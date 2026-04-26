@@ -29,8 +29,8 @@ except ImportError:
 
 
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.1.0-beta.4"
-APP_VERSION_LABEL = "0.1 beta 4"
+APP_VERSION = "0.1.1"
+APP_VERSION_LABEL = "0.1.1"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -430,6 +430,17 @@ class MainFrame(wx.Frame):
     def clear(self) -> None:
         self.root_sizer.Clear(delete_windows=True)
 
+    def focus_later(self, control: wx.Window) -> None:
+        wx.CallAfter(self.safe_set_focus, control)
+
+    @staticmethod
+    def safe_set_focus(control: wx.Window) -> None:
+        try:
+            if control and not getattr(control, "IsBeingDeleted", lambda: False)():
+                control.SetFocus()
+        except RuntimeError:
+            pass
+
     def add_button_row(self, buttons: list[tuple[str, callable]]) -> None:
         row = wx.BoxSizer(wx.HORIZONTAL)
         for label, handler in buttons:
@@ -457,7 +468,7 @@ class MainFrame(wx.Frame):
         self.root_sizer.Add(self.menu_list, 1, wx.EXPAND | wx.ALL, 4)
         self.add_button_row([(self.t("open"), self.activate_menu)])
         self.panel.Layout()
-        wx.CallAfter(self.menu_list.SetFocus)
+        self.focus_later(self.menu_list)
 
     def on_menu_key(self, event: wx.KeyEvent) -> None:
         if event.GetKeyCode() == wx.WXK_RETURN:
@@ -508,7 +519,8 @@ class MainFrame(wx.Frame):
         self.results_list.Bind(wx.EVT_LISTBOX, self.on_results_selection)
         self.root_sizer.Add(self.results_list, 1, wx.EXPAND | wx.ALL, 4)
         self.panel.Layout()
-        wx.CallAfter(self.query.SetFocus)
+        if not restore_search:
+            self.focus_later(self.query)
 
     def on_results_key(self, event: wx.KeyEvent) -> None:
         key = event.GetKeyCode()
@@ -541,7 +553,7 @@ class MainFrame(wx.Frame):
         self.root_sizer.Add(self.favorites_list, 1, wx.EXPAND | wx.ALL, 4)
         self.refresh_favorites()
         self.panel.Layout()
-        wx.CallAfter(self.favorites_list.SetFocus)
+        self.focus_later(self.favorites_list)
 
     def on_favorites_key(self, event: wx.KeyEvent) -> None:
         if event.GetKeyCode() == wx.WXK_RETURN:
@@ -638,7 +650,7 @@ class MainFrame(wx.Frame):
         scroller.SetSizer(form)
         self.root_sizer.Add(scroller, 1, wx.EXPAND | wx.ALL, 4)
         self.panel.Layout()
-        wx.CallAfter(lang.SetFocus)
+        self.focus_later(lang)
 
     def search_type_code(self) -> str:
         index = self.search_type.GetSelection()
@@ -955,10 +967,19 @@ class MainFrame(wx.Frame):
             if results:
                 index = min(max(0, self.return_index), len(results) - 1)
                 self.current_index = index
-                self.results_list.SetSelection(index)
-                self.results_list.SetFocus()
+                wx.CallAfter(self.focus_results_list, index)
         else:
             self.show_main_menu()
+
+    def focus_results_list(self, index: int | None = None) -> None:
+        if not hasattr(self, "results_list"):
+            return
+        try:
+            if index is not None and self.results_list.GetCount():
+                self.results_list.SetSelection(min(max(0, index), self.results_list.GetCount() - 1))
+            self.safe_set_focus(self.results_list)
+        except RuntimeError:
+            pass
 
     def announce_player(self, text: str) -> None:
         self.set_status(text)
@@ -1532,7 +1553,7 @@ class MainFrame(wx.Frame):
         buttons.Realize()
         root.Add(buttons, 0, wx.EXPAND | wx.ALL, 10)
         dialog.SetSizerAndFit(root)
-        wx.CallAfter(details.SetFocus)
+        wx.CallAfter(self.safe_set_focus, details)
         try:
             return dialog.ShowModal() == wx.ID_YES
         finally:
@@ -1552,6 +1573,7 @@ class MainFrame(wx.Frame):
             request = Request(download_url, headers=headers)
             with urlopen(request, timeout=120) as response, downloaded_path.open("wb") as handle:
                 shutil.copyfileobj(response, handle)
+            self.validate_update_executable(downloaded_path)
             wx.CallAfter(self.finish_app_update_install, str(downloaded_path), version)
         except Exception as exc:
             self.ui_queue.put(("status", self.t("app_update_failed", error=exc)))
@@ -1561,28 +1583,76 @@ class MainFrame(wx.Frame):
             self.message(self.t("update_source_only", version=version))
             return
         current_exe = Path(sys.executable)
-        script_path = Path(tempfile.gettempdir()) / f"apricotplayer-update-{int(time.time())}.cmd"
+        script_path = self.write_update_script(downloaded_path, str(current_exe), os.getpid(), restart=True)
+        self.launch_update_script(script_path)
+        self.set_status(self.t("installing_update", version=version))
+        self.message(self.t("update_ready_restart"))
+        self.exit_for_update()
+
+    @staticmethod
+    def validate_update_executable(path: Path) -> None:
+        if not path.exists() or path.stat().st_size < 1024 * 1024:
+            raise RuntimeError("downloaded update is not a valid executable")
+        with path.open("rb") as handle:
+            if handle.read(2) != b"MZ":
+                raise RuntimeError("downloaded update is not a Windows executable")
+
+    @classmethod
+    def write_update_script(cls, downloaded_path: str, target_path: str, process_id: int, restart: bool = True) -> Path:
+        script_path = Path(tempfile.gettempdir()) / f"apricotplayer-update-{int(time.time())}.ps1"
+        restart_value = "$true" if restart else "$false"
         script = "\n".join(
             [
-                "@echo off",
-                "setlocal",
-                ":replace",
-                f'copy /Y "{downloaded_path}" "{current_exe}" >nul',
-                "if errorlevel 1 (",
-                "  ping 127.0.0.1 -n 2 >nul",
-                "  goto replace",
-                ")",
-                f'del "{downloaded_path}" >nul 2>nul',
-                f'start "" "{current_exe}"',
-                'del "%~f0" >nul 2>nul',
+                "$ErrorActionPreference = 'Stop'",
+                f"$source = {cls.powershell_literal(downloaded_path)}",
+                f"$target = {cls.powershell_literal(target_path)}",
+                f"$processIdToWait = {int(process_id)}",
+                f"$restart = {restart_value}",
+                "Start-Sleep -Milliseconds 500",
+                "try { Wait-Process -Id $processIdToWait -Timeout 120 -ErrorAction SilentlyContinue } catch { }",
+                "$copied = $false",
+                "for ($attempt = 0; $attempt -lt 120; $attempt++) {",
+                "    try {",
+                "        Copy-Item -LiteralPath $source -Destination $target -Force -ErrorAction Stop",
+                "        $copied = $true",
+                "        break",
+                "    } catch {",
+                "        Start-Sleep -Seconds 1",
+                "    }",
+                "}",
+                "if (-not $copied) { exit 1 }",
+                "Remove-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue",
+                "if ($restart) { Start-Process -FilePath $target }",
+                "Start-Sleep -Seconds 2",
+                "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
             ]
         )
         script_path.write_text(script, encoding="utf-8-sig")
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        subprocess.Popen(["cmd", "/c", str(script_path)], creationflags=creationflags)
-        self.set_status(self.t("installing_update", version=version))
-        self.message(self.t("update_ready_restart"))
-        self.Close()
+        return script_path
+
+    @staticmethod
+    def launch_update_script(script_path: Path) -> None:
+        powershell = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
+        if not powershell:
+            raise RuntimeError("PowerShell was not found")
+        args = [powershell, "-NoProfile"]
+        if Path(powershell).name.lower() == "powershell.exe":
+            args.extend(["-ExecutionPolicy", "Bypass"])
+        args.extend(["-File", str(script_path)])
+        subprocess.Popen(args, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), close_fds=True)
+
+    @staticmethod
+    def powershell_literal(value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
+
+    def exit_for_update(self) -> None:
+        try:
+            self.Destroy()
+            app = wx.GetApp()
+            if app:
+                app.ExitMainLoop()
+        finally:
+            os._exit(0)
 
     def fetch_latest_release(self) -> dict | None:
         owner = self.settings.github_owner.strip() or DEFAULT_GITHUB_OWNER

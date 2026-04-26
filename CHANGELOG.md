@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1
+
+- updater now uses a PowerShell replacement script that waits for the old app process to exit before copying the new `.exe`
+- updater now validates that the downloaded file is a Windows executable before replacing the app
+- Escape from player mode now returns focus directly to the results list instead of the search field
+- switched versioning from beta suffixes to normal `0.1.x` releases
+
 ## 0.1.0-beta.4
 
 - update prompt title is now `Update available`
