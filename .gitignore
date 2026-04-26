@@ -7,6 +7,7 @@ downloads/
 build/
 build_wx/
 dist/
+release-dist/
 *.spec
 *.log
 vendor/*

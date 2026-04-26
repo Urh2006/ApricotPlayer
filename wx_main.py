@@ -29,8 +29,8 @@ except ImportError:
 
 
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.1.0-beta.2"
-APP_VERSION_LABEL = "0.1 beta 2"
+APP_VERSION = "0.1.0-beta.3"
+APP_VERSION_LABEL = "0.1 beta 3"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -44,6 +44,7 @@ RESULTS_PAGE_SIZE = 20
 DEFAULT_GITHUB_OWNER = "Urh2006"
 DEFAULT_GITHUB_REPO = "ApricotPlayer"
 UPDATE_ASSET_NAME = "ApricotPlayer.exe"
+PLAYBACK_SPEED_STEPS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0]
 
 
 TEXT = {
@@ -890,7 +891,7 @@ class MainFrame(wx.Frame):
             )
             self.player_kind = "mpv"
             self.player_control_mode = True
-            self.current_video_info["speed"] = self.settings.player_speed
+            self.current_video_info["speed"] = self.format_playback_rate(float(self.settings.player_speed))
             self.current_video_info["pitch"] = "1.00"
             self.update_details_text()
             self.set_status(self.t("playing", title=title))
@@ -948,6 +949,13 @@ class MainFrame(wx.Frame):
 
     def announce_player(self, text: str) -> None:
         self.set_status(text)
+        self.SetName(text)
+        try:
+            wx.Accessible.NotifyEvent(wx.ACC_EVENT_OBJECT_NAMECHANGE, self, wx.OBJID_CLIENT, 0)
+            wx.Accessible.NotifyEvent(wx.ACC_EVENT_SYSTEM_ALERT, self, wx.OBJID_ALERT, 0)
+            wx.Accessible.NotifyEvent(wx.ACC_EVENT_OBJECT_VALUECHANGE, self.status, wx.OBJID_CLIENT, 0)
+        except Exception:
+            pass
 
     def show_video_details(self) -> None:
         if not hasattr(self, "video_details"):
@@ -1073,10 +1081,11 @@ class MainFrame(wx.Frame):
         try:
             current = self.mpv_get_property("speed")
             speed = float(current if current is not None else 1.0)
-            speed = min(4.0, max(0.25, round(speed + delta, 2)))
+            speed = self.next_playback_speed(speed, delta)
             self.mpv_set_property("speed", speed)
-            self.current_video_info["speed"] = f"{speed:.2f}"
-            wx.CallAfter(self.announce_player, self.t("speed_announcement", speed=f"{speed:.2f}"))
+            speed_text = self.format_playback_rate(speed)
+            self.current_video_info["speed"] = speed_text
+            wx.CallAfter(self.announce_player, self.t("speed_announcement", speed=speed_text))
             wx.CallAfter(self.update_details_text)
         except Exception:
             wx.CallAfter(self.announce_player, self.t("timing_unavailable"))
@@ -1095,6 +1104,25 @@ class MainFrame(wx.Frame):
             wx.CallAfter(self.update_details_text)
         except Exception:
             wx.CallAfter(self.announce_player, self.t("timing_unavailable"))
+
+    @staticmethod
+    def next_playback_speed(current: float, delta: float) -> float:
+        steps = PLAYBACK_SPEED_STEPS
+        if delta < 0:
+            for step in reversed(steps):
+                if step < current - 0.001:
+                    return step
+            return steps[0]
+        for step in steps:
+            if step > current + 0.001:
+                return step
+        return steps[-1]
+
+    @staticmethod
+    def format_playback_rate(value: float) -> str:
+        if abs(value - round(value)) < 0.001:
+            return f"{value:.1f}"
+        return f"{value:.2f}".rstrip("0").rstrip(".")
 
     def stop_player(self, silent: bool = False) -> None:
         if self.player_process and self.player_process.poll() is None:
