@@ -29,8 +29,8 @@ except ImportError:
 
 
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.1.0-beta.3"
-APP_VERSION_LABEL = "0.1 beta 3"
+APP_VERSION = "0.1.0-beta.4"
+APP_VERSION_LABEL = "0.1 beta 4"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -98,8 +98,14 @@ TEXT = {
         "update_ready_restart": "Posodobitev je pripravljena. Program se bo zaprl in znova zagnal.",
         "update_source_only": "Samodejna namestitev deluje samo v .exe verziji. Na voljo je nova izdaja: {version}",
         "pitch_label": "Pitch",
-        "whats_new": "Kaj je novega",
-        "update_now": "Želiš posodobiti zdaj?",
+        "update_available_title": "Update available",
+        "update_version_heading": "Version {version}",
+        "whats_new": "What's new?",
+        "update_now": "Do you want to update now?",
+        "update_now_button": "Update now",
+        "skip_version_button": "Skip this version",
+        "update_skipped": "Posodobitev {version} je preskočena.",
+        "update_skip_status": "Preskočena posodobitev {version}.",
         "no_changelog": "Za to izdajo ni opisa sprememb.",
         "search_query": "Iskalni niz",
         "type": "Vrsta",
@@ -233,8 +239,14 @@ TEXT = {
         "update_ready_restart": "The update is ready. The app will close and restart.",
         "update_source_only": "Automatic install works only in the .exe build. New release available: {version}",
         "pitch_label": "Pitch",
-        "whats_new": "What's new",
+        "update_available_title": "Update available",
+        "update_version_heading": "Version {version}",
+        "whats_new": "What's new?",
         "update_now": "Would you like to update now?",
+        "update_now_button": "Update now",
+        "skip_version_button": "Skip this version",
+        "update_skipped": "Update {version} was skipped.",
+        "update_skip_status": "Skipped update {version}.",
         "no_changelog": "No changelog was provided for this release.",
         "search_query": "Search query",
         "type": "Type",
@@ -353,6 +365,7 @@ class Settings:
     open_folder_after_download: bool = False
     auto_update_ytdlp: bool = True
     auto_update_app: bool = True
+    skipped_update_version: str = ""
     confirm_before_download: bool = False
     download_archive: bool = False
     rate_limit: str = ""
@@ -1469,6 +1482,9 @@ class MainFrame(wx.Frame):
             if not self.is_newer_version(remote_version, APP_VERSION):
                 self.ui_queue.put(("status", self.t("app_up_to_date")))
                 return
+            if remote_version == self.settings.skipped_update_version:
+                self.ui_queue.put(("status", self.t("update_skip_status", version=remote_version)))
+                return
             asset = self.find_release_asset(release)
             if not asset:
                 self.ui_queue.put(("status", self.t("app_update_failed", error="no Windows asset found in release")))
@@ -1485,20 +1501,35 @@ class MainFrame(wx.Frame):
         changelog = self.release_changelog_text(release)
         if self.show_update_prompt(version, changelog):
             threading.Thread(target=self.download_and_install_update, args=(release, asset), daemon=True).start()
+        else:
+            self.settings.skipped_update_version = version
+            self.save_settings()
+            self.set_status(self.t("update_skipped", version=version))
 
     def show_update_prompt(self, version: str, changelog: str) -> bool:
-        dialog = wx.Dialog(self, title=f"{APP_NAME} {version}", style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        dialog = wx.Dialog(self, title=self.t("update_available_title"), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        dialog.SetName(self.t("update_available_title"))
         dialog.SetMinSize((640, 420))
         root = wx.BoxSizer(wx.VERTICAL)
-        intro = wx.StaticText(dialog, label=f"{self.t('whats_new')} - {version}")
-        root.Add(intro, 0, wx.ALL, 10)
+        version_label = wx.StaticText(dialog, label=self.t("update_version_heading", version=version))
+        root.Add(version_label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+        intro = wx.StaticText(dialog, label=self.t("whats_new"))
+        root.Add(intro, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
         details = wx.TextCtrl(dialog, value=changelog, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2)
         details.SetName(self.t("whats_new"))
         details.SetMinSize((580, 260))
         root.Add(details, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
         question = wx.StaticText(dialog, label=self.t("update_now"))
         root.Add(question, 0, wx.ALL, 10)
-        buttons = dialog.CreateStdDialogButtonSizer(wx.YES | wx.NO)
+        buttons = wx.StdDialogButtonSizer()
+        update_button = wx.Button(dialog, wx.ID_YES, self.t("update_now_button"))
+        skip_button = wx.Button(dialog, wx.ID_NO, self.t("skip_version_button"))
+        update_button.SetName(self.t("update_now_button"))
+        skip_button.SetName(self.t("skip_version_button"))
+        update_button.SetDefault()
+        buttons.AddButton(update_button)
+        buttons.AddButton(skip_button)
+        buttons.Realize()
         root.Add(buttons, 0, wx.EXPAND | wx.ALL, 10)
         dialog.SetSizerAndFit(root)
         wx.CallAfter(details.SetFocus)

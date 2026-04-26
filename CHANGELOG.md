@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-beta.4
+
+- update prompt title is now `Update available`
+- update prompt now shows `Version ...`, `What's new?`, and `Do you want to update now?`
+- update prompt buttons are now `Update now` and `Skip this version`
+- skipped app update versions are remembered so the same release is not offered repeatedly
+
 ## 0.1.0-beta.3
 
 - player announcements now raise explicit Windows accessibility events for screen readers
