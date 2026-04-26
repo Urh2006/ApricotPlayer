@@ -41,7 +41,7 @@ if (-not $ghCandidates) {
     throw "GitHub CLI was not found."
 }
 
-$gh = $ghCandidates[0]
+$gh = @($ghCandidates)[0]
 
 if (-not (Test-Path $ExecutablePath)) {
     throw "Executable not found: $ExecutablePath"
@@ -49,7 +49,8 @@ if (-not (Test-Path $ExecutablePath)) {
 
 $releaseExists = $false
 try {
-    & $gh release view $Tag --repo $Repo | Out-Null
+    $viewArgs = @("release", "view", $Tag, "--repo", $Repo)
+    & $gh @viewArgs | Out-Null
     $releaseExists = $true
 }
 catch {
@@ -58,11 +59,14 @@ catch {
 
 try {
     if ($releaseExists) {
-        & $gh release edit $Tag --title $Title --notes-file $resolvedNotesFile --repo $Repo
-        & $gh release upload $Tag $ExecutablePath --clobber --repo $Repo
+        $editArgs = @("release", "edit", $Tag, "--title", $Title, "--notes-file", $resolvedNotesFile, "--repo", $Repo)
+        $uploadArgs = @("release", "upload", $Tag, $ExecutablePath, "--clobber", "--repo", $Repo)
+        & $gh @editArgs
+        & $gh @uploadArgs
     }
     else {
-        & $gh release create $Tag $ExecutablePath --title $Title --notes-file $resolvedNotesFile --repo $Repo
+        $createArgs = @("release", "create", $Tag, $ExecutablePath, "--title", $Title, "--notes-file", $resolvedNotesFile, "--repo", $Repo)
+        & $gh @createArgs
     }
 }
 finally {
