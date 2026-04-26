@@ -17,7 +17,17 @@ if (-not $Notes) {
     $Notes = "Release $Tag"
 }
 
-$gh = (Get-Command gh -ErrorAction Stop).Source
+$ghCandidates = @(
+    (Get-Command gh -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue),
+    "C:\Program Files\GitHub CLI\gh.exe",
+    "$env:LOCALAPPDATA\Programs\GitHub CLI\gh.exe"
+) | Where-Object { $_ -and (Test-Path $_) }
+
+if (-not $ghCandidates) {
+    throw "GitHub CLI was not found."
+}
+
+$gh = $ghCandidates[0]
 
 if (-not (Test-Path $ExecutablePath)) {
     throw "Executable not found: $ExecutablePath"
