@@ -29,8 +29,8 @@ except ImportError:
 
 
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.1.0-beta.1"
-APP_VERSION_LABEL = "0.1 beta"
+APP_VERSION = "0.1.0-beta.2"
+APP_VERSION_LABEL = "0.1 beta 2"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -97,6 +97,9 @@ TEXT = {
         "update_ready_restart": "Posodobitev je pripravljena. Program se bo zaprl in znova zagnal.",
         "update_source_only": "Samodejna namestitev deluje samo v .exe verziji. Na voljo je nova izdaja: {version}",
         "pitch_label": "Pitch",
+        "whats_new": "Kaj je novega",
+        "update_now": "Želiš posodobiti zdaj?",
+        "no_changelog": "Za to izdajo ni opisa sprememb.",
         "search_query": "Iskalni niz",
         "type": "Vrsta",
         "search": "Search",
@@ -229,6 +232,9 @@ TEXT = {
         "update_ready_restart": "The update is ready. The app will close and restart.",
         "update_source_only": "Automatic install works only in the .exe build. New release available: {version}",
         "pitch_label": "Pitch",
+        "whats_new": "What's new",
+        "update_now": "Would you like to update now?",
+        "no_changelog": "No changelog was provided for this release.",
         "search_query": "Search query",
         "type": "Type",
         "search": "Search",
@@ -1448,13 +1454,30 @@ class MainFrame(wx.Frame):
         if not getattr(sys, "frozen", False):
             self.message(self.t("update_source_only", version=version))
             return
-        answer = wx.MessageBox(
-            self.t("app_update_available", version=version),
-            APP_NAME,
-            wx.YES_NO | wx.ICON_INFORMATION,
-        )
-        if answer == wx.YES:
+        changelog = self.release_changelog_text(release)
+        if self.show_update_prompt(version, changelog):
             threading.Thread(target=self.download_and_install_update, args=(release, asset), daemon=True).start()
+
+    def show_update_prompt(self, version: str, changelog: str) -> bool:
+        dialog = wx.Dialog(self, title=f"{APP_NAME} {version}", style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        dialog.SetMinSize((640, 420))
+        root = wx.BoxSizer(wx.VERTICAL)
+        intro = wx.StaticText(dialog, label=f"{self.t('whats_new')} - {version}")
+        root.Add(intro, 0, wx.ALL, 10)
+        details = wx.TextCtrl(dialog, value=changelog, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2)
+        details.SetName(self.t("whats_new"))
+        details.SetMinSize((580, 260))
+        root.Add(details, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
+        question = wx.StaticText(dialog, label=self.t("update_now"))
+        root.Add(question, 0, wx.ALL, 10)
+        buttons = dialog.CreateStdDialogButtonSizer(wx.YES | wx.NO)
+        root.Add(buttons, 0, wx.EXPAND | wx.ALL, 10)
+        dialog.SetSizerAndFit(root)
+        wx.CallAfter(details.SetFocus)
+        try:
+            return dialog.ShowModal() == wx.ID_YES
+        finally:
+            dialog.Destroy()
 
     def download_and_install_update(self, release: dict, asset: dict) -> None:
         version = self.release_version(release)
@@ -1534,6 +1557,14 @@ class MainFrame(wx.Frame):
     @staticmethod
     def release_version(release: dict) -> str:
         return str(release.get("tag_name") or release.get("name") or "").strip().lstrip("v")
+
+    def release_changelog_text(self, release: dict) -> str:
+        body = str(release.get("body") or "").replace("\r\n", "\n").strip()
+        if not body:
+            return self.t("no_changelog")
+        if len(body) > 6000:
+            return body[:6000].rstrip() + "\n\n..."
+        return body
 
     @staticmethod
     def parse_version(value: str) -> tuple[int, int, int, int, int]:

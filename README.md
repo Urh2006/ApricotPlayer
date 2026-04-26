@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.1.0-beta.1` (`0.1 beta`)
+Current version: `0.1.0-beta.2` (`0.1 beta 2`)
 
 The current standalone build is written to:
 
@@ -68,4 +68,6 @@ The packaged app can check GitHub releases automatically. For a private reposito
 Helpful scripts:
 
 - `scripts/build_release.ps1` builds `ApricotPlayer.exe`
-- `scripts/publish_release.ps1 -Tag v0.1.0-beta.1` publishes the built `.exe` to GitHub Releases
+- `scripts/publish_release.ps1 -Tag v0.1.0-beta.2 -NotesFile release-notes/v0.1.0-beta.2.md` publishes the built `.exe` to GitHub Releases
+
+Before the app installs a newer version, it now shows the release changelog and asks `Would you like to update now?`
