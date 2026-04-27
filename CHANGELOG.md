@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1
+
+- fixed `Ctrl+Shift+A` and `Ctrl+Shift+D` by registering them as app-wide download accelerators and handling them from the player panel
+- made result/player download shortcut detection more reliable for Windows key events
+- added a clearer Chrome cookie database error hint, including closing Chrome or using Edge, Firefox, or cookies.txt
+- pitch failures now announce that pitch control is unavailable instead of saying timing is unavailable
+- installer-based updates now request the desktop shortcut task so installed test builds stay easy to launch
+
 ## 0.3
 
 - public README no longer references local development download paths

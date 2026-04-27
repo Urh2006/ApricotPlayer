@@ -65,8 +65,8 @@ class QuietYtdlpLogger:
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.3"
-APP_VERSION_LABEL = "0.3"
+APP_VERSION = "0.3.1"
+APP_VERSION_LABEL = "0.3.1"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -119,6 +119,7 @@ TEXT = {
         "details_button": "View video details",
         "details_closed": "Video details closed.",
         "timing_unavailable": "Timing is not available yet.",
+        "pitch_unavailable": "Pitch control is not available yet.",
         "time_announcement": "Elapsed {elapsed}, remaining {remaining}, total {total}.",
         "speed_announcement": "Playback speed {speed}x.",
         "pitch_announcement": "Pitch {pitch}x.",
@@ -263,6 +264,7 @@ TEXT = {
         "download_done": "Prenos končan: {title}",
         "download_failed": "Prenos ni uspel: {error}",
         "youtube_auth_hint": "YouTube zahteva prijavo ali bot potrditev. V nastavitvah nastavi Cookies from browser na brskalnik, kjer si prijavljen v YouTube, na primer Chrome, Edge ali Firefox.",
+        "cookie_copy_hint": "ApricotPlayer ne more prebrati Chrome cookie baze. Zapri Chrome v celoti, v nastavitvah izberi Edge ali Firefox, ali uporabi izvozen cookies.txt file.",
         "favorite_added": "Dodano med priljubljene.",
         "favorite_exists": "Ta element je že med priljubljenimi.",
         "favorite_removed": "Odstranjeno iz priljubljenih.",
@@ -297,6 +299,7 @@ TEXT = {
         "details_button": "View video details",
         "details_closed": "Video details closed.",
         "timing_unavailable": "Timing is not available yet.",
+        "pitch_unavailable": "Pitch control is not available yet.",
         "time_announcement": "Elapsed {elapsed}, remaining {remaining}, total {total}.",
         "speed_announcement": "Playback speed {speed}x.",
         "pitch_announcement": "Pitch {pitch}x.",
@@ -441,6 +444,7 @@ TEXT = {
         "download_done": "Download finished: {title}",
         "download_failed": "Download failed: {error}",
         "youtube_auth_hint": "YouTube asks for sign-in or bot confirmation. Open Settings and set Cookies from browser to the browser where you are signed in to YouTube, for example Chrome, Edge, or Firefox.",
+        "cookie_copy_hint": "ApricotPlayer could not read the Chrome cookie database. Close Chrome completely, choose Edge or Firefox in Settings, or use an exported cookies.txt file.",
         "favorite_added": "Added to favorites.",
         "favorite_exists": "This item is already in favorites.",
         "favorite_removed": "Removed from favorites.",
@@ -535,6 +539,7 @@ class MainFrame(wx.Frame):
         self.video_details: wx.TextCtrl | None = None
         self.download_queue: dict[str, dict] = {}
         self.queue_items: list[dict] = []
+        self.last_download_shortcut: tuple[str, str, float] = ("", "", 0.0)
         self.ipc_path: str | None = None
         self.ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.loading_more_results = False
@@ -551,6 +556,7 @@ class MainFrame(wx.Frame):
         self.status.SetStatusText(self.t("ready"))
 
         self.Bind(wx.EVT_CHAR_HOOK, self.on_char_hook)
+        self.install_download_accelerators()
         self.show_main_menu()
         self.timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self.process_queue, self.timer)
@@ -559,6 +565,17 @@ class MainFrame(wx.Frame):
             wx.CallLater(300, self.start_ytdlp_update_check)
         if self.settings.auto_update_app:
             wx.CallLater(900, self.start_app_update_check)
+
+    def install_download_accelerators(self) -> None:
+        self.download_audio_accelerator_id = wx.NewIdRef()
+        self.download_video_accelerator_id = wx.NewIdRef()
+        self.Bind(wx.EVT_MENU, lambda _evt: self.download_audio_shortcut(), id=int(self.download_audio_accelerator_id))
+        self.Bind(wx.EVT_MENU, lambda _evt: self.download_video_shortcut(), id=int(self.download_video_accelerator_id))
+        entries = [
+            (wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("A"), int(self.download_audio_accelerator_id)),
+            (wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("D"), int(self.download_video_accelerator_id)),
+        ]
+        self.SetAcceleratorTable(wx.AcceleratorTable(entries))
 
     def t(self, key: str, **kwargs) -> str:
         language = self.settings.language if self.settings.language in TEXT else "sl"
@@ -583,6 +600,8 @@ class MainFrame(wx.Frame):
     def friendly_error(self, exc: Exception | str) -> str:
         text = str(exc)
         lowered = text.lower()
+        if "could not copy" in lowered and "cookie" in lowered and "database" in lowered:
+            return f"{text}\n\n{self.t('cookie_copy_hint')}"
         if "sign in to confirm" in lowered or "not a bot" in lowered or "cookies-from-browser" in lowered:
             return f"{text}\n\n{self.t('youtube_auth_hint')}"
         return text
@@ -822,9 +841,9 @@ class MainFrame(wx.Frame):
         elif self.is_shift_letter(event, "D") and not event.ControlDown():
             self.toggle_download_queue(False)
         elif self.is_ctrl_shift_letter(event, "A"):
-            self.download_audio()
+            self.download_audio_shortcut()
         elif self.is_ctrl_shift_letter(event, "D"):
-            self.download_video()
+            self.download_video_shortcut()
         elif key == wx.WXK_RETURN:
             self.play_selected()
         elif key == getattr(wx, "WXK_APPS", -1) or (key == wx.WXK_F10 and event.ShiftDown()):
@@ -1311,9 +1330,11 @@ class MainFrame(wx.Frame):
         )
         label = wx.StaticText(self.panel, label=f"{self.t('internal_player')}: {title}")
         self.root_sizer.Add(label, 0, wx.ALL, 4)
-        self.player_panel = wx.Panel(self.panel, style=wx.BORDER_SIMPLE)
+        self.player_panel = wx.Panel(self.panel, style=wx.BORDER_SIMPLE | wx.WANTS_CHARS)
         self.player_panel.SetName(self.t("internal_player"))
         self.player_panel.SetBackgroundColour(wx.BLACK)
+        self.player_panel.Bind(wx.EVT_KEY_DOWN, self.on_player_key)
+        self.player_panel.Bind(wx.EVT_CHAR_HOOK, self.on_char_hook)
         self.root_sizer.Add(self.player_panel, 1, wx.EXPAND | wx.ALL, 4)
         self.details_label = None
         self.video_details = None
@@ -1321,6 +1342,9 @@ class MainFrame(wx.Frame):
         self.player_control_mode = True
         self.panel.Layout()
         self.player_panel.SetFocus()
+
+    def on_player_key(self, event: wx.KeyEvent) -> None:
+        self.on_char_hook(event)
 
     def back_to_results(self) -> None:
         self.stop_player(silent=True)
@@ -1535,7 +1559,7 @@ class MainFrame(wx.Frame):
                 wx.CallAfter(self.play_default_sound)
             wx.CallAfter(self.update_details_text)
         except Exception:
-            wx.CallAfter(self.announce_player, self.t("timing_unavailable"))
+            wx.CallAfter(self.announce_player, self.t("pitch_unavailable"))
 
     def current_pitch_value(self) -> float:
         stored = self.current_video_info.get("pitch", "1.0")
@@ -1684,26 +1708,46 @@ class MainFrame(wx.Frame):
             self.set_status(self.t("stopped"))
 
     @staticmethod
+    def key_event_codes(event: wx.KeyEvent) -> set[int]:
+        codes: set[int] = set()
+        for getter_name in ("GetKeyCode", "GetUnicodeKey", "GetRawKeyCode"):
+            getter = getattr(event, getter_name, None)
+            if not getter:
+                continue
+            try:
+                code = int(getter())
+            except Exception:
+                continue
+            if code not in (-1, 0, wx.WXK_NONE):
+                codes.add(code)
+        return codes
+
+    @classmethod
+    def key_event_matches_letter(cls, event: wx.KeyEvent, letter: str) -> bool:
+        upper = letter.upper()
+        lower = letter.lower()
+        control_code = ord(upper) - ord("A") + 1
+        wanted = {ord(upper), ord(lower), control_code}
+        for code in cls.key_event_codes(event):
+            if code in wanted:
+                return True
+            if 65 <= code <= 90 and chr(code) == upper:
+                return True
+            if 97 <= code <= 122 and chr(code) == lower:
+                return True
+        return False
+
+    @staticmethod
     def is_shift_letter(event: wx.KeyEvent, letter: str) -> bool:
         if not event.ShiftDown():
             return False
-        upper = letter.upper()
-        codes = {ord(upper), ord(upper.lower())}
-        unicode_key = event.GetUnicodeKey()
-        if unicode_key != wx.WXK_NONE:
-            codes.add(unicode_key)
-        return event.GetKeyCode() in codes
+        return MainFrame.key_event_matches_letter(event, letter)
 
     @staticmethod
     def is_ctrl_shift_letter(event: wx.KeyEvent, letter: str) -> bool:
         if not (event.ControlDown() and event.ShiftDown()):
             return False
-        upper = letter.upper()
-        codes = {ord(upper), ord(upper.lower()), ord(upper) - ord("A") + 1}
-        unicode_key = event.GetUnicodeKey()
-        if unicode_key != wx.WXK_NONE:
-            codes.add(unicode_key)
-        return event.GetKeyCode() in codes
+        return MainFrame.key_event_matches_letter(event, letter)
 
     def on_char_hook(self, event: wx.KeyEvent) -> None:
         key = event.GetKeyCode()
@@ -1731,10 +1775,10 @@ class MainFrame(wx.Frame):
             self.play_selected()
             return
         if self.is_ctrl_shift_letter(event, "A"):
-            self.download_audio()
+            self.download_audio_shortcut()
             return
         if self.is_ctrl_shift_letter(event, "D"):
-            self.download_video()
+            self.download_video_shortcut()
             return
         if key == wx.WXK_ESCAPE:
             if self.in_player_screen and self.video_details_visible():
@@ -1835,6 +1879,23 @@ class MainFrame(wx.Frame):
 
     def download_video(self) -> None:
         self.start_download(False)
+
+    def download_audio_shortcut(self) -> None:
+        self.start_download_shortcut(True)
+
+    def download_video_shortcut(self) -> None:
+        self.start_download_shortcut(False)
+
+    def start_download_shortcut(self, audio_only: bool) -> None:
+        item = self.active_item()
+        url = str(item.get("url", "")) if item else ""
+        kind = "audio" if audio_only else "video"
+        now = time.monotonic()
+        last_kind, last_url, last_time = self.last_download_shortcut
+        if kind == last_kind and url == last_url and now - last_time < 0.35:
+            return
+        self.last_download_shortcut = (kind, url, now)
+        self.start_download(audio_only, item=item)
 
     def download_worker(self, item: dict, audio_only: bool) -> None:
         try:
@@ -2443,7 +2504,7 @@ class MainFrame(wx.Frame):
                 f"$log = {cls.powershell_literal(log_path)}",
                 f"$processIdToWait = {int(process_id)}",
                 f"$restart = {restart_value}",
-                "$silentArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS')",
+                "$silentArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', '/TASKS=desktopicon')",
                 "$installCandidates = @(",
                 "    (Join-Path $env:ProgramFiles 'ApricotPlayer\\ApricotPlayer.exe')",
                 ")",
