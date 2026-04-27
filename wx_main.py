@@ -34,8 +34,8 @@ except ImportError:
 
 
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.1.2"
-APP_VERSION_LABEL = "0.1.2"
+APP_VERSION = "0.1.3"
+APP_VERSION_LABEL = "0.1.3"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -49,7 +49,7 @@ RESULTS_PAGE_SIZE = 20
 DEFAULT_GITHUB_OWNER = "Urh2006"
 DEFAULT_GITHUB_REPO = "ApricotPlayer"
 UPDATE_ASSET_NAME = "ApricotPlayer.exe"
-PLAYBACK_SPEED_STEPS = [0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1.0, 1.1, 1.2, 1.25, 1.3, 1.4, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0]
+PLAYBACK_SPEED_STEPS = [0.25, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1.0, 1.1, 1.2, 1.25, 1.3, 1.4, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0]
 PITCH_STEPS = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0]
 DEFAULT_REACHED_SOUND = "default_reached.wav"
 
@@ -106,6 +106,11 @@ TEXT = {
         "app_update_disabled": "Samodejne posodobitve programa so izključene.",
         "app_update_failed": "Posodobitve programa ni bilo mogoče preveriti: {error}",
         "downloading_update": "Prenašam posodobitev {version}.",
+        "update_progress_title": "Updating ApricotPlayer",
+        "update_download_percent": "Downloading update {version}: {percent}%",
+        "update_download_unknown": "Downloading update {version}",
+        "update_download_complete": "Update downloaded. Preparing install.",
+        "update_install_started": "Installer started. ApricotPlayer will close and reopen.",
         "installing_update": "Nameščam posodobitev {version}.",
         "update_ready_restart": "Posodobitev je pripravljena. Program se bo zaprl in znova zagnal.",
         "update_source_only": "Samodejna namestitev deluje samo v .exe verziji. Na voljo je nova izdaja: {version}",
@@ -252,6 +257,11 @@ TEXT = {
         "app_update_disabled": "Automatic app updates are disabled.",
         "app_update_failed": "Could not check app updates: {error}",
         "downloading_update": "Downloading update {version}.",
+        "update_progress_title": "Updating ApricotPlayer",
+        "update_download_percent": "Downloading update {version}: {percent}%",
+        "update_download_unknown": "Downloading update {version}",
+        "update_download_complete": "Update downloaded. Preparing install.",
+        "update_install_started": "Installer started. ApricotPlayer will close and reopen.",
         "installing_update": "Installing update {version}.",
         "update_ready_restart": "The update is ready. The app will close and restart.",
         "update_source_only": "Automatic install works only in the .exe build. New release available: {version}",
@@ -428,6 +438,7 @@ class MainFrame(wx.Frame):
         self.collection_url = ""
         self.collection_result_type = ""
         self.nvda_client = self.load_nvda_client()
+        self.update_progress_dialog: wx.ProgressDialog | None = None
 
         self.panel = wx.Panel(self)
         self.root_sizer = wx.BoxSizer(wx.VERTICAL)
@@ -1254,7 +1265,7 @@ class MainFrame(wx.Frame):
             self.mpv_set_property("speed", speed)
             speed_text = self.format_playback_rate(speed)
             self.current_video_info["speed"] = speed_text
-            wx.CallAfter(self.announce_player, self.t("speed_announcement", speed=speed_text))
+            wx.CallAfter(self.announce_player, self.t("speed_announcement", speed=self.format_rate_for_speech(speed)))
             if self.is_default_rate(speed):
                 wx.CallAfter(self.play_default_sound)
             wx.CallAfter(self.update_details_text)
@@ -1273,7 +1284,7 @@ class MainFrame(wx.Frame):
             self.mpv_set_property("pitch", pitch)
             pitch_text = self.format_playback_rate(pitch)
             self.current_video_info["pitch"] = pitch_text
-            wx.CallAfter(self.announce_player, self.t("pitch_announcement", pitch=pitch_text))
+            wx.CallAfter(self.announce_player, self.t("pitch_announcement", pitch=self.format_rate_for_speech(pitch)))
             if self.is_default_rate(pitch):
                 wx.CallAfter(self.play_default_sound)
             wx.CallAfter(self.update_details_text)
@@ -1305,6 +1316,10 @@ class MainFrame(wx.Frame):
         if abs(value - round(value)) < 0.001:
             return f"{value:.1f}"
         return f"{value:.2f}".rstrip("0").rstrip(".")
+
+    @staticmethod
+    def format_rate_for_speech(value: float) -> str:
+        return f"{value:.2f}"
 
     @staticmethod
     def is_default_rate(value: float) -> bool:
@@ -1692,7 +1707,7 @@ class MainFrame(wx.Frame):
             return
         changelog = self.release_changelog_text(release)
         if self.show_update_prompt(version, changelog):
-            threading.Thread(target=self.download_and_install_update, args=(release, asset), daemon=True).start()
+            self.begin_app_update_install(release, asset)
         else:
             self.settings.skipped_update_version = version
             self.save_settings()
@@ -1730,24 +1745,106 @@ class MainFrame(wx.Frame):
         finally:
             dialog.Destroy()
 
+    def begin_app_update_install(self, release: dict, asset: dict) -> None:
+        version = self.release_version(release)
+        self.close_update_progress_dialog()
+        self.update_progress_dialog = wx.ProgressDialog(
+            self.t("update_progress_title"),
+            self.t("update_download_unknown", version=version),
+            maximum=100,
+            parent=self,
+            style=wx.PD_APP_MODAL | wx.PD_ELAPSED_TIME | wx.PD_ESTIMATED_TIME,
+        )
+        self.update_progress_dialog.Pulse(self.t("update_download_unknown", version=version))
+        self.announce_player(self.t("downloading_update", version=version))
+        threading.Thread(target=self.download_and_install_update, args=(release, asset), daemon=True).start()
+
+    def close_update_progress_dialog(self) -> None:
+        if self.update_progress_dialog:
+            try:
+                self.update_progress_dialog.Destroy()
+            except Exception:
+                pass
+            self.update_progress_dialog = None
+
+    def update_app_update_progress(self, version: str, percent: int | None) -> None:
+        if not self.update_progress_dialog:
+            return
+        try:
+            if percent is None:
+                self.update_progress_dialog.Pulse(self.t("update_download_unknown", version=version))
+            else:
+                percent = min(100, max(0, percent))
+                self.update_progress_dialog.Update(percent, self.t("update_download_percent", version=version, percent=percent))
+        except Exception:
+            pass
+
+    def update_app_update_finished(self, version: str) -> None:
+        if self.update_progress_dialog:
+            try:
+                self.update_progress_dialog.Update(100, self.t("update_download_complete"))
+            except Exception:
+                pass
+        self.announce_player(self.t("update_download_complete"))
+
+    def update_app_update_failed(self, error: Exception | str) -> None:
+        self.close_update_progress_dialog()
+        self.message(self.t("app_update_failed", error=error), wx.ICON_ERROR)
+
     def download_and_install_update(self, release: dict, asset: dict) -> None:
         version = self.release_version(release)
         try:
-            token = self.resolve_github_token()
             self.ui_queue.put(("status", self.t("downloading_update", version=version)))
             temp_dir = Path(tempfile.mkdtemp(prefix="apricotplayer-update-"))
             downloaded_path = temp_dir / asset["name"]
-            download_url = asset.get("url") or asset.get("browser_download_url") or ""
-            if not download_url:
-                raise RuntimeError("missing download url")
-            headers = self.github_headers(token, accept="application/octet-stream")
-            request = Request(download_url, headers=headers)
-            with urlopen(request, timeout=120) as response, downloaded_path.open("wb") as handle:
-                shutil.copyfileobj(response, handle)
+            self.download_update_asset(asset, downloaded_path, version)
             self.validate_update_executable(downloaded_path)
+            wx.CallAfter(self.update_app_update_finished, version)
             wx.CallAfter(self.finish_app_update_install, str(downloaded_path), version)
         except Exception as exc:
-            self.ui_queue.put(("status", self.t("app_update_failed", error=exc)))
+            wx.CallAfter(self.update_app_update_failed, exc)
+
+    def download_update_asset(self, asset: dict, downloaded_path: Path, version: str) -> None:
+        token = self.resolve_github_token()
+        attempts: list[tuple[str, dict[str, str]]] = []
+        browser_url = str(asset.get("browser_download_url") or "")
+        api_url = str(asset.get("url") or "")
+        if browser_url:
+            attempts.append((browser_url, self.github_headers("", accept="application/octet-stream")))
+        if api_url:
+            attempts.append((api_url, self.github_headers(token, accept="application/octet-stream")))
+        if not attempts:
+            raise RuntimeError("missing download url")
+        last_error: Exception | None = None
+        for download_url, headers in attempts:
+            try:
+                request = Request(download_url, headers=headers)
+                with urlopen(request, timeout=120) as response, downloaded_path.open("wb") as handle:
+                    total_header = response.headers.get("Content-Length")
+                    total = int(total_header) if total_header and total_header.isdigit() else 0
+                    downloaded = 0
+                    last_percent = -1
+                    while True:
+                        chunk = response.read(1024 * 512)
+                        if not chunk:
+                            break
+                        handle.write(chunk)
+                        downloaded += len(chunk)
+                        if total:
+                            percent = int(downloaded * 100 / total)
+                            if percent != last_percent:
+                                last_percent = percent
+                                wx.CallAfter(self.update_app_update_progress, version, percent)
+                        elif downloaded % (1024 * 1024 * 8) < len(chunk):
+                            wx.CallAfter(self.update_app_update_progress, version, None)
+                return
+            except Exception as exc:
+                last_error = exc
+                try:
+                    downloaded_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+        raise RuntimeError(last_error or "download failed")
 
     def finish_app_update_install(self, downloaded_path: str, version: str) -> None:
         if not getattr(sys, "frozen", False):
@@ -1757,7 +1854,8 @@ class MainFrame(wx.Frame):
         script_path = self.write_update_script(downloaded_path, str(current_exe), os.getpid(), restart=True)
         self.launch_update_script(script_path)
         self.set_status(self.t("installing_update", version=version))
-        self.message(self.t("update_ready_restart"))
+        self.close_update_progress_dialog()
+        self.message(self.t("update_install_started"))
         self.exit_for_update()
 
     @staticmethod

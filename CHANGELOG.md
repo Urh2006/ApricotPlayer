@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.3
+
+- updater now shows a visible progress dialog immediately after `Update now`
+- updater errors are now shown in an error dialog instead of only the status bar
+- updater now prefers the public GitHub `browser_download_url` and falls back to the API asset URL
+- playback speed announcements now always use two decimals such as `0.25x`, `0.50x`, and `1.10x`
+- speed control now includes `0.25x`
+
 ## 0.1.2
 
 - default language for new installs is now English

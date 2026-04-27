@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Tag,
     [string]$Repo = "Urh2006/ApricotPlayer",
-    [string]$ExecutablePath = "$env:USERPROFILE\Downloads\ApricotPlayer.exe",
+    [string]$ExecutablePath = "",
     [string]$Title = "",
     [string]$Notes = "",
     [string]$NotesFile = ""
@@ -10,6 +10,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 $tempNotesFile = $null
+$projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+
+if (-not $ExecutablePath) {
+    $ExecutablePath = Join-Path $projectRoot "release-dist\ApricotPlayer.exe"
+}
 
 if (-not $Title) {
     $Title = $Tag
