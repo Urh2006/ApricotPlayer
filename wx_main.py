@@ -65,8 +65,8 @@ class QuietYtdlpLogger:
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.2.1"
-APP_VERSION_LABEL = "0.2.1"
+APP_VERSION = "0.2.2"
+APP_VERSION_LABEL = "0.2.2"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -89,6 +89,7 @@ PITCH_MODE_MPV = "mpv pitch"
 PITCH_MODE_LINKED_SPEED = "linked speed"
 PITCH_MODE_OPTIONS = [PITCH_MODE_RUBBERBAND, PITCH_MODE_MPV, PITCH_MODE_LINKED_SPEED]
 RATE_STEP_OPTIONS = ["0.01", "0.02", "0.05", "0.10", "0.25"]
+COOKIES_BROWSER_OPTIONS = ["none", "chrome", "edge", "firefox", "brave", "chromium", "opera", "vivaldi"]
 
 
 TEXT = {
@@ -235,6 +236,7 @@ TEXT = {
         "rate_limit": "Rate limit",
         "proxy": "Proxy URL",
         "cookies": "Cookies file",
+        "cookies_from_browser": "Cookies from browser",
         "ffmpeg": "FFmpeg pot",
         "fragments": "Sočasni fragmenti",
         "retries": "Število ponovitev",
@@ -259,6 +261,7 @@ TEXT = {
         "download_cancelled": "Prenos preklican.",
         "download_done": "Prenos končan: {title}",
         "download_failed": "Prenos ni uspel: {error}",
+        "youtube_auth_hint": "YouTube zahteva prijavo ali bot potrditev. V nastavitvah nastavi Cookies from browser na brskalnik, kjer si prijavljen v YouTube, na primer Chrome, Edge ali Firefox.",
         "favorite_added": "Dodano med priljubljene.",
         "favorite_exists": "Ta element je že med priljubljenimi.",
         "favorite_removed": "Odstranjeno iz priljubljenih.",
@@ -411,6 +414,7 @@ TEXT = {
         "rate_limit": "Rate limit",
         "proxy": "Proxy URL",
         "cookies": "Cookies file",
+        "cookies_from_browser": "Cookies from browser",
         "ffmpeg": "FFmpeg path",
         "fragments": "Concurrent fragments",
         "retries": "Retries",
@@ -435,6 +439,7 @@ TEXT = {
         "download_cancelled": "Download cancelled.",
         "download_done": "Download finished: {title}",
         "download_failed": "Download failed: {error}",
+        "youtube_auth_hint": "YouTube asks for sign-in or bot confirmation. Open Settings and set Cookies from browser to the browser where you are signed in to YouTube, for example Chrome, Edge, or Firefox.",
         "favorite_added": "Added to favorites.",
         "favorite_exists": "This item is already in favorites.",
         "favorite_removed": "Removed from favorites.",
@@ -489,6 +494,7 @@ class Settings:
     rate_limit: str = ""
     proxy: str = ""
     cookies_file: str = ""
+    cookies_from_browser: str = "none"
     ffmpeg_location: str = ""
     github_owner: str = DEFAULT_GITHUB_OWNER
     github_repo: str = DEFAULT_GITHUB_REPO
@@ -558,12 +564,27 @@ class MainFrame(wx.Frame):
         text = TEXT[language].get(key, TEXT["sl"].get(key, key))
         return text.format(**kwargs) if kwargs else text
 
-    @staticmethod
-    def ydl_options(options: dict | None = None) -> dict:
+    def ydl_options(self, options: dict | None = None) -> dict:
         merged = {"logger": YTDLP_LOGGER, "no_warnings": True}
         if options:
             merged.update(options)
+        if "cookiefile" not in merged and self.settings.cookies_file.strip():
+            merged["cookiefile"] = self.settings.cookies_file.strip()
+        cookies_browser = self.normalized_cookies_browser()
+        if cookies_browser:
+            merged["cookiesfrombrowser"] = (cookies_browser,)
         return merged
+
+    def normalized_cookies_browser(self) -> str:
+        browser = str(getattr(self.settings, "cookies_from_browser", "none") or "none").strip().lower()
+        return "" if browser == "none" else browser
+
+    def friendly_error(self, exc: Exception | str) -> str:
+        text = str(exc)
+        lowered = text.lower()
+        if "sign in to confirm" in lowered or "not a bot" in lowered or "cookies-from-browser" in lowered:
+            return f"{text}\n\n{self.t('youtube_auth_hint')}"
+        return text
 
     def clear(self) -> None:
         self.root_sizer.Clear(delete_windows=True)
@@ -923,6 +944,7 @@ class MainFrame(wx.Frame):
         text("rate_limit", self.settings.rate_limit)
         text("proxy", self.settings.proxy)
         text("cookies", self.settings.cookies_file)
+        choice("cookies_from_browser", self.settings.cookies_from_browser or "none", COOKIES_BROWSER_OPTIONS)
         text("ffmpeg", self.settings.ffmpeg_location)
         text("github_owner", self.settings.github_owner)
         text("github_repo", self.settings.github_repo)
@@ -977,7 +999,7 @@ class MainFrame(wx.Frame):
             entries = list(info.get("entries") or [])[:limit]
             wx.CallAfter(self.show_results, [self.normalize_entry(entry, search_type) for entry in entries])
         except Exception as exc:
-            wx.CallAfter(self.message, str(exc), wx.ICON_ERROR)
+            wx.CallAfter(self.message, self.friendly_error(exc), wx.ICON_ERROR)
 
     def normalize_entry(self, entry: dict, search_type: str) -> dict:
         url = entry.get("webpage_url") or entry.get("url") or ""
@@ -1064,7 +1086,7 @@ class MainFrame(wx.Frame):
             entries = list(info.get("entries") or [])[:limit]
             wx.CallAfter(self.show_more_results, [self.normalize_entry(entry, search_type) for entry in entries], selection)
         except Exception as exc:
-            wx.CallAfter(self.dynamic_fetch_failed, str(exc))
+            wx.CallAfter(self.dynamic_fetch_failed, self.friendly_error(exc))
 
     def show_more_results(self, results: list[dict], selection: int) -> None:
         self.loading_more_results = False
@@ -1159,7 +1181,7 @@ class MainFrame(wx.Frame):
                 wx.CallAfter(self.show_results, normalized)
                 wx.CallAfter(setattr, self, "loading_more_results", False)
         except Exception as exc:
-            wx.CallAfter(self.dynamic_fetch_failed, str(exc))
+            wx.CallAfter(self.dynamic_fetch_failed, self.friendly_error(exc))
 
     def play_url(self, url: str, title: str = "") -> None:
         player = self.resolve_player()
@@ -1182,7 +1204,7 @@ class MainFrame(wx.Frame):
             wx.CallAfter(self.merge_current_video_info, info)
             wx.CallAfter(self.start_mpv, command, stream_url, title or url, headers)
         except Exception as exc:
-            wx.CallAfter(self.message, self.t("player_failed", error=exc), wx.ICON_ERROR)
+            wx.CallAfter(self.message, self.t("player_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
     def resolve_stream_url(self, url: str) -> tuple[str, dict, dict]:
         if yt_dlp is None:
@@ -1823,7 +1845,7 @@ class MainFrame(wx.Frame):
             done_text = self.t("download_audio_done" if audio_only else "download_video_done", title=item["title"])
             wx.CallAfter(self.finish_download, done_text, str(folder))
         except Exception as exc:
-            wx.CallAfter(self.message, self.t("download_failed", error=exc), wx.ICON_ERROR)
+            wx.CallAfter(self.message, self.t("download_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
     def finish_download(self, done_text: str, folder: str) -> None:
         if self.settings.popup_when_download_complete:
@@ -2055,7 +2077,7 @@ class MainFrame(wx.Frame):
                     ydl.download([item["url"]])
             wx.CallAfter(self.finish_batch_download, str(folder))
         except Exception as exc:
-            wx.CallAfter(self.message, self.t("download_failed", error=exc), wx.ICON_ERROR)
+            wx.CallAfter(self.message, self.t("download_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
     def finish_batch_download(self, folder: str) -> None:
         done_text = self.t("batch_download_done")
@@ -2125,6 +2147,7 @@ class MainFrame(wx.Frame):
         self.settings.rate_limit = c["rate_limit"].GetValue()
         self.settings.proxy = c["proxy"].GetValue()
         self.settings.cookies_file = c["cookies"].GetValue()
+        self.settings.cookies_from_browser = c["cookies_from_browser"].GetStringSelection() or "none"
         self.settings.ffmpeg_location = c["ffmpeg"].GetValue()
         self.settings.github_owner = c["github_owner"].GetValue().strip() or DEFAULT_GITHUB_OWNER
         self.settings.github_repo = c["github_repo"].GetValue().strip() or DEFAULT_GITHUB_REPO

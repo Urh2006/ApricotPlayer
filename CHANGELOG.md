@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2
+
+- added a `Cookies from browser` setting for YouTube sign-in/bot-check cases
+- yt-dlp now receives browser cookies for search, playback, playlist/channel loading, and downloads when this setting is enabled
+- YouTube authentication/bot-check errors now include a direct Settings hint
+
 ## 0.2.1
 
 - fixed packaged playback failing with `NoneType` stream write errors
