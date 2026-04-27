@@ -34,8 +34,8 @@ except ImportError:
 
 
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.1.3"
-APP_VERSION_LABEL = "0.1.3"
+APP_VERSION = "0.1.4"
+APP_VERSION_LABEL = "0.1.4"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -52,6 +52,11 @@ UPDATE_ASSET_NAME = "ApricotPlayer.exe"
 PLAYBACK_SPEED_STEPS = [0.25, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1.0, 1.1, 1.2, 1.25, 1.3, 1.4, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0]
 PITCH_STEPS = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0]
 DEFAULT_REACHED_SOUND = "default_reached.wav"
+PITCH_MODE_RUBBERBAND = "rubberband"
+PITCH_MODE_MPV = "mpv pitch"
+PITCH_MODE_LINKED_SPEED = "linked speed"
+PITCH_MODE_OPTIONS = [PITCH_MODE_RUBBERBAND, PITCH_MODE_MPV, PITCH_MODE_LINKED_SPEED]
+RATE_STEP_OPTIONS = ["0.01", "0.02", "0.05", "0.10", "0.25"]
 
 
 TEXT = {
@@ -75,6 +80,8 @@ TEXT = {
         "time_announcement": "Elapsed {elapsed}, remaining {remaining}, total {total}.",
         "speed_announcement": "Playback speed {speed}x.",
         "pitch_announcement": "Pitch {pitch}x.",
+        "download_audio_start": "Downloading audio...",
+        "download_video_start": "Downloading video...",
         "details_unavailable": "Video details are not available yet.",
         "version": "Verzija",
         "description": "Description",
@@ -146,10 +153,14 @@ TEXT = {
         "results_limit": "Število rezultatov",
         "seek_seconds": "Seek v sekundah",
         "volume_step": "Korak glasnosti",
+        "speed_step": "Korak hitrosti predvajanja",
+        "pitch_step": "Korak pitcha",
+        "pitch_mode": "Nacin spreminjanja pitcha",
         "auto_update": "Ob vsakem zagonu preveri posodobitve yt-dlp",
         "autoplay_next": "Po koncu posnetka samodejno predvajaj naslednjega",
         "confirm_download": "Pred prenosom vprašaj za potrditev",
         "open_after_download": "Po prenosu odpri mapo za prenose",
+        "download_complete_popup": "Pokazi popup, ko je prenos koncan",
         "audio_format": "Audio format",
         "audio_quality": "Audio kvaliteta (0 najboljše)",
         "video_format": "Video format yt-dlp",
@@ -226,6 +237,8 @@ TEXT = {
         "time_announcement": "Elapsed {elapsed}, remaining {remaining}, total {total}.",
         "speed_announcement": "Playback speed {speed}x.",
         "pitch_announcement": "Pitch {pitch}x.",
+        "download_audio_start": "Downloading audio...",
+        "download_video_start": "Downloading video...",
         "details_unavailable": "Video details are not available yet.",
         "version": "Version",
         "description": "Description",
@@ -297,10 +310,14 @@ TEXT = {
         "results_limit": "Number of results",
         "seek_seconds": "Seek seconds",
         "volume_step": "Volume step",
+        "speed_step": "Playback speed key step",
+        "pitch_step": "Pitch key step",
+        "pitch_mode": "Pitch control mode",
         "auto_update": "Check yt-dlp updates on every startup",
         "autoplay_next": "Automatically play next item",
         "confirm_download": "Ask before starting a download",
         "open_after_download": "Open download folder after download",
+        "download_complete_popup": "Show popup when download completes",
         "audio_format": "Audio format",
         "audio_quality": "Audio quality (0 is best)",
         "video_format": "Video format yt-dlp",
@@ -374,6 +391,9 @@ class Settings:
     player_fullscreen: bool = False
     player_start_paused: bool = False
     player_speed: str = "1.0"
+    speed_step: float = 0.01
+    pitch_step: float = 0.01
+    pitch_mode: str = PITCH_MODE_RUBBERBAND
     quiet_downloads: bool = False
     keep_playlist_order: bool = True
     filename_template: str = DEFAULT_FILENAME_TEMPLATE
@@ -390,6 +410,7 @@ class Settings:
     embed_thumbnail: bool = False
     restrict_filenames: bool = False
     open_folder_after_download: bool = False
+    popup_when_download_complete: bool = True
     auto_update_ytdlp: bool = True
     auto_update_app: bool = True
     skipped_update_version: str = ""
@@ -613,7 +634,11 @@ class MainFrame(wx.Frame):
 
     def on_results_key(self, event: wx.KeyEvent) -> None:
         key = event.GetKeyCode()
-        if key == wx.WXK_RETURN:
+        if self.is_ctrl_shift_letter(event, "A"):
+            self.download_audio()
+        elif self.is_ctrl_shift_letter(event, "D"):
+            self.download_video()
+        elif key == wx.WXK_RETURN:
             self.play_selected()
         elif key == getattr(wx, "WXK_APPS", -1) or (key == wx.WXK_F10 and event.ShiftDown()):
             self.open_context_menu()
@@ -699,11 +724,14 @@ class MainFrame(wx.Frame):
         choice("results_limit", results_limit_value, ["0", "10", "20", "50", "100", "150", "200", "250"])
         choice("seek_seconds", str(self.settings.seek_seconds), ["5", "10", "15", "30"])
         choice("volume_step", str(self.settings.volume_step), ["1", "2", "5", "10"])
+        choice("speed_step", self.format_step_value(self.settings.speed_step), RATE_STEP_OPTIONS)
+        choice("pitch_step", self.format_step_value(self.settings.pitch_step), RATE_STEP_OPTIONS)
         check("auto_update", self.settings.auto_update_ytdlp)
         check("auto_update_app", self.settings.auto_update_app)
         check("autoplay_next", self.settings.autoplay_next)
         check("confirm_download", self.settings.confirm_before_download)
         check("open_after_download", self.settings.open_folder_after_download)
+        check("download_complete_popup", self.settings.popup_when_download_complete)
         choice("audio_format", self.settings.audio_format, ["mp3", "m4a", "opus", "wav", "flac"])
         choice("audio_quality", self.settings.audio_quality, ["0", "1", "2", "3", "4", "5", "128", "192", "256", "320"])
         choice("video_format", self.settings.video_format, ["bestvideo+bestaudio/best", "best", "best[ext=mp4]", "worst"])
@@ -723,6 +751,7 @@ class MainFrame(wx.Frame):
         check("download_archive", self.settings.download_archive)
         text("player_command", self.settings.player_command)
         choice("player_speed", self.settings.player_speed, [self.format_playback_rate(step) for step in PLAYBACK_SPEED_STEPS if step <= 2.0])
+        choice("pitch_mode", self.normalized_pitch_mode(), PITCH_MODE_OPTIONS)
         check("browser_playback", self.settings.prefer_browser_playback)
         check("fullscreen", self.settings.player_fullscreen)
         check("start_paused", self.settings.player_start_paused)
@@ -1262,6 +1291,8 @@ class MainFrame(wx.Frame):
             current = self.mpv_get_property("speed")
             speed = float(current if current is not None else 1.0)
             speed = self.next_playback_speed(speed, delta)
+            if self.normalized_pitch_mode() != PITCH_MODE_LINKED_SPEED:
+                self.mpv_set_property("audio-pitch-correction", True)
             self.mpv_set_property("speed", speed)
             speed_text = self.format_playback_rate(speed)
             self.current_video_info["speed"] = speed_text
@@ -1277,13 +1308,9 @@ class MainFrame(wx.Frame):
 
     def change_pitch_worker(self, delta: float) -> None:
         try:
-            current = self.mpv_get_property("pitch")
-            stored = self.current_video_info.get("pitch", "1.0")
-            pitch = float(current if current is not None else stored)
+            pitch = self.current_pitch_value()
             pitch = self.next_pitch_value(pitch, delta)
-            self.mpv_set_property("pitch", pitch)
-            pitch_text = self.format_playback_rate(pitch)
-            self.current_video_info["pitch"] = pitch_text
+            self.apply_pitch_value(pitch)
             wx.CallAfter(self.announce_player, self.t("pitch_announcement", pitch=self.format_rate_for_speech(pitch)))
             if self.is_default_rate(pitch):
                 wx.CallAfter(self.play_default_sound)
@@ -1291,13 +1318,49 @@ class MainFrame(wx.Frame):
         except Exception:
             wx.CallAfter(self.announce_player, self.t("timing_unavailable"))
 
+    def current_pitch_value(self) -> float:
+        stored = self.current_video_info.get("pitch", "1.0")
+        try:
+            return float(stored)
+        except (TypeError, ValueError):
+            return 1.0
+
+    def apply_pitch_value(self, pitch: float) -> None:
+        mode = self.normalized_pitch_mode()
+        pitch_text = self.format_playback_rate(pitch)
+        if mode == PITCH_MODE_LINKED_SPEED:
+            self.clear_rubberband_pitch_filter()
+            self.mpv_set_property("audio-pitch-correction", False)
+            self.mpv_set_property("pitch", 1.0)
+            self.mpv_set_property("speed", pitch)
+            self.current_video_info["speed"] = pitch_text
+        elif mode == PITCH_MODE_MPV:
+            self.clear_rubberband_pitch_filter()
+            self.mpv_set_property("audio-pitch-correction", True)
+            self.mpv_set_property("pitch", pitch)
+        else:
+            self.mpv_set_property("audio-pitch-correction", True)
+            self.mpv_set_property("pitch", 1.0)
+            if self.is_default_rate(pitch):
+                self.clear_rubberband_pitch_filter()
+            else:
+                self.mpv_send(["af", "set", f"rubberband=transients=smooth:formant=preserved:pitch=quality:engine=finer:pitch-scale={pitch:.4f}"])
+        self.current_video_info["pitch"] = pitch_text
+
+    def clear_rubberband_pitch_filter(self) -> None:
+        self.mpv_send(["af", "set", ""])
+
     @staticmethod
     def next_playback_speed(current: float, delta: float) -> float:
-        return MainFrame.next_step_value(current, delta, PLAYBACK_SPEED_STEPS)
+        return MainFrame.clamp_rate(current + delta, 0.25, 4.0)
 
     @staticmethod
     def next_pitch_value(current: float, delta: float) -> float:
-        return MainFrame.next_step_value(current, delta, PITCH_STEPS)
+        return MainFrame.clamp_rate(current + delta, 0.5, 2.0)
+
+    @staticmethod
+    def clamp_rate(value: float, minimum: float, maximum: float) -> float:
+        return round(min(max(value, minimum), maximum), 2)
 
     @staticmethod
     def next_step_value(current: float, delta: float, steps: list[float]) -> float:
@@ -1320,6 +1383,23 @@ class MainFrame(wx.Frame):
     @staticmethod
     def format_rate_for_speech(value: float) -> str:
         return f"{value:.2f}"
+
+    @staticmethod
+    def format_step_value(value: float) -> str:
+        try:
+            return f"{float(value):.2f}"
+        except (TypeError, ValueError):
+            return "0.01"
+
+    def speed_step_value(self) -> float:
+        return self.to_float(str(getattr(self.settings, "speed_step", 0.01)), 0.01, 0.01, 0.25)
+
+    def pitch_step_value(self) -> float:
+        return self.to_float(str(getattr(self.settings, "pitch_step", 0.01)), 0.01, 0.01, 0.25)
+
+    def normalized_pitch_mode(self) -> str:
+        mode = str(getattr(self.settings, "pitch_mode", PITCH_MODE_RUBBERBAND) or PITCH_MODE_RUBBERBAND)
+        return mode if mode in PITCH_MODE_OPTIONS else PITCH_MODE_RUBBERBAND
 
     @staticmethod
     def is_default_rate(value: float) -> bool:
@@ -1355,6 +1435,17 @@ class MainFrame(wx.Frame):
         if not silent:
             self.set_status(self.t("stopped"))
 
+    @staticmethod
+    def is_ctrl_shift_letter(event: wx.KeyEvent, letter: str) -> bool:
+        if not (event.ControlDown() and event.ShiftDown()):
+            return False
+        upper = letter.upper()
+        codes = {ord(upper), ord(upper.lower()), ord(upper) - ord("A") + 1}
+        unicode_key = event.GetUnicodeKey()
+        if unicode_key != wx.WXK_NONE:
+            codes.add(unicode_key)
+        return event.GetKeyCode() in codes
+
     def on_char_hook(self, event: wx.KeyEvent) -> None:
         key = event.GetKeyCode()
         focus = wx.Window.FindFocus()
@@ -1365,10 +1456,10 @@ class MainFrame(wx.Frame):
         if key == wx.WXK_RETURN and focus is getattr(self, "results_list", None):
             self.play_selected()
             return
-        if event.ControlDown() and event.ShiftDown() and key in (ord("A"), ord("a")):
+        if self.is_ctrl_shift_letter(event, "A"):
             self.download_audio()
             return
-        if event.ControlDown() and event.ShiftDown() and key in (ord("D"), ord("d")):
+        if self.is_ctrl_shift_letter(event, "D"):
             self.download_video()
             return
         if key == wx.WXK_ESCAPE:
@@ -1388,16 +1479,16 @@ class MainFrame(wx.Frame):
                 self.announce_time_async()
                 return
             if key in (ord("S"), ord("s")):
-                self.change_speed_async(-0.10)
+                self.change_speed_async(-self.speed_step_value())
                 return
             if key in (ord("D"), ord("d")):
-                self.change_speed_async(0.10)
+                self.change_speed_async(self.speed_step_value())
                 return
             if key == wx.WXK_UP and event.ControlDown():
-                self.change_pitch_async(0.05)
+                self.change_pitch_async(self.pitch_step_value())
                 return
             if key == wx.WXK_DOWN and event.ControlDown():
-                self.change_pitch_async(-0.05)
+                self.change_pitch_async(-self.pitch_step_value())
                 return
             if key in (ord("V"), ord("v")):
                 self.show_video_details()
@@ -1454,7 +1545,7 @@ class MainFrame(wx.Frame):
             if wx.MessageBox(self.t("download_confirm", action=action, title=item["title"]), APP_NAME, wx.YES_NO | wx.ICON_QUESTION) != wx.YES:
                 self.set_status(self.t("download_cancelled"))
                 return
-        self.set_status(f"{item['title']}: {self.t('queued')}")
+        self.announce_player(self.t("download_audio_start" if audio_only else "download_video_start"))
         threading.Thread(target=self.download_worker, args=(item, audio_only), daemon=True).start()
 
     def download_audio(self) -> None:
@@ -1471,12 +1562,18 @@ class MainFrame(wx.Frame):
             with yt_dlp.YoutubeDL(options) as ydl:
                 ydl.download([item["url"]])
             done_text = self.t("download_audio_done" if audio_only else "download_video_done", title=item["title"])
-            wx.CallAfter(self.set_status, done_text)
-            wx.CallAfter(self.message, done_text, wx.ICON_INFORMATION)
-            if self.settings.open_folder_after_download:
-                os.startfile(folder)  # type: ignore[attr-defined]
+            wx.CallAfter(self.finish_download, done_text, str(folder))
         except Exception as exc:
             wx.CallAfter(self.message, self.t("download_failed", error=exc), wx.ICON_ERROR)
+
+    def finish_download(self, done_text: str, folder: str) -> None:
+        if self.settings.popup_when_download_complete:
+            self.set_status(done_text)
+            self.message(done_text, wx.ICON_INFORMATION)
+        else:
+            self.announce_player(done_text)
+        if self.settings.open_folder_after_download:
+            os.startfile(folder)  # type: ignore[attr-defined]
 
     def download_options(self, folder: Path, audio_only: bool, title: str) -> dict:
         progress_hook = self.make_download_progress_hook(title, audio_only)
@@ -1613,11 +1710,14 @@ class MainFrame(wx.Frame):
         self.settings.results_limit = self.to_int(c["results_limit"].GetStringSelection(), 20, 0, 250)
         self.settings.seek_seconds = self.to_int(c["seek_seconds"].GetStringSelection(), 5, 1)
         self.settings.volume_step = self.to_int(c["volume_step"].GetStringSelection(), 5, 1)
+        self.settings.speed_step = self.to_float(c["speed_step"].GetStringSelection(), 0.01, 0.01, 0.25)
+        self.settings.pitch_step = self.to_float(c["pitch_step"].GetStringSelection(), 0.01, 0.01, 0.25)
         self.settings.auto_update_ytdlp = c["auto_update"].GetValue()
         self.settings.auto_update_app = c["auto_update_app"].GetValue()
         self.settings.autoplay_next = c["autoplay_next"].GetValue()
         self.settings.confirm_before_download = c["confirm_download"].GetValue()
         self.settings.open_folder_after_download = c["open_after_download"].GetValue()
+        self.settings.popup_when_download_complete = c["download_complete_popup"].GetValue()
         self.settings.audio_format = c["audio_format"].GetStringSelection() or "mp3"
         self.settings.audio_quality = c["audio_quality"].GetStringSelection() or "0"
         self.settings.video_format = c["video_format"].GetStringSelection() or "bestvideo+bestaudio/best"
@@ -1637,6 +1737,7 @@ class MainFrame(wx.Frame):
         self.settings.download_archive = c["download_archive"].GetValue()
         self.settings.player_command = c["player_command"].GetValue()
         self.settings.player_speed = c["player_speed"].GetStringSelection() or "1.0"
+        self.settings.pitch_mode = c["pitch_mode"].GetStringSelection() or PITCH_MODE_RUBBERBAND
         self.settings.prefer_browser_playback = c["browser_playback"].GetValue()
         self.settings.player_fullscreen = c["fullscreen"].GetValue()
         self.settings.player_start_paused = c["start_paused"].GetValue()
@@ -2109,6 +2210,16 @@ class MainFrame(wx.Frame):
             number = max(minimum, int(value))
             return min(maximum, number) if maximum is not None else number
         except ValueError:
+            return default
+
+    @staticmethod
+    def to_float(value: str, default: float, minimum: float, maximum: float | None = None) -> float:
+        try:
+            number = max(minimum, float(value))
+            if maximum is not None:
+                number = min(maximum, number)
+            return round(number, 2)
+        except (TypeError, ValueError):
             return default
 
     @staticmethod

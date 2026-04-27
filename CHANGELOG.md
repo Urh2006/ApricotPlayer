@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.4
+
+- speed and pitch hotkeys now default to `0.01x` steps
+- settings now include playback speed step, pitch step, and pitch control mode
+- pitch control defaults to a higher-quality rubberband filter, with optional mpv pitch and linked-speed modes
+- `Ctrl+Shift+A` and `Ctrl+Shift+D` are handled more reliably in both results and player mode
+- downloads now announce start and can either show a completion popup or only speak completion through the screen reader
+
 ## 0.1.3
 
 - updater now shows a visible progress dialog immediately after `Update now`
