@@ -2,13 +2,13 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.2.2` (`0.2.2`)
+Current version: `0.3` (`0.3`)
 
-The current standalone build is written to:
+## Download
 
-```text
-C:\Users\urhst\Downloads\ApricotPlayer.exe
-```
+Download the latest Windows installer from the [GitHub Releases page](https://github.com/Urh2006/ApricotPlayer/releases/latest).
+
+The installer adds ApricotPlayer to the Windows Start Menu and can create a desktop shortcut. User settings are stored per user in `%APPDATA%\ApricotPlayer\settings.json`.
 
 ## Run from source
 
@@ -33,7 +33,7 @@ py wx_main.py
 - Favorites
 - Slovenian and English UI
 - Dynamic search mode with results loading in chunks of 20
-- GitHub release updater for the packaged `.exe`
+- GitHub release updater for installed and packaged builds
 - Per-user settings in `%APPDATA%\ApricotPlayer\settings.json`
 
 ## Player shortcuts
@@ -61,14 +61,10 @@ The app uses native Windows controls where possible so it behaves well with NVDA
 
 ## Updates
 
-The packaged app can check GitHub releases automatically. For a private repository, testers need either:
-
-- GitHub CLI installed and logged in, or
-- a GitHub token entered in the app settings
+The packaged app checks public GitHub releases automatically unless disabled in Settings. Before installing a newer version, it shows an `Update available` dialog with the version, changelog, and `Update now` / `Skip this version` buttons.
 
 Helpful scripts:
 
 - `scripts/build_release.ps1` builds `ApricotPlayer.exe`
-- `scripts/publish_release.ps1 -Tag v0.2.2 -NotesFile release-notes/v0.2.2.md` publishes `release-dist\ApricotPlayer.exe` to GitHub Releases
-
-Before the app installs a newer version, it shows an `Update available` dialog with the version, changelog, and `Update now` / `Skip this version` buttons. After `Update now`, a progress dialog is shown while the new `.exe` downloads.
+- `scripts/build_installer.ps1` builds `ApricotPlayerSetup.exe` when Inno Setup is installed
+- `scripts/publish_release.ps1 -Tag v0.3 -NotesFile release-notes/v0.3.md` publishes release assets to GitHub Releases

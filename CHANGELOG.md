@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3
+
+- public README no longer references local development download paths
+- added an Inno Setup based Windows installer build that installs ApricotPlayer into the standard Windows Programs folder
+- installer adds a Start Menu shortcut and offers an optional desktop shortcut
+- updater now prefers `ApricotPlayerSetup.exe` when a release provides it, then falls back to the portable `.exe`
+- release publishing now uploads both the portable executable and installer when both exist
+
 ## 0.2.2
 
 - added a `Cookies from browser` setting for YouTube sign-in/bot-check cases

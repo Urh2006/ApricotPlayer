@@ -3,6 +3,7 @@ param(
     [string]$Tag,
     [string]$Repo = "Urh2006/ApricotPlayer",
     [string]$ExecutablePath = "",
+    [string[]]$AssetPaths = @(),
     [string]$Title = "",
     [string]$Notes = "",
     [string]$NotesFile = ""
@@ -14,6 +15,14 @@ $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
 if (-not $ExecutablePath) {
     $ExecutablePath = Join-Path $projectRoot "release-dist\ApricotPlayer.exe"
+}
+
+if (-not $AssetPaths -or $AssetPaths.Count -eq 0) {
+    $AssetPaths = @($ExecutablePath)
+    $installerPath = Join-Path $projectRoot "release-dist\ApricotPlayerSetup.exe"
+    if (Test-Path $installerPath) {
+        $AssetPaths += $installerPath
+    }
 }
 
 if (-not $Title) {
@@ -48,8 +57,10 @@ if (-not $ghCandidates) {
 
 $gh = @($ghCandidates)[0]
 
-if (-not (Test-Path $ExecutablePath)) {
-    throw "Executable not found: $ExecutablePath"
+foreach ($assetPath in $AssetPaths) {
+    if (-not (Test-Path $assetPath)) {
+        throw "Release asset not found: $assetPath"
+    }
 }
 
 function Invoke-GhChecked {
@@ -90,12 +101,14 @@ if ($viewExitCode -eq 0) {
 try {
     if ($releaseExists) {
         $editArgs = @("release", "edit", $Tag, "--title", $Title, "--notes-file", $resolvedNotesFile, "--repo", $Repo)
-        $uploadArgs = @("release", "upload", $Tag, $ExecutablePath, "--clobber", "--repo", $Repo)
         [void](Invoke-GhChecked -Arguments $editArgs)
-        [void](Invoke-GhChecked -Arguments $uploadArgs)
+        foreach ($assetPath in $AssetPaths) {
+            $uploadArgs = @("release", "upload", $Tag, $assetPath, "--clobber", "--repo", $Repo)
+            [void](Invoke-GhChecked -Arguments $uploadArgs)
+        }
     }
     else {
-        $createArgs = @("release", "create", $Tag, $ExecutablePath, "--title", $Title, "--notes-file", $resolvedNotesFile, "--repo", $Repo)
+        $createArgs = @("release", "create", $Tag) + $AssetPaths + @("--title", $Title, "--notes-file", $resolvedNotesFile, "--repo", $Repo)
         [void](Invoke-GhChecked -Arguments $createArgs)
     }
 }

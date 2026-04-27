@@ -65,8 +65,8 @@ class QuietYtdlpLogger:
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.2.2"
-APP_VERSION_LABEL = "0.2.2"
+APP_VERSION = "0.3"
+APP_VERSION_LABEL = "0.3"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -80,6 +80,7 @@ RESULTS_PAGE_SIZE = 20
 DEFAULT_GITHUB_OWNER = "Urh2006"
 DEFAULT_GITHUB_REPO = "ApricotPlayer"
 UPDATE_ASSET_NAME = "ApricotPlayer.exe"
+INSTALLER_ASSET_NAME = "ApricotPlayerSetup.exe"
 UPDATE_LOG_FILE = APP_DIR / "updater.log"
 PLAYBACK_SPEED_STEPS = [0.25, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1.0, 1.1, 1.2, 1.25, 1.3, 1.4, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0]
 PITCH_STEPS = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0]
@@ -2356,13 +2357,21 @@ class MainFrame(wx.Frame):
             self.message(self.t("update_source_only", version=version))
             return
         current_exe = Path(sys.executable)
-        script_path = self.write_update_script(downloaded_path, str(current_exe), os.getpid(), str(UPDATE_LOG_FILE), restart=True)
+        if self.is_installer_asset(downloaded_path):
+            script_path = self.write_installer_update_script(downloaded_path, os.getpid(), str(UPDATE_LOG_FILE), restart=True)
+        else:
+            script_path = self.write_update_script(downloaded_path, str(current_exe), os.getpid(), str(UPDATE_LOG_FILE), restart=True)
         self.launch_update_script(script_path)
         self.set_status(self.t("installing_update", version=version))
         self.close_update_progress_dialog()
         self.announce_player(self.t("update_install_started"))
         self.set_status(self.t("update_install_log", path=UPDATE_LOG_FILE))
         wx.CallLater(800, self.exit_for_update)
+
+    @staticmethod
+    def is_installer_asset(path_or_name: str | Path) -> bool:
+        name = Path(path_or_name).name.lower()
+        return name == INSTALLER_ASSET_NAME.lower() or "setup" in name or "installer" in name
 
     @staticmethod
     def validate_update_executable(path: Path) -> None:
@@ -2423,6 +2432,55 @@ class MainFrame(wx.Frame):
         script_path.write_text(script, encoding="utf-8-sig")
         return script_path
 
+    @classmethod
+    def write_installer_update_script(cls, downloaded_path: str, process_id: int, log_path: str, restart: bool = True) -> Path:
+        script_path = Path(tempfile.gettempdir()) / f"apricotplayer-installer-update-{int(time.time())}.ps1"
+        restart_value = "$true" if restart else "$false"
+        script = "\n".join(
+            [
+                "$ErrorActionPreference = 'Stop'",
+                f"$source = {cls.powershell_literal(downloaded_path)}",
+                f"$log = {cls.powershell_literal(log_path)}",
+                f"$processIdToWait = {int(process_id)}",
+                f"$restart = {restart_value}",
+                "$silentArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS')",
+                "$installCandidates = @(",
+                "    (Join-Path $env:ProgramFiles 'ApricotPlayer\\ApricotPlayer.exe')",
+                ")",
+                "if (${env:ProgramFiles(x86)}) { $installCandidates += (Join-Path ${env:ProgramFiles(x86)} 'ApricotPlayer\\ApricotPlayer.exe') }",
+                "New-Item -ItemType Directory -Path (Split-Path -Parent $log) -Force | Out-Null",
+                "function Log($message) { Add-Content -LiteralPath $log -Value ((Get-Date -Format o) + ' ' + $message) -Encoding UTF8 }",
+                "Set-Content -LiteralPath $log -Value ((Get-Date -Format o) + ' Starting ApricotPlayer installer update') -Encoding UTF8",
+                "Log \"Installer: $source\"",
+                "Start-Sleep -Milliseconds 500",
+                "try { Wait-Process -Id $processIdToWait -Timeout 180 -ErrorAction SilentlyContinue } catch { Log \"Wait-Process warning: $($_.Exception.Message)\" }",
+                "try {",
+                "    Log 'Launching installer'",
+                "    $process = Start-Process -FilePath $source -ArgumentList $silentArgs -Verb runAs -Wait -PassThru",
+                "    if ($process -and $process.ExitCode -ne 0) { throw \"Installer exited with code $($process.ExitCode)\" }",
+                "    Log 'Installer completed'",
+                "    Remove-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue",
+                "    if ($restart) {",
+                "        foreach ($candidate in $installCandidates) {",
+                "            if (Test-Path -LiteralPath $candidate) {",
+                "                Log \"Restarting ApricotPlayer from $candidate\"",
+                "                Start-Process -FilePath $candidate -WorkingDirectory (Split-Path -Parent $candidate)",
+                "                break",
+                "            }",
+                "        }",
+                "    }",
+                "    Log 'Update complete'",
+                "} catch {",
+                "    Log \"Installer update failed: $($_.Exception.Message)\"",
+                "    exit 1",
+                "}",
+                "Start-Sleep -Seconds 2",
+                "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
+            ]
+        )
+        script_path.write_text(script, encoding="utf-8-sig")
+        return script_path
+
     @staticmethod
     def launch_update_script(script_path: Path) -> None:
         powershell = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
@@ -2468,7 +2526,13 @@ class MainFrame(wx.Frame):
         assets = release.get("assets") or []
         preferred_name = Path(sys.executable).name if getattr(sys, "frozen", False) else UPDATE_ASSET_NAME
         for asset in assets:
+            if asset.get("name") == INSTALLER_ASSET_NAME:
+                return asset
+        for asset in assets:
             if asset.get("name") == preferred_name:
+                return asset
+        for asset in assets:
+            if self.is_installer_asset(str(asset.get("name") or "")):
                 return asset
         for asset in assets:
             name = str(asset.get("name") or "").lower()
