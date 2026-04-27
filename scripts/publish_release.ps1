@@ -56,10 +56,16 @@ function Invoke-GhChecked {
     param(
         [Parameter(Mandatory = $true)]
         [string[]]$Arguments,
-        [switch]$AllowFailure
+        [switch]$AllowFailure,
+        [switch]$Quiet
     )
 
-    & $gh @Arguments | ForEach-Object { Write-Host $_ }
+    if ($Quiet) {
+        & $gh @Arguments *> $null
+    }
+    else {
+        & $gh @Arguments | ForEach-Object { Write-Host $_ }
+    }
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0 -and -not $AllowFailure) {
         throw "GitHub CLI failed with exit code ${exitCode}: gh $($Arguments -join ' ')"
@@ -69,7 +75,7 @@ function Invoke-GhChecked {
 
 $releaseExists = $false
 $viewArgs = @("release", "view", $Tag, "--repo", $Repo)
-$viewExitCode = Invoke-GhChecked -Arguments $viewArgs -AllowFailure
+$viewExitCode = Invoke-GhChecked -Arguments $viewArgs -AllowFailure -Quiet
 if ($viewExitCode -eq 0) {
     $releaseExists = $true
 }
