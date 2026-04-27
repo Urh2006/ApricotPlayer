@@ -2509,17 +2509,28 @@ class MainFrame(wx.Frame):
         owner = self.settings.github_owner.strip() or DEFAULT_GITHUB_OWNER
         repo = self.settings.github_repo.strip() or DEFAULT_GITHUB_REPO
         token = self.resolve_github_token()
-        request = Request(
+        latest_request = Request(
+            f"https://api.github.com/repos/{owner}/{repo}/releases/latest",
+            headers=self.github_headers(token),
+        )
+        try:
+            with urlopen(latest_request, timeout=30) as response:
+                release = json.loads(response.read().decode("utf-8"))
+            if isinstance(release, dict) and not release.get("draft"):
+                return release
+        except HTTPError as exc:
+            if exc.code != 404:
+                raise
+        list_request = Request(
             f"https://api.github.com/repos/{owner}/{repo}/releases",
             headers=self.github_headers(token),
         )
-        with urlopen(request, timeout=30) as response:
+        with urlopen(list_request, timeout=30) as response:
             payload = json.loads(response.read().decode("utf-8"))
-        if not isinstance(payload, list):
-            return None
-        for release in payload:
-            if not release.get("draft"):
-                return release
+        if isinstance(payload, list):
+            releases = [release for release in payload if not release.get("draft")]
+            releases.sort(key=lambda release: str(release.get("published_at") or release.get("created_at") or ""), reverse=True)
+            return releases[0] if releases else None
         return None
 
     def find_release_asset(self, release: dict) -> dict | None:
