@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1
+
+- fixed packaged playback failing with `NoneType` stream write errors
+- queued downloads now open a dedicated `Queued videos for download` screen instead of a hidden main-menu `Download all` action
+- queued download screen supports downloading the selected item, audio/video context menu actions, `Ctrl+Shift+A`, `Ctrl+Shift+D`, and a tab-reachable `Download all` button
+- batch downloads now clear the queue immediately so the queued option disappears once there is nothing waiting
+- batch downloads announce when they start and when each queued item begins downloading
+
 ## 0.2
 
 - updater install flow no longer waits behind a final OK dialog; it logs to `%APPDATA%\ApricotPlayer\updater.log`, exits the app, replaces the `.exe`, and restarts

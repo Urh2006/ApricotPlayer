@@ -33,9 +33,40 @@ except ImportError:
     winsound = None
 
 
+class NullTextStream:
+    encoding = "utf-8"
+
+    def write(self, _text: str) -> int:
+        return len(str(_text))
+
+    def flush(self) -> None:
+        pass
+
+    def isatty(self) -> bool:
+        return False
+
+
+if sys.stdout is None:
+    sys.stdout = NullTextStream()
+if sys.stderr is None:
+    sys.stderr = NullTextStream()
+
+
+class QuietYtdlpLogger:
+    def debug(self, _message: str) -> None:
+        pass
+
+    def warning(self, _message: str) -> None:
+        pass
+
+    def error(self, _message: str) -> None:
+        pass
+
+
+YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.2"
-APP_VERSION_LABEL = "0.2"
+APP_VERSION = "0.2.1"
+APP_VERSION_LABEL = "0.2.1"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -65,6 +96,12 @@ TEXT = {
         "ready": "Pripravljen.",
         "main_menu": "Glavni meni",
         "download_all": "Download all",
+        "queued_videos_for_download": "Queued videos for download",
+        "queued_downloads": "Queued videos for download",
+        "no_queued_downloads": "No queued downloads.",
+        "queued_download_instructions": "Use Enter to download with the queued format, Ctrl+Shift+A for audio, Ctrl+Shift+D for video, or the context menu.",
+        "download_selected_queued": "Download selected queued item",
+        "remove_from_queue": "Remove from queue",
         "search_youtube": "Iskanje po YouTube",
         "choose_download_folder": "Izbor mape za prenose",
         "favorites": "Priljubljeni",
@@ -211,8 +248,8 @@ TEXT = {
         "playing": "Predvajam: {title}",
         "preparing_stream": "Pripravljam predvajanje: {title}",
         "opened_browser": "Odprto v brskalniku: {title}",
-        "no_player": "Player ni najden, odprl sem brskalnik.",
-        "player_failed": "Player se ni zagnal, odprt je brskalnik: {error}",
+        "no_player": "Player ni najden.",
+        "player_failed": "Player se ni zagnal: {error}",
         "stopped": "Predvajanje ustavljeno.",
         "volume_boost_on": "Volume boost on.",
         "volume_boost_off": "Volume boost off.",
@@ -235,6 +272,12 @@ TEXT = {
         "ready": "Ready.",
         "main_menu": "Main menu",
         "download_all": "Download all",
+        "queued_videos_for_download": "Queued videos for download",
+        "queued_downloads": "Queued videos for download",
+        "no_queued_downloads": "No queued downloads.",
+        "queued_download_instructions": "Use Enter to download with the queued format, Ctrl+Shift+A for audio, Ctrl+Shift+D for video, or the context menu.",
+        "download_selected_queued": "Download selected queued item",
+        "remove_from_queue": "Remove from queue",
         "search_youtube": "Search YouTube",
         "choose_download_folder": "Choose download folder",
         "favorites": "Favorites",
@@ -381,8 +424,8 @@ TEXT = {
         "playing": "Playing: {title}",
         "preparing_stream": "Preparing playback: {title}",
         "opened_browser": "Opened in browser: {title}",
-        "no_player": "Player not found, opened browser.",
-        "player_failed": "Player did not start, opened browser: {error}",
+        "no_player": "Player not found.",
+        "player_failed": "Player did not start: {error}",
         "stopped": "Playback stopped.",
         "volume_boost_on": "Volume boost on.",
         "volume_boost_off": "Volume boost off.",
@@ -478,11 +521,13 @@ class MainFrame(wx.Frame):
         self.player_control_mode = False
         self.volume_boost_enabled = False
         self.in_player_screen = False
+        self.in_queue_screen = False
         self.current_video_item: dict | None = None
         self.current_video_info: dict = {}
         self.details_label: wx.StaticText | None = None
         self.video_details: wx.TextCtrl | None = None
         self.download_queue: dict[str, dict] = {}
+        self.queue_items: list[dict] = []
         self.ipc_path: str | None = None
         self.ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.loading_more_results = False
@@ -512,6 +557,13 @@ class MainFrame(wx.Frame):
         language = self.settings.language if self.settings.language in TEXT else "sl"
         text = TEXT[language].get(key, TEXT["sl"].get(key, key))
         return text.format(**kwargs) if kwargs else text
+
+    @staticmethod
+    def ydl_options(options: dict | None = None) -> dict:
+        merged = {"logger": YTDLP_LOGGER, "no_warnings": True}
+        if options:
+            merged.update(options)
+        return merged
 
     def clear(self) -> None:
         self.root_sizer.Clear(delete_windows=True)
@@ -591,12 +643,13 @@ class MainFrame(wx.Frame):
         self.root_sizer.Add(row, 0, wx.ALL, 4)
 
     def show_main_menu(self) -> None:
+        self.in_queue_screen = False
         self.clear()
         title = wx.StaticText(self.panel, label=self.t("main_menu"))
         self.root_sizer.Add(title, 0, wx.ALL, 4)
         self.menu_actions = []
         if self.download_queue:
-            self.menu_actions.append((f"{self.t('download_all')} ({len(self.download_queue)})", self.download_all_queued))
+            self.menu_actions.append((f"{self.t('queued_videos_for_download')} ({len(self.download_queue)})", self.show_download_queue))
         self.menu_actions.extend([
             (self.t("search_youtube"), self.show_search),
             (self.t("choose_download_folder"), self.choose_download_folder),
@@ -625,7 +678,81 @@ class MainFrame(wx.Frame):
         if index != wx.NOT_FOUND:
             self.menu_actions[index][1]()
 
+    def show_download_queue(self) -> None:
+        self.in_queue_screen = True
+        self.clear()
+        buttons = [(self.t("back"), self.show_main_menu)]
+        if self.download_queue:
+            buttons.append((self.t("download_all"), self.download_all_queued))
+        self.add_button_row(buttons)
+        title = wx.StaticText(self.panel, label=self.t("queued_downloads"))
+        self.root_sizer.Add(title, 0, wx.ALL, 4)
+        instructions = wx.StaticText(self.panel, label=self.t("queued_download_instructions"))
+        self.root_sizer.Add(instructions, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
+        self.queue_items = list(self.download_queue.values())
+        self.queue_list = wx.ListBox(self.panel, choices=[self.queue_line(item) for item in self.queue_items])
+        self.queue_list.SetName(self.t("queued_downloads"))
+        self.queue_list.Bind(wx.EVT_CONTEXT_MENU, self.open_queue_context_menu)
+        self.queue_list.Bind(wx.EVT_KEY_DOWN, self.on_queue_key)
+        self.root_sizer.Add(self.queue_list, 1, wx.EXPAND | wx.ALL, 4)
+        if self.queue_items:
+            self.queue_list.SetSelection(0)
+        else:
+            empty = wx.StaticText(self.panel, label=self.t("no_queued_downloads"))
+            self.root_sizer.Add(empty, 0, wx.ALL, 4)
+        self.panel.Layout()
+        self.focus_later(self.queue_list)
+
+    def queue_line(self, item: dict) -> str:
+        mode = self.t("audio_queued_marker" if item.get("audio_only") else "video_queued_marker")
+        parts = [
+            item.get("title", ""),
+            f"{self.t('channel')}: {item.get('channel', '')}",
+            mode,
+        ]
+        return " | ".join(part for part in parts if part)
+
+    def selected_queue_item(self) -> dict | None:
+        if not hasattr(self, "queue_list"):
+            return None
+        try:
+            index = self.queue_list.GetSelection()
+        except RuntimeError:
+            return None
+        if index == wx.NOT_FOUND or index < 0 or index >= len(self.queue_items):
+            return None
+        return self.queue_items[index]
+
+    def on_queue_key(self, event: wx.KeyEvent) -> None:
+        key = event.GetKeyCode()
+        if self.is_ctrl_shift_letter(event, "A"):
+            self.download_selected_queue_item(True)
+        elif self.is_ctrl_shift_letter(event, "D"):
+            self.download_selected_queue_item(False)
+        elif key == wx.WXK_RETURN:
+            self.download_selected_queue_item()
+        elif key == getattr(wx, "WXK_APPS", -1) or (key == wx.WXK_F10 and event.ShiftDown()):
+            self.open_queue_context_menu()
+        else:
+            event.Skip()
+
+    def open_queue_context_menu(self, _event=None) -> None:
+        menu = wx.Menu()
+        actions = [
+            (self.t("download_selected_queued"), lambda: self.download_selected_queue_item()),
+            (f"{self.t('download_audio')}\tCtrl+Shift+A", lambda: self.download_selected_queue_item(True)),
+            (f"{self.t('download_video')}\tCtrl+Shift+D", lambda: self.download_selected_queue_item(False)),
+            (self.t("download_all"), self.download_all_queued),
+            (self.t("remove_from_queue"), self.remove_selected_queue_item),
+        ]
+        for label, handler in actions:
+            item = menu.Append(wx.ID_ANY, label)
+            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
+        self.PopupMenu(menu)
+        menu.Destroy()
+
     def show_search(self, restore_search: bool = False) -> None:
+        self.in_queue_screen = False
         self.clear()
         self.add_button_row([(self.t("back"), self.show_main_menu)])
         grid = wx.FlexGridSizer(2, 2, 6, 6)
@@ -842,7 +969,7 @@ class MainFrame(wx.Frame):
     def search_worker(self, query: str, search_type: str, limit: int) -> None:
         try:
             options = {"quiet": True, "extract_flat": True, "skip_download": True, "playlistend": limit}
-            with yt_dlp.YoutubeDL(options) as ydl:
+            with yt_dlp.YoutubeDL(self.ydl_options(options)) as ydl:
                 if search_type == "Video":
                     info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
                 else:
@@ -929,7 +1056,7 @@ class MainFrame(wx.Frame):
     def search_more_worker(self, query: str, search_type: str, limit: int, selection: int) -> None:
         try:
             options = {"quiet": True, "extract_flat": True, "skip_download": True, "playlistend": limit}
-            with yt_dlp.YoutubeDL(options) as ydl:
+            with yt_dlp.YoutubeDL(self.ydl_options(options)) as ydl:
                 if search_type == "Video":
                     info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
                 else:
@@ -968,7 +1095,10 @@ class MainFrame(wx.Frame):
     def selected_result(self) -> dict | None:
         if not hasattr(self, "results_list"):
             return None
-        index = self.results_list.GetSelection()
+        try:
+            index = self.results_list.GetSelection()
+        except RuntimeError:
+            return None
         if index == wx.NOT_FOUND:
             return None
         self.current_index = index
@@ -1019,7 +1149,7 @@ class MainFrame(wx.Frame):
                 "skip_download": True,
                 "playlistend": limit,
             }
-            with yt_dlp.YoutubeDL(options) as ydl:
+            with yt_dlp.YoutubeDL(self.ydl_options(options)) as ydl:
                 info = ydl.extract_info(url, download=False)
             entries = list(info.get("entries") or [])[:limit]
             normalized = [self.normalize_entry(entry, result_type) for entry in entries]
@@ -1063,7 +1193,7 @@ class MainFrame(wx.Frame):
             "format": "best[ext=mp4]/best",
             "noplaylist": True,
         }
-        with yt_dlp.YoutubeDL(options) as ydl:
+        with yt_dlp.YoutubeDL(self.ydl_options(options)) as ydl:
             info = ydl.extract_info(url, download=False)
         stream_url = info.get("url")
         if not stream_url and info.get("formats"):
@@ -1147,6 +1277,7 @@ class MainFrame(wx.Frame):
             self.message(self.t("player_failed", error=exc), wx.ICON_ERROR)
 
     def show_player_page(self, title: str) -> None:
+        self.in_queue_screen = False
         self.clear()
         self.add_button_row(
             [
@@ -1267,6 +1398,10 @@ class MainFrame(wx.Frame):
     def active_item(self) -> dict | None:
         if self.in_player_screen and self.current_video_item:
             return self.current_video_item
+        if self.in_queue_screen:
+            item = self.selected_queue_item()
+            if item:
+                return item
         return self.selected_result()
 
     def copy_url_to_clipboard(self, url: str) -> None:
@@ -1554,6 +1689,15 @@ class MainFrame(wx.Frame):
         if key == wx.WXK_RETURN and focus is getattr(self, "menu_list", None):
             self.activate_menu()
             return
+        if focus is getattr(self, "queue_list", None) and self.is_ctrl_shift_letter(event, "A"):
+            self.download_selected_queue_item(True)
+            return
+        if focus is getattr(self, "queue_list", None) and self.is_ctrl_shift_letter(event, "D"):
+            self.download_selected_queue_item(False)
+            return
+        if focus is getattr(self, "queue_list", None) and key == wx.WXK_RETURN:
+            self.download_selected_queue_item()
+            return
         if focus is getattr(self, "results_list", None) and self.is_shift_letter(event, "A") and not event.ControlDown():
             self.toggle_download_queue(True)
             return
@@ -1648,8 +1792,8 @@ class MainFrame(wx.Frame):
         self.PopupMenu(menu)
         menu.Destroy()
 
-    def start_download(self, audio_only: bool) -> None:
-        item = self.active_item()
+    def start_download(self, audio_only: bool, item: dict | None = None, remove_queued: bool = False) -> None:
+        item = item or self.active_item()
         if not item:
             self.message(self.t("no_selection"))
             return
@@ -1658,6 +1802,8 @@ class MainFrame(wx.Frame):
             if wx.MessageBox(self.t("download_confirm", action=action, title=item["title"]), APP_NAME, wx.YES_NO | wx.ICON_QUESTION) != wx.YES:
                 self.set_status(self.t("download_cancelled"))
                 return
+        if remove_queued:
+            self.remove_queued_url(item.get("url", ""), announce=False)
         self.announce_player(self.t("download_audio_start" if audio_only else "download_video_start"))
         threading.Thread(target=self.download_worker, args=(item, audio_only), daemon=True).start()
 
@@ -1672,7 +1818,7 @@ class MainFrame(wx.Frame):
             folder = Path(self.settings.download_folder)
             folder.mkdir(parents=True, exist_ok=True)
             options = self.download_options(folder, audio_only, item["title"])
-            with yt_dlp.YoutubeDL(options) as ydl:
+            with yt_dlp.YoutubeDL(self.ydl_options(options)) as ydl:
                 ydl.download([item["url"]])
             done_text = self.t("download_audio_done" if audio_only else "download_video_done", title=item["title"])
             wx.CallAfter(self.finish_download, done_text, str(folder))
@@ -1820,6 +1966,16 @@ class MainFrame(wx.Frame):
             self.announce_player(self.t(key, title=item.get("title", "")))
         self.refresh_result_line(self.current_index)
 
+    def remove_queued_url(self, url: str, announce: bool = True) -> None:
+        if not url:
+            return
+        item = self.download_queue.pop(url, None)
+        if item and announce:
+            self.announce_player(self.t("download_deselected", title=item.get("title", "")))
+        self.refresh_results_list_labels()
+        if self.in_queue_screen:
+            self.refresh_queue_view()
+
     def refresh_result_line(self, index: int) -> None:
         if not hasattr(self, "results_list") or index < 0 or index >= len(self.results):
             return
@@ -1829,28 +1985,62 @@ class MainFrame(wx.Frame):
         except RuntimeError:
             pass
 
+    def refresh_queue_view(self) -> None:
+        if not self.in_queue_screen or not hasattr(self, "queue_list"):
+            return
+        if not self.download_queue:
+            self.show_download_queue()
+            return
+        try:
+            selection = self.queue_list.GetSelection()
+            self.queue_items = list(self.download_queue.values())
+            self.queue_list.Clear()
+            for item in self.queue_items:
+                self.queue_list.Append(self.queue_line(item))
+            self.queue_list.SetSelection(min(max(0, selection), len(self.queue_items) - 1))
+        except RuntimeError:
+            pass
+
+    def download_selected_queue_item(self, audio_only: bool | None = None) -> None:
+        item = self.selected_queue_item()
+        if not item:
+            self.announce_player(self.t("download_queue_empty"))
+            return
+        if audio_only is None:
+            audio_only = bool(item.get("audio_only"))
+        self.start_download(audio_only, item=dict(item), remove_queued=True)
+
+    def remove_selected_queue_item(self) -> None:
+        item = self.selected_queue_item()
+        if not item:
+            self.announce_player(self.t("download_queue_empty"))
+            return
+        self.remove_queued_url(item.get("url", ""), announce=True)
+
     def download_all_queued(self) -> None:
         if not self.download_queue:
             self.announce_player(self.t("download_queue_empty"))
             return
         items = list(self.download_queue.values())
         self.download_queue.clear()
-        if hasattr(self, "results_list"):
-            self.refresh_results_list_labels()
+        self.refresh_results_list_labels()
+        if self.in_queue_screen:
+            self.show_download_queue()
         self.announce_player(self.t("batch_download_start", count=len(items)))
         threading.Thread(target=self.download_batch_worker, args=(items,), daemon=True).start()
-        if wx.Window.FindFocus() is getattr(self, "menu_list", None):
-            self.show_main_menu()
 
     def refresh_results_list_labels(self) -> None:
         if not hasattr(self, "results_list"):
             return
-        selection = self.results_list.GetSelection()
-        self.results_list.Clear()
-        for index, item in enumerate(self.results):
-            self.results_list.Append(self.result_line(index, item))
-        if self.results:
-            self.results_list.SetSelection(min(max(0, selection), len(self.results) - 1))
+        try:
+            selection = self.results_list.GetSelection()
+            self.results_list.Clear()
+            for index, item in enumerate(self.results):
+                self.results_list.Append(self.result_line(index, item))
+            if self.results:
+                self.results_list.SetSelection(min(max(0, selection), len(self.results) - 1))
+        except RuntimeError:
+            pass
 
     def download_batch_worker(self, items: list[dict]) -> None:
         folder = Path(self.settings.download_folder)
@@ -1861,13 +2051,21 @@ class MainFrame(wx.Frame):
                 mode_key = "download_audio_start" if audio_only else "download_video_start"
                 wx.CallAfter(self.announce_player, self.t(mode_key))
                 options = self.download_options(folder, audio_only, item.get("title", ""))
-                with yt_dlp.YoutubeDL(options) as ydl:
+                with yt_dlp.YoutubeDL(self.ydl_options(options)) as ydl:
                     ydl.download([item["url"]])
-                done_text = self.t("download_audio_done" if audio_only else "download_video_done", title=item.get("title", ""))
-                wx.CallAfter(self.finish_download, done_text, str(folder))
-            wx.CallAfter(self.announce_player, self.t("batch_download_done"))
+            wx.CallAfter(self.finish_batch_download, str(folder))
         except Exception as exc:
             wx.CallAfter(self.message, self.t("download_failed", error=exc), wx.ICON_ERROR)
+
+    def finish_batch_download(self, folder: str) -> None:
+        done_text = self.t("batch_download_done")
+        if self.settings.popup_when_download_complete:
+            self.set_status(done_text)
+            self.message(done_text, wx.ICON_INFORMATION)
+        else:
+            self.announce_player(done_text)
+        if self.settings.open_folder_after_download:
+            os.startfile(folder)  # type: ignore[attr-defined]
 
     def restore_default_settings(self) -> None:
         self.settings = Settings()
@@ -1948,7 +2146,7 @@ class MainFrame(wx.Frame):
             self.ui_queue.put(("status", self.t("missing_ytdlp")))
             return
         try:
-            with yt_dlp.YoutubeDL({"quiet": True, "skip_download": True}) as ydl:
+            with yt_dlp.YoutubeDL(self.ydl_options({"quiet": True, "skip_download": True})) as ydl:
                 from yt_dlp.update import run_update
 
                 run_update(ydl)
