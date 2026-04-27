@@ -60,11 +60,18 @@ function Invoke-GhChecked {
         [switch]$Quiet
     )
 
-    if ($Quiet) {
-        & $gh @Arguments *> $null
+    try {
+        if ($Quiet) {
+            & $gh @Arguments *> $null
+        }
+        else {
+            & $gh @Arguments | ForEach-Object { Write-Host $_ }
+        }
     }
-    else {
-        & $gh @Arguments | ForEach-Object { Write-Host $_ }
+    catch {
+        if (-not $AllowFailure) {
+            throw
+        }
     }
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0 -and -not $AllowFailure) {
