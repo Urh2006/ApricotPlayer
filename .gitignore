@@ -12,3 +12,5 @@ release-dist/
 *.log
 vendor/*
 !vendor/.gitkeep
+!vendor/nvda/
+!vendor/nvda/nvdaControllerClient64.dll

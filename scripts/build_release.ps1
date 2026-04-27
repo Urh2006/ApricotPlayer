@@ -26,6 +26,8 @@ $args = @(
 
 $mpvDir = Join-Path $projectRoot "vendor\mpv"
 $ffmpegDir = Join-Path $projectRoot "vendor\ffmpeg"
+$nvdaDir = Join-Path $projectRoot "vendor\nvda"
+$assetsDir = Join-Path $projectRoot "assets"
 
 if (Test-Path (Join-Path $mpvDir "mpv.exe")) {
     $args += @("--add-data", "$mpvDir;mpv")
@@ -33,6 +35,14 @@ if (Test-Path (Join-Path $mpvDir "mpv.exe")) {
 
 if (Test-Path (Join-Path $ffmpegDir "ffmpeg.exe")) {
     $args += @("--add-data", "$ffmpegDir;ffmpeg")
+}
+
+if (Test-Path (Join-Path $nvdaDir "nvdaControllerClient64.dll")) {
+    $args += @("--add-data", "$nvdaDir;nvda")
+}
+
+if (Test-Path $assetsDir) {
+    $args += @("--add-data", "$assetsDir;assets")
 }
 
 $args += "wx_main.py"

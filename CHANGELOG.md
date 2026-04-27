@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.2
+
+- default language for new installs is now English
+- settings are always saved to the user's `%APPDATA%\ApricotPlayer\settings.json`
+- settings screen now includes a settings file path and a Restore to defaults button
+- player announcements now try NVDA speech directly through `nvdaControllerClient`
+- `T`, `V`, `L`, speed changes, and pitch changes now use the same announcement path
+- video details now use a standard multiline read-only text field for better screen reader reading, arrow navigation, and copying
+- speed and pitch controls now have finer steps, including `1.1x`
+- reaching default `1.0x` speed or pitch plays a short confirmation sound
+- dynamic results mode now fetches the first 20 results first, then fetches more only when needed
+- context menu download items now show `Ctrl+Shift+A` and `Ctrl+Shift+D`
+
 ## 0.1.1
 
 - updater now uses a PowerShell replacement script that waits for the old app process to exit before copying the new `.exe`

@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import webbrowser
+import ctypes
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,17 +21,21 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
 import wx
-import wx.richtext as richtext
 
 try:
     import yt_dlp
 except ImportError:
     yt_dlp = None
 
+try:
+    import winsound
+except ImportError:
+    winsound = None
+
 
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.1.1"
-APP_VERSION_LABEL = "0.1.1"
+APP_VERSION = "0.1.2"
+APP_VERSION_LABEL = "0.1.2"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -44,7 +49,9 @@ RESULTS_PAGE_SIZE = 20
 DEFAULT_GITHUB_OWNER = "Urh2006"
 DEFAULT_GITHUB_REPO = "ApricotPlayer"
 UPDATE_ASSET_NAME = "ApricotPlayer.exe"
-PLAYBACK_SPEED_STEPS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0]
+PLAYBACK_SPEED_STEPS = [0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1.0, 1.1, 1.2, 1.25, 1.3, 1.4, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0]
+PITCH_STEPS = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0]
+DEFAULT_REACHED_SOUND = "default_reached.wav"
 
 
 TEXT = {
@@ -84,6 +91,11 @@ TEXT = {
         "details_title": "Podrobnosti videa",
         "search_more_loaded": "Naloženih rezultatov: {count}.",
         "copy_link": "Copy link",
+        "settings_file": "Settings file",
+        "restore_defaults": "Restore to defaults",
+        "defaults_restored": "Default settings restored.",
+        "loading_more_results": "Loading more results.",
+        "no_more_results": "No more results.",
         "auto_update_app": "Ob zagonu preveri posodobitve programa na GitHubu",
         "github_owner": "GitHub owner",
         "github_repo": "GitHub repo",
@@ -225,6 +237,11 @@ TEXT = {
         "details_title": "Video details",
         "search_more_loaded": "Loaded results: {count}.",
         "copy_link": "Copy link",
+        "settings_file": "Settings file",
+        "restore_defaults": "Restore to defaults",
+        "defaults_restored": "Default settings restored.",
+        "loading_more_results": "Loading more results.",
+        "no_more_results": "No more results.",
         "auto_update_app": "Check app updates on startup from GitHub",
         "github_owner": "GitHub owner",
         "github_repo": "GitHub repo",
@@ -335,7 +352,7 @@ TEXT = {
 
 @dataclass
 class Settings:
-    language: str = "sl"
+    language: str = "en"
     download_folder: str = str(Path.home() / "Downloads")
     results_limit: int = 20
     audio_format: str = "mp3"
@@ -385,6 +402,7 @@ class MainFrame(wx.Frame):
         super().__init__(None, title=WINDOW_TITLE, size=(950, 680))
         APP_DIR.mkdir(parents=True, exist_ok=True)
         self.settings = self.load_settings()
+        self.save_settings()
         self.favorites = self.load_favorites()
         self.results: list[dict] = []
         self.all_results: list[dict] = []
@@ -405,6 +423,11 @@ class MainFrame(wx.Frame):
         self.current_video_info: dict = {}
         self.ipc_path: str | None = None
         self.ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
+        self.loading_more_results = False
+        self.current_search_type_code = "Video"
+        self.collection_url = ""
+        self.collection_result_type = ""
+        self.nvda_client = self.load_nvda_client()
 
         self.panel = wx.Panel(self)
         self.root_sizer = wx.BoxSizer(wx.VERTICAL)
@@ -440,6 +463,61 @@ class MainFrame(wx.Frame):
                 control.SetFocus()
         except RuntimeError:
             pass
+
+    def speak_text(self, text: str) -> None:
+        if not text:
+            return
+        if self.nvda_client:
+            try:
+                if hasattr(self.nvda_client, "nvdaController_cancelSpeech"):
+                    self.nvda_client.nvdaController_cancelSpeech()
+                result = self.nvda_client.nvdaController_speakText(str(text))
+                if result == 0:
+                    return
+            except Exception:
+                self.nvda_client = None
+        self.raise_accessibility_alert(text)
+
+    def raise_accessibility_alert(self, text: str) -> None:
+        self.SetName(text)
+        try:
+            wx.Accessible.NotifyEvent(wx.ACC_EVENT_OBJECT_NAMECHANGE, self, wx.OBJID_CLIENT, 0)
+            wx.Accessible.NotifyEvent(wx.ACC_EVENT_SYSTEM_ALERT, self, wx.OBJID_ALERT, 0)
+            wx.Accessible.NotifyEvent(wx.ACC_EVENT_OBJECT_VALUECHANGE, self.status, wx.OBJID_CLIENT, 0)
+        except Exception:
+            pass
+
+    def load_nvda_client(self):
+        for path in self.nvda_client_candidates():
+            try:
+                if path.exists():
+                    client = ctypes.WinDLL(str(path))
+                    client.nvdaController_speakText.argtypes = [ctypes.c_wchar_p]
+                    client.nvdaController_speakText.restype = ctypes.c_int
+                    if hasattr(client, "nvdaController_cancelSpeech"):
+                        client.nvdaController_cancelSpeech.argtypes = []
+                        client.nvdaController_cancelSpeech.restype = ctypes.c_int
+                    return client
+            except Exception:
+                continue
+        return None
+
+    def nvda_client_candidates(self) -> list[Path]:
+        names = ["nvdaControllerClient64.dll", "nvdaControllerClient.dll"]
+        roots = [
+            self.bundled_path("nvda"),
+            Path(__file__).resolve().parent / "vendor" / "nvda",
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "NVDA",
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Bookworm" / "accessible_output2" / "lib",
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "TeamTalk5",
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "twblue" / "accessible_output2" / "lib",
+            Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "RS Games Client" / "accessible_output2" / "lib",
+        ]
+        candidates = []
+        for root in roots:
+            for name in names:
+                candidates.append(root / name)
+        return candidates
 
     def add_button_row(self, buttons: list[tuple[str, callable]]) -> None:
         row = wx.BoxSizer(wx.HORIZONTAL)
@@ -563,7 +641,7 @@ class MainFrame(wx.Frame):
 
     def show_settings(self) -> None:
         self.clear()
-        self.add_button_row([(self.t("back"), self.show_main_menu), (self.t("save"), self.save_settings_from_ui)])
+        self.add_button_row([(self.t("back"), self.show_main_menu), (self.t("save"), self.save_settings_from_ui), (self.t("restore_defaults"), self.restore_default_settings)])
         scroller = wx.ScrolledWindow(self.panel)
         scroller.SetScrollRate(10, 10)
         form = wx.FlexGridSizer(0, 2, 6, 6)
@@ -600,6 +678,7 @@ class MainFrame(wx.Frame):
         lang.SetName(self.t("language"))
         form.Add(lang, 1, wx.EXPAND)
         self.controls["language"] = lang
+        text("settings_file", str(SETTINGS_FILE), wx.TE_READONLY)
         text("download_folder", self.settings.download_folder)
         browse = wx.Button(scroller, label=self.t("browse"))
         browse.Bind(wx.EVT_BUTTON, lambda _evt: self.choose_download_folder())
@@ -632,7 +711,7 @@ class MainFrame(wx.Frame):
         check("restrict_filenames", self.settings.restrict_filenames)
         check("download_archive", self.settings.download_archive)
         text("player_command", self.settings.player_command)
-        choice("player_speed", self.settings.player_speed, ["0.5", "0.75", "1.0", "1.25", "1.5", "1.75", "2.0"])
+        choice("player_speed", self.settings.player_speed, [self.format_playback_rate(step) for step in PLAYBACK_SPEED_STEPS if step <= 2.0])
         check("browser_playback", self.settings.prefer_browser_playback)
         check("fullscreen", self.settings.player_fullscreen)
         check("start_paused", self.settings.player_start_paused)
@@ -666,15 +745,24 @@ class MainFrame(wx.Frame):
             return
         self.last_search_query = query
         self.last_search_type_index = self.search_type.GetSelection()
+        self.current_search_type_code = self.search_type_code()
+        self.collection_url = ""
+        self.collection_result_type = ""
+        self.loading_more_results = False
         self.set_status(self.t("searching", query=query))
-        threading.Thread(target=self.search_worker, args=(query, self.search_type_code()), daemon=True).start()
+        threading.Thread(target=self.search_worker, args=(query, self.current_search_type_code, self.initial_results_limit()), daemon=True).start()
 
     def effective_results_limit(self) -> int:
-        return 250 if self.settings.results_limit == 0 else self.settings.results_limit
+        return min(250, max(1, self.settings.results_limit))
 
-    def search_worker(self, query: str, search_type: str) -> None:
+    def initial_results_limit(self) -> int:
+        return RESULTS_PAGE_SIZE if self.settings.results_limit == 0 else self.effective_results_limit()
+
+    def max_results_limit(self) -> int:
+        return 250 if self.settings.results_limit == 0 else self.effective_results_limit()
+
+    def search_worker(self, query: str, search_type: str, limit: int) -> None:
         try:
-            limit = self.effective_results_limit()
             options = {"quiet": True, "extract_flat": True, "skip_download": True, "playlistend": limit}
             with yt_dlp.YoutubeDL(options) as ydl:
                 if search_type == "Video":
@@ -739,10 +827,51 @@ class MainFrame(wx.Frame):
         if selection < len(self.results) - 1:
             return
         if len(self.results) >= len(self.all_results):
+            self.fetch_more_dynamic_results(selection)
             return
         next_count = min(len(self.all_results), len(self.results) + RESULTS_PAGE_SIZE)
         self.show_results(self.all_results, selection=selection, visible_count=next_count)
         self.set_status(self.t("search_more_loaded", count=len(self.results)))
+
+    def fetch_more_dynamic_results(self, selection: int) -> None:
+        if self.loading_more_results:
+            return
+        current_count = len(self.all_results)
+        if current_count >= self.max_results_limit():
+            self.set_status(self.t("no_more_results"))
+            return
+        next_limit = min(self.max_results_limit(), current_count + RESULTS_PAGE_SIZE)
+        self.loading_more_results = True
+        self.set_status(self.t("loading_more_results"))
+        if self.collection_url:
+            threading.Thread(target=self.load_collection_worker, args=(self.collection_url, self.collection_result_type or "Video", next_limit, selection), daemon=True).start()
+        else:
+            threading.Thread(target=self.search_more_worker, args=(self.last_search_query, self.current_search_type_code, next_limit, selection), daemon=True).start()
+
+    def search_more_worker(self, query: str, search_type: str, limit: int, selection: int) -> None:
+        try:
+            options = {"quiet": True, "extract_flat": True, "skip_download": True, "playlistend": limit}
+            with yt_dlp.YoutubeDL(options) as ydl:
+                if search_type == "Video":
+                    info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
+                else:
+                    info = ydl.extract_info(self.youtube_search_url(query, search_type), download=False)
+            entries = list(info.get("entries") or [])[:limit]
+            wx.CallAfter(self.show_more_results, [self.normalize_entry(entry, search_type) for entry in entries], selection)
+        except Exception as exc:
+            wx.CallAfter(self.dynamic_fetch_failed, str(exc))
+
+    def show_more_results(self, results: list[dict], selection: int) -> None:
+        self.loading_more_results = False
+        if len(results) <= len(self.all_results):
+            self.set_status(self.t("no_more_results"))
+            return
+        self.show_results(results, selection=selection, visible_count=min(len(results), len(self.results) + RESULTS_PAGE_SIZE))
+        self.set_status(self.t("search_more_loaded", count=len(self.results)))
+
+    def dynamic_fetch_failed(self, error: str) -> None:
+        self.loading_more_results = False
+        self.message(error, wx.ICON_ERROR)
 
     def result_line(self, index: int, item: dict) -> str:
         parts = [
@@ -788,15 +917,21 @@ class MainFrame(wx.Frame):
         url = item["url"].rstrip("/")
         if not url.endswith("/videos"):
             url = f"{url}/videos"
-        threading.Thread(target=self.load_collection_worker, args=(url, "Video"), daemon=True).start()
+        self.collection_url = url
+        self.collection_result_type = "Video"
+        self.loading_more_results = False
+        threading.Thread(target=self.load_collection_worker, args=(url, "Video", self.initial_results_limit(), 0), daemon=True).start()
 
     def open_playlist_videos(self, item: dict) -> None:
         self.set_status(self.t("loading_playlist", title=item["title"]))
-        threading.Thread(target=self.load_collection_worker, args=(item["url"], "Video"), daemon=True).start()
+        self.collection_url = item["url"]
+        self.collection_result_type = "Video"
+        self.loading_more_results = False
+        threading.Thread(target=self.load_collection_worker, args=(item["url"], "Video", self.initial_results_limit(), 0), daemon=True).start()
 
-    def load_collection_worker(self, url: str, result_type: str) -> None:
+    def load_collection_worker(self, url: str, result_type: str, limit: int | None = None, selection: int = 0) -> None:
         try:
-            limit = self.effective_results_limit()
+            limit = limit or self.initial_results_limit()
             options = {
                 "quiet": True,
                 "extract_flat": True,
@@ -806,9 +941,14 @@ class MainFrame(wx.Frame):
             with yt_dlp.YoutubeDL(options) as ydl:
                 info = ydl.extract_info(url, download=False)
             entries = list(info.get("entries") or [])[:limit]
-            wx.CallAfter(self.show_results, [self.normalize_entry(entry, result_type) for entry in entries])
+            normalized = [self.normalize_entry(entry, result_type) for entry in entries]
+            if self.settings.results_limit == 0 and selection:
+                wx.CallAfter(self.show_more_results, normalized, selection)
+            else:
+                wx.CallAfter(self.show_results, normalized)
+                wx.CallAfter(setattr, self, "loading_more_results", False)
         except Exception as exc:
-            wx.CallAfter(self.message, str(exc), wx.ICON_ERROR)
+            wx.CallAfter(self.dynamic_fetch_failed, str(exc))
 
     def play_url(self, url: str, title: str = "") -> None:
         player = self.resolve_player()
@@ -917,7 +1057,7 @@ class MainFrame(wx.Frame):
             self.player_kind = "mpv"
             self.player_control_mode = True
             self.current_video_info["speed"] = self.format_playback_rate(float(self.settings.player_speed))
-            self.current_video_info["pitch"] = "1.00"
+            self.current_video_info["pitch"] = self.format_playback_rate(1.0)
             self.update_details_text()
             self.set_status(self.t("playing", title=title))
         except Exception as exc:
@@ -940,12 +1080,11 @@ class MainFrame(wx.Frame):
         self.player_panel.SetBackgroundColour(wx.BLACK)
         self.root_sizer.Add(self.player_panel, 1, wx.EXPAND | wx.ALL, 4)
         self.details_label = wx.StaticText(self.panel, label=self.t("video_details"))
-        self.video_details = richtext.RichTextCtrl(
+        self.video_details = wx.TextCtrl(
             self.panel,
-            style=wx.VSCROLL | wx.HSCROLL | wx.WANTS_CHARS | wx.BORDER_THEME,
+            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2 | wx.TE_DONTWRAP | wx.VSCROLL | wx.HSCROLL | wx.WANTS_CHARS,
         )
         self.video_details.SetName(self.t("video_details"))
-        self.video_details.SetEditable(False)
         self.video_details.SetMinSize((-1, 140))
         self.root_sizer.Add(self.details_label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 4)
         self.root_sizer.Add(self.video_details, 0, wx.EXPAND | wx.ALL, 4)
@@ -983,13 +1122,7 @@ class MainFrame(wx.Frame):
 
     def announce_player(self, text: str) -> None:
         self.set_status(text)
-        self.SetName(text)
-        try:
-            wx.Accessible.NotifyEvent(wx.ACC_EVENT_OBJECT_NAMECHANGE, self, wx.OBJID_CLIENT, 0)
-            wx.Accessible.NotifyEvent(wx.ACC_EVENT_SYSTEM_ALERT, self, wx.OBJID_ALERT, 0)
-            wx.Accessible.NotifyEvent(wx.ACC_EVENT_OBJECT_VALUECHANGE, self.status, wx.OBJID_CLIENT, 0)
-        except Exception:
-            pass
+        self.speak_text(text)
 
     def show_video_details(self) -> None:
         if not hasattr(self, "video_details"):
@@ -998,15 +1131,17 @@ class MainFrame(wx.Frame):
         self.details_label.Show()
         self.video_details.Show()
         self.panel.Layout()
-        self.video_details.SetFocus()
+        self.video_details.SetInsertionPoint(0)
+        self.safe_set_focus(self.video_details)
+        self.announce_player(self.t("video_details"))
 
     def update_details_text(self) -> None:
         if not hasattr(self, "video_details"):
             return
+        details = self.build_video_details_text()
         self.video_details.Freeze()
-        self.video_details.Clear()
-        self.video_details.WriteText(self.build_video_details_text())
-        self.video_details.ShowPosition(0)
+        self.video_details.SetValue(details)
+        self.video_details.SetInsertionPoint(0)
         self.video_details.Thaw()
 
     def build_video_details_text(self) -> str:
@@ -1041,7 +1176,7 @@ class MainFrame(wx.Frame):
                 wx.TheClipboard.SetData(wx.TextDataObject(url))
             finally:
                 wx.TheClipboard.Close()
-        self.set_status(self.t("url_copied"))
+        self.announce_player(self.t("url_copied"))
 
     def copy_active_url(self) -> None:
         item = self.active_item()
@@ -1120,6 +1255,8 @@ class MainFrame(wx.Frame):
             speed_text = self.format_playback_rate(speed)
             self.current_video_info["speed"] = speed_text
             wx.CallAfter(self.announce_player, self.t("speed_announcement", speed=speed_text))
+            if self.is_default_rate(speed):
+                wx.CallAfter(self.play_default_sound)
             wx.CallAfter(self.update_details_text)
         except Exception:
             wx.CallAfter(self.announce_player, self.t("timing_unavailable"))
@@ -1130,18 +1267,29 @@ class MainFrame(wx.Frame):
     def change_pitch_worker(self, delta: float) -> None:
         try:
             current = self.mpv_get_property("pitch")
-            pitch = float(current if current is not None else 1.0)
-            pitch = min(2.0, max(0.5, round(pitch + delta, 2)))
+            stored = self.current_video_info.get("pitch", "1.0")
+            pitch = float(current if current is not None else stored)
+            pitch = self.next_pitch_value(pitch, delta)
             self.mpv_set_property("pitch", pitch)
-            self.current_video_info["pitch"] = f"{pitch:.2f}"
-            wx.CallAfter(self.announce_player, self.t("pitch_announcement", pitch=f"{pitch:.2f}"))
+            pitch_text = self.format_playback_rate(pitch)
+            self.current_video_info["pitch"] = pitch_text
+            wx.CallAfter(self.announce_player, self.t("pitch_announcement", pitch=pitch_text))
+            if self.is_default_rate(pitch):
+                wx.CallAfter(self.play_default_sound)
             wx.CallAfter(self.update_details_text)
         except Exception:
             wx.CallAfter(self.announce_player, self.t("timing_unavailable"))
 
     @staticmethod
     def next_playback_speed(current: float, delta: float) -> float:
-        steps = PLAYBACK_SPEED_STEPS
+        return MainFrame.next_step_value(current, delta, PLAYBACK_SPEED_STEPS)
+
+    @staticmethod
+    def next_pitch_value(current: float, delta: float) -> float:
+        return MainFrame.next_step_value(current, delta, PITCH_STEPS)
+
+    @staticmethod
+    def next_step_value(current: float, delta: float, steps: list[float]) -> float:
         if delta < 0:
             for step in reversed(steps):
                 if step < current - 0.001:
@@ -1157,6 +1305,22 @@ class MainFrame(wx.Frame):
         if abs(value - round(value)) < 0.001:
             return f"{value:.1f}"
         return f"{value:.2f}".rstrip("0").rstrip(".")
+
+    @staticmethod
+    def is_default_rate(value: float) -> bool:
+        return abs(value - 1.0) < 0.001
+
+    def play_default_sound(self) -> None:
+        if winsound is None:
+            return
+        sound_path = self.bundled_path("assets", DEFAULT_REACHED_SOUND)
+        try:
+            if sound_path.exists():
+                winsound.PlaySound(str(sound_path), winsound.SND_FILENAME | winsound.SND_ASYNC)
+            else:
+                winsound.MessageBeep(winsound.MB_OK)
+        except Exception:
+            pass
 
     def stop_player(self, silent: bool = False) -> None:
         if self.player_process and self.player_process.poll() is None:
@@ -1253,8 +1417,8 @@ class MainFrame(wx.Frame):
         menu = wx.Menu()
         actions = [
             (self.t("play"), self.play_selected),
-            (self.t("download_audio"), self.download_audio),
-            (self.t("download_video"), self.download_video),
+            (f"{self.t('download_audio')}\tCtrl+Shift+A", self.download_audio),
+            (f"{self.t('download_video')}\tCtrl+Shift+D", self.download_video),
             (self.t("add_favorite"), self.add_selected_favorite),
             (self.t("open_browser"), self.open_selected_in_browser),
             (self.t("copy_url"), self.copy_selected_url),
@@ -1409,6 +1573,13 @@ class MainFrame(wx.Frame):
         item = self.active_item()
         if item:
             self.copy_url_to_clipboard(item["url"])
+
+    def restore_default_settings(self) -> None:
+        self.settings = Settings()
+        self.save_settings()
+        self.set_status(self.t("defaults_restored"))
+        self.speak_text(self.t("defaults_restored"))
+        self.show_settings()
 
     def choose_download_folder(self) -> None:
         with wx.DirDialog(self, self.t("choose_download_folder"), self.settings.download_folder) as dialog:
