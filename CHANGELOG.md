@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2
+
+- updater install flow no longer waits behind a final OK dialog; it logs to `%APPDATA%\ApricotPlayer\updater.log`, exits the app, replaces the `.exe`, and restarts
+- video details are created only after pressing `V`; `Escape` closes details back to the player before returning to results
+- added `F2` volume boost with screen-reader announcements and automatic clamp back to 100 when disabled
+- added cross-search batch download queue with `Shift+A` for audio and `Shift+D` for video
+- main menu now shows `Download all` dynamically when the batch queue has items
+
 ## 0.1.4
 
 - speed and pitch hotkeys now default to `0.01x` steps

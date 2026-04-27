@@ -34,8 +34,8 @@ except ImportError:
 
 
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.1.4"
-APP_VERSION_LABEL = "0.1.4"
+APP_VERSION = "0.2"
+APP_VERSION_LABEL = "0.2"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -49,6 +49,7 @@ RESULTS_PAGE_SIZE = 20
 DEFAULT_GITHUB_OWNER = "Urh2006"
 DEFAULT_GITHUB_REPO = "ApricotPlayer"
 UPDATE_ASSET_NAME = "ApricotPlayer.exe"
+UPDATE_LOG_FILE = APP_DIR / "updater.log"
 PLAYBACK_SPEED_STEPS = [0.25, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1.0, 1.1, 1.2, 1.25, 1.3, 1.4, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0]
 PITCH_STEPS = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0]
 DEFAULT_REACHED_SOUND = "default_reached.wav"
@@ -63,6 +64,7 @@ TEXT = {
     "sl": {
         "ready": "Pripravljen.",
         "main_menu": "Glavni meni",
+        "download_all": "Download all",
         "search_youtube": "Iskanje po YouTube",
         "choose_download_folder": "Izbor mape za prenose",
         "favorites": "Priljubljeni",
@@ -76,12 +78,21 @@ TEXT = {
         "player_announcement": "Obvestilo predvajalnika",
         "video_details": "Podrobnosti videa",
         "details_button": "View video details",
+        "details_closed": "Video details closed.",
         "timing_unavailable": "Timing is not available yet.",
         "time_announcement": "Elapsed {elapsed}, remaining {remaining}, total {total}.",
         "speed_announcement": "Playback speed {speed}x.",
         "pitch_announcement": "Pitch {pitch}x.",
         "download_audio_start": "Downloading audio...",
         "download_video_start": "Downloading video...",
+        "batch_download_start": "Starting batch download of {count} items.",
+        "batch_download_done": "Batch download complete.",
+        "audio_selected_download": "Audio download queued: {title}",
+        "video_selected_download": "Video download queued: {title}",
+        "download_deselected": "Removed from download queue: {title}",
+        "download_queue_empty": "Download queue is empty.",
+        "audio_queued_marker": "audio queued",
+        "video_queued_marker": "video queued",
         "details_unavailable": "Video details are not available yet.",
         "version": "Verzija",
         "description": "Description",
@@ -118,6 +129,7 @@ TEXT = {
         "update_download_unknown": "Downloading update {version}",
         "update_download_complete": "Update downloaded. Preparing install.",
         "update_install_started": "Installer started. ApricotPlayer will close and reopen.",
+        "update_install_log": "Updater log: {path}",
         "installing_update": "Nameščam posodobitev {version}.",
         "update_ready_restart": "Posodobitev je pripravljena. Program se bo zaprl in znova zagnal.",
         "update_source_only": "Samodejna namestitev deluje samo v .exe verziji. Na voljo je nova izdaja: {version}",
@@ -202,6 +214,8 @@ TEXT = {
         "no_player": "Player ni najden, odprl sem brskalnik.",
         "player_failed": "Player se ni zagnal, odprt je brskalnik: {error}",
         "stopped": "Predvajanje ustavljeno.",
+        "volume_boost_on": "Volume boost on.",
+        "volume_boost_off": "Volume boost off.",
         "queued": "V čakalni vrsti",
         "done": "Končano",
         "download_confirm": "Prenesem {action}: {title}?",
@@ -220,6 +234,7 @@ TEXT = {
     "en": {
         "ready": "Ready.",
         "main_menu": "Main menu",
+        "download_all": "Download all",
         "search_youtube": "Search YouTube",
         "choose_download_folder": "Choose download folder",
         "favorites": "Favorites",
@@ -233,12 +248,21 @@ TEXT = {
         "player_announcement": "Player announcement",
         "video_details": "Video details",
         "details_button": "View video details",
+        "details_closed": "Video details closed.",
         "timing_unavailable": "Timing is not available yet.",
         "time_announcement": "Elapsed {elapsed}, remaining {remaining}, total {total}.",
         "speed_announcement": "Playback speed {speed}x.",
         "pitch_announcement": "Pitch {pitch}x.",
         "download_audio_start": "Downloading audio...",
         "download_video_start": "Downloading video...",
+        "batch_download_start": "Starting batch download of {count} items.",
+        "batch_download_done": "Batch download complete.",
+        "audio_selected_download": "Audio download queued: {title}",
+        "video_selected_download": "Video download queued: {title}",
+        "download_deselected": "Removed from download queue: {title}",
+        "download_queue_empty": "Download queue is empty.",
+        "audio_queued_marker": "audio queued",
+        "video_queued_marker": "video queued",
         "details_unavailable": "Video details are not available yet.",
         "version": "Version",
         "description": "Description",
@@ -275,6 +299,7 @@ TEXT = {
         "update_download_unknown": "Downloading update {version}",
         "update_download_complete": "Update downloaded. Preparing install.",
         "update_install_started": "Installer started. ApricotPlayer will close and reopen.",
+        "update_install_log": "Updater log: {path}",
         "installing_update": "Installing update {version}.",
         "update_ready_restart": "The update is ready. The app will close and restart.",
         "update_source_only": "Automatic install works only in the .exe build. New release available: {version}",
@@ -359,6 +384,8 @@ TEXT = {
         "no_player": "Player not found, opened browser.",
         "player_failed": "Player did not start, opened browser: {error}",
         "stopped": "Playback stopped.",
+        "volume_boost_on": "Volume boost on.",
+        "volume_boost_off": "Volume boost off.",
         "queued": "Queued",
         "done": "Done",
         "download_confirm": "Download {action}: {title}?",
@@ -449,9 +476,13 @@ class MainFrame(wx.Frame):
         self.player_log_handle = None
         self.player_kind = ""
         self.player_control_mode = False
+        self.volume_boost_enabled = False
         self.in_player_screen = False
         self.current_video_item: dict | None = None
         self.current_video_info: dict = {}
+        self.details_label: wx.StaticText | None = None
+        self.video_details: wx.TextCtrl | None = None
+        self.download_queue: dict[str, dict] = {}
         self.ipc_path: str | None = None
         self.ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.loading_more_results = False
@@ -563,13 +594,16 @@ class MainFrame(wx.Frame):
         self.clear()
         title = wx.StaticText(self.panel, label=self.t("main_menu"))
         self.root_sizer.Add(title, 0, wx.ALL, 4)
-        self.menu_actions = [
+        self.menu_actions = []
+        if self.download_queue:
+            self.menu_actions.append((f"{self.t('download_all')} ({len(self.download_queue)})", self.download_all_queued))
+        self.menu_actions.extend([
             (self.t("search_youtube"), self.show_search),
             (self.t("choose_download_folder"), self.choose_download_folder),
             (self.t("favorites"), self.show_favorites),
             (self.t("settings"), self.show_settings),
             (self.t("exit"), self.Close),
-        ]
+        ])
         self.menu_list = wx.ListBox(self.panel, choices=[item[0] for item in self.menu_actions])
         self.menu_list.SetName(self.t("main_menu"))
         self.menu_list.SetSelection(0)
@@ -634,7 +668,11 @@ class MainFrame(wx.Frame):
 
     def on_results_key(self, event: wx.KeyEvent) -> None:
         key = event.GetKeyCode()
-        if self.is_ctrl_shift_letter(event, "A"):
+        if self.is_shift_letter(event, "A") and not event.ControlDown():
+            self.toggle_download_queue(True)
+        elif self.is_shift_letter(event, "D") and not event.ControlDown():
+            self.toggle_download_queue(False)
+        elif self.is_ctrl_shift_letter(event, "A"):
             self.download_audio()
         elif self.is_ctrl_shift_letter(event, "D"):
             self.download_video()
@@ -922,6 +960,9 @@ class MainFrame(wx.Frame):
             item.get("duration", ""),
             item["type"],
         ]
+        queued = self.download_queue.get(item.get("url", ""))
+        if queued:
+            parts.append(self.t("audio_queued_marker" if queued.get("audio_only") else "video_queued_marker"))
         return " | ".join(part for part in parts if part)
 
     def selected_result(self) -> dict | None:
@@ -1066,6 +1107,7 @@ class MainFrame(wx.Frame):
                 "--force-window=yes",
                 f"--input-ipc-server={self.ipc_path}",
                 "--idle=no",
+                "--volume-max=300",
                 f"--speed={self.settings.player_speed}",
                 "--term-playing-msg=",
                 "--msg-level=all=warn",
@@ -1096,6 +1138,7 @@ class MainFrame(wx.Frame):
             )
             self.player_kind = "mpv"
             self.player_control_mode = True
+            self.volume_boost_enabled = False
             self.current_video_info["speed"] = self.format_playback_rate(float(self.settings.player_speed))
             self.current_video_info["pitch"] = self.format_playback_rate(1.0)
             self.update_details_text()
@@ -1110,7 +1153,6 @@ class MainFrame(wx.Frame):
                 (self.t("back_results"), self.back_to_results),
                 (self.t("play"), lambda: self.player_command("cycle pause")),
                 (self.t("copy_link"), self.copy_active_url),
-                (self.t("details_button"), self.show_video_details),
             ]
         )
         label = wx.StaticText(self.panel, label=f"{self.t('internal_player')}: {title}")
@@ -1119,20 +1161,10 @@ class MainFrame(wx.Frame):
         self.player_panel.SetName(self.t("internal_player"))
         self.player_panel.SetBackgroundColour(wx.BLACK)
         self.root_sizer.Add(self.player_panel, 1, wx.EXPAND | wx.ALL, 4)
-        self.details_label = wx.StaticText(self.panel, label=self.t("video_details"))
-        self.video_details = wx.TextCtrl(
-            self.panel,
-            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2 | wx.TE_DONTWRAP | wx.VSCROLL | wx.HSCROLL | wx.WANTS_CHARS,
-        )
-        self.video_details.SetName(self.t("video_details"))
-        self.video_details.SetMinSize((-1, 140))
-        self.root_sizer.Add(self.details_label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 4)
-        self.root_sizer.Add(self.video_details, 0, wx.EXPAND | wx.ALL, 4)
-        self.details_label.Hide()
-        self.video_details.Hide()
+        self.details_label = None
+        self.video_details = None
         self.in_player_screen = True
         self.player_control_mode = True
-        self.update_details_text()
         self.panel.Layout()
         self.player_panel.SetFocus()
 
@@ -1165,18 +1197,47 @@ class MainFrame(wx.Frame):
         self.speak_text(text)
 
     def show_video_details(self) -> None:
-        if not hasattr(self, "video_details"):
+        if not self.in_player_screen:
             return
+        if self.video_details is None:
+            self.details_label = wx.StaticText(self.panel, label=self.t("video_details"))
+            self.video_details = wx.TextCtrl(
+                self.panel,
+                style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2 | wx.TE_DONTWRAP | wx.VSCROLL | wx.HSCROLL | wx.WANTS_CHARS,
+            )
+            self.video_details.SetName(self.t("video_details"))
+            self.video_details.SetMinSize((-1, 160))
+            self.root_sizer.Add(self.details_label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 4)
+            self.root_sizer.Add(self.video_details, 0, wx.EXPAND | wx.ALL, 4)
         self.update_details_text()
-        self.details_label.Show()
-        self.video_details.Show()
+        if self.details_label:
+            self.details_label.Show()
+        if self.video_details:
+            self.video_details.Show()
         self.panel.Layout()
         self.video_details.SetInsertionPoint(0)
         self.safe_set_focus(self.video_details)
         self.announce_player(self.t("video_details"))
 
+    def hide_video_details(self) -> None:
+        if not self.video_details:
+            return
+        if self.details_label:
+            self.details_label.Hide()
+        self.video_details.Hide()
+        self.panel.Layout()
+        if hasattr(self, "player_panel"):
+            self.safe_set_focus(self.player_panel)
+        self.announce_player(self.t("details_closed"))
+
+    def video_details_visible(self) -> bool:
+        try:
+            return bool(self.video_details and self.video_details.IsShown())
+        except RuntimeError:
+            return False
+
     def update_details_text(self) -> None:
-        if not hasattr(self, "video_details"):
+        if not self.video_details:
             return
         details = self.build_video_details_text()
         self.video_details.Freeze()
@@ -1350,6 +1411,35 @@ class MainFrame(wx.Frame):
     def clear_rubberband_pitch_filter(self) -> None:
         self.mpv_send(["af", "set", ""])
 
+    def change_volume_async(self, delta: int) -> None:
+        threading.Thread(target=self.change_volume_worker, args=(delta,), daemon=True).start()
+
+    def change_volume_worker(self, delta: int) -> None:
+        try:
+            current = self.mpv_get_property("volume")
+            volume = float(current if current is not None else 100.0)
+            maximum = 300.0 if self.volume_boost_enabled else 100.0
+            volume = min(max(0.0, volume + float(delta)), maximum)
+            self.mpv_set_property("volume", volume)
+        except Exception:
+            pass
+
+    def toggle_volume_boost(self) -> None:
+        self.volume_boost_enabled = not self.volume_boost_enabled
+        if self.volume_boost_enabled:
+            self.announce_player(self.t("volume_boost_on"))
+        else:
+            threading.Thread(target=self.disable_volume_boost_worker, daemon=True).start()
+
+    def disable_volume_boost_worker(self) -> None:
+        try:
+            current = self.mpv_get_property("volume")
+            if current is not None and float(current) > 100.0:
+                self.mpv_set_property("volume", 100.0)
+        except Exception:
+            pass
+        wx.CallAfter(self.announce_player, self.t("volume_boost_off"))
+
     @staticmethod
     def next_playback_speed(current: float, delta: float) -> float:
         return MainFrame.clamp_rate(current + delta, 0.25, 4.0)
@@ -1436,6 +1526,17 @@ class MainFrame(wx.Frame):
             self.set_status(self.t("stopped"))
 
     @staticmethod
+    def is_shift_letter(event: wx.KeyEvent, letter: str) -> bool:
+        if not event.ShiftDown():
+            return False
+        upper = letter.upper()
+        codes = {ord(upper), ord(upper.lower())}
+        unicode_key = event.GetUnicodeKey()
+        if unicode_key != wx.WXK_NONE:
+            codes.add(unicode_key)
+        return event.GetKeyCode() in codes
+
+    @staticmethod
     def is_ctrl_shift_letter(event: wx.KeyEvent, letter: str) -> bool:
         if not (event.ControlDown() and event.ShiftDown()):
             return False
@@ -1449,9 +1550,15 @@ class MainFrame(wx.Frame):
     def on_char_hook(self, event: wx.KeyEvent) -> None:
         key = event.GetKeyCode()
         focus = wx.Window.FindFocus()
-        details_has_focus = focus is getattr(self, "video_details", None)
+        details_has_focus = focus is self.video_details
         if key == wx.WXK_RETURN and focus is getattr(self, "menu_list", None):
             self.activate_menu()
+            return
+        if focus is getattr(self, "results_list", None) and self.is_shift_letter(event, "A") and not event.ControlDown():
+            self.toggle_download_queue(True)
+            return
+        if focus is getattr(self, "results_list", None) and self.is_shift_letter(event, "D") and not event.ControlDown():
+            self.toggle_download_queue(False)
             return
         if key == wx.WXK_RETURN and focus is getattr(self, "results_list", None):
             self.play_selected()
@@ -1463,6 +1570,9 @@ class MainFrame(wx.Frame):
             self.download_video()
             return
         if key == wx.WXK_ESCAPE:
+            if self.in_player_screen and self.video_details_visible():
+                self.hide_video_details()
+                return
             if self.in_player_screen:
                 self.back_to_results()
                 return
@@ -1472,6 +1582,9 @@ class MainFrame(wx.Frame):
             self.copy_active_url()
             return
         if self.player_control_mode and not details_has_focus:
+            if key == wx.WXK_F2:
+                self.toggle_volume_boost()
+                return
             if key == wx.WXK_SPACE:
                 self.player_command("cycle pause")
                 return
@@ -1512,10 +1625,10 @@ class MainFrame(wx.Frame):
                 self.player_command("seek 5")
                 return
             if key == wx.WXK_UP:
-                self.player_command(f"add volume {self.settings.volume_step}")
+                self.change_volume_async(self.settings.volume_step)
                 return
             if key == wx.WXK_DOWN:
-                self.player_command(f"add volume -{self.settings.volume_step}")
+                self.change_volume_async(-self.settings.volume_step)
                 return
         event.Skip()
 
@@ -1685,6 +1798,76 @@ class MainFrame(wx.Frame):
         item = self.active_item()
         if item:
             self.copy_url_to_clipboard(item["url"])
+
+    def toggle_download_queue(self, audio_only: bool) -> None:
+        item = self.selected_result()
+        if not item:
+            self.message(self.t("no_selection"))
+            return
+        url = item.get("url", "")
+        if not url:
+            self.message(self.t("no_selection"))
+            return
+        existing = self.download_queue.get(url)
+        if existing and existing.get("audio_only") == audio_only:
+            self.download_queue.pop(url, None)
+            self.announce_player(self.t("download_deselected", title=item.get("title", "")))
+        else:
+            queued = dict(item)
+            queued["audio_only"] = audio_only
+            self.download_queue[url] = queued
+            key = "audio_selected_download" if audio_only else "video_selected_download"
+            self.announce_player(self.t(key, title=item.get("title", "")))
+        self.refresh_result_line(self.current_index)
+
+    def refresh_result_line(self, index: int) -> None:
+        if not hasattr(self, "results_list") or index < 0 or index >= len(self.results):
+            return
+        try:
+            self.results_list.SetString(index, self.result_line(index, self.results[index]))
+            self.results_list.SetSelection(index)
+        except RuntimeError:
+            pass
+
+    def download_all_queued(self) -> None:
+        if not self.download_queue:
+            self.announce_player(self.t("download_queue_empty"))
+            return
+        items = list(self.download_queue.values())
+        self.download_queue.clear()
+        if hasattr(self, "results_list"):
+            self.refresh_results_list_labels()
+        self.announce_player(self.t("batch_download_start", count=len(items)))
+        threading.Thread(target=self.download_batch_worker, args=(items,), daemon=True).start()
+        if wx.Window.FindFocus() is getattr(self, "menu_list", None):
+            self.show_main_menu()
+
+    def refresh_results_list_labels(self) -> None:
+        if not hasattr(self, "results_list"):
+            return
+        selection = self.results_list.GetSelection()
+        self.results_list.Clear()
+        for index, item in enumerate(self.results):
+            self.results_list.Append(self.result_line(index, item))
+        if self.results:
+            self.results_list.SetSelection(min(max(0, selection), len(self.results) - 1))
+
+    def download_batch_worker(self, items: list[dict]) -> None:
+        folder = Path(self.settings.download_folder)
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            for item in items:
+                audio_only = bool(item.get("audio_only"))
+                mode_key = "download_audio_start" if audio_only else "download_video_start"
+                wx.CallAfter(self.announce_player, self.t(mode_key))
+                options = self.download_options(folder, audio_only, item.get("title", ""))
+                with yt_dlp.YoutubeDL(options) as ydl:
+                    ydl.download([item["url"]])
+                done_text = self.t("download_audio_done" if audio_only else "download_video_done", title=item.get("title", ""))
+                wx.CallAfter(self.finish_download, done_text, str(folder))
+            wx.CallAfter(self.announce_player, self.t("batch_download_done"))
+        except Exception as exc:
+            wx.CallAfter(self.message, self.t("download_failed", error=exc), wx.ICON_ERROR)
 
     def restore_default_settings(self) -> None:
         self.settings = Settings()
@@ -1952,12 +2135,13 @@ class MainFrame(wx.Frame):
             self.message(self.t("update_source_only", version=version))
             return
         current_exe = Path(sys.executable)
-        script_path = self.write_update_script(downloaded_path, str(current_exe), os.getpid(), restart=True)
+        script_path = self.write_update_script(downloaded_path, str(current_exe), os.getpid(), str(UPDATE_LOG_FILE), restart=True)
         self.launch_update_script(script_path)
         self.set_status(self.t("installing_update", version=version))
         self.close_update_progress_dialog()
-        self.message(self.t("update_install_started"))
-        self.exit_for_update()
+        self.announce_player(self.t("update_install_started"))
+        self.set_status(self.t("update_install_log", path=UPDATE_LOG_FILE))
+        wx.CallLater(800, self.exit_for_update)
 
     @staticmethod
     def validate_update_executable(path: Path) -> None:
@@ -1968,7 +2152,7 @@ class MainFrame(wx.Frame):
                 raise RuntimeError("downloaded update is not a Windows executable")
 
     @classmethod
-    def write_update_script(cls, downloaded_path: str, target_path: str, process_id: int, restart: bool = True) -> Path:
+    def write_update_script(cls, downloaded_path: str, target_path: str, process_id: int, log_path: str, restart: bool = True) -> Path:
         script_path = Path(tempfile.gettempdir()) / f"apricotplayer-update-{int(time.time())}.ps1"
         restart_value = "$true" if restart else "$false"
         script = "\n".join(
@@ -1976,23 +2160,41 @@ class MainFrame(wx.Frame):
                 "$ErrorActionPreference = 'Stop'",
                 f"$source = {cls.powershell_literal(downloaded_path)}",
                 f"$target = {cls.powershell_literal(target_path)}",
+                f"$log = {cls.powershell_literal(log_path)}",
                 f"$processIdToWait = {int(process_id)}",
                 f"$restart = {restart_value}",
+                "$targetDir = Split-Path -Parent $target",
+                "$oldTarget = \"$target.old\"",
+                "New-Item -ItemType Directory -Path (Split-Path -Parent $log) -Force | Out-Null",
+                "function Log($message) { Add-Content -LiteralPath $log -Value ((Get-Date -Format o) + ' ' + $message) -Encoding UTF8 }",
+                "Set-Content -LiteralPath $log -Value ((Get-Date -Format o) + ' Starting ApricotPlayer update') -Encoding UTF8",
+                "Log \"Source: $source\"",
+                "Log \"Target: $target\"",
                 "Start-Sleep -Milliseconds 500",
-                "try { Wait-Process -Id $processIdToWait -Timeout 120 -ErrorAction SilentlyContinue } catch { }",
+                "try { Wait-Process -Id $processIdToWait -Timeout 180 -ErrorAction SilentlyContinue } catch { Log \"Wait-Process warning: $($_.Exception.Message)\" }",
                 "$copied = $false",
-                "for ($attempt = 0; $attempt -lt 120; $attempt++) {",
+                "for ($attempt = 0; $attempt -lt 180; $attempt++) {",
                 "    try {",
+                "        if (Test-Path -LiteralPath $oldTarget) { Remove-Item -LiteralPath $oldTarget -Force -ErrorAction SilentlyContinue }",
+                "        if (Test-Path -LiteralPath $target) { Rename-Item -LiteralPath $target -NewName (Split-Path -Leaf $oldTarget) -Force -ErrorAction Stop }",
                 "        Copy-Item -LiteralPath $source -Destination $target -Force -ErrorAction Stop",
+                "        if ((Get-Item -LiteralPath $target).Length -lt 1048576) { throw 'Copied file is too small.' }",
                 "        $copied = $true",
+                "        Log \"Copy succeeded on attempt $attempt\"",
                 "        break",
                 "    } catch {",
+                "        Log \"Copy attempt $attempt failed: $($_.Exception.Message)\"",
+                "        if ((Test-Path -LiteralPath $oldTarget) -and -not (Test-Path -LiteralPath $target)) {",
+                "            try { Rename-Item -LiteralPath $oldTarget -NewName (Split-Path -Leaf $target) -Force -ErrorAction SilentlyContinue } catch { }",
+                "        }",
                 "        Start-Sleep -Seconds 1",
                 "    }",
                 "}",
-                "if (-not $copied) { exit 1 }",
+                "if (-not $copied) { Log 'Update failed: could not copy new executable'; exit 1 }",
                 "Remove-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue",
-                "if ($restart) { Start-Process -FilePath $target }",
+                "if (Test-Path -LiteralPath $oldTarget) { Remove-Item -LiteralPath $oldTarget -Force -ErrorAction SilentlyContinue }",
+                "if ($restart) { Log 'Restarting ApricotPlayer'; Start-Process -FilePath $target -WorkingDirectory $targetDir }",
+                "Log 'Update complete'",
                 "Start-Sleep -Seconds 2",
                 "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
             ]
@@ -2067,10 +2269,10 @@ class MainFrame(wx.Frame):
 
     @staticmethod
     def parse_version(value: str) -> tuple[int, int, int, int, int]:
-        match = re.match(r"^v?(\d+)\.(\d+)\.(\d+)(?:-([A-Za-z]+)(?:[.-]?(\d+))?)?$", value.strip())
+        match = re.match(r"^v?(\d+)\.(\d+)(?:\.(\d+))?(?:-([A-Za-z]+)(?:[.-]?(\d+))?)?$", value.strip())
         if not match:
             return (0, 0, 0, 0, 0)
-        major, minor, patch = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        major, minor, patch = (int(match.group(1)), int(match.group(2)), int(match.group(3) or 0))
         stage_name = (match.group(4) or "").lower()
         stage_number = int(match.group(5) or 0)
         stage_rank = {"alpha": 1, "beta": 2, "rc": 3}.get(stage_name, 4)
