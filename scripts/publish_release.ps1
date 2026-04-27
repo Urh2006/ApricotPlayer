@@ -52,26 +52,38 @@ if (-not (Test-Path $ExecutablePath)) {
     throw "Executable not found: $ExecutablePath"
 }
 
-$releaseExists = $false
-try {
-    $viewArgs = @("release", "view", $Tag, "--repo", $Repo)
-    & $gh @viewArgs | Out-Null
-    $releaseExists = $true
+function Invoke-GhChecked {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Arguments,
+        [switch]$AllowFailure
+    )
+
+    & $gh @Arguments | ForEach-Object { Write-Host $_ }
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0 -and -not $AllowFailure) {
+        throw "GitHub CLI failed with exit code ${exitCode}: gh $($Arguments -join ' ')"
+    }
+    return $exitCode
 }
-catch {
-    $releaseExists = $false
+
+$releaseExists = $false
+$viewArgs = @("release", "view", $Tag, "--repo", $Repo)
+$viewExitCode = Invoke-GhChecked -Arguments $viewArgs -AllowFailure
+if ($viewExitCode -eq 0) {
+    $releaseExists = $true
 }
 
 try {
     if ($releaseExists) {
         $editArgs = @("release", "edit", $Tag, "--title", $Title, "--notes-file", $resolvedNotesFile, "--repo", $Repo)
         $uploadArgs = @("release", "upload", $Tag, $ExecutablePath, "--clobber", "--repo", $Repo)
-        & $gh @editArgs
-        & $gh @uploadArgs
+        [void](Invoke-GhChecked -Arguments $editArgs)
+        [void](Invoke-GhChecked -Arguments $uploadArgs)
     }
     else {
         $createArgs = @("release", "create", $Tag, $ExecutablePath, "--title", $Title, "--notes-file", $resolvedNotesFile, "--repo", $Repo)
-        & $gh @createArgs
+        [void](Invoke-GhChecked -Arguments $createArgs)
     }
 }
 finally {
