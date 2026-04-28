@@ -65,8 +65,8 @@ class QuietYtdlpLogger:
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.3.2"
-APP_VERSION_LABEL = "0.3.2"
+APP_VERSION = "0.3.3"
+APP_VERSION_LABEL = "0.3.3"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -130,6 +130,7 @@ TEXT = {
         "time_announcement": "Elapsed {elapsed}, remaining {remaining}, total {total}.",
         "speed_announcement": "Playback speed {speed}x.",
         "pitch_announcement": "Pitch {pitch}x.",
+        "download_started": "Download started.",
         "download_audio_start": "Downloading audio...",
         "download_video_start": "Downloading video...",
         "batch_download_start": "Starting batch download of {count} items.",
@@ -321,6 +322,7 @@ TEXT = {
         "time_announcement": "Elapsed {elapsed}, remaining {remaining}, total {total}.",
         "speed_announcement": "Playback speed {speed}x.",
         "pitch_announcement": "Pitch {pitch}x.",
+        "download_started": "Download started.",
         "download_audio_start": "Downloading audio...",
         "download_video_start": "Downloading video...",
         "batch_download_start": "Starting batch download of {count} items.",
@@ -1962,8 +1964,9 @@ class MainFrame(wx.Frame):
                 return
         if remove_queued:
             self.remove_queued_url(item.get("url", ""), announce=False)
-        self.announce_player(self.t("download_audio_start" if audio_only else "download_video_start"))
-        wx.CallLater(250, self.start_download_worker_thread, item, audio_only)
+        self.announce_player(self.t("download_started"))
+        self.set_status(self.t("download_audio_start" if audio_only else "download_video_start"))
+        wx.CallLater(900, self.start_download_worker_thread, item, audio_only)
 
     def start_download_worker_thread(self, item: dict, audio_only: bool) -> None:
         threading.Thread(target=self.download_worker, args=(item, audio_only), daemon=True).start()

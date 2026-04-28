@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.3
+
+- download actions now always speak `Download started.` before the download worker starts, independent of the completion popup setting
+- download worker startup is delayed slightly so very fast downloads cannot immediately override the screen-reader start announcement
+
 ## 0.3.2
 
 - settings are now split into keyboard-friendly sections: General, Playback, Downloads, Cookies and network, and Updates and advanced
