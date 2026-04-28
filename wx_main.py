@@ -78,8 +78,8 @@ class QuietYtdlpLogger:
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.3.6"
-APP_VERSION_LABEL = "0.3.6"
+APP_VERSION = "0.3.7"
+APP_VERSION_LABEL = "0.3.7"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -105,7 +105,8 @@ PITCH_MODE_OPTIONS = [PITCH_MODE_RUBBERBAND, PITCH_MODE_MPV]
 LEGACY_PITCH_MODE_RUBBERBAND = "rubberband"
 LEGACY_PITCH_MODE_MPV = "mpv pitch"
 LEGACY_PITCH_MODE_LINKED_SPEED = "linked speed"
-RUBBERBAND_FILTER_LABEL = "@apricot_pitch"
+RUBBERBAND_FILTER_LABEL = "apricot_pitch"
+RUBBERBAND_FILTER_REF = f"@{RUBBERBAND_FILTER_LABEL}"
 RATE_STEP_OPTIONS = ["0.01", "0.02", "0.05", "0.10", "0.25"]
 COOKIES_BROWSER_OPTIONS = ["none", "chrome", "edge", "firefox", "brave", "chromium", "opera", "vivaldi"]
 
@@ -1717,10 +1718,10 @@ class MainFrame(wx.Frame):
 
     @staticmethod
     def rubberband_pitch_filter(pitch: float) -> str:
-        return f"{RUBBERBAND_FILTER_LABEL}:rubberband=transients=smooth:formant=preserved:pitch=quality:engine=finer:pitch-scale={pitch:.4f}"
+        return f"{RUBBERBAND_FILTER_REF}:rubberband=transients=smooth:formant=preserved:pitch=quality:engine=finer:pitch-scale={pitch:.4f}"
 
     def clear_rubberband_pitch_filter(self) -> None:
-        self.mpv_send(["af", "remove", RUBBERBAND_FILTER_LABEL])
+        self.mpv_send(["af", "remove", RUBBERBAND_FILTER_REF])
         self.rubberband_pitch_filter_active = False
 
     def change_volume_async(self, delta: int) -> None:

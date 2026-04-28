@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.7
+
+- fixed the runtime Rubberband `set-pitch` IPC call so pitch changes update the existing labeled filter instead of recreating it
+- kept pitch and playback speed independent while making repeated pitch key presses smoother
+
 ## 0.3.6
 
 - rebuilt player pitch control so pitch and playback speed remain independent in every supported pitch mode
