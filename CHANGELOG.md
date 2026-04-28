@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.8
+
+- renamed the startup app update setting to simply `Check for updates at startup`
+- added a manual `Check for updates` button in Settings that checks the latest GitHub release immediately
+- manual update checks ignore a previously skipped version so users can retry an update without editing their settings file
+- manual update checks announce the result for screen readers
+
 ## 0.3.7
 
 - fixed the runtime Rubberband `set-pitch` IPC call so pitch changes update the existing labeled filter instead of recreating it

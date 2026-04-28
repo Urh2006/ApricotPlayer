@@ -78,8 +78,8 @@ class QuietYtdlpLogger:
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.3.7"
-APP_VERSION_LABEL = "0.3.7"
+APP_VERSION = "0.3.8"
+APP_VERSION_LABEL = "0.3.8"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -179,7 +179,8 @@ TEXT = {
         "defaults_restored": "Default settings restored.",
         "loading_more_results": "Loading more results.",
         "no_more_results": "No more results.",
-        "auto_update_app": "Ob zagonu preveri posodobitve programa na GitHubu",
+        "auto_update_app": "Ob zagonu preveri posodobitve programa",
+        "check_app_updates_now": "Preveri posodobitve",
         "github_owner": "GitHub owner",
         "github_repo": "GitHub repo",
         "github_token": "GitHub token za private updates",
@@ -371,7 +372,8 @@ TEXT = {
         "defaults_restored": "Default settings restored.",
         "loading_more_results": "Loading more results.",
         "no_more_results": "No more results.",
-        "auto_update_app": "Check app updates on startup from GitHub",
+        "auto_update_app": "Check for updates at startup",
+        "check_app_updates_now": "Check for updates",
         "github_owner": "GitHub owner",
         "github_repo": "GitHub repo",
         "github_token": "GitHub token for private updates",
@@ -1036,6 +1038,7 @@ class MainFrame(wx.Frame):
             choice("results_limit", results_limit_value, ["0", "10", "20", "50", "100", "150", "200", "250"])
             check("auto_update", self.settings.auto_update_ytdlp)
             check("auto_update_app", self.settings.auto_update_app)
+            button("check_app_updates_now", self.manual_app_update_check)
         elif section_name == "playback":
             text("player_command", self.settings.player_command)
             choice("player_speed", self.settings.player_speed, [self.format_playback_rate(step) for step in PLAYBACK_SPEED_STEPS if step <= 2.0])
@@ -2488,33 +2491,48 @@ class MainFrame(wx.Frame):
         except Exception as exc:
             self.ui_queue.put(("status", self.t("updates_failed", error=exc)))
 
-    def start_app_update_check(self) -> None:
-        if not self.settings.auto_update_app:
+    def manual_app_update_check(self) -> None:
+        self.apply_settings_from_visible_controls()
+        self.save_settings()
+        self.start_app_update_check(manual=True)
+
+    def start_app_update_check(self, manual: bool = False) -> None:
+        if not manual and not self.settings.auto_update_app:
             self.set_status(self.t("app_update_disabled"))
             return
         self.set_status(self.t("checking_app_updates"))
-        threading.Thread(target=self.app_update_worker, daemon=True).start()
+        if manual:
+            self.announce_player(self.t("checking_app_updates"))
+        threading.Thread(target=self.app_update_worker, args=(manual,), daemon=True).start()
 
-    def app_update_worker(self) -> None:
+    def app_update_worker(self, manual: bool = False) -> None:
         try:
             release = self.fetch_latest_release()
             if not release:
-                self.ui_queue.put(("status", self.t("app_up_to_date")))
+                self.report_app_update_status(self.t("app_up_to_date"), manual)
                 return
             remote_version = self.release_version(release)
             if not self.is_newer_version(remote_version, APP_VERSION):
-                self.ui_queue.put(("status", self.t("app_up_to_date")))
+                self.report_app_update_status(self.t("app_up_to_date"), manual)
                 return
-            if remote_version == self.settings.skipped_update_version:
-                self.ui_queue.put(("status", self.t("update_skip_status", version=remote_version)))
+            if not manual and remote_version == self.settings.skipped_update_version:
+                self.report_app_update_status(self.t("update_skip_status", version=remote_version), manual)
                 return
             asset = self.find_release_asset(release)
             if not asset:
-                self.ui_queue.put(("status", self.t("app_update_failed", error="no Windows asset found in release")))
+                self.report_app_update_status(self.t("app_update_failed", error="no Windows asset found in release"), manual)
                 return
             wx.CallAfter(self.prompt_for_app_update, release, asset)
         except Exception as exc:
-            self.ui_queue.put(("status", self.t("app_update_failed", error=exc)))
+            message = self.t("app_update_failed", error=exc)
+            self.report_app_update_status(message, manual)
+            if manual:
+                wx.CallAfter(self.message, message, wx.ICON_ERROR)
+
+    def report_app_update_status(self, message: str, manual: bool = False) -> None:
+        self.ui_queue.put(("status", message))
+        if manual:
+            wx.CallAfter(self.announce_player, message)
 
     def prompt_for_app_update(self, release: dict, asset: dict) -> None:
         version = self.release_version(release)
