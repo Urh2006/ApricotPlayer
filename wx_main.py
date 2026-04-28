@@ -65,13 +65,14 @@ class QuietYtdlpLogger:
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.3.1"
-APP_VERSION_LABEL = "0.3.1"
+APP_VERSION = "0.3.2"
+APP_VERSION_LABEL = "0.3.2"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
 SETTINGS_FILE = APP_DIR / "settings.json"
 FAVORITES_FILE = APP_DIR / "favorites.json"
+CACHED_COOKIES_FILE = APP_DIR / "cookies.txt"
 LEGACY_SETTINGS_FILE = LEGACY_APP_DIR / "settings.json"
 LEGACY_FAVORITES_FILE = LEGACY_APP_DIR / "favorites.json"
 DEFAULT_FILENAME_TEMPLATE = "%(title)s.%(ext)s"
@@ -108,6 +109,12 @@ TEXT = {
         "choose_download_folder": "Izbor mape za prenose",
         "favorites": "Priljubljeni",
         "settings": "Nastavitve",
+        "settings_sections": "Razdelki nastavitev",
+        "general_section": "Splošno",
+        "playback_section": "Predvajanje",
+        "downloads_section": "Prenosi",
+        "cookies_network_section": "Piškotki in omrežje",
+        "updates_advanced_section": "Posodobitve in napredno",
         "exit": "Izhod",
         "open": "Odpri",
         "back": "Nazaj v glavni meni",
@@ -239,6 +246,11 @@ TEXT = {
         "proxy": "Proxy URL",
         "cookies": "Cookies file",
         "cookies_from_browser": "Cookies from browser",
+        "export_browser_cookies": "Export browser cookies to cookies.txt",
+        "exporting_browser_cookies": "Exporting browser cookies.",
+        "browser_cookies_exported": "Browser cookies exported to {path}. Cookies from browser is now set to none.",
+        "browser_cookies_export_failed": "Browser cookies export failed: {error}",
+        "select_cookies_browser": "Najprej izberi browser pri Cookies from browser.",
         "ffmpeg": "FFmpeg pot",
         "fragments": "Sočasni fragmenti",
         "retries": "Število ponovitev",
@@ -288,6 +300,12 @@ TEXT = {
         "choose_download_folder": "Choose download folder",
         "favorites": "Favorites",
         "settings": "Settings",
+        "settings_sections": "Settings sections",
+        "general_section": "General",
+        "playback_section": "Playback",
+        "downloads_section": "Downloads",
+        "cookies_network_section": "Cookies and network",
+        "updates_advanced_section": "Updates and advanced",
         "exit": "Exit",
         "open": "Open",
         "back": "Back to main menu",
@@ -419,6 +437,11 @@ TEXT = {
         "proxy": "Proxy URL",
         "cookies": "Cookies file",
         "cookies_from_browser": "Cookies from browser",
+        "export_browser_cookies": "Export browser cookies to cookies.txt",
+        "exporting_browser_cookies": "Exporting browser cookies.",
+        "browser_cookies_exported": "Browser cookies exported to {path}. Cookies from browser is now set to none.",
+        "browser_cookies_export_failed": "Browser cookies export failed: {error}",
+        "select_cookies_browser": "Choose a browser in Cookies from browser first.",
         "ffmpeg": "FFmpeg path",
         "fragments": "Concurrent fragments",
         "retries": "Retries",
@@ -525,6 +548,7 @@ class MainFrame(wx.Frame):
         self.last_search_query = ""
         self.last_search_type_index = 0
         self.last_visible_count = 0
+        self.settings_section_index = 0
         self.current_index = -1
         self.player_process: subprocess.Popen | None = None
         self.player_log_handle = None
@@ -586,10 +610,11 @@ class MainFrame(wx.Frame):
         merged = {"logger": YTDLP_LOGGER, "no_warnings": True}
         if options:
             merged.update(options)
-        if "cookiefile" not in merged and self.settings.cookies_file.strip():
-            merged["cookiefile"] = self.settings.cookies_file.strip()
+        cookiefile = str(merged.get("cookiefile") or self.settings.cookies_file).strip()
+        if cookiefile:
+            merged["cookiefile"] = cookiefile
         cookies_browser = self.normalized_cookies_browser()
-        if cookies_browser:
+        if cookies_browser and not cookiefile and "cookiesfrombrowser" not in merged:
             merged["cookiesfrombrowser"] = (cookies_browser,)
         return merged
 
@@ -884,99 +909,165 @@ class MainFrame(wx.Frame):
     def show_settings(self) -> None:
         self.clear()
         self.add_button_row([(self.t("back"), self.show_main_menu), (self.t("save"), self.save_settings_from_ui), (self.t("restore_defaults"), self.restore_default_settings)])
-        scroller = wx.ScrolledWindow(self.panel)
-        scroller.SetScrollRate(10, 10)
+        self.controls = {}
+        self.settings_control_order = []
+        sections = self.settings_sections()
+        self.settings_section_index = min(max(0, self.settings_section_index), len(sections) - 1)
+        body = wx.BoxSizer(wx.HORIZONTAL)
+        self.settings_section_list = wx.ListBox(self.panel, choices=[label for label, _name in sections], style=wx.LB_SINGLE)
+        self.settings_section_list.SetName(self.t("settings_sections"))
+        self.settings_section_list.SetSelection(self.settings_section_index)
+        self.settings_section_list.Bind(wx.EVT_LISTBOX, self.on_settings_section_changed)
+        self.settings_section_list.Bind(wx.EVT_KEY_DOWN, self.on_settings_section_key)
+        body.Add(self.settings_section_list, 0, wx.EXPAND | wx.ALL, 4)
+        self.settings_scroller = wx.ScrolledWindow(self.panel, style=wx.VSCROLL | wx.WANTS_CHARS)
+        self.settings_scroller.SetName(self.t("settings"))
+        self.settings_scroller.SetScrollRate(10, 10)
+        body.Add(self.settings_scroller, 1, wx.EXPAND | wx.ALL, 4)
+        self.root_sizer.Add(body, 1, wx.EXPAND)
+        self.render_settings_section()
+        self.panel.Layout()
+        self.focus_later(self.settings_section_list)
+
+    def settings_sections(self) -> list[tuple[str, str]]:
+        return [
+            (self.t("general_section"), "general"),
+            (self.t("playback_section"), "playback"),
+            (self.t("downloads_section"), "downloads"),
+            (self.t("cookies_network_section"), "cookies"),
+            (self.t("updates_advanced_section"), "advanced"),
+        ]
+
+    def on_settings_section_changed(self, event) -> None:
+        event.Skip()
+        self.apply_settings_from_visible_controls()
+        self.settings_section_index = self.settings_section_list.GetSelection()
+        self.render_settings_section()
+
+    def on_settings_section_key(self, event: wx.KeyEvent) -> None:
+        if event.GetKeyCode() == wx.WXK_RETURN:
+            self.focus_first_settings_control()
+        else:
+            event.Skip()
+
+    def focus_first_settings_control(self) -> None:
+        if self.settings_control_order:
+            self.safe_set_focus(self.settings_control_order[0])
+
+    def render_settings_section(self) -> None:
+        if not hasattr(self, "settings_scroller"):
+            return
+        old_sizer = self.settings_scroller.GetSizer()
+        if old_sizer:
+            old_sizer.Clear(delete_windows=True)
+        self.controls = {}
+        self.settings_control_order = []
         form = wx.FlexGridSizer(0, 2, 6, 6)
         form.AddGrowableCol(1, 1)
-        self.controls = {}
+        section_name = self.settings_sections()[self.settings_section_index][1]
+
+        def remember(key: str, ctrl: wx.Window) -> None:
+            self.controls[key] = ctrl
+            self.settings_control_order.append(ctrl)
 
         def text(key: str, value: str, style: int = 0):
-            form.Add(wx.StaticText(scroller, label=self.t(key)), 0, wx.ALIGN_CENTER_VERTICAL)
-            ctrl = wx.TextCtrl(scroller, value=value, style=style)
+            form.Add(wx.StaticText(self.settings_scroller, label=self.t(key)), 0, wx.ALIGN_CENTER_VERTICAL)
+            ctrl = wx.TextCtrl(self.settings_scroller, value=value, style=style)
             ctrl.SetName(self.t(key))
             form.Add(ctrl, 1, wx.EXPAND)
-            self.controls[key] = ctrl
+            remember(key, ctrl)
 
         def choice(key: str, value: str, options: list[str]):
-            form.Add(wx.StaticText(scroller, label=self.t(key)), 0, wx.ALIGN_CENTER_VERTICAL)
-            ctrl = wx.Choice(scroller, choices=options)
+            form.Add(wx.StaticText(self.settings_scroller, label=self.t(key)), 0, wx.ALIGN_CENTER_VERTICAL)
+            ctrl = wx.Choice(self.settings_scroller, choices=options)
             ctrl.SetName(self.t(key))
             selected = options.index(value) if value in options else 0
             ctrl.SetSelection(selected)
             form.Add(ctrl, 1, wx.EXPAND)
-            self.controls[key] = ctrl
+            remember(key, ctrl)
 
         def check(key: str, value: bool):
             form.AddSpacer(1)
-            ctrl = wx.CheckBox(scroller, label=self.t(key))
+            ctrl = wx.CheckBox(self.settings_scroller, label=self.t(key))
             ctrl.SetName(self.t(key))
             ctrl.SetValue(value)
             form.Add(ctrl, 1, wx.EXPAND)
-            self.controls[key] = ctrl
+            remember(key, ctrl)
 
-        form.Add(wx.StaticText(scroller, label=self.t("language")), 0, wx.ALIGN_CENTER_VERTICAL)
-        lang = wx.Choice(scroller, choices=["Slovenščina", "English"])
-        lang.SetSelection(1 if self.settings.language == "en" else 0)
-        lang.SetName(self.t("language"))
-        form.Add(lang, 1, wx.EXPAND)
-        self.controls["language"] = lang
-        text("settings_file", str(SETTINGS_FILE), wx.TE_READONLY)
-        text("download_folder", self.settings.download_folder)
-        browse = wx.Button(scroller, label=self.t("browse"))
-        browse.Bind(wx.EVT_BUTTON, lambda _evt: self.choose_download_folder())
-        form.AddSpacer(1)
-        form.Add(browse, 0)
-        results_limit_value = "0" if self.settings.results_limit == 0 else str(min(250, self.settings.results_limit))
-        choice("results_limit", results_limit_value, ["0", "10", "20", "50", "100", "150", "200", "250"])
-        choice("seek_seconds", str(self.settings.seek_seconds), ["5", "10", "15", "30"])
-        choice("volume_step", str(self.settings.volume_step), ["1", "2", "5", "10"])
-        choice("speed_step", self.format_step_value(self.settings.speed_step), RATE_STEP_OPTIONS)
-        choice("pitch_step", self.format_step_value(self.settings.pitch_step), RATE_STEP_OPTIONS)
-        check("auto_update", self.settings.auto_update_ytdlp)
-        check("auto_update_app", self.settings.auto_update_app)
-        check("autoplay_next", self.settings.autoplay_next)
-        check("confirm_download", self.settings.confirm_before_download)
-        check("open_after_download", self.settings.open_folder_after_download)
-        check("download_complete_popup", self.settings.popup_when_download_complete)
-        choice("audio_format", self.settings.audio_format, ["mp3", "m4a", "opus", "wav", "flac"])
-        choice("audio_quality", self.settings.audio_quality, ["0", "1", "2", "3", "4", "5", "128", "192", "256", "320"])
-        choice("video_format", self.settings.video_format, ["bestvideo+bestaudio/best", "best", "best[ext=mp4]", "worst"])
-        choice("max_height", str(self.settings.max_video_height), ["0", "360", "480", "720", "1080", "1440", "2160"])
-        text("filename_template", self.settings.filename_template or DEFAULT_FILENAME_TEMPLATE)
-        text("subtitle_langs", self.settings.subtitle_languages)
-        check("quiet_downloads", self.settings.quiet_downloads)
-        check("playlist_order", self.settings.keep_playlist_order)
-        check("write_thumbnail", self.settings.write_thumbnail)
-        check("write_description", self.settings.write_description)
-        check("write_info_json", self.settings.write_info_json)
-        check("write_subtitles", self.settings.write_subtitles)
-        check("auto_subtitles", self.settings.auto_subtitles)
-        check("embed_metadata", self.settings.embed_metadata)
-        check("embed_thumbnail", self.settings.embed_thumbnail)
-        check("restrict_filenames", self.settings.restrict_filenames)
-        check("download_archive", self.settings.download_archive)
-        text("player_command", self.settings.player_command)
-        choice("player_speed", self.settings.player_speed, [self.format_playback_rate(step) for step in PLAYBACK_SPEED_STEPS if step <= 2.0])
-        choice("pitch_mode", self.normalized_pitch_mode(), PITCH_MODE_OPTIONS)
-        check("browser_playback", self.settings.prefer_browser_playback)
-        check("fullscreen", self.settings.player_fullscreen)
-        check("start_paused", self.settings.player_start_paused)
-        text("rate_limit", self.settings.rate_limit)
-        text("proxy", self.settings.proxy)
-        text("cookies", self.settings.cookies_file)
-        choice("cookies_from_browser", self.settings.cookies_from_browser or "none", COOKIES_BROWSER_OPTIONS)
-        text("ffmpeg", self.settings.ffmpeg_location)
-        text("github_owner", self.settings.github_owner)
-        text("github_repo", self.settings.github_repo)
-        text("github_token", self.settings.github_token, wx.TE_PASSWORD)
-        choice("fragments", str(self.settings.concurrent_fragments), ["1", "2", "4", "8", "16"])
-        choice("retries", str(self.settings.retries), ["0", "3", "5", "10", "20"])
-        choice("timeout", str(self.settings.socket_timeout), ["5", "10", "20", "30", "60"])
+        def button(key: str, handler):
+            form.AddSpacer(1)
+            ctrl = wx.Button(self.settings_scroller, label=self.t(key))
+            ctrl.SetName(self.t(key))
+            ctrl.Bind(wx.EVT_BUTTON, lambda _evt, fn=handler: fn())
+            form.Add(ctrl, 0)
+            self.settings_control_order.append(ctrl)
 
-        scroller.SetSizer(form)
-        self.root_sizer.Add(scroller, 1, wx.EXPAND | wx.ALL, 4)
+        if section_name == "general":
+            form.Add(wx.StaticText(self.settings_scroller, label=self.t("language")), 0, wx.ALIGN_CENTER_VERTICAL)
+            lang = wx.Choice(self.settings_scroller, choices=["Slovenščina", "English"])
+            lang.SetSelection(1 if self.settings.language == "en" else 0)
+            lang.SetName(self.t("language"))
+            form.Add(lang, 1, wx.EXPAND)
+            remember("language", lang)
+            text("settings_file", str(SETTINGS_FILE), wx.TE_READONLY)
+            text("download_folder", self.settings.download_folder)
+            button("browse", self.choose_download_folder)
+            results_limit_value = "0" if self.settings.results_limit == 0 else str(min(250, self.settings.results_limit))
+            choice("results_limit", results_limit_value, ["0", "10", "20", "50", "100", "150", "200", "250"])
+            check("auto_update", self.settings.auto_update_ytdlp)
+            check("auto_update_app", self.settings.auto_update_app)
+        elif section_name == "playback":
+            text("player_command", self.settings.player_command)
+            choice("player_speed", self.settings.player_speed, [self.format_playback_rate(step) for step in PLAYBACK_SPEED_STEPS if step <= 2.0])
+            choice("pitch_mode", self.normalized_pitch_mode(), PITCH_MODE_OPTIONS)
+            choice("speed_step", self.format_step_value(self.settings.speed_step), RATE_STEP_OPTIONS)
+            choice("pitch_step", self.format_step_value(self.settings.pitch_step), RATE_STEP_OPTIONS)
+            choice("seek_seconds", str(self.settings.seek_seconds), ["5", "10", "15", "30"])
+            choice("volume_step", str(self.settings.volume_step), ["1", "2", "5", "10"])
+            check("autoplay_next", self.settings.autoplay_next)
+            check("browser_playback", self.settings.prefer_browser_playback)
+            check("fullscreen", self.settings.player_fullscreen)
+            check("start_paused", self.settings.player_start_paused)
+        elif section_name == "downloads":
+            check("confirm_download", self.settings.confirm_before_download)
+            check("open_after_download", self.settings.open_folder_after_download)
+            check("download_complete_popup", self.settings.popup_when_download_complete)
+            choice("audio_format", self.settings.audio_format, ["mp3", "m4a", "opus", "wav", "flac"])
+            choice("audio_quality", self.settings.audio_quality, ["0", "1", "2", "3", "4", "5", "128", "192", "256", "320"])
+            choice("video_format", self.settings.video_format, ["bestvideo+bestaudio/best", "best", "best[ext=mp4]", "worst"])
+            choice("max_height", str(self.settings.max_video_height), ["0", "360", "480", "720", "1080", "1440", "2160"])
+            text("filename_template", self.settings.filename_template or DEFAULT_FILENAME_TEMPLATE)
+            text("subtitle_langs", self.settings.subtitle_languages)
+            check("quiet_downloads", self.settings.quiet_downloads)
+            check("playlist_order", self.settings.keep_playlist_order)
+            check("write_thumbnail", self.settings.write_thumbnail)
+            check("write_description", self.settings.write_description)
+            check("write_info_json", self.settings.write_info_json)
+            check("write_subtitles", self.settings.write_subtitles)
+            check("auto_subtitles", self.settings.auto_subtitles)
+            check("embed_metadata", self.settings.embed_metadata)
+            check("embed_thumbnail", self.settings.embed_thumbnail)
+            check("restrict_filenames", self.settings.restrict_filenames)
+            check("download_archive", self.settings.download_archive)
+        elif section_name == "cookies":
+            text("cookies", self.settings.cookies_file)
+            choice("cookies_from_browser", self.settings.cookies_from_browser or "none", COOKIES_BROWSER_OPTIONS)
+            button("export_browser_cookies", self.export_browser_cookies_from_settings)
+            text("rate_limit", self.settings.rate_limit)
+            text("proxy", self.settings.proxy)
+            text("ffmpeg", self.settings.ffmpeg_location)
+            choice("fragments", str(self.settings.concurrent_fragments), ["1", "2", "4", "8", "16"])
+            choice("retries", str(self.settings.retries), ["0", "3", "5", "10", "20"])
+            choice("timeout", str(self.settings.socket_timeout), ["5", "10", "20", "30", "60"])
+        else:
+            text("github_owner", self.settings.github_owner)
+            text("github_repo", self.settings.github_repo)
+            text("github_token", self.settings.github_token, wx.TE_PASSWORD)
+
+        self.settings_scroller.SetSizer(form, True)
+        self.settings_scroller.Layout()
+        self.settings_scroller.FitInside()
         self.panel.Layout()
-        self.focus_later(lang)
 
     def search_type_code(self) -> str:
         index = self.search_type.GetSelection()
@@ -1872,6 +1963,9 @@ class MainFrame(wx.Frame):
         if remove_queued:
             self.remove_queued_url(item.get("url", ""), announce=False)
         self.announce_player(self.t("download_audio_start" if audio_only else "download_video_start"))
+        wx.CallLater(250, self.start_download_worker_thread, item, audio_only)
+
+    def start_download_worker_thread(self, item: dict, audio_only: bool) -> None:
         threading.Thread(target=self.download_worker, args=(item, audio_only), daemon=True).start()
 
     def download_audio(self) -> None:
@@ -2167,60 +2261,151 @@ class MainFrame(wx.Frame):
                 self.save_settings()
                 self.set_status(self.t("settings_saved"))
 
+    def export_browser_cookies_from_settings(self) -> None:
+        if yt_dlp is None:
+            self.message(self.t("missing_ytdlp"), wx.ICON_ERROR)
+            return
+        self.apply_settings_from_visible_controls()
+        browser = self.normalized_cookies_browser()
+        if not browser:
+            self.message(self.t("select_cookies_browser"))
+            return
+        self.announce_player(self.t("exporting_browser_cookies"))
+        threading.Thread(target=self.export_browser_cookies_worker, args=(browser,), daemon=True).start()
+
+    def export_browser_cookies_worker(self, browser: str) -> None:
+        try:
+            CACHED_COOKIES_FILE.parent.mkdir(parents=True, exist_ok=True)
+            options = {
+                "logger": YTDLP_LOGGER,
+                "no_warnings": True,
+                "quiet": True,
+                "skip_download": True,
+                "cookiefile": str(CACHED_COOKIES_FILE),
+                "cookiesfrombrowser": (browser,),
+            }
+            with yt_dlp.YoutubeDL(options) as ydl:
+                _ = ydl.cookiejar
+                ydl.save_cookies()
+            wx.CallAfter(self.finish_browser_cookies_export, str(CACHED_COOKIES_FILE))
+        except Exception as exc:
+            wx.CallAfter(self.message, self.t("browser_cookies_export_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
+
+    def finish_browser_cookies_export(self, path: str) -> None:
+        self.settings.cookies_file = path
+        self.settings.cookies_from_browser = "none"
+        self.save_settings()
+        if hasattr(self, "controls"):
+            if "cookies" in self.controls:
+                self.controls["cookies"].SetValue(path)
+            if "cookies_from_browser" in self.controls:
+                self.controls["cookies_from_browser"].SetSelection(0)
+        self.announce_player(self.t("browser_cookies_exported", path=path))
+
     def save_settings_from_ui(self) -> None:
-        c = self.controls
         old_language = self.settings.language
-        self.settings.language = "en" if c["language"].GetSelection() == 1 else "sl"
-        self.settings.download_folder = c["download_folder"].GetValue()
-        self.settings.results_limit = self.to_int(c["results_limit"].GetStringSelection(), 20, 0, 250)
-        self.settings.seek_seconds = self.to_int(c["seek_seconds"].GetStringSelection(), 5, 1)
-        self.settings.volume_step = self.to_int(c["volume_step"].GetStringSelection(), 5, 1)
-        self.settings.speed_step = self.to_float(c["speed_step"].GetStringSelection(), 0.01, 0.01, 0.25)
-        self.settings.pitch_step = self.to_float(c["pitch_step"].GetStringSelection(), 0.01, 0.01, 0.25)
-        self.settings.auto_update_ytdlp = c["auto_update"].GetValue()
-        self.settings.auto_update_app = c["auto_update_app"].GetValue()
-        self.settings.autoplay_next = c["autoplay_next"].GetValue()
-        self.settings.confirm_before_download = c["confirm_download"].GetValue()
-        self.settings.open_folder_after_download = c["open_after_download"].GetValue()
-        self.settings.popup_when_download_complete = c["download_complete_popup"].GetValue()
-        self.settings.audio_format = c["audio_format"].GetStringSelection() or "mp3"
-        self.settings.audio_quality = c["audio_quality"].GetStringSelection() or "0"
-        self.settings.video_format = c["video_format"].GetStringSelection() or "bestvideo+bestaudio/best"
-        self.settings.max_video_height = self.to_int(c["max_height"].GetStringSelection(), 1080, 0)
-        self.settings.filename_template = c["filename_template"].GetValue() or DEFAULT_FILENAME_TEMPLATE
-        self.settings.subtitle_languages = c["subtitle_langs"].GetValue() or "sl,en"
-        self.settings.quiet_downloads = c["quiet_downloads"].GetValue()
-        self.settings.keep_playlist_order = c["playlist_order"].GetValue()
-        self.settings.write_thumbnail = c["write_thumbnail"].GetValue()
-        self.settings.write_description = c["write_description"].GetValue()
-        self.settings.write_info_json = c["write_info_json"].GetValue()
-        self.settings.write_subtitles = c["write_subtitles"].GetValue()
-        self.settings.auto_subtitles = c["auto_subtitles"].GetValue()
-        self.settings.embed_metadata = c["embed_metadata"].GetValue()
-        self.settings.embed_thumbnail = c["embed_thumbnail"].GetValue()
-        self.settings.restrict_filenames = c["restrict_filenames"].GetValue()
-        self.settings.download_archive = c["download_archive"].GetValue()
-        self.settings.player_command = c["player_command"].GetValue()
-        self.settings.player_speed = c["player_speed"].GetStringSelection() or "1.0"
-        self.settings.pitch_mode = c["pitch_mode"].GetStringSelection() or PITCH_MODE_RUBBERBAND
-        self.settings.prefer_browser_playback = c["browser_playback"].GetValue()
-        self.settings.player_fullscreen = c["fullscreen"].GetValue()
-        self.settings.player_start_paused = c["start_paused"].GetValue()
-        self.settings.rate_limit = c["rate_limit"].GetValue()
-        self.settings.proxy = c["proxy"].GetValue()
-        self.settings.cookies_file = c["cookies"].GetValue()
-        self.settings.cookies_from_browser = c["cookies_from_browser"].GetStringSelection() or "none"
-        self.settings.ffmpeg_location = c["ffmpeg"].GetValue()
-        self.settings.github_owner = c["github_owner"].GetValue().strip() or DEFAULT_GITHUB_OWNER
-        self.settings.github_repo = c["github_repo"].GetValue().strip() or DEFAULT_GITHUB_REPO
-        self.settings.github_token = c["github_token"].GetValue().strip()
-        self.settings.concurrent_fragments = self.to_int(c["fragments"].GetStringSelection(), 4, 1)
-        self.settings.retries = self.to_int(c["retries"].GetStringSelection(), 10, 0)
-        self.settings.socket_timeout = self.to_int(c["timeout"].GetStringSelection(), 20, 1)
+        self.apply_settings_from_visible_controls()
         self.save_settings()
         self.set_status(self.t("settings_saved"))
         if self.settings.language != old_language:
             self.show_settings()
+
+    def apply_settings_from_visible_controls(self) -> None:
+        c = self.controls
+        if "language" in c:
+            self.settings.language = "en" if c["language"].GetSelection() == 1 else "sl"
+        if "download_folder" in c:
+            self.settings.download_folder = c["download_folder"].GetValue()
+        if "results_limit" in c:
+            self.settings.results_limit = self.to_int(c["results_limit"].GetStringSelection(), 20, 0, 250)
+        if "seek_seconds" in c:
+            self.settings.seek_seconds = self.to_int(c["seek_seconds"].GetStringSelection(), 5, 1)
+        if "volume_step" in c:
+            self.settings.volume_step = self.to_int(c["volume_step"].GetStringSelection(), 5, 1)
+        if "speed_step" in c:
+            self.settings.speed_step = self.to_float(c["speed_step"].GetStringSelection(), 0.01, 0.01, 0.25)
+        if "pitch_step" in c:
+            self.settings.pitch_step = self.to_float(c["pitch_step"].GetStringSelection(), 0.01, 0.01, 0.25)
+        if "auto_update" in c:
+            self.settings.auto_update_ytdlp = c["auto_update"].GetValue()
+        if "auto_update_app" in c:
+            self.settings.auto_update_app = c["auto_update_app"].GetValue()
+        if "autoplay_next" in c:
+            self.settings.autoplay_next = c["autoplay_next"].GetValue()
+        if "confirm_download" in c:
+            self.settings.confirm_before_download = c["confirm_download"].GetValue()
+        if "open_after_download" in c:
+            self.settings.open_folder_after_download = c["open_after_download"].GetValue()
+        if "download_complete_popup" in c:
+            self.settings.popup_when_download_complete = c["download_complete_popup"].GetValue()
+        if "audio_format" in c:
+            self.settings.audio_format = c["audio_format"].GetStringSelection() or "mp3"
+        if "audio_quality" in c:
+            self.settings.audio_quality = c["audio_quality"].GetStringSelection() or "0"
+        if "video_format" in c:
+            self.settings.video_format = c["video_format"].GetStringSelection() or "bestvideo+bestaudio/best"
+        if "max_height" in c:
+            self.settings.max_video_height = self.to_int(c["max_height"].GetStringSelection(), 1080, 0)
+        if "filename_template" in c:
+            self.settings.filename_template = c["filename_template"].GetValue() or DEFAULT_FILENAME_TEMPLATE
+        if "subtitle_langs" in c:
+            self.settings.subtitle_languages = c["subtitle_langs"].GetValue() or "sl,en"
+        if "quiet_downloads" in c:
+            self.settings.quiet_downloads = c["quiet_downloads"].GetValue()
+        if "playlist_order" in c:
+            self.settings.keep_playlist_order = c["playlist_order"].GetValue()
+        if "write_thumbnail" in c:
+            self.settings.write_thumbnail = c["write_thumbnail"].GetValue()
+        if "write_description" in c:
+            self.settings.write_description = c["write_description"].GetValue()
+        if "write_info_json" in c:
+            self.settings.write_info_json = c["write_info_json"].GetValue()
+        if "write_subtitles" in c:
+            self.settings.write_subtitles = c["write_subtitles"].GetValue()
+        if "auto_subtitles" in c:
+            self.settings.auto_subtitles = c["auto_subtitles"].GetValue()
+        if "embed_metadata" in c:
+            self.settings.embed_metadata = c["embed_metadata"].GetValue()
+        if "embed_thumbnail" in c:
+            self.settings.embed_thumbnail = c["embed_thumbnail"].GetValue()
+        if "restrict_filenames" in c:
+            self.settings.restrict_filenames = c["restrict_filenames"].GetValue()
+        if "download_archive" in c:
+            self.settings.download_archive = c["download_archive"].GetValue()
+        if "player_command" in c:
+            self.settings.player_command = c["player_command"].GetValue()
+        if "player_speed" in c:
+            self.settings.player_speed = c["player_speed"].GetStringSelection() or "1.0"
+        if "pitch_mode" in c:
+            self.settings.pitch_mode = c["pitch_mode"].GetStringSelection() or PITCH_MODE_RUBBERBAND
+        if "browser_playback" in c:
+            self.settings.prefer_browser_playback = c["browser_playback"].GetValue()
+        if "fullscreen" in c:
+            self.settings.player_fullscreen = c["fullscreen"].GetValue()
+        if "start_paused" in c:
+            self.settings.player_start_paused = c["start_paused"].GetValue()
+        if "rate_limit" in c:
+            self.settings.rate_limit = c["rate_limit"].GetValue()
+        if "proxy" in c:
+            self.settings.proxy = c["proxy"].GetValue()
+        if "cookies" in c:
+            self.settings.cookies_file = c["cookies"].GetValue()
+        if "cookies_from_browser" in c:
+            self.settings.cookies_from_browser = c["cookies_from_browser"].GetStringSelection() or "none"
+        if "ffmpeg" in c:
+            self.settings.ffmpeg_location = c["ffmpeg"].GetValue()
+        if "github_owner" in c:
+            self.settings.github_owner = c["github_owner"].GetValue().strip() or DEFAULT_GITHUB_OWNER
+        if "github_repo" in c:
+            self.settings.github_repo = c["github_repo"].GetValue().strip() or DEFAULT_GITHUB_REPO
+        if "github_token" in c:
+            self.settings.github_token = c["github_token"].GetValue().strip()
+        if "fragments" in c:
+            self.settings.concurrent_fragments = self.to_int(c["fragments"].GetStringSelection(), 4, 1)
+        if "retries" in c:
+            self.settings.retries = self.to_int(c["retries"].GetStringSelection(), 10, 0)
+        if "timeout" in c:
+            self.settings.socket_timeout = self.to_int(c["timeout"].GetStringSelection(), 20, 1)
 
     def start_ytdlp_update_check(self) -> None:
         self.set_status(self.t("checking_updates"))
