@@ -78,8 +78,8 @@ class QuietYtdlpLogger:
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.3.5"
-APP_VERSION_LABEL = "0.3.5"
+APP_VERSION = "0.3.6"
+APP_VERSION_LABEL = "0.3.6"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -99,10 +99,13 @@ UPDATE_LOG_FILE = APP_DIR / "updater.log"
 PLAYBACK_SPEED_STEPS = [0.25, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1.0, 1.1, 1.2, 1.25, 1.3, 1.4, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0]
 PITCH_STEPS = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0]
 DEFAULT_REACHED_SOUND = "default_reached.wav"
-PITCH_MODE_RUBBERBAND = "rubberband"
-PITCH_MODE_MPV = "mpv pitch"
-PITCH_MODE_LINKED_SPEED = "linked speed"
-PITCH_MODE_OPTIONS = [PITCH_MODE_RUBBERBAND, PITCH_MODE_MPV, PITCH_MODE_LINKED_SPEED]
+PITCH_MODE_RUBBERBAND = "Independent pitch - best quality (Rubberband)"
+PITCH_MODE_MPV = "Independent pitch - basic (mpv built-in)"
+PITCH_MODE_OPTIONS = [PITCH_MODE_RUBBERBAND, PITCH_MODE_MPV]
+LEGACY_PITCH_MODE_RUBBERBAND = "rubberband"
+LEGACY_PITCH_MODE_MPV = "mpv pitch"
+LEGACY_PITCH_MODE_LINKED_SPEED = "linked speed"
+RUBBERBAND_FILTER_LABEL = "@apricot_pitch"
 RATE_STEP_OPTIONS = ["0.01", "0.02", "0.05", "0.10", "0.25"]
 COOKIES_BROWSER_OPTIONS = ["none", "chrome", "edge", "firefox", "brave", "chromium", "opera", "vivaldi"]
 
@@ -228,7 +231,7 @@ TEXT = {
         "volume_step": "Korak glasnosti",
         "speed_step": "Korak hitrosti predvajanja",
         "pitch_step": "Korak pitcha",
-        "pitch_mode": "Nacin spreminjanja pitcha",
+        "pitch_mode": "Nacin pitch kontrole",
         "auto_update": "Ob vsakem zagonu preveri posodobitve yt-dlp",
         "autoplay_next": "Po koncu posnetka samodejno predvajaj naslednjega",
         "confirm_download": "Pred prenosom vprašaj za potrditev",
@@ -570,6 +573,7 @@ class MainFrame(wx.Frame):
         self.player_kind = ""
         self.player_control_mode = False
         self.volume_boost_enabled = False
+        self.rubberband_pitch_filter_active = False
         self.in_player_screen = False
         self.in_queue_screen = False
         self.current_video_item: dict | None = None
@@ -1396,6 +1400,8 @@ class MainFrame(wx.Frame):
                 f"--input-ipc-server={self.ipc_path}",
                 "--idle=no",
                 "--volume-max=300",
+                "--audio-pitch-correction=yes",
+                "--pitch=1.0",
                 f"--speed={self.settings.player_speed}",
                 "--term-playing-msg=",
                 "--msg-level=all=warn",
@@ -1427,6 +1433,7 @@ class MainFrame(wx.Frame):
             self.player_kind = "mpv"
             self.player_control_mode = True
             self.volume_boost_enabled = False
+            self.rubberband_pitch_filter_active = False
             self.current_video_info["speed"] = self.format_playback_rate(float(self.settings.player_speed))
             self.current_video_info["pitch"] = self.format_playback_rate(1.0)
             self.update_details_text()
@@ -1650,8 +1657,7 @@ class MainFrame(wx.Frame):
             current = self.mpv_get_property("speed")
             speed = float(current if current is not None else 1.0)
             speed = self.next_playback_speed(speed, delta)
-            if self.normalized_pitch_mode() != PITCH_MODE_LINKED_SPEED:
-                self.mpv_set_property("audio-pitch-correction", True)
+            self.mpv_set_property("audio-pitch-correction", True)
             self.mpv_set_property("speed", speed)
             speed_text = self.format_playback_rate(speed)
             self.current_video_info["speed"] = speed_text
@@ -1687,13 +1693,7 @@ class MainFrame(wx.Frame):
     def apply_pitch_value(self, pitch: float) -> None:
         mode = self.normalized_pitch_mode()
         pitch_text = self.format_playback_rate(pitch)
-        if mode == PITCH_MODE_LINKED_SPEED:
-            self.clear_rubberband_pitch_filter()
-            self.mpv_set_property("audio-pitch-correction", False)
-            self.mpv_set_property("pitch", 1.0)
-            self.mpv_set_property("speed", pitch)
-            self.current_video_info["speed"] = pitch_text
-        elif mode == PITCH_MODE_MPV:
+        if mode == PITCH_MODE_MPV:
             self.clear_rubberband_pitch_filter()
             self.mpv_set_property("audio-pitch-correction", True)
             self.mpv_set_property("pitch", pitch)
@@ -1703,11 +1703,25 @@ class MainFrame(wx.Frame):
             if self.is_default_rate(pitch):
                 self.clear_rubberband_pitch_filter()
             else:
-                self.mpv_send(["af", "set", f"rubberband=transients=smooth:formant=preserved:pitch=quality:engine=finer:pitch-scale={pitch:.4f}"])
+                self.apply_rubberband_pitch_filter(pitch)
         self.current_video_info["pitch"] = pitch_text
 
+    def apply_rubberband_pitch_filter(self, pitch: float) -> None:
+        if self.rubberband_pitch_filter_active:
+            response = self.mpv_request(["af-command", RUBBERBAND_FILTER_LABEL, "set-pitch", f"{pitch:.4f}"])
+            if response.get("error") == "success":
+                return
+        self.clear_rubberband_pitch_filter()
+        self.mpv_send(["af", "add", self.rubberband_pitch_filter(pitch)])
+        self.rubberband_pitch_filter_active = True
+
+    @staticmethod
+    def rubberband_pitch_filter(pitch: float) -> str:
+        return f"{RUBBERBAND_FILTER_LABEL}:rubberband=transients=smooth:formant=preserved:pitch=quality:engine=finer:pitch-scale={pitch:.4f}"
+
     def clear_rubberband_pitch_filter(self) -> None:
-        self.mpv_send(["af", "set", ""])
+        self.mpv_send(["af", "remove", RUBBERBAND_FILTER_LABEL])
+        self.rubberband_pitch_filter_active = False
 
     def change_volume_async(self, delta: int) -> None:
         threading.Thread(target=self.change_volume_worker, args=(delta,), daemon=True).start()
@@ -1787,7 +1801,19 @@ class MainFrame(wx.Frame):
 
     def normalized_pitch_mode(self) -> str:
         mode = str(getattr(self.settings, "pitch_mode", PITCH_MODE_RUBBERBAND) or PITCH_MODE_RUBBERBAND)
-        return mode if mode in PITCH_MODE_OPTIONS else PITCH_MODE_RUBBERBAND
+        return self.normalize_pitch_mode_value(mode)
+
+    @staticmethod
+    def normalize_pitch_mode_value(mode: str) -> str:
+        normalized = str(mode or "").strip()
+        lowered = normalized.lower()
+        if normalized in PITCH_MODE_OPTIONS:
+            return normalized
+        if lowered == LEGACY_PITCH_MODE_MPV:
+            return PITCH_MODE_MPV
+        if lowered in {LEGACY_PITCH_MODE_RUBBERBAND, LEGACY_PITCH_MODE_LINKED_SPEED}:
+            return PITCH_MODE_RUBBERBAND
+        return PITCH_MODE_RUBBERBAND
 
     @staticmethod
     def is_default_rate(value: float) -> bool:
@@ -1818,6 +1844,7 @@ class MainFrame(wx.Frame):
             self.player_log_handle = None
         self.player_kind = ""
         self.player_control_mode = False
+        self.rubberband_pitch_filter_active = False
         if not self.in_player_screen:
             self.in_player_screen = False
         if not silent:
@@ -2412,7 +2439,7 @@ class MainFrame(wx.Frame):
         if "player_speed" in c:
             self.settings.player_speed = c["player_speed"].GetStringSelection() or "1.0"
         if "pitch_mode" in c:
-            self.settings.pitch_mode = c["pitch_mode"].GetStringSelection() or PITCH_MODE_RUBBERBAND
+            self.settings.pitch_mode = self.normalize_pitch_mode_value(c["pitch_mode"].GetStringSelection())
         if "browser_playback" in c:
             self.settings.prefer_browser_playback = c["browser_playback"].GetValue()
         if "fullscreen" in c:
@@ -2952,6 +2979,7 @@ class MainFrame(wx.Frame):
                 merged = {**asdict(Settings()), **data}
                 if merged.get("filename_template") == OLD_FILENAME_TEMPLATE:
                     merged["filename_template"] = DEFAULT_FILENAME_TEMPLATE
+                merged["pitch_mode"] = self.normalize_pitch_mode_value(str(merged.get("pitch_mode") or ""))
                 return Settings(**merged)
             except Exception:
                 return Settings()

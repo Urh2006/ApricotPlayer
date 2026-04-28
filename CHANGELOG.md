@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.6
+
+- rebuilt player pitch control so pitch and playback speed remain independent in every supported pitch mode
+- removed the confusing legacy `linked speed` pitch mode; old settings using it now migrate to the recommended independent Rubberband mode
+- renamed pitch mode choices to describe what they do directly: best-quality Rubberband independent pitch or basic mpv built-in independent pitch
+- Rubberband pitch changes now update the labeled mpv audio filter instead of replacing the whole audio filter chain or changing playback speed
+
 ## 0.3.5
 
 - installer builds now use PyInstaller `onedir` layout so installed launches no longer pay the one-file extraction cost every time
