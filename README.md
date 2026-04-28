@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.3.3` (`0.3.3`)
+Current version: `0.3.4` (`0.3.4`)
 
 ## Download
 
@@ -67,4 +67,4 @@ Helpful scripts:
 
 - `scripts/build_release.ps1` builds `ApricotPlayer.exe`
 - `scripts/build_installer.ps1` builds `ApricotPlayerSetup.exe` when Inno Setup is installed
-- `scripts/publish_release.ps1 -Tag v0.3.3 -NotesFile release-notes/v0.3.3.md` publishes release assets to GitHub Releases
+- `scripts/publish_release.ps1 -Tag v0.3.4 -NotesFile release-notes/v0.3.4.md` publishes release assets to GitHub Releases

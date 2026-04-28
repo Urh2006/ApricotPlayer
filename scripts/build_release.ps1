@@ -21,7 +21,12 @@ $args = @(
     "--workpath", $workPath,
     "--specpath", $specPath,
     "--collect-all", "yt_dlp",
-    "--collect-all", "wx"
+    "--exclude-module", "IPython",
+    "--exclude-module", "jedi",
+    "--exclude-module", "matplotlib",
+    "--exclude-module", "numpy",
+    "--exclude-module", "PIL",
+    "--exclude-module", "tkinter"
 )
 
 $mpvDir = Join-Path $projectRoot "vendor\mpv"

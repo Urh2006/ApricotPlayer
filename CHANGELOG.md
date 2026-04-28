@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.4
+
+- optimized the Windows build by removing the broad `--collect-all wx` bundle step
+- excluded unused heavyweight modules from the packaged app, including IPython, matplotlib, numpy, PIL, tkinter, and jedi
+- reduced the installed executable size and one-file startup unpacking work for faster launches
+- deferred loading `yt-dlp` until search, playback, downloads, cookies export, or update checks actually need it, so the main menu can appear sooner
+- delayed automatic YouTube/app update checks for a few seconds after startup so they no longer compete with the first menu render
+
 ## 0.3.3
 
 - download actions now always speak `Download started.` before the download worker starts, independent of the completion popup setting

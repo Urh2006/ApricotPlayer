@@ -15,6 +15,7 @@ import webbrowser
 import ctypes
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from importlib import import_module
 from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -22,10 +23,22 @@ from urllib.error import HTTPError, URLError
 
 import wx
 
-try:
-    import yt_dlp
-except ImportError:
-    yt_dlp = None
+yt_dlp = None
+yt_dlp_import_error: Exception | None = None
+
+
+def get_yt_dlp():
+    global yt_dlp, yt_dlp_import_error
+    if yt_dlp is not None:
+        return yt_dlp
+    if yt_dlp_import_error is not None:
+        return None
+    try:
+        yt_dlp = import_module("yt_dlp")
+    except ImportError as exc:
+        yt_dlp_import_error = exc
+        return None
+    return yt_dlp
 
 try:
     import winsound
@@ -65,8 +78,8 @@ class QuietYtdlpLogger:
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.3.3"
-APP_VERSION_LABEL = "0.3.3"
+APP_VERSION = "0.3.4"
+APP_VERSION_LABEL = "0.3.4"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -588,9 +601,9 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_TIMER, self.process_queue, self.timer)
         self.timer.Start(100)
         if self.settings.auto_update_ytdlp:
-            wx.CallLater(300, self.start_ytdlp_update_check)
+            wx.CallLater(3500, self.start_ytdlp_update_check)
         if self.settings.auto_update_app:
-            wx.CallLater(900, self.start_app_update_check)
+            wx.CallLater(5500, self.start_app_update_check)
 
     def install_download_accelerators(self) -> None:
         self.download_audio_accelerator_id = wx.NewIdRef()
@@ -1076,7 +1089,7 @@ class MainFrame(wx.Frame):
         return ("Video", "Playlist", "Kanal")[index if index != wx.NOT_FOUND else 0]
 
     def search(self) -> None:
-        if yt_dlp is None:
+        if get_yt_dlp() is None:
             self.message(self.t("missing_ytdlp"), wx.ICON_ERROR)
             return
         query = self.query.GetValue().strip()
@@ -1103,8 +1116,11 @@ class MainFrame(wx.Frame):
 
     def search_worker(self, query: str, search_type: str, limit: int) -> None:
         try:
+            ytdlp = get_yt_dlp()
+            if ytdlp is None:
+                raise RuntimeError(self.t("missing_ytdlp"))
             options = {"quiet": True, "extract_flat": True, "skip_download": True, "playlistend": limit}
-            with yt_dlp.YoutubeDL(self.ydl_options(options)) as ydl:
+            with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
                 if search_type == "Video":
                     info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
                 else:
@@ -1190,8 +1206,11 @@ class MainFrame(wx.Frame):
 
     def search_more_worker(self, query: str, search_type: str, limit: int, selection: int) -> None:
         try:
+            ytdlp = get_yt_dlp()
+            if ytdlp is None:
+                raise RuntimeError(self.t("missing_ytdlp"))
             options = {"quiet": True, "extract_flat": True, "skip_download": True, "playlistend": limit}
-            with yt_dlp.YoutubeDL(self.ydl_options(options)) as ydl:
+            with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
                 if search_type == "Video":
                     info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
                 else:
@@ -1277,6 +1296,9 @@ class MainFrame(wx.Frame):
 
     def load_collection_worker(self, url: str, result_type: str, limit: int | None = None, selection: int = 0) -> None:
         try:
+            ytdlp = get_yt_dlp()
+            if ytdlp is None:
+                raise RuntimeError(self.t("missing_ytdlp"))
             limit = limit or self.initial_results_limit()
             options = {
                 "quiet": True,
@@ -1284,7 +1306,7 @@ class MainFrame(wx.Frame):
                 "skip_download": True,
                 "playlistend": limit,
             }
-            with yt_dlp.YoutubeDL(self.ydl_options(options)) as ydl:
+            with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
                 info = ydl.extract_info(url, download=False)
             entries = list(info.get("entries") or [])[:limit]
             normalized = [self.normalize_entry(entry, result_type) for entry in entries]
@@ -1320,7 +1342,8 @@ class MainFrame(wx.Frame):
             wx.CallAfter(self.message, self.t("player_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
     def resolve_stream_url(self, url: str) -> tuple[str, dict, dict]:
-        if yt_dlp is None:
+        ytdlp = get_yt_dlp()
+        if ytdlp is None:
             raise RuntimeError(self.t("missing_ytdlp"))
         options = {
             "quiet": True,
@@ -1328,7 +1351,7 @@ class MainFrame(wx.Frame):
             "format": "best[ext=mp4]/best",
             "noplaylist": True,
         }
-        with yt_dlp.YoutubeDL(self.ydl_options(options)) as ydl:
+        with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
             info = ydl.extract_info(url, download=False)
         stream_url = info.get("url")
         if not stream_url and info.get("formats"):
@@ -1996,10 +2019,13 @@ class MainFrame(wx.Frame):
 
     def download_worker(self, item: dict, audio_only: bool) -> None:
         try:
+            ytdlp = get_yt_dlp()
+            if ytdlp is None:
+                raise RuntimeError(self.t("missing_ytdlp"))
             folder = Path(self.settings.download_folder)
             folder.mkdir(parents=True, exist_ok=True)
             options = self.download_options(folder, audio_only, item["title"])
-            with yt_dlp.YoutubeDL(self.ydl_options(options)) as ydl:
+            with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
                 ydl.download([item["url"]])
             done_text = self.t("download_audio_done" if audio_only else "download_video_done", title=item["title"])
             wx.CallAfter(self.finish_download, done_text, str(folder))
@@ -2226,13 +2252,16 @@ class MainFrame(wx.Frame):
     def download_batch_worker(self, items: list[dict]) -> None:
         folder = Path(self.settings.download_folder)
         try:
+            ytdlp = get_yt_dlp()
+            if ytdlp is None:
+                raise RuntimeError(self.t("missing_ytdlp"))
             folder.mkdir(parents=True, exist_ok=True)
             for item in items:
                 audio_only = bool(item.get("audio_only"))
                 mode_key = "download_audio_start" if audio_only else "download_video_start"
                 wx.CallAfter(self.announce_player, self.t(mode_key))
                 options = self.download_options(folder, audio_only, item.get("title", ""))
-                with yt_dlp.YoutubeDL(self.ydl_options(options)) as ydl:
+                with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
                     ydl.download([item["url"]])
             wx.CallAfter(self.finish_batch_download, str(folder))
         except Exception as exc:
@@ -2265,7 +2294,7 @@ class MainFrame(wx.Frame):
                 self.set_status(self.t("settings_saved"))
 
     def export_browser_cookies_from_settings(self) -> None:
-        if yt_dlp is None:
+        if get_yt_dlp() is None:
             self.message(self.t("missing_ytdlp"), wx.ICON_ERROR)
             return
         self.apply_settings_from_visible_controls()
@@ -2278,6 +2307,9 @@ class MainFrame(wx.Frame):
 
     def export_browser_cookies_worker(self, browser: str) -> None:
         try:
+            ytdlp = get_yt_dlp()
+            if ytdlp is None:
+                raise RuntimeError(self.t("missing_ytdlp"))
             CACHED_COOKIES_FILE.parent.mkdir(parents=True, exist_ok=True)
             options = {
                 "logger": YTDLP_LOGGER,
@@ -2287,7 +2319,7 @@ class MainFrame(wx.Frame):
                 "cookiefile": str(CACHED_COOKIES_FILE),
                 "cookiesfrombrowser": (browser,),
             }
-            with yt_dlp.YoutubeDL(options) as ydl:
+            with ytdlp.YoutubeDL(options) as ydl:
                 _ = ydl.cookiejar
                 ydl.save_cookies()
             wx.CallAfter(self.finish_browser_cookies_export, str(CACHED_COOKIES_FILE))
@@ -2415,11 +2447,12 @@ class MainFrame(wx.Frame):
         threading.Thread(target=self.update_ytdlp_worker, daemon=True).start()
 
     def update_ytdlp_worker(self) -> None:
-        if yt_dlp is None:
+        ytdlp = get_yt_dlp()
+        if ytdlp is None:
             self.ui_queue.put(("status", self.t("missing_ytdlp")))
             return
         try:
-            with yt_dlp.YoutubeDL(self.ydl_options({"quiet": True, "skip_download": True})) as ydl:
+            with ytdlp.YoutubeDL(self.ydl_options({"quiet": True, "skip_download": True})) as ydl:
                 from yt_dlp.update import run_update
 
                 run_update(ydl)
