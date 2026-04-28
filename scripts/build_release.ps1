@@ -1,7 +1,9 @@
 param(
     [string]$PythonExe = "python",
     [string]$OutputDir = "$env:USERPROFILE\Downloads",
-    [string]$AppName = "ApricotPlayer"
+    [string]$AppName = "ApricotPlayer",
+    [ValidateSet("onefile", "onedir")]
+    [string]$PackageMode = "onefile"
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,7 +16,6 @@ $args = @(
     "-m", "PyInstaller",
     "--noconfirm",
     "--clean",
-    "--onefile",
     "--windowed",
     "--name", $AppName,
     "--distpath", $OutputDir,
@@ -28,6 +29,13 @@ $args = @(
     "--exclude-module", "PIL",
     "--exclude-module", "tkinter"
 )
+
+if ($PackageMode -eq "onefile") {
+    $args += "--onefile"
+}
+else {
+    $args += "--onedir"
+}
 
 $mpvDir = Join-Path $projectRoot "vendor\mpv"
 $ffmpegDir = Join-Path $projectRoot "vendor\ffmpeg"

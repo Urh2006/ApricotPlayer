@@ -6,6 +6,10 @@
 #define SourceExe "..\release-dist\ApricotPlayer.exe"
 #endif
 
+#ifndef SourceDir
+#define SourceDir ""
+#endif
+
 #ifndef OutputDir
 #define OutputDir "..\release-dist"
 #endif
@@ -41,7 +45,14 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
 
 [Files]
+#if SourceDir != ""
+Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+#else
 Source: "{#SourceExe}"; DestDir: "{app}"; DestName: "ApricotPlayer.exe"; Flags: ignoreversion
+#endif
+
+[InstallDelete]
+Type: filesandordirs; Name: "{app}\_internal"
 
 [Icons]
 Name: "{group}\ApricotPlayer"; Filename: "{app}\ApricotPlayer.exe"

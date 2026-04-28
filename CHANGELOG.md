@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.5
+
+- installer builds now use PyInstaller `onedir` layout so installed launches no longer pay the one-file extraction cost every time
+- portable `ApricotPlayer.exe` remains available as a single-file build for quick sharing
+- installer script now supports packaging either a single executable or a full application directory
+- installer updates clean the old `_internal` runtime folder before installing the new one-dir runtime
+- release build script now supports `-PackageMode onefile` and `-PackageMode onedir`
+
 ## 0.3.4
 
 - optimized the Windows build by removing the broad `--collect-all wx` bundle step

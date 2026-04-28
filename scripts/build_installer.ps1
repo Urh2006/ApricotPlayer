@@ -1,6 +1,7 @@
 param(
     [string]$AppVersion = "",
     [string]$ExecutablePath = "",
+    [string]$SourceDir = "",
     [string]$OutputDir = "",
     [string]$InnoSetupCompiler = ""
 )
@@ -25,7 +26,14 @@ if (-not $OutputDir) {
     $OutputDir = Join-Path $projectRoot "release-dist"
 }
 
-if (-not (Test-Path $ExecutablePath)) {
+if ($SourceDir) {
+    $SourceDir = (Resolve-Path $SourceDir).Path
+    $sourceDirExe = Join-Path $SourceDir "ApricotPlayer.exe"
+    if (-not (Test-Path $sourceDirExe)) {
+        throw "ApricotPlayer.exe was not found in source directory: $SourceDir"
+    }
+}
+elseif (-not (Test-Path $ExecutablePath)) {
     throw "Executable not found: $ExecutablePath"
 }
 
@@ -51,8 +59,16 @@ if (-not (Test-Path $issPath)) {
     throw "Installer script not found: $issPath"
 }
 
-& $InnoSetupCompiler `
-    "/DMyAppVersion=$AppVersion" `
-    "/DSourceExe=$ExecutablePath" `
-    "/DOutputDir=$OutputDir" `
-    $issPath
+$compilerArgs = @(
+    "/DMyAppVersion=$AppVersion",
+    "/DOutputDir=$OutputDir"
+)
+
+if ($SourceDir) {
+    $compilerArgs += "/DSourceDir=$SourceDir"
+}
+else {
+    $compilerArgs += "/DSourceExe=$ExecutablePath"
+}
+
+& $InnoSetupCompiler @compilerArgs $issPath
