@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4
+
+- added `All` to YouTube search so videos, playlists, and channels can appear in one result list
+- added context-menu downloads for playlist and channel results; ApricotPlayer creates a dedicated folder under the configured download folder and downloads the videos there
+- changed release assets going forward to `ApricotPlayerSetup.exe` plus `ApricotPlayerPortable.zip`; the raw single-file exe is no longer published by default
+- added portable ZIP updater support so portable builds can update by downloading and extracting the new ZIP into the current app folder
+- restored linked pitch/speed mode as `Linked pitch and speed - pitch keys change both`; pitch keys now adjust pitch and speed together, while speed keys still adjust only speed
+
 ## 0.3.8
 
 - renamed the startup app update setting to simply `Check for updates at startup`

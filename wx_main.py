@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import webbrowser
+import zipfile
 import ctypes
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -78,8 +79,8 @@ class QuietYtdlpLogger:
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.3.8"
-APP_VERSION_LABEL = "0.3.8"
+APP_VERSION = "0.4"
+APP_VERSION_LABEL = "0.4"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -93,15 +94,16 @@ OLD_FILENAME_TEMPLATE = "%(title)s [%(id)s].%(ext)s"
 RESULTS_PAGE_SIZE = 20
 DEFAULT_GITHUB_OWNER = "Urh2006"
 DEFAULT_GITHUB_REPO = "ApricotPlayer"
-UPDATE_ASSET_NAME = "ApricotPlayer.exe"
 INSTALLER_ASSET_NAME = "ApricotPlayerSetup.exe"
+PORTABLE_ZIP_ASSET_NAME = "ApricotPlayerPortable.zip"
 UPDATE_LOG_FILE = APP_DIR / "updater.log"
 PLAYBACK_SPEED_STEPS = [0.25, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1.0, 1.1, 1.2, 1.25, 1.3, 1.4, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0]
 PITCH_STEPS = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0]
 DEFAULT_REACHED_SOUND = "default_reached.wav"
 PITCH_MODE_RUBBERBAND = "Independent pitch - best quality (Rubberband)"
 PITCH_MODE_MPV = "Independent pitch - basic (mpv built-in)"
-PITCH_MODE_OPTIONS = [PITCH_MODE_RUBBERBAND, PITCH_MODE_MPV]
+PITCH_MODE_LINKED_SPEED = "Linked pitch and speed - pitch keys change both"
+PITCH_MODE_OPTIONS = [PITCH_MODE_RUBBERBAND, PITCH_MODE_MPV, PITCH_MODE_LINKED_SPEED]
 LEGACY_PITCH_MODE_RUBBERBAND = "rubberband"
 LEGACY_PITCH_MODE_MPV = "mpv pitch"
 LEGACY_PITCH_MODE_LINKED_SPEED = "linked speed"
@@ -194,7 +196,7 @@ TEXT = {
         "update_download_percent": "Downloading update {version}: {percent}%",
         "update_download_unknown": "Downloading update {version}",
         "update_download_complete": "Update downloaded. Preparing install.",
-        "update_install_started": "Installer started. ApricotPlayer will close and reopen.",
+        "update_install_started": "Update started. ApricotPlayer will close and reopen.",
         "update_install_log": "Updater log: {path}",
         "installing_update": "Nameščam posodobitev {version}.",
         "update_ready_restart": "Posodobitev je pripravljena. Program se bo zaprl in znova zagnal.",
@@ -215,10 +217,17 @@ TEXT = {
         "video": "Video",
         "playlist": "Playlist",
         "channel": "Kanal",
+        "all": "Vse",
         "views": "Ogledi",
         "play": "Play",
         "download_audio": "Download audio",
         "download_video": "Download video",
+        "download_playlist": "Download playlist",
+        "download_channel": "Download channel",
+        "download_playlist_start": "Downloading playlist...",
+        "download_channel_start": "Downloading channel...",
+        "download_playlist_done": "Playlist downloaded: {title}",
+        "download_channel_done": "Channel downloaded: {title}",
         "add_favorite": "Add to favorites",
         "open_browser": "Open in browser",
         "copy_url": "Copy URL",
@@ -387,7 +396,7 @@ TEXT = {
         "update_download_percent": "Downloading update {version}: {percent}%",
         "update_download_unknown": "Downloading update {version}",
         "update_download_complete": "Update downloaded. Preparing install.",
-        "update_install_started": "Installer started. ApricotPlayer will close and reopen.",
+        "update_install_started": "Update started. ApricotPlayer will close and reopen.",
         "update_install_log": "Updater log: {path}",
         "installing_update": "Installing update {version}.",
         "update_ready_restart": "The update is ready. The app will close and restart.",
@@ -408,10 +417,17 @@ TEXT = {
         "video": "Video",
         "playlist": "Playlist",
         "channel": "Channel",
+        "all": "All",
         "views": "Views",
         "play": "Play",
         "download_audio": "Download audio",
         "download_video": "Download video",
+        "download_playlist": "Download playlist",
+        "download_channel": "Download channel",
+        "download_playlist_start": "Downloading playlist...",
+        "download_channel_start": "Downloading channel...",
+        "download_playlist_done": "Playlist downloaded: {title}",
+        "download_channel_done": "Channel downloaded: {title}",
         "add_favorite": "Add to favorites",
         "open_browser": "Open in browser",
         "copy_url": "Copy URL",
@@ -855,7 +871,7 @@ class MainFrame(wx.Frame):
         grid.Add(wx.StaticText(self.panel, label=self.t("type")), 0, wx.ALIGN_CENTER_VERTICAL)
         self.search_type = wx.Choice(
             self.panel,
-            choices=[self.t("video"), self.t("playlist"), self.t("channel")],
+            choices=[self.t("video"), self.t("playlist"), self.t("channel"), self.t("all")],
         )
         self.search_type.SetName(self.t("type"))
         self.search_type.SetSelection(self.last_search_type_index if restore_search else 0)
@@ -1094,7 +1110,7 @@ class MainFrame(wx.Frame):
 
     def search_type_code(self) -> str:
         index = self.search_type.GetSelection()
-        return ("Video", "Playlist", "Kanal")[index if index != wx.NOT_FOUND else 0]
+        return ("Video", "Playlist", "Kanal", "All")[index if index != wx.NOT_FOUND else 0]
 
     def search(self) -> None:
         if get_yt_dlp() is None:
@@ -1140,11 +1156,36 @@ class MainFrame(wx.Frame):
 
     def normalize_entry(self, entry: dict, search_type: str) -> dict:
         url = entry.get("webpage_url") or entry.get("url") or ""
+        ie_key = str(entry.get("ie_key") or "").lower()
+        entry_type = str(entry.get("_type") or entry.get("result_type") or "").lower()
+        url_text = str(url)
+        is_playlist = search_type == "Playlist" or "playlist" in ie_key or "playlist" in entry_type or "list=" in url_text
+        is_channel = (
+            search_type == "Kanal"
+            or "channel" in ie_key
+            or "channel" in entry_type
+            or ("tab" in ie_key and not is_playlist)
+            or "/channel/" in url_text
+            or url_text.startswith("@")
+            or url_text.startswith("/@")
+        )
+        if is_channel:
+            kind = "channel"
+            display_type = self.t("channel")
+        elif is_playlist:
+            kind = "playlist"
+            display_type = self.t("playlist")
+        else:
+            kind = "video"
+            display_type = self.t("video")
         if url and not url.startswith("http"):
-            ie_key = (entry.get("ie_key") or "").lower()
-            if "playlist" in ie_key:
-                url = f"https://www.youtube.com/playlist?list={url}"
-            elif "tab" in ie_key or search_type == "Kanal":
+            if kind == "playlist":
+                clean_url = url.lstrip("/")
+                if url.startswith("/") or "list=" in clean_url:
+                    url = f"https://www.youtube.com/{clean_url}"
+                else:
+                    url = f"https://www.youtube.com/playlist?list={clean_url}"
+            elif kind == "channel":
                 url = f"https://www.youtube.com/{url.lstrip('/')}"
             else:
                 url = f"https://www.youtube.com/watch?v={url}"
@@ -1159,8 +1200,8 @@ class MainFrame(wx.Frame):
             "timestamp": entry.get("timestamp"),
             "upload_date": entry.get("upload_date"),
             "description": entry.get("description") or "",
-            "type": self.t("channel") if search_type == "Kanal" else search_type,
-            "kind": "channel" if search_type == "Kanal" else "playlist" if search_type == "Playlist" else "video",
+            "type": display_type,
+            "kind": kind,
             "url": url,
         }
 
@@ -1679,7 +1720,8 @@ class MainFrame(wx.Frame):
         try:
             pitch = self.current_pitch_value()
             pitch = self.next_pitch_value(pitch, delta)
-            self.apply_pitch_value(pitch)
+            speed_delta = delta if self.normalized_pitch_mode() == PITCH_MODE_LINKED_SPEED else None
+            self.apply_pitch_value(pitch, speed_delta=speed_delta)
             wx.CallAfter(self.announce_player, self.t("pitch_announcement", pitch=self.format_rate_for_speech(pitch)))
             if self.is_default_rate(pitch):
                 wx.CallAfter(self.play_default_sound)
@@ -1694,7 +1736,7 @@ class MainFrame(wx.Frame):
         except (TypeError, ValueError):
             return 1.0
 
-    def apply_pitch_value(self, pitch: float) -> None:
+    def apply_pitch_value(self, pitch: float, speed_delta: float | None = None) -> None:
         mode = self.normalized_pitch_mode()
         pitch_text = self.format_playback_rate(pitch)
         if mode == PITCH_MODE_MPV:
@@ -1708,6 +1750,12 @@ class MainFrame(wx.Frame):
                 self.clear_rubberband_pitch_filter()
             else:
                 self.apply_rubberband_pitch_filter(pitch)
+            if mode == PITCH_MODE_LINKED_SPEED and speed_delta is not None:
+                current_speed = self.mpv_get_property("speed")
+                speed = float(current_speed if current_speed is not None else 1.0)
+                speed = self.next_playback_speed(speed, speed_delta)
+                self.mpv_set_property("speed", speed)
+                self.current_video_info["speed"] = self.format_playback_rate(speed)
         self.current_video_info["pitch"] = pitch_text
 
     def apply_rubberband_pitch_filter(self, pitch: float) -> None:
@@ -1815,7 +1863,9 @@ class MainFrame(wx.Frame):
             return normalized
         if lowered == LEGACY_PITCH_MODE_MPV:
             return PITCH_MODE_MPV
-        if lowered in {LEGACY_PITCH_MODE_RUBBERBAND, LEGACY_PITCH_MODE_LINKED_SPEED}:
+        if lowered == LEGACY_PITCH_MODE_LINKED_SPEED:
+            return PITCH_MODE_LINKED_SPEED
+        if lowered == LEGACY_PITCH_MODE_RUBBERBAND:
             return PITCH_MODE_RUBBERBAND
         return PITCH_MODE_RUBBERBAND
 
@@ -1992,6 +2042,7 @@ class MainFrame(wx.Frame):
 
     def open_context_menu(self, _event=None) -> None:
         menu = wx.Menu()
+        item = self.selected_result()
         actions = [
             (self.t("play"), self.play_selected),
             (f"{self.t('download_audio')}\tCtrl+Shift+A", self.download_audio),
@@ -2000,6 +2051,9 @@ class MainFrame(wx.Frame):
             (self.t("open_browser"), self.open_selected_in_browser),
             (self.t("copy_url"), self.copy_selected_url),
         ]
+        if item and item.get("kind") in {"playlist", "channel"}:
+            label = self.t("download_channel" if item.get("kind") == "channel" else "download_playlist")
+            actions.insert(1, (label, lambda selected=dict(item): self.download_collection(selected)))
         for label, handler in actions:
             item = menu.Append(wx.ID_ANY, label)
             self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
@@ -2030,6 +2084,22 @@ class MainFrame(wx.Frame):
 
     def download_video(self) -> None:
         self.start_download(False)
+
+    def download_collection(self, item: dict | None = None) -> None:
+        item = item or self.selected_result()
+        if not item or item.get("kind") not in {"playlist", "channel"}:
+            self.message(self.t("no_selection"))
+            return
+        kind = str(item.get("kind") or "playlist")
+        if self.settings.confirm_before_download:
+            action = self.t("download_channel" if kind == "channel" else "download_playlist")
+            if wx.MessageBox(self.t("download_confirm", action=action, title=item["title"]), APP_NAME, wx.YES_NO | wx.ICON_QUESTION) != wx.YES:
+                self.set_status(self.t("download_cancelled"))
+                return
+        start_key = "download_channel_start" if kind == "channel" else "download_playlist_start"
+        self.announce_player(self.t("download_started"))
+        self.set_status(self.t(start_key))
+        threading.Thread(target=self.download_collection_worker, args=(dict(item),), daemon=True).start()
 
     def download_audio_shortcut(self) -> None:
         self.start_download_shortcut(True)
@@ -2063,6 +2133,23 @@ class MainFrame(wx.Frame):
         except Exception as exc:
             wx.CallAfter(self.message, self.t("download_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
+    def download_collection_worker(self, item: dict) -> None:
+        try:
+            ytdlp = get_yt_dlp()
+            if ytdlp is None:
+                raise RuntimeError(self.t("missing_ytdlp"))
+            kind = str(item.get("kind") or "playlist")
+            title = item.get("title") or self.t("channel" if kind == "channel" else "playlist")
+            folder = Path(self.settings.download_folder) / self.safe_folder_name(title)
+            folder.mkdir(parents=True, exist_ok=True)
+            options = self.download_options(folder, False, title, allow_playlist=True)
+            with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
+                ydl.download([self.collection_download_url(item)])
+            done_key = "download_channel_done" if kind == "channel" else "download_playlist_done"
+            wx.CallAfter(self.finish_download, self.t(done_key, title=title), str(folder))
+        except Exception as exc:
+            wx.CallAfter(self.message, self.t("download_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
+
     def finish_download(self, done_text: str, folder: str) -> None:
         if self.settings.popup_when_download_complete:
             self.set_status(done_text)
@@ -2072,12 +2159,15 @@ class MainFrame(wx.Frame):
         if self.settings.open_folder_after_download:
             os.startfile(folder)  # type: ignore[attr-defined]
 
-    def download_options(self, folder: Path, audio_only: bool, title: str) -> dict:
+    def download_options(self, folder: Path, audio_only: bool, title: str, allow_playlist: bool = False) -> dict:
         progress_hook = self.make_download_progress_hook(title, audio_only)
+        template = self.settings.filename_template or DEFAULT_FILENAME_TEMPLATE
+        if allow_playlist and "%(playlist_index)" not in template:
+            template = "%(playlist_index)s - " + template
         options = {
-            "outtmpl": str(folder / self.settings.filename_template),
+            "outtmpl": str(folder / template),
             "quiet": self.settings.quiet_downloads,
-            "noplaylist": not self.settings.keep_playlist_order,
+            "noplaylist": False if allow_playlist else not self.settings.keep_playlist_order,
             "writethumbnail": self.settings.write_thumbnail,
             "writedescription": self.settings.write_description,
             "writeinfojson": self.settings.write_info_json,
@@ -2112,6 +2202,21 @@ class MainFrame(wx.Frame):
         else:
             options["format"] = self.settings.video_format
         return options
+
+    @staticmethod
+    def safe_folder_name(value: str) -> str:
+        cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", str(value or "").strip())
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
+        return cleaned[:150] or "Download"
+
+    @staticmethod
+    def collection_download_url(item: dict) -> str:
+        url = str(item.get("url") or "")
+        if item.get("kind") == "channel":
+            url = url.rstrip("/")
+            if not url.endswith("/videos"):
+                url = f"{url}/videos"
+        return url
 
     def make_download_progress_hook(self, title: str, audio_only: bool):
         mode = self.t("download_audio_mode" if audio_only else "download_video_mode")
@@ -2632,7 +2737,7 @@ class MainFrame(wx.Frame):
             temp_dir = Path(tempfile.mkdtemp(prefix="apricotplayer-update-"))
             downloaded_path = temp_dir / asset["name"]
             self.download_update_asset(asset, downloaded_path, version)
-            self.validate_update_executable(downloaded_path)
+            self.validate_update_package(downloaded_path)
             wx.CallAfter(self.update_app_update_finished, version)
             wx.CallAfter(self.finish_app_update_install, str(downloaded_path), version)
         except Exception as exc:
@@ -2687,6 +2792,8 @@ class MainFrame(wx.Frame):
         current_exe = Path(sys.executable)
         if self.is_installer_asset(downloaded_path):
             script_path = self.write_installer_update_script(downloaded_path, os.getpid(), str(UPDATE_LOG_FILE), restart=True)
+        elif self.is_portable_zip_asset(downloaded_path):
+            script_path = self.write_portable_zip_update_script(downloaded_path, str(current_exe.parent), str(current_exe), os.getpid(), str(UPDATE_LOG_FILE), restart=True)
         else:
             script_path = self.write_update_script(downloaded_path, str(current_exe), os.getpid(), str(UPDATE_LOG_FILE), restart=True)
         self.launch_update_script(script_path)
@@ -2702,9 +2809,18 @@ class MainFrame(wx.Frame):
         return name == INSTALLER_ASSET_NAME.lower() or "setup" in name or "installer" in name
 
     @staticmethod
-    def validate_update_executable(path: Path) -> None:
+    def is_portable_zip_asset(path_or_name: str | Path) -> bool:
+        name = Path(path_or_name).name.lower()
+        return name == PORTABLE_ZIP_ASSET_NAME.lower() or (name.endswith(".zip") and "portable" in name)
+
+    @staticmethod
+    def validate_update_package(path: Path) -> None:
         if not path.exists() or path.stat().st_size < 1024 * 1024:
-            raise RuntimeError("downloaded update is not a valid executable")
+            raise RuntimeError("downloaded update is not a valid package")
+        if MainFrame.is_portable_zip_asset(path):
+            if not zipfile.is_zipfile(path):
+                raise RuntimeError("downloaded portable update is not a valid zip file")
+            return
         with path.open("rb") as handle:
             if handle.read(2) != b"MZ":
                 raise RuntimeError("downloaded update is not a Windows executable")
@@ -2753,6 +2869,57 @@ class MainFrame(wx.Frame):
                 "if (Test-Path -LiteralPath $oldTarget) { Remove-Item -LiteralPath $oldTarget -Force -ErrorAction SilentlyContinue }",
                 "if ($restart) { Log 'Restarting ApricotPlayer'; Start-Process -FilePath $target -WorkingDirectory $targetDir }",
                 "Log 'Update complete'",
+                "Start-Sleep -Seconds 2",
+                "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
+            ]
+        )
+        script_path.write_text(script, encoding="utf-8-sig")
+        return script_path
+
+    @classmethod
+    def write_portable_zip_update_script(cls, downloaded_path: str, target_dir: str, target_exe: str, process_id: int, log_path: str, restart: bool = True) -> Path:
+        script_path = Path(tempfile.gettempdir()) / f"apricotplayer-portable-update-{int(time.time())}.ps1"
+        restart_value = "$true" if restart else "$false"
+        script = "\n".join(
+            [
+                "$ErrorActionPreference = 'Stop'",
+                f"$source = {cls.powershell_literal(downloaded_path)}",
+                f"$targetDir = {cls.powershell_literal(target_dir)}",
+                f"$targetExe = {cls.powershell_literal(target_exe)}",
+                f"$log = {cls.powershell_literal(log_path)}",
+                f"$processIdToWait = {int(process_id)}",
+                f"$restart = {restart_value}",
+                "$extractRoot = Join-Path ([IO.Path]::GetTempPath()) ('apricotplayer-portable-' + [Guid]::NewGuid().ToString())",
+                "New-Item -ItemType Directory -Path (Split-Path -Parent $log) -Force | Out-Null",
+                "function Log($message) { Add-Content -LiteralPath $log -Value ((Get-Date -Format o) + ' ' + $message) -Encoding UTF8 }",
+                "Set-Content -LiteralPath $log -Value ((Get-Date -Format o) + ' Starting ApricotPlayer portable update') -Encoding UTF8",
+                "Log \"Source: $source\"",
+                "Log \"Target directory: $targetDir\"",
+                "Start-Sleep -Milliseconds 500",
+                "try { Wait-Process -Id $processIdToWait -Timeout 180 -ErrorAction SilentlyContinue } catch { Log \"Wait-Process warning: $($_.Exception.Message)\" }",
+                "try {",
+                "    New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null",
+                "    Expand-Archive -LiteralPath $source -DestinationPath $extractRoot -Force",
+                "    $sourceAppDir = Join-Path $extractRoot 'ApricotPlayer'",
+                "    if (-not (Test-Path -LiteralPath (Join-Path $sourceAppDir 'ApricotPlayer.exe'))) {",
+                "        $candidate = Get-ChildItem -LiteralPath $extractRoot -Filter 'ApricotPlayer.exe' -Recurse -File | Select-Object -First 1",
+                "        if (-not $candidate) { throw 'ApricotPlayer.exe was not found in portable zip.' }",
+                "        $sourceAppDir = Split-Path -Parent $candidate.FullName",
+                "    }",
+                "    Log \"Extracted app directory: $sourceAppDir\"",
+                "    Get-ChildItem -LiteralPath $sourceAppDir -Force | ForEach-Object {",
+                "        Copy-Item -LiteralPath $_.FullName -Destination $targetDir -Recurse -Force -ErrorAction Stop",
+                "    }",
+                "    if (-not (Test-Path -LiteralPath $targetExe)) { throw 'Updated ApricotPlayer.exe is missing after copy.' }",
+                "    Remove-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue",
+                "    Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue",
+                "    if ($restart) { Log 'Restarting ApricotPlayer'; Start-Process -FilePath $targetExe -WorkingDirectory $targetDir }",
+                "    Log 'Update complete'",
+                "} catch {",
+                "    Log \"Portable update failed: $($_.Exception.Message)\"",
+                "    try { if (Test-Path -LiteralPath $extractRoot) { Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue } } catch { }",
+                "    exit 1",
+                "}",
                 "Start-Sleep -Seconds 2",
                 "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
             ]
@@ -2863,21 +3030,41 @@ class MainFrame(wx.Frame):
 
     def find_release_asset(self, release: dict) -> dict | None:
         assets = release.get("assets") or []
-        preferred_name = Path(sys.executable).name if getattr(sys, "frozen", False) else UPDATE_ASSET_NAME
-        for asset in assets:
-            if asset.get("name") == INSTALLER_ASSET_NAME:
-                return asset
-        for asset in assets:
-            if asset.get("name") == preferred_name:
-                return asset
-        for asset in assets:
-            if self.is_installer_asset(str(asset.get("name") or "")):
-                return asset
+        preferred_names = [INSTALLER_ASSET_NAME, PORTABLE_ZIP_ASSET_NAME] if self.is_installed_build() else [PORTABLE_ZIP_ASSET_NAME, INSTALLER_ASSET_NAME]
+        for preferred_name in preferred_names:
+            for asset in assets:
+                if asset.get("name") == preferred_name:
+                    return asset
+        for predicate in (self.is_portable_zip_asset, self.is_installer_asset):
+            for asset in assets:
+                if predicate(str(asset.get("name") or "")):
+                    return asset
         for asset in assets:
             name = str(asset.get("name") or "").lower()
             if name.endswith(".exe"):
                 return asset
         return None
+
+    @staticmethod
+    def is_installed_build() -> bool:
+        if not getattr(sys, "frozen", False):
+            return False
+        try:
+            exe_path = Path(sys.executable).resolve()
+        except Exception:
+            exe_path = Path(sys.executable)
+        if (exe_path.parent / "unins000.exe").exists():
+            return True
+        roots = [os.environ.get("ProgramFiles", ""), os.environ.get("ProgramFiles(x86)", "")]
+        for root in roots:
+            if not root:
+                continue
+            try:
+                exe_path.relative_to(Path(root).resolve())
+                return True
+            except Exception:
+                pass
+        return False
 
     @staticmethod
     def release_version(release: dict) -> str:

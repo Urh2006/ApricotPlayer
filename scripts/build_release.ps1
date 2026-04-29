@@ -3,7 +3,7 @@ param(
     [string]$OutputDir = "$env:USERPROFILE\Downloads",
     [string]$AppName = "ApricotPlayer",
     [ValidateSet("onefile", "onedir")]
-    [string]$PackageMode = "onefile"
+    [string]$PackageMode = "onedir"
 )
 
 $ErrorActionPreference = "Stop"
