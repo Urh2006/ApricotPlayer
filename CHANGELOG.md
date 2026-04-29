@@ -1,5 +1,14 @@
 # Changelog
 
+## What's new in version 0.5.2
+
+- verified the GitHub repository is public and simplified the updater to use the public ApricotPlayer release endpoints without user-facing owner, repo, or private token settings
+- added a Keyboard shortcuts settings section with accessible editable shortcut fields and saved custom shortcuts
+- added braille-friendly NVDA announcements by sending both speech and braille messages and raising status bar accessibility events
+- changed empty list boxes to expose readable placeholder items such as No results, No favorites, No subscriptions, and No queued downloads instead of leaving screen readers on unknown
+- added 15 language choices and translated the new shortcut, empty-list, and important status/announcement strings
+- Settings now announces Settings saved when the Save button is pressed
+
 ## What's new in version 0.5.1
 
 - fixed the search result context menu so channels and playlists no longer show single-video actions such as Play, Download audio, or Download video

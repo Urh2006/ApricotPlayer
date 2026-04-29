@@ -15,7 +15,7 @@ import time
 import webbrowser
 import zipfile
 import ctypes
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from importlib import import_module
 from pathlib import Path
@@ -99,8 +99,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.5.1"
-APP_VERSION_LABEL = "0.5.1"
+APP_VERSION = "0.5.2"
+APP_VERSION_LABEL = "0.5.2"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -117,6 +117,8 @@ OLD_FILENAME_TEMPLATE = "%(title)s [%(id)s].%(ext)s"
 RESULTS_PAGE_SIZE = 20
 DEFAULT_GITHUB_OWNER = "Urh2006"
 DEFAULT_GITHUB_REPO = "ApricotPlayer"
+GITHUB_RELEASES_API_URL = f"https://api.github.com/repos/{DEFAULT_GITHUB_OWNER}/{DEFAULT_GITHUB_REPO}/releases"
+GITHUB_LATEST_RELEASE_API_URL = f"https://api.github.com/repos/{DEFAULT_GITHUB_OWNER}/{DEFAULT_GITHUB_REPO}/releases/latest"
 INSTALLER_ASSET_NAME = "ApricotPlayerSetup.exe"
 PORTABLE_ZIP_ASSET_NAME = "ApricotPlayer.zip"
 LEGACY_PORTABLE_ZIP_ASSET_NAME = "ApricotPlayerPortable.zip"
@@ -164,9 +166,84 @@ LANGUAGES = [
     ("sv", "Svenska"),
     ("hr", "Hrvatski"),
     ("sr", "Srpski"),
+    ("cs", "Czech"),
+    ("sk", "Slovak"),
+    ("hu", "Hungarian"),
+    ("ro", "Romanian"),
+    ("tr", "Turkish"),
+    ("uk", "Ukrainian"),
+    ("ru", "Russian"),
+    ("ja", "Japanese"),
+    ("ko", "Korean"),
+    ("zh", "Chinese Simplified"),
+    ("ar", "Arabic"),
+    ("hi", "Hindi"),
+    ("id", "Indonesian"),
+    ("fi", "Finnish"),
+    ("el", "Greek"),
 ]
 LANGUAGE_CODES = [code for code, _name in LANGUAGES]
 LANGUAGE_NAMES = {code: name for code, name in LANGUAGES}
+
+DEFAULT_KEYBOARD_SHORTCUTS = {
+    "download_audio": "Ctrl+Shift+A",
+    "download_video": "Ctrl+Shift+D",
+    "subscribe_channel": "Ctrl+Shift+S",
+    "queue_audio": "Shift+A",
+    "queue_video": "Shift+D",
+    "context_menu": "Applications",
+    "open_selected": "Enter",
+    "new_subscription_videos": "Space",
+    "remove_selected": "Delete",
+    "player_copy_link": "L",
+    "player_play_pause": "Space",
+    "player_time": "T",
+    "player_speed_down": "S",
+    "player_speed_up": "D",
+    "player_pitch_up": "Ctrl+Up",
+    "player_pitch_down": "Ctrl+Down",
+    "player_details": "V",
+    "player_back": "Escape",
+    "player_volume_boost": "F2",
+    "player_seek_back": "Left",
+    "player_seek_forward": "Right",
+    "player_seek_back_large": "Ctrl+Left",
+    "player_seek_forward_large": "Ctrl+Right",
+    "player_seek_back_huge": "Ctrl+Shift+Left",
+    "player_seek_forward_huge": "Ctrl+Shift+Right",
+    "player_volume_up": "Up",
+    "player_volume_down": "Down",
+}
+
+SHORTCUT_DEFINITIONS = [
+    ("download_audio", "shortcut_download_audio"),
+    ("download_video", "shortcut_download_video"),
+    ("subscribe_channel", "shortcut_subscribe_channel"),
+    ("queue_audio", "shortcut_queue_audio"),
+    ("queue_video", "shortcut_queue_video"),
+    ("context_menu", "shortcut_context_menu"),
+    ("open_selected", "shortcut_open_selected"),
+    ("new_subscription_videos", "shortcut_new_subscription_videos"),
+    ("remove_selected", "shortcut_remove_selected"),
+    ("player_copy_link", "shortcut_player_copy_link"),
+    ("player_play_pause", "shortcut_player_play_pause"),
+    ("player_time", "shortcut_player_time"),
+    ("player_speed_down", "shortcut_player_speed_down"),
+    ("player_speed_up", "shortcut_player_speed_up"),
+    ("player_pitch_up", "shortcut_player_pitch_up"),
+    ("player_pitch_down", "shortcut_player_pitch_down"),
+    ("player_details", "shortcut_player_details"),
+    ("player_back", "shortcut_player_back"),
+    ("player_volume_boost", "shortcut_player_volume_boost"),
+    ("player_seek_back", "shortcut_player_seek_back"),
+    ("player_seek_forward", "shortcut_player_seek_forward"),
+    ("player_seek_back_large", "shortcut_player_seek_back_large"),
+    ("player_seek_forward_large", "shortcut_player_seek_forward_large"),
+    ("player_seek_back_huge", "shortcut_player_seek_back_huge"),
+    ("player_seek_forward_huge", "shortcut_player_seek_forward_huge"),
+    ("player_volume_up", "shortcut_player_volume_up"),
+    ("player_volume_down", "shortcut_player_volume_down"),
+]
 
 
 TEXT = {
@@ -195,6 +272,12 @@ TEXT = {
         "downloads_section": "Prenosi",
         "cookies_network_section": "Piškotki in omrežje",
         "updates_advanced_section": "Posodobitve in napredno",
+        "keyboard_shortcuts_section": "Bliznjicne tipke",
+        "keyboard_shortcuts_help": "Vnesi bliznjice v obliki Ctrl+Shift+A, Space, Enter, Left ali F2. Spremembe se shranijo s tipko Shrani.",
+        "search_results_empty": "Ni rezultatov iskanja.",
+        "no_results": "Ni rezultatov.",
+        "favorites_empty": "Ni priljubljenih.",
+        "empty": "Prazno.",
         "exit": "Izhod",
         "open": "Odpri",
         "back": "Nazaj v glavni meni",
@@ -258,9 +341,6 @@ TEXT = {
         "no_more_results": "No more results.",
         "auto_update_app": "Ob zagonu preveri posodobitve programa",
         "check_app_updates_now": "Preveri posodobitve",
-        "github_owner": "GitHub owner",
-        "github_repo": "GitHub repo",
-        "github_token": "GitHub token za private updates",
         "checking_app_updates": "Preverjam posodobitve programa.",
         "app_up_to_date": "Program je posodobljen.",
         "app_update_available": "Na voljo je nova verzija {version}. Želiš prenos in namestitev zdaj?",
@@ -391,6 +471,33 @@ TEXT = {
         "favorite_exists": "Ta element je že med priljubljenimi.",
         "favorite_removed": "Odstranjeno iz priljubljenih.",
         "settings_saved": "Nastavitve shranjene.",
+        "shortcut_download_audio": "Prenesi zvok",
+        "shortcut_download_video": "Prenesi video",
+        "shortcut_subscribe_channel": "Naroci se na kanal",
+        "shortcut_queue_audio": "Oznaci za prenos zvoka",
+        "shortcut_queue_video": "Oznaci za prenos videa",
+        "shortcut_context_menu": "Kontekstni meni",
+        "shortcut_open_selected": "Odpri izbrano",
+        "shortcut_new_subscription_videos": "Novi videi iz narocnine",
+        "shortcut_remove_selected": "Odstrani izbrano",
+        "shortcut_player_copy_link": "Predvajalnik: kopiraj povezavo",
+        "shortcut_player_play_pause": "Predvajalnik: predvajaj ali pavza",
+        "shortcut_player_time": "Predvajalnik: povej cas",
+        "shortcut_player_speed_down": "Predvajalnik: pocasneje",
+        "shortcut_player_speed_up": "Predvajalnik: hitreje",
+        "shortcut_player_pitch_up": "Predvajalnik: visji ton",
+        "shortcut_player_pitch_down": "Predvajalnik: nizji ton",
+        "shortcut_player_details": "Predvajalnik: podrobnosti videa",
+        "shortcut_player_back": "Predvajalnik: nazaj ali zapri podrobnosti",
+        "shortcut_player_volume_boost": "Predvajalnik: ojacanje glasnosti",
+        "shortcut_player_seek_back": "Predvajalnik: 5 sekund nazaj",
+        "shortcut_player_seek_forward": "Predvajalnik: 5 sekund naprej",
+        "shortcut_player_seek_back_large": "Predvajalnik: 1 minuto nazaj",
+        "shortcut_player_seek_forward_large": "Predvajalnik: 1 minuto naprej",
+        "shortcut_player_seek_back_huge": "Predvajalnik: 10 minut nazaj",
+        "shortcut_player_seek_forward_huge": "Predvajalnik: 10 minut naprej",
+        "shortcut_player_volume_up": "Predvajalnik: glasneje",
+        "shortcut_player_volume_down": "Predvajalnik: tisje",
         "components_updating": "Posodabljam komponente.",
         "components_done": "Komponente so posodobljene.",
         "components_updated": "Komponente posodobljene.",
@@ -427,6 +534,12 @@ TEXT = {
         "library_section": "Library and subscriptions",
         "cookies_network_section": "Cookies and network",
         "updates_advanced_section": "Updates and advanced",
+        "keyboard_shortcuts_section": "Keyboard shortcuts",
+        "keyboard_shortcuts_help": "Enter shortcuts like Ctrl+Shift+A, Space, Enter, Left, or F2. Press Save to keep changes.",
+        "search_results_empty": "No search results.",
+        "no_results": "No results.",
+        "favorites_empty": "No favorites.",
+        "empty": "Empty.",
         "exit": "Exit",
         "open": "Open",
         "back": "Back to main menu",
@@ -490,9 +603,6 @@ TEXT = {
         "no_more_results": "No more results.",
         "auto_update_app": "Check for updates at startup",
         "check_app_updates_now": "Check for updates",
-        "github_owner": "GitHub owner",
-        "github_repo": "GitHub repo",
-        "github_token": "GitHub token for private updates",
         "checking_app_updates": "Checking app updates.",
         "app_up_to_date": "The app is up to date.",
         "app_update_available": "Version {version} is available. Download and install now?",
@@ -545,7 +655,7 @@ TEXT = {
         "history_empty": "History is empty.",
         "history_cleared": "History cleared.",
         "history_removed": "History item removed.",
-        "subscribe_channel": "Subscribe to channel\tCtrl+Shift+S",
+        "subscribe_channel": "Subscribe to channel",
         "unsubscribe_channel": "Unsubscribe from channel",
         "subscription_added": "Subscribed to {title}.",
         "subscription_exists": "Already subscribed to {title}.",
@@ -658,6 +768,33 @@ TEXT = {
         "favorite_exists": "This item is already in favorites.",
         "favorite_removed": "Removed from favorites.",
         "settings_saved": "Settings saved.",
+        "shortcut_download_audio": "Download audio",
+        "shortcut_download_video": "Download video",
+        "shortcut_subscribe_channel": "Subscribe to channel",
+        "shortcut_queue_audio": "Queue audio download",
+        "shortcut_queue_video": "Queue video download",
+        "shortcut_context_menu": "Context menu",
+        "shortcut_open_selected": "Open selected item",
+        "shortcut_new_subscription_videos": "New subscription videos",
+        "shortcut_remove_selected": "Remove selected item",
+        "shortcut_player_copy_link": "Player: copy link",
+        "shortcut_player_play_pause": "Player: play or pause",
+        "shortcut_player_time": "Player: announce time",
+        "shortcut_player_speed_down": "Player: slower",
+        "shortcut_player_speed_up": "Player: faster",
+        "shortcut_player_pitch_up": "Player: pitch up",
+        "shortcut_player_pitch_down": "Player: pitch down",
+        "shortcut_player_details": "Player: video details",
+        "shortcut_player_back": "Player: back or close details",
+        "shortcut_player_volume_boost": "Player: volume boost",
+        "shortcut_player_seek_back": "Player: seek back 5 seconds",
+        "shortcut_player_seek_forward": "Player: seek forward 5 seconds",
+        "shortcut_player_seek_back_large": "Player: seek back 1 minute",
+        "shortcut_player_seek_forward_large": "Player: seek forward 1 minute",
+        "shortcut_player_seek_back_huge": "Player: seek back 10 minutes",
+        "shortcut_player_seek_forward_huge": "Player: seek forward 10 minutes",
+        "shortcut_player_volume_up": "Player: volume up",
+        "shortcut_player_volume_down": "Player: volume down",
         "components_updating": "Updating components.",
         "components_done": "Components are up to date.",
         "components_updated": "Components updated.",
@@ -972,9 +1109,6 @@ class Settings:
     cookies_file: str = ""
     cookies_from_browser: str = "none"
     ffmpeg_location: str = ""
-    github_owner: str = DEFAULT_GITHUB_OWNER
-    github_repo: str = DEFAULT_GITHUB_REPO
-    github_token: str = ""
     concurrent_fragments: int = 4
     retries: int = 10
     socket_timeout: int = 20
@@ -984,6 +1118,7 @@ class Settings:
     subscription_notifications: bool = True
     last_subscription_check: float = 0.0
     history_limit: int = 500
+    keyboard_shortcuts: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_KEYBOARD_SHORTCUTS))
 
 
 class ApricotTaskBarIcon(wx.adv.TaskBarIcon):
@@ -1104,12 +1239,135 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _evt: self.download_audio_shortcut(), id=int(self.download_audio_accelerator_id))
         self.Bind(wx.EVT_MENU, lambda _evt: self.download_video_shortcut(), id=int(self.download_video_accelerator_id))
         self.Bind(wx.EVT_MENU, lambda _evt: self.subscribe_shortcut(), id=int(self.subscribe_accelerator_id))
-        entries = [
-            (wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("A"), int(self.download_audio_accelerator_id)),
-            (wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("D"), int(self.download_video_accelerator_id)),
-            (wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("S"), int(self.subscribe_accelerator_id)),
-        ]
+        entries = []
+        for action, menu_id in (
+            ("download_audio", int(self.download_audio_accelerator_id)),
+            ("download_video", int(self.download_video_accelerator_id)),
+            ("subscribe_channel", int(self.subscribe_accelerator_id)),
+        ):
+            accelerator = self.shortcut_to_accelerator(self.shortcut_for(action))
+            if accelerator:
+                flags, key_code = accelerator
+                entries.append((flags, key_code, menu_id))
         self.SetAcceleratorTable(wx.AcceleratorTable(entries))
+
+    def shortcut_for(self, action: str) -> str:
+        shortcuts = getattr(self.settings, "keyboard_shortcuts", {}) or {}
+        value = str(shortcuts.get(action) or DEFAULT_KEYBOARD_SHORTCUTS.get(action) or "").strip()
+        return value or DEFAULT_KEYBOARD_SHORTCUTS.get(action, "")
+
+    def menu_label_with_shortcut(self, label_key: str, action: str) -> str:
+        shortcut = self.shortcut_for(action)
+        return f"{self.t(label_key)}\t{shortcut}" if shortcut else self.t(label_key)
+
+    def shortcut_to_accelerator(self, shortcut: str) -> tuple[int, int] | None:
+        parsed = self.parse_shortcut(shortcut)
+        if not parsed:
+            return None
+        ctrl, shift, alt, key_name = parsed
+        key_code = self.shortcut_key_code(key_name)
+        if key_code is None or key_code < 0:
+            return None
+        flags = 0
+        if ctrl:
+            flags |= wx.ACCEL_CTRL
+        if shift:
+            flags |= wx.ACCEL_SHIFT
+        if alt:
+            flags |= wx.ACCEL_ALT
+        return flags, key_code
+
+    @staticmethod
+    def parse_shortcut(shortcut: str) -> tuple[bool, bool, bool, str] | None:
+        text = str(shortcut or "").strip()
+        if not text:
+            return None
+        text = text.split("|", 1)[0].strip()
+        parts = [part.strip() for part in text.replace("-", "+").split("+") if part.strip()]
+        if not parts:
+            return None
+        ctrl = shift = alt = False
+        key_parts: list[str] = []
+        for part in parts:
+            normalized = part.lower().replace(" ", "")
+            if normalized in {"ctrl", "control", "strg"}:
+                ctrl = True
+            elif normalized in {"shift", "shft"}:
+                shift = True
+            elif normalized in {"alt", "option"}:
+                alt = True
+            else:
+                key_parts.append(part)
+        if not key_parts:
+            return None
+        return ctrl, shift, alt, " ".join(key_parts).strip()
+
+    @staticmethod
+    def shortcut_key_code(key_name: str) -> int | None:
+        normalized = key_name.strip().lower().replace("_", " ").replace("-", " ")
+        normalized = re.sub(r"\s+", " ", normalized)
+        aliases = {
+            "enter": wx.WXK_RETURN,
+            "return": wx.WXK_RETURN,
+            "space": wx.WXK_SPACE,
+            "spacebar": wx.WXK_SPACE,
+            "escape": wx.WXK_ESCAPE,
+            "esc": wx.WXK_ESCAPE,
+            "delete": wx.WXK_DELETE,
+            "del": wx.WXK_DELETE,
+            "left": wx.WXK_LEFT,
+            "left arrow": wx.WXK_LEFT,
+            "right": wx.WXK_RIGHT,
+            "right arrow": wx.WXK_RIGHT,
+            "up": wx.WXK_UP,
+            "up arrow": wx.WXK_UP,
+            "down": wx.WXK_DOWN,
+            "down arrow": wx.WXK_DOWN,
+            "applications": getattr(wx, "WXK_WINDOWS_MENU", getattr(wx, "WXK_MENU", getattr(wx, "WXK_APPS", -1))),
+            "application": getattr(wx, "WXK_WINDOWS_MENU", getattr(wx, "WXK_MENU", getattr(wx, "WXK_APPS", -1))),
+            "apps": getattr(wx, "WXK_WINDOWS_MENU", getattr(wx, "WXK_MENU", getattr(wx, "WXK_APPS", -1))),
+            "menu": getattr(wx, "WXK_WINDOWS_MENU", getattr(wx, "WXK_MENU", getattr(wx, "WXK_APPS", -1))),
+            "context menu": getattr(wx, "WXK_WINDOWS_MENU", getattr(wx, "WXK_MENU", getattr(wx, "WXK_APPS", -1))),
+        }
+        if normalized in aliases:
+            return aliases[normalized]
+        match = re.fullmatch(r"f(\d{1,2})", normalized)
+        if match:
+            number = int(match.group(1))
+            if 1 <= number <= 24:
+                return wx.WXK_F1 + number - 1
+        if len(normalized) == 1:
+            return ord(normalized.upper())
+        return None
+
+    def shortcut_matches(self, event: wx.KeyEvent, action: str) -> bool:
+        return self.event_matches_shortcut(event, self.shortcut_for(action))
+
+    def event_matches_shortcut(self, event: wx.KeyEvent, shortcut: str) -> bool:
+        alternatives = re.split(r"\s*\|\s*", str(shortcut or ""))
+        return any(self.event_matches_single_shortcut(event, alternative) for alternative in alternatives if alternative.strip())
+
+    def event_matches_single_shortcut(self, event: wx.KeyEvent, shortcut: str) -> bool:
+        parsed = self.parse_shortcut(shortcut)
+        if not parsed:
+            return False
+        ctrl, shift, alt, key_name = parsed
+        if bool(event.ControlDown()) != ctrl or bool(event.ShiftDown()) != shift or bool(event.AltDown()) != alt:
+            return False
+        key_code = self.shortcut_key_code(key_name)
+        if key_code is None:
+            return False
+        if len(key_name.strip()) == 1 and key_name.strip().isprintable():
+            return self.key_event_matches_letter(event, key_name.strip()) if key_name.strip().isalpha() else key_code in self.key_event_codes(event)
+        return key_code in self.key_event_codes(event)
+
+    def context_menu_shortcut_matches(self, event: wx.KeyEvent) -> bool:
+        context_codes = {
+            getattr(wx, "WXK_APPS", -1),
+            getattr(wx, "WXK_MENU", -1),
+            getattr(wx, "WXK_WINDOWS_MENU", -1),
+        }
+        return self.shortcut_matches(event, "context_menu") or event.GetKeyCode() in context_codes or (event.GetKeyCode() == wx.WXK_F10 and event.ShiftDown())
 
     def t(self, key: str, **kwargs) -> str:
         language = self.settings.language if self.settings.language in TEXT else "en"
@@ -1158,16 +1416,23 @@ class MainFrame(wx.Frame):
     def speak_text(self, text: str) -> None:
         if not text:
             return
+        announced = False
         if self.nvda_client:
             try:
                 if hasattr(self.nvda_client, "nvdaController_cancelSpeech"):
                     self.nvda_client.nvdaController_cancelSpeech()
                 result = self.nvda_client.nvdaController_speakText(str(text))
                 if result == 0:
-                    return
+                    announced = True
+                if hasattr(self.nvda_client, "nvdaController_brailleMessage"):
+                    braille_result = self.nvda_client.nvdaController_brailleMessage(str(text))
+                    if braille_result == 0:
+                        announced = True
             except Exception:
                 self.nvda_client = None
         self.raise_accessibility_alert(text)
+        if announced:
+            return
 
     def raise_accessibility_alert(self, text: str) -> None:
         self.SetName(text)
@@ -1185,6 +1450,9 @@ class MainFrame(wx.Frame):
                     client = ctypes.WinDLL(str(path))
                     client.nvdaController_speakText.argtypes = [ctypes.c_wchar_p]
                     client.nvdaController_speakText.restype = ctypes.c_int
+                    if hasattr(client, "nvdaController_brailleMessage"):
+                        client.nvdaController_brailleMessage.argtypes = [ctypes.c_wchar_p]
+                        client.nvdaController_brailleMessage.restype = ctypes.c_int
                     if hasattr(client, "nvdaController_cancelSpeech"):
                         client.nvdaController_cancelSpeech.argtypes = []
                         client.nvdaController_cancelSpeech.restype = ctypes.c_int
@@ -1302,7 +1570,7 @@ class MainFrame(wx.Frame):
         self.focus_later(self.menu_list)
 
     def on_menu_key(self, event: wx.KeyEvent) -> None:
-        if event.GetKeyCode() == wx.WXK_RETURN:
+        if self.shortcut_matches(event, "open_selected"):
             self.activate_menu()
             return
         event.Skip()
@@ -1332,16 +1600,13 @@ class MainFrame(wx.Frame):
         instructions = wx.StaticText(self.panel, label=self.t("queued_download_instructions"))
         self.root_sizer.Add(instructions, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
         self.queue_items = self.download_items_snapshot()
-        self.queue_list = wx.ListBox(self.panel, choices=[self.queue_line(item) for item in self.queue_items])
+        queue_choices = [self.queue_line(item) for item in self.queue_items] or [self.t("no_queued_downloads")]
+        self.queue_list = wx.ListBox(self.panel, choices=queue_choices)
         self.queue_list.SetName(self.t("current_downloads"))
         self.queue_list.Bind(wx.EVT_CONTEXT_MENU, self.open_queue_context_menu)
         self.queue_list.Bind(wx.EVT_KEY_DOWN, self.on_queue_key)
         self.root_sizer.Add(self.queue_list, 1, wx.EXPAND | wx.ALL, 4)
-        if self.queue_items:
-            self.queue_list.SetSelection(0)
-        else:
-            empty = wx.StaticText(self.panel, label=self.t("no_queued_downloads"))
-            self.root_sizer.Add(empty, 0, wx.ALL, 4)
+        self.queue_list.SetSelection(0)
         self.panel.Layout()
         self.focus_later(self.queue_list)
 
@@ -1398,14 +1663,13 @@ class MainFrame(wx.Frame):
         return self.queue_items[index]
 
     def on_queue_key(self, event: wx.KeyEvent) -> None:
-        key = event.GetKeyCode()
-        if self.is_ctrl_shift_letter(event, "A"):
+        if self.shortcut_matches(event, "download_audio"):
             self.download_selected_queue_item(True)
-        elif self.is_ctrl_shift_letter(event, "D"):
+        elif self.shortcut_matches(event, "download_video"):
             self.download_selected_queue_item(False)
-        elif key == wx.WXK_RETURN:
+        elif self.shortcut_matches(event, "open_selected"):
             self.download_selected_queue_item()
-        elif key == getattr(wx, "WXK_APPS", -1) or (key == wx.WXK_F10 and event.ShiftDown()):
+        elif self.context_menu_shortcut_matches(event):
             self.open_queue_context_menu()
         else:
             event.Skip()
@@ -1421,8 +1685,8 @@ class MainFrame(wx.Frame):
         else:
             actions = [
                 (self.t("download_selected_queued"), lambda: self.download_selected_queue_item()),
-                (f"{self.t('download_audio')}\tCtrl+Shift+A", lambda: self.download_selected_queue_item(True)),
-                (f"{self.t('download_video')}\tCtrl+Shift+D", lambda: self.download_selected_queue_item(False)),
+                (self.menu_label_with_shortcut("download_audio", "download_audio"), lambda: self.download_selected_queue_item(True)),
+                (self.menu_label_with_shortcut("download_video", "download_video"), lambda: self.download_selected_queue_item(False)),
                 (self.t("download_all"), self.download_all_queued),
                 (self.t("remove_from_queue"), self.remove_selected_queue_item),
             ]
@@ -1468,8 +1732,9 @@ class MainFrame(wx.Frame):
                 (self.t("add_favorite"), self.add_selected_favorite),
             ]
         )
-        self.results_list = wx.ListBox(self.panel, choices=[])
+        self.results_list = wx.ListBox(self.panel, choices=[self.t("search_results_empty")])
         self.results_list.SetName(self.t("search_youtube"))
+        self.results_list.SetSelection(0)
         self.results_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _evt: self.play_selected())
         self.results_list.Bind(wx.EVT_CONTEXT_MENU, self.open_context_menu)
         self.results_list.Bind(wx.EVT_KEY_DOWN, self.on_results_key)
@@ -1486,20 +1751,19 @@ class MainFrame(wx.Frame):
             self.show_main_menu()
 
     def on_results_key(self, event: wx.KeyEvent) -> None:
-        key = event.GetKeyCode()
-        if self.is_shift_letter(event, "A") and not event.ControlDown():
+        if self.shortcut_matches(event, "queue_audio"):
             self.toggle_download_queue(True)
-        elif self.is_shift_letter(event, "D") and not event.ControlDown():
+        elif self.shortcut_matches(event, "queue_video"):
             self.toggle_download_queue(False)
-        elif self.is_ctrl_shift_letter(event, "A"):
+        elif self.shortcut_matches(event, "download_audio"):
             self.download_audio_shortcut()
-        elif self.is_ctrl_shift_letter(event, "D"):
+        elif self.shortcut_matches(event, "download_video"):
             self.download_video_shortcut()
-        elif self.is_ctrl_shift_letter(event, "S"):
+        elif self.shortcut_matches(event, "subscribe_channel"):
             self.subscribe_shortcut()
-        elif key == wx.WXK_RETURN:
+        elif self.shortcut_matches(event, "open_selected"):
             self.play_selected()
-        elif key == getattr(wx, "WXK_APPS", -1) or (key == wx.WXK_F10 and event.ShiftDown()):
+        elif self.context_menu_shortcut_matches(event):
             self.open_context_menu()
         else:
             event.Skip()
@@ -1535,12 +1799,11 @@ class MainFrame(wx.Frame):
         self.focus_later(self.favorites_list)
 
     def on_favorites_key(self, event: wx.KeyEvent) -> None:
-        key = event.GetKeyCode()
-        if key == wx.WXK_RETURN:
+        if self.shortcut_matches(event, "open_selected"):
             self.play_favorite()
-        elif self.is_ctrl_shift_letter(event, "S"):
+        elif self.shortcut_matches(event, "subscribe_channel"):
             self.subscribe_to_selected_channel(self.selected_favorite())
-        elif key == getattr(wx, "WXK_APPS", -1) or (key == wx.WXK_F10 and event.ShiftDown()):
+        elif self.context_menu_shortcut_matches(event):
             self.open_favorites_context_menu()
         else:
             event.Skip()
@@ -1549,9 +1812,9 @@ class MainFrame(wx.Frame):
         menu = wx.Menu()
         actions = [
             (self.t("play"), self.play_favorite),
-            (f"{self.t('download_audio')}\tCtrl+Shift+A", lambda: self.start_download(True, item=self.selected_favorite())),
-            (f"{self.t('download_video')}\tCtrl+Shift+D", lambda: self.start_download(False, item=self.selected_favorite())),
-            (self.t("subscribe_channel"), lambda: self.subscribe_to_selected_channel(self.selected_favorite())),
+            (self.menu_label_with_shortcut("download_audio", "download_audio"), lambda: self.start_download(True, item=self.selected_favorite())),
+            (self.menu_label_with_shortcut("download_video", "download_video"), lambda: self.start_download(False, item=self.selected_favorite())),
+            (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), lambda: self.subscribe_to_selected_channel(self.selected_favorite())),
             (self.t("copy_url"), lambda: self.copy_item_url(self.selected_favorite())),
             (self.t("remove"), self.remove_favorite),
         ]
@@ -1597,6 +1860,8 @@ class MainFrame(wx.Frame):
             if self.history:
                 self.history_list.SetSelection(0)
             else:
+                self.history_list.Append(self.t("history_empty"))
+                self.history_list.SetSelection(0)
                 self.set_status(self.t("history_empty"))
         except RuntimeError:
             pass
@@ -1616,18 +1881,17 @@ class MainFrame(wx.Frame):
         return self.history[index]
 
     def on_history_key(self, event: wx.KeyEvent) -> None:
-        key = event.GetKeyCode()
-        if key == wx.WXK_RETURN:
+        if self.shortcut_matches(event, "open_selected"):
             self.play_history_item()
-        elif self.is_ctrl_shift_letter(event, "A"):
+        elif self.shortcut_matches(event, "download_audio"):
             self.start_download(True, item=self.selected_history_item())
-        elif self.is_ctrl_shift_letter(event, "D"):
+        elif self.shortcut_matches(event, "download_video"):
             self.start_download(False, item=self.selected_history_item())
-        elif self.is_ctrl_shift_letter(event, "S"):
+        elif self.shortcut_matches(event, "subscribe_channel"):
             self.subscribe_to_selected_channel(self.selected_history_item())
-        elif key == wx.WXK_DELETE:
+        elif self.shortcut_matches(event, "remove_selected"):
             self.remove_history_item()
-        elif key == getattr(wx, "WXK_APPS", -1) or (key == wx.WXK_F10 and event.ShiftDown()):
+        elif self.context_menu_shortcut_matches(event):
             self.open_history_context_menu()
         else:
             event.Skip()
@@ -1636,10 +1900,10 @@ class MainFrame(wx.Frame):
         menu = wx.Menu()
         actions = [
             (self.t("play"), self.play_history_item),
-            (f"{self.t('download_audio')}\tCtrl+Shift+A", lambda: self.start_download(True, item=self.selected_history_item())),
-            (f"{self.t('download_video')}\tCtrl+Shift+D", lambda: self.start_download(False, item=self.selected_history_item())),
+            (self.menu_label_with_shortcut("download_audio", "download_audio"), lambda: self.start_download(True, item=self.selected_history_item())),
+            (self.menu_label_with_shortcut("download_video", "download_video"), lambda: self.start_download(False, item=self.selected_history_item())),
             (self.t("add_favorite"), lambda: self.add_favorite_item(self.selected_history_item())),
-            (self.t("subscribe_channel"), lambda: self.subscribe_to_selected_channel(self.selected_history_item())),
+            (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), lambda: self.subscribe_to_selected_channel(self.selected_history_item())),
             (self.t("copy_url"), lambda: self.copy_item_url(self.selected_history_item())),
             (self.t("remove_history_item"), self.remove_history_item),
             (self.t("clear_history"), self.clear_history),
@@ -1708,6 +1972,8 @@ class MainFrame(wx.Frame):
             if self.subscriptions:
                 self.subscriptions_list.SetSelection(0)
             else:
+                self.subscriptions_list.Append(self.t("subscription_empty"))
+                self.subscriptions_list.SetSelection(0)
                 self.set_status(self.t("subscription_empty"))
         except RuntimeError:
             pass
@@ -1731,14 +1997,13 @@ class MainFrame(wx.Frame):
         return self.subscriptions[index]
 
     def on_subscriptions_key(self, event: wx.KeyEvent) -> None:
-        key = event.GetKeyCode()
-        if key == wx.WXK_RETURN:
+        if self.shortcut_matches(event, "open_selected"):
             self.open_selected_subscription_videos()
-        elif key == wx.WXK_SPACE:
+        elif self.shortcut_matches(event, "new_subscription_videos"):
             self.open_selected_subscription_new_videos()
-        elif key == wx.WXK_DELETE:
+        elif self.shortcut_matches(event, "remove_selected"):
             self.remove_subscription()
-        elif key == getattr(wx, "WXK_APPS", -1) or (key == wx.WXK_F10 and event.ShiftDown()):
+        elif self.context_menu_shortcut_matches(event):
             self.open_subscriptions_context_menu()
         else:
             event.Skip()
@@ -1963,7 +2228,7 @@ class MainFrame(wx.Frame):
             (self.t("downloads_section"), "downloads"),
             (self.t("library_section"), "library"),
             (self.t("cookies_network_section"), "cookies"),
-            (self.t("updates_advanced_section"), "advanced"),
+            (self.t("keyboard_shortcuts_section"), "shortcuts"),
         ]
 
     def on_settings_section_changed(self, event) -> None:
@@ -2101,10 +2366,12 @@ class MainFrame(wx.Frame):
             choice("fragments", str(self.settings.concurrent_fragments), ["1", "2", "4", "8", "16"])
             choice("retries", str(self.settings.retries), ["0", "3", "5", "10", "20"])
             choice("timeout", str(self.settings.socket_timeout), ["5", "10", "20", "30", "60"])
-        else:
-            text("github_owner", self.settings.github_owner)
-            text("github_repo", self.settings.github_repo)
-            text("github_token", self.settings.github_token, wx.TE_PASSWORD)
+        elif section_name == "shortcuts":
+            form.Add(wx.StaticText(self.settings_scroller, label=self.t("keyboard_shortcuts_help")), 0, wx.ALIGN_CENTER_VERTICAL)
+            form.AddSpacer(1)
+            shortcuts = self.normalized_keyboard_shortcuts(getattr(self.settings, "keyboard_shortcuts", {}) or {})
+            for action, label_key in SHORTCUT_DEFINITIONS:
+                text(f"shortcut_{action}", shortcuts[action])
 
         self.settings_scroller.SetSizer(form, True)
         self.settings_scroller.Layout()
@@ -2228,10 +2495,17 @@ class MainFrame(wx.Frame):
             selected_index = min(max(0, selection), len(self.results) - 1)
             self.results_list.SetSelection(selected_index)
             self.results_list.SetFocus()
-        self.set_status(self.t("found", count=len(self.results)))
+            self.set_status(self.t("found", count=len(self.results)))
+        else:
+            self.results_list.Append(self.t("no_results"))
+            self.results_list.SetSelection(0)
+            self.results_list.SetFocus()
+            self.set_status(self.t("no_results"))
 
     def maybe_extend_results(self) -> None:
         if not self.dynamic_fetch_enabled or self.settings.results_limit != 0 or not hasattr(self, "results_list"):
+            return
+        if not self.results and not self.all_results:
             return
         selection = self.results_list.GetSelection()
         if selection == wx.NOT_FOUND:
@@ -2312,7 +2586,7 @@ class MainFrame(wx.Frame):
             index = self.results_list.GetSelection()
         except RuntimeError:
             return None
-        if index == wx.NOT_FOUND:
+        if index == wx.NOT_FOUND or index < 0 or index >= len(self.results):
             return None
         self.current_index = index
         return self.results[index]
@@ -3164,37 +3438,37 @@ class MainFrame(wx.Frame):
         key = event.GetKeyCode()
         focus = wx.Window.FindFocus()
         details_has_focus = focus is self.video_details
-        if key == wx.WXK_RETURN and focus is getattr(self, "menu_list", None):
+        if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "menu_list", None):
             self.activate_menu()
             return
-        if focus is getattr(self, "queue_list", None) and self.is_ctrl_shift_letter(event, "A"):
+        if focus is getattr(self, "queue_list", None) and self.shortcut_matches(event, "download_audio"):
             self.download_selected_queue_item(True)
             return
-        if focus is getattr(self, "queue_list", None) and self.is_ctrl_shift_letter(event, "D"):
+        if focus is getattr(self, "queue_list", None) and self.shortcut_matches(event, "download_video"):
             self.download_selected_queue_item(False)
             return
-        if focus is getattr(self, "queue_list", None) and key == wx.WXK_RETURN:
+        if focus is getattr(self, "queue_list", None) and self.shortcut_matches(event, "open_selected"):
             self.download_selected_queue_item()
             return
-        if focus is getattr(self, "results_list", None) and self.is_shift_letter(event, "A") and not event.ControlDown():
+        if focus is getattr(self, "results_list", None) and self.shortcut_matches(event, "queue_audio"):
             self.toggle_download_queue(True)
             return
-        if focus is getattr(self, "results_list", None) and self.is_shift_letter(event, "D") and not event.ControlDown():
+        if focus is getattr(self, "results_list", None) and self.shortcut_matches(event, "queue_video"):
             self.toggle_download_queue(False)
             return
-        if key == wx.WXK_RETURN and focus is getattr(self, "results_list", None):
+        if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "results_list", None):
             self.play_selected()
             return
-        if self.is_ctrl_shift_letter(event, "A"):
+        if self.shortcut_matches(event, "download_audio"):
             self.download_audio_shortcut()
             return
-        if self.is_ctrl_shift_letter(event, "D"):
+        if self.shortcut_matches(event, "download_video"):
             self.download_video_shortcut()
             return
-        if self.is_ctrl_shift_letter(event, "S"):
+        if self.shortcut_matches(event, "subscribe_channel"):
             self.subscribe_shortcut()
             return
-        if key == wx.WXK_ESCAPE:
+        if self.shortcut_matches(event, "player_back"):
             if self.in_player_screen and self.video_details_visible():
                 self.hide_video_details()
                 return
@@ -3206,56 +3480,56 @@ class MainFrame(wx.Frame):
                 return
             self.show_main_menu()
             return
-        if self.in_player_screen and key in (ord("L"), ord("l")):
+        if self.in_player_screen and self.shortcut_matches(event, "player_copy_link"):
             self.copy_active_url()
             return
         if self.player_control_mode and not details_has_focus:
-            if key == wx.WXK_F2:
+            if self.shortcut_matches(event, "player_volume_boost"):
                 self.toggle_volume_boost()
                 return
-            if key == wx.WXK_SPACE:
+            if self.shortcut_matches(event, "player_play_pause"):
                 self.player_command("cycle pause")
                 return
-            if key in (ord("T"), ord("t")):
+            if self.shortcut_matches(event, "player_time"):
                 self.announce_time_async()
                 return
-            if key in (ord("S"), ord("s")):
+            if self.shortcut_matches(event, "player_speed_down"):
                 self.change_speed_async(-self.speed_step_value())
                 return
-            if key in (ord("D"), ord("d")):
+            if self.shortcut_matches(event, "player_speed_up"):
                 self.change_speed_async(self.speed_step_value())
                 return
-            if key == wx.WXK_UP and event.ControlDown():
+            if self.shortcut_matches(event, "player_pitch_up"):
                 self.change_pitch_async(self.pitch_step_value())
                 return
-            if key == wx.WXK_DOWN and event.ControlDown():
+            if self.shortcut_matches(event, "player_pitch_down"):
                 self.change_pitch_async(-self.pitch_step_value())
                 return
-            if key in (ord("V"), ord("v")):
+            if self.shortcut_matches(event, "player_details"):
                 self.show_video_details()
                 return
-            if key == wx.WXK_LEFT and event.ControlDown() and event.ShiftDown():
+            if self.shortcut_matches(event, "player_seek_back_huge"):
                 self.player_command("seek -600")
                 return
-            if key == wx.WXK_RIGHT and event.ControlDown() and event.ShiftDown():
+            if self.shortcut_matches(event, "player_seek_forward_huge"):
                 self.player_command("seek 600")
                 return
-            if key == wx.WXK_LEFT and event.ControlDown():
+            if self.shortcut_matches(event, "player_seek_back_large"):
                 self.player_command("seek -60")
                 return
-            if key == wx.WXK_RIGHT and event.ControlDown():
+            if self.shortcut_matches(event, "player_seek_forward_large"):
                 self.player_command("seek 60")
                 return
-            if key == wx.WXK_LEFT:
+            if self.shortcut_matches(event, "player_seek_back"):
                 self.player_command("seek -5")
                 return
-            if key == wx.WXK_RIGHT:
+            if self.shortcut_matches(event, "player_seek_forward"):
                 self.player_command("seek 5")
                 return
-            if key == wx.WXK_UP:
+            if self.shortcut_matches(event, "player_volume_up"):
                 self.change_volume_async(self.settings.volume_step)
                 return
-            if key == wx.WXK_DOWN:
+            if self.shortcut_matches(event, "player_volume_down"):
                 self.change_volume_async(-self.settings.volume_step)
                 return
         event.Skip()
@@ -3273,14 +3547,14 @@ class MainFrame(wx.Frame):
                 (self.t("copy_url"), self.copy_selected_url),
             ]
             if is_channel:
-                actions.insert(3, (self.t("subscribe_channel"), self.subscribe_shortcut))
+                actions.insert(3, (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), self.subscribe_shortcut))
         else:
             actions = [
                 (self.t("play"), self.play_selected),
-                (f"{self.t('download_audio')}\tCtrl+Shift+A", self.download_audio),
-                (f"{self.t('download_video')}\tCtrl+Shift+D", self.download_video),
+                (self.menu_label_with_shortcut("download_audio", "download_audio"), self.download_audio),
+                (self.menu_label_with_shortcut("download_video", "download_video"), self.download_video),
                 (self.t("add_favorite"), self.add_selected_favorite),
-                (self.t("subscribe_channel"), self.subscribe_shortcut),
+                (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), self.subscribe_shortcut),
                 (self.t("open_browser"), self.open_selected_in_browser),
                 (self.t("copy_url"), self.copy_selected_url),
             ]
@@ -3584,10 +3858,14 @@ class MainFrame(wx.Frame):
             self.favorites_list.Append(f"{index + 1}. {item['title']} | {self.t('channel')}: {item['channel']}")
         if self.favorites:
             self.favorites_list.SetSelection(0)
+        else:
+            self.favorites_list.Append(self.t("favorites_empty"))
+            self.favorites_list.SetSelection(0)
+            self.set_status(self.t("favorites_empty"))
 
     def selected_favorite(self) -> dict | None:
         index = self.favorites_list.GetSelection()
-        return None if index == wx.NOT_FOUND else self.favorites[index]
+        return None if index == wx.NOT_FOUND or index < 0 or index >= len(self.favorites) else self.favorites[index]
 
     def play_favorite(self) -> None:
         item = self.selected_favorite()
@@ -3596,7 +3874,7 @@ class MainFrame(wx.Frame):
 
     def remove_favorite(self) -> None:
         index = self.favorites_list.GetSelection()
-        if index != wx.NOT_FOUND:
+        if index != wx.NOT_FOUND and 0 <= index < len(self.favorites):
             del self.favorites[index]
             self.save_favorites()
             self.refresh_favorites()
@@ -3755,6 +4033,9 @@ class MainFrame(wx.Frame):
                 self.results_list.Append(self.result_line(index, item))
             if self.results:
                 self.results_list.SetSelection(min(max(0, selection), len(self.results) - 1))
+            else:
+                self.results_list.Append(self.t("no_results"))
+                self.results_list.SetSelection(0)
         except RuntimeError:
             pass
 
@@ -3887,7 +4168,10 @@ class MainFrame(wx.Frame):
         self.save_settings()
         self.trim_history()
         self.configure_subscription_timer()
-        self.set_status(self.t("settings_saved"))
+        self.install_download_accelerators()
+        saved_text = self.t("settings_saved")
+        self.set_status(saved_text)
+        self.speak_text(saved_text)
         if self.settings.language != old_language:
             self.show_settings()
 
@@ -3978,12 +4262,6 @@ class MainFrame(wx.Frame):
             self.settings.cookies_from_browser = c["cookies_from_browser"].GetStringSelection() or "none"
         if "ffmpeg" in c:
             self.settings.ffmpeg_location = c["ffmpeg"].GetValue()
-        if "github_owner" in c:
-            self.settings.github_owner = c["github_owner"].GetValue().strip() or DEFAULT_GITHUB_OWNER
-        if "github_repo" in c:
-            self.settings.github_repo = c["github_repo"].GetValue().strip() or DEFAULT_GITHUB_REPO
-        if "github_token" in c:
-            self.settings.github_token = c["github_token"].GetValue().strip()
         if "fragments" in c:
             self.settings.concurrent_fragments = self.to_int(c["fragments"].GetStringSelection(), 4, 1)
         if "retries" in c:
@@ -3998,6 +4276,12 @@ class MainFrame(wx.Frame):
             self.settings.subscription_check_interval_hours = self.to_int(c["subscription_check_interval"].GetStringSelection(), 6, 1, 168)
         if "subscription_notifications" in c:
             self.settings.subscription_notifications = c["subscription_notifications"].GetValue()
+        shortcuts = dict(getattr(self.settings, "keyboard_shortcuts", {}) or {})
+        for action, _label_key in SHORTCUT_DEFINITIONS:
+            control_key = f"shortcut_{action}"
+            if control_key in c:
+                shortcuts[action] = c[control_key].GetValue().strip() or DEFAULT_KEYBOARD_SHORTCUTS[action]
+        self.settings.keyboard_shortcuts = self.normalized_keyboard_shortcuts(shortcuts)
 
     def selected_choice_value(self, key: str) -> str:
         ctrl = self.controls.get(key) if hasattr(self, "controls") else None
@@ -4267,14 +4551,13 @@ class MainFrame(wx.Frame):
             wx.CallAfter(self.update_app_update_failed, exc)
 
     def download_update_asset(self, asset: dict, downloaded_path: Path, version: str) -> None:
-        token = self.resolve_github_token()
         attempts: list[tuple[str, dict[str, str]]] = []
         browser_url = str(asset.get("browser_download_url") or "")
         api_url = str(asset.get("url") or "")
         if browser_url:
             attempts.append((browser_url, self.github_headers("", accept="application/octet-stream")))
         if api_url:
-            attempts.append((api_url, self.github_headers(token, accept="application/octet-stream")))
+            attempts.append((api_url, self.github_headers("", accept="application/octet-stream")))
         if not attempts:
             raise RuntimeError("missing download url")
         last_error: Exception | None = None
@@ -4557,12 +4840,9 @@ class MainFrame(wx.Frame):
             os._exit(0)
 
     def fetch_latest_release(self) -> dict | None:
-        owner = self.settings.github_owner.strip() or DEFAULT_GITHUB_OWNER
-        repo = self.settings.github_repo.strip() or DEFAULT_GITHUB_REPO
-        token = self.resolve_github_token()
         latest_request = Request(
-            f"https://api.github.com/repos/{owner}/{repo}/releases/latest",
-            headers=self.github_headers(token),
+            GITHUB_LATEST_RELEASE_API_URL,
+            headers=self.github_headers(""),
         )
         try:
             with self.open_url(latest_request, timeout=30) as response:
@@ -4573,8 +4853,8 @@ class MainFrame(wx.Frame):
             if exc.code != 404:
                 raise
         list_request = Request(
-            f"https://api.github.com/repos/{owner}/{repo}/releases",
-            headers=self.github_headers(token),
+            GITHUB_RELEASES_API_URL,
+            headers=self.github_headers(""),
         )
         with self.open_url(list_request, timeout=30) as response:
             payload = json.loads(response.read().decode("utf-8"))
@@ -4671,38 +4951,6 @@ class MainFrame(wx.Frame):
             headers["Authorization"] = f"Bearer {token}"
         return headers
 
-    def resolve_github_token(self) -> str:
-        configured = self.settings.github_token.strip()
-        if configured:
-            return configured
-        gh_path = self.find_gh_executable()
-        if not gh_path:
-            return ""
-        try:
-            result = subprocess.run(
-                [gh_path, "auth", "token"],
-                capture_output=True,
-                text=True,
-                timeout=15,
-                check=True,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-            return result.stdout.strip()
-        except Exception:
-            return ""
-
-    @staticmethod
-    def find_gh_executable() -> str:
-        candidates = [
-            shutil.which("gh"),
-            r"C:\Program Files\GitHub CLI\gh.exe",
-            str(Path.home() / "AppData" / "Local" / "Programs" / "GitHub CLI" / "gh.exe"),
-        ]
-        for candidate in candidates:
-            if candidate and Path(candidate).exists():
-                return str(candidate)
-        return ""
-
     def process_queue(self, _event) -> None:
         try:
             while True:
@@ -4754,6 +5002,16 @@ class MainFrame(wx.Frame):
         base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
         return base.joinpath(*parts)
 
+    @staticmethod
+    def normalized_keyboard_shortcuts(shortcuts: dict | None) -> dict[str, str]:
+        normalized = dict(DEFAULT_KEYBOARD_SHORTCUTS)
+        if isinstance(shortcuts, dict):
+            for action in DEFAULT_KEYBOARD_SHORTCUTS:
+                value = str(shortcuts.get(action) or "").strip()
+                if value:
+                    normalized[action] = value
+        return normalized
+
     def load_settings(self) -> Settings:
         source = SETTINGS_FILE if SETTINGS_FILE.exists() else LEGACY_SETTINGS_FILE
         if source.exists():
@@ -4768,6 +5026,7 @@ class MainFrame(wx.Frame):
                     merged["filename_template"] = DEFAULT_FILENAME_TEMPLATE
                 merged["pitch_mode"] = self.normalize_pitch_mode_value(str(merged.get("pitch_mode") or ""))
                 merged["video_format"] = self.normalize_video_format_value(str(merged.get("video_format") or ""))
+                merged["keyboard_shortcuts"] = self.normalized_keyboard_shortcuts(merged.get("keyboard_shortcuts"))
                 return Settings(**merged)
             except Exception:
                 return Settings()
