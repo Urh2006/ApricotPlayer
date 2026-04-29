@@ -98,8 +98,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.4.6"
-APP_VERSION_LABEL = "0.4.6"
+APP_VERSION = "0.4.7"
+APP_VERSION_LABEL = "0.4.7"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -3359,7 +3359,6 @@ class MainFrame(wx.Frame):
         return ctrl.GetStringSelection()
 
     def start_ytdlp_update_check(self) -> None:
-        self.announce_player(self.t("components_updating"))
         threading.Thread(target=self.update_ytdlp_worker, daemon=True).start()
 
     def update_ytdlp_worker(self) -> None:
@@ -3369,8 +3368,8 @@ class MainFrame(wx.Frame):
             return
         try:
             updated = self.update_ytdlp_component_package(ytdlp)
-            key = "components_updated" if updated else "components_done"
-            self.ui_queue.put(("announce", self.t(key)))
+            if updated:
+                self.ui_queue.put(("announce", self.t("components_updated")))
         except Exception as exc:
             self.ui_queue.put(("announce", self.t("updates_failed", error=exc)))
 
@@ -3384,6 +3383,7 @@ class MainFrame(wx.Frame):
             return False
         if not wheel_url:
             raise RuntimeError("yt-dlp wheel URL is empty")
+        self.ui_queue.put(("announce", self.t("components_updating")))
         COMPONENTS_DIR.mkdir(parents=True, exist_ok=True)
         temp_dir = Path(tempfile.mkdtemp(prefix="apricotplayer-ytdlp-"))
         wheel_path = temp_dir / "yt_dlp.whl"

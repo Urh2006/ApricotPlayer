@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.4.7
+
+- changed the yt-dlp component update check so screen readers only announce "updating components" after a newer yt-dlp package has actually been found and installation is starting
+- kept no-update startup checks quiet so ApricotPlayer does not announce component updating when there is nothing to install
+- published updated installer and portable release assets for testing updates from 0.4.6
+
 ## What's new in version 0.4.6
 
 - fixed update checks on systems where Python/OpenSSL could not find a trusted certificate authority by using the bundled `certifi` certificate store for GitHub and PyPI HTTPS requests
