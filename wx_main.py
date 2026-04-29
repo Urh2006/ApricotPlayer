@@ -37,6 +37,13 @@ def get_yt_dlp():
     if yt_dlp_import_error is not None:
         return None
     try:
+        components_dir = globals().get("COMPONENTS_DIR")
+        if components_dir:
+            components_path = Path(components_dir)
+            if (components_path / "yt_dlp").exists():
+                components_text = str(components_path)
+                if components_text not in sys.path:
+                    sys.path.insert(0, components_text)
         yt_dlp = import_module("yt_dlp")
     except ImportError as exc:
         yt_dlp_import_error = exc
@@ -79,16 +86,21 @@ class QuietYtdlpLogger:
         pass
 
 
+class DownloadCancelled(Exception):
+    pass
+
+
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.4.4"
-APP_VERSION_LABEL = "0.4.4"
+APP_VERSION = "0.4.5"
+APP_VERSION_LABEL = "0.4.5"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
 SETTINGS_FILE = APP_DIR / "settings.json"
 FAVORITES_FILE = APP_DIR / "favorites.json"
 CACHED_COOKIES_FILE = APP_DIR / "cookies.txt"
+COMPONENTS_DIR = APP_DIR / "components"
 LEGACY_SETTINGS_FILE = LEGACY_APP_DIR / "settings.json"
 LEGACY_FAVORITES_FILE = LEGACY_APP_DIR / "favorites.json"
 DEFAULT_FILENAME_TEMPLATE = "%(title)s.%(ext)s"
@@ -99,6 +111,7 @@ DEFAULT_GITHUB_REPO = "ApricotPlayer"
 INSTALLER_ASSET_NAME = "ApricotPlayerSetup.exe"
 PORTABLE_ZIP_ASSET_NAME = "ApricotPlayerPortable.zip"
 UPDATE_LOG_FILE = APP_DIR / "updater.log"
+YTDLP_PYPI_JSON_URL = "https://pypi.org/pypi/yt-dlp/json"
 PLAYBACK_SPEED_STEPS = [0.25, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1.0, 1.1, 1.2, 1.25, 1.3, 1.4, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0]
 PITCH_STEPS = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0]
 DEFAULT_REACHED_SOUND = "default_reached.wav"
@@ -151,12 +164,17 @@ TEXT = {
         "ready": "Pripravljen.",
         "main_menu": "Glavni meni",
         "download_all": "Download all",
+        "download_all_selected": "Prenesi vse izbrane elemente",
         "queued_videos_for_download": "Queued videos for download",
         "queued_downloads": "Queued videos for download",
+        "current_downloads": "Trenutni prenosi",
         "no_queued_downloads": "No queued downloads.",
         "queued_download_instructions": "Use Enter to download with the queued format, Ctrl+Shift+A for audio, Ctrl+Shift+D for video, or the context menu.",
         "download_selected_queued": "Download selected queued item",
         "remove_from_queue": "Remove from queue",
+        "cancel_download": "Preklici prenos",
+        "cancel_all_downloads": "Preklici vse prenose",
+        "no_active_download": "Ni aktivnega prenosa.",
         "search_youtube": "Iskanje po YouTube",
         "choose_download_folder": "Izbor mape za prenose",
         "favorites": "Priljubljeni",
@@ -189,16 +207,30 @@ TEXT = {
         "batch_download_done": "Batch download complete.",
         "audio_selected_download": "Audio download queued: {title}",
         "video_selected_download": "Video download queued: {title}",
+        "collection_audio_selected_download": "Zvok zbirke dodan v cakalno vrsto: {title}",
+        "collection_video_selected_download": "Video zbirke dodan v cakalno vrsto: {title}",
         "download_deselected": "Removed from download queue: {title}",
         "download_queue_empty": "Download queue is empty.",
         "audio_queued_marker": "audio queued",
         "video_queued_marker": "video queued",
+        "collection_audio_queued_marker": "zbirka kot zvok v cakalni vrsti",
+        "collection_video_queued_marker": "zbirka kot video v cakalni vrsti",
+        "download_state_queued": "V cakalni vrsti",
+        "download_state_downloading": "Prenasam",
+        "download_state_processing": "Obdelujem",
+        "download_state_done": "Koncano",
+        "download_state_cancelled": "Preklicano",
+        "download_state_failed": "Neuspesno",
+        "downloads_remaining": "preostalo {remaining} od {total}",
+        "download_percent_value": "{percent} odstotkov",
+        "download_cancel_requested": "Zahtevan preklic: {title}",
+        "all_downloads_cancel_requested": "Zahtevan preklic vseh prenosov.",
         "details_unavailable": "Video details are not available yet.",
         "version": "Verzija",
         "description": "Description",
         "url": "URL",
         "uploaded": "uploaded",
-        "dynamic_results": "0 (dinamično, po 20)",
+        "dynamic_results": "Dinamicno (nalaga po 20 rezultatov)",
         "url_copied": "Povezava je kopirana.",
         "download_audio_done": "Audio downloaded: {title}",
         "download_video_done": "Video downloaded: {title}",
@@ -349,6 +381,9 @@ TEXT = {
         "favorite_exists": "Ta element je že med priljubljenimi.",
         "favorite_removed": "Odstranjeno iz priljubljenih.",
         "settings_saved": "Nastavitve shranjene.",
+        "components_updating": "Posodabljam komponente.",
+        "components_done": "Komponente so posodobljene.",
+        "components_updated": "Komponente posodobljene.",
         "checking_updates": "Preverjam posodobitve za YouTube podporo.",
         "updates_ok": "YouTube podpora je posodobljena.",
         "updates_failed": "Posodobitve YouTube podpore ni bilo mogoče preveriti: {error}",
@@ -358,12 +393,17 @@ TEXT = {
         "ready": "Ready.",
         "main_menu": "Main menu",
         "download_all": "Download all",
+        "download_all_selected": "Download all selected items",
         "queued_videos_for_download": "Queued videos for download",
         "queued_downloads": "Queued videos for download",
+        "current_downloads": "Current downloads",
         "no_queued_downloads": "No queued downloads.",
         "queued_download_instructions": "Use Enter to download with the queued format, Ctrl+Shift+A for audio, Ctrl+Shift+D for video, or the context menu.",
         "download_selected_queued": "Download selected queued item",
         "remove_from_queue": "Remove from queue",
+        "cancel_download": "Cancel download",
+        "cancel_all_downloads": "Cancel all downloads",
+        "no_active_download": "No active download.",
         "search_youtube": "Search YouTube",
         "choose_download_folder": "Choose download folder",
         "favorites": "Favorites",
@@ -396,16 +436,30 @@ TEXT = {
         "batch_download_done": "Batch download complete.",
         "audio_selected_download": "Audio download queued: {title}",
         "video_selected_download": "Video download queued: {title}",
+        "collection_audio_selected_download": "Collection audio download queued: {title}",
+        "collection_video_selected_download": "Collection video download queued: {title}",
         "download_deselected": "Removed from download queue: {title}",
         "download_queue_empty": "Download queue is empty.",
         "audio_queued_marker": "audio queued",
         "video_queued_marker": "video queued",
+        "collection_audio_queued_marker": "collection audio queued",
+        "collection_video_queued_marker": "collection video queued",
+        "download_state_queued": "Queued",
+        "download_state_downloading": "Downloading",
+        "download_state_processing": "Processing",
+        "download_state_done": "Done",
+        "download_state_cancelled": "Cancelled",
+        "download_state_failed": "Failed",
+        "downloads_remaining": "{remaining} of {total} remaining",
+        "download_percent_value": "{percent} percent",
+        "download_cancel_requested": "Cancel requested: {title}",
+        "all_downloads_cancel_requested": "Cancel requested for all downloads.",
         "details_unavailable": "Video details are not available yet.",
         "version": "Version",
         "description": "Description",
         "url": "URL",
         "uploaded": "uploaded",
-        "dynamic_results": "0 (dynamic, by 20)",
+        "dynamic_results": "Dynamic (loads 20 at a time)",
         "url_copied": "Link copied.",
         "download_audio_done": "Audio downloaded: {title}",
         "download_video_done": "Video downloaded: {title}",
@@ -556,6 +610,9 @@ TEXT = {
         "favorite_exists": "This item is already in favorites.",
         "favorite_removed": "Removed from favorites.",
         "settings_saved": "Settings saved.",
+        "components_updating": "Updating components.",
+        "components_done": "Components are up to date.",
+        "components_updated": "Components updated.",
         "checking_updates": "Checking updates for YouTube support.",
         "updates_ok": "YouTube support is up to date.",
         "updates_failed": "Could not check YouTube support updates: {error}",
@@ -565,6 +622,260 @@ TEXT = {
 
 TEXT["sl"].update(SL_TRANSLATION_FIXES)
 TEXT.update(EXTRA_TEXT)
+SUPPLEMENTAL_TRANSLATIONS = {
+    "de": {
+        "download_all_selected": "Alle ausgewaehlten Elemente herunterladen",
+        "current_downloads": "Aktuelle Downloads",
+        "cancel_download": "Download abbrechen",
+        "cancel_all_downloads": "Alle Downloads abbrechen",
+        "no_active_download": "Kein aktiver Download.",
+        "collection_audio_selected_download": "Sammlung als Audio in Warteschlange: {title}",
+        "collection_video_selected_download": "Sammlung als Video in Warteschlange: {title}",
+        "collection_audio_queued_marker": "Sammlung Audio in Warteschlange",
+        "collection_video_queued_marker": "Sammlung Video in Warteschlange",
+        "download_state_queued": "In Warteschlange",
+        "download_state_downloading": "Wird heruntergeladen",
+        "download_state_processing": "Wird verarbeitet",
+        "download_state_done": "Fertig",
+        "download_state_cancelled": "Abgebrochen",
+        "download_state_failed": "Fehlgeschlagen",
+        "downloads_remaining": "{remaining} von {total} verbleibend",
+        "download_percent_value": "{percent} Prozent",
+        "download_cancel_requested": "Abbruch angefordert: {title}",
+        "all_downloads_cancel_requested": "Abbruch fuer alle Downloads angefordert.",
+        "components_updating": "Komponenten werden aktualisiert.",
+        "components_done": "Komponenten sind aktuell.",
+        "components_updated": "Komponenten aktualisiert.",
+        "dynamic_results": "Dynamisch (laedt jeweils 20 Ergebnisse)",
+    },
+    "fr": {
+        "download_all_selected": "Telecharger tous les elements selectionnes",
+        "current_downloads": "Telechargements en cours",
+        "cancel_download": "Annuler le telechargement",
+        "cancel_all_downloads": "Annuler tous les telechargements",
+        "no_active_download": "Aucun telechargement actif.",
+        "collection_audio_selected_download": "Collection audio ajoutee a la file: {title}",
+        "collection_video_selected_download": "Collection video ajoutee a la file: {title}",
+        "collection_audio_queued_marker": "collection audio en file",
+        "collection_video_queued_marker": "collection video en file",
+        "download_state_queued": "En file",
+        "download_state_downloading": "Telechargement",
+        "download_state_processing": "Traitement",
+        "download_state_done": "Termine",
+        "download_state_cancelled": "Annule",
+        "download_state_failed": "Echec",
+        "downloads_remaining": "{remaining} sur {total} restants",
+        "download_percent_value": "{percent} pour cent",
+        "download_cancel_requested": "Annulation demandee: {title}",
+        "all_downloads_cancel_requested": "Annulation demandee pour tous les telechargements.",
+        "components_updating": "Mise a jour des composants.",
+        "components_done": "Les composants sont a jour.",
+        "components_updated": "Composants mis a jour.",
+        "dynamic_results": "Dynamique (charge 20 resultats a la fois)",
+    },
+    "es": {
+        "download_all_selected": "Descargar todos los elementos seleccionados",
+        "current_downloads": "Descargas actuales",
+        "cancel_download": "Cancelar descarga",
+        "cancel_all_downloads": "Cancelar todas las descargas",
+        "no_active_download": "No hay descarga activa.",
+        "collection_audio_selected_download": "Coleccion de audio en cola: {title}",
+        "collection_video_selected_download": "Coleccion de video en cola: {title}",
+        "collection_audio_queued_marker": "coleccion de audio en cola",
+        "collection_video_queued_marker": "coleccion de video en cola",
+        "download_state_queued": "En cola",
+        "download_state_downloading": "Descargando",
+        "download_state_processing": "Procesando",
+        "download_state_done": "Listo",
+        "download_state_cancelled": "Cancelado",
+        "download_state_failed": "Fallido",
+        "downloads_remaining": "quedan {remaining} de {total}",
+        "download_percent_value": "{percent} por ciento",
+        "download_cancel_requested": "Cancelacion solicitada: {title}",
+        "all_downloads_cancel_requested": "Cancelacion solicitada para todas las descargas.",
+        "components_updating": "Actualizando componentes.",
+        "components_done": "Los componentes estan actualizados.",
+        "components_updated": "Componentes actualizados.",
+        "dynamic_results": "Dinamico (carga 20 resultados cada vez)",
+    },
+    "pt": {
+        "download_all_selected": "Baixar todos os itens selecionados",
+        "current_downloads": "Downloads atuais",
+        "cancel_download": "Cancelar download",
+        "cancel_all_downloads": "Cancelar todos os downloads",
+        "no_active_download": "Nenhum download ativo.",
+        "collection_audio_selected_download": "Colecao em audio na fila: {title}",
+        "collection_video_selected_download": "Colecao em video na fila: {title}",
+        "collection_audio_queued_marker": "colecao em audio na fila",
+        "collection_video_queued_marker": "colecao em video na fila",
+        "download_state_queued": "Na fila",
+        "download_state_downloading": "Baixando",
+        "download_state_processing": "Processando",
+        "download_state_done": "Concluido",
+        "download_state_cancelled": "Cancelado",
+        "download_state_failed": "Falhou",
+        "downloads_remaining": "{remaining} de {total} restantes",
+        "download_percent_value": "{percent} por cento",
+        "download_cancel_requested": "Cancelamento solicitado: {title}",
+        "all_downloads_cancel_requested": "Cancelamento solicitado para todos os downloads.",
+        "components_updating": "Atualizando componentes.",
+        "components_done": "Componentes atualizados.",
+        "components_updated": "Componentes atualizados.",
+        "dynamic_results": "Dinamico (carrega 20 resultados por vez)",
+    },
+    "it": {
+        "download_all_selected": "Scarica tutti gli elementi selezionati",
+        "current_downloads": "Download correnti",
+        "cancel_download": "Annulla download",
+        "cancel_all_downloads": "Annulla tutti i download",
+        "no_active_download": "Nessun download attivo.",
+        "collection_audio_selected_download": "Raccolta audio in coda: {title}",
+        "collection_video_selected_download": "Raccolta video in coda: {title}",
+        "collection_audio_queued_marker": "raccolta audio in coda",
+        "collection_video_queued_marker": "raccolta video in coda",
+        "download_state_queued": "In coda",
+        "download_state_downloading": "Download in corso",
+        "download_state_processing": "Elaborazione",
+        "download_state_done": "Completato",
+        "download_state_cancelled": "Annullato",
+        "download_state_failed": "Non riuscito",
+        "downloads_remaining": "{remaining} di {total} rimanenti",
+        "download_percent_value": "{percent} percento",
+        "download_cancel_requested": "Annullamento richiesto: {title}",
+        "all_downloads_cancel_requested": "Annullamento richiesto per tutti i download.",
+        "components_updating": "Aggiornamento componenti.",
+        "components_done": "Componenti aggiornati.",
+        "components_updated": "Componenti aggiornati.",
+        "dynamic_results": "Dinamico (carica 20 risultati alla volta)",
+    },
+    "pl": {
+        "download_all_selected": "Pobierz wszystkie wybrane elementy",
+        "current_downloads": "Biezace pobierania",
+        "cancel_download": "Anuluj pobieranie",
+        "cancel_all_downloads": "Anuluj wszystkie pobierania",
+        "no_active_download": "Brak aktywnego pobierania.",
+        "collection_audio_selected_download": "Kolekcja audio dodana do kolejki: {title}",
+        "collection_video_selected_download": "Kolekcja wideo dodana do kolejki: {title}",
+        "collection_audio_queued_marker": "kolekcja audio w kolejce",
+        "collection_video_queued_marker": "kolekcja wideo w kolejce",
+        "download_state_queued": "W kolejce",
+        "download_state_downloading": "Pobieranie",
+        "download_state_processing": "Przetwarzanie",
+        "download_state_done": "Gotowe",
+        "download_state_cancelled": "Anulowane",
+        "download_state_failed": "Niepowodzenie",
+        "downloads_remaining": "pozostalo {remaining} z {total}",
+        "download_percent_value": "{percent} procent",
+        "download_cancel_requested": "Zadano anulowanie: {title}",
+        "all_downloads_cancel_requested": "Zadano anulowanie wszystkich pobieran.",
+        "components_updating": "Aktualizowanie komponentow.",
+        "components_done": "Komponenty sa aktualne.",
+        "components_updated": "Komponenty zaktualizowane.",
+        "dynamic_results": "Dynamicznie (laduje po 20 wynikow)",
+    },
+    "nl": {
+        "download_all_selected": "Alle geselecteerde items downloaden",
+        "current_downloads": "Huidige downloads",
+        "cancel_download": "Download annuleren",
+        "cancel_all_downloads": "Alle downloads annuleren",
+        "no_active_download": "Geen actieve download.",
+        "collection_audio_selected_download": "Collectie als audio in wachtrij: {title}",
+        "collection_video_selected_download": "Collectie als video in wachtrij: {title}",
+        "collection_audio_queued_marker": "collectie audio in wachtrij",
+        "collection_video_queued_marker": "collectie video in wachtrij",
+        "download_state_queued": "In wachtrij",
+        "download_state_downloading": "Downloaden",
+        "download_state_processing": "Verwerken",
+        "download_state_done": "Klaar",
+        "download_state_cancelled": "Geannuleerd",
+        "download_state_failed": "Mislukt",
+        "downloads_remaining": "{remaining} van {total} resterend",
+        "download_percent_value": "{percent} procent",
+        "download_cancel_requested": "Annuleren aangevraagd: {title}",
+        "all_downloads_cancel_requested": "Annuleren aangevraagd voor alle downloads.",
+        "components_updating": "Componenten bijwerken.",
+        "components_done": "Componenten zijn bijgewerkt.",
+        "components_updated": "Componenten bijgewerkt.",
+        "dynamic_results": "Dynamisch (laadt 20 resultaten per keer)",
+    },
+    "sv": {
+        "download_all_selected": "Ladda ner alla valda objekt",
+        "current_downloads": "Aktuella nedladdningar",
+        "cancel_download": "Avbryt nedladdning",
+        "cancel_all_downloads": "Avbryt alla nedladdningar",
+        "no_active_download": "Ingen aktiv nedladdning.",
+        "collection_audio_selected_download": "Samling som ljud i ko: {title}",
+        "collection_video_selected_download": "Samling som video i ko: {title}",
+        "collection_audio_queued_marker": "samling ljud i ko",
+        "collection_video_queued_marker": "samling video i ko",
+        "download_state_queued": "I ko",
+        "download_state_downloading": "Laddar ner",
+        "download_state_processing": "Bearbetar",
+        "download_state_done": "Klar",
+        "download_state_cancelled": "Avbruten",
+        "download_state_failed": "Misslyckades",
+        "downloads_remaining": "{remaining} av {total} kvar",
+        "download_percent_value": "{percent} procent",
+        "download_cancel_requested": "Avbrott begart: {title}",
+        "all_downloads_cancel_requested": "Avbrott begart for alla nedladdningar.",
+        "components_updating": "Uppdaterar komponenter.",
+        "components_done": "Komponenterna ar uppdaterade.",
+        "components_updated": "Komponenter uppdaterade.",
+        "dynamic_results": "Dynamiskt (laddar 20 resultat i taget)",
+    },
+    "hr": {
+        "download_all_selected": "Preuzmi sve odabrane stavke",
+        "current_downloads": "Trenutna preuzimanja",
+        "cancel_download": "Otkazi preuzimanje",
+        "cancel_all_downloads": "Otkazi sva preuzimanja",
+        "no_active_download": "Nema aktivnog preuzimanja.",
+        "collection_audio_selected_download": "Zbirka kao audio u redu: {title}",
+        "collection_video_selected_download": "Zbirka kao video u redu: {title}",
+        "collection_audio_queued_marker": "zbirka audio u redu",
+        "collection_video_queued_marker": "zbirka video u redu",
+        "download_state_queued": "U redu",
+        "download_state_downloading": "Preuzimanje",
+        "download_state_processing": "Obrada",
+        "download_state_done": "Gotovo",
+        "download_state_cancelled": "Otkazano",
+        "download_state_failed": "Neuspjelo",
+        "downloads_remaining": "preostalo {remaining} od {total}",
+        "download_percent_value": "{percent} posto",
+        "download_cancel_requested": "Zatrazeno otkazivanje: {title}",
+        "all_downloads_cancel_requested": "Zatrazeno otkazivanje svih preuzimanja.",
+        "components_updating": "Azuriranje komponenti.",
+        "components_done": "Komponente su azurne.",
+        "components_updated": "Komponente azurirane.",
+        "dynamic_results": "Dinamicki (ucitava po 20 rezultata)",
+    },
+    "sr": {
+        "download_all_selected": "Preuzmi sve izabrane stavke",
+        "current_downloads": "Trenutna preuzimanja",
+        "cancel_download": "Otkazi preuzimanje",
+        "cancel_all_downloads": "Otkazi sva preuzimanja",
+        "no_active_download": "Nema aktivnog preuzimanja.",
+        "collection_audio_selected_download": "Zbirka kao audio u redu: {title}",
+        "collection_video_selected_download": "Zbirka kao video u redu: {title}",
+        "collection_audio_queued_marker": "zbirka audio u redu",
+        "collection_video_queued_marker": "zbirka video u redu",
+        "download_state_queued": "U redu",
+        "download_state_downloading": "Preuzimanje",
+        "download_state_processing": "Obrada",
+        "download_state_done": "Gotovo",
+        "download_state_cancelled": "Otkazano",
+        "download_state_failed": "Neuspelo",
+        "downloads_remaining": "preostalo {remaining} od {total}",
+        "download_percent_value": "{percent} posto",
+        "download_cancel_requested": "Zatrazeno otkazivanje: {title}",
+        "all_downloads_cancel_requested": "Zatrazeno otkazivanje svih preuzimanja.",
+        "components_updating": "Azuriranje komponenti.",
+        "components_done": "Komponente su azurne.",
+        "components_updated": "Komponente azurirane.",
+        "dynamic_results": "Dinamicki (ucitava po 20 rezultata)",
+    },
+}
+for language_code, translations in SUPPLEMENTAL_TRANSLATIONS.items():
+    TEXT.setdefault(language_code, {}).update(translations)
 for language_code in LANGUAGE_CODES:
     TEXT[language_code] = {**TEXT["en"], **TEXT.get(language_code, {})}
 
@@ -573,7 +884,7 @@ for language_code in LANGUAGE_CODES:
 class Settings:
     language: str = "en"
     download_folder: str = str(Path.home() / "Downloads")
-    results_limit: int = 20
+    results_limit: int = 0
     audio_format: str = "mp3"
     video_format: str = VIDEO_FORMAT_MP4
     max_video_height: int = 1080
@@ -637,6 +948,9 @@ class MainFrame(wx.Frame):
         self.last_search_query = ""
         self.last_search_type_index = 0
         self.last_visible_count = 0
+        self.search_screen_active = False
+        self.in_main_menu = False
+        self.search_results_stack: list[dict] = []
         self.settings_section_index = 0
         self.current_index = -1
         self.player_process: subprocess.Popen | None = None
@@ -652,13 +966,16 @@ class MainFrame(wx.Frame):
         self.details_label: wx.StaticText | None = None
         self.video_details: wx.TextCtrl | None = None
         self.download_queue: dict[str, dict] = {}
+        self.active_downloads: dict[str, dict] = {}
+        self.download_cancel_events: dict[str, threading.Event] = {}
+        self.download_task_counter = 0
         self.queue_items: list[dict] = []
         self.last_download_shortcut: tuple[str, str, float] = ("", "", 0.0)
         self.ipc_path: str | None = None
         self.mpv_ipc_lock = threading.Lock()
         self.ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.loading_more_results = False
-        self.current_search_type_code = "Video"
+        self.current_search_type_code = "All"
         self.collection_url = ""
         self.collection_result_type = ""
         self.nvda_client = self.load_nvda_client()
@@ -800,13 +1117,16 @@ class MainFrame(wx.Frame):
         self.root_sizer.Add(row, 0, wx.ALL, 4)
 
     def show_main_menu(self) -> None:
+        self.in_main_menu = True
         self.in_queue_screen = False
+        self.search_screen_active = False
         self.clear()
         title = wx.StaticText(self.panel, label=self.t("main_menu"))
         self.root_sizer.Add(title, 0, wx.ALL, 4)
         self.menu_actions = []
-        if self.download_queue:
-            self.menu_actions.append((f"{self.t('queued_videos_for_download')} ({len(self.download_queue)})", self.show_download_queue))
+        download_count = len(self.download_queue) + len(self.active_downloads)
+        if download_count:
+            self.menu_actions.append((f"{self.t('current_downloads')} ({download_count})", self.show_download_queue))
         self.menu_actions.extend([
             (self.t("search_youtube"), self.show_search),
             (self.t("choose_download_folder"), self.choose_download_folder),
@@ -836,19 +1156,24 @@ class MainFrame(wx.Frame):
             self.menu_actions[index][1]()
 
     def show_download_queue(self) -> None:
+        self.in_main_menu = False
         self.in_queue_screen = True
+        self.search_screen_active = False
         self.clear()
         buttons = [(self.t("back"), self.show_main_menu)]
         if self.download_queue:
             buttons.append((self.t("download_all"), self.download_all_queued))
+        if self.active_downloads:
+            buttons.append((self.t("cancel_download"), self.cancel_selected_download))
+            buttons.append((self.t("cancel_all_downloads"), self.cancel_all_downloads))
         self.add_button_row(buttons)
-        title = wx.StaticText(self.panel, label=self.t("queued_downloads"))
+        title = wx.StaticText(self.panel, label=self.t("current_downloads"))
         self.root_sizer.Add(title, 0, wx.ALL, 4)
         instructions = wx.StaticText(self.panel, label=self.t("queued_download_instructions"))
         self.root_sizer.Add(instructions, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
-        self.queue_items = list(self.download_queue.values())
+        self.queue_items = self.download_items_snapshot()
         self.queue_list = wx.ListBox(self.panel, choices=[self.queue_line(item) for item in self.queue_items])
-        self.queue_list.SetName(self.t("queued_downloads"))
+        self.queue_list.SetName(self.t("current_downloads"))
         self.queue_list.Bind(wx.EVT_CONTEXT_MENU, self.open_queue_context_menu)
         self.queue_list.Bind(wx.EVT_KEY_DOWN, self.on_queue_key)
         self.root_sizer.Add(self.queue_list, 1, wx.EXPAND | wx.ALL, 4)
@@ -860,14 +1185,46 @@ class MainFrame(wx.Frame):
         self.panel.Layout()
         self.focus_later(self.queue_list)
 
+    def download_items_snapshot(self) -> list[dict]:
+        active = sorted(self.active_downloads.values(), key=lambda item: item.get("created_at", 0))
+        queued = list(self.download_queue.values())
+        return [dict(item, queue_state="active") for item in active] + [dict(item, queue_state="queued") for item in queued]
+
     def queue_line(self, item: dict) -> str:
-        mode = self.t("audio_queued_marker" if item.get("audio_only") else "video_queued_marker")
+        if item.get("queue_state") == "active":
+            state = self.t(str(item.get("status_key") or "download_state_downloading"))
+            kind = str(item.get("task_kind") or "")
+            if kind == "batch":
+                completed = int(item.get("completed") or 0)
+                total = int(item.get("total") or 0)
+                remaining = max(0, total - completed)
+                summary = self.t("downloads_remaining", remaining=remaining, total=total) if total else ""
+            else:
+                total = int(item.get("playlist_count") or 0)
+                index = int(item.get("playlist_index") or 0)
+                remaining = max(0, total - index) if total and index else 0
+                summary = self.t("downloads_remaining", remaining=remaining, total=total) if total and index else ""
+            current = item.get("current_title") or item.get("title", "")
+            percent = item.get("percent")
+            percent_text = self.t("download_percent_value", percent=percent) if percent else ""
+            parts = [item.get("title", ""), state, summary, current, percent_text]
+            return " | ".join(part for part in parts if part)
+        mode = self.queue_mode_label(item)
         parts = [
             item.get("title", ""),
-            f"{self.t('channel')}: {item.get('channel', '')}",
+            item.get("type", ""),
+            f"{self.t('channel')}: {item.get('channel', '')}" if item.get("channel") and item.get("kind") == "video" else "",
             mode,
+            self.t("download_state_queued"),
         ]
         return " | ".join(part for part in parts if part)
+
+    def queue_mode_label(self, item: dict) -> str:
+        if item.get("kind") in {"playlist", "channel"}:
+            if item.get("audio_only"):
+                return self.t("collection_audio_queued_marker")
+            return self.t("collection_video_queued_marker")
+        return self.t("audio_queued_marker" if item.get("audio_only") else "video_queued_marker")
 
     def selected_queue_item(self) -> dict | None:
         if not hasattr(self, "queue_list"):
@@ -895,13 +1252,20 @@ class MainFrame(wx.Frame):
 
     def open_queue_context_menu(self, _event=None) -> None:
         menu = wx.Menu()
-        actions = [
-            (self.t("download_selected_queued"), lambda: self.download_selected_queue_item()),
-            (f"{self.t('download_audio')}\tCtrl+Shift+A", lambda: self.download_selected_queue_item(True)),
-            (f"{self.t('download_video')}\tCtrl+Shift+D", lambda: self.download_selected_queue_item(False)),
-            (self.t("download_all"), self.download_all_queued),
-            (self.t("remove_from_queue"), self.remove_selected_queue_item),
-        ]
+        item = self.selected_queue_item()
+        if item and item.get("queue_state") == "active":
+            actions = [
+                (self.t("cancel_download"), self.cancel_selected_download),
+                (self.t("cancel_all_downloads"), self.cancel_all_downloads),
+            ]
+        else:
+            actions = [
+                (self.t("download_selected_queued"), lambda: self.download_selected_queue_item()),
+                (f"{self.t('download_audio')}\tCtrl+Shift+A", lambda: self.download_selected_queue_item(True)),
+                (f"{self.t('download_video')}\tCtrl+Shift+D", lambda: self.download_selected_queue_item(False)),
+                (self.t("download_all"), self.download_all_queued),
+                (self.t("remove_from_queue"), self.remove_selected_queue_item),
+            ]
         for label, handler in actions:
             item = menu.Append(wx.ID_ANY, label)
             self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
@@ -909,9 +1273,11 @@ class MainFrame(wx.Frame):
         menu.Destroy()
 
     def show_search(self, restore_search: bool = False) -> None:
+        self.in_main_menu = False
         self.in_queue_screen = False
+        self.search_screen_active = True
         self.clear()
-        self.add_button_row([(self.t("back"), self.show_main_menu)])
+        self.add_button_row([(self.t("back"), self.back_from_search)])
         grid = wx.FlexGridSizer(2, 2, 6, 6)
         grid.AddGrowableCol(1, 1)
         grid.Add(wx.StaticText(self.panel, label=self.t("search_query")), 0, wx.ALIGN_CENTER_VERTICAL)
@@ -924,7 +1290,7 @@ class MainFrame(wx.Frame):
         grid.Add(wx.StaticText(self.panel, label=self.t("type")), 0, wx.ALIGN_CENTER_VERTICAL)
         self.search_type = wx.Choice(
             self.panel,
-            choices=[self.t("video"), self.t("playlist"), self.t("channel"), self.t("all")],
+            choices=[self.t("all"), self.t("video"), self.t("playlist"), self.t("channel")],
         )
         self.search_type.SetName(self.t("type"))
         self.search_type.SetSelection(self.last_search_type_index if restore_search else 0)
@@ -950,6 +1316,12 @@ class MainFrame(wx.Frame):
         if not restore_search:
             self.focus_later(self.query)
 
+    def back_from_search(self) -> None:
+        if self.search_results_stack:
+            self.restore_previous_search_results()
+        else:
+            self.show_main_menu()
+
     def on_results_key(self, event: wx.KeyEvent) -> None:
         key = event.GetKeyCode()
         if self.is_shift_letter(event, "A") and not event.ControlDown():
@@ -973,6 +1345,8 @@ class MainFrame(wx.Frame):
         self.maybe_extend_results()
 
     def show_favorites(self) -> None:
+        self.in_main_menu = False
+        self.search_screen_active = False
         self.clear()
         self.add_button_row(
             [
@@ -998,6 +1372,8 @@ class MainFrame(wx.Frame):
             event.Skip()
 
     def show_settings(self) -> None:
+        self.in_main_menu = False
+        self.search_screen_active = False
         self.clear()
         self.add_button_row([(self.t("back"), self.show_main_menu), (self.t("save"), self.save_settings_from_ui), (self.t("restore_defaults"), self.restore_default_settings)])
         self.controls = {}
@@ -1109,7 +1485,8 @@ class MainFrame(wx.Frame):
             text("download_folder", self.settings.download_folder)
             button("browse", self.choose_download_folder)
             results_limit_value = "0" if self.settings.results_limit == 0 else str(min(250, self.settings.results_limit))
-            choice("results_limit", results_limit_value, ["0", "10", "20", "50", "100", "150", "200", "250"])
+            result_limit_options = ["0", "10", "20", "50", "100", "150", "200", "250"]
+            choice("results_limit", results_limit_value, result_limit_options, self.result_limit_labels(result_limit_options))
             check("auto_update", self.settings.auto_update_ytdlp)
             check("auto_update_app", self.settings.auto_update_app)
             button("check_app_updates_now", self.manual_app_update_check)
@@ -1168,7 +1545,7 @@ class MainFrame(wx.Frame):
 
     def search_type_code(self) -> str:
         index = self.search_type.GetSelection()
-        return ("Video", "Playlist", "Kanal", "All")[index if index != wx.NOT_FOUND else 0]
+        return ("All", "Video", "Playlist", "Kanal")[index if index != wx.NOT_FOUND else 0]
 
     def search(self) -> None:
         if get_yt_dlp() is None:
@@ -1183,6 +1560,7 @@ class MainFrame(wx.Frame):
         self.current_search_type_code = self.search_type_code()
         self.collection_url = ""
         self.collection_result_type = ""
+        self.search_results_stack = []
         self.loading_more_results = False
         self.set_status(self.t("searching", query=query))
         threading.Thread(target=self.search_worker, args=(query, self.current_search_type_code, self.initial_results_limit()), daemon=True).start()
@@ -1340,17 +1718,20 @@ class MainFrame(wx.Frame):
         self.message(error, wx.ICON_ERROR)
 
     def result_line(self, index: int, item: dict) -> str:
-        parts = [
-            item["title"],
-            f"{self.t('channel')}: {item['channel']}",
-            f"{self.t('views')}: {item['views']}",
-            item.get("age", ""),
-            item.get("duration", ""),
-            item["type"],
-        ]
+        if item.get("kind") in {"playlist", "channel"}:
+            parts = [item["title"], item["type"]]
+        else:
+            parts = [
+                item["title"],
+                f"{self.t('channel')}: {item['channel']}",
+                f"{self.t('views')}: {item['views']}",
+                item.get("age", ""),
+                item.get("duration", ""),
+                item["type"],
+            ]
         queued = self.download_queue.get(item.get("url", ""))
         if queued:
-            parts.append(self.t("audio_queued_marker" if queued.get("audio_only") else "video_queued_marker"))
+            parts.append(self.queue_mode_label(queued))
         return " | ".join(part for part in parts if part)
 
     def selected_result(self) -> dict | None:
@@ -1384,7 +1765,43 @@ class MainFrame(wx.Frame):
         self.current_video_info = dict(item)
         self.play_url(item["url"], item["title"])
 
+    def push_search_state(self) -> None:
+        if not self.results:
+            return
+        self.search_results_stack.append(
+            {
+                "results": list(self.results),
+                "all_results": list(self.all_results or self.results),
+                "index": max(0, self.current_index),
+                "visible_count": self.last_visible_count or len(self.results),
+                "query": self.last_search_query,
+                "type_index": self.last_search_type_index,
+                "search_type": self.current_search_type_code,
+                "collection_url": self.collection_url,
+                "collection_result_type": self.collection_result_type,
+            }
+        )
+
+    def restore_previous_search_results(self) -> None:
+        if not self.search_results_stack:
+            self.show_main_menu()
+            return
+        state = self.search_results_stack.pop()
+        self.last_search_query = str(state.get("query") or self.last_search_query)
+        self.last_search_type_index = int(state.get("type_index") or 0)
+        self.current_search_type_code = str(state.get("search_type") or "All")
+        self.collection_url = str(state.get("collection_url") or "")
+        self.collection_result_type = str(state.get("collection_result_type") or "")
+        self.loading_more_results = False
+        results = list(state.get("all_results") or state.get("results") or [])
+        selection = int(state.get("index") or 0)
+        visible_count = int(state.get("visible_count") or len(results))
+        self.show_search(restore_search=True)
+        self.show_results(results, selection=selection, visible_count=visible_count)
+        wx.CallAfter(self.focus_results_list, selection)
+
     def open_channel_videos(self, item: dict) -> None:
+        self.push_search_state()
         self.set_status(self.t("loading_channel", title=item["title"]))
         url = item["url"].rstrip("/")
         if not url.endswith("/videos"):
@@ -1395,6 +1812,7 @@ class MainFrame(wx.Frame):
         threading.Thread(target=self.load_collection_worker, args=(url, "Video", self.initial_results_limit(), 0), daemon=True).start()
 
     def open_playlist_videos(self, item: dict) -> None:
+        self.push_search_state()
         self.set_status(self.t("loading_playlist", title=item["title"]))
         self.collection_url = item["url"]
         self.collection_result_type = "Video"
@@ -1545,7 +1963,9 @@ class MainFrame(wx.Frame):
             self.message(self.t("player_failed", error=exc), wx.ICON_ERROR)
 
     def show_player_page(self, title: str) -> None:
+        self.in_main_menu = False
         self.in_queue_screen = False
+        self.search_screen_active = False
         self.clear()
         self.add_button_row(
             [
@@ -1691,6 +2111,64 @@ class MainFrame(wx.Frame):
         item = self.active_item()
         if item:
             self.copy_url_to_clipboard(item.get("url", ""))
+
+    def next_download_task_id(self, prefix: str = "download") -> str:
+        self.download_task_counter += 1
+        return f"{prefix}-{self.download_task_counter}-{int(time.time() * 1000)}"
+
+    def register_download_task(self, item: dict, audio_only: bool, task_kind: str = "single", total: int = 0) -> tuple[str, threading.Event]:
+        task_id = self.next_download_task_id(task_kind)
+        cancel_event = threading.Event()
+        title = item.get("title") or self.t("download_video_mode")
+        self.download_cancel_events[task_id] = cancel_event
+        self.active_downloads[task_id] = {
+            "task_id": task_id,
+            "task_kind": task_kind,
+            "title": title,
+            "current_title": title,
+            "url": item.get("url", ""),
+            "kind": item.get("kind", "video"),
+            "type": item.get("type", ""),
+            "channel": item.get("channel", ""),
+            "audio_only": audio_only,
+            "status_key": "download_state_downloading",
+            "total": total,
+            "completed": 0,
+            "remaining": total,
+            "percent": "",
+            "created_at": time.monotonic(),
+        }
+        self.refresh_download_views()
+        return task_id, cancel_event
+
+    def update_download_task(self, task_id: str, **fields) -> None:
+        task = self.active_downloads.get(task_id)
+        if not task:
+            return
+        task.update(fields)
+        self.refresh_download_views(update_menu=False)
+
+    def finish_download_task(self, task_id: str, status_key: str = "download_state_done") -> None:
+        task = self.active_downloads.get(task_id)
+        if task:
+            task["status_key"] = status_key
+        self.download_cancel_events.pop(task_id, None)
+        self.active_downloads.pop(task_id, None)
+        self.refresh_download_views()
+
+    def refresh_download_views(self, update_menu: bool = True) -> None:
+        if self.in_queue_screen:
+            wx.CallAfter(self.refresh_queue_view)
+        if update_menu and hasattr(self, "menu_list"):
+            wx.CallAfter(self.refresh_main_menu_download_label)
+
+    def refresh_main_menu_download_label(self) -> None:
+        if not getattr(self, "in_main_menu", False) or not hasattr(self, "menu_list"):
+            return
+        try:
+            self.show_main_menu()
+        except RuntimeError:
+            pass
 
     def player_command(self, command: str) -> None:
         if self.player_kind != "mpv" or not self.ipc_path:
@@ -1966,6 +2444,9 @@ class MainFrame(wx.Frame):
             self.t("video_format_smallest"),
         ]
 
+    def result_limit_labels(self, options: list[str]) -> list[str]:
+        return [self.t("dynamic_results") if option == "0" else option for option in options]
+
     @staticmethod
     def normalize_pitch_mode_value(mode: str) -> str:
         normalized = str(mode or "").strip()
@@ -2102,6 +2583,9 @@ class MainFrame(wx.Frame):
             if self.in_player_screen:
                 self.back_to_results()
                 return
+            if self.search_screen_active and self.search_results_stack:
+                self.restore_previous_search_results()
+                return
             self.show_main_menu()
             return
         if self.in_player_screen and key in (ord("L"), ord("l")):
@@ -2172,6 +2656,8 @@ class MainFrame(wx.Frame):
         if item and item.get("kind") in {"playlist", "channel"}:
             label = self.t("download_channel" if item.get("kind") == "channel" else "download_playlist")
             actions.insert(1, (label, lambda selected=dict(item): self.download_collection(selected)))
+        if len(self.download_queue) > 1:
+            actions.insert(1, (self.t("download_all_selected"), self.download_all_queued))
         for label, handler in actions:
             item = menu.Append(wx.ID_ANY, label)
             self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
@@ -2192,10 +2678,11 @@ class MainFrame(wx.Frame):
             self.remove_queued_url(item.get("url", ""), announce=False)
         self.announce_player(self.t("download_started"))
         self.set_status(self.t("download_audio_start" if audio_only else "download_video_start"))
-        wx.CallLater(900, self.start_download_worker_thread, item, audio_only)
+        task_id, cancel_event = self.register_download_task(item, audio_only, "single", total=1)
+        wx.CallLater(900, self.start_download_worker_thread, item, audio_only, task_id, cancel_event)
 
-    def start_download_worker_thread(self, item: dict, audio_only: bool) -> None:
-        threading.Thread(target=self.download_worker, args=(item, audio_only), daemon=True).start()
+    def start_download_worker_thread(self, item: dict, audio_only: bool, task_id: str, cancel_event: threading.Event) -> None:
+        threading.Thread(target=self.download_worker, args=(item, audio_only, task_id, cancel_event), daemon=True).start()
 
     def download_audio(self) -> None:
         self.start_download(True)
@@ -2203,7 +2690,7 @@ class MainFrame(wx.Frame):
     def download_video(self) -> None:
         self.start_download(False)
 
-    def download_collection(self, item: dict | None = None) -> None:
+    def download_collection(self, item: dict | None = None, audio_only: bool = False, remove_queued: bool = False) -> None:
         item = item or self.selected_result()
         if not item or item.get("kind") not in {"playlist", "channel"}:
             self.message(self.t("no_selection"))
@@ -2214,10 +2701,13 @@ class MainFrame(wx.Frame):
             if wx.MessageBox(self.t("download_confirm", action=action, title=item["title"]), APP_NAME, wx.YES_NO | wx.ICON_QUESTION) != wx.YES:
                 self.set_status(self.t("download_cancelled"))
                 return
+        if remove_queued:
+            self.remove_queued_url(item.get("url", ""), announce=False)
         start_key = "download_channel_start" if kind == "channel" else "download_playlist_start"
         self.announce_player(self.t("download_started"))
         self.set_status(self.t(start_key))
-        threading.Thread(target=self.download_collection_worker, args=(dict(item),), daemon=True).start()
+        task_id, cancel_event = self.register_download_task(item, audio_only, kind, total=0)
+        threading.Thread(target=self.download_collection_worker, args=(dict(item), audio_only, task_id, cancel_event), daemon=True).start()
 
     def download_audio_shortcut(self) -> None:
         self.start_download_shortcut(True)
@@ -2236,22 +2726,33 @@ class MainFrame(wx.Frame):
         self.last_download_shortcut = (kind, url, now)
         self.start_download(audio_only, item=item)
 
-    def download_worker(self, item: dict, audio_only: bool) -> None:
+    def download_worker(self, item: dict, audio_only: bool, task_id: str, cancel_event: threading.Event) -> None:
         try:
             ytdlp = get_yt_dlp()
             if ytdlp is None:
                 raise RuntimeError(self.t("missing_ytdlp"))
             folder = Path(self.settings.download_folder)
             folder.mkdir(parents=True, exist_ok=True)
-            options = self.download_options(folder, audio_only, item["title"])
+            options = self.download_options(folder, audio_only, item["title"], task_id=task_id, cancel_event=cancel_event)
             with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
                 ydl.download([item["url"]])
+            if cancel_event.is_set():
+                raise DownloadCancelled()
             done_text = self.t("download_audio_done" if audio_only else "download_video_done", title=item["title"])
+            wx.CallAfter(self.finish_download_task, task_id)
             wx.CallAfter(self.finish_download, done_text, str(folder))
+        except DownloadCancelled:
+            wx.CallAfter(self.finish_download_task, task_id, "download_state_cancelled")
+            wx.CallAfter(self.announce_player, self.t("download_cancelled"))
         except Exception as exc:
+            if cancel_event.is_set():
+                wx.CallAfter(self.finish_download_task, task_id, "download_state_cancelled")
+                wx.CallAfter(self.announce_player, self.t("download_cancelled"))
+                return
+            wx.CallAfter(self.finish_download_task, task_id, "download_state_failed")
             wx.CallAfter(self.message, self.t("download_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
-    def download_collection_worker(self, item: dict) -> None:
+    def download_collection_worker(self, item: dict, audio_only: bool, task_id: str, cancel_event: threading.Event) -> None:
         try:
             ytdlp = get_yt_dlp()
             if ytdlp is None:
@@ -2260,12 +2761,23 @@ class MainFrame(wx.Frame):
             title = item.get("title") or self.t("channel" if kind == "channel" else "playlist")
             folder = Path(self.settings.download_folder) / self.safe_folder_name(title)
             folder.mkdir(parents=True, exist_ok=True)
-            options = self.download_options(folder, False, title, allow_playlist=True)
+            options = self.download_options(folder, audio_only, title, allow_playlist=True, task_id=task_id, cancel_event=cancel_event)
             with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
                 ydl.download([self.collection_download_url(item)])
+            if cancel_event.is_set():
+                raise DownloadCancelled()
             done_key = "download_channel_done" if kind == "channel" else "download_playlist_done"
+            wx.CallAfter(self.finish_download_task, task_id)
             wx.CallAfter(self.finish_download, self.t(done_key, title=title), str(folder))
+        except DownloadCancelled:
+            wx.CallAfter(self.finish_download_task, task_id, "download_state_cancelled")
+            wx.CallAfter(self.announce_player, self.t("download_cancelled"))
         except Exception as exc:
+            if cancel_event.is_set():
+                wx.CallAfter(self.finish_download_task, task_id, "download_state_cancelled")
+                wx.CallAfter(self.announce_player, self.t("download_cancelled"))
+                return
+            wx.CallAfter(self.finish_download_task, task_id, "download_state_failed")
             wx.CallAfter(self.message, self.t("download_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
     def finish_download(self, done_text: str, folder: str) -> None:
@@ -2277,8 +2789,16 @@ class MainFrame(wx.Frame):
         if self.settings.open_folder_after_download:
             os.startfile(folder)  # type: ignore[attr-defined]
 
-    def download_options(self, folder: Path, audio_only: bool, title: str, allow_playlist: bool = False) -> dict:
-        progress_hook = self.make_download_progress_hook(title, audio_only)
+    def download_options(
+        self,
+        folder: Path,
+        audio_only: bool,
+        title: str,
+        allow_playlist: bool = False,
+        task_id: str | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> dict:
+        progress_hook = self.make_download_progress_hook(title, audio_only, task_id=task_id, cancel_event=cancel_event)
         template = self.settings.filename_template or DEFAULT_FILENAME_TEMPLATE
         if allow_playlist and "%(playlist_index)" not in template:
             template = "%(playlist_index)s - " + template
@@ -2348,11 +2868,17 @@ class MainFrame(wx.Frame):
                 url = f"{url}/videos"
         return url
 
-    def make_download_progress_hook(self, title: str, audio_only: bool):
+    def make_download_progress_hook(self, title: str, audio_only: bool, task_id: str | None = None, cancel_event: threading.Event | None = None):
         mode = self.t("download_audio_mode" if audio_only else "download_video_mode")
 
         def hook(data: dict) -> None:
+            if cancel_event and cancel_event.is_set():
+                raise DownloadCancelled()
             status = data.get("status")
+            info_dict = data.get("info_dict") or {}
+            current_title = info_dict.get("title") or title
+            playlist_index = info_dict.get("playlist_index")
+            playlist_count = info_dict.get("playlist_count") or info_dict.get("n_entries")
             if status == "downloading":
                 percent_text = str(data.get("_percent_str") or "").strip().replace("%", "")
                 if not percent_text:
@@ -2360,9 +2886,37 @@ class MainFrame(wx.Frame):
                     total = data.get("total_bytes") or data.get("total_bytes_estimate") or 0
                     if total:
                         percent_text = f"{(float(downloaded) / float(total)) * 100:.1f}"
+                if task_id:
+                    self.ui_queue.put(
+                        (
+                            "download_task",
+                            {
+                                "task_id": task_id,
+                                "status_key": "download_state_downloading",
+                                "current_title": current_title,
+                                "percent": percent_text,
+                                "playlist_index": playlist_index or 0,
+                                "playlist_count": playlist_count or 0,
+                            },
+                        )
+                    )
                 if percent_text:
                     self.ui_queue.put(("status", self.t("download_progress", mode=mode, percent=percent_text, title=title)))
             elif status == "finished":
+                if task_id:
+                    self.ui_queue.put(
+                        (
+                            "download_task",
+                            {
+                                "task_id": task_id,
+                                "status_key": "download_state_processing",
+                                "current_title": current_title,
+                                "percent": "100",
+                                "playlist_index": playlist_index or 0,
+                                "playlist_count": playlist_count or 0,
+                            },
+                        )
+                    )
                 self.ui_queue.put(("status", self.t("download_processing", mode=mode, title=title)))
 
         return hook
@@ -2435,9 +2989,13 @@ class MainFrame(wx.Frame):
             queued = dict(item)
             queued["audio_only"] = audio_only
             self.download_queue[url] = queued
-            key = "audio_selected_download" if audio_only else "video_selected_download"
+            if item.get("kind") in {"playlist", "channel"}:
+                key = "collection_audio_selected_download" if audio_only else "collection_video_selected_download"
+            else:
+                key = "audio_selected_download" if audio_only else "video_selected_download"
             self.announce_player(self.t(key, title=item.get("title", "")))
         self.refresh_result_line(self.current_index)
+        self.refresh_download_views()
 
     def remove_queued_url(self, url: str, announce: bool = True) -> None:
         if not url:
@@ -2448,6 +3006,7 @@ class MainFrame(wx.Frame):
         self.refresh_results_list_labels()
         if self.in_queue_screen:
             self.refresh_queue_view()
+        self.refresh_download_views()
 
     def refresh_result_line(self, index: int) -> None:
         if not hasattr(self, "results_list") or index < 0 or index >= len(self.results):
@@ -2461,12 +3020,12 @@ class MainFrame(wx.Frame):
     def refresh_queue_view(self) -> None:
         if not self.in_queue_screen or not hasattr(self, "queue_list"):
             return
-        if not self.download_queue:
+        if not self.download_queue and not self.active_downloads:
             self.show_download_queue()
             return
         try:
             selection = self.queue_list.GetSelection()
-            self.queue_items = list(self.download_queue.values())
+            self.queue_items = self.download_items_snapshot()
             self.queue_list.Clear()
             for item in self.queue_items:
                 self.queue_list.Append(self.queue_line(item))
@@ -2479,16 +3038,55 @@ class MainFrame(wx.Frame):
         if not item:
             self.announce_player(self.t("download_queue_empty"))
             return
+        if item.get("queue_state") == "active":
+            self.cancel_download_task(str(item.get("task_id") or ""))
+            return
         if audio_only is None:
             audio_only = bool(item.get("audio_only"))
-        self.start_download(audio_only, item=dict(item), remove_queued=True)
+        if item.get("kind") in {"playlist", "channel"}:
+            self.download_collection(dict(item), audio_only=audio_only, remove_queued=True)
+        else:
+            self.start_download(audio_only, item=dict(item), remove_queued=True)
 
     def remove_selected_queue_item(self) -> None:
         item = self.selected_queue_item()
         if not item:
             self.announce_player(self.t("download_queue_empty"))
             return
+        if item.get("queue_state") == "active":
+            self.cancel_download_task(str(item.get("task_id") or ""))
+            return
         self.remove_queued_url(item.get("url", ""), announce=True)
+
+    def cancel_selected_download(self) -> None:
+        item = self.selected_queue_item()
+        if not item or item.get("queue_state") != "active":
+            self.announce_player(self.t("no_active_download"))
+            return
+        self.cancel_download_task(str(item.get("task_id") or ""))
+
+    def cancel_download_task(self, task_id: str) -> None:
+        cancel_event = self.download_cancel_events.get(task_id)
+        task = self.active_downloads.get(task_id)
+        if not cancel_event or not task:
+            self.announce_player(self.t("no_active_download"))
+            return
+        cancel_event.set()
+        task["status_key"] = "download_state_cancelled"
+        self.announce_player(self.t("download_cancel_requested", title=task.get("title", "")))
+        self.refresh_download_views()
+
+    def cancel_all_downloads(self) -> None:
+        if not self.active_downloads:
+            self.announce_player(self.t("no_active_download"))
+            return
+        for task_id in list(self.active_downloads):
+            cancel_event = self.download_cancel_events.get(task_id)
+            if cancel_event:
+                cancel_event.set()
+            self.active_downloads[task_id]["status_key"] = "download_state_cancelled"
+        self.announce_player(self.t("all_downloads_cancel_requested"))
+        self.refresh_download_views()
 
     def download_all_queued(self) -> None:
         if not self.download_queue:
@@ -2497,10 +3095,11 @@ class MainFrame(wx.Frame):
         items = list(self.download_queue.values())
         self.download_queue.clear()
         self.refresh_results_list_labels()
+        self.announce_player(self.t("batch_download_start", count=len(items)))
+        task_id, cancel_event = self.register_download_task({"title": self.t("download_all_selected"), "kind": "batch"}, False, "batch", total=len(items))
         if self.in_queue_screen:
             self.show_download_queue()
-        self.announce_player(self.t("batch_download_start", count=len(items)))
-        threading.Thread(target=self.download_batch_worker, args=(items,), daemon=True).start()
+        threading.Thread(target=self.download_batch_worker, args=(items, task_id, cancel_event), daemon=True).start()
 
     def refresh_results_list_labels(self) -> None:
         if not hasattr(self, "results_list"):
@@ -2515,22 +3114,56 @@ class MainFrame(wx.Frame):
         except RuntimeError:
             pass
 
-    def download_batch_worker(self, items: list[dict]) -> None:
+    def download_batch_worker(self, items: list[dict], task_id: str, cancel_event: threading.Event) -> None:
         folder = Path(self.settings.download_folder)
         try:
             ytdlp = get_yt_dlp()
             if ytdlp is None:
                 raise RuntimeError(self.t("missing_ytdlp"))
             folder.mkdir(parents=True, exist_ok=True)
-            for item in items:
+            total = len(items)
+            for index, item in enumerate(items, start=1):
+                if cancel_event.is_set():
+                    raise DownloadCancelled()
                 audio_only = bool(item.get("audio_only"))
                 mode_key = "download_audio_start" if audio_only else "download_video_start"
+                self.ui_queue.put(
+                    (
+                        "download_task",
+                        {
+                            "task_id": task_id,
+                            "status_key": "download_state_downloading",
+                            "current_title": item.get("title", ""),
+                            "completed": index - 1,
+                            "total": total,
+                            "percent": "",
+                        },
+                    )
+                )
                 wx.CallAfter(self.announce_player, self.t(mode_key))
-                options = self.download_options(folder, audio_only, item.get("title", ""))
+                item_folder = folder
+                allow_playlist = False
+                url = item["url"]
+                if item.get("kind") in {"playlist", "channel"}:
+                    item_folder = folder / self.safe_folder_name(item.get("title", ""))
+                    item_folder.mkdir(parents=True, exist_ok=True)
+                    allow_playlist = True
+                    url = self.collection_download_url(item)
+                options = self.download_options(item_folder, audio_only, item.get("title", ""), allow_playlist=allow_playlist, task_id=task_id, cancel_event=cancel_event)
                 with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
-                    ydl.download([item["url"]])
+                    ydl.download([url])
+                self.ui_queue.put(("download_task", {"task_id": task_id, "completed": index, "total": total}))
+            wx.CallAfter(self.finish_download_task, task_id)
             wx.CallAfter(self.finish_batch_download, str(folder))
+        except DownloadCancelled:
+            wx.CallAfter(self.finish_download_task, task_id, "download_state_cancelled")
+            wx.CallAfter(self.announce_player, self.t("download_cancelled"))
         except Exception as exc:
+            if cancel_event.is_set():
+                wx.CallAfter(self.finish_download_task, task_id, "download_state_cancelled")
+                wx.CallAfter(self.announce_player, self.t("download_cancelled"))
+                return
+            wx.CallAfter(self.finish_download_task, task_id, "download_state_failed")
             wx.CallAfter(self.message, self.t("download_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
     def finish_batch_download(self, folder: str) -> None:
@@ -2619,7 +3252,7 @@ class MainFrame(wx.Frame):
         if "download_folder" in c:
             self.settings.download_folder = c["download_folder"].GetValue()
         if "results_limit" in c:
-            self.settings.results_limit = self.to_int(c["results_limit"].GetStringSelection(), 20, 0, 250)
+            self.settings.results_limit = self.to_int(self.selected_choice_value("results_limit"), 0, 0, 250)
         if "seek_seconds" in c:
             self.settings.seek_seconds = self.to_int(c["seek_seconds"].GetStringSelection(), 5, 1)
         if "volume_step" in c:
@@ -2720,22 +3353,100 @@ class MainFrame(wx.Frame):
         return ctrl.GetStringSelection()
 
     def start_ytdlp_update_check(self) -> None:
-        self.set_status(self.t("checking_updates"))
+        self.announce_player(self.t("components_updating"))
         threading.Thread(target=self.update_ytdlp_worker, daemon=True).start()
 
     def update_ytdlp_worker(self) -> None:
         ytdlp = get_yt_dlp()
         if ytdlp is None:
-            self.ui_queue.put(("status", self.t("missing_ytdlp")))
+            self.ui_queue.put(("announce", self.t("missing_ytdlp")))
             return
         try:
-            with ytdlp.YoutubeDL(self.ydl_options({"quiet": True, "skip_download": True})) as ydl:
-                from yt_dlp.update import run_update
-
-                run_update(ydl)
-            self.ui_queue.put(("status", self.t("updates_ok")))
+            updated = self.update_ytdlp_component_package(ytdlp)
+            key = "components_updated" if updated else "components_done"
+            self.ui_queue.put(("announce", self.t(key)))
         except Exception as exc:
-            self.ui_queue.put(("status", self.t("updates_failed", error=exc)))
+            self.ui_queue.put(("announce", self.t("updates_failed", error=exc)))
+
+    def update_ytdlp_component_package(self, ytdlp_module) -> bool:
+        try:
+            current_version = str(import_module("yt_dlp.version").__version__)
+        except Exception:
+            current_version = str(getattr(ytdlp_module, "__version__", "0") or "0")
+        latest_version, wheel_url = self.fetch_latest_ytdlp_wheel()
+        if not self.is_component_version_newer(latest_version, current_version):
+            return False
+        if not wheel_url:
+            raise RuntimeError("yt-dlp wheel URL is empty")
+        COMPONENTS_DIR.mkdir(parents=True, exist_ok=True)
+        temp_dir = Path(tempfile.mkdtemp(prefix="apricotplayer-ytdlp-"))
+        wheel_path = temp_dir / "yt_dlp.whl"
+        extract_dir = temp_dir / "extract"
+        try:
+            request = Request(wheel_url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+            with urlopen(request, timeout=120) as response, wheel_path.open("wb") as handle:
+                shutil.copyfileobj(response, handle)
+            extract_dir.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(wheel_path) as archive:
+                archive.extractall(extract_dir)
+            package_source = extract_dir / "yt_dlp"
+            if not package_source.exists():
+                raise RuntimeError("yt-dlp wheel did not contain yt_dlp package")
+            package_target = COMPONENTS_DIR / "yt_dlp"
+            old_target = COMPONENTS_DIR / "yt_dlp.old"
+            renamed_old = False
+            if old_target.exists():
+                shutil.rmtree(old_target, ignore_errors=True)
+            if package_target.exists():
+                package_target.rename(old_target)
+                renamed_old = True
+            try:
+                shutil.copytree(package_source, package_target)
+            except Exception:
+                if renamed_old and old_target.exists() and not package_target.exists():
+                    old_target.rename(package_target)
+                raise
+            for dist_info in COMPONENTS_DIR.glob("yt_dlp-*.dist-info"):
+                shutil.rmtree(dist_info, ignore_errors=True)
+            for dist_info in extract_dir.glob("yt_dlp-*.dist-info"):
+                shutil.copytree(dist_info, COMPONENTS_DIR / dist_info.name)
+            if old_target.exists():
+                shutil.rmtree(old_target, ignore_errors=True)
+            self.reload_ytdlp_after_component_update()
+            return True
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def fetch_latest_ytdlp_wheel(self) -> tuple[str, str]:
+        request = Request(YTDLP_PYPI_JSON_URL, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+        with urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        latest_version = str((payload.get("info") or {}).get("version") or "")
+        urls = payload.get("urls") or []
+        for item in urls:
+            filename = str(item.get("filename") or "")
+            if filename.endswith(".whl") and str(item.get("packagetype") or "") == "bdist_wheel":
+                return latest_version, str(item.get("url") or "")
+        raise RuntimeError("Could not find a yt-dlp wheel on PyPI")
+
+    @staticmethod
+    def is_component_version_newer(remote_version: str, current_version: str) -> bool:
+        def parts(value: str) -> tuple[int, ...]:
+            return tuple(int(part) for part in re.findall(r"\d+", value)[:4]) or (0,)
+
+        remote_parts = parts(remote_version)
+        current_parts = parts(current_version)
+        length = max(len(remote_parts), len(current_parts))
+        return remote_parts + (0,) * (length - len(remote_parts)) > current_parts + (0,) * (length - len(current_parts))
+
+    @staticmethod
+    def reload_ytdlp_after_component_update() -> None:
+        global yt_dlp, yt_dlp_import_error
+        for name in list(sys.modules):
+            if name == "yt_dlp" or name.startswith("yt_dlp."):
+                sys.modules.pop(name, None)
+        yt_dlp = None
+        yt_dlp_import_error = None
 
     def manual_app_update_check(self) -> None:
         self.apply_settings_from_visible_controls()
@@ -3311,6 +4022,11 @@ class MainFrame(wx.Frame):
                     self.show_results(payload)
                 elif kind == "status":
                     self.set_status(str(payload))
+                elif kind == "announce":
+                    self.announce_player(str(payload))
+                elif kind == "download_task" and isinstance(payload, dict):
+                    task_id = str(payload.pop("task_id", ""))
+                    self.update_download_task(task_id, **payload)
                 elif kind == "error":
                     self.message(str(payload), wx.ICON_ERROR)
         except queue.Empty:

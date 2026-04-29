@@ -1,5 +1,17 @@
 # Changelog
 
+## What's new in version 0.4.5
+
+- added a Current downloads screen that shows pending and active downloads together, including batch progress, current item, remaining count, and cancel controls
+- queued channels and playlists can now be downloaded together with queued videos, including audio or video mode
+- the result context menu now offers `Download all selected items` when more than one item is queued
+- new default settings use dynamic result loading, shown as `Dynamic (loads 20 at a time)` instead of a raw `0`
+- YouTube search now defaults to `All`, followed by videos, playlists, and channels
+- channel and playlist result rows no longer show irrelevant view counts
+- pressing Escape from a channel or playlist result list now returns to the previous search results instead of the main menu
+- the yt-dlp component updater now checks PyPI in the background, installs newer yt-dlp code into the per-user components folder, and announces updating/done through the screen reader
+- added translations for the new download status and component-update messages across all supported UI languages
+
 ## What's new in version 0.4.4
 
 - fixed the update dialog buttons by binding `Update now` and `Skip this version` directly to the modal result instead of relying on implicit wx dialog behavior
