@@ -1,5 +1,13 @@
 # Changelog
 
+## What's new in version 0.4.3
+
+- changed the default video download format to MP4 so normal video downloads no longer default to WebM
+- added friendly video download format choices in Settings: MP4 recommended, best available, MP4 single file, and smallest file
+- migrated the old `bestvideo+bestaudio/best` setting to the new MP4 recommended mode automatically
+- video downloads now set `merge_output_format` to `mp4` for MP4 modes
+- translated the new video format labels across all supported UI languages
+
 ## What's new in version 0.4.2
 
 - made mpv IPC commands serialized and retry-aware so pitch changes no longer fail when the player pipe is still starting or briefly busy

@@ -81,8 +81,8 @@ class QuietYtdlpLogger:
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.4.2"
-APP_VERSION_LABEL = "0.4.2"
+APP_VERSION = "0.4.3"
+APP_VERSION_LABEL = "0.4.3"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -113,6 +113,18 @@ RUBBERBAND_FILTER_LABEL = "apricot_pitch"
 RUBBERBAND_FILTER_REF = f"@{RUBBERBAND_FILTER_LABEL}"
 RATE_STEP_OPTIONS = ["0.01", "0.02", "0.05", "0.10", "0.25"]
 COOKIES_BROWSER_OPTIONS = ["none", "chrome", "edge", "firefox", "brave", "chromium", "opera", "vivaldi"]
+VIDEO_FORMAT_MP4 = "mp4"
+VIDEO_FORMAT_BEST_ANY = "best-any"
+VIDEO_FORMAT_MP4_SINGLE = "mp4-single"
+VIDEO_FORMAT_SMALLEST = "smallest"
+VIDEO_FORMAT_OPTIONS = [VIDEO_FORMAT_MP4, VIDEO_FORMAT_BEST_ANY, VIDEO_FORMAT_MP4_SINGLE, VIDEO_FORMAT_SMALLEST]
+LEGACY_VIDEO_FORMAT_MAP = {
+    "bestvideo+bestaudio/best": VIDEO_FORMAT_MP4,
+    "best": VIDEO_FORMAT_BEST_ANY,
+    "best[ext=mp4]": VIDEO_FORMAT_MP4_SINGLE,
+    "best[ext=mp4]/best": VIDEO_FORMAT_MP4_SINGLE,
+    "worst": VIDEO_FORMAT_SMALLEST,
+}
 MPV_IPC_TIMEOUT_SECONDS = 2.5
 MPV_PITCH_RETRY_ATTEMPTS = 8
 MPV_PITCH_RETRY_DELAY_SECONDS = 0.12
@@ -274,7 +286,11 @@ TEXT = {
         "download_complete_popup": "Pokazi popup, ko je prenos koncan",
         "audio_format": "Audio format",
         "audio_quality": "Audio kvaliteta (0 najboljše)",
-        "video_format": "Video format yt-dlp",
+        "video_format": "Format prenosa videa",
+        "video_format_mp4_recommended": "MP4 (priporočeno)",
+        "video_format_best_available": "Najboljša razpoložljiva kakovost (lahko je WebM)",
+        "video_format_mp4_single": "MP4 ena datoteka (hitro)",
+        "video_format_smallest": "Najmanjša datoteka",
         "max_height": "Največja višina videa",
         "filename_template": "Predloga imena datoteke",
         "subtitle_langs": "Jeziki podnapisov",
@@ -477,7 +493,11 @@ TEXT = {
         "download_complete_popup": "Show popup when download completes",
         "audio_format": "Audio format",
         "audio_quality": "Audio quality (0 is best)",
-        "video_format": "Video format yt-dlp",
+        "video_format": "Video download format",
+        "video_format_mp4_recommended": "MP4 (recommended)",
+        "video_format_best_available": "Best available quality (may be WebM)",
+        "video_format_mp4_single": "MP4 single file (fast)",
+        "video_format_smallest": "Smallest file",
         "max_height": "Maximum video height",
         "filename_template": "Filename template",
         "subtitle_langs": "Subtitle languages",
@@ -555,7 +575,7 @@ class Settings:
     download_folder: str = str(Path.home() / "Downloads")
     results_limit: int = 20
     audio_format: str = "mp3"
-    video_format: str = "bestvideo+bestaudio/best"
+    video_format: str = VIDEO_FORMAT_MP4
     max_video_height: int = 1080
     player_command: str = ""
     autoplay_next: bool = False
@@ -1111,7 +1131,7 @@ class MainFrame(wx.Frame):
             check("download_complete_popup", self.settings.popup_when_download_complete)
             choice("audio_format", self.settings.audio_format, ["mp3", "m4a", "opus", "wav", "flac"])
             choice("audio_quality", self.settings.audio_quality, ["0", "1", "2", "3", "4", "5", "128", "192", "256", "320"])
-            choice("video_format", self.settings.video_format, ["bestvideo+bestaudio/best", "best", "best[ext=mp4]", "worst"])
+            choice("video_format", self.normalized_video_format(), VIDEO_FORMAT_OPTIONS, self.video_format_labels())
             choice("max_height", str(self.settings.max_video_height), ["0", "360", "480", "720", "1080", "1440", "2160"])
             text("filename_template", self.settings.filename_template or DEFAULT_FILENAME_TEMPLATE)
             text("subtitle_langs", self.settings.subtitle_languages)
@@ -1928,11 +1948,22 @@ class MainFrame(wx.Frame):
         mode = str(getattr(self.settings, "pitch_mode", PITCH_MODE_RUBBERBAND) or PITCH_MODE_RUBBERBAND)
         return self.normalize_pitch_mode_value(mode)
 
+    def normalized_video_format(self) -> str:
+        return self.normalize_video_format_value(getattr(self.settings, "video_format", VIDEO_FORMAT_MP4))
+
     def pitch_mode_labels(self) -> list[str]:
         return [
             self.t("pitch_mode_rubberband"),
             self.t("pitch_mode_mpv"),
             self.t("pitch_mode_linked_speed"),
+        ]
+
+    def video_format_labels(self) -> list[str]:
+        return [
+            self.t("video_format_mp4_recommended"),
+            self.t("video_format_best_available"),
+            self.t("video_format_mp4_single"),
+            self.t("video_format_smallest"),
         ]
 
     @staticmethod
@@ -1948,6 +1979,13 @@ class MainFrame(wx.Frame):
         if lowered == LEGACY_PITCH_MODE_RUBBERBAND:
             return PITCH_MODE_RUBBERBAND
         return PITCH_MODE_RUBBERBAND
+
+    @staticmethod
+    def normalize_video_format_value(value: str) -> str:
+        normalized = str(value or "").strip()
+        if normalized in VIDEO_FORMAT_OPTIONS:
+            return normalized
+        return LEGACY_VIDEO_FORMAT_MAP.get(normalized, VIDEO_FORMAT_MP4)
 
     @staticmethod
     def is_default_rate(value: float) -> bool:
@@ -2277,11 +2315,23 @@ class MainFrame(wx.Frame):
             options["download_archive"] = str(APP_DIR / "download-archive.txt")
         if audio_only:
             options.update({"format": "bestaudio/best", "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": self.settings.audio_format, "preferredquality": self.settings.audio_quality}]})
-        elif self.settings.max_video_height > 0:
-            options["format"] = f"bestvideo[height<={self.settings.max_video_height}]+bestaudio/best[height<={self.settings.max_video_height}]/{self.settings.video_format}"
         else:
-            options["format"] = self.settings.video_format
+            video_mode = self.normalized_video_format()
+            options["format"] = self.video_format_selector(video_mode)
+            if video_mode in {VIDEO_FORMAT_MP4, VIDEO_FORMAT_MP4_SINGLE, VIDEO_FORMAT_SMALLEST}:
+                options["merge_output_format"] = "mp4"
         return options
+
+    def video_format_selector(self, video_mode: str) -> str:
+        height = self.settings.max_video_height if self.settings.max_video_height > 0 else 0
+        limit = f"[height<={height}]" if height else ""
+        if video_mode == VIDEO_FORMAT_BEST_ANY:
+            return f"bestvideo{limit}+bestaudio/best{limit}/best"
+        if video_mode == VIDEO_FORMAT_MP4_SINGLE:
+            return f"best[ext=mp4]{limit}/best{limit}/best"
+        if video_mode == VIDEO_FORMAT_SMALLEST:
+            return f"worst[ext=mp4]{limit}/worst{limit}/worst"
+        return f"bestvideo[ext=mp4]{limit}+bestaudio[ext=m4a]/best[ext=mp4]{limit}/bestvideo{limit}+bestaudio/best{limit}/best"
 
     @staticmethod
     def safe_folder_name(value: str) -> str:
@@ -2595,7 +2645,7 @@ class MainFrame(wx.Frame):
         if "audio_quality" in c:
             self.settings.audio_quality = c["audio_quality"].GetStringSelection() or "0"
         if "video_format" in c:
-            self.settings.video_format = c["video_format"].GetStringSelection() or "bestvideo+bestaudio/best"
+            self.settings.video_format = self.normalize_video_format_value(self.selected_choice_value("video_format"))
         if "max_height" in c:
             self.settings.max_video_height = self.to_int(c["max_height"].GetStringSelection(), 1080, 0)
         if "filename_template" in c:
@@ -3279,6 +3329,7 @@ class MainFrame(wx.Frame):
                 if merged.get("filename_template") == OLD_FILENAME_TEMPLATE:
                     merged["filename_template"] = DEFAULT_FILENAME_TEMPLATE
                 merged["pitch_mode"] = self.normalize_pitch_mode_value(str(merged.get("pitch_mode") or ""))
+                merged["video_format"] = self.normalize_video_format_value(str(merged.get("video_format") or ""))
                 return Settings(**merged)
             except Exception:
                 return Settings()
