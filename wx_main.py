@@ -81,8 +81,8 @@ class QuietYtdlpLogger:
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.4.1"
-APP_VERSION_LABEL = "0.4.1"
+APP_VERSION = "0.4.2"
+APP_VERSION_LABEL = "0.4.2"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -113,6 +113,9 @@ RUBBERBAND_FILTER_LABEL = "apricot_pitch"
 RUBBERBAND_FILTER_REF = f"@{RUBBERBAND_FILTER_LABEL}"
 RATE_STEP_OPTIONS = ["0.01", "0.02", "0.05", "0.10", "0.25"]
 COOKIES_BROWSER_OPTIONS = ["none", "chrome", "edge", "firefox", "brave", "chromium", "opera", "vivaldi"]
+MPV_IPC_TIMEOUT_SECONDS = 2.5
+MPV_PITCH_RETRY_ATTEMPTS = 8
+MPV_PITCH_RETRY_DELAY_SECONDS = 0.12
 LANGUAGES = [
     ("en", "English"),
     ("sl", "Slovenščina"),
@@ -632,6 +635,7 @@ class MainFrame(wx.Frame):
         self.queue_items: list[dict] = []
         self.last_download_shortcut: tuple[str, str, float] = ("", "", 0.0)
         self.ipc_path: str | None = None
+        self.mpv_ipc_lock = threading.Lock()
         self.ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.loading_more_results = False
         self.current_search_type_code = "Video"
@@ -1672,40 +1676,67 @@ class MainFrame(wx.Frame):
         if self.player_kind != "mpv" or not self.ipc_path:
             return
         try:
-            self.mpv_send(shlex.split(command))
-        except OSError:
+            self.mpv_send(shlex.split(command), timeout=0.5)
+        except Exception:
             pass
 
-    def mpv_send(self, command: list) -> None:
-        payload = json.dumps({"command": command}) + "\n"
-        with open(self.ipc_path, "w", encoding="utf-8") as pipe:
-            pipe.write(payload)
+    def mpv_process_alive(self) -> bool:
+        return bool(self.player_process and self.player_process.poll() is None)
 
-    def mpv_request(self, command: list) -> dict:
+    def open_mpv_pipe(self, mode: str, timeout: float = MPV_IPC_TIMEOUT_SECONDS, buffering: int = -1, encoding: str | None = None):
+        if self.player_kind != "mpv" or not self.ipc_path:
+            raise RuntimeError("mpv is not running")
+        deadline = time.monotonic() + max(0.0, timeout)
+        last_error: Exception | None = None
+        while True:
+            if not self.mpv_process_alive():
+                raise RuntimeError("mpv process is not running")
+            try:
+                if encoding is None:
+                    return open(self.ipc_path, mode, buffering=buffering)
+                return open(self.ipc_path, mode, buffering=buffering, encoding=encoding)
+            except OSError as exc:
+                last_error = exc
+                if time.monotonic() >= deadline:
+                    raise last_error
+                time.sleep(0.04)
+
+    def mpv_send(self, command: list, timeout: float = MPV_IPC_TIMEOUT_SECONDS) -> None:
+        payload = json.dumps({"command": command}) + "\n"
+        with self.mpv_ipc_lock:
+            with self.open_mpv_pipe("w", timeout=timeout, encoding="utf-8") as pipe:
+                pipe.write(payload)
+
+    def mpv_request(self, command: list, timeout: float = MPV_IPC_TIMEOUT_SECONDS) -> dict:
         if self.player_kind != "mpv" or not self.ipc_path:
             return {}
         request_id = int(time.time() * 1000000)
         payload = (json.dumps({"command": command, "request_id": request_id}) + "\n").encode("utf-8")
-        with open(self.ipc_path, "r+b", buffering=0) as pipe:
-            pipe.write(payload)
-            for _ in range(25):
-                raw = pipe.readline()
-                if not raw:
-                    break
-                try:
-                    response = json.loads(raw.decode("utf-8", errors="replace"))
-                except json.JSONDecodeError:
-                    continue
-                if response.get("request_id") == request_id:
-                    return response
+        with self.mpv_ipc_lock:
+            with self.open_mpv_pipe("r+b", timeout=timeout, buffering=0) as pipe:
+                deadline = time.monotonic() + max(0.0, timeout)
+                pipe.write(payload)
+                while time.monotonic() < deadline:
+                    raw = pipe.readline()
+                    if not raw:
+                        time.sleep(0.01)
+                        continue
+                    try:
+                        response = json.loads(raw.decode("utf-8", errors="replace"))
+                    except json.JSONDecodeError:
+                        continue
+                    if response.get("request_id") == request_id:
+                        return response
         return {}
 
-    def mpv_get_property(self, name: str):
-        response = self.mpv_request(["get_property", name])
+    def mpv_get_property(self, name: str, timeout: float = MPV_IPC_TIMEOUT_SECONDS):
+        response = self.mpv_request(["get_property", name], timeout=timeout)
         return response.get("data")
 
-    def mpv_set_property(self, name: str, value) -> None:
-        self.mpv_send(["set_property", name, value])
+    def mpv_set_property(self, name: str, value, timeout: float = MPV_IPC_TIMEOUT_SECONDS) -> None:
+        response = self.mpv_request(["set_property", name, value], timeout=timeout)
+        if not response or response.get("error") != "success":
+            raise RuntimeError(str(response.get("error")))
 
     def announce_time_async(self) -> None:
         threading.Thread(target=self.announce_time_worker, daemon=True).start()
@@ -1751,17 +1782,20 @@ class MainFrame(wx.Frame):
         threading.Thread(target=self.change_pitch_worker, args=(delta,), daemon=True).start()
 
     def change_pitch_worker(self, delta: float) -> None:
-        try:
-            pitch = self.current_pitch_value()
-            pitch = self.next_pitch_value(pitch, delta)
-            speed_delta = delta if self.normalized_pitch_mode() == PITCH_MODE_LINKED_SPEED else None
-            self.apply_pitch_value(pitch, speed_delta=speed_delta)
-            wx.CallAfter(self.announce_player, self.t("pitch_announcement", pitch=self.format_rate_for_speech(pitch)))
-            if self.is_default_rate(pitch):
-                wx.CallAfter(self.play_default_sound)
-            wx.CallAfter(self.update_details_text)
-        except Exception:
-            wx.CallAfter(self.announce_player, self.t("pitch_unavailable"))
+        pitch = self.next_pitch_value(self.current_pitch_value(), delta)
+        speed_delta = delta if self.normalized_pitch_mode() == PITCH_MODE_LINKED_SPEED else None
+        for _attempt in range(MPV_PITCH_RETRY_ATTEMPTS):
+            try:
+                self.apply_pitch_value(pitch, speed_delta=speed_delta)
+                wx.CallAfter(self.announce_player, self.t("pitch_announcement", pitch=self.format_rate_for_speech(pitch)))
+                if self.is_default_rate(pitch):
+                    wx.CallAfter(self.play_default_sound)
+                wx.CallAfter(self.update_details_text)
+                return
+            except Exception:
+                if not self.mpv_process_alive():
+                    return
+                time.sleep(MPV_PITCH_RETRY_DELAY_SECONDS)
 
     def current_pitch_value(self) -> float:
         stored = self.current_video_info.get("pitch", "1.0")
@@ -1797,8 +1831,11 @@ class MainFrame(wx.Frame):
             response = self.mpv_request(["af-command", RUBBERBAND_FILTER_LABEL, "set-pitch", f"{pitch:.4f}"])
             if response.get("error") == "success":
                 return
+            self.rubberband_pitch_filter_active = False
         self.clear_rubberband_pitch_filter()
-        self.mpv_send(["af", "add", self.rubberband_pitch_filter(pitch)])
+        response = self.mpv_request(["af", "add", self.rubberband_pitch_filter(pitch)])
+        if response.get("error") != "success":
+            raise RuntimeError(str(response.get("error") or "rubberband filter not ready"))
         self.rubberband_pitch_filter_active = True
 
     @staticmethod
@@ -1806,8 +1843,10 @@ class MainFrame(wx.Frame):
         return f"{RUBBERBAND_FILTER_REF}:rubberband=transients=smooth:formant=preserved:pitch=quality:engine=finer:pitch-scale={pitch:.4f}"
 
     def clear_rubberband_pitch_filter(self) -> None:
-        self.mpv_send(["af", "remove", RUBBERBAND_FILTER_REF])
-        self.rubberband_pitch_filter_active = False
+        try:
+            self.mpv_request(["af", "remove", RUBBERBAND_FILTER_REF], timeout=0.8)
+        finally:
+            self.rubberband_pitch_filter_active = False
 
     def change_volume_async(self, delta: int) -> None:
         threading.Thread(target=self.change_volume_worker, args=(delta,), daemon=True).start()

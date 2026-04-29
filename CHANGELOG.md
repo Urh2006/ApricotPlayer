@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.4.2
+
+- made mpv IPC commands serialized and retry-aware so pitch changes no longer fail when the player pipe is still starting or briefly busy
+- made pitch changes retry silently instead of announcing a transient `Pitch control is not available yet` message
+- verified the bundled mpv accepts pitch property changes, Rubberband filter insertion, and runtime Rubberband `set-pitch` commands through JSON IPC
+
 ## What's new in version 0.4.1
 
 - added ten more UI languages: German, French, Spanish, Portuguese, Italian, Polish, Dutch, Swedish, Croatian, and Serbian
