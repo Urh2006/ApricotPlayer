@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.1
+## What's new in version 0.4.1
 
 - added ten more UI languages: German, French, Spanish, Portuguese, Italian, Polish, Dutch, Swedish, Croatian, and Serbian
 - fixed remaining untranslated Slovenian settings and player strings

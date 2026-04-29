@@ -67,6 +67,8 @@ ApricotPlayer keeps UI strings in synchronized language packs. When adding a new
 
 The packaged app checks public GitHub releases automatically unless disabled in Settings. Before installing a newer version, it shows an `Update available` dialog with the version, changelog, and `Update now` / `Skip this version` buttons.
 
+Release notes must start with `# What's new in version X.Y.Z` so the updater dialog includes the target version in the changelog text itself.
+
 Helpful scripts:
 
 - `scripts/build_release.ps1 -PackageMode onedir` builds the fast app folder used by both the installer and portable ZIP
