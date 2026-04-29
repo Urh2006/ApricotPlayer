@@ -1,5 +1,13 @@
 # Changelog
 
+## What's new in version 0.5.0
+
+- added a History screen for recently played and downloaded items, with keyboard and context menu actions for play, download, favorite, subscribe, copy URL, remove, and clear history
+- added a Subscriptions screen for YouTube channels, including Ctrl+Shift+S subscription shortcuts, context menu subscription actions, manual checks, and automatic background checks
+- added Windows notifications for new videos from subscribed channels, with settings for automatic checks, check interval, and notifications
+- added optional system tray behavior so the close button or Alt+F4 can hide ApricotPlayer to the tray while the Exit command still closes it completely
+- renamed the portable release package to `ApricotPlayer.zip` while keeping updater compatibility with the old portable asset name
+
 ## What's new in version 0.4.7
 
 - changed the yt-dlp component update check so screen readers only announce "updating components" after a newer yt-dlp package has actually been found and installation is starting

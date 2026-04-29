@@ -11,7 +11,7 @@ if (-not $SourceDir) {
 }
 
 if (-not $OutputPath) {
-    $OutputPath = Join-Path $projectRoot "release-dist\ApricotPlayerPortable.zip"
+    $OutputPath = Join-Path $projectRoot "release-dist\ApricotPlayer.zip"
 }
 
 $SourceDir = (Resolve-Path $SourceDir).Path

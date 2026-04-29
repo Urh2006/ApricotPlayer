@@ -15,7 +15,7 @@ import time
 import webbrowser
 import zipfile
 import ctypes
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timezone
 from importlib import import_module
 from pathlib import Path
@@ -24,6 +24,7 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
 import wx
+import wx.adv
 
 try:
     import certifi
@@ -98,13 +99,15 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.4.7"
-APP_VERSION_LABEL = "0.4.7"
+APP_VERSION = "0.5.0"
+APP_VERSION_LABEL = "0.5.0"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
 SETTINGS_FILE = APP_DIR / "settings.json"
 FAVORITES_FILE = APP_DIR / "favorites.json"
+HISTORY_FILE = APP_DIR / "history.json"
+SUBSCRIPTIONS_FILE = APP_DIR / "subscriptions.json"
 CACHED_COOKIES_FILE = APP_DIR / "cookies.txt"
 COMPONENTS_DIR = APP_DIR / "components"
 LEGACY_SETTINGS_FILE = LEGACY_APP_DIR / "settings.json"
@@ -115,7 +118,8 @@ RESULTS_PAGE_SIZE = 20
 DEFAULT_GITHUB_OWNER = "Urh2006"
 DEFAULT_GITHUB_REPO = "ApricotPlayer"
 INSTALLER_ASSET_NAME = "ApricotPlayerSetup.exe"
-PORTABLE_ZIP_ASSET_NAME = "ApricotPlayerPortable.zip"
+PORTABLE_ZIP_ASSET_NAME = "ApricotPlayer.zip"
+LEGACY_PORTABLE_ZIP_ASSET_NAME = "ApricotPlayerPortable.zip"
 UPDATE_LOG_FILE = APP_DIR / "updater.log"
 YTDLP_PYPI_JSON_URL = "https://pypi.org/pypi/yt-dlp/json"
 PLAYBACK_SPEED_STEPS = [0.25, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1.0, 1.1, 1.2, 1.25, 1.3, 1.4, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0]
@@ -413,11 +417,14 @@ TEXT = {
         "search_youtube": "Search YouTube",
         "choose_download_folder": "Choose download folder",
         "favorites": "Favorites",
+        "history": "History",
+        "subscriptions": "Subscriptions",
         "settings": "Settings",
         "settings_sections": "Settings sections",
         "general_section": "General",
         "playback_section": "Playback",
         "downloads_section": "Downloads",
+        "library_section": "Library and subscriptions",
         "cookies_network_section": "Cookies and network",
         "updates_advanced_section": "Updates and advanced",
         "exit": "Exit",
@@ -533,6 +540,36 @@ TEXT = {
         "copy_url": "Copy URL",
         "remove": "Remove",
         "refresh": "Refresh list",
+        "clear_history": "Clear history",
+        "remove_history_item": "Remove from history",
+        "history_empty": "History is empty.",
+        "history_cleared": "History cleared.",
+        "history_removed": "History item removed.",
+        "subscribe_channel": "Subscribe to channel\tCtrl+Shift+S",
+        "unsubscribe_channel": "Unsubscribe from channel",
+        "subscription_added": "Subscribed to {title}.",
+        "subscription_exists": "Already subscribed to {title}.",
+        "subscription_removed": "Subscription removed: {title}.",
+        "subscription_empty": "No subscriptions yet.",
+        "subscription_check_now": "Check subscriptions now",
+        "subscription_checking": "Checking subscriptions.",
+        "subscription_check_complete": "Subscription check complete.",
+        "subscription_check_failed": "Could not check subscriptions: {error}",
+        "subscription_no_new": "No new subscription videos.",
+        "subscription_new_videos": "{count} new videos from {title}.",
+        "subscription_open_videos": "Open channel videos",
+        "subscription_last_checked": "last checked {time}",
+        "subscription_never_checked": "never checked",
+        "subscription_notifications": "Windows notifications for new subscription videos",
+        "subscription_check_enabled": "Check subscriptions automatically",
+        "subscription_check_interval": "Subscription check interval in hours",
+        "close_to_tray": "Close button or Alt+F4 sends ApricotPlayer to system tray",
+        "tray_still_running": "ApricotPlayer is still running in the system tray.",
+        "tray_show": "Show ApricotPlayer",
+        "tray_check_subscriptions": "Check subscriptions",
+        "tray_exit": "Exit ApricotPlayer",
+        "notification_subscription_title": "New YouTube videos",
+        "history_limit": "History limit",
         "download_folder": "Download folder",
         "browse": "Browse",
         "save": "Save",
@@ -936,6 +973,41 @@ class Settings:
     concurrent_fragments: int = 4
     retries: int = 10
     socket_timeout: int = 20
+    close_to_tray: bool = False
+    subscription_check_enabled: bool = True
+    subscription_check_interval_hours: int = 6
+    subscription_notifications: bool = True
+    last_subscription_check: float = 0.0
+    history_limit: int = 500
+
+
+class ApricotTaskBarIcon(wx.adv.TaskBarIcon):
+    def __init__(self, frame: "MainFrame") -> None:
+        super().__init__()
+        self.frame = frame
+        self.show_id = wx.NewIdRef()
+        self.check_id = wx.NewIdRef()
+        self.exit_id = wx.NewIdRef()
+        self.Bind(wx.adv.EVT_TASKBAR_LEFT_DCLICK, lambda _event: self.frame.restore_from_tray())
+        self.Bind(wx.EVT_MENU, lambda _event: self.frame.restore_from_tray(), id=int(self.show_id))
+        self.Bind(wx.EVT_MENU, lambda _event: self.frame.check_subscriptions(manual=True), id=int(self.check_id))
+        self.Bind(wx.EVT_MENU, lambda _event: self.frame.quit_application(), id=int(self.exit_id))
+        self.SetIcon(self.make_icon(), APP_NAME)
+
+    def CreatePopupMenu(self) -> wx.Menu:
+        menu = wx.Menu()
+        menu.Append(int(self.show_id), self.frame.t("tray_show"))
+        menu.Append(int(self.check_id), self.frame.t("tray_check_subscriptions"))
+        menu.AppendSeparator()
+        menu.Append(int(self.exit_id), self.frame.t("tray_exit"))
+        return menu
+
+    @staticmethod
+    def make_icon() -> wx.Icon:
+        bitmap = wx.ArtProvider.GetBitmap(wx.ART_INFORMATION, wx.ART_OTHER, (16, 16))
+        icon = wx.Icon()
+        icon.CopyFromBitmap(bitmap)
+        return icon
 
 
 class MainFrame(wx.Frame):
@@ -945,6 +1017,8 @@ class MainFrame(wx.Frame):
         self.settings = self.load_settings()
         self.save_settings()
         self.favorites = self.load_favorites()
+        self.history = self.load_history()
+        self.subscriptions = self.load_subscriptions()
         self.results: list[dict] = []
         self.all_results: list[dict] = []
         self.return_results: list[dict] = []
@@ -955,6 +1029,9 @@ class MainFrame(wx.Frame):
         self.last_search_type_index = 0
         self.last_visible_count = 0
         self.search_screen_active = False
+        self.favorites_screen_active = False
+        self.history_screen_active = False
+        self.subscriptions_screen_active = False
         self.in_main_menu = False
         self.search_results_stack: list[dict] = []
         self.settings_section_index = 0
@@ -986,6 +1063,9 @@ class MainFrame(wx.Frame):
         self.collection_result_type = ""
         self.nvda_client = self.load_nvda_client()
         self.update_progress_dialog: wx.ProgressDialog | None = None
+        self.subscription_check_running = False
+        self.exiting = False
+        self.taskbar_icon: ApricotTaskBarIcon | None = None
 
         self.panel = wx.Panel(self)
         self.root_sizer = wx.BoxSizer(wx.VERTICAL)
@@ -994,24 +1074,34 @@ class MainFrame(wx.Frame):
         self.status.SetStatusText(self.t("ready"))
 
         self.Bind(wx.EVT_CHAR_HOOK, self.on_char_hook)
+        self.Bind(wx.EVT_CLOSE, self.on_close)
         self.install_download_accelerators()
+        self.setup_taskbar_icon()
         self.show_main_menu()
         self.timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self.process_queue, self.timer)
         self.timer.Start(100)
+        self.subscription_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self.on_subscription_timer, self.subscription_timer)
+        self.configure_subscription_timer()
         if self.settings.auto_update_ytdlp:
             wx.CallLater(3500, self.start_ytdlp_update_check)
         if self.settings.auto_update_app:
             wx.CallLater(5500, self.start_app_update_check)
+        if self.settings.subscription_check_enabled:
+            wx.CallLater(8500, self.check_subscriptions_if_due)
 
     def install_download_accelerators(self) -> None:
         self.download_audio_accelerator_id = wx.NewIdRef()
         self.download_video_accelerator_id = wx.NewIdRef()
+        self.subscribe_accelerator_id = wx.NewIdRef()
         self.Bind(wx.EVT_MENU, lambda _evt: self.download_audio_shortcut(), id=int(self.download_audio_accelerator_id))
         self.Bind(wx.EVT_MENU, lambda _evt: self.download_video_shortcut(), id=int(self.download_video_accelerator_id))
+        self.Bind(wx.EVT_MENU, lambda _evt: self.subscribe_shortcut(), id=int(self.subscribe_accelerator_id))
         entries = [
             (wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("A"), int(self.download_audio_accelerator_id)),
             (wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("D"), int(self.download_video_accelerator_id)),
+            (wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("S"), int(self.subscribe_accelerator_id)),
         ]
         self.SetAcceleratorTable(wx.AcceleratorTable(entries))
 
@@ -1122,10 +1212,63 @@ class MainFrame(wx.Frame):
             row.Add(button, 0, wx.RIGHT, 6)
         self.root_sizer.Add(row, 0, wx.ALL, 4)
 
+    def setup_taskbar_icon(self) -> None:
+        if self.taskbar_icon is not None:
+            return
+        try:
+            self.taskbar_icon = ApricotTaskBarIcon(self)
+        except Exception:
+            self.taskbar_icon = None
+
+    def destroy_taskbar_icon(self) -> None:
+        if self.taskbar_icon is None:
+            return
+        try:
+            self.taskbar_icon.RemoveIcon()
+            self.taskbar_icon.Destroy()
+        except Exception:
+            pass
+        self.taskbar_icon = None
+
+    def on_close(self, event: wx.CloseEvent) -> None:
+        if self.exiting or not self.settings.close_to_tray:
+            self.destroy_taskbar_icon()
+            event.Skip()
+            return
+        event.Veto()
+        self.Hide()
+        self.announce_player(self.t("tray_still_running"))
+        self.show_desktop_notification(APP_NAME, self.t("tray_still_running"))
+
+    def restore_from_tray(self) -> None:
+        self.Show()
+        self.Raise()
+        if hasattr(self, "menu_list") and self.in_main_menu:
+            self.focus_later(self.menu_list)
+        else:
+            self.SetFocus()
+
+    def quit_application(self) -> None:
+        self.exiting = True
+        self.destroy_taskbar_icon()
+        self.Close(force=True)
+
+    def show_desktop_notification(self, title: str, message: str) -> None:
+        if not self.settings.subscription_notifications:
+            return
+        try:
+            notification = wx.adv.NotificationMessage(title=title, message=message, parent=self)
+            notification.Show(timeout=10)
+        except Exception:
+            pass
+
     def show_main_menu(self) -> None:
         self.in_main_menu = True
         self.in_queue_screen = False
         self.search_screen_active = False
+        self.favorites_screen_active = False
+        self.history_screen_active = False
+        self.subscriptions_screen_active = False
         self.clear()
         title = wx.StaticText(self.panel, label=self.t("main_menu"))
         self.root_sizer.Add(title, 0, wx.ALL, 4)
@@ -1137,8 +1280,10 @@ class MainFrame(wx.Frame):
             (self.t("search_youtube"), self.show_search),
             (self.t("choose_download_folder"), self.choose_download_folder),
             (self.t("favorites"), self.show_favorites),
+            (self.t("history"), self.show_history),
+            (self.t("subscriptions"), self.show_subscriptions),
             (self.t("settings"), self.show_settings),
-            (self.t("exit"), self.Close),
+            (self.t("exit"), self.quit_application),
         ])
         self.menu_list = wx.ListBox(self.panel, choices=[item[0] for item in self.menu_actions])
         self.menu_list.SetName(self.t("main_menu"))
@@ -1165,6 +1310,9 @@ class MainFrame(wx.Frame):
         self.in_main_menu = False
         self.in_queue_screen = True
         self.search_screen_active = False
+        self.favorites_screen_active = False
+        self.history_screen_active = False
+        self.subscriptions_screen_active = False
         self.clear()
         buttons = [(self.t("back"), self.show_main_menu)]
         if self.download_queue:
@@ -1282,6 +1430,9 @@ class MainFrame(wx.Frame):
         self.in_main_menu = False
         self.in_queue_screen = False
         self.search_screen_active = True
+        self.favorites_screen_active = False
+        self.history_screen_active = False
+        self.subscriptions_screen_active = False
         self.clear()
         self.add_button_row([(self.t("back"), self.back_from_search)])
         grid = wx.FlexGridSizer(2, 2, 6, 6)
@@ -1338,6 +1489,8 @@ class MainFrame(wx.Frame):
             self.download_audio_shortcut()
         elif self.is_ctrl_shift_letter(event, "D"):
             self.download_video_shortcut()
+        elif self.is_ctrl_shift_letter(event, "S"):
+            self.subscribe_shortcut()
         elif key == wx.WXK_RETURN:
             self.play_selected()
         elif key == getattr(wx, "WXK_APPS", -1) or (key == wx.WXK_F10 and event.ShiftDown()):
@@ -1353,6 +1506,9 @@ class MainFrame(wx.Frame):
     def show_favorites(self) -> None:
         self.in_main_menu = False
         self.search_screen_active = False
+        self.favorites_screen_active = True
+        self.history_screen_active = False
+        self.subscriptions_screen_active = False
         self.clear()
         self.add_button_row(
             [
@@ -1365,6 +1521,7 @@ class MainFrame(wx.Frame):
         self.favorites_list = wx.ListBox(self.panel, choices=[])
         self.favorites_list.SetName(self.t("favorites"))
         self.favorites_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _evt: self.play_favorite())
+        self.favorites_list.Bind(wx.EVT_CONTEXT_MENU, self.open_favorites_context_menu)
         self.favorites_list.Bind(wx.EVT_KEY_DOWN, self.on_favorites_key)
         self.root_sizer.Add(self.favorites_list, 1, wx.EXPAND | wx.ALL, 4)
         self.refresh_favorites()
@@ -1372,14 +1529,383 @@ class MainFrame(wx.Frame):
         self.focus_later(self.favorites_list)
 
     def on_favorites_key(self, event: wx.KeyEvent) -> None:
-        if event.GetKeyCode() == wx.WXK_RETURN:
+        key = event.GetKeyCode()
+        if key == wx.WXK_RETURN:
             self.play_favorite()
+        elif self.is_ctrl_shift_letter(event, "S"):
+            self.subscribe_to_selected_channel(self.selected_favorite())
+        elif key == getattr(wx, "WXK_APPS", -1) or (key == wx.WXK_F10 and event.ShiftDown()):
+            self.open_favorites_context_menu()
         else:
             event.Skip()
+
+    def open_favorites_context_menu(self, _event=None) -> None:
+        menu = wx.Menu()
+        actions = [
+            (self.t("play"), self.play_favorite),
+            (f"{self.t('download_audio')}\tCtrl+Shift+A", lambda: self.start_download(True, item=self.selected_favorite())),
+            (f"{self.t('download_video')}\tCtrl+Shift+D", lambda: self.start_download(False, item=self.selected_favorite())),
+            (self.t("subscribe_channel"), lambda: self.subscribe_to_selected_channel(self.selected_favorite())),
+            (self.t("copy_url"), lambda: self.copy_item_url(self.selected_favorite())),
+            (self.t("remove"), self.remove_favorite),
+        ]
+        for label, handler in actions:
+            item = menu.Append(wx.ID_ANY, label)
+            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
+        self.PopupMenu(menu)
+        menu.Destroy()
+
+    def show_history(self) -> None:
+        self.in_main_menu = False
+        self.in_queue_screen = False
+        self.search_screen_active = False
+        self.favorites_screen_active = False
+        self.history_screen_active = True
+        self.subscriptions_screen_active = False
+        self.clear()
+        self.add_button_row(
+            [
+                (self.t("back"), self.show_main_menu),
+                (self.t("play"), self.play_history_item),
+                (self.t("remove_history_item"), self.remove_history_item),
+                (self.t("clear_history"), self.clear_history),
+            ]
+        )
+        self.history_list = wx.ListBox(self.panel, choices=[])
+        self.history_list.SetName(self.t("history"))
+        self.history_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _evt: self.play_history_item())
+        self.history_list.Bind(wx.EVT_CONTEXT_MENU, self.open_history_context_menu)
+        self.history_list.Bind(wx.EVT_KEY_DOWN, self.on_history_key)
+        self.root_sizer.Add(self.history_list, 1, wx.EXPAND | wx.ALL, 4)
+        self.refresh_history()
+        self.panel.Layout()
+        self.focus_later(self.history_list)
+
+    def refresh_history(self) -> None:
+        if not hasattr(self, "history_list"):
+            return
+        try:
+            self.history_list.Clear()
+            for item in self.history:
+                self.history_list.Append(self.history_line(item))
+            if self.history:
+                self.history_list.SetSelection(0)
+            else:
+                self.set_status(self.t("history_empty"))
+        except RuntimeError:
+            pass
+
+    def history_line(self, item: dict) -> str:
+        when = self.format_history_time(item.get("timestamp"))
+        action = str(item.get("action") or "")
+        parts = [when, action, item.get("title", ""), f"{self.t('channel')}: {item.get('channel', '')}" if item.get("channel") else ""]
+        return " | ".join(part for part in parts if part)
+
+    def selected_history_item(self) -> dict | None:
+        if not hasattr(self, "history_list"):
+            return None
+        index = self.history_list.GetSelection()
+        if index == wx.NOT_FOUND or index < 0 or index >= len(self.history):
+            return None
+        return self.history[index]
+
+    def on_history_key(self, event: wx.KeyEvent) -> None:
+        key = event.GetKeyCode()
+        if key == wx.WXK_RETURN:
+            self.play_history_item()
+        elif self.is_ctrl_shift_letter(event, "A"):
+            self.start_download(True, item=self.selected_history_item())
+        elif self.is_ctrl_shift_letter(event, "D"):
+            self.start_download(False, item=self.selected_history_item())
+        elif self.is_ctrl_shift_letter(event, "S"):
+            self.subscribe_to_selected_channel(self.selected_history_item())
+        elif key == wx.WXK_DELETE:
+            self.remove_history_item()
+        elif key == getattr(wx, "WXK_APPS", -1) or (key == wx.WXK_F10 and event.ShiftDown()):
+            self.open_history_context_menu()
+        else:
+            event.Skip()
+
+    def open_history_context_menu(self, _event=None) -> None:
+        menu = wx.Menu()
+        actions = [
+            (self.t("play"), self.play_history_item),
+            (f"{self.t('download_audio')}\tCtrl+Shift+A", lambda: self.start_download(True, item=self.selected_history_item())),
+            (f"{self.t('download_video')}\tCtrl+Shift+D", lambda: self.start_download(False, item=self.selected_history_item())),
+            (self.t("add_favorite"), lambda: self.add_favorite_item(self.selected_history_item())),
+            (self.t("subscribe_channel"), lambda: self.subscribe_to_selected_channel(self.selected_history_item())),
+            (self.t("copy_url"), lambda: self.copy_item_url(self.selected_history_item())),
+            (self.t("remove_history_item"), self.remove_history_item),
+            (self.t("clear_history"), self.clear_history),
+        ]
+        for label, handler in actions:
+            item = menu.Append(wx.ID_ANY, label)
+            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
+        self.PopupMenu(menu)
+        menu.Destroy()
+
+    def play_history_item(self) -> None:
+        item = self.selected_history_item()
+        if item:
+            self.current_video_item = item
+            self.current_video_info = dict(item)
+            self.play_url(item["url"], item.get("title", ""))
+
+    def remove_history_item(self) -> None:
+        if not hasattr(self, "history_list"):
+            return
+        index = self.history_list.GetSelection()
+        if index != wx.NOT_FOUND and 0 <= index < len(self.history):
+            del self.history[index]
+            self.save_history()
+            self.refresh_history()
+            self.announce_player(self.t("history_removed"))
+
+    def clear_history(self) -> None:
+        self.history = []
+        self.save_history()
+        self.refresh_history()
+        self.announce_player(self.t("history_cleared"))
+
+    def show_subscriptions(self) -> None:
+        self.in_main_menu = False
+        self.in_queue_screen = False
+        self.search_screen_active = False
+        self.favorites_screen_active = False
+        self.history_screen_active = False
+        self.subscriptions_screen_active = True
+        self.clear()
+        self.add_button_row(
+            [
+                (self.t("back"), self.show_main_menu),
+                (self.t("subscription_check_now"), lambda: self.check_subscriptions(manual=True)),
+                (self.t("subscription_open_videos"), self.open_selected_subscription_videos),
+                (self.t("remove"), self.remove_subscription),
+            ]
+        )
+        self.subscriptions_list = wx.ListBox(self.panel, choices=[])
+        self.subscriptions_list.SetName(self.t("subscriptions"))
+        self.subscriptions_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _evt: self.open_selected_subscription_videos())
+        self.subscriptions_list.Bind(wx.EVT_CONTEXT_MENU, self.open_subscriptions_context_menu)
+        self.subscriptions_list.Bind(wx.EVT_KEY_DOWN, self.on_subscriptions_key)
+        self.root_sizer.Add(self.subscriptions_list, 1, wx.EXPAND | wx.ALL, 4)
+        self.refresh_subscriptions()
+        self.panel.Layout()
+        self.focus_later(self.subscriptions_list)
+
+    def refresh_subscriptions(self) -> None:
+        if not hasattr(self, "subscriptions_list"):
+            return
+        try:
+            self.subscriptions_list.Clear()
+            for item in self.subscriptions:
+                self.subscriptions_list.Append(self.subscription_line(item))
+            if self.subscriptions:
+                self.subscriptions_list.SetSelection(0)
+            else:
+                self.set_status(self.t("subscription_empty"))
+        except RuntimeError:
+            pass
+
+    def subscription_line(self, item: dict) -> str:
+        checked = self.format_history_time(item.get("last_checked")) if item.get("last_checked") else self.t("subscription_never_checked")
+        new_count = int(item.get("last_new_count") or 0)
+        parts = [
+            item.get("title", ""),
+            self.t("subscription_last_checked", time=checked) if item.get("last_checked") else checked,
+            self.t("subscription_new_videos", count=new_count, title=item.get("title", "")) if new_count else "",
+        ]
+        return " | ".join(part for part in parts if part)
+
+    def selected_subscription(self) -> dict | None:
+        if not hasattr(self, "subscriptions_list"):
+            return None
+        index = self.subscriptions_list.GetSelection()
+        if index == wx.NOT_FOUND or index < 0 or index >= len(self.subscriptions):
+            return None
+        return self.subscriptions[index]
+
+    def on_subscriptions_key(self, event: wx.KeyEvent) -> None:
+        key = event.GetKeyCode()
+        if key == wx.WXK_RETURN:
+            self.open_selected_subscription_videos()
+        elif key == wx.WXK_DELETE:
+            self.remove_subscription()
+        elif key == getattr(wx, "WXK_APPS", -1) or (key == wx.WXK_F10 and event.ShiftDown()):
+            self.open_subscriptions_context_menu()
+        else:
+            event.Skip()
+
+    def open_subscriptions_context_menu(self, _event=None) -> None:
+        menu = wx.Menu()
+        actions = [
+            (self.t("subscription_open_videos"), self.open_selected_subscription_videos),
+            (self.t("subscription_check_now"), lambda: self.check_subscriptions(manual=True)),
+            (self.t("copy_url"), lambda: self.copy_item_url(self.selected_subscription())),
+            (self.t("remove"), self.remove_subscription),
+        ]
+        for label, handler in actions:
+            item = menu.Append(wx.ID_ANY, label)
+            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
+        self.PopupMenu(menu)
+        menu.Destroy()
+
+    def open_selected_subscription_videos(self) -> None:
+        item = self.selected_subscription()
+        if not item:
+            self.message(self.t("no_selection"))
+            return
+        self.search_results_stack.append({"screen": "subscriptions"})
+        channel_item = {
+            "title": item.get("title", ""),
+            "url": item.get("url", ""),
+            "kind": "channel",
+            "type": self.t("channel"),
+            "channel": item.get("title", ""),
+        }
+        self.show_search(restore_search=True)
+        self.open_channel_videos(channel_item, push_state=False)
+
+    def remove_subscription(self) -> None:
+        if not hasattr(self, "subscriptions_list"):
+            return
+        index = self.subscriptions_list.GetSelection()
+        if index != wx.NOT_FOUND and 0 <= index < len(self.subscriptions):
+            item = self.subscriptions.pop(index)
+            self.save_subscriptions()
+            self.refresh_subscriptions()
+            self.announce_player(self.t("subscription_removed", title=item.get("title", "")))
+
+    def subscribe_shortcut(self) -> None:
+        self.subscribe_to_selected_channel(self.active_item())
+
+    def subscribe_to_selected_channel(self, item: dict | None) -> None:
+        if not item:
+            self.message(self.t("no_selection"))
+            return
+        subscription = self.subscription_from_item(item)
+        if not subscription:
+            self.message(self.t("no_selection"))
+            return
+        url = subscription["url"]
+        existing = next((sub for sub in self.subscriptions if sub.get("url") == url), None)
+        if existing:
+            self.announce_player(self.t("subscription_exists", title=existing.get("title", "")))
+            return
+        self.subscriptions.insert(0, subscription)
+        self.save_subscriptions()
+        self.refresh_subscriptions()
+        self.announce_player(self.t("subscription_added", title=subscription.get("title", "")))
+
+    def subscription_from_item(self, item: dict) -> dict | None:
+        kind = item.get("kind")
+        channel_url = str(item.get("channel_url") or "").strip()
+        if kind == "channel":
+            channel_url = str(item.get("url") or channel_url).strip()
+        if not channel_url:
+            return None
+        title = item.get("channel") or item.get("title") or channel_url
+        latest_urls = [item.get("url")] if item.get("kind") == "video" and item.get("url") else []
+        return {
+            "title": title,
+            "url": channel_url,
+            "latest_urls": latest_urls,
+            "last_checked": 0.0,
+            "last_new_count": 0,
+            "created_at": time.time(),
+        }
+
+    def configure_subscription_timer(self) -> None:
+        if not hasattr(self, "subscription_timer"):
+            return
+        try:
+            self.subscription_timer.Stop()
+        except Exception:
+            pass
+        if self.settings.subscription_check_enabled:
+            interval_ms = max(1, int(self.settings.subscription_check_interval_hours or 6)) * 60 * 60 * 1000
+            self.subscription_timer.Start(interval_ms)
+
+    def on_subscription_timer(self, _event) -> None:
+        self.check_subscriptions_if_due()
+
+    def check_subscriptions_if_due(self) -> None:
+        if not self.settings.subscription_check_enabled or not self.subscriptions:
+            return
+        interval_seconds = max(1, int(self.settings.subscription_check_interval_hours or 6)) * 60 * 60
+        last_check = float(getattr(self.settings, "last_subscription_check", 0.0) or 0.0)
+        if time.time() - last_check >= interval_seconds:
+            self.check_subscriptions(manual=False)
+
+    def check_subscriptions(self, manual: bool = False) -> None:
+        if self.subscription_check_running:
+            return
+        if not self.subscriptions:
+            if manual:
+                self.announce_player(self.t("subscription_empty"))
+            return
+        self.subscription_check_running = True
+        if manual:
+            self.announce_player(self.t("subscription_checking"))
+        threading.Thread(target=self.check_subscriptions_worker, args=(manual,), daemon=True).start()
+
+    def check_subscriptions_worker(self, manual: bool = False) -> None:
+        try:
+            total_new = 0
+            updated_subscriptions = []
+            for subscription in self.subscriptions:
+                updated, new_items = self.check_one_subscription(subscription)
+                updated_subscriptions.append(updated)
+                if new_items:
+                    total_new += len(new_items)
+                    message = self.t("subscription_new_videos", count=len(new_items), title=updated.get("title", ""))
+                    self.ui_queue.put(("announce", message))
+                    self.ui_queue.put(("notify", (self.t("notification_subscription_title"), message)))
+            self.subscriptions = updated_subscriptions
+            self.settings.last_subscription_check = time.time()
+            self.save_subscriptions()
+            self.save_settings()
+            self.ui_queue.put(("subscriptions_changed", None))
+            if manual:
+                key = "subscription_check_complete" if total_new else "subscription_no_new"
+                self.ui_queue.put(("announce", self.t(key)))
+        except Exception as exc:
+            if manual:
+                self.ui_queue.put(("announce", self.t("subscription_check_failed", error=exc)))
+        finally:
+            self.subscription_check_running = False
+
+    def check_one_subscription(self, subscription: dict) -> tuple[dict, list[dict]]:
+        entries = self.fetch_subscription_entries(subscription)
+        current_urls = [entry.get("url", "") for entry in entries if entry.get("url")]
+        known_urls = set(subscription.get("latest_urls") or [])
+        if not known_urls:
+            new_items: list[dict] = []
+        else:
+            new_items = [entry for entry in entries if entry.get("url") and entry.get("url") not in known_urls]
+        updated = dict(subscription)
+        updated["latest_urls"] = current_urls[:20]
+        updated["last_checked"] = time.time()
+        updated["last_new_count"] = len(new_items)
+        return updated, new_items
+
+    def fetch_subscription_entries(self, subscription: dict) -> list[dict]:
+        ytdlp = get_yt_dlp()
+        if ytdlp is None:
+            raise RuntimeError(self.t("missing_ytdlp"))
+        url = self.collection_download_url({"kind": "channel", "url": subscription.get("url", "")})
+        options = {"quiet": True, "extract_flat": True, "skip_download": True, "playlistend": 5}
+        with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
+            info = ydl.extract_info(url, download=False)
+        entries = list(info.get("entries") or [])[:5]
+        return [self.normalize_entry(entry, "Video") for entry in entries]
 
     def show_settings(self) -> None:
         self.in_main_menu = False
         self.search_screen_active = False
+        self.favorites_screen_active = False
+        self.history_screen_active = False
+        self.subscriptions_screen_active = False
         self.clear()
         self.add_button_row([(self.t("back"), self.show_main_menu), (self.t("save"), self.save_settings_from_ui), (self.t("restore_defaults"), self.restore_default_settings)])
         self.controls = {}
@@ -1407,6 +1933,7 @@ class MainFrame(wx.Frame):
             (self.t("general_section"), "general"),
             (self.t("playback_section"), "playback"),
             (self.t("downloads_section"), "downloads"),
+            (self.t("library_section"), "library"),
             (self.t("cookies_network_section"), "cookies"),
             (self.t("updates_advanced_section"), "advanced"),
         ]
@@ -1496,6 +2023,7 @@ class MainFrame(wx.Frame):
             check("auto_update", self.settings.auto_update_ytdlp)
             check("auto_update_app", self.settings.auto_update_app)
             button("check_app_updates_now", self.manual_app_update_check)
+            check("close_to_tray", self.settings.close_to_tray)
         elif section_name == "playback":
             text("player_command", self.settings.player_command)
             choice("player_speed", self.settings.player_speed, [self.format_playback_rate(step) for step in PLAYBACK_SPEED_STEPS if step <= 2.0])
@@ -1529,6 +2057,12 @@ class MainFrame(wx.Frame):
             check("embed_thumbnail", self.settings.embed_thumbnail)
             check("restrict_filenames", self.settings.restrict_filenames)
             check("download_archive", self.settings.download_archive)
+        elif section_name == "library":
+            choice("history_limit", str(self.settings.history_limit), ["100", "250", "500", "1000", "2000"])
+            check("subscription_check_enabled", self.settings.subscription_check_enabled)
+            choice("subscription_check_interval", str(self.settings.subscription_check_interval_hours), ["1", "2", "3", "6", "12", "24"])
+            check("subscription_notifications", self.settings.subscription_notifications)
+            button("subscription_check_now", lambda: self.check_subscriptions(manual=True))
         elif section_name == "cookies":
             text("cookies", self.settings.cookies_file)
             choice("cookies_from_browser", self.settings.cookies_from_browser or "none", COOKIES_BROWSER_OPTIONS)
@@ -1634,6 +2168,8 @@ class MainFrame(wx.Frame):
         return {
             "title": entry.get("title") or "",
             "channel": entry.get("uploader") or entry.get("channel") or "",
+            "channel_url": self.normalize_channel_url(entry),
+            "channel_id": entry.get("channel_id") or entry.get("uploader_id") or "",
             "views": self.format_count(entry.get("view_count")),
             "view_count": entry.get("view_count"),
             "age": self.format_age(entry),
@@ -1772,7 +2308,7 @@ class MainFrame(wx.Frame):
         self.play_url(item["url"], item["title"])
 
     def push_search_state(self) -> None:
-        if not self.results:
+        if not self.search_screen_active or not self.results:
             return
         self.search_results_stack.append(
             {
@@ -1793,6 +2329,9 @@ class MainFrame(wx.Frame):
             self.show_main_menu()
             return
         state = self.search_results_stack.pop()
+        if state.get("screen") == "subscriptions":
+            self.show_subscriptions()
+            return
         self.last_search_query = str(state.get("query") or self.last_search_query)
         self.last_search_type_index = int(state.get("type_index") or 0)
         self.current_search_type_code = str(state.get("search_type") or "All")
@@ -1806,8 +2345,9 @@ class MainFrame(wx.Frame):
         self.show_results(results, selection=selection, visible_count=visible_count)
         wx.CallAfter(self.focus_results_list, selection)
 
-    def open_channel_videos(self, item: dict) -> None:
-        self.push_search_state()
+    def open_channel_videos(self, item: dict, push_state: bool = True) -> None:
+        if push_state:
+            self.push_search_state()
         self.set_status(self.t("loading_channel", title=item["title"]))
         url = item["url"].rstrip("/")
         if not url.endswith("/videos"):
@@ -1854,6 +2394,8 @@ class MainFrame(wx.Frame):
         if not player:
             self.message(self.t("player_missing"), wx.ICON_ERROR)
             return
+        if self.current_video_item:
+            self.record_history(self.current_video_item, "played")
         self.current_index = max(0, self.current_index)
         self.stop_player(silent=True)
         command, kind = player
@@ -1900,6 +2442,8 @@ class MainFrame(wx.Frame):
             {
                 "title": info.get("title") or self.current_video_info.get("title", ""),
                 "channel": info.get("uploader") or info.get("channel") or self.current_video_info.get("channel", ""),
+                "channel_url": self.normalize_channel_url(info) or self.current_video_info.get("channel_url", ""),
+                "channel_id": info.get("channel_id") or info.get("uploader_id") or self.current_video_info.get("channel_id", ""),
                 "url": info.get("webpage_url") or self.current_video_info.get("url", ""),
                 "view_count": info.get("view_count", self.current_video_info.get("view_count")),
                 "views": self.format_count(info.get("view_count", self.current_video_info.get("view_count"))),
@@ -1972,6 +2516,9 @@ class MainFrame(wx.Frame):
         self.in_main_menu = False
         self.in_queue_screen = False
         self.search_screen_active = False
+        self.favorites_screen_active = False
+        self.history_screen_active = False
+        self.subscriptions_screen_active = False
         self.clear()
         self.add_button_row(
             [
@@ -2101,6 +2648,12 @@ class MainFrame(wx.Frame):
             item = self.selected_queue_item()
             if item:
                 return item
+        if self.favorites_screen_active:
+            return self.selected_favorite()
+        if self.history_screen_active:
+            return self.selected_history_item()
+        if self.subscriptions_screen_active:
+            return self.selected_subscription()
         return self.selected_result()
 
     def copy_url_to_clipboard(self, url: str) -> None:
@@ -2582,6 +3135,9 @@ class MainFrame(wx.Frame):
         if self.is_ctrl_shift_letter(event, "D"):
             self.download_video_shortcut()
             return
+        if self.is_ctrl_shift_letter(event, "S"):
+            self.subscribe_shortcut()
+            return
         if key == wx.WXK_ESCAPE:
             if self.in_player_screen and self.video_details_visible():
                 self.hide_video_details()
@@ -2656,6 +3212,7 @@ class MainFrame(wx.Frame):
             (f"{self.t('download_audio')}\tCtrl+Shift+A", self.download_audio),
             (f"{self.t('download_video')}\tCtrl+Shift+D", self.download_video),
             (self.t("add_favorite"), self.add_selected_favorite),
+            (self.t("subscribe_channel"), self.subscribe_shortcut),
             (self.t("open_browser"), self.open_selected_in_browser),
             (self.t("copy_url"), self.copy_selected_url),
         ]
@@ -2674,6 +3231,9 @@ class MainFrame(wx.Frame):
         item = item or self.active_item()
         if not item:
             self.message(self.t("no_selection"))
+            return
+        if item.get("kind") in {"playlist", "channel"}:
+            self.download_collection(item, audio_only=audio_only, remove_queued=remove_queued)
             return
         action = "audio" if audio_only else "video"
         if self.settings.confirm_before_download:
@@ -2746,6 +3306,7 @@ class MainFrame(wx.Frame):
                 raise DownloadCancelled()
             done_text = self.t("download_audio_done" if audio_only else "download_video_done", title=item["title"])
             wx.CallAfter(self.finish_download_task, task_id)
+            wx.CallAfter(self.record_history, item, "downloaded audio" if audio_only else "downloaded video")
             wx.CallAfter(self.finish_download, done_text, str(folder))
         except DownloadCancelled:
             wx.CallAfter(self.finish_download_task, task_id, "download_state_cancelled")
@@ -2774,6 +3335,7 @@ class MainFrame(wx.Frame):
                 raise DownloadCancelled()
             done_key = "download_channel_done" if kind == "channel" else "download_playlist_done"
             wx.CallAfter(self.finish_download_task, task_id)
+            wx.CallAfter(self.record_history, item, f"downloaded {kind}")
             wx.CallAfter(self.finish_download, self.t(done_key, title=title), str(folder))
         except DownloadCancelled:
             wx.CallAfter(self.finish_download_task, task_id, "download_state_cancelled")
@@ -2928,11 +3490,18 @@ class MainFrame(wx.Frame):
         return hook
 
     def add_selected_favorite(self) -> None:
-        item = self.selected_result()
+        self.add_favorite_item(self.active_item())
+
+    def add_favorite_item(self, item: dict | None) -> None:
         if not item:
             self.message(self.t("no_selection"))
             return
-        favorite = {"title": item["title"], "channel": item["channel"], "url": item["url"]}
+        favorite = {
+            "title": item.get("title", ""),
+            "channel": item.get("channel", ""),
+            "channel_url": item.get("channel_url", ""),
+            "url": item.get("url", ""),
+        }
         if any(existing["url"] == favorite["url"] for existing in self.favorites):
             self.set_status(self.t("favorite_exists"))
             return
@@ -2977,6 +3546,10 @@ class MainFrame(wx.Frame):
         item = self.active_item()
         if item:
             self.copy_url_to_clipboard(item["url"])
+
+    def copy_item_url(self, item: dict | None) -> None:
+        if item:
+            self.copy_url_to_clipboard(str(item.get("url") or ""))
 
     def toggle_download_queue(self, audio_only: bool) -> None:
         item = self.selected_result()
@@ -3185,6 +3758,7 @@ class MainFrame(wx.Frame):
     def restore_default_settings(self) -> None:
         self.settings = Settings()
         self.save_settings()
+        self.configure_subscription_timer()
         self.set_status(self.t("defaults_restored"))
         self.speak_text(self.t("defaults_restored"))
         self.show_settings()
@@ -3246,6 +3820,8 @@ class MainFrame(wx.Frame):
         old_language = self.settings.language
         self.apply_settings_from_visible_controls()
         self.save_settings()
+        self.trim_history()
+        self.configure_subscription_timer()
         self.set_status(self.t("settings_saved"))
         if self.settings.language != old_language:
             self.show_settings()
@@ -3271,6 +3847,8 @@ class MainFrame(wx.Frame):
             self.settings.auto_update_ytdlp = c["auto_update"].GetValue()
         if "auto_update_app" in c:
             self.settings.auto_update_app = c["auto_update_app"].GetValue()
+        if "close_to_tray" in c:
+            self.settings.close_to_tray = c["close_to_tray"].GetValue()
         if "autoplay_next" in c:
             self.settings.autoplay_next = c["autoplay_next"].GetValue()
         if "confirm_download" in c:
@@ -3347,6 +3925,14 @@ class MainFrame(wx.Frame):
             self.settings.retries = self.to_int(c["retries"].GetStringSelection(), 10, 0)
         if "timeout" in c:
             self.settings.socket_timeout = self.to_int(c["timeout"].GetStringSelection(), 20, 1)
+        if "history_limit" in c:
+            self.settings.history_limit = self.to_int(c["history_limit"].GetStringSelection(), 500, 100, 5000)
+        if "subscription_check_enabled" in c:
+            self.settings.subscription_check_enabled = c["subscription_check_enabled"].GetValue()
+        if "subscription_check_interval" in c:
+            self.settings.subscription_check_interval_hours = self.to_int(c["subscription_check_interval"].GetStringSelection(), 6, 1, 168)
+        if "subscription_notifications" in c:
+            self.settings.subscription_notifications = c["subscription_notifications"].GetValue()
 
     def selected_choice_value(self, key: str) -> str:
         ctrl = self.controls.get(key) if hasattr(self, "controls") else None
@@ -3686,7 +4272,7 @@ class MainFrame(wx.Frame):
     @staticmethod
     def is_portable_zip_asset(path_or_name: str | Path) -> bool:
         name = Path(path_or_name).name.lower()
-        return name == PORTABLE_ZIP_ASSET_NAME.lower() or (name.endswith(".zip") and "portable" in name)
+        return name in {PORTABLE_ZIP_ASSET_NAME.lower(), LEGACY_PORTABLE_ZIP_ASSET_NAME.lower()} or (name.endswith(".zip") and "apricotplayer" in name)
 
     @staticmethod
     def validate_update_package(path: Path) -> None:
@@ -3896,6 +4482,8 @@ class MainFrame(wx.Frame):
 
     def exit_for_update(self) -> None:
         try:
+            self.exiting = True
+            self.destroy_taskbar_icon()
             self.Destroy()
             app = wx.GetApp()
             if app:
@@ -3933,7 +4521,8 @@ class MainFrame(wx.Frame):
 
     def find_release_asset(self, release: dict) -> dict | None:
         assets = release.get("assets") or []
-        preferred_names = [INSTALLER_ASSET_NAME, PORTABLE_ZIP_ASSET_NAME] if self.is_installed_build() else [PORTABLE_ZIP_ASSET_NAME, INSTALLER_ASSET_NAME]
+        portable_names = [PORTABLE_ZIP_ASSET_NAME, LEGACY_PORTABLE_ZIP_ASSET_NAME]
+        preferred_names = [INSTALLER_ASSET_NAME, *portable_names] if self.is_installed_build() else [*portable_names, INSTALLER_ASSET_NAME]
         for preferred_name in preferred_names:
             for asset in assets:
                 if asset.get("name") == preferred_name:
@@ -4062,6 +4651,11 @@ class MainFrame(wx.Frame):
                 elif kind == "download_task" and isinstance(payload, dict):
                     task_id = str(payload.pop("task_id", ""))
                     self.update_download_task(task_id, **payload)
+                elif kind == "notify" and isinstance(payload, tuple):
+                    title, message = payload
+                    self.show_desktop_notification(str(title), str(message))
+                elif kind == "subscriptions_changed":
+                    self.refresh_subscriptions()
                 elif kind == "error":
                     self.message(str(payload), wx.ICON_ERROR)
         except queue.Empty:
@@ -4100,6 +4694,8 @@ class MainFrame(wx.Frame):
         if source.exists():
             try:
                 data = json.loads(source.read_text(encoding="utf-8"))
+                allowed_keys = {field.name for field in fields(Settings)}
+                data = {key: value for key, value in data.items() if key in allowed_keys}
                 merged = {**asdict(Settings()), **data}
                 if merged.get("language") not in LANGUAGE_CODES:
                     merged["language"] = "en"
@@ -4130,10 +4726,71 @@ class MainFrame(wx.Frame):
         APP_DIR.mkdir(parents=True, exist_ok=True)
         FAVORITES_FILE.write_text(json.dumps(self.favorites, indent=2, ensure_ascii=False), encoding="utf-8")
 
+    def load_history(self) -> list[dict]:
+        return self.load_json_list(HISTORY_FILE)
+
+    def save_history(self) -> None:
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        HISTORY_FILE.write_text(json.dumps(self.history, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def load_subscriptions(self) -> list[dict]:
+        return self.load_json_list(SUBSCRIPTIONS_FILE)
+
+    def save_subscriptions(self) -> None:
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        SUBSCRIPTIONS_FILE.write_text(json.dumps(self.subscriptions, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    @staticmethod
+    def load_json_list(path: Path) -> list[dict]:
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                return data if isinstance(data, list) else []
+            except Exception:
+                return []
+        return []
+
+    def record_history(self, item: dict, action: str) -> None:
+        url = str(item.get("url") or "")
+        if not url:
+            return
+        entry = {
+            "title": item.get("title", ""),
+            "channel": item.get("channel", ""),
+            "channel_url": item.get("channel_url", ""),
+            "channel_id": item.get("channel_id", ""),
+            "url": url,
+            "kind": item.get("kind", "video"),
+            "type": item.get("type", self.t("video")),
+            "action": action,
+            "timestamp": time.time(),
+        }
+        self.history = [existing for existing in self.history if existing.get("url") != url]
+        self.history.insert(0, entry)
+        self.trim_history()
+        self.save_history()
+
+    def trim_history(self) -> None:
+        limit = max(10, int(getattr(self.settings, "history_limit", 500) or 500))
+        if len(self.history) > limit:
+            self.history = self.history[:limit]
+            self.save_history()
+
     @staticmethod
     def youtube_search_url(query: str, search_type: str) -> str:
         filters = {"Playlist": "EgIQAw==", "Kanal": "EgIQAg=="}
         return f"https://www.youtube.com/results?{urlencode({'search_query': query, 'sp': filters.get(search_type, '')})}"
+
+    @staticmethod
+    def normalize_channel_url(entry: dict) -> str:
+        for key in ("channel_url", "uploader_url"):
+            value = str(entry.get(key) or "").strip()
+            if value:
+                return value if value.startswith("http") else f"https://www.youtube.com/{value.lstrip('/')}"
+        channel_id = str(entry.get("channel_id") or entry.get("uploader_id") or "").strip()
+        if channel_id.startswith("UC"):
+            return f"https://www.youtube.com/channel/{channel_id}"
+        return ""
 
     @staticmethod
     def parse_csv(value: str) -> list[str]:
@@ -4213,6 +4870,13 @@ class MainFrame(wx.Frame):
                 amount = diff // size
                 return f"{amount} {name}{'' if amount == 1 else 's'} ago"
         return "just now"
+
+    @staticmethod
+    def format_history_time(timestamp) -> str:
+        try:
+            return datetime.fromtimestamp(float(timestamp)).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            return ""
 
     @staticmethod
     def make_ipc_path() -> str:

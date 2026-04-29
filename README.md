@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.4.7` (`0.4.7`)
+Current version: `0.5.0` (`0.5.0`)
 
 ## Download
 
@@ -33,6 +33,10 @@ py wx_main.py
 - Video downloads default to MP4, with selectable video download format options in Settings
 - Current downloads screen with active batch/playlist/channel status and cancel controls
 - Favorites
+- History screen for recently played and downloaded items
+- Subscriptions screen for YouTube channels, with manual and automatic checks for new videos
+- Windows notifications for new videos from subscribed channels
+- Optional system tray mode when closing the window
 - UI languages: English, Slovenian, German, French, Spanish, Portuguese, Italian, Polish, Dutch, Swedish, Croatian, and Serbian
 - Dynamic search mode is the default for new settings, loading results in chunks of 20
 - GitHub release updater for installed and packaged builds
@@ -58,6 +62,7 @@ py wx_main.py
 
 - `Ctrl+Shift+A`: download audio
 - `Ctrl+Shift+D`: download video
+- `Ctrl+Shift+S`: subscribe to the focused item's channel
 
 ## Accessibility
 
@@ -77,5 +82,5 @@ Helpful scripts:
 
 - `scripts/build_release.ps1 -PackageMode onedir` builds the fast app folder used by both the installer and portable ZIP
 - `scripts/build_installer.ps1` builds `ApricotPlayerSetup.exe` when Inno Setup is installed
-- `scripts/build_portable_zip.ps1` builds `ApricotPlayerPortable.zip`
-- `scripts/publish_release.ps1 -Tag v0.4.7 -NotesFile release-notes/v0.4.7.md` publishes the installer and portable ZIP to GitHub Releases
+- `scripts/build_portable_zip.ps1` builds `ApricotPlayer.zip`
+- `scripts/publish_release.ps1 -Tag v0.5.0 -NotesFile release-notes/v0.5.0.md` publishes the installer and portable ZIP to GitHub Releases

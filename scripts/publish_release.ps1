@@ -23,12 +23,12 @@ if (-not $AssetPaths -or $AssetPaths.Count -eq 0) {
     if (Test-Path $installerPath) {
         $AssetPaths += $installerPath
     }
-    $portableZipPath = Join-Path $projectRoot "release-dist\ApricotPlayerPortable.zip"
+    $portableZipPath = Join-Path $projectRoot "release-dist\ApricotPlayer.zip"
     if (Test-Path $portableZipPath) {
         $AssetPaths += $portableZipPath
     }
     if (-not $AssetPaths -or $AssetPaths.Count -eq 0) {
-        throw "No default release assets were found. Build ApricotPlayerSetup.exe and ApricotPlayerPortable.zip first, or pass -AssetPaths."
+        throw "No default release assets were found. Build ApricotPlayerSetup.exe and ApricotPlayer.zip first, or pass -AssetPaths."
     }
 }
 
