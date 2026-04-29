@@ -1,5 +1,13 @@
 # Changelog
 
+## What's new in version 0.5.1
+
+- fixed the search result context menu so channels and playlists no longer show single-video actions such as Play, Download audio, or Download video
+- channel and playlist result context menus now show collection-aware actions such as Open channel videos, Open playlist videos, Download channel, or Download playlist
+- added a New videos action in Subscriptions that opens only the videos found since the last subscription check
+- pressing Enter on a subscribed channel opens all channel videos, and Escape returns to the Subscriptions list
+- tightened library item handling so saved channel and playlist items open as collections instead of being treated as single videos
+
 ## What's new in version 0.5.0
 
 - added a History screen for recently played and downloaded items, with keyboard and context menu actions for play, download, favorite, subscribe, copy URL, remove, and clear history

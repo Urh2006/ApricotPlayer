@@ -99,8 +99,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.5.0"
-APP_VERSION_LABEL = "0.5.0"
+APP_VERSION = "0.5.1"
+APP_VERSION_LABEL = "0.5.1"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -557,7 +557,12 @@ TEXT = {
         "subscription_check_failed": "Could not check subscriptions: {error}",
         "subscription_no_new": "No new subscription videos.",
         "subscription_new_videos": "{count} new videos from {title}.",
+        "subscription_new_videos_button": "New videos",
+        "subscription_new_videos_title": "New videos from {title}",
+        "subscription_no_saved_new_videos": "No new videos saved for this channel.",
         "subscription_open_videos": "Open channel videos",
+        "open_channel_videos": "Open channel videos",
+        "open_playlist_videos": "Open playlist videos",
         "subscription_last_checked": "last checked {time}",
         "subscription_never_checked": "never checked",
         "subscription_notifications": "Windows notifications for new subscription videos",
@@ -1058,6 +1063,7 @@ class MainFrame(wx.Frame):
         self.mpv_ipc_lock = threading.Lock()
         self.ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.loading_more_results = False
+        self.dynamic_fetch_enabled = True
         self.current_search_type_code = "All"
         self.collection_url = ""
         self.collection_result_type = ""
@@ -1647,9 +1653,7 @@ class MainFrame(wx.Frame):
     def play_history_item(self) -> None:
         item = self.selected_history_item()
         if item:
-            self.current_video_item = item
-            self.current_video_info = dict(item)
-            self.play_url(item["url"], item.get("title", ""))
+            self.open_library_item(item, "history")
 
     def remove_history_item(self) -> None:
         if not hasattr(self, "history_list"):
@@ -1680,6 +1684,7 @@ class MainFrame(wx.Frame):
                 (self.t("back"), self.show_main_menu),
                 (self.t("subscription_check_now"), lambda: self.check_subscriptions(manual=True)),
                 (self.t("subscription_open_videos"), self.open_selected_subscription_videos),
+                (self.t("subscription_new_videos_button"), self.open_selected_subscription_new_videos),
                 (self.t("remove"), self.remove_subscription),
             ]
         )
@@ -1729,6 +1734,8 @@ class MainFrame(wx.Frame):
         key = event.GetKeyCode()
         if key == wx.WXK_RETURN:
             self.open_selected_subscription_videos()
+        elif key == wx.WXK_SPACE:
+            self.open_selected_subscription_new_videos()
         elif key == wx.WXK_DELETE:
             self.remove_subscription()
         elif key == getattr(wx, "WXK_APPS", -1) or (key == wx.WXK_F10 and event.ShiftDown()):
@@ -1740,6 +1747,7 @@ class MainFrame(wx.Frame):
         menu = wx.Menu()
         actions = [
             (self.t("subscription_open_videos"), self.open_selected_subscription_videos),
+            (self.t("subscription_new_videos_button"), self.open_selected_subscription_new_videos),
             (self.t("subscription_check_now"), lambda: self.check_subscriptions(manual=True)),
             (self.t("copy_url"), lambda: self.copy_item_url(self.selected_subscription())),
             (self.t("remove"), self.remove_subscription),
@@ -1755,7 +1763,6 @@ class MainFrame(wx.Frame):
         if not item:
             self.message(self.t("no_selection"))
             return
-        self.search_results_stack.append({"screen": "subscriptions"})
         channel_item = {
             "title": item.get("title", ""),
             "url": item.get("url", ""),
@@ -1763,8 +1770,28 @@ class MainFrame(wx.Frame):
             "type": self.t("channel"),
             "channel": item.get("title", ""),
         }
+        self.open_library_item(channel_item, "subscriptions")
+
+    def open_selected_subscription_new_videos(self) -> None:
+        item = self.selected_subscription()
+        if not item:
+            self.message(self.t("no_selection"))
+            return
+        new_items = list(item.get("last_new_items") or [])
+        if not new_items:
+            self.announce_player(self.t("subscription_no_saved_new_videos"))
+            return
+        self.search_results_stack.append({"screen": "subscriptions"})
+        self.last_search_query = self.t("subscription_new_videos_title", title=item.get("title", ""))
+        self.last_search_type_index = 0
+        self.current_search_type_code = "Video"
+        self.collection_url = ""
+        self.collection_result_type = ""
+        self.loading_more_results = False
+        self.dynamic_fetch_enabled = False
         self.show_search(restore_search=True)
-        self.open_channel_videos(channel_item, push_state=False)
+        self.show_results(new_items, selection=0, visible_count=len(new_items))
+        wx.CallAfter(self.focus_results_list, 0)
 
     def remove_subscription(self) -> None:
         if not hasattr(self, "subscriptions_list"):
@@ -1887,6 +1914,7 @@ class MainFrame(wx.Frame):
         updated["latest_urls"] = current_urls[:20]
         updated["last_checked"] = time.time()
         updated["last_new_count"] = len(new_items)
+        updated["last_new_items"] = new_items[:20]
         return updated, new_items
 
     def fetch_subscription_entries(self, subscription: dict) -> list[dict]:
@@ -2102,6 +2130,7 @@ class MainFrame(wx.Frame):
         self.collection_result_type = ""
         self.search_results_stack = []
         self.loading_more_results = False
+        self.dynamic_fetch_enabled = True
         self.set_status(self.t("searching", query=query))
         threading.Thread(target=self.search_worker, args=(query, self.current_search_type_code, self.initial_results_limit()), daemon=True).start()
 
@@ -2202,7 +2231,7 @@ class MainFrame(wx.Frame):
         self.set_status(self.t("found", count=len(self.results)))
 
     def maybe_extend_results(self) -> None:
-        if self.settings.results_limit != 0 or not hasattr(self, "results_list"):
+        if not self.dynamic_fetch_enabled or self.settings.results_limit != 0 or not hasattr(self, "results_list"):
             return
         selection = self.results_list.GetSelection()
         if selection == wx.NOT_FOUND:
@@ -2332,12 +2361,19 @@ class MainFrame(wx.Frame):
         if state.get("screen") == "subscriptions":
             self.show_subscriptions()
             return
+        if state.get("screen") == "history":
+            self.show_history()
+            return
+        if state.get("screen") == "favorites":
+            self.show_favorites()
+            return
         self.last_search_query = str(state.get("query") or self.last_search_query)
         self.last_search_type_index = int(state.get("type_index") or 0)
         self.current_search_type_code = str(state.get("search_type") or "All")
         self.collection_url = str(state.get("collection_url") or "")
         self.collection_result_type = str(state.get("collection_result_type") or "")
         self.loading_more_results = False
+        self.dynamic_fetch_enabled = True
         results = list(state.get("all_results") or state.get("results") or [])
         selection = int(state.get("index") or 0)
         visible_count = int(state.get("visible_count") or len(results))
@@ -2355,14 +2391,17 @@ class MainFrame(wx.Frame):
         self.collection_url = url
         self.collection_result_type = "Video"
         self.loading_more_results = False
+        self.dynamic_fetch_enabled = True
         threading.Thread(target=self.load_collection_worker, args=(url, "Video", self.initial_results_limit(), 0), daemon=True).start()
 
-    def open_playlist_videos(self, item: dict) -> None:
-        self.push_search_state()
+    def open_playlist_videos(self, item: dict, push_state: bool = True) -> None:
+        if push_state:
+            self.push_search_state()
         self.set_status(self.t("loading_playlist", title=item["title"]))
         self.collection_url = item["url"]
         self.collection_result_type = "Video"
         self.loading_more_results = False
+        self.dynamic_fetch_enabled = True
         threading.Thread(target=self.load_collection_worker, args=(item["url"], "Video", self.initial_results_limit(), 0), daemon=True).start()
 
     def load_collection_worker(self, url: str, result_type: str, limit: int | None = None, selection: int = 0) -> None:
@@ -2670,6 +2709,23 @@ class MainFrame(wx.Frame):
         item = self.active_item()
         if item:
             self.copy_url_to_clipboard(item.get("url", ""))
+
+    def open_library_item(self, item: dict, screen: str) -> None:
+        kind = item.get("kind")
+        if kind in {"channel", "playlist"}:
+            self.search_results_stack.append({"screen": screen})
+            self.last_search_query = item.get("title", "")
+            self.last_search_type_index = 0
+            self.current_search_type_code = "Video"
+            self.show_search(restore_search=True)
+            if kind == "channel":
+                self.open_channel_videos(item, push_state=False)
+            else:
+                self.open_playlist_videos(item, push_state=False)
+            return
+        self.current_video_item = item
+        self.current_video_info = dict(item)
+        self.play_url(item["url"], item.get("title", ""))
 
     def next_download_task_id(self, prefix: str = "download") -> str:
         self.download_task_counter += 1
@@ -3207,18 +3263,27 @@ class MainFrame(wx.Frame):
     def open_context_menu(self, _event=None) -> None:
         menu = wx.Menu()
         item = self.selected_result()
-        actions = [
-            (self.t("play"), self.play_selected),
-            (f"{self.t('download_audio')}\tCtrl+Shift+A", self.download_audio),
-            (f"{self.t('download_video')}\tCtrl+Shift+D", self.download_video),
-            (self.t("add_favorite"), self.add_selected_favorite),
-            (self.t("subscribe_channel"), self.subscribe_shortcut),
-            (self.t("open_browser"), self.open_selected_in_browser),
-            (self.t("copy_url"), self.copy_selected_url),
-        ]
         if item and item.get("kind") in {"playlist", "channel"}:
-            label = self.t("download_channel" if item.get("kind") == "channel" else "download_playlist")
-            actions.insert(1, (label, lambda selected=dict(item): self.download_collection(selected)))
+            is_channel = item.get("kind") == "channel"
+            actions = [
+                (self.t("open_channel_videos" if is_channel else "open_playlist_videos"), self.play_selected),
+                (self.t("download_channel" if is_channel else "download_playlist"), lambda selected=dict(item): self.download_collection(selected)),
+                (self.t("add_favorite"), self.add_selected_favorite),
+                (self.t("open_browser"), self.open_selected_in_browser),
+                (self.t("copy_url"), self.copy_selected_url),
+            ]
+            if is_channel:
+                actions.insert(3, (self.t("subscribe_channel"), self.subscribe_shortcut))
+        else:
+            actions = [
+                (self.t("play"), self.play_selected),
+                (f"{self.t('download_audio')}\tCtrl+Shift+A", self.download_audio),
+                (f"{self.t('download_video')}\tCtrl+Shift+D", self.download_video),
+                (self.t("add_favorite"), self.add_selected_favorite),
+                (self.t("subscribe_channel"), self.subscribe_shortcut),
+                (self.t("open_browser"), self.open_selected_in_browser),
+                (self.t("copy_url"), self.copy_selected_url),
+            ]
         if len(self.download_queue) > 1:
             actions.insert(1, (self.t("download_all_selected"), self.download_all_queued))
         for label, handler in actions:
@@ -3500,6 +3565,8 @@ class MainFrame(wx.Frame):
             "title": item.get("title", ""),
             "channel": item.get("channel", ""),
             "channel_url": item.get("channel_url", ""),
+            "kind": item.get("kind", "video"),
+            "type": item.get("type", self.t("video")),
             "url": item.get("url", ""),
         }
         if any(existing["url"] == favorite["url"] for existing in self.favorites):
@@ -3525,9 +3592,7 @@ class MainFrame(wx.Frame):
     def play_favorite(self) -> None:
         item = self.selected_favorite()
         if item:
-            self.current_video_item = item
-            self.current_video_info = dict(item)
-            self.play_url(item["url"], item["title"])
+            self.open_library_item(item, "favorites")
 
     def remove_favorite(self) -> None:
         index = self.favorites_list.GetSelection()
