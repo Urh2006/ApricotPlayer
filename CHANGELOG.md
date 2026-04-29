@@ -1,5 +1,12 @@
 # Changelog
 
+## What's new in version 0.4.4
+
+- fixed the update dialog buttons by binding `Update now` and `Skip this version` directly to the modal result instead of relying on implicit wx dialog behavior
+- `Skip this version` now announces and updates the status immediately, so screen-reader users know the choice was saved
+- updater diagnostics now start logging as soon as the update prompt is shown, including button choice, download start, downloaded package size, and script launch path
+- verified the update prompt programmatically: `Skip this version` returns skip and `Update now` returns update
+
 ## What's new in version 0.4.3
 
 - changed the default video download format to MP4 so normal video downloads no longer default to WebM

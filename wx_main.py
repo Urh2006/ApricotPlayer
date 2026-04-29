@@ -81,8 +81,8 @@ class QuietYtdlpLogger:
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.4.3"
-APP_VERSION_LABEL = "0.4.3"
+APP_VERSION = "0.4.4"
+APP_VERSION_LABEL = "0.4.4"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -2782,16 +2782,19 @@ class MainFrame(wx.Frame):
 
     def prompt_for_app_update(self, release: dict, asset: dict) -> None:
         version = self.release_version(release)
+        self.log_update_event(f"Prompting for update {version} with asset {asset.get('name')}")
         if not getattr(sys, "frozen", False):
             self.message(self.t("update_source_only", version=version))
             return
         changelog = self.release_changelog_text(release)
         if self.show_update_prompt(version, changelog):
+            self.log_update_event(f"User selected update now for {version}")
             self.begin_app_update_install(release, asset)
         else:
+            self.log_update_event(f"User skipped update {version}")
             self.settings.skipped_update_version = version
             self.save_settings()
-            self.set_status(self.t("update_skipped", version=version))
+            self.announce_player(self.t("update_skipped", version=version))
 
     def show_update_prompt(self, version: str, changelog: str) -> bool:
         dialog = wx.Dialog(self, title=self.t("update_available_title"), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
@@ -2814,6 +2817,13 @@ class MainFrame(wx.Frame):
         update_button.SetName(self.t("update_now_button"))
         skip_button.SetName(self.t("skip_version_button"))
         update_button.SetDefault()
+        try:
+            dialog.SetAffirmativeId(wx.ID_YES)
+            dialog.SetEscapeId(wx.ID_NO)
+        except Exception:
+            pass
+        update_button.Bind(wx.EVT_BUTTON, lambda _event: dialog.EndModal(wx.ID_YES))
+        skip_button.Bind(wx.EVT_BUTTON, lambda _event: dialog.EndModal(wx.ID_NO))
         buttons.AddButton(update_button)
         buttons.AddButton(skip_button)
         buttons.Realize()
@@ -2827,6 +2837,7 @@ class MainFrame(wx.Frame):
 
     def begin_app_update_install(self, release: dict, asset: dict) -> None:
         version = self.release_version(release)
+        self.log_update_event(f"Beginning update {version}; asset={asset.get('name')}")
         self.close_update_progress_dialog()
         self.update_progress_dialog = wx.ProgressDialog(
             self.t("update_progress_title"),
@@ -2868,6 +2879,7 @@ class MainFrame(wx.Frame):
         self.announce_player(self.t("update_download_complete"))
 
     def update_app_update_failed(self, error: Exception | str) -> None:
+        self.log_update_event(f"Update failed before install: {error}")
         self.close_update_progress_dialog()
         self.message(self.t("app_update_failed", error=error), wx.ICON_ERROR)
 
@@ -2877,7 +2889,9 @@ class MainFrame(wx.Frame):
             self.ui_queue.put(("status", self.t("downloading_update", version=version)))
             temp_dir = Path(tempfile.mkdtemp(prefix="apricotplayer-update-"))
             downloaded_path = temp_dir / asset["name"]
+            self.log_update_event(f"Downloading update {version} to {downloaded_path}")
             self.download_update_asset(asset, downloaded_path, version)
+            self.log_update_event(f"Downloaded update {version}; size={downloaded_path.stat().st_size}")
             self.validate_update_package(downloaded_path)
             wx.CallAfter(self.update_app_update_finished, version)
             wx.CallAfter(self.finish_app_update_install, str(downloaded_path), version)
@@ -2931,12 +2945,14 @@ class MainFrame(wx.Frame):
             self.message(self.t("update_source_only", version=version))
             return
         current_exe = Path(sys.executable)
+        self.log_update_event(f"Preparing install for {version}; package={downloaded_path}; current_exe={current_exe}")
         if self.is_installer_asset(downloaded_path):
             script_path = self.write_installer_update_script(downloaded_path, os.getpid(), str(UPDATE_LOG_FILE), restart=True)
         elif self.is_portable_zip_asset(downloaded_path):
             script_path = self.write_portable_zip_update_script(downloaded_path, str(current_exe.parent), str(current_exe), os.getpid(), str(UPDATE_LOG_FILE), restart=True)
         else:
             script_path = self.write_update_script(downloaded_path, str(current_exe), os.getpid(), str(UPDATE_LOG_FILE), restart=True)
+        self.log_update_event(f"Launching update script {script_path}")
         self.launch_update_script(script_path)
         self.set_status(self.t("installing_update", version=version))
         self.close_update_progress_dialog()
@@ -3131,6 +3147,16 @@ class MainFrame(wx.Frame):
     @staticmethod
     def powershell_literal(value: str) -> str:
         return "'" + value.replace("'", "''") + "'"
+
+    @staticmethod
+    def log_update_event(message: str) -> None:
+        try:
+            APP_DIR.mkdir(parents=True, exist_ok=True)
+            line = f"{datetime.now(timezone.utc).isoformat()} {message}\n"
+            with UPDATE_LOG_FILE.open("a", encoding="utf-8") as handle:
+                handle.write(line)
+        except Exception:
+            pass
 
     def exit_for_update(self) -> None:
         try:
