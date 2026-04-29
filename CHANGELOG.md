@@ -1,5 +1,12 @@
 # Changelog
 
+## What's new in version 0.4.6
+
+- fixed update checks on systems where Python/OpenSSL could not find a trusted certificate authority by using the bundled `certifi` certificate store for GitHub and PyPI HTTPS requests
+- changed the app updater to exit ApricotPlayer immediately after launching the updater helper instead of relying on a delayed UI timer, preventing the old window from getting stuck as not responding
+- updater helper scripts now wait up to 15 seconds for ApricotPlayer to close and then force-close only that ApricotPlayer process if needed, instead of waiting up to 180 seconds
+- kept installer and portable ZIP update paths aligned so both release assets use the same certificate and shutdown fixes
+
 ## What's new in version 0.4.5
 
 - added a Current downloads screen that shows pending and active downloads together, including batch progress, current item, remaining count, and cancel controls

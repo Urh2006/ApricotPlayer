@@ -6,6 +6,7 @@ import queue
 import re
 import shlex
 import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,11 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
 import wx
+
+try:
+    import certifi
+except ImportError:
+    certifi = None
 
 from locales import EXTRA_TEXT, SL_TRANSLATION_FIXES
 
@@ -92,8 +98,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.4.5"
-APP_VERSION_LABEL = "0.4.5"
+APP_VERSION = "0.4.6"
+APP_VERSION_LABEL = "0.4.6"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -3384,7 +3390,7 @@ class MainFrame(wx.Frame):
         extract_dir = temp_dir / "extract"
         try:
             request = Request(wheel_url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
-            with urlopen(request, timeout=120) as response, wheel_path.open("wb") as handle:
+            with self.open_url(request, timeout=120) as response, wheel_path.open("wb") as handle:
                 shutil.copyfileobj(response, handle)
             extract_dir.mkdir(parents=True, exist_ok=True)
             with zipfile.ZipFile(wheel_path) as archive:
@@ -3419,7 +3425,7 @@ class MainFrame(wx.Frame):
 
     def fetch_latest_ytdlp_wheel(self) -> tuple[str, str]:
         request = Request(YTDLP_PYPI_JSON_URL, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
-        with urlopen(request, timeout=30) as response:
+        with self.open_url(request, timeout=30) as response:
             payload = json.loads(response.read().decode("utf-8"))
         latest_version = str((payload.get("info") or {}).get("version") or "")
         urls = payload.get("urls") or []
@@ -3624,7 +3630,7 @@ class MainFrame(wx.Frame):
         for download_url, headers in attempts:
             try:
                 request = Request(download_url, headers=headers)
-                with urlopen(request, timeout=120) as response, downloaded_path.open("wb") as handle:
+                with self.open_url(request, timeout=120) as response, downloaded_path.open("wb") as handle:
                     total_header = response.headers.get("Content-Length")
                     total = int(total_header) if total_header and total_header.isdigit() else 0
                     downloaded = 0
@@ -3669,7 +3675,8 @@ class MainFrame(wx.Frame):
         self.close_update_progress_dialog()
         self.announce_player(self.t("update_install_started"))
         self.set_status(self.t("update_install_log", path=UPDATE_LOG_FILE))
-        wx.CallLater(800, self.exit_for_update)
+        self.log_update_event("Exiting ApricotPlayer for update")
+        self.exit_for_update()
 
     @staticmethod
     def is_installer_asset(path_or_name: str | Path) -> bool:
@@ -3713,7 +3720,13 @@ class MainFrame(wx.Frame):
                 "Log \"Source: $source\"",
                 "Log \"Target: $target\"",
                 "Start-Sleep -Milliseconds 500",
-                "try { Wait-Process -Id $processIdToWait -Timeout 180 -ErrorAction SilentlyContinue } catch { Log \"Wait-Process warning: $($_.Exception.Message)\" }",
+                "if ($processIdToWait -gt 0) {",
+                "    try { Wait-Process -Id $processIdToWait -Timeout 15 -ErrorAction SilentlyContinue } catch { Log \"Wait-Process warning: $($_.Exception.Message)\" }",
+                "    try {",
+                "        $stillRunning = Get-Process -Id $processIdToWait -ErrorAction SilentlyContinue",
+                "        if ($stillRunning) { Log 'ApricotPlayer did not exit; forcing shutdown'; Stop-Process -Id $processIdToWait -Force -ErrorAction SilentlyContinue }",
+                "    } catch { Log \"Force shutdown warning: $($_.Exception.Message)\" }",
+                "}",
                 "$copied = $false",
                 "for ($attempt = 0; $attempt -lt 180; $attempt++) {",
                 "    try {",
@@ -3764,7 +3777,13 @@ class MainFrame(wx.Frame):
                 "Log \"Source: $source\"",
                 "Log \"Target directory: $targetDir\"",
                 "Start-Sleep -Milliseconds 500",
-                "try { Wait-Process -Id $processIdToWait -Timeout 180 -ErrorAction SilentlyContinue } catch { Log \"Wait-Process warning: $($_.Exception.Message)\" }",
+                "if ($processIdToWait -gt 0) {",
+                "    try { Wait-Process -Id $processIdToWait -Timeout 15 -ErrorAction SilentlyContinue } catch { Log \"Wait-Process warning: $($_.Exception.Message)\" }",
+                "    try {",
+                "        $stillRunning = Get-Process -Id $processIdToWait -ErrorAction SilentlyContinue",
+                "        if ($stillRunning) { Log 'ApricotPlayer did not exit; forcing shutdown'; Stop-Process -Id $processIdToWait -Force -ErrorAction SilentlyContinue }",
+                "    } catch { Log \"Force shutdown warning: $($_.Exception.Message)\" }",
+                "}",
                 "try {",
                 "    New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null",
                 "    Expand-Archive -LiteralPath $source -DestinationPath $extractRoot -Force",
@@ -3816,7 +3835,13 @@ class MainFrame(wx.Frame):
                 "Set-Content -LiteralPath $log -Value ((Get-Date -Format o) + ' Starting ApricotPlayer installer update') -Encoding UTF8",
                 "Log \"Installer: $source\"",
                 "Start-Sleep -Milliseconds 500",
-                "try { Wait-Process -Id $processIdToWait -Timeout 180 -ErrorAction SilentlyContinue } catch { Log \"Wait-Process warning: $($_.Exception.Message)\" }",
+                "if ($processIdToWait -gt 0) {",
+                "    try { Wait-Process -Id $processIdToWait -Timeout 15 -ErrorAction SilentlyContinue } catch { Log \"Wait-Process warning: $($_.Exception.Message)\" }",
+                "    try {",
+                "        $stillRunning = Get-Process -Id $processIdToWait -ErrorAction SilentlyContinue",
+                "        if ($stillRunning) { Log 'ApricotPlayer did not exit; forcing shutdown'; Stop-Process -Id $processIdToWait -Force -ErrorAction SilentlyContinue }",
+                "    } catch { Log \"Force shutdown warning: $($_.Exception.Message)\" }",
+                "}",
                 "try {",
                 "    Log 'Launching installer'",
                 "    $process = Start-Process -FilePath $source -ArgumentList $silentArgs -Verb runAs -Wait -PassThru",
@@ -3887,7 +3912,7 @@ class MainFrame(wx.Frame):
             headers=self.github_headers(token),
         )
         try:
-            with urlopen(latest_request, timeout=30) as response:
+            with self.open_url(latest_request, timeout=30) as response:
                 release = json.loads(response.read().decode("utf-8"))
             if isinstance(release, dict) and not release.get("draft"):
                 return release
@@ -3898,7 +3923,7 @@ class MainFrame(wx.Frame):
             f"https://api.github.com/repos/{owner}/{repo}/releases",
             headers=self.github_headers(token),
         )
-        with urlopen(list_request, timeout=30) as response:
+        with self.open_url(list_request, timeout=30) as response:
             payload = json.loads(response.read().decode("utf-8"))
         if isinstance(payload, list):
             releases = [release for release in payload if not release.get("draft")]
@@ -3970,6 +3995,16 @@ class MainFrame(wx.Frame):
     @classmethod
     def is_newer_version(cls, remote_version: str, current_version: str) -> bool:
         return cls.parse_version(remote_version) > cls.parse_version(current_version)
+
+    @classmethod
+    def open_url(cls, request: Request | str, timeout: int = 30):
+        return urlopen(request, timeout=timeout, context=cls.ssl_context())
+
+    @staticmethod
+    def ssl_context() -> ssl.SSLContext:
+        if certifi:
+            return ssl.create_default_context(cafile=certifi.where())
+        return ssl.create_default_context()
 
     @staticmethod
     def github_headers(token: str = "", accept: str = "application/vnd.github+json") -> dict[str, str]:

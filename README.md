@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.4.5` (`0.4.5`)
+Current version: `0.4.6` (`0.4.6`)
 
 ## Download
 
@@ -36,6 +36,7 @@ py wx_main.py
 - UI languages: English, Slovenian, German, French, Spanish, Portuguese, Italian, Polish, Dutch, Swedish, Croatian, and Serbian
 - Dynamic search mode is the default for new settings, loading results in chunks of 20
 - GitHub release updater for installed and packaged builds
+- Updater HTTPS checks use the bundled `certifi` certificate store for more reliable GitHub access
 - yt-dlp component updater that can refresh the Python package into `%APPDATA%\ApricotPlayer\components`
 - Per-user settings in `%APPDATA%\ApricotPlayer\settings.json`
 
@@ -77,4 +78,4 @@ Helpful scripts:
 - `scripts/build_release.ps1 -PackageMode onedir` builds the fast app folder used by both the installer and portable ZIP
 - `scripts/build_installer.ps1` builds `ApricotPlayerSetup.exe` when Inno Setup is installed
 - `scripts/build_portable_zip.ps1` builds `ApricotPlayerPortable.zip`
-- `scripts/publish_release.ps1 -Tag v0.4.5 -NotesFile release-notes/v0.4.5.md` publishes the installer and portable ZIP to GitHub Releases
+- `scripts/publish_release.ps1 -Tag v0.4.6 -NotesFile release-notes/v0.4.6.md` publishes the installer and portable ZIP to GitHub Releases
