@@ -24,6 +24,8 @@ from urllib.error import HTTPError, URLError
 
 import wx
 
+from locales import EXTRA_TEXT, SL_TRANSLATION_FIXES
+
 yt_dlp = None
 yt_dlp_import_error: Exception | None = None
 
@@ -79,8 +81,8 @@ class QuietYtdlpLogger:
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.4"
-APP_VERSION_LABEL = "0.4"
+APP_VERSION = "0.4.1"
+APP_VERSION_LABEL = "0.4.1"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -111,6 +113,22 @@ RUBBERBAND_FILTER_LABEL = "apricot_pitch"
 RUBBERBAND_FILTER_REF = f"@{RUBBERBAND_FILTER_LABEL}"
 RATE_STEP_OPTIONS = ["0.01", "0.02", "0.05", "0.10", "0.25"]
 COOKIES_BROWSER_OPTIONS = ["none", "chrome", "edge", "firefox", "brave", "chromium", "opera", "vivaldi"]
+LANGUAGES = [
+    ("en", "English"),
+    ("sl", "Slovenščina"),
+    ("de", "Deutsch"),
+    ("fr", "Français"),
+    ("es", "Español"),
+    ("pt", "Português"),
+    ("it", "Italiano"),
+    ("pl", "Polski"),
+    ("nl", "Nederlands"),
+    ("sv", "Svenska"),
+    ("hr", "Hrvatski"),
+    ("sr", "Srpski"),
+]
+LANGUAGE_CODES = [code for code, _name in LANGUAGES]
+LANGUAGE_NAMES = {code: name for code, name in LANGUAGES}
 
 
 TEXT = {
@@ -243,6 +261,9 @@ TEXT = {
         "speed_step": "Korak hitrosti predvajanja",
         "pitch_step": "Korak pitcha",
         "pitch_mode": "Nacin pitch kontrole",
+        "pitch_mode_rubberband": "Neodvisna visina tona - najboljsa kakovost (Rubberband)",
+        "pitch_mode_mpv": "Neodvisna visina tona - osnovno (mpv)",
+        "pitch_mode_linked_speed": "Povezana visina tona in hitrost - tipke za visino tona spremenijo oboje",
         "auto_update": "Ob vsakem zagonu preveri posodobitve yt-dlp",
         "autoplay_next": "Po koncu posnetka samodejno predvajaj naslednjega",
         "confirm_download": "Pred prenosom vprašaj za potrditev",
@@ -443,6 +464,9 @@ TEXT = {
         "speed_step": "Playback speed key step",
         "pitch_step": "Pitch key step",
         "pitch_mode": "Pitch control mode",
+        "pitch_mode_rubberband": "Independent pitch - best quality (Rubberband)",
+        "pitch_mode_mpv": "Independent pitch - basic (mpv built-in)",
+        "pitch_mode_linked_speed": "Linked pitch and speed - pitch keys change both",
         "auto_update": "Check yt-dlp updates on every startup",
         "autoplay_next": "Automatically play next item",
         "confirm_download": "Ask before starting a download",
@@ -515,6 +539,11 @@ TEXT = {
         "missing_ytdlp": "yt-dlp is missing.",
     },
 }
+
+TEXT["sl"].update(SL_TRANSLATION_FIXES)
+TEXT.update(EXTRA_TEXT)
+for language_code in LANGUAGE_CODES:
+    TEXT[language_code] = {**TEXT["en"], **TEXT.get(language_code, {})}
 
 
 @dataclass
@@ -640,8 +669,8 @@ class MainFrame(wx.Frame):
         self.SetAcceleratorTable(wx.AcceleratorTable(entries))
 
     def t(self, key: str, **kwargs) -> str:
-        language = self.settings.language if self.settings.language in TEXT else "sl"
-        text = TEXT[language].get(key, TEXT["sl"].get(key, key))
+        language = self.settings.language if self.settings.language in TEXT else "en"
+        text = TEXT[language].get(key, TEXT["en"].get(key, key))
         return text.format(**kwargs) if kwargs else text
 
     def ydl_options(self, options: dict | None = None) -> dict:
@@ -999,6 +1028,7 @@ class MainFrame(wx.Frame):
         if old_sizer:
             old_sizer.Clear(delete_windows=True)
         self.controls = {}
+        self.choice_values = {}
         self.settings_control_order = []
         form = wx.FlexGridSizer(0, 2, 6, 6)
         form.AddGrowableCol(1, 1)
@@ -1015,13 +1045,16 @@ class MainFrame(wx.Frame):
             form.Add(ctrl, 1, wx.EXPAND)
             remember(key, ctrl)
 
-        def choice(key: str, value: str, options: list[str]):
+        def choice(key: str, value: str, options: list[str], labels: list[str] | None = None):
             form.Add(wx.StaticText(self.settings_scroller, label=self.t(key)), 0, wx.ALIGN_CENTER_VERTICAL)
-            ctrl = wx.Choice(self.settings_scroller, choices=options)
+            visible_options = labels or options
+            ctrl = wx.Choice(self.settings_scroller, choices=visible_options)
             ctrl.SetName(self.t(key))
             selected = options.index(value) if value in options else 0
             ctrl.SetSelection(selected)
             form.Add(ctrl, 1, wx.EXPAND)
+            if labels:
+                self.choice_values[key] = options
             remember(key, ctrl)
 
         def check(key: str, value: bool):
@@ -1042,8 +1075,9 @@ class MainFrame(wx.Frame):
 
         if section_name == "general":
             form.Add(wx.StaticText(self.settings_scroller, label=self.t("language")), 0, wx.ALIGN_CENTER_VERTICAL)
-            lang = wx.Choice(self.settings_scroller, choices=["Slovenščina", "English"])
-            lang.SetSelection(1 if self.settings.language == "en" else 0)
+            language_code = self.settings.language if self.settings.language in LANGUAGE_CODES else "en"
+            lang = wx.Choice(self.settings_scroller, choices=[name for _code, name in LANGUAGES])
+            lang.SetSelection(LANGUAGE_CODES.index(language_code))
             lang.SetName(self.t("language"))
             form.Add(lang, 1, wx.EXPAND)
             remember("language", lang)
@@ -1058,7 +1092,7 @@ class MainFrame(wx.Frame):
         elif section_name == "playback":
             text("player_command", self.settings.player_command)
             choice("player_speed", self.settings.player_speed, [self.format_playback_rate(step) for step in PLAYBACK_SPEED_STEPS if step <= 2.0])
-            choice("pitch_mode", self.normalized_pitch_mode(), PITCH_MODE_OPTIONS)
+            choice("pitch_mode", self.normalized_pitch_mode(), PITCH_MODE_OPTIONS, self.pitch_mode_labels())
             choice("speed_step", self.format_step_value(self.settings.speed_step), RATE_STEP_OPTIONS)
             choice("pitch_step", self.format_step_value(self.settings.pitch_step), RATE_STEP_OPTIONS)
             choice("seek_seconds", str(self.settings.seek_seconds), ["5", "10", "15", "30"])
@@ -1855,6 +1889,13 @@ class MainFrame(wx.Frame):
         mode = str(getattr(self.settings, "pitch_mode", PITCH_MODE_RUBBERBAND) or PITCH_MODE_RUBBERBAND)
         return self.normalize_pitch_mode_value(mode)
 
+    def pitch_mode_labels(self) -> list[str]:
+        return [
+            self.t("pitch_mode_rubberband"),
+            self.t("pitch_mode_mpv"),
+            self.t("pitch_mode_linked_speed"),
+        ]
+
     @staticmethod
     def normalize_pitch_mode_value(mode: str) -> str:
         normalized = str(mode or "").strip()
@@ -2484,7 +2525,8 @@ class MainFrame(wx.Frame):
     def apply_settings_from_visible_controls(self) -> None:
         c = self.controls
         if "language" in c:
-            self.settings.language = "en" if c["language"].GetSelection() == 1 else "sl"
+            selected = c["language"].GetSelection()
+            self.settings.language = LANGUAGE_CODES[selected] if 0 <= selected < len(LANGUAGE_CODES) else "en"
         if "download_folder" in c:
             self.settings.download_folder = c["download_folder"].GetValue()
         if "results_limit" in c:
@@ -2548,7 +2590,7 @@ class MainFrame(wx.Frame):
         if "player_speed" in c:
             self.settings.player_speed = c["player_speed"].GetStringSelection() or "1.0"
         if "pitch_mode" in c:
-            self.settings.pitch_mode = self.normalize_pitch_mode_value(c["pitch_mode"].GetStringSelection())
+            self.settings.pitch_mode = self.normalize_pitch_mode_value(self.selected_choice_value("pitch_mode"))
         if "browser_playback" in c:
             self.settings.prefer_browser_playback = c["browser_playback"].GetValue()
         if "fullscreen" in c:
@@ -2577,6 +2619,16 @@ class MainFrame(wx.Frame):
             self.settings.retries = self.to_int(c["retries"].GetStringSelection(), 10, 0)
         if "timeout" in c:
             self.settings.socket_timeout = self.to_int(c["timeout"].GetStringSelection(), 20, 1)
+
+    def selected_choice_value(self, key: str) -> str:
+        ctrl = self.controls.get(key) if hasattr(self, "controls") else None
+        if not isinstance(ctrl, wx.Choice):
+            return ""
+        values = getattr(self, "choice_values", {}).get(key)
+        selection = ctrl.GetSelection()
+        if values and 0 <= selection < len(values):
+            return values[selection]
+        return ctrl.GetStringSelection()
 
     def start_ytdlp_update_check(self) -> None:
         self.set_status(self.t("checking_updates"))
@@ -3183,6 +3235,8 @@ class MainFrame(wx.Frame):
             try:
                 data = json.loads(source.read_text(encoding="utf-8"))
                 merged = {**asdict(Settings()), **data}
+                if merged.get("language") not in LANGUAGE_CODES:
+                    merged["language"] = "en"
                 if merged.get("filename_template") == OLD_FILENAME_TEMPLATE:
                     merged["filename_template"] = DEFAULT_FILENAME_TEMPLATE
                 merged["pitch_mode"] = self.normalize_pitch_mode_value(str(merged.get("pitch_mode") or ""))

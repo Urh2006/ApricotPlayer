@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.1
+
+- added ten more UI languages: German, French, Spanish, Portuguese, Italian, Polish, Dutch, Swedish, Croatian, and Serbian
+- fixed remaining untranslated Slovenian settings and player strings
+- changed the language selector to use the shared language registry instead of a hard-coded Slovenian/English toggle
+- localized pitch-control mode labels while keeping the saved settings values stable
+- added a README localization policy so every future UI change is translated across all supported languages in the same release
+
 ## 0.4
 
 - added `All` to YouTube search so videos, playlists, and channels can appear in one result list
