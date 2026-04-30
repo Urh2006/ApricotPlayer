@@ -1,5 +1,13 @@
 # Changelog
 
+## What's new in version 0.6.1
+
+- added podcast search using the Apple Podcasts directory through the iTunes Search API, while direct RSS and Atom feed URLs remain supported
+- added a Podcasts and RSS settings section for provider, country, result limit, maximum episodes per feed, startup refresh, and automatic refresh interval
+- added settings to hide Podcasts and RSS feeds or History from the main menu
+- removed Choose download folder from the main menu because the same control already exists in Settings
+- History can now be disabled so new played/downloaded items are not recorded while it is off
+
 ## What's new in version 0.6.0
 
 - added a Podcasts and RSS feeds screen to manage podcast/RSS subscriptions outside YouTube

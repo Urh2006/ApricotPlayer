@@ -404,6 +404,12 @@ def apply_extra_translation_overlays() -> None:
         else:
             EXTRA_TEXT.setdefault(_language_code, {}).update(_translations)
 
+    for _language_code, _translations in PODCAST_SETTINGS_TRANSLATIONS.items():
+        if _language_code == 'sl':
+            SL_TRANSLATION_FIXES.update(_translations)
+        else:
+            EXTRA_TEXT.setdefault(_language_code, {}).update(_translations)
+
 EXTRA_TEXT = {
     'de': {
         'ready': 'Bereit.',
@@ -2762,6 +2768,36 @@ RSS_TRANSLATIONS = {
     },
     'el': {
         'rss_feeds': 'Podcast kai RSS roes', 'rss_feed_items': 'Stoicheia rois', 'add_rss_feed': 'Prosthiki rois', 'rss_feed_url': 'URL rois', 'refresh_feeds': 'Ananeosi roon', 'refresh_feed': 'Ananeosi rois', 'open_feed': 'Anoigma rois', 'remove_feed': 'Afairesi rois', 'rss_feeds_empty': 'Den yparchoun podcast i RSS roes.', 'rss_items_empty': 'Den yparchoun stoicheia se afti ti roi.', 'rss_feed_added': 'I roi prostethike: {title}.', 'rss_feed_exists': 'Afti i roi yparchei idi.', 'rss_feed_removed': 'I roi afairethike.', 'rss_refresh_started': 'Ananeonontai oi roes.', 'rss_refresh_done': 'Oi roes ananeothikan.', 'rss_refresh_failed': 'I ananeosi rois apetyche: {error}', 'rss_feed_last_checked': 'teleftaios elegchos {time}', 'rss_feed_never_checked': 'den elegchthike pote', 'rss_feed_item_count': '{count} stoicheia', 'podcast_episode': 'Epeisodio podcast', 'play_episode': 'Anaparagogi epeisodiou', 'download_episode_audio': 'Lipsi ichou epeisodiou', 'open_episode_page': 'Anoigma selidas epeisodiou', 'published': 'dimosievthike', 'rss_unknown_feed_title': 'Roi choris titlo',
+    },
+}
+
+PODCAST_SETTINGS_TRANSLATIONS = {
+    'sl': {
+        'podcasts_section': 'Podcasti in RSS',
+        'enable_history': 'Omogoci zgodovino in jo pokazi v glavnem meniju',
+        'enable_podcasts_rss': 'Omogoci podcaste in RSS vire ter jih pokazi v glavnem meniju',
+        'podcast_source': 'Vir podcastov',
+        'podcast_source_info': 'Iskanje podcastov uporablja imenik Apple Podcasts prek iTunes Search API. Neposredni RSS in Atom URL-ji so vedno podprti.',
+        'podcast_search_provider': 'Ponudnik iskanja podcastov',
+        'podcast_search_provider_apple': 'Imenik Apple Podcasts',
+        'podcast_search_country': 'Drzava iskanja podcastov',
+        'podcast_search_limit': 'Stevilo rezultatov iskanja podcastov',
+        'rss_max_items': 'Najvec epizod na vir',
+        'rss_refresh_on_startup': 'Ob zagonu osvezi podcaste in RSS vire',
+        'rss_auto_refresh_enabled': 'Samodejno osvezuj podcaste in RSS vire',
+        'rss_refresh_interval': 'Interval osvezevanja podcastov in RSS v urah',
+        'search_podcasts': 'Isci podcaste',
+        'podcast_search_query': 'Iskanje podcastov',
+        'podcast_search_results': 'Rezultati iskanja podcastov',
+        'podcast_searching': 'Iscem podcaste: {query}',
+        'podcast_search_done': 'Najdenih podcastov: {count}.',
+        'podcast_search_failed': 'Iskanje podcastov ni uspelo: {error}',
+        'podcast_search_empty': 'Ni rezultatov iskanja podcastov.',
+        'add_podcast': 'Dodaj podcast',
+        'podcast_added': 'Podcast dodan: {title}.',
+        'podcast_author': 'Avtor',
+        'podcast_genre': 'Zanr',
+        'podcast_episode_count': '{count} epizod',
     },
 }
 

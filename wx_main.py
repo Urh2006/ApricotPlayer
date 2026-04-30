@@ -101,8 +101,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.0"
-APP_VERSION_LABEL = "0.6.0"
+APP_VERSION = "0.6.1"
+APP_VERSION_LABEL = "0.6.1"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -146,6 +146,9 @@ VIDEO_FORMAT_BEST_ANY = "best-any"
 VIDEO_FORMAT_MP4_SINGLE = "mp4-single"
 VIDEO_FORMAT_SMALLEST = "smallest"
 VIDEO_FORMAT_OPTIONS = [VIDEO_FORMAT_MP4, VIDEO_FORMAT_BEST_ANY, VIDEO_FORMAT_MP4_SINGLE, VIDEO_FORMAT_SMALLEST]
+PODCAST_DIRECTORY_PROVIDER_APPLE = "apple"
+PODCAST_DIRECTORY_PROVIDER_OPTIONS = [PODCAST_DIRECTORY_PROVIDER_APPLE]
+PODCAST_COUNTRY_OPTIONS = ["US", "SI", "GB", "DE", "FR", "ES", "IT", "AT", "HR", "RS", "CA", "AU", "NL", "SE", "PL"]
 LEGACY_VIDEO_FORMAT_MAP = {
     "bestvideo+bestaudio/best": VIDEO_FORMAT_MP4,
     "best": VIDEO_FORMAT_BEST_ANY,
@@ -531,6 +534,31 @@ TEXT = {
         "subscriptions": "Subscriptions",
         "rss_feeds": "Podcasts and RSS feeds",
         "rss_feed_items": "Feed items",
+        "podcasts_section": "Podcasts and RSS",
+        "enable_history": "Enable History and show it in the main menu",
+        "enable_podcasts_rss": "Enable Podcasts and RSS feeds and show it in the main menu",
+        "podcast_source": "Podcast source",
+        "podcast_source_info": "Podcast search uses the Apple Podcasts directory through the iTunes Search API. Direct RSS and Atom feed URLs are always supported.",
+        "podcast_search_provider": "Podcast search provider",
+        "podcast_search_provider_apple": "Apple Podcasts directory",
+        "podcast_search_country": "Podcast search country",
+        "podcast_search_limit": "Podcast search results",
+        "rss_max_items": "Maximum episodes per feed",
+        "rss_refresh_on_startup": "Refresh podcast and RSS feeds at startup",
+        "rss_auto_refresh_enabled": "Refresh podcast and RSS feeds automatically",
+        "rss_refresh_interval": "Podcast and RSS refresh interval in hours",
+        "search_podcasts": "Search podcasts",
+        "podcast_search_query": "Podcast search",
+        "podcast_search_results": "Podcast search results",
+        "podcast_searching": "Searching podcasts: {query}",
+        "podcast_search_done": "Found {count} podcasts.",
+        "podcast_search_failed": "Podcast search failed: {error}",
+        "podcast_search_empty": "No podcast search results.",
+        "add_podcast": "Add podcast",
+        "podcast_added": "Podcast added: {title}.",
+        "podcast_author": "Author",
+        "podcast_genre": "Genre",
+        "podcast_episode_count": "{count} episodes",
         "add_rss_feed": "Add feed",
         "rss_feed_url": "Feed URL",
         "refresh_feeds": "Refresh feeds",
@@ -1153,6 +1181,15 @@ class Settings:
     download_notifications: bool = True
     subscription_notifications: bool = True
     last_subscription_check: float = 0.0
+    enable_history: bool = True
+    enable_podcasts_rss: bool = True
+    podcast_search_provider: str = PODCAST_DIRECTORY_PROVIDER_APPLE
+    podcast_search_country: str = "US"
+    podcast_search_limit: int = 20
+    rss_max_items: int = 100
+    rss_refresh_on_startup: bool = False
+    rss_auto_refresh_enabled: bool = False
+    rss_refresh_interval_hours: int = 12
     history_limit: int = 500
     keyboard_shortcuts: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_KEYBOARD_SHORTCUTS))
 
@@ -1197,6 +1234,7 @@ class MainFrame(wx.Frame):
         self.subscriptions = self.load_subscriptions()
         self.rss_feeds = self.load_rss_feeds()
         self.rss_items: list[dict] = []
+        self.podcast_search_results: list[dict] = []
         self.results: list[dict] = []
         self.all_results: list[dict] = []
         self.return_results: list[dict] = []
@@ -1212,6 +1250,7 @@ class MainFrame(wx.Frame):
         self.subscriptions_screen_active = False
         self.rss_feeds_screen_active = False
         self.rss_items_screen_active = False
+        self.podcast_search_screen_active = False
         self.in_main_menu = False
         self.current_rss_feed_index = -1
         self.player_return_screen = ""
@@ -1248,6 +1287,7 @@ class MainFrame(wx.Frame):
         self.nvda_client = self.load_nvda_client()
         self.update_progress_dialog: wx.ProgressDialog | None = None
         self.subscription_check_running = False
+        self.rss_refresh_running = False
         self.exiting = False
         self.taskbar_icon: ApricotTaskBarIcon | None = None
 
@@ -1268,12 +1308,17 @@ class MainFrame(wx.Frame):
         self.subscription_timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self.on_subscription_timer, self.subscription_timer)
         self.configure_subscription_timer()
+        self.rss_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self.on_rss_timer, self.rss_timer)
+        self.configure_rss_timer()
         if self.settings.auto_update_ytdlp:
             wx.CallLater(3500, self.start_ytdlp_update_check)
         if self.settings.auto_update_app:
             wx.CallLater(5500, self.start_app_update_check)
         if self.settings.subscription_check_enabled:
             wx.CallLater(8500, self.check_subscriptions_if_due)
+        if self.settings.enable_podcasts_rss and self.settings.rss_refresh_on_startup and self.rss_feeds:
+            wx.CallLater(9500, self.refresh_all_rss_feeds_background)
 
     def install_download_accelerators(self) -> None:
         self.download_audio_accelerator_id = wx.NewIdRef()
@@ -1698,6 +1743,7 @@ class MainFrame(wx.Frame):
         self.subscriptions_screen_active = False
         self.rss_feeds_screen_active = False
         self.rss_items_screen_active = False
+        self.podcast_search_screen_active = False
         self.clear()
         title = wx.StaticText(self.panel, label=self.t("main_menu"))
         self.root_sizer.Add(title, 0, wx.ALL, 4)
@@ -1707,11 +1753,14 @@ class MainFrame(wx.Frame):
             self.menu_actions.append((f"{self.t('current_downloads')} ({download_count})", self.show_download_queue))
         self.menu_actions.extend([
             (self.t("search_youtube"), self.show_search),
-            (self.t("choose_download_folder"), self.choose_download_folder),
             (self.t("favorites"), self.show_favorites),
-            (self.t("history"), self.show_history),
             (self.t("subscriptions"), self.show_subscriptions),
-            (self.t("rss_feeds"), self.show_rss_feeds),
+        ])
+        if self.settings.enable_history:
+            self.menu_actions.append((self.t("history"), self.show_history))
+        if self.settings.enable_podcasts_rss:
+            self.menu_actions.append((self.t("rss_feeds"), self.show_rss_feeds))
+        self.menu_actions.extend([
             (self.t("settings"), self.show_settings),
             (self.t("exit"), self.quit_application),
         ])
@@ -1745,6 +1794,7 @@ class MainFrame(wx.Frame):
         self.subscriptions_screen_active = False
         self.rss_feeds_screen_active = False
         self.rss_items_screen_active = False
+        self.podcast_search_screen_active = False
         self.clear()
         buttons = [(self.t("back"), self.show_main_menu)]
         if self.download_queue:
@@ -1863,6 +1913,7 @@ class MainFrame(wx.Frame):
         self.subscriptions_screen_active = False
         self.rss_feeds_screen_active = False
         self.rss_items_screen_active = False
+        self.podcast_search_screen_active = False
         self.clear()
         self.add_button_row([(self.t("back"), self.back_from_search)])
         grid = wx.FlexGridSizer(2, 2, 6, 6)
@@ -1941,6 +1992,7 @@ class MainFrame(wx.Frame):
         self.subscriptions_screen_active = False
         self.rss_feeds_screen_active = False
         self.rss_items_screen_active = False
+        self.podcast_search_screen_active = False
         self.clear()
         self.add_button_row(
             [
@@ -1987,6 +2039,9 @@ class MainFrame(wx.Frame):
         menu.Destroy()
 
     def show_history(self) -> None:
+        if not self.settings.enable_history:
+            self.show_main_menu()
+            return
         self.in_main_menu = False
         self.in_queue_screen = False
         self.search_screen_active = False
@@ -1995,6 +2050,7 @@ class MainFrame(wx.Frame):
         self.subscriptions_screen_active = False
         self.rss_feeds_screen_active = False
         self.rss_items_screen_active = False
+        self.podcast_search_screen_active = False
         self.clear()
         self.add_button_row(
             [
@@ -2108,6 +2164,7 @@ class MainFrame(wx.Frame):
         self.subscriptions_screen_active = True
         self.rss_feeds_screen_active = False
         self.rss_items_screen_active = False
+        self.podcast_search_screen_active = False
         self.clear()
         self.add_button_row(
             [
@@ -2287,6 +2344,20 @@ class MainFrame(wx.Frame):
     def on_subscription_timer(self, _event) -> None:
         self.check_subscriptions_if_due()
 
+    def configure_rss_timer(self) -> None:
+        if not hasattr(self, "rss_timer"):
+            return
+        try:
+            self.rss_timer.Stop()
+        except Exception:
+            pass
+        if self.settings.enable_podcasts_rss and self.settings.rss_auto_refresh_enabled:
+            interval_ms = max(1, int(self.settings.rss_refresh_interval_hours or 12)) * 60 * 60 * 1000
+            self.rss_timer.Start(interval_ms)
+
+    def on_rss_timer(self, _event) -> None:
+        self.refresh_all_rss_feeds_background()
+
     def check_subscriptions_if_due(self) -> None:
         if not self.settings.subscription_check_enabled or not self.subscriptions:
             return
@@ -2360,6 +2431,9 @@ class MainFrame(wx.Frame):
         return [self.normalize_entry(entry, "Video") for entry in entries]
 
     def show_rss_feeds(self) -> None:
+        if not self.settings.enable_podcasts_rss:
+            self.show_main_menu()
+            return
         self.in_main_menu = False
         self.in_queue_screen = False
         self.search_screen_active = False
@@ -2368,10 +2442,12 @@ class MainFrame(wx.Frame):
         self.subscriptions_screen_active = False
         self.rss_feeds_screen_active = True
         self.rss_items_screen_active = False
+        self.podcast_search_screen_active = False
         self.clear()
         self.add_button_row(
             [
                 (self.t("back"), self.show_main_menu),
+                (self.t("search_podcasts"), self.search_podcasts),
                 (self.t("add_rss_feed"), self.add_rss_feed),
                 (self.t("refresh_feeds"), self.refresh_all_rss_feeds),
                 (self.t("open_feed"), self.open_selected_rss_feed),
@@ -2448,11 +2524,151 @@ class MainFrame(wx.Frame):
         self.PopupMenu(menu)
         menu.Destroy()
 
+    def search_podcasts(self) -> None:
+        with wx.TextEntryDialog(self, self.t("podcast_search_query"), self.t("search_podcasts")) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            query = dialog.GetValue().strip()
+        if not query:
+            return
+        self.announce_player(self.t("podcast_searching", query=query))
+        threading.Thread(target=self.search_podcasts_worker, args=(query,), daemon=True).start()
+
+    def search_podcasts_worker(self, query: str) -> None:
+        try:
+            provider = self.normalized_podcast_search_provider()
+            if provider != PODCAST_DIRECTORY_PROVIDER_APPLE:
+                provider = PODCAST_DIRECTORY_PROVIDER_APPLE
+            limit = min(200, max(1, int(self.settings.podcast_search_limit or 20)))
+            params = {
+                "media": "podcast",
+                "entity": "podcast",
+                "term": query,
+                "country": self.normalized_podcast_search_country(),
+                "limit": str(limit),
+            }
+            url = f"https://itunes.apple.com/search?{urlencode(params)}"
+            request = Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+            with self.open_url(request, timeout=30) as response:
+                payload = json.loads(response.read().decode("utf-8", errors="replace"))
+            results = [self.normalize_podcast_result(item) for item in payload.get("results") or []]
+            results = [item for item in results if item.get("url")]
+            self.ui_queue.put(("podcast_results", {"query": query, "results": results}))
+        except Exception as exc:
+            self.ui_queue.put(("announce", self.t("podcast_search_failed", error=self.friendly_error(exc))))
+
+    def normalize_podcast_result(self, item: dict) -> dict:
+        title = str(item.get("collectionName") or item.get("trackName") or "").strip()
+        author = str(item.get("artistName") or "").strip()
+        feed_url = str(item.get("feedUrl") or "").strip()
+        page_url = str(item.get("collectionViewUrl") or item.get("trackViewUrl") or "").strip()
+        genre = str(item.get("primaryGenreName") or "").strip()
+        count = int(item.get("trackCount") or 0)
+        return {
+            "title": title or feed_url or page_url,
+            "channel": author,
+            "author": author,
+            "genre": genre,
+            "episode_count": count,
+            "url": feed_url,
+            "webpage_url": page_url or feed_url,
+            "kind": "podcast",
+            "type": self.t("rss_feeds"),
+        }
+
+    def show_podcast_search_results(self, results: list[dict], query: str = "") -> None:
+        self.podcast_search_results = list(results)
+        self.in_main_menu = False
+        self.in_queue_screen = False
+        self.search_screen_active = False
+        self.favorites_screen_active = False
+        self.history_screen_active = False
+        self.subscriptions_screen_active = False
+        self.rss_feeds_screen_active = False
+        self.rss_items_screen_active = False
+        self.podcast_search_screen_active = True
+        self.clear()
+        self.add_button_row(
+            [
+                (self.t("back"), self.show_rss_feeds),
+                (self.t("add_podcast"), self.add_selected_podcast_result),
+                (self.t("open_browser"), self.open_selected_in_browser),
+            ]
+        )
+        label = wx.StaticText(self.panel, label=self.t("podcast_search_results"))
+        self.root_sizer.Add(label, 0, wx.ALL, 4)
+        self.podcast_result_list = wx.ListBox(self.panel, choices=[])
+        self.podcast_result_list.SetName(self.t("podcast_search_results"))
+        self.podcast_result_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _evt: self.add_selected_podcast_result())
+        self.podcast_result_list.Bind(wx.EVT_CONTEXT_MENU, self.open_podcast_search_context_menu)
+        self.podcast_result_list.Bind(wx.EVT_KEY_DOWN, self.on_podcast_search_key)
+        self.root_sizer.Add(self.podcast_result_list, 1, wx.EXPAND | wx.ALL, 4)
+        for item in self.podcast_search_results:
+            self.podcast_result_list.Append(self.podcast_result_line(item))
+        if self.podcast_search_results:
+            self.podcast_result_list.SetSelection(0)
+            self.set_status(self.t("podcast_search_done", count=len(self.podcast_search_results)))
+        else:
+            self.podcast_result_list.Append(self.t("podcast_search_empty"))
+            self.podcast_result_list.SetSelection(0)
+            self.set_status(self.t("podcast_search_empty"))
+        self.panel.Layout()
+        self.focus_later(self.podcast_result_list)
+
+    def podcast_result_line(self, item: dict) -> str:
+        count = int(item.get("episode_count") or 0)
+        parts = [
+            item.get("title", ""),
+            f"{self.t('podcast_author')}: {item.get('author', '')}" if item.get("author") else "",
+            f"{self.t('podcast_genre')}: {item.get('genre', '')}" if item.get("genre") else "",
+            self.t("podcast_episode_count", count=count) if count else "",
+        ]
+        return " | ".join(part for part in parts if part)
+
+    def selected_podcast_result(self) -> dict | None:
+        if not hasattr(self, "podcast_result_list"):
+            return None
+        index = self.podcast_result_list.GetSelection()
+        if index == wx.NOT_FOUND or index < 0 or index >= len(self.podcast_search_results):
+            return None
+        return self.podcast_search_results[index]
+
+    def on_podcast_search_key(self, event: wx.KeyEvent) -> None:
+        if self.shortcut_matches(event, "open_selected"):
+            self.add_selected_podcast_result()
+        elif self.context_menu_shortcut_matches(event):
+            self.open_podcast_search_context_menu()
+        else:
+            event.Skip()
+
+    def open_podcast_search_context_menu(self, _event=None) -> None:
+        menu = wx.Menu()
+        actions = [
+            (self.t("add_podcast"), self.add_selected_podcast_result),
+            (self.t("open_browser"), self.open_selected_in_browser),
+            (self.t("copy_url"), lambda: self.copy_item_url(self.selected_podcast_result())),
+        ]
+        for label, handler in actions:
+            item = menu.Append(wx.ID_ANY, label)
+            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
+        self.PopupMenu(menu)
+        menu.Destroy()
+
+    def add_selected_podcast_result(self) -> None:
+        item = self.selected_podcast_result()
+        if not item:
+            self.announce_player(self.t("podcast_search_empty"))
+            return
+        self.add_rss_feed_url(str(item.get("url") or ""))
+
     def add_rss_feed(self) -> None:
         with wx.TextEntryDialog(self, self.t("rss_feed_url"), self.t("add_rss_feed")) as dialog:
             if dialog.ShowModal() != wx.ID_OK:
                 return
             url = dialog.GetValue().strip()
+        self.add_rss_feed_url(url)
+
+    def add_rss_feed_url(self, url: str) -> None:
         if not url:
             return
         if not re.match(r"^https?://", url, flags=re.IGNORECASE):
@@ -2477,18 +2693,30 @@ class MainFrame(wx.Frame):
         if not self.rss_feeds:
             self.announce_player(self.t("rss_feeds_empty"))
             return
+        if self.rss_refresh_running:
+            return
+        self.rss_refresh_running = True
         self.announce_player(self.t("rss_refresh_started"))
-        threading.Thread(target=self.refresh_rss_feeds_worker, args=(None,), daemon=True).start()
+        threading.Thread(target=self.refresh_rss_feeds_worker, args=(None, False), daemon=True).start()
+
+    def refresh_all_rss_feeds_background(self) -> None:
+        if not self.settings.enable_podcasts_rss or not self.rss_feeds or self.rss_refresh_running:
+            return
+        self.rss_refresh_running = True
+        threading.Thread(target=self.refresh_rss_feeds_worker, args=(None, True), daemon=True).start()
 
     def refresh_selected_rss_feed(self) -> None:
         feed = self.selected_rss_feed()
         if not feed:
             self.message(self.t("no_selection"))
             return
+        if self.rss_refresh_running:
+            return
+        self.rss_refresh_running = True
         self.announce_player(self.t("rss_refresh_started"))
-        threading.Thread(target=self.refresh_rss_feeds_worker, args=(self.current_rss_feed_index,), daemon=True).start()
+        threading.Thread(target=self.refresh_rss_feeds_worker, args=(self.current_rss_feed_index, False), daemon=True).start()
 
-    def refresh_rss_feeds_worker(self, feed_index: int | None) -> None:
+    def refresh_rss_feeds_worker(self, feed_index: int | None, silent: bool = False) -> None:
         try:
             if feed_index is None:
                 indexes = range(len(self.rss_feeds))
@@ -2503,9 +2731,13 @@ class MainFrame(wx.Frame):
             self.rss_feeds = updated_feeds
             self.save_rss_feeds()
             self.ui_queue.put(("rss_feeds_changed", None))
-            self.ui_queue.put(("announce", self.t("rss_refresh_done")))
+            if not silent:
+                self.ui_queue.put(("announce", self.t("rss_refresh_done")))
         except Exception as exc:
-            self.ui_queue.put(("announce", self.t("rss_refresh_failed", error=self.friendly_error(exc))))
+            if not silent:
+                self.ui_queue.put(("announce", self.t("rss_refresh_failed", error=self.friendly_error(exc))))
+        finally:
+            self.rss_refresh_running = False
 
     def open_selected_rss_feed(self) -> None:
         feed = self.selected_rss_feed()
@@ -2540,6 +2772,7 @@ class MainFrame(wx.Frame):
         self.subscriptions_screen_active = False
         self.rss_feeds_screen_active = False
         self.rss_items_screen_active = True
+        self.podcast_search_screen_active = False
         self.clear()
         self.add_button_row(
             [
@@ -2650,8 +2883,11 @@ class MainFrame(wx.Frame):
         if self.current_rss_feed_index < 0 or self.current_rss_feed_index >= len(self.rss_feeds):
             self.show_rss_feeds()
             return
+        if self.rss_refresh_running:
+            return
+        self.rss_refresh_running = True
         self.announce_player(self.t("rss_refresh_started"))
-        threading.Thread(target=self.refresh_rss_feeds_worker, args=(self.current_rss_feed_index,), daemon=True).start()
+        threading.Thread(target=self.refresh_rss_feeds_worker, args=(self.current_rss_feed_index, False), daemon=True).start()
 
     def fetch_rss_feed(self, url: str) -> dict:
         request = Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
@@ -2664,7 +2900,7 @@ class MainFrame(wx.Frame):
             "title": title or self.t("rss_unknown_feed_title"),
             "url": final_url or url,
             "site_url": site_url,
-            "items": items[:100],
+            "items": items[: min(500, max(1, int(self.settings.rss_max_items or 100)))],
             "last_checked": time.time(),
             "created_at": time.time(),
         }
@@ -2798,6 +3034,7 @@ class MainFrame(wx.Frame):
         self.subscriptions_screen_active = False
         self.rss_feeds_screen_active = False
         self.rss_items_screen_active = False
+        self.podcast_search_screen_active = False
         self.clear()
         self.add_button_row([(self.t("back"), self.show_main_menu), (self.t("save"), self.save_settings_from_ui), (self.t("restore_defaults"), self.restore_default_settings)])
         self.controls = {}
@@ -2826,6 +3063,7 @@ class MainFrame(wx.Frame):
             (self.t("playback_section"), "playback"),
             (self.t("downloads_section"), "downloads"),
             (self.t("library_section"), "library"),
+            (self.t("podcasts_section"), "podcasts"),
             (self.t("notifications_section"), "notifications"),
             (self.t("cookies_network_section"), "cookies"),
             (self.t("keyboard_shortcuts_section"), "shortcuts"),
@@ -2951,10 +3189,21 @@ class MainFrame(wx.Frame):
             check("restrict_filenames", self.settings.restrict_filenames)
             check("download_archive", self.settings.download_archive)
         elif section_name == "library":
+            check("enable_history", self.settings.enable_history)
             choice("history_limit", str(self.settings.history_limit), ["100", "250", "500", "1000", "2000"])
             check("subscription_check_enabled", self.settings.subscription_check_enabled)
             choice("subscription_check_interval", str(self.settings.subscription_check_interval_hours), ["1", "2", "3", "6", "12", "24"])
             button("subscription_check_now", lambda: self.check_subscriptions(manual=True))
+        elif section_name == "podcasts":
+            check("enable_podcasts_rss", self.settings.enable_podcasts_rss)
+            text("podcast_source", self.t("podcast_source_info"), wx.TE_READONLY | wx.TE_MULTILINE)
+            choice("podcast_search_provider", self.normalized_podcast_search_provider(), PODCAST_DIRECTORY_PROVIDER_OPTIONS, [self.t("podcast_search_provider_apple")])
+            choice("podcast_search_country", self.normalized_podcast_search_country(), PODCAST_COUNTRY_OPTIONS)
+            choice("podcast_search_limit", str(self.settings.podcast_search_limit), ["10", "20", "50", "100", "150", "200"])
+            choice("rss_max_items", str(self.settings.rss_max_items), ["25", "50", "100", "200", "500"])
+            check("rss_refresh_on_startup", self.settings.rss_refresh_on_startup)
+            check("rss_auto_refresh_enabled", self.settings.rss_auto_refresh_enabled)
+            choice("rss_refresh_interval", str(self.settings.rss_refresh_interval_hours), ["1", "2", "3", "6", "12", "24"])
         elif section_name == "notifications":
             check("windows_notifications", self.settings.windows_notifications)
             check("download_notifications", self.settings.download_notifications)
@@ -3443,6 +3692,9 @@ class MainFrame(wx.Frame):
         self.favorites_screen_active = False
         self.history_screen_active = False
         self.subscriptions_screen_active = False
+        self.rss_feeds_screen_active = False
+        self.rss_items_screen_active = False
+        self.podcast_search_screen_active = False
         self.clear()
         self.add_button_row(
             [
@@ -3604,6 +3856,8 @@ class MainFrame(wx.Frame):
             return self.selected_rss_feed()
         if self.rss_items_screen_active:
             return self.selected_rss_item()
+        if self.podcast_search_screen_active:
+            return self.selected_podcast_result()
         return self.selected_result()
 
     def copy_url_to_clipboard(self, url: str) -> None:
@@ -3957,6 +4211,14 @@ class MainFrame(wx.Frame):
     def normalized_video_format(self) -> str:
         return self.normalize_video_format_value(getattr(self.settings, "video_format", VIDEO_FORMAT_MP4))
 
+    def normalized_podcast_search_provider(self) -> str:
+        provider = str(getattr(self.settings, "podcast_search_provider", PODCAST_DIRECTORY_PROVIDER_APPLE) or PODCAST_DIRECTORY_PROVIDER_APPLE)
+        return provider if provider in PODCAST_DIRECTORY_PROVIDER_OPTIONS else PODCAST_DIRECTORY_PROVIDER_APPLE
+
+    def normalized_podcast_search_country(self) -> str:
+        country = str(getattr(self.settings, "podcast_search_country", "US") or "US").upper()
+        return country if country in PODCAST_COUNTRY_OPTIONS else "US"
+
     def pitch_mode_labels(self) -> list[str]:
         return [
             self.t("pitch_mode_rubberband"),
@@ -4121,6 +4383,9 @@ class MainFrame(wx.Frame):
                 self.restore_previous_search_results()
                 return
             if self.rss_items_screen_active:
+                self.show_rss_feeds()
+                return
+            if self.podcast_search_screen_active:
                 self.show_rss_feeds()
                 return
             if self.rss_feeds_screen_active:
@@ -4759,6 +5024,7 @@ class MainFrame(wx.Frame):
         self.settings = Settings()
         self.save_settings()
         self.configure_subscription_timer()
+        self.configure_rss_timer()
         self.set_status(self.t("defaults_restored"))
         self.speak_text(self.t("defaults_restored"))
         self.show_settings()
@@ -4822,6 +5088,7 @@ class MainFrame(wx.Frame):
         self.save_settings()
         self.trim_history()
         self.configure_subscription_timer()
+        self.configure_rss_timer()
         self.install_download_accelerators()
         saved_text = self.t("settings_saved")
         self.set_status(saved_text)
@@ -4924,6 +5191,24 @@ class MainFrame(wx.Frame):
             self.settings.socket_timeout = self.to_int(c["timeout"].GetStringSelection(), 20, 1)
         if "history_limit" in c:
             self.settings.history_limit = self.to_int(c["history_limit"].GetStringSelection(), 500, 100, 5000)
+        if "enable_history" in c:
+            self.settings.enable_history = c["enable_history"].GetValue()
+        if "enable_podcasts_rss" in c:
+            self.settings.enable_podcasts_rss = c["enable_podcasts_rss"].GetValue()
+        if "podcast_search_provider" in c:
+            self.settings.podcast_search_provider = self.selected_choice_value("podcast_search_provider") or PODCAST_DIRECTORY_PROVIDER_APPLE
+        if "podcast_search_country" in c:
+            self.settings.podcast_search_country = c["podcast_search_country"].GetStringSelection() or "US"
+        if "podcast_search_limit" in c:
+            self.settings.podcast_search_limit = self.to_int(c["podcast_search_limit"].GetStringSelection(), 20, 1, 200)
+        if "rss_max_items" in c:
+            self.settings.rss_max_items = self.to_int(c["rss_max_items"].GetStringSelection(), 100, 1, 500)
+        if "rss_refresh_on_startup" in c:
+            self.settings.rss_refresh_on_startup = c["rss_refresh_on_startup"].GetValue()
+        if "rss_auto_refresh_enabled" in c:
+            self.settings.rss_auto_refresh_enabled = c["rss_auto_refresh_enabled"].GetValue()
+        if "rss_refresh_interval" in c:
+            self.settings.rss_refresh_interval_hours = self.to_int(c["rss_refresh_interval"].GetStringSelection(), 12, 1, 168)
         if "subscription_check_enabled" in c:
             self.settings.subscription_check_enabled = c["subscription_check_enabled"].GetValue()
         if "subscription_check_interval" in c:
@@ -5632,6 +5917,8 @@ class MainFrame(wx.Frame):
                         self.show_rss_items(self.current_rss_feed_index)
                     else:
                         self.refresh_rss_feed_list()
+                elif kind == "podcast_results" and isinstance(payload, dict):
+                    self.show_podcast_search_results(list(payload.get("results") or []), str(payload.get("query") or ""))
                 elif kind == "error":
                     self.message(str(payload), wx.ICON_ERROR)
         except queue.Empty:
@@ -5689,6 +5976,10 @@ class MainFrame(wx.Frame):
                     merged["filename_template"] = DEFAULT_FILENAME_TEMPLATE
                 merged["pitch_mode"] = self.normalize_pitch_mode_value(str(merged.get("pitch_mode") or ""))
                 merged["video_format"] = self.normalize_video_format_value(str(merged.get("video_format") or ""))
+                provider = str(merged.get("podcast_search_provider") or PODCAST_DIRECTORY_PROVIDER_APPLE)
+                merged["podcast_search_provider"] = provider if provider in PODCAST_DIRECTORY_PROVIDER_OPTIONS else PODCAST_DIRECTORY_PROVIDER_APPLE
+                country = str(merged.get("podcast_search_country") or "US").upper()
+                merged["podcast_search_country"] = country if country in PODCAST_COUNTRY_OPTIONS else "US"
                 merged["keyboard_shortcuts"] = self.normalized_keyboard_shortcuts(merged.get("keyboard_shortcuts"))
                 return Settings(**merged)
             except Exception:
@@ -5745,6 +6036,8 @@ class MainFrame(wx.Frame):
         return []
 
     def record_history(self, item: dict, action: str) -> None:
+        if not self.settings.enable_history:
+            return
         url = str(item.get("url") or "")
         if not url:
             return

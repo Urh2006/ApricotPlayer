@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.6.0` (`0.6.0`)
+Current version: `0.6.1` (`0.6.1`)
 
 ## Download
 
@@ -36,7 +36,8 @@ py wx_main.py
 - History screen for recently played and downloaded items
 - Subscriptions screen for YouTube channels, with manual and automatic checks for new videos
 - New videos view for each subscription after a subscription check finds new channel uploads
-- Podcasts and RSS feeds screen with add, refresh, open, play, download audio, copy URL, and browser actions
+- Podcasts and RSS feeds screen with Apple Podcasts directory search, direct RSS/Atom feed URLs, refresh, open, play, download audio, copy URL, and browser actions
+- Settings can hide History or Podcasts and RSS from the main menu
 - Windows notifications for new videos from subscribed channels
 - Optional Windows notifications for completed downloads when ApricotPlayer is not focused
 - Optional system tray mode when closing the window
@@ -88,4 +89,4 @@ Helpful scripts:
 - `scripts/build_release.ps1 -PackageMode onedir` builds the fast app folder used by both the installer and portable ZIP
 - `scripts/build_installer.ps1` builds `ApricotPlayerSetup.exe` when Inno Setup is installed
 - `scripts/build_portable_zip.ps1` builds `ApricotPlayer.zip`
-- `scripts/publish_release.ps1 -Tag v0.6.0 -NotesFile release-notes/v0.6.0.md` publishes the installer and portable ZIP to GitHub Releases
+- `scripts/publish_release.ps1 -Tag v0.6.1 -NotesFile release-notes/v0.6.1.md` publishes the installer and portable ZIP to GitHub Releases
