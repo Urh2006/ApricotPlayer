@@ -101,8 +101,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.2"
-APP_VERSION_LABEL = "0.6.2"
+APP_VERSION = "0.6.3"
+APP_VERSION_LABEL = "0.6.3"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -115,6 +115,7 @@ CACHED_COOKIES_FILE = APP_DIR / "cookies.txt"
 COMPONENTS_DIR = APP_DIR / "components"
 LEGACY_SETTINGS_FILE = LEGACY_APP_DIR / "settings.json"
 LEGACY_FAVORITES_FILE = LEGACY_APP_DIR / "favorites.json"
+DEFAULT_DOWNLOAD_ROOT = Path.home() / "Downloads" / "ApricotPlayer"
 DEFAULT_FILENAME_TEMPLATE = "%(title)s.%(ext)s"
 OLD_FILENAME_TEMPLATE = "%(title)s [%(id)s].%(ext)s"
 RESULTS_PAGE_SIZE = 20
@@ -199,7 +200,7 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "queue_video": "Shift+D",
     "context_menu": "Applications",
     "open_selected": "Enter",
-    "new_subscription_videos": "Space",
+    "new_subscription_videos": "N",
     "remove_selected": "Delete",
     "player_copy_link": "L",
     "player_play_pause": "Space",
@@ -579,6 +580,10 @@ TEXT = {
         "podcast_episode": "Podcast episode",
         "play_episode": "Play episode",
         "download_episode_audio": "Download episode audio",
+        "queue_episode_audio": "Queue episode audio download",
+        "download_feed": "Download entire feed",
+        "download_feed_start": "Downloading feed...",
+        "download_feed_done": "Feed download complete: {title}",
         "open_episode_page": "Open episode page",
         "published": "published",
         "rss_unknown_feed_title": "Untitled feed",
@@ -595,6 +600,8 @@ TEXT = {
         "keyboard_shortcuts_help": "Focus a field and press the new key combination. Tab and Shift+Tab still move between fields. Press Save to keep changes.",
         "shortcut_capture_hint": "Press the new key combination. Tab and Shift+Tab move focus.",
         "shortcut_captured": "Shortcut set to {shortcut}.",
+        "shortcut_in_use": "{shortcut} is already assigned to {action}. Choose a different shortcut.",
+        "shortcut_in_use_title": "Shortcut already in use",
         "search_results_empty": "No search results.",
         "no_results": "No results.",
         "favorites_empty": "No favorites.",
@@ -627,6 +634,8 @@ TEXT = {
         "download_queue_empty": "Download queue is empty.",
         "audio_queued_marker": "audio queued",
         "video_queued_marker": "video queued",
+        "podcast_audio_queued_marker": "podcast audio queued",
+        "podcast_episode_audio_selected_download": "Podcast episode queued: {title}",
         "collection_audio_queued_marker": "collection audio queued",
         "collection_video_queued_marker": "collection video queued",
         "download_state_queued": "Queued",
@@ -1131,7 +1140,7 @@ for language_code in LANGUAGE_CODES:
 @dataclass
 class Settings:
     language: str = "en"
-    download_folder: str = str(Path.home() / "Downloads")
+    download_folder: str = str(DEFAULT_DOWNLOAD_ROOT)
     results_limit: int = 0
     audio_format: str = "mp3"
     video_format: str = VIDEO_FORMAT_MP4
@@ -1499,10 +1508,82 @@ class MainFrame(wx.Frame):
         if not shortcut:
             event.Skip()
             return
+        action = str(getattr(control, "_apricot_shortcut_action", "") or "")
+        conflict = self.shortcut_conflict(shortcut, action)
+        if conflict:
+            message = self.t("shortcut_in_use", shortcut=shortcut, action=self.t(conflict[1]))
+            wx.MessageBox(message, self.t("shortcut_in_use_title"), wx.OK | wx.ICON_WARNING)
+            self.speak_text(message)
+            control.SetFocus()
+            return
         control.ChangeValue(shortcut)
         control.SetInsertionPointEnd()
         control.SetFocus()
         self.speak_text(self.t("shortcut_captured", shortcut=shortcut))
+
+    def canonical_shortcut(self, shortcut: str) -> str:
+        parsed = self.parse_shortcut(shortcut)
+        if not parsed:
+            return ""
+        ctrl, shift, alt, key_name = parsed
+        key_code = self.shortcut_key_code(key_name)
+        if key_code is None or key_code < 0:
+            return ""
+        key_label = self.shortcut_name_for_key_code(key_code)
+        if not key_label:
+            key_label = key_name.strip()
+        parts: list[str] = []
+        if ctrl:
+            parts.append("Ctrl")
+        if shift:
+            parts.append("Shift")
+        if alt:
+            parts.append("Alt")
+        parts.append(key_label)
+        return "+".join(parts).lower()
+
+    def shortcut_conflict(self, shortcut: str, current_action: str = "") -> tuple[str, str] | None:
+        wanted = self.canonical_shortcut(shortcut)
+        if not wanted:
+            return None
+        values = self.current_shortcut_values_from_controls()
+        for action, label_key in SHORTCUT_DEFINITIONS:
+            if action == current_action:
+                continue
+            if self.canonical_shortcut(values.get(action) or "") == wanted:
+                return action, label_key
+        return None
+
+    def current_shortcut_values_from_controls(self) -> dict[str, str]:
+        values = self.normalized_keyboard_shortcuts(getattr(self.settings, "keyboard_shortcuts", {}) or {})
+        if hasattr(self, "controls"):
+            for action, _label_key in SHORTCUT_DEFINITIONS:
+                control = self.controls.get(f"shortcut_{action}")
+                if isinstance(control, wx.TextCtrl):
+                    values[action] = control.GetValue().strip() or DEFAULT_KEYBOARD_SHORTCUTS[action]
+        return values
+
+    def validate_shortcut_controls(self) -> bool:
+        if not hasattr(self, "controls") or not any(f"shortcut_{action}" in self.controls for action, _label_key in SHORTCUT_DEFINITIONS):
+            return True
+        values = self.current_shortcut_values_from_controls()
+        seen: dict[str, tuple[str, str]] = {}
+        for action, label_key in SHORTCUT_DEFINITIONS:
+            canonical = self.canonical_shortcut(values.get(action) or "")
+            if not canonical:
+                continue
+            if canonical in seen:
+                _other_action, other_label_key = seen[canonical]
+                shortcut = values.get(action) or DEFAULT_KEYBOARD_SHORTCUTS[action]
+                message = self.t("shortcut_in_use", shortcut=shortcut, action=self.t(other_label_key))
+                wx.MessageBox(message, self.t("shortcut_in_use_title"), wx.OK | wx.ICON_WARNING)
+                self.speak_text(message)
+                control = self.controls.get(f"shortcut_{action}") if hasattr(self, "controls") else None
+                if isinstance(control, wx.TextCtrl):
+                    self.safe_set_focus(control)
+                return False
+            seen[canonical] = (action, label_key)
+        return True
 
     @staticmethod
     def is_shortcut_capture_control(control: wx.Window | None) -> bool:
@@ -1857,6 +1938,8 @@ class MainFrame(wx.Frame):
         return " | ".join(part for part in parts if part)
 
     def queue_mode_label(self, item: dict) -> str:
+        if item.get("kind") == "rss_item":
+            return self.t("podcast_audio_queued_marker")
         if item.get("kind") in {"playlist", "channel"}:
             if item.get("audio_only"):
                 return self.t("collection_audio_queued_marker")
@@ -2518,6 +2601,7 @@ class MainFrame(wx.Frame):
         menu = wx.Menu()
         actions = [
             (self.t("open_feed"), self.open_selected_rss_feed),
+            (self.t("download_feed"), self.download_selected_rss_feed),
             (self.t("refresh_feed"), self.refresh_selected_rss_feed),
             (self.t("copy_url"), lambda: self.copy_item_url(self.selected_rss_feed())),
             (self.t("remove_feed"), self.remove_rss_feed),
@@ -2784,6 +2868,7 @@ class MainFrame(wx.Frame):
                 (self.t("refresh_feed"), self.refresh_selected_rss_feed_from_items),
                 (self.t("play_episode"), self.play_selected_rss_item),
                 (self.t("download_episode_audio"), self.download_selected_rss_item),
+                (self.t("download_feed"), self.download_current_rss_feed),
             ]
         )
         label = wx.StaticText(self.panel, label=feed.get("title") or self.t("rss_feed_items"))
@@ -2816,11 +2901,13 @@ class MainFrame(wx.Frame):
 
     def rss_item_line(self, item: dict) -> str:
         published = self.format_history_time(item.get("timestamp")) if item.get("timestamp") else ""
+        queued = self.t("podcast_audio_queued_marker") if str(item.get("url") or "") in self.download_queue else ""
         parts = [
             item.get("title", ""),
             f"{self.t('published')}: {published}" if published else "",
             item.get("duration", ""),
             item.get("type", self.t("podcast_episode")),
+            queued,
         ]
         return " | ".join(part for part in parts if part)
 
@@ -2838,6 +2925,8 @@ class MainFrame(wx.Frame):
     def on_rss_item_key(self, event: wx.KeyEvent) -> None:
         if self.shortcut_matches(event, "open_selected"):
             self.play_selected_rss_item()
+        elif self.shortcut_matches(event, "queue_audio"):
+            self.toggle_rss_item_queue()
         elif self.shortcut_matches(event, "download_audio"):
             self.download_selected_rss_item()
         elif self.context_menu_shortcut_matches(event):
@@ -2850,6 +2939,8 @@ class MainFrame(wx.Frame):
         actions = [
             (self.t("play_episode"), self.play_selected_rss_item),
             (self.menu_label_with_shortcut("download_episode_audio", "download_audio"), self.download_selected_rss_item),
+            (self.menu_label_with_shortcut("queue_episode_audio", "queue_audio"), self.toggle_rss_item_queue),
+            (self.t("download_feed"), self.download_current_rss_feed),
             (self.t("open_episode_page"), self.open_selected_in_browser),
             (self.t("copy_url"), lambda: self.copy_item_url(self.selected_rss_item())),
         ]
@@ -2882,6 +2973,54 @@ class MainFrame(wx.Frame):
             self.start_download(True, item=item)
         else:
             self.message(self.t("no_selection"))
+
+    def toggle_rss_item_queue(self) -> None:
+        item = self.selected_rss_item()
+        if not item or not item.get("url"):
+            self.message(self.t("no_selection"))
+            return
+        url = str(item.get("url") or "")
+        if url in self.download_queue:
+            self.download_queue.pop(url, None)
+            self.announce_player(self.t("download_deselected", title=item.get("title", "")))
+        else:
+            queued = dict(item)
+            queued["audio_only"] = True
+            self.download_queue[url] = queued
+            self.announce_player(self.t("podcast_episode_audio_selected_download", title=item.get("title", "")))
+        self.refresh_rss_items_list(int(item.get("rss_item_index") or 0))
+        self.refresh_download_views()
+
+    def download_selected_rss_feed(self) -> None:
+        feed = self.selected_rss_feed()
+        if not feed:
+            self.message(self.t("no_selection"))
+            return
+        self.download_rss_feed(feed)
+
+    def download_current_rss_feed(self) -> None:
+        if self.current_rss_feed_index < 0 or self.current_rss_feed_index >= len(self.rss_feeds):
+            self.message(self.t("no_selection"))
+            return
+        self.download_rss_feed(self.rss_feeds[self.current_rss_feed_index])
+
+    def download_rss_feed(self, feed: dict) -> None:
+        items = [dict(item, audio_only=True) for item in list(feed.get("items") or []) if item.get("url")]
+        if not items:
+            self.announce_player(self.t("rss_items_empty"))
+            return
+        title = feed.get("title") or self.t("rss_unknown_feed_title")
+        for item in items:
+            item.setdefault("channel", title)
+            item.setdefault("kind", "rss_item")
+            item.setdefault("type", self.t("podcast_episode"))
+        self.announce_player(self.t("download_feed_start"))
+        self.set_status(self.t("download_feed_start"))
+        task_id, cancel_event = self.register_download_task({"title": title, "kind": "rss_feed"}, True, "rss_feed", total=len(items))
+        self.refresh_download_views()
+        finish_folder = str(self.podcasts_download_folder() / self.safe_folder_name(str(title)))
+        done_text = self.t("download_feed_done", title=title)
+        threading.Thread(target=self.download_batch_worker, args=(items, task_id, cancel_event, done_text, finish_folder), daemon=True).start()
 
     def refresh_selected_rss_feed_from_items(self) -> None:
         if self.current_rss_feed_index < 0 or self.current_rss_feed_index >= len(self.rss_feeds):
@@ -3231,6 +3370,7 @@ class MainFrame(wx.Frame):
                 ctrl = wx.TextCtrl(self.settings_scroller, value=shortcuts[action], style=wx.TE_PROCESS_ENTER)
                 ctrl.SetName(f"{self.t(label_key)}. {self.t('shortcut_capture_hint')}")
                 setattr(ctrl, "_apricot_shortcut_capture", True)
+                setattr(ctrl, "_apricot_shortcut_action", action)
                 ctrl.Bind(wx.EVT_KEY_DOWN, lambda evt, target=ctrl: self.on_shortcut_capture_key(evt, target))
                 form.Add(ctrl, 1, wx.EXPAND)
                 remember(f"shortcut_{action}", ctrl)
@@ -4492,6 +4632,36 @@ class MainFrame(wx.Frame):
         self.PopupMenu(menu)
         menu.Destroy()
 
+    def download_root_folder(self) -> Path:
+        folder = Path(str(self.settings.download_folder or DEFAULT_DOWNLOAD_ROOT)).expanduser()
+        return folder
+
+    def music_download_folder(self) -> Path:
+        root = self.download_root_folder()
+        if root.name.lower() == "music":
+            return root
+        return root / "music"
+
+    def podcasts_download_folder(self) -> Path:
+        root = self.download_root_folder()
+        root_name = root.name.lower()
+        if root_name == "podcasts":
+            return root
+        if root_name == "music":
+            return root.parent / "podcasts"
+        return root / "podcasts"
+
+    def download_folder_for_item(self, item: dict, audio_only: bool = True, collection: bool = False) -> Path:
+        kind = str(item.get("kind") or "")
+        if kind == "rss_item":
+            feed_title = item.get("channel") or item.get("podcast_title") or self.t("rss_unknown_feed_title")
+            return self.podcasts_download_folder() / self.safe_folder_name(str(feed_title))
+        folder = self.music_download_folder()
+        if collection or kind in {"playlist", "channel"}:
+            title = item.get("title") or self.t("channel" if kind == "channel" else "playlist")
+            return folder / self.safe_folder_name(str(title))
+        return folder
+
     def start_download(self, audio_only: bool, item: dict | None = None, remove_queued: bool = False) -> None:
         item = item or self.active_item()
         if not item:
@@ -4562,7 +4732,7 @@ class MainFrame(wx.Frame):
             ytdlp = get_yt_dlp()
             if ytdlp is None:
                 raise RuntimeError(self.t("missing_ytdlp"))
-            folder = Path(self.settings.download_folder)
+            folder = self.download_folder_for_item(item, audio_only)
             folder.mkdir(parents=True, exist_ok=True)
             options = self.download_options(folder, audio_only, item["title"], task_id=task_id, cancel_event=cancel_event)
             with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
@@ -4591,7 +4761,7 @@ class MainFrame(wx.Frame):
                 raise RuntimeError(self.t("missing_ytdlp"))
             kind = str(item.get("kind") or "playlist")
             title = item.get("title") or self.t("channel" if kind == "channel" else "playlist")
-            folder = Path(self.settings.download_folder) / self.safe_folder_name(title)
+            folder = self.download_folder_for_item(item, audio_only, collection=True)
             folder.mkdir(parents=True, exist_ok=True)
             options = self.download_options(folder, audio_only, title, allow_playlist=True, task_id=task_id, cancel_event=cancel_event)
             with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
@@ -4855,6 +5025,8 @@ class MainFrame(wx.Frame):
         if item and announce:
             self.announce_player(self.t("download_deselected", title=item.get("title", "")))
         self.refresh_results_list_labels()
+        if self.rss_items_screen_active:
+            self.refresh_rss_items_list()
         if self.in_queue_screen:
             self.refresh_queue_view()
         self.refresh_download_views()
@@ -4894,6 +5066,8 @@ class MainFrame(wx.Frame):
             return
         if audio_only is None:
             audio_only = bool(item.get("audio_only"))
+        if item.get("kind") == "rss_item":
+            audio_only = True
         if item.get("kind") in {"playlist", "channel"}:
             self.download_collection(dict(item), audio_only=audio_only, remove_queued=True)
         else:
@@ -4946,6 +5120,8 @@ class MainFrame(wx.Frame):
         items = list(self.download_queue.values())
         self.download_queue.clear()
         self.refresh_results_list_labels()
+        if self.rss_items_screen_active:
+            self.refresh_rss_items_list()
         self.announce_player(self.t("batch_download_start", count=len(items)))
         task_id, cancel_event = self.register_download_task({"title": self.t("download_all_selected"), "kind": "batch"}, False, "batch", total=len(items))
         if self.in_queue_screen:
@@ -4968,8 +5144,9 @@ class MainFrame(wx.Frame):
         except RuntimeError:
             pass
 
-    def download_batch_worker(self, items: list[dict], task_id: str, cancel_event: threading.Event) -> None:
-        folder = Path(self.settings.download_folder)
+    def download_batch_worker(self, items: list[dict], task_id: str, cancel_event: threading.Event, done_text: str | None = None, finish_folder: str | None = None) -> None:
+        folder = self.download_root_folder()
+        last_item_folder = folder
         try:
             ytdlp = get_yt_dlp()
             if ytdlp is None:
@@ -4995,20 +5172,21 @@ class MainFrame(wx.Frame):
                     )
                 )
                 wx.CallAfter(self.announce_player, self.t(mode_key))
-                item_folder = folder
+                item_folder = self.download_folder_for_item(item, audio_only)
                 allow_playlist = False
                 url = item["url"]
                 if item.get("kind") in {"playlist", "channel"}:
-                    item_folder = folder / self.safe_folder_name(item.get("title", ""))
-                    item_folder.mkdir(parents=True, exist_ok=True)
+                    item_folder = self.download_folder_for_item(item, audio_only, collection=True)
                     allow_playlist = True
                     url = self.collection_download_url(item)
+                item_folder.mkdir(parents=True, exist_ok=True)
+                last_item_folder = item_folder
                 options = self.download_options(item_folder, audio_only, item.get("title", ""), allow_playlist=allow_playlist, task_id=task_id, cancel_event=cancel_event)
                 with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
                     ydl.download([url])
                 self.ui_queue.put(("download_task", {"task_id": task_id, "completed": index, "total": total}))
             wx.CallAfter(self.finish_download_task, task_id)
-            wx.CallAfter(self.finish_batch_download, str(folder))
+            wx.CallAfter(self.finish_batch_download, finish_folder or str(last_item_folder if len(items) == 1 else folder), done_text)
         except DownloadCancelled:
             wx.CallAfter(self.finish_download_task, task_id, "download_state_cancelled")
             wx.CallAfter(self.announce_player, self.t("download_cancelled"))
@@ -5020,8 +5198,8 @@ class MainFrame(wx.Frame):
             wx.CallAfter(self.finish_download_task, task_id, "download_state_failed")
             wx.CallAfter(self.message, self.t("download_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
-    def finish_batch_download(self, folder: str) -> None:
-        done_text = self.t("batch_download_done")
+    def finish_batch_download(self, folder: str, done_text: str | None = None) -> None:
+        done_text = done_text or self.t("batch_download_done")
         self.set_status(done_text)
         focused = self.app_has_focus()
         if not focused:
@@ -5097,6 +5275,8 @@ class MainFrame(wx.Frame):
 
     def save_settings_from_ui(self) -> None:
         old_language = self.settings.language
+        if not self.validate_shortcut_controls():
+            return
         self.apply_settings_from_visible_controls()
         self.save_settings()
         self.trim_history()

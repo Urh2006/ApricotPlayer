@@ -1,5 +1,14 @@
 # Changelog
 
+## What's new in version 0.6.3
+
+- added duplicate shortcut protection in Settings so a newly captured keyboard shortcut cannot silently replace another action's shortcut
+- changed new public default settings to use `Downloads\ApricotPlayer` as the download root, with YouTube downloads routed to `music` and podcast episodes routed to `podcasts`
+- channel and playlist downloads now create their folders inside the music download area, while podcast feeds and episodes use a podcast-named folder inside the podcasts area
+- added download-entire-feed actions for podcast/RSS feeds and episode-list screens
+- podcast episodes can now be queued for audio download with the same queue/download flow used by videos
+- changed the default New subscription videos shortcut to `N` so public default shortcuts are unique
+
 ## What's new in version 0.6.2
 
 - fixed installer updates so ApricotPlayer installs into the exact running installation folder, closes old ApricotPlayer processes from that folder before setup runs, and logs the installed executable that was written
