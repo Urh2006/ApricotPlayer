@@ -17,11 +17,13 @@ import zipfile
 import ctypes
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from importlib import import_module
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
+import xml.etree.ElementTree as ET
 
 import wx
 import wx.adv
@@ -99,8 +101,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.5.3"
-APP_VERSION_LABEL = "0.5.3"
+APP_VERSION = "0.6.0"
+APP_VERSION_LABEL = "0.6.0"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -108,6 +110,7 @@ SETTINGS_FILE = APP_DIR / "settings.json"
 FAVORITES_FILE = APP_DIR / "favorites.json"
 HISTORY_FILE = APP_DIR / "history.json"
 SUBSCRIPTIONS_FILE = APP_DIR / "subscriptions.json"
+RSS_FEEDS_FILE = APP_DIR / "rss_feeds.json"
 CACHED_COOKIES_FILE = APP_DIR / "cookies.txt"
 COMPONENTS_DIR = APP_DIR / "components"
 LEGACY_SETTINGS_FILE = LEGACY_APP_DIR / "settings.json"
@@ -526,6 +529,31 @@ TEXT = {
         "favorites": "Favorites",
         "history": "History",
         "subscriptions": "Subscriptions",
+        "rss_feeds": "Podcasts and RSS feeds",
+        "rss_feed_items": "Feed items",
+        "add_rss_feed": "Add feed",
+        "rss_feed_url": "Feed URL",
+        "refresh_feeds": "Refresh feeds",
+        "refresh_feed": "Refresh feed",
+        "open_feed": "Open feed",
+        "remove_feed": "Remove feed",
+        "rss_feeds_empty": "No podcast or RSS feeds.",
+        "rss_items_empty": "No items in this feed.",
+        "rss_feed_added": "Feed added: {title}.",
+        "rss_feed_exists": "This feed is already added.",
+        "rss_feed_removed": "Feed removed.",
+        "rss_refresh_started": "Refreshing feeds.",
+        "rss_refresh_done": "Feeds refreshed.",
+        "rss_refresh_failed": "Feed refresh failed: {error}",
+        "rss_feed_last_checked": "last checked {time}",
+        "rss_feed_never_checked": "never checked",
+        "rss_feed_item_count": "{count} items",
+        "podcast_episode": "Podcast episode",
+        "play_episode": "Play episode",
+        "download_episode_audio": "Download episode audio",
+        "open_episode_page": "Open episode page",
+        "published": "published",
+        "rss_unknown_feed_title": "Untitled feed",
         "settings": "Settings",
         "settings_sections": "Settings sections",
         "general_section": "General",
@@ -1167,6 +1195,8 @@ class MainFrame(wx.Frame):
         self.favorites = self.load_favorites()
         self.history = self.load_history()
         self.subscriptions = self.load_subscriptions()
+        self.rss_feeds = self.load_rss_feeds()
+        self.rss_items: list[dict] = []
         self.results: list[dict] = []
         self.all_results: list[dict] = []
         self.return_results: list[dict] = []
@@ -1180,7 +1210,12 @@ class MainFrame(wx.Frame):
         self.favorites_screen_active = False
         self.history_screen_active = False
         self.subscriptions_screen_active = False
+        self.rss_feeds_screen_active = False
+        self.rss_items_screen_active = False
         self.in_main_menu = False
+        self.current_rss_feed_index = -1
+        self.player_return_screen = ""
+        self.player_return_data: dict = {}
         self.search_results_stack: list[dict] = []
         self.settings_section_index = 0
         self.current_index = -1
@@ -1661,6 +1696,8 @@ class MainFrame(wx.Frame):
         self.favorites_screen_active = False
         self.history_screen_active = False
         self.subscriptions_screen_active = False
+        self.rss_feeds_screen_active = False
+        self.rss_items_screen_active = False
         self.clear()
         title = wx.StaticText(self.panel, label=self.t("main_menu"))
         self.root_sizer.Add(title, 0, wx.ALL, 4)
@@ -1674,6 +1711,7 @@ class MainFrame(wx.Frame):
             (self.t("favorites"), self.show_favorites),
             (self.t("history"), self.show_history),
             (self.t("subscriptions"), self.show_subscriptions),
+            (self.t("rss_feeds"), self.show_rss_feeds),
             (self.t("settings"), self.show_settings),
             (self.t("exit"), self.quit_application),
         ])
@@ -1705,6 +1743,8 @@ class MainFrame(wx.Frame):
         self.favorites_screen_active = False
         self.history_screen_active = False
         self.subscriptions_screen_active = False
+        self.rss_feeds_screen_active = False
+        self.rss_items_screen_active = False
         self.clear()
         buttons = [(self.t("back"), self.show_main_menu)]
         if self.download_queue:
@@ -1821,6 +1861,8 @@ class MainFrame(wx.Frame):
         self.favorites_screen_active = False
         self.history_screen_active = False
         self.subscriptions_screen_active = False
+        self.rss_feeds_screen_active = False
+        self.rss_items_screen_active = False
         self.clear()
         self.add_button_row([(self.t("back"), self.back_from_search)])
         grid = wx.FlexGridSizer(2, 2, 6, 6)
@@ -1897,6 +1939,8 @@ class MainFrame(wx.Frame):
         self.favorites_screen_active = True
         self.history_screen_active = False
         self.subscriptions_screen_active = False
+        self.rss_feeds_screen_active = False
+        self.rss_items_screen_active = False
         self.clear()
         self.add_button_row(
             [
@@ -1949,6 +1993,8 @@ class MainFrame(wx.Frame):
         self.favorites_screen_active = False
         self.history_screen_active = True
         self.subscriptions_screen_active = False
+        self.rss_feeds_screen_active = False
+        self.rss_items_screen_active = False
         self.clear()
         self.add_button_row(
             [
@@ -2060,6 +2106,8 @@ class MainFrame(wx.Frame):
         self.favorites_screen_active = False
         self.history_screen_active = False
         self.subscriptions_screen_active = True
+        self.rss_feeds_screen_active = False
+        self.rss_items_screen_active = False
         self.clear()
         self.add_button_row(
             [
@@ -2311,12 +2359,445 @@ class MainFrame(wx.Frame):
         entries = list(info.get("entries") or [])[:5]
         return [self.normalize_entry(entry, "Video") for entry in entries]
 
+    def show_rss_feeds(self) -> None:
+        self.in_main_menu = False
+        self.in_queue_screen = False
+        self.search_screen_active = False
+        self.favorites_screen_active = False
+        self.history_screen_active = False
+        self.subscriptions_screen_active = False
+        self.rss_feeds_screen_active = True
+        self.rss_items_screen_active = False
+        self.clear()
+        self.add_button_row(
+            [
+                (self.t("back"), self.show_main_menu),
+                (self.t("add_rss_feed"), self.add_rss_feed),
+                (self.t("refresh_feeds"), self.refresh_all_rss_feeds),
+                (self.t("open_feed"), self.open_selected_rss_feed),
+                (self.t("remove_feed"), self.remove_rss_feed),
+            ]
+        )
+        self.rss_feed_list = wx.ListBox(self.panel, choices=[])
+        self.rss_feed_list.SetName(self.t("rss_feeds"))
+        self.rss_feed_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _evt: self.open_selected_rss_feed())
+        self.rss_feed_list.Bind(wx.EVT_CONTEXT_MENU, self.open_rss_feed_context_menu)
+        self.rss_feed_list.Bind(wx.EVT_KEY_DOWN, self.on_rss_feed_key)
+        self.root_sizer.Add(self.rss_feed_list, 1, wx.EXPAND | wx.ALL, 4)
+        self.refresh_rss_feed_list()
+        self.panel.Layout()
+        self.focus_later(self.rss_feed_list)
+
+    def refresh_rss_feed_list(self) -> None:
+        if not hasattr(self, "rss_feed_list"):
+            return
+        try:
+            self.rss_feed_list.Clear()
+            for feed in self.rss_feeds:
+                self.rss_feed_list.Append(self.rss_feed_line(feed))
+            if self.rss_feeds:
+                index = min(max(0, self.current_rss_feed_index), len(self.rss_feeds) - 1)
+                self.rss_feed_list.SetSelection(index)
+            else:
+                self.rss_feed_list.Append(self.t("rss_feeds_empty"))
+                self.rss_feed_list.SetSelection(0)
+                self.set_status(self.t("rss_feeds_empty"))
+        except RuntimeError:
+            pass
+
+    def rss_feed_line(self, feed: dict) -> str:
+        checked = self.format_history_time(feed.get("last_checked")) if feed.get("last_checked") else self.t("rss_feed_never_checked")
+        count = len(feed.get("items") or [])
+        parts = [
+            feed.get("title") or self.t("rss_unknown_feed_title"),
+            self.t("rss_feed_item_count", count=count),
+            self.t("rss_feed_last_checked", time=checked) if feed.get("last_checked") else checked,
+        ]
+        return " | ".join(part for part in parts if part)
+
+    def selected_rss_feed(self) -> dict | None:
+        if not hasattr(self, "rss_feed_list"):
+            return None
+        index = self.rss_feed_list.GetSelection()
+        if index == wx.NOT_FOUND or index < 0 or index >= len(self.rss_feeds):
+            return None
+        self.current_rss_feed_index = index
+        return self.rss_feeds[index]
+
+    def on_rss_feed_key(self, event: wx.KeyEvent) -> None:
+        if self.shortcut_matches(event, "open_selected"):
+            self.open_selected_rss_feed()
+        elif self.shortcut_matches(event, "remove_selected"):
+            self.remove_rss_feed()
+        elif self.context_menu_shortcut_matches(event):
+            self.open_rss_feed_context_menu()
+        else:
+            event.Skip()
+
+    def open_rss_feed_context_menu(self, _event=None) -> None:
+        menu = wx.Menu()
+        actions = [
+            (self.t("open_feed"), self.open_selected_rss_feed),
+            (self.t("refresh_feed"), self.refresh_selected_rss_feed),
+            (self.t("copy_url"), lambda: self.copy_item_url(self.selected_rss_feed())),
+            (self.t("remove_feed"), self.remove_rss_feed),
+        ]
+        for label, handler in actions:
+            item = menu.Append(wx.ID_ANY, label)
+            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
+        self.PopupMenu(menu)
+        menu.Destroy()
+
+    def add_rss_feed(self) -> None:
+        with wx.TextEntryDialog(self, self.t("rss_feed_url"), self.t("add_rss_feed")) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            url = dialog.GetValue().strip()
+        if not url:
+            return
+        if not re.match(r"^https?://", url, flags=re.IGNORECASE):
+            url = "https://" + url
+        if any(str(feed.get("url") or "").rstrip("/") == url.rstrip("/") for feed in self.rss_feeds):
+            self.announce_player(self.t("rss_feed_exists"))
+            return
+        self.announce_player(self.t("rss_refresh_started"))
+        threading.Thread(target=self.add_rss_feed_worker, args=(url,), daemon=True).start()
+
+    def add_rss_feed_worker(self, url: str) -> None:
+        try:
+            feed = self.fetch_rss_feed(url)
+            self.rss_feeds.insert(0, feed)
+            self.save_rss_feeds()
+            self.ui_queue.put(("rss_feeds_changed", None))
+            self.ui_queue.put(("announce", self.t("rss_feed_added", title=feed.get("title") or self.t("rss_unknown_feed_title"))))
+        except Exception as exc:
+            self.ui_queue.put(("announce", self.t("rss_refresh_failed", error=self.friendly_error(exc))))
+
+    def refresh_all_rss_feeds(self) -> None:
+        if not self.rss_feeds:
+            self.announce_player(self.t("rss_feeds_empty"))
+            return
+        self.announce_player(self.t("rss_refresh_started"))
+        threading.Thread(target=self.refresh_rss_feeds_worker, args=(None,), daemon=True).start()
+
+    def refresh_selected_rss_feed(self) -> None:
+        feed = self.selected_rss_feed()
+        if not feed:
+            self.message(self.t("no_selection"))
+            return
+        self.announce_player(self.t("rss_refresh_started"))
+        threading.Thread(target=self.refresh_rss_feeds_worker, args=(self.current_rss_feed_index,), daemon=True).start()
+
+    def refresh_rss_feeds_worker(self, feed_index: int | None) -> None:
+        try:
+            if feed_index is None:
+                indexes = range(len(self.rss_feeds))
+            else:
+                indexes = [feed_index]
+            updated_feeds = list(self.rss_feeds)
+            for index in indexes:
+                existing = updated_feeds[index]
+                refreshed = self.fetch_rss_feed(str(existing.get("url") or ""))
+                refreshed["created_at"] = existing.get("created_at", refreshed.get("created_at", time.time()))
+                updated_feeds[index] = refreshed
+            self.rss_feeds = updated_feeds
+            self.save_rss_feeds()
+            self.ui_queue.put(("rss_feeds_changed", None))
+            self.ui_queue.put(("announce", self.t("rss_refresh_done")))
+        except Exception as exc:
+            self.ui_queue.put(("announce", self.t("rss_refresh_failed", error=self.friendly_error(exc))))
+
+    def open_selected_rss_feed(self) -> None:
+        feed = self.selected_rss_feed()
+        if not feed:
+            self.message(self.t("no_selection"))
+            return
+        self.show_rss_items(self.current_rss_feed_index)
+
+    def remove_rss_feed(self) -> None:
+        if not hasattr(self, "rss_feed_list"):
+            return
+        index = self.rss_feed_list.GetSelection()
+        if index != wx.NOT_FOUND and 0 <= index < len(self.rss_feeds):
+            del self.rss_feeds[index]
+            self.current_rss_feed_index = min(index, len(self.rss_feeds) - 1)
+            self.save_rss_feeds()
+            self.refresh_rss_feed_list()
+            self.announce_player(self.t("rss_feed_removed"))
+
+    def show_rss_items(self, feed_index: int, selection: int = 0) -> None:
+        if feed_index < 0 or feed_index >= len(self.rss_feeds):
+            self.show_rss_feeds()
+            return
+        self.current_rss_feed_index = feed_index
+        feed = self.rss_feeds[feed_index]
+        self.rss_items = list(feed.get("items") or [])
+        self.in_main_menu = False
+        self.in_queue_screen = False
+        self.search_screen_active = False
+        self.favorites_screen_active = False
+        self.history_screen_active = False
+        self.subscriptions_screen_active = False
+        self.rss_feeds_screen_active = False
+        self.rss_items_screen_active = True
+        self.clear()
+        self.add_button_row(
+            [
+                (self.t("back"), self.show_rss_feeds),
+                (self.t("refresh_feed"), self.refresh_selected_rss_feed_from_items),
+                (self.t("play_episode"), self.play_selected_rss_item),
+                (self.t("download_episode_audio"), self.download_selected_rss_item),
+            ]
+        )
+        label = wx.StaticText(self.panel, label=feed.get("title") or self.t("rss_feed_items"))
+        self.root_sizer.Add(label, 0, wx.ALL, 4)
+        self.rss_items_list = wx.ListBox(self.panel, choices=[])
+        self.rss_items_list.SetName(self.t("rss_feed_items"))
+        self.rss_items_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _evt: self.play_selected_rss_item())
+        self.rss_items_list.Bind(wx.EVT_CONTEXT_MENU, self.open_rss_item_context_menu)
+        self.rss_items_list.Bind(wx.EVT_KEY_DOWN, self.on_rss_item_key)
+        self.root_sizer.Add(self.rss_items_list, 1, wx.EXPAND | wx.ALL, 4)
+        self.refresh_rss_items_list(selection)
+        self.panel.Layout()
+        self.focus_later(self.rss_items_list)
+
+    def refresh_rss_items_list(self, selection: int = 0) -> None:
+        if not hasattr(self, "rss_items_list"):
+            return
+        try:
+            self.rss_items_list.Clear()
+            for item in self.rss_items:
+                self.rss_items_list.Append(self.rss_item_line(item))
+            if self.rss_items:
+                self.rss_items_list.SetSelection(min(max(0, selection), len(self.rss_items) - 1))
+            else:
+                self.rss_items_list.Append(self.t("rss_items_empty"))
+                self.rss_items_list.SetSelection(0)
+                self.set_status(self.t("rss_items_empty"))
+        except RuntimeError:
+            pass
+
+    def rss_item_line(self, item: dict) -> str:
+        published = self.format_history_time(item.get("timestamp")) if item.get("timestamp") else ""
+        parts = [
+            item.get("title", ""),
+            f"{self.t('published')}: {published}" if published else "",
+            item.get("duration", ""),
+            item.get("type", self.t("podcast_episode")),
+        ]
+        return " | ".join(part for part in parts if part)
+
+    def selected_rss_item(self) -> dict | None:
+        if not hasattr(self, "rss_items_list"):
+            return None
+        index = self.rss_items_list.GetSelection()
+        if index == wx.NOT_FOUND or index < 0 or index >= len(self.rss_items):
+            return None
+        item = dict(self.rss_items[index])
+        item["rss_feed_index"] = self.current_rss_feed_index
+        item["rss_item_index"] = index
+        return item
+
+    def on_rss_item_key(self, event: wx.KeyEvent) -> None:
+        if self.shortcut_matches(event, "open_selected"):
+            self.play_selected_rss_item()
+        elif self.shortcut_matches(event, "download_audio"):
+            self.download_selected_rss_item()
+        elif self.context_menu_shortcut_matches(event):
+            self.open_rss_item_context_menu()
+        else:
+            event.Skip()
+
+    def open_rss_item_context_menu(self, _event=None) -> None:
+        menu = wx.Menu()
+        actions = [
+            (self.t("play_episode"), self.play_selected_rss_item),
+            (self.menu_label_with_shortcut("download_episode_audio", "download_audio"), self.download_selected_rss_item),
+            (self.t("open_episode_page"), self.open_selected_in_browser),
+            (self.t("copy_url"), lambda: self.copy_item_url(self.selected_rss_item())),
+        ]
+        for label, handler in actions:
+            item = menu.Append(wx.ID_ANY, label)
+            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
+        self.PopupMenu(menu)
+        menu.Destroy()
+
+    def play_selected_rss_item(self) -> None:
+        item = self.selected_rss_item()
+        if not item:
+            self.message(self.t("no_selection"))
+            return
+        if not item.get("url"):
+            self.message(self.t("no_selection"))
+            return
+        self.player_return_screen = "rss_items"
+        self.player_return_data = {
+            "feed_index": self.current_rss_feed_index,
+            "item_index": int(item.get("rss_item_index") or 0),
+        }
+        self.current_video_item = item
+        self.current_video_info = dict(item)
+        self.play_url(item.get("url", ""), item.get("title", ""))
+
+    def download_selected_rss_item(self) -> None:
+        item = self.selected_rss_item()
+        if item and item.get("url"):
+            self.start_download(True, item=item)
+        else:
+            self.message(self.t("no_selection"))
+
+    def refresh_selected_rss_feed_from_items(self) -> None:
+        if self.current_rss_feed_index < 0 or self.current_rss_feed_index >= len(self.rss_feeds):
+            self.show_rss_feeds()
+            return
+        self.announce_player(self.t("rss_refresh_started"))
+        threading.Thread(target=self.refresh_rss_feeds_worker, args=(self.current_rss_feed_index,), daemon=True).start()
+
+    def fetch_rss_feed(self, url: str) -> dict:
+        request = Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+        with self.open_url(request, timeout=30) as response:
+            final_url = response.geturl()
+            raw = response.read(3_000_000)
+        root = ET.fromstring(raw)
+        title, site_url, items = self.parse_feed_root(root, final_url)
+        return {
+            "title": title or self.t("rss_unknown_feed_title"),
+            "url": final_url or url,
+            "site_url": site_url,
+            "items": items[:100],
+            "last_checked": time.time(),
+            "created_at": time.time(),
+        }
+
+    def parse_feed_root(self, root: ET.Element, base_url: str) -> tuple[str, str, list[dict]]:
+        root_name = self.xml_local_name(root.tag)
+        if root_name == "feed":
+            return self.parse_atom_feed(root, base_url)
+        channel = self.first_child(root, "channel") or root
+        title = self.child_text(channel, "title")
+        site_url = self.absolute_url(self.child_text(channel, "link"), base_url)
+        items = [self.parse_rss_item(item, base_url, title) for item in self.children(channel, "item")]
+        return title, site_url, [item for item in items if item.get("title") or item.get("url")]
+
+    def parse_rss_item(self, item: ET.Element, base_url: str, feed_title: str) -> dict:
+        title = self.child_text(item, "title")
+        page_url = self.absolute_url(self.child_text(item, "link"), base_url)
+        media_url = ""
+        for child in list(item):
+            name = self.xml_local_name(child.tag)
+            if name in {"enclosure", "content"} and child.get("url"):
+                media_url = self.absolute_url(str(child.get("url") or ""), base_url)
+                break
+        timestamp = self.parse_feed_timestamp(self.child_text(item, "pubDate") or self.child_text(item, "published"))
+        description = self.strip_html(self.child_text(item, "description") or self.child_text(item, "summary") or self.child_text(item, "content"))
+        guid = self.child_text(item, "guid")
+        url = media_url or page_url or self.absolute_url(guid, base_url)
+        duration = self.child_text(item, "duration")
+        return {
+            "title": title or page_url or media_url,
+            "url": url,
+            "webpage_url": page_url or url,
+            "media_url": media_url,
+            "description": description,
+            "duration": duration,
+            "timestamp": timestamp,
+            "channel": feed_title,
+            "kind": "rss_item",
+            "type": self.t("podcast_episode"),
+        }
+
+    def parse_atom_feed(self, root: ET.Element, base_url: str) -> tuple[str, str, list[dict]]:
+        title = self.child_text(root, "title")
+        site_url = self.atom_link(root, base_url, {"alternate", ""})
+        items = [self.parse_atom_item(entry, base_url, title) for entry in self.children(root, "entry")]
+        return title, site_url, [item for item in items if item.get("title") or item.get("url")]
+
+    def parse_atom_item(self, entry: ET.Element, base_url: str, feed_title: str) -> dict:
+        title = self.child_text(entry, "title")
+        page_url = self.atom_link(entry, base_url, {"alternate", ""})
+        media_url = self.atom_link(entry, base_url, {"enclosure"})
+        timestamp = self.parse_feed_timestamp(self.child_text(entry, "published") or self.child_text(entry, "updated"))
+        description = self.strip_html(self.child_text(entry, "summary") or self.child_text(entry, "content"))
+        item_id = self.child_text(entry, "id")
+        url = media_url or page_url or self.absolute_url(item_id, base_url)
+        duration = self.child_text(entry, "duration")
+        return {
+            "title": title or page_url or media_url,
+            "url": url,
+            "webpage_url": page_url or url,
+            "media_url": media_url,
+            "description": description,
+            "duration": duration,
+            "timestamp": timestamp,
+            "channel": feed_title,
+            "kind": "rss_item",
+            "type": self.t("podcast_episode"),
+        }
+
+    def atom_link(self, element: ET.Element, base_url: str, rels: set[str]) -> str:
+        for child in self.children(element, "link"):
+            rel = str(child.get("rel") or "").lower()
+            if rel in rels:
+                href = str(child.get("href") or "").strip()
+                if href:
+                    return self.absolute_url(href, base_url)
+        return ""
+
+    @staticmethod
+    def xml_local_name(tag: str) -> str:
+        return str(tag).split("}", 1)[-1].lower()
+
+    def children(self, element: ET.Element, local_name: str) -> list[ET.Element]:
+        return [child for child in list(element) if self.xml_local_name(child.tag) == local_name.lower()]
+
+    def first_child(self, element: ET.Element, local_name: str) -> ET.Element | None:
+        for child in self.children(element, local_name):
+            return child
+        return None
+
+    def child_text(self, element: ET.Element, local_name: str) -> str:
+        child = self.first_child(element, local_name)
+        if child is None:
+            return ""
+        return "".join(child.itertext()).strip()
+
+    @staticmethod
+    def absolute_url(value: str, base_url: str) -> str:
+        value = str(value or "").strip()
+        if not value:
+            return ""
+        return urljoin(base_url, value)
+
+    @staticmethod
+    def parse_feed_timestamp(value: str) -> float:
+        value = str(value or "").strip()
+        if not value:
+            return 0.0
+        try:
+            return parsedate_to_datetime(value).timestamp()
+        except Exception:
+            pass
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def strip_html(value: str) -> str:
+        text = re.sub(r"<br\s*/?>", "\n", str(value or ""), flags=re.IGNORECASE)
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = re.sub(r"[ \t]+", " ", text)
+        text = re.sub(r"\n\s+", "\n", text)
+        return text.strip()
+
     def show_settings(self) -> None:
         self.in_main_menu = False
         self.search_screen_active = False
         self.favorites_screen_active = False
         self.history_screen_active = False
         self.subscriptions_screen_active = False
+        self.rss_feeds_screen_active = False
+        self.rss_items_screen_active = False
         self.clear()
         self.add_button_row([(self.t("back"), self.show_main_menu), (self.t("save"), self.save_settings_from_ui), (self.t("restore_defaults"), self.restore_default_settings)])
         self.controls = {}
@@ -2734,6 +3215,8 @@ class MainFrame(wx.Frame):
         self.return_all_results = list(self.all_results or self.results)
         self.return_index = self.current_index
         self.return_visible_count = self.last_visible_count or len(self.results)
+        self.player_return_screen = "search"
+        self.player_return_data = {}
         self.current_video_item = item
         self.current_video_info = dict(item)
         self.play_url(item["url"], item["title"])
@@ -2989,6 +3472,28 @@ class MainFrame(wx.Frame):
     def back_to_results(self) -> None:
         self.stop_player(silent=True)
         self.in_player_screen = False
+        if self.player_return_screen == "rss_items":
+            feed_index = int(self.player_return_data.get("feed_index", self.current_rss_feed_index) or 0)
+            item_index = int(self.player_return_data.get("item_index", 0) or 0)
+            self.player_return_screen = ""
+            self.player_return_data = {}
+            self.show_rss_items(feed_index, selection=item_index)
+            return
+        if self.player_return_screen == "history":
+            self.player_return_screen = ""
+            self.player_return_data = {}
+            self.show_history()
+            return
+        if self.player_return_screen == "favorites":
+            self.player_return_screen = ""
+            self.player_return_data = {}
+            self.show_favorites()
+            return
+        if self.player_return_screen == "subscriptions":
+            self.player_return_screen = ""
+            self.player_return_data = {}
+            self.show_subscriptions()
+            return
         results = self.return_all_results or self.all_results or self.return_results or self.results
         if results:
             self.show_search(restore_search=True)
@@ -3095,6 +3600,10 @@ class MainFrame(wx.Frame):
             return self.selected_history_item()
         if self.subscriptions_screen_active:
             return self.selected_subscription()
+        if self.rss_feeds_screen_active:
+            return self.selected_rss_feed()
+        if self.rss_items_screen_active:
+            return self.selected_rss_item()
         return self.selected_result()
 
     def copy_url_to_clipboard(self, url: str) -> None:
@@ -3127,6 +3636,8 @@ class MainFrame(wx.Frame):
             return
         self.current_video_item = item
         self.current_video_info = dict(item)
+        self.player_return_screen = screen
+        self.player_return_data = {}
         self.play_url(item["url"], item.get("title", ""))
 
     def next_download_task_id(self, prefix: str = "download") -> str:
@@ -3609,6 +4120,12 @@ class MainFrame(wx.Frame):
             if self.search_screen_active and self.search_results_stack:
                 self.restore_previous_search_results()
                 return
+            if self.rss_items_screen_active:
+                self.show_rss_feeds()
+                return
+            if self.rss_feeds_screen_active:
+                self.show_main_menu()
+                return
             self.show_main_menu()
             return
         if self.in_player_screen and self.shortcut_matches(event, "player_copy_link"):
@@ -4017,12 +4534,12 @@ class MainFrame(wx.Frame):
     def open_selected_in_browser(self) -> None:
         item = self.active_item()
         if item:
-            webbrowser.open(item["url"])
+            webbrowser.open(str(item.get("webpage_url") or item.get("url") or ""))
 
     def copy_selected_url(self) -> None:
         item = self.active_item()
         if item:
-            self.copy_url_to_clipboard(item["url"])
+            self.copy_url_to_clipboard(str(item.get("url") or ""))
 
     def copy_item_url(self, item: dict | None) -> None:
         if item:
@@ -5110,6 +5627,11 @@ class MainFrame(wx.Frame):
                     self.show_desktop_notification(str(title), str(message), enabled=self.settings.subscription_notifications)
                 elif kind == "subscriptions_changed":
                     self.refresh_subscriptions()
+                elif kind == "rss_feeds_changed":
+                    if self.rss_items_screen_active and 0 <= self.current_rss_feed_index < len(self.rss_feeds):
+                        self.show_rss_items(self.current_rss_feed_index)
+                    else:
+                        self.refresh_rss_feed_list()
                 elif kind == "error":
                     self.message(str(payload), wx.ICON_ERROR)
         except queue.Empty:
@@ -5204,6 +5726,13 @@ class MainFrame(wx.Frame):
     def save_subscriptions(self) -> None:
         APP_DIR.mkdir(parents=True, exist_ok=True)
         SUBSCRIPTIONS_FILE.write_text(json.dumps(self.subscriptions, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def load_rss_feeds(self) -> list[dict]:
+        return self.load_json_list(RSS_FEEDS_FILE)
+
+    def save_rss_feeds(self) -> None:
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        RSS_FEEDS_FILE.write_text(json.dumps(self.rss_feeds, indent=2, ensure_ascii=False), encoding="utf-8")
 
     @staticmethod
     def load_json_list(path: Path) -> list[dict]:

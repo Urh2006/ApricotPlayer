@@ -1,5 +1,14 @@
 # Changelog
 
+## What's new in version 0.6.0
+
+- added a Podcasts and RSS feeds screen to manage podcast/RSS subscriptions outside YouTube
+- feed lists support keyboard and context menu actions for add, refresh, open, copy URL, and remove
+- feed item lists support play, audio download, copy URL, and open episode page actions
+- RSS and Atom parsing is built in with support for podcast enclosures, Atom enclosure links, publication dates, descriptions, and durations when available
+- Escape returns from a playing podcast episode back to the feed item list, matching the accessible navigation model used elsewhere
+- added per-user RSS feed storage in `%APPDATA%\ApricotPlayer\rss_feeds.json`
+
 ## What's new in version 0.5.3
 
 - added a Notifications settings section with a master Windows notifications switch plus separate toggles for subscription and completed-download notifications
