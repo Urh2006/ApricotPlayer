@@ -1,5 +1,13 @@
 # Changelog
 
+## What's new in version 0.6.2
+
+- fixed installer updates so ApricotPlayer installs into the exact running installation folder, closes old ApricotPlayer processes from that folder before setup runs, and logs the installed executable that was written
+- choosing Update now clears any previously skipped update version, and old skipped-version flags are cleaned up after a newer app version is installed
+- added single-instance protection so launching ApricotPlayer again while it is already open or hidden in the system tray shows an Already open message instead of starting a second copy
+- Enter now opens podcast/RSS feeds and podcast search results from their lists, and Enter starts playback from episode lists even when the global shortcut handler receives the key first
+- numpad Enter now works the same as Enter for configurable open actions
+
 ## What's new in version 0.6.1
 
 - added podcast search using the Apple Podcasts directory through the iTunes Search API, while direct RSS and Atom feed URLs remain supported

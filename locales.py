@@ -74,6 +74,7 @@ SL_TRANSLATION_FIXES = {
     'history': 'Zgodovina',
     'subscriptions': 'Narocnine',
     'rss_feeds': 'Podcasti in RSS viri',
+    'already_open': 'ApricotPlayer je ze odprt.',
     'rss_feed_items': 'Elementi vira',
     'add_rss_feed': 'Dodaj vir',
     'rss_feed_url': 'URL vira',

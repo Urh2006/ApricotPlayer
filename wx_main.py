@@ -101,8 +101,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.1"
-APP_VERSION_LABEL = "0.6.1"
+APP_VERSION = "0.6.2"
+APP_VERSION_LABEL = "0.6.2"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -742,6 +742,7 @@ TEXT = {
         "subscription_check_interval": "Subscription check interval in hours",
         "close_to_tray": "Close button or Alt+F4 sends ApricotPlayer to system tray",
         "tray_still_running": "ApricotPlayer is still running in the system tray.",
+        "already_open": "ApricotPlayer is already open.",
         "tray_show": "Show ApricotPlayer",
         "tray_check_subscriptions": "Check subscriptions",
         "tray_exit": "Exit ApricotPlayer",
@@ -1524,9 +1525,12 @@ class MainFrame(wx.Frame):
         key_code = self.shortcut_key_code(key_name)
         if key_code is None:
             return False
+        event_codes = self.key_event_codes(event)
+        if key_code == wx.WXK_RETURN and wx.WXK_NUMPAD_ENTER in event_codes:
+            return True
         if len(key_name.strip()) == 1 and key_name.strip().isprintable():
-            return self.key_event_matches_letter(event, key_name.strip()) if key_name.strip().isalpha() else key_code in self.key_event_codes(event)
-        return key_code in self.key_event_codes(event)
+            return self.key_event_matches_letter(event, key_name.strip()) if key_name.strip().isalpha() else key_code in event_codes
+        return key_code in event_codes
 
     def context_menu_shortcut_matches(self, event: wx.KeyEvent) -> bool:
         context_codes = {
@@ -4345,6 +4349,15 @@ class MainFrame(wx.Frame):
         if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "menu_list", None):
             self.activate_menu()
             return
+        if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "rss_feed_list", None):
+            self.open_selected_rss_feed()
+            return
+        if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "podcast_result_list", None):
+            self.add_selected_podcast_result()
+            return
+        if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "rss_items_list", None):
+            self.play_selected_rss_item()
+            return
         if focus is getattr(self, "queue_list", None) and self.shortcut_matches(event, "download_audio"):
             self.download_selected_queue_item(True)
             return
@@ -5384,6 +5397,9 @@ class MainFrame(wx.Frame):
         changelog = self.release_changelog_text(release)
         if self.show_update_prompt(version, changelog):
             self.log_update_event(f"User selected update now for {version}")
+            if self.settings.skipped_update_version:
+                self.settings.skipped_update_version = ""
+                self.save_settings()
             self.begin_app_update_install(release, asset)
         else:
             self.log_update_event(f"User skipped update {version}")
@@ -5541,7 +5557,7 @@ class MainFrame(wx.Frame):
         current_exe = Path(sys.executable)
         self.log_update_event(f"Preparing install for {version}; package={downloaded_path}; current_exe={current_exe}")
         if self.is_installer_asset(downloaded_path):
-            script_path = self.write_installer_update_script(downloaded_path, os.getpid(), str(UPDATE_LOG_FILE), restart=True)
+            script_path = self.write_installer_update_script(downloaded_path, str(current_exe.parent), os.getpid(), str(UPDATE_LOG_FILE), restart=True)
         elif self.is_portable_zip_asset(downloaded_path):
             script_path = self.write_portable_zip_update_script(downloaded_path, str(current_exe.parent), str(current_exe), os.getpid(), str(UPDATE_LOG_FILE), restart=True)
         else:
@@ -5692,18 +5708,21 @@ class MainFrame(wx.Frame):
         return script_path
 
     @classmethod
-    def write_installer_update_script(cls, downloaded_path: str, process_id: int, log_path: str, restart: bool = True) -> Path:
+    def write_installer_update_script(cls, downloaded_path: str, install_dir: str, process_id: int, log_path: str, restart: bool = True) -> Path:
         script_path = Path(tempfile.gettempdir()) / f"apricotplayer-installer-update-{int(time.time())}.ps1"
         restart_value = "$true" if restart else "$false"
         script = "\n".join(
             [
                 "$ErrorActionPreference = 'Stop'",
                 f"$source = {cls.powershell_literal(downloaded_path)}",
+                f"$installDir = {cls.powershell_literal(install_dir)}",
                 f"$log = {cls.powershell_literal(log_path)}",
                 f"$processIdToWait = {int(process_id)}",
                 f"$restart = {restart_value}",
-                "$silentArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', '/TASKS=desktopicon')",
+                "$installerLog = [IO.Path]::ChangeExtension($log, '.inno.log')",
+                "$silentArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', '/RESTARTAPPLICATIONS', '/TASKS=desktopicon', ('/DIR=' + $installDir), ('/LOG=' + $installerLog))",
                 "$installCandidates = @(",
+                "    (Join-Path $installDir 'ApricotPlayer.exe'),",
                 "    (Join-Path $env:ProgramFiles 'ApricotPlayer\\ApricotPlayer.exe')",
                 ")",
                 "if (${env:ProgramFiles(x86)}) { $installCandidates += (Join-Path ${env:ProgramFiles(x86)} 'ApricotPlayer\\ApricotPlayer.exe') }",
@@ -5711,6 +5730,7 @@ class MainFrame(wx.Frame):
                 "function Log($message) { Add-Content -LiteralPath $log -Value ((Get-Date -Format o) + ' ' + $message) -Encoding UTF8 }",
                 "Set-Content -LiteralPath $log -Value ((Get-Date -Format o) + ' Starting ApricotPlayer installer update') -Encoding UTF8",
                 "Log \"Installer: $source\"",
+                "Log \"Install directory: $installDir\"",
                 "Start-Sleep -Milliseconds 500",
                 "if ($processIdToWait -gt 0) {",
                 "    try { Wait-Process -Id $processIdToWait -Timeout 15 -ErrorAction SilentlyContinue } catch { Log \"Wait-Process warning: $($_.Exception.Message)\" }",
@@ -5720,10 +5740,28 @@ class MainFrame(wx.Frame):
                 "    } catch { Log \"Force shutdown warning: $($_.Exception.Message)\" }",
                 "}",
                 "try {",
+                "    $knownDirs = @($installCandidates | ForEach-Object { Split-Path -Parent $_ } | Where-Object { $_ } | Select-Object -Unique)",
+                "    Get-CimInstance Win32_Process -Filter \"Name = 'ApricotPlayer.exe'\" -ErrorAction SilentlyContinue | ForEach-Object {",
+                "        $processPath = $_.ExecutablePath",
+                "        if ($processPath) {",
+                "            $processDir = Split-Path -Parent $processPath",
+                "            if ($knownDirs -contains $processDir) {",
+                "                Log \"Stopping old ApricotPlayer process $($_.ProcessId) at $processPath\"",
+                "                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue",
+                "            }",
+                "        }",
+                "    }",
+                "} catch { Log \"Extra process cleanup warning: $($_.Exception.Message)\" }",
+                "try {",
                 "    Log 'Launching installer'",
                 "    $process = Start-Process -FilePath $source -ArgumentList $silentArgs -Verb runAs -Wait -PassThru",
                 "    if ($process -and $process.ExitCode -ne 0) { throw \"Installer exited with code $($process.ExitCode)\" }",
                 "    Log 'Installer completed'",
+                "    $installedExe = Join-Path $installDir 'ApricotPlayer.exe'",
+                "    if (-not (Test-Path -LiteralPath $installedExe)) { throw \"Installed ApricotPlayer.exe was not found at $installedExe\" }",
+                "    $installedItem = Get-Item -LiteralPath $installedExe",
+                "    if ($installedItem.Length -lt 1048576) { throw 'Installed ApricotPlayer.exe is too small.' }",
+                "    Log \"Installed executable: $installedExe size=$($installedItem.Length) modified=$($installedItem.LastWriteTimeUtc.ToString('o'))\"",
                 "    Remove-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue",
                 "    if ($restart) {",
                 "        foreach ($candidate in $installCandidates) {",
@@ -5981,6 +6019,9 @@ class MainFrame(wx.Frame):
                 country = str(merged.get("podcast_search_country") or "US").upper()
                 merged["podcast_search_country"] = country if country in PODCAST_COUNTRY_OPTIONS else "US"
                 merged["keyboard_shortcuts"] = self.normalized_keyboard_shortcuts(merged.get("keyboard_shortcuts"))
+                skipped_version = str(merged.get("skipped_update_version") or "")
+                if skipped_version and not self.is_newer_version(skipped_version, APP_VERSION):
+                    merged["skipped_update_version"] = ""
                 return Settings(**merged)
             except Exception:
                 return Settings()
@@ -6170,8 +6211,27 @@ class MainFrame(wx.Frame):
         return rf"\\.\pipe\urhasaurus-youtube-{os.getpid()}" if os.name == "nt" else f"/tmp/urhasaurus-youtube-{os.getpid()}.sock"
 
 
+def startup_language() -> str:
+    try:
+        data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        language = str(data.get("language") or "en")
+        return language if language in TEXT else "en"
+    except Exception:
+        return "en"
+
+
+def startup_text(key: str) -> str:
+    language = startup_language()
+    return TEXT.get(language, TEXT["en"]).get(key, TEXT["en"].get(key, key))
+
+
 class App(wx.App):
     def OnInit(self) -> bool:
+        instance_name = f"{APP_NAME}-{wx.GetUserId() or 'user'}"
+        self.instance_checker = wx.SingleInstanceChecker(instance_name)
+        if self.instance_checker.IsAnotherRunning():
+            wx.MessageBox(startup_text("already_open"), APP_NAME, wx.OK | wx.ICON_INFORMATION)
+            return False
         frame = MainFrame()
         frame.Show()
         return True

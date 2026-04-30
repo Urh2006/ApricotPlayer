@@ -25,6 +25,9 @@ if (-not $ExecutablePath) {
 if (-not $OutputDir) {
     $OutputDir = Join-Path $projectRoot "release-dist"
 }
+else {
+    $OutputDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDir)
+}
 
 if ($SourceDir) {
     $SourceDir = (Resolve-Path $SourceDir).Path
