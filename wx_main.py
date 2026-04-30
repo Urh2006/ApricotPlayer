@@ -99,8 +99,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.5.2"
-APP_VERSION_LABEL = "0.5.2"
+APP_VERSION = "0.5.3"
+APP_VERSION_LABEL = "0.5.3"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -534,8 +534,11 @@ TEXT = {
         "library_section": "Library and subscriptions",
         "cookies_network_section": "Cookies and network",
         "updates_advanced_section": "Updates and advanced",
+        "notifications_section": "Notifications",
         "keyboard_shortcuts_section": "Keyboard shortcuts",
-        "keyboard_shortcuts_help": "Enter shortcuts like Ctrl+Shift+A, Space, Enter, Left, or F2. Press Save to keep changes.",
+        "keyboard_shortcuts_help": "Focus a field and press the new key combination. Tab and Shift+Tab still move between fields. Press Save to keep changes.",
+        "shortcut_capture_hint": "Press the new key combination. Tab and Shift+Tab move focus.",
+        "shortcut_captured": "Shortcut set to {shortcut}.",
         "search_results_empty": "No search results.",
         "no_results": "No results.",
         "favorites_empty": "No favorites.",
@@ -676,6 +679,9 @@ TEXT = {
         "subscription_last_checked": "last checked {time}",
         "subscription_never_checked": "never checked",
         "subscription_notifications": "Windows notifications for new subscription videos",
+        "windows_notifications": "Windows notifications",
+        "download_notifications": "Windows notifications for completed downloads when ApricotPlayer is not focused",
+        "notification_download_title": "Download complete",
         "subscription_check_enabled": "Check subscriptions automatically",
         "subscription_check_interval": "Subscription check interval in hours",
         "close_to_tray": "Close button or Alt+F4 sends ApricotPlayer to system tray",
@@ -1115,6 +1121,8 @@ class Settings:
     close_to_tray: bool = False
     subscription_check_enabled: bool = True
     subscription_check_interval_hours: int = 6
+    windows_notifications: bool = True
+    download_notifications: bool = True
     subscription_notifications: bool = True
     last_subscription_check: float = 0.0
     history_limit: int = 500
@@ -1315,6 +1323,16 @@ class MainFrame(wx.Frame):
             "esc": wx.WXK_ESCAPE,
             "delete": wx.WXK_DELETE,
             "del": wx.WXK_DELETE,
+            "backspace": wx.WXK_BACK,
+            "back": wx.WXK_BACK,
+            "insert": wx.WXK_INSERT,
+            "ins": wx.WXK_INSERT,
+            "home": wx.WXK_HOME,
+            "end": wx.WXK_END,
+            "pageup": wx.WXK_PAGEUP,
+            "page up": wx.WXK_PAGEUP,
+            "pagedown": wx.WXK_PAGEDOWN,
+            "page down": wx.WXK_PAGEDOWN,
             "left": wx.WXK_LEFT,
             "left arrow": wx.WXK_LEFT,
             "right": wx.WXK_RIGHT,
@@ -1339,6 +1357,75 @@ class MainFrame(wx.Frame):
         if len(normalized) == 1:
             return ord(normalized.upper())
         return None
+
+    @staticmethod
+    def shortcut_name_for_key_code(key_code: int, unicode_key: int = 0) -> str:
+        names = {
+            wx.WXK_RETURN: "Enter",
+            wx.WXK_NUMPAD_ENTER: "Enter",
+            wx.WXK_SPACE: "Space",
+            wx.WXK_ESCAPE: "Escape",
+            wx.WXK_DELETE: "Delete",
+            wx.WXK_BACK: "Backspace",
+            wx.WXK_INSERT: "Insert",
+            wx.WXK_HOME: "Home",
+            wx.WXK_END: "End",
+            wx.WXK_PAGEUP: "PageUp",
+            wx.WXK_PAGEDOWN: "PageDown",
+            wx.WXK_LEFT: "Left",
+            wx.WXK_RIGHT: "Right",
+            wx.WXK_UP: "Up",
+            wx.WXK_DOWN: "Down",
+            getattr(wx, "WXK_APPS", -1): "Applications",
+            getattr(wx, "WXK_MENU", -1): "Applications",
+            getattr(wx, "WXK_WINDOWS_MENU", -1): "Applications",
+        }
+        if key_code in names:
+            return names[key_code]
+        if wx.WXK_F1 <= key_code <= wx.WXK_F24:
+            return f"F{key_code - wx.WXK_F1 + 1}"
+        if ord("A") <= key_code <= ord("Z"):
+            return chr(key_code)
+        if ord("0") <= key_code <= ord("9"):
+            return chr(key_code)
+        if unicode_key and 32 <= unicode_key < 127:
+            return chr(unicode_key).upper()
+        return ""
+
+    def shortcut_from_key_event(self, event: wx.KeyEvent) -> str:
+        key_code = event.GetKeyCode()
+        modifier_keys = {wx.WXK_TAB, getattr(wx, "WXK_CONTROL", -1), getattr(wx, "WXK_SHIFT", -1), getattr(wx, "WXK_ALT", -1)}
+        if key_code in modifier_keys:
+            return ""
+        key_name = self.shortcut_name_for_key_code(key_code, event.GetUnicodeKey())
+        if not key_name:
+            return ""
+        parts: list[str] = []
+        if event.ControlDown():
+            parts.append("Ctrl")
+        if event.ShiftDown():
+            parts.append("Shift")
+        if event.AltDown():
+            parts.append("Alt")
+        parts.append(key_name)
+        return "+".join(parts)
+
+    def on_shortcut_capture_key(self, event: wx.KeyEvent, control: wx.TextCtrl) -> None:
+        if event.GetKeyCode() == wx.WXK_TAB:
+            event.Skip()
+            return
+        shortcut = self.shortcut_from_key_event(event)
+        if not shortcut:
+            event.Skip()
+            return
+        control.ChangeValue(shortcut)
+        control.SetInsertionPointEnd()
+        control.SetFocus()
+        self.speak_text(self.t("shortcut_captured", shortcut=shortcut))
+
+    @staticmethod
+    def is_shortcut_capture_control(control: wx.Window | None) -> bool:
+        return isinstance(control, wx.TextCtrl) and bool(getattr(control, "_apricot_shortcut_capture", False))
 
     def shortcut_matches(self, event: wx.KeyEvent, action: str) -> bool:
         return self.event_matches_shortcut(event, self.shortcut_for(action))
@@ -1527,14 +1614,45 @@ class MainFrame(wx.Frame):
         self.destroy_taskbar_icon()
         self.Close(force=True)
 
-    def show_desktop_notification(self, title: str, message: str) -> None:
-        if not self.settings.subscription_notifications:
-            return
+    def app_has_focus(self) -> bool:
+        try:
+            if self.IsShown() and self.IsActive():
+                return True
+        except Exception:
+            pass
+        try:
+            focus = wx.Window.FindFocus()
+            if focus and focus.GetTopLevelParent() is self:
+                return True
+        except Exception:
+            pass
+        return False
+
+    def show_desktop_notification(
+        self,
+        title: str,
+        message: str,
+        enabled: bool = True,
+        only_when_unfocused: bool = False,
+    ) -> bool:
+        if not enabled or not self.settings.windows_notifications:
+            return False
+        if only_when_unfocused and self.app_has_focus():
+            return False
         try:
             notification = wx.adv.NotificationMessage(title=title, message=message, parent=self)
             notification.Show(timeout=10)
+            return True
         except Exception:
-            pass
+            return False
+
+    def show_download_complete_notification(self, message: str) -> bool:
+        return self.show_desktop_notification(
+            self.t("notification_download_title"),
+            message,
+            enabled=self.settings.download_notifications,
+            only_when_unfocused=True,
+        )
 
     def show_main_menu(self) -> None:
         self.in_main_menu = True
@@ -2227,6 +2345,7 @@ class MainFrame(wx.Frame):
             (self.t("playback_section"), "playback"),
             (self.t("downloads_section"), "downloads"),
             (self.t("library_section"), "library"),
+            (self.t("notifications_section"), "notifications"),
             (self.t("cookies_network_section"), "cookies"),
             (self.t("keyboard_shortcuts_section"), "shortcuts"),
         ]
@@ -2354,8 +2473,11 @@ class MainFrame(wx.Frame):
             choice("history_limit", str(self.settings.history_limit), ["100", "250", "500", "1000", "2000"])
             check("subscription_check_enabled", self.settings.subscription_check_enabled)
             choice("subscription_check_interval", str(self.settings.subscription_check_interval_hours), ["1", "2", "3", "6", "12", "24"])
-            check("subscription_notifications", self.settings.subscription_notifications)
             button("subscription_check_now", lambda: self.check_subscriptions(manual=True))
+        elif section_name == "notifications":
+            check("windows_notifications", self.settings.windows_notifications)
+            check("download_notifications", self.settings.download_notifications)
+            check("subscription_notifications", self.settings.subscription_notifications)
         elif section_name == "cookies":
             text("cookies", self.settings.cookies_file)
             choice("cookies_from_browser", self.settings.cookies_from_browser or "none", COOKIES_BROWSER_OPTIONS)
@@ -2371,7 +2493,13 @@ class MainFrame(wx.Frame):
             form.AddSpacer(1)
             shortcuts = self.normalized_keyboard_shortcuts(getattr(self.settings, "keyboard_shortcuts", {}) or {})
             for action, label_key in SHORTCUT_DEFINITIONS:
-                text(f"shortcut_{action}", shortcuts[action])
+                form.Add(wx.StaticText(self.settings_scroller, label=self.t(label_key)), 0, wx.ALIGN_CENTER_VERTICAL)
+                ctrl = wx.TextCtrl(self.settings_scroller, value=shortcuts[action], style=wx.TE_PROCESS_ENTER)
+                ctrl.SetName(f"{self.t(label_key)}. {self.t('shortcut_capture_hint')}")
+                setattr(ctrl, "_apricot_shortcut_capture", True)
+                ctrl.Bind(wx.EVT_KEY_DOWN, lambda evt, target=ctrl: self.on_shortcut_capture_key(evt, target))
+                form.Add(ctrl, 1, wx.EXPAND)
+                remember(f"shortcut_{action}", ctrl)
 
         self.settings_scroller.SetSizer(form, True)
         self.settings_scroller.Layout()
@@ -3438,6 +3566,9 @@ class MainFrame(wx.Frame):
         key = event.GetKeyCode()
         focus = wx.Window.FindFocus()
         details_has_focus = focus is self.video_details
+        if self.is_shortcut_capture_control(focus):
+            self.on_shortcut_capture_key(event, focus)
+            return
         if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "menu_list", None):
             self.activate_menu()
             return
@@ -3688,8 +3819,11 @@ class MainFrame(wx.Frame):
             wx.CallAfter(self.message, self.t("download_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
     def finish_download(self, done_text: str, folder: str) -> None:
-        if self.settings.popup_when_download_complete:
-            self.set_status(done_text)
+        self.set_status(done_text)
+        focused = self.app_has_focus()
+        if not focused:
+            self.show_download_complete_notification(done_text)
+        elif self.settings.popup_when_download_complete:
             self.message(done_text, wx.ICON_INFORMATION)
         else:
             self.announce_player(done_text)
@@ -4093,8 +4227,11 @@ class MainFrame(wx.Frame):
 
     def finish_batch_download(self, folder: str) -> None:
         done_text = self.t("batch_download_done")
-        if self.settings.popup_when_download_complete:
-            self.set_status(done_text)
+        self.set_status(done_text)
+        focused = self.app_has_focus()
+        if not focused:
+            self.show_download_complete_notification(done_text)
+        elif self.settings.popup_when_download_complete:
             self.message(done_text, wx.ICON_INFORMATION)
         else:
             self.announce_player(done_text)
@@ -4274,6 +4411,10 @@ class MainFrame(wx.Frame):
             self.settings.subscription_check_enabled = c["subscription_check_enabled"].GetValue()
         if "subscription_check_interval" in c:
             self.settings.subscription_check_interval_hours = self.to_int(c["subscription_check_interval"].GetStringSelection(), 6, 1, 168)
+        if "windows_notifications" in c:
+            self.settings.windows_notifications = c["windows_notifications"].GetValue()
+        if "download_notifications" in c:
+            self.settings.download_notifications = c["download_notifications"].GetValue()
         if "subscription_notifications" in c:
             self.settings.subscription_notifications = c["subscription_notifications"].GetValue()
         shortcuts = dict(getattr(self.settings, "keyboard_shortcuts", {}) or {})
@@ -4966,7 +5107,7 @@ class MainFrame(wx.Frame):
                     self.update_download_task(task_id, **payload)
                 elif kind == "notify" and isinstance(payload, tuple):
                     title, message = payload
-                    self.show_desktop_notification(str(title), str(message))
+                    self.show_desktop_notification(str(title), str(message), enabled=self.settings.subscription_notifications)
                 elif kind == "subscriptions_changed":
                     self.refresh_subscriptions()
                 elif kind == "error":

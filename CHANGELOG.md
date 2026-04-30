@@ -1,5 +1,12 @@
 # Changelog
 
+## What's new in version 0.5.3
+
+- added a Notifications settings section with a master Windows notifications switch plus separate toggles for subscription and completed-download notifications
+- completed audio, video, batch, playlist, and channel downloads can now send Windows notification center messages when ApricotPlayer is not focused, while in-app popup behavior is preserved when the app is focused
+- rebuilt Keyboard shortcuts editing so focusing a shortcut field and pressing a key combination captures it directly; Tab and Shift+Tab still move between fields
+- translated the new notification and shortcut-capture text across the supported language packs
+
 ## What's new in version 0.5.2
 
 - verified the GitHub repository is public and simplified the updater to use the public ApricotPlayer release endpoints without user-facing owner, repo, or private token settings
