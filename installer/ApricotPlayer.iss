@@ -64,3 +64,4 @@ Name: "{autodesktop}\ApricotPlayer"; Filename: "{app}\ApricotPlayer.exe"; Tasks:
 
 [Run]
 Filename: "{app}\ApricotPlayer.exe"; Description: "Launch ApricotPlayer"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\ApricotPlayer.exe"; Parameters: "--updated-relaunch"; Flags: nowait; Check: WizardSilent

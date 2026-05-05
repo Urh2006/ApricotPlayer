@@ -1,5 +1,12 @@
 # Changelog
 
+## What's new in version 0.6.6
+
+- fixed installer updater relaunch so ApricotPlayer restarts from the newly installed executable immediately after an update
+- removed the installer restart-applications flag from the updater flow to prevent Windows/Inno from reopening the old running version before ApricotPlayer can relaunch itself
+- the updater now re-checks the installed executable location after setup completes and stops stale ApricotPlayer processes in known install folders before starting the new version
+- the installer now also launches the updated app at the end of silent update installs, with a short duplicate-launch suppression window so older updater scripts do not show an extra already-open dialog
+
 ## What's new in version 0.6.5
 
 - changed the default audio output device setting from a text field to an accessible combo box populated from mpv's detected Windows audio devices

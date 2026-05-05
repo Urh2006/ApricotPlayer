@@ -101,11 +101,13 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.5"
-APP_VERSION_LABEL = "0.6.5"
+APP_VERSION = "0.6.6"
+APP_VERSION_LABEL = "0.6.6"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
+UPDATE_RELAUNCH_ARG = "--updated-relaunch"
+UPDATE_RELAUNCH_SENTINEL = APP_DIR / "updated-relaunch.json"
 SETTINGS_FILE = APP_DIR / "settings.json"
 FAVORITES_FILE = APP_DIR / "favorites.json"
 HISTORY_FILE = APP_DIR / "history.json"
@@ -7271,7 +7273,7 @@ class MainFrame(wx.Frame):
                 "if (-not $copied) { Log 'Update failed: could not copy new executable'; exit 1 }",
                 "Remove-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue",
                 "if (Test-Path -LiteralPath $oldTarget) { Remove-Item -LiteralPath $oldTarget -Force -ErrorAction SilentlyContinue }",
-                "if ($restart) { Log 'Restarting ApricotPlayer'; Start-Process -FilePath $target -WorkingDirectory $targetDir }",
+                f"if ($restart) {{ Log 'Restarting ApricotPlayer'; Start-Process -FilePath $target -WorkingDirectory $targetDir -ArgumentList {cls.powershell_literal(UPDATE_RELAUNCH_ARG)} }}",
                 "Log 'Update complete'",
                 "Start-Sleep -Seconds 2",
                 "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
@@ -7323,7 +7325,7 @@ class MainFrame(wx.Frame):
                 "    if (-not (Test-Path -LiteralPath $targetExe)) { throw 'Updated ApricotPlayer.exe is missing after copy.' }",
                 "    Remove-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue",
                 "    Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue",
-                "    if ($restart) { Log 'Restarting ApricotPlayer'; Start-Process -FilePath $targetExe -WorkingDirectory $targetDir }",
+                f"    if ($restart) {{ Log 'Restarting ApricotPlayer'; Start-Process -FilePath $targetExe -WorkingDirectory $targetDir -ArgumentList {cls.powershell_literal(UPDATE_RELAUNCH_ARG)} }}",
                 "    Log 'Update complete'",
                 "} catch {",
                 "    Log \"Portable update failed: $($_.Exception.Message)\"",
@@ -7350,12 +7352,58 @@ class MainFrame(wx.Frame):
                 f"$processIdToWait = {int(process_id)}",
                 f"$restart = {restart_value}",
                 "$installerLog = [IO.Path]::ChangeExtension($log, '.inno.log')",
-                "$silentArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', '/RESTARTAPPLICATIONS', '/TASKS=desktopicon', ('/DIR=' + $installDir), ('/LOG=' + $installerLog))",
-                "$installCandidates = @(",
-                "    (Join-Path $installDir 'ApricotPlayer.exe'),",
-                "    (Join-Path $env:ProgramFiles 'ApricotPlayer\\ApricotPlayer.exe')",
-                ")",
-                "if (${env:ProgramFiles(x86)}) { $installCandidates += (Join-Path ${env:ProgramFiles(x86)} 'ApricotPlayer\\ApricotPlayer.exe') }",
+                "$silentArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', '/TASKS=desktopicon', ('/DIR=' + $installDir), ('/LOG=' + $installerLog))",
+                "$installCandidates = @()",
+                "function Normalize-ExecutablePath([string]$path) {",
+                "    if (-not $path) { return '' }",
+                "    $candidate = $path.Trim().Trim('\"')",
+                "    if ($candidate -match '^(.*?\\.exe)') { $candidate = $matches[1] }",
+                "    return $candidate",
+                "}",
+                "function Add-InstallCandidate([string]$path) {",
+                "    $candidate = Normalize-ExecutablePath $path",
+                "    if ($candidate -and -not ($script:installCandidates -contains $candidate)) { $script:installCandidates += $candidate }",
+                "}",
+                "function Find-InstalledApricotExe {",
+                "    $roots = @(",
+                "        'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',",
+                "        'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',",
+                "        'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'",
+                "    )",
+                "    foreach ($root in $roots) {",
+                "        try {",
+                "            $items = @(Get-ItemProperty -Path $root -ErrorAction SilentlyContinue)",
+                "            foreach ($item in $items) {",
+                "                if ($item.DisplayName -ne 'ApricotPlayer') { continue }",
+                "                if ($item.InstallLocation) {",
+                "                    $candidate = Join-Path $item.InstallLocation 'ApricotPlayer.exe'",
+                "                    if (Test-Path -LiteralPath $candidate) { return $candidate }",
+                "                }",
+                "                $icon = Normalize-ExecutablePath ([string]$item.DisplayIcon)",
+                "                if ($icon -and (Test-Path -LiteralPath $icon)) { return $icon }",
+                "            }",
+                "        } catch { }",
+                "    }",
+                "    return $null",
+                "}",
+                "function Stop-ApricotProcesses([string[]]$dirs) {",
+                "    try {",
+                "        $normalizedDirs = @($dirs | Where-Object { $_ } | ForEach-Object { try { [IO.Path]::GetFullPath($_).TrimEnd('\\') } catch { $_ } } | Select-Object -Unique)",
+                "        Get-CimInstance Win32_Process -Filter \"Name = 'ApricotPlayer.exe'\" -ErrorAction SilentlyContinue | ForEach-Object {",
+                "            $processPath = $_.ExecutablePath",
+                "            if (-not $processPath) { return }",
+                "            $processDir = Split-Path -Parent $processPath",
+                "            try { $processDir = [IO.Path]::GetFullPath($processDir).TrimEnd('\\') } catch { }",
+                "            if ($normalizedDirs -contains $processDir) {",
+                "                Log \"Stopping ApricotPlayer process $($_.ProcessId) at $processPath\"",
+                "                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue",
+                "            }",
+                "        }",
+                "    } catch { Log \"Process cleanup warning: $($_.Exception.Message)\" }",
+                "}",
+                "Add-InstallCandidate (Join-Path $installDir 'ApricotPlayer.exe')",
+                "if ($env:ProgramFiles) { Add-InstallCandidate (Join-Path $env:ProgramFiles 'ApricotPlayer\\ApricotPlayer.exe') }",
+                "if (${env:ProgramFiles(x86)}) { Add-InstallCandidate (Join-Path ${env:ProgramFiles(x86)} 'ApricotPlayer\\ApricotPlayer.exe') }",
                 "New-Item -ItemType Directory -Path (Split-Path -Parent $log) -Force | Out-Null",
                 "function Log($message) { Add-Content -LiteralPath $log -Value ((Get-Date -Format o) + ' ' + $message) -Encoding UTF8 }",
                 "Set-Content -LiteralPath $log -Value ((Get-Date -Format o) + ' Starting ApricotPlayer installer update') -Encoding UTF8",
@@ -7369,38 +7417,27 @@ class MainFrame(wx.Frame):
                 "        if ($stillRunning) { Log 'ApricotPlayer did not exit; forcing shutdown'; Stop-Process -Id $processIdToWait -Force -ErrorAction SilentlyContinue }",
                 "    } catch { Log \"Force shutdown warning: $($_.Exception.Message)\" }",
                 "}",
-                "try {",
-                "    $knownDirs = @($installCandidates | ForEach-Object { Split-Path -Parent $_ } | Where-Object { $_ } | Select-Object -Unique)",
-                "    Get-CimInstance Win32_Process -Filter \"Name = 'ApricotPlayer.exe'\" -ErrorAction SilentlyContinue | ForEach-Object {",
-                "        $processPath = $_.ExecutablePath",
-                "        if ($processPath) {",
-                "            $processDir = Split-Path -Parent $processPath",
-                "            if ($knownDirs -contains $processDir) {",
-                "                Log \"Stopping old ApricotPlayer process $($_.ProcessId) at $processPath\"",
-                "                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue",
-                "            }",
-                "        }",
-                "    }",
-                "} catch { Log \"Extra process cleanup warning: $($_.Exception.Message)\" }",
+                "$knownDirs = @($installCandidates | ForEach-Object { Split-Path -Parent $_ } | Where-Object { $_ } | Select-Object -Unique)",
+                "Stop-ApricotProcesses $knownDirs",
                 "try {",
                 "    Log 'Launching installer'",
                 "    $process = Start-Process -FilePath $source -ArgumentList $silentArgs -Verb runAs -Wait -PassThru",
                 "    if ($process -and $process.ExitCode -ne 0) { throw \"Installer exited with code $($process.ExitCode)\" }",
                 "    Log 'Installer completed'",
-                "    $installedExe = Join-Path $installDir 'ApricotPlayer.exe'",
+                "    $installedExe = Find-InstalledApricotExe",
+                "    if (-not $installedExe) { $installedExe = Join-Path $installDir 'ApricotPlayer.exe' }",
+                "    Add-InstallCandidate $installedExe",
                 "    if (-not (Test-Path -LiteralPath $installedExe)) { throw \"Installed ApricotPlayer.exe was not found at $installedExe\" }",
                 "    $installedItem = Get-Item -LiteralPath $installedExe",
                 "    if ($installedItem.Length -lt 1048576) { throw 'Installed ApricotPlayer.exe is too small.' }",
                 "    Log \"Installed executable: $installedExe size=$($installedItem.Length) modified=$($installedItem.LastWriteTimeUtc.ToString('o'))\"",
                 "    Remove-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue",
+                "    $knownDirs = @($installCandidates | ForEach-Object { Split-Path -Parent $_ } | Where-Object { $_ } | Select-Object -Unique)",
+                "    Stop-ApricotProcesses $knownDirs",
                 "    if ($restart) {",
-                "        foreach ($candidate in $installCandidates) {",
-                "            if (Test-Path -LiteralPath $candidate) {",
-                "                Log \"Restarting ApricotPlayer from $candidate\"",
-                "                Start-Process -FilePath $candidate -WorkingDirectory (Split-Path -Parent $candidate)",
-                "                break",
-                "            }",
-                "        }",
+                "        $installedDir = Split-Path -Parent $installedExe",
+                "        Log \"Restarting ApricotPlayer from $installedExe\"",
+                f"        Start-Process -FilePath $installedExe -WorkingDirectory $installedDir -ArgumentList {cls.powershell_literal(UPDATE_RELAUNCH_ARG)}",
                 "    }",
                 "    Log 'Update complete'",
                 "} catch {",
@@ -7922,11 +7959,40 @@ def startup_text(key: str) -> str:
     return TEXT.get(language, TEXT["en"]).get(key, TEXT["en"].get(key, key))
 
 
+def update_relaunch_requested() -> bool:
+    return any(arg == UPDATE_RELAUNCH_ARG for arg in sys.argv[1:])
+
+
+def mark_update_relaunch_window(seconds: int = 45) -> None:
+    try:
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        payload = {"expires_at": time.time() + max(5, seconds)}
+        UPDATE_RELAUNCH_SENTINEL.write_text(json.dumps(payload), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def suppress_already_open_for_update() -> bool:
+    try:
+        payload = json.loads(UPDATE_RELAUNCH_SENTINEL.read_text(encoding="utf-8"))
+        expires_at = float(payload.get("expires_at", 0) or 0)
+        if expires_at >= time.time():
+            return True
+        UPDATE_RELAUNCH_SENTINEL.unlink(missing_ok=True)
+    except Exception:
+        pass
+    return False
+
+
 class App(wx.App):
     def OnInit(self) -> bool:
+        if update_relaunch_requested():
+            mark_update_relaunch_window()
         instance_name = f"{APP_NAME}-{wx.GetUserId() or 'user'}"
         self.instance_checker = wx.SingleInstanceChecker(instance_name)
         if self.instance_checker.IsAnotherRunning():
+            if suppress_already_open_for_update():
+                return False
             wx.MessageBox(startup_text("already_open"), APP_NAME, wx.OK | wx.ICON_INFORMATION)
             return False
         frame = MainFrame()
