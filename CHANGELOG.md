@@ -1,5 +1,18 @@
 # Changelog
 
+## What's new in version 0.6.5
+
+- changed the default audio output device setting from a text field to an accessible combo box populated from mpv's detected Windows audio devices
+- saved default audio devices now persist across restarts, while devices chosen from the player are session-only and reset when ApricotPlayer closes
+- ApricotPlayer now warns on startup when a saved default audio output device is no longer available and lets the user choose a new default
+- removed the visible Player command/path setting from Settings
+- added a configurable Direct link Enter action for play, audio download, video download, or direct media URL copy
+- rebuilt the player screen so Tab navigation reaches the player buttons, the video panel, and video details controls while player shortcuts still work globally
+- added a Show video details button, Copy details button, and improved Escape behavior for temporary versus default-visible details
+- added a Show video details by default setting
+- added selectable playback-speed audio processing modes, including tuned scaletempo2, mpv default, classic scaletempo, and Rubberband
+- search results now hydrate missing YouTube metadata in the background so upload age can update from Uploaded unknown to Uploaded X ago when yt-dlp can resolve it
+
 ## What's new in version 0.6.4
 
 - added optional playback cache and resume playback so videos can reopen from the last watched position

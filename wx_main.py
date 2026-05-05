@@ -101,8 +101,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.4"
-APP_VERSION_LABEL = "0.6.4"
+APP_VERSION = "0.6.5"
+APP_VERSION_LABEL = "0.6.5"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -145,6 +145,16 @@ LEGACY_PITCH_MODE_LINKED_SPEED = "linked speed"
 RUBBERBAND_FILTER_LABEL = "apricot_pitch"
 RUBBERBAND_FILTER_REF = f"@{RUBBERBAND_FILTER_LABEL}"
 RATE_STEP_OPTIONS = ["0.01", "0.02", "0.05", "0.10", "0.25"]
+SPEED_AUDIO_MODE_SCALETEMPO2 = "High quality scaletempo2"
+SPEED_AUDIO_MODE_MPV = "mpv default scaletempo2"
+SPEED_AUDIO_MODE_SCALETEMPO = "Classic scaletempo"
+SPEED_AUDIO_MODE_RUBBERBAND = "Rubberband high quality"
+SPEED_AUDIO_MODE_OPTIONS = [SPEED_AUDIO_MODE_SCALETEMPO2, SPEED_AUDIO_MODE_MPV, SPEED_AUDIO_MODE_SCALETEMPO, SPEED_AUDIO_MODE_RUBBERBAND]
+DIRECT_LINK_ENTER_PLAY = "play"
+DIRECT_LINK_ENTER_AUDIO = "download_audio"
+DIRECT_LINK_ENTER_VIDEO = "download_video"
+DIRECT_LINK_ENTER_STREAM = "copy_stream_url"
+DIRECT_LINK_ENTER_OPTIONS = [DIRECT_LINK_ENTER_PLAY, DIRECT_LINK_ENTER_AUDIO, DIRECT_LINK_ENTER_VIDEO, DIRECT_LINK_ENTER_STREAM]
 COOKIES_BROWSER_OPTIONS = ["none", "chrome", "edge", "firefox", "brave", "chromium", "opera", "vivaldi"]
 VIDEO_FORMAT_MP4 = "mp4"
 VIDEO_FORMAT_BEST_ANY = "best-any"
@@ -459,19 +469,29 @@ TEXT = {
         "pitch_mode_rubberband": "Neodvisna visina tona - najboljsa kakovost (Rubberband)",
         "pitch_mode_mpv": "Neodvisna visina tona - osnovno (mpv)",
         "pitch_mode_linked_speed": "Povezana visina tona in hitrost - tipke za visino tona spremenijo oboje",
+        "speed_audio_mode": "Kakovost zvoka pri spremembi hitrosti",
+        "speed_audio_mode_scaletempo2": "Visoka kakovost scaletempo2 (priporoceno)",
+        "speed_audio_mode_mpv": "mpv privzeto scaletempo2",
+        "speed_audio_mode_scaletempo": "Klasicni scaletempo",
+        "speed_audio_mode_rubberband": "Rubberband visoka kakovost",
         "auto_update": "Ob vsakem zagonu preveri posodobitve yt-dlp",
         "autoplay_next": "Po koncu posnetka samodejno predvajaj naslednjega",
+        "show_video_details_by_default": "Privzeto pokazi podrobnosti videa v predvajalniku",
         "enable_stream_cache": "Omogoci predpomnilnik za predvajanje",
         "cache_folder": "Mapa za predpomnilnik",
         "cache_size_mb": "Velikost predpomnilnika v MB",
         "resume_playback": "Nadaljuj predvajanje tam, kjer si ostal",
         "default_audio_device": "Privzeta izhodna zvocna naprava",
+        "audio_device_missing": "Shranjena izhodna zvocna naprava ni vec na voljo. Izberi novo privzeto napravo.",
         "output_devices": "Izhodne zvocne naprave",
         "select_output_device": "Izberi izhodno zvocno napravo",
         "output_device_set": "Izhodna zvocna naprava nastavljena: {device}.",
         "no_output_devices": "Ni najdenih izhodnih zvocnih naprav.",
         "previous": "Prejsnji",
         "next": "Naslednji",
+        "show_video_details": "Pokazi podrobnosti videa",
+        "copy_details": "Kopiraj podrobnosti",
+        "details_copied": "Podrobnosti so kopirane.",
         "no_previous_item": "Ni prejsnjega elementa.",
         "no_next_item": "Ni naslednjega elementa.",
         "confirm_download": "Pred prenosom vprašaj za potrditev",
@@ -735,6 +755,11 @@ TEXT = {
         "details_title": "Video details",
         "search_more_loaded": "Loaded results: {count}.",
         "copy_link": "Copy link",
+        "direct_link_enter_action": "Kaj se zgodi, ko v Direct link pritisnes Enter",
+        "direct_link_enter_play": "Predvajaj povezavo",
+        "direct_link_enter_audio": "Prenesi zvok",
+        "direct_link_enter_video": "Prenesi video",
+        "direct_link_enter_stream": "Kopiraj direktni media URL",
         "settings_file": "Settings file",
         "restore_defaults": "Restore to defaults",
         "defaults_restored": "Default settings restored.",
@@ -991,14 +1016,29 @@ TEXT["en"].update(
         "cache_size_mb": "Playback cache size in MB",
         "resume_playback": "Resume videos where you left off",
         "default_audio_device": "Default audio output device",
+        "audio_device_missing": "The saved audio output device is no longer available. Choose a new default device.",
         "output_devices": "Audio output devices",
         "select_output_device": "Select audio output device",
         "output_device_set": "Audio output device set to {device}.",
         "no_output_devices": "No audio output devices were found.",
         "previous": "Previous",
         "next": "Next",
+        "show_video_details": "Show video details",
+        "copy_details": "Copy details",
+        "details_copied": "Details copied.",
         "no_previous_item": "No previous item.",
         "no_next_item": "No next item.",
+        "speed_audio_mode": "Audio quality when changing speed",
+        "speed_audio_mode_scaletempo2": "High quality scaletempo2 (recommended)",
+        "speed_audio_mode_mpv": "mpv default scaletempo2",
+        "speed_audio_mode_scaletempo": "Classic scaletempo",
+        "speed_audio_mode_rubberband": "Rubberband high quality",
+        "show_video_details_by_default": "Show video details in the player by default",
+        "direct_link_enter_action": "What Enter does in Direct link",
+        "direct_link_enter_play": "Play link",
+        "direct_link_enter_audio": "Download audio",
+        "direct_link_enter_video": "Download video",
+        "direct_link_enter_stream": "Copy direct media URL",
         "shortcut_create_playlist": "Create playlist",
         "shortcut_add_to_playlist": "Add to playlist",
         "shortcut_remove_from_playlist": "Remove from playlist",
@@ -1289,6 +1329,9 @@ class Settings:
     player_fullscreen: bool = False
     player_start_paused: bool = False
     player_speed: str = "1.0"
+    speed_audio_mode: str = SPEED_AUDIO_MODE_SCALETEMPO2
+    show_video_details_by_default: bool = False
+    direct_link_enter_action: str = DIRECT_LINK_ENTER_PLAY
     enable_stream_cache: bool = True
     cache_folder: str = str(DEFAULT_CACHE_DIR)
     cache_size_mb: int = 512
@@ -1447,6 +1490,10 @@ class MainFrame(wx.Frame):
         self.collection_result_type = ""
         self.current_stream_url = ""
         self.current_audio_device = ""
+        self.session_audio_output_device = ""
+        self.audio_device_options_cache: tuple[float, list[str], list[str]] | None = None
+        self.metadata_hydration_urls: set[str] = set()
+        self.details_opened_temporarily = False
         self.nvda_client = self.load_nvda_client()
         self.update_progress_dialog: wx.ProgressDialog | None = None
         self.subscription_check_running = False
@@ -1482,6 +1529,7 @@ class MainFrame(wx.Frame):
             wx.CallLater(8500, self.check_subscriptions_if_due)
         if self.settings.enable_podcasts_rss and self.settings.rss_refresh_on_startup and self.rss_feeds:
             wx.CallLater(9500, self.refresh_all_rss_feeds_background)
+        wx.CallLater(6500, self.check_saved_audio_device_available)
 
     def install_download_accelerators(self) -> None:
         self.download_audio_accelerator_id = wx.NewIdRef()
@@ -2058,7 +2106,7 @@ class MainFrame(wx.Frame):
         self.root_sizer.Add(label, 0, wx.ALL, 4)
         self.direct_link_ctrl = wx.TextCtrl(self.panel, style=wx.TE_PROCESS_ENTER)
         self.direct_link_ctrl.SetName(self.t("direct_link_url"))
-        self.direct_link_ctrl.Bind(wx.EVT_TEXT_ENTER, lambda _evt: self.play_direct_link())
+        self.direct_link_ctrl.Bind(wx.EVT_TEXT_ENTER, lambda _evt: self.activate_direct_link_enter_action())
         self.root_sizer.Add(self.direct_link_ctrl, 0, wx.EXPAND | wx.ALL, 4)
         self.panel.Layout()
         self.focus_later(self.direct_link_ctrl)
@@ -2090,6 +2138,17 @@ class MainFrame(wx.Frame):
         self.current_video_item = item
         self.current_video_info = dict(item)
         self.play_url(str(item.get("url") or ""), str(item.get("title") or ""))
+
+    def activate_direct_link_enter_action(self) -> None:
+        action = self.normalized_direct_link_enter_action()
+        if action == DIRECT_LINK_ENTER_AUDIO:
+            self.download_direct_link(True)
+        elif action == DIRECT_LINK_ENTER_VIDEO:
+            self.download_direct_link(False)
+        elif action == DIRECT_LINK_ENTER_STREAM:
+            self.copy_direct_stream_url(self.direct_link_item())
+        else:
+            self.play_direct_link()
 
     def download_direct_link(self, audio_only: bool) -> None:
         item = self.direct_link_item()
@@ -4121,21 +4180,24 @@ class MainFrame(wx.Frame):
             results_limit_value = "0" if self.settings.results_limit == 0 else str(min(250, self.settings.results_limit))
             result_limit_options = ["0", "10", "20", "50", "100", "150", "200", "250"]
             choice("results_limit", results_limit_value, result_limit_options, self.result_limit_labels(result_limit_options))
+            choice("direct_link_enter_action", self.normalized_direct_link_enter_action(), DIRECT_LINK_ENTER_OPTIONS, self.direct_link_enter_action_labels())
             check("auto_update", self.settings.auto_update_ytdlp)
             check("auto_update_app", self.settings.auto_update_app)
             button("check_app_updates_now", self.manual_app_update_check)
             check("close_to_tray", self.settings.close_to_tray)
         elif section_name == "playback":
-            text("player_command", self.settings.player_command)
             choice("player_speed", self.settings.player_speed, [self.format_playback_rate(step) for step in PLAYBACK_SPEED_STEPS if step <= 2.0])
+            choice("speed_audio_mode", self.normalized_speed_audio_mode(), SPEED_AUDIO_MODE_OPTIONS, self.speed_audio_mode_labels())
             choice("pitch_mode", self.normalized_pitch_mode(), PITCH_MODE_OPTIONS, self.pitch_mode_labels())
             choice("speed_step", self.format_step_value(self.settings.speed_step), RATE_STEP_OPTIONS)
             choice("pitch_step", self.format_step_value(self.settings.pitch_step), RATE_STEP_OPTIONS)
+            check("show_video_details_by_default", self.settings.show_video_details_by_default)
             check("enable_stream_cache", self.settings.enable_stream_cache)
             text("cache_folder", self.settings.cache_folder or str(DEFAULT_CACHE_DIR))
             choice("cache_size_mb", str(self.settings.cache_size_mb), ["128", "256", "512", "1024", "2048", "4096"])
             check("resume_playback", self.settings.resume_playback)
-            text("default_audio_device", self.settings.audio_output_device or "auto")
+            device_values, device_labels = self.audio_output_device_options()
+            choice("default_audio_device", self.normalized_audio_output_device(), device_values, device_labels)
             choice("seek_seconds", str(self.settings.seek_seconds), ["5", "10", "15", "30"])
             choice("volume_step", str(self.settings.volume_step), ["1", "2", "5", "10"])
             check("autoplay_next", self.settings.autoplay_next)
@@ -4333,6 +4395,7 @@ class MainFrame(wx.Frame):
             self.results_list.SetSelection(selected_index)
             self.results_list.SetFocus()
             self.set_status(self.t("found", count=len(self.results)))
+            self.start_result_metadata_hydration()
         else:
             self.results_list.Append(self.t("no_results"))
             self.results_list.SetSelection(0)
@@ -4398,6 +4461,69 @@ class MainFrame(wx.Frame):
     def dynamic_fetch_failed(self, error: str) -> None:
         self.loading_more_results = False
         self.message(error, wx.ICON_ERROR)
+
+    def start_result_metadata_hydration(self) -> None:
+        candidates: list[dict] = []
+        for item in list(self.results)[:RESULTS_PAGE_SIZE]:
+            url = str(item.get("url") or "")
+            if item.get("kind") != "video" or not url or url in self.metadata_hydration_urls:
+                continue
+            if item.get("timestamp") or item.get("upload_date"):
+                continue
+            candidates.append(dict(item))
+            self.metadata_hydration_urls.add(url)
+        if candidates:
+            threading.Thread(target=self.result_metadata_worker, args=(candidates,), daemon=True).start()
+
+    def result_metadata_worker(self, items: list[dict]) -> None:
+        ytdlp = get_yt_dlp()
+        if ytdlp is None:
+            return
+        options = {"quiet": True, "skip_download": True, "noplaylist": True}
+        for item in items:
+            url = str(item.get("url") or "")
+            if not url:
+                continue
+            try:
+                with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                payload = self.metadata_from_info(info, item)
+                self.ui_queue.put(("result_metadata", payload))
+            except Exception:
+                continue
+
+    def metadata_from_info(self, info: dict, item: dict) -> dict:
+        timestamp = info.get("timestamp") or info.get("release_timestamp") or info.get("modified_timestamp") or item.get("timestamp")
+        upload_date = info.get("upload_date") or item.get("upload_date")
+        return {
+            "url": item.get("url", ""),
+            "title": info.get("title") or item.get("title", ""),
+            "channel": info.get("uploader") or info.get("channel") or item.get("channel", ""),
+            "channel_url": self.normalize_channel_url(info) or item.get("channel_url", ""),
+            "channel_id": info.get("channel_id") or info.get("uploader_id") or item.get("channel_id", ""),
+            "view_count": info.get("view_count", item.get("view_count")),
+            "views": self.format_count(info.get("view_count", item.get("view_count"))),
+            "timestamp": timestamp,
+            "upload_date": upload_date,
+            "age": self.format_age({"timestamp": timestamp, "upload_date": upload_date}) or item.get("age") or self.t("uploaded_unknown"),
+            "duration_seconds": info.get("duration", item.get("duration_seconds")),
+            "duration": self.format_duration(info.get("duration", item.get("duration_seconds"))),
+            "description": info.get("description") or item.get("description", ""),
+        }
+
+    def apply_result_metadata(self, payload: dict) -> None:
+        url = str(payload.get("url") or "")
+        if not url:
+            return
+        for collection in (self.results, self.all_results, self.return_results, self.return_all_results):
+            for item in collection:
+                if item.get("url") == url:
+                    item.update({key: value for key, value in payload.items() if value not in (None, "")})
+        if hasattr(self, "results_list"):
+            for index, item in enumerate(self.results):
+                if item.get("url") == url:
+                    self.refresh_result_line(index)
+                    break
 
     def result_line(self, index: int, item: dict) -> str:
         if item.get("kind") in {"playlist", "channel"}:
@@ -4628,6 +4754,88 @@ class MainFrame(wx.Frame):
     def cache_folder_path(self) -> Path:
         return Path(str(getattr(self.settings, "cache_folder", "") or DEFAULT_CACHE_DIR)).expanduser()
 
+    def audio_output_device_options(self, force_refresh: bool = False) -> tuple[list[str], list[str]]:
+        now = time.monotonic()
+        if not force_refresh and self.audio_device_options_cache and now - self.audio_device_options_cache[0] < 20:
+            return list(self.audio_device_options_cache[1]), list(self.audio_device_options_cache[2])
+        values = ["auto"]
+        labels = ["auto"]
+        player = self.resolve_player()
+        if player:
+            command, kind = player
+            if kind == "mpv":
+                try:
+                    creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+                    result = subprocess.run(
+                        [command, "--audio-device=help", "--idle=yes", "--frames=0"],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=5,
+                        creationflags=creationflags,
+                    )
+                    for line in result.stdout.splitlines():
+                        match = re.match(r"\s*'([^']+)'\s+\((.*)\)\s*$", line)
+                        if not match:
+                            continue
+                        value, label = match.group(1).strip(), match.group(2).strip()
+                        if value and value not in values:
+                            values.append(value)
+                            labels.append(f"{label} ({value})" if label and label != value else value)
+                except Exception:
+                    pass
+        current = self.normalized_audio_output_device()
+        if current and current not in values:
+            values.append(current)
+            labels.append(f"{current} ({self.t('no_output_devices')})")
+        self.audio_device_options_cache = (now, list(values), list(labels))
+        return values, labels
+
+    def check_saved_audio_device_available(self) -> None:
+        device = self.normalized_audio_output_device()
+        if not device or device.lower() == "auto":
+            return
+        values, labels = self.audio_output_device_options(force_refresh=True)
+        if device in values and labels[values.index(device)] != f"{device} ({self.t('no_output_devices')})":
+            return
+        self.prompt_for_new_default_audio_device(values, labels)
+
+    def prompt_for_new_default_audio_device(self, values: list[str], labels: list[str]) -> None:
+        if not values:
+            values, labels = ["auto"], ["auto"]
+        self.message(self.t("audio_device_missing"), wx.ICON_WARNING)
+        with wx.SingleChoiceDialog(self, self.t("audio_device_missing"), self.t("default_audio_device"), labels) as dialog:
+            dialog.SetSelection(0)
+            if dialog.ShowModal() != wx.ID_OK:
+                self.settings.audio_output_device = "auto"
+                self.save_settings()
+                return
+            index = dialog.GetSelection()
+        self.settings.audio_output_device = values[index] if 0 <= index < len(values) else "auto"
+        self.save_settings()
+        self.announce_player(self.t("settings_saved"))
+
+    def player_audio_output_device(self) -> str:
+        return (self.session_audio_output_device or self.normalized_audio_output_device() or "auto").strip() or "auto"
+
+    def speed_audio_filter_args(self) -> list[str]:
+        mode = self.normalized_speed_audio_mode()
+        if mode == SPEED_AUDIO_MODE_MPV:
+            return ["--audio-pitch-correction=yes"]
+        if mode == SPEED_AUDIO_MODE_SCALETEMPO:
+            return ["--audio-pitch-correction=no", "--af=@apricot_speed:scaletempo=stride=30:overlap=.50:search=10"]
+        if mode == SPEED_AUDIO_MODE_RUBBERBAND:
+            return [
+                "--audio-pitch-correction=yes",
+                "--af=@apricot_speed:rubberband=transients=smooth:formant=preserved:pitch=quality:engine=finer",
+            ]
+        return ["--audio-pitch-correction=no", "--af=@apricot_speed:scaletempo2=search-interval=50:window-size=20:max-speed=8.0"]
+
+    def speed_uses_mpv_auto_pitch_correction(self) -> bool:
+        return self.normalized_speed_audio_mode() in {SPEED_AUDIO_MODE_MPV, SPEED_AUDIO_MODE_RUBBERBAND}
+
     def start_mpv(self, command: str, stream_url: str, title: str, headers: dict) -> None:
         try:
             self.ipc_path = self.make_ipc_path()
@@ -4640,12 +4848,12 @@ class MainFrame(wx.Frame):
                 f"--input-ipc-server={self.ipc_path}",
                 "--idle=no",
                 "--volume-max=300",
-                "--audio-pitch-correction=yes",
                 "--pitch=1.0",
                 f"--speed={self.settings.player_speed}",
                 "--term-playing-msg=",
                 "--msg-level=all=warn",
             ]
+            args.extend(self.speed_audio_filter_args())
             if getattr(self.settings, "enable_stream_cache", True):
                 cache_folder = self.cache_folder_path()
                 cache_folder.mkdir(parents=True, exist_ok=True)
@@ -4663,7 +4871,7 @@ class MainFrame(wx.Frame):
                 )
             else:
                 args.append("--cache=no")
-            audio_device = str(getattr(self.settings, "audio_output_device", "auto") or "auto").strip()
+            audio_device = self.player_audio_output_device()
             if audio_device and audio_device.lower() != "auto":
                 args.append(f"--audio-device={audio_device}")
             resume_position = self.playback_resume_position()
@@ -4730,11 +4938,12 @@ class MainFrame(wx.Frame):
                 (self.t("output_devices"), self.show_output_devices),
                 (self.t("copy_link"), self.copy_active_url),
                 (self.t("copy_stream_url"), self.copy_direct_stream_url),
+                (self.t("show_video_details"), self.show_video_details),
             ]
         )
         label = wx.StaticText(self.panel, label=f"{self.t('internal_player')}: {title}")
         self.root_sizer.Add(label, 0, wx.ALL, 4)
-        self.player_panel = wx.Panel(self.panel, style=wx.BORDER_SIMPLE | wx.WANTS_CHARS)
+        self.player_panel = wx.Panel(self.panel, style=wx.BORDER_SIMPLE)
         self.player_panel.SetName(self.t("internal_player"))
         self.player_panel.SetBackgroundColour(wx.BLACK)
         self.player_panel.Bind(wx.EVT_KEY_DOWN, self.on_player_key)
@@ -4742,10 +4951,15 @@ class MainFrame(wx.Frame):
         self.root_sizer.Add(self.player_panel, 1, wx.EXPAND | wx.ALL, 4)
         self.details_label = None
         self.video_details = None
+        self.details_button_sizer = None
+        self.details_opened_temporarily = False
         self.in_player_screen = True
         self.player_control_mode = True
         self.panel.Layout()
-        self.player_panel.SetFocus()
+        if self.settings.show_video_details_by_default:
+            wx.CallAfter(self.show_video_details, False)
+        else:
+            self.player_panel.SetFocus()
 
     def on_player_key(self, event: wx.KeyEvent) -> None:
         self.on_char_hook(event)
@@ -4817,9 +5031,10 @@ class MainFrame(wx.Frame):
         self.set_status(text)
         self.speak_text(text)
 
-    def show_video_details(self) -> None:
+    def show_video_details(self, temporary: bool | None = None) -> None:
         if not self.in_player_screen:
             return
+        self.details_opened_temporarily = (not self.settings.show_video_details_by_default) if temporary is None else bool(temporary)
         if self.video_details is None:
             self.details_label = wx.StaticText(self.panel, label=self.t("video_details"))
             self.video_details = wx.TextCtrl(
@@ -4830,11 +5045,23 @@ class MainFrame(wx.Frame):
             self.video_details.SetMinSize((-1, 160))
             self.root_sizer.Add(self.details_label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 4)
             self.root_sizer.Add(self.video_details, 0, wx.EXPAND | wx.ALL, 4)
+            self.details_button_sizer = wx.BoxSizer(wx.HORIZONTAL)
+            copy_button = wx.Button(self.panel, label=self.t("copy_details"))
+            copy_button.SetName(self.t("copy_details"))
+            copy_button.Bind(wx.EVT_BUTTON, lambda _evt: self.copy_video_details())
+            back_button = wx.Button(self.panel, label=self.t("back"))
+            back_button.SetName(self.t("back"))
+            back_button.Bind(wx.EVT_BUTTON, lambda _evt: self.hide_video_details())
+            self.details_button_sizer.Add(copy_button, 0, wx.RIGHT, 6)
+            self.details_button_sizer.Add(back_button, 0)
+            self.root_sizer.Add(self.details_button_sizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
         self.update_details_text()
         if self.details_label:
             self.details_label.Show()
         if self.video_details:
             self.video_details.Show()
+        if self.details_button_sizer:
+            self.show_sizer_items(self.details_button_sizer, True)
         self.panel.Layout()
         self.video_details.SetInsertionPoint(0)
         self.safe_set_focus(self.video_details)
@@ -4846,10 +5073,24 @@ class MainFrame(wx.Frame):
         if self.details_label:
             self.details_label.Hide()
         self.video_details.Hide()
+        if self.details_button_sizer:
+            self.show_sizer_items(self.details_button_sizer, False)
         self.panel.Layout()
         if hasattr(self, "player_panel"):
             self.safe_set_focus(self.player_panel)
         self.announce_player(self.t("details_closed"))
+
+    def copy_video_details(self) -> None:
+        details = self.build_video_details_text()
+        self.copy_plain_text_to_clipboard(details)
+        self.announce_player(self.t("details_copied"))
+
+    @staticmethod
+    def show_sizer_items(sizer: wx.Sizer, show: bool) -> None:
+        for child in sizer.GetChildren():
+            window = child.GetWindow()
+            if window:
+                window.Show(show)
 
     def video_details_visible(self) -> bool:
         try:
@@ -4959,6 +5200,7 @@ class MainFrame(wx.Frame):
         value = values[index]
         try:
             self.mpv_set_property("audio-device", value)
+            self.session_audio_output_device = value
             self.current_audio_device = value
             self.announce_player(self.t("output_device_set", device=choices[index]))
         except Exception as exc:
@@ -5204,7 +5446,7 @@ class MainFrame(wx.Frame):
             current = self.mpv_get_property("speed")
             speed = float(current if current is not None else 1.0)
             speed = self.next_playback_speed(speed, delta)
-            self.mpv_set_property("audio-pitch-correction", True)
+            self.mpv_set_property("audio-pitch-correction", self.speed_uses_mpv_auto_pitch_correction())
             self.mpv_set_property("speed", speed)
             speed_text = self.format_playback_rate(speed)
             self.current_video_info["speed"] = speed_text
@@ -5365,6 +5607,18 @@ class MainFrame(wx.Frame):
         mode = str(getattr(self.settings, "pitch_mode", PITCH_MODE_RUBBERBAND) or PITCH_MODE_RUBBERBAND)
         return self.normalize_pitch_mode_value(mode)
 
+    def normalized_speed_audio_mode(self) -> str:
+        mode = str(getattr(self.settings, "speed_audio_mode", SPEED_AUDIO_MODE_SCALETEMPO2) or SPEED_AUDIO_MODE_SCALETEMPO2)
+        return self.normalize_speed_audio_mode_value(mode)
+
+    def normalized_direct_link_enter_action(self) -> str:
+        action = str(getattr(self.settings, "direct_link_enter_action", DIRECT_LINK_ENTER_PLAY) or DIRECT_LINK_ENTER_PLAY)
+        return self.normalize_direct_link_enter_action(action)
+
+    def normalized_audio_output_device(self) -> str:
+        device = str(getattr(self.settings, "audio_output_device", "auto") or "auto").strip()
+        return device or "auto"
+
     def normalized_video_format(self) -> str:
         return self.normalize_video_format_value(getattr(self.settings, "video_format", VIDEO_FORMAT_MP4))
 
@@ -5381,6 +5635,22 @@ class MainFrame(wx.Frame):
             self.t("pitch_mode_rubberband"),
             self.t("pitch_mode_mpv"),
             self.t("pitch_mode_linked_speed"),
+        ]
+
+    def speed_audio_mode_labels(self) -> list[str]:
+        return [
+            self.t("speed_audio_mode_scaletempo2"),
+            self.t("speed_audio_mode_mpv"),
+            self.t("speed_audio_mode_scaletempo"),
+            self.t("speed_audio_mode_rubberband"),
+        ]
+
+    def direct_link_enter_action_labels(self) -> list[str]:
+        return [
+            self.t("direct_link_enter_play"),
+            self.t("direct_link_enter_audio"),
+            self.t("direct_link_enter_video"),
+            self.t("direct_link_enter_stream"),
         ]
 
     def video_format_labels(self) -> list[str]:
@@ -5407,6 +5677,25 @@ class MainFrame(wx.Frame):
         if lowered == LEGACY_PITCH_MODE_RUBBERBAND:
             return PITCH_MODE_RUBBERBAND
         return PITCH_MODE_RUBBERBAND
+
+    @staticmethod
+    def normalize_speed_audio_mode_value(mode: str) -> str:
+        normalized = str(mode or "").strip()
+        if normalized in SPEED_AUDIO_MODE_OPTIONS:
+            return normalized
+        lowered = normalized.lower()
+        if "rubber" in lowered:
+            return SPEED_AUDIO_MODE_RUBBERBAND
+        if "classic" in lowered or lowered == "scaletempo":
+            return SPEED_AUDIO_MODE_SCALETEMPO
+        if "mpv" in lowered or "default" in lowered:
+            return SPEED_AUDIO_MODE_MPV
+        return SPEED_AUDIO_MODE_SCALETEMPO2
+
+    @staticmethod
+    def normalize_direct_link_enter_action(action: str) -> str:
+        normalized = str(action or "").strip()
+        return normalized if normalized in DIRECT_LINK_ENTER_OPTIONS else DIRECT_LINK_ENTER_PLAY
 
     @staticmethod
     def normalize_video_format_value(value: str) -> str:
@@ -5518,6 +5807,28 @@ class MainFrame(wx.Frame):
             return False
         return MainFrame.key_event_matches_letter(event, letter)
 
+    @staticmethod
+    def details_text_navigation_key(event: wx.KeyEvent) -> bool:
+        key = event.GetKeyCode()
+        navigation = {
+            wx.WXK_UP,
+            wx.WXK_DOWN,
+            wx.WXK_LEFT,
+            wx.WXK_RIGHT,
+            wx.WXK_HOME,
+            wx.WXK_END,
+            wx.WXK_PAGEUP,
+            wx.WXK_PAGEDOWN,
+            wx.WXK_TAB,
+        }
+        if key in navigation:
+            return True
+        if event.ControlDown() and MainFrame.key_event_matches_letter(event, "c"):
+            return True
+        if event.ControlDown() and MainFrame.key_event_matches_letter(event, "a"):
+            return True
+        return False
+
     def on_char_hook(self, event: wx.KeyEvent) -> None:
         key = event.GetKeyCode()
         focus = wx.Window.FindFocus()
@@ -5584,7 +5895,10 @@ class MainFrame(wx.Frame):
             return
         if self.shortcut_matches(event, "player_back"):
             if self.in_player_screen and self.video_details_visible():
-                self.hide_video_details()
+                if self.details_opened_temporarily:
+                    self.hide_video_details()
+                    return
+                self.back_to_results()
                 return
             if self.in_player_screen:
                 self.back_to_results()
@@ -5615,7 +5929,10 @@ class MainFrame(wx.Frame):
         if self.shortcut_matches(event, "copy_stream_url"):
             self.copy_direct_stream_url()
             return
-        if self.player_control_mode and not details_has_focus:
+        if self.player_control_mode:
+            if details_has_focus and self.details_text_navigation_key(event):
+                event.Skip()
+                return
             if self.shortcut_matches(event, "player_output_devices"):
                 self.show_output_devices()
                 return
@@ -6411,6 +6728,8 @@ class MainFrame(wx.Frame):
             self.settings.download_folder = c["download_folder"].GetValue()
         if "results_limit" in c:
             self.settings.results_limit = self.to_int(self.selected_choice_value("results_limit"), 0, 0, 250)
+        if "direct_link_enter_action" in c:
+            self.settings.direct_link_enter_action = self.normalize_direct_link_enter_action(self.selected_choice_value("direct_link_enter_action"))
         if "seek_seconds" in c:
             self.settings.seek_seconds = self.to_int(c["seek_seconds"].GetStringSelection(), 5, 1)
         if "volume_step" in c:
@@ -6467,12 +6786,14 @@ class MainFrame(wx.Frame):
             self.settings.restrict_filenames = c["restrict_filenames"].GetValue()
         if "download_archive" in c:
             self.settings.download_archive = c["download_archive"].GetValue()
-        if "player_command" in c:
-            self.settings.player_command = c["player_command"].GetValue()
         if "player_speed" in c:
             self.settings.player_speed = c["player_speed"].GetStringSelection() or "1.0"
+        if "speed_audio_mode" in c:
+            self.settings.speed_audio_mode = self.normalize_speed_audio_mode_value(self.selected_choice_value("speed_audio_mode"))
         if "pitch_mode" in c:
             self.settings.pitch_mode = self.normalize_pitch_mode_value(self.selected_choice_value("pitch_mode"))
+        if "show_video_details_by_default" in c:
+            self.settings.show_video_details_by_default = c["show_video_details_by_default"].GetValue()
         if "enable_stream_cache" in c:
             self.settings.enable_stream_cache = c["enable_stream_cache"].GetValue()
         if "cache_folder" in c:
@@ -6482,7 +6803,7 @@ class MainFrame(wx.Frame):
         if "resume_playback" in c:
             self.settings.resume_playback = c["resume_playback"].GetValue()
         if "default_audio_device" in c:
-            self.settings.audio_output_device = c["default_audio_device"].GetValue().strip() or "auto"
+            self.settings.audio_output_device = self.selected_choice_value("default_audio_device") or "auto"
         if "browser_playback" in c:
             self.settings.prefer_browser_playback = c["browser_playback"].GetValue()
         if "fullscreen" in c:
@@ -7284,6 +7605,8 @@ class MainFrame(wx.Frame):
                 elif kind == "download_task" and isinstance(payload, dict):
                     task_id = str(payload.pop("task_id", ""))
                     self.update_download_task(task_id, **payload)
+                elif kind == "result_metadata" and isinstance(payload, dict):
+                    self.apply_result_metadata(payload)
                 elif kind == "notify" and isinstance(payload, tuple):
                     title, message = payload
                     self.show_desktop_notification(str(title), str(message), enabled=self.settings.subscription_notifications)
@@ -7354,6 +7677,8 @@ class MainFrame(wx.Frame):
                 if merged.get("filename_template") == OLD_FILENAME_TEMPLATE:
                     merged["filename_template"] = DEFAULT_FILENAME_TEMPLATE
                 merged["pitch_mode"] = self.normalize_pitch_mode_value(str(merged.get("pitch_mode") or ""))
+                merged["speed_audio_mode"] = self.normalize_speed_audio_mode_value(str(merged.get("speed_audio_mode") or ""))
+                merged["direct_link_enter_action"] = self.normalize_direct_link_enter_action(str(merged.get("direct_link_enter_action") or ""))
                 merged["video_format"] = self.normalize_video_format_value(str(merged.get("video_format") or ""))
                 provider = str(merged.get("podcast_search_provider") or PODCAST_DIRECTORY_PROVIDER_APPLE)
                 merged["podcast_search_provider"] = provider if provider in PODCAST_DIRECTORY_PROVIDER_OPTIONS else PODCAST_DIRECTORY_PROVIDER_APPLE
