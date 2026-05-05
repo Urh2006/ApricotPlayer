@@ -101,8 +101,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.3"
-APP_VERSION_LABEL = "0.6.3"
+APP_VERSION = "0.6.4"
+APP_VERSION_LABEL = "0.6.4"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -111,11 +111,15 @@ FAVORITES_FILE = APP_DIR / "favorites.json"
 HISTORY_FILE = APP_DIR / "history.json"
 SUBSCRIPTIONS_FILE = APP_DIR / "subscriptions.json"
 RSS_FEEDS_FILE = APP_DIR / "rss_feeds.json"
+USER_PLAYLISTS_FILE = APP_DIR / "playlists.json"
+NOTIFICATIONS_FILE = APP_DIR / "notifications.json"
+PLAYBACK_POSITIONS_FILE = APP_DIR / "playback_positions.json"
 CACHED_COOKIES_FILE = APP_DIR / "cookies.txt"
 COMPONENTS_DIR = APP_DIR / "components"
 LEGACY_SETTINGS_FILE = LEGACY_APP_DIR / "settings.json"
 LEGACY_FAVORITES_FILE = LEGACY_APP_DIR / "favorites.json"
 DEFAULT_DOWNLOAD_ROOT = Path.home() / "Downloads" / "ApricotPlayer"
+DEFAULT_CACHE_DIR = APP_DIR / "cache"
 DEFAULT_FILENAME_TEMPLATE = "%(title)s.%(ext)s"
 OLD_FILENAME_TEMPLATE = "%(title)s [%(id)s].%(ext)s"
 RESULTS_PAGE_SIZE = 20
@@ -198,6 +202,10 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "subscribe_channel": "Ctrl+Shift+S",
     "queue_audio": "Shift+A",
     "queue_video": "Shift+D",
+    "create_playlist": "Ctrl+Shift+N",
+    "add_to_playlist": "Ctrl+Shift+P",
+    "remove_from_playlist": "Ctrl+Shift+R",
+    "copy_stream_url": "Ctrl+D",
     "context_menu": "Applications",
     "open_selected": "Enter",
     "new_subscription_videos": "N",
@@ -210,6 +218,9 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "player_pitch_up": "Ctrl+Up",
     "player_pitch_down": "Ctrl+Down",
     "player_details": "V",
+    "player_output_devices": "O",
+    "player_previous": "Ctrl+PageUp",
+    "player_next": "Ctrl+PageDown",
     "player_back": "Escape",
     "player_volume_boost": "F2",
     "player_seek_back": "Left",
@@ -228,6 +239,10 @@ SHORTCUT_DEFINITIONS = [
     ("subscribe_channel", "shortcut_subscribe_channel"),
     ("queue_audio", "shortcut_queue_audio"),
     ("queue_video", "shortcut_queue_video"),
+    ("create_playlist", "shortcut_create_playlist"),
+    ("add_to_playlist", "shortcut_add_to_playlist"),
+    ("remove_from_playlist", "shortcut_remove_from_playlist"),
+    ("copy_stream_url", "shortcut_copy_stream_url"),
     ("context_menu", "shortcut_context_menu"),
     ("open_selected", "shortcut_open_selected"),
     ("new_subscription_videos", "shortcut_new_subscription_videos"),
@@ -240,6 +255,9 @@ SHORTCUT_DEFINITIONS = [
     ("player_pitch_up", "shortcut_player_pitch_up"),
     ("player_pitch_down", "shortcut_player_pitch_down"),
     ("player_details", "shortcut_player_details"),
+    ("player_output_devices", "shortcut_player_output_devices"),
+    ("player_previous", "shortcut_player_previous"),
+    ("player_next", "shortcut_player_next"),
     ("player_back", "shortcut_player_back"),
     ("player_volume_boost", "shortcut_player_volume_boost"),
     ("player_seek_back", "shortcut_player_seek_back"),
@@ -270,8 +288,40 @@ TEXT = {
         "cancel_all_downloads": "Preklici vse prenose",
         "no_active_download": "Ni aktivnega prenosa.",
         "search_youtube": "Iskanje po YouTube",
+        "direct_link": "Neposredna povezava",
+        "direct_link_url": "URL za predvajanje ali prenos",
+        "play_direct_link": "Predvajaj povezavo",
+        "download_direct_audio": "Prenesi zvok iz povezave",
+        "download_direct_video": "Prenesi video iz povezave",
         "choose_download_folder": "Izbor mape za prenose",
         "favorites": "Priljubljeni",
+        "playlists": "Playliste",
+        "create_playlist": "Ustvari playlisto",
+        "playlist_name": "Ime playliste",
+        "playlist_created": "Playlista ustvarjena: {title}.",
+        "playlist_exists": "Playlista s tem imenom ze obstaja.",
+        "playlist_empty": "Playlista je prazna.",
+        "no_playlists": "Ni playlist.",
+        "open_playlist": "Odpri playlisto",
+        "remove_playlist": "Odstrani playlisto",
+        "playlist_removed": "Playlista odstranjena.",
+        "playlist_items": "Elementi playliste",
+        "add_to_playlist": "Dodaj v playlisto",
+        "added_to_playlist": "Dodano v playlisto {playlist}: {title}.",
+        "added_to_playlist_count": "Dodano v playlisto {playlist}: {count} elementov.",
+        "remove_from_playlist": "Odstrani iz playliste",
+        "removed_from_playlist": "Odstranjeno iz playliste.",
+        "download_user_playlist": "Prenesi playlisto",
+        "copy_stream_url": "Kopiraj direktni media URL",
+        "resolving_stream_url": "Pridobivam direktni media URL.",
+        "stream_url_copied": "Direktni media URL je kopiran.",
+        "stream_url_failed": "Direktnega media URL-ja ni bilo mogoce pridobiti: {error}",
+        "notification_center": "Notification center",
+        "notification_center_empty": "Ni obvestil.",
+        "clear_notifications": "Pocisti obvestila",
+        "notifications_cleared": "Obvestila so pociscena.",
+        "notification_new_video": "{channel}: nov video {title}",
+        "notification_new_podcast": "{feed}: nova epizoda {title}",
         "settings": "Nastavitve",
         "settings_sections": "Razdelki nastavitev",
         "general_section": "Splošno",
@@ -330,6 +380,7 @@ TEXT = {
         "description": "Description",
         "url": "URL",
         "uploaded": "uploaded",
+        "uploaded_unknown": "Uploaded unknown",
         "dynamic_results": "Dinamicno (nalaga po 20 rezultatov)",
         "url_copied": "Povezava je kopirana.",
         "download_audio_done": "Audio downloaded: {title}",
@@ -410,6 +461,19 @@ TEXT = {
         "pitch_mode_linked_speed": "Povezana visina tona in hitrost - tipke za visino tona spremenijo oboje",
         "auto_update": "Ob vsakem zagonu preveri posodobitve yt-dlp",
         "autoplay_next": "Po koncu posnetka samodejno predvajaj naslednjega",
+        "enable_stream_cache": "Omogoci predpomnilnik za predvajanje",
+        "cache_folder": "Mapa za predpomnilnik",
+        "cache_size_mb": "Velikost predpomnilnika v MB",
+        "resume_playback": "Nadaljuj predvajanje tam, kjer si ostal",
+        "default_audio_device": "Privzeta izhodna zvocna naprava",
+        "output_devices": "Izhodne zvocne naprave",
+        "select_output_device": "Izberi izhodno zvocno napravo",
+        "output_device_set": "Izhodna zvocna naprava nastavljena: {device}.",
+        "no_output_devices": "Ni najdenih izhodnih zvocnih naprav.",
+        "previous": "Prejsnji",
+        "next": "Naslednji",
+        "no_previous_item": "Ni prejsnjega elementa.",
+        "no_next_item": "Ni naslednjega elementa.",
         "confirm_download": "Pred prenosom vprašaj za potrditev",
         "open_after_download": "Po prenosu odpri mapo za prenose",
         "download_complete_popup": "Pokazi popup, ko je prenos koncan",
@@ -483,6 +547,10 @@ TEXT = {
         "shortcut_subscribe_channel": "Naroci se na kanal",
         "shortcut_queue_audio": "Oznaci za prenos zvoka",
         "shortcut_queue_video": "Oznaci za prenos videa",
+        "shortcut_create_playlist": "Ustvari playlisto",
+        "shortcut_add_to_playlist": "Dodaj v playlisto",
+        "shortcut_remove_from_playlist": "Odstrani iz playliste",
+        "shortcut_copy_stream_url": "Kopiraj direktni media URL",
         "shortcut_context_menu": "Kontekstni meni",
         "shortcut_open_selected": "Odpri izbrano",
         "shortcut_new_subscription_videos": "Novi videi iz narocnine",
@@ -495,6 +563,9 @@ TEXT = {
         "shortcut_player_pitch_up": "Predvajalnik: visji ton",
         "shortcut_player_pitch_down": "Predvajalnik: nizji ton",
         "shortcut_player_details": "Predvajalnik: podrobnosti videa",
+        "shortcut_player_output_devices": "Predvajalnik: izhodne naprave",
+        "shortcut_player_previous": "Predvajalnik: prejsnji element",
+        "shortcut_player_next": "Predvajalnik: naslednji element",
         "shortcut_player_back": "Predvajalnik: nazaj ali zapri podrobnosti",
         "shortcut_player_volume_boost": "Predvajalnik: ojacanje glasnosti",
         "shortcut_player_seek_back": "Predvajalnik: 5 sekund nazaj",
@@ -879,6 +950,73 @@ TEXT = {
 
 TEXT["sl"].update(SL_TRANSLATION_FIXES)
 TEXT.update(EXTRA_TEXT)
+TEXT["en"].update(
+    {
+        "direct_link": "Direct link",
+        "direct_link_url": "URL to play or download",
+        "play_direct_link": "Play link",
+        "download_direct_audio": "Download link audio",
+        "download_direct_video": "Download link video",
+        "playlists": "Playlists",
+        "create_playlist": "Create playlist",
+        "playlist_name": "Playlist name",
+        "playlist_created": "Playlist created: {title}.",
+        "playlist_exists": "A playlist with that name already exists.",
+        "playlist_empty": "Playlist is empty.",
+        "no_playlists": "No playlists.",
+        "open_playlist": "Open playlist",
+        "remove_playlist": "Remove playlist",
+        "playlist_removed": "Playlist removed.",
+        "playlist_items": "Playlist items",
+        "add_to_playlist": "Add to playlist",
+        "select_playlist": "Select playlist",
+        "added_to_playlist": "Added to playlist {playlist}: {title}.",
+        "added_to_playlist_count": "Added {count} items to playlist {playlist}.",
+        "remove_from_playlist": "Remove from playlist",
+        "removed_from_playlist": "Removed from playlist.",
+        "download_user_playlist": "Download playlist",
+        "copy_stream_url": "Copy direct media URL",
+        "resolving_stream_url": "Resolving direct media URL.",
+        "stream_url_copied": "Direct media URL copied.",
+        "stream_url_failed": "Could not resolve direct media URL: {error}",
+        "notification_center": "Notification center",
+        "notification_center_empty": "No notifications.",
+        "clear_notifications": "Clear notifications",
+        "notifications_cleared": "Notifications cleared.",
+        "notification_new_video": "{channel}: new video {title}",
+        "notification_new_podcast": "{feed}: new episode {title}",
+        "uploaded_unknown": "Uploaded unknown",
+        "enable_stream_cache": "Enable playback cache",
+        "cache_folder": "Playback cache folder",
+        "cache_size_mb": "Playback cache size in MB",
+        "resume_playback": "Resume videos where you left off",
+        "default_audio_device": "Default audio output device",
+        "output_devices": "Audio output devices",
+        "select_output_device": "Select audio output device",
+        "output_device_set": "Audio output device set to {device}.",
+        "no_output_devices": "No audio output devices were found.",
+        "previous": "Previous",
+        "next": "Next",
+        "no_previous_item": "No previous item.",
+        "no_next_item": "No next item.",
+        "shortcut_create_playlist": "Create playlist",
+        "shortcut_add_to_playlist": "Add to playlist",
+        "shortcut_remove_from_playlist": "Remove from playlist",
+        "shortcut_copy_stream_url": "Copy direct media URL",
+        "shortcut_player_output_devices": "Player: audio output devices",
+        "shortcut_player_previous": "Player: previous item",
+        "shortcut_player_next": "Player: next item",
+    }
+)
+TEXT["sl"].update(
+    {
+        "select_playlist": "Izberi playlisto",
+        "shortcut_capture_hint": "Pritisni novo kombinacijo tipk. Tab in Shift+Tab premikata fokus.",
+        "shortcut_captured": "Bliznjica nastavljena na {shortcut}.",
+        "shortcut_in_use": "{shortcut} je ze nastavljen za {action}. Izberi drugo bliznjico.",
+        "shortcut_in_use_title": "Bliznjica je ze v uporabi",
+    }
+)
 SUPPLEMENTAL_TRANSLATIONS = {
     "de": {
         "download_all_selected": "Alle ausgewaehlten Elemente herunterladen",
@@ -1151,6 +1289,11 @@ class Settings:
     player_fullscreen: bool = False
     player_start_paused: bool = False
     player_speed: str = "1.0"
+    enable_stream_cache: bool = True
+    cache_folder: str = str(DEFAULT_CACHE_DIR)
+    cache_size_mb: int = 512
+    resume_playback: bool = True
+    audio_output_device: str = "auto"
     speed_step: float = 0.01
     pitch_step: float = 0.01
     pitch_mode: str = PITCH_MODE_RUBBERBAND
@@ -1243,6 +1386,9 @@ class MainFrame(wx.Frame):
         self.history = self.load_history()
         self.subscriptions = self.load_subscriptions()
         self.rss_feeds = self.load_rss_feeds()
+        self.user_playlists = self.load_user_playlists()
+        self.notifications = self.load_notifications()
+        self.playback_positions = self.load_playback_positions()
         self.rss_items: list[dict] = []
         self.podcast_search_results: list[dict] = []
         self.results: list[dict] = []
@@ -1261,8 +1407,13 @@ class MainFrame(wx.Frame):
         self.rss_feeds_screen_active = False
         self.rss_items_screen_active = False
         self.podcast_search_screen_active = False
+        self.user_playlists_screen_active = False
+        self.user_playlist_items_screen_active = False
+        self.notification_center_screen_active = False
+        self.direct_link_screen_active = False
         self.in_main_menu = False
         self.current_rss_feed_index = -1
+        self.current_user_playlist_index = -1
         self.player_return_screen = ""
         self.player_return_data: dict = {}
         self.search_results_stack: list[dict] = []
@@ -1294,6 +1445,8 @@ class MainFrame(wx.Frame):
         self.current_search_type_code = "All"
         self.collection_url = ""
         self.collection_result_type = ""
+        self.current_stream_url = ""
+        self.current_audio_device = ""
         self.nvda_client = self.load_nvda_client()
         self.update_progress_dialog: wx.ProgressDialog | None = None
         self.subscription_check_running = False
@@ -1829,6 +1982,10 @@ class MainFrame(wx.Frame):
         self.rss_feeds_screen_active = False
         self.rss_items_screen_active = False
         self.podcast_search_screen_active = False
+        self.user_playlists_screen_active = False
+        self.user_playlist_items_screen_active = False
+        self.notification_center_screen_active = False
+        self.direct_link_screen_active = False
         self.clear()
         title = wx.StaticText(self.panel, label=self.t("main_menu"))
         self.root_sizer.Add(title, 0, wx.ALL, 4)
@@ -1838,8 +1995,11 @@ class MainFrame(wx.Frame):
             self.menu_actions.append((f"{self.t('current_downloads')} ({download_count})", self.show_download_queue))
         self.menu_actions.extend([
             (self.t("search_youtube"), self.show_search),
+            (self.t("direct_link"), self.show_direct_link),
             (self.t("favorites"), self.show_favorites),
+            (self.t("playlists"), self.show_user_playlists),
             (self.t("subscriptions"), self.show_subscriptions),
+            (self.t("notification_center"), self.show_notification_center),
         ])
         if self.settings.enable_history:
             self.menu_actions.append((self.t("history"), self.show_history))
@@ -1870,6 +2030,603 @@ class MainFrame(wx.Frame):
         if index != wx.NOT_FOUND:
             self.menu_actions[index][1]()
 
+    def show_direct_link(self) -> None:
+        self.in_main_menu = False
+        self.in_queue_screen = False
+        self.search_screen_active = False
+        self.favorites_screen_active = False
+        self.history_screen_active = False
+        self.subscriptions_screen_active = False
+        self.rss_feeds_screen_active = False
+        self.rss_items_screen_active = False
+        self.podcast_search_screen_active = False
+        self.user_playlists_screen_active = False
+        self.user_playlist_items_screen_active = False
+        self.notification_center_screen_active = False
+        self.direct_link_screen_active = True
+        self.clear()
+        self.add_button_row(
+            [
+                (self.t("back"), self.show_main_menu),
+                (self.t("play_direct_link"), self.play_direct_link),
+                (self.t("download_direct_audio"), lambda: self.download_direct_link(True)),
+                (self.t("download_direct_video"), lambda: self.download_direct_link(False)),
+                (self.t("copy_stream_url"), self.copy_direct_stream_url),
+            ]
+        )
+        label = wx.StaticText(self.panel, label=self.t("direct_link_url"))
+        self.root_sizer.Add(label, 0, wx.ALL, 4)
+        self.direct_link_ctrl = wx.TextCtrl(self.panel, style=wx.TE_PROCESS_ENTER)
+        self.direct_link_ctrl.SetName(self.t("direct_link_url"))
+        self.direct_link_ctrl.Bind(wx.EVT_TEXT_ENTER, lambda _evt: self.play_direct_link())
+        self.root_sizer.Add(self.direct_link_ctrl, 0, wx.EXPAND | wx.ALL, 4)
+        self.panel.Layout()
+        self.focus_later(self.direct_link_ctrl)
+
+    def direct_link_item(self) -> dict | None:
+        if not hasattr(self, "direct_link_ctrl"):
+            return None
+        url = self.direct_link_ctrl.GetValue().strip()
+        if not url:
+            return None
+        if not re.match(r"^[a-z][a-z0-9+.-]*://", url, flags=re.IGNORECASE):
+            url = "https://" + url
+        return {
+            "title": url,
+            "url": url,
+            "webpage_url": url,
+            "kind": "video",
+            "type": self.t("direct_link"),
+            "channel": "",
+        }
+
+    def play_direct_link(self) -> None:
+        item = self.direct_link_item()
+        if not item:
+            self.message(self.t("no_selection"))
+            return
+        self.player_return_screen = "direct_link"
+        self.player_return_data = {}
+        self.current_video_item = item
+        self.current_video_info = dict(item)
+        self.play_url(str(item.get("url") or ""), str(item.get("title") or ""))
+
+    def download_direct_link(self, audio_only: bool) -> None:
+        item = self.direct_link_item()
+        if not item:
+            self.message(self.t("no_selection"))
+            return
+        self.start_download(audio_only, item=item)
+
+    def show_user_playlists(self) -> None:
+        self.in_main_menu = False
+        self.in_queue_screen = False
+        self.search_screen_active = False
+        self.favorites_screen_active = False
+        self.history_screen_active = False
+        self.subscriptions_screen_active = False
+        self.rss_feeds_screen_active = False
+        self.rss_items_screen_active = False
+        self.podcast_search_screen_active = False
+        self.user_playlists_screen_active = True
+        self.user_playlist_items_screen_active = False
+        self.notification_center_screen_active = False
+        self.direct_link_screen_active = False
+        self.clear()
+        self.add_button_row(
+            [
+                (self.t("back"), self.show_main_menu),
+                (self.t("create_playlist"), self.create_user_playlist_dialog),
+                (self.t("open_playlist"), self.open_selected_user_playlist),
+                (self.t("download_user_playlist"), self.download_selected_user_playlist),
+                (self.t("remove_playlist"), self.remove_selected_user_playlist),
+            ]
+        )
+        label = wx.StaticText(self.panel, label=self.t("playlists"))
+        self.root_sizer.Add(label, 0, wx.ALL, 4)
+        self.user_playlist_list = wx.ListBox(self.panel, choices=[])
+        self.user_playlist_list.SetName(self.t("playlists"))
+        self.user_playlist_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _evt: self.open_selected_user_playlist())
+        self.user_playlist_list.Bind(wx.EVT_CONTEXT_MENU, self.open_user_playlists_context_menu)
+        self.user_playlist_list.Bind(wx.EVT_KEY_DOWN, self.on_user_playlists_key)
+        self.root_sizer.Add(self.user_playlist_list, 1, wx.EXPAND | wx.ALL, 4)
+        self.refresh_user_playlists()
+        self.panel.Layout()
+        self.focus_later(self.user_playlist_list)
+
+    def refresh_user_playlists(self) -> None:
+        if not hasattr(self, "user_playlist_list"):
+            return
+        try:
+            self.user_playlist_list.Clear()
+            for playlist in self.user_playlists:
+                self.user_playlist_list.Append(self.user_playlist_line(playlist))
+            if self.user_playlists:
+                index = min(max(0, self.current_user_playlist_index), len(self.user_playlists) - 1)
+                self.user_playlist_list.SetSelection(index)
+            else:
+                self.user_playlist_list.Append(self.t("no_playlists"))
+                self.user_playlist_list.SetSelection(0)
+                self.set_status(self.t("no_playlists"))
+        except RuntimeError:
+            pass
+
+    def user_playlist_line(self, playlist: dict) -> str:
+        count = len(playlist.get("items") or [])
+        return f"{playlist.get('title', '')} | {count} {self.t('video')}"
+
+    def selected_user_playlist(self) -> dict | None:
+        if not hasattr(self, "user_playlist_list"):
+            return None
+        index = self.user_playlist_list.GetSelection()
+        if index == wx.NOT_FOUND or index < 0 or index >= len(self.user_playlists):
+            return None
+        self.current_user_playlist_index = index
+        return self.user_playlists[index]
+
+    def on_user_playlists_key(self, event: wx.KeyEvent) -> None:
+        if self.shortcut_matches(event, "create_playlist"):
+            self.create_user_playlist_dialog()
+        elif self.shortcut_matches(event, "open_selected"):
+            self.open_selected_user_playlist()
+        elif self.shortcut_matches(event, "remove_selected"):
+            self.remove_selected_user_playlist()
+        elif self.context_menu_shortcut_matches(event):
+            self.open_user_playlists_context_menu()
+        else:
+            event.Skip()
+
+    def open_user_playlists_context_menu(self, _event=None) -> None:
+        menu = wx.Menu()
+        actions = [
+            (self.t("open_playlist"), self.open_selected_user_playlist),
+            (self.menu_label_with_shortcut("create_playlist", "create_playlist"), self.create_user_playlist_dialog),
+            (self.t("download_user_playlist"), self.download_selected_user_playlist),
+            (self.t("remove_playlist"), self.remove_selected_user_playlist),
+        ]
+        for label, handler in actions:
+            item = menu.Append(wx.ID_ANY, label)
+            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
+        self.PopupMenu(menu)
+        menu.Destroy()
+
+    def create_user_playlist_dialog(self, initial_item: dict | None = None) -> int | None:
+        with wx.TextEntryDialog(self, self.t("playlist_name"), self.t("create_playlist")) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return None
+            title = dialog.GetValue().strip()
+        if not title:
+            return None
+        if any(str(playlist.get("title") or "").lower() == title.lower() for playlist in self.user_playlists):
+            self.announce_player(self.t("playlist_exists"))
+            return None
+        playlist = {"title": title, "items": [], "created_at": time.time(), "updated_at": time.time()}
+        self.user_playlists.append(playlist)
+        self.current_user_playlist_index = len(self.user_playlists) - 1
+        if initial_item:
+            playlist["items"].append(self.playlist_item_from_media(initial_item))
+        self.save_user_playlists()
+        self.refresh_user_playlists()
+        self.announce_player(self.t("playlist_created", title=title))
+        return self.current_user_playlist_index
+
+    def open_selected_user_playlist(self) -> None:
+        if self.selected_user_playlist() is None:
+            self.announce_player(self.t("no_playlists"))
+            return
+        self.show_user_playlist_items(self.current_user_playlist_index)
+
+    def show_user_playlist_items(self, playlist_index: int, selection: int = 0) -> None:
+        if playlist_index < 0 or playlist_index >= len(self.user_playlists):
+            self.show_user_playlists()
+            return
+        self.current_user_playlist_index = playlist_index
+        self.in_main_menu = False
+        self.in_queue_screen = False
+        self.search_screen_active = False
+        self.favorites_screen_active = False
+        self.history_screen_active = False
+        self.subscriptions_screen_active = False
+        self.rss_feeds_screen_active = False
+        self.rss_items_screen_active = False
+        self.podcast_search_screen_active = False
+        self.user_playlists_screen_active = False
+        self.user_playlist_items_screen_active = True
+        self.notification_center_screen_active = False
+        self.direct_link_screen_active = False
+        self.clear()
+        self.add_button_row(
+            [
+                (self.t("back"), self.show_user_playlists),
+                (self.t("play"), self.play_selected_user_playlist_item),
+                (self.t("download_user_playlist"), self.download_current_user_playlist),
+                (self.t("remove_from_playlist"), self.remove_selected_user_playlist_item),
+            ]
+        )
+        playlist = self.user_playlists[playlist_index]
+        label = wx.StaticText(self.panel, label=f"{self.t('playlist_items')}: {playlist.get('title', '')}")
+        self.root_sizer.Add(label, 0, wx.ALL, 4)
+        self.user_playlist_items = list(playlist.get("items") or [])
+        self.user_playlist_items_list = wx.ListBox(self.panel, choices=[])
+        self.user_playlist_items_list.SetName(self.t("playlist_items"))
+        self.user_playlist_items_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _evt: self.play_selected_user_playlist_item())
+        self.user_playlist_items_list.Bind(wx.EVT_CONTEXT_MENU, self.open_user_playlist_items_context_menu)
+        self.user_playlist_items_list.Bind(wx.EVT_KEY_DOWN, self.on_user_playlist_items_key)
+        self.root_sizer.Add(self.user_playlist_items_list, 1, wx.EXPAND | wx.ALL, 4)
+        self.refresh_user_playlist_items(selection)
+        self.panel.Layout()
+        self.focus_later(self.user_playlist_items_list)
+
+    def refresh_user_playlist_items(self, selection: int = 0) -> None:
+        if not hasattr(self, "user_playlist_items_list"):
+            return
+        try:
+            self.user_playlist_items = list(self.user_playlists[self.current_user_playlist_index].get("items") or [])
+            self.user_playlist_items_list.Clear()
+            for index, item in enumerate(self.user_playlist_items):
+                self.user_playlist_items_list.Append(self.result_line(index, item))
+            if self.user_playlist_items:
+                self.user_playlist_items_list.SetSelection(min(max(0, selection), len(self.user_playlist_items) - 1))
+            else:
+                self.user_playlist_items_list.Append(self.t("playlist_empty"))
+                self.user_playlist_items_list.SetSelection(0)
+                self.set_status(self.t("playlist_empty"))
+        except RuntimeError:
+            pass
+
+    def selected_user_playlist_item(self) -> dict | None:
+        if not hasattr(self, "user_playlist_items_list"):
+            return None
+        index = self.user_playlist_items_list.GetSelection()
+        if index == wx.NOT_FOUND or index < 0 or index >= len(self.user_playlist_items):
+            return None
+        return dict(self.user_playlist_items[index], user_playlist_index=self.current_user_playlist_index, user_playlist_item_index=index)
+
+    def on_user_playlist_items_key(self, event: wx.KeyEvent) -> None:
+        if self.shortcut_matches(event, "open_selected"):
+            self.play_selected_user_playlist_item()
+        elif self.shortcut_matches(event, "download_audio"):
+            self.start_download(True, item=self.selected_user_playlist_item())
+        elif self.shortcut_matches(event, "download_video"):
+            self.start_download(False, item=self.selected_user_playlist_item())
+        elif self.shortcut_matches(event, "remove_from_playlist") or self.shortcut_matches(event, "remove_selected"):
+            self.remove_selected_user_playlist_item()
+        elif self.context_menu_shortcut_matches(event):
+            self.open_user_playlist_items_context_menu()
+        else:
+            event.Skip()
+
+    def open_user_playlist_items_context_menu(self, _event=None) -> None:
+        menu = wx.Menu()
+        actions = [
+            (self.t("play"), self.play_selected_user_playlist_item),
+            (self.menu_label_with_shortcut("download_audio", "download_audio"), lambda: self.start_download(True, item=self.selected_user_playlist_item())),
+            (self.menu_label_with_shortcut("download_video", "download_video"), lambda: self.start_download(False, item=self.selected_user_playlist_item())),
+            (self.t("download_user_playlist"), self.download_current_user_playlist),
+            (self.menu_label_with_shortcut("remove_from_playlist", "remove_from_playlist"), self.remove_selected_user_playlist_item),
+            (self.t("copy_url"), lambda: self.copy_item_url(self.selected_user_playlist_item())),
+            (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda: self.copy_direct_stream_url(self.selected_user_playlist_item())),
+        ]
+        for label, handler in actions:
+            item = menu.Append(wx.ID_ANY, label)
+            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
+        self.PopupMenu(menu)
+        menu.Destroy()
+
+    def play_selected_user_playlist_item(self) -> None:
+        item = self.selected_user_playlist_item()
+        if not item:
+            self.announce_player(self.t("playlist_empty"))
+            return
+        self.player_return_screen = "user_playlist_items"
+        self.player_return_data = {
+            "playlist_index": self.current_user_playlist_index,
+            "item_index": int(item.get("user_playlist_item_index") or 0),
+        }
+        self.current_video_item = item
+        self.current_video_info = dict(item)
+        self.play_url(str(item.get("url") or ""), str(item.get("title") or ""))
+
+    def remove_selected_user_playlist_item(self) -> None:
+        item = self.selected_user_playlist_item()
+        if not item:
+            self.announce_player(self.t("playlist_empty"))
+            return
+        index = int(item.get("user_playlist_item_index") or 0)
+        playlist = self.user_playlists[self.current_user_playlist_index]
+        items = list(playlist.get("items") or [])
+        if 0 <= index < len(items):
+            del items[index]
+            playlist["items"] = items
+            playlist["updated_at"] = time.time()
+            self.save_user_playlists()
+            self.refresh_user_playlist_items(min(index, len(items) - 1))
+            self.announce_player(self.t("removed_from_playlist"))
+
+    def remove_selected_user_playlist(self) -> None:
+        if not hasattr(self, "user_playlist_list"):
+            return
+        index = self.user_playlist_list.GetSelection()
+        if index == wx.NOT_FOUND or index < 0 or index >= len(self.user_playlists):
+            self.announce_player(self.t("no_playlists"))
+            return
+        del self.user_playlists[index]
+        self.current_user_playlist_index = min(index, len(self.user_playlists) - 1)
+        self.save_user_playlists()
+        self.refresh_user_playlists()
+        self.announce_player(self.t("playlist_removed"))
+
+    def download_selected_user_playlist(self) -> None:
+        playlist = self.selected_user_playlist()
+        if not playlist:
+            self.announce_player(self.t("no_playlists"))
+            return
+        self.download_user_playlist(playlist)
+
+    def download_current_user_playlist(self) -> None:
+        if self.current_user_playlist_index < 0 or self.current_user_playlist_index >= len(self.user_playlists):
+            self.announce_player(self.t("no_playlists"))
+            return
+        self.download_user_playlist(self.user_playlists[self.current_user_playlist_index])
+
+    def download_user_playlist(self, playlist: dict) -> None:
+        title = str(playlist.get("title") or self.t("playlists"))
+        folder = str(self.music_download_folder() / self.safe_folder_name(title))
+        items = [dict(item, audio_only=False, download_folder_override=folder) for item in list(playlist.get("items") or []) if item.get("url")]
+        if not items:
+            self.announce_player(self.t("playlist_empty"))
+            return
+        self.announce_player(self.t("batch_download_start", count=len(items)))
+        task_id, cancel_event = self.register_download_task({"title": title, "kind": "playlist"}, False, "batch", total=len(items))
+        done_text = self.t("download_playlist_done", title=title)
+        threading.Thread(target=self.download_batch_worker, args=(items, task_id, cancel_event, done_text, folder), daemon=True).start()
+
+    def add_active_to_playlist(self) -> None:
+        items = self.playlist_candidate_items()
+        if not items:
+            self.message(self.t("no_selection"))
+            return
+        playlist_index = self.choose_or_create_playlist_index()
+        if playlist_index is None:
+            return
+        self.add_items_to_playlist(playlist_index, items)
+
+    def playlist_candidate_items(self) -> list[dict]:
+        queued_items = [dict(item) for item in self.download_queue.values() if self.playlist_item_is_supported(item)]
+        if len(queued_items) > 1:
+            return queued_items
+        item = self.active_item()
+        if item and self.playlist_item_is_supported(item):
+            return [dict(item)]
+        return queued_items
+
+    @staticmethod
+    def playlist_item_is_supported(item: dict | None) -> bool:
+        return bool(item and item.get("url") and item.get("kind") not in {"channel", "playlist", "podcast"})
+
+    def choose_or_create_playlist_index(self, initial_item: dict | None = None) -> int | None:
+        if not self.user_playlists:
+            return self.create_user_playlist_dialog(initial_item=initial_item)
+        if len(self.user_playlists) == 1:
+            return 0
+        choices = [str(playlist.get("title") or "") for playlist in self.user_playlists]
+        with wx.SingleChoiceDialog(self, self.t("select_playlist"), self.t("add_to_playlist"), choices) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return None
+            index = dialog.GetSelection()
+        return index if 0 <= index < len(self.user_playlists) else None
+
+    def add_items_to_playlist(self, playlist_index: int, items: list[dict]) -> None:
+        if playlist_index < 0 or playlist_index >= len(self.user_playlists):
+            return
+        playlist = self.user_playlists[playlist_index]
+        existing_urls = {str(item.get("url") or "") for item in playlist.get("items") or []}
+        added: list[dict] = []
+        for item in items:
+            url = str(item.get("url") or "")
+            if not url or url in existing_urls:
+                continue
+            playlist_item = self.playlist_item_from_media(item)
+            playlist.setdefault("items", []).append(playlist_item)
+            existing_urls.add(url)
+            added.append(playlist_item)
+        if not added:
+            self.announce_player(self.t("playlist_exists"))
+            return
+        playlist["updated_at"] = time.time()
+        self.save_user_playlists()
+        title = str(playlist.get("title") or "")
+        if len(added) == 1:
+            self.announce_player(self.t("added_to_playlist", playlist=title, title=added[0].get("title", "")))
+        else:
+            self.announce_player(self.t("added_to_playlist_count", playlist=title, count=len(added)))
+        if self.user_playlist_items_screen_active:
+            self.refresh_user_playlist_items()
+
+    def playlist_item_from_media(self, item: dict) -> dict:
+        keys = [
+            "title",
+            "channel",
+            "channel_url",
+            "channel_id",
+            "views",
+            "view_count",
+            "age",
+            "duration",
+            "duration_seconds",
+            "timestamp",
+            "upload_date",
+            "description",
+            "type",
+            "kind",
+            "url",
+            "webpage_url",
+        ]
+        playlist_item = {key: item.get(key, "") for key in keys}
+        playlist_item["kind"] = playlist_item.get("kind") or "video"
+        playlist_item["type"] = playlist_item.get("type") or self.t("video")
+        playlist_item["added_at"] = time.time()
+        return playlist_item
+
+    def append_add_to_playlist_menu(self, menu: wx.Menu) -> None:
+        if self.user_playlists:
+            submenu = wx.Menu()
+            for index, playlist in enumerate(self.user_playlists):
+                menu_item = submenu.Append(wx.ID_ANY, str(playlist.get("title") or self.t("playlists")))
+                self.Bind(wx.EVT_MENU, lambda _evt, idx=index: self.add_items_to_playlist(idx, self.playlist_candidate_items()), menu_item)
+            create_item = submenu.Append(wx.ID_ANY, self.t("create_playlist"))
+            self.Bind(wx.EVT_MENU, lambda _evt: self.add_active_to_playlist(), create_item)
+            menu.AppendSubMenu(submenu, self.menu_label_with_shortcut("add_to_playlist", "add_to_playlist"))
+        else:
+            item = menu.Append(wx.ID_ANY, self.menu_label_with_shortcut("add_to_playlist", "add_to_playlist"))
+            self.Bind(wx.EVT_MENU, lambda _evt: self.add_active_to_playlist(), item)
+
+    def show_notification_center(self) -> None:
+        self.in_main_menu = False
+        self.in_queue_screen = False
+        self.search_screen_active = False
+        self.favorites_screen_active = False
+        self.history_screen_active = False
+        self.subscriptions_screen_active = False
+        self.rss_feeds_screen_active = False
+        self.rss_items_screen_active = False
+        self.podcast_search_screen_active = False
+        self.user_playlists_screen_active = False
+        self.user_playlist_items_screen_active = False
+        self.notification_center_screen_active = True
+        self.direct_link_screen_active = False
+        self.clear()
+        self.add_button_row(
+            [
+                (self.t("back"), self.show_main_menu),
+                (self.t("play"), self.open_selected_notification),
+                (self.t("clear_notifications"), self.clear_notifications),
+            ]
+        )
+        label = wx.StaticText(self.panel, label=self.t("notification_center"))
+        self.root_sizer.Add(label, 0, wx.ALL, 4)
+        self.notification_list = wx.ListBox(self.panel, choices=[])
+        self.notification_list.SetName(self.t("notification_center"))
+        self.notification_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _evt: self.open_selected_notification())
+        self.notification_list.Bind(wx.EVT_CONTEXT_MENU, self.open_notification_context_menu)
+        self.notification_list.Bind(wx.EVT_KEY_DOWN, self.on_notification_key)
+        self.root_sizer.Add(self.notification_list, 1, wx.EXPAND | wx.ALL, 4)
+        self.refresh_notification_center()
+        self.panel.Layout()
+        self.focus_later(self.notification_list)
+
+    def refresh_notification_center(self) -> None:
+        if not hasattr(self, "notification_list"):
+            return
+        try:
+            self.notification_list.Clear()
+            for notification in self.notifications:
+                self.notification_list.Append(self.notification_line(notification))
+            if self.notifications:
+                self.notification_list.SetSelection(0)
+            else:
+                self.notification_list.Append(self.t("notification_center_empty"))
+                self.notification_list.SetSelection(0)
+                self.set_status(self.t("notification_center_empty"))
+        except RuntimeError:
+            pass
+
+    def notification_line(self, notification: dict) -> str:
+        when = self.format_history_time(notification.get("timestamp"))
+        item = notification.get("item") or {}
+        parts = [
+            notification.get("title", ""),
+            notification.get("message", ""),
+            item.get("title", ""),
+            f"{self.t('channel')}: {item.get('channel', '')}" if item.get("channel") else "",
+            when,
+        ]
+        return " | ".join(part for part in parts if part)
+
+    def selected_notification(self) -> dict | None:
+        if not hasattr(self, "notification_list"):
+            return None
+        index = self.notification_list.GetSelection()
+        if index == wx.NOT_FOUND or index < 0 or index >= len(self.notifications):
+            return None
+        return self.notifications[index]
+
+    def selected_notification_item(self) -> dict | None:
+        notification = self.selected_notification()
+        if not notification:
+            return None
+        item = notification.get("item")
+        return dict(item) if isinstance(item, dict) else None
+
+    def on_notification_key(self, event: wx.KeyEvent) -> None:
+        if self.shortcut_matches(event, "open_selected"):
+            self.open_selected_notification()
+        elif self.shortcut_matches(event, "remove_selected"):
+            self.clear_selected_notification()
+        elif self.context_menu_shortcut_matches(event):
+            self.open_notification_context_menu()
+        else:
+            event.Skip()
+
+    def open_notification_context_menu(self, _event=None) -> None:
+        menu = wx.Menu()
+        actions = [
+            (self.t("play"), self.open_selected_notification),
+            (self.t("copy_url"), lambda: self.copy_item_url(self.selected_notification_item())),
+            (self.t("clear_notifications"), self.clear_notifications),
+        ]
+        for label, handler in actions:
+            item = menu.Append(wx.ID_ANY, label)
+            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
+        self.PopupMenu(menu)
+        menu.Destroy()
+
+    def open_selected_notification(self) -> None:
+        item = self.selected_notification_item()
+        if not item or not item.get("url"):
+            self.announce_player(self.t("notification_center_empty"))
+            return
+        self.player_return_screen = "notification_center"
+        self.player_return_data = {}
+        self.current_video_item = item
+        self.current_video_info = dict(item)
+        self.play_url(str(item.get("url") or ""), str(item.get("title") or ""))
+
+    def clear_selected_notification(self) -> None:
+        if not hasattr(self, "notification_list"):
+            return
+        index = self.notification_list.GetSelection()
+        if index != wx.NOT_FOUND and 0 <= index < len(self.notifications):
+            del self.notifications[index]
+            self.save_notifications()
+            self.refresh_notification_center()
+
+    def clear_notifications(self) -> None:
+        self.notifications = []
+        self.save_notifications()
+        self.refresh_notification_center()
+        self.announce_player(self.t("notifications_cleared"))
+
+    def add_app_notification(self, notification: dict) -> None:
+        item = notification.get("item") if isinstance(notification.get("item"), dict) else {}
+        stored = {
+            "kind": notification.get("kind", "info"),
+            "title": notification.get("title", APP_NAME),
+            "message": notification.get("message", ""),
+            "item": item,
+            "timestamp": time.time(),
+        }
+        self.notifications.insert(0, stored)
+        self.notifications = self.notifications[:200]
+        self.save_notifications()
+        if self.notification_center_screen_active:
+            self.refresh_notification_center()
+        if not self.app_has_focus():
+            enabled = self.settings.windows_notifications
+            if stored.get("kind") == "subscription":
+                enabled = enabled and self.settings.subscription_notifications
+            self.show_desktop_notification(str(stored.get("title") or APP_NAME), str(stored.get("message") or ""), enabled=enabled)
+
     def show_download_queue(self) -> None:
         self.in_main_menu = False
         self.in_queue_screen = True
@@ -1880,6 +2637,10 @@ class MainFrame(wx.Frame):
         self.rss_feeds_screen_active = False
         self.rss_items_screen_active = False
         self.podcast_search_screen_active = False
+        self.user_playlists_screen_active = False
+        self.user_playlist_items_screen_active = False
+        self.notification_center_screen_active = False
+        self.direct_link_screen_active = False
         self.clear()
         buttons = [(self.t("back"), self.show_main_menu)]
         if self.download_queue:
@@ -2001,6 +2762,10 @@ class MainFrame(wx.Frame):
         self.rss_feeds_screen_active = False
         self.rss_items_screen_active = False
         self.podcast_search_screen_active = False
+        self.user_playlists_screen_active = False
+        self.user_playlist_items_screen_active = False
+        self.notification_center_screen_active = False
+        self.direct_link_screen_active = False
         self.clear()
         self.add_button_row([(self.t("back"), self.back_from_search)])
         grid = wx.FlexGridSizer(2, 2, 6, 6)
@@ -2080,6 +2845,10 @@ class MainFrame(wx.Frame):
         self.rss_feeds_screen_active = False
         self.rss_items_screen_active = False
         self.podcast_search_screen_active = False
+        self.user_playlists_screen_active = False
+        self.user_playlist_items_screen_active = False
+        self.notification_center_screen_active = False
+        self.direct_link_screen_active = False
         self.clear()
         self.add_button_row(
             [
@@ -2116,6 +2885,8 @@ class MainFrame(wx.Frame):
             (self.menu_label_with_shortcut("download_audio", "download_audio"), lambda: self.start_download(True, item=self.selected_favorite())),
             (self.menu_label_with_shortcut("download_video", "download_video"), lambda: self.start_download(False, item=self.selected_favorite())),
             (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), lambda: self.subscribe_to_selected_channel(self.selected_favorite())),
+            (self.menu_label_with_shortcut("add_to_playlist", "add_to_playlist"), self.add_active_to_playlist),
+            (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda: self.copy_direct_stream_url(self.selected_favorite())),
             (self.t("copy_url"), lambda: self.copy_item_url(self.selected_favorite())),
             (self.t("remove"), self.remove_favorite),
         ]
@@ -2138,6 +2909,10 @@ class MainFrame(wx.Frame):
         self.rss_feeds_screen_active = False
         self.rss_items_screen_active = False
         self.podcast_search_screen_active = False
+        self.user_playlists_screen_active = False
+        self.user_playlist_items_screen_active = False
+        self.notification_center_screen_active = False
+        self.direct_link_screen_active = False
         self.clear()
         self.add_button_row(
             [
@@ -2211,6 +2986,8 @@ class MainFrame(wx.Frame):
             (self.menu_label_with_shortcut("download_video", "download_video"), lambda: self.start_download(False, item=self.selected_history_item())),
             (self.t("add_favorite"), lambda: self.add_favorite_item(self.selected_history_item())),
             (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), lambda: self.subscribe_to_selected_channel(self.selected_history_item())),
+            (self.menu_label_with_shortcut("add_to_playlist", "add_to_playlist"), self.add_active_to_playlist),
+            (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda: self.copy_direct_stream_url(self.selected_history_item())),
             (self.t("copy_url"), lambda: self.copy_item_url(self.selected_history_item())),
             (self.t("remove_history_item"), self.remove_history_item),
             (self.t("clear_history"), self.clear_history),
@@ -2252,6 +3029,10 @@ class MainFrame(wx.Frame):
         self.rss_feeds_screen_active = False
         self.rss_items_screen_active = False
         self.podcast_search_screen_active = False
+        self.user_playlists_screen_active = False
+        self.user_playlist_items_screen_active = False
+        self.notification_center_screen_active = False
+        self.direct_link_screen_active = False
         self.clear()
         self.add_button_row(
             [
@@ -2476,7 +3257,20 @@ class MainFrame(wx.Frame):
                     total_new += len(new_items)
                     message = self.t("subscription_new_videos", count=len(new_items), title=updated.get("title", ""))
                     self.ui_queue.put(("announce", message))
-                    self.ui_queue.put(("notify", (self.t("notification_subscription_title"), message)))
+                    for entry in new_items[:20]:
+                        title = str(entry.get("title") or "")
+                        notification_message = self.t("notification_new_video", channel=updated.get("title", ""), title=title)
+                        self.ui_queue.put(
+                            (
+                                "app_notification",
+                                {
+                                    "kind": "subscription",
+                                    "title": self.t("notification_subscription_title"),
+                                    "message": notification_message,
+                                    "item": entry,
+                                },
+                            )
+                        )
             self.subscriptions = updated_subscriptions
             self.settings.last_subscription_check = time.time()
             self.save_subscriptions()
@@ -2530,6 +3324,10 @@ class MainFrame(wx.Frame):
         self.rss_feeds_screen_active = True
         self.rss_items_screen_active = False
         self.podcast_search_screen_active = False
+        self.user_playlists_screen_active = False
+        self.user_playlist_items_screen_active = False
+        self.notification_center_screen_active = False
+        self.direct_link_screen_active = False
         self.clear()
         self.add_button_row(
             [
@@ -2675,6 +3473,10 @@ class MainFrame(wx.Frame):
         self.rss_feeds_screen_active = False
         self.rss_items_screen_active = False
         self.podcast_search_screen_active = True
+        self.user_playlists_screen_active = False
+        self.user_playlist_items_screen_active = False
+        self.notification_center_screen_active = False
+        self.direct_link_screen_active = False
         self.clear()
         self.add_button_row(
             [
@@ -2813,9 +3615,26 @@ class MainFrame(wx.Frame):
             updated_feeds = list(self.rss_feeds)
             for index in indexes:
                 existing = updated_feeds[index]
+                known_urls = {str(item.get("url") or "") for item in existing.get("items") or [] if item.get("url")}
                 refreshed = self.fetch_rss_feed(str(existing.get("url") or ""))
                 refreshed["created_at"] = existing.get("created_at", refreshed.get("created_at", time.time()))
                 updated_feeds[index] = refreshed
+                if known_urls:
+                    for entry in list(refreshed.get("items") or []):
+                        url = str(entry.get("url") or "")
+                        if url and url not in known_urls:
+                            notification_message = self.t("notification_new_podcast", feed=refreshed.get("title", ""), title=entry.get("title", ""))
+                            self.ui_queue.put(
+                                (
+                                    "app_notification",
+                                    {
+                                        "kind": "podcast",
+                                        "title": self.t("rss_feeds"),
+                                        "message": notification_message,
+                                        "item": entry,
+                                    },
+                                )
+                            )
             self.rss_feeds = updated_feeds
             self.save_rss_feeds()
             self.ui_queue.put(("rss_feeds_changed", None))
@@ -2861,6 +3680,10 @@ class MainFrame(wx.Frame):
         self.rss_feeds_screen_active = False
         self.rss_items_screen_active = True
         self.podcast_search_screen_active = False
+        self.user_playlists_screen_active = False
+        self.user_playlist_items_screen_active = False
+        self.notification_center_screen_active = False
+        self.direct_link_screen_active = False
         self.clear()
         self.add_button_row(
             [
@@ -3178,6 +4001,10 @@ class MainFrame(wx.Frame):
         self.rss_feeds_screen_active = False
         self.rss_items_screen_active = False
         self.podcast_search_screen_active = False
+        self.user_playlists_screen_active = False
+        self.user_playlist_items_screen_active = False
+        self.notification_center_screen_active = False
+        self.direct_link_screen_active = False
         self.clear()
         self.add_button_row([(self.t("back"), self.show_main_menu), (self.t("save"), self.save_settings_from_ui), (self.t("restore_defaults"), self.restore_default_settings)])
         self.controls = {}
@@ -3304,6 +4131,11 @@ class MainFrame(wx.Frame):
             choice("pitch_mode", self.normalized_pitch_mode(), PITCH_MODE_OPTIONS, self.pitch_mode_labels())
             choice("speed_step", self.format_step_value(self.settings.speed_step), RATE_STEP_OPTIONS)
             choice("pitch_step", self.format_step_value(self.settings.pitch_step), RATE_STEP_OPTIONS)
+            check("enable_stream_cache", self.settings.enable_stream_cache)
+            text("cache_folder", self.settings.cache_folder or str(DEFAULT_CACHE_DIR))
+            choice("cache_size_mb", str(self.settings.cache_size_mb), ["128", "256", "512", "1024", "2048", "4096"])
+            check("resume_playback", self.settings.resume_playback)
+            text("default_audio_device", self.settings.audio_output_device or "auto")
             choice("seek_seconds", str(self.settings.seek_seconds), ["5", "10", "15", "30"])
             choice("volume_step", str(self.settings.volume_step), ["1", "2", "5", "10"])
             check("autoplay_next", self.settings.autoplay_next)
@@ -3463,6 +4295,9 @@ class MainFrame(wx.Frame):
                 url = f"https://www.youtube.com/{url.lstrip('/')}"
             else:
                 url = f"https://www.youtube.com/watch?v={url}"
+        timestamp = entry.get("timestamp") or entry.get("release_timestamp") or entry.get("modified_timestamp")
+        upload_date = entry.get("upload_date")
+        age = self.format_age({"timestamp": timestamp, "upload_date": upload_date}) if kind == "video" else ""
         return {
             "title": entry.get("title") or "",
             "channel": entry.get("uploader") or entry.get("channel") or "",
@@ -3470,11 +4305,11 @@ class MainFrame(wx.Frame):
             "channel_id": entry.get("channel_id") or entry.get("uploader_id") or "",
             "views": self.format_count(entry.get("view_count")),
             "view_count": entry.get("view_count"),
-            "age": self.format_age(entry),
+            "age": age or (self.t("uploaded_unknown") if kind == "video" else ""),
             "duration": self.format_duration(entry.get("duration")),
             "duration_seconds": entry.get("duration"),
-            "timestamp": entry.get("timestamp"),
-            "upload_date": entry.get("upload_date"),
+            "timestamp": timestamp,
+            "upload_date": upload_date,
             "description": entry.get("description") or "",
             "type": display_type,
             "kind": kind,
@@ -3572,7 +4407,7 @@ class MainFrame(wx.Frame):
                 item["title"],
                 f"{self.t('channel')}: {item['channel']}",
                 f"{self.t('views')}: {item['views']}",
-                item.get("age", ""),
+                item.get("age") or self.t("uploaded_unknown"),
                 item.get("duration", ""),
                 item["type"],
             ]
@@ -3776,6 +4611,23 @@ class MainFrame(wx.Frame):
             self.current_video_item.update(self.current_video_info)
         self.update_details_text()
 
+    def playback_key(self, item: dict | None = None) -> str:
+        item = item or self.current_video_item or self.current_video_info
+        return str((item or {}).get("url") or (item or {}).get("webpage_url") or "").strip()
+
+    def playback_resume_position(self) -> float:
+        key = self.playback_key()
+        if not key or not getattr(self.settings, "resume_playback", True):
+            return 0.0
+        try:
+            position = float(self.playback_positions.get(key, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+        return position if position >= 5.0 else 0.0
+
+    def cache_folder_path(self) -> Path:
+        return Path(str(getattr(self.settings, "cache_folder", "") or DEFAULT_CACHE_DIR)).expanduser()
+
     def start_mpv(self, command: str, stream_url: str, title: str, headers: dict) -> None:
         try:
             self.ipc_path = self.make_ipc_path()
@@ -3794,6 +4646,29 @@ class MainFrame(wx.Frame):
                 "--term-playing-msg=",
                 "--msg-level=all=warn",
             ]
+            if getattr(self.settings, "enable_stream_cache", True):
+                cache_folder = self.cache_folder_path()
+                cache_folder.mkdir(parents=True, exist_ok=True)
+                cache_size = max(128, min(4096, int(getattr(self.settings, "cache_size_mb", 512) or 512)))
+                back_cache = max(32, min(cache_size, cache_size // 4))
+                args.extend(
+                    [
+                        "--cache=yes",
+                        "--cache-on-disk=yes",
+                        f"--demuxer-cache-dir={cache_folder}",
+                        f"--demuxer-max-bytes={cache_size}MiB",
+                        f"--demuxer-max-back-bytes={back_cache}MiB",
+                        "--cache-pause=no",
+                    ]
+                )
+            else:
+                args.append("--cache=no")
+            audio_device = str(getattr(self.settings, "audio_output_device", "auto") or "auto").strip()
+            if audio_device and audio_device.lower() != "auto":
+                args.append(f"--audio-device={audio_device}")
+            resume_position = self.playback_resume_position()
+            if resume_position:
+                args.append(f"--start={resume_position:.1f}")
             if headers.get("User-Agent"):
                 args.append(f"--user-agent={headers['User-Agent']}")
             if headers.get("Referer"):
@@ -3820,6 +4695,8 @@ class MainFrame(wx.Frame):
             )
             self.player_kind = "mpv"
             self.player_control_mode = True
+            self.current_stream_url = stream_url
+            self.current_audio_device = audio_device
             self.volume_boost_enabled = False
             self.rubberband_pitch_filter_active = False
             self.current_video_info["speed"] = self.format_playback_rate(float(self.settings.player_speed))
@@ -3839,12 +4716,20 @@ class MainFrame(wx.Frame):
         self.rss_feeds_screen_active = False
         self.rss_items_screen_active = False
         self.podcast_search_screen_active = False
+        self.user_playlists_screen_active = False
+        self.user_playlist_items_screen_active = False
+        self.notification_center_screen_active = False
+        self.direct_link_screen_active = False
         self.clear()
         self.add_button_row(
             [
                 (self.t("back_results"), self.back_to_results),
+                (self.t("previous"), lambda: self.play_relative_item(-1)),
                 (self.t("play"), lambda: self.player_command("cycle pause")),
+                (self.t("next"), lambda: self.play_relative_item(1)),
+                (self.t("output_devices"), self.show_output_devices),
                 (self.t("copy_link"), self.copy_active_url),
+                (self.t("copy_stream_url"), self.copy_direct_stream_url),
             ]
         )
         label = wx.StaticText(self.panel, label=f"{self.t('internal_player')}: {title}")
@@ -3879,6 +4764,23 @@ class MainFrame(wx.Frame):
             self.player_return_screen = ""
             self.player_return_data = {}
             self.show_history()
+            return
+        if self.player_return_screen == "user_playlist_items":
+            playlist_index = int(self.player_return_data.get("playlist_index", self.current_user_playlist_index) or 0)
+            item_index = int(self.player_return_data.get("item_index", 0) or 0)
+            self.player_return_screen = ""
+            self.player_return_data = {}
+            self.show_user_playlist_items(playlist_index, selection=item_index)
+            return
+        if self.player_return_screen == "notification_center":
+            self.player_return_screen = ""
+            self.player_return_data = {}
+            self.show_notification_center()
+            return
+        if self.player_return_screen == "direct_link":
+            self.player_return_screen = ""
+            self.player_return_data = {}
+            self.show_direct_link()
             return
         if self.player_return_screen == "favorites":
             self.player_return_screen = ""
@@ -4002,6 +4904,14 @@ class MainFrame(wx.Frame):
             return self.selected_rss_item()
         if self.podcast_search_screen_active:
             return self.selected_podcast_result()
+        if self.user_playlists_screen_active:
+            return self.selected_user_playlist()
+        if self.user_playlist_items_screen_active:
+            return self.selected_user_playlist_item()
+        if self.notification_center_screen_active:
+            return self.selected_notification_item()
+        if self.direct_link_screen_active:
+            return self.direct_link_item()
         return self.selected_result()
 
     def copy_url_to_clipboard(self, url: str) -> None:
@@ -4018,6 +4928,109 @@ class MainFrame(wx.Frame):
         item = self.active_item()
         if item:
             self.copy_url_to_clipboard(item.get("url", ""))
+
+    def show_output_devices(self) -> None:
+        if not self.in_player_screen or self.player_kind != "mpv":
+            return
+        try:
+            devices = self.mpv_get_property("audio-device-list", timeout=1.5) or []
+        except Exception:
+            devices = []
+        choices: list[str] = []
+        values: list[str] = []
+        for device in devices:
+            if not isinstance(device, dict):
+                continue
+            name = str(device.get("name") or "").strip()
+            if not name:
+                continue
+            description = str(device.get("description") or name).strip()
+            choices.append(f"{description} ({name})" if description != name else name)
+            values.append(name)
+        if not choices:
+            self.announce_player(self.t("no_output_devices"))
+            return
+        with wx.SingleChoiceDialog(self, self.t("select_output_device"), self.t("output_devices"), choices) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            index = dialog.GetSelection()
+        if index == wx.NOT_FOUND or index < 0 or index >= len(values):
+            return
+        value = values[index]
+        try:
+            self.mpv_set_property("audio-device", value)
+            self.current_audio_device = value
+            self.announce_player(self.t("output_device_set", device=choices[index]))
+        except Exception as exc:
+            self.announce_player(self.t("stream_url_failed", error=self.friendly_error(exc)))
+
+    def play_relative_item(self, delta: int) -> None:
+        if delta < 0:
+            item = self.relative_player_item(-1)
+            if not item:
+                self.announce_player(self.t("no_previous_item"))
+                return
+        else:
+            item = self.relative_player_item(1)
+            if not item:
+                self.announce_player(self.t("no_next_item"))
+                return
+        self.open_relative_player_item(item)
+
+    def relative_player_item(self, delta: int) -> dict | None:
+        screen = self.player_return_screen
+        data = dict(self.player_return_data or {})
+        if screen == "rss_items":
+            feed_index = int(data.get("feed_index", self.current_rss_feed_index) or 0)
+            item_index = int(data.get("item_index", 0) or 0) + delta
+            if 0 <= feed_index < len(self.rss_feeds):
+                items = list(self.rss_feeds[feed_index].get("items") or [])
+                if 0 <= item_index < len(items):
+                    return dict(items[item_index], rss_feed_index=feed_index, rss_item_index=item_index)
+        if screen == "user_playlist_items":
+            playlist_index = int(data.get("playlist_index", self.current_user_playlist_index) or 0)
+            item_index = int(data.get("item_index", 0) or 0) + delta
+            if 0 <= playlist_index < len(self.user_playlists):
+                items = list(self.user_playlists[playlist_index].get("items") or [])
+                if 0 <= item_index < len(items):
+                    return dict(items[item_index], user_playlist_index=playlist_index, user_playlist_item_index=item_index)
+        results = self.return_all_results or self.all_results or self.return_results or self.results
+        item_index = int(data.get("index", self.return_index) or self.return_index) + delta
+        playable = [item for item in results if item.get("kind") not in {"channel", "playlist"}]
+        if not playable:
+            return None
+        current_url = str((self.current_video_item or {}).get("url") or "")
+        current_pos = next((i for i, item in enumerate(playable) if item.get("url") == current_url), -1)
+        if current_pos >= 0:
+            item_index = current_pos + delta
+        if 0 <= item_index < len(playable):
+            return dict(playable[item_index])
+        return None
+
+    def open_relative_player_item(self, item: dict) -> None:
+        if not item.get("url"):
+            return
+        self.stop_player(silent=True)
+        if item.get("kind") == "rss_item":
+            self.player_return_screen = "rss_items"
+            self.player_return_data = {
+                "feed_index": int(item.get("rss_feed_index", self.current_rss_feed_index) or 0),
+                "item_index": int(item.get("rss_item_index", 0) or 0),
+            }
+        elif "user_playlist_index" in item:
+            self.player_return_screen = "user_playlist_items"
+            self.player_return_data = {
+                "playlist_index": int(item.get("user_playlist_index", self.current_user_playlist_index) or 0),
+                "item_index": int(item.get("user_playlist_item_index", 0) or 0),
+            }
+        else:
+            results = self.return_all_results or self.all_results or self.return_results or self.results
+            self.return_index = next((i for i, result in enumerate(results) if result.get("url") == item.get("url")), self.return_index)
+            self.player_return_screen = "search"
+            self.player_return_data = {"index": self.return_index}
+        self.current_video_item = item
+        self.current_video_info = dict(item)
+        self.play_url(str(item.get("url") or ""), str(item.get("title") or ""))
 
     def open_library_item(self, item: dict, screen: str) -> None:
         kind = item.get("kind")
@@ -4419,6 +5432,7 @@ class MainFrame(wx.Frame):
             pass
 
     def stop_player(self, silent: bool = False) -> None:
+        self.save_current_playback_position()
         if self.player_process and self.player_process.poll() is None:
             self.player_process.terminate()
             try:
@@ -4432,10 +5446,35 @@ class MainFrame(wx.Frame):
         self.player_kind = ""
         self.player_control_mode = False
         self.rubberband_pitch_filter_active = False
+        self.current_stream_url = ""
+        self.current_audio_device = ""
         if not self.in_player_screen:
             self.in_player_screen = False
         if not silent:
             self.set_status(self.t("stopped"))
+
+    def save_current_playback_position(self) -> None:
+        if not getattr(self.settings, "resume_playback", True) or not self.mpv_process_alive():
+            return
+        key = self.playback_key()
+        if not key:
+            return
+        try:
+            elapsed = self.mpv_get_property("time-pos", timeout=0.35)
+            duration = self.mpv_get_property("duration", timeout=0.35)
+            if elapsed is None:
+                return
+            position = float(elapsed)
+            total = float(duration or 0.0)
+            if position < 5.0:
+                self.playback_positions.pop(key, None)
+            elif total and position > max(5.0, total - 8.0):
+                self.playback_positions.pop(key, None)
+            else:
+                self.playback_positions[key] = round(position, 1)
+            self.save_playback_positions()
+        except Exception:
+            pass
 
     @staticmethod
     def key_event_codes(event: wx.KeyEvent) -> set[int]:
@@ -4498,6 +5537,15 @@ class MainFrame(wx.Frame):
         if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "rss_items_list", None):
             self.play_selected_rss_item()
             return
+        if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "user_playlist_list", None):
+            self.open_selected_user_playlist()
+            return
+        if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "user_playlist_items_list", None):
+            self.play_selected_user_playlist_item()
+            return
+        if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "notification_list", None):
+            self.open_selected_notification()
+            return
         if focus is getattr(self, "queue_list", None) and self.shortcut_matches(event, "download_audio"):
             self.download_selected_queue_item(True)
             return
@@ -4525,6 +5573,15 @@ class MainFrame(wx.Frame):
         if self.shortcut_matches(event, "subscribe_channel"):
             self.subscribe_shortcut()
             return
+        if self.shortcut_matches(event, "create_playlist"):
+            self.create_user_playlist_dialog()
+            return
+        if self.shortcut_matches(event, "add_to_playlist"):
+            self.add_active_to_playlist()
+            return
+        if self.shortcut_matches(event, "remove_from_playlist"):
+            self.remove_selected_user_playlist_item()
+            return
         if self.shortcut_matches(event, "player_back"):
             if self.in_player_screen and self.video_details_visible():
                 self.hide_video_details()
@@ -4538,10 +5595,16 @@ class MainFrame(wx.Frame):
             if self.rss_items_screen_active:
                 self.show_rss_feeds()
                 return
+            if self.user_playlist_items_screen_active:
+                self.show_user_playlists()
+                return
             if self.podcast_search_screen_active:
                 self.show_rss_feeds()
                 return
             if self.rss_feeds_screen_active:
+                self.show_main_menu()
+                return
+            if self.user_playlists_screen_active or self.notification_center_screen_active or self.direct_link_screen_active:
                 self.show_main_menu()
                 return
             self.show_main_menu()
@@ -4549,7 +5612,19 @@ class MainFrame(wx.Frame):
         if self.in_player_screen and self.shortcut_matches(event, "player_copy_link"):
             self.copy_active_url()
             return
+        if self.shortcut_matches(event, "copy_stream_url"):
+            self.copy_direct_stream_url()
+            return
         if self.player_control_mode and not details_has_focus:
+            if self.shortcut_matches(event, "player_output_devices"):
+                self.show_output_devices()
+                return
+            if self.shortcut_matches(event, "player_previous"):
+                self.play_relative_item(-1)
+                return
+            if self.shortcut_matches(event, "player_next"):
+                self.play_relative_item(1)
+                return
             if self.shortcut_matches(event, "player_volume_boost"):
                 self.toggle_volume_boost()
                 return
@@ -4622,6 +5697,7 @@ class MainFrame(wx.Frame):
                 (self.t("add_favorite"), self.add_selected_favorite),
                 (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), self.subscribe_shortcut),
                 (self.t("open_browser"), self.open_selected_in_browser),
+                (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda selected=dict(item or {}): self.copy_direct_stream_url(selected)),
                 (self.t("copy_url"), self.copy_selected_url),
             ]
         if len(self.download_queue) > 1:
@@ -4629,6 +5705,9 @@ class MainFrame(wx.Frame):
         for label, handler in actions:
             item = menu.Append(wx.ID_ANY, label)
             self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
+        selected = self.selected_result()
+        if selected and selected.get("kind") not in {"playlist", "channel"}:
+            self.append_add_to_playlist_menu(menu)
         self.PopupMenu(menu)
         menu.Destroy()
 
@@ -4993,6 +6072,39 @@ class MainFrame(wx.Frame):
         if item:
             self.copy_url_to_clipboard(str(item.get("url") or ""))
 
+    def copy_direct_stream_url(self, item: dict | None = None) -> None:
+        item = item or self.active_item()
+        if self.in_player_screen and not item and self.current_stream_url:
+            self.copy_url_to_clipboard(self.current_stream_url)
+            self.announce_player(self.t("stream_url_copied"))
+            return
+        if self.in_player_screen and item and self.current_video_item and item.get("url") == self.current_video_item.get("url") and self.current_stream_url:
+            self.copy_plain_text_to_clipboard(self.current_stream_url)
+            self.announce_player(self.t("stream_url_copied"))
+            return
+        if not item or not item.get("url"):
+            self.message(self.t("no_selection"))
+            return
+        self.announce_player(self.t("resolving_stream_url"))
+        threading.Thread(target=self.copy_direct_stream_url_worker, args=(dict(item),), daemon=True).start()
+
+    def copy_direct_stream_url_worker(self, item: dict) -> None:
+        try:
+            stream_url, _headers, _info = self.resolve_stream_url(str(item.get("url") or ""))
+            wx.CallAfter(self.copy_plain_text_to_clipboard, stream_url)
+            wx.CallAfter(self.announce_player, self.t("stream_url_copied"))
+        except Exception as exc:
+            wx.CallAfter(self.announce_player, self.t("stream_url_failed", error=self.friendly_error(exc)))
+
+    def copy_plain_text_to_clipboard(self, text: str) -> None:
+        if not text:
+            return
+        if wx.TheClipboard.Open():
+            try:
+                wx.TheClipboard.SetData(wx.TextDataObject(text))
+            finally:
+                wx.TheClipboard.Close()
+
     def toggle_download_queue(self, audio_only: bool) -> None:
         item = self.selected_result()
         if not item:
@@ -5172,7 +6284,8 @@ class MainFrame(wx.Frame):
                     )
                 )
                 wx.CallAfter(self.announce_player, self.t(mode_key))
-                item_folder = self.download_folder_for_item(item, audio_only)
+                override_folder = str(item.get("download_folder_override") or "").strip()
+                item_folder = Path(override_folder) if override_folder else self.download_folder_for_item(item, audio_only)
                 allow_playlist = False
                 url = item["url"]
                 if item.get("kind") in {"playlist", "channel"}:
@@ -5360,6 +6473,16 @@ class MainFrame(wx.Frame):
             self.settings.player_speed = c["player_speed"].GetStringSelection() or "1.0"
         if "pitch_mode" in c:
             self.settings.pitch_mode = self.normalize_pitch_mode_value(self.selected_choice_value("pitch_mode"))
+        if "enable_stream_cache" in c:
+            self.settings.enable_stream_cache = c["enable_stream_cache"].GetValue()
+        if "cache_folder" in c:
+            self.settings.cache_folder = c["cache_folder"].GetValue().strip() or str(DEFAULT_CACHE_DIR)
+        if "cache_size_mb" in c:
+            self.settings.cache_size_mb = self.to_int(c["cache_size_mb"].GetStringSelection(), 512, 128, 4096)
+        if "resume_playback" in c:
+            self.settings.resume_playback = c["resume_playback"].GetValue()
+        if "default_audio_device" in c:
+            self.settings.audio_output_device = c["default_audio_device"].GetValue().strip() or "auto"
         if "browser_playback" in c:
             self.settings.prefer_browser_playback = c["browser_playback"].GetValue()
         if "fullscreen" in c:
@@ -5556,6 +6679,12 @@ class MainFrame(wx.Frame):
             if not asset:
                 self.report_app_update_status(self.t("app_update_failed", error="no Windows asset found in release"), manual)
                 return
+            try:
+                cumulative = self.cumulative_changelog_text(APP_VERSION, remote_version)
+                if cumulative:
+                    release["_cumulative_changelog"] = cumulative
+            except Exception:
+                pass
             wx.CallAfter(self.prompt_for_app_update, release, asset)
         except Exception as exc:
             message = self.t("app_update_failed", error=exc)
@@ -6025,6 +7154,33 @@ class MainFrame(wx.Frame):
             return releases[0] if releases else None
         return None
 
+    def fetch_public_releases(self) -> list[dict]:
+        request = Request(GITHUB_RELEASES_API_URL, headers=self.github_headers(""))
+        with self.open_url(request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if not isinstance(payload, list):
+            return []
+        releases = [release for release in payload if isinstance(release, dict) and not release.get("draft")]
+        releases.sort(key=lambda release: self.parse_version(self.release_version(release)), reverse=True)
+        return releases
+
+    def cumulative_changelog_text(self, current_version: str, latest_version: str) -> str:
+        sections: list[str] = []
+        for release in self.fetch_public_releases():
+            version = self.release_version(release)
+            if not version:
+                continue
+            if self.is_newer_version(version, current_version) and not self.is_newer_version(version, latest_version):
+                body = str(release.get("body") or "").replace("\r\n", "\n").strip() or self.t("no_changelog")
+                if re.match(r"^#*\s*what'?s new in version", body, flags=re.IGNORECASE):
+                    sections.append(body)
+                else:
+                    sections.append(f"What's new in version {version}\n\n{body}")
+        text = "\n\n".join(sections).strip()
+        if len(text) > 12000:
+            return text[:12000].rstrip() + "\n\n..."
+        return text
+
     def find_release_asset(self, release: dict) -> dict | None:
         assets = release.get("assets") or []
         portable_names = [PORTABLE_ZIP_ASSET_NAME, LEGACY_PORTABLE_ZIP_ASSET_NAME]
@@ -6069,6 +7225,9 @@ class MainFrame(wx.Frame):
         return str(release.get("tag_name") or release.get("name") or "").strip().lstrip("v")
 
     def release_changelog_text(self, release: dict) -> str:
+        cumulative = str(release.get("_cumulative_changelog") or "").strip()
+        if cumulative:
+            return cumulative
         body = str(release.get("body") or "").replace("\r\n", "\n").strip()
         if not body:
             return self.t("no_changelog")
@@ -6128,6 +7287,8 @@ class MainFrame(wx.Frame):
                 elif kind == "notify" and isinstance(payload, tuple):
                     title, message = payload
                     self.show_desktop_notification(str(title), str(message), enabled=self.settings.subscription_notifications)
+                elif kind == "app_notification" and isinstance(payload, dict):
+                    self.add_app_notification(payload)
                 elif kind == "subscriptions_changed":
                     self.refresh_subscriptions()
                 elif kind == "rss_feeds_changed":
@@ -6246,6 +7407,27 @@ class MainFrame(wx.Frame):
         APP_DIR.mkdir(parents=True, exist_ok=True)
         RSS_FEEDS_FILE.write_text(json.dumps(self.rss_feeds, indent=2, ensure_ascii=False), encoding="utf-8")
 
+    def load_user_playlists(self) -> list[dict]:
+        return self.load_json_list(USER_PLAYLISTS_FILE)
+
+    def save_user_playlists(self) -> None:
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        USER_PLAYLISTS_FILE.write_text(json.dumps(self.user_playlists, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def load_notifications(self) -> list[dict]:
+        return self.load_json_list(NOTIFICATIONS_FILE)
+
+    def save_notifications(self) -> None:
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        NOTIFICATIONS_FILE.write_text(json.dumps(self.notifications, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def load_playback_positions(self) -> dict:
+        return self.load_json_dict(PLAYBACK_POSITIONS_FILE)
+
+    def save_playback_positions(self) -> None:
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        PLAYBACK_POSITIONS_FILE.write_text(json.dumps(self.playback_positions, indent=2, ensure_ascii=False), encoding="utf-8")
+
     @staticmethod
     def load_json_list(path: Path) -> list[dict]:
         if path.exists():
@@ -6255,6 +7437,16 @@ class MainFrame(wx.Frame):
             except Exception:
                 return []
         return []
+
+    @staticmethod
+    def load_json_dict(path: Path) -> dict:
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                return data if isinstance(data, dict) else {}
+            except Exception:
+                return {}
+        return {}
 
     def record_history(self, item: dict, action: str) -> None:
         if not self.settings.enable_history:

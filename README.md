@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.6.3` (`0.6.3`)
+Current version: `0.6.4` (`0.6.4`)
 
 ## Download
 
@@ -35,12 +35,17 @@ py wx_main.py
 - Current downloads screen with active batch/playlist/channel status and cancel controls
 - Favorites
 - History screen for recently played and downloaded items
+- User-created playlists with create, add, remove, play, and download actions
 - Subscriptions screen for YouTube channels, with manual and automatic checks for new videos
 - New videos view for each subscription after a subscription check finds new channel uploads
+- Notification center for saved subscription and podcast notifications, with Enter playback
 - Podcasts and RSS feeds screen with Apple Podcasts directory search, direct RSS/Atom feed URLs, refresh, open, play, download audio, download entire feed, queue episodes, copy URL, and browser actions
+- Direct link screen for playing or downloading any `yt-dlp` supported URL
 - Settings can hide History or Podcasts and RSS from the main menu
 - Windows notifications for new videos from subscribed channels
 - Optional Windows notifications for completed downloads when ApricotPlayer is not focused
+- Optional playback cache and resume playback from the last position
+- Default audio output device setting plus a player-only output device picker
 - Optional system tray mode when closing the window
 - UI languages: English, Slovenian, German, French, Spanish, Portuguese, Italian, Polish, Dutch, Swedish, Croatian, Serbian, Czech, Slovak, Hungarian, Romanian, Turkish, Ukrainian, Russian, Japanese, Korean, Chinese Simplified, Arabic, Hindi, Indonesian, Finnish, and Greek
 - Configurable keyboard shortcuts in Settings, captured by pressing the desired key combination, with duplicate shortcut warnings
@@ -62,7 +67,10 @@ py wx_main.py
 - `S` / `D`: slower / faster playback
 - `T`: announce elapsed, remaining, and total time
 - `V`: open video details
+- `O`: choose audio output device for the current video
 - `L`: copy current video link
+- `Ctrl+D`: copy the direct media stream URL
+- `Ctrl+PageUp/PageDown`: previous or next item
 - `Escape`: back to the last search results
 
 ## Download shortcuts
@@ -70,6 +78,9 @@ py wx_main.py
 - `Ctrl+Shift+A`: download audio
 - `Ctrl+Shift+D`: download video
 - `Ctrl+Shift+S`: subscribe to the focused item's channel
+- `Ctrl+Shift+N`: create playlist
+- `Ctrl+Shift+P`: add the focused or queued videos to a playlist
+- `Ctrl+Shift+R`: remove an item from a user playlist
 
 ## Accessibility
 
@@ -90,4 +101,4 @@ Helpful scripts:
 - `scripts/build_release.ps1 -PackageMode onedir` builds the fast app folder used by both the installer and portable ZIP
 - `scripts/build_installer.ps1` builds `ApricotPlayerSetup.exe` when Inno Setup is installed
 - `scripts/build_portable_zip.ps1` builds `ApricotPlayer.zip`
-- `scripts/publish_release.ps1 -Tag v0.6.3 -NotesFile release-notes/v0.6.3.md` publishes the installer and portable ZIP to GitHub Releases
+- `scripts/publish_release.ps1 -Tag v0.6.4 -NotesFile release-notes/v0.6.4.md` publishes the installer and portable ZIP to GitHub Releases

@@ -54,6 +54,9 @@ Source: "{#SourceExe}"; DestDir: "{app}"; DestName: "ApricotPlayer.exe"; Flags: 
 [InstallDelete]
 Type: filesandordirs; Name: "{app}\_internal"
 Type: files; Name: "{userdesktop}\ApricotPlayer.lnk"
+Type: files; Name: "{userdesktop}\apricotplayer.lnk"
+Type: files; Name: "{autodesktop}\ApricotPlayer.lnk"
+Type: files; Name: "{autodesktop}\apricotplayer.lnk"
 
 [Icons]
 Name: "{group}\ApricotPlayer"; Filename: "{app}\ApricotPlayer.exe"

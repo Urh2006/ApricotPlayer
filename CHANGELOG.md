@@ -1,5 +1,19 @@
 # Changelog
 
+## What's new in version 0.6.4
+
+- added optional playback cache and resume playback so videos can reopen from the last watched position
+- added a player output-device picker on `O`, plus a default audio output device setting for the whole app
+- added Previous and Next player buttons and configurable shortcuts
+- added user-created playlists with create, open, add, remove, play, and download actions
+- added a Direct link screen for playing or downloading any `yt-dlp` supported URL
+- added direct media URL copying with `Ctrl+D` for use in VLC or other external players
+- added a Notification center for saved subscription and podcast notifications, with Enter playback
+- new video and podcast notifications now include the actual video or episode title
+- update dialogs now include cumulative release notes for every version newer than the user's installed version
+- search rows now keep the `uploaded ... ago` format and show an accessible unknown-upload fallback when YouTube does not provide an upload timestamp
+- fixed installer cleanup for old lowercase desktop shortcut names
+
 ## What's new in version 0.6.3
 
 - added duplicate shortcut protection in Settings so a newly captured keyboard shortcut cannot silently replace another action's shortcut
