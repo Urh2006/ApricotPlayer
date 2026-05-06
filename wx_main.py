@@ -22,7 +22,7 @@ from importlib import import_module
 from pathlib import Path
 from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 import xml.etree.ElementTree as ET
 
 import wx
@@ -37,6 +37,7 @@ from locales import EXTRA_TEXT, SL_TRANSLATION_FIXES
 
 yt_dlp = None
 yt_dlp_import_error: Exception | None = None
+_SSL_CONTEXT: ssl.SSLContext | None = None
 
 
 def get_yt_dlp():
@@ -101,8 +102,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.6"
-APP_VERSION_LABEL = "0.6.6"
+APP_VERSION = "0.6.7"
+APP_VERSION_LABEL = "0.6.7"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -2844,7 +2845,8 @@ class MainFrame(wx.Frame):
             choices=[self.t("all"), self.t("video"), self.t("playlist"), self.t("channel")],
         )
         self.search_type.SetName(self.t("type"))
-        self.search_type.SetSelection(self.last_search_type_index if restore_search else 0)
+        restored_type_index = self.last_search_type_index if restore_search else 0
+        self.search_type.SetSelection(restored_type_index if 0 <= restored_type_index < self.search_type.GetCount() else 0)
         grid.Add(self.search_type, 1, wx.EXPAND)
         self.root_sizer.Add(grid, 0, wx.EXPAND | wx.ALL, 4)
         self.add_button_row(
@@ -3310,9 +3312,22 @@ class MainFrame(wx.Frame):
     def check_subscriptions_worker(self, manual: bool = False) -> None:
         try:
             total_new = 0
+            failures = 0
+            successes = 0
             updated_subscriptions = []
             for subscription in self.subscriptions:
-                updated, new_items = self.check_one_subscription(subscription)
+                try:
+                    updated, new_items = self.check_one_subscription(subscription)
+                except Exception as exc:
+                    failures += 1
+                    updated = dict(subscription)
+                    updated["last_checked"] = time.time()
+                    updated["last_error"] = self.friendly_error(exc)
+                    updated_subscriptions.append(updated)
+                    if manual:
+                        self.ui_queue.put(("announce", self.t("subscription_check_failed", error=self.friendly_error(exc))))
+                    continue
+                successes += 1
                 updated_subscriptions.append(updated)
                 if new_items:
                     total_new += len(new_items)
@@ -3332,13 +3347,15 @@ class MainFrame(wx.Frame):
                                 },
                             )
                         )
-            self.subscriptions = updated_subscriptions
-            self.settings.last_subscription_check = time.time()
-            self.save_subscriptions()
-            self.save_settings()
+            if updated_subscriptions:
+                self.subscriptions = updated_subscriptions
+                self.save_subscriptions()
+            if successes:
+                self.settings.last_subscription_check = time.time()
+                self.save_settings()
             self.ui_queue.put(("subscriptions_changed", None))
-            if manual:
-                key = "subscription_check_complete" if total_new else "subscription_no_new"
+            if manual and not (failures and not successes):
+                key = "subscription_check_complete" if total_new or failures else "subscription_no_new"
                 self.ui_queue.put(("announce", self.t(key)))
         except Exception as exc:
             if manual:
@@ -3674,32 +3691,44 @@ class MainFrame(wx.Frame):
             else:
                 indexes = [feed_index]
             updated_feeds = list(self.rss_feeds)
+            failures: list[str] = []
             for index in indexes:
+                if index < 0 or index >= len(updated_feeds):
+                    continue
                 existing = updated_feeds[index]
-                known_urls = {str(item.get("url") or "") for item in existing.get("items") or [] if item.get("url")}
-                refreshed = self.fetch_rss_feed(str(existing.get("url") or ""))
-                refreshed["created_at"] = existing.get("created_at", refreshed.get("created_at", time.time()))
-                updated_feeds[index] = refreshed
-                if known_urls:
-                    for entry in list(refreshed.get("items") or []):
-                        url = str(entry.get("url") or "")
-                        if url and url not in known_urls:
-                            notification_message = self.t("notification_new_podcast", feed=refreshed.get("title", ""), title=entry.get("title", ""))
-                            self.ui_queue.put(
-                                (
-                                    "app_notification",
-                                    {
-                                        "kind": "podcast",
-                                        "title": self.t("rss_feeds"),
-                                        "message": notification_message,
-                                        "item": entry,
-                                    },
+                try:
+                    known_urls = {str(item.get("url") or "") for item in existing.get("items") or [] if item.get("url")}
+                    refreshed = self.fetch_rss_feed(str(existing.get("url") or ""))
+                    refreshed["created_at"] = existing.get("created_at", refreshed.get("created_at", time.time()))
+                    updated_feeds[index] = refreshed
+                    if known_urls:
+                        for entry in list(refreshed.get("items") or []):
+                            url = str(entry.get("url") or "")
+                            if url and url not in known_urls:
+                                notification_message = self.t("notification_new_podcast", feed=refreshed.get("title", ""), title=entry.get("title", ""))
+                                self.ui_queue.put(
+                                    (
+                                        "app_notification",
+                                        {
+                                            "kind": "podcast",
+                                            "title": self.t("rss_feeds"),
+                                            "message": notification_message,
+                                            "item": entry,
+                                        },
+                                    )
                                 )
-                            )
+                except Exception as exc:
+                    preserved = dict(existing)
+                    preserved["last_error"] = self.friendly_error(exc)
+                    preserved["last_checked"] = time.time()
+                    updated_feeds[index] = preserved
+                    failures.append(preserved.get("title") or preserved.get("url") or self.t("rss_unknown_feed_title"))
             self.rss_feeds = updated_feeds
             self.save_rss_feeds()
             self.ui_queue.put(("rss_feeds_changed", None))
-            if not silent:
+            if not silent and failures:
+                self.ui_queue.put(("announce", self.t("rss_refresh_failed", error=", ".join(failures[:3]))))
+            elif not silent:
                 self.ui_queue.put(("announce", self.t("rss_refresh_done")))
         except Exception as exc:
             if not silent:
@@ -4278,7 +4307,8 @@ class MainFrame(wx.Frame):
 
     def search_type_code(self) -> str:
         index = self.search_type.GetSelection()
-        return ("All", "Video", "Playlist", "Kanal")[index if index != wx.NOT_FOUND else 0]
+        options = ("All", "Video", "Playlist", "Channel")
+        return options[index] if 0 <= index < len(options) else "All"
 
     def search(self) -> None:
         if get_yt_dlp() is None:
@@ -4331,7 +4361,7 @@ class MainFrame(wx.Frame):
         url_text = str(url)
         is_playlist = search_type == "Playlist" or "playlist" in ie_key or "playlist" in entry_type or "list=" in url_text
         is_channel = (
-            search_type == "Kanal"
+            search_type in {"Channel", "Kanal"}
             or "channel" in ie_key
             or "channel" in entry_type
             or ("tab" in ie_key and not is_playlist)
@@ -4466,7 +4496,7 @@ class MainFrame(wx.Frame):
 
     def start_result_metadata_hydration(self) -> None:
         candidates: list[dict] = []
-        for item in list(self.results)[:RESULTS_PAGE_SIZE]:
+        for item in list(self.results):
             url = str(item.get("url") or "")
             if item.get("kind") != "video" or not url or url in self.metadata_hydration_urls:
                 continue
@@ -4474,6 +4504,8 @@ class MainFrame(wx.Frame):
                 continue
             candidates.append(dict(item))
             self.metadata_hydration_urls.add(url)
+            if len(candidates) >= RESULTS_PAGE_SIZE:
+                break
         if candidates:
             threading.Thread(target=self.result_metadata_worker, args=(candidates,), daemon=True).start()
 
@@ -4482,17 +4514,20 @@ class MainFrame(wx.Frame):
         if ytdlp is None:
             return
         options = {"quiet": True, "skip_download": True, "noplaylist": True}
-        for item in items:
-            url = str(item.get("url") or "")
-            if not url:
-                continue
-            try:
-                with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
-                    info = ydl.extract_info(url, download=False)
-                payload = self.metadata_from_info(info, item)
-                self.ui_queue.put(("result_metadata", payload))
-            except Exception:
-                continue
+        try:
+            with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
+                for item in items:
+                    url = str(item.get("url") or "")
+                    if not url:
+                        continue
+                    try:
+                        info = ydl.extract_info(url, download=False)
+                        payload = self.metadata_from_info(info, item)
+                        self.ui_queue.put(("result_metadata", payload))
+                    except Exception:
+                        continue
+        except Exception:
+            return
 
     def metadata_from_info(self, info: dict, item: dict) -> dict:
         timestamp = info.get("timestamp") or info.get("release_timestamp") or info.get("modified_timestamp") or item.get("timestamp")
@@ -5832,7 +5867,6 @@ class MainFrame(wx.Frame):
         return False
 
     def on_char_hook(self, event: wx.KeyEvent) -> None:
-        key = event.GetKeyCode()
         focus = wx.Window.FindFocus()
         details_has_focus = focus is self.video_details
         if self.is_shortcut_capture_control(focus):
@@ -6204,12 +6238,12 @@ class MainFrame(wx.Frame):
     ) -> dict:
         progress_hook = self.make_download_progress_hook(title, audio_only, task_id=task_id, cancel_event=cancel_event)
         template = self.settings.filename_template or DEFAULT_FILENAME_TEMPLATE
-        if allow_playlist and "%(playlist_index)" not in template:
+        if allow_playlist and self.settings.keep_playlist_order and "%(playlist_index)" not in template:
             template = "%(playlist_index)s - " + template
         options = {
             "outtmpl": str(folder / template),
             "quiet": self.settings.quiet_downloads,
-            "noplaylist": False if allow_playlist else not self.settings.keep_playlist_order,
+            "noplaylist": not allow_playlist,
             "writethumbnail": self.settings.write_thumbnail,
             "writedescription": self.settings.write_description,
             "writeinfojson": self.settings.write_info_json,
@@ -6274,8 +6308,12 @@ class MainFrame(wx.Frame):
 
     def make_download_progress_hook(self, title: str, audio_only: bool, task_id: str | None = None, cancel_event: threading.Event | None = None):
         mode = self.t("download_audio_mode" if audio_only else "download_video_mode")
+        last_reported_percent = ""
+        last_reported_title = ""
+        last_reported_at = 0.0
 
         def hook(data: dict) -> None:
+            nonlocal last_reported_percent, last_reported_title, last_reported_at
             if cancel_event and cancel_event.is_set():
                 raise DownloadCancelled()
             status = data.get("status")
@@ -6290,6 +6328,23 @@ class MainFrame(wx.Frame):
                     total = data.get("total_bytes") or data.get("total_bytes_estimate") or 0
                     if total:
                         percent_text = f"{(float(downloaded) / float(total)) * 100:.1f}"
+                try:
+                    percent_value = float(percent_text)
+                    percent_text = f"{percent_value:.1f}".rstrip("0").rstrip(".")
+                    percent_bucket = str(min(100, max(0, int(percent_value))))
+                except (TypeError, ValueError):
+                    percent_bucket = percent_text
+                now = time.monotonic()
+                should_report = (
+                    percent_bucket != last_reported_percent
+                    or current_title != last_reported_title
+                    or now - last_reported_at >= 0.75
+                )
+                if not should_report:
+                    return
+                last_reported_percent = percent_bucket
+                last_reported_title = current_title
+                last_reported_at = now
                 if task_id:
                     self.ui_queue.put(
                         (
@@ -6466,8 +6521,17 @@ class MainFrame(wx.Frame):
         if not hasattr(self, "results_list") or index < 0 or index >= len(self.results):
             return
         try:
-            self.results_list.SetString(index, self.result_line(index, self.results[index]))
-            self.results_list.SetSelection(index)
+            line = self.result_line(index, self.results[index])
+            if self.results_list.GetString(index) == line:
+                return
+            selection = self.results_list.GetSelection()
+            self.results_list.Freeze()
+            try:
+                self.results_list.SetString(index, line)
+                if selection != wx.NOT_FOUND and selection != self.results_list.GetSelection():
+                    self.results_list.SetSelection(min(max(0, selection), len(self.results) - 1))
+            finally:
+                self.results_list.Thaw()
         except RuntimeError:
             pass
 
@@ -6564,14 +6628,23 @@ class MainFrame(wx.Frame):
             return
         try:
             selection = self.results_list.GetSelection()
-            self.results_list.Clear()
-            for index, item in enumerate(self.results):
-                self.results_list.Append(self.result_line(index, item))
-            if self.results:
-                self.results_list.SetSelection(min(max(0, selection), len(self.results) - 1))
-            else:
-                self.results_list.Append(self.t("no_results"))
-                self.results_list.SetSelection(0)
+            labels = [self.result_line(index, item) for index, item in enumerate(self.results)]
+            if not labels:
+                labels = [self.t("no_results")]
+            current_labels = [self.results_list.GetString(index) for index in range(self.results_list.GetCount())]
+            if current_labels == labels:
+                return
+            self.results_list.Freeze()
+            try:
+                self.results_list.Clear()
+                for line in labels:
+                    self.results_list.Append(line)
+                if self.results:
+                    self.results_list.SetSelection(min(max(0, selection), len(self.results) - 1))
+                else:
+                    self.results_list.SetSelection(0)
+            finally:
+                self.results_list.Thaw()
         except RuntimeError:
             pass
 
@@ -7614,9 +7687,14 @@ class MainFrame(wx.Frame):
 
     @staticmethod
     def ssl_context() -> ssl.SSLContext:
+        global _SSL_CONTEXT
+        if _SSL_CONTEXT is not None:
+            return _SSL_CONTEXT
         if certifi:
-            return ssl.create_default_context(cafile=certifi.where())
-        return ssl.create_default_context()
+            _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+        else:
+            _SSL_CONTEXT = ssl.create_default_context()
+        return _SSL_CONTEXT
 
     @staticmethod
     def github_headers(token: str = "", accept: str = "application/vnd.github+json") -> dict[str, str]:
@@ -7840,7 +7918,7 @@ class MainFrame(wx.Frame):
 
     @staticmethod
     def youtube_search_url(query: str, search_type: str) -> str:
-        filters = {"Playlist": "EgIQAw==", "Kanal": "EgIQAg=="}
+        filters = {"Playlist": "EgIQAw==", "Channel": "EgIQAg==", "Kanal": "EgIQAg=="}
         return f"https://www.youtube.com/results?{urlencode({'search_query': query, 'sp': filters.get(search_type, '')})}"
 
     @staticmethod

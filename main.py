@@ -14,10 +14,8 @@ from urllib.parse import urlencode
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from tkinter import (
-    BOTH,
     END,
     LEFT,
-    RIGHT,
     VERTICAL,
     W,
     BooleanVar,
@@ -996,7 +994,6 @@ class AccessibleYouTubeApp:
         self.select_and_play_current()
 
     def select_and_play_current(self) -> None:
-        iid = str(self.current_index)
         self.results_list.selection_clear(0, END)
         self.results_list.selection_set(self.current_index)
         self.results_list.activate(self.current_index)

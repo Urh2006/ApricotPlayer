@@ -1,5 +1,16 @@
 # Changelog
 
+## What's new in version 0.6.7
+
+- fixed single video downloads so they always use single-video mode instead of accidentally following playlist URLs when playlist ordering is enabled
+- dynamic search metadata hydration now covers newly loaded result pages, so later batches can also update from Uploaded unknown to Uploaded X ago
+- optimized result metadata hydration by reusing one yt-dlp session per visible batch
+- fixed search result metadata updates so NVDA focus no longer jumps from result to result while upload ages are being filled in
+- optimized download progress updates by throttling duplicate UI events while still reporting meaningful progress changes
+- subscription checks and RSS refreshes now continue when one channel or feed fails, instead of stopping the whole refresh
+- cached the HTTPS certificate context used for GitHub, podcast, RSS, and update requests
+- cleaned up static-analysis warnings in the Python sources
+
 ## What's new in version 0.6.6
 
 - fixed installer updater relaunch so ApricotPlayer restarts from the newly installed executable immediately after an update
