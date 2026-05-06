@@ -103,8 +103,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.10"
-APP_VERSION_LABEL = "0.6.10"
+APP_VERSION = "0.6.10.1"
+APP_VERSION_LABEL = "0.6.10.1"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -2101,6 +2101,56 @@ class MainFrame(wx.Frame):
         except RuntimeError:
             pass
 
+    def foreground_window(self) -> None:
+        try:
+            self.Show(True)
+        except Exception:
+            pass
+        try:
+            if self.IsIconized():
+                self.Iconize(False)
+        except Exception:
+            pass
+        try:
+            self.Raise()
+        except Exception:
+            pass
+        if os.name == "nt":
+            try:
+                hwnd = int(self.GetHandle())
+                if hwnd:
+                    user32 = ctypes.windll.user32
+                    user32.ShowWindow(hwnd, 9)
+                    user32.BringWindowToTop(hwnd)
+                    user32.SetForegroundWindow(hwnd)
+                    user32.SetActiveWindow(hwnd)
+            except Exception:
+                pass
+
+    def focus_primary_control(self) -> None:
+        if getattr(self, "in_main_menu", False) and hasattr(self, "menu_list"):
+            self.safe_set_focus(self.menu_list)
+            return
+        if getattr(self, "search_screen_active", False) and hasattr(self, "query"):
+            self.safe_set_focus(self.query)
+            return
+        focus = wx.Window.FindFocus()
+        if focus:
+            self.safe_set_focus(focus)
+        else:
+            self.safe_set_focus(self)
+
+    def activate_window(self) -> None:
+        self.foreground_window()
+        self.focus_primary_control()
+
+    def activate_window_later(self, delays: tuple[int, ...] = (0, 75, 250, 750)) -> None:
+        for delay in delays:
+            if delay <= 0:
+                wx.CallAfter(self.activate_window)
+            else:
+                wx.CallLater(delay, self.activate_window)
+
     @staticmethod
     def listbox_strings(listbox: wx.ListBox) -> list[str]:
         return [listbox.GetString(index) for index in range(listbox.GetCount())]
@@ -2229,20 +2279,10 @@ class MainFrame(wx.Frame):
 
     def restore_from_tray(self) -> None:
         try:
-            if self.IsIconized():
-                self.Iconize(False)
-        except Exception:
-            pass
-        self.Show(True)
-        try:
             self.RequestUserAttention(wx.USER_ATTENTION_INFO)
         except Exception:
             pass
-        self.Raise()
-        if hasattr(self, "menu_list") and self.in_main_menu:
-            self.focus_later(self.menu_list)
-        else:
-            self.SetFocus()
+        self.activate_window_later((0, 75, 250))
 
     def show_settings_from_tray(self) -> None:
         self.restore_from_tray()
@@ -8711,7 +8751,9 @@ class App(wx.App):
             request_existing_instance_activation("show")
             return False
         frame = MainFrame()
+        self.SetTopWindow(frame)
         frame.Show()
+        frame.activate_window_later()
         return True
 
 

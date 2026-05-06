@@ -1,5 +1,10 @@
 # Changelog
 
+## What's new in version 0.6.10.1
+
+- fixed startup focus so opening ApricotPlayer from a closed state explicitly brings the app window to the foreground and focuses the main menu
+- reused the same foreground/focus activation path when restoring an already running app from the system tray or a second launch
+
 ## What's new in version 0.6.10
 
 - fixed updater version comparison so future hotfix versions such as 0.6.10.1 are detected as newer releases
