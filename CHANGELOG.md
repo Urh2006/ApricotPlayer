@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.6.9.1
+
+- added a 30-minute option for automatic subscription checks and podcast/RSS refreshes
+- optimized the Settings Playback section so audio output devices are refreshed in the background instead of blocking section navigation
+- made second-launch activation checks more frequent so an already running ApricotPlayer window can restore focus more quickly after the launcher process signals it
+
 ## What's new in version 0.6.9
 
 - fixed History so pressing Enter on a history item reliably opens playback for videos, podcast episodes, and other saved playable links

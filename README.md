@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.6.9` (`0.6.9`)
+Current version: `0.6.9.1` (`0.6.9.1`)
 
 ## Download
 
@@ -37,6 +37,7 @@ py wx_main.py
 - History screen for recently played and downloaded items
 - User-created playlists with create, add, remove, play, and download actions
 - Subscriptions screen for YouTube channels, with manual and automatic checks for new videos
+- Subscription and podcast/RSS automatic refresh intervals include a 30-minute option
 - New videos view for each subscription after a subscription check finds new channel uploads
 - Notification center for saved subscription and podcast notifications, with Enter playback
 - Podcasts and RSS feeds screen with Apple Podcasts directory search, direct RSS/Atom feed URLs, refresh, open, play, download audio, download entire feed, queue episodes, copy URL, and browser actions

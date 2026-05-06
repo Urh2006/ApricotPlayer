@@ -102,8 +102,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.9"
-APP_VERSION_LABEL = "0.6.9"
+APP_VERSION = "0.6.9.1"
+APP_VERSION_LABEL = "0.6.9.1"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -127,6 +127,7 @@ DEFAULT_CACHE_DIR = APP_DIR / "cache"
 DEFAULT_FILENAME_TEMPLATE = "%(title)s.%(ext)s"
 OLD_FILENAME_TEMPLATE = "%(title)s [%(id)s].%(ext)s"
 RESULTS_PAGE_SIZE = 20
+REFRESH_INTERVAL_OPTIONS = ["0.5", "1", "2", "3", "6", "12", "24"]
 DEFAULT_GITHUB_OWNER = "Urh2006"
 DEFAULT_GITHUB_REPO = "ApricotPlayer"
 GITHUB_RELEASES_API_URL = f"https://api.github.com/repos/{DEFAULT_GITHUB_OWNER}/{DEFAULT_GITHUB_REPO}/releases"
@@ -649,7 +650,7 @@ TEXT = {
         "rss_max_items": "Maximum episodes per feed",
         "rss_refresh_on_startup": "Refresh podcast and RSS feeds at startup",
         "rss_auto_refresh_enabled": "Refresh podcast and RSS feeds automatically",
-        "rss_refresh_interval": "Podcast and RSS refresh interval in hours",
+        "rss_refresh_interval": "Podcast and RSS refresh interval",
         "search_podcasts": "Search podcasts",
         "podcast_search_query": "Podcast search",
         "podcast_search_results": "Podcast search results",
@@ -855,10 +856,13 @@ TEXT = {
         "download_notifications": "Windows notifications for completed downloads when ApricotPlayer is not focused",
         "notification_download_title": "Download complete",
         "subscription_check_enabled": "Check subscriptions automatically",
-        "subscription_check_interval": "Subscription check interval in hours",
+        "subscription_check_interval": "Subscription check interval",
         "close_to_tray": "Close button or Alt+F4 sends ApricotPlayer to system tray",
         "tray_notification": "Windows notification when ApricotPlayer goes to the system tray",
         "tray_still_running": "ApricotPlayer is still running in the system tray.",
+        "interval_30_minutes": "30 minutes",
+        "interval_1_hour": "1 hour",
+        "interval_hours": "{hours} hours",
         "already_open": "ApricotPlayer is already open.",
         "tray_show": "Show ApricotPlayer",
         "tray_settings": "Settings",
@@ -1075,6 +1079,11 @@ TEXT["sl"].update(
         "shortcut_in_use_title": "Bliznjica je ze v uporabi",
         "tray_notification": "Windows obvestilo, ko gre ApricotPlayer v system tray",
         "tray_settings": "Nastavitve",
+        "rss_refresh_interval": "Interval osvezevanja podcastov in RSS",
+        "subscription_check_interval": "Interval preverjanja narocnin",
+        "interval_30_minutes": "30 minut",
+        "interval_1_hour": "1 ura",
+        "interval_hours": "{hours} ur",
         "repeat": "Ponavljaj",
         "repeat_on": "Ponavljanje vklopljeno.",
         "repeat_off": "Ponavljanje izklopljeno.",
@@ -1508,7 +1517,7 @@ class Settings:
     close_to_tray: bool = False
     tray_notification: bool = True
     subscription_check_enabled: bool = True
-    subscription_check_interval_hours: int = 6
+    subscription_check_interval_hours: float = 6.0
     windows_notifications: bool = True
     download_notifications: bool = True
     subscription_notifications: bool = True
@@ -1521,7 +1530,7 @@ class Settings:
     rss_max_items: int = 100
     rss_refresh_on_startup: bool = False
     rss_auto_refresh_enabled: bool = False
-    rss_refresh_interval_hours: int = 12
+    rss_refresh_interval_hours: float = 12.0
     history_limit: int = 500
     keyboard_shortcuts: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_KEYBOARD_SHORTCUTS))
 
@@ -1639,6 +1648,7 @@ class MainFrame(wx.Frame):
         self.current_audio_device = ""
         self.session_audio_output_device = ""
         self.audio_device_options_cache: tuple[float, list[str], list[str]] | None = None
+        self.audio_device_refresh_running = False
         self.metadata_hydration_urls: set[str] = set()
         self.search_generation = 0
         self.last_activation_check = 0.0
@@ -2164,7 +2174,7 @@ class MainFrame(wx.Frame):
 
     def check_activation_signal(self) -> None:
         now = time.monotonic()
-        if now - self.last_activation_check < 0.2:
+        if now - self.last_activation_check < 0.05:
             return
         self.last_activation_check = now
         try:
@@ -3452,6 +3462,10 @@ class MainFrame(wx.Frame):
             "created_at": time.time(),
         }
 
+    def refresh_interval_seconds(self, value, default: float) -> float:
+        hours = self.to_float(str(value), default, 0.5, 168.0)
+        return max(30 * 60, hours * 60 * 60)
+
     def configure_subscription_timer(self) -> None:
         if not hasattr(self, "subscription_timer"):
             return
@@ -3460,7 +3474,7 @@ class MainFrame(wx.Frame):
         except Exception:
             pass
         if self.settings.subscription_check_enabled:
-            interval_ms = max(1, int(self.settings.subscription_check_interval_hours or 6)) * 60 * 60 * 1000
+            interval_ms = int(self.refresh_interval_seconds(self.settings.subscription_check_interval_hours, 6.0) * 1000)
             self.subscription_timer.Start(interval_ms)
 
     def on_subscription_timer(self, _event) -> None:
@@ -3474,7 +3488,7 @@ class MainFrame(wx.Frame):
         except Exception:
             pass
         if self.settings.enable_podcasts_rss and self.settings.rss_auto_refresh_enabled:
-            interval_ms = max(1, int(self.settings.rss_refresh_interval_hours or 12)) * 60 * 60 * 1000
+            interval_ms = int(self.refresh_interval_seconds(self.settings.rss_refresh_interval_hours, 12.0) * 1000)
             self.rss_timer.Start(interval_ms)
 
     def on_rss_timer(self, _event) -> None:
@@ -3483,7 +3497,7 @@ class MainFrame(wx.Frame):
     def check_subscriptions_if_due(self) -> None:
         if not self.settings.subscription_check_enabled or not self.subscriptions:
             return
-        interval_seconds = max(1, int(self.settings.subscription_check_interval_hours or 6)) * 60 * 60
+        interval_seconds = self.refresh_interval_seconds(self.settings.subscription_check_interval_hours, 6.0)
         last_check = float(getattr(self.settings, "last_subscription_check", 0.0) or 0.0)
         if time.time() - last_check >= interval_seconds:
             self.check_subscriptions(manual=False)
@@ -4412,8 +4426,9 @@ class MainFrame(wx.Frame):
             text("cache_folder", self.settings.cache_folder or str(DEFAULT_CACHE_DIR))
             choice("cache_size_mb", str(self.settings.cache_size_mb), ["128", "256", "512", "1024", "2048", "4096"])
             check("resume_playback", self.settings.resume_playback)
-            device_values, device_labels = self.audio_output_device_options()
+            device_values, device_labels = self.audio_output_device_options(allow_probe=False)
             choice("default_audio_device", self.normalized_audio_output_device(), device_values, device_labels)
+            self.refresh_audio_output_devices_async()
             choice("seek_seconds", str(self.settings.seek_seconds), ["5", "10", "15", "30"])
             choice("volume_step", str(self.settings.volume_step), ["1", "2", "5", "10"])
             check("autoplay_next", self.settings.autoplay_next)
@@ -4445,7 +4460,12 @@ class MainFrame(wx.Frame):
             check("enable_history", self.settings.enable_history)
             choice("history_limit", str(self.settings.history_limit), ["100", "250", "500", "1000", "2000"])
             check("subscription_check_enabled", self.settings.subscription_check_enabled)
-            choice("subscription_check_interval", str(self.settings.subscription_check_interval_hours), ["1", "2", "3", "6", "12", "24"])
+            choice(
+                "subscription_check_interval",
+                self.format_refresh_interval_value(self.settings.subscription_check_interval_hours, 6.0),
+                REFRESH_INTERVAL_OPTIONS,
+                self.refresh_interval_labels(),
+            )
             button("subscription_check_now", lambda: self.check_subscriptions(manual=True))
         elif section_name == "podcasts":
             check("enable_podcasts_rss", self.settings.enable_podcasts_rss)
@@ -4456,7 +4476,12 @@ class MainFrame(wx.Frame):
             choice("rss_max_items", str(self.settings.rss_max_items), ["25", "50", "100", "200", "500"])
             check("rss_refresh_on_startup", self.settings.rss_refresh_on_startup)
             check("rss_auto_refresh_enabled", self.settings.rss_auto_refresh_enabled)
-            choice("rss_refresh_interval", str(self.settings.rss_refresh_interval_hours), ["1", "2", "3", "6", "12", "24"])
+            choice(
+                "rss_refresh_interval",
+                self.format_refresh_interval_value(self.settings.rss_refresh_interval_hours, 12.0),
+                REFRESH_INTERVAL_OPTIONS,
+                self.refresh_interval_labels(),
+            )
         elif section_name == "notifications":
             check("windows_notifications", self.settings.windows_notifications)
             check("download_notifications", self.settings.download_notifications)
@@ -5006,12 +5031,18 @@ class MainFrame(wx.Frame):
     def cache_folder_path(self) -> Path:
         return Path(str(getattr(self.settings, "cache_folder", "") or DEFAULT_CACHE_DIR)).expanduser()
 
-    def audio_output_device_options(self, force_refresh: bool = False) -> tuple[list[str], list[str]]:
+    def audio_output_device_options(self, force_refresh: bool = False, allow_probe: bool = True) -> tuple[list[str], list[str]]:
         now = time.monotonic()
         if not force_refresh and self.audio_device_options_cache and now - self.audio_device_options_cache[0] < 20:
             return list(self.audio_device_options_cache[1]), list(self.audio_device_options_cache[2])
         values = ["auto"]
         labels = ["auto"]
+        if not allow_probe:
+            current = self.normalized_audio_output_device()
+            if current and current.lower() != "auto":
+                values.append(current)
+                labels.append(current)
+            return values, labels
         player = self.resolve_player()
         if player:
             command, kind = player
@@ -5044,6 +5075,48 @@ class MainFrame(wx.Frame):
             labels.append(f"{current} ({self.t('no_output_devices')})")
         self.audio_device_options_cache = (now, list(values), list(labels))
         return values, labels
+
+    def refresh_audio_output_devices_async(self) -> None:
+        if self.audio_device_refresh_running:
+            return
+        if self.audio_device_options_cache and time.monotonic() - self.audio_device_options_cache[0] < 60:
+            return
+        self.audio_device_refresh_running = True
+        threading.Thread(target=self.refresh_audio_output_devices_worker, daemon=True).start()
+
+    def refresh_audio_output_devices_worker(self) -> None:
+        values: list[str] = ["auto"]
+        labels: list[str] = ["auto"]
+        try:
+            values, labels = self.audio_output_device_options(force_refresh=True, allow_probe=True)
+        finally:
+            wx.CallAfter(self.finish_audio_output_device_refresh, values, labels)
+
+    def finish_audio_output_device_refresh(self, values: list[str], labels: list[str]) -> None:
+        self.audio_device_refresh_running = False
+        if not hasattr(self, "settings_sections") or not hasattr(self, "controls"):
+            return
+        try:
+            section_name = self.settings_sections()[self.settings_section_index][1]
+        except Exception:
+            return
+        if section_name != "playback":
+            return
+        ctrl = self.controls.get("default_audio_device")
+        if not isinstance(ctrl, wx.Choice) or (hasattr(ctrl, "IsBeingDeleted") and ctrl.IsBeingDeleted()):
+            return
+        current = self.selected_choice_value("default_audio_device") or self.normalized_audio_output_device()
+        if current and current not in values:
+            values = [*values, current]
+            labels = [*labels, current]
+        selected = values.index(current) if current in values else 0
+        try:
+            ctrl.Freeze()
+            ctrl.Set(labels)
+            ctrl.SetSelection(selected)
+            self.choice_values["default_audio_device"] = list(values)
+        finally:
+            ctrl.Thaw()
 
     def check_saved_audio_device_available(self) -> None:
         device = self.normalized_audio_output_device()
@@ -6015,6 +6088,31 @@ class MainFrame(wx.Frame):
 
     def result_limit_labels(self, options: list[str]) -> list[str]:
         return [self.t("dynamic_results") if option == "0" else option for option in options]
+
+    def refresh_interval_labels(self) -> list[str]:
+        return [self.refresh_interval_label(option) for option in REFRESH_INTERVAL_OPTIONS]
+
+    def refresh_interval_label(self, value: str) -> str:
+        try:
+            hours = float(value)
+        except (TypeError, ValueError):
+            hours = 1.0
+        if hours == 0.5:
+            return self.t("interval_30_minutes")
+        if hours == 1.0:
+            return self.t("interval_1_hour")
+        label_hours = int(hours) if hours.is_integer() else hours
+        return self.t("interval_hours", hours=label_hours)
+
+    @staticmethod
+    def format_refresh_interval_value(value, default: float) -> str:
+        try:
+            hours = max(0.5, min(168.0, float(value)))
+        except (TypeError, ValueError):
+            hours = default
+        if hours.is_integer():
+            return str(int(hours))
+        return f"{hours:.1f}".rstrip("0").rstrip(".")
 
     @staticmethod
     def normalize_pitch_mode_value(mode: str) -> str:
@@ -7227,11 +7325,11 @@ class MainFrame(wx.Frame):
         if "rss_auto_refresh_enabled" in c:
             self.settings.rss_auto_refresh_enabled = c["rss_auto_refresh_enabled"].GetValue()
         if "rss_refresh_interval" in c:
-            self.settings.rss_refresh_interval_hours = self.to_int(c["rss_refresh_interval"].GetStringSelection(), 12, 1, 168)
+            self.settings.rss_refresh_interval_hours = self.to_float(self.selected_choice_value("rss_refresh_interval"), 12.0, 0.5, 168.0)
         if "subscription_check_enabled" in c:
             self.settings.subscription_check_enabled = c["subscription_check_enabled"].GetValue()
         if "subscription_check_interval" in c:
-            self.settings.subscription_check_interval_hours = self.to_int(c["subscription_check_interval"].GetStringSelection(), 6, 1, 168)
+            self.settings.subscription_check_interval_hours = self.to_float(self.selected_choice_value("subscription_check_interval"), 6.0, 0.5, 168.0)
         if "windows_notifications" in c:
             self.settings.windows_notifications = c["windows_notifications"].GetValue()
         if "download_notifications" in c:
