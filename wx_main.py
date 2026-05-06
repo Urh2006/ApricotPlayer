@@ -8087,7 +8087,7 @@ class MainFrame(wx.Frame):
                 f"$processIdToWait = {int(process_id)}",
                 f"$restart = {restart_value}",
                 "$installerLog = [IO.Path]::ChangeExtension($log, '.inno.log')",
-                "$silentArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', '/TASKS=desktopicon', ('/DIR=' + $installDir), ('/LOG=' + $installerLog))",
+                "$silentArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', '/TASKS=desktopicon', ('/DIR=\"' + $installDir + '\"'), ('/LOG=\"' + $installerLog + '\"'))",
                 "$installCandidates = @()",
                 "function Normalize-ExecutablePath([string]$path) {",
                 "    if (-not $path) { return '' }",

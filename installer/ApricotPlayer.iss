@@ -23,6 +23,7 @@ AppPublisherURL=https://github.com/Urh2006/ApricotPlayer
 AppSupportURL=https://github.com/Urh2006/ApricotPlayer/issues
 AppUpdatesURL=https://github.com/Urh2006/ApricotPlayer/releases/latest
 DefaultDirName={autopf}\ApricotPlayer
+UsePreviousAppDir=no
 DefaultGroupName=ApricotPlayer
 DisableProgramGroupPage=yes
 OutputDir={#OutputDir}
