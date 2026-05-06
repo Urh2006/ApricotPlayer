@@ -103,8 +103,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.10.1"
-APP_VERSION_LABEL = "0.6.10.1"
+APP_VERSION = "0.6.10.2"
+APP_VERSION_LABEL = "0.6.10.2"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -144,7 +144,7 @@ DEFAULT_REACHED_SOUND = "default_reached.wav"
 PITCH_MODE_RUBBERBAND = "Independent pitch - advanced (Rubberband)"
 PITCH_MODE_MPV = "Independent pitch - highest quality (mpv built-in)"
 PITCH_MODE_LINKED_SPEED = "Linked pitch and speed - pitch keys change both"
-PITCH_MODE_OPTIONS = [PITCH_MODE_RUBBERBAND, PITCH_MODE_MPV, PITCH_MODE_LINKED_SPEED]
+PITCH_MODE_OPTIONS = [PITCH_MODE_MPV, PITCH_MODE_RUBBERBAND, PITCH_MODE_LINKED_SPEED]
 LEGACY_PITCH_MODE_RUBBERBAND = "rubberband"
 LEGACY_PITCH_MODE_MPV = "mpv pitch"
 LEGACY_PITCH_MODE_LINKED_SPEED = "linked speed"
@@ -157,7 +157,7 @@ SPEED_AUDIO_MODE_SCALETEMPO2 = "High quality scaletempo2"
 SPEED_AUDIO_MODE_MPV = "mpv default scaletempo2"
 SPEED_AUDIO_MODE_SCALETEMPO = "Classic scaletempo"
 SPEED_AUDIO_MODE_RUBBERBAND = "Rubberband high quality"
-SPEED_AUDIO_MODE_OPTIONS = [SPEED_AUDIO_MODE_SCALETEMPO2, SPEED_AUDIO_MODE_MPV, SPEED_AUDIO_MODE_SCALETEMPO, SPEED_AUDIO_MODE_RUBBERBAND]
+SPEED_AUDIO_MODE_OPTIONS = [SPEED_AUDIO_MODE_RUBBERBAND, SPEED_AUDIO_MODE_SCALETEMPO2, SPEED_AUDIO_MODE_MPV, SPEED_AUDIO_MODE_SCALETEMPO]
 DIRECT_LINK_ENTER_PLAY = "play"
 DIRECT_LINK_ENTER_AUDIO = "download_audio"
 DIRECT_LINK_ENTER_VIDEO = "download_video"
@@ -1548,7 +1548,7 @@ class ApricotTaskBarIcon(wx.adv.TaskBarIcon):
         self.settings_id = wx.NewIdRef()
         self.check_id = wx.NewIdRef()
         self.exit_id = wx.NewIdRef()
-        for event_name in ("EVT_TASKBAR_CLICK", "EVT_TASKBAR_LEFT_DOWN", "EVT_TASKBAR_LEFT_UP", "EVT_TASKBAR_LEFT_DCLICK"):
+        for event_name in ("EVT_TASKBAR_LEFT_UP", "EVT_TASKBAR_LEFT_DCLICK"):
             event_binder = getattr(wx.adv, event_name, None)
             if event_binder is not None:
                 self.Bind(event_binder, lambda _event: self.frame.restore_from_tray())
@@ -1875,11 +1875,19 @@ class MainFrame(wx.Frame):
         if event.GetKeyCode() == wx.WXK_TAB:
             event.Skip()
             return
+        action = str(getattr(control, "_apricot_shortcut_action", "") or "")
+        if (
+            event.GetKeyCode() == getattr(wx, "WXK_SPACE", ord(" "))
+            and not event.ControlDown()
+            and not event.ShiftDown()
+            and not event.AltDown()
+            and action != "player_play_pause"
+        ):
+            return
         shortcut = self.shortcut_from_key_event(event)
         if not shortcut:
             event.Skip()
             return
-        action = str(getattr(control, "_apricot_shortcut_action", "") or "")
         conflict = self.shortcut_conflict(shortcut, action)
         if conflict:
             message = self.t("shortcut_in_use", shortcut=shortcut, action=self.t(conflict[1]))
