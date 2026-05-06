@@ -1,5 +1,15 @@
 # Changelog
 
+## What's new in version 0.6.10
+
+- fixed updater version comparison so future hotfix versions such as 0.6.10.1 are detected as newer releases
+- used a three-part 0.6.10 release number so older 0.6.9-era updaters can detect this update
+- changed release lookup to choose the highest public version from GitHub releases instead of trusting only GitHub's latest marker
+- hardened updater downloads with exact asset-name checks, trusted HTTPS source checks, asset size checks, SHA-256 verification when GitHub or PyPI publishes a digest, and safe ZIP path validation
+- made yt-dlp component updates verify PyPI wheel SHA-256 digests and extract wheels with path traversal protection
+- optimized Settings section navigation with debounced section rendering so arrowing through sections does not rebuild the right side for every key press
+- rebuilt Keyboard shortcuts settings into one action list and one capture field, reducing dozens of edit fields to two focusable controls for smoother screen reader navigation
+
 ## What's new in version 0.6.9.1
 
 - added a 30-minute option for automatic subscription checks and podcast/RSS refreshes

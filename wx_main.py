@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import queue
 import re
@@ -20,7 +21,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from importlib import import_module
 from pathlib import Path
-from urllib.parse import urlencode, urljoin
+from urllib.parse import urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 import xml.etree.ElementTree as ET
@@ -102,8 +103,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.9.1"
-APP_VERSION_LABEL = "0.6.9.1"
+APP_VERSION = "0.6.10"
+APP_VERSION_LABEL = "0.6.10"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -701,6 +702,8 @@ TEXT = {
         "notifications_section": "Notifications",
         "keyboard_shortcuts_section": "Keyboard shortcuts",
         "keyboard_shortcuts_help": "Focus a field and press the new key combination. Tab and Shift+Tab still move between fields. Press Save to keep changes.",
+        "shortcut_actions": "Shortcut actions",
+        "shortcut_value": "Shortcut for selected action",
         "shortcut_capture_hint": "Press the new key combination. Tab and Shift+Tab move focus.",
         "shortcut_captured": "Shortcut set to {shortcut}.",
         "shortcut_in_use": "{shortcut} is already assigned to {action}. Choose a different shortcut.",
@@ -1084,6 +1087,8 @@ TEXT["sl"].update(
         "interval_30_minutes": "30 minut",
         "interval_1_hour": "1 ura",
         "interval_hours": "{hours} ur",
+        "shortcut_actions": "Akcije bliznjic",
+        "shortcut_value": "Bliznjica za izbrano akcijo",
         "repeat": "Ponavljaj",
         "repeat_on": "Ponavljanje vklopljeno.",
         "repeat_off": "Ponavljanje izklopljeno.",
@@ -1652,6 +1657,12 @@ class MainFrame(wx.Frame):
         self.metadata_hydration_urls: set[str] = set()
         self.search_generation = 0
         self.last_activation_check = 0.0
+        self.settings_render_generation = 0
+        self.settings_pending_section_index = -1
+        self.settings_controls_applied_for_pending = False
+        self.shortcut_editor_values: dict[str, str] = {}
+        self.shortcut_editor_actions: list[str] = []
+        self.shortcut_editor_current_action = ""
         self.details_opened_temporarily = False
         self.nvda_client = self.load_nvda_client()
         self.update_progress_dialog: wx.ProgressDialog | None = None
@@ -1879,7 +1890,57 @@ class MainFrame(wx.Frame):
         control.ChangeValue(shortcut)
         control.SetInsertionPointEnd()
         control.SetFocus()
+        if action:
+            self.shortcut_editor_values[action] = shortcut
+            self.update_shortcut_action_label(action)
         self.speak_text(self.t("shortcut_captured", shortcut=shortcut))
+
+    def shortcut_label_key(self, wanted_action: str) -> str:
+        for action, label_key in SHORTCUT_DEFINITIONS:
+            if action == wanted_action:
+                return label_key
+        return wanted_action
+
+    def shortcut_display_label(self, action: str, shortcut: str) -> str:
+        label = self.t(self.shortcut_label_key(action))
+        return f"{label}: {shortcut or DEFAULT_KEYBOARD_SHORTCUTS.get(action, '')}"
+
+    def sync_shortcut_editor_value(self) -> None:
+        if not hasattr(self, "controls"):
+            return
+        control = self.controls.get("shortcut_active_value")
+        if not isinstance(control, wx.TextCtrl):
+            return
+        action = str(getattr(control, "_apricot_shortcut_action", "") or self.shortcut_editor_current_action)
+        if action:
+            self.shortcut_editor_current_action = action
+            self.shortcut_editor_values[action] = control.GetValue().strip() or DEFAULT_KEYBOARD_SHORTCUTS.get(action, "")
+
+    def update_shortcut_action_label(self, action: str) -> None:
+        control = self.controls.get("shortcut_action_list") if hasattr(self, "controls") else None
+        if not isinstance(control, wx.ListBox) or action not in self.shortcut_editor_actions:
+            return
+        index = self.shortcut_editor_actions.index(action)
+        try:
+            control.SetString(index, self.shortcut_display_label(action, self.shortcut_editor_values.get(action, "")))
+        except Exception:
+            pass
+
+    def on_shortcut_action_selected(self, _event) -> None:
+        self.sync_shortcut_editor_value()
+        list_control = self.controls.get("shortcut_action_list") if hasattr(self, "controls") else None
+        value_control = self.controls.get("shortcut_active_value") if hasattr(self, "controls") else None
+        if not isinstance(list_control, wx.ListBox) or not isinstance(value_control, wx.TextCtrl):
+            return
+        index = list_control.GetSelection()
+        if not (0 <= index < len(self.shortcut_editor_actions)):
+            return
+        action = self.shortcut_editor_actions[index]
+        self.shortcut_editor_current_action = action
+        shortcut = self.shortcut_editor_values.get(action) or DEFAULT_KEYBOARD_SHORTCUTS.get(action, "")
+        value_control.ChangeValue(shortcut)
+        value_control.SetName(f"{self.t('shortcut_value')}. {self.t(self.shortcut_label_key(action))}. {self.t('shortcut_capture_hint')}")
+        setattr(value_control, "_apricot_shortcut_action", action)
 
     def canonical_shortcut(self, shortcut: str) -> str:
         parsed = self.parse_shortcut(shortcut)
@@ -1917,14 +1978,20 @@ class MainFrame(wx.Frame):
     def current_shortcut_values_from_controls(self) -> dict[str, str]:
         values = self.normalized_keyboard_shortcuts(getattr(self.settings, "keyboard_shortcuts", {}) or {})
         if hasattr(self, "controls"):
-            for action, _label_key in SHORTCUT_DEFINITIONS:
-                control = self.controls.get(f"shortcut_{action}")
-                if isinstance(control, wx.TextCtrl):
-                    values[action] = control.GetValue().strip() or DEFAULT_KEYBOARD_SHORTCUTS[action]
+            if "shortcut_action_list" in self.controls and "shortcut_active_value" in self.controls:
+                self.sync_shortcut_editor_value()
+                values.update(self.shortcut_editor_values)
+            else:
+                for action, _label_key in SHORTCUT_DEFINITIONS:
+                    control = self.controls.get(f"shortcut_{action}")
+                    if isinstance(control, wx.TextCtrl):
+                        values[action] = control.GetValue().strip() or DEFAULT_KEYBOARD_SHORTCUTS[action]
         return values
 
     def validate_shortcut_controls(self) -> bool:
-        if not hasattr(self, "controls") or not any(f"shortcut_{action}" in self.controls for action, _label_key in SHORTCUT_DEFINITIONS):
+        has_shortcut_editor = hasattr(self, "controls") and "shortcut_action_list" in self.controls and "shortcut_active_value" in self.controls
+        has_legacy_controls = hasattr(self, "controls") and any(f"shortcut_{action}" in self.controls for action, _label_key in SHORTCUT_DEFINITIONS)
+        if not has_shortcut_editor and not has_legacy_controls:
             return True
         values = self.current_shortcut_values_from_controls()
         seen: dict[str, tuple[str, str]] = {}
@@ -1938,9 +2005,18 @@ class MainFrame(wx.Frame):
                 message = self.t("shortcut_in_use", shortcut=shortcut, action=self.t(other_label_key))
                 wx.MessageBox(message, self.t("shortcut_in_use_title"), wx.OK | wx.ICON_WARNING)
                 self.speak_text(message)
-                control = self.controls.get(f"shortcut_{action}") if hasattr(self, "controls") else None
-                if isinstance(control, wx.TextCtrl):
-                    self.safe_set_focus(control)
+                if has_shortcut_editor:
+                    list_control = self.controls.get("shortcut_action_list")
+                    value_control = self.controls.get("shortcut_active_value")
+                    if isinstance(list_control, wx.ListBox) and action in self.shortcut_editor_actions:
+                        list_control.SetSelection(self.shortcut_editor_actions.index(action))
+                        self.on_shortcut_action_selected(None)
+                    if isinstance(value_control, wx.TextCtrl):
+                        self.safe_set_focus(value_control)
+                else:
+                    control = self.controls.get(f"shortcut_{action}") if hasattr(self, "controls") else None
+                    if isinstance(control, wx.TextCtrl):
+                        self.safe_set_focus(control)
                 return False
             seen[canonical] = (action, label_key)
         return True
@@ -4296,7 +4372,11 @@ class MainFrame(wx.Frame):
         self.clear()
         self.add_button_row([(self.t("back"), self.show_main_menu), (self.t("save"), self.save_settings_from_ui), (self.t("restore_defaults"), self.restore_default_settings)])
         self.controls = {}
+        self.choice_values = {}
         self.settings_control_order = []
+        self.settings_render_generation = 0
+        self.settings_pending_section_index = -1
+        self.settings_controls_applied_for_pending = False
         sections = self.settings_sections()
         self.settings_section_index = min(max(0, self.settings_section_index), len(sections) - 1)
         body = wx.BoxSizer(wx.HORIZONTAL)
@@ -4329,12 +4409,38 @@ class MainFrame(wx.Frame):
 
     def on_settings_section_changed(self, event) -> None:
         event.Skip()
-        self.apply_settings_from_visible_controls()
-        self.settings_section_index = self.settings_section_list.GetSelection()
+        if not hasattr(self, "settings_section_list"):
+            return
+        new_index = self.settings_section_list.GetSelection()
+        if new_index < 0 or new_index == self.settings_section_index and self.settings_pending_section_index < 0:
+            return
+        if not self.settings_controls_applied_for_pending:
+            self.apply_settings_from_visible_controls()
+            self.settings_controls_applied_for_pending = True
+        self.settings_pending_section_index = new_index
+        self.settings_render_generation += 1
+        wx.CallLater(140, self.render_pending_settings_section, self.settings_render_generation)
+
+    def render_pending_settings_section(self, generation: int) -> None:
+        if generation != self.settings_render_generation or self.settings_pending_section_index < 0:
+            return
+        self.settings_section_index = self.settings_pending_section_index
+        self.settings_pending_section_index = -1
+        self.settings_controls_applied_for_pending = False
+        self.render_settings_section()
+
+    def flush_settings_section_render(self) -> None:
+        if self.settings_pending_section_index < 0:
+            return
+        self.settings_render_generation += 1
+        self.settings_section_index = self.settings_pending_section_index
+        self.settings_pending_section_index = -1
+        self.settings_controls_applied_for_pending = False
         self.render_settings_section()
 
     def on_settings_section_key(self, event: wx.KeyEvent) -> None:
         if event.GetKeyCode() == wx.WXK_RETURN:
+            self.flush_settings_section_render()
             self.focus_first_settings_control()
         else:
             event.Skip()
@@ -4500,15 +4606,33 @@ class MainFrame(wx.Frame):
             form.Add(wx.StaticText(self.settings_scroller, label=self.t("keyboard_shortcuts_help")), 0, wx.ALIGN_CENTER_VERTICAL)
             form.AddSpacer(1)
             shortcuts = self.normalized_keyboard_shortcuts(getattr(self.settings, "keyboard_shortcuts", {}) or {})
-            for action, label_key in SHORTCUT_DEFINITIONS:
-                form.Add(wx.StaticText(self.settings_scroller, label=self.t(label_key)), 0, wx.ALIGN_CENTER_VERTICAL)
-                ctrl = wx.TextCtrl(self.settings_scroller, value=shortcuts[action], style=wx.TE_PROCESS_ENTER)
-                ctrl.SetName(f"{self.t(label_key)}. {self.t('shortcut_capture_hint')}")
-                setattr(ctrl, "_apricot_shortcut_capture", True)
-                setattr(ctrl, "_apricot_shortcut_action", action)
-                ctrl.Bind(wx.EVT_KEY_DOWN, lambda evt, target=ctrl: self.on_shortcut_capture_key(evt, target))
-                form.Add(ctrl, 1, wx.EXPAND)
-                remember(f"shortcut_{action}", ctrl)
+            self.shortcut_editor_values = dict(shortcuts)
+            self.shortcut_editor_actions = [action for action, _label_key in SHORTCUT_DEFINITIONS]
+            if self.shortcut_editor_current_action not in self.shortcut_editor_actions:
+                self.shortcut_editor_current_action = self.shortcut_editor_actions[0] if self.shortcut_editor_actions else ""
+            selected_index = self.shortcut_editor_actions.index(self.shortcut_editor_current_action) if self.shortcut_editor_current_action in self.shortcut_editor_actions else 0
+            form.Add(wx.StaticText(self.settings_scroller, label=self.t("shortcut_actions")), 0, wx.ALIGN_CENTER_VERTICAL)
+            shortcut_list = wx.ListBox(
+                self.settings_scroller,
+                choices=[self.shortcut_display_label(action, self.shortcut_editor_values.get(action, "")) for action in self.shortcut_editor_actions],
+                style=wx.LB_SINGLE,
+            )
+            shortcut_list.SetName(self.t("shortcut_actions"))
+            shortcut_list.SetMinSize((-1, 260))
+            if self.shortcut_editor_actions:
+                shortcut_list.SetSelection(selected_index)
+            shortcut_list.Bind(wx.EVT_LISTBOX, self.on_shortcut_action_selected)
+            form.Add(shortcut_list, 1, wx.EXPAND)
+            remember("shortcut_action_list", shortcut_list)
+            form.Add(wx.StaticText(self.settings_scroller, label=self.t("shortcut_value")), 0, wx.ALIGN_CENTER_VERTICAL)
+            active_value = self.shortcut_editor_values.get(self.shortcut_editor_current_action, "")
+            shortcut_ctrl = wx.TextCtrl(self.settings_scroller, value=active_value, style=wx.TE_PROCESS_ENTER)
+            shortcut_ctrl.SetName(f"{self.t('shortcut_value')}. {self.t('shortcut_capture_hint')}")
+            setattr(shortcut_ctrl, "_apricot_shortcut_capture", True)
+            setattr(shortcut_ctrl, "_apricot_shortcut_action", self.shortcut_editor_current_action)
+            shortcut_ctrl.Bind(wx.EVT_KEY_DOWN, lambda evt, target=shortcut_ctrl: self.on_shortcut_capture_key(evt, target))
+            form.Add(shortcut_ctrl, 1, wx.EXPAND)
+            remember("shortcut_active_value", shortcut_ctrl)
 
         self.settings_scroller.SetSizer(form, True)
         self.settings_scroller.Layout()
@@ -7337,10 +7461,14 @@ class MainFrame(wx.Frame):
         if "subscription_notifications" in c:
             self.settings.subscription_notifications = c["subscription_notifications"].GetValue()
         shortcuts = dict(getattr(self.settings, "keyboard_shortcuts", {}) or {})
-        for action, _label_key in SHORTCUT_DEFINITIONS:
-            control_key = f"shortcut_{action}"
-            if control_key in c:
-                shortcuts[action] = c[control_key].GetValue().strip() or DEFAULT_KEYBOARD_SHORTCUTS[action]
+        if "shortcut_action_list" in c and "shortcut_active_value" in c:
+            self.sync_shortcut_editor_value()
+            shortcuts.update(self.shortcut_editor_values)
+        else:
+            for action, _label_key in SHORTCUT_DEFINITIONS:
+                control_key = f"shortcut_{action}"
+                if control_key in c:
+                    shortcuts[action] = c[control_key].GetValue().strip() or DEFAULT_KEYBOARD_SHORTCUTS[action]
         self.settings.keyboard_shortcuts = self.normalized_keyboard_shortcuts(shortcuts)
 
     def selected_choice_value(self, key: str) -> str:
@@ -7373,11 +7501,12 @@ class MainFrame(wx.Frame):
             current_version = str(import_module("yt_dlp.version").__version__)
         except Exception:
             current_version = str(getattr(ytdlp_module, "__version__", "0") or "0")
-        latest_version, wheel_url = self.fetch_latest_ytdlp_wheel()
+        latest_version, wheel_url, wheel_sha256 = self.fetch_latest_ytdlp_wheel()
         if not self.is_component_version_newer(latest_version, current_version):
             return False
         if not wheel_url:
             raise RuntimeError("yt-dlp wheel URL is empty")
+        self.validate_trusted_download_url(wheel_url, {"files.pythonhosted.org", "pypi.org", "pypi.python.org"})
         self.ui_queue.put(("announce", self.t("components_updating")))
         COMPONENTS_DIR.mkdir(parents=True, exist_ok=True)
         temp_dir = Path(tempfile.mkdtemp(prefix="apricotplayer-ytdlp-"))
@@ -7386,10 +7515,13 @@ class MainFrame(wx.Frame):
         try:
             request = Request(wheel_url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
             with self.open_url(request, timeout=120) as response, wheel_path.open("wb") as handle:
+                self.validate_https_response_url(response.geturl())
                 shutil.copyfileobj(response, handle)
+            if wheel_sha256:
+                self.verify_file_sha256(wheel_path, wheel_sha256)
             extract_dir.mkdir(parents=True, exist_ok=True)
             with zipfile.ZipFile(wheel_path) as archive:
-                archive.extractall(extract_dir)
+                self.safe_extract_zip(archive, extract_dir)
             package_source = extract_dir / "yt_dlp"
             if not package_source.exists():
                 raise RuntimeError("yt-dlp wheel did not contain yt_dlp package")
@@ -7418,7 +7550,7 @@ class MainFrame(wx.Frame):
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
-    def fetch_latest_ytdlp_wheel(self) -> tuple[str, str]:
+    def fetch_latest_ytdlp_wheel(self) -> tuple[str, str, str]:
         request = Request(YTDLP_PYPI_JSON_URL, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
         with self.open_url(request, timeout=30) as response:
             payload = json.loads(response.read().decode("utf-8"))
@@ -7427,7 +7559,8 @@ class MainFrame(wx.Frame):
         for item in urls:
             filename = str(item.get("filename") or "")
             if filename.endswith(".whl") and str(item.get("packagetype") or "") == "bdist_wheel":
-                return latest_version, str(item.get("url") or "")
+                digest = str(((item.get("digests") or {}).get("sha256")) or "")
+                return latest_version, str(item.get("url") or ""), digest
         raise RuntimeError("Could not find a yt-dlp wheel on PyPI")
 
     @staticmethod
@@ -7609,10 +7742,11 @@ class MainFrame(wx.Frame):
         try:
             self.ui_queue.put(("status", self.t("downloading_update", version=version)))
             temp_dir = Path(tempfile.mkdtemp(prefix="apricotplayer-update-"))
-            downloaded_path = temp_dir / asset["name"]
+            downloaded_path = temp_dir / self.safe_asset_filename(asset)
             self.log_update_event(f"Downloading update {version} to {downloaded_path}")
             self.download_update_asset(asset, downloaded_path, version)
             self.log_update_event(f"Downloaded update {version}; size={downloaded_path.stat().st_size}")
+            self.verify_release_asset_file(asset, downloaded_path)
             self.validate_update_package(downloaded_path)
             wx.CallAfter(self.update_app_update_finished, version)
             wx.CallAfter(self.finish_app_update_install, str(downloaded_path), version)
@@ -7624,8 +7758,10 @@ class MainFrame(wx.Frame):
         browser_url = str(asset.get("browser_download_url") or "")
         api_url = str(asset.get("url") or "")
         if browser_url:
+            self.validate_trusted_download_url(browser_url, {"github.com"})
             attempts.append((browser_url, self.github_headers("", accept="application/octet-stream")))
         if api_url:
+            self.validate_trusted_download_url(api_url, {"api.github.com"})
             attempts.append((api_url, self.github_headers("", accept="application/octet-stream")))
         if not attempts:
             raise RuntimeError("missing download url")
@@ -7634,6 +7770,7 @@ class MainFrame(wx.Frame):
             try:
                 request = Request(download_url, headers=headers)
                 with self.open_url(request, timeout=120) as response, downloaded_path.open("wb") as handle:
+                    self.validate_https_response_url(response.geturl())
                     total_header = response.headers.get("Content-Length")
                     total = int(total_header) if total_header and total_header.isdigit() else 0
                     downloaded = 0
@@ -7659,6 +7796,52 @@ class MainFrame(wx.Frame):
                 except Exception:
                     pass
         raise RuntimeError(last_error or "download failed")
+
+    @staticmethod
+    def safe_asset_filename(asset: dict) -> str:
+        name = Path(str(asset.get("name") or "")).name
+        if name not in {INSTALLER_ASSET_NAME, PORTABLE_ZIP_ASSET_NAME, LEGACY_PORTABLE_ZIP_ASSET_NAME}:
+            raise RuntimeError(f"unexpected update asset name: {name or 'missing'}")
+        return name
+
+    @staticmethod
+    def validate_trusted_download_url(download_url: str, allowed_hosts: set[str]) -> None:
+        parsed = urlparse(str(download_url or ""))
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme.lower() != "https" or host not in {allowed.lower() for allowed in allowed_hosts}:
+            raise RuntimeError(f"untrusted download URL: {download_url}")
+
+    @staticmethod
+    def validate_https_response_url(download_url: str) -> None:
+        parsed = urlparse(str(download_url or ""))
+        if parsed.scheme.lower() != "https":
+            raise RuntimeError(f"download redirected to a non-HTTPS URL: {download_url}")
+
+    @staticmethod
+    def file_sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    @classmethod
+    def verify_file_sha256(cls, path: Path, expected_sha256: str) -> None:
+        expected = str(expected_sha256 or "").strip().lower()
+        if expected.startswith("sha256:"):
+            expected = expected.split(":", 1)[1]
+        if not expected:
+            return
+        actual = cls.file_sha256(path)
+        if actual.lower() != expected:
+            raise RuntimeError("downloaded file checksum did not match the published SHA-256 digest")
+
+    @classmethod
+    def verify_release_asset_file(cls, asset: dict, path: Path) -> None:
+        expected_size = asset.get("size")
+        if isinstance(expected_size, int) and expected_size > 0 and path.stat().st_size != expected_size:
+            raise RuntimeError("downloaded update size did not match the GitHub release asset size")
+        cls.verify_file_sha256(path, str(asset.get("digest") or ""))
 
     def finish_app_update_install(self, downloaded_path: str, version: str) -> None:
         if not getattr(sys, "frozen", False):
@@ -7692,12 +7875,38 @@ class MainFrame(wx.Frame):
         return name in {PORTABLE_ZIP_ASSET_NAME.lower(), LEGACY_PORTABLE_ZIP_ASSET_NAME.lower()} or (name.endswith(".zip") and "apricotplayer" in name)
 
     @staticmethod
-    def validate_update_package(path: Path) -> None:
+    def validate_zip_member_path(member_name: str) -> None:
+        normalized = member_name.replace("\\", "/")
+        if not normalized or normalized.startswith("/") or re.match(r"^[A-Za-z]:", normalized):
+            raise RuntimeError("zip package contains an unsafe absolute path")
+        parts = [part for part in normalized.split("/") if part]
+        if any(part == ".." for part in parts):
+            raise RuntimeError("zip package contains an unsafe parent-directory path")
+
+    @classmethod
+    def safe_extract_zip(cls, archive: zipfile.ZipFile, target_dir: Path) -> None:
+        target_root = target_dir.resolve()
+        for member in archive.infolist():
+            cls.validate_zip_member_path(member.filename)
+            destination = (target_root / member.filename).resolve()
+            try:
+                destination.relative_to(target_root)
+            except ValueError:
+                raise RuntimeError("zip package member would extract outside the target directory") from None
+        archive.extractall(target_root)
+
+    @classmethod
+    def validate_update_package(cls, path: Path) -> None:
         if not path.exists() or path.stat().st_size < 1024 * 1024:
             raise RuntimeError("downloaded update is not a valid package")
         if MainFrame.is_portable_zip_asset(path):
             if not zipfile.is_zipfile(path):
                 raise RuntimeError("downloaded portable update is not a valid zip file")
+            with zipfile.ZipFile(path) as archive:
+                for member in archive.infolist():
+                    cls.validate_zip_member_path(member.filename)
+                if not any(Path(member.filename.replace("\\", "/")).name.lower() == "apricotplayer.exe" for member in archive.infolist()):
+                    raise RuntimeError("downloaded portable update does not contain ApricotPlayer.exe")
             return
         with path.open("rb") as handle:
             if handle.read(2) != b"MZ":
@@ -7966,6 +8175,12 @@ class MainFrame(wx.Frame):
             os._exit(0)
 
     def fetch_latest_release(self) -> dict | None:
+        try:
+            releases = self.fetch_public_releases()
+            if releases:
+                return releases[0]
+        except Exception:
+            pass
         latest_request = Request(
             GITHUB_LATEST_RELEASE_API_URL,
             headers=self.github_headers(""),
@@ -8025,14 +8240,6 @@ class MainFrame(wx.Frame):
             for asset in assets:
                 if asset.get("name") == preferred_name:
                     return asset
-        for predicate in (self.is_portable_zip_asset, self.is_installer_asset):
-            for asset in assets:
-                if predicate(str(asset.get("name") or "")):
-                    return asset
-        for asset in assets:
-            name = str(asset.get("name") or "").lower()
-            if name.endswith(".exe"):
-                return asset
         return None
 
     @staticmethod
@@ -8072,15 +8279,20 @@ class MainFrame(wx.Frame):
         return body
 
     @staticmethod
-    def parse_version(value: str) -> tuple[int, int, int, int, int]:
-        match = re.match(r"^v?(\d+)\.(\d+)(?:\.(\d+))?(?:-([A-Za-z]+)(?:[.-]?(\d+))?)?$", value.strip())
+    def parse_version(value: str) -> tuple[int, int, int, int, int, int]:
+        match = re.match(r"^v?(\d+)\.(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([A-Za-z]+)(?:[.-]?(\d+))?)?$", value.strip())
         if not match:
-            return (0, 0, 0, 0, 0)
-        major, minor, patch = (int(match.group(1)), int(match.group(2)), int(match.group(3) or 0))
-        stage_name = (match.group(4) or "").lower()
-        stage_number = int(match.group(5) or 0)
+            return (0, 0, 0, 0, 0, 0)
+        major, minor, patch, hotfix = (
+            int(match.group(1)),
+            int(match.group(2)),
+            int(match.group(3) or 0),
+            int(match.group(4) or 0),
+        )
+        stage_name = (match.group(5) or "").lower()
+        stage_number = int(match.group(6) or 0)
         stage_rank = {"alpha": 1, "beta": 2, "rc": 3}.get(stage_name, 4)
-        return (major, minor, patch, stage_rank, stage_number)
+        return (major, minor, patch, hotfix, stage_rank, stage_number)
 
     @classmethod
     def is_newer_version(cls, remote_version: str, current_version: str) -> bool:

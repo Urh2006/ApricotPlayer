@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.6.9.1` (`0.6.9.1`)
+Current version: `0.6.10` (`0.6.10`)
 
 ## Download
 
@@ -54,6 +54,7 @@ py wx_main.py
 - Player repeat checkbox and finished-video restart behavior when pressing Space or Play
 - UI languages: English, Slovenian, German, French, Spanish, Portuguese, Italian, Polish, Dutch, Swedish, Croatian, Serbian, Czech, Slovak, Hungarian, Romanian, Turkish, Ukrainian, Russian, Japanese, Korean, Chinese Simplified, Arabic, Hindi, Indonesian, Finnish, and Greek
 - Configurable keyboard shortcuts in Settings, captured by pressing the desired key combination, with duplicate shortcut warnings
+- Keyboard shortcut settings use a lightweight action list and one capture field for faster screen reader navigation
 - Braille-friendly NVDA announcements using speech, braille messages, and status bar accessibility events
 - Focus-preserving search result updates while background metadata is filled in
 - Stale search protection prevents older background searches from replacing newer results
@@ -61,6 +62,7 @@ py wx_main.py
 - Dynamic search mode is the default for new settings, loading results in chunks of 20
 - Dynamic result metadata hydration covers newly loaded result pages, not only the first page
 - GitHub release updater for installed and packaged builds, with installer updates applied to the exact running install folder and restarted from the newly installed executable
+- Update downloads are hardened with trusted asset names, HTTPS checks, GitHub/PyPI SHA-256 verification when published, and safe ZIP extraction checks
 - Updater HTTPS checks use the bundled `certifi` certificate store for more reliable GitHub access
 - yt-dlp component updater that can refresh the Python package into `%APPDATA%\ApricotPlayer\components` and only announces component updating when an update is actually being installed
 - Per-user settings in `%APPDATA%\ApricotPlayer\settings.json`
