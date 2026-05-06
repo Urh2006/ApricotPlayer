@@ -1,5 +1,15 @@
 # Changelog
 
+## What's new in version 0.6.9
+
+- fixed History so pressing Enter on a history item reliably opens playback for videos, podcast episodes, and other saved playable links
+- changed second-launch behavior so starting ApricotPlayer again restores and focuses the existing window, including when it is hidden in the system tray, instead of opening an "already open" dialog
+- added a Settings entry for whether ApricotPlayer shows a Windows notification when it is sent to the system tray
+- added Settings to the tray icon menu and made tray icon activation restore ApricotPlayer directly while keeping the existing Show ApricotPlayer menu item
+- added a Repeat checkbox to the player and made Space/Play restart a finished video from the beginning when automatic next playback is off
+- changed new-user playback defaults to MPV pitch control and Rubberband speed audio processing as the recommended quality settings
+- reduced startup disk writes by only creating the settings file on first run instead of rewriting it on every launch
+
 ## What's new in version 0.6.8
 
 - added stale-search protection so older background searches, channel loads, and playlist loads cannot replace newer results after the user has already moved on

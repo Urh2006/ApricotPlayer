@@ -102,13 +102,14 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.8"
-APP_VERSION_LABEL = "0.6.8"
+APP_VERSION = "0.6.9"
+APP_VERSION_LABEL = "0.6.9"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
 UPDATE_RELAUNCH_ARG = "--updated-relaunch"
 UPDATE_RELAUNCH_SENTINEL = APP_DIR / "updated-relaunch.json"
+ACTIVATE_SIGNAL_FILE = APP_DIR / "activate.json"
 SETTINGS_FILE = APP_DIR / "settings.json"
 FAVORITES_FILE = APP_DIR / "favorites.json"
 HISTORY_FILE = APP_DIR / "history.json"
@@ -138,13 +139,15 @@ YTDLP_PYPI_JSON_URL = "https://pypi.org/pypi/yt-dlp/json"
 PLAYBACK_SPEED_STEPS = [0.25, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1.0, 1.1, 1.2, 1.25, 1.3, 1.4, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0]
 PITCH_STEPS = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0]
 DEFAULT_REACHED_SOUND = "default_reached.wav"
-PITCH_MODE_RUBBERBAND = "Independent pitch - best quality (Rubberband)"
-PITCH_MODE_MPV = "Independent pitch - basic (mpv built-in)"
+PITCH_MODE_RUBBERBAND = "Independent pitch - advanced (Rubberband)"
+PITCH_MODE_MPV = "Independent pitch - highest quality (mpv built-in)"
 PITCH_MODE_LINKED_SPEED = "Linked pitch and speed - pitch keys change both"
 PITCH_MODE_OPTIONS = [PITCH_MODE_RUBBERBAND, PITCH_MODE_MPV, PITCH_MODE_LINKED_SPEED]
 LEGACY_PITCH_MODE_RUBBERBAND = "rubberband"
 LEGACY_PITCH_MODE_MPV = "mpv pitch"
 LEGACY_PITCH_MODE_LINKED_SPEED = "linked speed"
+LEGACY_PITCH_MODE_RUBBERBAND_LABEL = "independent pitch - best quality (rubberband)"
+LEGACY_PITCH_MODE_MPV_LABEL = "independent pitch - basic (mpv built-in)"
 RUBBERBAND_FILTER_LABEL = "apricot_pitch"
 RUBBERBAND_FILTER_REF = f"@{RUBBERBAND_FILTER_LABEL}"
 RATE_STEP_OPTIONS = ["0.01", "0.02", "0.05", "0.10", "0.25"]
@@ -469,14 +472,14 @@ TEXT = {
         "speed_step": "Korak hitrosti predvajanja",
         "pitch_step": "Korak pitcha",
         "pitch_mode": "Nacin pitch kontrole",
-        "pitch_mode_rubberband": "Neodvisna visina tona - najboljsa kakovost (Rubberband)",
-        "pitch_mode_mpv": "Neodvisna visina tona - osnovno (mpv)",
+        "pitch_mode_rubberband": "Neodvisna visina tona - Rubberband (napredno)",
+        "pitch_mode_mpv": "Neodvisna visina tona - MPV (najboljsa kakovost, priporoceno)",
         "pitch_mode_linked_speed": "Povezana visina tona in hitrost - tipke za visino tona spremenijo oboje",
         "speed_audio_mode": "Kakovost zvoka pri spremembi hitrosti",
-        "speed_audio_mode_scaletempo2": "Visoka kakovost scaletempo2 (priporoceno)",
+        "speed_audio_mode_scaletempo2": "Visoka kakovost scaletempo2",
         "speed_audio_mode_mpv": "mpv privzeto scaletempo2",
         "speed_audio_mode_scaletempo": "Klasicni scaletempo",
-        "speed_audio_mode_rubberband": "Rubberband visoka kakovost",
+        "speed_audio_mode_rubberband": "Rubberband visoka kakovost (priporoceno)",
         "auto_update": "Ob vsakem zagonu preveri posodobitve yt-dlp",
         "autoplay_next": "Po koncu posnetka samodejno predvajaj naslednjega",
         "show_video_details_by_default": "Privzeto pokazi podrobnosti videa v predvajalniku",
@@ -490,6 +493,11 @@ TEXT = {
         "select_output_device": "Izberi izhodno zvocno napravo",
         "output_device_set": "Izhodna zvocna naprava nastavljena: {device}.",
         "no_output_devices": "Ni najdenih izhodnih zvocnih naprav.",
+        "repeat": "Ponavljaj",
+        "repeat_on": "Ponavljanje vklopljeno.",
+        "repeat_off": "Ponavljanje izklopljeno.",
+        "playback_restarted": "Predvajanje znova od zacetka.",
+        "playback_finished": "Predvajanje koncano.",
         "previous": "Prejsnji",
         "next": "Naslednji",
         "show_video_details": "Pokazi podrobnosti videa",
@@ -849,9 +857,11 @@ TEXT = {
         "subscription_check_enabled": "Check subscriptions automatically",
         "subscription_check_interval": "Subscription check interval in hours",
         "close_to_tray": "Close button or Alt+F4 sends ApricotPlayer to system tray",
+        "tray_notification": "Windows notification when ApricotPlayer goes to the system tray",
         "tray_still_running": "ApricotPlayer is still running in the system tray.",
         "already_open": "ApricotPlayer is already open.",
         "tray_show": "Show ApricotPlayer",
+        "tray_settings": "Settings",
         "tray_check_subscriptions": "Check subscriptions",
         "tray_exit": "Exit ApricotPlayer",
         "notification_subscription_title": "New YouTube videos",
@@ -866,8 +876,8 @@ TEXT = {
         "speed_step": "Playback speed key step",
         "pitch_step": "Pitch key step",
         "pitch_mode": "Pitch control mode",
-        "pitch_mode_rubberband": "Independent pitch - best quality (Rubberband)",
-        "pitch_mode_mpv": "Independent pitch - basic (mpv built-in)",
+        "pitch_mode_rubberband": "Independent pitch - Rubberband (advanced)",
+        "pitch_mode_mpv": "Independent pitch - MPV (highest quality, recommended)",
         "pitch_mode_linked_speed": "Linked pitch and speed - pitch keys change both",
         "auto_update": "Check yt-dlp updates on every startup",
         "autoplay_next": "Automatically play next item",
@@ -1024,6 +1034,11 @@ TEXT["en"].update(
         "select_output_device": "Select audio output device",
         "output_device_set": "Audio output device set to {device}.",
         "no_output_devices": "No audio output devices were found.",
+        "repeat": "Repeat",
+        "repeat_on": "Repeat on.",
+        "repeat_off": "Repeat off.",
+        "playback_restarted": "Playback restarted from the beginning.",
+        "playback_finished": "Playback finished.",
         "previous": "Previous",
         "next": "Next",
         "show_video_details": "Show video details",
@@ -1032,10 +1047,10 @@ TEXT["en"].update(
         "no_previous_item": "No previous item.",
         "no_next_item": "No next item.",
         "speed_audio_mode": "Audio quality when changing speed",
-        "speed_audio_mode_scaletempo2": "High quality scaletempo2 (recommended)",
+        "speed_audio_mode_scaletempo2": "High quality scaletempo2",
         "speed_audio_mode_mpv": "mpv default scaletempo2",
         "speed_audio_mode_scaletempo": "Classic scaletempo",
-        "speed_audio_mode_rubberband": "Rubberband high quality",
+        "speed_audio_mode_rubberband": "Rubberband high quality (recommended)",
         "show_video_details_by_default": "Show video details in the player by default",
         "direct_link_enter_action": "What Enter does in Direct link",
         "direct_link_enter_play": "Play link",
@@ -1058,6 +1073,13 @@ TEXT["sl"].update(
         "shortcut_captured": "Bliznjica nastavljena na {shortcut}.",
         "shortcut_in_use": "{shortcut} je ze nastavljen za {action}. Izberi drugo bliznjico.",
         "shortcut_in_use_title": "Bliznjica je ze v uporabi",
+        "tray_notification": "Windows obvestilo, ko gre ApricotPlayer v system tray",
+        "tray_settings": "Nastavitve",
+        "repeat": "Ponavljaj",
+        "repeat_on": "Ponavljanje vklopljeno.",
+        "repeat_off": "Ponavljanje izklopljeno.",
+        "playback_restarted": "Predvajanje znova od zacetka.",
+        "playback_finished": "Predvajanje koncano.",
     }
 )
 SUPPLEMENTAL_TRANSLATIONS = {
@@ -1312,6 +1334,116 @@ SUPPLEMENTAL_TRANSLATIONS = {
         "dynamic_results": "Dinamicki (ucitava po 20 rezultata)",
     },
 }
+SUPPLEMENTAL_TRANSLATIONS.setdefault("de", {}).update(
+    {
+        "tray_notification": "Windows-Benachrichtigung, wenn ApricotPlayer in den Infobereich geht",
+        "tray_settings": "Einstellungen",
+        "repeat": "Wiederholen",
+        "repeat_on": "Wiederholen ein.",
+        "repeat_off": "Wiederholen aus.",
+        "playback_restarted": "Wiedergabe von Anfang neu gestartet.",
+        "playback_finished": "Wiedergabe beendet.",
+    }
+)
+SUPPLEMENTAL_TRANSLATIONS.setdefault("fr", {}).update(
+    {
+        "tray_notification": "Notification Windows quand ApricotPlayer va dans la zone de notification",
+        "tray_settings": "Parametres",
+        "repeat": "Repeter",
+        "repeat_on": "Repetition activee.",
+        "repeat_off": "Repetition desactivee.",
+        "playback_restarted": "Lecture relancee depuis le debut.",
+        "playback_finished": "Lecture terminee.",
+    }
+)
+SUPPLEMENTAL_TRANSLATIONS.setdefault("es", {}).update(
+    {
+        "tray_notification": "Notificacion de Windows cuando ApricotPlayer va a la bandeja",
+        "tray_settings": "Configuracion",
+        "repeat": "Repetir",
+        "repeat_on": "Repeticion activada.",
+        "repeat_off": "Repeticion desactivada.",
+        "playback_restarted": "Reproduccion reiniciada desde el principio.",
+        "playback_finished": "Reproduccion terminada.",
+    }
+)
+SUPPLEMENTAL_TRANSLATIONS.setdefault("pt", {}).update(
+    {
+        "tray_notification": "Notificacao do Windows quando ApricotPlayer vai para a bandeja",
+        "tray_settings": "Configuracoes",
+        "repeat": "Repetir",
+        "repeat_on": "Repeticao ativada.",
+        "repeat_off": "Repeticao desativada.",
+        "playback_restarted": "Reproducao reiniciada desde o inicio.",
+        "playback_finished": "Reproducao concluida.",
+    }
+)
+SUPPLEMENTAL_TRANSLATIONS.setdefault("it", {}).update(
+    {
+        "tray_notification": "Notifica di Windows quando ApricotPlayer va nell'area di notifica",
+        "tray_settings": "Impostazioni",
+        "repeat": "Ripeti",
+        "repeat_on": "Ripetizione attiva.",
+        "repeat_off": "Ripetizione disattivata.",
+        "playback_restarted": "Riproduzione riavviata dall'inizio.",
+        "playback_finished": "Riproduzione terminata.",
+    }
+)
+SUPPLEMENTAL_TRANSLATIONS.setdefault("pl", {}).update(
+    {
+        "tray_notification": "Powiadomienie Windows, gdy ApricotPlayer przechodzi do zasobnika",
+        "tray_settings": "Ustawienia",
+        "repeat": "Powtarzaj",
+        "repeat_on": "Powtarzanie wlaczone.",
+        "repeat_off": "Powtarzanie wylaczone.",
+        "playback_restarted": "Odtwarzanie uruchomione od poczatku.",
+        "playback_finished": "Odtwarzanie zakonczone.",
+    }
+)
+SUPPLEMENTAL_TRANSLATIONS.setdefault("nl", {}).update(
+    {
+        "tray_notification": "Windows-melding wanneer ApricotPlayer naar het systeemvak gaat",
+        "tray_settings": "Instellingen",
+        "repeat": "Herhalen",
+        "repeat_on": "Herhalen aan.",
+        "repeat_off": "Herhalen uit.",
+        "playback_restarted": "Afspelen opnieuw gestart vanaf het begin.",
+        "playback_finished": "Afspelen voltooid.",
+    }
+)
+SUPPLEMENTAL_TRANSLATIONS.setdefault("sv", {}).update(
+    {
+        "tray_notification": "Windows-meddelande nar ApricotPlayer gar till systemfaltet",
+        "tray_settings": "Installningar",
+        "repeat": "Upprepa",
+        "repeat_on": "Upprepning pa.",
+        "repeat_off": "Upprepning av.",
+        "playback_restarted": "Uppspelning startad om fran borjan.",
+        "playback_finished": "Uppspelning klar.",
+    }
+)
+SUPPLEMENTAL_TRANSLATIONS.setdefault("hr", {}).update(
+    {
+        "tray_notification": "Windows obavijest kada ApricotPlayer ode u sistemsku traku",
+        "tray_settings": "Postavke",
+        "repeat": "Ponavljaj",
+        "repeat_on": "Ponavljanje ukljuceno.",
+        "repeat_off": "Ponavljanje iskljuceno.",
+        "playback_restarted": "Reprodukcija ponovno pokrenuta od pocetka.",
+        "playback_finished": "Reprodukcija zavrsena.",
+    }
+)
+SUPPLEMENTAL_TRANSLATIONS.setdefault("sr", {}).update(
+    {
+        "tray_notification": "Windows obavestenje kada ApricotPlayer ode u sistemsku traku",
+        "tray_settings": "Podesavanja",
+        "repeat": "Ponavljaj",
+        "repeat_on": "Ponavljanje ukljuceno.",
+        "repeat_off": "Ponavljanje iskljuceno.",
+        "playback_restarted": "Reprodukcija ponovo pokrenuta od pocetka.",
+        "playback_finished": "Reprodukcija zavrsena.",
+    }
+)
 for language_code, translations in SUPPLEMENTAL_TRANSLATIONS.items():
     TEXT.setdefault(language_code, {}).update(translations)
 for language_code in LANGUAGE_CODES:
@@ -1332,7 +1464,7 @@ class Settings:
     player_fullscreen: bool = False
     player_start_paused: bool = False
     player_speed: str = "1.0"
-    speed_audio_mode: str = SPEED_AUDIO_MODE_SCALETEMPO2
+    speed_audio_mode: str = SPEED_AUDIO_MODE_RUBBERBAND
     show_video_details_by_default: bool = False
     direct_link_enter_action: str = DIRECT_LINK_ENTER_PLAY
     enable_stream_cache: bool = True
@@ -1342,7 +1474,7 @@ class Settings:
     audio_output_device: str = "auto"
     speed_step: float = 0.01
     pitch_step: float = 0.01
-    pitch_mode: str = PITCH_MODE_RUBBERBAND
+    pitch_mode: str = PITCH_MODE_MPV
     quiet_downloads: bool = False
     keep_playlist_order: bool = True
     filename_template: str = DEFAULT_FILENAME_TEMPLATE
@@ -1374,6 +1506,7 @@ class Settings:
     retries: int = 10
     socket_timeout: int = 20
     close_to_tray: bool = False
+    tray_notification: bool = True
     subscription_check_enabled: bool = True
     subscription_check_interval_hours: int = 6
     windows_notifications: bool = True
@@ -1398,10 +1531,15 @@ class ApricotTaskBarIcon(wx.adv.TaskBarIcon):
         super().__init__()
         self.frame = frame
         self.show_id = wx.NewIdRef()
+        self.settings_id = wx.NewIdRef()
         self.check_id = wx.NewIdRef()
         self.exit_id = wx.NewIdRef()
-        self.Bind(wx.adv.EVT_TASKBAR_LEFT_DCLICK, lambda _event: self.frame.restore_from_tray())
+        for event_name in ("EVT_TASKBAR_CLICK", "EVT_TASKBAR_LEFT_DOWN", "EVT_TASKBAR_LEFT_UP", "EVT_TASKBAR_LEFT_DCLICK"):
+            event_binder = getattr(wx.adv, event_name, None)
+            if event_binder is not None:
+                self.Bind(event_binder, lambda _event: self.frame.restore_from_tray())
         self.Bind(wx.EVT_MENU, lambda _event: self.frame.restore_from_tray(), id=int(self.show_id))
+        self.Bind(wx.EVT_MENU, lambda _event: self.frame.show_settings_from_tray(), id=int(self.settings_id))
         self.Bind(wx.EVT_MENU, lambda _event: self.frame.check_subscriptions(manual=True), id=int(self.check_id))
         self.Bind(wx.EVT_MENU, lambda _event: self.frame.quit_application(), id=int(self.exit_id))
         self.SetIcon(self.make_icon(), APP_NAME)
@@ -1409,6 +1547,7 @@ class ApricotTaskBarIcon(wx.adv.TaskBarIcon):
     def CreatePopupMenu(self) -> wx.Menu:
         menu = wx.Menu()
         menu.Append(int(self.show_id), self.frame.t("tray_show"))
+        menu.Append(int(self.settings_id), self.frame.t("tray_settings"))
         menu.Append(int(self.check_id), self.frame.t("tray_check_subscriptions"))
         menu.AppendSeparator()
         menu.Append(int(self.exit_id), self.frame.t("tray_exit"))
@@ -1426,8 +1565,10 @@ class MainFrame(wx.Frame):
     def __init__(self) -> None:
         super().__init__(None, title=WINDOW_TITLE, size=(950, 680))
         APP_DIR.mkdir(parents=True, exist_ok=True)
+        settings_file_existed = SETTINGS_FILE.exists()
         self.settings = self.load_settings()
-        self.save_settings()
+        if not settings_file_existed:
+            self.save_settings()
         self.favorites = self.load_favorites()
         self.history = self.load_history()
         self.subscriptions = self.load_subscriptions()
@@ -1473,6 +1614,9 @@ class MainFrame(wx.Frame):
         self.rubberband_pitch_filter_active = False
         self.in_player_screen = False
         self.in_queue_screen = False
+        self.repeat_current = False
+        self.player_generation = 0
+        self.player_ended = False
         self.current_video_item: dict | None = None
         self.current_video_info: dict = {}
         self.details_label: wx.StaticText | None = None
@@ -1497,6 +1641,7 @@ class MainFrame(wx.Frame):
         self.audio_device_options_cache: tuple[float, list[str], list[str]] | None = None
         self.metadata_hydration_urls: set[str] = set()
         self.search_generation = 0
+        self.last_activation_check = 0.0
         self.details_opened_temporarily = False
         self.nvda_client = self.load_nvda_client()
         self.update_progress_dialog: wx.ProgressDialog | None = None
@@ -1994,15 +2139,46 @@ class MainFrame(wx.Frame):
         event.Veto()
         self.Hide()
         self.announce_player(self.t("tray_still_running"))
-        self.show_desktop_notification(APP_NAME, self.t("tray_still_running"))
+        self.show_desktop_notification(APP_NAME, self.t("tray_still_running"), enabled=self.settings.tray_notification)
 
     def restore_from_tray(self) -> None:
-        self.Show()
+        try:
+            if self.IsIconized():
+                self.Iconize(False)
+        except Exception:
+            pass
+        self.Show(True)
+        try:
+            self.RequestUserAttention(wx.USER_ATTENTION_INFO)
+        except Exception:
+            pass
         self.Raise()
         if hasattr(self, "menu_list") and self.in_main_menu:
             self.focus_later(self.menu_list)
         else:
             self.SetFocus()
+
+    def show_settings_from_tray(self) -> None:
+        self.restore_from_tray()
+        wx.CallAfter(self.show_settings)
+
+    def check_activation_signal(self) -> None:
+        now = time.monotonic()
+        if now - self.last_activation_check < 0.2:
+            return
+        self.last_activation_check = now
+        try:
+            if not ACTIVATE_SIGNAL_FILE.exists():
+                return
+            payload = json.loads(ACTIVATE_SIGNAL_FILE.read_text(encoding="utf-8"))
+            ACTIVATE_SIGNAL_FILE.unlink(missing_ok=True)
+        except Exception:
+            return
+        action = str(payload.get("action") or "show")
+        if action == "settings":
+            self.show_settings_from_tray()
+        else:
+            self.restore_from_tray()
 
     def quit_application(self) -> None:
         self.exiting = True
@@ -3075,8 +3251,10 @@ class MainFrame(wx.Frame):
 
     def play_history_item(self) -> None:
         item = self.selected_history_item()
-        if item:
-            self.open_library_item(item, "history")
+        if not item or not item.get("url"):
+            self.announce_player(self.t("no_selection"))
+            return
+        self.open_library_item(dict(item), "history")
 
     def remove_history_item(self) -> None:
         if not hasattr(self, "history_list"):
@@ -4222,6 +4400,7 @@ class MainFrame(wx.Frame):
             check("auto_update_app", self.settings.auto_update_app)
             button("check_app_updates_now", self.manual_app_update_check)
             check("close_to_tray", self.settings.close_to_tray)
+            check("tray_notification", self.settings.tray_notification)
         elif section_name == "playback":
             choice("player_speed", self.settings.player_speed, [self.format_playback_rate(step) for step in PLAYBACK_SPEED_STEPS if step <= 2.0])
             choice("speed_audio_mode", self.normalized_speed_audio_mode(), SPEED_AUDIO_MODE_OPTIONS, self.speed_audio_mode_labels())
@@ -4920,9 +5099,11 @@ class MainFrame(wx.Frame):
                 "--force-window=yes",
                 f"--input-ipc-server={self.ipc_path}",
                 "--idle=no",
+                "--keep-open=yes",
                 "--volume-max=300",
                 "--pitch=1.0",
                 f"--speed={self.settings.player_speed}",
+                f"--loop-file={'inf' if self.repeat_current else 'no'}",
                 "--term-playing-msg=",
                 "--msg-level=all=warn",
             ]
@@ -4976,6 +5157,8 @@ class MainFrame(wx.Frame):
             )
             self.player_kind = "mpv"
             self.player_control_mode = True
+            self.player_ended = False
+            self.player_generation += 1
             self.current_stream_url = stream_url
             self.current_audio_device = audio_device
             self.volume_boost_enabled = False
@@ -4984,6 +5167,7 @@ class MainFrame(wx.Frame):
             self.current_video_info["pitch"] = self.format_playback_rate(1.0)
             self.update_details_text()
             self.set_status(self.t("playing", title=title))
+            self.start_player_monitor(self.player_generation)
         except Exception as exc:
             self.message(self.t("player_failed", error=exc), wx.ICON_ERROR)
 
@@ -5006,7 +5190,7 @@ class MainFrame(wx.Frame):
             [
                 (self.t("back_results"), self.back_to_results),
                 (self.t("previous"), lambda: self.play_relative_item(-1)),
-                (self.t("play"), lambda: self.player_command("cycle pause")),
+                (self.t("play"), self.player_play_pause),
                 (self.t("next"), lambda: self.play_relative_item(1)),
                 (self.t("output_devices"), self.show_output_devices),
                 (self.t("copy_link"), self.copy_active_url),
@@ -5016,6 +5200,11 @@ class MainFrame(wx.Frame):
         )
         label = wx.StaticText(self.panel, label=f"{self.t('internal_player')}: {title}")
         self.root_sizer.Add(label, 0, wx.ALL, 4)
+        self.repeat_checkbox = wx.CheckBox(self.panel, label=self.t("repeat"))
+        self.repeat_checkbox.SetName(self.t("repeat"))
+        self.repeat_checkbox.SetValue(self.repeat_current)
+        self.repeat_checkbox.Bind(wx.EVT_CHECKBOX, self.on_repeat_changed)
+        self.root_sizer.Add(self.repeat_checkbox, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
         self.player_panel = wx.Panel(self.panel, style=wx.BORDER_SIMPLE)
         self.player_panel.SetName(self.t("internal_player"))
         self.player_panel.SetBackgroundColour(wx.BLACK)
@@ -5036,6 +5225,16 @@ class MainFrame(wx.Frame):
 
     def on_player_key(self, event: wx.KeyEvent) -> None:
         self.on_char_hook(event)
+
+    def on_repeat_changed(self, _event=None) -> None:
+        checked = bool(getattr(self, "repeat_checkbox", None) and self.repeat_checkbox.GetValue())
+        self.repeat_current = checked
+        if self.player_kind == "mpv" and self.mpv_process_alive():
+            try:
+                self.mpv_set_property("loop-file", "inf" if checked else "no", timeout=0.8)
+            except Exception:
+                pass
+        self.announce_player(self.t("repeat_on" if checked else "repeat_off"))
 
     def back_to_results(self) -> None:
         self.stop_player(silent=True)
@@ -5362,11 +5561,15 @@ class MainFrame(wx.Frame):
             else:
                 self.open_playlist_videos(item, push_state=False)
             return
+        url = str(item.get("url") or "")
+        if not url:
+            self.announce_player(self.t("no_selection"))
+            return
         self.current_video_item = item
         self.current_video_info = dict(item)
         self.player_return_screen = screen
         self.player_return_data = {}
-        self.play_url(item["url"], item.get("title", ""))
+        self.play_url(url, item.get("title", ""))
 
     def next_download_task_id(self, prefix: str = "download") -> str:
         self.download_task_counter += 1
@@ -5425,6 +5628,80 @@ class MainFrame(wx.Frame):
             self.show_main_menu()
         except RuntimeError:
             pass
+
+    def start_player_monitor(self, generation: int) -> None:
+        threading.Thread(target=self.player_monitor_worker, args=(generation,), daemon=True).start()
+
+    def player_monitor_worker(self, generation: int) -> None:
+        while generation == self.player_generation and self.mpv_process_alive():
+            time.sleep(0.5)
+            if generation != self.player_generation or not self.mpv_process_alive():
+                return
+            try:
+                eof_reached = bool(self.mpv_get_property("eof-reached", timeout=0.25))
+            except Exception:
+                eof_reached = False
+            if eof_reached:
+                wx.CallAfter(self.handle_player_eof, generation)
+                return
+
+    def handle_player_eof(self, generation: int) -> None:
+        if generation != self.player_generation or not self.in_player_screen:
+            return
+        if self.mpv_process_alive():
+            try:
+                if not bool(self.mpv_get_property("eof-reached", timeout=0.15)):
+                    return
+            except Exception:
+                pass
+        if self.repeat_current:
+            self.player_ended = False
+            return
+        if self.settings.autoplay_next:
+            next_item = self.relative_player_item(1)
+            if next_item:
+                self.open_relative_player_item(next_item)
+                return
+        self.player_ended = True
+        self.announce_player(self.t("playback_finished"))
+
+    def player_play_pause(self) -> None:
+        if self.player_kind != "mpv":
+            return
+        if not self.mpv_process_alive():
+            self.restart_current_playback()
+            return
+        try:
+            eof_reached = bool(self.mpv_get_property("eof-reached", timeout=0.25))
+        except Exception:
+            eof_reached = False
+        if self.player_ended or eof_reached:
+            self.restart_current_playback()
+            return
+        self.player_command("cycle pause")
+
+    def restart_current_playback(self) -> None:
+        self.player_ended = False
+        if self.mpv_process_alive():
+            try:
+                self.mpv_send(["seek", 0, "absolute"], timeout=0.8)
+                self.mpv_set_property("pause", False, timeout=0.8)
+                self.start_player_monitor(self.player_generation)
+                self.announce_player(self.t("playback_restarted"))
+                return
+            except Exception:
+                pass
+        item = dict(self.current_video_item or self.current_video_info or {})
+        url = str(item.get("url") or "")
+        if not url:
+            return
+        key = self.playback_key(item)
+        if key and key in self.playback_positions:
+            self.playback_positions.pop(key, None)
+            self.save_playback_positions()
+        self.current_video_item = item
+        self.current_video_info = dict(item)
+        self.play_url(url, str(item.get("title") or ""))
 
     def player_command(self, command: str) -> None:
         if self.player_kind != "mpv" or not self.ipc_path:
@@ -5679,11 +5956,11 @@ class MainFrame(wx.Frame):
         return self.to_float(str(getattr(self.settings, "pitch_step", 0.01)), 0.01, 0.01, 0.25)
 
     def normalized_pitch_mode(self) -> str:
-        mode = str(getattr(self.settings, "pitch_mode", PITCH_MODE_RUBBERBAND) or PITCH_MODE_RUBBERBAND)
+        mode = str(getattr(self.settings, "pitch_mode", PITCH_MODE_MPV) or PITCH_MODE_MPV)
         return self.normalize_pitch_mode_value(mode)
 
     def normalized_speed_audio_mode(self) -> str:
-        mode = str(getattr(self.settings, "speed_audio_mode", SPEED_AUDIO_MODE_SCALETEMPO2) or SPEED_AUDIO_MODE_SCALETEMPO2)
+        mode = str(getattr(self.settings, "speed_audio_mode", SPEED_AUDIO_MODE_RUBBERBAND) or SPEED_AUDIO_MODE_RUBBERBAND)
         return self.normalize_speed_audio_mode_value(mode)
 
     def normalized_direct_link_enter_action(self) -> str:
@@ -5745,13 +6022,13 @@ class MainFrame(wx.Frame):
         lowered = normalized.lower()
         if normalized in PITCH_MODE_OPTIONS:
             return normalized
-        if lowered == LEGACY_PITCH_MODE_MPV:
+        if lowered in {LEGACY_PITCH_MODE_MPV, LEGACY_PITCH_MODE_MPV_LABEL}:
             return PITCH_MODE_MPV
         if lowered == LEGACY_PITCH_MODE_LINKED_SPEED:
             return PITCH_MODE_LINKED_SPEED
-        if lowered == LEGACY_PITCH_MODE_RUBBERBAND:
+        if lowered in {LEGACY_PITCH_MODE_RUBBERBAND, LEGACY_PITCH_MODE_RUBBERBAND_LABEL}:
             return PITCH_MODE_RUBBERBAND
-        return PITCH_MODE_RUBBERBAND
+        return PITCH_MODE_MPV
 
     @staticmethod
     def normalize_speed_audio_mode_value(mode: str) -> str:
@@ -5765,7 +6042,7 @@ class MainFrame(wx.Frame):
             return SPEED_AUDIO_MODE_SCALETEMPO
         if "mpv" in lowered or "default" in lowered:
             return SPEED_AUDIO_MODE_MPV
-        return SPEED_AUDIO_MODE_SCALETEMPO2
+        return SPEED_AUDIO_MODE_RUBBERBAND
 
     @staticmethod
     def normalize_direct_link_enter_action(action: str) -> str:
@@ -5797,6 +6074,8 @@ class MainFrame(wx.Frame):
 
     def stop_player(self, silent: bool = False) -> None:
         self.save_current_playback_position()
+        self.player_generation += 1
+        self.player_ended = False
         if self.player_process and self.player_process.poll() is None:
             self.player_process.terminate()
             try:
@@ -5931,6 +6210,9 @@ class MainFrame(wx.Frame):
         if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "notification_list", None):
             self.open_selected_notification()
             return
+        if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "history_list", None):
+            self.play_history_item()
+            return
         if focus is getattr(self, "queue_list", None) and self.shortcut_matches(event, "download_audio"):
             self.download_selected_queue_item(True)
             return
@@ -6004,6 +6286,9 @@ class MainFrame(wx.Frame):
             self.copy_direct_stream_url()
             return
         if self.player_control_mode:
+            if focus is getattr(self, "repeat_checkbox", None) and self.shortcut_matches(event, "player_play_pause"):
+                event.Skip()
+                return
             if details_has_focus and self.details_text_navigation_key(event):
                 event.Skip()
                 return
@@ -6020,7 +6305,7 @@ class MainFrame(wx.Frame):
                 self.toggle_volume_boost()
                 return
             if self.shortcut_matches(event, "player_play_pause"):
-                self.player_command("cycle pause")
+                self.player_play_pause()
                 return
             if self.shortcut_matches(event, "player_time"):
                 self.announce_time_async()
@@ -6839,6 +7124,8 @@ class MainFrame(wx.Frame):
             self.settings.auto_update_app = c["auto_update_app"].GetValue()
         if "close_to_tray" in c:
             self.settings.close_to_tray = c["close_to_tray"].GetValue()
+        if "tray_notification" in c:
+            self.settings.tray_notification = c["tray_notification"].GetValue()
         if "autoplay_next" in c:
             self.settings.autoplay_next = c["autoplay_next"].GetValue()
         if "confirm_download" in c:
@@ -7728,6 +8015,7 @@ class MainFrame(wx.Frame):
         return headers
 
     def process_queue(self, _event) -> None:
+        self.check_activation_signal()
         processed = 0
         max_items_per_tick = 200
         try:
@@ -8092,6 +8380,15 @@ def suppress_already_open_for_update() -> bool:
     return False
 
 
+def request_existing_instance_activation(action: str = "show") -> None:
+    try:
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        payload = {"action": action, "pid": os.getpid(), "timestamp": time.time()}
+        ACTIVATE_SIGNAL_FILE.write_text(json.dumps(payload), encoding="utf-8")
+    except Exception:
+        pass
+
+
 class App(wx.App):
     def OnInit(self) -> bool:
         if update_relaunch_requested():
@@ -8101,7 +8398,7 @@ class App(wx.App):
         if self.instance_checker.IsAnotherRunning():
             if suppress_already_open_for_update():
                 return False
-            wx.MessageBox(startup_text("already_open"), APP_NAME, wx.OK | wx.ICON_INFORMATION)
+            request_existing_instance_activation("show")
             return False
         frame = MainFrame()
         frame.Show()
