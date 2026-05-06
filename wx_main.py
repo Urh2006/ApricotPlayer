@@ -102,8 +102,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.7"
-APP_VERSION_LABEL = "0.6.7"
+APP_VERSION = "0.6.8"
+APP_VERSION_LABEL = "0.6.8"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -1496,6 +1496,7 @@ class MainFrame(wx.Frame):
         self.session_audio_output_device = ""
         self.audio_device_options_cache: tuple[float, list[str], list[str]] | None = None
         self.metadata_hydration_urls: set[str] = set()
+        self.search_generation = 0
         self.details_opened_temporarily = False
         self.nvda_client = self.load_nvda_client()
         self.update_progress_dialog: wx.ProgressDialog | None = None
@@ -1869,6 +1870,31 @@ class MainFrame(wx.Frame):
         except RuntimeError:
             pass
 
+    @staticmethod
+    def listbox_strings(listbox: wx.ListBox) -> list[str]:
+        return [listbox.GetString(index) for index in range(listbox.GetCount())]
+
+    def set_listbox_items(self, listbox: wx.ListBox, labels: list[str], selection: int = 0) -> bool:
+        labels = [str(label) for label in labels]
+        if not labels:
+            return False
+        target_selection = min(max(0, selection), len(labels) - 1)
+        current_selection = listbox.GetSelection()
+        if self.listbox_strings(listbox) == labels:
+            if current_selection != target_selection:
+                listbox.SetSelection(target_selection)
+                return True
+            return False
+        listbox.Freeze()
+        try:
+            listbox.Clear()
+            for label in labels:
+                listbox.Append(label)
+            listbox.SetSelection(target_selection)
+        finally:
+            listbox.Thaw()
+        return True
+
     def speak_text(self, text: str) -> None:
         if not text:
             return
@@ -2200,15 +2226,12 @@ class MainFrame(wx.Frame):
         if not hasattr(self, "user_playlist_list"):
             return
         try:
-            self.user_playlist_list.Clear()
-            for playlist in self.user_playlists:
-                self.user_playlist_list.Append(self.user_playlist_line(playlist))
             if self.user_playlists:
+                labels = [self.user_playlist_line(playlist) for playlist in self.user_playlists]
                 index = min(max(0, self.current_user_playlist_index), len(self.user_playlists) - 1)
-                self.user_playlist_list.SetSelection(index)
+                self.set_listbox_items(self.user_playlist_list, labels, index)
             else:
-                self.user_playlist_list.Append(self.t("no_playlists"))
-                self.user_playlist_list.SetSelection(0)
+                self.set_listbox_items(self.user_playlist_list, [self.t("no_playlists")], 0)
                 self.set_status(self.t("no_playlists"))
         except RuntimeError:
             pass
@@ -2324,14 +2347,11 @@ class MainFrame(wx.Frame):
             return
         try:
             self.user_playlist_items = list(self.user_playlists[self.current_user_playlist_index].get("items") or [])
-            self.user_playlist_items_list.Clear()
-            for index, item in enumerate(self.user_playlist_items):
-                self.user_playlist_items_list.Append(self.result_line(index, item))
             if self.user_playlist_items:
-                self.user_playlist_items_list.SetSelection(min(max(0, selection), len(self.user_playlist_items) - 1))
+                labels = [self.result_line(index, item) for index, item in enumerate(self.user_playlist_items)]
+                self.set_listbox_items(self.user_playlist_items_list, labels, selection)
             else:
-                self.user_playlist_items_list.Append(self.t("playlist_empty"))
-                self.user_playlist_items_list.SetSelection(0)
+                self.set_listbox_items(self.user_playlist_items_list, [self.t("playlist_empty")], 0)
                 self.set_status(self.t("playlist_empty"))
         except RuntimeError:
             pass
@@ -2581,14 +2601,10 @@ class MainFrame(wx.Frame):
         if not hasattr(self, "notification_list"):
             return
         try:
-            self.notification_list.Clear()
-            for notification in self.notifications:
-                self.notification_list.Append(self.notification_line(notification))
             if self.notifications:
-                self.notification_list.SetSelection(0)
+                self.set_listbox_items(self.notification_list, [self.notification_line(notification) for notification in self.notifications], 0)
             else:
-                self.notification_list.Append(self.t("notification_center_empty"))
-                self.notification_list.SetSelection(0)
+                self.set_listbox_items(self.notification_list, [self.t("notification_center_empty")], 0)
                 self.set_status(self.t("notification_center_empty"))
         except RuntimeError:
             pass
@@ -2999,14 +3015,10 @@ class MainFrame(wx.Frame):
         if not hasattr(self, "history_list"):
             return
         try:
-            self.history_list.Clear()
-            for item in self.history:
-                self.history_list.Append(self.history_line(item))
             if self.history:
-                self.history_list.SetSelection(0)
+                self.set_listbox_items(self.history_list, [self.history_line(item) for item in self.history], 0)
             else:
-                self.history_list.Append(self.t("history_empty"))
-                self.history_list.SetSelection(0)
+                self.set_listbox_items(self.history_list, [self.t("history_empty")], 0)
                 self.set_status(self.t("history_empty"))
         except RuntimeError:
             pass
@@ -3120,14 +3132,13 @@ class MainFrame(wx.Frame):
         if not hasattr(self, "subscriptions_list"):
             return
         try:
-            self.subscriptions_list.Clear()
-            for item in self.subscriptions:
-                self.subscriptions_list.Append(self.subscription_line(item))
+            selection = self.subscriptions_list.GetSelection()
+            if selection == wx.NOT_FOUND:
+                selection = 0
             if self.subscriptions:
-                self.subscriptions_list.SetSelection(0)
+                self.set_listbox_items(self.subscriptions_list, [self.subscription_line(item) for item in self.subscriptions], selection)
             else:
-                self.subscriptions_list.Append(self.t("subscription_empty"))
-                self.subscriptions_list.SetSelection(0)
+                self.set_listbox_items(self.subscriptions_list, [self.t("subscription_empty")], 0)
                 self.set_status(self.t("subscription_empty"))
         except RuntimeError:
             pass
@@ -3208,6 +3219,8 @@ class MainFrame(wx.Frame):
         self.collection_result_type = ""
         self.loading_more_results = False
         self.dynamic_fetch_enabled = False
+        self.metadata_hydration_urls.clear()
+        self.search_generation += 1
         self.show_search(restore_search=True)
         self.show_results(new_items, selection=0, visible_count=len(new_items))
         wx.CallAfter(self.focus_results_list, 0)
@@ -3431,15 +3444,12 @@ class MainFrame(wx.Frame):
         if not hasattr(self, "rss_feed_list"):
             return
         try:
-            self.rss_feed_list.Clear()
-            for feed in self.rss_feeds:
-                self.rss_feed_list.Append(self.rss_feed_line(feed))
             if self.rss_feeds:
+                labels = [self.rss_feed_line(feed) for feed in self.rss_feeds]
                 index = min(max(0, self.current_rss_feed_index), len(self.rss_feeds) - 1)
-                self.rss_feed_list.SetSelection(index)
+                self.set_listbox_items(self.rss_feed_list, labels, index)
             else:
-                self.rss_feed_list.Append(self.t("rss_feeds_empty"))
-                self.rss_feed_list.SetSelection(0)
+                self.set_listbox_items(self.rss_feed_list, [self.t("rss_feeds_empty")], 0)
                 self.set_status(self.t("rss_feeds_empty"))
         except RuntimeError:
             pass
@@ -3800,14 +3810,10 @@ class MainFrame(wx.Frame):
         if not hasattr(self, "rss_items_list"):
             return
         try:
-            self.rss_items_list.Clear()
-            for item in self.rss_items:
-                self.rss_items_list.Append(self.rss_item_line(item))
             if self.rss_items:
-                self.rss_items_list.SetSelection(min(max(0, selection), len(self.rss_items) - 1))
+                self.set_listbox_items(self.rss_items_list, [self.rss_item_line(item) for item in self.rss_items], selection)
             else:
-                self.rss_items_list.Append(self.t("rss_items_empty"))
-                self.rss_items_list.SetSelection(0)
+                self.set_listbox_items(self.rss_items_list, [self.t("rss_items_empty")], 0)
                 self.set_status(self.t("rss_items_empty"))
         except RuntimeError:
             pass
@@ -4326,8 +4332,11 @@ class MainFrame(wx.Frame):
         self.search_results_stack = []
         self.loading_more_results = False
         self.dynamic_fetch_enabled = True
+        self.metadata_hydration_urls.clear()
         self.set_status(self.t("searching", query=query))
-        threading.Thread(target=self.search_worker, args=(query, self.current_search_type_code, self.initial_results_limit()), daemon=True).start()
+        self.search_generation += 1
+        generation = self.search_generation
+        threading.Thread(target=self.search_worker, args=(query, self.current_search_type_code, self.initial_results_limit(), generation), daemon=True).start()
 
     def effective_results_limit(self) -> int:
         return min(250, max(1, self.settings.results_limit))
@@ -4338,7 +4347,7 @@ class MainFrame(wx.Frame):
     def max_results_limit(self) -> int:
         return 250 if self.settings.results_limit == 0 else self.effective_results_limit()
 
-    def search_worker(self, query: str, search_type: str, limit: int) -> None:
+    def search_worker(self, query: str, search_type: str, limit: int, generation: int) -> None:
         try:
             ytdlp = get_yt_dlp()
             if ytdlp is None:
@@ -4350,9 +4359,17 @@ class MainFrame(wx.Frame):
                 else:
                     info = ydl.extract_info(self.youtube_search_url(query, search_type), download=False)
             entries = list(info.get("entries") or [])[:limit]
-            wx.CallAfter(self.show_results, [self.normalize_entry(entry, search_type) for entry in entries])
+            wx.CallAfter(self.show_results_if_current, generation, [self.normalize_entry(entry, search_type) for entry in entries])
         except Exception as exc:
-            wx.CallAfter(self.message, self.friendly_error(exc), wx.ICON_ERROR)
+            wx.CallAfter(self.show_search_error_if_current, generation, self.friendly_error(exc))
+
+    def show_results_if_current(self, generation: int, results: list[dict]) -> None:
+        if generation == self.search_generation:
+            self.show_results(results)
+
+    def show_search_error_if_current(self, generation: int, error: str) -> None:
+        if generation == self.search_generation:
+            self.message(error, wx.ICON_ERROR)
 
     def normalize_entry(self, entry: dict, search_type: str) -> dict:
         url = entry.get("webpage_url") or entry.get("url") or ""
@@ -4419,19 +4436,16 @@ class MainFrame(wx.Frame):
         else:
             self.last_visible_count = len(self.all_results)
             self.results = list(self.all_results)
-        self.results_list.Clear()
-        for index, item in enumerate(self.results):
-            self.results_list.Append(self.result_line(index, item))
         if self.results:
             selected_index = min(max(0, selection), len(self.results) - 1)
-            self.results_list.SetSelection(selected_index)
-            self.results_list.SetFocus()
+            labels = [self.result_line(index, item) for index, item in enumerate(self.results)]
+            self.set_listbox_items(self.results_list, labels, selected_index)
+            self.safe_set_focus(self.results_list)
             self.set_status(self.t("found", count=len(self.results)))
             self.start_result_metadata_hydration()
         else:
-            self.results_list.Append(self.t("no_results"))
-            self.results_list.SetSelection(0)
-            self.results_list.SetFocus()
+            self.set_listbox_items(self.results_list, [self.t("no_results")], 0)
+            self.safe_set_focus(self.results_list)
             self.set_status(self.t("no_results"))
 
     def maybe_extend_results(self) -> None:
@@ -4461,12 +4475,13 @@ class MainFrame(wx.Frame):
         next_limit = min(self.max_results_limit(), current_count + RESULTS_PAGE_SIZE)
         self.loading_more_results = True
         self.set_status(self.t("loading_more_results"))
+        generation = self.search_generation
         if self.collection_url:
-            threading.Thread(target=self.load_collection_worker, args=(self.collection_url, self.collection_result_type or "Video", next_limit, selection), daemon=True).start()
+            threading.Thread(target=self.load_collection_worker, args=(self.collection_url, self.collection_result_type or "Video", next_limit, selection, generation), daemon=True).start()
         else:
-            threading.Thread(target=self.search_more_worker, args=(self.last_search_query, self.current_search_type_code, next_limit, selection), daemon=True).start()
+            threading.Thread(target=self.search_more_worker, args=(self.last_search_query, self.current_search_type_code, next_limit, selection, generation), daemon=True).start()
 
-    def search_more_worker(self, query: str, search_type: str, limit: int, selection: int) -> None:
+    def search_more_worker(self, query: str, search_type: str, limit: int, selection: int, generation: int) -> None:
         try:
             ytdlp = get_yt_dlp()
             if ytdlp is None:
@@ -4478,9 +4493,9 @@ class MainFrame(wx.Frame):
                 else:
                     info = ydl.extract_info(self.youtube_search_url(query, search_type), download=False)
             entries = list(info.get("entries") or [])[:limit]
-            wx.CallAfter(self.show_more_results, [self.normalize_entry(entry, search_type) for entry in entries], selection)
+            wx.CallAfter(self.show_more_results_if_current, generation, [self.normalize_entry(entry, search_type) for entry in entries], selection)
         except Exception as exc:
-            wx.CallAfter(self.dynamic_fetch_failed, self.friendly_error(exc))
+            wx.CallAfter(self.dynamic_fetch_failed_if_current, generation, self.friendly_error(exc))
 
     def show_more_results(self, results: list[dict], selection: int) -> None:
         self.loading_more_results = False
@@ -4490,9 +4505,17 @@ class MainFrame(wx.Frame):
         self.show_results(results, selection=selection, visible_count=min(len(results), len(self.results) + RESULTS_PAGE_SIZE))
         self.set_status(self.t("search_more_loaded", count=len(self.results)))
 
+    def show_more_results_if_current(self, generation: int, results: list[dict], selection: int) -> None:
+        if generation == self.search_generation:
+            self.show_more_results(results, selection)
+
     def dynamic_fetch_failed(self, error: str) -> None:
         self.loading_more_results = False
         self.message(error, wx.ICON_ERROR)
+
+    def dynamic_fetch_failed_if_current(self, generation: int, error: str) -> None:
+        if generation == self.search_generation:
+            self.dynamic_fetch_failed(error)
 
     def start_result_metadata_hydration(self) -> None:
         candidates: list[dict] = []
@@ -4650,6 +4673,8 @@ class MainFrame(wx.Frame):
         self.collection_result_type = str(state.get("collection_result_type") or "")
         self.loading_more_results = False
         self.dynamic_fetch_enabled = True
+        self.metadata_hydration_urls.clear()
+        self.search_generation += 1
         results = list(state.get("all_results") or state.get("results") or [])
         selection = int(state.get("index") or 0)
         visible_count = int(state.get("visible_count") or len(results))
@@ -4668,7 +4693,10 @@ class MainFrame(wx.Frame):
         self.collection_result_type = "Video"
         self.loading_more_results = False
         self.dynamic_fetch_enabled = True
-        threading.Thread(target=self.load_collection_worker, args=(url, "Video", self.initial_results_limit(), 0), daemon=True).start()
+        self.metadata_hydration_urls.clear()
+        self.search_generation += 1
+        generation = self.search_generation
+        threading.Thread(target=self.load_collection_worker, args=(url, "Video", self.initial_results_limit(), 0, generation), daemon=True).start()
 
     def open_playlist_videos(self, item: dict, push_state: bool = True) -> None:
         if push_state:
@@ -4678,13 +4706,17 @@ class MainFrame(wx.Frame):
         self.collection_result_type = "Video"
         self.loading_more_results = False
         self.dynamic_fetch_enabled = True
-        threading.Thread(target=self.load_collection_worker, args=(item["url"], "Video", self.initial_results_limit(), 0), daemon=True).start()
+        self.metadata_hydration_urls.clear()
+        self.search_generation += 1
+        generation = self.search_generation
+        threading.Thread(target=self.load_collection_worker, args=(item["url"], "Video", self.initial_results_limit(), 0, generation), daemon=True).start()
 
-    def load_collection_worker(self, url: str, result_type: str, limit: int | None = None, selection: int = 0) -> None:
+    def load_collection_worker(self, url: str, result_type: str, limit: int | None = None, selection: int = 0, generation: int | None = None) -> None:
         try:
             ytdlp = get_yt_dlp()
             if ytdlp is None:
                 raise RuntimeError(self.t("missing_ytdlp"))
+            generation = self.search_generation if generation is None else generation
             limit = limit or self.initial_results_limit()
             options = {
                 "quiet": True,
@@ -4697,12 +4729,16 @@ class MainFrame(wx.Frame):
             entries = list(info.get("entries") or [])[:limit]
             normalized = [self.normalize_entry(entry, result_type) for entry in entries]
             if self.settings.results_limit == 0 and selection:
-                wx.CallAfter(self.show_more_results, normalized, selection)
+                wx.CallAfter(self.show_more_results_if_current, generation, normalized, selection)
             else:
-                wx.CallAfter(self.show_results, normalized)
-                wx.CallAfter(setattr, self, "loading_more_results", False)
+                wx.CallAfter(self.show_results_if_current, generation, normalized)
+                wx.CallAfter(self.clear_loading_more_if_current, generation)
         except Exception as exc:
-            wx.CallAfter(self.dynamic_fetch_failed, self.friendly_error(exc))
+            wx.CallAfter(self.dynamic_fetch_failed_if_current, generation or self.search_generation, self.friendly_error(exc))
+
+    def clear_loading_more_if_current(self, generation: int) -> None:
+        if generation == self.search_generation:
+            self.loading_more_results = False
 
     def play_url(self, url: str, title: str = "") -> None:
         player = self.resolve_player()
@@ -5045,6 +5081,8 @@ class MainFrame(wx.Frame):
             return
         results = self.return_all_results or self.all_results or self.return_results or self.results
         if results:
+            self.metadata_hydration_urls.clear()
+            self.search_generation += 1
             self.show_search(restore_search=True)
             self.show_results(results, selection=self.return_index, visible_count=self.return_visible_count)
             if results:
@@ -6405,14 +6443,11 @@ class MainFrame(wx.Frame):
     def refresh_favorites(self) -> None:
         if not hasattr(self, "favorites_list"):
             return
-        self.favorites_list.Clear()
-        for index, item in enumerate(self.favorites):
-            self.favorites_list.Append(f"{index + 1}. {item['title']} | {self.t('channel')}: {item['channel']}")
         if self.favorites:
-            self.favorites_list.SetSelection(0)
+            labels = [f"{index + 1}. {item['title']} | {self.t('channel')}: {item['channel']}" for index, item in enumerate(self.favorites)]
+            self.set_listbox_items(self.favorites_list, labels, 0)
         else:
-            self.favorites_list.Append(self.t("favorites_empty"))
-            self.favorites_list.SetSelection(0)
+            self.set_listbox_items(self.favorites_list, [self.t("favorites_empty")], 0)
             self.set_status(self.t("favorites_empty"))
 
     def selected_favorite(self) -> dict | None:
@@ -6544,10 +6579,8 @@ class MainFrame(wx.Frame):
         try:
             selection = self.queue_list.GetSelection()
             self.queue_items = self.download_items_snapshot()
-            self.queue_list.Clear()
-            for item in self.queue_items:
-                self.queue_list.Append(self.queue_line(item))
-            self.queue_list.SetSelection(min(max(0, selection), len(self.queue_items) - 1))
+            labels = [self.queue_line(item) for item in self.queue_items]
+            self.set_listbox_items(self.queue_list, labels, selection)
         except RuntimeError:
             pass
 
@@ -6631,20 +6664,7 @@ class MainFrame(wx.Frame):
             labels = [self.result_line(index, item) for index, item in enumerate(self.results)]
             if not labels:
                 labels = [self.t("no_results")]
-            current_labels = [self.results_list.GetString(index) for index in range(self.results_list.GetCount())]
-            if current_labels == labels:
-                return
-            self.results_list.Freeze()
-            try:
-                self.results_list.Clear()
-                for line in labels:
-                    self.results_list.Append(line)
-                if self.results:
-                    self.results_list.SetSelection(min(max(0, selection), len(self.results) - 1))
-                else:
-                    self.results_list.SetSelection(0)
-            finally:
-                self.results_list.Thaw()
+            self.set_listbox_items(self.results_list, labels, selection)
         except RuntimeError:
             pass
 
@@ -7708,9 +7728,12 @@ class MainFrame(wx.Frame):
         return headers
 
     def process_queue(self, _event) -> None:
+        processed = 0
+        max_items_per_tick = 200
         try:
-            while True:
+            while processed < max_items_per_tick:
                 kind, payload = self.ui_queue.get_nowait()
+                processed += 1
                 if kind == "results":
                     self.show_results(payload)
                 elif kind == "status":
@@ -7731,7 +7754,14 @@ class MainFrame(wx.Frame):
                     self.refresh_subscriptions()
                 elif kind == "rss_feeds_changed":
                     if self.rss_items_screen_active and 0 <= self.current_rss_feed_index < len(self.rss_feeds):
-                        self.show_rss_items(self.current_rss_feed_index)
+                        selection = 0
+                        if hasattr(self, "rss_items_list"):
+                            try:
+                                selection = self.rss_items_list.GetSelection()
+                            except RuntimeError:
+                                selection = 0
+                        self.rss_items = list(self.rss_feeds[self.current_rss_feed_index].get("items") or [])
+                        self.refresh_rss_items_list(selection)
                     else:
                         self.refresh_rss_feed_list()
                 elif kind == "podcast_results" and isinstance(payload, dict):

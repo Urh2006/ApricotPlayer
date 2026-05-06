@@ -1,5 +1,15 @@
 # Changelog
 
+## What's new in version 0.6.8
+
+- added stale-search protection so older background searches, channel loads, and playlist loads cannot replace newer results after the user has already moved on
+- optimized list refreshes across playlists, subscriptions, history, notifications, RSS, favorites, current downloads, and result labels so unchanged lists are not rebuilt
+- preserved list selection more carefully during background subscription and RSS updates
+- refreshed RSS episode lists in place instead of rebuilding the whole screen when feeds update in the background
+- reset result metadata hydration per new search or collection load so failed upload-age lookups can be retried on later searches
+- limited UI queue processing per timer tick to keep the interface responsive during bursts of download/status events
+- kept the focus-preserving upload-age metadata behavior from 0.6.7 while applying it through the broader list refresh cleanup
+
 ## What's new in version 0.6.7
 
 - fixed single video downloads so they always use single-video mode instead of accidentally following playlist URLs when playlist ordering is enabled
