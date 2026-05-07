@@ -97,14 +97,45 @@ class QuietYtdlpLogger:
         pass
 
 
+class MemoryYtdlpLogger:
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+
+    def debug(self, message: str) -> None:
+        text = str(message or "").strip()
+        if text and not text.startswith("Searching for") and not text.startswith("Loading cookie"):
+            self.messages.append(text)
+
+    def warning(self, message: str) -> None:
+        text = str(message or "").strip()
+        if text:
+            self.messages.append(text)
+
+    def error(self, message: str) -> None:
+        text = str(message or "").strip()
+        if text:
+            self.messages.append(text)
+
+    def summary(self) -> str:
+        seen: set[str] = set()
+        lines: list[str] = []
+        for message in self.messages:
+            if message not in seen:
+                seen.add(message)
+                lines.append(message)
+            if len(lines) >= 5:
+                break
+        return "\n".join(lines)
+
+
 class DownloadCancelled(Exception):
     pass
 
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.10.8"
-APP_VERSION_LABEL = "0.6.10.8"
+APP_VERSION = "0.6.11"
+APP_VERSION_LABEL = "0.6.11"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -164,6 +195,8 @@ DIRECT_LINK_ENTER_VIDEO = "download_video"
 DIRECT_LINK_ENTER_STREAM = "copy_stream_url"
 DIRECT_LINK_ENTER_OPTIONS = [DIRECT_LINK_ENTER_PLAY, DIRECT_LINK_ENTER_AUDIO, DIRECT_LINK_ENTER_VIDEO, DIRECT_LINK_ENTER_STREAM]
 COOKIES_BROWSER_OPTIONS = ["none", "chrome", "edge", "firefox", "brave", "chromium", "opera", "vivaldi"]
+COOKIE_PROFILE_AUTO = "auto"
+COOKIE_PROFILE_OPTIONS = [COOKIE_PROFILE_AUTO]
 COOKIES_BROWSER_PROCESS_NAMES = {
     "chrome": ["chrome"],
     "edge": ["msedge"],
@@ -555,15 +588,23 @@ TEXT = {
         "cookies": "Cookies file",
         "choose_cookies_file": "Izberi cookies.txt datoteko",
         "cookies_from_browser": "Cookies from browser",
+        "cookies_browser_profile": "Browser profile",
+        "browser_profile_auto": "Auto - poskusi vse profile",
         "export_browser_cookies": "Export browser cookies to cookies.txt",
         "exporting_browser_cookies": "Exporting browser cookies.",
-        "browser_cookies_exported": "Browser cookies exported to {path}. Cookies from browser is now set to none.",
+        "browser_cookies_exported": "Browser cookies exported to {path} from {profile}.",
         "browser_cookies_export_failed": "Browser cookies export failed: {error}",
+        "browser_cookies_no_youtube": "Cookies exported, but no YouTube login cookies were found. Odpri YouTube v izbranem browserju, se prijavi, potem poskusi znova.",
         "select_cookies_browser": "Najprej izberi browser pri Cookies from browser.",
         "close_browser_for_cookie_export_title": "Zapri browser za export cookies",
         "close_browser_for_cookie_export_message": "{browser} je odprt. ApricotPlayer ga lahko zapre in potem exporta cookies, kar obicajno popravi Chrome cookie database error. Shrani odprte stvari v browserju, potem izberi Yes. Nadaljujem?",
         "browser_closed_for_cookie_export": "Browser zaprt. Exportam cookies.",
         "cookies_file_selected": "Cookies file selected: {path}",
+        "cookie_auto_refresh_start": "YouTube rabi prijavne cookies. Osvezujem cookies iz {browser}.",
+        "cookie_auto_refresh_done": "Cookies osvezeni iz {profile}. Poskusam znova.",
+        "cookie_auto_refresh_failed": "Cookies se niso mogli osveziti: {error}",
+        "cookie_profile_attempt_failed": "{profile}: {error}",
+        "cookie_all_profiles_failed": "Noben browser profil ni deloval. Zapri browser v celoti ali se prijavi v YouTube in poskusi znova.",
         "ffmpeg": "FFmpeg pot",
         "fragments": "Sočasni fragmenti",
         "retries": "Število ponovitev",
@@ -588,8 +629,8 @@ TEXT = {
         "download_cancelled": "Prenos preklican.",
         "download_done": "Prenos končan: {title}",
         "download_failed": "Prenos ni uspel: {error}",
-        "youtube_auth_hint": "YouTube zahteva prijavo ali bot potrditev. V nastavitvah nastavi Cookies from browser na brskalnik, kjer si prijavljen v YouTube, na primer Chrome, Edge ali Firefox.",
-        "cookie_copy_hint": "ApricotPlayer ne more prebrati Chrome cookie baze. Zapri Chrome v celoti in ponovno izberi Export browser cookies. Lahko tudi izberes Edge ali Firefox, ali uporabis izvozen cookies.txt file.",
+        "youtube_auth_hint": "YouTube zahteva prijavo ali bot potrditev. V nastavitvah izberi Cookies from browser, na primer Brave, da ApricotPlayer lahko sam osvezi cookies.txt.",
+        "cookie_copy_hint": "ApricotPlayer ne more prebrati Chrome cookie baze. Izberi pravi browser in profil v nastavitvah, potem uporabi Export browser cookies; ApricotPlayer bo po potrebi zaprl browser in poskusil vse profile.",
         "favorite_added": "Dodano med priljubljene.",
         "favorite_exists": "Ta element je že med priljubljenimi.",
         "favorite_removed": "Odstranjeno iz priljubljenih.",
@@ -946,10 +987,18 @@ TEXT = {
         "cookies": "Cookies file",
         "choose_cookies_file": "Choose cookies.txt file",
         "cookies_from_browser": "Cookies from browser",
+        "cookies_browser_profile": "Browser profile",
+        "browser_profile_auto": "Auto - try all profiles",
         "export_browser_cookies": "Export browser cookies to cookies.txt",
         "exporting_browser_cookies": "Exporting browser cookies.",
-        "browser_cookies_exported": "Browser cookies exported to {path}. Cookies from browser is now set to none.",
+        "browser_cookies_exported": "Browser cookies exported to {path} from {profile}.",
         "browser_cookies_export_failed": "Browser cookies export failed: {error}",
+        "browser_cookies_no_youtube": "Cookies were exported, but no YouTube login cookies were found. Open YouTube in the selected browser, sign in, then try again.",
+        "cookie_auto_refresh_start": "YouTube needs sign-in cookies. Refreshing cookies from {browser}.",
+        "cookie_auto_refresh_done": "Cookies refreshed from {profile}. Trying again.",
+        "cookie_auto_refresh_failed": "Cookies could not be refreshed: {error}",
+        "cookie_profile_attempt_failed": "{profile}: {error}",
+        "cookie_all_profiles_failed": "No browser profile worked. Close the browser completely or sign in to YouTube, then try again.",
         "select_cookies_browser": "Choose a browser in Cookies from browser first.",
         "close_browser_for_cookie_export_title": "Close browser to export cookies",
         "close_browser_for_cookie_export_message": "{browser} is open. ApricotPlayer can close it and then export cookies, which usually fixes the Chrome cookie database error. Save anything open in the browser, then choose Yes. Continue?",
@@ -979,8 +1028,8 @@ TEXT = {
         "download_cancelled": "Download cancelled.",
         "download_done": "Download finished: {title}",
         "download_failed": "Download failed: {error}",
-        "youtube_auth_hint": "YouTube asks for sign-in or bot confirmation. Open Settings and set Cookies from browser to the browser where you are signed in to YouTube, for example Chrome, Edge, or Firefox.",
-        "cookie_copy_hint": "ApricotPlayer could not read the Chrome cookie database. Close Chrome completely and use Export browser cookies again. You can also choose Edge or Firefox, or use an exported cookies.txt file.",
+        "youtube_auth_hint": "YouTube asks for sign-in or bot confirmation. Open Settings and choose Cookies from browser, for example Brave, so ApricotPlayer can refresh cookies.txt automatically.",
+        "cookie_copy_hint": "ApricotPlayer could not read the Chrome cookie database. Choose the correct browser and profile in Settings, then use Export browser cookies; ApricotPlayer will close the browser if needed and try all profiles.",
         "favorite_added": "Added to favorites.",
         "favorite_exists": "This item is already in favorites.",
         "favorite_removed": "Removed from favorites.",
@@ -1486,6 +1535,36 @@ SUPPLEMENTAL_TRANSLATIONS.setdefault("sr", {}).update(
         "playback_finished": "Reprodukcija zavrsena.",
     }
 )
+COOKIE_TRANSLATION_UPDATES = {
+    "sl": {
+        "cookies_browser_profile": "Browser profil",
+        "browser_profile_auto": "Auto - poskusi vse profile",
+        "browser_cookies_exported": "Piškotki brskalnika so izvoženi v {path} iz profila {profile}.",
+        "browser_cookies_no_youtube": "Piškotki so izvoženi, vendar ni bilo najdenih YouTube prijavnih piškotkov. Odpri YouTube v izbranem brskalniku, se prijavi, potem poskusi znova.",
+        "cookie_auto_refresh_start": "YouTube zahteva prijavne piškotke. Osvežujem piškotke iz {browser}.",
+        "cookie_auto_refresh_done": "Piškotki so osveženi iz profila {profile}. Poskušam znova.",
+        "cookie_auto_refresh_failed": "Piškotkov ni bilo mogoče osvežiti: {error}",
+        "cookie_profile_attempt_failed": "{profile}: {error}",
+        "cookie_all_profiles_failed": "Noben profil brskalnika ni deloval. Popolnoma zapri brskalnik ali se prijavi v YouTube in poskusi znova.",
+        "youtube_auth_hint": "YouTube zahteva prijavo ali bot potrditev. V nastavitvah izberi Piškotki iz brskalnika, na primer Brave, da ApricotPlayer lahko sam osveži cookies.txt.",
+        "cookie_copy_hint": "ApricotPlayer ne more prebrati Chromove baze piškotkov. Izberi pravi brskalnik in profil v nastavitvah, potem uporabi Izvozi piškotke brskalnika; ApricotPlayer bo po potrebi zaprl brskalnik in poskusil vse profile.",
+    },
+    "en": {
+        "cookies_browser_profile": "Browser profile",
+        "browser_profile_auto": "Auto - try all profiles",
+        "browser_cookies_exported": "Browser cookies exported to {path} from {profile}.",
+        "browser_cookies_no_youtube": "Cookies were exported, but no YouTube login cookies were found. Open YouTube in the selected browser, sign in, then try again.",
+        "cookie_auto_refresh_start": "YouTube needs sign-in cookies. Refreshing cookies from {browser}.",
+        "cookie_auto_refresh_done": "Cookies refreshed from {profile}. Trying again.",
+        "cookie_auto_refresh_failed": "Cookies could not be refreshed: {error}",
+        "cookie_profile_attempt_failed": "{profile}: {error}",
+        "cookie_all_profiles_failed": "No browser profile worked. Close the browser completely or sign in to YouTube, then try again.",
+        "youtube_auth_hint": "YouTube asks for sign-in or bot confirmation. Open Settings and choose Cookies from browser, for example Brave, so ApricotPlayer can refresh cookies.txt automatically.",
+        "cookie_copy_hint": "ApricotPlayer could not read the Chrome cookie database. Choose the correct browser and profile in Settings, then use Export browser cookies; ApricotPlayer will close the browser if needed and try all profiles.",
+    },
+}
+for language_code in LANGUAGE_CODES:
+    SUPPLEMENTAL_TRANSLATIONS.setdefault(language_code, {}).update(COOKIE_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"])
 for language_code, translations in SUPPLEMENTAL_TRANSLATIONS.items():
     TEXT.setdefault(language_code, {}).update(translations)
 for language_code in LANGUAGE_CODES:
@@ -1543,6 +1622,7 @@ class Settings:
     proxy: str = ""
     cookies_file: str = ""
     cookies_from_browser: str = "none"
+    cookies_browser_profile: str = COOKIE_PROFILE_AUTO
     ffmpeg_location: str = ""
     concurrent_fragments: int = 4
     retries: int = 10
@@ -1672,6 +1752,7 @@ class MainFrame(wx.Frame):
         self.last_download_shortcut: tuple[str, str, float] = ("", "", 0.0)
         self.ipc_path: str | None = None
         self.mpv_ipc_lock = threading.Lock()
+        self.cookie_repair_lock = threading.Lock()
         self.ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.loading_more_results = False
         self.dynamic_fetch_enabled = True
@@ -2106,9 +2187,6 @@ class MainFrame(wx.Frame):
         cookiefile = str(merged.get("cookiefile") or self.effective_cookies_file()).strip()
         if cookiefile:
             merged["cookiefile"] = cookiefile
-        cookies_browser = self.normalized_cookies_browser()
-        if cookies_browser and not cookiefile and "cookiesfrombrowser" not in merged:
-            merged["cookiesfrombrowser"] = (cookies_browser,)
         return merged
 
     def effective_cookies_file(self) -> str:
@@ -2134,6 +2212,277 @@ class MainFrame(wx.Frame):
         if "sign in to confirm" in lowered or "not a bot" in lowered or "cookies-from-browser" in lowered:
             return f"{text}\n\n{self.t('youtube_auth_hint')}"
         return text
+
+    def is_cookie_auth_error(self, exc: Exception | str) -> bool:
+        lowered = str(exc).lower()
+        checks = (
+            "sign in to confirm",
+            "not a bot",
+            "confirm you're not a bot",
+            "confirm you are not a bot",
+            "cookies-from-browser",
+            "failed to load cookies",
+            "could not copy chrome cookie database",
+            "login required",
+            "this video may be inappropriate",
+        )
+        return any(check in lowered for check in checks)
+
+    def ydl_extract_info(self, url: str, options: dict | None = None, download: bool = False) -> dict:
+        ytdlp = get_yt_dlp()
+        if ytdlp is None:
+            raise RuntimeError(self.t("missing_ytdlp"))
+
+        def run_once():
+            with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
+                return ydl.extract_info(url, download=download)
+
+        try:
+            return run_once()
+        except Exception as exc:
+            if self.repair_cookies_for_error(exc):
+                return run_once()
+            raise
+
+    def ydl_download_urls(self, urls: list[str], options: dict | None = None) -> None:
+        ytdlp = get_yt_dlp()
+        if ytdlp is None:
+            raise RuntimeError(self.t("missing_ytdlp"))
+
+        def run_once() -> None:
+            with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
+                ydl.download(urls)
+
+        try:
+            run_once()
+        except Exception as exc:
+            if self.repair_cookies_for_error(exc):
+                run_once()
+                return
+            raise
+
+    def repair_cookies_for_error(self, exc: Exception | str) -> bool:
+        if not self.is_cookie_auth_error(exc):
+            return False
+        browser = self.normalized_cookies_browser()
+        if not browser:
+            return False
+        if not self.cookie_repair_lock.acquire(blocking=False):
+            with self.cookie_repair_lock:
+                return bool(self.effective_cookies_file())
+        try:
+            self.ui_queue.put(("announce", self.t("cookie_auto_refresh_start", browser=browser.title())))
+            try:
+                result = self.export_browser_cookies_blocking(browser, allow_close=True)
+            except Exception as export_exc:
+                self.ui_queue.put(("announce", self.t("cookie_auto_refresh_failed", error=self.friendly_error(export_exc))))
+                return False
+            self.ui_queue.put(("announce", self.t("cookie_auto_refresh_done", profile=result.get("profile_label", self.t("browser_profile_auto")))))
+            return True
+        finally:
+            self.cookie_repair_lock.release()
+
+    def cookie_browser_root(self, browser: str) -> Path | None:
+        browser = str(browser or "").lower()
+        local = Path(os.getenv("LOCALAPPDATA", ""))
+        roaming = Path(os.getenv("APPDATA", ""))
+        roots = {
+            "brave": local / "BraveSoftware" / "Brave-Browser" / "User Data",
+            "chrome": local / "Google" / "Chrome" / "User Data",
+            "chromium": local / "Chromium" / "User Data",
+            "edge": local / "Microsoft" / "Edge" / "User Data",
+            "vivaldi": local / "Vivaldi" / "User Data",
+            "opera": roaming / "Opera Software" / "Opera Stable",
+        }
+        return roots.get(browser)
+
+    @staticmethod
+    def chromium_cookie_file(profile: Path) -> Path:
+        network_cookie = profile / "Network" / "Cookies"
+        return network_cookie if network_cookie.exists() else profile / "Cookies"
+
+    def discover_cookie_profiles(self, browser: str) -> list[tuple[str, str]]:
+        browser = str(browser or "").lower()
+        profiles: list[tuple[str, str]] = []
+        if browser == "firefox":
+            roots = [
+                Path(os.getenv("APPDATA", "")) / "Mozilla" / "Firefox" / "Profiles",
+                Path(os.getenv("LOCALAPPDATA", "")) / "Packages" / "Mozilla.Firefox_n80bbvh6b1yt2" / "LocalCache" / "Roaming" / "Mozilla" / "Firefox" / "Profiles",
+            ]
+            for root in roots:
+                if not root.exists():
+                    continue
+                for profile in root.iterdir():
+                    if profile.is_dir() and (profile / "cookies.sqlite").exists():
+                        profiles.append((profile.name, str(profile)))
+            return sorted(profiles, key=lambda item: item[0].lower())
+        root = self.cookie_browser_root(browser)
+        if not root or not root.exists():
+            return []
+        if browser == "opera":
+            if self.chromium_cookie_file(root).exists():
+                return [(root.name, str(root))]
+            return []
+        candidates = []
+        if self.chromium_cookie_file(root).exists():
+            candidates.append(root)
+        try:
+            candidates.extend(path for path in root.iterdir() if path.is_dir() and self.chromium_cookie_file(path).exists())
+        except OSError:
+            pass
+
+        def sort_key(path: Path) -> tuple[int, str]:
+            name = path.name
+            if name == "Default":
+                return (0, name)
+            match = re.fullmatch(r"Profile (\d+)", name)
+            if match:
+                return (1, f"{int(match.group(1)):04d}")
+            return (2, name.lower())
+
+        seen: set[str] = set()
+        for profile in sorted(candidates, key=sort_key):
+            value = profile.name if profile.parent == root and browser != "opera" else str(profile)
+            if value in seen:
+                continue
+            seen.add(value)
+            profiles.append((profile.name, value))
+        return profiles
+
+    def cookie_profile_choice_values(self, browser: str | None = None) -> list[str]:
+        browser = browser or self.normalized_cookies_browser()
+        values = [COOKIE_PROFILE_AUTO]
+        values.extend(value for _label, value in self.discover_cookie_profiles(browser))
+        selected = str(getattr(self.settings, "cookies_browser_profile", COOKIE_PROFILE_AUTO) or COOKIE_PROFILE_AUTO).strip()
+        if selected and selected not in values:
+            values.append(selected)
+        return values
+
+    def cookie_profile_choice_labels(self, values: list[str]) -> list[str]:
+        labels = []
+        for value in values:
+            if value == COOKIE_PROFILE_AUTO:
+                labels.append(self.t("browser_profile_auto"))
+            elif os.path.isabs(value):
+                labels.append(Path(value).name)
+            else:
+                labels.append(value)
+        return labels
+
+    def cookie_profile_candidates(self, browser: str) -> list[tuple[str, str | None]]:
+        selected = str(getattr(self.settings, "cookies_browser_profile", COOKIE_PROFILE_AUTO) or COOKIE_PROFILE_AUTO).strip()
+        discovered = self.discover_cookie_profiles(browser)
+        candidates: list[tuple[str, str | None]] = []
+        if selected and selected != COOKIE_PROFILE_AUTO:
+            label = Path(selected).name if os.path.isabs(selected) else selected
+            candidates.append((label, selected))
+        candidates.extend(discovered)
+        candidates.append((self.t("browser_profile_auto"), None))
+        deduped: list[tuple[str, str | None]] = []
+        seen: set[str] = set()
+        for label, profile in candidates:
+            key = profile or ""
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append((label, profile))
+        return deduped
+
+    @staticmethod
+    def cookie_jar_score(cookie_jar) -> tuple[int, int, int]:
+        auth_names = {
+            "sid",
+            "hsid",
+            "ssid",
+            "apisid",
+            "sapisid",
+            "login_info",
+            "__secure-1psid",
+            "__secure-3psid",
+            "__secure-1papisid",
+            "__secure-3papisid",
+            "__secure-1psidts",
+            "__secure-3psidts",
+        }
+        score = 0
+        youtube_count = 0
+        total_count = 0
+        for cookie in cookie_jar:
+            total_count += 1
+            domain = str(getattr(cookie, "domain", "") or "").lower()
+            name = str(getattr(cookie, "name", "") or "").lower()
+            if "youtube.com" in domain:
+                youtube_count += 1
+                score += 3
+            if "google.com" in domain or "youtube.com" in domain:
+                score += 1
+                if name in auth_names:
+                    score += 100
+        return score, youtube_count, total_count
+
+    def export_browser_cookies_blocking(self, browser: str, allow_close: bool = False) -> dict:
+        ytdlp = get_yt_dlp()
+        if ytdlp is None:
+            raise RuntimeError(self.t("missing_ytdlp"))
+        if allow_close and self.cookie_browser_is_running(browser):
+            self.close_cookie_browser_processes(browser)
+            self.wait_for_cookie_browser_exit(browser)
+        cookies_module = import_module("yt_dlp.cookies")
+        candidates = self.cookie_profile_candidates(browser)
+        errors: list[str] = []
+        best: tuple[int, str, object, str] | None = None
+        for attempt in range(2):
+            lock_error_seen = False
+            for label, profile in candidates:
+                logger = MemoryYtdlpLogger()
+                try:
+                    cookie_jar = cookies_module.extract_cookies_from_browser(browser, profile, logger)
+                    score, youtube_count, total_count = self.cookie_jar_score(cookie_jar)
+                    if total_count <= 0:
+                        errors.append(self.t("cookie_profile_attempt_failed", profile=label, error="no cookies found"))
+                        continue
+                    if best is None or score > best[0]:
+                        best = (score, label, cookie_jar, logger.summary())
+                    if score >= 100 and youtube_count > 0:
+                        break
+                except Exception as exc:
+                    error_text = self.cookie_export_error_text(exc, logger)
+                    if "could not copy" in error_text.lower() and "cookie" in error_text.lower():
+                        lock_error_seen = True
+                    errors.append(self.t("cookie_profile_attempt_failed", profile=label, error=error_text))
+            if best and best[0] > 0:
+                break
+            if allow_close and lock_error_seen and attempt == 0:
+                self.close_cookie_browser_processes(browser)
+                self.wait_for_cookie_browser_exit(browser, timeout=8.0)
+                time.sleep(1.0)
+                continue
+            break
+        if not best or best[0] <= 0:
+            detail = "\n".join(errors[-6:]) if errors else self.t("cookie_all_profiles_failed")
+            raise RuntimeError(f"{self.t('browser_cookies_no_youtube')}\n\n{detail}")
+        _score, label, cookie_jar, _summary = best
+        CACHED_COOKIES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        cookie_jar.save(str(CACHED_COOKIES_FILE), ignore_discard=True, ignore_expires=True)
+        self.settings.cookies_file = str(CACHED_COOKIES_FILE)
+        self.settings.cookies_from_browser = browser
+        self.save_settings()
+        return {"path": str(CACHED_COOKIES_FILE), "profile_label": label}
+
+    def cookie_export_error_text(self, exc: Exception | str, logger: MemoryYtdlpLogger | None = None) -> str:
+        text = self.friendly_error(exc)
+        summary = logger.summary() if logger else ""
+        if summary and summary not in text:
+            text = f"{text}\n{summary}"
+        return text
+
+    def wait_for_cookie_browser_exit(self, browser: str, timeout: float = 6.0) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if not self.cookie_browser_is_running(browser):
+                return True
+            time.sleep(0.25)
+        return not self.cookie_browser_is_running(browser)
 
     def clear(self) -> None:
         self.root_sizer.Clear(delete_windows=True)
@@ -3782,13 +4131,9 @@ class MainFrame(wx.Frame):
         return updated, new_items
 
     def fetch_subscription_entries(self, subscription: dict) -> list[dict]:
-        ytdlp = get_yt_dlp()
-        if ytdlp is None:
-            raise RuntimeError(self.t("missing_ytdlp"))
         url = self.collection_download_url({"kind": "channel", "url": subscription.get("url", "")})
         options = {"quiet": True, "extract_flat": True, "skip_download": True, "playlistend": 5}
-        with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
-            info = ydl.extract_info(url, download=False)
+        info = self.ydl_extract_info(url, options, download=False)
         entries = list(info.get("entries") or [])[:5]
         return [self.normalize_entry(entry, "Video") for entry in entries]
 
@@ -4718,6 +5063,9 @@ class MainFrame(wx.Frame):
             text("cookies", self.settings.cookies_file)
             button("choose_cookies_file", self.choose_cookies_file)
             choice("cookies_from_browser", self.settings.cookies_from_browser or "none", COOKIES_BROWSER_OPTIONS)
+            profile_values = self.cookie_profile_choice_values(self.settings.cookies_from_browser or "none")
+            profile_value = self.settings.cookies_browser_profile if self.settings.cookies_browser_profile in profile_values else COOKIE_PROFILE_AUTO
+            choice("cookies_browser_profile", profile_value, profile_values, self.cookie_profile_choice_labels(profile_values))
             button("export_browser_cookies", self.export_browser_cookies_from_settings)
             text("rate_limit", self.settings.rate_limit)
             text("proxy", self.settings.proxy)
@@ -4800,15 +5148,11 @@ class MainFrame(wx.Frame):
 
     def search_worker(self, query: str, search_type: str, limit: int, generation: int) -> None:
         try:
-            ytdlp = get_yt_dlp()
-            if ytdlp is None:
-                raise RuntimeError(self.t("missing_ytdlp"))
             options = {"quiet": True, "extract_flat": True, "skip_download": True, "playlistend": limit}
-            with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
-                if search_type == "Video":
-                    info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
-                else:
-                    info = ydl.extract_info(self.youtube_search_url(query, search_type), download=False)
+            if search_type == "Video":
+                info = self.ydl_extract_info(f"ytsearch{limit}:{query}", options, download=False)
+            else:
+                info = self.ydl_extract_info(self.youtube_search_url(query, search_type), options, download=False)
             entries = list(info.get("entries") or [])[:limit]
             wx.CallAfter(self.show_results_if_current, generation, [self.normalize_entry(entry, search_type) for entry in entries])
         except Exception as exc:
@@ -4934,15 +5278,11 @@ class MainFrame(wx.Frame):
 
     def search_more_worker(self, query: str, search_type: str, limit: int, selection: int, generation: int) -> None:
         try:
-            ytdlp = get_yt_dlp()
-            if ytdlp is None:
-                raise RuntimeError(self.t("missing_ytdlp"))
             options = {"quiet": True, "extract_flat": True, "skip_download": True, "playlistend": limit}
-            with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
-                if search_type == "Video":
-                    info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
-                else:
-                    info = ydl.extract_info(self.youtube_search_url(query, search_type), download=False)
+            if search_type == "Video":
+                info = self.ydl_extract_info(f"ytsearch{limit}:{query}", options, download=False)
+            else:
+                info = self.ydl_extract_info(self.youtube_search_url(query, search_type), options, download=False)
             entries = list(info.get("entries") or [])[:limit]
             wx.CallAfter(self.show_more_results_if_current, generation, [self.normalize_entry(entry, search_type) for entry in entries], selection)
         except Exception as exc:
@@ -4989,17 +5329,16 @@ class MainFrame(wx.Frame):
             return
         options = {"quiet": True, "skip_download": True, "noplaylist": True}
         try:
-            with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
-                for item in items:
-                    url = str(item.get("url") or "")
-                    if not url:
-                        continue
-                    try:
-                        info = ydl.extract_info(url, download=False)
-                        payload = self.metadata_from_info(info, item)
-                        self.ui_queue.put(("result_metadata", payload))
-                    except Exception:
-                        continue
+            for item in items:
+                url = str(item.get("url") or "")
+                if not url:
+                    continue
+                try:
+                    info = self.ydl_extract_info(url, options, download=False)
+                    payload = self.metadata_from_info(info, item)
+                    self.ui_queue.put(("result_metadata", payload))
+                except Exception:
+                    continue
         except Exception:
             return
 
@@ -5164,9 +5503,6 @@ class MainFrame(wx.Frame):
 
     def load_collection_worker(self, url: str, result_type: str, limit: int | None = None, selection: int = 0, generation: int | None = None) -> None:
         try:
-            ytdlp = get_yt_dlp()
-            if ytdlp is None:
-                raise RuntimeError(self.t("missing_ytdlp"))
             generation = self.search_generation if generation is None else generation
             limit = limit or self.initial_results_limit()
             options = {
@@ -5175,8 +5511,7 @@ class MainFrame(wx.Frame):
                 "skip_download": True,
                 "playlistend": limit,
             }
-            with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
-                info = ydl.extract_info(url, download=False)
+            info = self.ydl_extract_info(url, options, download=False)
             entries = list(info.get("entries") or [])[:limit]
             normalized = [self.normalize_entry(entry, result_type) for entry in entries]
             if self.settings.results_limit == 0 and selection:
@@ -5217,17 +5552,13 @@ class MainFrame(wx.Frame):
             wx.CallAfter(self.message, self.t("player_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
     def resolve_stream_url(self, url: str) -> tuple[str, dict, dict]:
-        ytdlp = get_yt_dlp()
-        if ytdlp is None:
-            raise RuntimeError(self.t("missing_ytdlp"))
         options = {
             "quiet": True,
             "skip_download": True,
             "format": "best[ext=mp4]/best",
             "noplaylist": True,
         }
-        with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
-            info = ydl.extract_info(url, download=False)
+        info = self.ydl_extract_info(url, options, download=False)
         stream_url = info.get("url")
         if not stream_url and info.get("formats"):
             formats = [fmt for fmt in info["formats"] if fmt.get("url") and fmt.get("vcodec") != "none" and fmt.get("acodec") != "none"]
@@ -6898,14 +7229,10 @@ class MainFrame(wx.Frame):
 
     def download_worker(self, item: dict, audio_only: bool, task_id: str, cancel_event: threading.Event) -> None:
         try:
-            ytdlp = get_yt_dlp()
-            if ytdlp is None:
-                raise RuntimeError(self.t("missing_ytdlp"))
             folder = self.download_folder_for_item(item, audio_only)
             folder.mkdir(parents=True, exist_ok=True)
             options = self.download_options(folder, audio_only, item["title"], task_id=task_id, cancel_event=cancel_event)
-            with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
-                ydl.download([item["url"]])
+            self.ydl_download_urls([item["url"]], options)
             if cancel_event.is_set():
                 raise DownloadCancelled()
             done_text = self.t("download_audio_done" if audio_only else "download_video_done", title=item["title"])
@@ -6925,16 +7252,12 @@ class MainFrame(wx.Frame):
 
     def download_collection_worker(self, item: dict, audio_only: bool, task_id: str, cancel_event: threading.Event) -> None:
         try:
-            ytdlp = get_yt_dlp()
-            if ytdlp is None:
-                raise RuntimeError(self.t("missing_ytdlp"))
             kind = str(item.get("kind") or "playlist")
             title = item.get("title") or self.t("channel" if kind == "channel" else "playlist")
             folder = self.download_folder_for_item(item, audio_only, collection=True)
             folder.mkdir(parents=True, exist_ok=True)
             options = self.download_options(folder, audio_only, title, allow_playlist=True, task_id=task_id, cancel_event=cancel_event)
-            with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
-                ydl.download([self.collection_download_url(item)])
+            self.ydl_download_urls([self.collection_download_url(item)], options)
             if cancel_event.is_set():
                 raise DownloadCancelled()
             done_key = "download_channel_done" if kind == "channel" else "download_playlist_done"
@@ -7444,8 +7767,7 @@ class MainFrame(wx.Frame):
                 item_folder.mkdir(parents=True, exist_ok=True)
                 last_item_folder = item_folder
                 options = self.download_options(item_folder, audio_only, item.get("title", ""), allow_playlist=allow_playlist, task_id=task_id, cancel_event=cancel_event)
-                with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
-                    ydl.download([url])
+                self.ydl_download_urls([url], options)
                 self.ui_queue.put(("download_task", {"task_id": task_id, "completed": index, "total": total}))
             wx.CallAfter(self.finish_download_task, task_id)
             wx.CallAfter(self.finish_batch_download, finish_folder or str(last_item_folder if len(items) == 1 else folder), done_text)
@@ -7503,12 +7825,15 @@ class MainFrame(wx.Frame):
             path = dialog.GetPath()
         self.settings.cookies_file = path
         self.settings.cookies_from_browser = "none"
+        self.settings.cookies_browser_profile = COOKIE_PROFILE_AUTO
         self.save_settings()
         if hasattr(self, "controls"):
             if "cookies" in self.controls:
                 self.controls["cookies"].SetValue(path)
             if "cookies_from_browser" in self.controls:
                 self.controls["cookies_from_browser"].SetSelection(0)
+            if "cookies_browser_profile" in self.controls:
+                self.controls["cookies_browser_profile"].SetSelection(0)
         self.announce_player(self.t("cookies_file_selected", path=path))
 
     def export_browser_cookies_from_settings(self) -> None:
@@ -7532,6 +7857,7 @@ class MainFrame(wx.Frame):
                     return
             if self.close_cookie_browser_processes(browser):
                 self.announce_player(self.t("browser_closed_for_cookie_export"))
+            self.wait_for_cookie_browser_exit(browser)
         self.announce_player(self.t("exporting_browser_cookies"))
         threading.Thread(target=self.export_browser_cookies_worker, args=(browser,), daemon=True).start()
 
@@ -7580,35 +7906,22 @@ class MainFrame(wx.Frame):
 
     def export_browser_cookies_worker(self, browser: str) -> None:
         try:
-            ytdlp = get_yt_dlp()
-            if ytdlp is None:
-                raise RuntimeError(self.t("missing_ytdlp"))
-            CACHED_COOKIES_FILE.parent.mkdir(parents=True, exist_ok=True)
-            options = {
-                "logger": YTDLP_LOGGER,
-                "no_warnings": True,
-                "quiet": True,
-                "skip_download": True,
-                "cookiefile": str(CACHED_COOKIES_FILE),
-                "cookiesfrombrowser": (browser,),
-            }
-            with ytdlp.YoutubeDL(options) as ydl:
-                _ = ydl.cookiejar
-                ydl.save_cookies()
-            wx.CallAfter(self.finish_browser_cookies_export, str(CACHED_COOKIES_FILE))
+            result = self.export_browser_cookies_blocking(browser, allow_close=True)
+            wx.CallAfter(self.finish_browser_cookies_export, str(result["path"]), str(result["profile_label"]), browser)
         except Exception as exc:
             wx.CallAfter(self.message, self.t("browser_cookies_export_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
-    def finish_browser_cookies_export(self, path: str) -> None:
+    def finish_browser_cookies_export(self, path: str, profile_label: str, browser: str) -> None:
         self.settings.cookies_file = path
-        self.settings.cookies_from_browser = "none"
+        self.settings.cookies_from_browser = browser
         self.save_settings()
         if hasattr(self, "controls"):
             if "cookies" in self.controls:
                 self.controls["cookies"].SetValue(path)
             if "cookies_from_browser" in self.controls:
-                self.controls["cookies_from_browser"].SetSelection(0)
-        self.announce_player(self.t("browser_cookies_exported", path=path))
+                selection = COOKIES_BROWSER_OPTIONS.index(browser) if browser in COOKIES_BROWSER_OPTIONS else 0
+                self.controls["cookies_from_browser"].SetSelection(selection)
+        self.announce_player(self.t("browser_cookies_exported", path=path, profile=profile_label))
 
     def save_settings_from_ui(self) -> None:
         old_language = self.settings.language
@@ -7727,6 +8040,8 @@ class MainFrame(wx.Frame):
             self.settings.cookies_file = c["cookies"].GetValue()
         if "cookies_from_browser" in c:
             self.settings.cookies_from_browser = c["cookies_from_browser"].GetStringSelection() or "none"
+        if "cookies_browser_profile" in c:
+            self.settings.cookies_browser_profile = self.selected_choice_value("cookies_browser_profile") or COOKIE_PROFILE_AUTO
         if "ffmpeg" in c:
             self.settings.ffmpeg_location = c["ffmpeg"].GetValue()
         if "fragments" in c:
@@ -8768,6 +9083,8 @@ class MainFrame(wx.Frame):
                 merged["podcast_search_provider"] = provider if provider in PODCAST_DIRECTORY_PROVIDER_OPTIONS else PODCAST_DIRECTORY_PROVIDER_APPLE
                 country = str(merged.get("podcast_search_country") or "US").upper()
                 merged["podcast_search_country"] = country if country in PODCAST_COUNTRY_OPTIONS else "US"
+                if not str(merged.get("cookies_browser_profile") or "").strip():
+                    merged["cookies_browser_profile"] = COOKIE_PROFILE_AUTO
                 shortcuts = self.normalized_keyboard_shortcuts(merged.get("keyboard_shortcuts"))
                 repaired_shortcuts = self.repair_keyboard_shortcut_conflicts(shortcuts)
                 if repaired_shortcuts != shortcuts:

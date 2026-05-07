@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.6.10.8` (`0.6.10.8`)
+Current version: `0.6.11` (`0.6.11`)
 
 ## Download
 
@@ -44,7 +44,7 @@ py wx_main.py
 - Podcasts and RSS feeds screen with Apple Podcasts directory search, direct RSS/Atom feed URLs, refresh, open, play, download audio, download entire feed, queue episodes, copy URL, and browser actions
 - Direct link screen for playing or downloading any `yt-dlp` supported URL
 - Direct link Enter behavior can be configured in Settings
-- Browser cookie export can close the selected browser first to avoid locked Chrome cookie database errors, and exported cookies are reused automatically
+- Browser cookie export can close the selected browser first, scan Brave/Chrome/Edge/Firefox profiles, export a usable `cookies.txt`, and automatically refresh cookies when YouTube asks for sign-in or bot confirmation
 - Settings can hide History or Podcasts and RSS from the main menu
 - Windows notifications for new videos from subscribed channels
 - Optional Windows notifications for completed downloads when ApricotPlayer is not focused
