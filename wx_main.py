@@ -103,8 +103,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.10.4"
-APP_VERSION_LABEL = "0.6.10.4"
+APP_VERSION = "0.6.10.5"
+APP_VERSION_LABEL = "0.6.10.5"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -5940,9 +5940,31 @@ class MainFrame(wx.Frame):
         except Exception:
             eof_reached = False
         if self.player_ended or eof_reached:
-            self.restart_current_playback()
+            if self.player_should_restart_from_end(eof_reached):
+                self.restart_current_playback()
+                return
+            self.player_ended = False
+            try:
+                self.mpv_set_property("pause", False, timeout=0.5)
+                self.start_player_monitor(self.player_generation)
+            except Exception:
+                self.player_command("cycle pause")
             return
         self.player_command("cycle pause")
+
+    def player_should_restart_from_end(self, eof_reached: bool) -> bool:
+        if self.player_ended and not eof_reached:
+            return True
+        if not eof_reached:
+            return False
+        try:
+            elapsed = self.mpv_get_property("time-pos", timeout=0.2)
+            duration = self.mpv_get_property("duration", timeout=0.2)
+            if elapsed is not None and duration is not None:
+                return float(elapsed) >= max(0.0, float(duration) - 0.35)
+        except Exception:
+            pass
+        return True
 
     def restart_current_playback(self) -> None:
         self.player_ended = False
@@ -5978,16 +6000,24 @@ class MainFrame(wx.Frame):
     def player_seek(self, seconds: float) -> None:
         if self.player_kind != "mpv" or not self.ipc_path:
             return
+        was_ended = self.player_ended
         try:
             response = self.mpv_request(["seek", float(seconds), "relative+exact"], timeout=0.8)
             if response.get("error") == "success":
+                self.after_player_seek(seconds, was_ended)
                 return
         except Exception:
             pass
         try:
             self.mpv_send(["seek", float(seconds), "relative+exact"], timeout=0.8)
+            self.after_player_seek(seconds, was_ended)
         except Exception:
             pass
+
+    def after_player_seek(self, seconds: float, was_ended: bool) -> None:
+        if seconds < 0 and was_ended:
+            self.player_ended = False
+            self.start_player_monitor(self.player_generation)
 
     def mpv_process_alive(self) -> bool:
         return bool(self.player_process and self.player_process.poll() is None)
