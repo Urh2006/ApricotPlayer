@@ -1,5 +1,12 @@
 # Changelog
 
+## What's new in version 0.6.13
+
+- changed `Ctrl+Shift+V` to open the Notification center directly from anywhere in the app
+- updated the keyboard shortcut label from "New subscription videos" to "Notification center"
+- kept the selected notification stable when the notification list refreshes
+- made the shortcut behave the same way inside the subscriptions screen instead of opening only one channel's saved new videos
+
 ## What's new in version 0.6.12
 
 - restored fast playback startup by keeping the first yt-dlp playback/download attempt cookie-free

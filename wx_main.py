@@ -134,8 +134,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.12"
-APP_VERSION_LABEL = "0.6.12"
+APP_VERSION = "0.6.13"
+APP_VERSION_LABEL = "0.6.13"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -645,7 +645,7 @@ TEXT = {
         "shortcut_copy_stream_url": "Kopiraj direktni media URL",
         "shortcut_context_menu": "Kontekstni meni",
         "shortcut_open_selected": "Odpri izbrano",
-        "shortcut_new_subscription_videos": "Novi videi iz narocnine",
+        "shortcut_new_subscription_videos": "Center obvestil",
         "shortcut_remove_selected": "Odstrani izbrano",
         "shortcut_player_copy_link": "Predvajalnik: kopiraj povezavo",
         "shortcut_player_play_pause": "Predvajalnik: predvajaj ali pavza",
@@ -1040,7 +1040,7 @@ TEXT = {
         "shortcut_queue_audio": "Select video for download or adding to playlists",
         "shortcut_context_menu": "Context menu",
         "shortcut_open_selected": "Open selected item",
-        "shortcut_new_subscription_videos": "New subscription videos",
+        "shortcut_new_subscription_videos": "Notification center",
         "shortcut_remove_selected": "Remove selected item",
         "shortcut_player_copy_link": "Player: copy link",
         "shortcut_player_play_pause": "Player: play or pause",
@@ -3351,12 +3351,19 @@ class MainFrame(wx.Frame):
         self.panel.Layout()
         self.focus_later(self.notification_list)
 
+    def open_notification_center_shortcut(self) -> None:
+        if self.in_player_screen:
+            self.stop_player(silent=True)
+            self.in_player_screen = False
+        self.show_notification_center()
+
     def refresh_notification_center(self) -> None:
         if not hasattr(self, "notification_list"):
             return
         try:
+            selection = self.notification_list.GetSelection()
             if self.notifications:
-                self.set_listbox_items(self.notification_list, [self.notification_line(notification) for notification in self.notifications], 0)
+                self.set_listbox_items(self.notification_list, [self.notification_line(notification) for notification in self.notifications], max(0, selection))
             else:
                 self.set_listbox_items(self.notification_list, [self.t("notification_center_empty")], 0)
                 self.set_status(self.t("notification_center_empty"))
@@ -3923,7 +3930,7 @@ class MainFrame(wx.Frame):
         if self.shortcut_matches(event, "open_selected"):
             self.open_selected_subscription_videos()
         elif self.shortcut_matches(event, "new_subscription_videos"):
-            self.open_selected_subscription_new_videos()
+            self.open_notification_center_shortcut()
         elif self.shortcut_matches(event, "remove_selected"):
             self.remove_subscription()
         elif self.context_menu_shortcut_matches(event):
@@ -6980,6 +6987,9 @@ class MainFrame(wx.Frame):
             return
         if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "history_list", None):
             self.play_history_item()
+            return
+        if self.shortcut_matches(event, "new_subscription_videos"):
+            self.open_notification_center_shortcut()
             return
         if focus is getattr(self, "queue_list", None) and self.shortcut_matches(event, "download_audio"):
             self.download_selected_queue_item(True)
