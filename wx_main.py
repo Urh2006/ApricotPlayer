@@ -103,8 +103,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.10.3"
-APP_VERSION_LABEL = "0.6.10.3"
+APP_VERSION = "0.6.10.4"
+APP_VERSION_LABEL = "0.6.10.4"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -5948,7 +5948,7 @@ class MainFrame(wx.Frame):
         self.player_ended = False
         if self.mpv_process_alive():
             try:
-                self.mpv_send(["seek", 0, "absolute"], timeout=0.8)
+                self.mpv_send(["seek", 0, "absolute+exact"], timeout=0.8)
                 self.mpv_set_property("pause", False, timeout=0.8)
                 self.start_player_monitor(self.player_generation)
                 self.announce_player(self.t("playback_restarted"))
@@ -5972,6 +5972,20 @@ class MainFrame(wx.Frame):
             return
         try:
             self.mpv_send(shlex.split(command), timeout=0.5)
+        except Exception:
+            pass
+
+    def player_seek(self, seconds: float) -> None:
+        if self.player_kind != "mpv" or not self.ipc_path:
+            return
+        try:
+            response = self.mpv_request(["seek", float(seconds), "relative+exact"], timeout=0.8)
+            if response.get("error") == "success":
+                return
+        except Exception:
+            pass
+        try:
+            self.mpv_send(["seek", float(seconds), "relative+exact"], timeout=0.8)
         except Exception:
             pass
 
@@ -6640,22 +6654,22 @@ class MainFrame(wx.Frame):
                 self.show_video_details()
                 return
             if self.shortcut_matches(event, "player_seek_back_huge"):
-                self.player_command("seek -600")
+                self.player_seek(-600)
                 return
             if self.shortcut_matches(event, "player_seek_forward_huge"):
-                self.player_command("seek 600")
+                self.player_seek(600)
                 return
             if self.shortcut_matches(event, "player_seek_back_large"):
-                self.player_command("seek -60")
+                self.player_seek(-60)
                 return
             if self.shortcut_matches(event, "player_seek_forward_large"):
-                self.player_command("seek 60")
+                self.player_seek(60)
                 return
             if self.shortcut_matches(event, "player_seek_back"):
-                self.player_command("seek -5")
+                self.player_seek(-5)
                 return
             if self.shortcut_matches(event, "player_seek_forward"):
-                self.player_command("seek 5")
+                self.player_seek(5)
                 return
             if self.shortcut_matches(event, "player_volume_up"):
                 self.change_volume_async(self.settings.volume_step)
