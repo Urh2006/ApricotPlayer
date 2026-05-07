@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.6.10.6` (`0.6.10.6`)
+Current version: `0.6.10.7` (`0.6.10.7`)
 
 ## Download
 
@@ -92,6 +92,7 @@ py wx_main.py
 
 - `Ctrl+Shift+A`: download audio
 - `Ctrl+Shift+D`: download video
+- `Shift+A`: select the focused video for download or adding to playlists
 - `Ctrl+Shift+S`: subscribe to the focused item's channel
 - `Ctrl+Shift+N`: create playlist
 - `Ctrl+Shift+P`: add the focused or queued videos to a playlist

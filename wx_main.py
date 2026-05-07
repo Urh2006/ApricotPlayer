@@ -103,8 +103,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.10.6"
-APP_VERSION_LABEL = "0.6.10.6"
+APP_VERSION = "0.6.10.7"
+APP_VERSION_LABEL = "0.6.10.7"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -220,7 +220,6 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "download_video": "Ctrl+Shift+D",
     "subscribe_channel": "Ctrl+Shift+S",
     "queue_audio": "Shift+A",
-    "queue_video": "Shift+D",
     "create_playlist": "Ctrl+Shift+N",
     "add_to_playlist": "Ctrl+Shift+P",
     "remove_from_playlist": "Ctrl+Shift+R",
@@ -257,7 +256,6 @@ SHORTCUT_DEFINITIONS = [
     ("download_video", "shortcut_download_video"),
     ("subscribe_channel", "shortcut_subscribe_channel"),
     ("queue_audio", "shortcut_queue_audio"),
-    ("queue_video", "shortcut_queue_video"),
     ("create_playlist", "shortcut_create_playlist"),
     ("add_to_playlist", "shortcut_add_to_playlist"),
     ("remove_from_playlist", "shortcut_remove_from_playlist"),
@@ -295,12 +293,16 @@ TEXT = {
         "ready": "Pripravljen.",
         "main_menu": "Glavni meni",
         "download_all": "Download all",
+        "download_all_as_audio": "Prenesi vse kot zvok",
+        "download_all_as_video": "Prenesi vse kot video",
         "download_all_selected": "Prenesi vse izbrane elemente",
         "queued_videos_for_download": "Queued videos for download",
         "queued_downloads": "Queued videos for download",
         "current_downloads": "Trenutni prenosi",
         "no_queued_downloads": "No queued downloads.",
-        "queued_download_instructions": "Use Enter to download with the queued format, Ctrl+Shift+A for audio, Ctrl+Shift+D for video, or the context menu.",
+        "queued_download_instructions": "Enter vprasa za zvok ali video. Uporabis lahko tudi Ctrl+Shift+A za zvok, Ctrl+Shift+D za video ali kontekstni meni.",
+        "select_download_format": "Izberi obliko prenosa",
+        "select_download_format_message": "Izberi, ali naj se ta element prenese kot zvok ali video.",
         "download_selected_queued": "Download selected queued item",
         "remove_from_queue": "Remove from queue",
         "cancel_download": "Preklici prenos",
@@ -374,12 +376,14 @@ TEXT = {
         "download_video_start": "Downloading video...",
         "batch_download_start": "Starting batch download of {count} items.",
         "batch_download_done": "Batch download complete.",
+        "selected_for_download_or_playlist": "Izbrano za prenos ali playlisto: {title}",
         "audio_selected_download": "Audio download queued: {title}",
         "video_selected_download": "Video download queued: {title}",
         "collection_audio_selected_download": "Zvok zbirke dodan v cakalno vrsto: {title}",
         "collection_video_selected_download": "Video zbirke dodan v cakalno vrsto: {title}",
         "download_deselected": "Removed from download queue: {title}",
         "download_queue_empty": "Download queue is empty.",
+        "selected_queued_marker": "izbrano",
         "audio_queued_marker": "audio queued",
         "video_queued_marker": "video queued",
         "collection_audio_queued_marker": "zbirka kot zvok v cakalni vrsti",
@@ -579,8 +583,7 @@ TEXT = {
         "shortcut_download_audio": "Prenesi zvok",
         "shortcut_download_video": "Prenesi video",
         "shortcut_subscribe_channel": "Naroci se na kanal",
-        "shortcut_queue_audio": "Oznaci za prenos zvoka",
-        "shortcut_queue_video": "Oznaci za prenos videa",
+        "shortcut_queue_audio": "Oznaci video za prenos ali dodajanje v playliste",
         "shortcut_create_playlist": "Ustvari playlisto",
         "shortcut_add_to_playlist": "Dodaj v playlisto",
         "shortcut_remove_from_playlist": "Odstrani iz playliste",
@@ -622,12 +625,16 @@ TEXT = {
         "ready": "Ready.",
         "main_menu": "Main menu",
         "download_all": "Download all",
+        "download_all_as_audio": "Download all as audio",
+        "download_all_as_video": "Download all as video",
         "download_all_selected": "Download all selected items",
         "queued_videos_for_download": "Queued videos for download",
         "queued_downloads": "Queued videos for download",
         "current_downloads": "Current downloads",
         "no_queued_downloads": "No queued downloads.",
-        "queued_download_instructions": "Use Enter to download with the queued format, Ctrl+Shift+A for audio, Ctrl+Shift+D for video, or the context menu.",
+        "queued_download_instructions": "Press Enter to choose audio or video. You can also use Ctrl+Shift+A for audio, Ctrl+Shift+D for video, or the context menu.",
+        "select_download_format": "Choose download format",
+        "select_download_format_message": "Choose whether to download this item as audio or video.",
         "download_selected_queued": "Download selected queued item",
         "remove_from_queue": "Remove from queue",
         "cancel_download": "Cancel download",
@@ -733,12 +740,14 @@ TEXT = {
         "download_video_start": "Downloading video...",
         "batch_download_start": "Starting batch download of {count} items.",
         "batch_download_done": "Batch download complete.",
+        "selected_for_download_or_playlist": "Selected for download or playlist: {title}",
         "audio_selected_download": "Audio download queued: {title}",
         "video_selected_download": "Video download queued: {title}",
         "collection_audio_selected_download": "Collection audio download queued: {title}",
         "collection_video_selected_download": "Collection video download queued: {title}",
         "download_deselected": "Removed from download queue: {title}",
         "download_queue_empty": "Download queue is empty.",
+        "selected_queued_marker": "selected",
         "audio_queued_marker": "audio queued",
         "video_queued_marker": "video queued",
         "podcast_audio_queued_marker": "podcast audio queued",
@@ -960,8 +969,7 @@ TEXT = {
         "shortcut_download_audio": "Download audio",
         "shortcut_download_video": "Download video",
         "shortcut_subscribe_channel": "Subscribe to channel",
-        "shortcut_queue_audio": "Queue audio download",
-        "shortcut_queue_video": "Queue video download",
+        "shortcut_queue_audio": "Select video for download or adding to playlists",
         "shortcut_context_menu": "Context menu",
         "shortcut_open_selected": "Open selected item",
         "shortcut_new_subscription_videos": "New subscription videos",
@@ -2841,6 +2849,7 @@ class MainFrame(wx.Frame):
             playlist.setdefault("items", []).append(playlist_item)
             existing_urls.add(url)
             added.append(playlist_item)
+        self.clear_playlist_candidate_download_queue_items(items)
         if not added:
             self.announce_player(self.t("playlist_exists"))
             return
@@ -2853,6 +2862,20 @@ class MainFrame(wx.Frame):
             self.announce_player(self.t("added_to_playlist_count", playlist=title, count=len(added)))
         if self.user_playlist_items_screen_active:
             self.refresh_user_playlist_items()
+
+    def clear_playlist_candidate_download_queue_items(self, items: list[dict]) -> None:
+        changed = False
+        for item in items:
+            url = str(item.get("url") or "")
+            if url and url in self.download_queue and self.playlist_item_is_supported(self.download_queue.get(url)):
+                self.download_queue.pop(url, None)
+                changed = True
+        if not changed:
+            return
+        self.refresh_results_list_labels()
+        if self.in_queue_screen:
+            self.refresh_queue_view()
+        self.refresh_download_views()
 
     def playlist_item_from_media(self, item: dict) -> dict:
         keys = [
@@ -3051,7 +3074,8 @@ class MainFrame(wx.Frame):
         self.clear()
         buttons = [(self.t("back"), self.show_main_menu)]
         if self.download_queue:
-            buttons.append((self.t("download_all"), self.download_all_queued))
+            buttons.append((self.t("download_all_as_audio"), lambda: self.download_all_queued(True)))
+            buttons.append((self.t("download_all_as_video"), lambda: self.download_all_queued(False)))
         if self.active_downloads:
             buttons.append((self.t("cancel_download"), self.cancel_selected_download))
             buttons.append((self.t("cancel_all_downloads"), self.cancel_all_downloads))
@@ -3108,6 +3132,8 @@ class MainFrame(wx.Frame):
     def queue_mode_label(self, item: dict) -> str:
         if item.get("kind") == "rss_item":
             return self.t("podcast_audio_queued_marker")
+        if not isinstance(item.get("audio_only"), bool):
+            return self.t("selected_queued_marker")
         if item.get("kind") in {"playlist", "channel"}:
             if item.get("audio_only"):
                 return self.t("collection_audio_queued_marker")
@@ -3150,7 +3176,8 @@ class MainFrame(wx.Frame):
                 (self.t("download_selected_queued"), lambda: self.download_selected_queue_item()),
                 (self.menu_label_with_shortcut("download_audio", "download_audio"), lambda: self.download_selected_queue_item(True)),
                 (self.menu_label_with_shortcut("download_video", "download_video"), lambda: self.download_selected_queue_item(False)),
-                (self.t("download_all"), self.download_all_queued),
+                (self.t("download_all_as_audio"), lambda: self.download_all_queued(True)),
+                (self.t("download_all_as_video"), lambda: self.download_all_queued(False)),
                 (self.t("remove_from_queue"), self.remove_selected_queue_item),
             ]
         for label, handler in actions:
@@ -3223,9 +3250,7 @@ class MainFrame(wx.Frame):
 
     def on_results_key(self, event: wx.KeyEvent) -> None:
         if self.shortcut_matches(event, "queue_audio"):
-            self.toggle_download_queue(True)
-        elif self.shortcut_matches(event, "queue_video"):
-            self.toggle_download_queue(False)
+            self.toggle_download_queue()
         elif self.shortcut_matches(event, "download_audio"):
             self.download_audio_shortcut()
         elif self.shortcut_matches(event, "download_video"):
@@ -6581,10 +6606,7 @@ class MainFrame(wx.Frame):
             self.download_selected_queue_item()
             return
         if focus is getattr(self, "results_list", None) and self.shortcut_matches(event, "queue_audio"):
-            self.toggle_download_queue(True)
-            return
-        if focus is getattr(self, "results_list", None) and self.shortcut_matches(event, "queue_video"):
-            self.toggle_download_queue(False)
+            self.toggle_download_queue()
             return
         if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "results_list", None):
             self.play_selected()
@@ -6735,7 +6757,10 @@ class MainFrame(wx.Frame):
                 (self.t("copy_url"), self.copy_selected_url),
             ]
         if len(self.download_queue) > 1:
-            actions.insert(1, (self.t("download_all_selected"), self.download_all_queued))
+            actions[1:1] = [
+                (self.t("download_all_as_audio"), lambda: self.download_all_queued(True)),
+                (self.t("download_all_as_video"), lambda: self.download_all_queued(False)),
+            ]
         for label, handler in actions:
             item = menu.Append(wx.ID_ANY, label)
             self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
@@ -7157,7 +7182,7 @@ class MainFrame(wx.Frame):
             finally:
                 wx.TheClipboard.Close()
 
-    def toggle_download_queue(self, audio_only: bool) -> None:
+    def toggle_download_queue(self, audio_only: bool | None = None) -> None:
         item = self.selected_result()
         if not item:
             self.message(self.t("no_selection"))
@@ -7167,14 +7192,17 @@ class MainFrame(wx.Frame):
             self.message(self.t("no_selection"))
             return
         existing = self.download_queue.get(url)
-        if existing and existing.get("audio_only") == audio_only:
+        existing_audio_only = existing.get("audio_only") if existing and "audio_only" in existing else None
+        if existing and existing_audio_only == audio_only:
             self.download_queue.pop(url, None)
             self.announce_player(self.t("download_deselected", title=item.get("title", "")))
         else:
             queued = dict(item)
             queued["audio_only"] = audio_only
             self.download_queue[url] = queued
-            if item.get("kind") in {"playlist", "channel"}:
+            if audio_only is None:
+                key = "selected_for_download_or_playlist"
+            elif item.get("kind") in {"playlist", "channel"}:
                 key = "collection_audio_selected_download" if audio_only else "collection_video_selected_download"
             else:
                 key = "audio_selected_download" if audio_only else "video_selected_download"
@@ -7236,13 +7264,29 @@ class MainFrame(wx.Frame):
             self.cancel_download_task(str(item.get("task_id") or ""))
             return
         if audio_only is None:
-            audio_only = bool(item.get("audio_only"))
-        if item.get("kind") == "rss_item":
+            if item.get("kind") == "rss_item":
+                audio_only = True
+            elif isinstance(item.get("audio_only"), bool):
+                audio_only = bool(item.get("audio_only"))
+            else:
+                selected_format = self.choose_queue_download_format()
+                if selected_format is None:
+                    return
+                audio_only = selected_format
+        elif item.get("kind") == "rss_item":
             audio_only = True
         if item.get("kind") in {"playlist", "channel"}:
             self.download_collection(dict(item), audio_only=audio_only, remove_queued=True)
         else:
             self.start_download(audio_only, item=dict(item), remove_queued=True)
+
+    def choose_queue_download_format(self) -> bool | None:
+        choices = [self.t("download_audio"), self.t("download_video")]
+        with wx.SingleChoiceDialog(self, self.t("select_download_format_message"), self.t("select_download_format"), choices) as dialog:
+            dialog.SetSelection(0)
+            if dialog.ShowModal() != wx.ID_OK:
+                return None
+            return dialog.GetSelection() == 0
 
     def remove_selected_queue_item(self) -> None:
         item = self.selected_queue_item()
@@ -7284,17 +7328,36 @@ class MainFrame(wx.Frame):
         self.announce_player(self.t("all_downloads_cancel_requested"))
         self.refresh_download_views()
 
-    def download_all_queued(self) -> None:
+    def download_all_queued(self, audio_only: bool | None = None) -> None:
         if not self.download_queue:
             self.announce_player(self.t("download_queue_empty"))
             return
-        items = list(self.download_queue.values())
+        if audio_only is None and any(not isinstance(item.get("audio_only"), bool) and item.get("kind") != "rss_item" for item in self.download_queue.values()):
+            audio_only = self.choose_queue_download_format()
+            if audio_only is None:
+                return
+        items = []
+        for queued_item in self.download_queue.values():
+            item = dict(queued_item)
+            if item.get("kind") == "rss_item":
+                item["audio_only"] = True
+            elif audio_only is not None:
+                item["audio_only"] = audio_only
+            elif not isinstance(item.get("audio_only"), bool):
+                item["audio_only"] = True
+            items.append(item)
         self.download_queue.clear()
         self.refresh_results_list_labels()
         if self.rss_items_screen_active:
             self.refresh_rss_items_list()
         self.announce_player(self.t("batch_download_start", count=len(items)))
-        task_id, cancel_event = self.register_download_task({"title": self.t("download_all_selected"), "kind": "batch"}, False, "batch", total=len(items))
+        if audio_only is True:
+            batch_title = self.t("download_all_as_audio")
+        elif audio_only is False:
+            batch_title = self.t("download_all_as_video")
+        else:
+            batch_title = self.t("download_all_selected")
+        task_id, cancel_event = self.register_download_task({"title": batch_title, "kind": "batch"}, False, "batch", total=len(items))
         if self.in_queue_screen:
             self.show_download_queue()
         threading.Thread(target=self.download_batch_worker, args=(items, task_id, cancel_event), daemon=True).start()
