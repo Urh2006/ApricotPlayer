@@ -103,8 +103,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.10.2"
-APP_VERSION_LABEL = "0.6.10.2"
+APP_VERSION = "0.6.10.3"
+APP_VERSION_LABEL = "0.6.10.3"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -169,6 +169,7 @@ VIDEO_FORMAT_BEST_ANY = "best-any"
 VIDEO_FORMAT_MP4_SINGLE = "mp4-single"
 VIDEO_FORMAT_SMALLEST = "smallest"
 VIDEO_FORMAT_OPTIONS = [VIDEO_FORMAT_MP4, VIDEO_FORMAT_BEST_ANY, VIDEO_FORMAT_MP4_SINGLE, VIDEO_FORMAT_SMALLEST]
+AUDIO_QUALITY_OPTIONS = ["0", "320", "256", "192", "160", "128", "96", "64", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
 PODCAST_DIRECTORY_PROVIDER_APPLE = "apple"
 PODCAST_DIRECTORY_PROVIDER_OPTIONS = [PODCAST_DIRECTORY_PROVIDER_APPLE]
 PODCAST_COUNTRY_OPTIONS = ["US", "SI", "GB", "DE", "FR", "ES", "IT", "AT", "HR", "RS", "CA", "AU", "NL", "SE", "PL"]
@@ -226,7 +227,7 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "copy_stream_url": "Ctrl+D",
     "context_menu": "Applications",
     "open_selected": "Enter",
-    "new_subscription_videos": "N",
+    "new_subscription_videos": "Ctrl+Shift+V",
     "remove_selected": "Delete",
     "player_copy_link": "L",
     "player_play_pause": "Space",
@@ -511,7 +512,7 @@ TEXT = {
         "open_after_download": "Po prenosu odpri mapo za prenose",
         "download_complete_popup": "Pokazi popup, ko je prenos koncan",
         "audio_format": "Audio format",
-        "audio_quality": "Audio kvaliteta (0 najboljše)",
+        "audio_quality": "Audio kvaliteta",
         "video_format": "Format prenosa videa",
         "video_format_mp4_recommended": "MP4 (priporočeno)",
         "video_format_best_available": "Najboljša razpoložljiva kakovost (lahko je WebM)",
@@ -892,7 +893,7 @@ TEXT = {
         "open_after_download": "Open download folder after download",
         "download_complete_popup": "Show popup when download completes",
         "audio_format": "Audio format",
-        "audio_quality": "Audio quality (0 is best)",
+        "audio_quality": "Audio quality",
         "video_format": "Video download format",
         "video_format_mp4_recommended": "MP4 (recommended)",
         "video_format_best_available": "Best available quality (may be WebM)",
@@ -1580,8 +1581,9 @@ class MainFrame(wx.Frame):
         super().__init__(None, title=WINDOW_TITLE, size=(950, 680))
         APP_DIR.mkdir(parents=True, exist_ok=True)
         settings_file_existed = SETTINGS_FILE.exists()
+        self.settings_migrated = False
         self.settings = self.load_settings()
-        if not settings_file_existed:
+        if not settings_file_existed or self.settings_migrated:
             self.save_settings()
         self.favorites = self.load_favorites()
         self.history = self.load_history()
@@ -2277,7 +2279,7 @@ class MainFrame(wx.Frame):
 
     def on_close(self, event: wx.CloseEvent) -> None:
         if self.exiting or not self.settings.close_to_tray:
-            self.destroy_taskbar_icon()
+            self.shutdown_runtime()
             event.Skip()
             return
         event.Veto()
@@ -2315,9 +2317,26 @@ class MainFrame(wx.Frame):
             self.restore_from_tray()
 
     def quit_application(self) -> None:
-        self.exiting = True
-        self.destroy_taskbar_icon()
+        self.shutdown_runtime()
         self.Close(force=True)
+
+    def shutdown_runtime(self) -> None:
+        self.exiting = True
+        for timer in (
+            getattr(self, "timer", None),
+            getattr(self, "subscription_timer", None),
+            getattr(self, "rss_timer", None),
+        ):
+            try:
+                if timer and timer.IsRunning():
+                    timer.Stop()
+            except Exception:
+                pass
+        try:
+            self.stop_player(silent=True)
+        except Exception:
+            pass
+        self.destroy_taskbar_icon()
 
     def app_has_focus(self) -> bool:
         try:
@@ -4594,7 +4613,7 @@ class MainFrame(wx.Frame):
             check("open_after_download", self.settings.open_folder_after_download)
             check("download_complete_popup", self.settings.popup_when_download_complete)
             choice("audio_format", self.settings.audio_format, ["mp3", "m4a", "opus", "wav", "flac"])
-            choice("audio_quality", self.settings.audio_quality, ["0", "1", "2", "3", "4", "5", "128", "192", "256", "320"])
+            choice("audio_quality", self.normalize_audio_quality_value(self.settings.audio_quality), AUDIO_QUALITY_OPTIONS, self.audio_quality_labels())
             choice("video_format", self.normalized_video_format(), VIDEO_FORMAT_OPTIONS, self.video_format_labels())
             choice("max_height", str(self.settings.max_video_height), ["0", "360", "480", "720", "1080", "1440", "2160"])
             text("filename_template", self.settings.filename_template or DEFAULT_FILENAME_TEMPLATE)
@@ -6258,6 +6277,18 @@ class MainFrame(wx.Frame):
             self.t("video_format_smallest"),
         ]
 
+    @staticmethod
+    def audio_quality_label(value: str) -> str:
+        value = str(value or "").strip()
+        if value == "0":
+            return "Best variable quality (VBR 0)"
+        if value in {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"}:
+            return f"Variable quality (VBR {value})"
+        return f"{value} kbps"
+
+    def audio_quality_labels(self) -> list[str]:
+        return [self.audio_quality_label(value) for value in AUDIO_QUALITY_OPTIONS]
+
     def result_limit_labels(self, options: list[str]) -> list[str]:
         return [self.t("dynamic_results") if option == "0" else option for option in options]
 
@@ -6299,6 +6330,19 @@ class MainFrame(wx.Frame):
         if lowered in {LEGACY_PITCH_MODE_RUBBERBAND, LEGACY_PITCH_MODE_RUBBERBAND_LABEL}:
             return PITCH_MODE_RUBBERBAND
         return PITCH_MODE_MPV
+
+    @staticmethod
+    def normalize_audio_quality_value(value: str) -> str:
+        normalized = str(value or "").strip().lower().replace("kbps", "").replace("k", "").strip()
+        try:
+            numeric = float(normalized)
+        except (TypeError, ValueError):
+            return "0"
+        if numeric.is_integer():
+            normalized = str(int(numeric))
+        else:
+            normalized = str(numeric)
+        return normalized if normalized in AUDIO_QUALITY_OPTIONS else "0"
 
     @staticmethod
     def normalize_speed_audio_mode_value(mode: str) -> str:
@@ -7407,7 +7451,7 @@ class MainFrame(wx.Frame):
         if "audio_format" in c:
             self.settings.audio_format = c["audio_format"].GetStringSelection() or "mp3"
         if "audio_quality" in c:
-            self.settings.audio_quality = c["audio_quality"].GetStringSelection() or "0"
+            self.settings.audio_quality = self.normalize_audio_quality_value(self.selected_choice_value("audio_quality"))
         if "video_format" in c:
             self.settings.video_format = self.normalize_video_format_value(self.selected_choice_value("video_format"))
         if "max_height" in c:
@@ -8455,6 +8499,38 @@ class MainFrame(wx.Frame):
                     normalized[action] = value
         return normalized
 
+    def first_available_shortcut(self, values: dict[str, str], action: str, candidates: list[str]) -> str:
+        used = {
+            self.canonical_shortcut(shortcut)
+            for other_action, shortcut in values.items()
+            if other_action != action
+        }
+        for candidate in candidates:
+            canonical = self.canonical_shortcut(candidate)
+            if canonical and canonical not in used:
+                return candidate
+        return ""
+
+    def repair_keyboard_shortcut_conflicts(self, shortcuts: dict[str, str]) -> dict[str, str]:
+        repaired = dict(shortcuts)
+        if self.canonical_shortcut(repaired.get("new_subscription_videos", "")) == self.canonical_shortcut(repaired.get("player_play_pause", "")):
+            replacement = self.first_available_shortcut(repaired, "new_subscription_videos", ["Ctrl+Shift+V", "Ctrl+Alt+V", "Alt+N"])
+            if replacement:
+                repaired["new_subscription_videos"] = replacement
+        seen: dict[str, str] = {}
+        for action, _label_key in SHORTCUT_DEFINITIONS:
+            canonical = self.canonical_shortcut(repaired.get(action, ""))
+            if not canonical:
+                repaired[action] = DEFAULT_KEYBOARD_SHORTCUTS.get(action, "")
+                canonical = self.canonical_shortcut(repaired.get(action, ""))
+            if canonical and canonical in seen:
+                replacement = self.first_available_shortcut(repaired, action, [DEFAULT_KEYBOARD_SHORTCUTS.get(action, ""), f"Ctrl+Alt+{action[:1].upper()}"])
+                if replacement:
+                    repaired[action] = replacement
+            if canonical:
+                seen[self.canonical_shortcut(repaired.get(action, ""))] = action
+        return repaired
+
     def load_settings(self) -> Settings:
         source = SETTINGS_FILE if SETTINGS_FILE.exists() else LEGACY_SETTINGS_FILE
         if source.exists():
@@ -8471,11 +8547,19 @@ class MainFrame(wx.Frame):
                 merged["speed_audio_mode"] = self.normalize_speed_audio_mode_value(str(merged.get("speed_audio_mode") or ""))
                 merged["direct_link_enter_action"] = self.normalize_direct_link_enter_action(str(merged.get("direct_link_enter_action") or ""))
                 merged["video_format"] = self.normalize_video_format_value(str(merged.get("video_format") or ""))
+                old_audio_quality = str(merged.get("audio_quality") or "")
+                merged["audio_quality"] = self.normalize_audio_quality_value(old_audio_quality)
+                if old_audio_quality and merged["audio_quality"] != old_audio_quality:
+                    self.settings_migrated = True
                 provider = str(merged.get("podcast_search_provider") or PODCAST_DIRECTORY_PROVIDER_APPLE)
                 merged["podcast_search_provider"] = provider if provider in PODCAST_DIRECTORY_PROVIDER_OPTIONS else PODCAST_DIRECTORY_PROVIDER_APPLE
                 country = str(merged.get("podcast_search_country") or "US").upper()
                 merged["podcast_search_country"] = country if country in PODCAST_COUNTRY_OPTIONS else "US"
-                merged["keyboard_shortcuts"] = self.normalized_keyboard_shortcuts(merged.get("keyboard_shortcuts"))
+                shortcuts = self.normalized_keyboard_shortcuts(merged.get("keyboard_shortcuts"))
+                repaired_shortcuts = self.repair_keyboard_shortcut_conflicts(shortcuts)
+                if repaired_shortcuts != shortcuts:
+                    self.settings_migrated = True
+                merged["keyboard_shortcuts"] = repaired_shortcuts
                 skipped_version = str(merged.get("skipped_update_version") or "")
                 if skipped_version and not self.is_newer_version(skipped_version, APP_VERSION):
                     merged["skipped_update_version"] = ""

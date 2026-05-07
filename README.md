@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.6.10.2` (`0.6.10.2`)
+Current version: `0.6.10.3` (`0.6.10.3`)
 
 ## Download
 
@@ -32,6 +32,7 @@ py wx_main.py
 - Audio and video downloads with progress updates
 - Default downloads go to `Downloads\ApricotPlayer`, with YouTube music/video files under `music` and podcast episodes under `podcasts`
 - Video downloads default to MP4, with selectable video download format options in Settings
+- Audio download quality settings show clear VBR and kbps labels
 - Current downloads screen with active batch/playlist/channel status and cancel controls
 - Favorites
 - History screen for recently played and downloaded items
@@ -55,6 +56,7 @@ py wx_main.py
 - Player repeat checkbox and finished-video restart behavior when pressing Space or Play
 - UI languages: English, Slovenian, German, French, Spanish, Portuguese, Italian, Polish, Dutch, Swedish, Croatian, Serbian, Czech, Slovak, Hungarian, Romanian, Turkish, Ukrainian, Russian, Japanese, Korean, Chinese Simplified, Arabic, Hindi, Indonesian, Finnish, and Greek
 - Configurable keyboard shortcuts in Settings, captured by pressing the desired key combination, with duplicate shortcut warnings
+- Legacy shortcut conflicts are repaired on startup when an older settings file assigned the same key to multiple actions
 - Keyboard shortcut settings use a lightweight action list and one capture field for faster screen reader navigation
 - Recommended pitch and speed processing modes appear first in their Settings combo boxes
 - Braille-friendly NVDA announcements using speech, braille messages, and status bar accessibility events
@@ -94,6 +96,7 @@ py wx_main.py
 - `Ctrl+Shift+N`: create playlist
 - `Ctrl+Shift+P`: add the focused or queued videos to a playlist
 - `Ctrl+Shift+R`: remove an item from a user playlist
+- `Ctrl+Shift+V`: open new videos for the focused subscription
 
 ## Accessibility
 
