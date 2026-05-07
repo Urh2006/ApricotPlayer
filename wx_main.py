@@ -103,8 +103,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.10.7"
-APP_VERSION_LABEL = "0.6.10.7"
+APP_VERSION = "0.6.10.8"
+APP_VERSION_LABEL = "0.6.10.8"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -164,6 +164,15 @@ DIRECT_LINK_ENTER_VIDEO = "download_video"
 DIRECT_LINK_ENTER_STREAM = "copy_stream_url"
 DIRECT_LINK_ENTER_OPTIONS = [DIRECT_LINK_ENTER_PLAY, DIRECT_LINK_ENTER_AUDIO, DIRECT_LINK_ENTER_VIDEO, DIRECT_LINK_ENTER_STREAM]
 COOKIES_BROWSER_OPTIONS = ["none", "chrome", "edge", "firefox", "brave", "chromium", "opera", "vivaldi"]
+COOKIES_BROWSER_PROCESS_NAMES = {
+    "chrome": ["chrome"],
+    "edge": ["msedge"],
+    "brave": ["brave"],
+    "chromium": ["chromium"],
+    "opera": ["opera"],
+    "vivaldi": ["vivaldi"],
+    "firefox": ["firefox"],
+}
 VIDEO_FORMAT_MP4 = "mp4"
 VIDEO_FORMAT_BEST_ANY = "best-any"
 VIDEO_FORMAT_MP4_SINGLE = "mp4-single"
@@ -544,12 +553,17 @@ TEXT = {
         "rate_limit": "Rate limit",
         "proxy": "Proxy URL",
         "cookies": "Cookies file",
+        "choose_cookies_file": "Izberi cookies.txt datoteko",
         "cookies_from_browser": "Cookies from browser",
         "export_browser_cookies": "Export browser cookies to cookies.txt",
         "exporting_browser_cookies": "Exporting browser cookies.",
         "browser_cookies_exported": "Browser cookies exported to {path}. Cookies from browser is now set to none.",
         "browser_cookies_export_failed": "Browser cookies export failed: {error}",
         "select_cookies_browser": "Najprej izberi browser pri Cookies from browser.",
+        "close_browser_for_cookie_export_title": "Zapri browser za export cookies",
+        "close_browser_for_cookie_export_message": "{browser} je odprt. ApricotPlayer ga lahko zapre in potem exporta cookies, kar obicajno popravi Chrome cookie database error. Shrani odprte stvari v browserju, potem izberi Yes. Nadaljujem?",
+        "browser_closed_for_cookie_export": "Browser zaprt. Exportam cookies.",
+        "cookies_file_selected": "Cookies file selected: {path}",
         "ffmpeg": "FFmpeg pot",
         "fragments": "Sočasni fragmenti",
         "retries": "Število ponovitev",
@@ -575,7 +589,7 @@ TEXT = {
         "download_done": "Prenos končan: {title}",
         "download_failed": "Prenos ni uspel: {error}",
         "youtube_auth_hint": "YouTube zahteva prijavo ali bot potrditev. V nastavitvah nastavi Cookies from browser na brskalnik, kjer si prijavljen v YouTube, na primer Chrome, Edge ali Firefox.",
-        "cookie_copy_hint": "ApricotPlayer ne more prebrati Chrome cookie baze. Zapri Chrome v celoti, v nastavitvah izberi Edge ali Firefox, ali uporabi izvozen cookies.txt file.",
+        "cookie_copy_hint": "ApricotPlayer ne more prebrati Chrome cookie baze. Zapri Chrome v celoti in ponovno izberi Export browser cookies. Lahko tudi izberes Edge ali Firefox, ali uporabis izvozen cookies.txt file.",
         "favorite_added": "Dodano med priljubljene.",
         "favorite_exists": "Ta element je že med priljubljenimi.",
         "favorite_removed": "Odstranjeno iz priljubljenih.",
@@ -930,12 +944,17 @@ TEXT = {
         "rate_limit": "Rate limit",
         "proxy": "Proxy URL",
         "cookies": "Cookies file",
+        "choose_cookies_file": "Choose cookies.txt file",
         "cookies_from_browser": "Cookies from browser",
         "export_browser_cookies": "Export browser cookies to cookies.txt",
         "exporting_browser_cookies": "Exporting browser cookies.",
         "browser_cookies_exported": "Browser cookies exported to {path}. Cookies from browser is now set to none.",
         "browser_cookies_export_failed": "Browser cookies export failed: {error}",
         "select_cookies_browser": "Choose a browser in Cookies from browser first.",
+        "close_browser_for_cookie_export_title": "Close browser to export cookies",
+        "close_browser_for_cookie_export_message": "{browser} is open. ApricotPlayer can close it and then export cookies, which usually fixes the Chrome cookie database error. Save anything open in the browser, then choose Yes. Continue?",
+        "browser_closed_for_cookie_export": "Browser closed. Exporting cookies.",
+        "cookies_file_selected": "Cookies file selected: {path}",
         "ffmpeg": "FFmpeg path",
         "fragments": "Concurrent fragments",
         "retries": "Retries",
@@ -961,7 +980,7 @@ TEXT = {
         "download_done": "Download finished: {title}",
         "download_failed": "Download failed: {error}",
         "youtube_auth_hint": "YouTube asks for sign-in or bot confirmation. Open Settings and set Cookies from browser to the browser where you are signed in to YouTube, for example Chrome, Edge, or Firefox.",
-        "cookie_copy_hint": "ApricotPlayer could not read the Chrome cookie database. Close Chrome completely, choose Edge or Firefox in Settings, or use an exported cookies.txt file.",
+        "cookie_copy_hint": "ApricotPlayer could not read the Chrome cookie database. Close Chrome completely and use Export browser cookies again. You can also choose Edge or Firefox, or use an exported cookies.txt file.",
         "favorite_added": "Added to favorites.",
         "favorite_exists": "This item is already in favorites.",
         "favorite_removed": "Removed from favorites.",
@@ -2084,13 +2103,24 @@ class MainFrame(wx.Frame):
         merged = {"logger": YTDLP_LOGGER, "no_warnings": True}
         if options:
             merged.update(options)
-        cookiefile = str(merged.get("cookiefile") or self.settings.cookies_file).strip()
+        cookiefile = str(merged.get("cookiefile") or self.effective_cookies_file()).strip()
         if cookiefile:
             merged["cookiefile"] = cookiefile
         cookies_browser = self.normalized_cookies_browser()
         if cookies_browser and not cookiefile and "cookiesfrombrowser" not in merged:
             merged["cookiesfrombrowser"] = (cookies_browser,)
         return merged
+
+    def effective_cookies_file(self) -> str:
+        configured = str(getattr(self.settings, "cookies_file", "") or "").strip()
+        if configured:
+            return configured
+        try:
+            if CACHED_COOKIES_FILE.exists() and CACHED_COOKIES_FILE.stat().st_size > 0:
+                return str(CACHED_COOKIES_FILE)
+        except OSError:
+            pass
+        return ""
 
     def normalized_cookies_browser(self) -> str:
         browser = str(getattr(self.settings, "cookies_from_browser", "none") or "none").strip().lower()
@@ -4686,6 +4716,7 @@ class MainFrame(wx.Frame):
             check("subscription_notifications", self.settings.subscription_notifications)
         elif section_name == "cookies":
             text("cookies", self.settings.cookies_file)
+            button("choose_cookies_file", self.choose_cookies_file)
             choice("cookies_from_browser", self.settings.cookies_from_browser or "none", COOKIES_BROWSER_OPTIONS)
             button("export_browser_cookies", self.export_browser_cookies_from_settings)
             text("rate_limit", self.settings.rate_limit)
@@ -6964,7 +6995,7 @@ class MainFrame(wx.Frame):
             "socket_timeout": self.settings.socket_timeout,
             "progress_hooks": [progress_hook],
         }
-        for key, value in (("ratelimit", self.settings.rate_limit), ("proxy", self.settings.proxy), ("cookiefile", self.settings.cookies_file), ("ffmpeg_location", self.settings.ffmpeg_location)):
+        for key, value in (("ratelimit", self.settings.rate_limit), ("proxy", self.settings.proxy), ("cookiefile", self.effective_cookies_file()), ("ffmpeg_location", self.settings.ffmpeg_location)):
             if value.strip():
                 options[key] = value.strip()
         if "ffmpeg_location" not in options:
@@ -7460,6 +7491,26 @@ class MainFrame(wx.Frame):
                 self.save_settings()
                 self.set_status(self.t("settings_saved"))
 
+    def choose_cookies_file(self) -> None:
+        with wx.FileDialog(
+            self,
+            self.t("choose_cookies_file"),
+            wildcard="cookies.txt (*.txt)|*.txt|All files (*.*)|*.*",
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+        ) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            path = dialog.GetPath()
+        self.settings.cookies_file = path
+        self.settings.cookies_from_browser = "none"
+        self.save_settings()
+        if hasattr(self, "controls"):
+            if "cookies" in self.controls:
+                self.controls["cookies"].SetValue(path)
+            if "cookies_from_browser" in self.controls:
+                self.controls["cookies_from_browser"].SetSelection(0)
+        self.announce_player(self.t("cookies_file_selected", path=path))
+
     def export_browser_cookies_from_settings(self) -> None:
         if get_yt_dlp() is None:
             self.message(self.t("missing_ytdlp"), wx.ICON_ERROR)
@@ -7469,8 +7520,63 @@ class MainFrame(wx.Frame):
         if not browser:
             self.message(self.t("select_cookies_browser"))
             return
+        if self.cookie_browser_is_running(browser):
+            label = browser.title()
+            with wx.MessageDialog(
+                self,
+                self.t("close_browser_for_cookie_export_message", browser=label),
+                self.t("close_browser_for_cookie_export_title"),
+                wx.YES_NO | wx.ICON_WARNING,
+            ) as dialog:
+                if dialog.ShowModal() != wx.ID_YES:
+                    return
+            if self.close_cookie_browser_processes(browser):
+                self.announce_player(self.t("browser_closed_for_cookie_export"))
         self.announce_player(self.t("exporting_browser_cookies"))
         threading.Thread(target=self.export_browser_cookies_worker, args=(browser,), daemon=True).start()
+
+    def cookie_browser_process_names(self, browser: str) -> list[str]:
+        return COOKIES_BROWSER_PROCESS_NAMES.get(str(browser or "").lower(), [])
+
+    def cookie_browser_is_running(self, browser: str) -> bool:
+        if os.name != "nt":
+            return False
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        for name in self.cookie_browser_process_names(browser):
+            try:
+                result = subprocess.run(
+                    ["tasklist", "/FI", f"IMAGENAME eq {name}.exe", "/NH"],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                    creationflags=creationflags,
+                )
+                if f"{name}.exe".lower() in (result.stdout or "").lower():
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def close_cookie_browser_processes(self, browser: str) -> bool:
+        if os.name != "nt":
+            return False
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        attempted = False
+        for name in self.cookie_browser_process_names(browser):
+            attempted = True
+            try:
+                subprocess.run(
+                    ["taskkill", "/IM", f"{name}.exe", "/T", "/F"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    creationflags=creationflags,
+                )
+            except Exception:
+                continue
+        if attempted:
+            time.sleep(1.0)
+        return attempted and not self.cookie_browser_is_running(browser)
 
     def export_browser_cookies_worker(self, browser: str) -> None:
         try:
