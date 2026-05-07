@@ -134,8 +134,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.14"
-APP_VERSION_LABEL = "0.6.14"
+APP_VERSION = "0.6.14.1"
+APP_VERSION_LABEL = "0.6.14.1"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -1833,15 +1833,20 @@ class MainFrame(wx.Frame):
         self.download_audio_accelerator_id = wx.NewIdRef()
         self.download_video_accelerator_id = wx.NewIdRef()
         self.subscribe_accelerator_id = wx.NewIdRef()
+        self.notification_center_accelerator_id = wx.NewIdRef()
         self.Bind(wx.EVT_MENU, lambda _evt: self.download_audio_shortcut(), id=int(self.download_audio_accelerator_id))
         self.Bind(wx.EVT_MENU, lambda _evt: self.download_video_shortcut(), id=int(self.download_video_accelerator_id))
         self.Bind(wx.EVT_MENU, lambda _evt: self.subscribe_shortcut(), id=int(self.subscribe_accelerator_id))
+        self.Bind(wx.EVT_MENU, lambda _evt: self.open_notification_center_shortcut(), id=int(self.notification_center_accelerator_id))
         entries = []
         for action, menu_id in (
             ("download_audio", int(self.download_audio_accelerator_id)),
             ("download_video", int(self.download_video_accelerator_id)),
             ("subscribe_channel", int(self.subscribe_accelerator_id)),
+            ("new_subscription_videos", int(self.notification_center_accelerator_id)),
         ):
+            if action == "new_subscription_videos" and self.shortcut_is_plain_printable(action):
+                continue
             accelerator = self.shortcut_to_accelerator(self.shortcut_for(action))
             if accelerator:
                 flags, key_code = accelerator
@@ -2163,6 +2168,22 @@ class MainFrame(wx.Frame):
 
     def shortcut_matches(self, event: wx.KeyEvent, action: str) -> bool:
         return self.event_matches_shortcut(event, self.shortcut_for(action))
+
+    def shortcut_is_plain_printable(self, action: str) -> bool:
+        parsed = self.parse_shortcut(self.shortcut_for(action))
+        if not parsed:
+            return False
+        ctrl, shift, alt, key_name = parsed
+        return not ctrl and not alt and len(key_name.strip()) == 1 and key_name.strip().isprintable()
+
+    @staticmethod
+    def focus_accepts_text(focus: wx.Window | None) -> bool:
+        if focus is None:
+            return False
+        try:
+            return isinstance(focus, wx.TextCtrl) and not bool(focus.GetWindowStyleFlag() & wx.TE_READONLY)
+        except Exception:
+            return False
 
     def event_matches_shortcut(self, event: wx.KeyEvent, shortcut: str) -> bool:
         alternatives = re.split(r"\s*\|\s*", str(shortcut or ""))
@@ -7075,7 +7096,9 @@ class MainFrame(wx.Frame):
         if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "history_list", None):
             self.play_history_item()
             return
-        if self.shortcut_matches(event, "new_subscription_videos"):
+        if self.shortcut_matches(event, "new_subscription_videos") and not (
+            self.focus_accepts_text(focus) and self.shortcut_is_plain_printable("new_subscription_videos")
+        ):
             self.open_notification_center_shortcut()
             return
         if focus is getattr(self, "queue_list", None) and self.shortcut_matches(event, "download_audio"):

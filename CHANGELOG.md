@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.6.14.1
+
+- fixed `Ctrl+Shift+V` from the main menu by registering the Notification center shortcut in the global accelerator table
+- prevented plain single-letter global shortcuts from firing while the user is typing in editable text fields, so a custom `N` shortcut can no longer steal focus from the search box
+- kept the Notification center shortcut configurable while avoiding unsafe no-modifier accelerators for editable fields
+
 ## What's new in version 0.6.14
 
 - the window title now changes to the currently playing video, podcast, or episode title followed by ApricotPlayer, so Alt+Tab announces the active media
