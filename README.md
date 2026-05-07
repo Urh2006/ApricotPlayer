@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.6.13` (`0.6.13`)
+Current version: `0.6.14` (`0.6.14`)
 
 ## Download
 
@@ -42,6 +42,8 @@ py wx_main.py
 - New videos view for each subscription after a subscription check finds new channel uploads
 - Notification center for saved subscription and podcast notifications, with Enter playback
 - `Ctrl+Shift+V` opens the notification center directly from anywhere in the app
+- The player window title includes the currently playing video, podcast, or episode title for Alt+Tab
+- App update checks can run periodically in tray mode, show an Update available main-menu item, and optionally send Windows notifications
 - Podcasts and RSS feeds screen with Apple Podcasts directory search, direct RSS/Atom feed URLs, refresh, open, play, download audio, download entire feed, queue episodes, copy URL, and browser actions
 - Direct link screen for playing or downloading any `yt-dlp` supported URL
 - Direct link Enter behavior can be configured in Settings

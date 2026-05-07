@@ -1,5 +1,13 @@
 # Changelog
 
+## What's new in version 0.6.14
+
+- the window title now changes to the currently playing video, podcast, or episode title followed by ApricotPlayer, so Alt+Tab announces the active media
+- added an App update check interval setting with 30-minute, 1-hour, 2-hour, 3-hour, 6-hour, 12-hour, and 24-hour choices
+- added an optional Windows notification when a background update check finds a new ApricotPlayer release
+- background update checks now store the pending release and show an `Update available` item at the top of the main menu
+- opening that main-menu item shows the usual changelog and Update now / Skip this version buttons
+
 ## What's new in version 0.6.13
 
 - changed `Ctrl+Shift+V` to open the Notification center directly from anywhere in the app

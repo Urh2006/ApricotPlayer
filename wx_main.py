@@ -134,8 +134,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.13"
-APP_VERSION_LABEL = "0.6.13"
+APP_VERSION = "0.6.14"
+APP_VERSION_LABEL = "0.6.14"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -463,6 +463,11 @@ TEXT = {
         "loading_more_results": "Loading more results.",
         "no_more_results": "No more results.",
         "auto_update_app": "Ob zagonu preveri posodobitve programa",
+        "app_update_interval": "Interval preverjanja posodobitev programa",
+        "app_update_notifications": "Windows obvestilo, ko je na voljo posodobitev programa",
+        "app_update_menu_item": "Na voljo je posodobitev: {version}",
+        "app_update_ready_status": "Na voljo je posodobitev programa {version}.",
+        "app_update_notification_message": "ApricotPlayer {version} je na voljo.",
         "check_app_updates_now": "Preveri posodobitve",
         "checking_app_updates": "Preverjam posodobitve programa.",
         "app_up_to_date": "Program je posodobljen.",
@@ -846,6 +851,11 @@ TEXT = {
         "loading_more_results": "Loading more results.",
         "no_more_results": "No more results.",
         "auto_update_app": "Check for updates at startup",
+        "app_update_interval": "App update check interval",
+        "app_update_notifications": "Windows notification when an app update is available",
+        "app_update_menu_item": "Update available: {version}",
+        "app_update_ready_status": "App update {version} is available.",
+        "app_update_notification_message": "ApricotPlayer {version} is available.",
         "check_app_updates_now": "Check for updates",
         "checking_app_updates": "Checking app updates.",
         "app_up_to_date": "The app is up to date.",
@@ -1615,6 +1625,8 @@ class Settings:
     popup_when_download_complete: bool = True
     auto_update_ytdlp: bool = True
     auto_update_app: bool = True
+    app_update_interval_hours: float = 6.0
+    app_update_notifications: bool = True
     skipped_update_version: str = ""
     confirm_before_download: bool = False
     download_archive: bool = False
@@ -1776,6 +1788,9 @@ class MainFrame(wx.Frame):
         self.details_opened_temporarily = False
         self.nvda_client = self.load_nvda_client()
         self.update_progress_dialog: wx.ProgressDialog | None = None
+        self.app_update_check_running = False
+        self.pending_app_update_release: dict | None = None
+        self.pending_app_update_asset: dict | None = None
         self.subscription_check_running = False
         self.rss_refresh_running = False
         self.exiting = False
@@ -1801,6 +1816,9 @@ class MainFrame(wx.Frame):
         self.rss_timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self.on_rss_timer, self.rss_timer)
         self.configure_rss_timer()
+        self.app_update_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self.on_app_update_timer, self.app_update_timer)
+        self.configure_app_update_timer()
         if self.settings.auto_update_ytdlp:
             wx.CallLater(3500, self.start_ytdlp_update_check)
         if self.settings.auto_update_app:
@@ -2507,7 +2525,16 @@ class MainFrame(wx.Frame):
             time.sleep(0.25)
         return not self.cookie_browser_is_running(browser)
 
+    def set_window_title(self, media_title: str | None = None) -> None:
+        title = re.sub(r"\s+", " ", str(media_title or "").strip())
+        if title:
+            self.SetTitle(f"{title} - {WINDOW_TITLE}")
+        else:
+            self.SetTitle(WINDOW_TITLE)
+
     def clear(self) -> None:
+        if not self.in_player_screen:
+            self.set_window_title()
         self.root_sizer.Clear(delete_windows=True)
 
     def focus_later(self, control: wx.Window) -> None:
@@ -2736,6 +2763,7 @@ class MainFrame(wx.Frame):
             getattr(self, "timer", None),
             getattr(self, "subscription_timer", None),
             getattr(self, "rss_timer", None),
+            getattr(self, "app_update_timer", None),
         ):
             try:
                 if timer and timer.IsRunning():
@@ -2806,6 +2834,9 @@ class MainFrame(wx.Frame):
         title = wx.StaticText(self.panel, label=self.t("main_menu"))
         self.root_sizer.Add(title, 0, wx.ALL, 4)
         self.menu_actions = []
+        pending_version = self.pending_app_update_version()
+        if pending_version:
+            self.menu_actions.append((self.t("app_update_menu_item", version=pending_version), self.open_pending_app_update))
         download_count = len(self.download_queue) + len(self.active_downloads)
         if download_count:
             self.menu_actions.append((f"{self.t('current_downloads')} ({download_count})", self.show_download_queue))
@@ -2845,6 +2876,38 @@ class MainFrame(wx.Frame):
         index = self.menu_list.GetSelection()
         if index != wx.NOT_FOUND:
             self.menu_actions[index][1]()
+
+    def pending_app_update_version(self) -> str:
+        if not self.pending_app_update_release:
+            return ""
+        return self.release_version(self.pending_app_update_release)
+
+    def open_pending_app_update(self) -> None:
+        release = self.pending_app_update_release
+        asset = self.pending_app_update_asset
+        if not release or not asset:
+            self.start_app_update_check(manual=True)
+            return
+        version = self.release_version(release)
+        if not getattr(sys, "frozen", False):
+            self.message(self.t("update_source_only", version=version))
+            return
+        changelog = self.release_changelog_text(release)
+        if self.show_update_prompt(version, changelog):
+            self.log_update_event(f"User selected pending update now for {version}")
+            if self.settings.skipped_update_version:
+                self.settings.skipped_update_version = ""
+                self.save_settings()
+            self.begin_app_update_install(release, asset)
+        else:
+            self.log_update_event(f"User skipped pending update {version}")
+            self.settings.skipped_update_version = version
+            self.pending_app_update_release = None
+            self.pending_app_update_asset = None
+            self.save_settings()
+            self.announce_player(self.t("update_skipped", version=version))
+            if self.in_main_menu:
+                self.show_main_menu()
 
     def show_direct_link(self) -> None:
         self.in_main_menu = False
@@ -4039,8 +4102,8 @@ class MainFrame(wx.Frame):
             "created_at": time.time(),
         }
 
-    def refresh_interval_seconds(self, value, default: float) -> float:
-        hours = self.to_float(str(value), default, 0.5, 168.0)
+    def refresh_interval_seconds(self, value, default: float, maximum_hours: float = 168.0) -> float:
+        hours = self.to_float(str(value), default, 0.5, maximum_hours)
         return max(30 * 60, hours * 60 * 60)
 
     def configure_subscription_timer(self) -> None:
@@ -4070,6 +4133,20 @@ class MainFrame(wx.Frame):
 
     def on_rss_timer(self, _event) -> None:
         self.refresh_all_rss_feeds_background()
+
+    def configure_app_update_timer(self) -> None:
+        if not hasattr(self, "app_update_timer"):
+            return
+        try:
+            self.app_update_timer.Stop()
+        except Exception:
+            pass
+        if self.settings.auto_update_app:
+            interval_ms = int(self.refresh_interval_seconds(self.settings.app_update_interval_hours, 6.0, maximum_hours=24.0) * 1000)
+            self.app_update_timer.Start(interval_ms)
+
+    def on_app_update_timer(self, _event) -> None:
+        self.start_app_update_check(manual=False, prompt=False, notify=True)
 
     def check_subscriptions_if_due(self) -> None:
         if not self.settings.subscription_check_enabled or not self.subscriptions:
@@ -5015,6 +5092,12 @@ class MainFrame(wx.Frame):
             choice("direct_link_enter_action", self.normalized_direct_link_enter_action(), DIRECT_LINK_ENTER_OPTIONS, self.direct_link_enter_action_labels())
             check("auto_update", self.settings.auto_update_ytdlp)
             check("auto_update_app", self.settings.auto_update_app)
+            choice(
+                "app_update_interval",
+                self.format_refresh_interval_value(self.settings.app_update_interval_hours, 6.0),
+                REFRESH_INTERVAL_OPTIONS,
+                self.refresh_interval_labels(),
+            )
             button("check_app_updates_now", self.manual_app_update_check)
             check("close_to_tray", self.settings.close_to_tray)
             check("tray_notification", self.settings.tray_notification)
@@ -5089,6 +5172,7 @@ class MainFrame(wx.Frame):
             check("windows_notifications", self.settings.windows_notifications)
             check("download_notifications", self.settings.download_notifications)
             check("subscription_notifications", self.settings.subscription_notifications)
+            check("app_update_notifications", self.settings.app_update_notifications)
         elif section_name == "cookies":
             text("cookies", self.settings.cookies_file)
             button("choose_cookies_file", self.choose_cookies_file)
@@ -5620,6 +5704,8 @@ class MainFrame(wx.Frame):
         )
         if self.current_video_item is not None:
             self.current_video_item.update(self.current_video_info)
+        if self.in_player_screen:
+            self.set_window_title(str(self.current_video_info.get("title") or ""))
         self.update_details_text()
 
     def playback_key(self, item: dict | None = None) -> str:
@@ -5898,6 +5984,7 @@ class MainFrame(wx.Frame):
         self.details_opened_temporarily = False
         self.in_player_screen = True
         self.player_control_mode = True
+        self.set_window_title(title)
         self.panel.Layout()
         if self.settings.show_video_details_by_default:
             wx.CallAfter(self.show_video_details, False)
@@ -7833,6 +7920,7 @@ class MainFrame(wx.Frame):
         self.save_settings()
         self.configure_subscription_timer()
         self.configure_rss_timer()
+        self.configure_app_update_timer()
         self.set_status(self.t("defaults_restored"))
         self.speak_text(self.t("defaults_restored"))
         self.show_settings()
@@ -7965,6 +8053,7 @@ class MainFrame(wx.Frame):
         self.trim_history()
         self.configure_subscription_timer()
         self.configure_rss_timer()
+        self.configure_app_update_timer()
         self.install_download_accelerators()
         saved_text = self.t("settings_saved")
         self.set_status(saved_text)
@@ -7995,6 +8084,8 @@ class MainFrame(wx.Frame):
             self.settings.auto_update_ytdlp = c["auto_update"].GetValue()
         if "auto_update_app" in c:
             self.settings.auto_update_app = c["auto_update_app"].GetValue()
+        if "app_update_interval" in c:
+            self.settings.app_update_interval_hours = self.to_float(self.selected_choice_value("app_update_interval"), 6.0, 0.5, 24.0)
         if "close_to_tray" in c:
             self.settings.close_to_tray = c["close_to_tray"].GetValue()
         if "tray_notification" in c:
@@ -8113,6 +8204,8 @@ class MainFrame(wx.Frame):
             self.settings.download_notifications = c["download_notifications"].GetValue()
         if "subscription_notifications" in c:
             self.settings.subscription_notifications = c["subscription_notifications"].GetValue()
+        if "app_update_notifications" in c:
+            self.settings.app_update_notifications = c["app_update_notifications"].GetValue()
         shortcuts = dict(getattr(self.settings, "keyboard_shortcuts", {}) or {})
         if "shortcut_action_list" in c and "shortcut_active_value" in c:
             self.sync_shortcut_editor_value()
@@ -8240,16 +8333,21 @@ class MainFrame(wx.Frame):
         self.save_settings()
         self.start_app_update_check(manual=True)
 
-    def start_app_update_check(self, manual: bool = False) -> None:
+    def start_app_update_check(self, manual: bool = False, prompt: bool = True, notify: bool = False) -> None:
         if not manual and not self.settings.auto_update_app:
             self.set_status(self.t("app_update_disabled"))
             return
+        if self.app_update_check_running:
+            if manual:
+                self.announce_player(self.t("checking_app_updates"))
+            return
+        self.app_update_check_running = True
         self.set_status(self.t("checking_app_updates"))
         if manual:
             self.announce_player(self.t("checking_app_updates"))
-        threading.Thread(target=self.app_update_worker, args=(manual,), daemon=True).start()
+        threading.Thread(target=self.app_update_worker, args=(manual, prompt, notify), daemon=True).start()
 
-    def app_update_worker(self, manual: bool = False) -> None:
+    def app_update_worker(self, manual: bool = False, prompt: bool = True, notify: bool = False) -> None:
         try:
             release = self.fetch_latest_release()
             if not release:
@@ -8272,17 +8370,40 @@ class MainFrame(wx.Frame):
                     release["_cumulative_changelog"] = cumulative
             except Exception:
                 pass
-            wx.CallAfter(self.prompt_for_app_update, release, asset)
+            if prompt:
+                wx.CallAfter(self.prompt_for_app_update, release, asset)
+            else:
+                wx.CallAfter(self.store_pending_app_update, release, asset, notify)
         except Exception as exc:
             message = self.t("app_update_failed", error=exc)
             self.report_app_update_status(message, manual)
             if manual:
                 wx.CallAfter(self.message, message, wx.ICON_ERROR)
+        finally:
+            self.app_update_check_running = False
 
     def report_app_update_status(self, message: str, manual: bool = False) -> None:
         self.ui_queue.put(("status", message))
         if manual:
             wx.CallAfter(self.announce_player, message)
+
+    def store_pending_app_update(self, release: dict, asset: dict, notify: bool = False) -> None:
+        version = self.release_version(release)
+        if not self.is_newer_version(version, APP_VERSION):
+            return
+        self.pending_app_update_release = release
+        self.pending_app_update_asset = asset
+        message = self.t("app_update_ready_status", version=version)
+        self.set_status(message)
+        if notify:
+            self.show_desktop_notification(
+                self.t("update_available_title"),
+                self.t("app_update_notification_message", version=version),
+                enabled=self.settings.app_update_notifications,
+                only_when_unfocused=True,
+            )
+        if self.in_main_menu:
+            self.show_main_menu()
 
     def prompt_for_app_update(self, release: dict, asset: dict) -> None:
         version = self.release_version(release)
@@ -8300,6 +8421,8 @@ class MainFrame(wx.Frame):
         else:
             self.log_update_event(f"User skipped update {version}")
             self.settings.skipped_update_version = version
+            self.pending_app_update_release = None
+            self.pending_app_update_asset = None
             self.save_settings()
             self.announce_player(self.t("update_skipped", version=version))
 
