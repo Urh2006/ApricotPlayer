@@ -103,8 +103,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.10.5"
-APP_VERSION_LABEL = "0.6.10.5"
+APP_VERSION = "0.6.10.6"
+APP_VERSION_LABEL = "0.6.10.6"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -6292,17 +6292,17 @@ class MainFrame(wx.Frame):
 
     def pitch_mode_labels(self) -> list[str]:
         return [
-            self.t("pitch_mode_rubberband"),
             self.t("pitch_mode_mpv"),
+            self.t("pitch_mode_rubberband"),
             self.t("pitch_mode_linked_speed"),
         ]
 
     def speed_audio_mode_labels(self) -> list[str]:
         return [
+            self.t("speed_audio_mode_rubberband"),
             self.t("speed_audio_mode_scaletempo2"),
             self.t("speed_audio_mode_mpv"),
             self.t("speed_audio_mode_scaletempo"),
-            self.t("speed_audio_mode_rubberband"),
         ]
 
     def direct_link_enter_action_labels(self) -> list[str]:
