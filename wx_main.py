@@ -134,8 +134,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.11"
-APP_VERSION_LABEL = "0.6.11"
+APP_VERSION = "0.6.12"
+APP_VERSION_LABEL = "0.6.12"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -2180,11 +2180,13 @@ class MainFrame(wx.Frame):
         text = TEXT[language].get(key, TEXT["en"].get(key, key))
         return text.format(**kwargs) if kwargs else text
 
-    def ydl_options(self, options: dict | None = None) -> dict:
+    def ydl_options(self, options: dict | None = None, use_cookies: bool = False) -> dict:
         merged = {"logger": YTDLP_LOGGER, "no_warnings": True}
         if options:
             merged.update(options)
-        cookiefile = str(merged.get("cookiefile") or self.effective_cookies_file()).strip()
+        cookiefile = str(merged.get("cookiefile") or "").strip()
+        if use_cookies and not cookiefile:
+            cookiefile = self.effective_cookies_file()
         if cookiefile:
             merged["cookiefile"] = cookiefile
         return merged
@@ -2233,33 +2235,54 @@ class MainFrame(wx.Frame):
         if ytdlp is None:
             raise RuntimeError(self.t("missing_ytdlp"))
 
-        def run_once():
-            with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
+        def run_once(use_cookies: bool = False):
+            with ytdlp.YoutubeDL(self.ydl_options(options, use_cookies=use_cookies)) as ydl:
                 return ydl.extract_info(url, download=download)
 
         try:
             return run_once()
         except Exception as exc:
-            if self.repair_cookies_for_error(exc):
-                return run_once()
-            raise
+            if not self.is_cookie_auth_error(exc):
+                raise
+            retry_error: Exception | str = exc
+            if self.effective_cookies_file():
+                try:
+                    return run_once(use_cookies=True)
+                except Exception as cookie_exc:
+                    retry_error = cookie_exc
+                    if not self.is_cookie_auth_error(cookie_exc):
+                        raise
+            if self.repair_cookies_for_error(retry_error):
+                return run_once(use_cookies=True)
+            raise retry_error if isinstance(retry_error, Exception) else exc
 
     def ydl_download_urls(self, urls: list[str], options: dict | None = None) -> None:
         ytdlp = get_yt_dlp()
         if ytdlp is None:
             raise RuntimeError(self.t("missing_ytdlp"))
 
-        def run_once() -> None:
-            with ytdlp.YoutubeDL(self.ydl_options(options)) as ydl:
+        def run_once(use_cookies: bool = False) -> None:
+            with ytdlp.YoutubeDL(self.ydl_options(options, use_cookies=use_cookies)) as ydl:
                 ydl.download(urls)
 
         try:
             run_once()
         except Exception as exc:
-            if self.repair_cookies_for_error(exc):
-                run_once()
+            if not self.is_cookie_auth_error(exc):
+                raise
+            retry_error: Exception | str = exc
+            if self.effective_cookies_file():
+                try:
+                    run_once(use_cookies=True)
+                    return
+                except Exception as cookie_exc:
+                    retry_error = cookie_exc
+                    if not self.is_cookie_auth_error(cookie_exc):
+                        raise
+            if self.repair_cookies_for_error(retry_error):
+                run_once(use_cookies=True)
                 return
-            raise
+            raise retry_error if isinstance(retry_error, Exception) else exc
 
     def repair_cookies_for_error(self, exc: Exception | str) -> bool:
         if not self.is_cookie_auth_error(exc):
@@ -7318,7 +7341,7 @@ class MainFrame(wx.Frame):
             "socket_timeout": self.settings.socket_timeout,
             "progress_hooks": [progress_hook],
         }
-        for key, value in (("ratelimit", self.settings.rate_limit), ("proxy", self.settings.proxy), ("cookiefile", self.effective_cookies_file()), ("ffmpeg_location", self.settings.ffmpeg_location)):
+        for key, value in (("ratelimit", self.settings.rate_limit), ("proxy", self.settings.proxy), ("ffmpeg_location", self.settings.ffmpeg_location)):
             if value.strip():
                 options[key] = value.strip()
         if "ffmpeg_location" not in options:

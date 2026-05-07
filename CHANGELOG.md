@@ -1,5 +1,12 @@
 # Changelog
 
+## What's new in version 0.6.12
+
+- restored fast playback startup by keeping the first yt-dlp playback/download attempt cookie-free
+- changed cookie handling to retry with cached `cookies.txt` only after YouTube reports sign-in or bot-confirmation errors
+- kept the automatic browser profile export/repair flow as a second fallback only when cached cookies are missing or stale
+- removed automatic cookie injection from download options so normal downloads also stay on the fast path
+
 ## What's new in version 0.6.11
 
 - rebuilt browser cookie handling so normal playback and downloads use ApricotPlayer's cached `cookies.txt` instead of repeatedly reading locked Brave/Chrome/Edge databases
