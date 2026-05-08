@@ -1,5 +1,10 @@
 # Changelog
 
+## What's new in version 0.6.14.6
+
+- changed the new age-restricted YouTube fallback setting to off by default for new users and older settings files that do not have this option yet
+- kept normal playback on the fast first attempt; cookies and EJS still run only after a relevant playback failure and only when the setting is enabled
+
 ## What's new in version 0.6.14.5
 
 - restored fast YouTube playback startup by keeping Node/EJS challenge solving out of the normal first playback attempt

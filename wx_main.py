@@ -153,8 +153,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.14.5"
-APP_VERSION_LABEL = "0.6.14.5"
+APP_VERSION = "0.6.14.6"
+APP_VERSION_LABEL = "0.6.14.6"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -1628,7 +1628,7 @@ class Settings:
     speed_audio_mode: str = SPEED_AUDIO_MODE_RUBBERBAND
     show_video_details_by_default: bool = False
     direct_link_enter_action: str = DIRECT_LINK_ENTER_PLAY
-    enable_age_restricted_videos: bool = True
+    enable_age_restricted_videos: bool = False
     enable_stream_cache: bool = True
     cache_folder: str = str(DEFAULT_CACHE_DIR)
     cache_size_mb: int = 512
@@ -2310,7 +2310,7 @@ class MainFrame(wx.Frame):
         return "" if browser == "none" else browser
 
     def age_restricted_video_support_enabled(self) -> bool:
-        return bool(getattr(self.settings, "enable_age_restricted_videos", True))
+        return bool(getattr(self.settings, "enable_age_restricted_videos", False))
 
     def friendly_error(self, exc: Exception | str) -> str:
         text = str(exc)
