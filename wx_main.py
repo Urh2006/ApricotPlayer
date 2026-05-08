@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import http.cookiejar
 import json
 import hashlib
 import os
@@ -8,6 +10,7 @@ import re
 import shlex
 import shutil
 import ssl
+import socket
 import subprocess
 import sys
 import tempfile
@@ -142,8 +145,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.14.2"
-APP_VERSION_LABEL = "0.6.14.2"
+APP_VERSION = "0.6.14.3"
+APP_VERSION_LABEL = "0.6.14.3"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -205,6 +208,7 @@ DIRECT_LINK_ENTER_OPTIONS = [DIRECT_LINK_ENTER_PLAY, DIRECT_LINK_ENTER_AUDIO, DI
 COOKIES_BROWSER_OPTIONS = ["none", "chrome", "edge", "firefox", "brave", "chromium", "opera", "vivaldi"]
 COOKIE_PROFILE_AUTO = "auto"
 COOKIE_PROFILE_OPTIONS = [COOKIE_PROFILE_AUTO]
+CHROMIUM_COOKIE_BROWSERS = {"brave", "chrome", "edge", "chromium", "opera", "vivaldi"}
 COOKIES_BROWSER_PROCESS_NAMES = {
     "chrome": ["chrome"],
     "edge": ["msedge"],
@@ -2439,6 +2443,183 @@ class MainFrame(wx.Frame):
                 labels.append(value)
         return labels
 
+    @staticmethod
+    def free_local_port() -> int:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            return int(sock.getsockname()[1])
+
+    def cookie_browser_executable(self, browser: str) -> str:
+        browser = str(browser or "").lower()
+        program_files = Path(os.getenv("ProgramFiles", r"C:\Program Files"))
+        program_files_x86 = Path(os.getenv("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+        local = Path(os.getenv("LOCALAPPDATA", ""))
+        candidates = {
+            "brave": [
+                program_files / "BraveSoftware" / "Brave-Browser" / "Application" / "brave.exe",
+                program_files_x86 / "BraveSoftware" / "Brave-Browser" / "Application" / "brave.exe",
+                local / "BraveSoftware" / "Brave-Browser" / "Application" / "brave.exe",
+            ],
+            "chrome": [
+                program_files / "Google" / "Chrome" / "Application" / "chrome.exe",
+                program_files_x86 / "Google" / "Chrome" / "Application" / "chrome.exe",
+                local / "Google" / "Chrome" / "Application" / "chrome.exe",
+            ],
+            "edge": [
+                program_files_x86 / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+                program_files / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+                local / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+            ],
+            "chromium": [
+                program_files / "Chromium" / "Application" / "chrome.exe",
+                program_files_x86 / "Chromium" / "Application" / "chrome.exe",
+                local / "Chromium" / "Application" / "chrome.exe",
+            ],
+            "opera": [
+                local / "Programs" / "Opera" / "opera.exe",
+                program_files / "Opera" / "opera.exe",
+                program_files_x86 / "Opera" / "opera.exe",
+            ],
+            "vivaldi": [
+                local / "Vivaldi" / "Application" / "vivaldi.exe",
+                program_files / "Vivaldi" / "Application" / "vivaldi.exe",
+                program_files_x86 / "Vivaldi" / "Application" / "vivaldi.exe",
+            ],
+        }.get(browser, [])
+        for candidate in candidates:
+            if candidate.exists():
+                return str(candidate)
+        return ""
+
+    def chromium_profile_launch_args(self, browser: str, profile: str | None) -> tuple[str, list[str]]:
+        root = self.cookie_browser_root(browser)
+        if not root:
+            raise RuntimeError(f"browser profile root not found for {browser}")
+        profile_value = str(profile or "").strip()
+        profile_dir = ""
+        user_data_dir = root
+        if profile_value and os.path.isabs(profile_value):
+            profile_path = Path(profile_value)
+            if profile_path.exists() and profile_path.parent.exists():
+                user_data_dir = profile_path.parent
+                profile_dir = profile_path.name
+        elif profile_value:
+            profile_dir = profile_value
+        elif browser != "opera":
+            profile_dir = "Default"
+        args = [
+            f"--user-data-dir={user_data_dir}",
+            "--remote-allow-origins=*",
+            "--headless=new",
+            "--disable-gpu",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-background-networking",
+            "--disable-features=LockProfileCookieDatabase",
+        ]
+        if profile_dir and browser != "opera":
+            args.append(f"--profile-directory={profile_dir}")
+        return profile_dir or root.name, args
+
+    async def devtools_get_all_cookies(self, websocket_url: str) -> list[dict]:
+        websockets = import_module("websockets")
+        async with websockets.connect(websocket_url, max_size=32_000_000) as ws:
+            await ws.send(json.dumps({"id": 1, "method": "Storage.getCookies", "params": {}}))
+            while True:
+                payload = json.loads(await ws.recv())
+                if payload.get("id") != 1:
+                    continue
+                if payload.get("error"):
+                    raise RuntimeError(str(payload["error"]))
+                return list((payload.get("result") or {}).get("cookies") or [])
+
+    def fetch_devtools_json(self, port: int, endpoint: str, timeout: float = 1.0) -> dict:
+        request = Request(f"http://127.0.0.1:{port}{endpoint}", headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+        with urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8", errors="replace"))
+
+    def cdp_cookies_to_cookie_jar(self, cookies: list[dict]) -> http.cookiejar.MozillaCookieJar:
+        jar = http.cookiejar.MozillaCookieJar()
+        for item in cookies:
+            name = str(item.get("name") or "")
+            value = str(item.get("value") or "")
+            domain = str(item.get("domain") or "")
+            if not name or not domain:
+                continue
+            path = str(item.get("path") or "/")
+            expires_value = item.get("expires")
+            try:
+                expires = int(float(expires_value)) if expires_value not in (None, "", -1) else None
+            except (TypeError, ValueError):
+                expires = None
+            if expires is not None and expires <= 0:
+                expires = None
+            cookie = http.cookiejar.Cookie(
+                version=0,
+                name=name,
+                value=value,
+                port=None,
+                port_specified=False,
+                domain=domain,
+                domain_specified=domain.startswith("."),
+                domain_initial_dot=domain.startswith("."),
+                path=path,
+                path_specified=True,
+                secure=bool(item.get("secure")),
+                expires=expires,
+                discard=expires is None,
+                comment=None,
+                comment_url=None,
+                rest={"HttpOnly": None} if item.get("httpOnly") else {},
+                rfc2109=False,
+            )
+            jar.set_cookie(cookie)
+        return jar
+
+    def export_chromium_cookies_via_devtools(self, browser: str, profile: str | None) -> tuple[str, object]:
+        executable = self.cookie_browser_executable(browser)
+        if not executable:
+            raise RuntimeError(f"{browser} executable not found")
+        profile_label, base_args = self.chromium_profile_launch_args(browser, profile)
+        port = self.free_local_port()
+        args = [
+            executable,
+            f"--remote-debugging-port={port}",
+            *base_args,
+            "https://www.youtube.com/",
+        ]
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        process = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=creationflags)
+        try:
+            version_payload: dict | None = None
+            deadline = time.monotonic() + 12.0
+            while time.monotonic() < deadline:
+                try:
+                    version_payload = self.fetch_devtools_json(port, "/json/version", timeout=1.0)
+                    break
+                except Exception:
+                    time.sleep(0.25)
+            if not version_payload:
+                raise RuntimeError("browser devtools endpoint did not start")
+            websocket_url = str(version_payload.get("webSocketDebuggerUrl") or "")
+            if not websocket_url:
+                raise RuntimeError("browser devtools websocket is missing")
+            cookies = asyncio.run(self.devtools_get_all_cookies(websocket_url))
+            cookie_jar = self.cdp_cookies_to_cookie_jar(cookies)
+            score, youtube_count, total_count = self.cookie_jar_score(cookie_jar)
+            if total_count <= 0 or score <= 0 or youtube_count <= 0:
+                raise RuntimeError(self.t("browser_cookies_no_youtube"))
+            return profile_label, cookie_jar
+        finally:
+            try:
+                process.terminate()
+                process.wait(timeout=5)
+            except Exception:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+
     def cookie_profile_candidates(self, browser: str) -> list[tuple[str, str | None]]:
         selected = str(getattr(self.settings, "cookies_browser_profile", COOKIE_PROFILE_AUTO) or COOKIE_PROFILE_AUTO).strip()
         discovered = self.discover_cookie_profiles(browser)
@@ -2508,6 +2689,7 @@ class MainFrame(wx.Frame):
         candidates = self.cookie_profile_candidates(browser)
         errors: list[str] = []
         best: tuple[int, str, object, str] | None = None
+        copy_lock_error_seen = False
         for attempt in range(2):
             lock_error_seen = False
             for label, profile in candidates:
@@ -2526,6 +2708,7 @@ class MainFrame(wx.Frame):
                     error_text = self.cookie_export_error_text(exc, logger)
                     if "could not copy" in error_text.lower() and "cookie" in error_text.lower():
                         lock_error_seen = True
+                        copy_lock_error_seen = True
                     errors.append(self.t("cookie_profile_attempt_failed", profile=label, error=error_text))
             if best and best[0] > 0:
                 break
@@ -2535,6 +2718,27 @@ class MainFrame(wx.Frame):
                 time.sleep(1.0)
                 continue
             break
+        if allow_close and browser in CHROMIUM_COOKIE_BROWSERS and (copy_lock_error_seen or not best):
+            self.close_cookie_browser_processes(browser)
+            self.wait_for_cookie_browser_exit(browser, timeout=8.0)
+            tried_profiles: set[str] = set()
+            for label, profile in candidates:
+                profile_key = profile or "Default"
+                if profile_key in tried_profiles:
+                    continue
+                tried_profiles.add(profile_key)
+                try:
+                    cdp_label, cookie_jar = self.export_chromium_cookies_via_devtools(browser, profile)
+                    score, youtube_count, total_count = self.cookie_jar_score(cookie_jar)
+                    if total_count <= 0:
+                        errors.append(self.t("cookie_profile_attempt_failed", profile=label, error="no cookies found"))
+                        continue
+                    if best is None or score > best[0]:
+                        best = (score, cdp_label or label, cookie_jar, "browser devtools cookie export")
+                    if score >= 100 and youtube_count > 0:
+                        break
+                except Exception as exc:
+                    errors.append(self.t("cookie_profile_attempt_failed", profile=label, error=self.cookie_export_error_text(exc)))
         if not best or best[0] <= 0:
             detail = "\n".join(errors[-6:]) if errors else self.t("cookie_all_profiles_failed")
             raise RuntimeError(f"{self.t('browser_cookies_no_youtube')}\n\n{detail}")

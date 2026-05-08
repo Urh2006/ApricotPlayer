@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.6.14.3
+
+- added a Chromium DevTools cookie export fallback for Brave, Chrome, Edge, Chromium, Opera, and Vivaldi when Windows refuses to copy the locked cookie database
+- ApricotPlayer now launches the selected Chromium browser headlessly with the selected profile, reads cookies through the browser itself, writes `cookies.txt`, and closes the temporary browser process
+- this fixes the repeated `Could not copy Chrome cookie database` failure that blocked age-restricted videos and YouTube bot-check retries when `yt-dlp` could not copy the SQLite cookie file
+
 ## What's new in version 0.6.14.2
 
 - fixed browser cookie export for Brave, Chrome, Edge, Firefox, Chromium, Opera, and Vivaldi after yt-dlp started calling the logger `info` method during cookie extraction
