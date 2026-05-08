@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.6.14.5
+
+- restored fast YouTube playback startup by keeping Node/EJS challenge solving out of the normal first playback attempt
+- added a Playback setting for age-restricted YouTube video support, which only uses the slower cookies/EJS fallback when the fast path fails with a sign-in, age, or format challenge
+- kept age-restricted videos working while avoiding the extra yt-dlp setup cost for ordinary videos
+
 ## What's new in version 0.6.14.4
 
 - bundled EJS challenge solver support and a Node runtime so age-restricted YouTube videos can resolve playable formats instead of failing with `Requested format is not available`

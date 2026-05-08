@@ -153,8 +153,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.14.4"
-APP_VERSION_LABEL = "0.6.14.4"
+APP_VERSION = "0.6.14.5"
+APP_VERSION_LABEL = "0.6.14.5"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -557,6 +557,7 @@ TEXT = {
         "auto_update": "Ob vsakem zagonu preveri posodobitve yt-dlp",
         "autoplay_next": "Po koncu posnetka samodejno predvajaj naslednjega",
         "show_video_details_by_default": "Privzeto pokazi podrobnosti videa v predvajalniku",
+        "enable_age_restricted_videos": "Podpora za starostno omejene YouTube videe (pocasnejsi fallback samo po potrebi)",
         "enable_stream_cache": "Omogoci predpomnilnik za predvajanje",
         "cache_folder": "Mapa za predpomnilnik",
         "cache_size_mb": "Velikost predpomnilnika v MB",
@@ -1146,6 +1147,7 @@ TEXT["en"].update(
         "cache_folder": "Playback cache folder",
         "cache_size_mb": "Playback cache size in MB",
         "resume_playback": "Resume videos where you left off",
+        "enable_age_restricted_videos": "Age-restricted YouTube video support (slower fallback only when needed)",
         "default_audio_device": "Default audio output device",
         "audio_device_missing": "The saved audio output device is no longer available. Choose a new default device.",
         "output_devices": "Audio output devices",
@@ -1626,6 +1628,7 @@ class Settings:
     speed_audio_mode: str = SPEED_AUDIO_MODE_RUBBERBAND
     show_video_details_by_default: bool = False
     direct_link_enter_action: str = DIRECT_LINK_ENTER_PLAY
+    enable_age_restricted_videos: bool = True
     enable_stream_cache: bool = True
     cache_folder: str = str(DEFAULT_CACHE_DIR)
     cache_size_mb: int = 512
@@ -2247,15 +2250,16 @@ class MainFrame(wx.Frame):
         text = TEXT[language].get(key, TEXT["en"].get(key, key))
         return text.format(**kwargs) if kwargs else text
 
-    def ydl_options(self, options: dict | None = None, use_cookies: bool = False) -> dict:
+    def ydl_options(self, options: dict | None = None, use_cookies: bool = False, use_js_solver: bool = False) -> dict:
         disable_external_ytdlp_plugins()
         merged = {
             "logger": YTDLP_LOGGER,
             "no_warnings": True,
-            "js_runtimes": self.ytdlp_js_runtimes(),
         }
-        if not self.ytdlp_ejs_available():
-            merged["remote_components"] = ["ejs:github"]
+        if use_js_solver:
+            merged["js_runtimes"] = self.ytdlp_js_runtimes()
+            if not self.ytdlp_ejs_available():
+                merged["remote_components"] = ["ejs:github"]
         if options:
             merged.update(options)
         cookiefile = str(merged.get("cookiefile") or "").strip()
@@ -2305,6 +2309,9 @@ class MainFrame(wx.Frame):
         browser = str(getattr(self.settings, "cookies_from_browser", "none") or "none").strip().lower()
         return "" if browser == "none" else browser
 
+    def age_restricted_video_support_enabled(self) -> bool:
+        return bool(getattr(self.settings, "enable_age_restricted_videos", True))
+
     def friendly_error(self, exc: Exception | str) -> str:
         text = str(exc)
         lowered = text.lower()
@@ -2331,30 +2338,53 @@ class MainFrame(wx.Frame):
         )
         return any(check in lowered for check in checks)
 
-    def ydl_extract_info(self, url: str, options: dict | None = None, download: bool = False) -> dict:
+    def is_age_or_js_playback_error(self, exc: Exception | str) -> bool:
+        lowered = str(exc).lower()
+        checks = (
+            "requested format is not available",
+            "no video formats found",
+            "nsig extraction failed",
+            "signature extraction failed",
+            "n challenge",
+            "age restricted",
+            "age-restricted",
+            "this video may be inappropriate",
+            "only available to registered users",
+        )
+        return any(check in lowered for check in checks)
+
+    def ydl_extract_info(
+        self,
+        url: str,
+        options: dict | None = None,
+        download: bool = False,
+        use_cookies: bool = False,
+        use_js_solver: bool = False,
+        allow_cookie_retry: bool = True,
+    ) -> dict:
         ytdlp = get_yt_dlp()
         if ytdlp is None:
             raise RuntimeError(self.t("missing_ytdlp"))
 
-        def run_once(use_cookies: bool = False):
-            with ytdlp.YoutubeDL(self.ydl_options(options, use_cookies=use_cookies)) as ydl:
+        def run_once(run_with_cookies: bool = False):
+            with ytdlp.YoutubeDL(self.ydl_options(options, use_cookies=run_with_cookies, use_js_solver=use_js_solver)) as ydl:
                 return ydl.extract_info(url, download=download)
 
         try:
-            return run_once()
+            return run_once(use_cookies)
         except Exception as exc:
-            if not self.is_cookie_auth_error(exc):
+            if not allow_cookie_retry or not self.is_cookie_auth_error(exc):
                 raise
             retry_error: Exception | str = exc
-            if self.effective_cookies_file():
+            if not use_cookies and self.effective_cookies_file():
                 try:
-                    return run_once(use_cookies=True)
+                    return run_once(True)
                 except Exception as cookie_exc:
                     retry_error = cookie_exc
                     if not self.is_cookie_auth_error(cookie_exc):
                         raise
             if self.repair_cookies_for_error(retry_error):
-                return run_once(use_cookies=True)
+                return run_once(True)
             raise retry_error if isinstance(retry_error, Exception) else exc
 
     def ydl_download_urls(self, urls: list[str], options: dict | None = None) -> None:
@@ -5412,6 +5442,7 @@ class MainFrame(wx.Frame):
             choice("speed_step", self.format_step_value(self.settings.speed_step), RATE_STEP_OPTIONS)
             choice("pitch_step", self.format_step_value(self.settings.pitch_step), RATE_STEP_OPTIONS)
             check("show_video_details_by_default", self.settings.show_video_details_by_default)
+            check("enable_age_restricted_videos", self.settings.enable_age_restricted_videos)
             check("enable_stream_cache", self.settings.enable_stream_cache)
             text("cache_folder", self.settings.cache_folder or str(DEFAULT_CACHE_DIR))
             choice("cache_size_mb", str(self.settings.cache_size_mb), ["128", "256", "512", "1024", "2048", "4096"])
@@ -5967,7 +5998,7 @@ class MainFrame(wx.Frame):
             wx.CallAfter(self.merge_current_video_info, info)
             wx.CallAfter(self.start_mpv, command, stream_url, title or url, headers)
         except Exception as exc:
-            if self.is_cookie_auth_error(exc) and self.normalized_cookies_browser():
+            if self.age_restricted_video_support_enabled() and self.is_cookie_auth_error(exc) and self.normalized_cookies_browser():
                 wx.CallAfter(self.prompt_cookie_refresh_for_playback, command, url, title, self.friendly_error(exc))
             else:
                 wx.CallAfter(self.message, self.t("player_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
@@ -5999,7 +6030,19 @@ class MainFrame(wx.Frame):
             "format": "best[ext=mp4]/best",
             "noplaylist": True,
         }
-        info = self.ydl_extract_info(url, options, download=False)
+        try:
+            info = self.ydl_extract_info(url, options, download=False, allow_cookie_retry=False)
+        except Exception as exc:
+            if not self.age_restricted_video_support_enabled() or not (self.is_cookie_auth_error(exc) or self.is_age_or_js_playback_error(exc)):
+                raise
+            info = self.ydl_extract_info(
+                url,
+                options,
+                download=False,
+                use_cookies=bool(self.effective_cookies_file()),
+                use_js_solver=True,
+                allow_cookie_retry=True,
+            )
         stream_url = info.get("url")
         if not stream_url and info.get("formats"):
             formats = [fmt for fmt in info["formats"] if fmt.get("url") and fmt.get("vcodec") != "none" and fmt.get("acodec") != "none"]
@@ -8469,6 +8512,8 @@ class MainFrame(wx.Frame):
             self.settings.pitch_mode = self.normalize_pitch_mode_value(self.selected_choice_value("pitch_mode"))
         if "show_video_details_by_default" in c:
             self.settings.show_video_details_by_default = c["show_video_details_by_default"].GetValue()
+        if "enable_age_restricted_videos" in c:
+            self.settings.enable_age_restricted_videos = c["enable_age_restricted_videos"].GetValue()
         if "enable_stream_cache" in c:
             self.settings.enable_stream_cache = c["enable_stream_cache"].GetValue()
         if "cache_folder" in c:
