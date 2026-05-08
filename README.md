@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.6.14.6` (`0.6.14.6`)
+Current version: `0.6.14.7` (`0.6.14.7`)
 
 ## Download
 
@@ -61,6 +61,7 @@ py wx_main.py
 - Player repeat checkbox and finished-video restart behavior when pressing Space or Play
 - UI languages: English, Slovenian, German, French, Spanish, Portuguese, Italian, Polish, Dutch, Swedish, Croatian, Serbian, Czech, Slovak, Hungarian, Romanian, Turkish, Ukrainian, Russian, Japanese, Korean, Chinese Simplified, Arabic, Hindi, Indonesian, Finnish, and Greek
 - Configurable keyboard shortcuts in Settings, captured by pressing the desired key combination, with duplicate shortcut warnings
+- Configurable global navigation shortcuts for Search, Direct link, Favorites, Playlists, Subscriptions, Notification center, Settings, and other main screens
 - Legacy shortcut conflicts are repaired on startup when an older settings file assigned the same key to multiple actions
 - Keyboard shortcut settings use a lightweight action list and one capture field for faster screen reader navigation
 - Recommended pitch and speed processing modes appear first in their Settings combo boxes

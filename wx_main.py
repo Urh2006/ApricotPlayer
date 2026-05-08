@@ -153,8 +153,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.14.6"
-APP_VERSION_LABEL = "0.6.14.6"
+APP_VERSION = "0.6.14.7"
+APP_VERSION_LABEL = "0.6.14.7"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -278,6 +278,16 @@ LANGUAGE_CODES = [code for code, _name in LANGUAGES]
 LANGUAGE_NAMES = {code: name for code, name in LANGUAGES}
 
 DEFAULT_KEYBOARD_SHORTCUTS = {
+    "open_main_menu": "Ctrl+Alt+M",
+    "open_search": "Ctrl+Alt+Y",
+    "open_direct_link": "Ctrl+Alt+L",
+    "open_favorites": "Ctrl+Alt+F",
+    "open_playlists": "Ctrl+Alt+P",
+    "open_subscriptions": "Ctrl+Alt+B",
+    "open_current_downloads": "Ctrl+Alt+D",
+    "open_history": "Ctrl+Alt+H",
+    "open_podcasts_rss": "Ctrl+Alt+R",
+    "open_settings": "Ctrl+Alt+S",
     "download_audio": "Ctrl+Shift+A",
     "download_video": "Ctrl+Shift+D",
     "subscribe_channel": "Ctrl+Shift+S",
@@ -314,6 +324,16 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
 }
 
 SHORTCUT_DEFINITIONS = [
+    ("open_main_menu", "shortcut_open_main_menu"),
+    ("open_search", "shortcut_open_search"),
+    ("open_direct_link", "shortcut_open_direct_link"),
+    ("open_favorites", "shortcut_open_favorites"),
+    ("open_playlists", "shortcut_open_playlists"),
+    ("open_subscriptions", "shortcut_open_subscriptions"),
+    ("open_current_downloads", "shortcut_open_current_downloads"),
+    ("open_history", "shortcut_open_history"),
+    ("open_podcasts_rss", "shortcut_open_podcasts_rss"),
+    ("open_settings", "shortcut_open_settings"),
     ("download_audio", "shortcut_download_audio"),
     ("download_video", "shortcut_download_video"),
     ("subscribe_channel", "shortcut_subscribe_channel"),
@@ -663,6 +683,16 @@ TEXT = {
         "favorite_exists": "Ta element je že med priljubljenimi.",
         "favorite_removed": "Odstranjeno iz priljubljenih.",
         "settings_saved": "Nastavitve shranjene.",
+        "shortcut_open_main_menu": "Odpri glavni meni",
+        "shortcut_open_search": "Odpri iskanje YouTube",
+        "shortcut_open_direct_link": "Odpri neposredno povezavo",
+        "shortcut_open_favorites": "Odpri priljubljene",
+        "shortcut_open_playlists": "Odpri playliste",
+        "shortcut_open_subscriptions": "Odpri narocnine",
+        "shortcut_open_current_downloads": "Odpri trenutne prenose",
+        "shortcut_open_history": "Odpri zgodovino",
+        "shortcut_open_podcasts_rss": "Odpri podkaste in RSS",
+        "shortcut_open_settings": "Odpri nastavitve",
         "shortcut_download_audio": "Prenesi zvok",
         "shortcut_download_video": "Prenesi video",
         "shortcut_subscribe_channel": "Naroci se na kanal",
@@ -1069,6 +1099,16 @@ TEXT = {
         "favorite_exists": "This item is already in favorites.",
         "favorite_removed": "Removed from favorites.",
         "settings_saved": "Settings saved.",
+        "shortcut_open_main_menu": "Open main menu",
+        "shortcut_open_search": "Open YouTube search",
+        "shortcut_open_direct_link": "Open direct link",
+        "shortcut_open_favorites": "Open favorites",
+        "shortcut_open_playlists": "Open playlists",
+        "shortcut_open_subscriptions": "Open subscriptions",
+        "shortcut_open_current_downloads": "Open current downloads",
+        "shortcut_open_history": "Open history",
+        "shortcut_open_podcasts_rss": "Open podcasts and RSS",
+        "shortcut_open_settings": "Open settings",
         "shortcut_download_audio": "Download audio",
         "shortcut_download_video": "Download video",
         "shortcut_subscribe_channel": "Subscribe to channel",
@@ -1861,22 +1901,30 @@ class MainFrame(wx.Frame):
         wx.CallLater(6500, self.check_saved_audio_device_available)
 
     def install_download_accelerators(self) -> None:
-        self.download_audio_accelerator_id = wx.NewIdRef()
-        self.download_video_accelerator_id = wx.NewIdRef()
-        self.subscribe_accelerator_id = wx.NewIdRef()
-        self.notification_center_accelerator_id = wx.NewIdRef()
-        self.Bind(wx.EVT_MENU, lambda _evt: self.download_audio_shortcut(), id=int(self.download_audio_accelerator_id))
-        self.Bind(wx.EVT_MENU, lambda _evt: self.download_video_shortcut(), id=int(self.download_video_accelerator_id))
-        self.Bind(wx.EVT_MENU, lambda _evt: self.subscribe_shortcut(), id=int(self.subscribe_accelerator_id))
-        self.Bind(wx.EVT_MENU, lambda _evt: self.open_notification_center_shortcut(), id=int(self.notification_center_accelerator_id))
+        self.global_accelerator_ids: dict[str, wx.WindowIDRef] = {}
+        global_actions = [
+            ("open_main_menu", self.open_main_menu_shortcut),
+            ("open_search", self.open_search_shortcut),
+            ("open_direct_link", self.open_direct_link_shortcut),
+            ("open_favorites", self.open_favorites_shortcut),
+            ("open_playlists", self.open_playlists_shortcut),
+            ("open_subscriptions", self.open_subscriptions_shortcut),
+            ("open_current_downloads", self.open_current_downloads_shortcut),
+            ("open_history", self.open_history_shortcut),
+            ("open_podcasts_rss", self.open_podcasts_rss_shortcut),
+            ("open_settings", self.open_settings_shortcut),
+            ("download_audio", self.download_audio_shortcut),
+            ("download_video", self.download_video_shortcut),
+            ("subscribe_channel", self.subscribe_shortcut),
+            ("new_subscription_videos", self.open_notification_center_shortcut),
+        ]
+        for action, handler in global_actions:
+            menu_id = wx.NewIdRef()
+            self.global_accelerator_ids[action] = menu_id
+            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), id=int(menu_id))
         entries = []
-        for action, menu_id in (
-            ("download_audio", int(self.download_audio_accelerator_id)),
-            ("download_video", int(self.download_video_accelerator_id)),
-            ("subscribe_channel", int(self.subscribe_accelerator_id)),
-            ("new_subscription_videos", int(self.notification_center_accelerator_id)),
-        ):
-            if action == "new_subscription_videos" and self.shortcut_is_plain_printable(action):
+        for action, menu_id in self.global_accelerator_ids.items():
+            if self.shortcut_is_plain_printable(action):
                 continue
             accelerator = self.shortcut_to_accelerator(self.shortcut_for(action))
             if accelerator:
@@ -3201,8 +3249,12 @@ class MainFrame(wx.Frame):
         self.focus_later(self.menu_list)
 
     def on_menu_key(self, event: wx.KeyEvent) -> None:
+        if self.is_modifier_only_event(event):
+            return
         if self.shortcut_matches(event, "open_selected"):
             self.activate_menu()
+            return
+        if self.handle_global_navigation_shortcut(event, self.menu_list):
             return
         event.Skip()
 
@@ -3749,10 +3801,50 @@ class MainFrame(wx.Frame):
         self.focus_later(self.notification_list)
 
     def open_notification_center_shortcut(self) -> None:
-        if self.in_player_screen:
-            self.stop_player(silent=True)
-            self.in_player_screen = False
-        self.show_notification_center()
+        self.run_global_navigation_shortcut(self.show_notification_center)
+
+    def leave_player_for_global_navigation(self) -> None:
+        if not self.in_player_screen:
+            return
+        self.stop_player(silent=True)
+        self.in_player_screen = False
+        self.player_control_mode = False
+
+    def run_global_navigation_shortcut(self, handler) -> None:
+        self.leave_player_for_global_navigation()
+        handler()
+
+    def open_main_menu_shortcut(self) -> None:
+        self.run_global_navigation_shortcut(self.show_main_menu)
+
+    def open_search_shortcut(self) -> None:
+        self.run_global_navigation_shortcut(self.show_search)
+
+    def open_direct_link_shortcut(self) -> None:
+        self.run_global_navigation_shortcut(self.show_direct_link)
+
+    def open_favorites_shortcut(self) -> None:
+        self.run_global_navigation_shortcut(self.show_favorites)
+
+    def open_playlists_shortcut(self) -> None:
+        self.run_global_navigation_shortcut(self.show_user_playlists)
+
+    def open_subscriptions_shortcut(self) -> None:
+        self.run_global_navigation_shortcut(self.show_subscriptions)
+
+    def open_current_downloads_shortcut(self) -> None:
+        self.run_global_navigation_shortcut(self.show_download_queue)
+
+    def open_history_shortcut(self) -> None:
+        if self.settings.enable_history:
+            self.run_global_navigation_shortcut(self.show_history)
+
+    def open_podcasts_rss_shortcut(self) -> None:
+        if self.settings.enable_podcasts_rss:
+            self.run_global_navigation_shortcut(self.show_rss_feeds)
+
+    def open_settings_shortcut(self) -> None:
+        self.run_global_navigation_shortcut(self.show_settings)
 
     def refresh_notification_center(self) -> None:
         if not hasattr(self, "notification_list"):
@@ -4398,6 +4490,8 @@ class MainFrame(wx.Frame):
             self.announce_player(self.t("subscription_removed", title=item.get("title", "")))
 
     def subscribe_shortcut(self) -> None:
+        if self.in_main_menu:
+            return
         self.subscribe_to_selected_channel(self.active_item())
 
     def subscribe_to_selected_channel(self, item: dict | None) -> None:
@@ -7366,6 +7460,42 @@ class MainFrame(wx.Frame):
                 codes.add(code)
         return codes
 
+    @staticmethod
+    def is_modifier_only_event(event: wx.KeyEvent) -> bool:
+        modifier_codes = {
+            getattr(wx, "WXK_CONTROL", -1),
+            getattr(wx, "WXK_SHIFT", -1),
+            getattr(wx, "WXK_ALT", -1),
+            16, 17, 18,
+            160, 161, 162, 163, 164, 165,
+        }
+        codes = MainFrame.key_event_codes(event)
+        return bool(codes) and all(code in modifier_codes for code in codes)
+
+    def shortcut_allowed_for_focus(self, action: str, focus: wx.Window | None) -> bool:
+        return not (self.focus_accepts_text(focus) and self.shortcut_is_plain_printable(action))
+
+    def handle_global_navigation_shortcut(self, event: wx.KeyEvent, focus: wx.Window | None = None) -> bool:
+        focus = focus or wx.Window.FindFocus()
+        actions = [
+            ("open_main_menu", self.open_main_menu_shortcut),
+            ("open_search", self.open_search_shortcut),
+            ("open_direct_link", self.open_direct_link_shortcut),
+            ("open_favorites", self.open_favorites_shortcut),
+            ("open_playlists", self.open_playlists_shortcut),
+            ("open_subscriptions", self.open_subscriptions_shortcut),
+            ("open_current_downloads", self.open_current_downloads_shortcut),
+            ("open_history", self.open_history_shortcut),
+            ("open_podcasts_rss", self.open_podcasts_rss_shortcut),
+            ("open_settings", self.open_settings_shortcut),
+            ("new_subscription_videos", self.open_notification_center_shortcut),
+        ]
+        for action, handler in actions:
+            if self.shortcut_matches(event, action) and self.shortcut_allowed_for_focus(action, focus):
+                handler()
+                return True
+        return False
+
     @classmethod
     def key_event_matches_letter(cls, event: wx.KeyEvent, letter: str) -> bool:
         upper = letter.upper()
@@ -7418,8 +7548,20 @@ class MainFrame(wx.Frame):
     def on_char_hook(self, event: wx.KeyEvent) -> None:
         focus = wx.Window.FindFocus()
         details_has_focus = focus is self.video_details
+        if self.is_modifier_only_event(event):
+            return
         if self.is_shortcut_capture_control(focus):
             self.on_shortcut_capture_key(event, focus)
+            return
+        if self.in_main_menu:
+            if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "menu_list", None):
+                self.activate_menu()
+                return
+            if self.handle_global_navigation_shortcut(event, focus):
+                return
+            event.Skip()
+            return
+        if self.handle_global_navigation_shortcut(event, focus):
             return
         if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "menu_list", None):
             self.activate_menu()
@@ -7444,11 +7586,6 @@ class MainFrame(wx.Frame):
             return
         if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "history_list", None):
             self.play_history_item()
-            return
-        if self.shortcut_matches(event, "new_subscription_videos") and not (
-            self.focus_accepts_text(focus) and self.shortcut_is_plain_printable("new_subscription_videos")
-        ):
-            self.open_notification_center_shortcut()
             return
         if focus is getattr(self, "queue_list", None) and self.shortcut_matches(event, "download_audio"):
             self.download_selected_queue_item(True)
@@ -7709,6 +7846,8 @@ class MainFrame(wx.Frame):
         self.start_download_shortcut(False)
 
     def start_download_shortcut(self, audio_only: bool) -> None:
+        if self.in_main_menu:
+            return
         item = self.active_item()
         url = str(item.get("url", "")) if item else ""
         kind = "audio" if audio_only else "video"

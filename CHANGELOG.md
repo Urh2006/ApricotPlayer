@@ -1,5 +1,12 @@
 # Changelog
 
+## What's new in version 0.6.14.7
+
+- fixed main-menu shortcut handling so pressing modifier keys such as Ctrl+Shift by themselves no longer opens a "Select an item" dialog
+- made `Ctrl+Shift+V` open the Notification center from the main menu reliably
+- added configurable global shortcuts for main menu navigation, including Search, Direct link, Favorites, Playlists, Subscriptions, Current downloads, History, Podcasts/RSS, Settings, and Main menu
+- prevented item-only shortcuts such as download and subscribe from firing in the main menu when no media item is selected
+
 ## What's new in version 0.6.14.6
 
 - changed the new age-restricted YouTube fallback setting to off by default for new users and older settings files that do not have this option yet
