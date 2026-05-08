@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.6.14.2
+
+- fixed browser cookie export for Brave, Chrome, Edge, Firefox, Chromium, Opera, and Vivaldi after yt-dlp started calling the logger `info` method during cookie extraction
+- kept the automatic cookie refresh flow compatible with newer yt-dlp cookie extraction logging, so the error no longer stops every browser profile before cookies are checked
+- improved YouTube login cookie detection by recognizing additional current Google and YouTube auth cookie names
+
 ## What's new in version 0.6.14.1
 
 - fixed `Ctrl+Shift+V` from the main menu by registering the Notification center shortcut in the global accelerator table

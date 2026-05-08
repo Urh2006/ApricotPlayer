@@ -101,20 +101,28 @@ class MemoryYtdlpLogger:
     def __init__(self) -> None:
         self.messages: list[str] = []
 
-    def debug(self, message: str) -> None:
+    def info(self, message: str, *args, **kwargs) -> None:
+        text = str(message or "").strip()
+        if text and not text.startswith("Extracting cookies from") and not text.startswith("Extracted "):
+            self.messages.append(text)
+
+    def debug(self, message: str, *args, **kwargs) -> None:
         text = str(message or "").strip()
         if text and not text.startswith("Searching for") and not text.startswith("Loading cookie"):
             self.messages.append(text)
 
-    def warning(self, message: str) -> None:
+    def warning(self, message: str, *args, **kwargs) -> None:
         text = str(message or "").strip()
         if text:
             self.messages.append(text)
 
-    def error(self, message: str) -> None:
+    def error(self, message: str, *args, **kwargs) -> None:
         text = str(message or "").strip()
         if text:
             self.messages.append(text)
+
+    def progress_bar(self):
+        return None
 
     def summary(self) -> str:
         seen: set[str] = set()
@@ -134,8 +142,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.14.1"
-APP_VERSION_LABEL = "0.6.14.1"
+APP_VERSION = "0.6.14.2"
+APP_VERSION_LABEL = "0.6.14.2"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -2454,17 +2462,24 @@ class MainFrame(wx.Frame):
     def cookie_jar_score(cookie_jar) -> tuple[int, int, int]:
         auth_names = {
             "sid",
+            "sidcc",
+            "lsid",
+            "osid",
             "hsid",
             "ssid",
             "apisid",
             "sapisid",
             "login_info",
+            "account_chooser",
+            "__secure-osid",
             "__secure-1psid",
             "__secure-3psid",
             "__secure-1papisid",
             "__secure-3papisid",
             "__secure-1psidts",
             "__secure-3psidts",
+            "__secure-1psidcc",
+            "__secure-3psidcc",
         }
         score = 0
         youtube_count = 0
