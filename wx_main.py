@@ -59,10 +59,18 @@ def get_yt_dlp():
                 if components_text not in sys.path:
                     sys.path.insert(0, components_text)
         yt_dlp = import_module("yt_dlp")
+        disable_external_ytdlp_plugins()
     except ImportError as exc:
         yt_dlp_import_error = exc
         return None
     return yt_dlp
+
+
+def disable_external_ytdlp_plugins() -> None:
+    try:
+        import_module("yt_dlp.globals").plugin_dirs.value = []
+    except Exception:
+        pass
 
 try:
     import winsound
@@ -145,8 +153,8 @@ class DownloadCancelled(Exception):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.14.3"
-APP_VERSION_LABEL = "0.6.14.3"
+APP_VERSION = "0.6.14.4"
+APP_VERSION_LABEL = "0.6.14.4"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -620,6 +628,8 @@ TEXT = {
         "cookie_auto_refresh_start": "YouTube rabi prijavne cookies. Osvezujem cookies iz {browser}.",
         "cookie_auto_refresh_done": "Cookies osvezeni iz {profile}. Poskusam znova.",
         "cookie_auto_refresh_failed": "Cookies se niso mogli osveziti: {error}",
+        "cookie_refresh_prompt_title": "Osvezi YouTube cookies",
+        "cookie_refresh_prompt_message": "YouTube zahteva nove prijavne cookies ali bot potrditev. Ali zelis zdaj osveziti cookies iz izbranega browserja in poskusiti znova?",
         "cookie_profile_attempt_failed": "{profile}: {error}",
         "cookie_all_profiles_failed": "Noben browser profil ni deloval. Zapri browser v celoti ali se prijavi v YouTube in poskusi znova.",
         "ffmpeg": "FFmpeg pot",
@@ -1019,6 +1029,8 @@ TEXT = {
         "cookie_auto_refresh_start": "YouTube needs sign-in cookies. Refreshing cookies from {browser}.",
         "cookie_auto_refresh_done": "Cookies refreshed from {profile}. Trying again.",
         "cookie_auto_refresh_failed": "Cookies could not be refreshed: {error}",
+        "cookie_refresh_prompt_title": "Refresh YouTube cookies",
+        "cookie_refresh_prompt_message": "YouTube needs fresh sign-in cookies or bot confirmation. Do you want to refresh cookies from the selected browser now and try again?",
         "cookie_profile_attempt_failed": "{profile}: {error}",
         "cookie_all_profiles_failed": "No browser profile worked. Close the browser completely or sign in to YouTube, then try again.",
         "select_cookies_browser": "Choose a browser in Cookies from browser first.",
@@ -1566,6 +1578,8 @@ COOKIE_TRANSLATION_UPDATES = {
         "cookie_auto_refresh_start": "YouTube zahteva prijavne piškotke. Osvežujem piškotke iz {browser}.",
         "cookie_auto_refresh_done": "Piškotki so osveženi iz profila {profile}. Poskušam znova.",
         "cookie_auto_refresh_failed": "Piškotkov ni bilo mogoče osvežiti: {error}",
+        "cookie_refresh_prompt_title": "Osveži YouTube piškotke",
+        "cookie_refresh_prompt_message": "YouTube zahteva sveže prijavne piškotke ali bot potrditev. Ali želiš zdaj osvežiti piškotke iz izbranega brskalnika in poskusiti znova?",
         "cookie_profile_attempt_failed": "{profile}: {error}",
         "cookie_all_profiles_failed": "Noben profil brskalnika ni deloval. Popolnoma zapri brskalnik ali se prijavi v YouTube in poskusi znova.",
         "youtube_auth_hint": "YouTube zahteva prijavo ali bot potrditev. V nastavitvah izberi Piškotki iz brskalnika, na primer Brave, da ApricotPlayer lahko sam osveži cookies.txt.",
@@ -1579,6 +1593,8 @@ COOKIE_TRANSLATION_UPDATES = {
         "cookie_auto_refresh_start": "YouTube needs sign-in cookies. Refreshing cookies from {browser}.",
         "cookie_auto_refresh_done": "Cookies refreshed from {profile}. Trying again.",
         "cookie_auto_refresh_failed": "Cookies could not be refreshed: {error}",
+        "cookie_refresh_prompt_title": "Refresh YouTube cookies",
+        "cookie_refresh_prompt_message": "YouTube needs fresh sign-in cookies or bot confirmation. Do you want to refresh cookies from the selected browser now and try again?",
         "cookie_profile_attempt_failed": "{profile}: {error}",
         "cookie_all_profiles_failed": "No browser profile worked. Close the browser completely or sign in to YouTube, then try again.",
         "youtube_auth_hint": "YouTube asks for sign-in or bot confirmation. Open Settings and choose Cookies from browser, for example Brave, so ApricotPlayer can refresh cookies.txt automatically.",
@@ -2232,7 +2248,14 @@ class MainFrame(wx.Frame):
         return text.format(**kwargs) if kwargs else text
 
     def ydl_options(self, options: dict | None = None, use_cookies: bool = False) -> dict:
-        merged = {"logger": YTDLP_LOGGER, "no_warnings": True}
+        disable_external_ytdlp_plugins()
+        merged = {
+            "logger": YTDLP_LOGGER,
+            "no_warnings": True,
+            "js_runtimes": self.ytdlp_js_runtimes(),
+        }
+        if not self.ytdlp_ejs_available():
+            merged["remote_components"] = ["ejs:github"]
         if options:
             merged.update(options)
         cookiefile = str(merged.get("cookiefile") or "").strip()
@@ -2241,6 +2264,31 @@ class MainFrame(wx.Frame):
         if cookiefile:
             merged["cookiefile"] = cookiefile
         return merged
+
+    @staticmethod
+    def ytdlp_ejs_available() -> bool:
+        try:
+            import_module("yt_dlp_ejs")
+            return True
+        except Exception:
+            return False
+
+    def bundled_node_executable(self) -> str:
+        candidates = [
+            self.bundled_path("node", "node.exe"),
+            Path(__file__).resolve().parent / "vendor" / "node" / "node.exe",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return str(candidate)
+        node = shutil.which("node")
+        return node or ""
+
+    def ytdlp_js_runtimes(self) -> dict:
+        node = self.bundled_node_executable()
+        if node:
+            return {"node": {"path": node}}
+        return {"deno": {}, "node": {}, "quickjs": {}, "bun": {}}
 
     def effective_cookies_file(self) -> str:
         configured = str(getattr(self.settings, "cookies_file", "") or "").strip()
@@ -2276,6 +2324,8 @@ class MainFrame(wx.Frame):
             "cookies-from-browser",
             "failed to load cookies",
             "could not copy chrome cookie database",
+            "no youtube login cookies",
+            "cookies were exported, but no youtube login cookies",
             "login required",
             "this video may be inappropriate",
         )
@@ -2607,7 +2657,7 @@ class MainFrame(wx.Frame):
             cookies = asyncio.run(self.devtools_get_all_cookies(websocket_url))
             cookie_jar = self.cdp_cookies_to_cookie_jar(cookies)
             score, youtube_count, total_count = self.cookie_jar_score(cookie_jar)
-            if total_count <= 0 or score <= 0 or youtube_count <= 0:
+            if total_count <= 0 or score <= 0 or not self.cookie_jar_has_login_cookies(cookie_jar):
                 raise RuntimeError(self.t("browser_cookies_no_youtube"))
             return profile_label, cookie_jar
         finally:
@@ -2640,8 +2690,8 @@ class MainFrame(wx.Frame):
         return deduped
 
     @staticmethod
-    def cookie_jar_score(cookie_jar) -> tuple[int, int, int]:
-        auth_names = {
+    def youtube_auth_cookie_names() -> set[str]:
+        return {
             "sid",
             "sidcc",
             "lsid",
@@ -2662,6 +2712,20 @@ class MainFrame(wx.Frame):
             "__secure-1psidcc",
             "__secure-3psidcc",
         }
+
+    @staticmethod
+    def cookie_jar_has_login_cookies(cookie_jar) -> bool:
+        auth_names = MainFrame.youtube_auth_cookie_names()
+        for cookie in cookie_jar:
+            domain = str(getattr(cookie, "domain", "") or "").lower()
+            name = str(getattr(cookie, "name", "") or "").lower()
+            if ("google.com" in domain or "youtube.com" in domain) and name in auth_names:
+                return True
+        return False
+
+    @staticmethod
+    def cookie_jar_score(cookie_jar) -> tuple[int, int, int]:
+        auth_names = MainFrame.youtube_auth_cookie_names()
         score = 0
         youtube_count = 0
         total_count = 0
@@ -2739,7 +2803,7 @@ class MainFrame(wx.Frame):
                         break
                 except Exception as exc:
                     errors.append(self.t("cookie_profile_attempt_failed", profile=label, error=self.cookie_export_error_text(exc)))
-        if not best or best[0] <= 0:
+        if not best or best[0] <= 0 or not self.cookie_jar_has_login_cookies(best[2]):
             detail = "\n".join(errors[-6:]) if errors else self.t("cookie_all_profiles_failed")
             raise RuntimeError(f"{self.t('browser_cookies_no_youtube')}\n\n{detail}")
         _score, label, cookie_jar, _summary = best
@@ -5903,7 +5967,30 @@ class MainFrame(wx.Frame):
             wx.CallAfter(self.merge_current_video_info, info)
             wx.CallAfter(self.start_mpv, command, stream_url, title or url, headers)
         except Exception as exc:
-            wx.CallAfter(self.message, self.t("player_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
+            if self.is_cookie_auth_error(exc) and self.normalized_cookies_browser():
+                wx.CallAfter(self.prompt_cookie_refresh_for_playback, command, url, title, self.friendly_error(exc))
+            else:
+                wx.CallAfter(self.message, self.t("player_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
+
+    def prompt_cookie_refresh_for_playback(self, command: str, url: str, title: str, error: str) -> None:
+        message = f"{self.t('player_failed', error=error)}\n\n{self.t('cookie_refresh_prompt_message')}"
+        answer = wx.MessageBox(message, self.t("cookie_refresh_prompt_title"), wx.YES_NO | wx.ICON_QUESTION)
+        if answer != wx.YES:
+            return
+        browser = self.normalized_cookies_browser()
+        if not browser:
+            self.message(self.t("select_cookies_browser"), wx.ICON_WARNING)
+            return
+        self.announce_player(self.t("cookie_auto_refresh_start", browser=browser.title()))
+        threading.Thread(target=self.refresh_cookies_and_retry_playback_worker, args=(browser, command, url, title), daemon=True).start()
+
+    def refresh_cookies_and_retry_playback_worker(self, browser: str, command: str, url: str, title: str) -> None:
+        try:
+            result = self.export_browser_cookies_blocking(browser, allow_close=True)
+            self.ui_queue.put(("announce", self.t("cookie_auto_refresh_done", profile=result.get("profile_label", self.t("browser_profile_auto")))))
+            self.resolve_and_start_player(command, url, title)
+        except Exception as exc:
+            wx.CallAfter(self.message, self.t("cookie_auto_refresh_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
     def resolve_stream_url(self, url: str) -> tuple[str, dict, dict]:
         options = {

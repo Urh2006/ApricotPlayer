@@ -1,5 +1,12 @@
 # Changelog
 
+## What's new in version 0.6.14.4
+
+- bundled EJS challenge solver support and a Node runtime so age-restricted YouTube videos can resolve playable formats instead of failing with `Requested format is not available`
+- disabled external/default yt-dlp plugins inside ApricotPlayer so obsolete local plugins such as `yt-dlp-youtube-oauth2` cannot hijack YouTube extraction
+- added a playback recovery prompt that asks whether to refresh YouTube cookies when a sign-in, bot-check, or stale-cookie error still reaches the player
+- made manual browser cookie export accept valid Google/YouTube login cookies from the DevTools fallback and reject cookie files that do not contain login cookies
+
 ## What's new in version 0.6.14.3
 
 - added a Chromium DevTools cookie export fallback for Brave, Chrome, Edge, Chromium, Opera, and Vivaldi when Windows refuses to copy the locked cookie database

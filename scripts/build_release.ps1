@@ -22,6 +22,7 @@ $args = @(
     "--workpath", $workPath,
     "--specpath", $specPath,
     "--collect-all", "yt_dlp",
+    "--collect-all", "yt_dlp_ejs",
     "--exclude-module", "IPython",
     "--exclude-module", "jedi",
     "--exclude-module", "matplotlib",
@@ -41,6 +42,17 @@ $mpvDir = Join-Path $projectRoot "vendor\mpv"
 $ffmpegDir = Join-Path $projectRoot "vendor\ffmpeg"
 $nvdaDir = Join-Path $projectRoot "vendor\nvda"
 $assetsDir = Join-Path $projectRoot "assets"
+$nodeExe = $null
+
+try {
+    $nodeCommand = Get-Command "node.exe" -ErrorAction SilentlyContinue
+    if ($nodeCommand) {
+        $nodeExe = $nodeCommand.Source
+    }
+}
+catch {
+    $nodeExe = $null
+}
 
 if (Test-Path (Join-Path $mpvDir "mpv.exe")) {
     $args += @("--add-data", "$mpvDir;mpv")
@@ -56,6 +68,10 @@ if (Test-Path (Join-Path $nvdaDir "nvdaControllerClient64.dll")) {
 
 if (Test-Path $assetsDir) {
     $args += @("--add-data", "$assetsDir;assets")
+}
+
+if ($nodeExe -and (Test-Path $nodeExe)) {
+    $args += @("--add-data", "$nodeExe;node")
 }
 
 $args += "wx_main.py"
