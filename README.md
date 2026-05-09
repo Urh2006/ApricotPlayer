@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.7.1` (`0.7.1`)
+Current version: `0.7.2` (`0.7.2`)
 
 ## Download
 
@@ -70,6 +70,7 @@ py wx_main.py
 - Default audio output device setting with an accessible combo box, startup validation for missing devices, and a player output-device picker for session-only changes
 - Selectable playback-speed audio processing modes, including tuned `scaletempo2`, classic `scaletempo`, mpv default, and Rubberband
 - Optional system tray mode when closing the window
+- Optional Windows startup mode that launches ApricotPlayer directly into the system tray
 - Tray mode can restore the existing app window from a second launch, open Settings from the tray menu, and optionally show a Windows notification when ApricotPlayer is sent to the tray
 - The tray icon keeps keyboard context menu access for Show ApricotPlayer, Settings, subscription check, and Exit
 - Player repeat checkbox and finished-video restart behavior when pressing Space or Play

@@ -1,5 +1,13 @@
 # Changelog
 
+## What's new in version 0.7.2
+
+- added a General setting to start ApricotPlayer with Windows directly in the system tray
+- added `--start-in-tray` startup handling so tray autostart does not steal focus or open a second process
+- made tray startup skip interactive startup prompts, such as media association and missing audio-device dialogs
+- startup registration now uses the current executable path and keeps the Windows Run entry in sync when settings are saved
+- reviewed the 0.7.1 queue, clip export, local edit mode, update, and startup paths and kept the YouTube fast path unchanged
+
 ## What's new in version 0.7.1
 
 - changed marked clip export to use the normal download shortcuts: `Ctrl+Shift+A` exports the marked section as audio and `Ctrl+Shift+D` exports it as video

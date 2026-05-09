@@ -186,12 +186,13 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.7.1"
-APP_VERSION_LABEL = "0.7.1"
+APP_VERSION = "0.7.2"
+APP_VERSION_LABEL = "0.7.2"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
 UPDATE_RELAUNCH_ARG = "--updated-relaunch"
+START_IN_TRAY_ARG = "--start-in-tray"
 UPDATE_RELAUNCH_SENTINEL = APP_DIR / "updated-relaunch.json"
 ACTIVATE_SIGNAL_FILE = APP_DIR / "activate.json"
 SETTINGS_FILE = APP_DIR / "settings.json"
@@ -1109,6 +1110,8 @@ TEXT = {
         "subscription_check_enabled": "Check subscriptions automatically",
         "subscription_check_interval": "Subscription check interval",
         "close_to_tray": "Close button or Alt+F4 sends ApricotPlayer to system tray",
+        "start_with_windows": "Start ApricotPlayer with Windows in the system tray",
+        "startup_registration_failed": "Could not update Windows startup setting: {error}",
         "tray_notification": "Windows notification when ApricotPlayer goes to the system tray",
         "tray_still_running": "ApricotPlayer is still running in the system tray.",
         "interval_30_minutes": "30 minutes",
@@ -1357,6 +1360,8 @@ TEXT["sl"].update(
         "shortcut_in_use": "{shortcut} je ze nastavljen za {action}. Izberi drugo bliznjico.",
         "shortcut_in_use_title": "Bliznjica je ze v uporabi",
         "tray_notification": "Windows obvestilo, ko gre ApricotPlayer v system tray",
+        "start_with_windows": "Zaženi ApricotPlayer z Windows v system tray",
+        "startup_registration_failed": "Nastavitve zagona z Windows ni bilo mogoče posodobiti: {error}",
         "tray_settings": "Nastavitve",
         "rss_refresh_interval": "Interval osvezevanja podcastov in RSS",
         "subscription_check_interval": "Interval preverjanja narocnin",
@@ -3119,6 +3124,7 @@ class Settings:
     retries: int = 10
     socket_timeout: int = 20
     close_to_tray: bool = False
+    start_with_windows: bool = False
     tray_notification: bool = True
     subscription_check_enabled: bool = True
     subscription_check_interval_hours: float = 6.0
@@ -3177,9 +3183,10 @@ class ApricotTaskBarIcon(wx.adv.TaskBarIcon):
 
 
 class MainFrame(wx.Frame):
-    def __init__(self) -> None:
+    def __init__(self, start_hidden_in_tray: bool = False) -> None:
         super().__init__(None, title=WINDOW_TITLE, size=(950, 680))
         APP_DIR.mkdir(parents=True, exist_ok=True)
+        self.started_hidden_in_tray = start_hidden_in_tray
         settings_file_existed = SETTINGS_FILE.exists()
         self.first_run_without_settings = not SETTINGS_FILE.exists() and not LEGACY_SETTINGS_FILE.exists()
         self.settings_migrated = False
@@ -3319,9 +3326,12 @@ class MainFrame(wx.Frame):
             wx.CallLater(8500, self.check_subscriptions_if_due)
         if self.settings.enable_podcasts_rss and self.settings.rss_refresh_on_startup and self.rss_feeds:
             wx.CallLater(9500, self.refresh_all_rss_feeds_background)
-        wx.CallLater(6500, self.check_saved_audio_device_available)
-        wx.CallLater(7200, self.maybe_prompt_media_association_registration)
-        if self.first_run_without_settings and not self.settings.language_prompted:
+        if not self.started_hidden_in_tray:
+            wx.CallLater(6500, self.check_saved_audio_device_available)
+            wx.CallLater(7200, self.maybe_prompt_media_association_registration)
+        if self.settings.start_with_windows:
+            wx.CallLater(1800, self.sync_windows_startup_registration)
+        if self.first_run_without_settings and not self.settings.language_prompted and not self.started_hidden_in_tray:
             wx.CallAfter(self.prompt_initial_language)
 
     def install_download_accelerators(self) -> None:
@@ -4565,6 +4575,51 @@ class MainFrame(wx.Frame):
         except Exception:
             pass
         self.taskbar_icon = None
+
+    @staticmethod
+    def windows_startup_run_key_path() -> str:
+        return r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+    @staticmethod
+    def windows_startup_value_name() -> str:
+        return APP_NAME
+
+    @staticmethod
+    def current_launch_command(start_in_tray: bool = False) -> str:
+        if getattr(sys, "frozen", False):
+            parts = [sys.executable]
+        else:
+            parts = [sys.executable, str(Path(__file__).resolve())]
+        if start_in_tray:
+            parts.append(START_IN_TRAY_ARG)
+        return subprocess.list2cmdline(parts)
+
+    def sync_windows_startup_registration(self, show_error: bool = False) -> bool:
+        if os.name != "nt" or winreg is None:
+            return False
+        try:
+            access = winreg.KEY_SET_VALUE | winreg.KEY_QUERY_VALUE
+            with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, self.windows_startup_run_key_path(), 0, access) as key:
+                value_name = self.windows_startup_value_name()
+                if self.settings.start_with_windows:
+                    command = self.current_launch_command(start_in_tray=True)
+                    current = ""
+                    try:
+                        current, _value_type = winreg.QueryValueEx(key, value_name)
+                    except FileNotFoundError:
+                        current = ""
+                    if str(current) != command:
+                        winreg.SetValueEx(key, value_name, 0, winreg.REG_SZ, command)
+                else:
+                    try:
+                        winreg.DeleteValue(key, value_name)
+                    except FileNotFoundError:
+                        pass
+            return True
+        except Exception as exc:
+            if show_error:
+                self.message(self.t("startup_registration_failed", error=self.friendly_error(exc)), wx.ICON_WARNING)
+            return False
 
     def on_close(self, event: wx.CloseEvent) -> None:
         if self.exiting or not self.settings.close_to_tray:
@@ -7075,6 +7130,7 @@ class MainFrame(wx.Frame):
             )
             button("check_app_updates_now", self.manual_app_update_check)
             check("close_to_tray", self.settings.close_to_tray)
+            check("start_with_windows", self.settings.start_with_windows)
             check("tray_notification", self.settings.tray_notification)
         elif section_name == "playback":
             choice("player_speed", self.settings.player_speed, [self.format_playback_rate(step) for step in PLAYBACK_SPEED_STEPS if step <= 2.0])
@@ -10950,6 +11006,7 @@ class MainFrame(wx.Frame):
     def restore_default_settings(self) -> None:
         self.settings = Settings()
         self.save_settings()
+        self.sync_windows_startup_registration(show_error=True)
         self.configure_subscription_timer()
         self.configure_rss_timer()
         self.configure_app_update_timer()
@@ -11096,6 +11153,7 @@ class MainFrame(wx.Frame):
             return
         self.apply_settings_from_visible_controls()
         self.save_settings()
+        self.sync_windows_startup_registration(show_error=True)
         self.trim_history()
         self.configure_subscription_timer()
         self.configure_rss_timer()
@@ -11136,6 +11194,8 @@ class MainFrame(wx.Frame):
             self.settings.app_update_interval_hours = self.to_float(self.selected_choice_value("app_update_interval"), 6.0, 0.5, 24.0)
         if "close_to_tray" in c:
             self.settings.close_to_tray = c["close_to_tray"].GetValue()
+        if "start_with_windows" in c:
+            self.settings.start_with_windows = c["start_with_windows"].GetValue()
         if "tray_notification" in c:
             self.settings.tray_notification = c["tray_notification"].GetValue()
         if "autoplay_next" in c:
@@ -12682,6 +12742,10 @@ def update_relaunch_requested() -> bool:
     return any(arg == UPDATE_RELAUNCH_ARG for arg in sys.argv[1:])
 
 
+def start_in_tray_requested() -> bool:
+    return any(arg == START_IN_TRAY_ARG for arg in sys.argv[1:])
+
+
 def mark_update_relaunch_window(seconds: int = 45) -> None:
     try:
         APP_DIR.mkdir(parents=True, exist_ok=True)
@@ -12706,7 +12770,7 @@ def suppress_already_open_for_update() -> bool:
 def startup_media_path_argument(argv: list[str] | None = None) -> str:
     args = list(sys.argv[1:] if argv is None else argv)
     for arg in args:
-        if arg == UPDATE_RELAUNCH_ARG or arg.startswith("--"):
+        if arg in {UPDATE_RELAUNCH_ARG, START_IN_TRAY_ARG} or arg.startswith("--"):
             continue
         path = MainFrame.local_media_path_from_input(arg)
         if path:
@@ -12729,6 +12793,7 @@ class App(wx.App):
         if update_relaunch_requested():
             mark_update_relaunch_window()
         startup_media_path = startup_media_path_argument()
+        tray_start = start_in_tray_requested() and not startup_media_path
         instance_name = f"{APP_NAME}-{wx.GetUserId() or 'user'}"
         self.instance_checker = wx.SingleInstanceChecker(instance_name)
         if self.instance_checker.IsAnotherRunning():
@@ -12736,13 +12801,18 @@ class App(wx.App):
                 return False
             if startup_media_path:
                 request_existing_instance_activation("open_file", path=startup_media_path)
-            else:
+            elif not tray_start:
                 request_existing_instance_activation("show")
+            else:
+                return False
             return False
-        frame = MainFrame()
+        frame = MainFrame(start_hidden_in_tray=tray_start)
         self.SetTopWindow(frame)
-        frame.Show()
-        frame.activate_window_later()
+        if tray_start:
+            frame.Hide()
+        else:
+            frame.Show()
+            frame.activate_window_later()
         if startup_media_path:
             wx.CallAfter(frame.open_local_media_file, startup_media_path)
         return True
