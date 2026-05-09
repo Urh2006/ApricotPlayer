@@ -1,5 +1,16 @@
 # Changelog
 
+## What's new in version 0.7.1
+
+- changed marked clip export to use the normal download shortcuts: `Ctrl+Shift+A` exports the marked section as audio and `Ctrl+Shift+D` exports it as video
+- clip start and end marker shortcuts now toggle their marker off when pressed again
+- added local-file edit mode with `E`, edited-copy saving with `Ctrl+S`, and original-file replacement with `Ctrl+R`
+- moved the default player equalizer shortcut from `E` to `G` so `E` can control local-file edit mode
+- added a playback queue with player button, global open shortcut, add/remove shortcuts, context-menu actions, Enter-to-play, and automatic next-item playback
+- added an optional setting to ask where each download should be saved, using Save As for single downloads and folder selection for channel or playlist downloads
+- added first-run language selection for new users
+- kept YouTube playback on the fast path first; restricted-video cookies and EJS fallback still run only after a relevant playback failure
+
 ## What's new in version 0.7
 
 - added local media file playback support so ApricotPlayer can open audio and video files passed from Windows file associations

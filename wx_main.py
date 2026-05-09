@@ -186,8 +186,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.7"
-APP_VERSION_LABEL = "0.7"
+APP_VERSION = "0.7.1"
+APP_VERSION_LABEL = "0.7.1"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -202,6 +202,7 @@ RSS_FEEDS_FILE = APP_DIR / "rss_feeds.json"
 USER_PLAYLISTS_FILE = APP_DIR / "playlists.json"
 NOTIFICATIONS_FILE = APP_DIR / "notifications.json"
 PLAYBACK_POSITIONS_FILE = APP_DIR / "playback_positions.json"
+PLAYBACK_QUEUE_FILE = APP_DIR / "playback_queue.json"
 CACHED_COOKIES_FILE = APP_DIR / "cookies.txt"
 COMPONENTS_DIR = APP_DIR / "components"
 LEGACY_SETTINGS_FILE = LEGACY_APP_DIR / "settings.json"
@@ -389,6 +390,9 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "download_video": "Ctrl+Shift+D",
     "subscribe_channel": "Ctrl+Shift+S",
     "queue_audio": "Shift+A",
+    "add_to_playback_queue": "Ctrl+Shift+Q",
+    "remove_from_playback_queue": "Ctrl+Shift+Delete",
+    "open_playback_queue": "Ctrl+Alt+Q",
     "create_playlist": "Ctrl+Shift+N",
     "add_to_playlist": "Ctrl+Shift+P",
     "remove_from_playlist": "Ctrl+Shift+R",
@@ -406,10 +410,12 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "player_pitch_down": "Ctrl+Down",
     "player_details": "V",
     "player_output_devices": "O",
-    "player_equalizer": "E",
+    "player_equalizer": "G",
+    "player_edit_mode": "E",
+    "player_save_edit_copy": "Ctrl+S",
+    "player_replace_edit_original": "Ctrl+R",
     "player_marker_start": "LeftBracket",
     "player_marker_end": "RightBracket",
-    "player_export_clip": "Ctrl+S",
     "player_previous": "Ctrl+PageUp",
     "player_next": "Ctrl+PageDown",
     "player_back": "Escape",
@@ -440,6 +446,9 @@ SHORTCUT_DEFINITIONS = [
     ("download_video", "shortcut_download_video"),
     ("subscribe_channel", "shortcut_subscribe_channel"),
     ("queue_audio", "shortcut_queue_audio"),
+    ("add_to_playback_queue", "shortcut_add_to_playback_queue"),
+    ("remove_from_playback_queue", "shortcut_remove_from_playback_queue"),
+    ("open_playback_queue", "shortcut_open_playback_queue"),
     ("create_playlist", "shortcut_create_playlist"),
     ("add_to_playlist", "shortcut_add_to_playlist"),
     ("remove_from_playlist", "shortcut_remove_from_playlist"),
@@ -458,9 +467,11 @@ SHORTCUT_DEFINITIONS = [
     ("player_details", "shortcut_player_details"),
     ("player_output_devices", "shortcut_player_output_devices"),
     ("player_equalizer", "shortcut_player_equalizer"),
+    ("player_edit_mode", "shortcut_player_edit_mode"),
+    ("player_save_edit_copy", "shortcut_player_save_edit_copy"),
+    ("player_replace_edit_original", "shortcut_player_replace_edit_original"),
     ("player_marker_start", "shortcut_player_marker_start"),
     ("player_marker_end", "shortcut_player_marker_end"),
-    ("player_export_clip", "shortcut_player_export_clip"),
     ("player_previous", "shortcut_player_previous"),
     ("player_next", "shortcut_player_next"),
     ("player_back", "shortcut_player_back"),
@@ -2941,6 +2952,78 @@ for language_code in LANGUAGE_CODES:
     for key, value in MEDIA_PLAYER_TRANSLATION_UPDATES["en"].items():
         TEXT.setdefault(language_code, {}).setdefault(key, value)
 
+RELEASE_071_TRANSLATION_UPDATES = {
+    "sl": {
+        "first_run_language_prompt": "Izberi jezik za ApricotPlayer.",
+        "ask_download_location_each_time": "Vedno vpraĹˇaj, kam shraniti vsak prenos",
+        "choose_save_path": "Izberi ime in mesto shranjevanja",
+        "choose_save_folder": "Izberi mapo za shranjevanje",
+        "clip_start_marker_cleared": "Start marker izbrisan.",
+        "clip_end_marker_cleared": "End marker izbrisan.",
+        "playback_queue": "Vrstni red predvajanja",
+        "playback_queue_empty": "Vrstni red predvajanja je prazen.",
+        "playback_queue_instructions": "Pritisni Enter za takojĹˇnje predvajanje izbranega elementa.",
+        "playback_queue_added": "Dodano v vrstni red predvajanja: {title}",
+        "playback_queue_removed": "Odstranjeno iz vrstnega reda predvajanja: {title}",
+        "playback_queue_already_added": "Ta element je Ĺľe v vrstnem redu predvajanja: {title}",
+        "playback_queue_not_found": "Element ni v vrstnem redu predvajanja.",
+        "add_to_playback_queue": "Dodaj v vrstni red predvajanja",
+        "remove_from_playback_queue": "Odstrani iz vrstnega reda predvajanja",
+        "edit_mode": "Edit mode",
+        "edit_mode_on": "Edit mode on.",
+        "edit_mode_off": "Edit mode off.",
+        "edit_mode_local_only": "Edit mode je na voljo samo za lokalne datoteke.",
+        "edit_save_started": "Shranjujem urejeno datoteko.",
+        "edit_save_done": "Urejena datoteka shranjena: {title}",
+        "edit_replace_done": "Originalna datoteka zamenjana: {title}",
+        "edit_save_failed": "Shranjevanje urejene datoteke ni uspelo: {error}",
+        "shortcut_add_to_playback_queue": "Dodaj v vrstni red predvajanja",
+        "shortcut_remove_from_playback_queue": "Odstrani iz vrstnega reda predvajanja",
+        "shortcut_open_playback_queue": "Odpri vrstni red predvajanja",
+        "shortcut_player_edit_mode": "Predvajalnik: edit mode",
+        "shortcut_player_save_edit_copy": "Predvajalnik: shrani urejeno kopijo lokalne datoteke",
+        "shortcut_player_replace_edit_original": "Predvajalnik: zamenjaj originalno lokalno datoteko",
+        "shortcut_player_equalizer": "Predvajalnik: equalizer",
+    },
+    "en": {
+        "first_run_language_prompt": "Choose the language for ApricotPlayer.",
+        "ask_download_location_each_time": "Ask where to save each download every time",
+        "choose_save_path": "Choose file name and save location",
+        "choose_save_folder": "Choose save folder",
+        "clip_start_marker_cleared": "Start marker cleared.",
+        "clip_end_marker_cleared": "End marker cleared.",
+        "playback_queue": "Playback queue",
+        "playback_queue_empty": "Playback queue is empty.",
+        "playback_queue_instructions": "Press Enter to play the selected item immediately.",
+        "playback_queue_added": "Added to playback queue: {title}",
+        "playback_queue_removed": "Removed from playback queue: {title}",
+        "playback_queue_already_added": "This item is already in the playback queue: {title}",
+        "playback_queue_not_found": "Item is not in the playback queue.",
+        "add_to_playback_queue": "Add to playback queue",
+        "remove_from_playback_queue": "Remove from playback queue",
+        "edit_mode": "Edit mode",
+        "edit_mode_on": "Edit mode on.",
+        "edit_mode_off": "Edit mode off.",
+        "edit_mode_local_only": "Edit mode is available only for local files.",
+        "edit_save_started": "Saving edited file.",
+        "edit_save_done": "Edited file saved: {title}",
+        "edit_replace_done": "Original file replaced: {title}",
+        "edit_save_failed": "Could not save edited file: {error}",
+        "shortcut_add_to_playback_queue": "Add to playback queue",
+        "shortcut_remove_from_playback_queue": "Remove from playback queue",
+        "shortcut_open_playback_queue": "Open playback queue",
+        "shortcut_player_edit_mode": "Player: edit mode",
+        "shortcut_player_save_edit_copy": "Player: save edited local-file copy",
+        "shortcut_player_replace_edit_original": "Player: replace original local file",
+        "shortcut_player_equalizer": "Player: equalizer",
+    },
+}
+for language_code in LANGUAGE_CODES:
+    TEXT.setdefault(language_code, {}).update(RELEASE_071_TRANSLATION_UPDATES.get(language_code, RELEASE_071_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
+for language_code in LANGUAGE_CODES:
+    for key, value in RELEASE_071_TRANSLATION_UPDATES["en"].items():
+        TEXT.setdefault(language_code, {}).setdefault(key, value)
+
 
 def default_equalizer_gains() -> dict[str, float]:
     return {band_id: 0.0 for band_id, _label in EQ_BANDS}
@@ -3001,6 +3084,7 @@ class Settings:
     equalizer_preset_gains: dict[str, dict[str, float]] = field(default_factory=default_equalizer_preset_gains)
     equalizer_custom_names: dict[str, str] = field(default_factory=default_equalizer_custom_names)
     equalizer_db_range: int = 12
+    ask_download_location_each_time: bool = False
     quiet_downloads: bool = False
     keep_playlist_order: bool = True
     filename_template: str = DEFAULT_FILENAME_TEMPLATE
@@ -3054,6 +3138,7 @@ class Settings:
     history_limit: int = 500
     keyboard_shortcuts: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_KEYBOARD_SHORTCUTS))
     media_association_prompted_version: str = ""
+    language_prompted: bool = False
 
 
 class ApricotTaskBarIcon(wx.adv.TaskBarIcon):
@@ -3096,6 +3181,7 @@ class MainFrame(wx.Frame):
         super().__init__(None, title=WINDOW_TITLE, size=(950, 680))
         APP_DIR.mkdir(parents=True, exist_ok=True)
         settings_file_existed = SETTINGS_FILE.exists()
+        self.first_run_without_settings = not SETTINGS_FILE.exists() and not LEGACY_SETTINGS_FILE.exists()
         self.settings_migrated = False
         self.settings = self.load_settings()
         if not settings_file_existed or self.settings_migrated:
@@ -3107,6 +3193,7 @@ class MainFrame(wx.Frame):
         self.user_playlists = self.load_user_playlists()
         self.notifications = self.load_notifications()
         self.playback_positions = self.load_playback_positions()
+        self.playback_queue = self.load_playback_queue()
         self.rss_items: list[dict] = []
         self.podcast_search_results: list[dict] = []
         self.results: list[dict] = []
@@ -3171,6 +3258,7 @@ class MainFrame(wx.Frame):
         self.current_stream_headers: dict = {}
         self.current_audio_device = ""
         self.session_audio_output_device = ""
+        self.edit_mode_enabled = False
         self.session_equalizer_enabled: bool | None = None
         self.session_equalizer_gains: dict[str, float] = {}
         self.session_equalizer_before_bass_boost: tuple[bool | None, dict[str, float]] | None = None
@@ -3233,6 +3321,8 @@ class MainFrame(wx.Frame):
             wx.CallLater(9500, self.refresh_all_rss_feeds_background)
         wx.CallLater(6500, self.check_saved_audio_device_available)
         wx.CallLater(7200, self.maybe_prompt_media_association_registration)
+        if self.first_run_without_settings and not self.settings.language_prompted:
+            wx.CallAfter(self.prompt_initial_language)
 
     def install_download_accelerators(self) -> None:
         self.global_accelerator_ids: dict[str, wx.WindowIDRef] = {}
@@ -3248,6 +3338,7 @@ class MainFrame(wx.Frame):
             ("open_history", self.open_history_shortcut),
             ("open_podcasts_rss", self.open_podcasts_rss_shortcut),
             ("open_settings", self.open_settings_shortcut),
+            ("open_playback_queue", self.open_playback_queue_shortcut),
             ("download_audio", self.download_audio_shortcut),
             ("download_video", self.download_video_shortcut),
             ("subscribe_channel", self.subscribe_shortcut),
@@ -4606,6 +4697,8 @@ class MainFrame(wx.Frame):
         download_count = len(self.download_queue) + len(self.active_downloads)
         if download_count:
             self.menu_actions.append((f"{self.t('current_downloads')} ({download_count})", self.show_download_queue))
+        if self.playback_queue:
+            self.menu_actions.append((f"{self.t('playback_queue')} ({len(self.playback_queue)})", self.show_playback_queue))
         self.menu_actions.extend([
             (self.t("search_youtube"), self.show_search),
             (self.t("play_from_folder"), self.show_play_from_folder),
@@ -4944,6 +5037,10 @@ class MainFrame(wx.Frame):
             self.start_download(True, item=self.selected_user_playlist_item())
         elif self.shortcut_matches(event, "download_video"):
             self.start_download(False, item=self.selected_user_playlist_item())
+        elif self.shortcut_matches(event, "add_to_playback_queue"):
+            self.add_active_to_playback_queue()
+        elif self.shortcut_matches(event, "remove_from_playback_queue"):
+            self.remove_active_from_playback_queue()
         elif self.shortcut_matches(event, "remove_from_playlist") or self.shortcut_matches(event, "remove_selected"):
             self.remove_selected_user_playlist_item()
         elif self.context_menu_shortcut_matches(event):
@@ -4958,6 +5055,8 @@ class MainFrame(wx.Frame):
             (self.menu_label_with_shortcut("download_audio", "download_audio"), lambda: self.start_download(True, item=self.selected_user_playlist_item())),
             (self.menu_label_with_shortcut("download_video", "download_video"), lambda: self.start_download(False, item=self.selected_user_playlist_item())),
             (self.t("download_user_playlist"), self.download_current_user_playlist),
+            (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
+            (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
             (self.menu_label_with_shortcut("remove_from_playlist", "remove_from_playlist"), self.remove_selected_user_playlist_item),
             (self.t("copy_url"), lambda: self.copy_item_url(self.selected_user_playlist_item())),
             (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda: self.copy_direct_stream_url(self.selected_user_playlist_item())),
@@ -5528,6 +5627,22 @@ class MainFrame(wx.Frame):
         if not restore_search:
             self.focus_later(self.query)
 
+    def prompt_initial_language(self) -> None:
+        if self.settings.language_prompted:
+            return
+        choices = [name for _code, name in LANGUAGES]
+        current = LANGUAGE_CODES.index(self.settings.language) if self.settings.language in LANGUAGE_CODES else 0
+        with wx.SingleChoiceDialog(self, self.t("first_run_language_prompt"), self.t("language"), choices) as dialog:
+            dialog.SetSelection(current)
+            if dialog.ShowModal() == wx.ID_OK:
+                index = dialog.GetSelection()
+                if 0 <= index < len(LANGUAGE_CODES):
+                    self.settings.language = LANGUAGE_CODES[index]
+        self.settings.language_prompted = True
+        self.save_settings()
+        self.show_main_menu()
+        self.announce_player(self.t("settings_saved"))
+
     def back_from_search(self) -> None:
         if self.search_results_stack:
             self.restore_previous_search_results()
@@ -5537,6 +5652,10 @@ class MainFrame(wx.Frame):
     def on_results_key(self, event: wx.KeyEvent) -> None:
         if self.shortcut_matches(event, "queue_audio"):
             self.toggle_download_queue()
+        elif self.shortcut_matches(event, "add_to_playback_queue"):
+            self.add_active_to_playback_queue()
+        elif self.shortcut_matches(event, "remove_from_playback_queue"):
+            self.remove_active_from_playback_queue()
         elif self.shortcut_matches(event, "download_audio"):
             self.download_audio_shortcut()
         elif self.shortcut_matches(event, "download_video"):
@@ -5592,6 +5711,10 @@ class MainFrame(wx.Frame):
             self.play_favorite()
         elif self.shortcut_matches(event, "subscribe_channel"):
             self.subscribe_to_selected_channel(self.selected_favorite())
+        elif self.shortcut_matches(event, "add_to_playback_queue"):
+            self.add_active_to_playback_queue()
+        elif self.shortcut_matches(event, "remove_from_playback_queue"):
+            self.remove_active_from_playback_queue()
         elif self.context_menu_shortcut_matches(event):
             self.open_favorites_context_menu()
         else:
@@ -5605,6 +5728,8 @@ class MainFrame(wx.Frame):
             (self.menu_label_with_shortcut("download_video", "download_video"), lambda: self.start_download(False, item=self.selected_favorite())),
             (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), lambda: self.subscribe_to_selected_channel(self.selected_favorite())),
             (self.menu_label_with_shortcut("add_to_playlist", "add_to_playlist"), self.add_active_to_playlist),
+            (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
+            (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
             (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda: self.copy_direct_stream_url(self.selected_favorite())),
             (self.t("copy_url"), lambda: self.copy_item_url(self.selected_favorite())),
             (self.t("remove"), self.remove_favorite),
@@ -5686,6 +5811,10 @@ class MainFrame(wx.Frame):
             self.start_download(False, item=self.selected_history_item())
         elif self.shortcut_matches(event, "subscribe_channel"):
             self.subscribe_to_selected_channel(self.selected_history_item())
+        elif self.shortcut_matches(event, "add_to_playback_queue"):
+            self.add_active_to_playback_queue()
+        elif self.shortcut_matches(event, "remove_from_playback_queue"):
+            self.remove_active_from_playback_queue()
         elif self.shortcut_matches(event, "remove_selected"):
             self.remove_history_item()
         elif self.context_menu_shortcut_matches(event):
@@ -5702,6 +5831,8 @@ class MainFrame(wx.Frame):
             (self.t("add_favorite"), lambda: self.add_favorite_item(self.selected_history_item())),
             (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), lambda: self.subscribe_to_selected_channel(self.selected_history_item())),
             (self.menu_label_with_shortcut("add_to_playlist", "add_to_playlist"), self.add_active_to_playlist),
+            (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
+            (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
             (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda: self.copy_direct_stream_url(self.selected_history_item())),
             (self.t("copy_url"), lambda: self.copy_item_url(self.selected_history_item())),
             (self.t("remove_history_item"), self.remove_history_item),
@@ -6506,6 +6637,10 @@ class MainFrame(wx.Frame):
             self.toggle_rss_item_queue()
         elif self.shortcut_matches(event, "download_audio"):
             self.download_selected_rss_item()
+        elif self.shortcut_matches(event, "add_to_playback_queue"):
+            self.add_active_to_playback_queue()
+        elif self.shortcut_matches(event, "remove_from_playback_queue"):
+            self.remove_active_from_playback_queue()
         elif self.context_menu_shortcut_matches(event):
             self.open_rss_item_context_menu()
         else:
@@ -6517,6 +6652,8 @@ class MainFrame(wx.Frame):
             (self.t("play_episode"), self.play_selected_rss_item),
             (self.menu_label_with_shortcut("download_episode_audio", "download_audio"), self.download_selected_rss_item),
             (self.menu_label_with_shortcut("queue_episode_audio", "queue_audio"), self.toggle_rss_item_queue),
+            (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
+            (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
             (self.t("download_feed"), self.download_current_rss_feed),
             (self.t("open_episode_page"), self.open_selected_in_browser),
             (self.t("copy_url"), lambda: self.copy_item_url(self.selected_rss_item())),
@@ -6985,6 +7122,7 @@ class MainFrame(wx.Frame):
             check("confirm_download", self.settings.confirm_before_download)
             check("open_after_download", self.settings.open_folder_after_download)
             check("download_complete_popup", self.settings.popup_when_download_complete)
+            check("ask_download_location_each_time", self.settings.ask_download_location_each_time)
             choice("audio_format", self.settings.audio_format, ["mp3", "m4a", "opus", "wav", "flac"])
             choice("audio_quality", self.normalize_audio_quality_value(self.settings.audio_quality), AUDIO_QUALITY_OPTIONS, self.audio_quality_labels())
             choice("video_format", self.normalized_video_format(), VIDEO_FORMAT_OPTIONS, self.video_format_labels())
@@ -7592,6 +7730,7 @@ class MainFrame(wx.Frame):
         self.session_equalizer_enabled = None
         self.session_equalizer_gains = {}
         self.session_equalizer_before_bass_boost = None
+        self.edit_mode_enabled = False
         self.bass_boost_enabled = False
         self.equalizer_filter_active = False
         self.clip_start_marker = None
@@ -7950,8 +8089,10 @@ class MainFrame(wx.Frame):
                 (self.t("previous"), lambda: self.play_relative_item(-1)),
                 (self.t("play"), self.player_play_pause),
                 (self.t("next"), lambda: self.play_relative_item(1)),
+                (self.t("playback_queue"), self.show_playback_queue),
                 (self.t("output_devices"), self.show_output_devices),
                 (self.t("equalizer"), self.show_player_equalizer),
+                (self.t("edit_mode"), self.toggle_edit_mode),
                 (self.t("copy_link"), self.copy_active_url),
                 (self.t("copy_stream_url"), self.copy_direct_stream_url),
                 (self.t("show_video_details"), self.show_video_details),
@@ -8055,6 +8196,11 @@ class MainFrame(wx.Frame):
             self.show_direct_link()
             return
         if self.player_return_screen == "local_file":
+            self.player_return_screen = ""
+            self.player_return_data = {}
+            self.show_main_menu()
+            return
+        if self.player_return_screen == "playback_queue":
             self.player_return_screen = ""
             self.player_return_data = {}
             self.show_main_menu()
@@ -8421,6 +8567,11 @@ class MainFrame(wx.Frame):
         self.announce_player(self.t("equalizer_closed"))
 
     def play_relative_item(self, delta: int) -> None:
+        if delta > 0:
+            queued_item = self.pop_next_playback_queue_item()
+            if queued_item:
+                self.open_playback_queue_item(queued_item)
+                return
         if delta < 0:
             item = self.relative_player_item(-1)
             if not item:
@@ -8487,6 +8638,273 @@ class MainFrame(wx.Frame):
         self.current_video_item = item
         self.current_video_info = dict(item)
         self.play_url(str(item.get("url") or ""), str(item.get("title") or ""))
+
+    def playable_queue_item(self, item: dict | None) -> dict | None:
+        if not item or item.get("kind") in {"channel", "playlist"}:
+            return None
+        url = str(item.get("url") or item.get("webpage_url") or "").strip()
+        if not url:
+            return None
+        return self.playlist_item_from_media(dict(item))
+
+    def add_active_to_playback_queue(self) -> None:
+        item = self.playable_queue_item(self.active_item())
+        if not item:
+            self.announce_player(self.t("no_selection"))
+            return
+        url = str(item.get("url") or "")
+        if any(str(existing.get("url") or "") == url for existing in self.playback_queue):
+            self.announce_player(self.t("playback_queue_already_added", title=item.get("title", "")))
+            return
+        self.playback_queue.append(item)
+        self.save_playback_queue()
+        self.announce_player(self.t("playback_queue_added", title=item.get("title", "")))
+
+    def remove_active_from_playback_queue(self) -> None:
+        item = self.playable_queue_item(self.active_item())
+        if not item:
+            self.announce_player(self.t("no_selection"))
+            return
+        if self.remove_playback_queue_url(str(item.get("url") or "")):
+            self.announce_player(self.t("playback_queue_removed", title=item.get("title", "")))
+        else:
+            self.announce_player(self.t("playback_queue_not_found"))
+
+    def remove_playback_queue_url(self, url: str) -> bool:
+        before = len(self.playback_queue)
+        self.playback_queue = [item for item in self.playback_queue if str(item.get("url") or "") != url]
+        changed = len(self.playback_queue) != before
+        if changed:
+            self.save_playback_queue()
+        return changed
+
+    def playback_queue_line(self, item: dict, index: int) -> str:
+        parts = [
+            str(index + 1),
+            item.get("title", ""),
+            f"{self.t('channel')}: {item.get('channel', '')}" if item.get("channel") else "",
+            item.get("type", ""),
+        ]
+        return ". ".join([parts[0], " | ".join(part for part in parts[1:] if part)])
+
+    def open_playback_queue_shortcut(self) -> None:
+        self.show_playback_queue()
+
+    def show_playback_queue(self) -> None:
+        if not self.playback_queue:
+            self.announce_player(self.t("playback_queue_empty"))
+            return
+        dialog = wx.Dialog(self, title=self.t("playback_queue"), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        dialog.SetName(self.t("playback_queue"))
+        dialog.SetMinSize((560, 420))
+        outer = wx.BoxSizer(wx.VERTICAL)
+        instructions = wx.StaticText(dialog, label=self.t("playback_queue_instructions"))
+        outer.Add(instructions, 0, wx.ALL, 8)
+        queue_list = wx.ListBox(dialog, choices=[self.playback_queue_line(item, index) for index, item in enumerate(self.playback_queue)])
+        queue_list.SetName(self.t("playback_queue"))
+        queue_list.SetSelection(0)
+        outer.Add(queue_list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        play_button = wx.Button(dialog, label=self.t("play"))
+        remove_button = wx.Button(dialog, label=self.t("remove_from_playback_queue"))
+        close_button = wx.Button(dialog, wx.ID_CANCEL, label=self.t("back"))
+        row.Add(play_button, 0, wx.RIGHT, 8)
+        row.Add(remove_button, 0, wx.RIGHT, 8)
+        row.Add(close_button, 0)
+        outer.Add(row, 0, wx.ALIGN_RIGHT | wx.ALL, 8)
+        dialog.SetSizer(outer)
+        action: dict[str, int | str] = {}
+
+        def selected_index() -> int:
+            index = queue_list.GetSelection()
+            return index if 0 <= index < len(self.playback_queue) else -1
+
+        def play_selected(_event=None) -> None:
+            index = selected_index()
+            if index >= 0:
+                action.update({"action": "play", "index": index})
+                dialog.EndModal(wx.ID_OK)
+
+        def remove_selected(_event=None) -> None:
+            index = selected_index()
+            if index < 0:
+                return
+            title = str(self.playback_queue[index].get("title") or "")
+            del self.playback_queue[index]
+            self.save_playback_queue()
+            queue_list.Set([self.playback_queue_line(item, item_index) for item_index, item in enumerate(self.playback_queue)] or [self.t("playback_queue_empty")])
+            if self.playback_queue:
+                queue_list.SetSelection(min(index, len(self.playback_queue) - 1))
+            self.announce_player(self.t("playback_queue_removed", title=title))
+            if not self.playback_queue:
+                dialog.EndModal(wx.ID_CANCEL)
+
+        queue_list.Bind(wx.EVT_LISTBOX_DCLICK, play_selected)
+        queue_list.Bind(wx.EVT_KEY_DOWN, lambda evt: play_selected() if self.shortcut_matches(evt, "open_selected") else evt.Skip())
+        play_button.Bind(wx.EVT_BUTTON, play_selected)
+        remove_button.Bind(wx.EVT_BUTTON, remove_selected)
+        result = dialog.ShowModal()
+        dialog.Destroy()
+        if result == wx.ID_OK and action.get("action") == "play":
+            self.play_playback_queue_index(int(action.get("index", -1)))
+
+    def play_playback_queue_index(self, index: int) -> None:
+        if index < 0 or index >= len(self.playback_queue):
+            self.announce_player(self.t("playback_queue_empty"))
+            return
+        item = dict(self.playback_queue.pop(index))
+        self.save_playback_queue()
+        self.open_playback_queue_item(item)
+
+    def pop_next_playback_queue_item(self) -> dict | None:
+        if not self.playback_queue:
+            return None
+        item = dict(self.playback_queue.pop(0))
+        self.save_playback_queue()
+        return item
+
+    def open_playback_queue_item(self, item: dict) -> None:
+        url = str(item.get("url") or "")
+        if not url:
+            self.announce_player(self.t("no_selection"))
+            return
+        self.stop_player(silent=True)
+        self.player_return_screen = "playback_queue"
+        self.player_return_data = {}
+        self.current_video_item = item
+        self.current_video_info = dict(item)
+        self.play_url(url, str(item.get("title") or ""))
+
+    def current_local_media_path(self) -> Path | None:
+        item = self.current_video_item or self.current_video_info or {}
+        if str(item.get("kind") or "") != "local_file":
+            return None
+        return self.local_media_path_from_input(str(item.get("url") or item.get("webpage_url") or ""))
+
+    def toggle_edit_mode(self) -> None:
+        if not self.in_player_screen:
+            return
+        if not self.current_local_media_path():
+            self.announce_player(self.t("edit_mode_local_only"))
+            return
+        self.edit_mode_enabled = not self.edit_mode_enabled
+        self.announce_player(self.t("edit_mode_on" if self.edit_mode_enabled else "edit_mode_off"))
+
+    def save_edited_local_file(self, replace_original: bool = False) -> None:
+        if not self.edit_mode_enabled:
+            return
+        source = self.current_local_media_path()
+        if not source:
+            self.announce_player(self.t("edit_mode_local_only"))
+            return
+        self.announce_player(self.t("edit_save_started"))
+        if replace_original:
+            self.stop_player(silent=True)
+        threading.Thread(target=self.save_edited_local_file_worker, args=(source, replace_original), daemon=True).start()
+
+    def save_edited_local_file_worker(self, source: Path, replace_original: bool = False) -> None:
+        try:
+            ffmpeg = self.ffmpeg_executable()
+            if not ffmpeg:
+                raise RuntimeError("FFmpeg was not found")
+            output = self.edited_output_path(source, replace_original)
+            temp_output = output.with_name(f"{output.stem}.apricot-temp{output.suffix}") if replace_original else output
+            args = self.local_edit_ffmpeg_args(ffmpeg, source, temp_output)
+            creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+            result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=creationflags)
+            if result.returncode != 0:
+                error = (result.stderr or result.stdout or "").strip() or f"FFmpeg exited with code {result.returncode}"
+                raise RuntimeError(error[-600:])
+            if replace_original:
+                os.replace(temp_output, source)
+                wx.CallAfter(self.announce_player, self.t("edit_replace_done", title=source.name))
+            else:
+                wx.CallAfter(self.announce_player, self.t("edit_save_done", title=output.name))
+        except Exception as exc:
+            wx.CallAfter(self.message, self.t("edit_save_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
+
+    def edited_output_path(self, source: Path, replace_original: bool = False) -> Path:
+        if replace_original:
+            return source
+        output = source.with_name(f"{source.stem} - edited{source.suffix}")
+        counter = 2
+        while output.exists():
+            output = source.with_name(f"{source.stem} - edited ({counter}){source.suffix}")
+            counter += 1
+        return output
+
+    @staticmethod
+    def is_video_file_extension(path: Path) -> bool:
+        return path.suffix.lower() in {".3g2", ".3gp", ".avi", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".webm", ".wmv"}
+
+    def current_speed_value(self) -> float:
+        try:
+            return self.parse_rate_value(self.current_video_info.get("speed") or self.settings.player_speed or 1.0)
+        except (TypeError, ValueError):
+            return 1.0
+
+    @staticmethod
+    def ffmpeg_atempo_chain(factor: float) -> list[str]:
+        values: list[str] = []
+        factor = max(0.0625, min(16.0, float(factor or 1.0)))
+        while factor < 0.5:
+            values.append("atempo=0.5")
+            factor /= 0.5
+        while factor > 2.0:
+            values.append("atempo=2.0")
+            factor /= 2.0
+        if abs(factor - 1.0) >= 0.001:
+            values.append(f"atempo={factor:.6f}")
+        return values
+
+    def ffmpeg_equalizer_filters(self, gains: dict[str, float]) -> list[str]:
+        filters: list[str] = []
+        for band_id, _band_label in EQ_BANDS:
+            gain = max(-24.0, min(24.0, float(gains.get(band_id, 0.0) or 0.0)))
+            if abs(gain) >= 0.05:
+                filters.append(f"equalizer=f={band_id}:t=q:w=1:g={gain:.1f}")
+        return filters
+
+    def local_edit_audio_filters(self) -> list[str]:
+        speed = max(0.25, min(4.0, self.current_speed_value()))
+        pitch = max(0.5, min(2.0, self.current_pitch_value()))
+        enabled, gains = self.effective_equalizer_state()
+        filters = self.ffmpeg_equalizer_filters(gains) if enabled else []
+        if abs(pitch - 1.0) >= 0.001:
+            filters.extend([f"asetrate=48000*{pitch:.6f}", "aresample=48000"])
+        filters.extend(self.ffmpeg_atempo_chain(speed / pitch))
+        return filters
+
+    def local_edit_audio_codec_args(self, suffix: str) -> list[str]:
+        suffix = suffix.lower()
+        if suffix == ".mp3":
+            return ["-c:a", "libmp3lame", "-b:a", "320k"]
+        if suffix in {".m4a", ".mp4", ".m4v", ".mov"}:
+            return ["-c:a", "aac", "-b:a", "256k"]
+        if suffix == ".opus":
+            return ["-c:a", "libopus", "-b:a", "160k"]
+        if suffix == ".wav":
+            return ["-c:a", "pcm_s16le"]
+        if suffix == ".flac":
+            return ["-c:a", "flac"]
+        return ["-c:a", "aac", "-b:a", "256k"]
+
+    def local_edit_ffmpeg_args(self, ffmpeg: str, source: Path, output: Path) -> list[str]:
+        speed = max(0.25, min(4.0, self.current_speed_value()))
+        audio_filters = self.local_edit_audio_filters()
+        args = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-i", str(source)]
+        if audio_filters:
+            args.extend(["-af", ",".join(audio_filters)])
+            args.extend(self.local_edit_audio_codec_args(output.suffix))
+        else:
+            args.extend(["-c:a", "copy"])
+        if self.is_video_file_extension(source):
+            if abs(speed - 1.0) >= 0.001:
+                args.extend(["-vf", f"setpts={1.0 / speed:.8f}*PTS", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18"])
+            else:
+                args.extend(["-c:v", "copy"])
+        args.append(str(output))
+        return args
 
     def open_library_item(self, item: dict, screen: str) -> None:
         kind = item.get("kind")
@@ -8596,6 +9014,10 @@ class MainFrame(wx.Frame):
                 pass
         if self.repeat_current:
             self.player_ended = False
+            return
+        queued_item = self.pop_next_playback_queue_item()
+        if queued_item:
+            self.open_playback_queue_item(queued_item)
             return
         if self.settings.autoplay_next:
             next_item = self.relative_player_item(1)
@@ -8728,6 +9150,14 @@ class MainFrame(wx.Frame):
 
     def set_clip_marker_worker(self, marker: str) -> None:
         try:
+            if marker == "start" and self.clip_start_marker is not None:
+                self.clip_start_marker = None
+                wx.CallAfter(self.announce_player, self.t("clip_start_marker_cleared"))
+                return
+            if marker == "end" and self.clip_end_marker is not None:
+                self.clip_end_marker = None
+                wx.CallAfter(self.announce_player, self.t("clip_end_marker_cleared"))
+                return
             elapsed = self.mpv_get_property("time-pos")
             if elapsed is None:
                 wx.CallAfter(self.announce_player, self.t("timing_unavailable"))
@@ -8742,7 +9172,13 @@ class MainFrame(wx.Frame):
         except Exception:
             wx.CallAfter(self.announce_player, self.t("timing_unavailable"))
 
-    def export_marked_clip(self) -> None:
+    def clip_markers_are_set(self) -> bool:
+        return self.clip_start_marker is not None and self.clip_end_marker is not None
+
+    def clip_markers_partially_set(self) -> bool:
+        return (self.clip_start_marker is None) != (self.clip_end_marker is None)
+
+    def export_marked_clip(self, audio_only: bool = False) -> None:
         if self.clip_start_marker is None or self.clip_end_marker is None:
             self.announce_player(self.t("clip_markers_missing"))
             return
@@ -8755,7 +9191,7 @@ class MainFrame(wx.Frame):
         stream_url = self.current_stream_url
         headers = dict(self.current_stream_headers or {})
         self.announce_player(self.t("clip_export_started"))
-        threading.Thread(target=self.export_marked_clip_worker, args=(item, stream_url, headers, start, end), daemon=True).start()
+        threading.Thread(target=self.export_marked_clip_worker, args=(item, stream_url, headers, start, end, audio_only), daemon=True).start()
 
     def ffmpeg_executable(self) -> str:
         configured = str(getattr(self.settings, "ffmpeg_location", "") or "").strip()
@@ -8779,7 +9215,9 @@ class MainFrame(wx.Frame):
             folder = self.music_download_folder()
         return folder / "clips"
 
-    def clip_output_extension(self, source: str, item: dict) -> str:
+    def clip_output_extension(self, source: str, item: dict, audio_only: bool = False) -> str:
+        if audio_only:
+            return f".{self.settings.audio_format}"
         local_path = self.local_media_path_from_input(source)
         if local_path and local_path.suffix:
             return local_path.suffix.lower()
@@ -8791,7 +9229,25 @@ class MainFrame(wx.Frame):
             return ".m4a"
         return ".mp4"
 
-    def export_marked_clip_worker(self, item: dict, stream_url: str, headers: dict, start: float, end: float) -> None:
+    def audio_export_codec_args(self) -> list[str]:
+        fmt = str(self.settings.audio_format or "mp3").lower()
+        quality = self.normalize_audio_quality_value(self.settings.audio_quality)
+        if fmt == "mp3":
+            bitrate = "320" if quality == "0" else quality
+            return ["-vn", "-c:a", "libmp3lame", "-b:a", f"{bitrate}k"]
+        if fmt == "m4a":
+            bitrate = "256" if quality == "0" else quality
+            return ["-vn", "-c:a", "aac", "-b:a", f"{bitrate}k"]
+        if fmt == "opus":
+            bitrate = "160" if quality == "0" else quality
+            return ["-vn", "-c:a", "libopus", "-b:a", f"{bitrate}k"]
+        if fmt == "wav":
+            return ["-vn", "-c:a", "pcm_s16le"]
+        if fmt == "flac":
+            return ["-vn", "-c:a", "flac"]
+        return ["-vn"]
+
+    def export_marked_clip_worker(self, item: dict, stream_url: str, headers: dict, start: float, end: float, audio_only: bool = False) -> None:
         try:
             ffmpeg = self.ffmpeg_executable()
             if not ffmpeg:
@@ -8802,7 +9258,7 @@ class MainFrame(wx.Frame):
             folder = self.clip_output_folder_for_item(item)
             folder.mkdir(parents=True, exist_ok=True)
             title = str(item.get("title") or Path(input_url).stem or "clip")
-            suffix = self.clip_output_extension(input_url, item)
+            suffix = self.clip_output_extension(input_url, item, audio_only=audio_only)
             output = folder / f"{self.safe_folder_name(title)} - {self.format_seconds(start).replace(':', '-')}-{self.format_seconds(end).replace(':', '-')}{suffix}"
             counter = 2
             while output.exists():
@@ -8812,7 +9268,12 @@ class MainFrame(wx.Frame):
             header_text = "".join(f"{name}: {value}\r\n" for name, value in headers.items() if value)
             if header_text:
                 args.extend(["-headers", header_text])
-            args.extend(["-i", input_url, "-t", f"{end - start:.3f}", "-map", "0", "-c", "copy", "-avoid_negative_ts", "make_zero", str(output)])
+            args.extend(["-i", input_url, "-t", f"{end - start:.3f}"])
+            if audio_only:
+                args.extend(self.audio_export_codec_args())
+            else:
+                args.extend(["-map", "0", "-c", "copy", "-avoid_negative_ts", "make_zero"])
+            args.append(str(output))
             creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
             result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=creationflags)
             if result.returncode != 0:
@@ -8942,7 +9403,7 @@ class MainFrame(wx.Frame):
     def current_pitch_value(self) -> float:
         stored = self.current_video_info.get("pitch", "1.0")
         try:
-            return float(stored)
+            return self.parse_rate_value(stored)
         except (TypeError, ValueError):
             return 1.0
 
@@ -9048,6 +9509,11 @@ class MainFrame(wx.Frame):
         if abs(value - round(value)) < 0.001:
             return f"{value:.1f}"
         return f"{value:.2f}".rstrip("0").rstrip(".")
+
+    @staticmethod
+    def parse_rate_value(value) -> float:
+        text = str(value).strip().lower().removesuffix("x").strip()
+        return float(text)
 
     @staticmethod
     def format_rate_for_speech(value: float) -> str:
@@ -9446,6 +9912,7 @@ class MainFrame(wx.Frame):
             ("open_history", self.open_history_shortcut),
             ("open_podcasts_rss", self.open_podcasts_rss_shortcut),
             ("open_settings", self.open_settings_shortcut),
+            ("open_playback_queue", self.open_playback_queue_shortcut),
             ("new_subscription_videos", self.open_notification_center_shortcut),
         ]
         for action, handler in actions:
@@ -9557,6 +10024,12 @@ class MainFrame(wx.Frame):
         if focus is getattr(self, "results_list", None) and self.shortcut_matches(event, "queue_audio"):
             self.toggle_download_queue()
             return
+        if self.shortcut_matches(event, "add_to_playback_queue"):
+            self.add_active_to_playback_queue()
+            return
+        if self.shortcut_matches(event, "remove_from_playback_queue"):
+            self.remove_active_from_playback_queue()
+            return
         if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "results_list", None):
             self.play_selected()
             return
@@ -9630,14 +10103,20 @@ class MainFrame(wx.Frame):
             if self.shortcut_matches(event, "player_equalizer"):
                 self.show_player_equalizer()
                 return
+            if self.shortcut_matches(event, "player_edit_mode"):
+                self.toggle_edit_mode()
+                return
+            if self.shortcut_matches(event, "player_save_edit_copy"):
+                self.save_edited_local_file(replace_original=False)
+                return
+            if self.shortcut_matches(event, "player_replace_edit_original"):
+                self.save_edited_local_file(replace_original=True)
+                return
             if self.shortcut_matches(event, "player_marker_start"):
                 self.set_clip_marker_async("start")
                 return
             if self.shortcut_matches(event, "player_marker_end"):
                 self.set_clip_marker_async("end")
-                return
-            if self.shortcut_matches(event, "player_export_clip"):
-                self.export_marked_clip()
                 return
             if self.shortcut_matches(event, "player_previous"):
                 self.play_relative_item(-1)
@@ -9716,6 +10195,8 @@ class MainFrame(wx.Frame):
                 (self.menu_label_with_shortcut("download_video", "download_video"), self.download_video),
                 (self.t("add_favorite"), self.add_selected_favorite),
                 (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), self.subscribe_shortcut),
+                (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
+                (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
                 (self.t("open_browser"), self.open_selected_in_browser),
                 (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda selected=dict(item or {}): self.copy_direct_stream_url(selected)),
                 (self.t("copy_url"), self.copy_selected_url),
@@ -9764,10 +10245,52 @@ class MainFrame(wx.Frame):
             return folder / self.safe_folder_name(str(title))
         return folder
 
+    def default_download_filename(self, item: dict, audio_only: bool) -> str:
+        title = self.safe_folder_name(str(item.get("title") or "download"))
+        extension = self.settings.audio_format if audio_only else "mp4"
+        return f"{title}.{extension}"
+
+    def choose_download_target_path(self, item: dict, audio_only: bool) -> Path | None:
+        folder = self.download_folder_for_item(item, audio_only)
+        folder.mkdir(parents=True, exist_ok=True)
+        if audio_only:
+            wildcard = f"{self.settings.audio_format.upper()} (*.{self.settings.audio_format})|*.{self.settings.audio_format}|{self.t('all_files')} (*.*)|*.*"
+        else:
+            wildcard = f"MP4 (*.mp4)|*.mp4|{self.t('all_files')} (*.*)|*.*"
+        with wx.FileDialog(
+            self,
+            self.t("choose_save_path"),
+            defaultDir=str(folder),
+            defaultFile=self.default_download_filename(item, audio_only),
+            wildcard=wildcard,
+            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT,
+        ) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return None
+            path = Path(dialog.GetPath()).expanduser()
+        expected_suffix = f".{self.settings.audio_format}" if audio_only else ".mp4"
+        if not path.suffix:
+            path = path.with_suffix(expected_suffix)
+        return path
+
+    def choose_download_target_folder(self, item: dict, collection: bool = False) -> Path | None:
+        folder = self.download_folder_for_item(item, True, collection=collection)
+        folder.mkdir(parents=True, exist_ok=True)
+        with wx.DirDialog(self, self.t("choose_save_folder"), defaultPath=str(folder), style=wx.DD_DEFAULT_STYLE | wx.DD_DIR_MUST_EXIST) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return None
+            return Path(dialog.GetPath()).expanduser()
+
     def start_download(self, audio_only: bool, item: dict | None = None, remove_queued: bool = False) -> None:
         item = item or self.active_item()
         if not item:
             self.message(self.t("no_selection"))
+            return
+        if self.in_player_screen and self.clip_markers_are_set():
+            self.export_marked_clip(audio_only=audio_only)
+            return
+        if self.in_player_screen and self.clip_markers_partially_set():
+            self.announce_player(self.t("clip_markers_missing"))
             return
         if item.get("kind") in {"playlist", "channel"}:
             self.download_collection(item, audio_only=audio_only, remove_queued=remove_queued)
@@ -9779,13 +10302,17 @@ class MainFrame(wx.Frame):
                 return
         if remove_queued:
             self.remove_queued_url(item.get("url", ""), announce=False)
+        target_path = self.choose_download_target_path(item, audio_only) if self.settings.ask_download_location_each_time else None
+        if self.settings.ask_download_location_each_time and target_path is None:
+            self.set_status(self.t("download_cancelled"))
+            return
         self.announce_player(self.t("download_started"))
         self.set_status(self.t("download_audio_start" if audio_only else "download_video_start"))
         task_id, cancel_event = self.register_download_task(item, audio_only, "single", total=1)
-        wx.CallLater(900, self.start_download_worker_thread, item, audio_only, task_id, cancel_event)
+        wx.CallLater(900, self.start_download_worker_thread, item, audio_only, task_id, cancel_event, target_path)
 
-    def start_download_worker_thread(self, item: dict, audio_only: bool, task_id: str, cancel_event: threading.Event) -> None:
-        threading.Thread(target=self.download_worker, args=(item, audio_only, task_id, cancel_event), daemon=True).start()
+    def start_download_worker_thread(self, item: dict, audio_only: bool, task_id: str, cancel_event: threading.Event, target_path: Path | None = None) -> None:
+        threading.Thread(target=self.download_worker, args=(item, audio_only, task_id, cancel_event, target_path), daemon=True).start()
 
     def download_audio(self) -> None:
         self.start_download(True)
@@ -9806,11 +10333,15 @@ class MainFrame(wx.Frame):
                 return
         if remove_queued:
             self.remove_queued_url(item.get("url", ""), announce=False)
+        target_folder = self.choose_download_target_folder(item, collection=True) if self.settings.ask_download_location_each_time else None
+        if self.settings.ask_download_location_each_time and target_folder is None:
+            self.set_status(self.t("download_cancelled"))
+            return
         start_key = "download_channel_start" if kind == "channel" else "download_playlist_start"
         self.announce_player(self.t("download_started"))
         self.set_status(self.t(start_key))
         task_id, cancel_event = self.register_download_task(item, audio_only, kind, total=0)
-        threading.Thread(target=self.download_collection_worker, args=(dict(item), audio_only, task_id, cancel_event), daemon=True).start()
+        threading.Thread(target=self.download_collection_worker, args=(dict(item), audio_only, task_id, cancel_event, target_folder), daemon=True).start()
 
     def download_audio_shortcut(self) -> None:
         self.start_download_shortcut(True)
@@ -9831,11 +10362,11 @@ class MainFrame(wx.Frame):
         self.last_download_shortcut = (kind, url, now)
         self.start_download(audio_only, item=item)
 
-    def download_worker(self, item: dict, audio_only: bool, task_id: str, cancel_event: threading.Event) -> None:
+    def download_worker(self, item: dict, audio_only: bool, task_id: str, cancel_event: threading.Event, target_path: Path | None = None) -> None:
         try:
-            folder = self.download_folder_for_item(item, audio_only)
+            folder = target_path.parent if target_path else self.download_folder_for_item(item, audio_only)
             folder.mkdir(parents=True, exist_ok=True)
-            options = self.download_options(folder, audio_only, item["title"], task_id=task_id, cancel_event=cancel_event)
+            options = self.download_options(folder, audio_only, item["title"], task_id=task_id, cancel_event=cancel_event, target_path=target_path)
             self.ydl_download_urls([item["url"]], options)
             if cancel_event.is_set():
                 raise DownloadCancelled()
@@ -9854,11 +10385,11 @@ class MainFrame(wx.Frame):
             wx.CallAfter(self.finish_download_task, task_id, "download_state_failed")
             wx.CallAfter(self.message, self.t("download_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
-    def download_collection_worker(self, item: dict, audio_only: bool, task_id: str, cancel_event: threading.Event) -> None:
+    def download_collection_worker(self, item: dict, audio_only: bool, task_id: str, cancel_event: threading.Event, target_folder: Path | None = None) -> None:
         try:
             kind = str(item.get("kind") or "playlist")
             title = item.get("title") or self.t("channel" if kind == "channel" else "playlist")
-            folder = self.download_folder_for_item(item, audio_only, collection=True)
+            folder = target_folder or self.download_folder_for_item(item, audio_only, collection=True)
             folder.mkdir(parents=True, exist_ok=True)
             options = self.download_options(folder, audio_only, title, allow_playlist=True, task_id=task_id, cancel_event=cancel_event)
             self.ydl_download_urls([self.collection_download_url(item)], options)
@@ -9899,13 +10430,18 @@ class MainFrame(wx.Frame):
         allow_playlist: bool = False,
         task_id: str | None = None,
         cancel_event: threading.Event | None = None,
+        target_path: Path | None = None,
     ) -> dict:
         progress_hook = self.make_download_progress_hook(title, audio_only, task_id=task_id, cancel_event=cancel_event)
         template = self.settings.filename_template or DEFAULT_FILENAME_TEMPLATE
         if allow_playlist and self.settings.keep_playlist_order and "%(playlist_index)" not in template:
             template = "%(playlist_index)s - " + template
+        if target_path and audio_only:
+            outtmpl = str(target_path.with_suffix("")) + ".%(ext)s"
+        else:
+            outtmpl = str(target_path) if target_path else str(folder / template)
         options = {
-            "outtmpl": str(folder / template),
+            "outtmpl": outtmpl,
             "quiet": self.settings.quiet_downloads,
             "noplaylist": not allow_playlist,
             "writethumbnail": self.settings.write_thumbnail,
@@ -10304,6 +10840,14 @@ class MainFrame(wx.Frame):
             elif not isinstance(item.get("audio_only"), bool):
                 item["audio_only"] = True
             items.append(item)
+        batch_folder = None
+        if self.settings.ask_download_location_each_time:
+            batch_folder = self.choose_download_target_folder({"title": self.t("download_all_selected"), "kind": "batch"}, collection=False)
+            if batch_folder is None:
+                self.set_status(self.t("download_cancelled"))
+                return
+            for item in items:
+                item["download_folder_override"] = str(batch_folder)
         self.download_queue.clear()
         self.refresh_results_list_labels()
         if self.rss_items_screen_active:
@@ -10318,7 +10862,7 @@ class MainFrame(wx.Frame):
         task_id, cancel_event = self.register_download_task({"title": batch_title, "kind": "batch"}, False, "batch", total=len(items))
         if self.in_queue_screen:
             self.show_download_queue()
-        threading.Thread(target=self.download_batch_worker, args=(items, task_id, cancel_event), daemon=True).start()
+        threading.Thread(target=self.download_batch_worker, args=(items, task_id, cancel_event, None, str(batch_folder) if batch_folder else None), daemon=True).start()
 
     def refresh_results_list_labels(self) -> None:
         if not hasattr(self, "results_list"):
@@ -10365,7 +10909,11 @@ class MainFrame(wx.Frame):
                 allow_playlist = False
                 url = item["url"]
                 if item.get("kind") in {"playlist", "channel"}:
-                    item_folder = self.download_folder_for_item(item, audio_only, collection=True)
+                    if override_folder:
+                        title = item.get("title") or self.t("channel" if item.get("kind") == "channel" else "playlist")
+                        item_folder = Path(override_folder) / self.safe_folder_name(str(title))
+                    else:
+                        item_folder = self.download_folder_for_item(item, audio_only, collection=True)
                     allow_playlist = True
                     url = self.collection_download_url(item)
                 item_folder.mkdir(parents=True, exist_ok=True)
@@ -10598,6 +11146,8 @@ class MainFrame(wx.Frame):
             self.settings.open_folder_after_download = c["open_after_download"].GetValue()
         if "download_complete_popup" in c:
             self.settings.popup_when_download_complete = c["download_complete_popup"].GetValue()
+        if "ask_download_location_each_time" in c:
+            self.settings.ask_download_location_each_time = c["ask_download_location_each_time"].GetValue()
         if "audio_format" in c:
             self.settings.audio_format = c["audio_format"].GetStringSelection() or "mp3"
         if "audio_quality" in c:
@@ -11820,6 +12370,10 @@ class MainFrame(wx.Frame):
             repaired["player_marker_start"] = DEFAULT_KEYBOARD_SHORTCUTS["player_marker_start"]
         if str(repaired.get("player_marker_end", "")).strip() in {"]", "đ", "Đ"}:
             repaired["player_marker_end"] = DEFAULT_KEYBOARD_SHORTCUTS["player_marker_end"]
+        if self.canonical_shortcut(repaired.get("player_equalizer", "")) == "E":
+            repaired["player_equalizer"] = DEFAULT_KEYBOARD_SHORTCUTS["player_equalizer"]
+        if not repaired.get("player_edit_mode"):
+            repaired["player_edit_mode"] = DEFAULT_KEYBOARD_SHORTCUTS["player_edit_mode"]
         if self.canonical_shortcut(repaired.get("new_subscription_videos", "")) == self.canonical_shortcut(repaired.get("player_play_pause", "")):
             replacement = self.first_available_shortcut(repaired, "new_subscription_videos", ["Ctrl+Shift+V", "Ctrl+Alt+V", "Alt+N"])
             if replacement:
@@ -11947,6 +12501,13 @@ class MainFrame(wx.Frame):
     def save_playback_positions(self) -> None:
         APP_DIR.mkdir(parents=True, exist_ok=True)
         PLAYBACK_POSITIONS_FILE.write_text(json.dumps(self.playback_positions, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def load_playback_queue(self) -> list[dict]:
+        return self.load_json_list(PLAYBACK_QUEUE_FILE)
+
+    def save_playback_queue(self) -> None:
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        PLAYBACK_QUEUE_FILE.write_text(json.dumps(self.playback_queue, indent=2, ensure_ascii=False), encoding="utf-8")
 
     @staticmethod
     def load_json_list(path: Path) -> list[dict]:

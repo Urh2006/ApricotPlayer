@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.7` (`0.7`)
+Current version: `0.7.1` (`0.7.1`)
 
 ## Download
 
@@ -35,6 +35,12 @@ py wx_main.py
 - Accessible 10-band equalizer with descriptive frequency sliders, global Settings controls, genre/sound presets, three custom profiles, and player-only live controls
 - Player Bass boost checkbox for a temporary per-video EQ boost
 - Player clip markers and FFmpeg export for the marked section of the current video, local file, or podcast
+- Marked clips now export through the normal download shortcuts: `Ctrl+Shift+A` for audio clips and `Ctrl+Shift+D` for video clips
+- Start and end clip marker shortcuts toggle markers on and off, so accidental markers can be cleared immediately
+- Local-file edit mode for changing speed, pitch, or equalizer, then saving an edited copy or replacing the original file
+- Playback queue with add, remove, open queue, Enter-to-play, and automatic next-item playback
+- Optional Save As behavior for downloads, with file dialogs for single downloads and folder dialogs for channel or playlist downloads
+- First-run language selection for new users before they start using the app
 - Clip marker shortcuts use physical `LeftBracket` and `RightBracket` keys, so they work across keyboard layouts
 - Optional screen reader announcement for Playing or Paused when pressing Space in the player
 - Audio and video downloads with progress updates
@@ -97,9 +103,14 @@ py wx_main.py
 - `T`: announce elapsed, remaining, and total time
 - `V`: open video details
 - `O`: choose audio output device for the current video
-- `E`: open the player equalizer
+- `G`: open the player equalizer
+- `E`: toggle local-file edit mode
 - `LeftBracket` / `RightBracket`: set clip start and end markers
-- `Ctrl+S`: export the marked clip section
+- `Ctrl+Shift+A`: export marked section as audio when both markers are set
+- `Ctrl+Shift+D`: export marked section as video when both markers are set
+- `Ctrl+S`: save an edited copy in local-file edit mode
+- `Ctrl+R`: replace the original file in local-file edit mode
+- `Ctrl+Alt+Q`: open playback queue
 - `L`: copy current video link
 - `Ctrl+D`: copy the direct media stream URL
 - `Ctrl+PageUp/PageDown`: previous or next item
@@ -114,6 +125,8 @@ py wx_main.py
 - `Ctrl+Shift+N`: create playlist
 - `Ctrl+Shift+P`: add the focused or queued videos to a playlist
 - `Ctrl+Shift+R`: remove an item from a user playlist
+- `Ctrl+Shift+Q`: add the focused item to the playback queue
+- `Ctrl+Shift+Delete`: remove the focused item from the playback queue
 - `Ctrl+Shift+V`: open the notification center
 - `Ctrl+Alt+O`: play from folder
 
