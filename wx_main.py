@@ -186,8 +186,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8"
-APP_VERSION_LABEL = "0.8"
+APP_VERSION = "0.8.1"
+APP_VERSION_LABEL = "0.8.1"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -1316,7 +1316,7 @@ TEXT["en"].update(
         "enable_stream_cache": "Enable playback cache",
         "cache_folder": "Playback cache folder",
         "cache_size_mb": "Playback cache size in MB",
-        "resume_playback": "Resume videos where you left off",
+        "resume_playback": "Resume where you left off",
         "enable_age_restricted_videos": "Age-restricted YouTube video support (slower fallback only when needed)",
         "default_audio_device": "Default audio output device",
         "audio_device_missing": "The saved audio output device is no longer available. Choose a new default device.",
@@ -3043,10 +3043,13 @@ RELEASE_08_TRANSLATION_UPDATES = {
         "file_converter": "Pretvornik datotek",
         "folder_converter": "Pretvornik map",
         "converter_path": "Pot do datoteke ali mape",
+        "file_to_convert": "Datoteka za pretvorbo",
+        "folder_to_convert": "Mapa za pretvorbo",
         "browse_file": "Izberi datoteko",
         "browse_folder": "Izberi mapo",
-        "detected_format": "Zaznan format: {format}",
+        "detected_format": "Zaznan format",
         "output_format": "Izhodni format",
+        "convert_to": "Pretvori v",
         "add_image": "Dodaj sliko",
         "dark_background": "Temno ozadje",
         "image_path": "Pot do slike",
@@ -3073,10 +3076,13 @@ RELEASE_08_TRANSLATION_UPDATES = {
         "file_converter": "File converter",
         "folder_converter": "Folder converter",
         "converter_path": "File or folder path",
+        "file_to_convert": "File to convert",
+        "folder_to_convert": "Folder to convert",
         "browse_file": "Browse file",
         "browse_folder": "Browse folder",
-        "detected_format": "Detected format: {format}",
+        "detected_format": "Detected format",
         "output_format": "Output format",
+        "convert_to": "Convert to",
         "add_image": "Add image",
         "dark_background": "Dark background",
         "image_path": "Image path",
@@ -5049,9 +5055,10 @@ class MainFrame(wx.Frame):
             form = wx.FlexGridSizer(0, 2, 6, 6)
             form.AddGrowableCol(1, 1)
 
-            path_label = wx.StaticText(dialog, label=self.t("converter_path"))
+            path_key = "folder_to_convert" if folder_mode else "file_to_convert"
+            path_label = wx.StaticText(dialog, label=self.t(path_key))
             path_ctrl = wx.TextCtrl(dialog)
-            path_ctrl.SetName(self.t("converter_path"))
+            path_ctrl.SetName(self.t(path_key))
             browse_button = wx.Button(dialog, label=self.t("browse_folder" if folder_mode else "browse_file"))
             browse_button.SetName(self.t("browse_folder" if folder_mode else "browse_file"))
             path_row = wx.BoxSizer(wx.HORIZONTAL)
@@ -5060,14 +5067,15 @@ class MainFrame(wx.Frame):
             form.Add(path_label, 0, wx.ALIGN_CENTER_VERTICAL)
             form.Add(path_row, 1, wx.EXPAND)
 
-            detected_label = wx.StaticText(dialog, label=self.t("detected_format", format=self.t("empty")))
-            form.AddSpacer(1)
-            form.Add(detected_label, 0, wx.EXPAND)
+            detected_ctrl = wx.TextCtrl(dialog, value=self.t("empty"), style=wx.TE_READONLY)
+            detected_ctrl.SetName(self.t("detected_format"))
+            form.Add(wx.StaticText(dialog, label=self.t("detected_format")), 0, wx.ALIGN_CENTER_VERTICAL)
+            form.Add(detected_ctrl, 1, wx.EXPAND)
 
             target_choice = wx.Choice(dialog, choices=[])
-            target_choice.SetName(self.t("output_format"))
+            target_choice.SetName(self.t("convert_to"))
             target_values: list[str] = []
-            form.Add(wx.StaticText(dialog, label=self.t("output_format")), 0, wx.ALIGN_CENTER_VERTICAL)
+            form.Add(wx.StaticText(dialog, label=self.t("convert_to")), 0, wx.ALIGN_CENTER_VERTICAL)
             form.Add(target_choice, 1, wx.EXPAND)
 
             options_label = wx.StaticText(dialog, label=self.t("converter_audio_to_video_options"))
@@ -5141,7 +5149,7 @@ class MainFrame(wx.Frame):
                     detected = (path.suffix.lower().lstrip(".") or self.t("empty")) if input_kind else self.t("unsupported_input_format")
                     if not raw_path:
                         detected = self.t("empty")
-                detected_label.SetLabel(self.t("detected_format", format=detected))
+                detected_ctrl.SetValue(detected)
                 current = selected_target() if target_values else ""
                 target_values = self.converter_format_values(input_kind)
                 target_choice.Set(self.converter_format_labels(target_values))

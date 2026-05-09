@@ -1,5 +1,12 @@
 # Changelog
 
+## What's new in version 0.8.1
+
+- renamed the Playback setting from "Resume videos where you left off" to "Resume where you left off" because resume now applies to videos, podcasts, and local files
+- changed File converter and Folder converter path labels to "File to convert" and "Folder to convert"
+- changed the converter's detected format display into a focused read-only field for clearer screen-reader navigation
+- renamed the converter output format combo box label to "Convert to"
+
 ## What's new in version 0.8
 
 - added Playback settings for default volume and volume boost on by default, so playback can start at a chosen volume and optionally allow volume above 100% without pressing F2 first
