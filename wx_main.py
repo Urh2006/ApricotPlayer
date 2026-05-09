@@ -24,13 +24,18 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from importlib import import_module
 from pathlib import Path
-from urllib.parse import urlencode, urljoin, urlparse
+from urllib.parse import unquote, urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 import xml.etree.ElementTree as ET
 
 import wx
 import wx.adv
+
+try:
+    import winreg
+except ImportError:
+    winreg = None
 
 try:
     import certifi
@@ -151,10 +156,38 @@ class DownloadCancelled(Exception):
     pass
 
 
+class SliderAccessible(wx.Accessible):
+    def GetName(self, childId):
+        window = self.GetWindow()
+        if childId == 0 and window:
+            name = getattr(window, "_apricot_accessible_name", "") or window.GetName()
+            return wx.ACC_OK, str(name)
+        return wx.ACC_NOT_IMPLEMENTED, ""
+
+    def GetDescription(self, childId):
+        window = self.GetWindow()
+        if childId == 0 and window:
+            description = getattr(window, "_apricot_accessible_description", "") or window.GetToolTipText()
+            return wx.ACC_OK, str(description or "")
+        return wx.ACC_NOT_IMPLEMENTED, ""
+
+    def GetValue(self, childId):
+        window = self.GetWindow()
+        if childId == 0 and window:
+            value = getattr(window, "_apricot_accessible_value", "")
+            return wx.ACC_OK, str(value)
+        return wx.ACC_NOT_IMPLEMENTED, ""
+
+    def GetRole(self, childId):
+        if childId == 0:
+            return wx.ACC_OK, wx.ROLE_SYSTEM_SLIDER
+        return wx.ACC_NOT_IMPLEMENTED, 0
+
+
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.6.14.7"
-APP_VERSION_LABEL = "0.6.14.7"
+APP_VERSION = "0.7"
+APP_VERSION_LABEL = "0.7"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -179,6 +212,67 @@ DEFAULT_FILENAME_TEMPLATE = "%(title)s.%(ext)s"
 OLD_FILENAME_TEMPLATE = "%(title)s [%(id)s].%(ext)s"
 RESULTS_PAGE_SIZE = 20
 REFRESH_INTERVAL_OPTIONS = ["0.5", "1", "2", "3", "6", "12", "24"]
+EQ_FILTER_LABEL = "apricot_eq"
+EQ_FILTER_REF = f"@{EQ_FILTER_LABEL}"
+EQ_BANDS: list[tuple[str, str]] = [
+    ("31", "31 Hz sub bass rumble"),
+    ("62", "62 Hz bass thump"),
+    ("125", "125 Hz upper bass warmth"),
+    ("250", "250 Hz low mids"),
+    ("500", "500 Hz mids body"),
+    ("1000", "1 kHz midrange presence"),
+    ("2000", "2 kHz vocal clarity"),
+    ("4000", "4 kHz attack and detail"),
+    ("8000", "8 kHz brightness"),
+    ("16000", "16 kHz air and sparkle"),
+]
+EQ_RANGE_OPTIONS = ["6", "12", "18", "24"]
+EQ_PRESET_FLAT = "flat"
+EQ_CUSTOM_PRESET_IDS = ["custom1", "custom2", "custom3"]
+EQ_FACTORY_PRESET_VALUES: dict[str, list[float]] = {
+    "flat": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    "bass_boost": [5, 4, 3, 2, 1, 0, 0, 0, 0, 0],
+    "full_bass_treble": [4, 3, 0, -4, -2, 1, 4, 5, 6, 6],
+    "dance": [5, 4, 2, 0, -1, -1, 0, 2, 3, 3],
+    "hip_hop": [4, 5, 3, 1, -1, -1, 1, 2, 2, 1],
+    "electronic": [4, 3, 0, -3, -2, 0, 4, 5, 5, 4],
+    "rock": [4, 3, 1, -2, -3, -1, 2, 4, 5, 5],
+    "pop": [-1, 2, 3, 4, 2, 0, -1, -1, 0, 1],
+    "classical": [0, 0, 0, 0, 0, 0, -2, -2, -2, -3],
+    "jazz": [2, 1, 0, 1, 2, 2, 1, 2, 3, 2],
+    "acoustic": [2, 3, 2, 1, 0, 1, 2, 3, 2, 1],
+    "vocal": [-2, -1, 0, 1, 2, 3, 4, 3, 1, -1],
+    "podcast": [-3, -2, -1, 0, 2, 3, 4, 3, 0, -2],
+    "bright": [-1, -1, 0, 0, 1, 2, 3, 4, 5, 5],
+    "mellow": [1, 2, 1, 0, -1, -1, -1, -2, -3, -3],
+    "treble_boost": [-5, -4, -3, -1, 1, 3, 5, 6, 6, 6],
+    "laptop_headphones": [3, 5, 3, -2, 0, -3, -4, -4, 0, 0],
+    "late_night": [2, 2, 1, 0, -1, -2, -1, 0, 1, 1],
+}
+EQ_PRESET_OPTIONS = list(EQ_FACTORY_PRESET_VALUES.keys()) + EQ_CUSTOM_PRESET_IDS
+LOCAL_MEDIA_EXTENSIONS = {
+    ".3g2",
+    ".3gp",
+    ".aac",
+    ".aiff",
+    ".avi",
+    ".flac",
+    ".m4a",
+    ".m4v",
+    ".mkv",
+    ".mov",
+    ".mp3",
+    ".mp4",
+    ".mpeg",
+    ".mpg",
+    ".oga",
+    ".ogg",
+    ".opus",
+    ".wav",
+    ".webm",
+    ".wma",
+    ".wmv",
+}
 DEFAULT_GITHUB_OWNER = "Urh2006"
 DEFAULT_GITHUB_REPO = "ApricotPlayer"
 GITHUB_RELEASES_API_URL = f"https://api.github.com/repos/{DEFAULT_GITHUB_OWNER}/{DEFAULT_GITHUB_REPO}/releases"
@@ -245,6 +339,8 @@ LEGACY_VIDEO_FORMAT_MAP = {
 MPV_IPC_TIMEOUT_SECONDS = 2.5
 MPV_PITCH_RETRY_ATTEMPTS = 8
 MPV_PITCH_RETRY_DELAY_SECONDS = 0.12
+VK_OEM_4_LEFT_BRACKET = 0xDB
+VK_OEM_6_RIGHT_BRACKET = 0xDD
 LANGUAGES = [
     ("en", "English"),
     ("sl", "Slovenščina"),
@@ -280,6 +376,7 @@ LANGUAGE_NAMES = {code: name for code, name in LANGUAGES}
 DEFAULT_KEYBOARD_SHORTCUTS = {
     "open_main_menu": "Ctrl+Alt+M",
     "open_search": "Ctrl+Alt+Y",
+    "open_play_from_folder": "Ctrl+Alt+O",
     "open_direct_link": "Ctrl+Alt+L",
     "open_favorites": "Ctrl+Alt+F",
     "open_playlists": "Ctrl+Alt+P",
@@ -309,6 +406,10 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "player_pitch_down": "Ctrl+Down",
     "player_details": "V",
     "player_output_devices": "O",
+    "player_equalizer": "E",
+    "player_marker_start": "LeftBracket",
+    "player_marker_end": "RightBracket",
+    "player_export_clip": "Ctrl+S",
     "player_previous": "Ctrl+PageUp",
     "player_next": "Ctrl+PageDown",
     "player_back": "Escape",
@@ -326,6 +427,7 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
 SHORTCUT_DEFINITIONS = [
     ("open_main_menu", "shortcut_open_main_menu"),
     ("open_search", "shortcut_open_search"),
+    ("open_play_from_folder", "shortcut_open_play_from_folder"),
     ("open_direct_link", "shortcut_open_direct_link"),
     ("open_favorites", "shortcut_open_favorites"),
     ("open_playlists", "shortcut_open_playlists"),
@@ -355,6 +457,10 @@ SHORTCUT_DEFINITIONS = [
     ("player_pitch_down", "shortcut_player_pitch_down"),
     ("player_details", "shortcut_player_details"),
     ("player_output_devices", "shortcut_player_output_devices"),
+    ("player_equalizer", "shortcut_player_equalizer"),
+    ("player_marker_start", "shortcut_player_marker_start"),
+    ("player_marker_end", "shortcut_player_marker_end"),
+    ("player_export_clip", "shortcut_player_export_clip"),
     ("player_previous", "shortcut_player_previous"),
     ("player_next", "shortcut_player_next"),
     ("player_back", "shortcut_player_back"),
@@ -591,6 +697,9 @@ TEXT = {
         "repeat": "Ponavljaj",
         "repeat_on": "Ponavljanje vklopljeno.",
         "repeat_off": "Ponavljanje izklopljeno.",
+        "bass_boost": "Bass boost",
+        "bass_boost_on": "Bass boost vklopljen.",
+        "bass_boost_off": "Bass boost izklopljen.",
         "playback_restarted": "Predvajanje znova od zacetka.",
         "playback_finished": "Predvajanje koncano.",
         "previous": "Prejsnji",
@@ -1197,6 +1306,9 @@ TEXT["en"].update(
         "repeat": "Repeat",
         "repeat_on": "Repeat on.",
         "repeat_off": "Repeat off.",
+        "bass_boost": "Bass boost",
+        "bass_boost_on": "Bass boost on.",
+        "bass_boost_off": "Bass boost off.",
         "playback_restarted": "Playback restarted from the beginning.",
         "playback_finished": "Playback finished.",
         "previous": "Previous",
@@ -1649,6 +1761,1211 @@ for language_code, translations in SUPPLEMENTAL_TRANSLATIONS.items():
     TEXT.setdefault(language_code, {}).update(translations)
 for language_code in LANGUAGE_CODES:
     TEXT[language_code] = {**TEXT["en"], **TEXT.get(language_code, {})}
+MEDIA_PLAYER_TRANSLATION_UPDATES = {
+    "sl": {
+        "equalizer_section": "Equalizer",
+        "equalizer": "Equalizer",
+        "play_from_folder": "Predvajaj iz mape",
+        "announce_play_pause": "Najavi play/pause v predvajalniku",
+        "playback_paused": "Pavzirano.",
+        "playback_playing": "Predvajam.",
+        "select_media_file": "Izberi audio ali video datoteko",
+        "media_files": "Audio in video datoteke",
+        "all_files": "Vse datoteke",
+        "global_equalizer": "Globalni equalizer",
+        "equalizer_preset": "Equalizer preset",
+        "equalizer_preset_name": "Ime custom preseta",
+        "equalizer_db_range": "Razpon equalizerja v dB",
+        "equalizer_band_gain": "Equalizer {band}",
+        "reset_equalizer": "Resetiraj ta preset",
+        "equalizer_saved": "Equalizer shranjen.",
+        "equalizer_closed": "Equalizer zaprt.",
+        "equalizer_apply_failed": "Equalizer ni bil uporabljen: {error}",
+        "eq_preset_flat": "Default / flat",
+        "eq_preset_bass_boost": "Bass boost",
+        "eq_preset_full_bass_treble": "Full bass and treble",
+        "eq_preset_dance": "Dance",
+        "eq_preset_hip_hop": "Hip-hop",
+        "eq_preset_electronic": "Electronic",
+        "eq_preset_rock": "Rock",
+        "eq_preset_pop": "Pop",
+        "eq_preset_classical": "Classical",
+        "eq_preset_jazz": "Jazz",
+        "eq_preset_acoustic": "Acoustic",
+        "eq_preset_vocal": "Vocal clarity",
+        "eq_preset_podcast": "Podcast / speech",
+        "eq_preset_bright": "Bright",
+        "eq_preset_mellow": "Mellow",
+        "eq_preset_treble_boost": "Treble boost",
+        "eq_preset_laptop_headphones": "Laptop/headphones",
+        "eq_preset_late_night": "Late night",
+        "set_default_player": "Nastavi ApricotPlayer kot privzeti predvajalnik",
+        "default_player_settings_opened": "Odprte so Windows nastavitve za privzete aplikacije.",
+        "default_player_settings_failed": "Windows nastavitev za privzete aplikacije ni bilo mogoce odpreti: {error}",
+        "media_association_prompt_title": "Registracija media playerja",
+        "media_association_prompt_message": "ApricotPlayer se ni registriran kot media player za Windows. Ali ga zelis dodati med programe za audio in video datoteke? Privzeti predvajalnik se vedno izberes rocno v Windows nastavitvah.",
+        "media_association_registered": "ApricotPlayer je registriran kot media player.",
+        "media_association_failed": "Registracija media playerja ni uspela: {error}",
+        "local_media": "Lokalna media datoteka",
+        "local_file_open_failed": "Datoteke ni bilo mogoce odpreti: {error}",
+        "clip_start_marker_set": "Start marker nastavljen na {time}.",
+        "clip_end_marker_set": "End marker nastavljen na {time}.",
+        "clip_markers_missing": "Najprej nastavi start in end marker.",
+        "clip_marker_invalid": "End marker mora biti za start markerjem.",
+        "clip_export_started": "Export clip started.",
+        "clip_export_done": "Clip exported: {title}",
+        "clip_export_failed": "Clip export failed: {error}",
+        "shortcut_player_equalizer": "Predvajalnik: equalizer",
+        "shortcut_player_marker_start": "Predvajalnik: nastavi start marker",
+        "shortcut_player_marker_end": "Predvajalnik: nastavi end marker",
+        "shortcut_player_export_clip": "Predvajalnik: export oznacenega dela",
+        "shortcut_open_play_from_folder": "Odpri: predvajaj iz mape",
+    },
+    "en": {
+        "equalizer_section": "Equalizer",
+        "equalizer": "Equalizer",
+        "play_from_folder": "Play from folder",
+        "announce_play_pause": "Announce play/pause in the player",
+        "playback_paused": "Paused.",
+        "playback_playing": "Playing.",
+        "select_media_file": "Choose an audio or video file",
+        "media_files": "Audio and video files",
+        "all_files": "All files",
+        "global_equalizer": "Global equalizer",
+        "equalizer_preset": "Equalizer preset",
+        "equalizer_preset_name": "Custom preset name",
+        "equalizer_db_range": "Equalizer range in dB",
+        "equalizer_band_gain": "Equalizer {band}",
+        "reset_equalizer": "Reset this preset",
+        "equalizer_saved": "Equalizer saved.",
+        "equalizer_closed": "Equalizer closed.",
+        "equalizer_apply_failed": "Equalizer could not be applied: {error}",
+        "eq_preset_flat": "Default / flat",
+        "eq_preset_bass_boost": "Bass boost",
+        "eq_preset_full_bass_treble": "Full bass and treble",
+        "eq_preset_dance": "Dance",
+        "eq_preset_hip_hop": "Hip-hop",
+        "eq_preset_electronic": "Electronic",
+        "eq_preset_rock": "Rock",
+        "eq_preset_pop": "Pop",
+        "eq_preset_classical": "Classical",
+        "eq_preset_jazz": "Jazz",
+        "eq_preset_acoustic": "Acoustic",
+        "eq_preset_vocal": "Vocal clarity",
+        "eq_preset_podcast": "Podcast / speech",
+        "eq_preset_bright": "Bright",
+        "eq_preset_mellow": "Mellow",
+        "eq_preset_treble_boost": "Treble boost",
+        "eq_preset_laptop_headphones": "Laptop/headphones",
+        "eq_preset_late_night": "Late night",
+        "set_default_player": "Set ApricotPlayer as default media player",
+        "default_player_settings_opened": "Windows Default apps settings opened.",
+        "default_player_settings_failed": "Could not open Windows Default apps settings: {error}",
+        "media_association_prompt_title": "Media player registration",
+        "media_association_prompt_message": "ApricotPlayer is not registered as a Windows media player yet. Add it as an option for audio and video files? You still choose the default player manually in Windows settings.",
+        "media_association_registered": "ApricotPlayer is registered as a media player.",
+        "media_association_failed": "Media player registration failed: {error}",
+        "local_media": "Local media file",
+        "local_file_open_failed": "Could not open file: {error}",
+        "clip_start_marker_set": "Start marker set at {time}.",
+        "clip_end_marker_set": "End marker set at {time}.",
+        "clip_markers_missing": "Set a start marker and end marker first.",
+        "clip_marker_invalid": "The end marker must be after the start marker.",
+        "clip_export_started": "Clip export started.",
+        "clip_export_done": "Clip exported: {title}",
+        "clip_export_failed": "Clip export failed: {error}",
+        "shortcut_player_equalizer": "Player: equalizer",
+        "shortcut_player_marker_start": "Player: set start marker",
+        "shortcut_player_marker_end": "Player: set end marker",
+        "shortcut_player_export_clip": "Player: export marked clip",
+        "shortcut_open_play_from_folder": "Open: play from folder",
+    },
+}
+MEDIA_PLAYER_TRANSLATION_UPDATES.update(
+    {
+        "de": {
+            "play_from_folder": "Aus Ordner abspielen",
+            "announce_play_pause": "Wiedergabe/Pause im Player ansagen",
+            "playback_paused": "Pausiert.",
+            "playback_playing": "Wiedergabe.",
+            "select_media_file": "Audio- oder Videodatei auswählen",
+            "media_files": "Audio- und Videodateien",
+            "all_files": "Alle Dateien",
+            "global_equalizer": "Globaler Equalizer",
+            "equalizer_preset": "Equalizer-Voreinstellung",
+            "equalizer_preset_name": "Name der eigenen Voreinstellung",
+            "equalizer_db_range": "Equalizer-Bereich in dB",
+            "equalizer_band_gain": "Equalizer {band}",
+            "reset_equalizer": "Diese Voreinstellung zurücksetzen",
+            "equalizer_saved": "Equalizer gespeichert.",
+            "equalizer_closed": "Equalizer geschlossen.",
+            "equalizer_apply_failed": "Equalizer konnte nicht angewendet werden: {error}",
+            "set_default_player": "ApricotPlayer als Standard-Mediaplayer festlegen",
+            "default_player_settings_opened": "Windows-Einstellungen für Standard-Apps geöffnet.",
+            "default_player_settings_failed": "Windows-Einstellungen für Standard-Apps konnten nicht geöffnet werden: {error}",
+            "media_association_prompt_title": "Mediaplayer-Registrierung",
+            "media_association_prompt_message": "ApricotPlayer ist noch nicht als Windows-Mediaplayer registriert. Als Option für Audio- und Videodateien hinzufügen? Den Standardplayer wählst du weiterhin manuell in Windows.",
+            "media_association_registered": "ApricotPlayer ist als Mediaplayer registriert.",
+            "media_association_failed": "Mediaplayer-Registrierung fehlgeschlagen: {error}",
+            "local_media": "Lokale Mediendatei",
+            "local_file_open_failed": "Datei konnte nicht geöffnet werden: {error}",
+            "clip_start_marker_set": "Startmarke bei {time} gesetzt.",
+            "clip_end_marker_set": "Endmarke bei {time} gesetzt.",
+            "clip_markers_missing": "Setze zuerst eine Start- und Endmarke.",
+            "clip_marker_invalid": "Die Endmarke muss nach der Startmarke liegen.",
+            "clip_export_started": "Clip-Export gestartet.",
+            "clip_export_done": "Clip exportiert: {title}",
+            "clip_export_failed": "Clip-Export fehlgeschlagen: {error}",
+            "shortcut_player_equalizer": "Player: Equalizer",
+            "shortcut_player_marker_start": "Player: Startmarke setzen",
+            "shortcut_player_marker_end": "Player: Endmarke setzen",
+            "shortcut_player_export_clip": "Player: markierten Clip exportieren",
+            "shortcut_open_play_from_folder": "Öffnen: Aus Ordner abspielen",
+            "bass_boost": "Bassverstärkung",
+            "bass_boost_on": "Bassverstärkung ein.",
+            "bass_boost_off": "Bassverstärkung aus.",
+        },
+        "fr": {
+            "play_from_folder": "Lire depuis un dossier",
+            "announce_play_pause": "Annoncer lecture/pause dans le lecteur",
+            "playback_paused": "En pause.",
+            "playback_playing": "Lecture.",
+            "select_media_file": "Choisir un fichier audio ou vidéo",
+            "media_files": "Fichiers audio et vidéo",
+            "all_files": "Tous les fichiers",
+            "global_equalizer": "Égaliseur global",
+            "equalizer_preset": "Préréglage de l’égaliseur",
+            "equalizer_preset_name": "Nom du préréglage personnalisé",
+            "equalizer_db_range": "Plage de l’égaliseur en dB",
+            "equalizer_band_gain": "Égaliseur {band}",
+            "reset_equalizer": "Réinitialiser ce préréglage",
+            "equalizer_saved": "Égaliseur enregistré.",
+            "equalizer_closed": "Égaliseur fermé.",
+            "equalizer_apply_failed": "Impossible d’appliquer l’égaliseur : {error}",
+            "set_default_player": "Définir ApricotPlayer comme lecteur multimédia par défaut",
+            "default_player_settings_opened": "Paramètres Windows des applications par défaut ouverts.",
+            "default_player_settings_failed": "Impossible d’ouvrir les paramètres Windows des applications par défaut : {error}",
+            "media_association_prompt_title": "Enregistrement du lecteur multimédia",
+            "media_association_prompt_message": "ApricotPlayer n’est pas encore enregistré comme lecteur multimédia Windows. L’ajouter comme option pour les fichiers audio et vidéo ? Le lecteur par défaut se choisit toujours manuellement dans Windows.",
+            "media_association_registered": "ApricotPlayer est enregistré comme lecteur multimédia.",
+            "media_association_failed": "Échec de l’enregistrement du lecteur multimédia : {error}",
+            "local_media": "Fichier multimédia local",
+            "local_file_open_failed": "Impossible d’ouvrir le fichier : {error}",
+            "clip_start_marker_set": "Marqueur de début placé à {time}.",
+            "clip_end_marker_set": "Marqueur de fin placé à {time}.",
+            "clip_markers_missing": "Placez d’abord un marqueur de début et de fin.",
+            "clip_marker_invalid": "Le marqueur de fin doit être après le marqueur de début.",
+            "clip_export_started": "Export du clip démarré.",
+            "clip_export_done": "Clip exporté : {title}",
+            "clip_export_failed": "Échec de l’export du clip : {error}",
+            "shortcut_player_equalizer": "Lecteur : égaliseur",
+            "shortcut_player_marker_start": "Lecteur : définir le marqueur de début",
+            "shortcut_player_marker_end": "Lecteur : définir le marqueur de fin",
+            "shortcut_player_export_clip": "Lecteur : exporter le clip marqué",
+            "shortcut_open_play_from_folder": "Ouvrir : lire depuis un dossier",
+            "bass_boost": "Amplification des basses",
+            "bass_boost_on": "Amplification des basses activée.",
+            "bass_boost_off": "Amplification des basses désactivée.",
+        },
+        "es": {
+            "play_from_folder": "Reproducir desde carpeta",
+            "announce_play_pause": "Anunciar reproducir/pausa en el reproductor",
+            "playback_paused": "Pausado.",
+            "playback_playing": "Reproduciendo.",
+            "select_media_file": "Elegir un archivo de audio o video",
+            "media_files": "Archivos de audio y video",
+            "all_files": "Todos los archivos",
+            "global_equalizer": "Ecualizador global",
+            "equalizer_preset": "Preajuste del ecualizador",
+            "equalizer_preset_name": "Nombre del preajuste personalizado",
+            "equalizer_db_range": "Rango del ecualizador en dB",
+            "equalizer_band_gain": "Ecualizador {band}",
+            "reset_equalizer": "Restablecer este preajuste",
+            "equalizer_saved": "Ecualizador guardado.",
+            "equalizer_closed": "Ecualizador cerrado.",
+            "equalizer_apply_failed": "No se pudo aplicar el ecualizador: {error}",
+            "set_default_player": "Establecer ApricotPlayer como reproductor multimedia predeterminado",
+            "default_player_settings_opened": "Configuración de aplicaciones predeterminadas de Windows abierta.",
+            "default_player_settings_failed": "No se pudo abrir la configuración de aplicaciones predeterminadas de Windows: {error}",
+            "media_association_prompt_title": "Registro de reproductor multimedia",
+            "media_association_prompt_message": "ApricotPlayer aún no está registrado como reproductor multimedia de Windows. ¿Añadirlo como opción para archivos de audio y video? El reproductor predeterminado se elige manualmente en Windows.",
+            "media_association_registered": "ApricotPlayer está registrado como reproductor multimedia.",
+            "media_association_failed": "Falló el registro del reproductor multimedia: {error}",
+            "local_media": "Archivo multimedia local",
+            "local_file_open_failed": "No se pudo abrir el archivo: {error}",
+            "clip_start_marker_set": "Marcador inicial establecido en {time}.",
+            "clip_end_marker_set": "Marcador final establecido en {time}.",
+            "clip_markers_missing": "Primero establece un marcador inicial y final.",
+            "clip_marker_invalid": "El marcador final debe estar después del marcador inicial.",
+            "clip_export_started": "Exportación de clip iniciada.",
+            "clip_export_done": "Clip exportado: {title}",
+            "clip_export_failed": "Falló la exportación del clip: {error}",
+            "shortcut_player_equalizer": "Reproductor: ecualizador",
+            "shortcut_player_marker_start": "Reproductor: establecer marcador inicial",
+            "shortcut_player_marker_end": "Reproductor: establecer marcador final",
+            "shortcut_player_export_clip": "Reproductor: exportar clip marcado",
+            "shortcut_open_play_from_folder": "Abrir: reproducir desde carpeta",
+            "bass_boost": "Refuerzo de graves",
+            "bass_boost_on": "Refuerzo de graves activado.",
+            "bass_boost_off": "Refuerzo de graves desactivado.",
+        },
+        "pt": {
+            "play_from_folder": "Reproduzir da pasta",
+            "announce_play_pause": "Anunciar reproduzir/pausa no player",
+            "playback_paused": "Pausado.",
+            "playback_playing": "Reproduzindo.",
+            "select_media_file": "Escolher arquivo de áudio ou vídeo",
+            "media_files": "Arquivos de áudio e vídeo",
+            "all_files": "Todos os arquivos",
+            "global_equalizer": "Equalizador global",
+            "equalizer_preset": "Predefinição do equalizador",
+            "equalizer_preset_name": "Nome da predefinição personalizada",
+            "equalizer_db_range": "Faixa do equalizador em dB",
+            "equalizer_band_gain": "Equalizador {band}",
+            "reset_equalizer": "Redefinir esta predefinição",
+            "equalizer_saved": "Equalizador salvo.",
+            "equalizer_closed": "Equalizador fechado.",
+            "equalizer_apply_failed": "Não foi possível aplicar o equalizador: {error}",
+            "set_default_player": "Definir ApricotPlayer como player de mídia padrão",
+            "default_player_settings_opened": "Configurações de apps padrão do Windows abertas.",
+            "default_player_settings_failed": "Não foi possível abrir as configurações de apps padrão do Windows: {error}",
+            "media_association_prompt_title": "Registro do player de mídia",
+            "media_association_prompt_message": "ApricotPlayer ainda não está registrado como player de mídia do Windows. Adicionar como opção para arquivos de áudio e vídeo? O player padrão ainda é escolhido manualmente no Windows.",
+            "media_association_registered": "ApricotPlayer está registrado como player de mídia.",
+            "media_association_failed": "Falha ao registrar o player de mídia: {error}",
+            "local_media": "Arquivo de mídia local",
+            "local_file_open_failed": "Não foi possível abrir o arquivo: {error}",
+            "clip_start_marker_set": "Marcador inicial definido em {time}.",
+            "clip_end_marker_set": "Marcador final definido em {time}.",
+            "clip_markers_missing": "Defina primeiro um marcador inicial e final.",
+            "clip_marker_invalid": "O marcador final deve ficar depois do marcador inicial.",
+            "clip_export_started": "Exportação do clipe iniciada.",
+            "clip_export_done": "Clipe exportado: {title}",
+            "clip_export_failed": "Falha ao exportar o clipe: {error}",
+            "shortcut_player_equalizer": "Player: equalizador",
+            "shortcut_player_marker_start": "Player: definir marcador inicial",
+            "shortcut_player_marker_end": "Player: definir marcador final",
+            "shortcut_player_export_clip": "Player: exportar clipe marcado",
+            "shortcut_open_play_from_folder": "Abrir: reproduzir da pasta",
+            "bass_boost": "Reforço de graves",
+            "bass_boost_on": "Reforço de graves ativado.",
+            "bass_boost_off": "Reforço de graves desativado.",
+        },
+        "it": {
+            "play_from_folder": "Riproduci da cartella",
+            "announce_play_pause": "Annuncia riproduzione/pausa nel player",
+            "playback_paused": "In pausa.",
+            "playback_playing": "Riproduzione.",
+            "select_media_file": "Scegli un file audio o video",
+            "media_files": "File audio e video",
+            "all_files": "Tutti i file",
+            "global_equalizer": "Equalizzatore globale",
+            "equalizer_preset": "Preset equalizzatore",
+            "equalizer_preset_name": "Nome preset personalizzato",
+            "equalizer_db_range": "Intervallo equalizzatore in dB",
+            "equalizer_band_gain": "Equalizzatore {band}",
+            "reset_equalizer": "Reimposta questo preset",
+            "equalizer_saved": "Equalizzatore salvato.",
+            "equalizer_closed": "Equalizzatore chiuso.",
+            "equalizer_apply_failed": "Impossibile applicare l’equalizzatore: {error}",
+            "set_default_player": "Imposta ApricotPlayer come player multimediale predefinito",
+            "default_player_settings_opened": "Impostazioni app predefinite di Windows aperte.",
+            "default_player_settings_failed": "Impossibile aprire le impostazioni app predefinite di Windows: {error}",
+            "media_association_prompt_title": "Registrazione player multimediale",
+            "media_association_prompt_message": "ApricotPlayer non è ancora registrato come player multimediale di Windows. Aggiungerlo come opzione per file audio e video? Il player predefinito si sceglie comunque manualmente in Windows.",
+            "media_association_registered": "ApricotPlayer è registrato come player multimediale.",
+            "media_association_failed": "Registrazione player multimediale non riuscita: {error}",
+            "local_media": "File multimediale locale",
+            "local_file_open_failed": "Impossibile aprire il file: {error}",
+            "clip_start_marker_set": "Marcatore iniziale impostato a {time}.",
+            "clip_end_marker_set": "Marcatore finale impostato a {time}.",
+            "clip_markers_missing": "Imposta prima un marcatore iniziale e finale.",
+            "clip_marker_invalid": "Il marcatore finale deve essere dopo quello iniziale.",
+            "clip_export_started": "Esportazione clip avviata.",
+            "clip_export_done": "Clip esportata: {title}",
+            "clip_export_failed": "Esportazione clip non riuscita: {error}",
+            "shortcut_player_equalizer": "Player: equalizzatore",
+            "shortcut_player_marker_start": "Player: imposta marcatore iniziale",
+            "shortcut_player_marker_end": "Player: imposta marcatore finale",
+            "shortcut_player_export_clip": "Player: esporta clip marcata",
+            "shortcut_open_play_from_folder": "Apri: riproduci da cartella",
+            "bass_boost": "Potenziamento bassi",
+            "bass_boost_on": "Potenziamento bassi attivo.",
+            "bass_boost_off": "Potenziamento bassi disattivo.",
+        },
+        "pl": {
+            "play_from_folder": "Odtwórz z folderu",
+            "announce_play_pause": "Ogłaszaj odtwarzanie/pauzę w odtwarzaczu",
+            "playback_paused": "Wstrzymano.",
+            "playback_playing": "Odtwarzanie.",
+            "select_media_file": "Wybierz plik audio lub wideo",
+            "media_files": "Pliki audio i wideo",
+            "all_files": "Wszystkie pliki",
+            "global_equalizer": "Globalny korektor",
+            "equalizer_preset": "Preset korektora",
+            "equalizer_preset_name": "Nazwa własnego presetu",
+            "equalizer_db_range": "Zakres korektora w dB",
+            "equalizer_band_gain": "Korektor {band}",
+            "reset_equalizer": "Resetuj ten preset",
+            "equalizer_saved": "Korektor zapisany.",
+            "equalizer_closed": "Korektor zamknięty.",
+            "equalizer_apply_failed": "Nie można zastosować korektora: {error}",
+            "set_default_player": "Ustaw ApricotPlayer jako domyślny odtwarzacz multimediów",
+            "default_player_settings_opened": "Otwarto ustawienia aplikacji domyślnych Windows.",
+            "default_player_settings_failed": "Nie można otworzyć ustawień aplikacji domyślnych Windows: {error}",
+            "media_association_prompt_title": "Rejestracja odtwarzacza multimediów",
+            "media_association_prompt_message": "ApricotPlayer nie jest jeszcze zarejestrowany jako odtwarzacz multimediów Windows. Dodać go jako opcję dla plików audio i wideo? Domyślny odtwarzacz nadal wybierasz ręcznie w Windows.",
+            "media_association_registered": "ApricotPlayer jest zarejestrowany jako odtwarzacz multimediów.",
+            "media_association_failed": "Rejestracja odtwarzacza multimediów nie powiodła się: {error}",
+            "local_media": "Lokalny plik multimedialny",
+            "local_file_open_failed": "Nie można otworzyć pliku: {error}",
+            "clip_start_marker_set": "Znacznik początku ustawiony na {time}.",
+            "clip_end_marker_set": "Znacznik końca ustawiony na {time}.",
+            "clip_markers_missing": "Najpierw ustaw znacznik początku i końca.",
+            "clip_marker_invalid": "Znacznik końca musi być po znaczniku początku.",
+            "clip_export_started": "Rozpoczęto eksport klipu.",
+            "clip_export_done": "Klip wyeksportowany: {title}",
+            "clip_export_failed": "Eksport klipu nie powiódł się: {error}",
+            "shortcut_player_equalizer": "Odtwarzacz: korektor",
+            "shortcut_player_marker_start": "Odtwarzacz: ustaw znacznik początku",
+            "shortcut_player_marker_end": "Odtwarzacz: ustaw znacznik końca",
+            "shortcut_player_export_clip": "Odtwarzacz: eksportuj zaznaczony klip",
+            "shortcut_open_play_from_folder": "Otwórz: odtwórz z folderu",
+            "bass_boost": "Wzmocnienie basu",
+            "bass_boost_on": "Wzmocnienie basu włączone.",
+            "bass_boost_off": "Wzmocnienie basu wyłączone.",
+        },
+        "nl": {
+            "play_from_folder": "Afspelen uit map",
+            "announce_play_pause": "Afspelen/pauze aankondigen in de speler",
+            "playback_paused": "Gepauzeerd.",
+            "playback_playing": "Afspelen.",
+            "select_media_file": "Kies een audio- of videobestand",
+            "media_files": "Audio- en videobestanden",
+            "all_files": "Alle bestanden",
+            "global_equalizer": "Globale equalizer",
+            "equalizer_preset": "Equalizerpreset",
+            "equalizer_preset_name": "Naam van aangepaste preset",
+            "equalizer_db_range": "Equalizerbereik in dB",
+            "equalizer_band_gain": "Equalizer {band}",
+            "reset_equalizer": "Deze preset herstellen",
+            "equalizer_saved": "Equalizer opgeslagen.",
+            "equalizer_closed": "Equalizer gesloten.",
+            "equalizer_apply_failed": "Equalizer kon niet worden toegepast: {error}",
+            "set_default_player": "ApricotPlayer instellen als standaard mediaspeler",
+            "default_player_settings_opened": "Windows-instellingen voor standaardapps geopend.",
+            "default_player_settings_failed": "Windows-instellingen voor standaardapps konden niet worden geopend: {error}",
+            "media_association_prompt_title": "Registratie als mediaspeler",
+            "media_association_prompt_message": "ApricotPlayer is nog niet geregistreerd als Windows-mediaspeler. Toevoegen als optie voor audio- en videobestanden? De standaardspeler kies je nog steeds handmatig in Windows.",
+            "media_association_registered": "ApricotPlayer is geregistreerd als mediaspeler.",
+            "media_association_failed": "Registratie als mediaspeler mislukt: {error}",
+            "local_media": "Lokaal mediabestand",
+            "local_file_open_failed": "Bestand kon niet worden geopend: {error}",
+            "clip_start_marker_set": "Startmarkering ingesteld op {time}.",
+            "clip_end_marker_set": "Eindmarkering ingesteld op {time}.",
+            "clip_markers_missing": "Stel eerst een start- en eindmarkering in.",
+            "clip_marker_invalid": "De eindmarkering moet na de startmarkering staan.",
+            "clip_export_started": "Clip exporteren gestart.",
+            "clip_export_done": "Clip geëxporteerd: {title}",
+            "clip_export_failed": "Clip exporteren mislukt: {error}",
+            "shortcut_player_equalizer": "Speler: equalizer",
+            "shortcut_player_marker_start": "Speler: startmarkering instellen",
+            "shortcut_player_marker_end": "Speler: eindmarkering instellen",
+            "shortcut_player_export_clip": "Speler: gemarkeerde clip exporteren",
+            "shortcut_open_play_from_folder": "Openen: afspelen uit map",
+            "bass_boost": "Basversterking",
+            "bass_boost_on": "Basversterking aan.",
+            "bass_boost_off": "Basversterking uit.",
+        },
+        "sv": {
+            "play_from_folder": "Spela från mapp",
+            "announce_play_pause": "Annonsera spela/paus i spelaren",
+            "playback_paused": "Pausad.",
+            "playback_playing": "Spelar.",
+            "select_media_file": "Välj en ljud- eller videofil",
+            "media_files": "Ljud- och videofiler",
+            "all_files": "Alla filer",
+            "global_equalizer": "Global equalizer",
+            "equalizer_preset": "Equalizerförinställning",
+            "equalizer_preset_name": "Namn på egen förinställning",
+            "equalizer_db_range": "Equalizerintervall i dB",
+            "equalizer_band_gain": "Equalizer {band}",
+            "reset_equalizer": "Återställ denna förinställning",
+            "equalizer_saved": "Equalizer sparad.",
+            "equalizer_closed": "Equalizer stängd.",
+            "equalizer_apply_failed": "Equalizer kunde inte användas: {error}",
+            "set_default_player": "Ange ApricotPlayer som standardmediaspelare",
+            "default_player_settings_opened": "Windows-inställningar för standardappar öppnade.",
+            "default_player_settings_failed": "Kunde inte öppna Windows-inställningar för standardappar: {error}",
+            "media_association_prompt_title": "Registrering som mediaspelare",
+            "media_association_prompt_message": "ApricotPlayer är ännu inte registrerad som Windows-mediaspelare. Lägg till den som alternativ för ljud- och videofiler? Standardspelaren väljs fortfarande manuellt i Windows.",
+            "media_association_registered": "ApricotPlayer är registrerad som mediaspelare.",
+            "media_association_failed": "Registrering som mediaspelare misslyckades: {error}",
+            "local_media": "Lokal mediafil",
+            "local_file_open_failed": "Kunde inte öppna filen: {error}",
+            "clip_start_marker_set": "Startmarkör satt vid {time}.",
+            "clip_end_marker_set": "Slutmarkör satt vid {time}.",
+            "clip_markers_missing": "Sätt först en start- och slutmarkör.",
+            "clip_marker_invalid": "Slutmarkören måste vara efter startmarkören.",
+            "clip_export_started": "Clipexport startad.",
+            "clip_export_done": "Clip exporterad: {title}",
+            "clip_export_failed": "Clipexport misslyckades: {error}",
+            "shortcut_player_equalizer": "Spelare: equalizer",
+            "shortcut_player_marker_start": "Spelare: sätt startmarkör",
+            "shortcut_player_marker_end": "Spelare: sätt slutmarkör",
+            "shortcut_player_export_clip": "Spelare: exportera markerat klipp",
+            "shortcut_open_play_from_folder": "Öppna: spela från mapp",
+            "bass_boost": "Basförstärkning",
+            "bass_boost_on": "Basförstärkning på.",
+            "bass_boost_off": "Basförstärkning av.",
+        },
+        "hr": {
+            "play_from_folder": "Reproduciraj iz mape",
+            "announce_play_pause": "Najavi reprodukciju/pauzu u playeru",
+            "playback_paused": "Pauzirano.",
+            "playback_playing": "Reproduciram.",
+            "select_media_file": "Odaberi audio ili video datoteku",
+            "media_files": "Audio i video datoteke",
+            "all_files": "Sve datoteke",
+            "global_equalizer": "Globalni equalizer",
+            "equalizer_preset": "Preset equalizera",
+            "equalizer_preset_name": "Naziv prilagođenog preseta",
+            "equalizer_db_range": "Raspon equalizera u dB",
+            "equalizer_band_gain": "Equalizer {band}",
+            "reset_equalizer": "Resetiraj ovaj preset",
+            "equalizer_saved": "Equalizer spremljen.",
+            "equalizer_closed": "Equalizer zatvoren.",
+            "equalizer_apply_failed": "Equalizer nije moguće primijeniti: {error}",
+            "set_default_player": "Postavi ApricotPlayer kao zadani media player",
+            "default_player_settings_opened": "Otvorene su Windows postavke zadanih aplikacija.",
+            "default_player_settings_failed": "Nije moguće otvoriti Windows postavke zadanih aplikacija: {error}",
+            "media_association_prompt_title": "Registracija media playera",
+            "media_association_prompt_message": "ApricotPlayer još nije registriran kao Windows media player. Dodati ga kao opciju za audio i video datoteke? Zadani player i dalje se bira ručno u Windowsima.",
+            "media_association_registered": "ApricotPlayer je registriran kao media player.",
+            "media_association_failed": "Registracija media playera nije uspjela: {error}",
+            "local_media": "Lokalna media datoteka",
+            "local_file_open_failed": "Datoteku nije moguće otvoriti: {error}",
+            "clip_start_marker_set": "Početni marker postavljen na {time}.",
+            "clip_end_marker_set": "Završni marker postavljen na {time}.",
+            "clip_markers_missing": "Najprije postavi početni i završni marker.",
+            "clip_marker_invalid": "Završni marker mora biti nakon početnog.",
+            "clip_export_started": "Izvoz isječka započeo.",
+            "clip_export_done": "Isječak izvezen: {title}",
+            "clip_export_failed": "Izvoz isječka nije uspio: {error}",
+            "shortcut_player_equalizer": "Player: equalizer",
+            "shortcut_player_marker_start": "Player: postavi početni marker",
+            "shortcut_player_marker_end": "Player: postavi završni marker",
+            "shortcut_player_export_clip": "Player: izvezi označeni isječak",
+            "shortcut_open_play_from_folder": "Otvori: reproduciraj iz mape",
+            "bass_boost": "Pojačanje basa",
+            "bass_boost_on": "Pojačanje basa uključeno.",
+            "bass_boost_off": "Pojačanje basa isključeno.",
+        },
+        "sr": {
+            "play_from_folder": "Pusti iz fascikle",
+            "announce_play_pause": "Najavi reprodukciju/pauzu u plejeru",
+            "playback_paused": "Pauzirano.",
+            "playback_playing": "Reprodukcija.",
+            "select_media_file": "Izaberi audio ili video datoteku",
+            "media_files": "Audio i video datoteke",
+            "all_files": "Sve datoteke",
+            "global_equalizer": "Globalni ekvilajzer",
+            "equalizer_preset": "Podešavanje ekvilajzera",
+            "equalizer_preset_name": "Ime prilagođenog podešavanja",
+            "equalizer_db_range": "Opseg ekvilajzera u dB",
+            "equalizer_band_gain": "Ekvilajzer {band}",
+            "reset_equalizer": "Resetuj ovo podešavanje",
+            "equalizer_saved": "Ekvilajzer sačuvan.",
+            "equalizer_closed": "Ekvilajzer zatvoren.",
+            "equalizer_apply_failed": "Ekvilajzer nije mogao biti primenjen: {error}",
+            "set_default_player": "Postavi ApricotPlayer kao podrazumevani media plejer",
+            "default_player_settings_opened": "Otvorena su Windows podešavanja podrazumevanih aplikacija.",
+            "default_player_settings_failed": "Nije moguće otvoriti Windows podešavanja podrazumevanih aplikacija: {error}",
+            "media_association_prompt_title": "Registracija media plejera",
+            "media_association_prompt_message": "ApricotPlayer još nije registrovan kao Windows media plejer. Dodati ga kao opciju za audio i video datoteke? Podrazumevani plejer se i dalje bira ručno u Windowsu.",
+            "media_association_registered": "ApricotPlayer je registrovan kao media plejer.",
+            "media_association_failed": "Registracija media plejera nije uspela: {error}",
+            "local_media": "Lokalna media datoteka",
+            "local_file_open_failed": "Datoteka nije mogla da se otvori: {error}",
+            "clip_start_marker_set": "Početni marker postavljen na {time}.",
+            "clip_end_marker_set": "Završni marker postavljen na {time}.",
+            "clip_markers_missing": "Prvo postavi početni i završni marker.",
+            "clip_marker_invalid": "Završni marker mora biti posle početnog.",
+            "clip_export_started": "Izvoz klipa je počeo.",
+            "clip_export_done": "Klip izvezen: {title}",
+            "clip_export_failed": "Izvoz klipa nije uspeo: {error}",
+            "shortcut_player_equalizer": "Plejer: ekvilajzer",
+            "shortcut_player_marker_start": "Plejer: postavi početni marker",
+            "shortcut_player_marker_end": "Plejer: postavi završni marker",
+            "shortcut_player_export_clip": "Plejer: izvezi označeni klip",
+            "shortcut_open_play_from_folder": "Otvori: pusti iz fascikle",
+            "bass_boost": "Pojačanje basa",
+            "bass_boost_on": "Pojačanje basa uključeno.",
+            "bass_boost_off": "Pojačanje basa isključeno.",
+        },
+        "cs": {
+            "play_from_folder": "Přehrát ze složky",
+            "announce_play_pause": "Oznamovat přehrát/pozastavit v přehrávači",
+            "playback_paused": "Pozastaveno.",
+            "playback_playing": "Přehrávání.",
+            "select_media_file": "Vyberte audio nebo video soubor",
+            "media_files": "Audio a video soubory",
+            "all_files": "Všechny soubory",
+            "global_equalizer": "Globální ekvalizér",
+            "equalizer_preset": "Předvolba ekvalizéru",
+            "equalizer_preset_name": "Název vlastní předvolby",
+            "equalizer_db_range": "Rozsah ekvalizéru v dB",
+            "equalizer_band_gain": "Ekvalizér {band}",
+            "reset_equalizer": "Resetovat tuto předvolbu",
+            "equalizer_saved": "Ekvalizér uložen.",
+            "equalizer_closed": "Ekvalizér zavřen.",
+            "equalizer_apply_failed": "Ekvalizér se nepodařilo použít: {error}",
+            "set_default_player": "Nastavit ApricotPlayer jako výchozí přehrávač médií",
+            "default_player_settings_opened": "Otevřeno nastavení výchozích aplikací Windows.",
+            "default_player_settings_failed": "Nepodařilo se otevřít nastavení výchozích aplikací Windows: {error}",
+            "media_association_prompt_title": "Registrace přehrávače médií",
+            "media_association_prompt_message": "ApricotPlayer zatím není registrován jako přehrávač médií ve Windows. Přidat ho jako možnost pro audio a video soubory? Výchozí přehrávač stále vyberete ručně ve Windows.",
+            "media_association_registered": "ApricotPlayer je registrován jako přehrávač médií.",
+            "media_association_failed": "Registrace přehrávače médií selhala: {error}",
+            "local_media": "Místní mediální soubor",
+            "local_file_open_failed": "Soubor se nepodařilo otevřít: {error}",
+            "clip_start_marker_set": "Počáteční značka nastavena na {time}.",
+            "clip_end_marker_set": "Koncová značka nastavena na {time}.",
+            "clip_markers_missing": "Nejprve nastavte počáteční a koncovou značku.",
+            "clip_marker_invalid": "Koncová značka musí být za počáteční značkou.",
+            "clip_export_started": "Export klipu spuštěn.",
+            "clip_export_done": "Klip exportován: {title}",
+            "clip_export_failed": "Export klipu selhal: {error}",
+            "shortcut_player_equalizer": "Přehrávač: ekvalizér",
+            "shortcut_player_marker_start": "Přehrávač: nastavit počáteční značku",
+            "shortcut_player_marker_end": "Přehrávač: nastavit koncovou značku",
+            "shortcut_player_export_clip": "Přehrávač: exportovat označený klip",
+            "shortcut_open_play_from_folder": "Otevřít: přehrát ze složky",
+            "bass_boost": "Zesílení basů",
+            "bass_boost_on": "Zesílení basů zapnuto.",
+            "bass_boost_off": "Zesílení basů vypnuto.",
+        },
+        "sk": {
+            "play_from_folder": "Prehrať z priečinka",
+            "announce_play_pause": "Oznamovať prehratie/pozastavenie v prehrávači",
+            "playback_paused": "Pozastavené.",
+            "playback_playing": "Prehráva sa.",
+            "select_media_file": "Vyberte audio alebo video súbor",
+            "media_files": "Audio a video súbory",
+            "all_files": "Všetky súbory",
+            "global_equalizer": "Globálny ekvalizér",
+            "equalizer_preset": "Predvoľba ekvalizéra",
+            "equalizer_preset_name": "Názov vlastnej predvoľby",
+            "equalizer_db_range": "Rozsah ekvalizéra v dB",
+            "equalizer_band_gain": "Ekvalizér {band}",
+            "reset_equalizer": "Resetovať túto predvoľbu",
+            "equalizer_saved": "Ekvalizér uložený.",
+            "equalizer_closed": "Ekvalizér zatvorený.",
+            "equalizer_apply_failed": "Ekvalizér sa nepodarilo použiť: {error}",
+            "set_default_player": "Nastaviť ApricotPlayer ako predvolený prehrávač médií",
+            "default_player_settings_opened": "Otvorené nastavenia predvolených aplikácií Windows.",
+            "default_player_settings_failed": "Nepodarilo sa otvoriť nastavenia predvolených aplikácií Windows: {error}",
+            "media_association_prompt_title": "Registrácia prehrávača médií",
+            "media_association_prompt_message": "ApricotPlayer ešte nie je registrovaný ako prehrávač médií vo Windows. Pridať ho ako možnosť pre audio a video súbory? Predvolený prehrávač si stále vyberáte ručne vo Windows.",
+            "media_association_registered": "ApricotPlayer je registrovaný ako prehrávač médií.",
+            "media_association_failed": "Registrácia prehrávača médií zlyhala: {error}",
+            "local_media": "Miestny mediálny súbor",
+            "local_file_open_failed": "Súbor sa nepodarilo otvoriť: {error}",
+            "clip_start_marker_set": "Počiatočná značka nastavená na {time}.",
+            "clip_end_marker_set": "Koncová značka nastavená na {time}.",
+            "clip_markers_missing": "Najprv nastavte počiatočnú a koncovú značku.",
+            "clip_marker_invalid": "Koncová značka musí byť za počiatočnou.",
+            "clip_export_started": "Export klipu spustený.",
+            "clip_export_done": "Klip exportovaný: {title}",
+            "clip_export_failed": "Export klipu zlyhal: {error}",
+            "shortcut_player_equalizer": "Prehrávač: ekvalizér",
+            "shortcut_player_marker_start": "Prehrávač: nastaviť počiatočnú značku",
+            "shortcut_player_marker_end": "Prehrávač: nastaviť koncovú značku",
+            "shortcut_player_export_clip": "Prehrávač: exportovať označený klip",
+            "shortcut_open_play_from_folder": "Otvoriť: prehrať z priečinka",
+            "bass_boost": "Zosilnenie basov",
+            "bass_boost_on": "Zosilnenie basov zapnuté.",
+            "bass_boost_off": "Zosilnenie basov vypnuté.",
+        },
+        "hu": {
+            "play_from_folder": "Lejátszás mappából",
+            "announce_play_pause": "Lejátszás/szünet bemondása a lejátszóban",
+            "playback_paused": "Szüneteltetve.",
+            "playback_playing": "Lejátszás.",
+            "select_media_file": "Válassz hang- vagy videofájlt",
+            "media_files": "Hang- és videofájlok",
+            "all_files": "Minden fájl",
+            "global_equalizer": "Globális hangszínszabályzó",
+            "equalizer_preset": "Hangszínszabályzó előbeállítás",
+            "equalizer_preset_name": "Egyéni előbeállítás neve",
+            "equalizer_db_range": "Hangszínszabályzó tartománya dB-ben",
+            "equalizer_band_gain": "Hangszínszabályzó {band}",
+            "reset_equalizer": "Előbeállítás visszaállítása",
+            "equalizer_saved": "Hangszínszabályzó mentve.",
+            "equalizer_closed": "Hangszínszabályzó bezárva.",
+            "equalizer_apply_failed": "A hangszínszabályzó nem alkalmazható: {error}",
+            "set_default_player": "ApricotPlayer beállítása alapértelmezett médialejátszóként",
+            "default_player_settings_opened": "Windows alapértelmezett alkalmazások beállításai megnyitva.",
+            "default_player_settings_failed": "Nem sikerült megnyitni a Windows alapértelmezett alkalmazásbeállításait: {error}",
+            "media_association_prompt_title": "Médialejátszó regisztrációja",
+            "media_association_prompt_message": "Az ApricotPlayer még nincs Windows médialejátszóként regisztrálva. Hozzáadod opcióként hang- és videofájlokhoz? Az alapértelmezett lejátszót továbbra is kézzel választod ki a Windowsban.",
+            "media_association_registered": "Az ApricotPlayer médialejátszóként regisztrálva.",
+            "media_association_failed": "A médialejátszó regisztrációja sikertelen: {error}",
+            "local_media": "Helyi médiafájl",
+            "local_file_open_failed": "A fájl nem nyitható meg: {error}",
+            "clip_start_marker_set": "Kezdőjelölő beállítva: {time}.",
+            "clip_end_marker_set": "Végjelölő beállítva: {time}.",
+            "clip_markers_missing": "Először állíts be kezdő- és végjelölőt.",
+            "clip_marker_invalid": "A végjelölőnek a kezdőjelölő után kell lennie.",
+            "clip_export_started": "Klipp exportálása elindult.",
+            "clip_export_done": "Klipp exportálva: {title}",
+            "clip_export_failed": "Klipp exportálása sikertelen: {error}",
+            "shortcut_player_equalizer": "Lejátszó: hangszínszabályzó",
+            "shortcut_player_marker_start": "Lejátszó: kezdőjelölő beállítása",
+            "shortcut_player_marker_end": "Lejátszó: végjelölő beállítása",
+            "shortcut_player_export_clip": "Lejátszó: kijelölt klipp exportálása",
+            "shortcut_open_play_from_folder": "Megnyitás: lejátszás mappából",
+            "bass_boost": "Basszuskiemelés",
+            "bass_boost_on": "Basszuskiemelés bekapcsolva.",
+            "bass_boost_off": "Basszuskiemelés kikapcsolva.",
+        },
+        "ro": {
+            "play_from_folder": "Redă din folder",
+            "announce_play_pause": "Anunță redare/pauză în player",
+            "playback_paused": "Pauzat.",
+            "playback_playing": "Se redă.",
+            "select_media_file": "Alege un fișier audio sau video",
+            "media_files": "Fișiere audio și video",
+            "all_files": "Toate fișierele",
+            "global_equalizer": "Egalizator global",
+            "equalizer_preset": "Preset egalizator",
+            "equalizer_preset_name": "Nume preset personalizat",
+            "equalizer_db_range": "Interval egalizator în dB",
+            "equalizer_band_gain": "Egalizator {band}",
+            "reset_equalizer": "Resetează acest preset",
+            "equalizer_saved": "Egalizator salvat.",
+            "equalizer_closed": "Egalizator închis.",
+            "equalizer_apply_failed": "Egalizatorul nu a putut fi aplicat: {error}",
+            "set_default_player": "Setează ApricotPlayer ca player media implicit",
+            "default_player_settings_opened": "Setările Windows pentru aplicații implicite au fost deschise.",
+            "default_player_settings_failed": "Nu s-au putut deschide setările Windows pentru aplicații implicite: {error}",
+            "media_association_prompt_title": "Înregistrare player media",
+            "media_association_prompt_message": "ApricotPlayer nu este încă înregistrat ca player media Windows. Îl adaugi ca opțiune pentru fișiere audio și video? Playerul implicit se alege în continuare manual în Windows.",
+            "media_association_registered": "ApricotPlayer este înregistrat ca player media.",
+            "media_association_failed": "Înregistrarea playerului media a eșuat: {error}",
+            "local_media": "Fișier media local",
+            "local_file_open_failed": "Fișierul nu a putut fi deschis: {error}",
+            "clip_start_marker_set": "Marcajul de început setat la {time}.",
+            "clip_end_marker_set": "Marcajul de sfârșit setat la {time}.",
+            "clip_markers_missing": "Setează mai întâi marcajul de început și de sfârșit.",
+            "clip_marker_invalid": "Marcajul de sfârșit trebuie să fie după cel de început.",
+            "clip_export_started": "Exportul clipului a început.",
+            "clip_export_done": "Clip exportat: {title}",
+            "clip_export_failed": "Exportul clipului a eșuat: {error}",
+            "shortcut_player_equalizer": "Player: egalizator",
+            "shortcut_player_marker_start": "Player: setează marcajul de început",
+            "shortcut_player_marker_end": "Player: setează marcajul de sfârșit",
+            "shortcut_player_export_clip": "Player: exportă clipul marcat",
+            "shortcut_open_play_from_folder": "Deschide: redă din folder",
+            "bass_boost": "Amplificare bass",
+            "bass_boost_on": "Amplificare bass activată.",
+            "bass_boost_off": "Amplificare bass dezactivată.",
+        },
+        "tr": {
+            "play_from_folder": "Klasörden oynat",
+            "announce_play_pause": "Oynatıcıda oynat/duraklat durumunu duyur",
+            "playback_paused": "Duraklatıldı.",
+            "playback_playing": "Oynatılıyor.",
+            "select_media_file": "Ses veya video dosyası seç",
+            "media_files": "Ses ve video dosyaları",
+            "all_files": "Tüm dosyalar",
+            "global_equalizer": "Genel ekolayzer",
+            "equalizer_preset": "Ekolayzer ön ayarı",
+            "equalizer_preset_name": "Özel ön ayar adı",
+            "equalizer_db_range": "dB cinsinden ekolayzer aralığı",
+            "equalizer_band_gain": "Ekolayzer {band}",
+            "reset_equalizer": "Bu ön ayarı sıfırla",
+            "equalizer_saved": "Ekolayzer kaydedildi.",
+            "equalizer_closed": "Ekolayzer kapatıldı.",
+            "equalizer_apply_failed": "Ekolayzer uygulanamadı: {error}",
+            "set_default_player": "ApricotPlayer'ı varsayılan medya oynatıcı yap",
+            "default_player_settings_opened": "Windows varsayılan uygulamalar ayarları açıldı.",
+            "default_player_settings_failed": "Windows varsayılan uygulamalar ayarları açılamadı: {error}",
+            "media_association_prompt_title": "Medya oynatıcı kaydı",
+            "media_association_prompt_message": "ApricotPlayer henüz Windows medya oynatıcısı olarak kayıtlı değil. Ses ve video dosyaları için seçenek olarak eklensin mi? Varsayılan oynatıcıyı Windows içinde yine elle seçersiniz.",
+            "media_association_registered": "ApricotPlayer medya oynatıcı olarak kaydedildi.",
+            "media_association_failed": "Medya oynatıcı kaydı başarısız: {error}",
+            "local_media": "Yerel medya dosyası",
+            "local_file_open_failed": "Dosya açılamadı: {error}",
+            "clip_start_marker_set": "Başlangıç işareti {time} konumuna ayarlandı.",
+            "clip_end_marker_set": "Bitiş işareti {time} konumuna ayarlandı.",
+            "clip_markers_missing": "Önce başlangıç ve bitiş işaretlerini ayarlayın.",
+            "clip_marker_invalid": "Bitiş işareti başlangıç işaretinden sonra olmalıdır.",
+            "clip_export_started": "Klip dışa aktarımı başladı.",
+            "clip_export_done": "Klip dışa aktarıldı: {title}",
+            "clip_export_failed": "Klip dışa aktarılamadı: {error}",
+            "shortcut_player_equalizer": "Oynatıcı: ekolayzer",
+            "shortcut_player_marker_start": "Oynatıcı: başlangıç işareti koy",
+            "shortcut_player_marker_end": "Oynatıcı: bitiş işareti koy",
+            "shortcut_player_export_clip": "Oynatıcı: işaretli klibi dışa aktar",
+            "shortcut_open_play_from_folder": "Aç: klasörden oynat",
+            "bass_boost": "Bas güçlendirme",
+            "bass_boost_on": "Bas güçlendirme açık.",
+            "bass_boost_off": "Bas güçlendirme kapalı.",
+        },
+        "uk": {
+            "play_from_folder": "Відтворити з папки",
+            "announce_play_pause": "Оголошувати відтворення/паузу у програвачі",
+            "playback_paused": "Пауза.",
+            "playback_playing": "Відтворення.",
+            "select_media_file": "Виберіть аудіо або відеофайл",
+            "media_files": "Аудіо та відеофайли",
+            "all_files": "Усі файли",
+            "global_equalizer": "Глобальний еквалайзер",
+            "equalizer_preset": "Пресет еквалайзера",
+            "equalizer_preset_name": "Назва власного пресета",
+            "equalizer_db_range": "Діапазон еквалайзера в дБ",
+            "equalizer_band_gain": "Еквалайзер {band}",
+            "reset_equalizer": "Скинути цей пресет",
+            "equalizer_saved": "Еквалайзер збережено.",
+            "equalizer_closed": "Еквалайзер закрито.",
+            "equalizer_apply_failed": "Не вдалося застосувати еквалайзер: {error}",
+            "set_default_player": "Зробити ApricotPlayer типовим медіапрогравачем",
+            "default_player_settings_opened": "Відкрито налаштування типових програм Windows.",
+            "default_player_settings_failed": "Не вдалося відкрити налаштування типових програм Windows: {error}",
+            "media_association_prompt_title": "Реєстрація медіапрогравача",
+            "media_association_prompt_message": "ApricotPlayer ще не зареєстровано як медіапрогравач Windows. Додати його як варіант для аудіо та відеофайлів? Типовий програвач все одно вибирається вручну у Windows.",
+            "media_association_registered": "ApricotPlayer зареєстровано як медіапрогравач.",
+            "media_association_failed": "Не вдалося зареєструвати медіапрогравач: {error}",
+            "local_media": "Локальний медіафайл",
+            "local_file_open_failed": "Не вдалося відкрити файл: {error}",
+            "clip_start_marker_set": "Початкову мітку встановлено на {time}.",
+            "clip_end_marker_set": "Кінцеву мітку встановлено на {time}.",
+            "clip_markers_missing": "Спочатку встановіть початкову та кінцеву мітки.",
+            "clip_marker_invalid": "Кінцева мітка має бути після початкової.",
+            "clip_export_started": "Експорт кліпу розпочато.",
+            "clip_export_done": "Кліп експортовано: {title}",
+            "clip_export_failed": "Не вдалося експортувати кліп: {error}",
+            "shortcut_player_equalizer": "Програвач: еквалайзер",
+            "shortcut_player_marker_start": "Програвач: встановити початкову мітку",
+            "shortcut_player_marker_end": "Програвач: встановити кінцеву мітку",
+            "shortcut_player_export_clip": "Програвач: експортувати позначений кліп",
+            "shortcut_open_play_from_folder": "Відкрити: відтворити з папки",
+            "bass_boost": "Підсилення басів",
+            "bass_boost_on": "Підсилення басів увімкнено.",
+            "bass_boost_off": "Підсилення басів вимкнено.",
+        },
+        "ru": {
+            "play_from_folder": "Воспроизвести из папки",
+            "announce_play_pause": "Озвучивать воспроизведение/паузу в плеере",
+            "playback_paused": "Пауза.",
+            "playback_playing": "Воспроизведение.",
+            "select_media_file": "Выберите аудио или видеофайл",
+            "media_files": "Аудио и видеофайлы",
+            "all_files": "Все файлы",
+            "global_equalizer": "Глобальный эквалайзер",
+            "equalizer_preset": "Пресет эквалайзера",
+            "equalizer_preset_name": "Имя пользовательского пресета",
+            "equalizer_db_range": "Диапазон эквалайзера в дБ",
+            "equalizer_band_gain": "Эквалайзер {band}",
+            "reset_equalizer": "Сбросить этот пресет",
+            "equalizer_saved": "Эквалайзер сохранён.",
+            "equalizer_closed": "Эквалайзер закрыт.",
+            "equalizer_apply_failed": "Не удалось применить эквалайзер: {error}",
+            "set_default_player": "Сделать ApricotPlayer медиаплеером по умолчанию",
+            "default_player_settings_opened": "Открыты параметры приложений по умолчанию Windows.",
+            "default_player_settings_failed": "Не удалось открыть параметры приложений по умолчанию Windows: {error}",
+            "media_association_prompt_title": "Регистрация медиаплеера",
+            "media_association_prompt_message": "ApricotPlayer ещё не зарегистрирован как медиаплеер Windows. Добавить его как вариант для аудио и видеофайлов? Плеер по умолчанию всё равно выбирается вручную в Windows.",
+            "media_association_registered": "ApricotPlayer зарегистрирован как медиаплеер.",
+            "media_association_failed": "Не удалось зарегистрировать медиаплеер: {error}",
+            "local_media": "Локальный медиафайл",
+            "local_file_open_failed": "Не удалось открыть файл: {error}",
+            "clip_start_marker_set": "Начальная метка установлена на {time}.",
+            "clip_end_marker_set": "Конечная метка установлена на {time}.",
+            "clip_markers_missing": "Сначала установите начальную и конечную метки.",
+            "clip_marker_invalid": "Конечная метка должна быть после начальной.",
+            "clip_export_started": "Экспорт клипа начат.",
+            "clip_export_done": "Клип экспортирован: {title}",
+            "clip_export_failed": "Экспорт клипа не удался: {error}",
+            "shortcut_player_equalizer": "Плеер: эквалайзер",
+            "shortcut_player_marker_start": "Плеер: установить начальную метку",
+            "shortcut_player_marker_end": "Плеер: установить конечную метку",
+            "shortcut_player_export_clip": "Плеер: экспортировать отмеченный клип",
+            "shortcut_open_play_from_folder": "Открыть: воспроизвести из папки",
+            "bass_boost": "Усиление басов",
+            "bass_boost_on": "Усиление басов включено.",
+            "bass_boost_off": "Усиление басов выключено.",
+        },
+        "ja": {
+            "play_from_folder": "フォルダーから再生",
+            "announce_play_pause": "プレイヤーで再生/一時停止を読み上げる",
+            "playback_paused": "一時停止しました。",
+            "playback_playing": "再生中です。",
+            "select_media_file": "音声または動画ファイルを選択",
+            "media_files": "音声と動画ファイル",
+            "all_files": "すべてのファイル",
+            "global_equalizer": "グローバルイコライザー",
+            "equalizer_preset": "イコライザープリセット",
+            "equalizer_preset_name": "カスタムプリセット名",
+            "equalizer_db_range": "イコライザー範囲 dB",
+            "equalizer_band_gain": "イコライザー {band}",
+            "reset_equalizer": "このプリセットをリセット",
+            "equalizer_saved": "イコライザーを保存しました。",
+            "equalizer_closed": "イコライザーを閉じました。",
+            "equalizer_apply_failed": "イコライザーを適用できませんでした: {error}",
+            "set_default_player": "ApricotPlayer を既定のメディアプレイヤーに設定",
+            "default_player_settings_opened": "Windows の既定のアプリ設定を開きました。",
+            "default_player_settings_failed": "Windows の既定のアプリ設定を開けませんでした: {error}",
+            "media_association_prompt_title": "メディアプレイヤー登録",
+            "media_association_prompt_message": "ApricotPlayer はまだ Windows のメディアプレイヤーとして登録されていません。音声と動画ファイルの選択肢として追加しますか？既定のプレイヤーは Windows で手動で選びます。",
+            "media_association_registered": "ApricotPlayer をメディアプレイヤーとして登録しました。",
+            "media_association_failed": "メディアプレイヤー登録に失敗しました: {error}",
+            "local_media": "ローカルメディアファイル",
+            "local_file_open_failed": "ファイルを開けませんでした: {error}",
+            "clip_start_marker_set": "開始マーカーを {time} に設定しました。",
+            "clip_end_marker_set": "終了マーカーを {time} に設定しました。",
+            "clip_markers_missing": "先に開始マーカーと終了マーカーを設定してください。",
+            "clip_marker_invalid": "終了マーカーは開始マーカーより後である必要があります。",
+            "clip_export_started": "クリップのエクスポートを開始しました。",
+            "clip_export_done": "クリップをエクスポートしました: {title}",
+            "clip_export_failed": "クリップのエクスポートに失敗しました: {error}",
+            "shortcut_player_equalizer": "プレイヤー: イコライザー",
+            "shortcut_player_marker_start": "プレイヤー: 開始マーカーを設定",
+            "shortcut_player_marker_end": "プレイヤー: 終了マーカーを設定",
+            "shortcut_player_export_clip": "プレイヤー: マークしたクリップをエクスポート",
+            "shortcut_open_play_from_folder": "開く: フォルダーから再生",
+            "bass_boost": "低音ブースト",
+            "bass_boost_on": "低音ブースト オン。",
+            "bass_boost_off": "低音ブースト オフ。",
+        },
+        "ko": {
+            "play_from_folder": "폴더에서 재생",
+            "announce_play_pause": "플레이어에서 재생/일시정지 알림",
+            "playback_paused": "일시정지됨.",
+            "playback_playing": "재생 중.",
+            "select_media_file": "오디오 또는 비디오 파일 선택",
+            "media_files": "오디오 및 비디오 파일",
+            "all_files": "모든 파일",
+            "global_equalizer": "전역 이퀄라이저",
+            "equalizer_preset": "이퀄라이저 프리셋",
+            "equalizer_preset_name": "사용자 프리셋 이름",
+            "equalizer_db_range": "이퀄라이저 범위 dB",
+            "equalizer_band_gain": "이퀄라이저 {band}",
+            "reset_equalizer": "이 프리셋 초기화",
+            "equalizer_saved": "이퀄라이저 저장됨.",
+            "equalizer_closed": "이퀄라이저 닫힘.",
+            "equalizer_apply_failed": "이퀄라이저를 적용할 수 없습니다: {error}",
+            "set_default_player": "ApricotPlayer를 기본 미디어 플레이어로 설정",
+            "default_player_settings_opened": "Windows 기본 앱 설정을 열었습니다.",
+            "default_player_settings_failed": "Windows 기본 앱 설정을 열 수 없습니다: {error}",
+            "media_association_prompt_title": "미디어 플레이어 등록",
+            "media_association_prompt_message": "ApricotPlayer가 아직 Windows 미디어 플레이어로 등록되지 않았습니다. 오디오 및 비디오 파일 옵션으로 추가할까요? 기본 플레이어는 Windows에서 직접 선택합니다.",
+            "media_association_registered": "ApricotPlayer가 미디어 플레이어로 등록되었습니다.",
+            "media_association_failed": "미디어 플레이어 등록 실패: {error}",
+            "local_media": "로컬 미디어 파일",
+            "local_file_open_failed": "파일을 열 수 없습니다: {error}",
+            "clip_start_marker_set": "시작 마커를 {time}에 설정했습니다.",
+            "clip_end_marker_set": "끝 마커를 {time}에 설정했습니다.",
+            "clip_markers_missing": "먼저 시작 마커와 끝 마커를 설정하세요.",
+            "clip_marker_invalid": "끝 마커는 시작 마커 뒤에 있어야 합니다.",
+            "clip_export_started": "클립 내보내기를 시작했습니다.",
+            "clip_export_done": "클립 내보냄: {title}",
+            "clip_export_failed": "클립 내보내기 실패: {error}",
+            "shortcut_player_equalizer": "플레이어: 이퀄라이저",
+            "shortcut_player_marker_start": "플레이어: 시작 마커 설정",
+            "shortcut_player_marker_end": "플레이어: 끝 마커 설정",
+            "shortcut_player_export_clip": "플레이어: 표시한 클립 내보내기",
+            "shortcut_open_play_from_folder": "열기: 폴더에서 재생",
+            "bass_boost": "베이스 부스트",
+            "bass_boost_on": "베이스 부스트 켜짐.",
+            "bass_boost_off": "베이스 부스트 꺼짐.",
+        },
+        "zh": {
+            "play_from_folder": "从文件夹播放",
+            "announce_play_pause": "在播放器中朗读播放/暂停",
+            "playback_paused": "已暂停。",
+            "playback_playing": "正在播放。",
+            "select_media_file": "选择音频或视频文件",
+            "media_files": "音频和视频文件",
+            "all_files": "所有文件",
+            "global_equalizer": "全局均衡器",
+            "equalizer_preset": "均衡器预设",
+            "equalizer_preset_name": "自定义预设名称",
+            "equalizer_db_range": "均衡器范围 dB",
+            "equalizer_band_gain": "均衡器 {band}",
+            "reset_equalizer": "重置此预设",
+            "equalizer_saved": "均衡器已保存。",
+            "equalizer_closed": "均衡器已关闭。",
+            "equalizer_apply_failed": "无法应用均衡器：{error}",
+            "set_default_player": "将 ApricotPlayer 设为默认媒体播放器",
+            "default_player_settings_opened": "已打开 Windows 默认应用设置。",
+            "default_player_settings_failed": "无法打开 Windows 默认应用设置：{error}",
+            "media_association_prompt_title": "媒体播放器注册",
+            "media_association_prompt_message": "ApricotPlayer 尚未注册为 Windows 媒体播放器。是否将它添加为音频和视频文件的选项？默认播放器仍需在 Windows 中手动选择。",
+            "media_association_registered": "ApricotPlayer 已注册为媒体播放器。",
+            "media_association_failed": "媒体播放器注册失败：{error}",
+            "local_media": "本地媒体文件",
+            "local_file_open_failed": "无法打开文件：{error}",
+            "clip_start_marker_set": "开始标记已设为 {time}。",
+            "clip_end_marker_set": "结束标记已设为 {time}。",
+            "clip_markers_missing": "请先设置开始和结束标记。",
+            "clip_marker_invalid": "结束标记必须在开始标记之后。",
+            "clip_export_started": "已开始导出片段。",
+            "clip_export_done": "片段已导出：{title}",
+            "clip_export_failed": "片段导出失败：{error}",
+            "shortcut_player_equalizer": "播放器：均衡器",
+            "shortcut_player_marker_start": "播放器：设置开始标记",
+            "shortcut_player_marker_end": "播放器：设置结束标记",
+            "shortcut_player_export_clip": "播放器：导出标记片段",
+            "shortcut_open_play_from_folder": "打开：从文件夹播放",
+            "bass_boost": "低音增强",
+            "bass_boost_on": "低音增强开启。",
+            "bass_boost_off": "低音增强关闭。",
+        },
+        "ar": {
+            "play_from_folder": "تشغيل من مجلد",
+            "announce_play_pause": "نطق التشغيل/الإيقاف المؤقت في المشغل",
+            "playback_paused": "متوقف مؤقتا.",
+            "playback_playing": "قيد التشغيل.",
+            "select_media_file": "اختر ملف صوت أو فيديو",
+            "media_files": "ملفات الصوت والفيديو",
+            "all_files": "كل الملفات",
+            "global_equalizer": "معادل الصوت العام",
+            "equalizer_preset": "إعداد معادل الصوت",
+            "equalizer_preset_name": "اسم الإعداد المخصص",
+            "equalizer_db_range": "نطاق المعادل بالديسيبل",
+            "equalizer_band_gain": "معادل الصوت {band}",
+            "reset_equalizer": "إعادة ضبط هذا الإعداد",
+            "equalizer_saved": "تم حفظ معادل الصوت.",
+            "equalizer_closed": "تم إغلاق معادل الصوت.",
+            "equalizer_apply_failed": "تعذر تطبيق معادل الصوت: {error}",
+            "set_default_player": "تعيين ApricotPlayer كمشغل وسائط افتراضي",
+            "default_player_settings_opened": "تم فتح إعدادات التطبيقات الافتراضية في Windows.",
+            "default_player_settings_failed": "تعذر فتح إعدادات التطبيقات الافتراضية في Windows: {error}",
+            "media_association_prompt_title": "تسجيل مشغل الوسائط",
+            "media_association_prompt_message": "لم يتم تسجيل ApricotPlayer بعد كمشغل وسائط في Windows. هل تريد إضافته كخيار لملفات الصوت والفيديو؟ اختيار المشغل الافتراضي يتم يدويا من Windows.",
+            "media_association_registered": "تم تسجيل ApricotPlayer كمشغل وسائط.",
+            "media_association_failed": "فشل تسجيل مشغل الوسائط: {error}",
+            "local_media": "ملف وسائط محلي",
+            "local_file_open_failed": "تعذر فتح الملف: {error}",
+            "clip_start_marker_set": "تم تعيين علامة البداية عند {time}.",
+            "clip_end_marker_set": "تم تعيين علامة النهاية عند {time}.",
+            "clip_markers_missing": "عيّن أولا علامة البداية وعلامة النهاية.",
+            "clip_marker_invalid": "يجب أن تكون علامة النهاية بعد علامة البداية.",
+            "clip_export_started": "بدأ تصدير المقطع.",
+            "clip_export_done": "تم تصدير المقطع: {title}",
+            "clip_export_failed": "فشل تصدير المقطع: {error}",
+            "shortcut_player_equalizer": "المشغل: معادل الصوت",
+            "shortcut_player_marker_start": "المشغل: تعيين علامة البداية",
+            "shortcut_player_marker_end": "المشغل: تعيين علامة النهاية",
+            "shortcut_player_export_clip": "المشغل: تصدير المقطع المحدد",
+            "shortcut_open_play_from_folder": "فتح: تشغيل من مجلد",
+            "bass_boost": "تعزيز الجهير",
+            "bass_boost_on": "تعزيز الجهير مفعل.",
+            "bass_boost_off": "تعزيز الجهير معطل.",
+        },
+        "hi": {
+            "play_from_folder": "फ़ोल्डर से चलाएं",
+            "announce_play_pause": "प्लेयर में प्ले/पॉज़ की घोषणा करें",
+            "playback_paused": "पॉज़ किया गया.",
+            "playback_playing": "चल रहा है.",
+            "select_media_file": "ऑडियो या वीडियो फ़ाइल चुनें",
+            "media_files": "ऑडियो और वीडियो फ़ाइलें",
+            "all_files": "सभी फ़ाइलें",
+            "global_equalizer": "ग्लोबल इक्वलाइज़र",
+            "equalizer_preset": "इक्वलाइज़र प्रीसेट",
+            "equalizer_preset_name": "कस्टम प्रीसेट नाम",
+            "equalizer_db_range": "इक्वलाइज़र रेंज dB में",
+            "equalizer_band_gain": "इक्वलाइज़र {band}",
+            "reset_equalizer": "इस प्रीसेट को रीसेट करें",
+            "equalizer_saved": "इक्वलाइज़र सहेजा गया.",
+            "equalizer_closed": "इक्वलाइज़र बंद.",
+            "equalizer_apply_failed": "इक्वलाइज़र लागू नहीं हो सका: {error}",
+            "set_default_player": "ApricotPlayer को डिफ़ॉल्ट मीडिया प्लेयर बनाएं",
+            "default_player_settings_opened": "Windows डिफ़ॉल्ट ऐप सेटिंग खुल गई.",
+            "default_player_settings_failed": "Windows डिफ़ॉल्ट ऐप सेटिंग नहीं खुल सकी: {error}",
+            "media_association_prompt_title": "मीडिया प्लेयर पंजीकरण",
+            "media_association_prompt_message": "ApricotPlayer अभी Windows मीडिया प्लेयर के रूप में पंजीकृत नहीं है. क्या इसे ऑडियो और वीडियो फ़ाइलों के विकल्प के रूप में जोड़ना है? डिफ़ॉल्ट प्लेयर Windows में मैन्युअल रूप से चुना जाता है.",
+            "media_association_registered": "ApricotPlayer मीडिया प्लेयर के रूप में पंजीकृत है.",
+            "media_association_failed": "मीडिया प्लेयर पंजीकरण विफल: {error}",
+            "local_media": "स्थानीय मीडिया फ़ाइल",
+            "local_file_open_failed": "फ़ाइल नहीं खुल सकी: {error}",
+            "clip_start_marker_set": "आरंभ मार्कर {time} पर सेट.",
+            "clip_end_marker_set": "समाप्ति मार्कर {time} पर सेट.",
+            "clip_markers_missing": "पहले आरंभ और समाप्ति मार्कर सेट करें.",
+            "clip_marker_invalid": "समाप्ति मार्कर आरंभ मार्कर के बाद होना चाहिए.",
+            "clip_export_started": "क्लिप निर्यात शुरू.",
+            "clip_export_done": "क्लिप निर्यात हुई: {title}",
+            "clip_export_failed": "क्लिप निर्यात विफल: {error}",
+            "shortcut_player_equalizer": "प्लेयर: इक्वलाइज़र",
+            "shortcut_player_marker_start": "प्लेयर: आरंभ मार्कर सेट करें",
+            "shortcut_player_marker_end": "प्लेयर: समाप्ति मार्कर सेट करें",
+            "shortcut_player_export_clip": "प्लेयर: चिह्नित क्लिप निर्यात करें",
+            "shortcut_open_play_from_folder": "खोलें: फ़ोल्डर से चलाएं",
+            "bass_boost": "बेस बूस्ट",
+            "bass_boost_on": "बेस बूस्ट चालू.",
+            "bass_boost_off": "बेस बूस्ट बंद.",
+        },
+        "id": {
+            "play_from_folder": "Putar dari folder",
+            "announce_play_pause": "Umumkan putar/jeda di pemutar",
+            "playback_paused": "Dijeda.",
+            "playback_playing": "Memutar.",
+            "select_media_file": "Pilih file audio atau video",
+            "media_files": "File audio dan video",
+            "all_files": "Semua file",
+            "global_equalizer": "Equalizer global",
+            "equalizer_preset": "Preset equalizer",
+            "equalizer_preset_name": "Nama preset khusus",
+            "equalizer_db_range": "Rentang equalizer dalam dB",
+            "equalizer_band_gain": "Equalizer {band}",
+            "reset_equalizer": "Reset preset ini",
+            "equalizer_saved": "Equalizer disimpan.",
+            "equalizer_closed": "Equalizer ditutup.",
+            "equalizer_apply_failed": "Equalizer tidak dapat diterapkan: {error}",
+            "set_default_player": "Jadikan ApricotPlayer pemutar media default",
+            "default_player_settings_opened": "Pengaturan aplikasi default Windows dibuka.",
+            "default_player_settings_failed": "Tidak dapat membuka pengaturan aplikasi default Windows: {error}",
+            "media_association_prompt_title": "Pendaftaran pemutar media",
+            "media_association_prompt_message": "ApricotPlayer belum terdaftar sebagai pemutar media Windows. Tambahkan sebagai opsi untuk file audio dan video? Pemutar default tetap dipilih manual di Windows.",
+            "media_association_registered": "ApricotPlayer terdaftar sebagai pemutar media.",
+            "media_association_failed": "Pendaftaran pemutar media gagal: {error}",
+            "local_media": "File media lokal",
+            "local_file_open_failed": "File tidak dapat dibuka: {error}",
+            "clip_start_marker_set": "Penanda awal diatur ke {time}.",
+            "clip_end_marker_set": "Penanda akhir diatur ke {time}.",
+            "clip_markers_missing": "Atur penanda awal dan akhir terlebih dahulu.",
+            "clip_marker_invalid": "Penanda akhir harus setelah penanda awal.",
+            "clip_export_started": "Ekspor klip dimulai.",
+            "clip_export_done": "Klip diekspor: {title}",
+            "clip_export_failed": "Ekspor klip gagal: {error}",
+            "shortcut_player_equalizer": "Pemutar: equalizer",
+            "shortcut_player_marker_start": "Pemutar: atur penanda awal",
+            "shortcut_player_marker_end": "Pemutar: atur penanda akhir",
+            "shortcut_player_export_clip": "Pemutar: ekspor klip bertanda",
+            "shortcut_open_play_from_folder": "Buka: putar dari folder",
+            "bass_boost": "Penguat bass",
+            "bass_boost_on": "Penguat bass aktif.",
+            "bass_boost_off": "Penguat bass nonaktif.",
+        },
+        "fi": {
+            "play_from_folder": "Toista kansiosta",
+            "announce_play_pause": "Ilmoita toisto/tauko soittimessa",
+            "playback_paused": "Keskeytetty.",
+            "playback_playing": "Toistetaan.",
+            "select_media_file": "Valitse ääni- tai videotiedosto",
+            "media_files": "Ääni- ja videotiedostot",
+            "all_files": "Kaikki tiedostot",
+            "global_equalizer": "Yleinen taajuuskorjain",
+            "equalizer_preset": "Taajuuskorjaimen esiasetus",
+            "equalizer_preset_name": "Mukautetun esiasetuksen nimi",
+            "equalizer_db_range": "Taajuuskorjaimen alue dB",
+            "equalizer_band_gain": "Taajuuskorjain {band}",
+            "reset_equalizer": "Palauta tämä esiasetus",
+            "equalizer_saved": "Taajuuskorjain tallennettu.",
+            "equalizer_closed": "Taajuuskorjain suljettu.",
+            "equalizer_apply_failed": "Taajuuskorjainta ei voitu käyttää: {error}",
+            "set_default_player": "Aseta ApricotPlayer oletusmediasoittimeksi",
+            "default_player_settings_opened": "Windowsin oletussovellusasetukset avattu.",
+            "default_player_settings_failed": "Windowsin oletussovellusasetuksia ei voitu avata: {error}",
+            "media_association_prompt_title": "Mediasoittimen rekisteröinti",
+            "media_association_prompt_message": "ApricotPlayeria ei ole vielä rekisteröity Windows-mediasoittimeksi. Lisätäänkö se vaihtoehdoksi ääni- ja videotiedostoille? Oletussoitin valitaan edelleen käsin Windowsissa.",
+            "media_association_registered": "ApricotPlayer on rekisteröity mediasoittimeksi.",
+            "media_association_failed": "Mediasoittimen rekisteröinti epäonnistui: {error}",
+            "local_media": "Paikallinen mediatiedosto",
+            "local_file_open_failed": "Tiedostoa ei voitu avata: {error}",
+            "clip_start_marker_set": "Alkumerkki asetettu kohtaan {time}.",
+            "clip_end_marker_set": "Loppumerkki asetettu kohtaan {time}.",
+            "clip_markers_missing": "Aseta ensin alku- ja loppumerkki.",
+            "clip_marker_invalid": "Loppumerkin on oltava alkumerkin jälkeen.",
+            "clip_export_started": "Leikkeen vienti aloitettu.",
+            "clip_export_done": "Leike viety: {title}",
+            "clip_export_failed": "Leikkeen vienti epäonnistui: {error}",
+            "shortcut_player_equalizer": "Soitin: taajuuskorjain",
+            "shortcut_player_marker_start": "Soitin: aseta alkumerkki",
+            "shortcut_player_marker_end": "Soitin: aseta loppumerkki",
+            "shortcut_player_export_clip": "Soitin: vie merkitty leike",
+            "shortcut_open_play_from_folder": "Avaa: toista kansiosta",
+            "bass_boost": "Bassokorostus",
+            "bass_boost_on": "Bassokorostus päällä.",
+            "bass_boost_off": "Bassokorostus pois.",
+        },
+        "el": {
+            "play_from_folder": "Αναπαραγωγή από φάκελο",
+            "announce_play_pause": "Ανακοίνωση αναπαραγωγής/παύσης στον player",
+            "playback_paused": "Σε παύση.",
+            "playback_playing": "Αναπαραγωγή.",
+            "select_media_file": "Επιλέξτε αρχείο ήχου ή βίντεο",
+            "media_files": "Αρχεία ήχου και βίντεο",
+            "all_files": "Όλα τα αρχεία",
+            "global_equalizer": "Γενικός ισοσταθμιστής",
+            "equalizer_preset": "Προρύθμιση ισοσταθμιστή",
+            "equalizer_preset_name": "Όνομα προσαρμοσμένης προρύθμισης",
+            "equalizer_db_range": "Εύρος ισοσταθμιστή σε dB",
+            "equalizer_band_gain": "Ισοσταθμιστής {band}",
+            "reset_equalizer": "Επαναφορά αυτής της προρύθμισης",
+            "equalizer_saved": "Ο ισοσταθμιστής αποθηκεύτηκε.",
+            "equalizer_closed": "Ο ισοσταθμιστής έκλεισε.",
+            "equalizer_apply_failed": "Δεν ήταν δυνατή η εφαρμογή του ισοσταθμιστή: {error}",
+            "set_default_player": "Ορισμός του ApricotPlayer ως προεπιλεγμένου media player",
+            "default_player_settings_opened": "Άνοιξαν οι ρυθμίσεις προεπιλεγμένων εφαρμογών των Windows.",
+            "default_player_settings_failed": "Δεν ήταν δυνατό το άνοιγμα των ρυθμίσεων προεπιλεγμένων εφαρμογών των Windows: {error}",
+            "media_association_prompt_title": "Καταχώριση media player",
+            "media_association_prompt_message": "Το ApricotPlayer δεν έχει ακόμη καταχωριστεί ως media player των Windows. Να προστεθεί ως επιλογή για αρχεία ήχου και βίντεο; Ο προεπιλεγμένος player επιλέγεται ακόμη χειροκίνητα στα Windows.",
+            "media_association_registered": "Το ApricotPlayer καταχωρίστηκε ως media player.",
+            "media_association_failed": "Η καταχώριση media player απέτυχε: {error}",
+            "local_media": "Τοπικό αρχείο πολυμέσων",
+            "local_file_open_failed": "Δεν ήταν δυνατό το άνοιγμα του αρχείου: {error}",
+            "clip_start_marker_set": "Ο δείκτης αρχής ορίστηκε στο {time}.",
+            "clip_end_marker_set": "Ο δείκτης τέλους ορίστηκε στο {time}.",
+            "clip_markers_missing": "Ορίστε πρώτα δείκτη αρχής και τέλους.",
+            "clip_marker_invalid": "Ο δείκτης τέλους πρέπει να είναι μετά τον δείκτη αρχής.",
+            "clip_export_started": "Η εξαγωγή κλιπ ξεκίνησε.",
+            "clip_export_done": "Το κλιπ εξήχθη: {title}",
+            "clip_export_failed": "Η εξαγωγή κλιπ απέτυχε: {error}",
+            "shortcut_player_equalizer": "Player: ισοσταθμιστής",
+            "shortcut_player_marker_start": "Player: ορισμός δείκτη αρχής",
+            "shortcut_player_marker_end": "Player: ορισμός δείκτη τέλους",
+            "shortcut_player_export_clip": "Player: εξαγωγή σημειωμένου κλιπ",
+            "shortcut_open_play_from_folder": "Άνοιγμα: αναπαραγωγή από φάκελο",
+            "bass_boost": "Ενίσχυση μπάσων",
+            "bass_boost_on": "Ενίσχυση μπάσων ενεργή.",
+            "bass_boost_off": "Ενίσχυση μπάσων ανενεργή.",
+        },
+    }
+)
+for language_code in LANGUAGE_CODES:
+    TEXT.setdefault(language_code, {}).update(MEDIA_PLAYER_TRANSLATION_UPDATES.get(language_code, MEDIA_PLAYER_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
+for language_code in LANGUAGE_CODES:
+    for key, value in MEDIA_PLAYER_TRANSLATION_UPDATES["en"].items():
+        TEXT.setdefault(language_code, {}).setdefault(key, value)
+
+
+def default_equalizer_gains() -> dict[str, float]:
+    return {band_id: 0.0 for band_id, _label in EQ_BANDS}
+
+
+def equalizer_gains_from_values(values: list[float] | tuple[float, ...]) -> dict[str, float]:
+    gains: dict[str, float] = {}
+    for index, (band_id, _label) in enumerate(EQ_BANDS):
+        try:
+            value = float(values[index])
+        except Exception:
+            value = 0.0
+        gains[band_id] = round(max(-24.0, min(24.0, value)), 1)
+    return gains
+
+
+def default_equalizer_preset_gains() -> dict[str, dict[str, float]]:
+    presets = {preset_id: equalizer_gains_from_values(values) for preset_id, values in EQ_FACTORY_PRESET_VALUES.items()}
+    for custom_id in EQ_CUSTOM_PRESET_IDS:
+        presets[custom_id] = default_equalizer_gains()
+    return presets
+
+
+def default_equalizer_custom_names() -> dict[str, str]:
+    return {custom_id: f"Custom {index}" for index, custom_id in enumerate(EQ_CUSTOM_PRESET_IDS, start=1)}
 
 
 @dataclass
@@ -1664,6 +2981,7 @@ class Settings:
     prefer_browser_playback: bool = False
     player_fullscreen: bool = False
     player_start_paused: bool = False
+    announce_play_pause: bool = True
     player_speed: str = "1.0"
     speed_audio_mode: str = SPEED_AUDIO_MODE_RUBBERBAND
     show_video_details_by_default: bool = False
@@ -1677,6 +2995,12 @@ class Settings:
     speed_step: float = 0.01
     pitch_step: float = 0.01
     pitch_mode: str = PITCH_MODE_MPV
+    global_equalizer_enabled: bool = False
+    global_equalizer_preset: str = EQ_PRESET_FLAT
+    global_equalizer_gains: dict[str, float] = field(default_factory=default_equalizer_gains)
+    equalizer_preset_gains: dict[str, dict[str, float]] = field(default_factory=default_equalizer_preset_gains)
+    equalizer_custom_names: dict[str, str] = field(default_factory=default_equalizer_custom_names)
+    equalizer_db_range: int = 12
     quiet_downloads: bool = False
     keep_playlist_order: bool = True
     filename_template: str = DEFAULT_FILENAME_TEMPLATE
@@ -1729,6 +3053,7 @@ class Settings:
     rss_refresh_interval_hours: float = 12.0
     history_limit: int = 500
     keyboard_shortcuts: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_KEYBOARD_SHORTCUTS))
+    media_association_prompted_version: str = ""
 
 
 class ApricotTaskBarIcon(wx.adv.TaskBarIcon):
@@ -1843,8 +3168,16 @@ class MainFrame(wx.Frame):
         self.collection_url = ""
         self.collection_result_type = ""
         self.current_stream_url = ""
+        self.current_stream_headers: dict = {}
         self.current_audio_device = ""
         self.session_audio_output_device = ""
+        self.session_equalizer_enabled: bool | None = None
+        self.session_equalizer_gains: dict[str, float] = {}
+        self.session_equalizer_before_bass_boost: tuple[bool | None, dict[str, float]] | None = None
+        self.bass_boost_enabled = False
+        self.equalizer_filter_active = False
+        self.clip_start_marker: float | None = None
+        self.clip_end_marker: float | None = None
         self.audio_device_options_cache: tuple[float, list[str], list[str]] | None = None
         self.audio_device_refresh_running = False
         self.metadata_hydration_urls: set[str] = set()
@@ -1899,12 +3232,14 @@ class MainFrame(wx.Frame):
         if self.settings.enable_podcasts_rss and self.settings.rss_refresh_on_startup and self.rss_feeds:
             wx.CallLater(9500, self.refresh_all_rss_feeds_background)
         wx.CallLater(6500, self.check_saved_audio_device_available)
+        wx.CallLater(7200, self.maybe_prompt_media_association_registration)
 
     def install_download_accelerators(self) -> None:
         self.global_accelerator_ids: dict[str, wx.WindowIDRef] = {}
         global_actions = [
             ("open_main_menu", self.open_main_menu_shortcut),
             ("open_search", self.open_search_shortcut),
+            ("open_play_from_folder", self.open_play_from_folder_shortcut),
             ("open_direct_link", self.open_direct_link_shortcut),
             ("open_favorites", self.open_favorites_shortcut),
             ("open_playlists", self.open_playlists_shortcut),
@@ -2019,6 +3354,18 @@ class MainFrame(wx.Frame):
             "apps": getattr(wx, "WXK_WINDOWS_MENU", getattr(wx, "WXK_MENU", getattr(wx, "WXK_APPS", -1))),
             "menu": getattr(wx, "WXK_WINDOWS_MENU", getattr(wx, "WXK_MENU", getattr(wx, "WXK_APPS", -1))),
             "context menu": getattr(wx, "WXK_WINDOWS_MENU", getattr(wx, "WXK_MENU", getattr(wx, "WXK_APPS", -1))),
+            "[": VK_OEM_4_LEFT_BRACKET,
+            "leftbracket": VK_OEM_4_LEFT_BRACKET,
+            "left bracket": VK_OEM_4_LEFT_BRACKET,
+            "openbracket": VK_OEM_4_LEFT_BRACKET,
+            "open bracket": VK_OEM_4_LEFT_BRACKET,
+            "physical left bracket": VK_OEM_4_LEFT_BRACKET,
+            "]": VK_OEM_6_RIGHT_BRACKET,
+            "rightbracket": VK_OEM_6_RIGHT_BRACKET,
+            "right bracket": VK_OEM_6_RIGHT_BRACKET,
+            "closebracket": VK_OEM_6_RIGHT_BRACKET,
+            "close bracket": VK_OEM_6_RIGHT_BRACKET,
+            "physical right bracket": VK_OEM_6_RIGHT_BRACKET,
         }
         if normalized in aliases:
             return aliases[normalized]
@@ -2052,6 +3399,8 @@ class MainFrame(wx.Frame):
             getattr(wx, "WXK_APPS", -1): "Applications",
             getattr(wx, "WXK_MENU", -1): "Applications",
             getattr(wx, "WXK_WINDOWS_MENU", -1): "Applications",
+            VK_OEM_4_LEFT_BRACKET: "LeftBracket",
+            VK_OEM_6_RIGHT_BRACKET: "RightBracket",
         }
         if key_code in names:
             return names[key_code]
@@ -2070,7 +3419,15 @@ class MainFrame(wx.Frame):
         modifier_keys = {wx.WXK_TAB, getattr(wx, "WXK_CONTROL", -1), getattr(wx, "WXK_SHIFT", -1), getattr(wx, "WXK_ALT", -1)}
         if key_code in modifier_keys:
             return ""
-        key_name = self.shortcut_name_for_key_code(key_code, event.GetUnicodeKey())
+        raw_key_code = 0
+        try:
+            raw_key_code = int(event.GetRawKeyCode())
+        except Exception:
+            raw_key_code = 0
+        if raw_key_code in (VK_OEM_4_LEFT_BRACKET, VK_OEM_6_RIGHT_BRACKET):
+            key_name = self.shortcut_name_for_key_code(raw_key_code, event.GetUnicodeKey())
+        else:
+            key_name = self.shortcut_name_for_key_code(key_code, event.GetUnicodeKey())
         if not key_name:
             return ""
         parts: list[str] = []
@@ -2930,6 +4287,28 @@ class MainFrame(wx.Frame):
         except RuntimeError:
             pass
 
+    def set_equalizer_slider_accessibility(self, ctrl: wx.Slider, label: str) -> None:
+        value_text = f"{float(ctrl.GetValue()) / 10.0:.1f} dB"
+        name = str(label).strip() or self.t("equalizer")
+        full_text = f"{name}: {value_text}"
+        ctrl.SetName(full_text)
+        ctrl.SetLabel(full_text)
+        ctrl.SetToolTip(full_text)
+        ctrl._apricot_accessible_name = name
+        ctrl._apricot_accessible_description = full_text
+        ctrl._apricot_accessible_value = value_text
+        if not getattr(ctrl, "_apricot_accessible", None):
+            try:
+                ctrl._apricot_accessible = SliderAccessible(ctrl)
+                ctrl.SetAccessible(ctrl._apricot_accessible)
+            except Exception:
+                pass
+        try:
+            wx.Accessible.NotifyEvent(wx.ACC_EVENT_OBJECT_NAMECHANGE, ctrl, wx.OBJID_CLIENT, 0)
+            wx.Accessible.NotifyEvent(wx.ACC_EVENT_OBJECT_VALUECHANGE, ctrl, wx.OBJID_CLIENT, 0)
+        except Exception:
+            pass
+
     def foreground_window(self) -> None:
         try:
             self.Show(True)
@@ -3130,7 +4509,12 @@ class MainFrame(wx.Frame):
         except Exception:
             return
         action = str(payload.get("action") or "show")
-        if action == "settings":
+        if action == "open_file":
+            self.restore_from_tray()
+            path = str(payload.get("path") or "")
+            if path:
+                wx.CallAfter(self.open_local_media_file, path)
+        elif action == "settings":
             self.show_settings_from_tray()
         else:
             self.restore_from_tray()
@@ -3224,6 +4608,7 @@ class MainFrame(wx.Frame):
             self.menu_actions.append((f"{self.t('current_downloads')} ({download_count})", self.show_download_queue))
         self.menu_actions.extend([
             (self.t("search_youtube"), self.show_search),
+            (self.t("play_from_folder"), self.show_play_from_folder),
             (self.t("direct_link"), self.show_direct_link),
             (self.t("favorites"), self.show_favorites),
             (self.t("playlists"), self.show_user_playlists),
@@ -3819,6 +5204,9 @@ class MainFrame(wx.Frame):
 
     def open_search_shortcut(self) -> None:
         self.run_global_navigation_shortcut(self.show_search)
+
+    def open_play_from_folder_shortcut(self) -> None:
+        self.run_global_navigation_shortcut(self.show_play_from_folder)
 
     def open_direct_link_shortcut(self) -> None:
         self.run_global_navigation_shortcut(self.show_direct_link)
@@ -5401,6 +6789,7 @@ class MainFrame(wx.Frame):
         return [
             (self.t("general_section"), "general"),
             (self.t("playback_section"), "playback"),
+            (self.t("equalizer_section"), "equalizer"),
             (self.t("downloads_section"), "downloads"),
             (self.t("library_section"), "library"),
             (self.t("podcasts_section"), "podcasts"),
@@ -5474,6 +6863,7 @@ class MainFrame(wx.Frame):
             ctrl.SetName(self.t(key))
             form.Add(ctrl, 1, wx.EXPAND)
             remember(key, ctrl)
+            return ctrl
 
         def choice(key: str, value: str, options: list[str], labels: list[str] | None = None):
             form.Add(wx.StaticText(self.settings_scroller, label=self.t(key)), 0, wx.ALIGN_CENTER_VERTICAL)
@@ -5486,6 +6876,7 @@ class MainFrame(wx.Frame):
             if labels:
                 self.choice_values[key] = options
             remember(key, ctrl)
+            return ctrl
 
         def check(key: str, value: bool):
             form.AddSpacer(1)
@@ -5494,6 +6885,7 @@ class MainFrame(wx.Frame):
             ctrl.SetValue(value)
             form.Add(ctrl, 1, wx.EXPAND)
             remember(key, ctrl)
+            return ctrl
 
         def button(key: str, handler):
             form.AddSpacer(1)
@@ -5502,6 +6894,23 @@ class MainFrame(wx.Frame):
             ctrl.Bind(wx.EVT_BUTTON, lambda _evt, fn=handler: fn())
             form.Add(ctrl, 0)
             self.settings_control_order.append(ctrl)
+            return ctrl
+
+        def slider(key: str, label: str, value: float, minimum: int, maximum: int):
+            form.Add(wx.StaticText(self.settings_scroller, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
+            scaled_value = int(round(float(value) * 10))
+            ctrl = wx.Slider(
+                self.settings_scroller,
+                value=min(max(scaled_value, minimum), maximum),
+                minValue=minimum,
+                maxValue=maximum,
+                style=wx.SL_HORIZONTAL,
+            )
+            self.set_equalizer_slider_accessibility(ctrl, label)
+            ctrl.Bind(wx.EVT_SLIDER, lambda evt, label_text=label: self.on_equalizer_settings_slider(evt, label_text))
+            form.Add(ctrl, 1, wx.EXPAND)
+            remember(key, ctrl)
+            return ctrl
 
         if section_name == "general":
             form.Add(wx.StaticText(self.settings_scroller, label=self.t("language")), 0, wx.ALIGN_CENTER_VERTICAL)
@@ -5514,6 +6923,7 @@ class MainFrame(wx.Frame):
             text("settings_file", str(SETTINGS_FILE), wx.TE_READONLY)
             text("download_folder", self.settings.download_folder)
             button("browse", self.choose_download_folder)
+            button("set_default_player", self.open_windows_default_apps_settings)
             results_limit_value = "0" if self.settings.results_limit == 0 else str(min(250, self.settings.results_limit))
             result_limit_options = ["0", "10", "20", "50", "100", "150", "200", "250"]
             choice("results_limit", results_limit_value, result_limit_options, self.result_limit_labels(result_limit_options))
@@ -5550,6 +6960,27 @@ class MainFrame(wx.Frame):
             check("browser_playback", self.settings.prefer_browser_playback)
             check("fullscreen", self.settings.player_fullscreen)
             check("start_paused", self.settings.player_start_paused)
+            check("announce_play_pause", self.settings.announce_play_pause)
+        elif section_name == "equalizer":
+            equalizer_enabled = bool(getattr(self.settings, "global_equalizer_enabled", False))
+            enabled_box = check("global_equalizer", equalizer_enabled)
+            enabled_box.Bind(wx.EVT_CHECKBOX, self.on_global_equalizer_toggle)
+            if equalizer_enabled:
+                preset = self.normalized_equalizer_preset(getattr(self.settings, "global_equalizer_preset", EQ_PRESET_FLAT))
+                self.visible_equalizer_preset = preset
+                preset_choice = choice("equalizer_preset", preset, EQ_PRESET_OPTIONS, self.equalizer_preset_labels())
+                preset_choice.Bind(wx.EVT_CHOICE, self.on_equalizer_settings_preset_changed)
+                if preset in EQ_CUSTOM_PRESET_IDS:
+                    text("equalizer_preset_name", self.equalizer_custom_name(preset))
+                db_range = str(self.equalizer_db_range_value())
+                choice("equalizer_db_range", db_range, EQ_RANGE_OPTIONS)
+                gains = self.equalizer_gains_for_preset(preset)
+                slider_min = -int(db_range) * 10
+                slider_max = int(db_range) * 10
+                for band_id, band_label in EQ_BANDS:
+                    label = self.t("equalizer_band_gain", band=band_label)
+                    slider(f"eq_{band_id}", label, gains.get(band_id, 0.0), slider_min, slider_max)
+                button("reset_equalizer", self.reset_visible_equalizer_controls)
         elif section_name == "downloads":
             check("confirm_download", self.settings.confirm_before_download)
             check("open_after_download", self.settings.open_folder_after_download)
@@ -5652,6 +7083,14 @@ class MainFrame(wx.Frame):
         self.settings_scroller.Layout()
         self.settings_scroller.FitInside()
         self.panel.Layout()
+
+    def render_settings_section_and_focus(self, focus_key: str | None = None) -> None:
+        self.render_settings_section()
+        focus = self.controls.get(focus_key or "") if hasattr(self, "controls") else None
+        if focus is None and self.settings_control_order:
+            focus = self.settings_control_order[0]
+        if focus is not None:
+            self.focus_later(focus)
 
     def search_type_code(self) -> str:
         index = self.search_type.GetSelection()
@@ -6065,6 +7504,78 @@ class MainFrame(wx.Frame):
         except Exception as exc:
             wx.CallAfter(self.dynamic_fetch_failed_if_current, generation or self.search_generation, self.friendly_error(exc))
 
+    @staticmethod
+    def local_media_path_from_input(value: str) -> Path | None:
+        text = str(value or "").strip().strip('"')
+        if not text:
+            return None
+        if text.lower().startswith("file:"):
+            parsed = urlparse(text)
+            path_text = unquote(parsed.path or "")
+            if parsed.netloc:
+                text = f"//{parsed.netloc}{path_text}"
+            elif os.name == "nt" and re.match(r"^/[A-Za-z]:/", path_text):
+                text = path_text[1:]
+            else:
+                text = path_text
+        candidate = Path(text).expanduser()
+        try:
+            if candidate.exists() and candidate.is_file():
+                return candidate.resolve()
+        except OSError:
+            return None
+        return None
+
+    @staticmethod
+    def looks_like_local_media_path(value: str) -> bool:
+        path = MainFrame.local_media_path_from_input(value)
+        return bool(path and (path.suffix.lower() in LOCAL_MEDIA_EXTENSIONS or path.is_file()))
+
+    def local_media_item(self, path: Path) -> dict:
+        return {
+            "title": path.stem or path.name,
+            "url": str(path),
+            "webpage_url": str(path),
+            "kind": "local_file",
+            "type": self.t("local_media"),
+            "channel": path.parent.name,
+            "ext": path.suffix.lstrip(".").lower(),
+            "description": str(path),
+        }
+
+    def local_media_wildcard(self) -> str:
+        patterns = ";".join(f"*{extension}" for extension in sorted(LOCAL_MEDIA_EXTENSIONS))
+        return f"{self.t('media_files')} ({patterns})|{patterns}|{self.t('all_files')} (*.*)|*.*"
+
+    def show_play_from_folder(self) -> None:
+        start_dir = self.settings.download_folder or str(Path.home())
+        with wx.FileDialog(
+            self,
+            self.t("select_media_file"),
+            defaultDir=start_dir if Path(start_dir).exists() else str(Path.home()),
+            wildcard=self.local_media_wildcard(),
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+        ) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                self.show_main_menu()
+                return
+            path = dialog.GetPath()
+        self.open_local_media_file(path)
+
+    def open_local_media_file(self, value: str) -> None:
+        try:
+            path = self.local_media_path_from_input(value)
+            if not path:
+                raise FileNotFoundError(value)
+            item = self.local_media_item(path)
+            self.player_return_screen = "local_file"
+            self.player_return_data = {}
+            self.current_video_item = item
+            self.current_video_info = dict(item)
+            self.play_url(str(path), item["title"])
+        except Exception as exc:
+            self.message(self.t("local_file_open_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
+
     def clear_loading_more_if_current(self, generation: int) -> None:
         if generation == self.search_generation:
             self.loading_more_results = False
@@ -6078,6 +7589,14 @@ class MainFrame(wx.Frame):
             self.record_history(self.current_video_item, "played")
         self.current_index = max(0, self.current_index)
         self.stop_player(silent=True)
+        self.session_equalizer_enabled = None
+        self.session_equalizer_gains = {}
+        self.session_equalizer_before_bass_boost = None
+        self.bass_boost_enabled = False
+        self.equalizer_filter_active = False
+        self.clip_start_marker = None
+        self.clip_end_marker = None
+        self.current_stream_headers = {}
         command, kind = player
         if kind != "mpv":
             self.message(self.t("player_missing"), wx.ICON_ERROR)
@@ -6118,6 +7637,10 @@ class MainFrame(wx.Frame):
             wx.CallAfter(self.message, self.t("cookie_auto_refresh_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
     def resolve_stream_url(self, url: str) -> tuple[str, dict, dict]:
+        local_path = self.local_media_path_from_input(url)
+        if local_path:
+            info = self.local_media_item(local_path)
+            return str(local_path), {}, info
         options = {
             "quiet": True,
             "skip_download": True,
@@ -6164,6 +7687,7 @@ class MainFrame(wx.Frame):
                 "duration_seconds": info.get("duration", self.current_video_info.get("duration_seconds")),
                 "duration": self.format_duration(info.get("duration", self.current_video_info.get("duration_seconds"))),
                 "description": info.get("description") or self.current_video_info.get("description", ""),
+                "ext": info.get("ext") or self.current_video_info.get("ext", ""),
             }
         )
         if self.current_video_item is not None:
@@ -6391,13 +7915,16 @@ class MainFrame(wx.Frame):
             self.player_ended = False
             self.player_generation += 1
             self.current_stream_url = stream_url
+            self.current_stream_headers = dict(headers or {})
             self.current_audio_device = audio_device
             self.volume_boost_enabled = False
             self.rubberband_pitch_filter_active = False
+            self.equalizer_filter_active = False
             self.current_video_info["speed"] = self.format_playback_rate(float(self.settings.player_speed))
             self.current_video_info["pitch"] = self.format_playback_rate(1.0)
             self.update_details_text()
             self.set_status(self.t("playing", title=title))
+            wx.CallLater(700, self.apply_equalizer_to_player)
             self.start_player_monitor(self.player_generation)
         except Exception as exc:
             self.message(self.t("player_failed", error=exc), wx.ICON_ERROR)
@@ -6424,6 +7951,7 @@ class MainFrame(wx.Frame):
                 (self.t("play"), self.player_play_pause),
                 (self.t("next"), lambda: self.play_relative_item(1)),
                 (self.t("output_devices"), self.show_output_devices),
+                (self.t("equalizer"), self.show_player_equalizer),
                 (self.t("copy_link"), self.copy_active_url),
                 (self.t("copy_stream_url"), self.copy_direct_stream_url),
                 (self.t("show_video_details"), self.show_video_details),
@@ -6436,6 +7964,11 @@ class MainFrame(wx.Frame):
         self.repeat_checkbox.SetValue(self.repeat_current)
         self.repeat_checkbox.Bind(wx.EVT_CHECKBOX, self.on_repeat_changed)
         self.root_sizer.Add(self.repeat_checkbox, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
+        self.bass_boost_checkbox = wx.CheckBox(self.panel, label=self.t("bass_boost"))
+        self.bass_boost_checkbox.SetName(self.t("bass_boost"))
+        self.bass_boost_checkbox.SetValue(self.bass_boost_enabled)
+        self.bass_boost_checkbox.Bind(wx.EVT_CHECKBOX, self.on_bass_boost_changed)
+        self.root_sizer.Add(self.bass_boost_checkbox, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
         self.player_panel = wx.Panel(self.panel, style=wx.BORDER_SIMPLE)
         self.player_panel.SetName(self.t("internal_player"))
         self.player_panel.SetBackgroundColour(wx.BLACK)
@@ -6468,6 +8001,27 @@ class MainFrame(wx.Frame):
                 pass
         self.announce_player(self.t("repeat_on" if checked else "repeat_off"))
 
+    def on_bass_boost_changed(self, _event=None) -> None:
+        checked = bool(getattr(self, "bass_boost_checkbox", None) and self.bass_boost_checkbox.GetValue())
+        if checked == self.bass_boost_enabled:
+            return
+        if checked:
+            self.session_equalizer_before_bass_boost = (self.session_equalizer_enabled, dict(self.session_equalizer_gains))
+            self.session_equalizer_enabled = True
+            self.session_equalizer_gains = self.equalizer_gains_for_preset("bass_boost")
+        else:
+            previous = self.session_equalizer_before_bass_boost
+            if previous is None:
+                self.session_equalizer_enabled = None
+                self.session_equalizer_gains = {}
+            else:
+                self.session_equalizer_enabled, gains = previous
+                self.session_equalizer_gains = dict(gains)
+            self.session_equalizer_before_bass_boost = None
+        self.bass_boost_enabled = checked
+        self.apply_equalizer_to_player()
+        self.announce_player(self.t("bass_boost_on" if checked else "bass_boost_off"))
+
     def back_to_results(self) -> None:
         self.stop_player(silent=True)
         self.in_player_screen = False
@@ -6499,6 +8053,11 @@ class MainFrame(wx.Frame):
             self.player_return_screen = ""
             self.player_return_data = {}
             self.show_direct_link()
+            return
+        if self.player_return_screen == "local_file":
+            self.player_return_screen = ""
+            self.player_return_data = {}
+            self.show_main_menu()
             return
         if self.player_return_screen == "favorites":
             self.player_return_screen = ""
@@ -6712,6 +8271,155 @@ class MainFrame(wx.Frame):
         except Exception as exc:
             self.announce_player(self.t("stream_url_failed", error=self.friendly_error(exc)))
 
+    def effective_equalizer_state(self) -> tuple[bool, dict[str, float]]:
+        if self.session_equalizer_enabled is not None:
+            return bool(self.session_equalizer_enabled), self.normalized_equalizer_gains(self.session_equalizer_gains)
+        preset = self.normalized_equalizer_preset(getattr(self.settings, "global_equalizer_preset", EQ_PRESET_FLAT))
+        return bool(getattr(self.settings, "global_equalizer_enabled", False)), self.equalizer_gains_for_preset(preset)
+
+    @staticmethod
+    def equalizer_filter(gains: dict[str, float]) -> str:
+        filters = []
+        for band_id, _band_label in EQ_BANDS:
+            gain = max(-24.0, min(24.0, float(gains.get(band_id, 0.0) or 0.0)))
+            filters.append(f"equalizer=f={band_id}:t=q:w=1:g={gain:.1f}")
+        return f"{EQ_FILTER_REF}:lavfi=[{','.join(filters)}]"
+
+    def apply_equalizer_to_player(self) -> None:
+        if self.player_kind != "mpv" or not self.mpv_process_alive():
+            return
+        enabled, gains = self.effective_equalizer_state()
+        try:
+            self.mpv_request(["af", "remove", EQ_FILTER_REF], timeout=0.8)
+        except Exception:
+            pass
+        self.equalizer_filter_active = False
+        if not enabled or not any(abs(float(value)) >= 0.05 for value in gains.values()):
+            return
+        try:
+            response = self.mpv_request(["af", "add", self.equalizer_filter(gains)], timeout=1.0)
+            if response.get("error") == "success":
+                self.equalizer_filter_active = True
+        except Exception:
+            self.equalizer_filter_active = False
+
+    def show_player_equalizer(self) -> None:
+        if not self.in_player_screen:
+            return
+        original_enabled = self.session_equalizer_enabled
+        original_gains = dict(self.session_equalizer_gains)
+        _enabled, gains = self.effective_equalizer_state()
+        active_preset = self.normalized_equalizer_preset(getattr(self.settings, "global_equalizer_preset", EQ_PRESET_FLAT))
+        db_range = self.equalizer_db_range_value()
+        slider_min = -db_range * 10
+        slider_max = db_range * 10
+        dialog = wx.Dialog(self, title=self.t("equalizer"), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        dialog.SetName(self.t("equalizer"))
+        dialog.SetMinSize((520, 520))
+        outer = wx.BoxSizer(wx.VERTICAL)
+        outer.Add(wx.StaticText(dialog, label=self.t("equalizer_preset")), 0, wx.LEFT | wx.RIGHT | wx.TOP, 8)
+        preset_choice = wx.Choice(dialog, choices=self.equalizer_preset_labels())
+        preset_choice.SetName(self.t("equalizer_preset"))
+        preset_choice.SetSelection(EQ_PRESET_OPTIONS.index(active_preset) if active_preset in EQ_PRESET_OPTIONS else 0)
+        outer.Add(preset_choice, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+        name_label = wx.StaticText(dialog, label=self.t("equalizer_preset_name"))
+        name_ctrl = wx.TextCtrl(dialog, value=self.equalizer_custom_name(active_preset))
+        name_ctrl.SetName(self.t("equalizer_preset_name"))
+        outer.Add(name_label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 8)
+        outer.Add(name_ctrl, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+        sliders: dict[str, wx.Slider] = {}
+        for band_id, band_label in EQ_BANDS:
+            label_text = self.t("equalizer_band_gain", band=band_label)
+            outer.Add(wx.StaticText(dialog, label=label_text), 0, wx.LEFT | wx.RIGHT | wx.TOP, 8)
+            band_value = min(max(int(round(gains.get(band_id, 0.0) * 10)), slider_min), slider_max)
+            slider = wx.Slider(
+                dialog,
+                value=band_value,
+                minValue=slider_min,
+                maxValue=slider_max,
+                style=wx.SL_HORIZONTAL,
+            )
+            self.set_equalizer_slider_accessibility(slider, label_text)
+            sliders[band_id] = slider
+            outer.Add(slider, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+
+        buttons = wx.StdDialogButtonSizer()
+        ok_button = wx.Button(dialog, wx.ID_OK)
+        cancel_button = wx.Button(dialog, wx.ID_CANCEL)
+        reset_button = wx.Button(dialog, label=self.t("reset_equalizer"))
+        buttons.AddButton(ok_button)
+        buttons.AddButton(cancel_button)
+        buttons.Realize()
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        row.Add(reset_button, 0, wx.RIGHT, 8)
+        row.Add(buttons, 0)
+        outer.Add(row, 0, wx.ALIGN_RIGHT | wx.ALL, 8)
+        dialog.SetSizer(outer)
+
+        def current_dialog_gains() -> dict[str, float]:
+            return {band_id: round(float(ctrl.GetValue()) / 10.0, 1) for band_id, ctrl in sliders.items()}
+
+        def current_preset() -> str:
+            index = preset_choice.GetSelection()
+            return EQ_PRESET_OPTIONS[index] if 0 <= index < len(EQ_PRESET_OPTIONS) else EQ_PRESET_FLAT
+
+        def update_custom_name_visibility() -> None:
+            visible = current_preset() in EQ_CUSTOM_PRESET_IDS
+            name_label.Show(visible)
+            name_ctrl.Show(visible)
+            dialog.Layout()
+
+        def live_apply() -> None:
+            self.session_equalizer_enabled = True
+            self.session_equalizer_gains = current_dialog_gains()
+            self.apply_equalizer_to_player()
+
+        def load_preset_into_sliders(preset_id: str) -> None:
+            preset_gains = self.equalizer_gains_for_preset(preset_id)
+            for band_id, band_label in EQ_BANDS:
+                value = min(max(preset_gains.get(band_id, 0.0), -db_range), db_range)
+                sliders[band_id].SetValue(int(round(value * 10)))
+                self.set_equalizer_slider_accessibility(sliders[band_id], self.t("equalizer_band_gain", band=band_label))
+            name_ctrl.SetValue(self.equalizer_custom_name(preset_id))
+            update_custom_name_visibility()
+            live_apply()
+
+        def on_preset_changed(_event: wx.CommandEvent) -> None:
+            load_preset_into_sliders(current_preset())
+
+        def on_slider(event: wx.CommandEvent, label: str) -> None:
+            ctrl = event.GetEventObject()
+            if isinstance(ctrl, wx.Slider):
+                self.set_equalizer_slider_accessibility(ctrl, label)
+            live_apply()
+
+        for band_id, band_label in EQ_BANDS:
+            sliders[band_id].Bind(wx.EVT_SLIDER, lambda evt, label=self.t("equalizer_band_gain", band=band_label): on_slider(evt, label))
+        preset_choice.Bind(wx.EVT_CHOICE, on_preset_changed)
+
+        def reset_dialog_equalizer(_event=None) -> None:
+            preset_gains = self.factory_equalizer_gains_for_preset(current_preset())
+            for band_id, band_label in EQ_BANDS:
+                value = min(max(preset_gains.get(band_id, 0.0), -db_range), db_range)
+                sliders[band_id].SetValue(int(round(value * 10)))
+                self.set_equalizer_slider_accessibility(sliders[band_id], self.t("equalizer_band_gain", band=band_label))
+            live_apply()
+
+        reset_button.Bind(wx.EVT_BUTTON, reset_dialog_equalizer)
+        update_custom_name_visibility()
+        live_apply()
+        result = dialog.ShowModal()
+        dialog.Destroy()
+        if result == wx.ID_OK:
+            if self.bass_boost_enabled:
+                self.session_equalizer_before_bass_boost = (self.session_equalizer_enabled, dict(self.session_equalizer_gains))
+            self.announce_player(self.t("equalizer_saved"))
+            return
+        self.session_equalizer_enabled = original_enabled
+        self.session_equalizer_gains = original_gains
+        self.apply_equalizer_to_player()
+        self.announce_player(self.t("equalizer_closed"))
+
     def play_relative_item(self, delta: int) -> None:
         if delta < 0:
             item = self.relative_player_item(-1)
@@ -6915,10 +8623,38 @@ class MainFrame(wx.Frame):
             try:
                 self.mpv_set_property("pause", False, timeout=0.5)
                 self.start_player_monitor(self.player_generation)
+                self.announce_play_pause_state(False)
             except Exception:
-                self.player_command("cycle pause")
+                self.toggle_player_pause_fallback()
             return
+        self.toggle_player_pause()
+
+    def toggle_player_pause(self) -> None:
+        try:
+            paused = bool(self.mpv_get_property("pause", timeout=0.35))
+            new_paused = not paused
+            self.mpv_set_property("pause", new_paused, timeout=0.5)
+            self.announce_play_pause_state(new_paused)
+        except Exception:
+            self.toggle_player_pause_fallback()
+
+    def toggle_player_pause_fallback(self) -> None:
         self.player_command("cycle pause")
+        if self.settings.announce_play_pause:
+            wx.CallLater(120, self.announce_current_play_pause_state)
+
+    def announce_current_play_pause_state(self) -> None:
+        if not self.settings.announce_play_pause or self.player_kind != "mpv" or not self.mpv_process_alive():
+            return
+        try:
+            paused = bool(self.mpv_get_property("pause", timeout=0.35))
+            self.announce_play_pause_state(paused)
+        except Exception:
+            pass
+
+    def announce_play_pause_state(self, paused: bool) -> None:
+        if self.settings.announce_play_pause:
+            self.announce_player(self.t("playback_paused" if paused else "playback_playing"))
 
     def player_should_restart_from_end(self, eof_reached: bool) -> bool:
         if self.player_ended and not eof_reached:
@@ -6986,6 +8722,105 @@ class MainFrame(wx.Frame):
         if seconds < 0 and was_ended:
             self.player_ended = False
             self.start_player_monitor(self.player_generation)
+
+    def set_clip_marker_async(self, marker: str) -> None:
+        threading.Thread(target=self.set_clip_marker_worker, args=(marker,), daemon=True).start()
+
+    def set_clip_marker_worker(self, marker: str) -> None:
+        try:
+            elapsed = self.mpv_get_property("time-pos")
+            if elapsed is None:
+                wx.CallAfter(self.announce_player, self.t("timing_unavailable"))
+                return
+            position = max(0.0, float(elapsed))
+            if marker == "start":
+                self.clip_start_marker = position
+                wx.CallAfter(self.announce_player, self.t("clip_start_marker_set", time=self.format_seconds(position)))
+            else:
+                self.clip_end_marker = position
+                wx.CallAfter(self.announce_player, self.t("clip_end_marker_set", time=self.format_seconds(position)))
+        except Exception:
+            wx.CallAfter(self.announce_player, self.t("timing_unavailable"))
+
+    def export_marked_clip(self) -> None:
+        if self.clip_start_marker is None or self.clip_end_marker is None:
+            self.announce_player(self.t("clip_markers_missing"))
+            return
+        start = float(self.clip_start_marker)
+        end = float(self.clip_end_marker)
+        if end - start < 0.25:
+            self.announce_player(self.t("clip_marker_invalid"))
+            return
+        item = dict(self.current_video_item or self.current_video_info or {})
+        stream_url = self.current_stream_url
+        headers = dict(self.current_stream_headers or {})
+        self.announce_player(self.t("clip_export_started"))
+        threading.Thread(target=self.export_marked_clip_worker, args=(item, stream_url, headers, start, end), daemon=True).start()
+
+    def ffmpeg_executable(self) -> str:
+        configured = str(getattr(self.settings, "ffmpeg_location", "") or "").strip()
+        if configured:
+            configured_path = Path(configured)
+            if configured_path.is_dir():
+                candidate = configured_path / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+                if candidate.exists():
+                    return str(candidate)
+            elif configured_path.exists():
+                return configured
+        bundled = self.bundled_path("ffmpeg", "ffmpeg.exe")
+        if bundled.exists():
+            return str(bundled)
+        return shutil.which("ffmpeg") or ""
+
+    def clip_output_folder_for_item(self, item: dict) -> Path:
+        if item.get("kind") == "rss_item":
+            folder = self.podcasts_download_folder()
+        else:
+            folder = self.music_download_folder()
+        return folder / "clips"
+
+    def clip_output_extension(self, source: str, item: dict) -> str:
+        local_path = self.local_media_path_from_input(source)
+        if local_path and local_path.suffix:
+            return local_path.suffix.lower()
+        ext = str(item.get("ext") or "").strip().lower().lstrip(".")
+        if ext:
+            return f".{ext}"
+        kind = str(item.get("kind") or "")
+        if kind == "rss_item":
+            return ".m4a"
+        return ".mp4"
+
+    def export_marked_clip_worker(self, item: dict, stream_url: str, headers: dict, start: float, end: float) -> None:
+        try:
+            ffmpeg = self.ffmpeg_executable()
+            if not ffmpeg:
+                raise RuntimeError("FFmpeg was not found")
+            input_url = stream_url
+            if not input_url:
+                input_url, headers, _info = self.resolve_stream_url(str(item.get("url") or ""))
+            folder = self.clip_output_folder_for_item(item)
+            folder.mkdir(parents=True, exist_ok=True)
+            title = str(item.get("title") or Path(input_url).stem or "clip")
+            suffix = self.clip_output_extension(input_url, item)
+            output = folder / f"{self.safe_folder_name(title)} - {self.format_seconds(start).replace(':', '-')}-{self.format_seconds(end).replace(':', '-')}{suffix}"
+            counter = 2
+            while output.exists():
+                output = folder / f"{self.safe_folder_name(title)} - {self.format_seconds(start).replace(':', '-')}-{self.format_seconds(end).replace(':', '-')} ({counter}){suffix}"
+                counter += 1
+            args = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-ss", f"{start:.3f}"]
+            header_text = "".join(f"{name}: {value}\r\n" for name, value in headers.items() if value)
+            if header_text:
+                args.extend(["-headers", header_text])
+            args.extend(["-i", input_url, "-t", f"{end - start:.3f}", "-map", "0", "-c", "copy", "-avoid_negative_ts", "make_zero", str(output)])
+            creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+            result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=creationflags)
+            if result.returncode != 0:
+                error = (result.stderr or result.stdout or "").strip() or f"FFmpeg exited with code {result.returncode}"
+                raise RuntimeError(error[-600:])
+            wx.CallAfter(self.announce_player, self.t("clip_export_done", title=output.name))
+        except Exception as exc:
+            wx.CallAfter(self.message, self.t("clip_export_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
     def mpv_process_alive(self) -> bool:
         return bool(self.player_process and self.player_process.poll() is None)
@@ -7301,6 +9136,126 @@ class MainFrame(wx.Frame):
     def audio_quality_labels(self) -> list[str]:
         return [self.audio_quality_label(value) for value in AUDIO_QUALITY_OPTIONS]
 
+    def equalizer_db_range_value(self) -> int:
+        try:
+            value = int(getattr(self.settings, "equalizer_db_range", 12) or 12)
+        except (TypeError, ValueError):
+            value = 12
+        return min(24, max(6, value))
+
+    @staticmethod
+    def normalized_equalizer_preset(preset: str | None) -> str:
+        value = str(preset or EQ_PRESET_FLAT).strip()
+        return value if value in EQ_PRESET_OPTIONS else EQ_PRESET_FLAT
+
+    @staticmethod
+    def normalized_equalizer_gains(gains: dict | None) -> dict[str, float]:
+        normalized = default_equalizer_gains()
+        if isinstance(gains, dict):
+            for band_id, _band_label in EQ_BANDS:
+                try:
+                    normalized[band_id] = round(max(-24.0, min(24.0, float(gains.get(band_id, 0.0) or 0.0))), 1)
+                except (TypeError, ValueError):
+                    normalized[band_id] = 0.0
+        return normalized
+
+    def normalized_equalizer_preset_gains(self, presets: dict | None) -> dict[str, dict[str, float]]:
+        normalized = default_equalizer_preset_gains()
+        if isinstance(presets, dict):
+            for preset_id in EQ_PRESET_OPTIONS:
+                gains = presets.get(preset_id)
+                if isinstance(gains, dict):
+                    normalized[preset_id] = self.normalized_equalizer_gains(gains)
+        return normalized
+
+    def normalized_equalizer_custom_names(self, names: dict | None) -> dict[str, str]:
+        normalized = default_equalizer_custom_names()
+        if isinstance(names, dict):
+            for custom_id in EQ_CUSTOM_PRESET_IDS:
+                value = str(names.get(custom_id) or "").strip()
+                if value:
+                    normalized[custom_id] = value[:80]
+        return normalized
+
+    def equalizer_custom_name(self, preset_id: str) -> str:
+        names = self.normalized_equalizer_custom_names(getattr(self.settings, "equalizer_custom_names", {}) or {})
+        return names.get(preset_id, default_equalizer_custom_names().get(preset_id, preset_id))
+
+    def equalizer_preset_label(self, preset_id: str) -> str:
+        if preset_id in EQ_CUSTOM_PRESET_IDS:
+            return self.equalizer_custom_name(preset_id)
+        return self.t(f"eq_preset_{preset_id}")
+
+    def equalizer_preset_labels(self) -> list[str]:
+        return [self.equalizer_preset_label(preset_id) for preset_id in EQ_PRESET_OPTIONS]
+
+    def equalizer_gains_for_preset(self, preset_id: str | None) -> dict[str, float]:
+        preset_id = self.normalized_equalizer_preset(preset_id)
+        presets = self.normalized_equalizer_preset_gains(getattr(self.settings, "equalizer_preset_gains", {}) or {})
+        return self.normalized_equalizer_gains(presets.get(preset_id) or {})
+
+    def factory_equalizer_gains_for_preset(self, preset_id: str | None) -> dict[str, float]:
+        preset_id = self.normalized_equalizer_preset(preset_id)
+        if preset_id in EQ_FACTORY_PRESET_VALUES:
+            return equalizer_gains_from_values(EQ_FACTORY_PRESET_VALUES[preset_id])
+        return default_equalizer_gains()
+
+    def visible_equalizer_gains(self) -> dict[str, float]:
+        gains: dict[str, float] = {}
+        if not hasattr(self, "controls"):
+            return gains
+        for band_id, _band_label in EQ_BANDS:
+            ctrl = self.controls.get(f"eq_{band_id}")
+            if isinstance(ctrl, wx.Slider):
+                gains[band_id] = round(float(ctrl.GetValue()) / 10.0, 1)
+        return gains
+
+    def save_visible_equalizer_gains_to_preset(self, preset_id: str | None = None) -> None:
+        preset_id = self.normalized_equalizer_preset(preset_id or getattr(self, "visible_equalizer_preset", EQ_PRESET_FLAT))
+        gains = self.visible_equalizer_gains()
+        if not gains:
+            return
+        presets = self.normalized_equalizer_preset_gains(getattr(self.settings, "equalizer_preset_gains", {}) or {})
+        presets[preset_id] = self.normalized_equalizer_gains(gains)
+        self.settings.equalizer_preset_gains = presets
+        self.settings.global_equalizer_gains = self.normalized_equalizer_gains(gains)
+
+    def on_global_equalizer_toggle(self, _event: wx.CommandEvent) -> None:
+        ctrl = self.controls.get("global_equalizer") if hasattr(self, "controls") else None
+        self.save_visible_equalizer_gains_to_preset(getattr(self, "visible_equalizer_preset", EQ_PRESET_FLAT))
+        if isinstance(ctrl, wx.CheckBox):
+            self.settings.global_equalizer_enabled = ctrl.GetValue()
+        wx.CallAfter(self.render_settings_section_and_focus, "global_equalizer")
+
+    def on_equalizer_settings_preset_changed(self, _event: wx.CommandEvent) -> None:
+        previous = getattr(self, "visible_equalizer_preset", getattr(self.settings, "global_equalizer_preset", EQ_PRESET_FLAT))
+        self.save_visible_equalizer_gains_to_preset(previous)
+        preset = self.selected_choice_value("equalizer_preset")
+        self.settings.global_equalizer_preset = self.normalized_equalizer_preset(preset)
+        wx.CallAfter(self.render_settings_section_and_focus, "equalizer_preset")
+
+    def on_equalizer_settings_slider(self, event: wx.CommandEvent, label: str) -> None:
+        ctrl = event.GetEventObject()
+        if isinstance(ctrl, wx.Slider):
+            self.set_equalizer_slider_accessibility(ctrl, label)
+        event.Skip()
+
+    def reset_visible_equalizer_controls(self) -> None:
+        if not hasattr(self, "controls"):
+            return
+        preset = self.normalized_equalizer_preset(self.selected_choice_value("equalizer_preset") or getattr(self, "visible_equalizer_preset", EQ_PRESET_FLAT))
+        gains = self.factory_equalizer_gains_for_preset(preset)
+        presets = self.normalized_equalizer_preset_gains(getattr(self.settings, "equalizer_preset_gains", {}) or {})
+        presets[preset] = gains
+        self.settings.equalizer_preset_gains = presets
+        for band_id, band_label in EQ_BANDS:
+            ctrl = self.controls.get(f"eq_{band_id}")
+            if isinstance(ctrl, wx.Slider):
+                value = gains.get(band_id, 0.0)
+                ctrl.SetValue(int(round(value * 10)))
+                self.set_equalizer_slider_accessibility(ctrl, self.t("equalizer_band_gain", band=band_label))
+        self.announce_player(self.t("equalizer_saved"))
+
     def result_limit_labels(self, options: list[str]) -> list[str]:
         return [self.t("dynamic_results") if option == "0" else option for option in options]
 
@@ -7415,7 +9370,9 @@ class MainFrame(wx.Frame):
         self.player_kind = ""
         self.player_control_mode = False
         self.rubberband_pitch_filter_active = False
+        self.equalizer_filter_active = False
         self.current_stream_url = ""
+        self.current_stream_headers = {}
         self.current_audio_device = ""
         if not self.in_player_screen:
             self.in_player_screen = False
@@ -7480,6 +9437,7 @@ class MainFrame(wx.Frame):
         actions = [
             ("open_main_menu", self.open_main_menu_shortcut),
             ("open_search", self.open_search_shortcut),
+            ("open_play_from_folder", self.open_play_from_folder_shortcut),
             ("open_direct_link", self.open_direct_link_shortcut),
             ("open_favorites", self.open_favorites_shortcut),
             ("open_playlists", self.open_playlists_shortcut),
@@ -7660,11 +9618,26 @@ class MainFrame(wx.Frame):
             if focus is getattr(self, "repeat_checkbox", None) and self.shortcut_matches(event, "player_play_pause"):
                 event.Skip()
                 return
+            if focus is getattr(self, "bass_boost_checkbox", None) and self.shortcut_matches(event, "player_play_pause"):
+                event.Skip()
+                return
             if details_has_focus and self.details_text_navigation_key(event):
                 event.Skip()
                 return
             if self.shortcut_matches(event, "player_output_devices"):
                 self.show_output_devices()
+                return
+            if self.shortcut_matches(event, "player_equalizer"):
+                self.show_player_equalizer()
+                return
+            if self.shortcut_matches(event, "player_marker_start"):
+                self.set_clip_marker_async("start")
+                return
+            if self.shortcut_matches(event, "player_marker_end"):
+                self.set_clip_marker_async("end")
+                return
+            if self.shortcut_matches(event, "player_export_clip"):
+                self.export_marked_clip()
                 return
             if self.shortcut_matches(event, "player_previous"):
                 self.play_relative_item(-1)
@@ -8445,6 +10418,20 @@ class MainFrame(wx.Frame):
                 self.save_settings()
                 self.set_status(self.t("settings_saved"))
 
+    def open_windows_default_apps_settings(self) -> None:
+        try:
+            if os.name == "nt" and not self.media_association_registry_complete():
+                self.register_media_associations_current_user()
+                self.set_status(self.t("media_association_registered"))
+            os.startfile("ms-settings:defaultapps")  # type: ignore[attr-defined]
+            self.announce_player(self.t("default_player_settings_opened"))
+        except Exception as exc:
+            try:
+                subprocess.Popen(["control.exe", "/name", "Microsoft.DefaultPrograms"])
+                self.announce_player(self.t("default_player_settings_opened"))
+            except Exception:
+                self.message(self.t("default_player_settings_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
+
     def choose_cookies_file(self) -> None:
         with wx.FileDialog(
             self,
@@ -8566,6 +10553,8 @@ class MainFrame(wx.Frame):
         self.configure_rss_timer()
         self.configure_app_update_timer()
         self.install_download_accelerators()
+        if self.in_player_screen and self.session_equalizer_enabled is None:
+            self.apply_equalizer_to_player()
         saved_text = self.t("settings_saved")
         self.set_status(saved_text)
         self.speak_text(saved_text)
@@ -8649,6 +10638,29 @@ class MainFrame(wx.Frame):
             self.settings.speed_audio_mode = self.normalize_speed_audio_mode_value(self.selected_choice_value("speed_audio_mode"))
         if "pitch_mode" in c:
             self.settings.pitch_mode = self.normalize_pitch_mode_value(self.selected_choice_value("pitch_mode"))
+        if "global_equalizer" in c:
+            self.settings.global_equalizer_enabled = c["global_equalizer"].GetValue()
+        selected_equalizer_preset = self.normalized_equalizer_preset(getattr(self.settings, "global_equalizer_preset", EQ_PRESET_FLAT))
+        if "equalizer_preset" in c:
+            selected_equalizer_preset = self.normalized_equalizer_preset(self.selected_choice_value("equalizer_preset"))
+            self.settings.global_equalizer_preset = selected_equalizer_preset
+        if "equalizer_preset_name" in c and selected_equalizer_preset in EQ_CUSTOM_PRESET_IDS:
+            names = self.normalized_equalizer_custom_names(getattr(self.settings, "equalizer_custom_names", {}) or {})
+            names[selected_equalizer_preset] = c["equalizer_preset_name"].GetValue().strip()[:80] or default_equalizer_custom_names()[selected_equalizer_preset]
+            self.settings.equalizer_custom_names = names
+        if "equalizer_db_range" in c:
+            self.settings.equalizer_db_range = self.to_int(self.selected_choice_value("equalizer_db_range"), 12, 6, 24)
+        eq_gains: dict[str, float] = {}
+        for band_id, _band_label in EQ_BANDS:
+            ctrl = c.get(f"eq_{band_id}")
+            if isinstance(ctrl, wx.Slider):
+                eq_gains[band_id] = round(float(ctrl.GetValue()) / 10.0, 1)
+        if eq_gains:
+            eq_gains = self.normalized_equalizer_gains(eq_gains)
+            presets = self.normalized_equalizer_preset_gains(getattr(self.settings, "equalizer_preset_gains", {}) or {})
+            presets[selected_equalizer_preset] = eq_gains
+            self.settings.equalizer_preset_gains = presets
+            self.settings.global_equalizer_gains = eq_gains
         if "show_video_details_by_default" in c:
             self.settings.show_video_details_by_default = c["show_video_details_by_default"].GetValue()
         if "enable_age_restricted_videos" in c:
@@ -8669,6 +10681,8 @@ class MainFrame(wx.Frame):
             self.settings.player_fullscreen = c["fullscreen"].GetValue()
         if "start_paused" in c:
             self.settings.player_start_paused = c["start_paused"].GetValue()
+        if "announce_play_pause" in c:
+            self.settings.announce_play_pause = c["announce_play_pause"].GetValue()
         if "rate_limit" in c:
             self.settings.rate_limit = c["rate_limit"].GetValue()
         if "proxy" in c:
@@ -9328,7 +11342,7 @@ class MainFrame(wx.Frame):
                 f"$processIdToWait = {int(process_id)}",
                 f"$restart = {restart_value}",
                 "$installerLog = [IO.Path]::ChangeExtension($log, '.inno.log')",
-                "$silentArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', '/TASKS=desktopicon', ('/DIR=\"' + $installDir + '\"'), ('/LOG=\"' + $installerLog + '\"'))",
+                "$silentArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', '/TASKS=desktopicon,mediaassoc', ('/DIR=\"' + $installDir + '\"'), ('/LOG=\"' + $installerLog + '\"'))",
                 "$installCandidates = @()",
                 "function Normalize-ExecutablePath([string]$path) {",
                 "    if (-not $path) { return '' }",
@@ -9532,6 +11546,98 @@ class MainFrame(wx.Frame):
         return None
 
     @staticmethod
+    def current_executable_path() -> Path:
+        try:
+            return Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve()
+        except Exception:
+            return Path(sys.executable if getattr(sys, "frozen", False) else __file__)
+
+    @staticmethod
+    def registry_read_value(root, subkey: str, value_name: str = "") -> str:
+        if winreg is None:
+            return ""
+        try:
+            with winreg.OpenKey(root, subkey, 0, winreg.KEY_READ) as key:
+                value, _value_type = winreg.QueryValueEx(key, value_name)
+                return str(value or "")
+        except Exception:
+            return ""
+
+    def media_association_registry_complete(self) -> bool:
+        if os.name != "nt" or winreg is None:
+            return True
+        expected_exe = str(self.current_executable_path()).lower()
+        for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            registered = self.registry_read_value(root, r"Software\RegisteredApplications", APP_NAME)
+            command = self.registry_read_value(root, rf"Software\Classes\{APP_NAME}.Media\shell\open\command")
+            if not registered or not command:
+                continue
+            command_lower = command.lower()
+            if expected_exe in command_lower and "%1" in command_lower:
+                return True
+        return False
+
+    @staticmethod
+    def registry_set_value(root, subkey: str, value_name: str, value_type: int, value) -> None:
+        if winreg is None:
+            raise RuntimeError("Windows registry is not available")
+        with winreg.CreateKeyEx(root, subkey, 0, winreg.KEY_WRITE) as key:
+            winreg.SetValueEx(key, value_name, 0, value_type, value)
+
+    def register_media_associations_current_user(self) -> None:
+        if os.name != "nt" or winreg is None:
+            return
+        exe_path = str(self.current_executable_path())
+        command = f'"{exe_path}" "%1"'
+        icon = f"{exe_path},0"
+        root = winreg.HKEY_CURRENT_USER
+        self.registry_set_value(root, r"Software\RegisteredApplications", APP_NAME, winreg.REG_SZ, rf"Software\{APP_NAME}\Capabilities")
+        self.registry_set_value(root, rf"Software\{APP_NAME}\Capabilities", "ApplicationName", winreg.REG_SZ, APP_NAME)
+        self.registry_set_value(
+            root,
+            rf"Software\{APP_NAME}\Capabilities",
+            "ApplicationDescription",
+            winreg.REG_SZ,
+            "Accessible media player, YouTube player, downloader, podcast and RSS player",
+        )
+        for extension in sorted(LOCAL_MEDIA_EXTENSIONS):
+            self.registry_set_value(root, rf"Software\{APP_NAME}\Capabilities\FileAssociations", extension, winreg.REG_SZ, f"{APP_NAME}.Media")
+            self.registry_set_value(root, rf"Software\Classes\{extension}\OpenWithProgids", f"{APP_NAME}.Media", winreg.REG_NONE, b"")
+        self.registry_set_value(root, rf"Software\Classes\{APP_NAME}.Media", "", winreg.REG_SZ, f"{APP_NAME} media file")
+        self.registry_set_value(root, rf"Software\Classes\{APP_NAME}.Media\DefaultIcon", "", winreg.REG_SZ, icon)
+        self.registry_set_value(root, rf"Software\Classes\{APP_NAME}.Media\shell\open\command", "", winreg.REG_SZ, command)
+        for media_kind in ("audio", "video"):
+            base = rf"Software\Classes\SystemFileAssociations\{media_kind}\shell\{APP_NAME}"
+            self.registry_set_value(root, base, "MUIVerb", winreg.REG_SZ, f"Play with {APP_NAME}")
+            self.registry_set_value(root, base, "Icon", winreg.REG_SZ, icon)
+            self.registry_set_value(root, rf"{base}\command", "", winreg.REG_SZ, command)
+        try:
+            ctypes.windll.shell32.SHChangeNotify(0x08000000, 0x0000, None, None)
+        except Exception:
+            pass
+
+    def maybe_prompt_media_association_registration(self) -> None:
+        if not self.is_installed_build() or self.media_association_registry_complete():
+            return
+        if str(getattr(self.settings, "media_association_prompted_version", "")) == APP_VERSION:
+            return
+        result = wx.MessageBox(
+            self.t("media_association_prompt_message"),
+            self.t("media_association_prompt_title"),
+            wx.YES_NO | wx.ICON_QUESTION,
+        )
+        self.settings.media_association_prompted_version = APP_VERSION
+        self.save_settings()
+        if result != wx.YES:
+            return
+        try:
+            self.register_media_associations_current_user()
+            self.set_status(self.t("media_association_registered"))
+            self.speak_text(self.t("media_association_registered"))
+        except Exception as exc:
+            self.message(self.t("media_association_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
+
+    @staticmethod
     def is_installed_build() -> bool:
         if not getattr(sys, "frozen", False):
             return False
@@ -9710,6 +11816,10 @@ class MainFrame(wx.Frame):
 
     def repair_keyboard_shortcut_conflicts(self, shortcuts: dict[str, str]) -> dict[str, str]:
         repaired = dict(shortcuts)
+        if str(repaired.get("player_marker_start", "")).strip() in {"[", "š", "Š"}:
+            repaired["player_marker_start"] = DEFAULT_KEYBOARD_SHORTCUTS["player_marker_start"]
+        if str(repaired.get("player_marker_end", "")).strip() in {"]", "đ", "Đ"}:
+            repaired["player_marker_end"] = DEFAULT_KEYBOARD_SHORTCUTS["player_marker_end"]
         if self.canonical_shortcut(repaired.get("new_subscription_videos", "")) == self.canonical_shortcut(repaired.get("player_play_pause", "")):
             replacement = self.first_available_shortcut(repaired, "new_subscription_videos", ["Ctrl+Shift+V", "Ctrl+Alt+V", "Alt+N"])
             if replacement:
@@ -9732,7 +11842,8 @@ class MainFrame(wx.Frame):
         source = SETTINGS_FILE if SETTINGS_FILE.exists() else LEGACY_SETTINGS_FILE
         if source.exists():
             try:
-                data = json.loads(source.read_text(encoding="utf-8"))
+                raw_data = json.loads(source.read_text(encoding="utf-8"))
+                data = dict(raw_data) if isinstance(raw_data, dict) else {}
                 allowed_keys = {field.name for field in fields(Settings)}
                 data = {key: value for key, value in data.items() if key in allowed_keys}
                 merged = {**asdict(Settings()), **data}
@@ -9744,6 +11855,16 @@ class MainFrame(wx.Frame):
                 merged["speed_audio_mode"] = self.normalize_speed_audio_mode_value(str(merged.get("speed_audio_mode") or ""))
                 merged["direct_link_enter_action"] = self.normalize_direct_link_enter_action(str(merged.get("direct_link_enter_action") or ""))
                 merged["video_format"] = self.normalize_video_format_value(str(merged.get("video_format") or ""))
+                merged["global_equalizer_gains"] = self.normalized_equalizer_gains(merged.get("global_equalizer_gains"))
+                merged["global_equalizer_preset"] = self.normalized_equalizer_preset(str(merged.get("global_equalizer_preset") or EQ_PRESET_FLAT))
+                merged["equalizer_preset_gains"] = self.normalized_equalizer_preset_gains(merged.get("equalizer_preset_gains"))
+                merged["equalizer_custom_names"] = self.normalized_equalizer_custom_names(merged.get("equalizer_custom_names"))
+                if "global_equalizer_preset" not in data and any(abs(value) >= 0.05 for value in merged["global_equalizer_gains"].values()):
+                    merged["global_equalizer_preset"] = "custom1"
+                    merged["equalizer_custom_names"]["custom1"] = "Imported"
+                    merged["equalizer_preset_gains"]["custom1"] = merged["global_equalizer_gains"]
+                    self.settings_migrated = True
+                merged["equalizer_db_range"] = self.to_int(str(merged.get("equalizer_db_range") or "12"), 12, 6, 24)
                 old_audio_quality = str(merged.get("audio_quality") or "")
                 merged["audio_quality"] = self.normalize_audio_quality_value(old_audio_quality)
                 if old_audio_quality and merged["audio_quality"] != old_audio_quality:
@@ -10021,10 +12142,22 @@ def suppress_already_open_for_update() -> bool:
     return False
 
 
-def request_existing_instance_activation(action: str = "show") -> None:
+def startup_media_path_argument(argv: list[str] | None = None) -> str:
+    args = list(sys.argv[1:] if argv is None else argv)
+    for arg in args:
+        if arg == UPDATE_RELAUNCH_ARG or arg.startswith("--"):
+            continue
+        path = MainFrame.local_media_path_from_input(arg)
+        if path:
+            return str(path)
+    return ""
+
+
+def request_existing_instance_activation(action: str = "show", **extra_payload) -> None:
     try:
         APP_DIR.mkdir(parents=True, exist_ok=True)
         payload = {"action": action, "pid": os.getpid(), "timestamp": time.time()}
+        payload.update(extra_payload)
         ACTIVATE_SIGNAL_FILE.write_text(json.dumps(payload), encoding="utf-8")
     except Exception:
         pass
@@ -10034,17 +12167,23 @@ class App(wx.App):
     def OnInit(self) -> bool:
         if update_relaunch_requested():
             mark_update_relaunch_window()
+        startup_media_path = startup_media_path_argument()
         instance_name = f"{APP_NAME}-{wx.GetUserId() or 'user'}"
         self.instance_checker = wx.SingleInstanceChecker(instance_name)
         if self.instance_checker.IsAnotherRunning():
             if suppress_already_open_for_update():
                 return False
-            request_existing_instance_activation("show")
+            if startup_media_path:
+                request_existing_instance_activation("open_file", path=startup_media_path)
+            else:
+                request_existing_instance_activation("show")
             return False
         frame = MainFrame()
         self.SetTopWindow(frame)
         frame.Show()
         frame.activate_window_later()
+        if startup_media_path:
+            wx.CallAfter(frame.open_local_media_file, startup_media_path)
         return True
 
 

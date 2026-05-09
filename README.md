@@ -2,13 +2,13 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.6.14.7` (`0.6.14.7`)
+Current version: `0.7` (`0.7`)
 
 ## Download
 
 Download the latest Windows installer or portable ZIP from the [GitHub Releases page](https://github.com/Urh2006/ApricotPlayer/releases/latest).
 
-The installer adds ApricotPlayer to the Windows Start Menu and can create a desktop shortcut. User settings are stored per user in `%APPDATA%\ApricotPlayer\settings.json`.
+The installer adds ApricotPlayer to the Windows Start Menu, can create a desktop shortcut, and can register ApricotPlayer as a Windows media player for common audio/video files. User settings are stored per user in `%APPDATA%\ApricotPlayer\settings.json`.
 
 ## Run from source
 
@@ -29,6 +29,14 @@ py wx_main.py
 
 - NVDA-friendly main menu and search flow
 - In-app YouTube playback with `mpv`
+- Local media file playback for common audio and video files, including file association support on Windows
+- First-run repair prompt if Windows media player registration is missing after an update
+- Play from folder for choosing local media inside ApricotPlayer
+- Accessible 10-band equalizer with descriptive frequency sliders, global Settings controls, genre/sound presets, three custom profiles, and player-only live controls
+- Player Bass boost checkbox for a temporary per-video EQ boost
+- Player clip markers and FFmpeg export for the marked section of the current video, local file, or podcast
+- Clip marker shortcuts use physical `LeftBracket` and `RightBracket` keys, so they work across keyboard layouts
+- Optional screen reader announcement for Playing or Paused when pressing Space in the player
 - Audio and video downloads with progress updates
 - Default downloads go to `Downloads\ApricotPlayer`, with YouTube music/video files under `music` and podcast episodes under `podcasts`
 - Video downloads default to MP4, with selectable video download format options in Settings
@@ -89,6 +97,9 @@ py wx_main.py
 - `T`: announce elapsed, remaining, and total time
 - `V`: open video details
 - `O`: choose audio output device for the current video
+- `E`: open the player equalizer
+- `LeftBracket` / `RightBracket`: set clip start and end markers
+- `Ctrl+S`: export the marked clip section
 - `L`: copy current video link
 - `Ctrl+D`: copy the direct media stream URL
 - `Ctrl+PageUp/PageDown`: previous or next item
@@ -103,7 +114,8 @@ py wx_main.py
 - `Ctrl+Shift+N`: create playlist
 - `Ctrl+Shift+P`: add the focused or queued videos to a playlist
 - `Ctrl+Shift+R`: remove an item from a user playlist
-- `Ctrl+Shift+V`: open new videos for the focused subscription
+- `Ctrl+Shift+V`: open the notification center
+- `Ctrl+Alt+O`: play from folder
 
 ## Accessibility
 

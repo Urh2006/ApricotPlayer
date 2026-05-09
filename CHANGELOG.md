@@ -1,5 +1,22 @@
 # Changelog
 
+## What's new in version 0.7
+
+- added local media file playback support so ApricotPlayer can open audio and video files passed from Windows file associations
+- added installer registration for common audio/video file types and a Settings button that opens Windows Default apps
+- added Play from folder for opening local audio/video files directly from ApricotPlayer
+- added an accessible 10-band equalizer with global Settings controls, genre/sound presets, three custom profiles, and a player-only Equalizer dialog
+- expanded the equalizer into an enabled/disabled global Settings section with preset selection and editable preset gains
+- updated the player Equalizer dialog with the same accessible preset-and-slider workflow for per-video EQ changes
+- added player clip markers with physical `LeftBracket` and `RightBracket` keys, plus `Ctrl+S` to export only the marked section with FFmpeg
+- added configurable keyboard shortcuts for Play from folder, clip markers, and clip export
+- added a Playback setting to announce Playing or Paused when pressing Space in the player
+- added a player Bass boost checkbox that applies the bass boost EQ preset only for the current playback session
+- added a first-run repair prompt that registers ApricotPlayer as a Windows media player option if an update did not create the media association registry entries
+- improved equalizer slider names so screen readers hear the frequency range and purpose, not only a numeric slider value
+- fixed focus after enabling the global equalizer in Settings so the screen reader does not land on a blank panel
+- changed the default clip marker shortcuts to physical `LeftBracket` and `RightBracket` keys, so they work across keyboard layouts such as Slovenian where those keys type different characters
+
 ## What's new in version 0.6.14.7
 
 - fixed main-menu shortcut handling so pressing modifier keys such as Ctrl+Shift by themselves no longer opens a "Select an item" dialog
