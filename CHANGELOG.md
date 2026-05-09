@@ -1,5 +1,12 @@
 # Changelog
 
+## What's new in version 0.8.2
+
+- changed the Windows startup setting label to "Start ApricotPlayer at Windows startup"
+- Windows startup registration now launches the normal ApricotPlayer window instead of starting hidden in the system tray
+- the setting remains off by default for new users
+- the separate system tray close behavior is still available through the existing tray setting
+
 ## What's new in version 0.8.1
 
 - renamed the Playback setting from "Resume videos where you left off" to "Resume where you left off" because resume now applies to videos, podcasts, and local files

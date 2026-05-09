@@ -186,8 +186,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.1"
-APP_VERSION_LABEL = "0.8.1"
+APP_VERSION = "0.8.2"
+APP_VERSION_LABEL = "0.8.2"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -1117,7 +1117,7 @@ TEXT = {
         "subscription_check_enabled": "Check subscriptions automatically",
         "subscription_check_interval": "Subscription check interval",
         "close_to_tray": "Close button or Alt+F4 sends ApricotPlayer to system tray",
-        "start_with_windows": "Start ApricotPlayer with Windows in the system tray",
+        "start_with_windows": "Start ApricotPlayer at Windows startup",
         "startup_registration_failed": "Could not update Windows startup setting: {error}",
         "tray_notification": "Windows notification when ApricotPlayer goes to the system tray",
         "tray_still_running": "ApricotPlayer is still running in the system tray.",
@@ -1367,7 +1367,7 @@ TEXT["sl"].update(
         "shortcut_in_use": "{shortcut} je ze nastavljen za {action}. Izberi drugo bliznjico.",
         "shortcut_in_use_title": "Bliznjica je ze v uporabi",
         "tray_notification": "Windows obvestilo, ko gre ApricotPlayer v system tray",
-        "start_with_windows": "Zaženi ApricotPlayer z Windows v system tray",
+        "start_with_windows": "Zaženi ApricotPlayer ob zagonu Windows",
         "startup_registration_failed": "Nastavitve zagona z Windows ni bilo mogoče posodobiti: {error}",
         "tray_settings": "Nastavitve",
         "rss_refresh_interval": "Interval osvezevanja podcastov in RSS",
@@ -4685,7 +4685,7 @@ class MainFrame(wx.Frame):
             with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, self.windows_startup_run_key_path(), 0, access) as key:
                 value_name = self.windows_startup_value_name()
                 if self.settings.start_with_windows:
-                    command = self.current_launch_command(start_in_tray=True)
+                    command = self.current_launch_command(start_in_tray=False)
                     current = ""
                     try:
                         current, _value_type = winreg.QueryValueEx(key, value_name)

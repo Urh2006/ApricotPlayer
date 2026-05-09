@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.8.1` (`0.8.1`)
+Current version: `0.8.2` (`0.8.2`)
 
 ## Download
 
@@ -73,7 +73,7 @@ py wx_main.py
 - Default audio output device setting with an accessible combo box, startup validation for missing devices, and a player output-device picker for session-only changes
 - Selectable playback-speed audio processing modes, including tuned `scaletempo2`, classic `scaletempo`, mpv default, and Rubberband
 - Optional system tray mode when closing the window
-- Optional Windows startup mode that launches ApricotPlayer directly into the system tray
+- Optional Windows startup mode that launches ApricotPlayer normally when Windows starts
 - Tray mode can restore the existing app window from a second launch, open Settings from the tray menu, and optionally show a Windows notification when ApricotPlayer is sent to the tray
 - The tray icon keeps keyboard context menu access for Show ApricotPlayer, Settings, subscription check, and Exit
 - Player repeat checkbox and finished-video restart behavior when pressing Space or Play
@@ -153,4 +153,4 @@ Helpful scripts:
 - `scripts/build_release.ps1 -PackageMode onedir` builds the fast app folder used by both the installer and portable ZIP
 - `scripts/build_installer.ps1` builds `ApricotPlayerSetup.exe` when Inno Setup is installed
 - `scripts/build_portable_zip.ps1` builds `ApricotPlayer.zip`
-- `scripts/publish_release.ps1 -Tag v0.8.1 -NotesFile release-notes/v0.8.1.md` publishes the installer and portable ZIP to GitHub Releases
+- `scripts/publish_release.ps1 -Tag v0.8.2 -NotesFile release-notes/v0.8.2.md` publishes the installer and portable ZIP to GitHub Releases
