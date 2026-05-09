@@ -186,8 +186,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.7.2"
-APP_VERSION_LABEL = "0.7.2"
+APP_VERSION = "0.8"
+APP_VERSION_LABEL = "0.8"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -275,6 +275,13 @@ LOCAL_MEDIA_EXTENSIONS = {
     ".wma",
     ".wmv",
 }
+AUDIO_CONVERT_FORMATS = ["mp3", "m4a", "aac", "wav", "flac", "ogg", "opus", "wma", "aiff", "alac", "ac3", "mp2"]
+VIDEO_CONVERT_FORMATS = ["mp4", "mkv", "webm", "mov", "avi", "wmv", "m4v", "mpg", "mpeg", "flv", "3gp", "ogv", "ts", "m2ts", "asf"]
+AUDIO_INPUT_EXTENSIONS = {f".{fmt}" for fmt in AUDIO_CONVERT_FORMATS} | {".aif", ".aifc", ".ape", ".mka"}
+VIDEO_INPUT_EXTENSIONS = {f".{fmt}" for fmt in VIDEO_CONVERT_FORMATS} | {".asf", ".divx", ".m2ts", ".mts", ".ts", ".vob"}
+CONVERTER_MEDIA_EXTENSIONS = AUDIO_INPUT_EXTENSIONS | VIDEO_INPUT_EXTENSIONS
+CONVERTER_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif", ".tif", ".tiff"}
+LOCAL_MEDIA_EXTENSIONS.update(CONVERTER_MEDIA_EXTENSIONS)
 DEFAULT_GITHUB_OWNER = "Urh2006"
 DEFAULT_GITHUB_REPO = "ApricotPlayer"
 GITHUB_RELEASES_API_URL = f"https://api.github.com/repos/{DEFAULT_GITHUB_OWNER}/{DEFAULT_GITHUB_REPO}/releases"
@@ -3029,6 +3036,74 @@ for language_code in LANGUAGE_CODES:
     for key, value in RELEASE_071_TRANSLATION_UPDATES["en"].items():
         TEXT.setdefault(language_code, {}).setdefault(key, value)
 
+RELEASE_08_TRANSLATION_UPDATES = {
+    "sl": {
+        "default_volume": "Privzeta glasnost predvajanja",
+        "volume_boost_by_default": "Volume boost vklopljen privzeto",
+        "file_converter": "Pretvornik datotek",
+        "folder_converter": "Pretvornik map",
+        "converter_path": "Pot do datoteke ali mape",
+        "browse_file": "Izberi datoteko",
+        "browse_folder": "Izberi mapo",
+        "detected_format": "Zaznan format: {format}",
+        "output_format": "Izhodni format",
+        "add_image": "Dodaj sliko",
+        "dark_background": "Temno ozadje",
+        "image_path": "Pot do slike",
+        "choose_image": "Izberi sliko",
+        "convert": "Pretvori",
+        "conversion_started": "Pretvorba se je zacela.",
+        "conversion_done": "Pretvorba koncana: {title}",
+        "conversion_folder_done": "Pretvorba mape koncana: {count} datotek.",
+        "conversion_failed": "Pretvorba ni uspela: {error}",
+        "conversion_cancelled": "Pretvorba preklicana.",
+        "conversion_no_media_files": "V tej mapi ni podprtih medijskih datotek.",
+        "unsupported_input_format": "Ta vhodni format ni podprt.",
+        "choose_output_file": "Izberi ime in mesto pretvorjene datoteke",
+        "choose_output_folder": "Izberi mapo za pretvorjene datoteke",
+        "select_image_file": "Izberi sliko za video ozadje",
+        "converter_audio_to_video_options": "Moznosti za pretvorbo zvoka v video",
+        "audio_files": "Zvokovne datoteke",
+        "video_files": "Video datoteke",
+        "image_files": "Slikovne datoteke",
+    },
+    "en": {
+        "default_volume": "Default playback volume",
+        "volume_boost_by_default": "Volume boost on by default",
+        "file_converter": "File converter",
+        "folder_converter": "Folder converter",
+        "converter_path": "File or folder path",
+        "browse_file": "Browse file",
+        "browse_folder": "Browse folder",
+        "detected_format": "Detected format: {format}",
+        "output_format": "Output format",
+        "add_image": "Add image",
+        "dark_background": "Dark background",
+        "image_path": "Image path",
+        "choose_image": "Choose image",
+        "convert": "Convert",
+        "conversion_started": "Conversion started.",
+        "conversion_done": "Conversion complete: {title}",
+        "conversion_folder_done": "Folder conversion complete: {count} files.",
+        "conversion_failed": "Conversion failed: {error}",
+        "conversion_cancelled": "Conversion cancelled.",
+        "conversion_no_media_files": "No supported media files were found in this folder.",
+        "unsupported_input_format": "This input format is not supported.",
+        "choose_output_file": "Choose converted file name and save location",
+        "choose_output_folder": "Choose folder for converted files",
+        "select_image_file": "Choose image for video background",
+        "converter_audio_to_video_options": "Audio to video options",
+        "audio_files": "Audio files",
+        "video_files": "Video files",
+        "image_files": "Image files",
+    },
+}
+for language_code in LANGUAGE_CODES:
+    TEXT.setdefault(language_code, {}).update(RELEASE_08_TRANSLATION_UPDATES.get(language_code, RELEASE_08_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
+for language_code in LANGUAGE_CODES:
+    for key, value in RELEASE_08_TRANSLATION_UPDATES["en"].items():
+        TEXT.setdefault(language_code, {}).setdefault(key, value)
+
 
 def default_equalizer_gains() -> dict[str, float]:
     return {band_id: 0.0 for band_id, _label in EQ_BANDS}
@@ -3096,6 +3171,8 @@ class Settings:
     audio_quality: str = "0"
     seek_seconds: int = 5
     volume_step: int = 5
+    default_volume: int = 100
+    volume_boost_by_default: bool = False
     write_thumbnail: bool = False
     write_description: bool = False
     write_info_json: bool = False
@@ -4768,6 +4845,8 @@ class MainFrame(wx.Frame):
         if self.settings.enable_podcasts_rss:
             self.menu_actions.append((self.t("rss_feeds"), self.show_rss_feeds))
         self.menu_actions.extend([
+            (self.t("file_converter"), self.show_file_converter),
+            (self.t("folder_converter"), self.show_folder_converter),
             (self.t("settings"), self.show_settings),
             (self.t("exit"), self.quit_application),
         ])
@@ -4906,6 +4985,401 @@ class MainFrame(wx.Frame):
             self.message(self.t("no_selection"))
             return
         self.start_download(audio_only, item=item)
+
+    def show_file_converter(self) -> None:
+        self.show_converter_dialog(folder_mode=False)
+
+    def show_folder_converter(self) -> None:
+        self.show_converter_dialog(folder_mode=True)
+
+    def converter_input_kind(self, path: str | Path) -> str:
+        suffix = Path(path).suffix.lower()
+        if suffix in AUDIO_INPUT_EXTENSIONS:
+            return "audio"
+        if suffix in VIDEO_INPUT_EXTENSIONS:
+            return "video"
+        return ""
+
+    def converter_format_values(self, input_kind: str = "") -> list[str]:
+        if input_kind == "audio":
+            return [*AUDIO_CONVERT_FORMATS, *VIDEO_CONVERT_FORMATS]
+        if input_kind == "video":
+            return [*VIDEO_CONVERT_FORMATS, *AUDIO_CONVERT_FORMATS]
+        return [*AUDIO_CONVERT_FORMATS, *VIDEO_CONVERT_FORMATS]
+
+    @staticmethod
+    def converter_format_labels(values: list[str]) -> list[str]:
+        labels = []
+        for value in values:
+            labels.append("ALAC (M4A)" if value == "alac" else value.upper())
+        return labels
+
+    @staticmethod
+    def converter_output_extension(target_format: str) -> str:
+        return "m4a" if target_format == "alac" else target_format
+
+    def converter_wildcard_for_target(self, target_format: str) -> str:
+        extension = self.converter_output_extension(target_format)
+        return f"{extension.upper()} (*.{extension})|*.{extension}|{self.t('all_files')} (*.*)|*.*"
+
+    def converter_default_output_path(self, source: Path, target_format: str) -> Path:
+        extension = self.converter_output_extension(target_format)
+        return source.with_name(f"{source.stem} converted.{extension}")
+
+    def converter_is_audio_to_video(self, source_path: str | Path, target_format: str) -> bool:
+        return self.converter_input_kind(source_path) == "audio" and target_format in VIDEO_CONVERT_FORMATS
+
+    def folder_has_audio_inputs(self, folder: Path) -> bool:
+        try:
+            return any(path.is_file() and path.suffix.lower() in AUDIO_INPUT_EXTENSIONS for path in folder.iterdir())
+        except OSError:
+            return False
+
+    def converter_media_files_in_folder(self, folder: Path) -> list[Path]:
+        try:
+            return sorted(path for path in folder.iterdir() if path.is_file() and path.suffix.lower() in CONVERTER_MEDIA_EXTENSIONS)
+        except OSError:
+            return []
+
+    def show_converter_dialog(self, folder_mode: bool = False) -> None:
+        title = self.t("folder_converter" if folder_mode else "file_converter")
+        dialog = wx.Dialog(self, title=title, style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        try:
+            main = wx.BoxSizer(wx.VERTICAL)
+            form = wx.FlexGridSizer(0, 2, 6, 6)
+            form.AddGrowableCol(1, 1)
+
+            path_label = wx.StaticText(dialog, label=self.t("converter_path"))
+            path_ctrl = wx.TextCtrl(dialog)
+            path_ctrl.SetName(self.t("converter_path"))
+            browse_button = wx.Button(dialog, label=self.t("browse_folder" if folder_mode else "browse_file"))
+            browse_button.SetName(self.t("browse_folder" if folder_mode else "browse_file"))
+            path_row = wx.BoxSizer(wx.HORIZONTAL)
+            path_row.Add(path_ctrl, 1, wx.EXPAND | wx.RIGHT, 4)
+            path_row.Add(browse_button, 0)
+            form.Add(path_label, 0, wx.ALIGN_CENTER_VERTICAL)
+            form.Add(path_row, 1, wx.EXPAND)
+
+            detected_label = wx.StaticText(dialog, label=self.t("detected_format", format=self.t("empty")))
+            form.AddSpacer(1)
+            form.Add(detected_label, 0, wx.EXPAND)
+
+            target_choice = wx.Choice(dialog, choices=[])
+            target_choice.SetName(self.t("output_format"))
+            target_values: list[str] = []
+            form.Add(wx.StaticText(dialog, label=self.t("output_format")), 0, wx.ALIGN_CENTER_VERTICAL)
+            form.Add(target_choice, 1, wx.EXPAND)
+
+            options_label = wx.StaticText(dialog, label=self.t("converter_audio_to_video_options"))
+            add_image_box = wx.CheckBox(dialog, label=self.t("add_image"))
+            add_image_box.SetName(self.t("add_image"))
+            dark_box = wx.CheckBox(dialog, label=self.t("dark_background"))
+            dark_box.SetName(self.t("dark_background"))
+            image_label = wx.StaticText(dialog, label=self.t("image_path"))
+            image_ctrl = wx.TextCtrl(dialog)
+            image_ctrl.SetName(self.t("image_path"))
+            image_button = wx.Button(dialog, label=self.t("choose_image"))
+            image_button.SetName(self.t("choose_image"))
+            image_row = wx.BoxSizer(wx.HORIZONTAL)
+            image_row.Add(image_ctrl, 1, wx.EXPAND | wx.RIGHT, 4)
+            image_row.Add(image_button, 0)
+            form.Add(options_label, 0, wx.ALIGN_CENTER_VERTICAL)
+            form.Add(add_image_box, 1, wx.EXPAND)
+            form.AddSpacer(1)
+            form.Add(dark_box, 1, wx.EXPAND)
+            form.Add(image_label, 0, wx.ALIGN_CENTER_VERTICAL)
+            form.Add(image_row, 1, wx.EXPAND)
+
+            button_row = wx.BoxSizer(wx.HORIZONTAL)
+            convert_button = wx.Button(dialog, label=self.t("convert"))
+            convert_button.SetName(self.t("convert"))
+            cancel_button = wx.Button(dialog, wx.ID_CANCEL, self.t("back"))
+            button_row.Add(convert_button, 0, wx.RIGHT, 6)
+            button_row.Add(cancel_button, 0)
+
+            main.Add(form, 1, wx.EXPAND | wx.ALL, 10)
+            main.Add(button_row, 0, wx.ALIGN_RIGHT | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+            dialog.SetSizer(main)
+
+            def selected_target() -> str:
+                selection = target_choice.GetSelection()
+                if 0 <= selection < len(target_values):
+                    return target_values[selection]
+                return target_values[0] if target_values else "mp3"
+
+            def should_show_audio_video_options() -> bool:
+                target = selected_target()
+                if target not in VIDEO_CONVERT_FORMATS:
+                    return False
+                path = Path(path_ctrl.GetValue().strip().strip('"'))
+                if folder_mode:
+                    return not path.exists() or self.folder_has_audio_inputs(path)
+                return self.converter_is_audio_to_video(path, target)
+
+            def update_audio_video_controls() -> None:
+                show_options = should_show_audio_video_options()
+                if show_options and not add_image_box.GetValue() and not dark_box.GetValue():
+                    dark_box.SetValue(True)
+                show_image = show_options and add_image_box.GetValue()
+                for ctrl in (options_label, add_image_box, dark_box):
+                    ctrl.Show(show_options)
+                image_label.Show(show_image)
+                image_ctrl.Show(show_image)
+                image_button.Show(show_image)
+                dialog.Layout()
+                dialog.Fit()
+
+            def update_detected_and_formats(_event=None) -> None:
+                nonlocal target_values
+                raw_path = path_ctrl.GetValue().strip().strip('"')
+                path = Path(raw_path) if raw_path else Path()
+                if folder_mode:
+                    detected = self.t("folder_converter") if raw_path else self.t("empty")
+                    input_kind = ""
+                else:
+                    input_kind = self.converter_input_kind(path) if raw_path else ""
+                    detected = (path.suffix.lower().lstrip(".") or self.t("empty")) if input_kind else self.t("unsupported_input_format")
+                    if not raw_path:
+                        detected = self.t("empty")
+                detected_label.SetLabel(self.t("detected_format", format=detected))
+                current = selected_target() if target_values else ""
+                target_values = self.converter_format_values(input_kind)
+                target_choice.Set(self.converter_format_labels(target_values))
+                target_choice.SetSelection(target_values.index(current) if current in target_values else 0)
+                update_audio_video_controls()
+
+            def browse_path(_event=None) -> None:
+                if folder_mode:
+                    with wx.DirDialog(dialog, self.t("browse_folder"), style=wx.DD_DEFAULT_STYLE | wx.DD_DIR_MUST_EXIST) as chooser:
+                        if chooser.ShowModal() == wx.ID_OK:
+                            path_ctrl.SetValue(chooser.GetPath())
+                else:
+                    wildcard = self.converter_input_wildcard()
+                    with wx.FileDialog(dialog, self.t("browse_file"), wildcard=wildcard, style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as chooser:
+                        if chooser.ShowModal() == wx.ID_OK:
+                            path_ctrl.SetValue(chooser.GetPath())
+                update_detected_and_formats()
+
+            def browse_image(_event=None) -> None:
+                with wx.FileDialog(dialog, self.t("select_image_file"), wildcard=self.converter_image_wildcard(), style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as chooser:
+                    if chooser.ShowModal() == wx.ID_OK:
+                        image_ctrl.SetValue(chooser.GetPath())
+
+            def on_add_image(_event=None) -> None:
+                if add_image_box.GetValue():
+                    dark_box.SetValue(False)
+                elif not dark_box.GetValue():
+                    dark_box.SetValue(True)
+                update_audio_video_controls()
+
+            def on_dark(_event=None) -> None:
+                if dark_box.GetValue():
+                    add_image_box.SetValue(False)
+                elif not add_image_box.GetValue():
+                    add_image_box.SetValue(True)
+                update_audio_video_controls()
+
+            def convert(_event=None) -> None:
+                raw_path = path_ctrl.GetValue().strip().strip('"')
+                source = Path(raw_path).expanduser()
+                if not raw_path or not source.exists():
+                    self.message(self.t("no_selection"), wx.ICON_WARNING)
+                    return
+                target = selected_target()
+                use_image = bool(add_image_box.IsShown() and add_image_box.GetValue())
+                image_path = Path(image_ctrl.GetValue().strip().strip('"')).expanduser() if use_image else None
+                if use_image and (not image_path or not image_path.exists()):
+                    self.message(self.t("select_image_file"), wx.ICON_WARNING)
+                    return
+                if folder_mode:
+                    with wx.DirDialog(dialog, self.t("choose_output_folder"), defaultPath=str(source), style=wx.DD_DEFAULT_STYLE | wx.DD_DIR_MUST_EXIST) as chooser:
+                        if chooser.ShowModal() != wx.ID_OK:
+                            self.announce_player(self.t("conversion_cancelled"))
+                            return
+                        output_folder = Path(chooser.GetPath()).expanduser()
+                    self.start_folder_conversion(source, output_folder, target, image_path)
+                else:
+                    if not self.converter_input_kind(source):
+                        self.message(self.t("unsupported_input_format"), wx.ICON_WARNING)
+                        return
+                    default_output = self.converter_default_output_path(source, target)
+                    with wx.FileDialog(
+                        dialog,
+                        self.t("choose_output_file"),
+                        defaultDir=str(default_output.parent),
+                        defaultFile=default_output.name,
+                        wildcard=self.converter_wildcard_for_target(target),
+                        style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT,
+                    ) as chooser:
+                        if chooser.ShowModal() != wx.ID_OK:
+                            self.announce_player(self.t("conversion_cancelled"))
+                            return
+                        output = Path(chooser.GetPath()).expanduser()
+                    if not output.suffix:
+                        output = output.with_suffix(f".{self.converter_output_extension(target)}")
+                    self.start_file_conversion(source, output, target, image_path)
+                dialog.EndModal(wx.ID_OK)
+
+            browse_button.Bind(wx.EVT_BUTTON, browse_path)
+            image_button.Bind(wx.EVT_BUTTON, browse_image)
+            path_ctrl.Bind(wx.EVT_TEXT, update_detected_and_formats)
+            target_choice.Bind(wx.EVT_CHOICE, lambda evt: update_audio_video_controls())
+            add_image_box.Bind(wx.EVT_CHECKBOX, on_add_image)
+            dark_box.Bind(wx.EVT_CHECKBOX, on_dark)
+            convert_button.Bind(wx.EVT_BUTTON, convert)
+            update_detected_and_formats()
+            dialog.Fit()
+            dialog.SetMinSize((600, -1))
+            dialog.ShowModal()
+        finally:
+            dialog.Destroy()
+
+    def converter_input_wildcard(self) -> str:
+        audio_patterns = ";".join(f"*{extension}" for extension in sorted(AUDIO_INPUT_EXTENSIONS))
+        video_patterns = ";".join(f"*{extension}" for extension in sorted(VIDEO_INPUT_EXTENSIONS))
+        all_patterns = ";".join(f"*{extension}" for extension in sorted(CONVERTER_MEDIA_EXTENSIONS))
+        return (
+            f"{self.t('media_files')}|{all_patterns}|"
+            f"{self.t('audio_files')}|{audio_patterns}|"
+            f"{self.t('video_files')}|{video_patterns}|"
+            f"{self.t('all_files')} (*.*)|*.*"
+        )
+
+    def converter_image_wildcard(self) -> str:
+        patterns = ";".join(f"*{extension}" for extension in sorted(CONVERTER_IMAGE_EXTENSIONS))
+        return f"{self.t('image_files')}|{patterns}|{self.t('all_files')} (*.*)|*.*"
+
+    def start_file_conversion(self, source: Path, output: Path, target_format: str, image_path: Path | None = None) -> None:
+        output = self.unique_converter_output_path(output, source)
+        self.announce_player(self.t("conversion_started"))
+        self.set_status(self.t("conversion_started"))
+        threading.Thread(target=self.file_conversion_worker, args=(source, output, target_format, image_path), daemon=True).start()
+
+    def start_folder_conversion(self, source_folder: Path, output_folder: Path, target_format: str, image_path: Path | None = None) -> None:
+        self.announce_player(self.t("conversion_started"))
+        self.set_status(self.t("conversion_started"))
+        threading.Thread(target=self.folder_conversion_worker, args=(source_folder, output_folder, target_format, image_path), daemon=True).start()
+
+    def file_conversion_worker(self, source: Path, output: Path, target_format: str, image_path: Path | None = None) -> None:
+        try:
+            ffmpeg = self.ffmpeg_executable()
+            if not ffmpeg:
+                raise RuntimeError("FFmpeg was not found")
+            output.parent.mkdir(parents=True, exist_ok=True)
+            args = self.converter_ffmpeg_args(ffmpeg, source, output, target_format, image_path)
+            self.run_ffmpeg_conversion(args)
+            wx.CallAfter(self.set_status, self.t("conversion_done", title=output.name))
+            wx.CallAfter(self.announce_player, self.t("conversion_done", title=output.name))
+        except Exception as exc:
+            wx.CallAfter(self.message, self.t("conversion_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
+
+    def folder_conversion_worker(self, source_folder: Path, output_folder: Path, target_format: str, image_path: Path | None = None) -> None:
+        try:
+            ffmpeg = self.ffmpeg_executable()
+            if not ffmpeg:
+                raise RuntimeError("FFmpeg was not found")
+            files = self.converter_media_files_in_folder(source_folder)
+            if not files:
+                wx.CallAfter(self.message, self.t("conversion_no_media_files"), wx.ICON_INFORMATION)
+                return
+            output_folder.mkdir(parents=True, exist_ok=True)
+            converted = 0
+            for index, source in enumerate(files, start=1):
+                target = self.unique_converter_output_path(output_folder / f"{source.stem}.{self.converter_output_extension(target_format)}", source)
+                self.ui_queue.put(("status", f"{self.t('conversion_started')} {index}/{len(files)}: {source.name}"))
+                args = self.converter_ffmpeg_args(ffmpeg, source, target, target_format, image_path)
+                self.run_ffmpeg_conversion(args)
+                converted += 1
+            text = self.t("conversion_folder_done", count=converted)
+            wx.CallAfter(self.set_status, text)
+            wx.CallAfter(self.announce_player, text)
+        except Exception as exc:
+            wx.CallAfter(self.message, self.t("conversion_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
+
+    @staticmethod
+    def unique_converter_output_path(path: Path, source: Path | None = None) -> Path:
+        if source and path.resolve() == source.resolve():
+            path = path.with_name(f"{path.stem} converted{path.suffix}")
+        candidate = path
+        counter = 2
+        while candidate.exists():
+            candidate = path.with_name(f"{path.stem} ({counter}){path.suffix}")
+            counter += 1
+        return candidate
+
+    def run_ffmpeg_conversion(self, args: list[str]) -> None:
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=creationflags)
+        if result.returncode != 0:
+            error = (result.stderr or result.stdout or "").strip() or f"FFmpeg exited with code {result.returncode}"
+            raise RuntimeError(error[-900:])
+
+    def converter_audio_codec_args(self, target_format: str) -> list[str]:
+        fmt = target_format.lower()
+        if fmt == "mp3":
+            return ["-vn", "-c:a", "libmp3lame", "-b:a", "320k"]
+        if fmt in {"m4a", "aac"}:
+            return ["-vn", "-c:a", "aac", "-b:a", "256k"]
+        if fmt == "alac":
+            return ["-vn", "-c:a", "alac"]
+        if fmt == "opus":
+            return ["-vn", "-c:a", "libopus", "-b:a", "160k"]
+        if fmt == "ogg":
+            return ["-vn", "-c:a", "libvorbis", "-q:a", "5"]
+        if fmt == "wma":
+            return ["-vn", "-c:a", "wmav2", "-b:a", "192k"]
+        if fmt == "ac3":
+            return ["-vn", "-c:a", "ac3", "-b:a", "192k"]
+        if fmt == "mp2":
+            return ["-vn", "-c:a", "mp2", "-b:a", "192k"]
+        if fmt == "aiff":
+            return ["-vn", "-c:a", "pcm_s16be"]
+        if fmt == "wav":
+            return ["-vn", "-c:a", "pcm_s16le"]
+        if fmt == "flac":
+            return ["-vn", "-c:a", "flac"]
+        return ["-vn", "-c:a", "aac", "-b:a", "256k"]
+
+    def converter_video_codec_args(self, target_format: str) -> list[str]:
+        fmt = target_format.lower()
+        if fmt == "webm":
+            return ["-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "32", "-c:a", "libopus", "-b:a", "160k"]
+        if fmt == "avi":
+            return ["-c:v", "mpeg4", "-q:v", "4", "-c:a", "libmp3lame", "-b:a", "192k"]
+        if fmt in {"wmv", "asf"}:
+            return ["-c:v", "wmv2", "-b:v", "2500k", "-c:a", "wmav2", "-b:a", "192k"]
+        if fmt in {"mpg", "mpeg"}:
+            return ["-c:v", "mpeg2video", "-q:v", "4", "-c:a", "mp2", "-b:a", "192k"]
+        if fmt in {"ts", "m2ts"}:
+            return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-f", "mpegts"]
+        if fmt == "flv":
+            return ["-c:v", "flv", "-q:v", "4", "-c:a", "libmp3lame", "-b:a", "192k"]
+        if fmt == "ogv":
+            return ["-c:v", "libtheora", "-q:v", "7", "-c:a", "libvorbis", "-q:a", "5"]
+        extra = ["-movflags", "+faststart"] if fmt in {"mp4", "m4v", "mov"} else []
+        return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", *extra]
+
+    def converter_ffmpeg_args(self, ffmpeg: str, source: Path, output: Path, target_format: str, image_path: Path | None = None) -> list[str]:
+        source_kind = self.converter_input_kind(source)
+        if not source_kind:
+            raise RuntimeError(self.t("unsupported_input_format"))
+        target_format = target_format.lower()
+        args = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error"]
+        if target_format in AUDIO_CONVERT_FORMATS:
+            return [*args, "-i", str(source), *self.converter_audio_codec_args(target_format), str(output)]
+        if target_format not in VIDEO_CONVERT_FORMATS:
+            raise RuntimeError(self.t("unsupported_input_format"))
+        if source_kind == "audio":
+            if image_path:
+                args.extend(["-loop", "1", "-framerate", "1", "-i", str(image_path), "-i", str(source)])
+                args.extend(["-shortest", "-map", "0:v:0", "-map", "1:a:0", "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fps=30"])
+            else:
+                args.extend(["-f", "lavfi", "-i", "color=c=black:s=1280x720:r=30", "-i", str(source)])
+                args.extend(["-shortest", "-map", "0:v:0", "-map", "1:a:0"])
+            args.extend(self.converter_video_codec_args(target_format))
+            args.append(str(output))
+            return args
+        return [*args, "-i", str(source), *self.converter_video_codec_args(target_format), str(output)]
 
     def show_user_playlists(self) -> None:
         self.in_main_menu = False
@@ -7104,6 +7578,22 @@ class MainFrame(wx.Frame):
             remember(key, ctrl)
             return ctrl
 
+        def int_slider(key: str, label: str, value: int, minimum: int, maximum: int):
+            form.Add(wx.StaticText(self.settings_scroller, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
+            ctrl = wx.Slider(
+                self.settings_scroller,
+                value=min(max(int(value), minimum), maximum),
+                minValue=minimum,
+                maxValue=maximum,
+                style=wx.SL_HORIZONTAL | wx.SL_LABELS,
+            )
+            ctrl.SetName(label)
+            ctrl.SetLabel(label)
+            ctrl.SetToolTip(label)
+            form.Add(ctrl, 1, wx.EXPAND)
+            remember(key, ctrl)
+            return ctrl
+
         if section_name == "general":
             form.Add(wx.StaticText(self.settings_scroller, label=self.t("language")), 0, wx.ALIGN_CENTER_VERTICAL)
             language_code = self.settings.language if self.settings.language in LANGUAGE_CODES else "en"
@@ -7149,6 +7639,8 @@ class MainFrame(wx.Frame):
             self.refresh_audio_output_devices_async()
             choice("seek_seconds", str(self.settings.seek_seconds), ["5", "10", "15", "30"])
             choice("volume_step", str(self.settings.volume_step), ["1", "2", "5", "10"])
+            int_slider("default_volume", self.t("default_volume"), self.default_volume_value(), 0, 300)
+            check("volume_boost_by_default", bool(getattr(self.settings, "volume_boost_by_default", False)))
             check("autoplay_next", self.settings.autoplay_next)
             check("browser_playback", self.settings.prefer_browser_playback)
             check("fullscreen", self.settings.player_fullscreen)
@@ -8051,6 +8543,7 @@ class MainFrame(wx.Frame):
                 "--idle=no",
                 "--keep-open=yes",
                 "--volume-max=300",
+                f"--volume={self.default_volume_value()}",
                 "--pitch=1.0",
                 f"--speed={self.settings.player_speed}",
                 f"--loop-file={'inf' if self.repeat_current else 'no'}",
@@ -8112,7 +8605,7 @@ class MainFrame(wx.Frame):
             self.current_stream_url = stream_url
             self.current_stream_headers = dict(headers or {})
             self.current_audio_device = audio_device
-            self.volume_boost_enabled = False
+            self.volume_boost_enabled = bool(getattr(self.settings, "volume_boost_by_default", False) or self.default_volume_value() > 100)
             self.rubberband_pitch_filter_active = False
             self.equalizer_filter_active = False
             self.current_video_info["speed"] = self.format_playback_rate(float(self.settings.player_speed))
@@ -9587,6 +10080,9 @@ class MainFrame(wx.Frame):
 
     def pitch_step_value(self) -> float:
         return self.to_float(str(getattr(self.settings, "pitch_step", 0.01)), 0.01, 0.01, 0.25)
+
+    def default_volume_value(self) -> int:
+        return self.to_int(str(getattr(self.settings, "default_volume", 100)), 100, 0, 300)
 
     def normalized_pitch_mode(self) -> str:
         mode = str(getattr(self.settings, "pitch_mode", PITCH_MODE_MPV) or PITCH_MODE_MPV)
@@ -11182,6 +11678,10 @@ class MainFrame(wx.Frame):
             self.settings.seek_seconds = self.to_int(c["seek_seconds"].GetStringSelection(), 5, 1)
         if "volume_step" in c:
             self.settings.volume_step = self.to_int(c["volume_step"].GetStringSelection(), 5, 1)
+        if "default_volume" in c:
+            self.settings.default_volume = self.to_int(str(c["default_volume"].GetValue()), 100, 0, 300)
+        if "volume_boost_by_default" in c:
+            self.settings.volume_boost_by_default = c["volume_boost_by_default"].GetValue()
         if "speed_step" in c:
             self.settings.speed_step = self.to_float(c["speed_step"].GetStringSelection(), 0.01, 0.01, 0.25)
         if "pitch_step" in c:
@@ -12479,6 +12979,7 @@ class MainFrame(wx.Frame):
                     merged["equalizer_preset_gains"]["custom1"] = merged["global_equalizer_gains"]
                     self.settings_migrated = True
                 merged["equalizer_db_range"] = self.to_int(str(merged.get("equalizer_db_range") or "12"), 12, 6, 24)
+                merged["default_volume"] = self.to_int(str(merged.get("default_volume") or "100"), 100, 0, 300)
                 old_audio_quality = str(merged.get("audio_quality") or "")
                 merged["audio_quality"] = self.normalize_audio_quality_value(old_audio_quality)
                 if old_audio_quality and merged["audio_quality"] != old_audio_quality:

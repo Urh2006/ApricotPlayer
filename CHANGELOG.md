@@ -1,5 +1,15 @@
 # Changelog
 
+## What's new in version 0.8
+
+- added Playback settings for default volume and volume boost on by default, so playback can start at a chosen volume and optionally allow volume above 100% without pressing F2 first
+- added File converter and Folder converter menu items directly above Settings in the main menu
+- added accessible converter dialogs with path entry, Browse buttons, detected input format, output format combo boxes, Save As/folder output prompts, and screen-reader status messages
+- added broad FFmpeg-powered audio and video conversion targets, including MP3, M4A/AAC, WAV, FLAC, OGG, Opus, WMA, AIFF, ALAC, AC3, MP2, MP4, MKV, WebM, MOV, AVI, WMV, MPEG/MPG, FLV, 3GP, OGV, TS, M2TS, and ASF
+- added audio-to-video conversion choices for either a dark background or a selected image background
+- verified the existing Save As download setting still uses a file dialog for single downloads and a folder dialog for playlists, channels, and batch downloads
+- confirmed the default keyboard shortcuts include `G` for the player equalizer and `E` for local-file edit mode
+
 ## What's new in version 0.7.2
 
 - added a General setting to start ApricotPlayer with Windows directly in the system tray
