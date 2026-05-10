@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.8.3
+
+- converter default output filenames now keep the original base name and only change the extension, for example `song.mp3` to `song.mp4`
+- converter collision handling now uses numbered names such as `song (2).mp3` instead of adding `converted`
+- confirmed folder conversion saves directly into the folder selected by the user and does not create an extra nested folder
+
 ## What's new in version 0.8.2
 
 - changed the Windows startup setting label to "Start ApricotPlayer at Windows startup"

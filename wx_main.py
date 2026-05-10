@@ -186,8 +186,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.2"
-APP_VERSION_LABEL = "0.8.2"
+APP_VERSION = "0.8.3"
+APP_VERSION_LABEL = "0.8.3"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -5030,7 +5030,7 @@ class MainFrame(wx.Frame):
 
     def converter_default_output_path(self, source: Path, target_format: str) -> Path:
         extension = self.converter_output_extension(target_format)
-        return source.with_name(f"{source.stem} converted.{extension}")
+        return source.with_name(f"{source.stem}.{extension}")
 
     def converter_is_audio_to_video(self, source_path: str | Path, target_format: str) -> bool:
         return self.converter_input_kind(source_path) == "audio" and target_format in VIDEO_CONVERT_FORMATS
@@ -5306,11 +5306,9 @@ class MainFrame(wx.Frame):
 
     @staticmethod
     def unique_converter_output_path(path: Path, source: Path | None = None) -> Path:
-        if source and path.resolve() == source.resolve():
-            path = path.with_name(f"{path.stem} converted{path.suffix}")
         candidate = path
         counter = 2
-        while candidate.exists():
+        while candidate.exists() or (source is not None and candidate.resolve() == source.resolve()):
             candidate = path.with_name(f"{path.stem} ({counter}){path.suffix}")
             counter += 1
         return candidate
