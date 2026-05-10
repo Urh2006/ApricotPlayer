@@ -1,5 +1,10 @@
 # Changelog
 
+## What's new in version 0.8.4
+
+- app update checks now trust GitHub's `/releases/latest` endpoint first, so new versions show up even when GitHub's public releases list cache is behind
+- the full releases list is still used for cumulative changelogs and now merges the latest release when that list omits it
+
 ## What's new in version 0.8.3
 
 - converter default output filenames now keep the original base name and only change the extension, for example `song.mp3` to `song.mp4`

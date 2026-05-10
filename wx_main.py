@@ -186,8 +186,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.3"
-APP_VERSION_LABEL = "0.8.3"
+APP_VERSION = "0.8.4"
+APP_VERSION_LABEL = "0.8.4"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -12595,11 +12595,20 @@ class MainFrame(wx.Frame):
 
     def fetch_latest_release(self) -> dict | None:
         try:
+            release = self.fetch_github_latest_release()
+            if release:
+                return release
+        except Exception:
+            pass
+        try:
             releases = self.fetch_public_releases()
             if releases:
                 return releases[0]
         except Exception:
             pass
+        return self.fetch_github_latest_release()
+
+    def fetch_github_latest_release(self) -> dict | None:
         latest_request = Request(
             GITHUB_LATEST_RELEASE_API_URL,
             headers=self.github_headers(""),
@@ -12612,16 +12621,6 @@ class MainFrame(wx.Frame):
         except HTTPError as exc:
             if exc.code != 404:
                 raise
-        list_request = Request(
-            GITHUB_RELEASES_API_URL,
-            headers=self.github_headers(""),
-        )
-        with self.open_url(list_request, timeout=30) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        if isinstance(payload, list):
-            releases = [release for release in payload if not release.get("draft")]
-            releases.sort(key=lambda release: str(release.get("published_at") or release.get("created_at") or ""), reverse=True)
-            return releases[0] if releases else None
         return None
 
     def fetch_public_releases(self) -> list[dict]:
@@ -12629,8 +12628,18 @@ class MainFrame(wx.Frame):
         with self.open_url(request, timeout=30) as response:
             payload = json.loads(response.read().decode("utf-8"))
         if not isinstance(payload, list):
-            return []
-        releases = [release for release in payload if isinstance(release, dict) and not release.get("draft")]
+            releases = []
+        else:
+            releases = [release for release in payload if isinstance(release, dict) and not release.get("draft")]
+        try:
+            latest = self.fetch_github_latest_release()
+            if latest:
+                latest_tag = str(latest.get("tag_name") or "")
+                latest_id = latest.get("id")
+                if not any(release.get("id") == latest_id or str(release.get("tag_name") or "") == latest_tag for release in releases):
+                    releases.append(latest)
+        except Exception:
+            pass
         releases.sort(key=lambda release: self.parse_version(self.release_version(release)), reverse=True)
         return releases
 
