@@ -1,5 +1,17 @@
 # Changelog
 
+## What's new in version 0.8.6
+
+- replaced the Trending screen's `#trending` search with an official YouTube most-popular feed path using the YouTube Data API when configured
+- added a YouTube Data API key setting under Cookies and network; without a key, ApricotPlayer tries public YouTube chart/explore feeds and otherwise explains that official trending is unavailable
+- added an `Enable background playback` Playback setting, off by default, so the classic Escape-stops-player behavior remains available
+- when background playback is enabled, leaving the player keeps playback alive and exposes an accessible Player section with playback, queue, output-device, equalizer, copy-link, open-player, and close controls
+- fixed `Ctrl+Space` after shortcut navigation so it can control the active background player instead of reporting that the player is missing
+- improved equalizer state handling so global EQ and player-only EQ do not overwrite each other, and global EQ sliders can live-preview while audio is playing when no player EQ override is active
+- added dynamic equalizer profiles and a player equalizer action to save the current local EQ as a global preset
+- improved browser cookie export diagnostics for Chrome and other browsers by reporting tried profiles, cookie counts, YouTube-cookie counts, and whether login cookies were found
+- added a Settings action to open YouTube in the selected browser/profile before exporting cookies
+
 ## What's new in version 0.8.5
 
 - playback can continue in the background when leaving the player with Escape, Back, or Back to results

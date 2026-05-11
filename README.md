@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.8.5` (`0.8.5`)
+Current version: `0.8.6` (`0.8.6`)
 
 ## Download
 
@@ -29,14 +29,14 @@ py wx_main.py
 
 - NVDA-friendly main menu and search flow
 - In-app YouTube playback with `mpv`
-- Background playback while browsing results, settings, downloads, and the main menu, with a screen-reader named Player section and a Close player control
+- Optional background playback while browsing results, settings, downloads, and the main menu, with a screen-reader named Player section and a Close player control
 - Global `Ctrl+Space` background play/pause and `Ctrl+L` copy-link support from search results
-- Trending screen with country and category filters
+- Trending screen with country and category filters, using the official YouTube most-popular API when a YouTube Data API key is configured
 - Channel result options for opening channel videos, playlists, home, or popular videos
 - Local media file playback for common audio and video files, including file association support on Windows
 - First-run repair prompt if Windows media player registration is missing after an update
 - Play from folder for choosing local media inside ApricotPlayer
-- Accessible 10-band equalizer with descriptive frequency sliders, global Settings controls, genre/sound presets, three custom profiles, and player-only live controls
+- Accessible 10-band equalizer with descriptive frequency sliders, global Settings controls, genre/sound presets, dynamic custom profiles, player-only live controls, and a player action to save the current EQ as a global preset
 - Player Bass boost checkbox for a temporary per-video EQ boost
 - Player clip markers and FFmpeg export for the marked section of the current video, local file, or podcast
 - Marked clips now export through the normal download shortcuts: `Ctrl+Shift+A` for audio clips and `Ctrl+Shift+D` for video clips
@@ -69,7 +69,7 @@ py wx_main.py
 - Podcasts and RSS feeds screen with Apple Podcasts directory search, direct RSS/Atom feed URLs, refresh, open, play, download audio, download entire feed, queue episodes, copy URL, and browser actions
 - Direct link screen for playing or downloading any `yt-dlp` supported URL
 - Direct link Enter behavior can be configured in Settings
-- Browser cookie export can close the selected browser first, scan Brave/Chrome/Edge/Firefox profiles, export a usable `cookies.txt`, and automatically refresh cookies only after YouTube asks for sign-in or bot confirmation
+- Browser cookie export can close the selected browser first, scan Brave/Chrome/Edge/Firefox profiles, report profile diagnostics, export a usable `cookies.txt`, and automatically refresh cookies only after YouTube asks for sign-in or bot confirmation
 - Age-restricted YouTube support is optional in Playback settings, off by default, and uses cookies plus the bundled EJS/Node fallback only when the normal fast playback attempt fails
 - Settings can hide History or Podcasts and RSS from the main menu
 - Windows notifications for new videos from subscribed channels
@@ -160,4 +160,4 @@ Helpful scripts:
 - `scripts/build_release.ps1 -PackageMode onedir` builds the fast app folder used by both the installer and portable ZIP
 - `scripts/build_installer.ps1` builds `ApricotPlayerSetup.exe` when Inno Setup is installed
 - `scripts/build_portable_zip.ps1` builds `ApricotPlayer.zip`
-- `scripts/publish_release.ps1 -Tag v0.8.5 -NotesFile release-notes/v0.8.5.md` publishes the installer and portable ZIP to GitHub Releases
+- `scripts/publish_release.ps1 -Tag v0.8.6 -NotesFile release-notes/v0.8.6.md` publishes the installer and portable ZIP to GitHub Releases

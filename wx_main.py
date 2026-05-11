@@ -186,8 +186,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.5"
-APP_VERSION_LABEL = "0.8.5"
+APP_VERSION = "0.8.6"
+APP_VERSION_LABEL = "0.8.6"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -239,10 +239,28 @@ TRENDING_CATEGORIES: list[tuple[str, str]] = [
     ("gaming", "Gaming"),
     ("sports", "Sports"),
     ("news", "News"),
-    ("podcasts", "Podcasts"),
-    ("technology", "Technology"),
+    ("entertainment", "Entertainment"),
     ("comedy", "Comedy"),
+    ("technology", "Science & Technology"),
 ]
+YOUTUBE_API_VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
+TRENDING_CATEGORY_IDS: dict[str, str] = {
+    "all": "0",
+    "music": "10",
+    "movies": "1",
+    "gaming": "20",
+    "sports": "17",
+    "news": "25",
+    "entertainment": "24",
+    "comedy": "23",
+    "technology": "28",
+}
+TRENDING_PUBLIC_URLS: dict[str, list[str]] = {
+    "all": ["https://www.youtube.com/feed/trending?gl={country}"],
+    "music": ["https://charts.youtube.com/charts/TrendingVideos/{country_lower}/weekly"],
+    "movies": ["https://www.youtube.com/feed/trending?bp=4gIKGgh0cmFpbGVycw%3D%3D&gl={country}"],
+    "gaming": ["https://www.youtube.com/gaming?gl={country}"],
+}
 EQ_FILTER_LABEL = "apricot_eq"
 EQ_FILTER_REF = f"@{EQ_FILTER_LABEL}"
 EQ_BANDS: list[tuple[str, str]] = [
@@ -3199,6 +3217,54 @@ for language_code in LANGUAGE_CODES:
     for key, value in RELEASE_08_TRANSLATION_UPDATES["en"].items():
         TEXT.setdefault(language_code, {}).setdefault(key, value)
 
+RELEASE_086_TRANSLATION_UPDATES = {
+    "sl": {
+        "enable_background_playback": "Omogoci predvajanje v ozadju",
+        "youtube_data_api_key": "YouTube Data API key za uradne trende",
+        "trending_entertainment": "Entertainment",
+        "trending_technology": "Science & Technology",
+        "trending_loading_official": "Nalaganje uradnih YouTube trendov za {country}, {category}.",
+        "trending_api_key_required": "Za zanesljive uradne YouTube trende vnesi YouTube Data API key v Settings, Cookies and network. ApricotPlayer ne bo prikazal #trending search rezultatov kot prave trende.",
+        "trending_official_unavailable": "Uradni YouTube trend feed ni na voljo: {error}",
+        "trending_source_api": "Uradni YouTube most-popular feed.",
+        "trending_source_public": "Javni YouTube charts/explore feed.",
+        "add_equalizer_profile": "Dodaj equalizer profil",
+        "save_equalizer_as_global": "Shrani kot globalni equalizer preset",
+        "equalizer_profile_name": "Ime equalizer profila",
+        "equalizer_profile_saved": "Equalizer profil shranjen.",
+        "equalizer_global_preview_blocked": "Player equalizer je aktiven. Globalni equalizer bo slisen, ko resetiras player equalizer ali predvajas naslednji posnetek.",
+        "cookie_export_diagnostics": "Cookie diagnostics:\n{details}",
+        "open_youtube_login_profile": "Odpri YouTube v izbranem profilu",
+        "youtube_profile_opened": "YouTube odprt v izbranem profilu.",
+        "youtube_profile_open_failed": "YouTube profila ni bilo mogoce odpreti: {error}",
+    },
+    "en": {
+        "enable_background_playback": "Enable background playback",
+        "youtube_data_api_key": "YouTube Data API key for official trending",
+        "trending_entertainment": "Entertainment",
+        "trending_technology": "Science & Technology",
+        "trending_loading_official": "Loading official YouTube trending for {country}, {category}.",
+        "trending_api_key_required": "Enter a YouTube Data API key in Settings, Cookies and network for reliable official YouTube trending. ApricotPlayer will not show #trending search results as real trending.",
+        "trending_official_unavailable": "Official YouTube trending feed is unavailable: {error}",
+        "trending_source_api": "Official YouTube most-popular feed.",
+        "trending_source_public": "Public YouTube charts/explore feed.",
+        "add_equalizer_profile": "Add equalizer profile",
+        "save_equalizer_as_global": "Save as global equalizer preset",
+        "equalizer_profile_name": "Equalizer profile name",
+        "equalizer_profile_saved": "Equalizer profile saved.",
+        "equalizer_global_preview_blocked": "Player equalizer is active. Global equalizer changes will be audible after you reset the player equalizer or play the next item.",
+        "cookie_export_diagnostics": "Cookie diagnostics:\n{details}",
+        "open_youtube_login_profile": "Open YouTube in selected profile",
+        "youtube_profile_opened": "YouTube opened in the selected profile.",
+        "youtube_profile_open_failed": "Could not open the YouTube profile: {error}",
+    },
+}
+for language_code in LANGUAGE_CODES:
+    TEXT.setdefault(language_code, {}).update(RELEASE_086_TRANSLATION_UPDATES.get(language_code, RELEASE_086_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
+for language_code in LANGUAGE_CODES:
+    for key, value in RELEASE_086_TRANSLATION_UPDATES["en"].items():
+        TEXT.setdefault(language_code, {}).setdefault(key, value)
+
 
 def default_equalizer_gains() -> dict[str, float]:
     return {band_id: 0.0 for band_id, _label in EQ_BANDS}
@@ -3240,6 +3306,7 @@ class Settings:
     player_fullscreen: bool = False
     player_start_paused: bool = False
     announce_play_pause: bool = True
+    enable_background_playback: bool = False
     player_speed: str = "1.0"
     speed_audio_mode: str = SPEED_AUDIO_MODE_RUBBERBAND
     show_video_details_by_default: bool = False
@@ -3288,6 +3355,7 @@ class Settings:
     download_archive: bool = False
     rate_limit: str = ""
     proxy: str = ""
+    youtube_data_api_key: str = ""
     cookies_file: str = ""
     cookies_from_browser: str = "none"
     cookies_browser_profile: str = COOKIE_PROFILE_AUTO
@@ -3421,6 +3489,7 @@ class MainFrame(wx.Frame):
         self.video_details: wx.TextCtrl | None = None
         self.details_button_sizer: wx.Sizer | None = None
         self.background_player_controls: list[wx.Window] = []
+        self.background_player_section_added = False
         self.download_queue: dict[str, dict] = {}
         self.active_downloads: dict[str, dict] = {}
         self.download_cancel_events: dict[str, threading.Event] = {}
@@ -4454,6 +4523,11 @@ class MainFrame(wx.Frame):
                     score += 100
         return score, youtube_count, total_count
 
+    def cookie_score_summary(self, label: str, cookie_jar) -> str:
+        score, youtube_count, total_count = self.cookie_jar_score(cookie_jar)
+        has_login = self.cookie_jar_has_login_cookies(cookie_jar)
+        return f"{label}: {total_count} cookies, {youtube_count} YouTube cookies, login cookies {'yes' if has_login else 'no'}, score {score}"
+
     def export_browser_cookies_blocking(self, browser: str, allow_close: bool = False) -> dict:
         ytdlp = get_yt_dlp()
         if ytdlp is None:
@@ -4476,6 +4550,7 @@ class MainFrame(wx.Frame):
                     if total_count <= 0:
                         errors.append(self.t("cookie_profile_attempt_failed", profile=label, error="no cookies found"))
                         continue
+                    errors.append(self.cookie_score_summary(label, cookie_jar))
                     if best is None or score > best[0]:
                         best = (score, label, cookie_jar, logger.summary())
                     if score >= 100 and youtube_count > 0:
@@ -4509,6 +4584,7 @@ class MainFrame(wx.Frame):
                     if total_count <= 0:
                         errors.append(self.t("cookie_profile_attempt_failed", profile=label, error="no cookies found"))
                         continue
+                    errors.append(self.cookie_score_summary(cdp_label or label, cookie_jar))
                     if best is None or score > best[0]:
                         best = (score, cdp_label or label, cookie_jar, "browser devtools cookie export")
                     if score >= 100 and youtube_count > 0:
@@ -4516,8 +4592,11 @@ class MainFrame(wx.Frame):
                 except Exception as exc:
                     errors.append(self.t("cookie_profile_attempt_failed", profile=label, error=self.cookie_export_error_text(exc)))
         if not best or best[0] <= 0 or not self.cookie_jar_has_login_cookies(best[2]):
-            detail = "\n".join(errors[-6:]) if errors else self.t("cookie_all_profiles_failed")
-            raise RuntimeError(f"{self.t('browser_cookies_no_youtube')}\n\n{detail}")
+            details = list(errors[-10:]) if errors else [self.t("cookie_all_profiles_failed")]
+            if best:
+                details.append(f"Best profile was {best[1]}, but it did not contain usable Google/YouTube login cookies.")
+            detail = "\n".join(details)
+            raise RuntimeError(f"{self.t('browser_cookies_no_youtube')}\n\n{self.t('cookie_export_diagnostics', details=detail)}")
         _score, label, cookie_jar, _summary = best
         CACHED_COOKIES_FILE.parent.mkdir(parents=True, exist_ok=True)
         cookie_jar.save(str(CACHED_COOKIES_FILE), ignore_discard=True, ignore_expires=True)
@@ -4551,6 +4630,9 @@ class MainFrame(wx.Frame):
     def player_is_active(self) -> bool:
         return self.player_kind == "mpv" and self.mpv_process_alive()
 
+    def background_playback_enabled(self) -> bool:
+        return bool(getattr(self.settings, "enable_background_playback", False))
+
     def current_player_title(self) -> str:
         info = self.current_video_info or {}
         item = self.current_video_item or {}
@@ -4572,6 +4654,7 @@ class MainFrame(wx.Frame):
             self.set_window_title()
         self.root_sizer.Clear(delete_windows=True)
         self.background_player_controls = []
+        self.background_player_section_added = False
         if not self.in_player_screen:
             if preserved_player_panel is not None:
                 self.player_panel = preserved_player_panel
@@ -4762,6 +4845,8 @@ class MainFrame(wx.Frame):
             button.Bind(wx.EVT_BUTTON, lambda _evt, fn=handler: fn())
             row.Add(button, 0, wx.RIGHT, 6)
         self.root_sizer.Add(row, 0, wx.ALL, 4)
+        if self.background_playback_enabled() and not self.in_player_screen:
+            self.add_background_player_section()
 
     def setup_taskbar_icon(self) -> None:
         if self.taskbar_icon is not None:
@@ -4991,9 +5076,12 @@ class MainFrame(wx.Frame):
         self.focus_later(self.menu_list)
 
     def add_background_player_section(self) -> None:
-        self.background_player_controls = []
-        if not self.player_is_active():
+        if self.background_player_section_added:
             return
+        self.background_player_controls = []
+        if not self.background_playback_enabled() or not self.player_is_active():
+            return
+        self.background_player_section_added = True
         title = self.current_player_title()
         label = wx.StaticText(self.panel, label=self.t("background_player_now_playing", title=title))
         label.SetName(self.t("background_player"))
@@ -5006,6 +5094,9 @@ class MainFrame(wx.Frame):
             (self.t("play"), self.player_play_pause),
             (self.t("previous"), lambda: self.play_relative_item(-1)),
             (self.t("next"), lambda: self.play_relative_item(1)),
+            (self.t("playback_queue"), self.show_playback_queue),
+            (self.t("output_devices"), self.show_output_devices),
+            (self.t("equalizer"), self.show_player_equalizer),
             (self.t("open_player"), self.show_current_player_screen),
             (self.t("copy_link"), self.copy_current_player_url),
             (self.t("close_player"), self.close_current_player),
@@ -5988,7 +6079,8 @@ class MainFrame(wx.Frame):
     def leave_player_for_global_navigation(self) -> None:
         if not self.in_player_screen:
             return
-        self.stop_player(silent=True)
+        if not self.background_playback_enabled():
+            self.stop_player(silent=True)
         self.in_player_screen = False
         self.player_control_mode = False
 
@@ -7817,6 +7909,7 @@ class MainFrame(wx.Frame):
             check("fullscreen", self.settings.player_fullscreen)
             check("start_paused", self.settings.player_start_paused)
             check("announce_play_pause", self.settings.announce_play_pause)
+            check("enable_background_playback", bool(getattr(self.settings, "enable_background_playback", False)))
         elif section_name == "equalizer":
             equalizer_enabled = bool(getattr(self.settings, "global_equalizer_enabled", False))
             enabled_box = check("global_equalizer", equalizer_enabled)
@@ -7824,9 +7917,9 @@ class MainFrame(wx.Frame):
             if equalizer_enabled:
                 preset = self.normalized_equalizer_preset(getattr(self.settings, "global_equalizer_preset", EQ_PRESET_FLAT))
                 self.visible_equalizer_preset = preset
-                preset_choice = choice("equalizer_preset", preset, EQ_PRESET_OPTIONS, self.equalizer_preset_labels())
+                preset_choice = choice("equalizer_preset", preset, self.equalizer_preset_options(), self.equalizer_preset_labels())
                 preset_choice.Bind(wx.EVT_CHOICE, self.on_equalizer_settings_preset_changed)
-                if preset in EQ_CUSTOM_PRESET_IDS:
+                if self.is_custom_equalizer_preset(preset):
                     text("equalizer_preset_name", self.equalizer_custom_name(preset))
                 db_range = str(self.equalizer_db_range_value())
                 choice("equalizer_db_range", db_range, EQ_RANGE_OPTIONS)
@@ -7837,6 +7930,7 @@ class MainFrame(wx.Frame):
                     label = self.t("equalizer_band_gain", band=band_label)
                     slider(f"eq_{band_id}", label, gains.get(band_id, 0.0), slider_min, slider_max)
                 button("reset_equalizer", self.reset_visible_equalizer_controls)
+                button("add_equalizer_profile", self.add_equalizer_profile_from_settings)
         elif section_name == "downloads":
             check("confirm_download", self.settings.confirm_before_download)
             check("open_after_download", self.settings.open_folder_after_download)
@@ -7897,9 +7991,11 @@ class MainFrame(wx.Frame):
             profile_values = self.cookie_profile_choice_values(self.settings.cookies_from_browser or "none")
             profile_value = self.settings.cookies_browser_profile if self.settings.cookies_browser_profile in profile_values else COOKIE_PROFILE_AUTO
             choice("cookies_browser_profile", profile_value, profile_values, self.cookie_profile_choice_labels(profile_values))
+            button("open_youtube_login_profile", self.open_youtube_login_profile_from_settings)
             button("export_browser_cookies", self.export_browser_cookies_from_settings)
             text("rate_limit", self.settings.rate_limit)
             text("proxy", self.settings.proxy)
+            text("youtube_data_api_key", getattr(self.settings, "youtube_data_api_key", ""))
             text("ffmpeg", self.settings.ffmpeg_location)
             choice("fragments", str(self.settings.concurrent_fragments), ["1", "2", "4", "8", "16"])
             choice("retries", str(self.settings.retries), ["0", "3", "5", "10", "20"])
@@ -8398,11 +8494,15 @@ class MainFrame(wx.Frame):
         self.trending_country_choice = wx.Choice(self.panel, choices=[label for _code, label in TRENDING_COUNTRIES])
         self.trending_country_choice.SetName(self.t("trending_country"))
         self.trending_country_choice.SetSelection(0)
+        self.trending_country_choice.Bind(wx.EVT_CHOICE, lambda _evt: self.load_trending_results())
+        self.trending_country_choice.Bind(wx.EVT_KEY_DOWN, self.on_trending_filter_key)
         grid.Add(self.trending_country_choice, 1, wx.EXPAND)
         grid.Add(wx.StaticText(self.panel, label=self.t("trending_category")), 0, wx.ALIGN_CENTER_VERTICAL)
         self.trending_category_choice = wx.Choice(self.panel, choices=[self.t(f"trending_{code}") for code, _label in TRENDING_CATEGORIES])
         self.trending_category_choice.SetName(self.t("trending_category"))
         self.trending_category_choice.SetSelection(0)
+        self.trending_category_choice.Bind(wx.EVT_CHOICE, lambda _evt: self.load_trending_results())
+        self.trending_category_choice.Bind(wx.EVT_KEY_DOWN, self.on_trending_filter_key)
         grid.Add(self.trending_category_choice, 1, wx.EXPAND)
         self.root_sizer.Add(grid, 0, wx.EXPAND | wx.ALL, 4)
         self.results_list = wx.ListBox(self.panel, choices=[self.t("search_results_empty")])
@@ -8415,37 +8515,132 @@ class MainFrame(wx.Frame):
         self.root_sizer.Add(self.results_list, 1, wx.EXPAND | wx.ALL, 4)
         self.panel.Layout()
         self.focus_later(self.trending_country_choice)
+        wx.CallAfter(self.load_trending_results)
 
-    def trending_query(self, country_code: str, category_code: str) -> str:
-        category = "" if category_code == "all" else dict(TRENDING_CATEGORIES).get(category_code, category_code)
-        country = "" if country_code == "global" else dict(TRENDING_COUNTRIES).get(country_code, country_code)
-        parts = ["trending"]
-        if category:
-            parts.append(category)
-        parts.append("videos")
-        if country:
-            parts.append(country)
-        return " ".join(parts)
+    def on_trending_filter_key(self, event: wx.KeyEvent) -> None:
+        if event.GetKeyCode() == wx.WXK_RETURN:
+            self.load_trending_results()
+            return
+        event.Skip()
 
     def load_trending_results(self) -> None:
         country_index = self.trending_country_choice.GetSelection() if hasattr(self, "trending_country_choice") else 0
         category_index = self.trending_category_choice.GetSelection() if hasattr(self, "trending_category_choice") else 0
         country_code = TRENDING_COUNTRIES[country_index][0] if 0 <= country_index < len(TRENDING_COUNTRIES) else "global"
         category_code = TRENDING_CATEGORIES[category_index][0] if 0 <= category_index < len(TRENDING_CATEGORIES) else "all"
-        query = self.trending_query(country_code, category_code)
-        self.last_search_query = query
+        country_label = dict(TRENDING_COUNTRIES).get(country_code, country_code)
+        category_label = self.t(f"trending_{category_code}")
+        self.last_search_query = f"official trending {country_code} {category_code}"
         self.last_search_type_index = 1
         self.current_search_type_code = "Video"
         self.collection_url = ""
         self.collection_result_type = ""
         self.search_results_stack = []
         self.loading_more_results = False
-        self.dynamic_fetch_enabled = True
+        self.dynamic_fetch_enabled = False
         self.metadata_hydration_urls.clear()
-        self.set_status(self.t("loading_trending", query=query))
+        self.set_status(self.t("trending_loading_official", country=country_label, category=category_label))
         self.search_generation += 1
         generation = self.search_generation
-        threading.Thread(target=self.search_worker, args=(query, "Video", self.initial_results_limit(), generation), daemon=True).start()
+        threading.Thread(target=self.trending_worker, args=(country_code, category_code, generation), daemon=True).start()
+
+    def trending_worker(self, country_code: str, category_code: str, generation: int) -> None:
+        try:
+            source_key = "trending_source_public"
+            api_error = ""
+            results: list[dict] = []
+            if self.youtube_data_api_key():
+                try:
+                    results = self.fetch_youtube_api_trending(country_code, category_code)
+                    source_key = "trending_source_api"
+                except Exception as exc:
+                    api_error = self.friendly_error(exc)
+            if not results:
+                source_key = "trending_source_public"
+                results = self.fetch_public_official_trending(country_code, category_code)
+            wx.CallAfter(self.show_results_if_current, generation, results)
+            wx.CallAfter(self.set_status, self.t(source_key))
+        except Exception as exc:
+            message = self.friendly_error(exc)
+            if "api_error" in locals() and api_error:
+                message = f"{api_error}\n\n{message}"
+            wx.CallAfter(self.show_search_error_if_current, generation, self.t("trending_official_unavailable", error=message))
+
+    def youtube_data_api_key(self) -> str:
+        return str(getattr(self.settings, "youtube_data_api_key", "") or "").strip()
+
+    def fetch_youtube_api_trending(self, country_code: str, category_code: str) -> list[dict]:
+        api_key = self.youtube_data_api_key()
+        if not api_key:
+            raise RuntimeError(self.t("trending_api_key_required"))
+        max_results = min(50, max(1, self.max_results_limit()))
+        params = {
+            "part": "snippet,contentDetails,statistics",
+            "chart": "mostPopular",
+            "maxResults": str(max_results),
+            "key": api_key,
+        }
+        if country_code and country_code != "global":
+            params["regionCode"] = country_code
+        category_id = TRENDING_CATEGORY_IDS.get(category_code, "0")
+        if category_id and category_id != "0":
+            params["videoCategoryId"] = category_id
+        request = Request(f"{YOUTUBE_API_VIDEOS_URL}?{urlencode(params)}", headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+        with self.open_url(request, timeout=25) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+        if isinstance(payload, dict) and payload.get("error"):
+            error = payload.get("error") or {}
+            message = error.get("message") if isinstance(error, dict) else str(error)
+            raise RuntimeError(message or self.t("trending_api_key_required"))
+        return [self.normalize_youtube_api_video(item) for item in list(payload.get("items") or []) if isinstance(item, dict)]
+
+    def fetch_public_official_trending(self, country_code: str, category_code: str) -> list[dict]:
+        if country_code == "global":
+            country_code = "US"
+        urls = TRENDING_PUBLIC_URLS.get(category_code) or TRENDING_PUBLIC_URLS.get("all", [])
+        last_error = self.t("trending_api_key_required")
+        for template in urls:
+            url = template.format(country=country_code, country_lower=country_code.lower())
+            try:
+                options = {"quiet": True, "extract_flat": True, "skip_download": True, "playlistend": min(50, self.max_results_limit())}
+                info = self.ydl_extract_info(url, options, download=False, allow_cookie_retry=False)
+                entries = list((info or {}).get("entries") or [])
+                normalized = [self.normalize_entry(entry, "Video") for entry in entries if isinstance(entry, dict)]
+                if normalized:
+                    return normalized
+            except Exception as exc:
+                last_error = self.friendly_error(exc)
+        raise RuntimeError(f"{self.t('trending_api_key_required')}\n\n{last_error}")
+
+    def normalize_youtube_api_video(self, item: dict) -> dict:
+        snippet = item.get("snippet") or {}
+        statistics = item.get("statistics") or {}
+        content_details = item.get("contentDetails") or {}
+        video_id = str(item.get("id") or "")
+        title = str(snippet.get("title") or "")
+        channel = str(snippet.get("channelTitle") or "")
+        channel_id = str(snippet.get("channelId") or "")
+        published_at = str(snippet.get("publishedAt") or "")
+        timestamp = self.timestamp_from_iso_datetime(published_at)
+        duration_seconds = self.seconds_from_iso8601_duration(str(content_details.get("duration") or ""))
+        view_count = statistics.get("viewCount")
+        return {
+            "title": title,
+            "channel": channel,
+            "channel_url": f"https://www.youtube.com/channel/{channel_id}" if channel_id else "",
+            "channel_id": channel_id,
+            "views": self.format_count(view_count),
+            "view_count": view_count,
+            "age": self.format_age({"timestamp": timestamp}) if timestamp else self.t("uploaded_unknown"),
+            "duration": self.format_duration(duration_seconds),
+            "duration_seconds": duration_seconds,
+            "timestamp": timestamp,
+            "upload_date": "",
+            "description": snippet.get("description") or "",
+            "type": self.t("video"),
+            "kind": "video",
+            "url": f"https://www.youtube.com/watch?v={video_id}" if video_id else "",
+        }
 
     def open_playlist_videos(self, item: dict, push_state: bool = True) -> None:
         if push_state:
@@ -8946,6 +9141,8 @@ class MainFrame(wx.Frame):
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
         self.clear()
+        self.in_player_screen = True
+        self.player_control_mode = True
         self.add_button_row(
             [
                 (self.t("back_results"), self.back_to_results),
@@ -8998,8 +9195,6 @@ class MainFrame(wx.Frame):
         self.video_details = None
         self.details_button_sizer = None
         self.details_opened_temporarily = False
-        self.in_player_screen = True
-        self.player_control_mode = True
         self.set_window_title(title)
         self.panel.Layout()
         if self.settings.show_video_details_by_default:
@@ -9042,13 +9237,24 @@ class MainFrame(wx.Frame):
         self.announce_player(self.t("bass_boost_on" if checked else "bass_boost_off"))
 
     def leave_player_to_main_menu(self) -> None:
+        keep_playing = self.background_playback_enabled()
         self.in_player_screen = False
+        self.player_control_mode = keep_playing and self.player_control_mode
+        if not keep_playing:
+            self.stop_player(silent=True)
         self.show_main_menu()
-        if self.player_is_active():
+        if keep_playing and self.player_is_active():
             self.announce_player(self.t("background_player_hint"))
 
+    def leave_player_to_previous_screen(self) -> None:
+        self.back_to_results()
+
     def back_to_results(self) -> None:
+        keep_playing = self.background_playback_enabled()
         self.in_player_screen = False
+        self.player_control_mode = keep_playing and self.player_control_mode
+        if not keep_playing:
+            self.stop_player(silent=True)
         if self.player_return_screen == "rss_items":
             feed_index = int(self.player_return_data.get("feed_index", self.current_rss_feed_index) or 0)
             item_index = int(self.player_return_data.get("item_index", 0) or 0)
@@ -9349,11 +9555,12 @@ class MainFrame(wx.Frame):
         dialog = wx.Dialog(self, title=self.t("equalizer"), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         dialog.SetName(self.t("equalizer"))
         dialog.SetMinSize((520, 520))
+        preset_options = self.equalizer_preset_options()
         outer = wx.BoxSizer(wx.VERTICAL)
         outer.Add(wx.StaticText(dialog, label=self.t("equalizer_preset")), 0, wx.LEFT | wx.RIGHT | wx.TOP, 8)
         preset_choice = wx.Choice(dialog, choices=self.equalizer_preset_labels())
         preset_choice.SetName(self.t("equalizer_preset"))
-        preset_choice.SetSelection(EQ_PRESET_OPTIONS.index(active_preset) if active_preset in EQ_PRESET_OPTIONS else 0)
+        preset_choice.SetSelection(preset_options.index(active_preset) if active_preset in preset_options else 0)
         outer.Add(preset_choice, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
         name_label = wx.StaticText(dialog, label=self.t("equalizer_preset_name"))
         name_ctrl = wx.TextCtrl(dialog, value=self.equalizer_custom_name(active_preset))
@@ -9380,10 +9587,14 @@ class MainFrame(wx.Frame):
         ok_button = wx.Button(dialog, wx.ID_OK)
         cancel_button = wx.Button(dialog, wx.ID_CANCEL)
         reset_button = wx.Button(dialog, label=self.t("reset_equalizer"))
+        save_global_button = wx.Button(dialog, label=self.t("save_equalizer_as_global"))
+        add_profile_button = wx.Button(dialog, label=self.t("add_equalizer_profile"))
         buttons.AddButton(ok_button)
         buttons.AddButton(cancel_button)
         buttons.Realize()
         row = wx.BoxSizer(wx.HORIZONTAL)
+        row.Add(add_profile_button, 0, wx.RIGHT, 8)
+        row.Add(save_global_button, 0, wx.RIGHT, 8)
         row.Add(reset_button, 0, wx.RIGHT, 8)
         row.Add(buttons, 0)
         outer.Add(row, 0, wx.ALIGN_RIGHT | wx.ALL, 8)
@@ -9394,10 +9605,10 @@ class MainFrame(wx.Frame):
 
         def current_preset() -> str:
             index = preset_choice.GetSelection()
-            return EQ_PRESET_OPTIONS[index] if 0 <= index < len(EQ_PRESET_OPTIONS) else EQ_PRESET_FLAT
+            return preset_options[index] if 0 <= index < len(preset_options) else EQ_PRESET_FLAT
 
         def update_custom_name_visibility() -> None:
-            visible = current_preset() in EQ_CUSTOM_PRESET_IDS
+            visible = self.is_custom_equalizer_preset(current_preset())
             name_label.Show(visible)
             name_ctrl.Show(visible)
             dialog.Layout()
@@ -9416,6 +9627,13 @@ class MainFrame(wx.Frame):
             name_ctrl.SetValue(self.equalizer_custom_name(preset_id))
             update_custom_name_visibility()
             live_apply()
+
+        def refresh_preset_choices(selected_preset: str) -> None:
+            nonlocal preset_options
+            preset_options = self.equalizer_preset_options()
+            preset_choice.SetItems(self.equalizer_preset_labels())
+            preset_choice.SetSelection(preset_options.index(selected_preset) if selected_preset in preset_options else 0)
+            update_custom_name_visibility()
 
         def on_preset_changed(_event: wx.CommandEvent) -> None:
             load_preset_into_sliders(current_preset())
@@ -9439,6 +9657,27 @@ class MainFrame(wx.Frame):
             live_apply()
 
         reset_button.Bind(wx.EVT_BUTTON, reset_dialog_equalizer)
+
+        def add_profile_from_dialog(_event=None) -> None:
+            preset_id = self.create_equalizer_profile_dialog(current_dialog_gains())
+            if not preset_id:
+                return
+            refresh_preset_choices(preset_id)
+            name_ctrl.SetValue(self.equalizer_custom_name(preset_id))
+            live_apply()
+
+        def save_dialog_as_global(_event=None) -> None:
+            preset_id = self.choose_equalizer_profile_for_save(current_dialog_gains())
+            if not preset_id:
+                return
+            self.settings.global_equalizer_enabled = True
+            self.settings.global_equalizer_preset = preset_id
+            self.save_settings()
+            refresh_preset_choices(preset_id)
+            self.announce_player(self.t("equalizer_profile_saved"))
+
+        add_profile_button.Bind(wx.EVT_BUTTON, add_profile_from_dialog)
+        save_global_button.Bind(wx.EVT_BUTTON, save_dialog_as_global)
         update_custom_name_visibility()
         result = dialog.ShowModal()
         dialog.Destroy()
@@ -10498,10 +10737,11 @@ class MainFrame(wx.Frame):
             value = 12
         return min(24, max(6, value))
 
-    @staticmethod
-    def normalized_equalizer_preset(preset: str | None) -> str:
+    def normalized_equalizer_preset(self, preset: str | None) -> str:
         value = str(preset or EQ_PRESET_FLAT).strip()
-        return value if value in EQ_PRESET_OPTIONS else EQ_PRESET_FLAT
+        if value in EQ_FACTORY_PRESET_VALUES or value in EQ_CUSTOM_PRESET_IDS or value.startswith(("custom_", "user_")):
+            return value
+        return value if value in self.equalizer_preset_options() else EQ_PRESET_FLAT
 
     @staticmethod
     def normalized_equalizer_gains(gains: dict | None) -> dict[str, float]:
@@ -10517,32 +10757,56 @@ class MainFrame(wx.Frame):
     def normalized_equalizer_preset_gains(self, presets: dict | None) -> dict[str, dict[str, float]]:
         normalized = default_equalizer_preset_gains()
         if isinstance(presets, dict):
-            for preset_id in EQ_PRESET_OPTIONS:
+            for preset_id in list(EQ_FACTORY_PRESET_VALUES.keys()) + EQ_CUSTOM_PRESET_IDS:
                 gains = presets.get(preset_id)
                 if isinstance(gains, dict):
                     normalized[preset_id] = self.normalized_equalizer_gains(gains)
+            for preset_id, gains in presets.items():
+                preset_text = str(preset_id or "").strip()
+                if not preset_text or preset_text in normalized or preset_text in EQ_FACTORY_PRESET_VALUES:
+                    continue
+                if isinstance(gains, dict):
+                    normalized[preset_text] = self.normalized_equalizer_gains(gains)
         return normalized
 
     def normalized_equalizer_custom_names(self, names: dict | None) -> dict[str, str]:
         normalized = default_equalizer_custom_names()
         if isinstance(names, dict):
-            for custom_id in EQ_CUSTOM_PRESET_IDS:
-                value = str(names.get(custom_id) or "").strip()
-                if value:
-                    normalized[custom_id] = value[:80]
+            for custom_id, value in names.items():
+                custom_text = str(custom_id or "").strip()
+                if not custom_text or custom_text in EQ_FACTORY_PRESET_VALUES:
+                    continue
+                name = str(value or "").strip()
+                if name:
+                    normalized[custom_text] = name[:80]
         return normalized
+
+    def equalizer_custom_ids(self) -> list[str]:
+        settings = getattr(self, "settings", None)
+        names = self.normalized_equalizer_custom_names(getattr(settings, "equalizer_custom_names", {}) or {})
+        presets = self.normalized_equalizer_preset_gains(getattr(settings, "equalizer_preset_gains", {}) or {})
+        custom_ids = set(EQ_CUSTOM_PRESET_IDS)
+        custom_ids.update(key for key in names if key not in EQ_FACTORY_PRESET_VALUES)
+        custom_ids.update(key for key in presets if key not in EQ_FACTORY_PRESET_VALUES)
+        return sorted(custom_ids, key=lambda key: (0, EQ_CUSTOM_PRESET_IDS.index(key)) if key in EQ_CUSTOM_PRESET_IDS else (1, key.lower()))
+
+    def equalizer_preset_options(self) -> list[str]:
+        return list(EQ_FACTORY_PRESET_VALUES.keys()) + self.equalizer_custom_ids()
+
+    def is_custom_equalizer_preset(self, preset_id: str) -> bool:
+        return preset_id not in EQ_FACTORY_PRESET_VALUES
 
     def equalizer_custom_name(self, preset_id: str) -> str:
         names = self.normalized_equalizer_custom_names(getattr(self.settings, "equalizer_custom_names", {}) or {})
         return names.get(preset_id, default_equalizer_custom_names().get(preset_id, preset_id))
 
     def equalizer_preset_label(self, preset_id: str) -> str:
-        if preset_id in EQ_CUSTOM_PRESET_IDS:
+        if self.is_custom_equalizer_preset(preset_id):
             return self.equalizer_custom_name(preset_id)
         return self.t(f"eq_preset_{preset_id}")
 
     def equalizer_preset_labels(self) -> list[str]:
-        return [self.equalizer_preset_label(preset_id) for preset_id in EQ_PRESET_OPTIONS]
+        return [self.equalizer_preset_label(preset_id) for preset_id in self.equalizer_preset_options()]
 
     def equalizer_gains_for_preset(self, preset_id: str | None) -> dict[str, float]:
         preset_id = self.normalized_equalizer_preset(preset_id)
@@ -10575,11 +10839,70 @@ class MainFrame(wx.Frame):
         self.settings.equalizer_preset_gains = presets
         self.settings.global_equalizer_gains = self.normalized_equalizer_gains(gains)
 
+    def next_equalizer_profile_id(self) -> str:
+        existing = set(self.equalizer_preset_options())
+        counter = 1
+        while True:
+            candidate = f"custom_{counter}"
+            if candidate not in existing:
+                return candidate
+            counter += 1
+
+    def create_equalizer_profile(self, name: str, gains: dict[str, float] | None = None) -> str:
+        preset_id = self.next_equalizer_profile_id()
+        names = self.normalized_equalizer_custom_names(getattr(self.settings, "equalizer_custom_names", {}) or {})
+        names[preset_id] = (name.strip()[:80] if name.strip() else self.t("equalizer_profile_name"))
+        presets = self.normalized_equalizer_preset_gains(getattr(self.settings, "equalizer_preset_gains", {}) or {})
+        presets[preset_id] = self.normalized_equalizer_gains(gains or default_equalizer_gains())
+        self.settings.equalizer_custom_names = names
+        self.settings.equalizer_preset_gains = presets
+        return preset_id
+
+    def create_equalizer_profile_dialog(self, gains: dict[str, float] | None = None) -> str:
+        with wx.TextEntryDialog(self, self.t("equalizer_profile_name"), self.t("add_equalizer_profile"), self.t("equalizer_profile_name")) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return ""
+            name = dialog.GetValue().strip()
+        preset_id = self.create_equalizer_profile(name, gains)
+        self.settings.global_equalizer_preset = preset_id
+        self.save_settings()
+        self.announce_player(self.t("equalizer_profile_saved"))
+        return preset_id
+
+    def choose_equalizer_profile_for_save(self, gains: dict[str, float]) -> str:
+        profile_ids = self.equalizer_custom_ids()
+        labels = [self.equalizer_custom_name(profile_id) for profile_id in profile_ids]
+        labels.append(self.t("add_equalizer_profile"))
+        with wx.SingleChoiceDialog(self, self.t("save_equalizer_as_global"), self.t("equalizer"), labels) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return ""
+            selection = dialog.GetSelection()
+        if selection == len(profile_ids):
+            return self.create_equalizer_profile_dialog(gains)
+        if selection < 0 or selection >= len(profile_ids):
+            return ""
+        preset_id = profile_ids[selection]
+        presets = self.normalized_equalizer_preset_gains(getattr(self.settings, "equalizer_preset_gains", {}) or {})
+        presets[preset_id] = self.normalized_equalizer_gains(gains)
+        self.settings.equalizer_preset_gains = presets
+        self.save_settings()
+        return preset_id
+
+    def add_equalizer_profile_from_settings(self) -> None:
+        self.save_visible_equalizer_gains_to_preset(getattr(self, "visible_equalizer_preset", EQ_PRESET_FLAT))
+        preset_id = self.create_equalizer_profile_dialog(self.visible_equalizer_gains() or default_equalizer_gains())
+        if not preset_id:
+            return
+        self.settings.global_equalizer_preset = preset_id
+        wx.CallAfter(self.render_settings_section_and_focus, "equalizer_preset")
+
     def on_global_equalizer_toggle(self, _event: wx.CommandEvent) -> None:
         ctrl = self.controls.get("global_equalizer") if hasattr(self, "controls") else None
         self.save_visible_equalizer_gains_to_preset(getattr(self, "visible_equalizer_preset", EQ_PRESET_FLAT))
         if isinstance(ctrl, wx.CheckBox):
             self.settings.global_equalizer_enabled = ctrl.GetValue()
+        if self.player_is_active() and self.session_equalizer_enabled is None:
+            self.apply_equalizer_to_player()
         wx.CallAfter(self.render_settings_section_and_focus, "global_equalizer")
 
     def on_equalizer_settings_preset_changed(self, _event: wx.CommandEvent) -> None:
@@ -10593,6 +10916,13 @@ class MainFrame(wx.Frame):
         ctrl = event.GetEventObject()
         if isinstance(ctrl, wx.Slider):
             self.set_equalizer_slider_accessibility(ctrl, label)
+        self.save_visible_equalizer_gains_to_preset(getattr(self, "visible_equalizer_preset", EQ_PRESET_FLAT))
+        if self.player_is_active():
+            if self.session_equalizer_enabled is None:
+                self.settings.global_equalizer_enabled = True
+                self.apply_equalizer_to_player()
+            else:
+                self.set_status(self.t("equalizer_global_preview_blocked"))
         event.Skip()
 
     def reset_visible_equalizer_controls(self) -> None:
@@ -10609,6 +10939,8 @@ class MainFrame(wx.Frame):
                 value = gains.get(band_id, 0.0)
                 ctrl.SetValue(int(round(value * 10)))
                 self.set_equalizer_slider_accessibility(ctrl, self.t("equalizer_band_gain", band=band_label))
+        if self.player_is_active() and self.session_equalizer_enabled is None:
+            self.apply_equalizer_to_player()
         self.announce_player(self.t("equalizer_saved"))
 
     def result_limit_labels(self, options: list[str]) -> list[str]:
@@ -10748,13 +11080,14 @@ class MainFrame(wx.Frame):
     def close_current_player(self) -> None:
         was_player_screen = self.in_player_screen
         was_main_menu = self.in_main_menu
+        had_background_section = bool(getattr(self, "background_player_section_added", False))
         self.stop_player(silent=False)
         self.in_player_screen = False
         self.current_stream_url = ""
         self.current_stream_headers = {}
         self.current_audio_device = ""
         self.announce_player(self.t("player_closed"))
-        if was_main_menu or was_player_screen:
+        if was_main_menu or was_player_screen or had_background_section:
             self.show_main_menu()
 
     def background_play_pause_shortcut(self) -> None:
@@ -10986,7 +11319,7 @@ class MainFrame(wx.Frame):
                 self.hide_video_details()
                 return
             if self.in_player_screen:
-                self.leave_player_to_main_menu()
+                self.leave_player_to_previous_screen()
                 return
             if self.search_screen_active and self.search_results_stack:
                 self.restore_previous_search_results()
@@ -11968,6 +12301,38 @@ class MainFrame(wx.Frame):
         self.announce_player(self.t("exporting_browser_cookies"))
         threading.Thread(target=self.export_browser_cookies_worker, args=(browser,), daemon=True).start()
 
+    def open_youtube_login_profile_from_settings(self) -> None:
+        self.apply_settings_from_visible_controls()
+        browser = self.normalized_cookies_browser()
+        if not browser:
+            self.message(self.t("select_cookies_browser"))
+            return
+        try:
+            if browser in CHROMIUM_COOKIE_BROWSERS:
+                executable = self.cookie_browser_executable(browser)
+                if not executable:
+                    raise RuntimeError(f"{browser} executable not found")
+                root = self.cookie_browser_root(browser)
+                if not root:
+                    raise RuntimeError(f"{browser} profile root not found")
+                profile = str(getattr(self.settings, "cookies_browser_profile", COOKIE_PROFILE_AUTO) or COOKIE_PROFILE_AUTO)
+                profile_dir = "Default"
+                user_data_dir = root
+                if profile and profile != COOKIE_PROFILE_AUTO:
+                    if os.path.isabs(profile):
+                        profile_path = Path(profile)
+                        user_data_dir = profile_path.parent
+                        profile_dir = profile_path.name
+                    else:
+                        profile_dir = profile
+                args = [executable, f"--user-data-dir={user_data_dir}", f"--profile-directory={profile_dir}", "https://www.youtube.com/"]
+                subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                webbrowser.open("https://www.youtube.com/")
+            self.announce_player(self.t("youtube_profile_opened"))
+        except Exception as exc:
+            self.message(self.t("youtube_profile_open_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
+
     def cookie_browser_process_names(self, browser: str) -> list[str]:
         return COOKIES_BROWSER_PROCESS_NAMES.get(str(browser or "").lower(), [])
 
@@ -12141,9 +12506,9 @@ class MainFrame(wx.Frame):
         if "equalizer_preset" in c:
             selected_equalizer_preset = self.normalized_equalizer_preset(self.selected_choice_value("equalizer_preset"))
             self.settings.global_equalizer_preset = selected_equalizer_preset
-        if "equalizer_preset_name" in c and selected_equalizer_preset in EQ_CUSTOM_PRESET_IDS:
+        if "equalizer_preset_name" in c and self.is_custom_equalizer_preset(selected_equalizer_preset):
             names = self.normalized_equalizer_custom_names(getattr(self.settings, "equalizer_custom_names", {}) or {})
-            names[selected_equalizer_preset] = c["equalizer_preset_name"].GetValue().strip()[:80] or default_equalizer_custom_names()[selected_equalizer_preset]
+            names[selected_equalizer_preset] = c["equalizer_preset_name"].GetValue().strip()[:80] or self.equalizer_custom_name(selected_equalizer_preset)
             self.settings.equalizer_custom_names = names
         if "equalizer_db_range" in c:
             self.settings.equalizer_db_range = self.to_int(self.selected_choice_value("equalizer_db_range"), 12, 6, 24)
@@ -12180,10 +12545,14 @@ class MainFrame(wx.Frame):
             self.settings.player_start_paused = c["start_paused"].GetValue()
         if "announce_play_pause" in c:
             self.settings.announce_play_pause = c["announce_play_pause"].GetValue()
+        if "enable_background_playback" in c:
+            self.settings.enable_background_playback = c["enable_background_playback"].GetValue()
         if "rate_limit" in c:
             self.settings.rate_limit = c["rate_limit"].GetValue()
         if "proxy" in c:
             self.settings.proxy = c["proxy"].GetValue()
+        if "youtube_data_api_key" in c:
+            self.settings.youtube_data_api_key = c["youtube_data_api_key"].GetValue().strip()
         if "cookies" in c:
             self.settings.cookies_file = c["cookies"].GetValue()
         if "cookies_from_browser" in c:
@@ -13575,6 +13944,30 @@ class MainFrame(wx.Frame):
         minutes, sec = divmod(int(seconds), 60)
         hours, minutes = divmod(minutes, 60)
         return f"{hours}:{minutes:02d}:{sec:02d}" if hours else f"{minutes}:{sec:02d}"
+
+    @staticmethod
+    def seconds_from_iso8601_duration(value: str) -> int:
+        match = re.fullmatch(r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?", str(value or ""))
+        if not match:
+            return 0
+        days, hours, minutes, seconds = (int(part or 0) for part in match.groups())
+        return days * 86400 + hours * 3600 + minutes * 60 + seconds
+
+    @staticmethod
+    def timestamp_from_iso_datetime(value: str) -> int | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return int(parsed.timestamp())
+        except ValueError:
+            try:
+                return int(parsedate_to_datetime(text).timestamp())
+            except Exception:
+                return None
 
     @staticmethod
     def format_seconds(seconds: float | int | None) -> str:
