@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.8.4` (`0.8.4`)
+Current version: `0.8.5` (`0.8.5`)
 
 ## Download
 
@@ -29,6 +29,10 @@ py wx_main.py
 
 - NVDA-friendly main menu and search flow
 - In-app YouTube playback with `mpv`
+- Background playback while browsing results, settings, downloads, and the main menu, with a screen-reader named Player section and a Close player control
+- Global `Ctrl+Space` background play/pause and `Ctrl+L` copy-link support from search results
+- Trending screen with country and category filters
+- Channel result options for opening channel videos, playlists, home, or popular videos
 - Local media file playback for common audio and video files, including file association support on Windows
 - First-run repair prompt if Windows media player registration is missing after an update
 - Play from folder for choosing local media inside ApricotPlayer
@@ -119,7 +123,8 @@ py wx_main.py
 - `L`: copy current video link
 - `Ctrl+D`: copy the direct media stream URL
 - `Ctrl+PageUp/PageDown`: previous or next item
-- `Escape`: back to the last search results
+- `Ctrl+Space`: play/pause while playback continues in the background
+- `Escape`: leave the player and keep playback running in the background
 
 ## Download shortcuts
 
@@ -127,6 +132,7 @@ py wx_main.py
 - `Ctrl+Shift+D`: download video
 - `Shift+A`: select the focused video for download or adding to playlists
 - `Ctrl+Shift+S`: subscribe to the focused item's channel
+- `Ctrl+L`: copy the focused result link
 - `Ctrl+Shift+N`: create playlist
 - `Ctrl+Shift+P`: add the focused or queued videos to a playlist
 - `Ctrl+Shift+R`: remove an item from a user playlist
@@ -154,4 +160,4 @@ Helpful scripts:
 - `scripts/build_release.ps1 -PackageMode onedir` builds the fast app folder used by both the installer and portable ZIP
 - `scripts/build_installer.ps1` builds `ApricotPlayerSetup.exe` when Inno Setup is installed
 - `scripts/build_portable_zip.ps1` builds `ApricotPlayer.zip`
-- `scripts/publish_release.ps1 -Tag v0.8.4 -NotesFile release-notes/v0.8.4.md` publishes the installer and portable ZIP to GitHub Releases
+- `scripts/publish_release.ps1 -Tag v0.8.5 -NotesFile release-notes/v0.8.5.md` publishes the installer and portable ZIP to GitHub Releases

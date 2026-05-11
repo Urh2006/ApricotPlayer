@@ -186,8 +186,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.4"
-APP_VERSION_LABEL = "0.8.4"
+APP_VERSION = "0.8.5"
+APP_VERSION_LABEL = "0.8.5"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -214,6 +214,35 @@ DEFAULT_FILENAME_TEMPLATE = "%(title)s.%(ext)s"
 OLD_FILENAME_TEMPLATE = "%(title)s [%(id)s].%(ext)s"
 RESULTS_PAGE_SIZE = 20
 REFRESH_INTERVAL_OPTIONS = ["0.5", "1", "2", "3", "6", "12", "24"]
+TRENDING_COUNTRIES: list[tuple[str, str]] = [
+    ("global", "Global"),
+    ("US", "United States"),
+    ("GB", "United Kingdom"),
+    ("SI", "Slovenia"),
+    ("DE", "Germany"),
+    ("FR", "France"),
+    ("ES", "Spain"),
+    ("IT", "Italy"),
+    ("IN", "India"),
+    ("PK", "Pakistan"),
+    ("BR", "Brazil"),
+    ("MX", "Mexico"),
+    ("CA", "Canada"),
+    ("AU", "Australia"),
+    ("JP", "Japan"),
+    ("KR", "South Korea"),
+]
+TRENDING_CATEGORIES: list[tuple[str, str]] = [
+    ("all", "All"),
+    ("music", "Music"),
+    ("movies", "Movies"),
+    ("gaming", "Gaming"),
+    ("sports", "Sports"),
+    ("news", "News"),
+    ("podcasts", "Podcasts"),
+    ("technology", "Technology"),
+    ("comedy", "Comedy"),
+]
 EQ_FILTER_LABEL = "apricot_eq"
 EQ_FILTER_REF = f"@{EQ_FILTER_LABEL}"
 EQ_BANDS: list[tuple[str, str]] = [
@@ -394,6 +423,7 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "open_history": "Ctrl+Alt+H",
     "open_podcasts_rss": "Ctrl+Alt+R",
     "open_settings": "Ctrl+Alt+S",
+    "background_play_pause": "Ctrl+Space",
     "download_audio": "Ctrl+Shift+A",
     "download_video": "Ctrl+Shift+D",
     "subscribe_channel": "Ctrl+Shift+S",
@@ -404,6 +434,7 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "create_playlist": "Ctrl+Shift+N",
     "add_to_playlist": "Ctrl+Shift+P",
     "remove_from_playlist": "Ctrl+Shift+R",
+    "copy_link": "Ctrl+L",
     "copy_stream_url": "Ctrl+D",
     "context_menu": "Applications",
     "open_selected": "Enter",
@@ -450,6 +481,7 @@ SHORTCUT_DEFINITIONS = [
     ("open_history", "shortcut_open_history"),
     ("open_podcasts_rss", "shortcut_open_podcasts_rss"),
     ("open_settings", "shortcut_open_settings"),
+    ("background_play_pause", "shortcut_background_play_pause"),
     ("download_audio", "shortcut_download_audio"),
     ("download_video", "shortcut_download_video"),
     ("subscribe_channel", "shortcut_subscribe_channel"),
@@ -460,6 +492,7 @@ SHORTCUT_DEFINITIONS = [
     ("create_playlist", "shortcut_create_playlist"),
     ("add_to_playlist", "shortcut_add_to_playlist"),
     ("remove_from_playlist", "shortcut_remove_from_playlist"),
+    ("copy_link", "shortcut_copy_link"),
     ("copy_stream_url", "shortcut_copy_stream_url"),
     ("context_menu", "shortcut_context_menu"),
     ("open_selected", "shortcut_open_selected"),
@@ -521,6 +554,20 @@ TEXT = {
         "play_direct_link": "Predvajaj povezavo",
         "download_direct_audio": "Prenesi zvok iz povezave",
         "download_direct_video": "Prenesi video iz povezave",
+        "trending": "V trendu",
+        "trending_country": "Drzava za trende",
+        "trending_category": "Kategorija trendov",
+        "load_trending": "Nalozi trende",
+        "loading_trending": "Nalagam trende: {query}",
+        "trending_all": "Vse",
+        "trending_music": "Glasba",
+        "trending_movies": "Filmi",
+        "trending_gaming": "Gaming",
+        "trending_sports": "Sport",
+        "trending_news": "Novice",
+        "trending_podcasts": "Podkasti",
+        "trending_technology": "Tehnologija",
+        "trending_comedy": "Komedija",
         "choose_download_folder": "Izbor mape za prenose",
         "favorites": "Priljubljeni",
         "playlists": "Playliste",
@@ -568,6 +615,13 @@ TEXT = {
         "back": "Nazaj v glavni meni",
         "back_results": "Nazaj na rezultate",
         "internal_player": "Predvajalnik",
+        "player": "Predvajalnik",
+        "background_player": "Predvajalnik",
+        "background_player_now_playing": "Predvajalnik: {title}",
+        "background_player_hint": "Predvajanje se nadaljuje v ozadju.",
+        "open_player": "Odpri predvajalnik",
+        "close_player": "Zapri predvajalnik",
+        "player_closed": "Predvajalnik zaprt.",
         "player_missing": "Notranji predvajalnik mpv ni najden. Program ne bo odpiral YouTube strani.",
         "player_announcement": "Obvestilo predvajalnika",
         "video_details": "Podrobnosti videa",
@@ -622,6 +676,11 @@ TEXT = {
         "details_title": "Podrobnosti videa",
         "search_more_loaded": "Naloženih rezultatov: {count}.",
         "copy_link": "Copy link",
+        "channel_options": "Moznosti kanala",
+        "channel_home": "Domov",
+        "channel_videos": "Videi",
+        "channel_popular": "Popularni videi",
+        "channel_playlists": "Playliste kanala",
         "settings_file": "Settings file",
         "restore_defaults": "Restore to defaults",
         "defaults_restored": "Default settings restored.",
@@ -821,6 +880,7 @@ TEXT = {
         "shortcut_open_history": "Odpri zgodovino",
         "shortcut_open_podcasts_rss": "Odpri podkaste in RSS",
         "shortcut_open_settings": "Odpri nastavitve",
+        "shortcut_background_play_pause": "Predvajanje v ozadju: predvajaj ali pavza",
         "shortcut_download_audio": "Prenesi zvok",
         "shortcut_download_video": "Prenesi video",
         "shortcut_subscribe_channel": "Naroci se na kanal",
@@ -828,6 +888,7 @@ TEXT = {
         "shortcut_create_playlist": "Ustvari playlisto",
         "shortcut_add_to_playlist": "Dodaj v playlisto",
         "shortcut_remove_from_playlist": "Odstrani iz playliste",
+        "shortcut_copy_link": "Kopiraj povezavo",
         "shortcut_copy_stream_url": "Kopiraj direktni media URL",
         "shortcut_context_menu": "Kontekstni meni",
         "shortcut_open_selected": "Odpri izbrano",
@@ -1239,10 +1300,12 @@ TEXT = {
         "shortcut_open_history": "Open history",
         "shortcut_open_podcasts_rss": "Open podcasts and RSS",
         "shortcut_open_settings": "Open settings",
+        "shortcut_background_play_pause": "Background playback: play or pause",
         "shortcut_download_audio": "Download audio",
         "shortcut_download_video": "Download video",
         "shortcut_subscribe_channel": "Subscribe to channel",
         "shortcut_queue_audio": "Select video for download or adding to playlists",
+        "shortcut_copy_link": "Copy link",
         "shortcut_context_menu": "Context menu",
         "shortcut_open_selected": "Open selected item",
         "shortcut_new_subscription_videos": "Notification center",
@@ -1284,6 +1347,20 @@ TEXT["en"].update(
         "play_direct_link": "Play link",
         "download_direct_audio": "Download link audio",
         "download_direct_video": "Download link video",
+        "trending": "Trending",
+        "trending_country": "Trending country",
+        "trending_category": "Trending category",
+        "load_trending": "Load trending",
+        "loading_trending": "Loading trending: {query}",
+        "trending_all": "All",
+        "trending_music": "Music",
+        "trending_movies": "Movies",
+        "trending_gaming": "Gaming",
+        "trending_sports": "Sports",
+        "trending_news": "News",
+        "trending_podcasts": "Podcasts",
+        "trending_technology": "Technology",
+        "trending_comedy": "Comedy",
         "playlists": "Playlists",
         "create_playlist": "Create playlist",
         "playlist_name": "Playlist name",
@@ -1303,6 +1380,11 @@ TEXT["en"].update(
         "removed_from_playlist": "Removed from playlist.",
         "download_user_playlist": "Download playlist",
         "copy_stream_url": "Copy direct media URL",
+        "channel_options": "Channel options",
+        "channel_home": "Home",
+        "channel_videos": "Videos",
+        "channel_popular": "Popular videos",
+        "channel_playlists": "Channel playlists",
         "resolving_stream_url": "Resolving direct media URL.",
         "stream_url_copied": "Direct media URL copied.",
         "stream_url_failed": "Could not resolve direct media URL: {error}",
@@ -1317,6 +1399,13 @@ TEXT["en"].update(
         "cache_folder": "Playback cache folder",
         "cache_size_mb": "Playback cache size in MB",
         "resume_playback": "Resume where you left off",
+        "player": "Player",
+        "background_player": "Player",
+        "background_player_now_playing": "Player: {title}",
+        "background_player_hint": "Playback continues in the background.",
+        "open_player": "Open player",
+        "close_player": "Close player",
+        "player_closed": "Player closed.",
         "enable_age_restricted_videos": "Age-restricted YouTube video support (slower fallback only when needed)",
         "default_audio_device": "Default audio output device",
         "audio_device_missing": "The saved audio output device is no longer available. Choose a new default device.",
@@ -3327,8 +3416,11 @@ class MainFrame(wx.Frame):
         self.player_ended = False
         self.current_video_item: dict | None = None
         self.current_video_info: dict = {}
+        self.player_panel: wx.Panel | None = None
         self.details_label: wx.StaticText | None = None
         self.video_details: wx.TextCtrl | None = None
+        self.details_button_sizer: wx.Sizer | None = None
+        self.background_player_controls: list[wx.Window] = []
         self.download_queue: dict[str, dict] = {}
         self.active_downloads: dict[str, dict] = {}
         self.download_cancel_events: dict[str, threading.Event] = {}
@@ -3432,6 +3524,7 @@ class MainFrame(wx.Frame):
             ("open_podcasts_rss", self.open_podcasts_rss_shortcut),
             ("open_settings", self.open_settings_shortcut),
             ("open_playback_queue", self.open_playback_queue_shortcut),
+            ("background_play_pause", self.background_play_pause_shortcut),
             ("download_audio", self.download_audio_shortcut),
             ("download_video", self.download_video_shortcut),
             ("subscribe_channel", self.subscribe_shortcut),
@@ -4455,10 +4548,39 @@ class MainFrame(wx.Frame):
         else:
             self.SetTitle(WINDOW_TITLE)
 
+    def player_is_active(self) -> bool:
+        return self.player_kind == "mpv" and self.mpv_process_alive()
+
+    def current_player_title(self) -> str:
+        info = self.current_video_info or {}
+        item = self.current_video_item or {}
+        return str(info.get("title") or item.get("title") or self.t("player")).strip()
+
     def clear(self) -> None:
-        if not self.in_player_screen:
+        preserved_player_panel = None
+        if self.player_is_active() and self.player_panel is not None:
+            try:
+                if not self.player_panel.IsBeingDeleted():
+                    preserved_player_panel = self.player_panel
+                    self.root_sizer.Detach(preserved_player_panel)
+                    preserved_player_panel.Hide()
+            except RuntimeError:
+                preserved_player_panel = None
+        if self.player_is_active():
+            self.set_window_title(self.current_player_title())
+        elif not self.in_player_screen:
             self.set_window_title()
         self.root_sizer.Clear(delete_windows=True)
+        self.background_player_controls = []
+        if not self.in_player_screen:
+            if preserved_player_panel is not None:
+                self.player_panel = preserved_player_panel
+            elif not self.player_is_active():
+                self.player_panel = None
+            self.details_label = None
+            self.video_details = None
+            self.details_button_sizer = None
+            self.details_opened_temporarily = False
 
     def focus_later(self, control: wx.Window) -> None:
         wx.CallAfter(self.safe_set_focus, control)
@@ -4828,6 +4950,7 @@ class MainFrame(wx.Frame):
         self.clear()
         title = wx.StaticText(self.panel, label=self.t("main_menu"))
         self.root_sizer.Add(title, 0, wx.ALL, 4)
+        self.add_background_player_section()
         self.menu_actions = []
         pending_version = self.pending_app_update_version()
         if pending_version:
@@ -4839,6 +4962,7 @@ class MainFrame(wx.Frame):
             self.menu_actions.append((f"{self.t('playback_queue')} ({len(self.playback_queue)})", self.show_playback_queue))
         self.menu_actions.extend([
             (self.t("search_youtube"), self.show_search),
+            (self.t("trending"), self.show_trending),
             (self.t("play_from_folder"), self.show_play_from_folder),
             (self.t("direct_link"), self.show_direct_link),
             (self.t("favorites"), self.show_favorites),
@@ -4866,6 +4990,35 @@ class MainFrame(wx.Frame):
         self.panel.Layout()
         self.focus_later(self.menu_list)
 
+    def add_background_player_section(self) -> None:
+        self.background_player_controls = []
+        if not self.player_is_active():
+            return
+        title = self.current_player_title()
+        label = wx.StaticText(self.panel, label=self.t("background_player_now_playing", title=title))
+        label.SetName(self.t("background_player"))
+        self.root_sizer.Add(label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 4)
+        hint = wx.StaticText(self.panel, label=self.t("background_player_hint"))
+        hint.SetName(self.t("background_player_hint"))
+        self.root_sizer.Add(hint, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        controls = [
+            (self.t("play"), self.player_play_pause),
+            (self.t("previous"), lambda: self.play_relative_item(-1)),
+            (self.t("next"), lambda: self.play_relative_item(1)),
+            (self.t("open_player"), self.show_current_player_screen),
+            (self.t("copy_link"), self.copy_current_player_url),
+            (self.t("close_player"), self.close_current_player),
+        ]
+        for label_text, handler in controls:
+            button = wx.Button(self.panel, label=label_text)
+            button.SetName(f"{self.t('background_player')}: {label_text}")
+            button.Bind(wx.EVT_BUTTON, lambda _evt, fn=handler: fn())
+            button.Bind(wx.EVT_KEY_DOWN, self.on_background_player_key)
+            row.Add(button, 0, wx.RIGHT, 6)
+            self.background_player_controls.append(button)
+        self.root_sizer.Add(row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
+
     def on_menu_key(self, event: wx.KeyEvent) -> None:
         if self.is_modifier_only_event(event):
             return
@@ -4875,6 +5028,16 @@ class MainFrame(wx.Frame):
         if self.handle_global_navigation_shortcut(event, self.menu_list):
             return
         event.Skip()
+
+    def on_background_player_key(self, event: wx.KeyEvent) -> None:
+        self.on_char_hook(event)
+
+    def show_current_player_screen(self) -> None:
+        if not self.player_is_active():
+            self.announce_player(self.t("no_player"))
+            self.show_main_menu()
+            return
+        self.show_player_page(self.current_player_title())
 
     def activate_menu(self) -> None:
         index = self.menu_list.GetSelection()
@@ -6197,6 +6360,8 @@ class MainFrame(wx.Frame):
             self.download_video_shortcut()
         elif self.shortcut_matches(event, "subscribe_channel"):
             self.subscribe_shortcut()
+        elif self.shortcut_matches(event, "copy_link"):
+            self.copy_selected_url()
         elif self.shortcut_matches(event, "open_selected"):
             self.play_selected()
         elif self.context_menu_shortcut_matches(event):
@@ -8084,7 +8249,7 @@ class MainFrame(wx.Frame):
             self.message(self.t("no_selection"))
             return
         if item.get("kind") == "channel":
-            self.open_channel_videos(item)
+            self.show_channel_options(item)
             return
         if item.get("kind") == "playlist":
             self.open_playlist_videos(item)
@@ -8147,20 +8312,140 @@ class MainFrame(wx.Frame):
         wx.CallAfter(self.focus_results_list, selection)
 
     def open_channel_videos(self, item: dict, push_state: bool = True) -> None:
+        self.open_channel_tab(item, "videos", push_state=push_state)
+
+    def channel_tab_url(self, item: dict, tab: str) -> str:
+        url = str(item.get("url") or item.get("channel_url") or "").strip()
+        if not url:
+            return ""
+        base = url.split("?", 1)[0].rstrip("/")
+        base = re.sub(r"/(videos|playlists|featured|streams|shorts)$", "", base, flags=re.IGNORECASE)
+        if tab == "home":
+            return base
+        if tab == "popular":
+            return f"{base}/videos?sort=p"
+        if tab == "playlists":
+            return f"{base}/playlists"
+        return f"{base}/videos"
+
+    def show_channel_options(self, item: dict | None = None) -> None:
+        item = item or self.selected_result()
+        if not item or item.get("kind") != "channel":
+            self.message(self.t("no_selection"))
+            return
+        tabs = [
+            ("videos", self.t("channel_videos")),
+            ("playlists", self.t("channel_playlists")),
+            ("home", self.t("channel_home")),
+            ("popular", self.t("channel_popular")),
+        ]
+        with wx.SingleChoiceDialog(self, item.get("title", self.t("channel")), self.t("channel_options"), [label for _tab, label in tabs]) as dialog:
+            dialog.SetSelection(0)
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            index = dialog.GetSelection()
+        if 0 <= index < len(tabs):
+            self.open_channel_tab(item, tabs[index][0], push_state=True)
+
+    def open_channel_tab(self, item: dict, tab: str = "videos", push_state: bool = True) -> None:
         if push_state:
             self.push_search_state()
-        self.set_status(self.t("loading_channel", title=item["title"]))
-        url = item["url"].rstrip("/")
-        if not url.endswith("/videos"):
-            url = f"{url}/videos"
+        url = self.channel_tab_url(item, tab)
+        if not url:
+            self.message(self.t("no_selection"))
+            return
+        title = str(item.get("title") or self.t("channel"))
+        if tab == "playlists":
+            result_type = "Playlist"
+            label = self.t("channel_playlists")
+        elif tab == "home":
+            result_type = "All"
+            label = self.t("channel_home")
+        elif tab == "popular":
+            result_type = "Video"
+            label = self.t("channel_popular")
+        else:
+            result_type = "Video"
+            label = self.t("channel_videos")
+        self.set_status(self.t("loading_channel", title=f"{title} - {label}"))
         self.collection_url = url
-        self.collection_result_type = "Video"
+        self.collection_result_type = result_type
         self.loading_more_results = False
         self.dynamic_fetch_enabled = True
         self.metadata_hydration_urls.clear()
         self.search_generation += 1
         generation = self.search_generation
-        threading.Thread(target=self.load_collection_worker, args=(url, "Video", self.initial_results_limit(), 0, generation), daemon=True).start()
+        threading.Thread(target=self.load_collection_worker, args=(url, result_type, self.initial_results_limit(), 0, generation), daemon=True).start()
+
+    def show_trending(self) -> None:
+        self.in_main_menu = False
+        self.search_screen_active = True
+        self.favorites_screen_active = False
+        self.history_screen_active = False
+        self.subscriptions_screen_active = False
+        self.rss_feeds_screen_active = False
+        self.rss_items_screen_active = False
+        self.podcast_search_screen_active = False
+        self.user_playlists_screen_active = False
+        self.user_playlist_items_screen_active = False
+        self.notification_center_screen_active = False
+        self.direct_link_screen_active = False
+        self.clear()
+        self.add_button_row([(self.t("back"), self.show_main_menu), (self.t("load_trending"), self.load_trending_results)])
+        grid = wx.FlexGridSizer(2, 2, 6, 6)
+        grid.AddGrowableCol(1, 1)
+        grid.Add(wx.StaticText(self.panel, label=self.t("trending_country")), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.trending_country_choice = wx.Choice(self.panel, choices=[label for _code, label in TRENDING_COUNTRIES])
+        self.trending_country_choice.SetName(self.t("trending_country"))
+        self.trending_country_choice.SetSelection(0)
+        grid.Add(self.trending_country_choice, 1, wx.EXPAND)
+        grid.Add(wx.StaticText(self.panel, label=self.t("trending_category")), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.trending_category_choice = wx.Choice(self.panel, choices=[self.t(f"trending_{code}") for code, _label in TRENDING_CATEGORIES])
+        self.trending_category_choice.SetName(self.t("trending_category"))
+        self.trending_category_choice.SetSelection(0)
+        grid.Add(self.trending_category_choice, 1, wx.EXPAND)
+        self.root_sizer.Add(grid, 0, wx.EXPAND | wx.ALL, 4)
+        self.results_list = wx.ListBox(self.panel, choices=[self.t("search_results_empty")])
+        self.results_list.SetName(self.t("trending"))
+        self.results_list.SetSelection(0)
+        self.results_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _evt: self.play_selected())
+        self.results_list.Bind(wx.EVT_CONTEXT_MENU, self.open_context_menu)
+        self.results_list.Bind(wx.EVT_KEY_DOWN, self.on_results_key)
+        self.results_list.Bind(wx.EVT_LISTBOX, self.on_results_selection)
+        self.root_sizer.Add(self.results_list, 1, wx.EXPAND | wx.ALL, 4)
+        self.panel.Layout()
+        self.focus_later(self.trending_country_choice)
+
+    def trending_query(self, country_code: str, category_code: str) -> str:
+        category = "" if category_code == "all" else dict(TRENDING_CATEGORIES).get(category_code, category_code)
+        country = "" if country_code == "global" else dict(TRENDING_COUNTRIES).get(country_code, country_code)
+        parts = ["trending"]
+        if category:
+            parts.append(category)
+        parts.append("videos")
+        if country:
+            parts.append(country)
+        return " ".join(parts)
+
+    def load_trending_results(self) -> None:
+        country_index = self.trending_country_choice.GetSelection() if hasattr(self, "trending_country_choice") else 0
+        category_index = self.trending_category_choice.GetSelection() if hasattr(self, "trending_category_choice") else 0
+        country_code = TRENDING_COUNTRIES[country_index][0] if 0 <= country_index < len(TRENDING_COUNTRIES) else "global"
+        category_code = TRENDING_CATEGORIES[category_index][0] if 0 <= category_index < len(TRENDING_CATEGORIES) else "all"
+        query = self.trending_query(country_code, category_code)
+        self.last_search_query = query
+        self.last_search_type_index = 1
+        self.current_search_type_code = "Video"
+        self.collection_url = ""
+        self.collection_result_type = ""
+        self.search_results_stack = []
+        self.loading_more_results = False
+        self.dynamic_fetch_enabled = True
+        self.metadata_hydration_urls.clear()
+        self.set_status(self.t("loading_trending", query=query))
+        self.search_generation += 1
+        generation = self.search_generation
+        threading.Thread(target=self.search_worker, args=(query, "Video", self.initial_results_limit(), generation), daemon=True).start()
 
     def open_playlist_videos(self, item: dict, push_state: bool = True) -> None:
         if push_state:
@@ -8539,12 +8824,19 @@ class MainFrame(wx.Frame):
     def start_mpv(self, command: str, stream_url: str, title: str, headers: dict) -> None:
         try:
             self.ipc_path = self.make_ipc_path()
-            self.player_panel.Update()
-            hwnd = self.player_panel.GetHandle()
+            embed_player = False
+            hwnd = 0
+            try:
+                embed_player = bool(self.in_player_screen and self.player_panel and not self.player_panel.IsBeingDeleted())
+                if embed_player:
+                    self.player_panel.Update()
+                    hwnd = self.player_panel.GetHandle()
+            except Exception:
+                embed_player = False
             args = [
                 command,
-                f"--wid={hwnd}",
-                "--force-window=yes",
+                "--no-config",
+                "--force-window=yes" if embed_player else "--force-window=no",
                 f"--input-ipc-server={self.ipc_path}",
                 "--idle=no",
                 "--keep-open=yes",
@@ -8556,6 +8848,8 @@ class MainFrame(wx.Frame):
                 "--term-playing-msg=",
                 "--msg-level=all=warn",
             ]
+            if embed_player and hwnd:
+                args.insert(2, f"--wid={hwnd}")
             args.extend(self.speed_audio_filter_args())
             if getattr(self.settings, "enable_stream_cache", True):
                 cache_folder = self.cache_folder_path()
@@ -8618,10 +8912,24 @@ class MainFrame(wx.Frame):
             self.current_video_info["pitch"] = self.format_playback_rate(1.0)
             self.update_details_text()
             self.set_status(self.t("playing", title=title))
+            threading.Thread(target=self.apply_initial_volume_worker, args=(self.player_generation,), daemon=True).start()
             wx.CallLater(700, self.apply_equalizer_to_player)
             self.start_player_monitor(self.player_generation)
         except Exception as exc:
             self.message(self.t("player_failed", error=exc), wx.ICON_ERROR)
+
+    def apply_initial_volume_worker(self, generation: int) -> None:
+        target_volume = float(self.default_volume_value())
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            if generation != self.player_generation or not self.mpv_process_alive():
+                return
+            try:
+                self.mpv_set_property("volume-max", 300, timeout=0.4)
+                self.mpv_set_property("volume", target_volume, timeout=0.4)
+                return
+            except Exception:
+                time.sleep(0.12)
 
     def show_player_page(self, title: str) -> None:
         self.in_main_menu = False
@@ -8641,6 +8949,8 @@ class MainFrame(wx.Frame):
         self.add_button_row(
             [
                 (self.t("back_results"), self.back_to_results),
+                (self.t("back"), self.leave_player_to_main_menu),
+                (self.t("close_player"), self.close_current_player),
                 (self.t("previous"), lambda: self.play_relative_item(-1)),
                 (self.t("play"), self.player_play_pause),
                 (self.t("next"), lambda: self.play_relative_item(1)),
@@ -8665,11 +8975,24 @@ class MainFrame(wx.Frame):
         self.bass_boost_checkbox.SetValue(self.bass_boost_enabled)
         self.bass_boost_checkbox.Bind(wx.EVT_CHECKBOX, self.on_bass_boost_changed)
         self.root_sizer.Add(self.bass_boost_checkbox, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
-        self.player_panel = wx.Panel(self.panel, style=wx.BORDER_SIMPLE)
-        self.player_panel.SetName(self.t("internal_player"))
-        self.player_panel.SetBackgroundColour(wx.BLACK)
-        self.player_panel.Bind(wx.EVT_KEY_DOWN, self.on_player_key)
-        self.player_panel.Bind(wx.EVT_CHAR_HOOK, self.on_char_hook)
+        existing_panel = None
+        if self.player_is_active() and self.player_panel is not None:
+            try:
+                if not self.player_panel.IsBeingDeleted():
+                    existing_panel = self.player_panel
+            except RuntimeError:
+                existing_panel = None
+        if existing_panel is not None:
+            self.player_panel = existing_panel
+            self.player_panel.Show()
+        else:
+            self.player_panel = wx.Panel(self.panel, style=wx.BORDER_SIMPLE)
+            self.player_panel.SetBackgroundColour(wx.BLACK)
+            self.player_panel.Bind(wx.EVT_KEY_DOWN, self.on_player_key)
+            self.player_panel.Bind(wx.EVT_CHAR_HOOK, self.on_char_hook)
+        self.player_panel.SetName(self.t("player"))
+        self.player_panel.SetLabel(self.t("player"))
+        self.player_panel.SetToolTip(self.t("player"))
         self.root_sizer.Add(self.player_panel, 1, wx.EXPAND | wx.ALL, 4)
         self.details_label = None
         self.video_details = None
@@ -8718,8 +9041,13 @@ class MainFrame(wx.Frame):
         self.apply_equalizer_to_player()
         self.announce_player(self.t("bass_boost_on" if checked else "bass_boost_off"))
 
+    def leave_player_to_main_menu(self) -> None:
+        self.in_player_screen = False
+        self.show_main_menu()
+        if self.player_is_active():
+            self.announce_player(self.t("background_player_hint"))
+
     def back_to_results(self) -> None:
-        self.stop_player(silent=True)
         self.in_player_screen = False
         if self.player_return_screen == "rss_items":
             feed_index = int(self.player_return_data.get("feed_index", self.current_rss_feed_index) or 0)
@@ -8936,8 +9264,12 @@ class MainFrame(wx.Frame):
         if item:
             self.copy_url_to_clipboard(item.get("url", ""))
 
+    def copy_current_player_url(self) -> None:
+        item = self.current_video_item or self.current_video_info or {}
+        self.copy_url_to_clipboard(str(item.get("url") or item.get("webpage_url") or ""))
+
     def show_output_devices(self) -> None:
-        if not self.in_player_screen or self.player_kind != "mpv":
+        if not self.player_is_active():
             return
         try:
             devices = self.mpv_get_property("audio-device-list", timeout=1.5) or []
@@ -9005,7 +9337,7 @@ class MainFrame(wx.Frame):
             self.equalizer_filter_active = False
 
     def show_player_equalizer(self) -> None:
-        if not self.in_player_screen:
+        if not self.player_is_active():
             return
         original_enabled = self.session_equalizer_enabled
         original_gains = dict(self.session_equalizer_gains)
@@ -9108,7 +9440,6 @@ class MainFrame(wx.Frame):
 
         reset_button.Bind(wx.EVT_BUTTON, reset_dialog_equalizer)
         update_custom_name_visibility()
-        live_apply()
         result = dialog.ShowModal()
         dialog.Destroy()
         if result == wx.ID_OK:
@@ -9337,7 +9668,7 @@ class MainFrame(wx.Frame):
         return self.local_media_path_from_input(str(item.get("url") or item.get("webpage_url") or ""))
 
     def toggle_edit_mode(self) -> None:
-        if not self.in_player_screen:
+        if not self.player_is_active():
             return
         if not self.current_local_media_path():
             self.announce_player(self.t("edit_mode_local_only"))
@@ -9559,7 +9890,7 @@ class MainFrame(wx.Frame):
                 return
 
     def handle_player_eof(self, generation: int) -> None:
-        if generation != self.player_generation or not self.in_player_screen:
+        if generation != self.player_generation:
             return
         if self.mpv_process_alive():
             try:
@@ -10398,10 +10729,47 @@ class MainFrame(wx.Frame):
         self.current_stream_url = ""
         self.current_stream_headers = {}
         self.current_audio_device = ""
+        if self.player_panel is not None:
+            try:
+                self.root_sizer.Detach(self.player_panel)
+            except Exception:
+                pass
+            try:
+                if not self.player_panel.IsBeingDeleted():
+                    self.player_panel.Destroy()
+            except RuntimeError:
+                pass
+            self.player_panel = None
         if not self.in_player_screen:
             self.in_player_screen = False
         if not silent:
             self.set_status(self.t("stopped"))
+
+    def close_current_player(self) -> None:
+        was_player_screen = self.in_player_screen
+        was_main_menu = self.in_main_menu
+        self.stop_player(silent=False)
+        self.in_player_screen = False
+        self.current_stream_url = ""
+        self.current_stream_headers = {}
+        self.current_audio_device = ""
+        self.announce_player(self.t("player_closed"))
+        if was_main_menu or was_player_screen:
+            self.show_main_menu()
+
+    def background_play_pause_shortcut(self) -> None:
+        if self.player_is_active():
+            self.player_play_pause()
+            return
+        self.announce_player(self.t("no_player"))
+
+    def focus_in_background_player_controls(self, focus: wx.Window | None) -> bool:
+        if not focus:
+            return False
+        return any(focus is control for control in getattr(self, "background_player_controls", []))
+
+    def player_shortcuts_allowed(self, focus: wx.Window | None = None) -> bool:
+        return self.in_player_screen or self.focus_in_background_player_controls(focus)
 
     def save_current_playback_position(self) -> None:
         if not getattr(self.settings, "resume_playback", True) or not self.mpv_process_alive():
@@ -10472,6 +10840,7 @@ class MainFrame(wx.Frame):
             ("open_settings", self.open_settings_shortcut),
             ("open_playback_queue", self.open_playback_queue_shortcut),
             ("new_subscription_videos", self.open_notification_center_shortcut),
+            ("background_play_pause", self.background_play_pause_shortcut),
         ]
         for action, handler in actions:
             if self.shortcut_matches(event, action) and self.shortcut_allowed_for_focus(action, focus):
@@ -10591,6 +10960,9 @@ class MainFrame(wx.Frame):
         if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "results_list", None):
             self.play_selected()
             return
+        if focus is getattr(self, "results_list", None) and self.shortcut_matches(event, "copy_link"):
+            self.copy_selected_url()
+            return
         if self.shortcut_matches(event, "download_audio"):
             self.download_audio_shortcut()
             return
@@ -10611,13 +10983,10 @@ class MainFrame(wx.Frame):
             return
         if self.shortcut_matches(event, "player_back"):
             if self.in_player_screen and self.video_details_visible():
-                if self.details_opened_temporarily:
-                    self.hide_video_details()
-                    return
-                self.back_to_results()
+                self.hide_video_details()
                 return
             if self.in_player_screen:
-                self.back_to_results()
+                self.leave_player_to_main_menu()
                 return
             if self.search_screen_active and self.search_results_stack:
                 self.restore_previous_search_results()
@@ -10645,7 +11014,7 @@ class MainFrame(wx.Frame):
         if self.shortcut_matches(event, "copy_stream_url"):
             self.copy_direct_stream_url()
             return
-        if self.player_control_mode:
+        if self.player_control_mode and self.player_shortcuts_allowed(focus):
             if focus is getattr(self, "repeat_checkbox", None) and self.shortcut_matches(event, "player_play_pause"):
                 event.Skip()
                 return
@@ -10737,15 +11106,27 @@ class MainFrame(wx.Frame):
         item = self.selected_result()
         if item and item.get("kind") in {"playlist", "channel"}:
             is_channel = item.get("kind") == "channel"
-            actions = [
-                (self.t("open_channel_videos" if is_channel else "open_playlist_videos"), self.play_selected),
-                (self.t("download_channel" if is_channel else "download_playlist"), lambda selected=dict(item): self.download_collection(selected)),
-                (self.t("add_favorite"), self.add_selected_favorite),
-                (self.t("open_browser"), self.open_selected_in_browser),
-                (self.t("copy_url"), self.copy_selected_url),
-            ]
             if is_channel:
-                actions.insert(3, (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), self.subscribe_shortcut))
+                actions = [
+                    (self.t("channel_options"), lambda selected=dict(item): self.show_channel_options(selected)),
+                    (self.t("channel_videos"), lambda selected=dict(item): self.open_channel_tab(selected, "videos")),
+                    (self.t("channel_popular"), lambda selected=dict(item): self.open_channel_tab(selected, "popular")),
+                    (self.t("channel_playlists"), lambda selected=dict(item): self.open_channel_tab(selected, "playlists")),
+                    (self.t("download_channel"), lambda selected=dict(item): self.download_collection(selected)),
+                    (self.t("add_favorite"), self.add_selected_favorite),
+                    (self.t("open_browser"), self.open_selected_in_browser),
+                    (self.menu_label_with_shortcut("copy_url", "copy_link"), self.copy_selected_url),
+                ]
+            else:
+                actions = [
+                    (self.t("open_playlist_videos"), self.play_selected),
+                    (self.t("download_playlist"), lambda selected=dict(item): self.download_collection(selected)),
+                    (self.t("add_favorite"), self.add_selected_favorite),
+                    (self.t("open_browser"), self.open_selected_in_browser),
+                    (self.menu_label_with_shortcut("copy_url", "copy_link"), self.copy_selected_url),
+                ]
+            if is_channel:
+                actions.insert(5, (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), self.subscribe_shortcut))
         else:
             actions = [
                 (self.t("play"), self.play_selected),
@@ -10757,7 +11138,7 @@ class MainFrame(wx.Frame):
                 (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
                 (self.t("open_browser"), self.open_selected_in_browser),
                 (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda selected=dict(item or {}): self.copy_direct_stream_url(selected)),
-                (self.t("copy_url"), self.copy_selected_url),
+                (self.menu_label_with_shortcut("copy_url", "copy_link"), self.copy_selected_url),
             ]
         if len(self.download_queue) > 1:
             actions[1:1] = [
@@ -11661,7 +12042,7 @@ class MainFrame(wx.Frame):
         self.configure_rss_timer()
         self.configure_app_update_timer()
         self.install_download_accelerators()
-        if self.in_player_screen and self.session_equalizer_enabled is None:
+        if self.player_is_active() and self.session_equalizer_enabled is None:
             self.apply_equalizer_to_player()
         saved_text = self.t("settings_saved")
         self.set_status(saved_text)

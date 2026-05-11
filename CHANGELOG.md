@@ -1,5 +1,16 @@
 # Changelog
 
+## What's new in version 0.8.5
+
+- playback can continue in the background when leaving the player with Escape, Back, or Back to results
+- the main menu now shows a Player section while something is playing, with Play, Previous, Next, Open player, Copy link, and Close player controls
+- added configurable `Ctrl+Space` background play/pause and `Ctrl+L` copy-link support from search results
+- renamed the embedded player panel for screen readers so it is announced as Player instead of an unnamed panel
+- fixed the default-volume startup path so playback starts at the chosen volume without jumping to 100 first
+- stabilized player equalizer behavior so opening the player equalizer no longer overwrites the session EQ, and global EQ changes only apply when no player-only EQ is active
+- channel results now open an accessible channel options picker for videos, playlists, home, or popular videos
+- added a Trending main-menu item with country and category filters
+
 ## What's new in version 0.8.4
 
 - app update checks now trust GitHub's `/releases/latest` endpoint first, so new versions show up even when GitHub's public releases list cache is behind
