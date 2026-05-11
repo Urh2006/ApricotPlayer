@@ -186,8 +186,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.6"
-APP_VERSION_LABEL = "0.8.6"
+APP_VERSION = "0.8.7"
+APP_VERSION_LABEL = "0.8.7"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -301,23 +301,53 @@ EQ_FACTORY_PRESET_VALUES: dict[str, list[float]] = {
 EQ_PRESET_OPTIONS = list(EQ_FACTORY_PRESET_VALUES.keys()) + EQ_CUSTOM_PRESET_IDS
 LOCAL_MEDIA_EXTENSIONS = {
     ".3g2",
+    ".3ga",
     ".3gp",
     ".aac",
+    ".ac3",
+    ".amr",
+    ".ape",
+    ".au",
     ".aiff",
+    ".aif",
+    ".aifc",
     ".avi",
+    ".caf",
+    ".divx",
+    ".dts",
     ".flac",
+    ".flv",
     ".m4a",
     ".m4v",
+    ".m2ts",
+    ".m2v",
     ".mkv",
+    ".mka",
     ".mov",
+    ".mpe",
     ".mp3",
+    ".mp2",
+    ".mp2v",
     ".mp4",
+    ".mpv",
     ".mpeg",
     ".mpg",
+    ".mts",
+    ".mxf",
     ".oga",
+    ".ogm",
+    ".ogv",
     ".ogg",
+    ".ogx",
     ".opus",
+    ".ra",
+    ".rm",
+    ".rmvb",
+    ".snd",
+    ".ts",
+    ".vob",
     ".wav",
+    ".weba",
     ".webm",
     ".wma",
     ".wmv",
@@ -3265,6 +3295,24 @@ for language_code in LANGUAGE_CODES:
     for key, value in RELEASE_086_TRANSLATION_UPDATES["en"].items():
         TEXT.setdefault(language_code, {}).setdefault(key, value)
 
+RELEASE_087_TRANSLATION_UPDATES = {
+    "sl": {
+        "enable_trending": "Prikazi Trending v glavnem meniju",
+        "trending_disabled": "Trending je izklopljen v nastavitvah.",
+        "trending_unavailable_returning": "Trending ni na voljo. Vracam se v glavni meni.",
+    },
+    "en": {
+        "enable_trending": "Show Trending in the main menu",
+        "trending_disabled": "Trending is disabled in Settings.",
+        "trending_unavailable_returning": "Trending is unavailable. Returning to the main menu.",
+    },
+}
+for language_code in LANGUAGE_CODES:
+    TEXT.setdefault(language_code, {}).update(RELEASE_087_TRANSLATION_UPDATES.get(language_code, RELEASE_087_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
+for language_code in LANGUAGE_CODES:
+    for key, value in RELEASE_087_TRANSLATION_UPDATES["en"].items():
+        TEXT.setdefault(language_code, {}).setdefault(key, value)
+
 
 def default_equalizer_gains() -> dict[str, float]:
     return {band_id: 0.0 for band_id, _label in EQ_BANDS}
@@ -3372,6 +3420,7 @@ class Settings:
     download_notifications: bool = True
     subscription_notifications: bool = True
     last_subscription_check: float = 0.0
+    enable_trending: bool = False
     enable_history: bool = True
     enable_podcasts_rss: bool = True
     podcast_search_provider: str = PODCAST_DIRECTORY_PROVIDER_APPLE
@@ -4569,7 +4618,8 @@ class MainFrame(wx.Frame):
                 time.sleep(1.0)
                 continue
             break
-        if allow_close and browser in CHROMIUM_COOKIE_BROWSERS and (copy_lock_error_seen or not best):
+        needs_devtools_fallback = copy_lock_error_seen or not best or (best is not None and not self.cookie_jar_has_login_cookies(best[2]))
+        if allow_close and browser in CHROMIUM_COOKIE_BROWSERS and needs_devtools_fallback:
             self.close_cookie_browser_processes(browser)
             self.wait_for_cookie_browser_exit(browser, timeout=8.0)
             tried_profiles: set[str] = set()
@@ -5045,16 +5095,18 @@ class MainFrame(wx.Frame):
             self.menu_actions.append((f"{self.t('current_downloads')} ({download_count})", self.show_download_queue))
         if self.playback_queue:
             self.menu_actions.append((f"{self.t('playback_queue')} ({len(self.playback_queue)})", self.show_playback_queue))
-        self.menu_actions.extend([
+        primary_actions = [
             (self.t("search_youtube"), self.show_search),
-            (self.t("trending"), self.show_trending),
             (self.t("play_from_folder"), self.show_play_from_folder),
             (self.t("direct_link"), self.show_direct_link),
             (self.t("favorites"), self.show_favorites),
             (self.t("playlists"), self.show_user_playlists),
             (self.t("subscriptions"), self.show_subscriptions),
             (self.t("notification_center"), self.show_notification_center),
-        ])
+        ]
+        if getattr(self.settings, "enable_trending", False):
+            primary_actions.insert(1, (self.t("trending"), self.show_trending))
+        self.menu_actions.extend(primary_actions)
         if self.settings.enable_history:
             self.menu_actions.append((self.t("history"), self.show_history))
         if self.settings.enable_podcasts_rss:
@@ -7920,7 +7972,8 @@ class MainFrame(wx.Frame):
                 preset_choice = choice("equalizer_preset", preset, self.equalizer_preset_options(), self.equalizer_preset_labels())
                 preset_choice.Bind(wx.EVT_CHOICE, self.on_equalizer_settings_preset_changed)
                 if self.is_custom_equalizer_preset(preset):
-                    text("equalizer_preset_name", self.equalizer_custom_name(preset))
+                    name_ctrl = text("equalizer_preset_name", self.equalizer_custom_name(preset))
+                    name_ctrl.Bind(wx.EVT_KILL_FOCUS, self.on_equalizer_settings_name_changed)
                 db_range = str(self.equalizer_db_range_value())
                 choice("equalizer_db_range", db_range, EQ_RANGE_OPTIONS)
                 gains = self.equalizer_gains_for_preset(preset)
@@ -7954,6 +8007,7 @@ class MainFrame(wx.Frame):
             check("restrict_filenames", self.settings.restrict_filenames)
             check("download_archive", self.settings.download_archive)
         elif section_name == "library":
+            check("enable_trending", bool(getattr(self.settings, "enable_trending", False)))
             check("enable_history", self.settings.enable_history)
             choice("history_limit", str(self.settings.history_limit), ["100", "250", "500", "1000", "2000"])
             check("subscription_check_enabled", self.settings.subscription_check_enabled)
@@ -8474,6 +8528,10 @@ class MainFrame(wx.Frame):
         threading.Thread(target=self.load_collection_worker, args=(url, result_type, self.initial_results_limit(), 0, generation), daemon=True).start()
 
     def show_trending(self) -> None:
+        if not getattr(self.settings, "enable_trending", False):
+            self.announce_player(self.t("trending_disabled"))
+            self.show_main_menu()
+            return
         self.in_main_menu = False
         self.search_screen_active = True
         self.favorites_screen_active = False
@@ -8564,7 +8622,15 @@ class MainFrame(wx.Frame):
             message = self.friendly_error(exc)
             if "api_error" in locals() and api_error:
                 message = f"{api_error}\n\n{message}"
-            wx.CallAfter(self.show_search_error_if_current, generation, self.t("trending_official_unavailable", error=message))
+            wx.CallAfter(self.show_trending_error_if_current, generation, self.t("trending_official_unavailable", error=message))
+
+    def show_trending_error_if_current(self, generation: int, error: str) -> None:
+        if generation != self.search_generation:
+            return
+        self.search_generation += 1
+        self.message(error, wx.ICON_ERROR)
+        self.announce_player(self.t("trending_unavailable_returning"))
+        self.show_main_menu()
 
     def youtube_data_api_key(self) -> str:
         return str(getattr(self.settings, "youtube_data_api_key", "") or "").strip()
@@ -9247,10 +9313,10 @@ class MainFrame(wx.Frame):
             self.announce_player(self.t("background_player_hint"))
 
     def leave_player_to_previous_screen(self) -> None:
-        self.back_to_results()
+        self.back_to_results(stop_playback=True)
 
-    def back_to_results(self) -> None:
-        keep_playing = self.background_playback_enabled()
+    def back_to_results(self, stop_playback: bool = True) -> None:
+        keep_playing = self.background_playback_enabled() and not stop_playback
         self.in_player_screen = False
         self.player_control_mode = keep_playing and self.player_control_mode
         if not keep_playing:
@@ -9516,6 +9582,18 @@ class MainFrame(wx.Frame):
         preset = self.normalized_equalizer_preset(getattr(self.settings, "global_equalizer_preset", EQ_PRESET_FLAT))
         return bool(getattr(self.settings, "global_equalizer_enabled", False)), self.equalizer_gains_for_preset(preset)
 
+    def use_global_equalizer_for_live_preview(self) -> None:
+        self.session_equalizer_enabled = None
+        self.session_equalizer_gains = {}
+        if self.bass_boost_enabled:
+            self.bass_boost_enabled = False
+            self.session_equalizer_before_bass_boost = None
+            if getattr(self, "bass_boost_checkbox", None):
+                try:
+                    self.bass_boost_checkbox.SetValue(False)
+                except RuntimeError:
+                    pass
+
     @staticmethod
     def equalizer_filter(gains: dict[str, float]) -> str:
         filters = []
@@ -9556,6 +9634,7 @@ class MainFrame(wx.Frame):
         dialog.SetName(self.t("equalizer"))
         dialog.SetMinSize((520, 520))
         preset_options = self.equalizer_preset_options()
+        dialog_visible_preset = active_preset
         outer = wx.BoxSizer(wx.VERTICAL)
         outer.Add(wx.StaticText(dialog, label=self.t("equalizer_preset")), 0, wx.LEFT | wx.RIGHT | wx.TOP, 8)
         preset_choice = wx.Choice(dialog, choices=self.equalizer_preset_labels())
@@ -9613,12 +9692,22 @@ class MainFrame(wx.Frame):
             name_ctrl.Show(visible)
             dialog.Layout()
 
+        def save_current_dialog_name(preset_id: str | None = None) -> None:
+            preset_id = self.normalized_equalizer_preset(preset_id or dialog_visible_preset)
+            if not self.is_custom_equalizer_preset(preset_id):
+                return
+            names = self.normalized_equalizer_custom_names(getattr(self.settings, "equalizer_custom_names", {}) or {})
+            names[preset_id] = name_ctrl.GetValue().strip()[:80] or self.equalizer_custom_name(preset_id)
+            self.settings.equalizer_custom_names = names
+
         def live_apply() -> None:
             self.session_equalizer_enabled = True
             self.session_equalizer_gains = current_dialog_gains()
             self.apply_equalizer_to_player()
 
         def load_preset_into_sliders(preset_id: str) -> None:
+            nonlocal dialog_visible_preset
+            dialog_visible_preset = self.normalized_equalizer_preset(preset_id)
             preset_gains = self.equalizer_gains_for_preset(preset_id)
             for band_id, band_label in EQ_BANDS:
                 value = min(max(preset_gains.get(band_id, 0.0), -db_range), db_range)
@@ -9630,12 +9719,15 @@ class MainFrame(wx.Frame):
 
         def refresh_preset_choices(selected_preset: str) -> None:
             nonlocal preset_options
+            nonlocal dialog_visible_preset
+            dialog_visible_preset = self.normalized_equalizer_preset(selected_preset)
             preset_options = self.equalizer_preset_options()
             preset_choice.SetItems(self.equalizer_preset_labels())
             preset_choice.SetSelection(preset_options.index(selected_preset) if selected_preset in preset_options else 0)
             update_custom_name_visibility()
 
         def on_preset_changed(_event: wx.CommandEvent) -> None:
+            save_current_dialog_name(dialog_visible_preset)
             load_preset_into_sliders(current_preset())
 
         def on_slider(event: wx.CommandEvent, label: str) -> None:
@@ -9667,6 +9759,7 @@ class MainFrame(wx.Frame):
             live_apply()
 
         def save_dialog_as_global(_event=None) -> None:
+            save_current_dialog_name()
             preset_id = self.choose_equalizer_profile_for_save(current_dialog_gains())
             if not preset_id:
                 return
@@ -9680,6 +9773,9 @@ class MainFrame(wx.Frame):
         save_global_button.Bind(wx.EVT_BUTTON, save_dialog_as_global)
         update_custom_name_visibility()
         result = dialog.ShowModal()
+        if result == wx.ID_OK:
+            save_current_dialog_name()
+            self.save_settings()
         dialog.Destroy()
         if result == wx.ID_OK:
             if self.bass_boost_enabled:
@@ -10901,7 +10997,8 @@ class MainFrame(wx.Frame):
         self.save_visible_equalizer_gains_to_preset(getattr(self, "visible_equalizer_preset", EQ_PRESET_FLAT))
         if isinstance(ctrl, wx.CheckBox):
             self.settings.global_equalizer_enabled = ctrl.GetValue()
-        if self.player_is_active() and self.session_equalizer_enabled is None:
+        if self.player_is_active():
+            self.use_global_equalizer_for_live_preview()
             self.apply_equalizer_to_player()
         wx.CallAfter(self.render_settings_section_and_focus, "global_equalizer")
 
@@ -10910,7 +11007,21 @@ class MainFrame(wx.Frame):
         self.save_visible_equalizer_gains_to_preset(previous)
         preset = self.selected_choice_value("equalizer_preset")
         self.settings.global_equalizer_preset = self.normalized_equalizer_preset(preset)
+        if self.player_is_active():
+            self.use_global_equalizer_for_live_preview()
+            self.apply_equalizer_to_player()
         wx.CallAfter(self.render_settings_section_and_focus, "equalizer_preset")
+
+    def on_equalizer_settings_name_changed(self, event: wx.FocusEvent) -> None:
+        preset = self.normalized_equalizer_preset(getattr(self, "visible_equalizer_preset", getattr(self.settings, "global_equalizer_preset", EQ_PRESET_FLAT)))
+        ctrl = self.controls.get("equalizer_preset_name") if hasattr(self, "controls") else None
+        if self.is_custom_equalizer_preset(preset) and isinstance(ctrl, wx.TextCtrl):
+            names = self.normalized_equalizer_custom_names(getattr(self.settings, "equalizer_custom_names", {}) or {})
+            names[preset] = ctrl.GetValue().strip()[:80] or self.equalizer_custom_name(preset)
+            self.settings.equalizer_custom_names = names
+            self.save_visible_equalizer_gains_to_preset(preset)
+            wx.CallAfter(self.render_settings_section_and_focus, "equalizer_preset")
+        event.Skip()
 
     def on_equalizer_settings_slider(self, event: wx.CommandEvent, label: str) -> None:
         ctrl = event.GetEventObject()
@@ -10918,11 +11029,9 @@ class MainFrame(wx.Frame):
             self.set_equalizer_slider_accessibility(ctrl, label)
         self.save_visible_equalizer_gains_to_preset(getattr(self, "visible_equalizer_preset", EQ_PRESET_FLAT))
         if self.player_is_active():
-            if self.session_equalizer_enabled is None:
-                self.settings.global_equalizer_enabled = True
-                self.apply_equalizer_to_player()
-            else:
-                self.set_status(self.t("equalizer_global_preview_blocked"))
+            self.settings.global_equalizer_enabled = True
+            self.use_global_equalizer_for_live_preview()
+            self.apply_equalizer_to_player()
         event.Skip()
 
     def reset_visible_equalizer_controls(self) -> None:
@@ -10939,7 +11048,8 @@ class MainFrame(wx.Frame):
                 value = gains.get(band_id, 0.0)
                 ctrl.SetValue(int(round(value * 10)))
                 self.set_equalizer_slider_accessibility(ctrl, self.t("equalizer_band_gain", band=band_label))
-        if self.player_is_active() and self.session_equalizer_enabled is None:
+        if self.player_is_active():
+            self.use_global_equalizer_for_live_preview()
             self.apply_equalizer_to_player()
         self.announce_player(self.t("equalizer_saved"))
 
@@ -12312,20 +12422,18 @@ class MainFrame(wx.Frame):
                 executable = self.cookie_browser_executable(browser)
                 if not executable:
                     raise RuntimeError(f"{browser} executable not found")
-                root = self.cookie_browser_root(browser)
-                if not root:
-                    raise RuntimeError(f"{browser} profile root not found")
                 profile = str(getattr(self.settings, "cookies_browser_profile", COOKIE_PROFILE_AUTO) or COOKIE_PROFILE_AUTO)
-                profile_dir = "Default"
-                user_data_dir = root
+                profile_dir = ""
                 if profile and profile != COOKIE_PROFILE_AUTO:
                     if os.path.isabs(profile):
                         profile_path = Path(profile)
-                        user_data_dir = profile_path.parent
                         profile_dir = profile_path.name
                     else:
                         profile_dir = profile
-                args = [executable, f"--user-data-dir={user_data_dir}", f"--profile-directory={profile_dir}", "https://www.youtube.com/"]
+                args = [executable]
+                if profile_dir and browser != "opera":
+                    args.append(f"--profile-directory={profile_dir}")
+                args.append("https://www.youtube.com/")
                 subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             else:
                 webbrowser.open("https://www.youtube.com/")
@@ -12569,6 +12677,8 @@ class MainFrame(wx.Frame):
             self.settings.socket_timeout = self.to_int(c["timeout"].GetStringSelection(), 20, 1)
         if "history_limit" in c:
             self.settings.history_limit = self.to_int(c["history_limit"].GetStringSelection(), 500, 100, 5000)
+        if "enable_trending" in c:
+            self.settings.enable_trending = c["enable_trending"].GetValue()
         if "enable_history" in c:
             self.settings.enable_history = c["enable_history"].GetValue()
         if "enable_podcasts_rss" in c:
@@ -13442,13 +13552,23 @@ class MainFrame(wx.Frame):
         if os.name != "nt" or winreg is None:
             return True
         expected_exe = str(self.current_executable_path()).lower()
+        required_extensions = [".mp3", ".mp4", ".mkv", ".m4a", ".flac", ".wav", ".webm"]
         for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
             registered = self.registry_read_value(root, r"Software\RegisteredApplications", APP_NAME)
             command = self.registry_read_value(root, rf"Software\Classes\{APP_NAME}.Media\shell\open\command")
             if not registered or not command:
                 continue
             command_lower = command.lower()
-            if expected_exe in command_lower and "%1" in command_lower:
+            if expected_exe not in command_lower or "%1" not in command_lower:
+                continue
+            extension_commands_ok = True
+            for extension in required_extensions:
+                extension_command = self.registry_read_value(root, rf"Software\Classes\SystemFileAssociations\{extension}\shell\{APP_NAME}\command")
+                extension_command_lower = extension_command.lower()
+                if expected_exe not in extension_command_lower or "%1" not in extension_command_lower:
+                    extension_commands_ok = False
+                    break
+            if extension_commands_ok:
                 return True
         return False
 
@@ -13478,6 +13598,10 @@ class MainFrame(wx.Frame):
         for extension in sorted(LOCAL_MEDIA_EXTENSIONS):
             self.registry_set_value(root, rf"Software\{APP_NAME}\Capabilities\FileAssociations", extension, winreg.REG_SZ, f"{APP_NAME}.Media")
             self.registry_set_value(root, rf"Software\Classes\{extension}\OpenWithProgids", f"{APP_NAME}.Media", winreg.REG_NONE, b"")
+            extension_base = rf"Software\Classes\SystemFileAssociations\{extension}\shell\{APP_NAME}"
+            self.registry_set_value(root, extension_base, "MUIVerb", winreg.REG_SZ, f"Play with {APP_NAME}")
+            self.registry_set_value(root, extension_base, "Icon", winreg.REG_SZ, icon)
+            self.registry_set_value(root, rf"{extension_base}\command", "", winreg.REG_SZ, command)
         self.registry_set_value(root, rf"Software\Classes\{APP_NAME}.Media", "", winreg.REG_SZ, f"{APP_NAME} media file")
         self.registry_set_value(root, rf"Software\Classes\{APP_NAME}.Media\DefaultIcon", "", winreg.REG_SZ, icon)
         self.registry_set_value(root, rf"Software\Classes\{APP_NAME}.Media\shell\open\command", "", winreg.REG_SZ, command)

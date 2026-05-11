@@ -1,5 +1,16 @@
 # Changelog
 
+## What's new in version 0.8.7
+
+- added a Library setting to show or hide Trending in the main menu; Trending is off by default for new and existing settings files until enabled
+- fixed Trending error handling so an unavailable official feed or missing API key returns to the main menu instead of repeatedly showing the same dialog
+- changed Escape from the full player to return to the previous results screen and stop playback, while background playback still continues when browsing from the persistent Player section
+- improved Chrome and Chromium cookie export by trying the DevTools fallback when normal extraction finds cookies but no usable YouTube login cookies
+- changed the "Open YouTube in selected profile" action to use normal browser profile launching, avoiding the profile-lock error that could appear with Chrome-family browsers
+- expanded Windows "Play with ApricotPlayer" registration to more audio and video extensions and per-extension context-menu entries
+- tightened global equalizer live preview so Settings sliders affect currently playing background audio immediately and local/player EQ no longer blocks that preview
+- saved custom equalizer profile names more consistently so renamed profiles appear by name in the preset combo box
+
 ## What's new in version 0.8.6
 
 - replaced the Trending screen's `#trending` search with an official YouTube most-popular feed path using the YouTube Data API when configured
