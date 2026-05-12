@@ -187,8 +187,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.8"
-APP_VERSION_LABEL = "0.8.8"
+APP_VERSION = "0.8.9"
+APP_VERSION_LABEL = "0.8.9"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -3356,6 +3356,20 @@ for language_code in LANGUAGE_CODES:
     for key, value in RELEASE_088_TRANSLATION_UPDATES["en"].items():
         TEXT.setdefault(language_code, {}).setdefault(key, value)
 
+RELEASE_089_TRANSLATION_UPDATES = {
+    "sl": {
+        "announce_playback_finished": "Najavi, ko se predvajanje konca",
+    },
+    "en": {
+        "announce_playback_finished": "Announce when playback finishes",
+    },
+}
+for language_code in LANGUAGE_CODES:
+    TEXT.setdefault(language_code, {}).update(RELEASE_089_TRANSLATION_UPDATES.get(language_code, RELEASE_089_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
+for language_code in LANGUAGE_CODES:
+    for key, value in RELEASE_089_TRANSLATION_UPDATES["en"].items():
+        TEXT.setdefault(language_code, {}).setdefault(key, value)
+
 
 def default_equalizer_gains() -> dict[str, float]:
     return {band_id: 0.0 for band_id, _label in EQ_BANDS}
@@ -3397,6 +3411,7 @@ class Settings:
     player_fullscreen: bool = False
     player_start_paused: bool = False
     announce_play_pause: bool = True
+    announce_playback_finished: bool = True
     enable_background_playback: bool = False
     player_speed: str = "1.0"
     speed_audio_mode: str = SPEED_AUDIO_MODE_RUBBERBAND
@@ -8031,6 +8046,7 @@ class MainFrame(wx.Frame):
             check("fullscreen", self.settings.player_fullscreen)
             check("start_paused", self.settings.player_start_paused)
             check("announce_play_pause", self.settings.announce_play_pause)
+            check("announce_playback_finished", bool(getattr(self.settings, "announce_playback_finished", True)))
             check("enable_background_playback", bool(getattr(self.settings, "enable_background_playback", False)))
         elif section_name == "equalizer":
             equalizer_enabled = bool(getattr(self.settings, "global_equalizer_enabled", False))
@@ -10417,7 +10433,10 @@ class MainFrame(wx.Frame):
                 self.open_relative_player_item(next_item)
                 return
         self.player_ended = True
-        self.announce_player(self.t("playback_finished"))
+        if bool(getattr(self.settings, "announce_playback_finished", True)):
+            self.announce_player(self.t("playback_finished"))
+        else:
+            self.set_status(self.t("playback_finished"))
 
     def player_play_pause(self) -> None:
         if self.player_kind != "mpv":
@@ -12882,6 +12901,8 @@ class MainFrame(wx.Frame):
             self.settings.player_start_paused = c["start_paused"].GetValue()
         if "announce_play_pause" in c:
             self.settings.announce_play_pause = c["announce_play_pause"].GetValue()
+        if "announce_playback_finished" in c:
+            self.settings.announce_playback_finished = c["announce_playback_finished"].GetValue()
         if "enable_background_playback" in c:
             self.settings.enable_background_playback = c["enable_background_playback"].GetValue()
         if "rate_limit" in c:
@@ -14048,7 +14069,8 @@ class MainFrame(wx.Frame):
             repaired["player_marker_start"] = DEFAULT_KEYBOARD_SHORTCUTS["player_marker_start"]
         if str(repaired.get("player_marker_end", "")).strip() in {"]", "đ", "Đ"}:
             repaired["player_marker_end"] = DEFAULT_KEYBOARD_SHORTCUTS["player_marker_end"]
-        if self.canonical_shortcut(repaired.get("player_equalizer", "")) == "E":
+        equalizer_shortcut = self.canonical_shortcut(repaired.get("player_equalizer", ""))
+        if equalizer_shortcut in {"e", "g"}:
             repaired["player_equalizer"] = DEFAULT_KEYBOARD_SHORTCUTS["player_equalizer"]
         if not repaired.get("player_edit_mode"):
             repaired["player_edit_mode"] = DEFAULT_KEYBOARD_SHORTCUTS["player_edit_mode"]

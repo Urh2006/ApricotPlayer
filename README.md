@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.8.8` (`0.8.8`)
+Current version: `0.8.9` (`0.8.9`)
 
 ## Download
 
@@ -40,6 +40,7 @@ py wx_main.py
 - Accessible 10-band equalizer with descriptive frequency sliders, global Settings controls, genre/sound presets, dynamic custom profiles, player-only live controls, and a player action to save the current EQ as a global preset
 - Player Bass boost checkbox for a temporary per-video EQ boost
 - Player hotkeys include `F2` volume boost, `F3` bass boost, `F4` equalizer, `R` repeat, and `Shift+S` shuffle
+- Optional Playback setting to announce or silence the “Playback finished” screen-reader message
 - Player clip markers and FFmpeg export for the marked section of the current video, local file, or podcast
 - Marked clips now export through the normal download shortcuts: `Ctrl+Shift+A` for audio clips and `Ctrl+Shift+D` for video clips
 - Start and end clip marker shortcuts toggle markers on and off, so accidental markers can be cleared immediately
@@ -162,4 +163,4 @@ Helpful scripts:
 - `scripts/build_release.ps1 -PackageMode onedir` builds the fast app folder used by both the installer and portable ZIP
 - `scripts/build_installer.ps1` builds `ApricotPlayerSetup.exe` when Inno Setup is installed
 - `scripts/build_portable_zip.ps1` builds `ApricotPlayer.zip`
-- `scripts/publish_release.ps1 -Tag v0.8.8 -NotesFile release-notes/v0.8.8.md` publishes the installer and portable ZIP to GitHub Releases
+- `scripts/publish_release.ps1 -Tag v0.8.9 -NotesFile release-notes/v0.8.9.md` publishes the installer and portable ZIP to GitHub Releases

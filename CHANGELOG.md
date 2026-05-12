@@ -1,5 +1,12 @@
 # Changelog
 
+## What's new in version 0.8.9
+
+- added a Playback setting to turn the “Playback finished” screen-reader announcement on or off
+- kept the end-of-playback state internally even when the announcement is disabled, so Space can still restart from the end correctly
+- migrated existing old default equalizer shortcuts from `G` to `F4`, matching the current player shortcut layout
+- rechecked the new player hotkeys so repeat (`R`), shuffle (`Shift+S`), bass boost (`F3`), and equalizer (`F4`) are all listed in Keyboard shortcuts and toggle cleanly
+
 ## What's new in version 0.8.8
 
 - fixed background playback navigation so global shortcuts and manual navigation keep the active player alive when background playback is enabled, while Escape from the full player still stops playback and returns to the previous results
