@@ -1,5 +1,10 @@
 # Changelog
 
+## What's new in version 0.8.15
+
+- fixed the Default playback volume slider accessibility in Settings so screen readers hear the setting name and actual 0-300 volume value instead of a confusing slider/percentage mix
+- removed native slider tick labels from that control and reused ApricotPlayer's custom accessible slider value reporting
+
 ## What's new in version 0.8.14
 
 - avoided very slow YouTube playback retries when a manually imported cookies file does not contain usable YouTube/Google login cookies

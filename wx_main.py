@@ -187,8 +187,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.14"
-APP_VERSION_LABEL = "0.8.14"
+APP_VERSION = "0.8.15"
+APP_VERSION_LABEL = "0.8.15"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -5208,6 +5208,29 @@ class MainFrame(wx.Frame):
         except Exception:
             pass
 
+    def set_integer_slider_accessibility(self, ctrl: wx.Slider, label: str, unit: str = "") -> None:
+        value = int(ctrl.GetValue())
+        name = str(label).strip()
+        value_text = self.t("download_percent_value", percent=value) if unit == "percent" else f"{value} {unit}".strip()
+        full_text = f"{name}: {value_text}" if value_text else name
+        ctrl.SetName(full_text)
+        ctrl.SetLabel(full_text)
+        ctrl.SetToolTip(full_text)
+        ctrl._apricot_accessible_name = name
+        ctrl._apricot_accessible_description = full_text
+        ctrl._apricot_accessible_value = value_text
+        if not getattr(ctrl, "_apricot_accessible", None):
+            try:
+                ctrl._apricot_accessible = SliderAccessible(ctrl)
+                ctrl.SetAccessible(ctrl._apricot_accessible)
+            except Exception:
+                pass
+        try:
+            wx.Accessible.NotifyEvent(wx.ACC_EVENT_OBJECT_NAMECHANGE, ctrl, wx.OBJID_CLIENT, 0)
+            wx.Accessible.NotifyEvent(wx.ACC_EVENT_OBJECT_VALUECHANGE, ctrl, wx.OBJID_CLIENT, 0)
+        except Exception:
+            pass
+
     def foreground_window(self) -> None:
         try:
             self.Show(True)
@@ -8517,11 +8540,11 @@ class MainFrame(wx.Frame):
                 value=min(max(int(value), minimum), maximum),
                 minValue=minimum,
                 maxValue=maximum,
-                style=wx.SL_HORIZONTAL | wx.SL_LABELS,
+                style=wx.SL_HORIZONTAL,
             )
-            ctrl.SetName(label)
-            ctrl.SetLabel(label)
-            ctrl.SetToolTip(label)
+            unit = "percent" if key == "default_volume" else ""
+            self.set_integer_slider_accessibility(ctrl, label, unit)
+            ctrl.Bind(wx.EVT_SLIDER, lambda evt, label_text=label, unit_text=unit: self.set_integer_slider_accessibility(evt.GetEventObject(), label_text, unit_text))
             form.Add(ctrl, 1, wx.EXPAND)
             remember(key, ctrl)
             return ctrl
