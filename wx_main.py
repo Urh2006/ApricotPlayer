@@ -187,8 +187,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.12"
-APP_VERSION_LABEL = "0.8.12"
+APP_VERSION = "0.8.13"
+APP_VERSION_LABEL = "0.8.13"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -9527,18 +9527,47 @@ class MainFrame(wx.Frame):
             info = self.ydl_extract_info(url, options, download=False, allow_cookie_retry=False)
         except Exception as exc:
             cookie_file = self.effective_cookies_file()
-            can_retry_with_cookies = bool(cookie_file) and self.is_cookie_auth_error(exc)
-            can_retry_with_restricted_fallback = self.age_restricted_video_support_enabled() and (self.is_cookie_auth_error(exc) or self.is_age_or_js_playback_error(exc))
+            cookie_error = self.is_cookie_auth_error(exc)
+            age_or_js_error = self.is_age_or_js_playback_error(exc)
+            can_retry_with_cookies = bool(cookie_file) and (cookie_error or age_or_js_error)
+            can_retry_with_restricted_fallback = self.age_restricted_video_support_enabled() and (cookie_error or age_or_js_error)
             if not (can_retry_with_cookies or can_retry_with_restricted_fallback):
                 raise
-            info = self.ydl_extract_info(
-                url,
-                options,
-                download=False,
-                use_cookies=bool(cookie_file),
-                use_js_solver=can_retry_with_restricted_fallback,
-                allow_cookie_retry=True,
-            )
+            retry_error: Exception | str = exc
+            if cookie_file:
+                try:
+                    info = self.ydl_extract_info(
+                        url,
+                        options,
+                        download=False,
+                        use_cookies=True,
+                        use_js_solver=False,
+                        allow_cookie_retry=True,
+                    )
+                except Exception as cookie_exc:
+                    retry_error = cookie_exc
+                    if not self.is_age_or_js_playback_error(cookie_exc) and not self.is_cookie_auth_error(cookie_exc):
+                        raise
+                    info = self.ydl_extract_info(
+                        url,
+                        options,
+                        download=False,
+                        use_cookies=True,
+                        use_js_solver=True,
+                        allow_cookie_retry=True,
+                    )
+            else:
+                try:
+                    info = self.ydl_extract_info(
+                        url,
+                        options,
+                        download=False,
+                        use_cookies=False,
+                        use_js_solver=True,
+                        allow_cookie_retry=True,
+                    )
+                except Exception:
+                    raise retry_error if isinstance(retry_error, Exception) else exc
         stream_url = info.get("url")
         if not stream_url and info.get("formats"):
             formats = [fmt for fmt in info["formats"] if fmt.get("url") and fmt.get("vcodec") != "none" and fmt.get("acodec") != "none"]

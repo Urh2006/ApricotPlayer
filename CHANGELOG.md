@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.8.13
+
+- fixed playback for YouTube videos where valid imported cookies work but the first fast format choice fails with `Requested format is not available`
+- ApricotPlayer now keeps the fast playback path first, then retries the slower YouTube JS fallback only after that specific format/auth failure
+- verified the reported test video resolves successfully with imported cookies even when the age-restricted fallback setting is off
+
 ## What's new in version 0.8.12
 
 - fixed manual browser-extension cookie imports by converting selected Netscape/Mozilla, JSON, and Cookie-header exports into ApricotPlayer's own normalized `cookies.txt`
