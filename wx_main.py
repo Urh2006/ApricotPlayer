@@ -187,8 +187,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.13"
-APP_VERSION_LABEL = "0.8.13"
+APP_VERSION = "0.8.14"
+APP_VERSION_LABEL = "0.8.14"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -4247,6 +4247,45 @@ class MainFrame(wx.Frame):
             pass
         return ""
 
+    @staticmethod
+    def is_youtube_url(url: str) -> bool:
+        try:
+            host = (urlparse(str(url or "")).netloc or "").lower()
+        except Exception:
+            return False
+        return "youtube.com" in host or "youtu.be" in host
+
+    def cookies_file_has_youtube_login(self, path: str) -> bool:
+        if not path:
+            return False
+        cookie_path = Path(path)
+        try:
+            stat = cookie_path.stat()
+        except OSError:
+            return False
+        cache = getattr(self, "_youtube_cookie_login_cache", None)
+        if cache is None:
+            cache = {}
+            self._youtube_cookie_login_cache = cache
+        key = (str(cookie_path), stat.st_mtime_ns, stat.st_size)
+        if key in cache:
+            return bool(cache[key])
+        try:
+            _score, _youtube_count, _total_count, has_login = self.cookie_file_score(cookie_path)
+        except Exception:
+            has_login = False
+        cache.clear()
+        cache[key] = bool(has_login)
+        return bool(has_login)
+
+    def playback_cookies_file_for_url(self, url: str) -> str:
+        cookie_file = self.effective_cookies_file()
+        if not cookie_file:
+            return ""
+        if not self.is_youtube_url(url):
+            return cookie_file
+        return cookie_file if self.cookies_file_has_youtube_login(cookie_file) else ""
+
     def cookie_file_score(self, path: str | Path) -> tuple[int, int, int, bool]:
         jar = http.cookiejar.MozillaCookieJar()
         jar.load(str(path), ignore_discard=True, ignore_expires=True)
@@ -4559,6 +4598,9 @@ class MainFrame(wx.Frame):
             "only available to registered users",
         )
         return any(check in lowered for check in checks)
+
+    def is_requested_format_error(self, exc: Exception | str) -> bool:
+        return "requested format is not available" in str(exc).lower()
 
     def ydl_extract_info(
         self,
@@ -9523,26 +9565,55 @@ class MainFrame(wx.Frame):
             "format": "best[ext=mp4]/best",
             "noplaylist": True,
         }
+        format_fallback_options = dict(options)
+        format_fallback_options["format"] = "best[acodec!=none][vcodec!=none]/18/22/17/best"
         try:
             info = self.ydl_extract_info(url, options, download=False, allow_cookie_retry=False)
         except Exception as exc:
-            cookie_file = self.effective_cookies_file()
+            cookie_file = self.playback_cookies_file_for_url(url)
             cookie_error = self.is_cookie_auth_error(exc)
             age_or_js_error = self.is_age_or_js_playback_error(exc)
+            requested_format_error = self.is_requested_format_error(exc)
+            retry_error: Exception | str = exc
+            if requested_format_error:
+                try:
+                    info = self.ydl_extract_info(url, format_fallback_options, download=False, allow_cookie_retry=False)
+                    stream_url = info.get("url")
+                    if stream_url:
+                        return stream_url, info.get("http_headers") or {}, info
+                except Exception as format_exc:
+                    retry_error = format_exc
+                    cookie_error = cookie_error or self.is_cookie_auth_error(format_exc)
+                    age_or_js_error = age_or_js_error or self.is_age_or_js_playback_error(format_exc)
             can_retry_with_cookies = bool(cookie_file) and (cookie_error or age_or_js_error)
             can_retry_with_restricted_fallback = self.age_restricted_video_support_enabled() and (cookie_error or age_or_js_error)
+            can_retry_with_js_format_fallback = requested_format_error and age_or_js_error
             if not (can_retry_with_cookies or can_retry_with_restricted_fallback):
-                raise
-            retry_error: Exception | str = exc
+                if can_retry_with_js_format_fallback:
+                    try:
+                        info = self.ydl_extract_info(
+                            url,
+                            format_fallback_options,
+                            download=False,
+                            use_cookies=False,
+                            use_js_solver=True,
+                            allow_cookie_retry=False,
+                        )
+                    except Exception:
+                        raise retry_error if isinstance(retry_error, Exception) else exc
+                else:
+                    raise retry_error if isinstance(retry_error, Exception) else exc
+            else:
+                info = None
             if cookie_file:
                 try:
                     info = self.ydl_extract_info(
                         url,
-                        options,
+                        format_fallback_options if requested_format_error else options,
                         download=False,
                         use_cookies=True,
                         use_js_solver=False,
-                        allow_cookie_retry=True,
+                        allow_cookie_retry=False,
                     )
                 except Exception as cookie_exc:
                     retry_error = cookie_exc
@@ -9550,21 +9621,21 @@ class MainFrame(wx.Frame):
                         raise
                     info = self.ydl_extract_info(
                         url,
-                        options,
+                        format_fallback_options if requested_format_error else options,
                         download=False,
                         use_cookies=True,
                         use_js_solver=True,
-                        allow_cookie_retry=True,
+                        allow_cookie_retry=False,
                     )
-            else:
+            elif can_retry_with_restricted_fallback and info is None:
                 try:
                     info = self.ydl_extract_info(
                         url,
-                        options,
+                        format_fallback_options if requested_format_error else options,
                         download=False,
                         use_cookies=False,
                         use_js_solver=True,
-                        allow_cookie_retry=True,
+                        allow_cookie_retry=False,
                     )
                 except Exception:
                     raise retry_error if isinstance(retry_error, Exception) else exc

@@ -1,5 +1,12 @@
 # Changelog
 
+## What's new in version 0.8.14
+
+- avoided very slow YouTube playback retries when a manually imported cookies file does not contain usable YouTube/Google login cookies
+- for YouTube playback, ApricotPlayer now only uses a cookies file as an auth fallback if it can detect real login cookies in that file
+- added a faster progressive-format retry before the heavier YouTube JS fallback, so ordinary videos that only miss the first format choice can start faster
+- kept age-restricted videos working with valid login cookies while failing quickly and clearly when the selected cookies file cannot authenticate YouTube
+
 ## What's new in version 0.8.13
 
 - fixed playback for YouTube videos where valid imported cookies work but the first fast format choice fails with `Requested format is not available`
