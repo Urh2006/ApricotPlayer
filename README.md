@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.8.9` (`0.8.9`)
+Current version: `0.8.10` (`0.8.10`)
 
 ## Download
 
@@ -34,6 +34,7 @@ py wx_main.py
 - Global `Ctrl+Space` background play/pause and `Ctrl+L` copy-link support from search results
 - Optional Trending screen, hidden by default, with country and category filters using the official YouTube most-popular API when a YouTube Data API key is configured
 - Channel result options for opening channel videos, playlists, home, or popular videos
+- Dynamic result loading keeps fetching 20 more search, channel, playlist, or folder items until the source has no more results
 - Local media file and whole-folder playback for common audio and video files, including file association support on Windows
 - First-run repair prompt if Windows media player registration is missing after an update
 - Play from folder for choosing local media inside ApricotPlayer
@@ -62,6 +63,7 @@ py wx_main.py
 - Favorites
 - History screen for recently played and downloaded items
 - User-created playlists with create, add, remove, play, and download actions
+- User playlists can include YouTube videos, podcast episodes, direct links, and local media files
 - Subscriptions screen for YouTube channels, with manual and automatic checks for new videos
 - Subscription and podcast/RSS automatic refresh intervals include a 30-minute option
 - New videos view for each subscription after a subscription check finds new channel uploads
@@ -163,4 +165,4 @@ Helpful scripts:
 - `scripts/build_release.ps1 -PackageMode onedir` builds the fast app folder used by both the installer and portable ZIP
 - `scripts/build_installer.ps1` builds `ApricotPlayerSetup.exe` when Inno Setup is installed
 - `scripts/build_portable_zip.ps1` builds `ApricotPlayer.zip`
-- `scripts/publish_release.ps1 -Tag v0.8.9 -NotesFile release-notes/v0.8.9.md` publishes the installer and portable ZIP to GitHub Releases
+- `scripts/publish_release.ps1 -Tag v0.8.10 -NotesFile release-notes/v0.8.10.md` publishes the installer and portable ZIP to GitHub Releases

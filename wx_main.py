@@ -187,8 +187,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.9"
-APP_VERSION_LABEL = "0.8.9"
+APP_VERSION = "0.8.10"
+APP_VERSION_LABEL = "0.8.10"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -214,7 +214,9 @@ DEFAULT_CACHE_DIR = APP_DIR / "cache"
 DEFAULT_FILENAME_TEMPLATE = "%(title)s.%(ext)s"
 OLD_FILENAME_TEMPLATE = "%(title)s [%(id)s].%(ext)s"
 RESULTS_PAGE_SIZE = 20
-DYNAMIC_RESULTS_MAX = 1000
+# Zero means dynamic mode has no app-side cap; Apricot keeps asking the source
+# for the next 20 results until the source stops returning more.
+DYNAMIC_RESULTS_MAX = 0
 REFRESH_INTERVAL_OPTIONS = ["0.5", "1", "2", "3", "6", "12", "24"]
 TRENDING_COUNTRIES: list[tuple[str, str]] = [
     ("global", "Global"),
@@ -5211,6 +5213,7 @@ class MainFrame(wx.Frame):
             (self.t("previous"), lambda: self.play_relative_item(-1)),
             (self.t("next"), lambda: self.play_relative_item(1)),
             (self.t("playback_queue"), self.show_playback_queue),
+            (self.t("add_to_playlist"), lambda: self.add_active_to_playlist(prefer_active=True)),
             (self.t("output_devices"), self.show_output_devices),
             (self.t("equalizer"), self.show_player_equalizer),
             (self.t("bass_boost"), self.toggle_bass_boost),
@@ -6042,7 +6045,11 @@ class MainFrame(wx.Frame):
     def download_user_playlist(self, playlist: dict) -> None:
         title = str(playlist.get("title") or self.t("playlists"))
         folder = str(self.music_download_folder() / self.safe_folder_name(title))
-        items = [dict(item, audio_only=False, download_folder_override=folder) for item in list(playlist.get("items") or []) if item.get("url")]
+        items = [
+            dict(item, audio_only=False, download_folder_override=folder)
+            for item in list(playlist.get("items") or [])
+            if item.get("url") and item.get("kind") != "local_file"
+        ]
         if not items:
             self.announce_player(self.t("playlist_empty"))
             return
@@ -6051,8 +6058,8 @@ class MainFrame(wx.Frame):
         done_text = self.t("download_playlist_done", title=title)
         threading.Thread(target=self.download_batch_worker, args=(items, task_id, cancel_event, done_text, folder), daemon=True).start()
 
-    def add_active_to_playlist(self) -> None:
-        items = self.playlist_candidate_items()
+    def add_active_to_playlist(self, prefer_active: bool = False) -> None:
+        items = self.playlist_candidate_items(prefer_active=prefer_active)
         if not items:
             self.message(self.t("no_selection"))
             return
@@ -6061,11 +6068,13 @@ class MainFrame(wx.Frame):
             return
         self.add_items_to_playlist(playlist_index, items)
 
-    def playlist_candidate_items(self) -> list[dict]:
+    def playlist_candidate_items(self, prefer_active: bool = False) -> list[dict]:
+        item = self.active_item()
+        if prefer_active and item and self.playlist_item_is_supported(item):
+            return [dict(item)]
         queued_items = [dict(item) for item in self.download_queue.values() if self.playlist_item_is_supported(item)]
         if len(queued_items) > 1:
             return queued_items
-        item = self.active_item()
         if item and self.playlist_item_is_supported(item):
             return [dict(item)]
         return queued_items
@@ -6153,18 +6162,18 @@ class MainFrame(wx.Frame):
         playlist_item["added_at"] = time.time()
         return playlist_item
 
-    def append_add_to_playlist_menu(self, menu: wx.Menu) -> None:
+    def append_add_to_playlist_menu(self, menu: wx.Menu, prefer_active: bool = False) -> None:
         if self.user_playlists:
             submenu = wx.Menu()
             for index, playlist in enumerate(self.user_playlists):
                 menu_item = submenu.Append(wx.ID_ANY, str(playlist.get("title") or self.t("playlists")))
-                self.Bind(wx.EVT_MENU, lambda _evt, idx=index: self.add_items_to_playlist(idx, self.playlist_candidate_items()), menu_item)
+                self.Bind(wx.EVT_MENU, lambda _evt, idx=index, prefer=prefer_active: self.add_items_to_playlist(idx, self.playlist_candidate_items(prefer_active=prefer)), menu_item)
             create_item = submenu.Append(wx.ID_ANY, self.t("create_playlist"))
-            self.Bind(wx.EVT_MENU, lambda _evt: self.add_active_to_playlist(), create_item)
+            self.Bind(wx.EVT_MENU, lambda _evt, prefer=prefer_active: self.add_active_to_playlist(prefer_active=prefer), create_item)
             menu.AppendSubMenu(submenu, self.menu_label_with_shortcut("add_to_playlist", "add_to_playlist"))
         else:
             item = menu.Append(wx.ID_ANY, self.menu_label_with_shortcut("add_to_playlist", "add_to_playlist"))
-            self.Bind(wx.EVT_MENU, lambda _evt: self.add_active_to_playlist(), item)
+            self.Bind(wx.EVT_MENU, lambda _evt, prefer=prefer_active: self.add_active_to_playlist(prefer_active=prefer), item)
 
     def show_notification_center(self) -> None:
         self.in_main_menu = False
@@ -7580,6 +7589,7 @@ class MainFrame(wx.Frame):
             (self.t("play_episode"), self.play_selected_rss_item),
             (self.menu_label_with_shortcut("download_episode_audio", "download_audio"), self.download_selected_rss_item),
             (self.menu_label_with_shortcut("queue_episode_audio", "queue_audio"), self.toggle_rss_item_queue),
+            (self.menu_label_with_shortcut("add_to_playlist", "add_to_playlist"), self.add_active_to_playlist),
             (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
             (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
             (self.t("download_feed"), self.download_current_rss_feed),
@@ -8339,10 +8349,13 @@ class MainFrame(wx.Frame):
         if self.loading_more_results:
             return
         current_count = len(self.all_results)
-        if current_count >= self.max_results_limit():
+        max_limit = self.max_results_limit()
+        if max_limit and current_count >= max_limit:
             self.set_status(self.t("no_more_results"))
             return
-        next_limit = min(self.max_results_limit(), current_count + RESULTS_PAGE_SIZE)
+        next_limit = current_count + RESULTS_PAGE_SIZE
+        if max_limit:
+            next_limit = min(max_limit, next_limit)
         self.loading_more_results = True
         self.set_status(self.t("loading_more_results"))
         generation = self.search_generation
@@ -8726,7 +8739,8 @@ class MainFrame(wx.Frame):
         api_key = self.youtube_data_api_key()
         if not api_key:
             raise RuntimeError(self.t("trending_api_key_required"))
-        max_results = min(50, max(1, self.max_results_limit()))
+        limit = self.max_results_limit() or 50
+        max_results = min(50, max(1, limit))
         params = {
             "part": "snippet,contentDetails,statistics",
             "chart": "mostPopular",
@@ -8755,7 +8769,8 @@ class MainFrame(wx.Frame):
         for template in urls:
             url = template.format(country=country_code, country_lower=country_code.lower())
             try:
-                options = {"quiet": True, "extract_flat": True, "skip_download": True, "playlistend": min(50, self.max_results_limit())}
+                limit = self.max_results_limit() or 50
+                options = {"quiet": True, "extract_flat": True, "skip_download": True, "playlistend": min(50, limit)}
                 info = self.ydl_extract_info(url, options, download=False, allow_cookie_retry=False)
                 entries = list((info or {}).get("entries") or [])
                 normalized = [self.normalize_entry(entry, "Video") for entry in entries if isinstance(entry, dict)]
@@ -9369,6 +9384,7 @@ class MainFrame(wx.Frame):
                 (self.t("play"), self.player_play_pause),
                 (self.t("next"), lambda: self.play_relative_item(1)),
                 (self.t("playback_queue"), self.show_playback_queue),
+                (self.t("add_to_playlist"), lambda: self.add_active_to_playlist(prefer_active=True)),
                 (self.t("output_devices"), self.show_output_devices),
                 (self.t("equalizer"), self.show_player_equalizer),
                 (self.t("edit_mode"), self.toggle_edit_mode),
@@ -11624,7 +11640,8 @@ class MainFrame(wx.Frame):
             self.create_user_playlist_dialog()
             return
         if self.shortcut_matches(event, "add_to_playlist"):
-            self.add_active_to_playlist()
+            prefer_player_item = bool(self.current_video_item and (self.in_player_screen or self.focus_in_background_player_controls(focus)))
+            self.add_active_to_playlist(prefer_active=prefer_player_item)
             return
         if self.shortcut_matches(event, "remove_from_playlist"):
             self.remove_selected_user_playlist_item()
@@ -11788,7 +11805,7 @@ class MainFrame(wx.Frame):
             menu_item = menu.Append(wx.ID_ANY, label)
             self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), menu_item)
         if self.playlist_item_is_supported(item):
-            self.append_add_to_playlist_menu(menu)
+            self.append_add_to_playlist_menu(menu, prefer_active=True)
         self.PopupMenu(menu)
         menu.Destroy()
 

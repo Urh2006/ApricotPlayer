@@ -1,5 +1,14 @@
 # Changelog
 
+## What's new in version 0.8.10
+
+- removed ApricotPlayer's remaining app-side cap in dynamic result mode, so YouTube searches, channels, playlists, and local folder lists keep loading 20 more items until the source stops returning results
+- kept previously loaded dynamic results in the list while loading more, so arrowing back up still reaches everything already fetched
+- added a tabbable Add to playlist button to the full player and background Player section, making it easier to add the currently playing YouTube item, podcast episode, or local file to an Apricot playlist
+- added Add to playlist to podcast episode context menus and made player Add to playlist prefer the currently playing item instead of any unrelated multi-selected download queue
+- user playlist downloads now skip local files instead of trying to pass already-local media paths through `yt-dlp`
+- rechecked folder conversion behavior so failed files are counted and skipped without stopping the whole folder job
+
 ## What's new in version 0.8.9
 
 - added a Playback setting to turn the “Playback finished” screen-reader announcement on or off
