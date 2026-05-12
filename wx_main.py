@@ -6,6 +6,7 @@ import json
 import hashlib
 import os
 import queue
+import random
 import re
 import shlex
 import shutil
@@ -186,8 +187,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.7"
-APP_VERSION_LABEL = "0.8.7"
+APP_VERSION = "0.8.8"
+APP_VERSION_LABEL = "0.8.8"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -213,24 +214,24 @@ DEFAULT_CACHE_DIR = APP_DIR / "cache"
 DEFAULT_FILENAME_TEMPLATE = "%(title)s.%(ext)s"
 OLD_FILENAME_TEMPLATE = "%(title)s [%(id)s].%(ext)s"
 RESULTS_PAGE_SIZE = 20
+DYNAMIC_RESULTS_MAX = 1000
 REFRESH_INTERVAL_OPTIONS = ["0.5", "1", "2", "3", "6", "12", "24"]
 TRENDING_COUNTRIES: list[tuple[str, str]] = [
     ("global", "Global"),
-    ("US", "United States"),
-    ("GB", "United Kingdom"),
-    ("SI", "Slovenia"),
-    ("DE", "Germany"),
-    ("FR", "France"),
-    ("ES", "Spain"),
-    ("IT", "Italy"),
-    ("IN", "India"),
-    ("PK", "Pakistan"),
-    ("BR", "Brazil"),
-    ("MX", "Mexico"),
-    ("CA", "Canada"),
-    ("AU", "Australia"),
-    ("JP", "Japan"),
-    ("KR", "South Korea"),
+    ("AR", "Argentina"), ("AU", "Australia"), ("AT", "Austria"), ("BE", "Belgium"),
+    ("BR", "Brazil"), ("CA", "Canada"), ("CL", "Chile"), ("CO", "Colombia"),
+    ("CZ", "Czechia"), ("DK", "Denmark"), ("EG", "Egypt"), ("FI", "Finland"),
+    ("FR", "France"), ("DE", "Germany"), ("GR", "Greece"), ("HK", "Hong Kong"),
+    ("HU", "Hungary"), ("IN", "India"), ("ID", "Indonesia"), ("IE", "Ireland"),
+    ("IL", "Israel"), ("IT", "Italy"), ("JP", "Japan"), ("KE", "Kenya"),
+    ("MY", "Malaysia"), ("MX", "Mexico"), ("NL", "Netherlands"), ("NZ", "New Zealand"),
+    ("NG", "Nigeria"), ("NO", "Norway"), ("PK", "Pakistan"), ("PE", "Peru"),
+    ("PH", "Philippines"), ("PL", "Poland"), ("PT", "Portugal"), ("RO", "Romania"),
+    ("RU", "Russia"), ("SA", "Saudi Arabia"), ("RS", "Serbia"), ("SG", "Singapore"),
+    ("SK", "Slovakia"), ("SI", "Slovenia"), ("ZA", "South Africa"), ("KR", "South Korea"),
+    ("ES", "Spain"), ("SE", "Sweden"), ("CH", "Switzerland"), ("TW", "Taiwan"),
+    ("TH", "Thailand"), ("TR", "Turkey"), ("UA", "Ukraine"), ("AE", "United Arab Emirates"),
+    ("GB", "United Kingdom"), ("US", "United States"), ("VN", "Vietnam"),
 ]
 TRENDING_CATEGORIES: list[tuple[str, str]] = [
     ("all", "All"),
@@ -497,7 +498,7 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "player_pitch_down": "Ctrl+Down",
     "player_details": "V",
     "player_output_devices": "O",
-    "player_equalizer": "G",
+    "player_equalizer": "F4",
     "player_edit_mode": "E",
     "player_save_edit_copy": "Ctrl+S",
     "player_replace_edit_original": "Ctrl+R",
@@ -507,6 +508,9 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "player_next": "Ctrl+PageDown",
     "player_back": "Escape",
     "player_volume_boost": "F2",
+    "player_bass_boost": "F3",
+    "player_repeat": "R",
+    "player_shuffle": "Shift+S",
     "player_seek_back": "Left",
     "player_seek_forward": "Right",
     "player_seek_back_large": "Ctrl+Left",
@@ -565,6 +569,9 @@ SHORTCUT_DEFINITIONS = [
     ("player_next", "shortcut_player_next"),
     ("player_back", "shortcut_player_back"),
     ("player_volume_boost", "shortcut_player_volume_boost"),
+    ("player_bass_boost", "shortcut_player_bass_boost"),
+    ("player_repeat", "shortcut_player_repeat"),
+    ("player_shuffle", "shortcut_player_shuffle"),
     ("player_seek_back", "shortcut_player_seek_back"),
     ("player_seek_forward", "shortcut_player_seek_forward"),
     ("player_seek_back_large", "shortcut_player_seek_back_large"),
@@ -3313,6 +3320,42 @@ for language_code in LANGUAGE_CODES:
     for key, value in RELEASE_087_TRANSLATION_UPDATES["en"].items():
         TEXT.setdefault(language_code, {}).setdefault(key, value)
 
+RELEASE_088_TRANSLATION_UPDATES = {
+    "sl": {
+        "play_folder": "Predvajaj mapo",
+        "select_media_folder": "Izberi mapo z audio ali video datotekami",
+        "folder_loaded": "Mapa nalozena: {count} datotek.",
+        "folder_no_media": "V tej mapi ni podprtih audio ali video datotek.",
+        "shuffle": "Shuffle",
+        "shuffle_on": "Shuffle vklopljen.",
+        "shuffle_off": "Shuffle izklopljen.",
+        "conversion_folder_done_with_errors": "Pretvorba mape koncana: {count} datotek pretvorjenih, {failed} ni uspelo.",
+        "player_context_menu": "Player menu",
+        "shortcut_player_bass_boost": "Predvajalnik: bass boost",
+        "shortcut_player_repeat": "Predvajalnik: repeat",
+        "shortcut_player_shuffle": "Predvajalnik: shuffle",
+    },
+    "en": {
+        "play_folder": "Play folder",
+        "select_media_folder": "Choose a folder with audio or video files",
+        "folder_loaded": "Folder loaded: {count} files.",
+        "folder_no_media": "This folder does not contain supported audio or video files.",
+        "shuffle": "Shuffle",
+        "shuffle_on": "Shuffle on.",
+        "shuffle_off": "Shuffle off.",
+        "conversion_folder_done_with_errors": "Folder conversion complete: {count} files converted, {failed} failed.",
+        "player_context_menu": "Player menu",
+        "shortcut_player_bass_boost": "Player: bass boost",
+        "shortcut_player_repeat": "Player: repeat",
+        "shortcut_player_shuffle": "Player: shuffle",
+    },
+}
+for language_code in LANGUAGE_CODES:
+    TEXT.setdefault(language_code, {}).update(RELEASE_088_TRANSLATION_UPDATES.get(language_code, RELEASE_088_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
+for language_code in LANGUAGE_CODES:
+    for key, value in RELEASE_088_TRANSLATION_UPDATES["en"].items():
+        TEXT.setdefault(language_code, {}).setdefault(key, value)
+
 
 def default_equalizer_gains() -> dict[str, float]:
     return {band_id: 0.0 for band_id, _label in EQ_BANDS}
@@ -3529,6 +3572,8 @@ class MainFrame(wx.Frame):
         self.in_player_screen = False
         self.in_queue_screen = False
         self.repeat_current = False
+        self.shuffle_current = False
+        self.session_volume: float | None = None
         self.player_generation = 0
         self.player_ended = False
         self.current_video_item: dict | None = None
@@ -4115,6 +4160,8 @@ class MainFrame(wx.Frame):
     def friendly_error(self, exc: Exception | str) -> str:
         text = str(exc)
         lowered = text.lower()
+        if "failed to decrypt with dpapi" in lowered or "nonetype" in lowered and "decode" in lowered:
+            return f"{text}\n\n{self.t('cookie_copy_hint')}"
         if "could not copy" in lowered and "cookie" in lowered and "database" in lowered:
             return f"{text}\n\n{self.t('cookie_copy_hint')}"
         if "sign in to confirm" in lowered or "not a bot" in lowered or "cookies-from-browser" in lowered:
@@ -4133,6 +4180,8 @@ class MainFrame(wx.Frame):
             "could not copy chrome cookie database",
             "no youtube login cookies",
             "cookies were exported, but no youtube login cookies",
+            "failed to decrypt with dpapi",
+            "object has no attribute 'decode'",
             "login required",
             "this video may be inappropriate",
         )
@@ -5097,7 +5146,7 @@ class MainFrame(wx.Frame):
             self.menu_actions.append((f"{self.t('playback_queue')} ({len(self.playback_queue)})", self.show_playback_queue))
         primary_actions = [
             (self.t("search_youtube"), self.show_search),
-            (self.t("play_from_folder"), self.show_play_from_folder),
+            (self.t("play_folder"), self.show_play_from_folder),
             (self.t("direct_link"), self.show_direct_link),
             (self.t("favorites"), self.show_favorites),
             (self.t("playlists"), self.show_user_playlists),
@@ -5149,6 +5198,9 @@ class MainFrame(wx.Frame):
             (self.t("playback_queue"), self.show_playback_queue),
             (self.t("output_devices"), self.show_output_devices),
             (self.t("equalizer"), self.show_player_equalizer),
+            (self.t("bass_boost"), self.toggle_bass_boost),
+            (self.t("repeat"), self.toggle_repeat),
+            (self.t("shuffle"), self.toggle_shuffle),
             (self.t("open_player"), self.show_current_player_screen),
             (self.t("copy_link"), self.copy_current_player_url),
             (self.t("close_player"), self.close_current_player),
@@ -5234,6 +5286,7 @@ class MainFrame(wx.Frame):
         self.notification_center_screen_active = False
         self.direct_link_screen_active = True
         self.clear()
+        self.add_background_player_section()
         self.add_button_row(
             [
                 (self.t("back"), self.show_main_menu),
@@ -5598,13 +5651,18 @@ class MainFrame(wx.Frame):
                 return
             output_folder.mkdir(parents=True, exist_ok=True)
             converted = 0
+            failed = 0
             for index, source in enumerate(files, start=1):
                 target = self.unique_converter_output_path(output_folder / f"{source.stem}.{self.converter_output_extension(target_format)}", source)
                 self.ui_queue.put(("status", f"{self.t('conversion_started')} {index}/{len(files)}: {source.name}"))
-                args = self.converter_ffmpeg_args(ffmpeg, source, target, target_format, image_path)
-                self.run_ffmpeg_conversion(args)
-                converted += 1
-            text = self.t("conversion_folder_done", count=converted)
+                try:
+                    args = self.converter_ffmpeg_args(ffmpeg, source, target, target_format, image_path)
+                    self.run_ffmpeg_conversion(args)
+                    converted += 1
+                except Exception:
+                    failed += 1
+                    continue
+            text = self.t("conversion_folder_done_with_errors", count=converted, failed=failed) if failed else self.t("conversion_folder_done", count=converted)
             wx.CallAfter(self.set_status, text)
             wx.CallAfter(self.announce_player, text)
         except Exception as exc:
@@ -5708,6 +5766,7 @@ class MainFrame(wx.Frame):
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
         self.clear()
+        self.add_background_player_section()
         self.add_button_row(
             [
                 (self.t("back"), self.show_main_menu),
@@ -5827,6 +5886,7 @@ class MainFrame(wx.Frame):
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
         self.clear()
+        self.add_background_player_section()
         self.add_button_row(
             [
                 (self.t("back"), self.show_user_playlists),
@@ -6106,6 +6166,7 @@ class MainFrame(wx.Frame):
         self.notification_center_screen_active = True
         self.direct_link_screen_active = False
         self.clear()
+        self.add_background_player_section()
         self.add_button_row(
             [
                 (self.t("back"), self.show_main_menu),
@@ -6131,10 +6192,11 @@ class MainFrame(wx.Frame):
     def leave_player_for_global_navigation(self) -> None:
         if not self.in_player_screen:
             return
-        if not self.background_playback_enabled():
+        keep_playing = self.background_playback_enabled()
+        if not keep_playing:
             self.stop_player(silent=True)
         self.in_player_screen = False
-        self.player_control_mode = False
+        self.player_control_mode = keep_playing and self.player_control_mode
 
     def run_global_navigation_shortcut(self, handler) -> None:
         self.leave_player_for_global_navigation()
@@ -6299,6 +6361,7 @@ class MainFrame(wx.Frame):
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
         self.clear()
+        self.add_background_player_section()
         buttons = [(self.t("back"), self.show_main_menu)]
         if self.download_queue:
             buttons.append((self.t("download_all_as_audio"), lambda: self.download_all_queued(True)))
@@ -6428,6 +6491,7 @@ class MainFrame(wx.Frame):
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
         self.clear()
+        self.add_background_player_section()
         self.add_button_row([(self.t("back"), self.back_from_search)])
         grid = wx.FlexGridSizer(2, 2, 6, 6)
         grid.AddGrowableCol(1, 1)
@@ -6532,6 +6596,7 @@ class MainFrame(wx.Frame):
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
         self.clear()
+        self.add_background_player_section()
         self.add_button_row(
             [
                 (self.t("back"), self.show_main_menu),
@@ -6602,6 +6667,7 @@ class MainFrame(wx.Frame):
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
         self.clear()
+        self.add_background_player_section()
         self.add_button_row(
             [
                 (self.t("back"), self.show_main_menu),
@@ -6726,6 +6792,7 @@ class MainFrame(wx.Frame):
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
         self.clear()
+        self.add_background_player_section()
         self.add_button_row(
             [
                 (self.t("back"), self.show_main_menu),
@@ -6835,7 +6902,7 @@ class MainFrame(wx.Frame):
         self.collection_url = ""
         self.collection_result_type = ""
         self.loading_more_results = False
-        self.dynamic_fetch_enabled = False
+        self.dynamic_fetch_enabled = True
         self.metadata_hydration_urls.clear()
         self.search_generation += 1
         self.show_search(restore_search=True)
@@ -7053,6 +7120,7 @@ class MainFrame(wx.Frame):
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
         self.clear()
+        self.add_background_player_section()
         self.add_button_row(
             [
                 (self.t("back"), self.show_main_menu),
@@ -7199,6 +7267,7 @@ class MainFrame(wx.Frame):
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
         self.clear()
+        self.add_background_player_section()
         self.add_button_row(
             [
                 (self.t("back"), self.show_rss_feeds),
@@ -7741,6 +7810,7 @@ class MainFrame(wx.Frame):
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
         self.clear()
+        self.add_background_player_section()
         self.add_button_row([(self.t("back"), self.show_main_menu), (self.t("save"), self.save_settings_from_ui), (self.t("restore_defaults"), self.restore_default_settings)])
         self.controls = {}
         self.choice_values = {}
@@ -8133,7 +8203,7 @@ class MainFrame(wx.Frame):
         return RESULTS_PAGE_SIZE if self.settings.results_limit == 0 else self.effective_results_limit()
 
     def max_results_limit(self) -> int:
-        return 250 if self.settings.results_limit == 0 else self.effective_results_limit()
+        return DYNAMIC_RESULTS_MAX if self.settings.results_limit == 0 else self.effective_results_limit()
 
     def search_worker(self, query: str, search_type: str, limit: int, generation: int) -> None:
         try:
@@ -8545,6 +8615,7 @@ class MainFrame(wx.Frame):
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
         self.clear()
+        self.add_background_player_section()
         self.add_button_row([(self.t("back"), self.show_main_menu), (self.t("load_trending"), self.load_trending_results)])
         grid = wx.FlexGridSizer(2, 2, 6, 6)
         grid.AddGrowableCol(1, 1)
@@ -8785,20 +8856,60 @@ class MainFrame(wx.Frame):
         patterns = ";".join(f"*{extension}" for extension in sorted(LOCAL_MEDIA_EXTENSIONS))
         return f"{self.t('media_files')} ({patterns})|{patterns}|{self.t('all_files')} (*.*)|*.*"
 
+    def local_media_files_in_folder(self, folder: Path) -> list[Path]:
+        try:
+            return sorted(path for path in folder.iterdir() if path.is_file() and path.suffix.lower() in LOCAL_MEDIA_EXTENSIONS)
+        except OSError:
+            return []
+
     def show_play_from_folder(self) -> None:
         start_dir = self.settings.download_folder or str(Path.home())
-        with wx.FileDialog(
+        with wx.DirDialog(
             self,
-            self.t("select_media_file"),
-            defaultDir=start_dir if Path(start_dir).exists() else str(Path.home()),
-            wildcard=self.local_media_wildcard(),
-            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+            self.t("select_media_folder"),
+            defaultPath=start_dir if Path(start_dir).exists() else str(Path.home()),
+            style=wx.DD_DEFAULT_STYLE | wx.DD_DIR_MUST_EXIST,
         ) as dialog:
             if dialog.ShowModal() != wx.ID_OK:
                 self.show_main_menu()
                 return
             path = dialog.GetPath()
-        self.open_local_media_file(path)
+        self.open_local_media_folder(path)
+
+    def open_local_media_folder(self, value: str) -> None:
+        folder = Path(str(value or "")).expanduser()
+        if not folder.exists() or not folder.is_dir():
+            self.message(self.t("folder_no_media"), wx.ICON_WARNING)
+            self.show_main_menu()
+            return
+        files = self.local_media_files_in_folder(folder)
+        if not files:
+            self.message(self.t("folder_no_media"), wx.ICON_INFORMATION)
+            self.show_main_menu()
+            return
+        items = [self.local_media_item(path) for path in files]
+        self.last_search_query = str(folder)
+        self.last_search_type_index = 0
+        self.current_search_type_code = "All"
+        self.collection_url = ""
+        self.collection_result_type = ""
+        self.search_results_stack = []
+        self.loading_more_results = False
+        self.dynamic_fetch_enabled = True
+        self.metadata_hydration_urls.clear()
+        self.search_generation += 1
+        self.show_search(restore_search=True)
+        self.show_results(items, selection=0, visible_count=min(len(items), RESULTS_PAGE_SIZE))
+        self.set_status(self.t("folder_loaded", count=len(items)))
+        self.return_results = list(self.results)
+        self.return_all_results = list(self.all_results or self.results)
+        self.return_index = 0
+        self.return_visible_count = self.last_visible_count or len(self.results)
+        self.player_return_screen = "search"
+        self.player_return_data = {"index": 0}
+        self.current_video_item = dict(items[0])
+        self.current_video_info = dict(items[0])
+        self.play_url(str(items[0].get("url") or ""), str(items[0].get("title") or ""))
 
     def open_local_media_file(self, value: str) -> None:
         try:
@@ -8818,7 +8929,7 @@ class MainFrame(wx.Frame):
         if generation == self.search_generation:
             self.loading_more_results = False
 
-    def play_url(self, url: str, title: str = "") -> None:
+    def play_url(self, url: str, title: str = "", show_player: bool = True) -> None:
         player = self.resolve_player()
         if not player:
             self.message(self.t("player_missing"), wx.ICON_ERROR)
@@ -8826,12 +8937,16 @@ class MainFrame(wx.Frame):
         if self.current_video_item:
             self.record_history(self.current_video_item, "played")
         self.current_index = max(0, self.current_index)
-        self.stop_player(silent=True)
-        self.session_equalizer_enabled = None
-        self.session_equalizer_gains = {}
-        self.session_equalizer_before_bass_boost = None
+        continuing_session = self.player_is_active()
+        self.remember_current_player_volume()
+        self.stop_player(silent=True, reset_session=not continuing_session)
+        if not continuing_session:
+            self.session_equalizer_enabled = None
+            self.session_equalizer_gains = {}
+            self.session_equalizer_before_bass_boost = None
+            self.bass_boost_enabled = False
+            self.shuffle_current = False
         self.edit_mode_enabled = False
-        self.bass_boost_enabled = False
         self.equalizer_filter_active = False
         self.clip_start_marker = None
         self.clip_end_marker = None
@@ -8840,7 +8955,12 @@ class MainFrame(wx.Frame):
         if kind != "mpv":
             self.message(self.t("player_missing"), wx.ICON_ERROR)
             return
-        self.show_player_page(title)
+        if show_player:
+            self.show_player_page(title)
+        else:
+            self.in_player_screen = False
+            self.player_control_mode = True
+            self.set_window_title(title or self.current_player_title())
         self.set_status(self.t("preparing_stream", title=title or url))
         threading.Thread(target=self.resolve_and_start_player, args=(command, url, title), daemon=True).start()
 
@@ -9082,9 +9202,25 @@ class MainFrame(wx.Frame):
     def speed_uses_mpv_auto_pitch_correction(self) -> bool:
         return self.normalized_speed_audio_mode() in {SPEED_AUDIO_MODE_MPV, SPEED_AUDIO_MODE_RUBBERBAND}
 
+    def remember_current_player_volume(self) -> None:
+        if self.player_kind != "mpv" or not self.mpv_process_alive():
+            return
+        try:
+            current = self.mpv_get_property("volume", timeout=0.3)
+            if current is not None:
+                self.session_volume = max(0.0, min(300.0, float(current)))
+        except Exception:
+            pass
+
+    def player_start_volume_value(self) -> float:
+        if self.session_volume is not None:
+            return max(0.0, min(300.0, float(self.session_volume)))
+        return float(self.default_volume_value())
+
     def start_mpv(self, command: str, stream_url: str, title: str, headers: dict) -> None:
         try:
             self.ipc_path = self.make_ipc_path()
+            target_volume = self.player_start_volume_value()
             embed_player = False
             hwnd = 0
             try:
@@ -9102,7 +9238,7 @@ class MainFrame(wx.Frame):
                 "--idle=no",
                 "--keep-open=yes",
                 "--volume-max=300",
-                f"--volume={self.default_volume_value()}",
+                f"--volume={target_volume:g}",
                 "--pitch=1.0",
                 f"--speed={self.settings.player_speed}",
                 f"--loop-file={'inf' if self.repeat_current else 'no'}",
@@ -9166,21 +9302,20 @@ class MainFrame(wx.Frame):
             self.current_stream_url = stream_url
             self.current_stream_headers = dict(headers or {})
             self.current_audio_device = audio_device
-            self.volume_boost_enabled = bool(getattr(self.settings, "volume_boost_by_default", False) or self.default_volume_value() > 100)
+            self.volume_boost_enabled = bool(self.volume_boost_enabled or getattr(self.settings, "volume_boost_by_default", False) or target_volume > 100)
             self.rubberband_pitch_filter_active = False
             self.equalizer_filter_active = False
             self.current_video_info["speed"] = self.format_playback_rate(float(self.settings.player_speed))
             self.current_video_info["pitch"] = self.format_playback_rate(1.0)
             self.update_details_text()
             self.set_status(self.t("playing", title=title))
-            threading.Thread(target=self.apply_initial_volume_worker, args=(self.player_generation,), daemon=True).start()
+            threading.Thread(target=self.apply_initial_volume_worker, args=(self.player_generation, target_volume), daemon=True).start()
             wx.CallLater(700, self.apply_equalizer_to_player)
             self.start_player_monitor(self.player_generation)
         except Exception as exc:
             self.message(self.t("player_failed", error=exc), wx.ICON_ERROR)
 
-    def apply_initial_volume_worker(self, generation: int) -> None:
-        target_volume = float(self.default_volume_value())
+    def apply_initial_volume_worker(self, generation: int, target_volume: float) -> None:
         deadline = time.monotonic() + 2.0
         while time.monotonic() < deadline:
             if generation != self.player_generation or not self.mpv_process_alive():
@@ -9211,7 +9346,7 @@ class MainFrame(wx.Frame):
         self.player_control_mode = True
         self.add_button_row(
             [
-                (self.t("back_results"), self.back_to_results),
+                (self.t("back_results"), lambda: self.back_to_results(stop_playback=False)),
                 (self.t("back"), self.leave_player_to_main_menu),
                 (self.t("close_player"), self.close_current_player),
                 (self.t("previous"), lambda: self.play_relative_item(-1)),
@@ -9253,6 +9388,7 @@ class MainFrame(wx.Frame):
             self.player_panel.SetBackgroundColour(wx.BLACK)
             self.player_panel.Bind(wx.EVT_KEY_DOWN, self.on_player_key)
             self.player_panel.Bind(wx.EVT_CHAR_HOOK, self.on_char_hook)
+            self.player_panel.Bind(wx.EVT_CONTEXT_MENU, self.open_player_context_menu)
         self.player_panel.SetName(self.t("player"))
         self.player_panel.SetLabel(self.t("player"))
         self.player_panel.SetToolTip(self.t("player"))
@@ -9273,22 +9409,37 @@ class MainFrame(wx.Frame):
 
     def on_repeat_changed(self, _event=None) -> None:
         checked = bool(getattr(self, "repeat_checkbox", None) and self.repeat_checkbox.GetValue())
+        self.set_repeat_enabled(checked)
+
+    def set_repeat_enabled(self, checked: bool, announce: bool = True) -> None:
         self.repeat_current = checked
         if self.player_kind == "mpv" and self.mpv_process_alive():
             try:
                 self.mpv_set_property("loop-file", "inf" if checked else "no", timeout=0.8)
             except Exception:
                 pass
-        self.announce_player(self.t("repeat_on" if checked else "repeat_off"))
+        if getattr(self, "repeat_checkbox", None):
+            try:
+                self.repeat_checkbox.SetValue(checked)
+            except RuntimeError:
+                pass
+        if announce:
+            self.announce_player(self.t("repeat_on" if checked else "repeat_off"))
+
+    def toggle_repeat(self) -> None:
+        self.set_repeat_enabled(not self.repeat_current)
 
     def on_bass_boost_changed(self, _event=None) -> None:
         checked = bool(getattr(self, "bass_boost_checkbox", None) and self.bass_boost_checkbox.GetValue())
+        self.set_bass_boost_enabled(checked)
+
+    def set_bass_boost_enabled(self, checked: bool, announce: bool = True) -> None:
         if checked == self.bass_boost_enabled:
             return
         if checked:
             self.session_equalizer_before_bass_boost = (self.session_equalizer_enabled, dict(self.session_equalizer_gains))
             self.session_equalizer_enabled = True
-            self.session_equalizer_gains = self.equalizer_gains_for_preset("bass_boost")
+            self.session_equalizer_gains = self.factory_equalizer_gains_for_preset("bass_boost")
         else:
             previous = self.session_equalizer_before_bass_boost
             if previous is None:
@@ -9299,8 +9450,21 @@ class MainFrame(wx.Frame):
                 self.session_equalizer_gains = dict(gains)
             self.session_equalizer_before_bass_boost = None
         self.bass_boost_enabled = checked
+        if getattr(self, "bass_boost_checkbox", None):
+            try:
+                self.bass_boost_checkbox.SetValue(checked)
+            except RuntimeError:
+                pass
         self.apply_equalizer_to_player()
-        self.announce_player(self.t("bass_boost_on" if checked else "bass_boost_off"))
+        if announce:
+            self.announce_player(self.t("bass_boost_on" if checked else "bass_boost_off"))
+
+    def toggle_bass_boost(self) -> None:
+        self.set_bass_boost_enabled(not self.bass_boost_enabled)
+
+    def toggle_shuffle(self) -> None:
+        self.shuffle_current = not self.shuffle_current
+        self.announce_player(self.t("shuffle_on" if self.shuffle_current else "shuffle_off"))
 
     def leave_player_to_main_menu(self) -> None:
         keep_playing = self.background_playback_enabled()
@@ -9493,7 +9657,8 @@ class MainFrame(wx.Frame):
         return "\n".join(line for line in lines if line is not None)
 
     def active_item(self) -> dict | None:
-        if self.in_player_screen and self.current_video_item:
+        focus = wx.Window.FindFocus()
+        if self.current_video_item and (self.in_player_screen or self.focus_in_background_player_controls(focus)):
             return self.current_video_item
         if self.in_queue_screen:
             item = self.selected_queue_item()
@@ -9829,6 +9994,9 @@ class MainFrame(wx.Frame):
             return None
         current_url = str((self.current_video_item or {}).get("url") or "")
         current_pos = next((i for i, item in enumerate(playable) if item.get("url") == current_url), -1)
+        if self.shuffle_current and delta > 0 and playable:
+            choices = [item for item in playable if str(item.get("url") or "") != current_url] or playable
+            return dict(random.choice(choices))
         if current_pos >= 0:
             item_index = current_pos + delta
         if 0 <= item_index < len(playable):
@@ -9838,7 +10006,7 @@ class MainFrame(wx.Frame):
     def open_relative_player_item(self, item: dict) -> None:
         if not item.get("url"):
             return
-        self.stop_player(silent=True)
+        show_player = self.in_player_screen or not self.background_playback_enabled()
         if item.get("kind") == "rss_item":
             self.player_return_screen = "rss_items"
             self.player_return_data = {
@@ -9858,7 +10026,7 @@ class MainFrame(wx.Frame):
             self.player_return_data = {"index": self.return_index}
         self.current_video_item = item
         self.current_video_info = dict(item)
-        self.play_url(str(item.get("url") or ""), str(item.get("title") or ""))
+        self.play_url(str(item.get("url") or ""), str(item.get("title") or ""), show_player=show_player)
 
     def playable_queue_item(self, item: dict | None) -> dict | None:
         if not item or item.get("kind") in {"channel", "playlist"}:
@@ -9985,16 +10153,19 @@ class MainFrame(wx.Frame):
         return item
 
     def open_playback_queue_item(self, item: dict) -> None:
+        show_player = self.in_player_screen or not self.background_playback_enabled()
+        self.open_playback_queue_item_with_mode(item, show_player=show_player)
+
+    def open_playback_queue_item_with_mode(self, item: dict, show_player: bool = True) -> None:
         url = str(item.get("url") or "")
         if not url:
             self.announce_player(self.t("no_selection"))
             return
-        self.stop_player(silent=True)
         self.player_return_screen = "playback_queue"
         self.player_return_data = {}
         self.current_video_item = item
         self.current_video_info = dict(item)
-        self.play_url(url, str(item.get("title") or ""))
+        self.play_url(url, str(item.get("title") or ""), show_player=show_player)
 
     def current_local_media_path(self) -> Path | None:
         item = self.current_video_item or self.current_video_info or {}
@@ -10238,9 +10409,9 @@ class MainFrame(wx.Frame):
             return
         queued_item = self.pop_next_playback_queue_item()
         if queued_item:
-            self.open_playback_queue_item(queued_item)
+            self.open_playback_queue_item_with_mode(queued_item, show_player=self.in_player_screen or not self.background_playback_enabled())
             return
-        if self.settings.autoplay_next:
+        if self.shuffle_current or self.settings.autoplay_next:
             next_item = self.relative_player_item(1)
             if next_item:
                 self.open_relative_player_item(next_item)
@@ -10682,6 +10853,7 @@ class MainFrame(wx.Frame):
             maximum = 300.0 if self.volume_boost_enabled else 100.0
             volume = min(max(0.0, volume + float(delta)), maximum)
             self.mpv_set_property("volume", volume)
+            self.session_volume = volume
         except Exception:
             pass
 
@@ -10697,6 +10869,9 @@ class MainFrame(wx.Frame):
             current = self.mpv_get_property("volume")
             if current is not None and float(current) > 100.0:
                 self.mpv_set_property("volume", 100.0)
+                self.session_volume = 100.0
+            elif current is not None:
+                self.session_volume = max(0.0, min(100.0, float(current)))
         except Exception:
             pass
         wx.CallAfter(self.announce_player, self.t("volume_boost_off"))
@@ -11150,10 +11325,12 @@ class MainFrame(wx.Frame):
         except Exception:
             pass
 
-    def stop_player(self, silent: bool = False) -> None:
+    def stop_player(self, silent: bool = False, reset_session: bool = True) -> None:
         self.save_current_playback_position()
         self.player_generation += 1
         self.player_ended = False
+        if not reset_session:
+            self.remember_current_player_volume()
         if self.player_process and self.player_process.poll() is None:
             self.player_process.terminate()
             try:
@@ -11171,6 +11348,15 @@ class MainFrame(wx.Frame):
         self.current_stream_url = ""
         self.current_stream_headers = {}
         self.current_audio_device = ""
+        if reset_session:
+            self.session_volume = None
+            self.session_audio_output_device = ""
+            self.session_equalizer_enabled = None
+            self.session_equalizer_gains = {}
+            self.session_equalizer_before_bass_boost = None
+            self.bass_boost_enabled = False
+            self.volume_boost_enabled = False
+            self.shuffle_current = False
         if self.player_panel is not None:
             try:
                 self.root_sizer.Detach(self.player_panel)
@@ -11451,13 +11637,13 @@ class MainFrame(wx.Frame):
                 return
             self.show_main_menu()
             return
-        if self.in_player_screen and self.shortcut_matches(event, "player_copy_link"):
-            self.copy_active_url()
-            return
         if self.shortcut_matches(event, "copy_stream_url"):
             self.copy_direct_stream_url()
             return
         if self.player_control_mode and self.player_shortcuts_allowed(focus):
+            if self.context_menu_shortcut_matches(event):
+                self.open_player_context_menu()
+                return
             if focus is getattr(self, "repeat_checkbox", None) and self.shortcut_matches(event, "player_play_pause"):
                 event.Skip()
                 return
@@ -11469,6 +11655,9 @@ class MainFrame(wx.Frame):
                 return
             if self.shortcut_matches(event, "player_output_devices"):
                 self.show_output_devices()
+                return
+            if self.shortcut_matches(event, "player_copy_link"):
+                self.copy_current_player_url()
                 return
             if self.shortcut_matches(event, "player_equalizer"):
                 self.show_player_equalizer()
@@ -11496,6 +11685,15 @@ class MainFrame(wx.Frame):
                 return
             if self.shortcut_matches(event, "player_volume_boost"):
                 self.toggle_volume_boost()
+                return
+            if self.shortcut_matches(event, "player_bass_boost"):
+                self.toggle_bass_boost()
+                return
+            if self.shortcut_matches(event, "player_repeat"):
+                self.toggle_repeat()
+                return
+            if self.shortcut_matches(event, "player_shuffle"):
+                self.toggle_shuffle()
                 return
             if self.shortcut_matches(event, "player_play_pause"):
                 self.player_play_pause()
@@ -11543,6 +11741,37 @@ class MainFrame(wx.Frame):
                 self.change_volume_async(-self.settings.volume_step)
                 return
         event.Skip()
+
+    def open_player_context_menu(self, _event=None) -> None:
+        item = self.current_video_item or self.current_video_info or {}
+        menu = wx.Menu()
+        actions = []
+        if item.get("kind") != "local_file":
+            actions.extend(
+                [
+                    (self.menu_label_with_shortcut("download_audio", "download_audio"), lambda: self.start_download(True, item=dict(item))),
+                    (self.menu_label_with_shortcut("download_video", "download_video"), lambda: self.start_download(False, item=dict(item))),
+                ]
+            )
+        actions.extend([
+            (self.t("add_favorite"), lambda: self.add_favorite_item(dict(item))),
+            (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
+            (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
+            (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda: self.copy_direct_stream_url(dict(item))),
+            (self.menu_label_with_shortcut("copy_url", "copy_link"), self.copy_current_player_url),
+            (self.t("output_devices"), self.show_output_devices),
+            (self.t("equalizer"), self.show_player_equalizer),
+            (self.t("close_player"), self.close_current_player),
+        ])
+        if item.get("kind") != "local_file":
+            actions.insert(-5, (self.t("open_browser"), lambda: webbrowser.open(str(item.get("webpage_url") or item.get("url") or ""))))
+        for label, handler in actions:
+            menu_item = menu.Append(wx.ID_ANY, label)
+            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), menu_item)
+        if self.playlist_item_is_supported(item):
+            self.append_add_to_playlist_menu(menu)
+        self.PopupMenu(menu)
+        menu.Destroy()
 
     def open_context_menu(self, _event=None) -> None:
         menu = wx.Menu()

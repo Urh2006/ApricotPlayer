@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.8.7` (`0.8.7`)
+Current version: `0.8.8` (`0.8.8`)
 
 ## Download
 
@@ -30,14 +30,16 @@ py wx_main.py
 - NVDA-friendly main menu and search flow
 - In-app YouTube playback with `mpv`
 - Optional background playback while browsing results, settings, downloads, and the main menu, with a screen-reader named Player section and a Close player control
+- Player background controls on result/library/settings screens, plus context-menu actions from the player for download, queue, favorites, playlists, stream URL, output device, equalizer, and close
 - Global `Ctrl+Space` background play/pause and `Ctrl+L` copy-link support from search results
 - Optional Trending screen, hidden by default, with country and category filters using the official YouTube most-popular API when a YouTube Data API key is configured
 - Channel result options for opening channel videos, playlists, home, or popular videos
-- Local media file playback for common audio and video files, including file association support on Windows
+- Local media file and whole-folder playback for common audio and video files, including file association support on Windows
 - First-run repair prompt if Windows media player registration is missing after an update
 - Play from folder for choosing local media inside ApricotPlayer
 - Accessible 10-band equalizer with descriptive frequency sliders, global Settings controls, genre/sound presets, dynamic custom profiles, player-only live controls, and a player action to save the current EQ as a global preset
 - Player Bass boost checkbox for a temporary per-video EQ boost
+- Player hotkeys include `F2` volume boost, `F3` bass boost, `F4` equalizer, `R` repeat, and `Shift+S` shuffle
 - Player clip markers and FFmpeg export for the marked section of the current video, local file, or podcast
 - Marked clips now export through the normal download shortcuts: `Ctrl+Shift+A` for audio clips and `Ctrl+Shift+D` for video clips
 - Start and end clip marker shortcuts toggle markers on and off, so accidental markers can be cleared immediately
@@ -160,4 +162,4 @@ Helpful scripts:
 - `scripts/build_release.ps1 -PackageMode onedir` builds the fast app folder used by both the installer and portable ZIP
 - `scripts/build_installer.ps1` builds `ApricotPlayerSetup.exe` when Inno Setup is installed
 - `scripts/build_portable_zip.ps1` builds `ApricotPlayer.zip`
-- `scripts/publish_release.ps1 -Tag v0.8.7 -NotesFile release-notes/v0.8.7.md` publishes the installer and portable ZIP to GitHub Releases
+- `scripts/publish_release.ps1 -Tag v0.8.8 -NotesFile release-notes/v0.8.8.md` publishes the installer and portable ZIP to GitHub Releases

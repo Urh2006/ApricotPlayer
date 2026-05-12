@@ -1,5 +1,17 @@
 # Changelog
 
+## What's new in version 0.8.8
+
+- fixed background playback navigation so global shortcuts and manual navigation keep the active player alive when background playback is enabled, while Escape from the full player still stops playback and returns to the previous results
+- added player context-menu actions for download audio/video, add to favorites, add/remove playback queue, add to playlist, open in browser, copy URL, copy stream URL, output devices, equalizer, and close player
+- added player hotkeys for `F3` bass boost, `F4` equalizer, `R` repeat, and `Shift+S` shuffle; these are available in Keyboard shortcuts settings
+- made whole-folder local playback available from the main menu, with dynamic browsing of folder items and shuffle support across local files
+- preserved user-adjusted session volume, volume boost, bass boost, and player equalizer state when the next track starts, instead of resetting to the default volume every time
+- raised dynamic YouTube search/channel/playlist loading beyond the old 250-result ceiling, while keeping official Trending from falling back to fake search results
+- hardened folder conversion so one failed file no longer stops the whole folder conversion; ApricotPlayer reports converted and failed counts
+- improved Chrome-family cookie diagnostics for DPAPI/decode failures and kept the DevTools fallback path available for profiles where normal `yt-dlp` cookie extraction fails
+- expanded Trending country choices for testers who enable Trending in Settings
+
 ## What's new in version 0.8.7
 
 - added a Library setting to show or hide Trending in the main menu; Trending is off by default for new and existing settings files until enabled
