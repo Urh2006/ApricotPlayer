@@ -187,8 +187,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.11"
-APP_VERSION_LABEL = "0.8.11"
+APP_VERSION = "0.8.12"
+APP_VERSION_LABEL = "0.8.12"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -3390,6 +3390,40 @@ for language_code in LANGUAGE_CODES:
     for key, value in RELEASE_089_TRANSLATION_UPDATES["en"].items():
         TEXT.setdefault(language_code, {}).setdefault(key, value)
 
+RELEASE_0812_TRANSLATION_UPDATES = {
+    "sl": {
+        "cookie_user_agent": "Browser User-Agent za cookies datoteko",
+        "cookies_file_imported": "Cookies datoteka uvozena in normalizirana: {path}",
+        "cookies_file_json_imported": "JSON cookies pretvorjeni v cookies.txt: {path}",
+        "cookies_file_header_imported": "Cookie header pretvorjen v cookies.txt: {path}",
+        "cookies_file_netscape_imported": "Netscape cookies datoteka normalizirana: {path}",
+        "cookies_file_unsupported": "Ta cookies datoteka ni v podprtem formatu. Izberi Netscape/Mozilla cookies.txt ali JSON export iz browser extensiona.",
+        "cookies_file_import_hint": "ApricotPlayer bo izbrano datoteko pretvoril v interno Netscape cookies.txt kopijo, ker yt-dlp zahteva ta format.",
+        "cookies_file_selected": "Cookies file imported: {path}",
+        "cookies_file_login_found": "YouTube login cookies found in imported cookies file.",
+        "cookies_file_no_login_warning": "Imported cookies do not appear to contain YouTube login cookies. ApricotPlayer will still use them, but YouTube may keep asking you to sign in.",
+        "cookies_file_load_failed": "Could not import selected cookies file: {error}",
+    },
+    "en": {
+        "cookie_user_agent": "Browser User-Agent for cookies file",
+        "cookies_file_imported": "Cookies imported and normalized: {path}",
+        "cookies_file_json_imported": "JSON cookies converted to cookies.txt: {path}",
+        "cookies_file_header_imported": "Cookie header converted to cookies.txt: {path}",
+        "cookies_file_netscape_imported": "Netscape cookies file normalized: {path}",
+        "cookies_file_unsupported": "This cookies file is not in a supported format. Choose a Netscape/Mozilla cookies.txt file or a JSON export from a browser extension.",
+        "cookies_file_import_hint": "ApricotPlayer converts the selected file into its own Netscape cookies.txt copy because yt-dlp requires that format.",
+        "cookies_file_selected": "Cookies file imported: {path}",
+        "cookies_file_login_found": "YouTube login cookies found in imported cookies file.",
+        "cookies_file_no_login_warning": "Imported cookies do not appear to contain YouTube login cookies. ApricotPlayer will still use them, but YouTube may keep asking you to sign in.",
+        "cookies_file_load_failed": "Could not import selected cookies file: {error}",
+    },
+}
+for language_code in LANGUAGE_CODES:
+    TEXT.setdefault(language_code, {}).update(RELEASE_0812_TRANSLATION_UPDATES.get(language_code, RELEASE_0812_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
+for language_code in LANGUAGE_CODES:
+    for key, value in RELEASE_0812_TRANSLATION_UPDATES["en"].items():
+        TEXT.setdefault(language_code, {}).setdefault(key, value)
+
 
 def default_equalizer_gains() -> dict[str, float]:
     return {band_id: 0.0 for band_id, _label in EQ_BANDS}
@@ -3485,6 +3519,7 @@ class Settings:
     cookies_file: str = ""
     cookies_from_browser: str = "none"
     cookies_browser_profile: str = COOKIE_PROFILE_AUTO
+    cookie_user_agent: str = ""
     ffmpeg_location: str = ""
     concurrent_fragments: int = 4
     retries: int = 10
@@ -4148,6 +4183,11 @@ class MainFrame(wx.Frame):
             cookiefile = self.effective_cookies_file()
         if cookiefile:
             merged["cookiefile"] = str(Path(os.path.expandvars(cookiefile.strip('"'))).expanduser())
+            cookie_user_agent = str(getattr(self.settings, "cookie_user_agent", "") or "").strip()
+            if cookie_user_agent:
+                headers = dict(merged.get("http_headers") or {})
+                headers["User-Agent"] = cookie_user_agent
+                merged["http_headers"] = headers
         return merged
 
     @staticmethod
@@ -4178,7 +4218,28 @@ class MainFrame(wx.Frame):
     def effective_cookies_file(self) -> str:
         configured = str(getattr(self.settings, "cookies_file", "") or "").strip()
         if configured:
-            return str(Path(os.path.expandvars(configured.strip('"'))).expanduser())
+            configured_path = Path(os.path.expandvars(configured.strip('"'))).expanduser()
+            try:
+                same_as_cache = configured_path.resolve() == CACHED_COOKIES_FILE.resolve()
+            except OSError:
+                same_as_cache = False
+            attempts = getattr(self, "_cookies_file_auto_import_attempts", None)
+            if attempts is None:
+                attempts = set()
+                self._cookies_file_auto_import_attempts = attempts
+            attempt_key = str(configured_path)
+            if not same_as_cache and attempt_key not in attempts and configured_path.exists():
+                attempts.add(attempt_key)
+                try:
+                    result = self.import_cookie_file_to_cache(configured_path)
+                    self.settings.cookies_file = str(result["path"])
+                    self.settings.cookies_from_browser = "none"
+                    self.settings.cookies_browser_profile = COOKIE_PROFILE_AUTO
+                    self.save_settings()
+                    return str(result["path"])
+                except Exception:
+                    pass
+            return str(configured_path)
         try:
             if CACHED_COOKIES_FILE.exists() and CACHED_COOKIES_FILE.stat().st_size > 0:
                 return str(CACHED_COOKIES_FILE)
@@ -4191,6 +4252,261 @@ class MainFrame(wx.Frame):
         jar.load(str(path), ignore_discard=True, ignore_expires=True)
         score, youtube_count, total_count = self.cookie_jar_score(jar)
         return score, youtube_count, total_count, self.cookie_jar_has_login_cookies(jar)
+
+    @staticmethod
+    def decode_cookie_file_bytes(data: bytes) -> str:
+        for encoding in ("utf-8-sig", "utf-8", "cp1252"):
+            try:
+                return data.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+        return data.decode("utf-8", errors="replace")
+
+    @staticmethod
+    def cookie_bool(value) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+    @staticmethod
+    def cookie_expiry(value) -> int | None:
+        if value in (None, "", -1, "-1", 0, "0"):
+            return None
+        try:
+            expires = float(value)
+        except (TypeError, ValueError):
+            return None
+        if expires > 10_000_000_000:
+            expires /= 1000.0
+        if expires <= 0:
+            return None
+        return int(expires)
+
+    @staticmethod
+    def cookie_default_domain_from_text(text: str) -> str:
+        text = str(text or "").strip()
+        if not text:
+            return ""
+        if "://" not in text and "." in text:
+            return text.split("/", 1)[0]
+        try:
+            parsed = urlparse(text)
+            return parsed.netloc or parsed.path.split("/", 1)[0]
+        except Exception:
+            return ""
+
+    @staticmethod
+    def looks_like_cookie_domain_key(key: str) -> bool:
+        key = str(key or "").strip()
+        if not key or len(key) > 120 or " " in key:
+            return False
+        if key.startswith("."):
+            key = key[1:]
+        return "." in key and "/" not in key and "\\" not in key
+
+    def cookie_from_mapping(self, item: dict, default_domain: str = "") -> http.cookiejar.Cookie | None:
+        name = str(item.get("name") or item.get("Name") or item.get("key") or "").strip()
+        if not name:
+            return None
+        value = item.get("value")
+        if value is None:
+            value = item.get("Value")
+        if value is None:
+            value = ""
+        domain = str(
+            item.get("domain")
+            or item.get("Domain")
+            or item.get("host")
+            or item.get("host_key")
+            or item.get("hostKey")
+            or default_domain
+            or ""
+        ).strip()
+        if domain.startswith("#HttpOnly_"):
+            domain = domain[len("#HttpOnly_") :]
+        if "://" in domain:
+            domain = self.cookie_default_domain_from_text(domain)
+        if not domain:
+            return None
+        path = str(item.get("path") or item.get("Path") or "/")
+        expires = None
+        for key in ("expirationDate", "expiration_date", "expires", "expiry", "expiration", "Expiry"):
+            if key in item:
+                expires = self.cookie_expiry(item.get(key))
+                break
+        http_only = self.cookie_bool(item.get("httpOnly") if "httpOnly" in item else item.get("http_only"))
+        secure = self.cookie_bool(item.get("secure"))
+        return http.cookiejar.Cookie(
+            version=0,
+            name=name,
+            value=str(value),
+            port=None,
+            port_specified=False,
+            domain=domain,
+            domain_specified=True,
+            domain_initial_dot=domain.startswith("."),
+            path=path or "/",
+            path_specified=True,
+            secure=secure,
+            expires=expires,
+            discard=expires is None,
+            comment=None,
+            comment_url=None,
+            rest={"HttpOnly": None} if http_only else {},
+            rfc2109=False,
+        )
+
+    def iter_cookie_json_items(self, data, default_domain: str = ""):
+        if isinstance(data, list):
+            for item in data:
+                yield from self.iter_cookie_json_items(item, default_domain)
+            return
+        if not isinstance(data, dict):
+            return
+        own_default = (
+            self.cookie_default_domain_from_text(str(data.get("url") or data.get("host") or data.get("domain") or ""))
+            or default_domain
+        )
+        if any(key in data for key in ("name", "Name", "key")) and any(key in data for key in ("value", "Value")):
+            yield data, own_default
+        for key, value in data.items():
+            child_default = own_default
+            if self.looks_like_cookie_domain_key(key):
+                child_default = key
+            if isinstance(value, (list, dict)):
+                yield from self.iter_cookie_json_items(value, child_default)
+
+    def cookie_jar_from_json_data(self, data) -> http.cookiejar.MozillaCookieJar:
+        jar = http.cookiejar.MozillaCookieJar()
+        seen: set[tuple[str, str, str]] = set()
+        for item, default_domain in self.iter_cookie_json_items(data):
+            cookie = self.cookie_from_mapping(item, default_domain)
+            if not cookie:
+                continue
+            key = (cookie.domain, cookie.path, cookie.name)
+            if key in seen:
+                continue
+            seen.add(key)
+            jar.set_cookie(cookie)
+        return jar
+
+    @staticmethod
+    def looks_like_netscape_cookie_text(text: str) -> bool:
+        lowered = text[:500].lower()
+        if "# netscape http cookie file" in lowered or "# http cookie file" in lowered:
+            return True
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith("#") and not line.startswith("#HttpOnly_"):
+                continue
+            if len(line.split("\t")) >= 7:
+                return True
+            if len(re.split(r"\s+", line, maxsplit=6)) >= 7:
+                return True
+        return False
+
+    @staticmethod
+    def normalized_netscape_cookie_text(text: str) -> str:
+        lines: list[str] = []
+        has_header = False
+        for raw_line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+            line = raw_line.lstrip("\ufeff")
+            lowered = line.lower()
+            if lowered.startswith("# netscape http cookie file") or lowered.startswith("# http cookie file"):
+                has_header = True
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and "\t" not in stripped:
+                parts = re.split(r"\s+", stripped, maxsplit=6)
+                if len(parts) >= 7:
+                    line = "\t".join(parts[:7])
+            lines.append(line.rstrip("\n"))
+        if not has_header:
+            lines.insert(0, "# Netscape HTTP Cookie File")
+            lines.insert(1, "# This file was normalized by ApricotPlayer.")
+        return "\n".join(lines).rstrip() + "\n"
+
+    def cookie_jar_from_netscape_text(self, text: str) -> http.cookiejar.MozillaCookieJar:
+        normalized = self.normalized_netscape_cookie_text(text)
+        temp_path = CACHED_COOKIES_FILE.with_suffix(".import.tmp")
+        temp_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path.write_text(normalized, encoding="utf-8", newline="\n")
+        try:
+            jar = http.cookiejar.MozillaCookieJar()
+            jar.load(str(temp_path), ignore_discard=True, ignore_expires=True)
+            return jar
+        finally:
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+
+    def cookie_jar_from_header_text(self, text: str) -> http.cookiejar.MozillaCookieJar:
+        combined = " ".join(line.strip() for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#"))
+        if not combined:
+            raise RuntimeError(self.t("cookies_file_unsupported"))
+        if combined.lower().startswith("cookie:"):
+            combined = combined.split(":", 1)[1].strip()
+        if "=" not in combined or ";" not in combined:
+            raise RuntimeError(self.t("cookies_file_unsupported"))
+        jar = http.cookiejar.MozillaCookieJar()
+        ignored = {"path", "expires", "max-age", "secure", "httponly", "samesite", "domain", "priority"}
+        for part in combined.split(";"):
+            if "=" not in part:
+                continue
+            name, value = part.split("=", 1)
+            name = name.strip()
+            if not name or name.lower() in ignored:
+                continue
+            cookie = self.cookie_from_mapping({"name": name, "value": value.strip(), "domain": ".youtube.com", "path": "/"})
+            if cookie:
+                jar.set_cookie(cookie)
+        return jar
+
+    @staticmethod
+    def cookie_jar_total(cookie_jar) -> int:
+        return sum(1 for _cookie in cookie_jar)
+
+    def save_cookie_jar_to_cache(self, cookie_jar) -> None:
+        CACHED_COOKIES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = CACHED_COOKIES_FILE.with_suffix(".txt.tmp")
+        cookie_jar.save(str(temp_path), ignore_discard=True, ignore_expires=True)
+        os.replace(temp_path, CACHED_COOKIES_FILE)
+
+    def import_cookie_file_to_cache(self, source_path: str | Path) -> dict:
+        source = Path(source_path)
+        text = self.decode_cookie_file_bytes(source.read_bytes())
+        import_kind = "netscape"
+        jar: http.cookiejar.MozillaCookieJar | None = None
+        stripped = text.lstrip()
+        if stripped.startswith("{") or stripped.startswith("["):
+            try:
+                jar = self.cookie_jar_from_json_data(json.loads(text))
+                import_kind = "json"
+            except json.JSONDecodeError:
+                jar = None
+        if jar is None and self.looks_like_netscape_cookie_text(text):
+            jar = self.cookie_jar_from_netscape_text(text)
+            import_kind = "netscape"
+        if jar is None:
+            jar = self.cookie_jar_from_header_text(text)
+            import_kind = "header"
+        total_count = self.cookie_jar_total(jar)
+        if total_count <= 0:
+            raise RuntimeError(self.t("cookies_file_unsupported"))
+        self.save_cookie_jar_to_cache(jar)
+        score, youtube_count, total_count = self.cookie_jar_score(jar)
+        return {
+            "path": str(CACHED_COOKIES_FILE),
+            "kind": import_kind,
+            "score": score,
+            "youtube_count": youtube_count,
+            "total_count": total_count,
+            "has_login": self.cookie_jar_has_login_cookies(jar),
+        }
 
     def normalized_cookies_browser(self) -> str:
         browser = str(getattr(self.settings, "cookies_from_browser", "none") or "none").strip().lower()
@@ -8020,6 +8336,7 @@ class MainFrame(wx.Frame):
                 "cookies_file",
                 "cookies_from_browser",
                 "cookies_browser_profile",
+                "cookie_user_agent",
                 "ffmpeg_location",
                 "concurrent_fragments",
                 "retries",
@@ -8307,6 +8624,7 @@ class MainFrame(wx.Frame):
             choice("cookies_browser_profile", profile_value, profile_values, self.cookie_profile_choice_labels(profile_values))
             button("open_youtube_login_profile", self.open_youtube_login_profile_from_settings)
             button("export_browser_cookies", self.export_browser_cookies_from_settings)
+            text("cookie_user_agent", getattr(self.settings, "cookie_user_agent", ""))
             text("rate_limit", self.settings.rate_limit)
             text("proxy", self.settings.proxy)
             text("youtube_data_api_key", getattr(self.settings, "youtube_data_api_key", ""))
@@ -12848,27 +13166,34 @@ class MainFrame(wx.Frame):
             if dialog.ShowModal() != wx.ID_OK:
                 return
             path = dialog.GetPath()
-        self.settings.cookies_file = path
+        try:
+            result = self.import_cookie_file_to_cache(path)
+        except Exception as exc:
+            self.message(self.t("cookies_file_load_failed", error=self.friendly_error(exc)), wx.ICON_WARNING)
+            return
+        imported_path = str(result["path"])
+        self.settings.cookies_file = imported_path
         self.settings.cookies_from_browser = "none"
         self.settings.cookies_browser_profile = COOKIE_PROFILE_AUTO
         self.cookie_repair_suppressed_until = 0.0
         self.save_settings()
         if hasattr(self, "controls"):
             if "cookies" in self.controls:
-                self.controls["cookies"].SetValue(path)
+                self.controls["cookies"].SetValue(imported_path)
             if "cookies_from_browser" in self.controls:
                 self.controls["cookies_from_browser"].SetSelection(0)
             if "cookies_browser_profile" in self.controls:
                 self.controls["cookies_browser_profile"].SetSelection(0)
-        self.announce_player(self.t("cookies_file_selected", path=path))
-        try:
-            _score, _youtube_count, _total_count, has_login = self.cookie_file_score(path)
-            if has_login:
-                self.announce_player(self.t("cookies_file_login_found"))
-            else:
-                self.message(self.t("cookies_file_no_login_warning"), wx.ICON_WARNING)
-        except Exception as exc:
-            self.message(self.t("cookies_file_load_failed", error=self.friendly_error(exc)), wx.ICON_WARNING)
+        message_key = {
+            "json": "cookies_file_json_imported",
+            "header": "cookies_file_header_imported",
+            "netscape": "cookies_file_netscape_imported",
+        }.get(str(result.get("kind") or ""), "cookies_file_imported")
+        self.announce_player(self.t(message_key, path=imported_path))
+        if result.get("has_login"):
+            self.announce_player(self.t("cookies_file_login_found"))
+        else:
+            self.message(self.t("cookies_file_no_login_warning"), wx.ICON_WARNING)
 
     def export_browser_cookies_from_settings(self) -> None:
         if get_yt_dlp() is None:
@@ -13154,6 +13479,8 @@ class MainFrame(wx.Frame):
             self.settings.cookies_from_browser = c["cookies_from_browser"].GetStringSelection() or "none"
         if "cookies_browser_profile" in c:
             self.settings.cookies_browser_profile = self.selected_choice_value("cookies_browser_profile") or COOKIE_PROFILE_AUTO
+        if "cookie_user_agent" in c:
+            self.settings.cookie_user_agent = c["cookie_user_agent"].GetValue().strip()
         if "ffmpeg" in c:
             self.settings.ffmpeg_location = c["ffmpeg"].GetValue()
         if "fragments" in c:

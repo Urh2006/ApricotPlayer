@@ -1,5 +1,12 @@
 # Changelog
 
+## What's new in version 0.8.12
+
+- fixed manual browser-extension cookie imports by converting selected Netscape/Mozilla, JSON, and Cookie-header exports into ApricotPlayer's own normalized `cookies.txt`
+- existing manually selected cookie files are now normalized automatically the next time playback/downloads need cookies, so older settings are repaired without reselecting the file
+- added an optional Browser User-Agent setting for cookies files, matching yt-dlp guidance for sites that require cookies and browser-like headers to come from the same session
+- improved manual cookie warnings so ApricotPlayer keeps usable cookies but clearly reports when the imported file has no YouTube/Google login cookies
+
 ## What's new in version 0.8.11
 
 - fixed manual `cookies.txt` playback retry so ApricotPlayer uses a selected cookies file after a YouTube login/bot error even when age-restricted fallback support is turned off
