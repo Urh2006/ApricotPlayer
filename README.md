@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.8.10` (`0.8.10`)
+Current version: `0.8.11` (`0.8.11`)
 
 ## Download
 
@@ -75,6 +75,8 @@ py wx_main.py
 - Direct link screen for playing or downloading any `yt-dlp` supported URL
 - Direct link Enter behavior can be configured in Settings
 - Browser cookie export can close the selected browser first, scan Brave/Chrome/Edge/Firefox profiles, use a Chromium DevTools fallback when normal extraction finds no login cookies, report profile diagnostics, export a usable `cookies.txt`, and automatically refresh cookies only after YouTube asks for sign-in or bot confirmation
+- Manually chosen `cookies.txt` files are used after a fast playback auth failure even when age-restricted fallback support is off
+- Settings can be reset globally from General, or per section from the active Settings section
 - Age-restricted YouTube support is optional in Playback settings, off by default, and uses cookies plus the bundled EJS/Node fallback only when the normal fast playback attempt fails
 - Settings can hide Trending, History, or Podcasts and RSS from the main menu
 - Windows notifications for new videos from subscribed channels
@@ -165,4 +167,4 @@ Helpful scripts:
 - `scripts/build_release.ps1 -PackageMode onedir` builds the fast app folder used by both the installer and portable ZIP
 - `scripts/build_installer.ps1` builds `ApricotPlayerSetup.exe` when Inno Setup is installed
 - `scripts/build_portable_zip.ps1` builds `ApricotPlayer.zip`
-- `scripts/publish_release.ps1 -Tag v0.8.10 -NotesFile release-notes/v0.8.10.md` publishes the installer and portable ZIP to GitHub Releases
+- `scripts/publish_release.ps1 -Tag v0.8.11 -NotesFile release-notes/v0.8.11.md` publishes the installer and portable ZIP to GitHub Releases

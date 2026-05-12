@@ -1,5 +1,15 @@
 # Changelog
 
+## What's new in version 0.8.11
+
+- fixed manual `cookies.txt` playback retry so ApricotPlayer uses a selected cookies file after a YouTube login/bot error even when age-restricted fallback support is turned off
+- improved Chrome-family cookie export by trying a second DevTools mode when the normal `yt-dlp` browser-cookie path fails with DPAPI decrypt errors
+- added diagnostics for manually selected cookies files, including a warning when the file does not contain usable YouTube login cookies
+- added Reset all settings in General and Reset settings for the current section in every Settings section
+- made settings saves atomic and backed up the previous settings file, reducing the chance that an update or forced close resets playback/equalizer settings
+- throttled repeated automatic cookie-refresh speech after a failed cookie refresh, so the same broken browser-cookie state does not keep speaking continuously
+- made Repeat take priority over autoplay/queue at end of playback and restart the same item if mpv reaches EOF while repeat is enabled
+
 ## What's new in version 0.8.10
 
 - removed ApricotPlayer's remaining app-side cap in dynamic result mode, so YouTube searches, channels, playlists, and local folder lists keep loading 20 more items until the source stops returning results

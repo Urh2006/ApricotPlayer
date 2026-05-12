@@ -187,8 +187,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.10"
-APP_VERSION_LABEL = "0.8.10"
+APP_VERSION = "0.8.11"
+APP_VERSION_LABEL = "0.8.11"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -740,6 +740,9 @@ TEXT = {
         "channel_playlists": "Playliste kanala",
         "settings_file": "Settings file",
         "restore_defaults": "Restore to defaults",
+        "reset_all_settings": "Reset all settings",
+        "reset_settings_for_section": "Reset settings for {section}",
+        "section_settings_reset": "{section} settings reset.",
         "defaults_restored": "Default settings restored.",
         "loading_more_results": "Loading more results.",
         "no_more_results": "No more results.",
@@ -890,6 +893,9 @@ TEXT = {
         "close_browser_for_cookie_export_message": "{browser} je odprt. ApricotPlayer ga lahko zapre in potem exporta cookies, kar obicajno popravi Chrome cookie database error. Shrani odprte stvari v browserju, potem izberi Yes. Nadaljujem?",
         "browser_closed_for_cookie_export": "Browser zaprt. Exportam cookies.",
         "cookies_file_selected": "Cookies file selected: {path}",
+        "cookies_file_login_found": "YouTube login cookies found in selected cookies file.",
+        "cookies_file_no_login_warning": "The selected cookies file does not appear to contain YouTube login cookies. ApricotPlayer will still use it, but YouTube may keep asking you to sign in.",
+        "cookies_file_load_failed": "Could not read selected cookies file: {error}",
         "cookie_auto_refresh_start": "YouTube rabi prijavne cookies. Osvezujem cookies iz {browser}.",
         "cookie_auto_refresh_done": "Cookies osvezeni iz {profile}. Poskusam znova.",
         "cookie_auto_refresh_failed": "Cookies se niso mogli osveziti: {error}",
@@ -1146,6 +1152,9 @@ TEXT = {
         "direct_link_enter_stream": "Kopiraj direktni media URL",
         "settings_file": "Settings file",
         "restore_defaults": "Restore to defaults",
+        "reset_all_settings": "Reset all settings",
+        "reset_settings_for_section": "Reset settings for {section}",
+        "section_settings_reset": "{section} settings reset.",
         "defaults_restored": "Default settings restored.",
         "loading_more_results": "Loading more results.",
         "no_more_results": "No more results.",
@@ -1317,6 +1326,9 @@ TEXT = {
         "close_browser_for_cookie_export_message": "{browser} is open. ApricotPlayer can close it and then export cookies, which usually fixes the Chrome cookie database error. Save anything open in the browser, then choose Yes. Continue?",
         "browser_closed_for_cookie_export": "Browser closed. Exporting cookies.",
         "cookies_file_selected": "Cookies file selected: {path}",
+        "cookies_file_login_found": "YouTube login cookies found in selected cookies file.",
+        "cookies_file_no_login_warning": "The selected cookies file does not appear to contain YouTube login cookies. ApricotPlayer will still use it, but YouTube may keep asking you to sign in.",
+        "cookies_file_load_failed": "Could not read selected cookies file: {error}",
         "ffmpeg": "FFmpeg path",
         "fragments": "Concurrent fragments",
         "retries": "Retries",
@@ -1513,6 +1525,12 @@ TEXT["sl"].update(
         "shortcut_in_use": "{shortcut} je ze nastavljen za {action}. Izberi drugo bliznjico.",
         "shortcut_in_use_title": "Bliznjica je ze v uporabi",
         "tray_notification": "Windows obvestilo, ko gre ApricotPlayer v system tray",
+        "reset_all_settings": "Resetiraj vse nastavitve",
+        "reset_settings_for_section": "Resetiraj nastavitve za {section}",
+        "section_settings_reset": "Nastavitve za {section} so resetirane.",
+        "cookies_file_login_found": "YouTube prijavni piškotki so najdeni v izbrani cookies datoteki.",
+        "cookies_file_no_login_warning": "Izbrana cookies datoteka očitno nima YouTube prijavnih piškotkov. ApricotPlayer jo bo vseeno uporabil, ampak YouTube lahko še vedno zahteva prijavo.",
+        "cookies_file_load_failed": "Izbrane cookies datoteke ni bilo mogoče prebrati: {error}",
         "start_with_windows": "Zaženi ApricotPlayer ob zagonu Windows",
         "startup_registration_failed": "Nastavitve zagona z Windows ni bilo mogoče posodobiti: {error}",
         "tray_settings": "Nastavitve",
@@ -3610,6 +3628,7 @@ class MainFrame(wx.Frame):
         self.ipc_path: str | None = None
         self.mpv_ipc_lock = threading.Lock()
         self.cookie_repair_lock = threading.Lock()
+        self.cookie_repair_suppressed_until = 0.0
         self.ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.loading_more_results = False
         self.dynamic_fetch_enabled = True
@@ -4128,7 +4147,7 @@ class MainFrame(wx.Frame):
         if use_cookies and not cookiefile:
             cookiefile = self.effective_cookies_file()
         if cookiefile:
-            merged["cookiefile"] = cookiefile
+            merged["cookiefile"] = str(Path(os.path.expandvars(cookiefile.strip('"'))).expanduser())
         return merged
 
     @staticmethod
@@ -4159,13 +4178,19 @@ class MainFrame(wx.Frame):
     def effective_cookies_file(self) -> str:
         configured = str(getattr(self.settings, "cookies_file", "") or "").strip()
         if configured:
-            return configured
+            return str(Path(os.path.expandvars(configured.strip('"'))).expanduser())
         try:
             if CACHED_COOKIES_FILE.exists() and CACHED_COOKIES_FILE.stat().st_size > 0:
                 return str(CACHED_COOKIES_FILE)
         except OSError:
             pass
         return ""
+
+    def cookie_file_score(self, path: str | Path) -> tuple[int, int, int, bool]:
+        jar = http.cookiejar.MozillaCookieJar()
+        jar.load(str(path), ignore_discard=True, ignore_expires=True)
+        score, youtube_count, total_count = self.cookie_jar_score(jar)
+        return score, youtube_count, total_count, self.cookie_jar_has_login_cookies(jar)
 
     def normalized_cookies_browser(self) -> str:
         browser = str(getattr(self.settings, "cookies_from_browser", "none") or "none").strip().lower()
@@ -4287,6 +4312,8 @@ class MainFrame(wx.Frame):
         browser = self.normalized_cookies_browser()
         if not browser:
             return False
+        if time.monotonic() < self.cookie_repair_suppressed_until:
+            return False
         if not self.cookie_repair_lock.acquire(blocking=False):
             with self.cookie_repair_lock:
                 return bool(self.effective_cookies_file())
@@ -4295,6 +4322,7 @@ class MainFrame(wx.Frame):
             try:
                 result = self.export_browser_cookies_blocking(browser, allow_close=True)
             except Exception as export_exc:
+                self.cookie_repair_suppressed_until = time.monotonic() + 300.0
                 self.ui_queue.put(("announce", self.t("cookie_auto_refresh_failed", error=self.friendly_error(export_exc))))
                 return False
             self.ui_queue.put(("announce", self.t("cookie_auto_refresh_done", profile=result.get("profile_label", self.t("browser_profile_auto")))))
@@ -4437,7 +4465,7 @@ class MainFrame(wx.Frame):
                 return str(candidate)
         return ""
 
-    def chromium_profile_launch_args(self, browser: str, profile: str | None) -> tuple[str, list[str]]:
+    def chromium_profile_launch_args(self, browser: str, profile: str | None, headless: bool = True) -> tuple[str, list[str]]:
         root = self.cookie_browser_root(browser)
         if not root:
             raise RuntimeError(f"browser profile root not found for {browser}")
@@ -4456,13 +4484,16 @@ class MainFrame(wx.Frame):
         args = [
             f"--user-data-dir={user_data_dir}",
             "--remote-allow-origins=*",
-            "--headless=new",
             "--disable-gpu",
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-background-networking",
             "--disable-features=LockProfileCookieDatabase",
         ]
+        if headless:
+            args.append("--headless=new")
+        else:
+            args.extend(["--window-position=-32000,-32000", "--window-size=800,600"])
         if profile_dir and browser != "opera":
             args.append(f"--profile-directory={profile_dir}")
         return profile_dir or root.name, args
@@ -4522,11 +4553,11 @@ class MainFrame(wx.Frame):
             jar.set_cookie(cookie)
         return jar
 
-    def export_chromium_cookies_via_devtools(self, browser: str, profile: str | None) -> tuple[str, object]:
+    def export_chromium_cookies_via_devtools(self, browser: str, profile: str | None, headless: bool = True) -> tuple[str, object]:
         executable = self.cookie_browser_executable(browser)
         if not executable:
             raise RuntimeError(f"{browser} executable not found")
-        profile_label, base_args = self.chromium_profile_launch_args(browser, profile)
+        profile_label, base_args = self.chromium_profile_launch_args(browser, profile, headless=headless)
         port = self.free_local_port()
         args = [
             executable,
@@ -4694,19 +4725,23 @@ class MainFrame(wx.Frame):
                 if profile_key in tried_profiles:
                     continue
                 tried_profiles.add(profile_key)
-                try:
-                    cdp_label, cookie_jar = self.export_chromium_cookies_via_devtools(browser, profile)
-                    score, youtube_count, total_count = self.cookie_jar_score(cookie_jar)
-                    if total_count <= 0:
-                        errors.append(self.t("cookie_profile_attempt_failed", profile=label, error="no cookies found"))
-                        continue
-                    errors.append(self.cookie_score_summary(cdp_label or label, cookie_jar))
-                    if best is None or score > best[0]:
-                        best = (score, cdp_label or label, cookie_jar, "browser devtools cookie export")
-                    if score >= 100 and youtube_count > 0:
-                        break
-                except Exception as exc:
-                    errors.append(self.t("cookie_profile_attempt_failed", profile=label, error=self.cookie_export_error_text(exc)))
+                for headless in (True, False):
+                    mode_label = "DevTools headless" if headless else "DevTools window"
+                    try:
+                        cdp_label, cookie_jar = self.export_chromium_cookies_via_devtools(browser, profile, headless=headless)
+                        score, youtube_count, total_count = self.cookie_jar_score(cookie_jar)
+                        if total_count <= 0:
+                            errors.append(self.t("cookie_profile_attempt_failed", profile=f"{label} {mode_label}", error="no cookies found"))
+                            continue
+                        errors.append(self.cookie_score_summary(f"{cdp_label or label} {mode_label}", cookie_jar))
+                        if best is None or score > best[0]:
+                            best = (score, cdp_label or label, cookie_jar, mode_label)
+                        if score >= 100 and youtube_count > 0:
+                            break
+                    except Exception as exc:
+                        errors.append(self.t("cookie_profile_attempt_failed", profile=f"{label} {mode_label}", error=self.cookie_export_error_text(exc)))
+                if best and best[0] >= 100 and self.cookie_jar_has_login_cookies(best[2]):
+                    break
         if not best or best[0] <= 0 or not self.cookie_jar_has_login_cookies(best[2]):
             details = list(errors[-10:]) if errors else [self.t("cookie_all_profiles_failed")]
             if best:
@@ -4718,6 +4753,7 @@ class MainFrame(wx.Frame):
         cookie_jar.save(str(CACHED_COOKIES_FILE), ignore_discard=True, ignore_expires=True)
         self.settings.cookies_file = str(CACHED_COOKIES_FILE)
         self.settings.cookies_from_browser = browser
+        self.cookie_repair_suppressed_until = 0.0
         self.save_settings()
         return {"path": str(CACHED_COOKIES_FILE), "profile_label": label}
 
@@ -7874,6 +7910,124 @@ class MainFrame(wx.Frame):
             (self.t("keyboard_shortcuts_section"), "shortcuts"),
         ]
 
+    def settings_section_label(self, section_name: str) -> str:
+        for label, name in self.settings_sections():
+            if name == section_name:
+                return label
+        return section_name
+
+    @staticmethod
+    def settings_section_fields() -> dict[str, list[str]]:
+        return {
+            "general": [
+                "language",
+                "download_folder",
+                "results_limit",
+                "direct_link_enter_action",
+                "auto_update_ytdlp",
+                "auto_update_app",
+                "app_update_interval_hours",
+                "app_update_notifications",
+                "close_to_tray",
+                "start_with_windows",
+                "tray_notification",
+                "skipped_update_version",
+            ],
+            "playback": [
+                "autoplay_next",
+                "prefer_browser_playback",
+                "player_fullscreen",
+                "player_start_paused",
+                "announce_play_pause",
+                "announce_playback_finished",
+                "enable_background_playback",
+                "player_speed",
+                "speed_audio_mode",
+                "show_video_details_by_default",
+                "enable_age_restricted_videos",
+                "enable_stream_cache",
+                "cache_folder",
+                "cache_size_mb",
+                "resume_playback",
+                "audio_output_device",
+                "speed_step",
+                "pitch_step",
+                "pitch_mode",
+                "seek_seconds",
+                "volume_step",
+                "default_volume",
+                "volume_boost_by_default",
+            ],
+            "equalizer": [
+                "global_equalizer_enabled",
+                "global_equalizer_preset",
+                "global_equalizer_gains",
+                "equalizer_preset_gains",
+                "equalizer_custom_names",
+                "equalizer_db_range",
+            ],
+            "downloads": [
+                "audio_format",
+                "video_format",
+                "max_video_height",
+                "ask_download_location_each_time",
+                "quiet_downloads",
+                "keep_playlist_order",
+                "filename_template",
+                "audio_quality",
+                "write_thumbnail",
+                "write_description",
+                "write_info_json",
+                "write_subtitles",
+                "auto_subtitles",
+                "subtitle_languages",
+                "embed_metadata",
+                "embed_thumbnail",
+                "restrict_filenames",
+                "open_folder_after_download",
+                "popup_when_download_complete",
+                "confirm_before_download",
+                "download_archive",
+            ],
+            "library": [
+                "subscription_check_enabled",
+                "subscription_check_interval_hours",
+                "last_subscription_check",
+                "enable_trending",
+                "enable_history",
+                "history_limit",
+            ],
+            "podcasts": [
+                "enable_podcasts_rss",
+                "podcast_search_provider",
+                "podcast_search_country",
+                "podcast_search_limit",
+                "rss_max_items",
+                "rss_refresh_on_startup",
+                "rss_auto_refresh_enabled",
+                "rss_refresh_interval_hours",
+            ],
+            "notifications": [
+                "windows_notifications",
+                "download_notifications",
+                "subscription_notifications",
+                "app_update_notifications",
+            ],
+            "cookies": [
+                "rate_limit",
+                "proxy",
+                "youtube_data_api_key",
+                "cookies_file",
+                "cookies_from_browser",
+                "cookies_browser_profile",
+                "ffmpeg_location",
+                "concurrent_fragments",
+                "retries",
+                "socket_timeout",
+            ],
+            "shortcuts": ["keyboard_shortcuts"],
+        }
+
     def on_settings_section_changed(self, event) -> None:
         event.Skip()
         if not hasattr(self, "settings_section_list"):
@@ -7972,6 +8126,15 @@ class MainFrame(wx.Frame):
             self.settings_control_order.append(ctrl)
             return ctrl
 
+        def button_label(label: str, handler):
+            form.AddSpacer(1)
+            ctrl = wx.Button(self.settings_scroller, label=label)
+            ctrl.SetName(label)
+            ctrl.Bind(wx.EVT_BUTTON, lambda _evt, fn=handler: fn())
+            form.Add(ctrl, 0)
+            self.settings_control_order.append(ctrl)
+            return ctrl
+
         def slider(key: str, label: str, value: float, minimum: int, maximum: int):
             form.Add(wx.StaticText(self.settings_scroller, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
             scaled_value = int(round(float(value) * 10))
@@ -8032,6 +8195,7 @@ class MainFrame(wx.Frame):
             check("close_to_tray", self.settings.close_to_tray)
             check("start_with_windows", self.settings.start_with_windows)
             check("tray_notification", self.settings.tray_notification)
+            button("reset_all_settings", self.restore_default_settings)
         elif section_name == "playback":
             choice("player_speed", self.settings.player_speed, [self.format_playback_rate(step) for step in PLAYBACK_SPEED_STEPS if step <= 2.0])
             choice("speed_audio_mode", self.normalized_speed_audio_mode(), SPEED_AUDIO_MODE_OPTIONS, self.speed_audio_mode_labels())
@@ -8182,6 +8346,10 @@ class MainFrame(wx.Frame):
             form.Add(shortcut_ctrl, 1, wx.EXPAND)
             remember("shortcut_active_value", shortcut_ctrl)
 
+        button_label(
+            self.t("reset_settings_for_section", section=self.settings_section_label(section_name)),
+            lambda name=section_name: self.reset_settings_section(name),
+        )
         self.settings_scroller.SetSizer(form, True)
         self.settings_scroller.Layout()
         self.settings_scroller.FitInside()
@@ -9040,14 +9208,17 @@ class MainFrame(wx.Frame):
         try:
             info = self.ydl_extract_info(url, options, download=False, allow_cookie_retry=False)
         except Exception as exc:
-            if not self.age_restricted_video_support_enabled() or not (self.is_cookie_auth_error(exc) or self.is_age_or_js_playback_error(exc)):
+            cookie_file = self.effective_cookies_file()
+            can_retry_with_cookies = bool(cookie_file) and self.is_cookie_auth_error(exc)
+            can_retry_with_restricted_fallback = self.age_restricted_video_support_enabled() and (self.is_cookie_auth_error(exc) or self.is_age_or_js_playback_error(exc))
+            if not (can_retry_with_cookies or can_retry_with_restricted_fallback):
                 raise
             info = self.ydl_extract_info(
                 url,
                 options,
                 download=False,
-                use_cookies=bool(self.effective_cookies_file()),
-                use_js_solver=True,
+                use_cookies=bool(cookie_file),
+                use_js_solver=can_retry_with_restricted_fallback,
                 allow_cookie_retry=True,
             )
         stream_url = info.get("url")
@@ -10438,6 +10609,7 @@ class MainFrame(wx.Frame):
                 pass
         if self.repeat_current:
             self.player_ended = False
+            self.restart_current_playback(announce=False)
             return
         queued_item = self.pop_next_playback_queue_item()
         if queued_item:
@@ -10519,14 +10691,15 @@ class MainFrame(wx.Frame):
             pass
         return True
 
-    def restart_current_playback(self) -> None:
+    def restart_current_playback(self, announce: bool = True) -> None:
         self.player_ended = False
         if self.mpv_process_alive():
             try:
                 self.mpv_send(["seek", 0, "absolute+exact"], timeout=0.8)
                 self.mpv_set_property("pause", False, timeout=0.8)
                 self.start_player_monitor(self.player_generation)
-                self.announce_player(self.t("playback_restarted"))
+                if announce:
+                    self.announce_player(self.t("playback_restarted"))
                 return
             except Exception:
                 pass
@@ -12596,6 +12769,12 @@ class MainFrame(wx.Frame):
 
     def restore_default_settings(self) -> None:
         self.settings = Settings()
+        self.cookie_repair_suppressed_until = 0.0
+        try:
+            if CACHED_COOKIES_FILE.exists():
+                CACHED_COOKIES_FILE.unlink()
+        except OSError:
+            pass
         self.save_settings()
         self.sync_windows_startup_registration(show_error=True)
         self.configure_subscription_timer()
@@ -12604,6 +12783,37 @@ class MainFrame(wx.Frame):
         self.set_status(self.t("defaults_restored"))
         self.speak_text(self.t("defaults_restored"))
         self.show_settings()
+
+    def reset_settings_section(self, section_name: str) -> None:
+        section_fields = self.settings_section_fields().get(section_name, [])
+        if not section_fields:
+            return
+        defaults = asdict(Settings())
+        for key in section_fields:
+            if key in defaults:
+                setattr(self.settings, key, defaults[key])
+        if section_name == "cookies":
+            self.cookie_repair_suppressed_until = 0.0
+            try:
+                if CACHED_COOKIES_FILE.exists():
+                    CACHED_COOKIES_FILE.unlink()
+            except OSError:
+                pass
+        self.save_settings()
+        self.sync_windows_startup_registration(show_error=True)
+        self.configure_subscription_timer()
+        self.configure_rss_timer()
+        self.configure_app_update_timer()
+        if section_name == "shortcuts":
+            self.shortcut_editor_values = dict(DEFAULT_KEYBOARD_SHORTCUTS)
+        if section_name == "equalizer":
+            self.visible_equalizer_preset = EQ_PRESET_FLAT
+            if self.player_is_active() and self.session_equalizer_enabled is None:
+                self.apply_equalizer_to_player()
+        text = self.t("section_settings_reset", section=self.settings_section_label(section_name))
+        self.set_status(text)
+        self.speak_text(text)
+        self.render_settings_section_and_focus()
 
     def choose_download_folder(self) -> None:
         with wx.DirDialog(self, self.t("choose_download_folder"), self.settings.download_folder) as dialog:
@@ -12641,6 +12851,7 @@ class MainFrame(wx.Frame):
         self.settings.cookies_file = path
         self.settings.cookies_from_browser = "none"
         self.settings.cookies_browser_profile = COOKIE_PROFILE_AUTO
+        self.cookie_repair_suppressed_until = 0.0
         self.save_settings()
         if hasattr(self, "controls"):
             if "cookies" in self.controls:
@@ -12650,6 +12861,14 @@ class MainFrame(wx.Frame):
             if "cookies_browser_profile" in self.controls:
                 self.controls["cookies_browser_profile"].SetSelection(0)
         self.announce_player(self.t("cookies_file_selected", path=path))
+        try:
+            _score, _youtube_count, _total_count, has_login = self.cookie_file_score(path)
+            if has_login:
+                self.announce_player(self.t("cookies_file_login_found"))
+            else:
+                self.message(self.t("cookies_file_no_login_warning"), wx.ICON_WARNING)
+        except Exception as exc:
+            self.message(self.t("cookies_file_load_failed", error=self.friendly_error(exc)), wx.ICON_WARNING)
 
     def export_browser_cookies_from_settings(self) -> None:
         if get_yt_dlp() is None:
@@ -12759,6 +12978,7 @@ class MainFrame(wx.Frame):
     def finish_browser_cookies_export(self, path: str, profile_label: str, browser: str) -> None:
         self.settings.cookies_file = path
         self.settings.cookies_from_browser = browser
+        self.cookie_repair_suppressed_until = 0.0
         self.save_settings()
         if hasattr(self, "controls"):
             if "cookies" in self.controls:
@@ -14110,8 +14330,11 @@ class MainFrame(wx.Frame):
         return repaired
 
     def load_settings(self) -> Settings:
-        source = SETTINGS_FILE if SETTINGS_FILE.exists() else LEGACY_SETTINGS_FILE
-        if source.exists():
+        backup_settings = SETTINGS_FILE.with_suffix(".json.bak")
+        sources = [SETTINGS_FILE, backup_settings, LEGACY_SETTINGS_FILE]
+        for source in sources:
+            if not source.exists():
+                continue
             try:
                 raw_data = json.loads(source.read_text(encoding="utf-8"))
                 data = dict(raw_data) if isinstance(raw_data, dict) else {}
@@ -14157,12 +14380,21 @@ class MainFrame(wx.Frame):
                     merged["skipped_update_version"] = ""
                 return Settings(**merged)
             except Exception:
-                return Settings()
+                continue
         return Settings()
 
     def save_settings(self) -> None:
         APP_DIR.mkdir(parents=True, exist_ok=True)
-        SETTINGS_FILE.write_text(json.dumps(asdict(self.settings), indent=2, ensure_ascii=False), encoding="utf-8")
+        payload = json.dumps(asdict(self.settings), indent=2, ensure_ascii=False)
+        temp_file = SETTINGS_FILE.with_suffix(".json.tmp")
+        backup_file = SETTINGS_FILE.with_suffix(".json.bak")
+        temp_file.write_text(payload, encoding="utf-8")
+        if SETTINGS_FILE.exists():
+            try:
+                shutil.copy2(SETTINGS_FILE, backup_file)
+            except OSError:
+                pass
+        os.replace(temp_file, SETTINGS_FILE)
 
     def load_favorites(self) -> list[dict]:
         source = FAVORITES_FILE if FAVORITES_FILE.exists() else LEGACY_FAVORITES_FILE
