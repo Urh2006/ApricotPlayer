@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.8.20
+
+- fixed Play from folder so selected folders show their local audio/video files instead of leaving the list at "No search results"
+- added local-file-specific result rows and Space details so folder playback no longer expects YouTube-only metadata like views or upload age
+- made folder scanning more resilient by skipping unreadable files or subfolders instead of failing the whole folder
+
 ## What's new in version 0.8.19
 
 - fixed Trending return behavior so playback returns to the Trending screen with its country/category controls instead of the normal Search screen

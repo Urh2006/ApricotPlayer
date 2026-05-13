@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.8.19` (`0.8.19`)
+Current version: `0.8.20` (`0.8.20`)
 
 ## Download
 
@@ -37,7 +37,7 @@ py wx_main.py
 - Dynamic result loading keeps fetching 20 more search, channel, playlist, or folder items until the source has no more results
 - Local media file and whole-folder playback for common audio and video files, including file association support on Windows
 - First-run repair prompt if Windows media player registration is missing after an update
-- Play from folder for choosing local media inside ApricotPlayer
+- Play from folder for choosing local media inside ApricotPlayer, with folder contents shown as local media results
 - Accessible 10-band equalizer with descriptive frequency sliders, global Settings controls, genre/sound presets, dynamic custom profiles, player-only live controls, and a player action to save the current EQ as a global preset
 - Player Bass boost checkbox for a temporary per-video EQ boost
 - Player hotkeys include `F2` volume boost, `F3` bass boost, `F4` equalizer, `R` repeat, and `Shift+S` shuffle

@@ -187,8 +187,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.19"
-APP_VERSION_LABEL = "0.8.19"
+APP_VERSION = "0.8.20"
+APP_VERSION_LABEL = "0.8.20"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -3519,6 +3519,24 @@ for language_code in LANGUAGE_CODES:
     TEXT.setdefault(language_code, {}).update(RELEASE_0818_TRANSLATION_UPDATES.get(language_code, RELEASE_0818_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
 for language_code in LANGUAGE_CODES:
     for key, value in RELEASE_0818_TRANSLATION_UPDATES["en"].items():
+        TEXT.setdefault(language_code, {}).setdefault(key, value)
+
+RELEASE_0820_TRANSLATION_UPDATES = {
+    "sl": {
+        "local_file_result_details": "{title}. Lokalna datoteka. Format: {format}. Mapa: {folder}. Pot: {path}.",
+        "local_file_result_line": "{title} | Lokalna datoteka | Format: {format} | Mapa: {folder}",
+        "file_format_unknown": "neznan format",
+    },
+    "en": {
+        "local_file_result_details": "{title}. Local file. Format: {format}. Folder: {folder}. Path: {path}.",
+        "local_file_result_line": "{title} | Local file | Format: {format} | Folder: {folder}",
+        "file_format_unknown": "unknown format",
+    },
+}
+for language_code in LANGUAGE_CODES:
+    TEXT.setdefault(language_code, {}).update(RELEASE_0820_TRANSLATION_UPDATES.get(language_code, RELEASE_0820_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
+for language_code in LANGUAGE_CODES:
+    for key, value in RELEASE_0820_TRANSLATION_UPDATES["en"].items():
         TEXT.setdefault(language_code, {}).setdefault(key, value)
 
 
@@ -7255,6 +7273,14 @@ class MainFrame(wx.Frame):
     def result_details_text(self, item: dict) -> str:
         kind = str(item.get("kind") or "")
         title = str(item.get("title") or "")
+        if kind == "local_file":
+            return self.t(
+                "local_file_result_details",
+                title=title,
+                format=str(item.get("ext") or self.t("file_format_unknown")),
+                folder=str(item.get("folder") or item.get("channel") or self.t("unknown")),
+                path=str(item.get("path") or item.get("url") or item.get("webpage_url") or ""),
+            )
         if kind == "playlist":
             count = self.playlist_count_text(item) or self.t("playlist")
             return self.t("playlist_result_details", title=title, count=count)
@@ -9279,6 +9305,14 @@ class MainFrame(wx.Frame):
                     break
 
     def result_line(self, index: int, item: dict) -> str:
+        if item.get("kind") == "local_file":
+            title = str(item.get("relative_path") or item.get("title") or "")
+            return self.t(
+                "local_file_result_line",
+                title=title,
+                format=str(item.get("ext") or self.t("file_format_unknown")),
+                folder=str(item.get("folder") or item.get("channel") or ""),
+            )
         if item.get("kind") in {"playlist", "channel"}:
             parts = [item.get("title", ""), item.get("type", self.t("playlist" if item.get("kind") == "playlist" else "channel"))]
             if item.get("kind") == "playlist":
@@ -9742,15 +9776,25 @@ class MainFrame(wx.Frame):
         path = MainFrame.local_media_path_from_input(value)
         return bool(path and (path.suffix.lower() in LOCAL_MEDIA_EXTENSIONS or path.is_file()))
 
-    def local_media_item(self, path: Path) -> dict:
+    def local_media_item(self, path: Path, base_folder: Path | None = None) -> dict:
+        folder = path.parent.name
+        relative_path = path.name
+        if base_folder is not None:
+            try:
+                relative_path = str(path.relative_to(base_folder))
+            except ValueError:
+                relative_path = path.name
         return {
             "title": path.stem or path.name,
             "url": str(path),
             "webpage_url": str(path),
             "kind": "local_file",
             "type": self.t("local_media"),
-            "channel": path.parent.name,
+            "channel": folder,
+            "folder": folder,
             "ext": path.suffix.lstrip(".").lower(),
+            "path": str(path),
+            "relative_path": relative_path,
             "description": str(path),
         }
 
@@ -9759,15 +9803,24 @@ class MainFrame(wx.Frame):
         return f"{self.t('media_files')} ({patterns})|{patterns}|{self.t('all_files')} (*.*)|*.*"
 
     def local_media_files_in_folder(self, folder: Path) -> list[Path]:
+        files: list[Path] = []
+
+        def ignore_walk_error(_error: OSError) -> None:
+            return
+
         try:
-            files = [
-                path
-                for path in folder.rglob("*")
-                if path.is_file() and path.suffix.lower() in LOCAL_MEDIA_EXTENSIONS
-            ]
-            return sorted(files, key=lambda path: str(path.relative_to(folder)).lower())
+            for root, directories, names in os.walk(folder, onerror=ignore_walk_error):
+                directories.sort(key=str.lower)
+                for name in sorted(names, key=str.lower):
+                    path = Path(root) / name
+                    try:
+                        if path.is_file() and path.suffix.lower() in LOCAL_MEDIA_EXTENSIONS:
+                            files.append(path)
+                    except OSError:
+                        continue
         except OSError:
             return []
+        return sorted(files, key=lambda path: str(path.relative_to(folder)).lower())
 
     def show_play_from_folder(self) -> None:
         start_dir = self.settings.download_folder or str(Path.home())
@@ -9794,7 +9847,7 @@ class MainFrame(wx.Frame):
             self.message(self.t("folder_no_media"), wx.ICON_INFORMATION)
             self.show_main_menu()
             return
-        items = [self.local_media_item(path) for path in files]
+        items = [self.local_media_item(path, folder) for path in files]
         self.show_local_media_folder(folder, items, selection=0)
 
     def show_local_media_folder(self, folder: Path, items: list[dict], selection: int = 0) -> None:
