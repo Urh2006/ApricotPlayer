@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.8.22
+
+- fixed F7 video details by recognizing both wx and raw Windows F-key codes, including after resetting keyboard shortcuts to defaults
+- F7 now opens the full player first when used from background player controls, then focuses video details
+- reduced repeated screen reader announcements by avoiding repeated focus resets when ApricotPlayer is already focused on the correct list or control
+
 ## What's new in version 0.8.21
 
 - sped up video downloads without changing the already-fast audio download path

@@ -187,8 +187,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.21"
-APP_VERSION_LABEL = "0.8.21"
+APP_VERSION = "0.8.22"
+APP_VERSION_LABEL = "0.8.22"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -4274,6 +4274,9 @@ class MainFrame(wx.Frame):
         event_codes = self.key_event_codes(event)
         if key_code == wx.WXK_RETURN and wx.WXK_NUMPAD_ENTER in event_codes:
             return True
+        if wx.WXK_F1 <= key_code <= wx.WXK_F24:
+            raw_vk = 0x70 + (key_code - wx.WXK_F1)
+            return self.event_key_code(event) == key_code or self.event_raw_key_code(event) == raw_vk
         if len(key_name.strip()) == 1 and key_name.strip().isprintable():
             return self.key_event_matches_letter(event, key_name.strip()) if key_name.strip().isalpha() else key_code in event_codes
         return key_code in event_codes
@@ -5328,6 +5331,8 @@ class MainFrame(wx.Frame):
     def safe_set_focus(control: wx.Window) -> None:
         try:
             if control and not getattr(control, "IsBeingDeleted", lambda: False)():
+                if wx.Window.FindFocus() is control:
+                    return
                 control.SetFocus()
         except RuntimeError:
             pass
@@ -5432,20 +5437,24 @@ class MainFrame(wx.Frame):
             except Exception:
                 pass
 
-    def focus_primary_control(self) -> None:
+    def primary_focus_candidate(self) -> wx.Window | None:
         if getattr(self, "in_main_menu", False) and hasattr(self, "menu_list"):
-            self.safe_set_focus(self.menu_list)
-            return
+            return self.menu_list
         if getattr(self, "search_screen_active", False) and hasattr(self, "query"):
-            self.safe_set_focus(self.query)
-            return
+            return self.query
         focus = wx.Window.FindFocus()
+        return focus or self
+
+    def focus_primary_control(self) -> None:
+        focus = self.primary_focus_candidate()
         if focus:
             self.safe_set_focus(focus)
-        else:
-            self.safe_set_focus(self)
 
     def activate_window(self) -> None:
+        focus = wx.Window.FindFocus()
+        primary = self.primary_focus_candidate()
+        if primary is not None and focus is primary and self.app_has_focus():
+            return
         self.foreground_window()
         self.focus_primary_control()
 
@@ -10709,7 +10718,9 @@ class MainFrame(wx.Frame):
             return
         try:
             if index is not None and self.results_list.GetCount():
-                self.results_list.SetSelection(min(max(0, index), self.results_list.GetCount() - 1))
+                target = min(max(0, index), self.results_list.GetCount() - 1)
+                if self.results_list.GetSelection() != target:
+                    self.results_list.SetSelection(target)
             self.safe_set_focus(self.results_list)
         except RuntimeError:
             pass
@@ -10720,6 +10731,11 @@ class MainFrame(wx.Frame):
 
     def show_video_details(self, temporary: bool | None = None) -> None:
         if not self.in_player_screen:
+            if self.player_is_active():
+                self.show_current_player_screen()
+                wx.CallAfter(self.show_video_details, temporary)
+            else:
+                self.announce_player(self.t("no_player"))
             return
         self.details_opened_temporarily = (not self.settings.show_video_details_by_default) if temporary is None else bool(temporary)
         if self.video_details is None:
@@ -12697,6 +12713,23 @@ class MainFrame(wx.Frame):
         return codes
 
     @staticmethod
+    def event_key_code(event: wx.KeyEvent) -> int:
+        try:
+            return int(event.GetKeyCode())
+        except Exception:
+            return -1
+
+    @staticmethod
+    def event_raw_key_code(event: wx.KeyEvent) -> int:
+        getter = getattr(event, "GetRawKeyCode", None)
+        if not getter:
+            return -1
+        try:
+            return int(getter())
+        except Exception:
+            return -1
+
+    @staticmethod
     def is_modifier_only_event(event: wx.KeyEvent) -> bool:
         modifier_codes = {
             getattr(wx, "WXK_CONTROL", -1),
@@ -12761,6 +12794,24 @@ class MainFrame(wx.Frame):
         if not (event.ControlDown() and event.ShiftDown()):
             return False
         return MainFrame.key_event_matches_letter(event, letter)
+
+    @classmethod
+    def is_function_key_event(cls, event: wx.KeyEvent, number: int) -> bool:
+        if not 1 <= number <= 24:
+            return False
+        target = wx.WXK_F1 + number - 1
+        raw_target = 0x70 + number - 1
+        return cls.event_key_code(event) == target or cls.event_raw_key_code(event) == raw_target
+
+    def player_details_shortcut_matches(self, event: wx.KeyEvent) -> bool:
+        if self.shortcut_matches(event, "player_details"):
+            return True
+        return (
+            not event.ControlDown()
+            and not event.ShiftDown()
+            and not event.AltDown()
+            and self.is_function_key_event(event, 7)
+        )
 
     @staticmethod
     def details_text_navigation_key(event: wx.KeyEvent) -> bool:
@@ -12908,6 +12959,9 @@ class MainFrame(wx.Frame):
         if self.shortcut_matches(event, "copy_stream_url"):
             self.copy_direct_stream_url()
             return
+        if self.player_details_shortcut_matches(event) and (self.in_player_screen or self.focus_in_background_player_controls(focus)):
+            self.show_video_details()
+            return
         if self.player_control_mode and self.player_shortcuts_allowed(focus):
             if self.context_menu_shortcut_matches(event):
                 self.open_player_context_menu()
@@ -12981,11 +13035,11 @@ class MainFrame(wx.Frame):
             if self.shortcut_matches(event, "player_pitch_down"):
                 self.change_pitch_async(-self.pitch_step_value())
                 return
+            if self.player_details_shortcut_matches(event):
+                self.show_video_details()
+                return
             if self.shortcut_matches(event, "player_volume_status"):
                 self.announce_volume_async()
-                return
-            if self.shortcut_matches(event, "player_details"):
-                self.show_video_details()
                 return
             if self.shortcut_matches(event, "player_seek_back_huge"):
                 self.player_seek(-600)
