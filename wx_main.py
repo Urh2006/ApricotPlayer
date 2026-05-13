@@ -187,8 +187,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.25"
-APP_VERSION_LABEL = "0.8.25"
+APP_VERSION = "0.8.26"
+APP_VERSION_LABEL = "0.8.26"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -374,7 +374,7 @@ INSTALLER_ASSET_NAME = "ApricotPlayerSetup.exe"
 PORTABLE_ZIP_ASSET_NAME = "ApricotPlayer.zip"
 LEGACY_PORTABLE_ZIP_ASSET_NAME = "ApricotPlayerPortable.zip"
 UPDATE_LOG_FILE = APP_DIR / "updater.log"
-UPDATE_DOWNLOAD_CHUNK_SIZE = 1024 * 1024 * 4
+UPDATE_DOWNLOAD_CHUNK_SIZE = 1024 * 512
 UPDATE_PROGRESS_MIN_INTERVAL = 0.35
 YTDLP_PYPI_JSON_URL = "https://pypi.org/pypi/yt-dlp/json"
 PLAYBACK_SPEED_STEPS = [0.25, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1.0, 1.1, 1.2, 1.25, 1.3, 1.4, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0]

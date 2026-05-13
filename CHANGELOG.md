@@ -1,5 +1,9 @@
 # Changelog
 
+## What's new in version 0.8.26
+
+- reverted updater download chunks to the previous 512 KB size because the larger 4 MB chunks were slower for some testers
+
 ## What's new in version 0.8.25
 
 - hardened settings loading so a corrupted, empty, or partially unreadable settings file can no longer silently fall back to defaults and later overwrite user preferences
