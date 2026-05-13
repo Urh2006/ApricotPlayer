@@ -1,5 +1,27 @@
 # Changelog
 
+## What's new in version 0.8.19
+
+- fixed Trending return behavior so playback returns to the Trending screen with its country/category controls instead of the normal Search screen
+- added Subscribe to channel to the player context menu; Ctrl+Shift+S also works from the player for the currently playing YouTube video
+- repaired old shortcut settings where F7 could incorrectly announce volume; defaults are now V for volume and F7 for video details
+- kept the faster MP4 video download preference from 0.8.18 so video downloads try a single MP4 stream before falling back to slower merge formats
+
+## What's new in version 0.8.18
+
+- restored Escape in the player to stop playback and return to the previous screen, while manual Back buttons can still keep background playback alive
+- added result-list shortcuts for favorites and playlists: Ctrl+F, Ctrl+Shift+F, Ctrl+P, and Ctrl+Shift+P
+- Space on a focused search result now announces the result details without opening a dialog
+- playlist results now include the video count when YouTube provides it
+- made MP4 video downloads prefer a single MP4 file before falling back to separate video/audio streams, which can make many video downloads start and finish faster
+- reduced background result metadata hydration work to lower CPU, RAM, and screen reader churn while browsing results
+
+## What's new in version 0.8.17
+
+- moved confusing Cookies and network troubleshooting controls behind a new advanced network/download settings checkbox
+- clarified the User-Agent, FFmpeg path, concurrent fragments, and download speed limit labels for screen readers
+- strengthened the update relaunch focus path so ApricotPlayer brings itself to the foreground and focuses the main menu after updating
+
 ## What's new in version 0.8.16
 
 - fixed background playback so Escape returns one level back without stopping playback when background playback is enabled

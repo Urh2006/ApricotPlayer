@@ -187,8 +187,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.16"
-APP_VERSION_LABEL = "0.8.16"
+APP_VERSION = "0.8.19"
+APP_VERSION_LABEL = "0.8.19"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -214,6 +214,7 @@ DEFAULT_CACHE_DIR = APP_DIR / "cache"
 DEFAULT_FILENAME_TEMPLATE = "%(title)s.%(ext)s"
 OLD_FILENAME_TEMPLATE = "%(title)s [%(id)s].%(ext)s"
 RESULTS_PAGE_SIZE = 20
+RESULT_METADATA_HYDRATION_BATCH = 5
 # Zero means dynamic mode has no app-side cap; Apricot keeps asking the source
 # for the next 20 results until the source stops returning more.
 DYNAMIC_RESULTS_MAX = 0
@@ -483,8 +484,10 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "remove_from_playback_queue": "Ctrl+Shift+Delete",
     "open_playback_queue": "Ctrl+Alt+Q",
     "create_playlist": "Ctrl+Shift+N",
-    "add_to_playlist": "Ctrl+Shift+P",
-    "remove_from_playlist": "Ctrl+Shift+R",
+    "add_favorite": "Ctrl+F",
+    "remove_favorite": "Ctrl+Shift+F",
+    "add_to_playlist": "Ctrl+P",
+    "remove_from_playlist": "Ctrl+Shift+P",
     "copy_link": "Ctrl+L",
     "copy_stream_url": "Ctrl+D",
     "context_menu": "Applications",
@@ -545,6 +548,8 @@ SHORTCUT_DEFINITIONS = [
     ("remove_from_playback_queue", "shortcut_remove_from_playback_queue"),
     ("open_playback_queue", "shortcut_open_playback_queue"),
     ("create_playlist", "shortcut_create_playlist"),
+    ("add_favorite", "shortcut_add_favorite"),
+    ("remove_favorite", "shortcut_remove_favorite"),
     ("add_to_playlist", "shortcut_add_to_playlist"),
     ("remove_from_playlist", "shortcut_remove_from_playlist"),
     ("copy_link", "shortcut_copy_link"),
@@ -3462,6 +3467,60 @@ for language_code in LANGUAGE_CODES:
     for key, value in RELEASE_0812_TRANSLATION_UPDATES["en"].items():
         TEXT.setdefault(language_code, {}).setdefault(key, value)
 
+RELEASE_0817_TRANSLATION_UPDATES = {
+    "sl": {
+        "show_advanced_network_settings": "Prikazi napredne nastavitve za omrezje in prenose",
+        "cookie_user_agent": "Cookie User-Agent override (napredno, pusti prazno razen ce cookies ne delajo)",
+        "rate_limit": "Omejitev hitrosti prenosov (prazno pomeni brez omejitve; primeri: 500K, 2M)",
+        "ffmpeg": "Custom FFmpeg path (napredno, pusti prazno za vgrajeni FFmpeg)",
+        "fragments": "Socasni download fragmenti (4 priporoceno)",
+    },
+    "en": {
+        "show_advanced_network_settings": "Show advanced network and download settings",
+        "cookie_user_agent": "Cookie User-Agent override (advanced, leave empty unless cookies fail)",
+        "rate_limit": "Download speed limit (empty means unlimited; examples: 500K, 2M)",
+        "ffmpeg": "Custom FFmpeg path (advanced, leave empty to use bundled FFmpeg)",
+        "fragments": "Concurrent download fragments (4 recommended)",
+    },
+}
+for language_code in LANGUAGE_CODES:
+    TEXT.setdefault(language_code, {}).update(RELEASE_0817_TRANSLATION_UPDATES.get(language_code, RELEASE_0817_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
+for language_code in LANGUAGE_CODES:
+    for key, value in RELEASE_0817_TRANSLATION_UPDATES["en"].items():
+        TEXT.setdefault(language_code, {}).setdefault(key, value)
+
+RELEASE_0818_TRANSLATION_UPDATES = {
+    "sl": {
+        "shortcut_add_favorite": "Dodaj med priljubljene",
+        "shortcut_remove_favorite": "Odstrani iz priljubljenih",
+        "remove_favorite": "Odstrani iz priljubljenih",
+        "results_details": "{title}. Trajanje: {duration}. Kanal: {channel}. Ogledi: {views}. {age}. Tip: {type}.",
+        "playlist_result_details": "{title}. Playlist. {count}.",
+        "channel_result_details": "{title}. Kanal.",
+        "playlist_video_count": "{count} videov",
+        "not_in_favorites": "Ta element ni med priljubljenimi.",
+        "not_in_playlist": "Ta element ni v nobeni playlisti.",
+        "unknown": "neznano",
+    },
+    "en": {
+        "shortcut_add_favorite": "Add to favorites",
+        "shortcut_remove_favorite": "Remove from favorites",
+        "remove_favorite": "Remove from favorites",
+        "results_details": "{title}. Duration: {duration}. Channel: {channel}. Views: {views}. {age}. Type: {type}.",
+        "playlist_result_details": "{title}. Playlist. {count}.",
+        "channel_result_details": "{title}. Channel.",
+        "playlist_video_count": "{count} videos",
+        "not_in_favorites": "This item is not in favorites.",
+        "not_in_playlist": "This item is not in any playlist.",
+        "unknown": "unknown",
+    },
+}
+for language_code in LANGUAGE_CODES:
+    TEXT.setdefault(language_code, {}).update(RELEASE_0818_TRANSLATION_UPDATES.get(language_code, RELEASE_0818_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
+for language_code in LANGUAGE_CODES:
+    for key, value in RELEASE_0818_TRANSLATION_UPDATES["en"].items():
+        TEXT.setdefault(language_code, {}).setdefault(key, value)
+
 
 def default_equalizer_gains() -> dict[str, float]:
     return {band_id: 0.0 for band_id, _label in EQ_BANDS}
@@ -3557,6 +3616,7 @@ class Settings:
     cookies_file: str = ""
     cookies_from_browser: str = "none"
     cookies_browser_profile: str = COOKIE_PROFILE_AUTO
+    show_advanced_network_settings: bool = False
     cookie_user_agent: str = ""
     ffmpeg_location: str = ""
     concurrent_fragments: int = 4
@@ -3652,7 +3712,10 @@ class MainFrame(wx.Frame):
         self.last_search_query = ""
         self.last_search_type_index = 0
         self.last_visible_count = 0
+        self.last_trending_country_index = 0
+        self.last_trending_category_index = 0
         self.search_screen_active = False
+        self.trending_screen_active = False
         self.favorites_screen_active = False
         self.history_screen_active = False
         self.subscriptions_screen_active = False
@@ -5312,10 +5375,39 @@ class MainFrame(wx.Frame):
                 hwnd = int(self.GetHandle())
                 if hwnd:
                     user32 = ctypes.windll.user32
-                    user32.ShowWindow(hwnd, 9)
-                    user32.BringWindowToTop(hwnd)
-                    user32.SetForegroundWindow(hwnd)
-                    user32.SetActiveWindow(hwnd)
+                    kernel32 = ctypes.windll.kernel32
+                    foreground = user32.GetForegroundWindow()
+                    foreground_thread = user32.GetWindowThreadProcessId(foreground, None) if foreground else 0
+                    target_thread = user32.GetWindowThreadProcessId(hwnd, None)
+                    current_thread = kernel32.GetCurrentThreadId()
+                    attached: list[tuple[int, int]] = []
+                    for source_thread, target_input_thread in (
+                        (current_thread, foreground_thread),
+                        (target_thread, foreground_thread),
+                    ):
+                        if source_thread and target_input_thread and source_thread != target_input_thread:
+                            try:
+                                if user32.AttachThreadInput(source_thread, target_input_thread, True):
+                                    attached.append((source_thread, target_input_thread))
+                            except Exception:
+                                pass
+                    try:
+                        user32.ShowWindow(hwnd, 9)
+                        user32.BringWindowToTop(hwnd)
+                        user32.SetForegroundWindow(hwnd)
+                        user32.SetActiveWindow(hwnd)
+                        user32.SetFocus(hwnd)
+                    finally:
+                        for source_thread, target_input_thread in reversed(attached):
+                            try:
+                                user32.AttachThreadInput(source_thread, target_input_thread, False)
+                            except Exception:
+                                pass
+                    try:
+                        if user32.GetForegroundWindow() != hwnd:
+                            self.RequestUserAttention(wx.USER_ATTENTION_INFO)
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
@@ -5342,6 +5434,9 @@ class MainFrame(wx.Frame):
                 wx.CallAfter(self.activate_window)
             else:
                 wx.CallLater(delay, self.activate_window)
+
+    def activate_after_update_relaunch(self) -> None:
+        self.activate_window_later((0, 100, 350, 900, 1800, 3000))
 
     @staticmethod
     def listbox_strings(listbox: wx.ListBox) -> list[str]:
@@ -5527,7 +5622,7 @@ class MainFrame(wx.Frame):
             self.RequestUserAttention(wx.USER_ATTENTION_INFO)
         except Exception:
             pass
-        self.activate_window_later((0, 75, 250))
+        self.activate_window_later((0, 75, 250, 700, 1400))
 
     def show_settings_from_tray(self) -> None:
         self.restore_from_tray()
@@ -5623,6 +5718,7 @@ class MainFrame(wx.Frame):
         self.in_main_menu = True
         self.in_queue_screen = False
         self.search_screen_active = False
+        self.trending_screen_active = False
         self.favorites_screen_active = False
         self.history_screen_active = False
         self.subscriptions_screen_active = False
@@ -6609,6 +6705,45 @@ class MainFrame(wx.Frame):
         if self.user_playlist_items_screen_active:
             self.refresh_user_playlist_items()
 
+    def remove_active_from_playlist(self) -> None:
+        if self.user_playlist_items_screen_active:
+            self.remove_selected_user_playlist_item()
+            return
+        item = self.active_item()
+        if not self.playlist_item_is_supported(item):
+            self.announce_player(self.t("no_selection"))
+            return
+        url = str(item.get("url") or "")
+        matches: list[tuple[int, int, str]] = []
+        for playlist_index, playlist in enumerate(self.user_playlists):
+            for item_index, playlist_item in enumerate(list(playlist.get("items") or [])):
+                if str(playlist_item.get("url") or "") == url:
+                    matches.append((playlist_index, item_index, str(playlist.get("title") or "")))
+                    break
+        if not matches:
+            self.announce_player(self.t("not_in_playlist"))
+            return
+        selected_match = matches[0]
+        if len(matches) > 1:
+            choices = [title or self.t("playlists") for _playlist_index, _item_index, title in matches]
+            with wx.SingleChoiceDialog(self, self.t("select_playlist"), self.t("remove_from_playlist"), choices) as dialog:
+                if dialog.ShowModal() != wx.ID_OK:
+                    return
+                selected_index = dialog.GetSelection()
+            if 0 <= selected_index < len(matches):
+                selected_match = matches[selected_index]
+        playlist_index, item_index, _title = selected_match
+        playlist = self.user_playlists[playlist_index]
+        items = list(playlist.get("items") or [])
+        if 0 <= item_index < len(items):
+            del items[item_index]
+            playlist["items"] = items
+            playlist["updated_at"] = time.time()
+            self.save_user_playlists()
+            if self.user_playlist_items_screen_active and playlist_index == self.current_user_playlist_index:
+                self.refresh_user_playlist_items(min(item_index, len(items) - 1))
+            self.announce_player(self.t("removed_from_playlist"))
+
     def clear_playlist_candidate_download_queue_items(self, items: list[dict]) -> None:
         changed = False
         for item in items:
@@ -6991,6 +7126,7 @@ class MainFrame(wx.Frame):
         self.in_main_menu = False
         self.in_queue_screen = False
         self.search_screen_active = True
+        self.trending_screen_active = False
         self.favorites_screen_active = False
         self.history_screen_active = False
         self.subscriptions_screen_active = False
@@ -7068,12 +7204,22 @@ class MainFrame(wx.Frame):
             self.show_main_menu()
 
     def on_results_key(self, event: wx.KeyEvent) -> None:
-        if self.shortcut_matches(event, "queue_audio"):
+        if self.result_details_key(event):
+            self.announce_selected_result_details()
+        elif self.shortcut_matches(event, "queue_audio"):
             self.toggle_download_queue()
         elif self.shortcut_matches(event, "add_to_playback_queue"):
             self.add_active_to_playback_queue()
         elif self.shortcut_matches(event, "remove_from_playback_queue"):
             self.remove_active_from_playback_queue()
+        elif self.shortcut_matches(event, "add_favorite"):
+            self.add_selected_favorite()
+        elif self.shortcut_matches(event, "remove_favorite"):
+            self.remove_selected_favorite_shortcut()
+        elif self.shortcut_matches(event, "add_to_playlist"):
+            self.add_active_to_playlist()
+        elif self.shortcut_matches(event, "remove_from_playlist"):
+            self.remove_active_from_playlist()
         elif self.shortcut_matches(event, "download_audio"):
             self.download_audio_shortcut()
         elif self.shortcut_matches(event, "download_video"):
@@ -7089,6 +7235,40 @@ class MainFrame(wx.Frame):
         else:
             event.Skip()
             wx.CallAfter(self.maybe_extend_results)
+
+    @staticmethod
+    def result_details_key(event: wx.KeyEvent) -> bool:
+        return (
+            event.GetKeyCode() == wx.WXK_SPACE
+            and not event.ControlDown()
+            and not event.ShiftDown()
+            and not event.AltDown()
+        )
+
+    def announce_selected_result_details(self) -> None:
+        item = self.selected_result()
+        if not item:
+            self.announce_player(self.t("no_selection"))
+            return
+        self.announce_player(self.result_details_text(item))
+
+    def result_details_text(self, item: dict) -> str:
+        kind = str(item.get("kind") or "")
+        title = str(item.get("title") or "")
+        if kind == "playlist":
+            count = self.playlist_count_text(item) or self.t("playlist")
+            return self.t("playlist_result_details", title=title, count=count)
+        if kind == "channel":
+            return self.t("channel_result_details", title=title)
+        return self.t(
+            "results_details",
+            title=title,
+            duration=str(item.get("duration") or self.t("unknown")),
+            channel=str(item.get("channel") or self.t("unknown")),
+            views=str(item.get("views") or self.t("unknown")),
+            age=str(item.get("age") or self.t("uploaded_unknown")),
+            type=str(item.get("type") or self.t("video")),
+        )
 
     def on_results_selection(self, event) -> None:
         event.Skip()
@@ -8475,6 +8655,7 @@ class MainFrame(wx.Frame):
                 "cookies_file",
                 "cookies_from_browser",
                 "cookies_browser_profile",
+                "show_advanced_network_settings",
                 "cookie_user_agent",
                 "ffmpeg_location",
                 "concurrent_fragments",
@@ -8525,6 +8706,10 @@ class MainFrame(wx.Frame):
     def focus_first_settings_control(self) -> None:
         if self.settings_control_order:
             self.safe_set_focus(self.settings_control_order[0])
+
+    def on_advanced_network_toggle(self, _event: wx.CommandEvent) -> None:
+        self.apply_settings_from_visible_controls()
+        self.render_settings_section_and_focus("show_advanced_network_settings")
 
     def render_settings_section(self) -> None:
         if not hasattr(self, "settings_scroller"):
@@ -8763,12 +8948,15 @@ class MainFrame(wx.Frame):
             choice("cookies_browser_profile", profile_value, profile_values, self.cookie_profile_choice_labels(profile_values))
             button("open_youtube_login_profile", self.open_youtube_login_profile_from_settings)
             button("export_browser_cookies", self.export_browser_cookies_from_settings)
-            text("cookie_user_agent", getattr(self.settings, "cookie_user_agent", ""))
-            text("rate_limit", self.settings.rate_limit)
             text("proxy", self.settings.proxy)
             text("youtube_data_api_key", getattr(self.settings, "youtube_data_api_key", ""))
-            text("ffmpeg", self.settings.ffmpeg_location)
-            choice("fragments", str(self.settings.concurrent_fragments), ["1", "2", "4", "8", "16"])
+            advanced_box = check("show_advanced_network_settings", bool(getattr(self.settings, "show_advanced_network_settings", False)))
+            advanced_box.Bind(wx.EVT_CHECKBOX, self.on_advanced_network_toggle)
+            if bool(getattr(self.settings, "show_advanced_network_settings", False)):
+                text("cookie_user_agent", getattr(self.settings, "cookie_user_agent", ""))
+                text("rate_limit", self.settings.rate_limit)
+                text("ffmpeg", self.settings.ffmpeg_location)
+                choice("fragments", str(self.settings.concurrent_fragments), ["1", "2", "4", "8", "16"])
             choice("retries", str(self.settings.retries), ["0", "3", "5", "10", "20"])
             choice("timeout", str(self.settings.socket_timeout), ["5", "10", "20", "30", "60"])
         elif section_name == "shortcuts":
@@ -8914,6 +9102,7 @@ class MainFrame(wx.Frame):
         timestamp = entry.get("timestamp") or entry.get("release_timestamp") or entry.get("modified_timestamp")
         upload_date = entry.get("upload_date")
         age = self.format_age({"timestamp": timestamp, "upload_date": upload_date}) if kind == "video" else ""
+        playlist_count = entry.get("playlist_count") or entry.get("n_entries") or entry.get("video_count") or entry.get("playlist_count_text")
         return {
             "title": entry.get("title") or "",
             "channel": entry.get("uploader") or entry.get("channel") or "",
@@ -8929,6 +9118,7 @@ class MainFrame(wx.Frame):
             "description": entry.get("description") or "",
             "type": display_type,
             "kind": kind,
+            "playlist_count": playlist_count if kind == "playlist" else "",
             "url": url,
         }
 
@@ -9031,7 +9221,7 @@ class MainFrame(wx.Frame):
                 continue
             candidates.append(dict(item))
             self.metadata_hydration_urls.add(url)
-            if len(candidates) >= RESULTS_PAGE_SIZE:
+            if len(candidates) >= RESULT_METADATA_HYDRATION_BATCH:
                 break
         if candidates:
             threading.Thread(target=self.result_metadata_worker, args=(candidates,), daemon=True).start()
@@ -9090,7 +9280,11 @@ class MainFrame(wx.Frame):
 
     def result_line(self, index: int, item: dict) -> str:
         if item.get("kind") in {"playlist", "channel"}:
-            parts = [item["title"], item["type"]]
+            parts = [item.get("title", ""), item.get("type", self.t("playlist" if item.get("kind") == "playlist" else "channel"))]
+            if item.get("kind") == "playlist":
+                count_text = self.playlist_count_text(item)
+                if count_text:
+                    parts.append(count_text)
         else:
             parts = [
                 item["title"],
@@ -9104,6 +9298,16 @@ class MainFrame(wx.Frame):
         if queued:
             parts.append(self.queue_mode_label(queued))
         return " | ".join(part for part in parts if part)
+
+    def playlist_count_text(self, item: dict) -> str:
+        raw_count = item.get("playlist_count") or item.get("n_entries") or item.get("video_count")
+        if raw_count in (None, ""):
+            return ""
+        try:
+            count = int(str(raw_count).replace(",", "").strip())
+        except (TypeError, ValueError):
+            return str(raw_count)
+        return self.t("playlist_video_count", count=count)
 
     def selected_result(self) -> dict | None:
         if not hasattr(self, "results_list"):
@@ -9132,8 +9336,19 @@ class MainFrame(wx.Frame):
         self.return_all_results = list(self.all_results or self.results)
         self.return_index = self.current_index
         self.return_visible_count = self.last_visible_count or len(self.results)
-        self.player_return_screen = "folder" if self.folder_screen_active else "search"
-        self.player_return_data = {"index": self.current_index, "folder": self.last_search_query} if self.folder_screen_active else {}
+        if self.folder_screen_active:
+            self.player_return_screen = "folder"
+            self.player_return_data = {"index": self.current_index, "folder": self.last_search_query}
+        elif getattr(self, "trending_screen_active", False):
+            self.player_return_screen = "trending"
+            self.player_return_data = {
+                "index": self.current_index,
+                "country_index": getattr(self, "last_trending_country_index", 0),
+                "category_index": getattr(self, "last_trending_category_index", 0),
+            }
+        else:
+            self.player_return_screen = "search"
+            self.player_return_data = {}
         if self.folder_screen_active:
             items = [dict(result) for result in (self.all_results or self.results) if result.get("kind") == "local_file" and result.get("url")]
             queue_items = [self.playback_queue_item_with_folder_return(result, items) for result in items[self.current_index + 1 :]]
@@ -9148,6 +9363,7 @@ class MainFrame(wx.Frame):
             return
         self.search_results_stack.append(
             {
+                "screen": "trending" if getattr(self, "trending_screen_active", False) else "search",
                 "results": list(self.results),
                 "all_results": list(self.all_results or self.results),
                 "index": max(0, self.current_index),
@@ -9157,6 +9373,8 @@ class MainFrame(wx.Frame):
                 "search_type": self.current_search_type_code,
                 "collection_url": self.collection_url,
                 "collection_result_type": self.collection_result_type,
+                "country_index": getattr(self, "last_trending_country_index", 0),
+                "category_index": getattr(self, "last_trending_category_index", 0),
             }
         )
 
@@ -9173,6 +9391,20 @@ class MainFrame(wx.Frame):
             return
         if state.get("screen") == "favorites":
             self.show_favorites()
+            return
+        if state.get("screen") == "trending":
+            results = list(state.get("all_results") or state.get("results") or [])
+            selection = int(state.get("index") or 0)
+            visible_count = int(state.get("visible_count") or len(results))
+            country_index = int(state.get("country_index") or 0)
+            category_index = int(state.get("category_index") or 0)
+            self.loading_more_results = False
+            self.dynamic_fetch_enabled = False
+            self.metadata_hydration_urls.clear()
+            self.search_generation += 1
+            self.show_trending(auto_load=False, country_index=country_index, category_index=category_index)
+            self.show_results(results, selection=selection, visible_count=visible_count)
+            wx.CallAfter(self.focus_results_list, selection)
             return
         self.last_search_query = str(state.get("query") or self.last_search_query)
         self.last_search_type_index = int(state.get("type_index") or 0)
@@ -9229,6 +9461,7 @@ class MainFrame(wx.Frame):
     def open_channel_tab(self, item: dict, tab: str = "videos", push_state: bool = True) -> None:
         if push_state:
             self.push_search_state()
+        self.trending_screen_active = False
         url = self.channel_tab_url(item, tab)
         if not url:
             self.message(self.t("no_selection"))
@@ -9256,13 +9489,14 @@ class MainFrame(wx.Frame):
         generation = self.search_generation
         threading.Thread(target=self.load_collection_worker, args=(url, result_type, self.initial_results_limit(), 0, generation), daemon=True).start()
 
-    def show_trending(self) -> None:
+    def show_trending(self, auto_load: bool = True, country_index: int | None = None, category_index: int | None = None) -> None:
         if not getattr(self.settings, "enable_trending", False):
             self.announce_player(self.t("trending_disabled"))
             self.show_main_menu()
             return
         self.in_main_menu = False
         self.search_screen_active = True
+        self.trending_screen_active = True
         self.favorites_screen_active = False
         self.history_screen_active = False
         self.subscriptions_screen_active = False
@@ -9282,14 +9516,16 @@ class MainFrame(wx.Frame):
         grid.Add(wx.StaticText(self.panel, label=self.t("trending_country")), 0, wx.ALIGN_CENTER_VERTICAL)
         self.trending_country_choice = wx.Choice(self.panel, choices=[label for _code, label in TRENDING_COUNTRIES])
         self.trending_country_choice.SetName(self.t("trending_country"))
-        self.trending_country_choice.SetSelection(0)
+        selected_country = self.last_trending_country_index if country_index is None else country_index
+        self.trending_country_choice.SetSelection(min(max(0, selected_country), self.trending_country_choice.GetCount() - 1))
         self.trending_country_choice.Bind(wx.EVT_CHOICE, lambda _evt: self.load_trending_results())
         self.trending_country_choice.Bind(wx.EVT_KEY_DOWN, self.on_trending_filter_key)
         grid.Add(self.trending_country_choice, 1, wx.EXPAND)
         grid.Add(wx.StaticText(self.panel, label=self.t("trending_category")), 0, wx.ALIGN_CENTER_VERTICAL)
         self.trending_category_choice = wx.Choice(self.panel, choices=[self.t(f"trending_{code}") for code, _label in TRENDING_CATEGORIES])
         self.trending_category_choice.SetName(self.t("trending_category"))
-        self.trending_category_choice.SetSelection(0)
+        selected_category = self.last_trending_category_index if category_index is None else category_index
+        self.trending_category_choice.SetSelection(min(max(0, selected_category), self.trending_category_choice.GetCount() - 1))
         self.trending_category_choice.Bind(wx.EVT_CHOICE, lambda _evt: self.load_trending_results())
         self.trending_category_choice.Bind(wx.EVT_KEY_DOWN, self.on_trending_filter_key)
         grid.Add(self.trending_category_choice, 1, wx.EXPAND)
@@ -9304,7 +9540,8 @@ class MainFrame(wx.Frame):
         self.root_sizer.Add(self.results_list, 1, wx.EXPAND | wx.ALL, 4)
         self.panel.Layout()
         self.focus_later(self.trending_country_choice)
-        wx.CallAfter(self.load_trending_results)
+        if auto_load:
+            wx.CallAfter(self.load_trending_results)
 
     def on_trending_filter_key(self, event: wx.KeyEvent) -> None:
         if event.GetKeyCode() == wx.WXK_RETURN:
@@ -9317,6 +9554,8 @@ class MainFrame(wx.Frame):
         category_index = self.trending_category_choice.GetSelection() if hasattr(self, "trending_category_choice") else 0
         country_code = TRENDING_COUNTRIES[country_index][0] if 0 <= country_index < len(TRENDING_COUNTRIES) else "global"
         category_code = TRENDING_CATEGORIES[category_index][0] if 0 <= category_index < len(TRENDING_CATEGORIES) else "all"
+        self.last_trending_country_index = min(max(0, country_index), len(TRENDING_COUNTRIES) - 1)
+        self.last_trending_category_index = min(max(0, category_index), len(TRENDING_CATEGORIES) - 1)
         country_label = dict(TRENDING_COUNTRIES).get(country_code, country_code)
         category_label = self.t(f"trending_{category_code}")
         self.last_search_query = f"official trending {country_code} {category_code}"
@@ -9444,6 +9683,7 @@ class MainFrame(wx.Frame):
     def open_playlist_videos(self, item: dict, push_state: bool = True) -> None:
         if push_state:
             self.push_search_state()
+        self.trending_screen_active = False
         self.set_status(self.t("loading_playlist", title=item["title"]))
         self.collection_url = item["url"]
         self.collection_result_type = "Video"
@@ -10304,7 +10544,7 @@ class MainFrame(wx.Frame):
         self.show_main_menu()
 
     def leave_player_to_previous_screen(self) -> None:
-        self.back_to_results(stop_playback=not self.background_playback_enabled())
+        self.back_to_results(stop_playback=True)
 
     def back_to_results(self, stop_playback: bool = True) -> None:
         keep_playing = self.background_playback_enabled() and not stop_playback
@@ -10381,6 +10621,19 @@ class MainFrame(wx.Frame):
                 self.player_return_screen = ""
                 self.player_return_data = {}
             self.show_subscriptions()
+            return
+        if self.player_return_screen == "trending":
+            country_index = int(self.player_return_data.get("country_index", getattr(self, "last_trending_country_index", 0)) or 0)
+            category_index = int(self.player_return_data.get("category_index", getattr(self, "last_trending_category_index", 0)) or 0)
+            results = self.return_all_results or self.all_results or self.return_results or self.results
+            visible_count = self.return_visible_count or len(self.return_results or self.results)
+            index = min(max(0, self.return_index), max(0, len(results) - 1))
+            if not keep_playing:
+                self.player_return_screen = ""
+                self.player_return_data = {}
+            self.show_trending(auto_load=False, country_index=country_index, category_index=category_index)
+            self.show_results(results, selection=index, visible_count=visible_count)
+            wx.CallAfter(self.focus_results_list, index)
             return
         results = self.return_all_results or self.all_results or self.return_results or self.results
         if results:
@@ -12529,6 +12782,9 @@ class MainFrame(wx.Frame):
         if focus is getattr(self, "results_list", None) and self.shortcut_matches(event, "queue_audio"):
             self.toggle_download_queue()
             return
+        if focus is getattr(self, "results_list", None) and self.result_details_key(event):
+            self.announce_selected_result_details()
+            return
         if self.shortcut_matches(event, "add_to_playback_queue"):
             self.add_active_to_playback_queue()
             return
@@ -12540,6 +12796,12 @@ class MainFrame(wx.Frame):
             return
         if focus is getattr(self, "results_list", None) and self.shortcut_matches(event, "copy_link"):
             self.copy_selected_url()
+            return
+        if focus is getattr(self, "results_list", None) and self.shortcut_matches(event, "add_favorite"):
+            self.add_selected_favorite()
+            return
+        if focus is getattr(self, "results_list", None) and self.shortcut_matches(event, "remove_favorite"):
+            self.remove_selected_favorite_shortcut()
             return
         if self.shortcut_matches(event, "download_audio"):
             self.download_audio_shortcut()
@@ -12558,7 +12820,7 @@ class MainFrame(wx.Frame):
             self.add_active_to_playlist(prefer_active=prefer_player_item)
             return
         if self.shortcut_matches(event, "remove_from_playlist"):
-            self.remove_selected_user_playlist_item()
+            self.remove_active_from_playlist()
             return
         if self.shortcut_matches(event, "player_back"):
             if self.in_player_screen and self.video_details_visible():
@@ -12707,9 +12969,12 @@ class MainFrame(wx.Frame):
                 ]
             )
         actions.extend([
-            (self.t("add_favorite"), lambda: self.add_favorite_item(dict(item))),
+            (self.menu_label_with_shortcut("add_favorite", "add_favorite"), lambda: self.add_favorite_item(dict(item))),
+            (self.menu_label_with_shortcut("remove_favorite", "remove_favorite"), lambda: self.remove_favorite_item(dict(item))),
+            (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), lambda: self.subscribe_to_selected_channel(dict(item))),
             (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
             (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
+            (self.menu_label_with_shortcut("remove_from_playlist", "remove_from_playlist"), self.remove_active_from_playlist),
             (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda: self.copy_direct_stream_url(dict(item))),
             (self.menu_label_with_shortcut("copy_url", "copy_link"), self.copy_current_player_url),
             (self.t("output_devices"), self.show_output_devices),
@@ -12738,7 +13003,8 @@ class MainFrame(wx.Frame):
                     (self.t("channel_popular"), lambda selected=dict(item): self.open_channel_tab(selected, "popular")),
                     (self.t("channel_playlists"), lambda selected=dict(item): self.open_channel_tab(selected, "playlists")),
                     (self.t("download_channel"), lambda selected=dict(item): self.download_collection(selected)),
-                    (self.t("add_favorite"), self.add_selected_favorite),
+                    (self.menu_label_with_shortcut("add_favorite", "add_favorite"), self.add_selected_favorite),
+                    (self.menu_label_with_shortcut("remove_favorite", "remove_favorite"), self.remove_selected_favorite_shortcut),
                     (self.t("open_browser"), self.open_selected_in_browser),
                     (self.menu_label_with_shortcut("copy_url", "copy_link"), self.copy_selected_url),
                 ]
@@ -12746,7 +13012,8 @@ class MainFrame(wx.Frame):
                 actions = [
                     (self.t("open_playlist_videos"), self.play_selected),
                     (self.t("download_playlist"), lambda selected=dict(item): self.download_collection(selected)),
-                    (self.t("add_favorite"), self.add_selected_favorite),
+                    (self.menu_label_with_shortcut("add_favorite", "add_favorite"), self.add_selected_favorite),
+                    (self.menu_label_with_shortcut("remove_favorite", "remove_favorite"), self.remove_selected_favorite_shortcut),
                     (self.t("open_browser"), self.open_selected_in_browser),
                     (self.menu_label_with_shortcut("copy_url", "copy_link"), self.copy_selected_url),
                 ]
@@ -12757,10 +13024,12 @@ class MainFrame(wx.Frame):
                 (self.t("play"), self.play_selected),
                 (self.menu_label_with_shortcut("download_audio", "download_audio"), self.download_audio),
                 (self.menu_label_with_shortcut("download_video", "download_video"), self.download_video),
-                (self.t("add_favorite"), self.add_selected_favorite),
+                (self.menu_label_with_shortcut("add_favorite", "add_favorite"), self.add_selected_favorite),
+                (self.menu_label_with_shortcut("remove_favorite", "remove_favorite"), self.remove_selected_favorite_shortcut),
                 (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), self.subscribe_shortcut),
                 (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
                 (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
+                (self.menu_label_with_shortcut("remove_from_playlist", "remove_from_playlist"), self.remove_active_from_playlist),
                 (self.t("open_browser"), self.open_selected_in_browser),
                 (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda selected=dict(item or {}): self.copy_direct_stream_url(selected)),
                 (self.menu_label_with_shortcut("copy_url", "copy_link"), self.copy_selected_url),
@@ -13053,7 +13322,7 @@ class MainFrame(wx.Frame):
             return f"best[ext=mp4]{limit}/best{limit}/best"
         if video_mode == VIDEO_FORMAT_SMALLEST:
             return f"worst[ext=mp4]{limit}/worst{limit}/worst"
-        return f"bestvideo[ext=mp4]{limit}+bestaudio[ext=m4a]/best[ext=mp4]{limit}/bestvideo{limit}+bestaudio/best{limit}/best"
+        return f"best[ext=mp4]{limit}/bestvideo[ext=mp4]{limit}+bestaudio[ext=m4a]/bestvideo{limit}+bestaudio/best{limit}/best"
 
     @staticmethod
     def safe_folder_name(value: str) -> str:
@@ -13160,11 +13429,11 @@ class MainFrame(wx.Frame):
             "url": item.get("url", ""),
         }
         if any(existing["url"] == favorite["url"] for existing in self.favorites):
-            self.set_status(self.t("favorite_exists"))
+            self.announce_player(self.t("favorite_exists"))
             return
         self.favorites.append(favorite)
         self.save_favorites()
-        self.set_status(self.t("favorite_added"))
+        self.announce_player(self.t("favorite_added"))
 
     def refresh_favorites(self) -> None:
         if not hasattr(self, "favorites_list"):
@@ -13191,7 +13460,28 @@ class MainFrame(wx.Frame):
             del self.favorites[index]
             self.save_favorites()
             self.refresh_favorites()
-            self.set_status(self.t("favorite_removed"))
+            self.announce_player(self.t("favorite_removed"))
+
+    def remove_selected_favorite_shortcut(self) -> None:
+        self.remove_favorite_item(self.active_item())
+
+    def remove_favorite_item(self, item: dict | None) -> None:
+        if not item:
+            self.announce_player(self.t("no_selection"))
+            return
+        url = str(item.get("url") or "")
+        if not url:
+            self.announce_player(self.t("not_in_favorites"))
+            return
+        for index, favorite in enumerate(list(self.favorites)):
+            if str(favorite.get("url") or "") == url:
+                del self.favorites[index]
+                self.save_favorites()
+                if self.favorites_screen_active:
+                    self.refresh_favorites()
+                self.announce_player(self.t("favorite_removed"))
+                return
+        self.announce_player(self.t("not_in_favorites"))
 
     def open_selected_in_browser(self) -> None:
         item = self.active_item()
@@ -13905,6 +14195,8 @@ class MainFrame(wx.Frame):
             self.settings.cookies_from_browser = c["cookies_from_browser"].GetStringSelection() or "none"
         if "cookies_browser_profile" in c:
             self.settings.cookies_browser_profile = self.selected_choice_value("cookies_browser_profile") or COOKIE_PROFILE_AUTO
+        if "show_advanced_network_settings" in c:
+            self.settings.show_advanced_network_settings = c["show_advanced_network_settings"].GetValue()
         if "cookie_user_agent" in c:
             self.settings.cookie_user_agent = c["cookie_user_agent"].GetValue().strip()
         if "ffmpeg" in c:
@@ -15064,14 +15356,24 @@ class MainFrame(wx.Frame):
             repaired["player_equalizer"] = DEFAULT_KEYBOARD_SHORTCUTS["player_equalizer"]
         if not repaired.get("player_edit_mode"):
             repaired["player_edit_mode"] = DEFAULT_KEYBOARD_SHORTCUTS["player_edit_mode"]
-        if self.canonical_shortcut(repaired.get("player_details", "")) == "v":
+        details_shortcut = self.canonical_shortcut(repaired.get("player_details", ""))
+        volume_status_shortcut = self.canonical_shortcut(repaired.get("player_volume_status", ""))
+        if details_shortcut in {"", "v"} or details_shortcut == volume_status_shortcut:
             repaired["player_details"] = DEFAULT_KEYBOARD_SHORTCUTS["player_details"]
-        if not repaired.get("player_volume_status"):
+        if not repaired.get("player_volume_status") or volume_status_shortcut in {"f7", self.canonical_shortcut(repaired.get("player_details", ""))}:
             repaired["player_volume_status"] = DEFAULT_KEYBOARD_SHORTCUTS["player_volume_status"]
         if self.canonical_shortcut(repaired.get("new_subscription_videos", "")) == self.canonical_shortcut(repaired.get("player_play_pause", "")):
             replacement = self.first_available_shortcut(repaired, "new_subscription_videos", ["Ctrl+Shift+V", "Ctrl+Alt+V", "Alt+N"])
             if replacement:
                 repaired["new_subscription_videos"] = replacement
+        if self.canonical_shortcut(repaired.get("add_to_playlist", "")) == self.canonical_shortcut("Ctrl+Shift+P"):
+            repaired["add_to_playlist"] = DEFAULT_KEYBOARD_SHORTCUTS["add_to_playlist"]
+        if self.canonical_shortcut(repaired.get("remove_from_playlist", "")) == self.canonical_shortcut("Ctrl+Shift+R"):
+            repaired["remove_from_playlist"] = DEFAULT_KEYBOARD_SHORTCUTS["remove_from_playlist"]
+        if not str(repaired.get("add_favorite", "")).strip():
+            repaired["add_favorite"] = DEFAULT_KEYBOARD_SHORTCUTS["add_favorite"]
+        if not str(repaired.get("remove_favorite", "")).strip():
+            repaired["remove_favorite"] = DEFAULT_KEYBOARD_SHORTCUTS["remove_favorite"]
         seen: dict[str, str] = {}
         for action, _label_key in SHORTCUT_DEFINITIONS:
             canonical = self.canonical_shortcut(repaired.get(action, ""))
@@ -15461,7 +15763,8 @@ def request_existing_instance_activation(action: str = "show", **extra_payload) 
 
 class App(wx.App):
     def OnInit(self) -> bool:
-        if update_relaunch_requested():
+        update_relaunch = update_relaunch_requested()
+        if update_relaunch:
             mark_update_relaunch_window()
         startup_media_path = startup_media_path_argument()
         tray_start = start_in_tray_requested() and not startup_media_path
@@ -15483,7 +15786,10 @@ class App(wx.App):
             frame.Hide()
         else:
             frame.Show()
-            frame.activate_window_later()
+            if update_relaunch:
+                frame.activate_after_update_relaunch()
+            else:
+                frame.activate_window_later()
         if startup_media_path:
             wx.CallAfter(frame.open_local_media_file, startup_media_path)
         return True
