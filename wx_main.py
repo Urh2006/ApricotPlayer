@@ -187,8 +187,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.24"
-APP_VERSION_LABEL = "0.8.24"
+APP_VERSION = "0.8.25"
+APP_VERSION_LABEL = "0.8.25"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -3735,6 +3735,9 @@ class MainFrame(wx.Frame):
         settings_file_existed = SETTINGS_FILE.exists()
         self.first_run_without_settings = not SETTINGS_FILE.exists() and not LEGACY_SETTINGS_FILE.exists()
         self.settings_migrated = False
+        self.settings_loaded_from_path: Path | None = None
+        self.settings_load_errors: list[str] = []
+        self.settings_save_blocked = False
         self.settings = self.load_settings()
         if not settings_file_existed or self.settings_migrated:
             self.save_settings()
@@ -15621,14 +15624,22 @@ class MainFrame(wx.Frame):
     def load_settings(self) -> Settings:
         backup_settings = SETTINGS_FILE.with_suffix(".json.bak")
         sources = [SETTINGS_FILE, backup_settings, LEGACY_SETTINGS_FILE]
+        load_errors: list[str] = []
         for source in sources:
             if not source.exists():
                 continue
             try:
-                raw_data = json.loads(source.read_text(encoding="utf-8"))
-                data = dict(raw_data) if isinstance(raw_data, dict) else {}
+                raw_text = source.read_text(encoding="utf-8")
+                if not raw_text.strip():
+                    raise ValueError("settings file is empty")
+                raw_data = json.loads(raw_text)
+                if not isinstance(raw_data, dict):
+                    raise ValueError(f"settings file must contain an object, got {type(raw_data).__name__}")
+                data = dict(raw_data)
                 allowed_keys = {field.name for field in fields(Settings)}
                 data = {key: value for key, value in data.items() if key in allowed_keys}
+                if not data:
+                    raise ValueError("settings file contains no recognized settings")
                 merged = {**asdict(Settings()), **data}
                 if merged.get("language") not in LANGUAGE_CODES:
                     merged["language"] = "en"
@@ -15667,12 +15678,23 @@ class MainFrame(wx.Frame):
                 skipped_version = str(merged.get("skipped_update_version") or "")
                 if skipped_version and not self.is_newer_version(skipped_version, APP_VERSION):
                     merged["skipped_update_version"] = ""
+                self.settings_loaded_from_path = source
+                if source != SETTINGS_FILE:
+                    self.settings_migrated = True
                 return Settings(**merged)
-            except Exception:
+            except Exception as exc:
+                load_errors.append(f"{source}: {exc}")
                 continue
+        self.settings_load_errors = load_errors
+        if SETTINGS_FILE.exists() or backup_settings.exists():
+            self.settings_save_blocked = True
+            self.log_update_event("Settings load failed; automatic settings saves are blocked to avoid overwriting user preferences. " + " | ".join(load_errors[-3:]))
         return Settings()
 
     def save_settings(self) -> None:
+        if getattr(self, "settings_save_blocked", False):
+            self.log_update_event("Settings save skipped because settings could not be loaded safely.")
+            return
         APP_DIR.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(asdict(self.settings), indent=2, ensure_ascii=False)
         temp_file = SETTINGS_FILE.with_suffix(".json.tmp")
