@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.8.21
+
+- sped up video downloads without changing the already-fast audio download path
+- video downloads now use more parallel fragment downloads for DASH/HLS streams and chunked HTTP downloading for large video files
+- tightened MP4 format selection so ApricotPlayer prefers already-combined MP4 video+audio files before falling back to slower video/audio merging
+
 ## What's new in version 0.8.20
 
 - fixed Play from folder so selected folders show their local audio/video files instead of leaving the list at "No search results"

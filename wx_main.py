@@ -187,8 +187,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.20"
-APP_VERSION_LABEL = "0.8.20"
+APP_VERSION = "0.8.21"
+APP_VERSION_LABEL = "0.8.21"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -215,6 +215,9 @@ DEFAULT_FILENAME_TEMPLATE = "%(title)s.%(ext)s"
 OLD_FILENAME_TEMPLATE = "%(title)s [%(id)s].%(ext)s"
 RESULTS_PAGE_SIZE = 20
 RESULT_METADATA_HYDRATION_BATCH = 5
+VIDEO_DOWNLOAD_MIN_FRAGMENTS = 8
+VIDEO_DOWNLOAD_HTTP_CHUNK_SIZE = 10 << 20
+VIDEO_DOWNLOAD_BUFFER_SIZE = 1024 << 10
 # Zero means dynamic mode has no app-side cap; Apricot keeps asking the source
 # for the next 20 results until the source stops returning more.
 DYNAMIC_RESULTS_MAX = 0
@@ -13361,6 +13364,10 @@ class MainFrame(wx.Frame):
             options.update({"format": "bestaudio/best", "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": self.settings.audio_format, "preferredquality": self.settings.audio_quality}]})
         else:
             video_mode = self.normalized_video_format()
+            options["concurrent_fragment_downloads"] = max(self.settings.concurrent_fragments, VIDEO_DOWNLOAD_MIN_FRAGMENTS)
+            options["http_chunk_size"] = VIDEO_DOWNLOAD_HTTP_CHUNK_SIZE
+            options["buffersize"] = VIDEO_DOWNLOAD_BUFFER_SIZE
+            options["progress_delta"] = 0.5
             options["format"] = self.video_format_selector(video_mode)
             if video_mode in {VIDEO_FORMAT_MP4, VIDEO_FORMAT_MP4_SINGLE, VIDEO_FORMAT_SMALLEST}:
                 options["merge_output_format"] = "mp4"
@@ -13372,10 +13379,10 @@ class MainFrame(wx.Frame):
         if video_mode == VIDEO_FORMAT_BEST_ANY:
             return f"bestvideo{limit}+bestaudio/best{limit}/best"
         if video_mode == VIDEO_FORMAT_MP4_SINGLE:
-            return f"best[ext=mp4]{limit}/best{limit}/best"
+            return f"best[ext=mp4][vcodec!=none][acodec!=none]{limit}/best[ext=mp4][vcodec!=none][acodec!=none]/best{limit}/best"
         if video_mode == VIDEO_FORMAT_SMALLEST:
-            return f"worst[ext=mp4]{limit}/worst{limit}/worst"
-        return f"best[ext=mp4]{limit}/bestvideo[ext=mp4]{limit}+bestaudio[ext=m4a]/bestvideo{limit}+bestaudio/best{limit}/best"
+            return f"worst[ext=mp4][vcodec!=none][acodec!=none]{limit}/worst[ext=mp4][vcodec!=none][acodec!=none]/worst{limit}/worst"
+        return f"best[ext=mp4][vcodec!=none][acodec!=none]{limit}/best[ext=mp4][vcodec!=none][acodec!=none]/bestvideo[ext=mp4]{limit}+bestaudio[ext=m4a]/bestvideo{limit}+bestaudio/best{limit}/best"
 
     @staticmethod
     def safe_folder_name(value: str) -> str:
