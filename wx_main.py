@@ -187,8 +187,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.15"
-APP_VERSION_LABEL = "0.8.15"
+APP_VERSION = "0.8.16"
+APP_VERSION_LABEL = "0.8.16"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -498,7 +498,8 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "player_speed_up": "D",
     "player_pitch_up": "Ctrl+Up",
     "player_pitch_down": "Ctrl+Down",
-    "player_details": "V",
+    "player_volume_status": "V",
+    "player_details": "F7",
     "player_output_devices": "O",
     "player_equalizer": "F4",
     "player_edit_mode": "E",
@@ -559,6 +560,7 @@ SHORTCUT_DEFINITIONS = [
     ("player_speed_up", "shortcut_player_speed_up"),
     ("player_pitch_up", "shortcut_player_pitch_up"),
     ("player_pitch_down", "shortcut_player_pitch_down"),
+    ("player_volume_status", "shortcut_player_volume_status"),
     ("player_details", "shortcut_player_details"),
     ("player_output_devices", "shortcut_player_output_devices"),
     ("player_equalizer", "shortcut_player_equalizer"),
@@ -3390,6 +3392,42 @@ for language_code in LANGUAGE_CODES:
     for key, value in RELEASE_089_TRANSLATION_UPDATES["en"].items():
         TEXT.setdefault(language_code, {}).setdefault(key, value)
 
+RELEASE_0816_TRANSLATION_UPDATES = {
+    "sl": {
+        "pause": "Pavza",
+        "open_player": "Odpri zaslon predvajalnika",
+        "close_player": "Zapri",
+        "shuffle_folder": "Shuffle mapa",
+        "add_folder_to_queue": "Dodaj mapo v vrstni red predvajanja",
+        "folder_queue_added": "Mapa dodana v vrstni red predvajanja: {count} elementov.",
+        "move_up": "Premakni gor",
+        "move_down": "Premakni dol",
+        "playback_queue_reordered": "Vrstni red predvajanja posodobljen.",
+        "volume_announcement": "Glasnost: {volume}",
+        "shortcut_player_volume_status": "Predvajalnik: povej glasnost",
+        "shortcut_player_details": "Predvajalnik: podrobnosti videa",
+    },
+    "en": {
+        "pause": "Pause",
+        "open_player": "Open player screen",
+        "close_player": "Close",
+        "shuffle_folder": "Shuffle folder",
+        "add_folder_to_queue": "Add folder to queue",
+        "folder_queue_added": "Folder added to playback queue: {count} items.",
+        "move_up": "Move up",
+        "move_down": "Move down",
+        "playback_queue_reordered": "Playback queue updated.",
+        "volume_announcement": "Volume: {volume}",
+        "shortcut_player_volume_status": "Player: announce volume",
+        "shortcut_player_details": "Player: video details",
+    },
+}
+for language_code in LANGUAGE_CODES:
+    TEXT.setdefault(language_code, {}).update(RELEASE_0816_TRANSLATION_UPDATES.get(language_code, RELEASE_0816_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
+for language_code in LANGUAGE_CODES:
+    for key, value in RELEASE_0816_TRANSLATION_UPDATES["en"].items():
+        TEXT.setdefault(language_code, {}).setdefault(key, value)
+
 RELEASE_0812_TRANSLATION_UPDATES = {
     "sl": {
         "cookie_user_agent": "Browser User-Agent za cookies datoteko",
@@ -3625,6 +3663,7 @@ class MainFrame(wx.Frame):
         self.user_playlist_items_screen_active = False
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
+        self.folder_screen_active = False
         self.in_main_menu = False
         self.current_rss_feed_index = -1
         self.current_user_playlist_index = -1
@@ -3646,6 +3685,7 @@ class MainFrame(wx.Frame):
         self.session_volume: float | None = None
         self.player_generation = 0
         self.player_ended = False
+        self.player_paused = False
         self.current_video_item: dict | None = None
         self.current_video_info: dict = {}
         self.player_panel: wx.Panel | None = None
@@ -3653,6 +3693,7 @@ class MainFrame(wx.Frame):
         self.video_details: wx.TextCtrl | None = None
         self.details_button_sizer: wx.Sizer | None = None
         self.background_player_controls: list[wx.Window] = []
+        self.player_play_pause_buttons: list[wx.Button] = []
         self.background_player_section_added = False
         self.download_queue: dict[str, dict] = {}
         self.active_downloads: dict[str, dict] = {}
@@ -5148,6 +5189,26 @@ class MainFrame(wx.Frame):
         item = self.current_video_item or {}
         return str(info.get("title") or item.get("title") or self.t("player")).strip()
 
+    def current_play_pause_label(self) -> str:
+        if not self.player_is_active() or self.player_ended or self.player_paused:
+            return self.t("play")
+        return self.t("pause")
+
+    def update_play_pause_buttons(self) -> None:
+        label = self.current_play_pause_label()
+        for button in list(getattr(self, "player_play_pause_buttons", [])):
+            try:
+                if button and not button.IsBeingDeleted():
+                    button.SetLabel(label)
+                    button.SetName(label)
+                    button.SetToolTip(label)
+            except RuntimeError:
+                continue
+        try:
+            self.panel.Layout()
+        except Exception:
+            pass
+
     def clear(self) -> None:
         preserved_player_panel = None
         if self.player_is_active() and self.player_panel is not None:
@@ -5164,6 +5225,7 @@ class MainFrame(wx.Frame):
             self.set_window_title()
         self.root_sizer.Clear(delete_windows=True)
         self.background_player_controls = []
+        self.player_play_pause_buttons = []
         self.background_player_section_added = False
         if not self.in_player_screen:
             if preserved_player_panel is not None:
@@ -5374,7 +5436,13 @@ class MainFrame(wx.Frame):
     def add_button_row(self, buttons: list[tuple[str, callable]]) -> None:
         row = wx.BoxSizer(wx.HORIZONTAL)
         for label, handler in buttons:
-            button = wx.Button(self.panel, label=label)
+            is_play_pause = getattr(handler, "__name__", "") == "player_play_pause"
+            button_label = self.current_play_pause_label() if is_play_pause else label
+            button = wx.Button(self.panel, label=button_label)
+            if is_play_pause:
+                button.SetName(button_label)
+                button.SetToolTip(button_label)
+                self.player_play_pause_buttons.append(button)
             button.Bind(wx.EVT_BUTTON, lambda _evt, fn=handler: fn())
             row.Add(button, 0, wx.RIGHT, 6)
         self.root_sizer.Add(row, 0, wx.ALL, 4)
@@ -5565,6 +5633,7 @@ class MainFrame(wx.Frame):
         self.user_playlist_items_screen_active = False
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
+        self.folder_screen_active = False
         self.clear()
         title = wx.StaticText(self.panel, label=self.t("main_menu"))
         self.root_sizer.Add(title, 0, wx.ALL, 4)
@@ -5621,13 +5690,10 @@ class MainFrame(wx.Frame):
         label = wx.StaticText(self.panel, label=self.t("background_player_now_playing", title=title))
         label.SetName(self.t("background_player"))
         self.root_sizer.Add(label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 4)
-        hint = wx.StaticText(self.panel, label=self.t("background_player_hint"))
-        hint.SetName(self.t("background_player_hint"))
-        self.root_sizer.Add(hint, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
         row = wx.BoxSizer(wx.HORIZONTAL)
         controls = [
-            (self.t("play"), self.player_play_pause),
             (self.t("previous"), lambda: self.play_relative_item(-1)),
+            (self.current_play_pause_label(), self.player_play_pause),
             (self.t("next"), lambda: self.play_relative_item(1)),
             (self.t("playback_queue"), self.show_playback_queue),
             (self.t("add_to_playlist"), lambda: self.add_active_to_playlist(prefer_active=True)),
@@ -5645,6 +5711,8 @@ class MainFrame(wx.Frame):
             button.SetName(f"{self.t('background_player')}: {label_text}")
             button.Bind(wx.EVT_BUTTON, lambda _evt, fn=handler: fn())
             button.Bind(wx.EVT_KEY_DOWN, self.on_background_player_key)
+            if getattr(handler, "__name__", "") == "player_play_pause":
+                self.player_play_pause_buttons.append(button)
             row.Add(button, 0, wx.RIGHT, 6)
             self.background_player_controls.append(button)
         self.root_sizer.Add(row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
@@ -6200,6 +6268,7 @@ class MainFrame(wx.Frame):
         self.user_playlist_items_screen_active = False
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
+        self.folder_screen_active = False
         self.clear()
         self.add_background_player_section()
         self.add_button_row(
@@ -6801,6 +6870,7 @@ class MainFrame(wx.Frame):
         self.user_playlist_items_screen_active = False
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
+        self.folder_screen_active = False
         self.clear()
         self.add_background_player_section()
         buttons = [(self.t("back"), self.show_main_menu)]
@@ -6931,6 +7001,7 @@ class MainFrame(wx.Frame):
         self.user_playlist_items_screen_active = False
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
+        self.folder_screen_active = False
         self.clear()
         self.add_background_player_section()
         self.add_button_row([(self.t("back"), self.back_from_search)])
@@ -7036,6 +7107,7 @@ class MainFrame(wx.Frame):
         self.user_playlist_items_screen_active = False
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
+        self.folder_screen_active = False
         self.clear()
         self.add_background_player_section()
         self.add_button_row(
@@ -7107,6 +7179,7 @@ class MainFrame(wx.Frame):
         self.user_playlist_items_screen_active = False
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
+        self.folder_screen_active = False
         self.clear()
         self.add_background_player_section()
         self.add_button_row(
@@ -7232,6 +7305,7 @@ class MainFrame(wx.Frame):
         self.user_playlist_items_screen_active = False
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
+        self.folder_screen_active = False
         self.clear()
         self.add_background_player_section()
         self.add_button_row(
@@ -9058,8 +9132,13 @@ class MainFrame(wx.Frame):
         self.return_all_results = list(self.all_results or self.results)
         self.return_index = self.current_index
         self.return_visible_count = self.last_visible_count or len(self.results)
-        self.player_return_screen = "search"
-        self.player_return_data = {}
+        self.player_return_screen = "folder" if self.folder_screen_active else "search"
+        self.player_return_data = {"index": self.current_index, "folder": self.last_search_query} if self.folder_screen_active else {}
+        if self.folder_screen_active:
+            items = [dict(result) for result in (self.all_results or self.results) if result.get("kind") == "local_file" and result.get("url")]
+            queue_items = [self.playback_queue_item_with_folder_return(result, items) for result in items[self.current_index + 1 :]]
+            self.playback_queue = queue_items
+            self.save_playback_queue()
         self.current_video_item = item
         self.current_video_info = dict(item)
         self.play_url(item["url"], item["title"])
@@ -9194,6 +9273,7 @@ class MainFrame(wx.Frame):
         self.user_playlist_items_screen_active = False
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
+        self.folder_screen_active = False
         self.clear()
         self.add_background_player_section()
         self.add_button_row([(self.t("back"), self.show_main_menu), (self.t("load_trending"), self.load_trending_results)])
@@ -9440,7 +9520,12 @@ class MainFrame(wx.Frame):
 
     def local_media_files_in_folder(self, folder: Path) -> list[Path]:
         try:
-            return sorted(path for path in folder.iterdir() if path.is_file() and path.suffix.lower() in LOCAL_MEDIA_EXTENSIONS)
+            files = [
+                path
+                for path in folder.rglob("*")
+                if path.is_file() and path.suffix.lower() in LOCAL_MEDIA_EXTENSIONS
+            ]
+            return sorted(files, key=lambda path: str(path.relative_to(folder)).lower())
         except OSError:
             return []
 
@@ -9470,6 +9555,44 @@ class MainFrame(wx.Frame):
             self.show_main_menu()
             return
         items = [self.local_media_item(path) for path in files]
+        self.show_local_media_folder(folder, items, selection=0)
+
+    def show_local_media_folder(self, folder: Path, items: list[dict], selection: int = 0) -> None:
+        self.in_main_menu = False
+        self.in_queue_screen = False
+        self.search_screen_active = False
+        self.favorites_screen_active = False
+        self.history_screen_active = False
+        self.subscriptions_screen_active = False
+        self.rss_feeds_screen_active = False
+        self.rss_items_screen_active = False
+        self.podcast_search_screen_active = False
+        self.user_playlists_screen_active = False
+        self.user_playlist_items_screen_active = False
+        self.notification_center_screen_active = False
+        self.direct_link_screen_active = False
+        self.folder_screen_active = True
+        self.clear()
+        self.add_background_player_section()
+        self.add_button_row(
+            [
+                (self.t("back"), self.show_main_menu),
+                (self.t("play"), self.play_selected),
+                (self.t("play_folder"), lambda: self.play_local_folder(start_index=0, shuffle=False)),
+                (self.t("shuffle_folder"), lambda: self.play_local_folder(start_index=0, shuffle=True)),
+                (self.t("add_folder_to_queue"), self.add_local_folder_to_playback_queue),
+                (self.t("playback_queue"), self.show_playback_queue),
+            ]
+        )
+        label = wx.StaticText(self.panel, label=f"{self.t('play_from_folder')}: {folder}")
+        self.root_sizer.Add(label, 0, wx.ALL, 4)
+        self.results_list = wx.ListBox(self.panel, choices=[self.t("search_results_empty")])
+        self.results_list.SetName(self.t("play_from_folder"))
+        self.results_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _evt: self.play_selected())
+        self.results_list.Bind(wx.EVT_CONTEXT_MENU, self.open_context_menu)
+        self.results_list.Bind(wx.EVT_KEY_DOWN, self.on_results_key)
+        self.results_list.Bind(wx.EVT_LISTBOX, self.on_results_selection)
+        self.root_sizer.Add(self.results_list, 1, wx.EXPAND | wx.ALL, 4)
         self.last_search_query = str(folder)
         self.last_search_type_index = 0
         self.current_search_type_code = "All"
@@ -9477,21 +9600,80 @@ class MainFrame(wx.Frame):
         self.collection_result_type = ""
         self.search_results_stack = []
         self.loading_more_results = False
-        self.dynamic_fetch_enabled = True
+        self.dynamic_fetch_enabled = False
         self.metadata_hydration_urls.clear()
         self.search_generation += 1
-        self.show_search(restore_search=True)
-        self.show_results(items, selection=0, visible_count=min(len(items), RESULTS_PAGE_SIZE))
+        self.show_results(items, selection=selection, visible_count=len(items))
         self.set_status(self.t("folder_loaded", count=len(items)))
         self.return_results = list(self.results)
         self.return_all_results = list(self.all_results or self.results)
-        self.return_index = 0
+        self.return_index = min(max(0, selection), len(items) - 1)
         self.return_visible_count = self.last_visible_count or len(self.results)
-        self.player_return_screen = "search"
-        self.player_return_data = {"index": 0}
-        self.current_video_item = dict(items[0])
-        self.current_video_info = dict(items[0])
-        self.play_url(str(items[0].get("url") or ""), str(items[0].get("title") or ""))
+        self.panel.Layout()
+        self.focus_later(self.results_list)
+
+    def selected_local_folder_items(self) -> list[dict]:
+        return [dict(item) for item in (self.all_results or self.results) if item.get("kind") == "local_file" and item.get("url")]
+
+    def play_local_folder(self, start_index: int = 0, shuffle: bool = False) -> None:
+        items = self.selected_local_folder_items()
+        if not items:
+            self.announce_player(self.t("folder_no_media"))
+            return
+        current = self.selected_result()
+        if current and any(item.get("url") == current.get("url") for item in items):
+            start_index = next((index for index, item in enumerate(items) if item.get("url") == current.get("url")), start_index)
+        start_index = min(max(0, start_index), len(items) - 1)
+        ordered = list(items)
+        if shuffle:
+            random.shuffle(ordered)
+            start_index = 0
+            self.shuffle_current = True
+        else:
+            self.shuffle_current = False
+        current_item = dict(ordered[start_index])
+        queue_items = ordered[start_index + 1 :]
+        self.playback_queue = [self.playback_queue_item_with_folder_return(item, items) for item in queue_items]
+        self.save_playback_queue()
+        self.player_return_screen = "folder"
+        self.player_return_data = {
+            "index": next((index for index, item in enumerate(items) if item.get("url") == current_item.get("url")), start_index),
+            "folder": self.last_search_query,
+        }
+        self.return_results = list(self.results)
+        self.return_all_results = list(self.all_results or self.results)
+        self.return_index = int(self.player_return_data.get("index") or 0)
+        self.return_visible_count = self.last_visible_count or len(self.results)
+        self.current_video_item = current_item
+        self.current_video_info = dict(current_item)
+        self.play_url(str(current_item.get("url") or ""), str(current_item.get("title") or ""))
+
+    def add_local_folder_to_playback_queue(self) -> None:
+        source_items = self.selected_local_folder_items()
+        items = [self.playback_queue_item_with_folder_return(item, source_items) for item in source_items]
+        if not items:
+            self.announce_player(self.t("folder_no_media"))
+            return
+        existing_urls = {str(item.get("url") or "") for item in self.playback_queue}
+        added = 0
+        for item in items:
+            url = str(item.get("url") or "")
+            if url and url not in existing_urls:
+                self.playback_queue.append(item)
+                existing_urls.add(url)
+                added += 1
+        self.save_playback_queue()
+        self.announce_player(self.t("folder_queue_added", count=added))
+
+    def playback_queue_item_with_folder_return(self, item: dict, source_items: list[dict]) -> dict:
+        queue_item = self.playlist_item_from_media(item)
+        queue_item["_return_screen"] = "folder"
+        queue_item["_return_folder"] = self.last_search_query
+        queue_item["_return_index"] = next(
+            (index for index, source in enumerate(source_items) if source.get("url") == item.get("url")),
+            0,
+        )
+        return queue_item
 
     def open_local_media_file(self, value: str) -> None:
         try:
@@ -9941,6 +10123,7 @@ class MainFrame(wx.Frame):
             self.player_kind = "mpv"
             self.player_control_mode = True
             self.player_ended = False
+            self.player_paused = bool(self.settings.player_start_paused)
             self.player_generation += 1
             self.current_stream_url = stream_url
             self.current_stream_headers = dict(headers or {})
@@ -9952,6 +10135,7 @@ class MainFrame(wx.Frame):
             self.current_video_info["pitch"] = self.format_playback_rate(1.0)
             self.update_details_text()
             self.set_status(self.t("playing", title=title))
+            wx.CallAfter(self.update_play_pause_buttons)
             threading.Thread(target=self.apply_initial_volume_worker, args=(self.player_generation, target_volume), daemon=True).start()
             wx.CallLater(700, self.apply_equalizer_to_player)
             self.start_player_monitor(self.player_generation)
@@ -9984,6 +10168,7 @@ class MainFrame(wx.Frame):
         self.user_playlist_items_screen_active = False
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
+        self.folder_screen_active = False
         self.clear()
         self.in_player_screen = True
         self.player_control_mode = True
@@ -10117,11 +10302,9 @@ class MainFrame(wx.Frame):
         if not keep_playing:
             self.stop_player(silent=True)
         self.show_main_menu()
-        if keep_playing and self.player_is_active():
-            self.announce_player(self.t("background_player_hint"))
 
     def leave_player_to_previous_screen(self) -> None:
-        self.back_to_results(stop_playback=True)
+        self.back_to_results(stop_playback=not self.background_playback_enabled())
 
     def back_to_results(self, stop_playback: bool = True) -> None:
         keep_playing = self.background_playback_enabled() and not stop_playback
@@ -10132,50 +10315,71 @@ class MainFrame(wx.Frame):
         if self.player_return_screen == "rss_items":
             feed_index = int(self.player_return_data.get("feed_index", self.current_rss_feed_index) or 0)
             item_index = int(self.player_return_data.get("item_index", 0) or 0)
-            self.player_return_screen = ""
-            self.player_return_data = {}
+            if not keep_playing:
+                self.player_return_screen = ""
+                self.player_return_data = {}
             self.show_rss_items(feed_index, selection=item_index)
             return
         if self.player_return_screen == "history":
-            self.player_return_screen = ""
-            self.player_return_data = {}
+            if not keep_playing:
+                self.player_return_screen = ""
+                self.player_return_data = {}
             self.show_history()
             return
         if self.player_return_screen == "user_playlist_items":
             playlist_index = int(self.player_return_data.get("playlist_index", self.current_user_playlist_index) or 0)
             item_index = int(self.player_return_data.get("item_index", 0) or 0)
-            self.player_return_screen = ""
-            self.player_return_data = {}
+            if not keep_playing:
+                self.player_return_screen = ""
+                self.player_return_data = {}
             self.show_user_playlist_items(playlist_index, selection=item_index)
             return
         if self.player_return_screen == "notification_center":
-            self.player_return_screen = ""
-            self.player_return_data = {}
+            if not keep_playing:
+                self.player_return_screen = ""
+                self.player_return_data = {}
             self.show_notification_center()
             return
         if self.player_return_screen == "direct_link":
-            self.player_return_screen = ""
-            self.player_return_data = {}
+            if not keep_playing:
+                self.player_return_screen = ""
+                self.player_return_data = {}
             self.show_direct_link()
             return
+        if self.player_return_screen == "folder":
+            folder = Path(str(self.player_return_data.get("folder") or self.last_search_query or Path.home())).expanduser()
+            index = int(self.player_return_data.get("index", self.return_index) or 0)
+            results = list(self.return_all_results or self.all_results or self.return_results or self.results)
+            if not keep_playing:
+                self.player_return_screen = ""
+                self.player_return_data = {}
+            if results:
+                self.show_local_media_folder(folder, results, selection=index)
+            else:
+                self.open_local_media_folder(str(folder))
+            return
         if self.player_return_screen == "local_file":
-            self.player_return_screen = ""
-            self.player_return_data = {}
+            if not keep_playing:
+                self.player_return_screen = ""
+                self.player_return_data = {}
             self.show_main_menu()
             return
         if self.player_return_screen == "playback_queue":
-            self.player_return_screen = ""
-            self.player_return_data = {}
+            if not keep_playing:
+                self.player_return_screen = ""
+                self.player_return_data = {}
             self.show_main_menu()
             return
         if self.player_return_screen == "favorites":
-            self.player_return_screen = ""
-            self.player_return_data = {}
+            if not keep_playing:
+                self.player_return_screen = ""
+                self.player_return_data = {}
             self.show_favorites()
             return
         if self.player_return_screen == "subscriptions":
-            self.player_return_screen = ""
-            self.player_return_data = {}
+            if not keep_playing:
+                self.player_return_screen = ""
+                self.player_return_data = {}
             self.show_subscriptions()
             return
         results = self.return_all_results or self.all_results or self.return_results or self.results
@@ -10663,6 +10867,11 @@ class MainFrame(wx.Frame):
                 "playlist_index": int(item.get("user_playlist_index", self.current_user_playlist_index) or 0),
                 "item_index": int(item.get("user_playlist_item_index", 0) or 0),
             }
+        elif self.player_return_screen == "folder" or item.get("kind") == "local_file":
+            results = self.return_all_results or self.all_results or self.return_results or self.results
+            self.return_index = next((i for i, result in enumerate(results) if result.get("url") == item.get("url")), self.return_index)
+            self.player_return_screen = "folder"
+            self.player_return_data = {"index": self.return_index, "folder": self.last_search_query}
         else:
             results = self.return_all_results or self.all_results or self.return_results or self.results
             self.return_index = next((i for i, result in enumerate(results) if result.get("url") == item.get("url")), self.return_index)
@@ -10739,9 +10948,13 @@ class MainFrame(wx.Frame):
         outer.Add(queue_list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         row = wx.BoxSizer(wx.HORIZONTAL)
         play_button = wx.Button(dialog, label=self.t("play"))
+        move_up_button = wx.Button(dialog, label=self.t("move_up"))
+        move_down_button = wx.Button(dialog, label=self.t("move_down"))
         remove_button = wx.Button(dialog, label=self.t("remove_from_playback_queue"))
         close_button = wx.Button(dialog, wx.ID_CANCEL, label=self.t("back"))
         row.Add(play_button, 0, wx.RIGHT, 8)
+        row.Add(move_up_button, 0, wx.RIGHT, 8)
+        row.Add(move_down_button, 0, wx.RIGHT, 8)
         row.Add(remove_button, 0, wx.RIGHT, 8)
         row.Add(close_button, 0)
         outer.Add(row, 0, wx.ALIGN_RIGHT | wx.ALL, 8)
@@ -10772,9 +10985,51 @@ class MainFrame(wx.Frame):
             if not self.playback_queue:
                 dialog.EndModal(wx.ID_CANCEL)
 
+        def refresh_queue_list(selection: int) -> None:
+            labels = [self.playback_queue_line(item, item_index) for item_index, item in enumerate(self.playback_queue)] or [self.t("playback_queue_empty")]
+            queue_list.Set(labels)
+            if self.playback_queue:
+                queue_list.SetSelection(min(max(0, selection), len(self.playback_queue) - 1))
+
+        def move_selected(delta: int) -> None:
+            index = selected_index()
+            target = index + delta
+            if index < 0 or target < 0 or target >= len(self.playback_queue):
+                return
+            self.playback_queue[index], self.playback_queue[target] = self.playback_queue[target], self.playback_queue[index]
+            self.save_playback_queue()
+            refresh_queue_list(target)
+            self.announce_player(self.t("playback_queue_reordered"))
+
+        def open_queue_context_menu(event=None) -> None:
+            menu = wx.Menu()
+            actions = [
+                (self.t("play"), play_selected),
+                (self.t("move_up"), lambda _evt=None: move_selected(-1)),
+                (self.t("move_down"), lambda _evt=None: move_selected(1)),
+                (self.t("remove_from_playback_queue"), remove_selected),
+            ]
+            for label, handler in actions:
+                menu_item = menu.Append(wx.ID_ANY, label)
+                dialog.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), menu_item)
+            queue_list.PopupMenu(menu)
+            menu.Destroy()
+
         queue_list.Bind(wx.EVT_LISTBOX_DCLICK, play_selected)
-        queue_list.Bind(wx.EVT_KEY_DOWN, lambda evt: play_selected() if self.shortcut_matches(evt, "open_selected") else evt.Skip())
+        def on_queue_key(evt: wx.KeyEvent) -> None:
+            if self.shortcut_matches(evt, "open_selected"):
+                play_selected()
+                return
+            if self.context_menu_shortcut_matches(evt):
+                open_queue_context_menu(evt)
+                return
+            evt.Skip()
+
+        queue_list.Bind(wx.EVT_KEY_DOWN, on_queue_key)
+        queue_list.Bind(wx.EVT_CONTEXT_MENU, open_queue_context_menu)
         play_button.Bind(wx.EVT_BUTTON, play_selected)
+        move_up_button.Bind(wx.EVT_BUTTON, lambda _evt: move_selected(-1))
+        move_down_button.Bind(wx.EVT_BUTTON, lambda _evt: move_selected(1))
         remove_button.Bind(wx.EVT_BUTTON, remove_selected)
         result = dialog.ShowModal()
         dialog.Destroy()
@@ -10805,8 +11060,16 @@ class MainFrame(wx.Frame):
         if not url:
             self.announce_player(self.t("no_selection"))
             return
-        self.player_return_screen = "playback_queue"
-        self.player_return_data = {}
+        source_screen = str(item.get("_return_screen") or "")
+        if source_screen == "folder":
+            self.player_return_screen = "folder"
+            self.player_return_data = {
+                "index": int(item.get("_return_index") or 0),
+                "folder": str(item.get("_return_folder") or self.last_search_query),
+            }
+        else:
+            self.player_return_screen = "playback_queue"
+            self.player_return_data = {}
         self.current_video_item = item
         self.current_video_info = dict(item)
         self.play_url(url, str(item.get("title") or ""), show_player=show_player)
@@ -11050,6 +11313,8 @@ class MainFrame(wx.Frame):
                 pass
         if self.repeat_current:
             self.player_ended = False
+            self.player_paused = False
+            self.update_play_pause_buttons()
             self.restart_current_playback(announce=False)
             return
         queued_item = self.pop_next_playback_queue_item()
@@ -11062,6 +11327,8 @@ class MainFrame(wx.Frame):
                 self.open_relative_player_item(next_item)
                 return
         self.player_ended = True
+        self.player_paused = True
+        self.update_play_pause_buttons()
         if bool(getattr(self.settings, "announce_playback_finished", True)):
             self.announce_player(self.t("playback_finished"))
         else:
@@ -11085,6 +11352,8 @@ class MainFrame(wx.Frame):
             try:
                 self.mpv_set_property("pause", False, timeout=0.5)
                 self.start_player_monitor(self.player_generation)
+                self.player_paused = False
+                self.update_play_pause_buttons()
                 self.announce_play_pause_state(False)
             except Exception:
                 self.toggle_player_pause_fallback()
@@ -11096,12 +11365,15 @@ class MainFrame(wx.Frame):
             paused = bool(self.mpv_get_property("pause", timeout=0.35))
             new_paused = not paused
             self.mpv_set_property("pause", new_paused, timeout=0.5)
+            self.player_paused = new_paused
+            self.update_play_pause_buttons()
             self.announce_play_pause_state(new_paused)
         except Exception:
             self.toggle_player_pause_fallback()
 
     def toggle_player_pause_fallback(self) -> None:
         self.player_command("cycle pause")
+        wx.CallLater(140, self.refresh_play_pause_button_state)
         if self.settings.announce_play_pause:
             wx.CallLater(120, self.announce_current_play_pause_state)
 
@@ -11110,9 +11382,21 @@ class MainFrame(wx.Frame):
             return
         try:
             paused = bool(self.mpv_get_property("pause", timeout=0.35))
+            self.player_paused = paused
+            self.update_play_pause_buttons()
             self.announce_play_pause_state(paused)
         except Exception:
             pass
+
+    def refresh_play_pause_button_state(self) -> None:
+        if self.player_kind != "mpv" or not self.mpv_process_alive():
+            self.update_play_pause_buttons()
+            return
+        try:
+            self.player_paused = bool(self.mpv_get_property("pause", timeout=0.35))
+        except Exception:
+            pass
+        self.update_play_pause_buttons()
 
     def announce_play_pause_state(self, paused: bool) -> None:
         if self.settings.announce_play_pause:
@@ -11134,11 +11418,13 @@ class MainFrame(wx.Frame):
 
     def restart_current_playback(self, announce: bool = True) -> None:
         self.player_ended = False
+        self.player_paused = False
         if self.mpv_process_alive():
             try:
                 self.mpv_send(["seek", 0, "absolute+exact"], timeout=0.8)
                 self.mpv_set_property("pause", False, timeout=0.8)
                 self.start_player_monitor(self.player_generation)
+                self.update_play_pause_buttons()
                 if announce:
                     self.announce_player(self.t("playback_restarted"))
                 return
@@ -11505,6 +11791,19 @@ class MainFrame(wx.Frame):
             self.session_volume = volume
         except Exception:
             pass
+
+    def announce_volume_async(self) -> None:
+        threading.Thread(target=self.announce_volume_worker, daemon=True).start()
+
+    def announce_volume_worker(self) -> None:
+        try:
+            current = self.mpv_get_property("volume", timeout=0.5)
+            if current is None:
+                raise RuntimeError("volume unavailable")
+            volume = int(round(float(current)))
+            wx.CallAfter(self.announce_player, self.t("volume_announcement", volume=volume))
+        except Exception:
+            wx.CallAfter(self.announce_player, self.t("timing_unavailable"))
 
     def toggle_volume_boost(self) -> None:
         self.volume_boost_enabled = not self.volume_boost_enabled
@@ -11992,6 +12291,7 @@ class MainFrame(wx.Frame):
             self.player_log_handle = None
         self.player_kind = ""
         self.player_control_mode = False
+        self.player_paused = False
         self.rubberband_pitch_filter_active = False
         self.equalizer_filter_active = False
         self.current_stream_url = ""
@@ -12362,6 +12662,9 @@ class MainFrame(wx.Frame):
                 return
             if self.shortcut_matches(event, "player_pitch_down"):
                 self.change_pitch_async(-self.pitch_step_value())
+                return
+            if self.shortcut_matches(event, "player_volume_status"):
+                self.announce_volume_async()
                 return
             if self.shortcut_matches(event, "player_details"):
                 self.show_video_details()
@@ -14761,6 +15064,10 @@ class MainFrame(wx.Frame):
             repaired["player_equalizer"] = DEFAULT_KEYBOARD_SHORTCUTS["player_equalizer"]
         if not repaired.get("player_edit_mode"):
             repaired["player_edit_mode"] = DEFAULT_KEYBOARD_SHORTCUTS["player_edit_mode"]
+        if self.canonical_shortcut(repaired.get("player_details", "")) == "v":
+            repaired["player_details"] = DEFAULT_KEYBOARD_SHORTCUTS["player_details"]
+        if not repaired.get("player_volume_status"):
+            repaired["player_volume_status"] = DEFAULT_KEYBOARD_SHORTCUTS["player_volume_status"]
         if self.canonical_shortcut(repaired.get("new_subscription_videos", "")) == self.canonical_shortcut(repaired.get("player_play_pause", "")):
             replacement = self.first_available_shortcut(repaired, "new_subscription_videos", ["Ctrl+Shift+V", "Ctrl+Alt+V", "Alt+N"])
             if replacement:

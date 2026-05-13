@@ -1,5 +1,14 @@
 # Changelog
 
+## What's new in version 0.8.16
+
+- fixed background playback so Escape returns one level back without stopping playback when background playback is enabled
+- changed the background/player Play button to switch between Play and Pause based on the real player state
+- renamed the background player controls to Open player screen and Close, and removed the extra background-playback announcement
+- rebuilt Play from folder so it opens a folder as an accessible media list instead of immediately starting the first file
+- added Play folder, Shuffle folder, Add folder to queue, and queue Move up/Move down context menu actions
+- changed default player shortcuts so V announces the current volume and F7 opens video details
+
 ## What's new in version 0.8.15
 
 - fixed the Default playback volume slider accessibility in Settings so screen readers hear the setting name and actual 0-300 volume value instead of a confusing slider/percentage mix
