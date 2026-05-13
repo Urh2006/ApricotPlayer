@@ -187,8 +187,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.23"
-APP_VERSION_LABEL = "0.8.23"
+APP_VERSION = "0.8.24"
+APP_VERSION_LABEL = "0.8.24"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -374,6 +374,8 @@ INSTALLER_ASSET_NAME = "ApricotPlayerSetup.exe"
 PORTABLE_ZIP_ASSET_NAME = "ApricotPlayer.zip"
 LEGACY_PORTABLE_ZIP_ASSET_NAME = "ApricotPlayerPortable.zip"
 UPDATE_LOG_FILE = APP_DIR / "updater.log"
+UPDATE_DOWNLOAD_CHUNK_SIZE = 1024 * 1024 * 4
+UPDATE_PROGRESS_MIN_INTERVAL = 0.35
 YTDLP_PYPI_JSON_URL = "https://pypi.org/pypi/yt-dlp/json"
 PLAYBACK_SPEED_STEPS = [0.25, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1.0, 1.1, 1.2, 1.25, 1.3, 1.4, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0]
 PITCH_STEPS = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0]
@@ -5284,9 +5286,15 @@ class MainFrame(wx.Frame):
     def set_window_title(self, media_title: str | None = None) -> None:
         title = re.sub(r"\s+", " ", str(media_title or "").strip())
         if title:
-            self.SetTitle(f"{title} - {WINDOW_TITLE}")
+            window_title = f"{title} - {WINDOW_TITLE}"
         else:
-            self.SetTitle(WINDOW_TITLE)
+            window_title = WINDOW_TITLE
+        try:
+            if self.GetTitle() == window_title:
+                return
+        except Exception:
+            pass
+        self.SetTitle(window_title)
 
     def player_is_active(self) -> bool:
         return self.player_kind == "mpv" and self.mpv_process_alive()
@@ -11321,7 +11329,15 @@ class MainFrame(wx.Frame):
         changed = len(self.playback_queue) != before
         if changed:
             self.save_playback_queue()
+            self.refresh_main_menu_after_playback_queue_change()
         return changed
+
+    def refresh_main_menu_after_playback_queue_change(self) -> None:
+        if self.playback_queue:
+            return
+        if not self.in_main_menu or not hasattr(self, "menu_list"):
+            return
+        wx.CallAfter(self.show_main_menu)
 
     def playback_queue_line(self, item: dict, index: int) -> str:
         parts = [
@@ -11436,6 +11452,7 @@ class MainFrame(wx.Frame):
         remove_button.Bind(wx.EVT_BUTTON, remove_selected)
         result = dialog.ShowModal()
         dialog.Destroy()
+        self.refresh_main_menu_after_playback_queue_change()
         if result == wx.ID_OK and action.get("action") == "play":
             self.play_playback_queue_index(int(action.get("index", -1)))
 
@@ -14748,6 +14765,7 @@ class MainFrame(wx.Frame):
 
     def download_and_install_update(self, release: dict, asset: dict) -> None:
         version = self.release_version(release)
+        temp_dir: Path | None = None
         try:
             self.ui_queue.put(("status", self.t("downloading_update", version=version)))
             temp_dir = Path(tempfile.mkdtemp(prefix="apricotplayer-update-"))
@@ -14760,6 +14778,11 @@ class MainFrame(wx.Frame):
             wx.CallAfter(self.update_app_update_finished, version)
             wx.CallAfter(self.finish_app_update_install, str(downloaded_path), version)
         except Exception as exc:
+            if temp_dir:
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                except Exception:
+                    pass
             wx.CallAfter(self.update_app_update_failed, exc)
 
     def download_update_asset(self, asset: dict, downloaded_path: Path, version: str) -> None:
@@ -14777,29 +14800,38 @@ class MainFrame(wx.Frame):
         last_error: Exception | None = None
         for download_url, headers in attempts:
             try:
+                started = time.monotonic()
+                self.log_update_event(f"Download attempt: host={urlparse(download_url).hostname or ''}; asset={asset.get('name')}; expected_size={asset.get('size') or 'unknown'}")
                 request = Request(download_url, headers=headers)
-                with self.open_url(request, timeout=120) as response, downloaded_path.open("wb") as handle:
+                with self.open_url(request, timeout=300) as response, downloaded_path.open("wb") as handle:
                     self.validate_https_response_url(response.geturl())
                     total_header = response.headers.get("Content-Length")
                     total = int(total_header) if total_header and total_header.isdigit() else 0
                     downloaded = 0
                     last_percent = -1
+                    last_progress_time = 0.0
                     while True:
-                        chunk = response.read(1024 * 512)
+                        chunk = response.read(UPDATE_DOWNLOAD_CHUNK_SIZE)
                         if not chunk:
                             break
                         handle.write(chunk)
                         downloaded += len(chunk)
+                        now = time.monotonic()
                         if total:
                             percent = int(downloaded * 100 / total)
-                            if percent != last_percent:
+                            if percent != last_percent and (percent >= 100 or now - last_progress_time >= UPDATE_PROGRESS_MIN_INTERVAL):
                                 last_percent = percent
+                                last_progress_time = now
                                 wx.CallAfter(self.update_app_update_progress, version, percent)
-                        elif downloaded % (1024 * 1024 * 8) < len(chunk):
+                        elif now - last_progress_time >= UPDATE_PROGRESS_MIN_INTERVAL:
+                            last_progress_time = now
                             wx.CallAfter(self.update_app_update_progress, version, None)
+                elapsed = max(0.001, time.monotonic() - started)
+                self.log_update_event(f"Download completed: bytes={downloaded_path.stat().st_size}; seconds={elapsed:.1f}; mbps={(downloaded_path.stat().st_size * 8 / 1_000_000 / elapsed):.2f}")
                 return
             except Exception as exc:
                 last_error = exc
+                self.log_update_event(f"Download attempt failed from {urlparse(download_url).hostname or download_url}: {exc}")
                 try:
                     downloaded_path.unlink(missing_ok=True)
                 except Exception:

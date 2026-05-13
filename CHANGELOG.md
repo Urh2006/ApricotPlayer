@@ -1,5 +1,13 @@
 # Changelog
 
+## What's new in version 0.8.24
+
+- improved updater downloads with larger chunks, throttled progress updates, a longer download timeout, and clearer updater log timing
+- updater now cleans up failed update downloads before showing the error
+- installer desktop shortcut is selected by default again, so ApricotPlayer appears on the Desktop after install/update
+- playback queue now disappears from the main menu when the last queued item is removed
+- background playback navigation no longer resets the same window title repeatedly, reducing repeated screen reader announcements
+
 ## What's new in version 0.8.23
 
 - added Ctrl+Shift+U for unsubscribing from a channel

@@ -44,7 +44,7 @@ ChangesAssociations=yes
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
+Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
 Name: "mediaassoc"; Description: "Register ApricotPlayer as a media player for common audio and video files"; GroupDescription: "Windows integration:"
 
 [Files]
