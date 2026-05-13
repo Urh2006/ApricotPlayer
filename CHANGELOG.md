@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.8.23
+
+- added Ctrl+Shift+U for unsubscribing from a channel
+- added unsubscribe actions to relevant result, channel, subscription, favorite, history, and player context menus
+- made channel subscription detection more robust for video results by falling back to channel IDs and normalized channel URLs
+
 ## What's new in version 0.8.22
 
 - fixed F7 video details by recognizing both wx and raw Windows F-key codes, including after resetting keyboard shortcuts to defaults

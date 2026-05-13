@@ -187,8 +187,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.22"
-APP_VERSION_LABEL = "0.8.22"
+APP_VERSION = "0.8.23"
+APP_VERSION_LABEL = "0.8.23"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -482,6 +482,7 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "download_audio": "Ctrl+Shift+A",
     "download_video": "Ctrl+Shift+D",
     "subscribe_channel": "Ctrl+Shift+S",
+    "unsubscribe_channel": "Ctrl+Shift+U",
     "queue_audio": "Shift+A",
     "add_to_playback_queue": "Ctrl+Shift+Q",
     "remove_from_playback_queue": "Ctrl+Shift+Delete",
@@ -546,6 +547,7 @@ SHORTCUT_DEFINITIONS = [
     ("download_audio", "shortcut_download_audio"),
     ("download_video", "shortcut_download_video"),
     ("subscribe_channel", "shortcut_subscribe_channel"),
+    ("unsubscribe_channel", "shortcut_unsubscribe_channel"),
     ("queue_audio", "shortcut_queue_audio"),
     ("add_to_playback_queue", "shortcut_add_to_playback_queue"),
     ("remove_from_playback_queue", "shortcut_remove_from_playback_queue"),
@@ -957,6 +959,7 @@ TEXT = {
         "shortcut_download_audio": "Prenesi zvok",
         "shortcut_download_video": "Prenesi video",
         "shortcut_subscribe_channel": "Naroci se na kanal",
+        "shortcut_unsubscribe_channel": "Odjavi se od kanala",
         "shortcut_queue_audio": "Oznaci video za prenos ali dodajanje v playliste",
         "shortcut_create_playlist": "Ustvari playlisto",
         "shortcut_add_to_playlist": "Dodaj v playlisto",
@@ -1383,6 +1386,7 @@ TEXT = {
         "shortcut_download_audio": "Download audio",
         "shortcut_download_video": "Download video",
         "shortcut_subscribe_channel": "Subscribe to channel",
+        "shortcut_unsubscribe_channel": "Unsubscribe from channel",
         "shortcut_queue_audio": "Select video for download or adding to playlists",
         "shortcut_copy_link": "Copy link",
         "shortcut_context_menu": "Context menu",
@@ -3542,6 +3546,24 @@ for language_code in LANGUAGE_CODES:
     for key, value in RELEASE_0820_TRANSLATION_UPDATES["en"].items():
         TEXT.setdefault(language_code, {}).setdefault(key, value)
 
+RELEASE_0823_TRANSLATION_UPDATES = {
+    "sl": {
+        "unsubscribe_channel": "Odjavi se od kanala",
+        "shortcut_unsubscribe_channel": "Odjavi se od kanala",
+        "subscription_not_found": "Nisi naročen na {title}.",
+    },
+    "en": {
+        "unsubscribe_channel": "Unsubscribe from channel",
+        "shortcut_unsubscribe_channel": "Unsubscribe from channel",
+        "subscription_not_found": "You are not subscribed to {title}.",
+    },
+}
+for language_code in LANGUAGE_CODES:
+    TEXT.setdefault(language_code, {}).update(RELEASE_0823_TRANSLATION_UPDATES.get(language_code, RELEASE_0823_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
+for language_code in LANGUAGE_CODES:
+    for key, value in RELEASE_0823_TRANSLATION_UPDATES["en"].items():
+        TEXT.setdefault(language_code, {}).setdefault(key, value)
+
 
 def default_equalizer_gains() -> dict[str, float]:
     return {band_id: 0.0 for band_id, _label in EQ_BANDS}
@@ -3887,6 +3909,7 @@ class MainFrame(wx.Frame):
             ("download_audio", self.download_audio_shortcut),
             ("download_video", self.download_video_shortcut),
             ("subscribe_channel", self.subscribe_shortcut),
+            ("unsubscribe_channel", self.unsubscribe_shortcut),
             ("new_subscription_videos", self.open_notification_center_shortcut),
         ]
         for action, handler in global_actions:
@@ -7256,6 +7279,8 @@ class MainFrame(wx.Frame):
             self.download_video_shortcut()
         elif self.shortcut_matches(event, "subscribe_channel"):
             self.subscribe_shortcut()
+        elif self.shortcut_matches(event, "unsubscribe_channel"):
+            self.unsubscribe_shortcut()
         elif self.shortcut_matches(event, "copy_link"):
             self.copy_selected_url()
         elif self.shortcut_matches(event, "open_selected"):
@@ -7351,6 +7376,8 @@ class MainFrame(wx.Frame):
             self.play_favorite()
         elif self.shortcut_matches(event, "subscribe_channel"):
             self.subscribe_to_selected_channel(self.selected_favorite())
+        elif self.shortcut_matches(event, "unsubscribe_channel"):
+            self.unsubscribe_from_selected_channel(self.selected_favorite())
         elif self.shortcut_matches(event, "add_to_playback_queue"):
             self.add_active_to_playback_queue()
         elif self.shortcut_matches(event, "remove_from_playback_queue"):
@@ -7367,6 +7394,7 @@ class MainFrame(wx.Frame):
             (self.menu_label_with_shortcut("download_audio", "download_audio"), lambda: self.start_download(True, item=self.selected_favorite())),
             (self.menu_label_with_shortcut("download_video", "download_video"), lambda: self.start_download(False, item=self.selected_favorite())),
             (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), lambda: self.subscribe_to_selected_channel(self.selected_favorite())),
+            (self.menu_label_with_shortcut("unsubscribe_channel", "unsubscribe_channel"), lambda: self.unsubscribe_from_selected_channel(self.selected_favorite())),
             (self.menu_label_with_shortcut("add_to_playlist", "add_to_playlist"), self.add_active_to_playlist),
             (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
             (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
@@ -7453,6 +7481,8 @@ class MainFrame(wx.Frame):
             self.start_download(False, item=self.selected_history_item())
         elif self.shortcut_matches(event, "subscribe_channel"):
             self.subscribe_to_selected_channel(self.selected_history_item())
+        elif self.shortcut_matches(event, "unsubscribe_channel"):
+            self.unsubscribe_from_selected_channel(self.selected_history_item())
         elif self.shortcut_matches(event, "add_to_playback_queue"):
             self.add_active_to_playback_queue()
         elif self.shortcut_matches(event, "remove_from_playback_queue"):
@@ -7472,6 +7502,7 @@ class MainFrame(wx.Frame):
             (self.menu_label_with_shortcut("download_video", "download_video"), lambda: self.start_download(False, item=self.selected_history_item())),
             (self.t("add_favorite"), lambda: self.add_favorite_item(self.selected_history_item())),
             (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), lambda: self.subscribe_to_selected_channel(self.selected_history_item())),
+            (self.menu_label_with_shortcut("unsubscribe_channel", "unsubscribe_channel"), lambda: self.unsubscribe_from_selected_channel(self.selected_history_item())),
             (self.menu_label_with_shortcut("add_to_playlist", "add_to_playlist"), self.add_active_to_playlist),
             (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
             (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
@@ -7583,6 +7614,8 @@ class MainFrame(wx.Frame):
             self.open_selected_subscription_videos()
         elif self.shortcut_matches(event, "new_subscription_videos"):
             self.open_notification_center_shortcut()
+        elif self.shortcut_matches(event, "unsubscribe_channel"):
+            self.remove_subscription()
         elif self.shortcut_matches(event, "remove_selected"):
             self.remove_subscription()
         elif self.context_menu_shortcut_matches(event):
@@ -7597,6 +7630,7 @@ class MainFrame(wx.Frame):
             (self.t("subscription_new_videos_button"), self.open_selected_subscription_new_videos),
             (self.t("subscription_check_now"), lambda: self.check_subscriptions(manual=True)),
             (self.t("copy_url"), lambda: self.copy_item_url(self.selected_subscription())),
+            (self.menu_label_with_shortcut("unsubscribe_channel", "unsubscribe_channel"), self.remove_subscription),
             (self.t("remove"), self.remove_subscription),
         ]
         for label, handler in actions:
@@ -7657,6 +7691,14 @@ class MainFrame(wx.Frame):
             return
         self.subscribe_to_selected_channel(self.active_item())
 
+    def unsubscribe_shortcut(self) -> None:
+        if self.in_main_menu:
+            return
+        if self.subscriptions_screen_active:
+            self.remove_subscription()
+            return
+        self.unsubscribe_from_selected_channel(self.active_item())
+
     def subscribe_to_selected_channel(self, item: dict | None) -> None:
         if not item:
             self.message(self.t("no_selection"))
@@ -7675,11 +7717,34 @@ class MainFrame(wx.Frame):
         self.refresh_subscriptions()
         self.announce_player(self.t("subscription_added", title=subscription.get("title", "")))
 
+    def unsubscribe_from_selected_channel(self, item: dict | None) -> None:
+        if not item:
+            self.message(self.t("no_selection"))
+            return
+        subscription = self.subscription_from_item(item)
+        if not subscription:
+            self.message(self.t("no_selection"))
+            return
+        target_url = self.canonical_channel_url(subscription.get("url", ""))
+        target_title = subscription.get("title") or self.t("channel")
+        for index, existing in enumerate(list(self.subscriptions)):
+            existing_url = self.canonical_channel_url(str(existing.get("url") or ""))
+            if existing_url and existing_url == target_url:
+                removed = self.subscriptions.pop(index)
+                self.save_subscriptions()
+                self.refresh_subscriptions()
+                self.announce_player(self.t("subscription_removed", title=removed.get("title") or target_title))
+                return
+        self.announce_player(self.t("subscription_not_found", title=target_title))
+
     def subscription_from_item(self, item: dict) -> dict | None:
         kind = item.get("kind")
-        channel_url = str(item.get("channel_url") or "").strip()
+        channel_url = self.normalize_channel_url(item)
         if kind == "channel":
             channel_url = str(item.get("url") or channel_url).strip()
+        if not channel_url and item.get("latest_urls") is not None:
+            channel_url = str(item.get("url") or "").strip()
+        channel_url = self.canonical_channel_url(channel_url)
         if not channel_url:
             return None
         title = item.get("channel") or item.get("title") or channel_url
@@ -7692,6 +7757,19 @@ class MainFrame(wx.Frame):
             "last_new_count": 0,
             "created_at": time.time(),
         }
+
+    @staticmethod
+    def canonical_channel_url(url: str) -> str:
+        text = str(url or "").strip()
+        if not text:
+            return ""
+        if text.startswith("@") or text.startswith("/@"):
+            text = f"https://www.youtube.com/{text.lstrip('/')}"
+        elif text and not text.startswith("http"):
+            text = f"https://www.youtube.com/{text.lstrip('/')}"
+        base = text.split("?", 1)[0].split("#", 1)[0].rstrip("/")
+        base = re.sub(r"/(videos|playlists|featured|streams|shorts|community|about)$", "", base, flags=re.IGNORECASE)
+        return base.rstrip("/")
 
     def refresh_interval_seconds(self, value, default: float, maximum_hours: float = 168.0) -> float:
         hours = self.to_float(str(value), default, 0.5, maximum_hours)
@@ -12919,6 +12997,9 @@ class MainFrame(wx.Frame):
         if self.shortcut_matches(event, "subscribe_channel"):
             self.subscribe_shortcut()
             return
+        if self.shortcut_matches(event, "unsubscribe_channel"):
+            self.unsubscribe_shortcut()
+            return
         if self.shortcut_matches(event, "create_playlist"):
             self.create_user_playlist_dialog()
             return
@@ -13082,6 +13163,7 @@ class MainFrame(wx.Frame):
             (self.menu_label_with_shortcut("add_favorite", "add_favorite"), lambda: self.add_favorite_item(dict(item))),
             (self.menu_label_with_shortcut("remove_favorite", "remove_favorite"), lambda: self.remove_favorite_item(dict(item))),
             (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), lambda: self.subscribe_to_selected_channel(dict(item))),
+            (self.menu_label_with_shortcut("unsubscribe_channel", "unsubscribe_channel"), lambda: self.unsubscribe_from_selected_channel(dict(item))),
             (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
             (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
             (self.menu_label_with_shortcut("remove_from_playlist", "remove_from_playlist"), self.remove_active_from_playlist),
@@ -13129,6 +13211,7 @@ class MainFrame(wx.Frame):
                 ]
             if is_channel:
                 actions.insert(5, (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), self.subscribe_shortcut))
+                actions.insert(6, (self.menu_label_with_shortcut("unsubscribe_channel", "unsubscribe_channel"), self.unsubscribe_shortcut))
         else:
             actions = [
                 (self.t("play"), self.play_selected),
@@ -13137,6 +13220,7 @@ class MainFrame(wx.Frame):
                 (self.menu_label_with_shortcut("add_favorite", "add_favorite"), self.add_selected_favorite),
                 (self.menu_label_with_shortcut("remove_favorite", "remove_favorite"), self.remove_selected_favorite_shortcut),
                 (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), self.subscribe_shortcut),
+                (self.menu_label_with_shortcut("unsubscribe_channel", "unsubscribe_channel"), self.unsubscribe_shortcut),
                 (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
                 (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
                 (self.menu_label_with_shortcut("remove_from_playlist", "remove_from_playlist"), self.remove_active_from_playlist),
