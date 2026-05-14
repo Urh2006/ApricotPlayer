@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.8.44
+
+- fixed classic player navigation when background playback is disabled: Tab from Player now goes to Previous, Play/Pause, Next, and the rest of the player controls instead of jumping into the Back buttons.
+- made Shift+Tab in the classic player return to Back to results / Back to main menu without trapping focus on Player.
+- changed Escape in fullscreen player mode so it exits fullscreen, unchecks the Fullscreen checkbox, keeps playback running, and returns focus to Player.
+
 ## What's new in version 0.8.43
 
 - fixed Shift+Tab from the background Player section after returning to the main menu, search results, folder results, or other lists, so focus goes back to the active list instead of forcing users to tab around the whole window.

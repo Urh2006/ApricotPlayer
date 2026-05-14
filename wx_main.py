@@ -202,8 +202,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.43"
-APP_VERSION_LABEL = "0.8.43"
+APP_VERSION = "0.8.44"
+APP_VERSION_LABEL = "0.8.44"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -3820,6 +3820,7 @@ class MainFrame(wx.Frame):
         self.player_fullscreen_results_override = False
         self.manual_background_playback_active = False
         self.player_navigation_controls = []
+        self.player_action_controls = []
         self.player_escape_stop_controls = []
         self.fullscreen_checkbox: wx.CheckBox | None = None
         self.details_label: wx.StaticText | None = None
@@ -5380,6 +5381,7 @@ class MainFrame(wx.Frame):
             self.set_window_title()
         self.root_sizer.Clear(delete_windows=True)
         self.background_player_controls = []
+        self.player_action_controls = []
         self.player_play_pause_buttons = []
         self.background_player_section_added = False
         if not self.in_player_screen:
@@ -6075,6 +6077,17 @@ class MainFrame(wx.Frame):
         wx.CallAfter(self.focus_results_list, self.return_index)
         wx.CallLater(100, self.focus_results_list, self.return_index)
         wx.CallLater(300, self.focus_results_list, self.return_index)
+
+    def exit_fullscreen_to_player(self) -> None:
+        if not self.player_is_active():
+            self.back_to_results(stop_playback=False)
+            return
+        self.exit_fullscreen_window()
+        self.show_player_page(self.current_player_title(), focus_target="player")
+        if self.player_panel is not None:
+            wx.CallAfter(self.safe_set_focus, self.player_panel)
+            wx.CallLater(100, self.safe_set_focus, self.player_panel)
+            wx.CallLater(300, self.safe_set_focus, self.player_panel)
 
     def enter_player_fullscreen(self) -> None:
         if not self.player_is_active():
@@ -10866,6 +10879,7 @@ class MainFrame(wx.Frame):
         self.in_player_screen = True
         self.player_control_mode = True
         self.player_navigation_controls = []
+        self.player_action_controls = []
         self.player_escape_stop_controls = []
         navigation_controls = []
         if fullscreen_mode and background_enabled:
@@ -10910,7 +10924,7 @@ class MainFrame(wx.Frame):
             self.player_panel.SetFocus()
         player_controls = [
             (self.t("previous"), lambda: self.play_relative_item(-1)),
-            (self.t("play"), self.player_play_pause),
+            (self.current_play_pause_label(), self.player_play_pause),
             (self.t("next"), lambda: self.play_relative_item(1)),
             (self.t("playback_queue"), self.show_playback_queue),
             (self.t("add_to_playlist"), lambda: self.add_active_to_playlist(prefer_active=True)),
@@ -10923,22 +10937,30 @@ class MainFrame(wx.Frame):
         ]
         if background_enabled:
             player_controls.append((self.t("close_player"), self.close_current_player))
-        self.player_escape_stop_controls.extend(self.add_button_row(player_controls))
+        player_action_buttons = self.add_button_row(player_controls)
+        self.player_action_controls = list(player_action_buttons)
+        self.player_escape_stop_controls.extend(player_action_buttons)
         self.fullscreen_checkbox = wx.CheckBox(self.panel, label=self.t("fullscreen"))
         self.fullscreen_checkbox.SetName(self.t("fullscreen"))
         self.fullscreen_checkbox.SetValue(fullscreen_mode)
         self.fullscreen_checkbox.Bind(wx.EVT_CHECKBOX, self.on_player_fullscreen_changed)
         self.root_sizer.Add(self.fullscreen_checkbox, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
+        self.player_action_controls.append(self.fullscreen_checkbox)
+        self.player_escape_stop_controls.append(self.fullscreen_checkbox)
         self.repeat_checkbox = wx.CheckBox(self.panel, label=self.t("repeat"))
         self.repeat_checkbox.SetName(self.t("repeat"))
         self.repeat_checkbox.SetValue(self.repeat_current)
         self.repeat_checkbox.Bind(wx.EVT_CHECKBOX, self.on_repeat_changed)
         self.root_sizer.Add(self.repeat_checkbox, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
+        self.player_action_controls.append(self.repeat_checkbox)
+        self.player_escape_stop_controls.append(self.repeat_checkbox)
         self.bass_boost_checkbox = wx.CheckBox(self.panel, label=self.t("bass_boost"))
         self.bass_boost_checkbox.SetName(self.t("bass_boost"))
         self.bass_boost_checkbox.SetValue(self.bass_boost_enabled)
         self.bass_boost_checkbox.Bind(wx.EVT_CHECKBOX, self.on_bass_boost_changed)
         self.root_sizer.Add(self.bass_boost_checkbox, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
+        self.player_action_controls.append(self.bass_boost_checkbox)
+        self.player_escape_stop_controls.append(self.bass_boost_checkbox)
         self.details_label = None
         self.video_details = None
         self.details_button_sizer = None
@@ -11066,6 +11088,14 @@ class MainFrame(wx.Frame):
             return True
         return focus in getattr(self, "player_escape_stop_controls", [])
 
+    def visible_player_controls(self, controls: list[wx.Window] | tuple[wx.Window, ...]) -> list[wx.Window]:
+        visible_controls: list[wx.Window] = []
+        for control in controls:
+            live = self.live_window(control)
+            if live is not None:
+                visible_controls.append(live)
+        return visible_controls
+
     def handle_player_tab_navigation(self, event: wx.KeyEvent, focus: wx.Window | None) -> bool:
         if not self.in_player_screen or event.GetKeyCode() != wx.WXK_TAB:
             return False
@@ -11077,8 +11107,8 @@ class MainFrame(wx.Frame):
             if panel is not None:
                 self.safe_set_focus(panel)
                 return True
-        controls = getattr(self, "player_escape_stop_controls", [])
-        navigation_controls = getattr(self, "player_navigation_controls", [])
+        action_controls = self.visible_player_controls(getattr(self, "player_action_controls", []))
+        navigation_controls = self.visible_player_controls(getattr(self, "player_navigation_controls", []))
         if navigation_controls and focus in navigation_controls:
             try:
                 nav_index = navigation_controls.index(focus)
@@ -11095,10 +11125,23 @@ class MainFrame(wx.Frame):
             if panel is not None:
                 self.safe_set_focus(panel)
                 return True
-        if controls and focus is controls[0] and event.ShiftDown():
-            if panel is not None:
-                self.safe_set_focus(panel)
+        if action_controls and focus in action_controls:
+            try:
+                action_index = action_controls.index(focus)
+            except ValueError:
+                action_index = -1
+            if event.ShiftDown():
+                if action_index > 0:
+                    self.safe_set_focus(action_controls[action_index - 1])
+                    return True
+                if panel is not None:
+                    self.safe_set_focus(panel)
+                    return True
+                return False
+            if 0 <= action_index < len(action_controls) - 1:
+                self.safe_set_focus(action_controls[action_index + 1])
                 return True
+            return False
         if focus is panel:
             if event.ShiftDown():
                 if results is not None:
@@ -11108,8 +11151,8 @@ class MainFrame(wx.Frame):
                     self.safe_set_focus(navigation_controls[-1])
                     return True
                 return False
-            if controls:
-                self.safe_set_focus(controls[0])
+            if action_controls:
+                self.safe_set_focus(action_controls[0])
                 return True
         return False
 
@@ -13604,6 +13647,9 @@ class MainFrame(wx.Frame):
                 self.hide_video_details()
                 return
             if self.in_player_screen:
+                if self.player_fullscreen_mode_active() or self.IsFullScreen():
+                    self.exit_fullscreen_to_player()
+                    return
                 if self.player_escape_closes_playback(focus):
                     if self.IsFullScreen():
                         self.ShowFullScreen(False)
