@@ -187,8 +187,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.27"
-APP_VERSION_LABEL = "0.8.27"
+APP_VERSION = "0.8.28"
+APP_VERSION_LABEL = "0.8.28"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -3783,6 +3783,7 @@ class MainFrame(wx.Frame):
         self.search_results_stack: list[dict] = []
         self.settings_section_index = 0
         self.current_index = -1
+        self.deferred_result_line_updates: set[int] = set()
         self.player_process: subprocess.Popen | None = None
         self.player_log_handle = None
         self.player_kind = ""
@@ -3800,6 +3801,8 @@ class MainFrame(wx.Frame):
         self.current_video_item: dict | None = None
         self.current_video_info: dict = {}
         self.player_panel: wx.Panel | None = None
+        self.player_fullscreen_session = False
+        self.player_fullscreen_results_override = False
         self.details_label: wx.StaticText | None = None
         self.video_details: wx.TextCtrl | None = None
         self.details_button_sizer: wx.Sizer | None = None
@@ -5920,13 +5923,41 @@ class MainFrame(wx.Frame):
             return
         self.show_player_page(self.current_player_title())
 
+    def player_fullscreen_mode_active(self) -> bool:
+        if self.player_fullscreen_session:
+            return True
+        return bool(getattr(self.settings, "player_fullscreen", False) and not self.player_fullscreen_results_override)
+
+    def exit_fullscreen_window(self) -> None:
+        self.player_fullscreen_session = False
+        self.player_fullscreen_results_override = True
+        try:
+            if self.player_kind == "mpv" and self.mpv_process_alive():
+                self.mpv_request(["set_property", "fullscreen", False], timeout=0.5)
+        except Exception:
+            pass
+        try:
+            if self.IsFullScreen():
+                self.ShowFullScreen(False)
+        except Exception:
+            pass
+
+    def exit_fullscreen_to_results(self) -> None:
+        if not self.player_is_active():
+            self.back_to_results(stop_playback=False)
+            return
+        self.exit_fullscreen_window()
+        self.show_player_page(self.current_player_title())
+        wx.CallAfter(self.focus_results_list, self.return_index)
+
     def enter_player_fullscreen(self) -> None:
         if not self.player_is_active():
             self.announce_player(self.t("no_player"))
             return
+        self.player_fullscreen_session = True
+        self.player_fullscreen_results_override = False
         try:
-            if not self.in_player_screen:
-                self.show_current_player_screen()
+            self.show_player_page(self.current_player_title())
             if self.player_kind == "mpv":
                 self.mpv_request(["set_property", "fullscreen", True], timeout=0.5)
             self.ShowFullScreen(True)
@@ -7387,6 +7418,8 @@ class MainFrame(wx.Frame):
 
     def on_results_selection(self, event) -> None:
         event.Skip()
+        selection = self.current_results_selection(-1)
+        self.apply_deferred_result_line_updates(exclude_index=selection)
         self.maybe_extend_results()
 
     def show_favorites(self) -> None:
@@ -9295,6 +9328,7 @@ class MainFrame(wx.Frame):
         }
 
     def show_results(self, results: list[dict], selection: int = 0, visible_count: int | None = None, focus_results: bool = True) -> None:
+        self.deferred_result_line_updates.clear()
         self.all_results = list(results)
         if self.settings.results_limit == 0:
             count = visible_count if visible_count is not None else min(RESULTS_PAGE_SIZE, len(self.all_results))
@@ -9565,10 +9599,12 @@ class MainFrame(wx.Frame):
         self.return_all_results = list(self.all_results or self.results)
         self.return_index = self.current_index
         self.return_visible_count = self.last_visible_count or len(self.results)
-        if self.folder_screen_active:
+        folder_context = self.folder_screen_active or (self.in_player_screen and self.player_return_screen == "folder")
+        trending_context = getattr(self, "trending_screen_active", False) or (self.in_player_screen and self.player_return_screen == "trending")
+        if folder_context:
             self.player_return_screen = "folder"
             self.player_return_data = {"index": self.current_index, "folder": self.last_search_query}
-        elif getattr(self, "trending_screen_active", False):
+        elif trending_context:
             self.player_return_screen = "trending"
             self.player_return_data = {
                 "index": self.current_index,
@@ -9578,7 +9614,7 @@ class MainFrame(wx.Frame):
         else:
             self.player_return_screen = "search"
             self.player_return_data = {}
-        if self.folder_screen_active:
+        if folder_context:
             items = [dict(result) for result in (self.all_results or self.results) if result.get("kind") == "local_file" and result.get("url")]
             queue_items = [self.playback_queue_item_with_folder_return(result, items, auto_folder_queue=True) for result in items[self.current_index + 1 :]]
             self.playback_queue = queue_items
@@ -10225,6 +10261,7 @@ class MainFrame(wx.Frame):
         self.clip_start_marker = None
         self.clip_end_marker = None
         self.current_stream_headers = {}
+        self.player_fullscreen_results_override = False
         command, kind = player
         if kind != "mpv":
             self.message(self.t("player_missing"), wx.ICON_ERROR)
@@ -10665,6 +10702,7 @@ class MainFrame(wx.Frame):
                 time.sleep(0.12)
 
     def show_player_page(self, title: str) -> None:
+        fullscreen_mode = self.player_fullscreen_mode_active()
         self.in_main_menu = False
         self.in_queue_screen = False
         self.search_screen_active = False
@@ -10682,9 +10720,11 @@ class MainFrame(wx.Frame):
         self.clear()
         self.in_player_screen = True
         self.player_control_mode = True
-        self.add_button_row(
+        controls = []
+        if fullscreen_mode:
+            controls.append((self.t("back_results"), self.exit_fullscreen_to_results))
+        controls.extend(
             [
-                (self.t("back_results"), lambda: self.back_to_results(stop_playback=False)),
                 (self.t("back"), self.leave_player_to_main_menu),
                 (self.t("close_player"), self.close_current_player),
                 (self.t("previous"), lambda: self.play_relative_item(-1)),
@@ -10701,6 +10741,7 @@ class MainFrame(wx.Frame):
                 (self.t("show_video_details"), self.show_video_details),
             ]
         )
+        self.add_button_row(controls)
         label = wx.StaticText(self.panel, label=f"{self.t('internal_player')}: {title}")
         self.root_sizer.Add(label, 0, wx.ALL, 4)
         self.repeat_checkbox = wx.CheckBox(self.panel, label=self.t("repeat"))
@@ -10732,6 +10773,8 @@ class MainFrame(wx.Frame):
         self.player_panel.SetName(self.t("player"))
         self.player_panel.SetLabel(self.t("player"))
         self.root_sizer.Add(self.player_panel, 1, wx.EXPAND | wx.ALL, 4)
+        if not fullscreen_mode:
+            self.add_player_results_section()
         self.details_label = None
         self.video_details = None
         self.details_button_sizer = None
@@ -10742,6 +10785,45 @@ class MainFrame(wx.Frame):
             wx.CallAfter(self.show_video_details, False)
         else:
             self.player_panel.SetFocus()
+        if fullscreen_mode:
+            wx.CallAfter(self.ShowFullScreen, True)
+
+    def player_results_snapshot(self) -> tuple[list[dict], int, int]:
+        results = list(self.return_all_results or self.all_results or self.return_results or self.results)
+        if not results:
+            return [], 0, 0
+        visible_count = self.return_visible_count or len(self.return_results or self.results or results)
+        visible_count = min(max(1, int(visible_count or len(results))), len(results))
+        current_url = str((self.current_video_item or self.current_video_info or {}).get("url") or "")
+        selection = min(max(0, self.return_index), visible_count - 1)
+        if current_url:
+            for index, item in enumerate(results[:visible_count]):
+                if str(item.get("url") or "") == current_url:
+                    selection = index
+                    break
+        return results, visible_count, selection
+
+    def add_player_results_section(self) -> None:
+        results, visible_count, selection = self.player_results_snapshot()
+        if not results:
+            return
+        self.deferred_result_line_updates.clear()
+        self.all_results = list(results)
+        self.last_visible_count = visible_count
+        self.results = self.all_results[:visible_count]
+        label = wx.StaticText(self.panel, label=self.t("search_youtube"))
+        label.SetName(self.t("search_youtube"))
+        self.root_sizer.Add(label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 4)
+        labels = [self.result_line(index, item) for index, item in enumerate(self.results)]
+        self.results_list = wx.ListBox(self.panel, choices=labels or [self.t("search_results_empty")])
+        self.results_list.SetName(self.t("search_youtube"))
+        if labels:
+            self.results_list.SetSelection(min(max(0, selection), len(labels) - 1))
+        self.results_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _evt: self.play_selected())
+        self.results_list.Bind(wx.EVT_CONTEXT_MENU, self.open_context_menu)
+        self.results_list.Bind(wx.EVT_KEY_DOWN, self.on_results_key)
+        self.results_list.Bind(wx.EVT_LISTBOX, self.on_results_selection)
+        self.root_sizer.Add(self.results_list, 1, wx.EXPAND | wx.ALL, 4)
 
     def on_player_key(self, event: wx.KeyEvent) -> None:
         self.on_char_hook(event)
@@ -10807,6 +10889,7 @@ class MainFrame(wx.Frame):
 
     def leave_player_to_main_menu(self) -> None:
         keep_playing = self.background_playback_enabled()
+        self.exit_fullscreen_window()
         self.in_player_screen = False
         self.player_control_mode = keep_playing and self.player_control_mode
         if not keep_playing:
@@ -10818,6 +10901,7 @@ class MainFrame(wx.Frame):
 
     def back_to_results(self, stop_playback: bool = True) -> None:
         keep_playing = self.background_playback_enabled() and not stop_playback
+        self.exit_fullscreen_window()
         self.in_player_screen = False
         self.player_control_mode = keep_playing and self.player_control_mode
         if not keep_playing:
@@ -11038,6 +11122,8 @@ class MainFrame(wx.Frame):
 
     def active_item(self) -> dict | None:
         focus = wx.Window.FindFocus()
+        if focus is getattr(self, "results_list", None):
+            return self.selected_result()
         if self.current_video_item and (self.in_player_screen or self.focus_in_background_player_controls(focus)):
             return self.current_video_item
         if self.in_queue_screen:
@@ -12849,6 +12935,8 @@ class MainFrame(wx.Frame):
         if reset_session:
             if self.player_return_screen == "folder":
                 self.clear_auto_folder_playback_queue()
+            self.player_fullscreen_session = False
+            self.player_fullscreen_results_override = False
             self.session_volume = None
             self.session_audio_output_device = ""
             self.session_equalizer_enabled = None
@@ -13192,6 +13280,10 @@ class MainFrame(wx.Frame):
             return
         if self.player_details_shortcut_matches(event) and (self.in_player_screen or self.focus_in_background_player_controls(focus)):
             self.show_video_details()
+            return
+        if self.in_player_screen and focus is getattr(self, "results_list", None):
+            event.Skip()
+            wx.CallAfter(self.maybe_extend_results)
             return
         if self.player_control_mode and self.player_shortcuts_allowed(focus):
             if self.context_menu_shortcut_matches(event):
@@ -13920,6 +14012,29 @@ class MainFrame(wx.Frame):
         self.refresh_download_views()
 
     def refresh_result_line(self, index: int) -> None:
+        if self.result_line_update_should_defer(index):
+            self.deferred_result_line_updates.add(index)
+            return
+        self.refresh_result_line_now(index)
+
+    def result_line_update_should_defer(self, index: int) -> bool:
+        if not hasattr(self, "results_list") or index < 0:
+            return False
+        try:
+            return wx.Window.FindFocus() is self.results_list and self.results_list.GetSelection() == index
+        except RuntimeError:
+            return False
+
+    def apply_deferred_result_line_updates(self, exclude_index: int | None = None) -> None:
+        if not self.deferred_result_line_updates:
+            return
+        for index in sorted(list(self.deferred_result_line_updates)):
+            if exclude_index is not None and index == exclude_index:
+                continue
+            self.deferred_result_line_updates.discard(index)
+            self.refresh_result_line_now(index)
+
+    def refresh_result_line_now(self, index: int) -> None:
         if not hasattr(self, "results_list") or index < 0 or index >= len(self.results):
             return
         try:
@@ -14074,6 +14189,19 @@ class MainFrame(wx.Frame):
             labels = [self.result_line(index, item) for index, item in enumerate(self.results)]
             if not labels:
                 labels = [self.t("no_results")]
+            if wx.Window.FindFocus() is self.results_list and self.results_list.GetCount() == len(labels):
+                self.results_list.Freeze()
+                try:
+                    for index, label in enumerate(labels):
+                        if index == selection:
+                            if self.results_list.GetString(index) != label:
+                                self.deferred_result_line_updates.add(index)
+                            continue
+                        if self.results_list.GetString(index) != label:
+                            self.results_list.SetString(index, label)
+                finally:
+                    self.results_list.Thaw()
+                return
             self.set_listbox_items(self.results_list, labels, selection)
         except RuntimeError:
             pass

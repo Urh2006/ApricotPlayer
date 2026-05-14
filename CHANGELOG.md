@@ -1,5 +1,12 @@
 # Changelog
 
+## What's new in version 0.8.28
+
+- changed the player layout so normal playback keeps the result list visible and tabbable under the player; pressing Enter on another result starts it and returns focus to Player
+- removed the Back to results button from normal player mode; it now appears only in fullscreen mode, where results are intentionally hidden
+- made the fullscreen player button switch to a true fullscreen player view, with Back to results returning to the normal player-with-results layout
+- reduced screen reader spam from result metadata refreshes by deferring updates to the currently focused result row until focus moves away
+
 ## What's new in version 0.8.27
 
 - fixed dynamic loading so search, channel, playlist, and trending result lists append new items without moving screen reader focus to the newly loaded rows
