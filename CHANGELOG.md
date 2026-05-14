@@ -1,5 +1,10 @@
 # Changelog
 
+## What's new in version 0.8.43
+
+- fixed Shift+Tab from the background Player section after returning to the main menu, search results, folder results, or other lists, so focus goes back to the active list instead of forcing users to tab around the whole window.
+- made background player reverse navigation choose the current screen's primary control explicitly for steadier NVDA navigation.
+
 ## What's new in version 0.8.42
 
 - fixed player shortcuts while background playback is visible in the main menu, so Space, seek, volume, speed, pitch, details, equalizer, and other player keys work when focus is on the background Player section.

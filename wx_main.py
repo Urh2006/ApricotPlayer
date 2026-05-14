@@ -202,8 +202,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.42"
-APP_VERSION_LABEL = "0.8.42"
+APP_VERSION = "0.8.43"
+APP_VERSION_LABEL = "0.8.43"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -5979,6 +5979,42 @@ class MainFrame(wx.Frame):
     def on_background_player_key(self, event: wx.KeyEvent) -> None:
         self.on_char_hook(event)
 
+    @staticmethod
+    def live_window(control: wx.Window | None) -> wx.Window | None:
+        if control is None:
+            return None
+        try:
+            if control.IsBeingDeleted():
+                return None
+            if not control.IsShownOnScreen() and not control.IsShown():
+                return None
+        except RuntimeError:
+            return None
+        except Exception:
+            pass
+        return control
+
+    def background_player_previous_target(self) -> wx.Window | None:
+        if getattr(self, "in_main_menu", False):
+            return self.live_window(getattr(self, "menu_list", None))
+        candidate_names = [
+            "results_list",
+            "queue_list",
+            "rss_items_list",
+            "rss_feed_list",
+            "podcast_result_list",
+            "user_playlist_items_list",
+            "user_playlist_list",
+            "notification_list",
+            "history_list",
+            "direct_link_ctrl",
+        ]
+        for name in candidate_names:
+            target = self.live_window(getattr(self, name, None))
+            if target is not None and not self.focus_in_background_player_controls(target):
+                return target
+        return None
+
     def handle_background_player_tab_navigation(self, event: wx.KeyEvent, focus: wx.Window | None) -> bool:
         if event.GetKeyCode() != wx.WXK_TAB:
             return False
@@ -5997,6 +6033,11 @@ class MainFrame(wx.Frame):
         if 0 <= next_index < len(controls):
             self.safe_set_focus(controls[next_index])
             return True
+        if event.ShiftDown() and index == 0:
+            target = self.background_player_previous_target()
+            if target is not None:
+                self.safe_set_focus(target)
+                return True
         return False
 
     def show_current_player_screen(self) -> None:
