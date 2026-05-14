@@ -1,5 +1,10 @@
 # Changelog
 
+## What's new in version 0.8.41
+
+- announced the title of the newly playing video, podcast episode, queue item, or local file when using player Next or Previous.
+- preserved quiet automatic playback transitions; the new title announcement is only for manual Next/Previous actions.
+
 ## What's new in version 0.8.40
 
 - polished several stability issues before the next larger feature cycle

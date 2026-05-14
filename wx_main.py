@@ -202,8 +202,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.40"
-APP_VERSION_LABEL = "0.8.40"
+APP_VERSION = "0.8.41"
+APP_VERSION_LABEL = "0.8.41"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -10339,7 +10339,7 @@ class MainFrame(wx.Frame):
         if generation == self.search_generation:
             self.loading_more_results = False
 
-    def play_url(self, url: str, title: str = "", show_player: bool = True) -> None:
+    def play_url(self, url: str, title: str = "", show_player: bool = True, announce_start: bool = False) -> None:
         player = self.resolve_player()
         if not player:
             self.message(self.t("player_missing"), wx.ICON_ERROR)
@@ -10373,20 +10373,20 @@ class MainFrame(wx.Frame):
             self.player_control_mode = True
             self.set_window_title(title or self.current_player_title())
         self.set_status(self.t("preparing_stream", title=title or url))
-        threading.Thread(target=self.resolve_and_start_player, args=(command, url, title), daemon=True).start()
+        threading.Thread(target=self.resolve_and_start_player, args=(command, url, title, announce_start), daemon=True).start()
 
-    def resolve_and_start_player(self, command: str, url: str, title: str) -> None:
+    def resolve_and_start_player(self, command: str, url: str, title: str, announce_start: bool = False) -> None:
         try:
             stream_url, headers, info = self.resolve_stream_url(url)
             wx.CallAfter(self.merge_current_video_info, info)
-            wx.CallAfter(self.start_mpv, command, stream_url, title or url, headers)
+            wx.CallAfter(self.start_mpv, command, stream_url, title or url, headers, announce_start)
         except Exception as exc:
             if self.age_restricted_video_support_enabled() and self.is_cookie_auth_error(exc) and self.normalized_cookies_browser():
-                wx.CallAfter(self.prompt_cookie_refresh_for_playback, command, url, title, self.friendly_error(exc))
+                wx.CallAfter(self.prompt_cookie_refresh_for_playback, command, url, title, self.friendly_error(exc), announce_start)
             else:
                 wx.CallAfter(self.message, self.t("player_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
-    def prompt_cookie_refresh_for_playback(self, command: str, url: str, title: str, error: str) -> None:
+    def prompt_cookie_refresh_for_playback(self, command: str, url: str, title: str, error: str, announce_start: bool = False) -> None:
         message = f"{self.t('player_failed', error=error)}\n\n{self.t('cookie_refresh_prompt_message')}"
         answer = wx.MessageBox(message, self.t("cookie_refresh_prompt_title"), wx.YES_NO | wx.ICON_QUESTION)
         if answer != wx.YES:
@@ -10396,13 +10396,13 @@ class MainFrame(wx.Frame):
             self.message(self.t("select_cookies_browser"), wx.ICON_WARNING)
             return
         self.announce_player(self.t("cookie_auto_refresh_start", browser=browser.title()))
-        threading.Thread(target=self.refresh_cookies_and_retry_playback_worker, args=(browser, command, url, title), daemon=True).start()
+        threading.Thread(target=self.refresh_cookies_and_retry_playback_worker, args=(browser, command, url, title, announce_start), daemon=True).start()
 
-    def refresh_cookies_and_retry_playback_worker(self, browser: str, command: str, url: str, title: str) -> None:
+    def refresh_cookies_and_retry_playback_worker(self, browser: str, command: str, url: str, title: str, announce_start: bool = False) -> None:
         try:
             result = self.export_browser_cookies_blocking(browser, allow_close=True)
             self.ui_queue.put(("announce", self.t("cookie_auto_refresh_done", profile=result.get("profile_label", self.t("browser_profile_auto")))))
-            self.resolve_and_start_player(command, url, title)
+            self.resolve_and_start_player(command, url, title, announce_start)
         except Exception as exc:
             wx.CallAfter(self.message, self.t("cookie_auto_refresh_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
@@ -10689,7 +10689,7 @@ class MainFrame(wx.Frame):
             return max(0.0, min(300.0, float(self.session_volume)))
         return float(self.default_volume_value())
 
-    def start_mpv(self, command: str, stream_url: str, title: str, headers: dict) -> None:
+    def start_mpv(self, command: str, stream_url: str, title: str, headers: dict, announce_start: bool = False) -> None:
         try:
             self.ipc_path = self.make_ipc_path()
             target_volume = self.player_start_volume_value()
@@ -10782,6 +10782,8 @@ class MainFrame(wx.Frame):
             self.current_video_info["pitch"] = self.format_playback_rate(1.0)
             self.update_details_text()
             self.set_status(self.t("playing", title=title))
+            if announce_start:
+                self.announce_player(self.t("playing", title=title))
             wx.CallAfter(self.update_play_pause_buttons)
             threading.Thread(target=self.apply_initial_volume_worker, args=(self.player_generation, target_volume), daemon=True).start()
             wx.CallLater(700, self.apply_equalizer_to_player)
@@ -11607,7 +11609,7 @@ class MainFrame(wx.Frame):
         if delta > 0:
             queued_item = self.pop_next_playback_queue_item()
             if queued_item:
-                self.open_playback_queue_item(queued_item)
+                self.open_playback_queue_item(queued_item, announce_start=True)
                 return
         if delta < 0:
             item = self.relative_player_item(-1)
@@ -11619,7 +11621,7 @@ class MainFrame(wx.Frame):
             if not item:
                 self.announce_player(self.t("no_next_item"))
                 return
-        self.open_relative_player_item(item)
+        self.open_relative_player_item(item, announce_start=True)
 
     def relative_player_item(self, delta: int) -> dict | None:
         screen = self.player_return_screen
@@ -11654,7 +11656,7 @@ class MainFrame(wx.Frame):
             return dict(playable[item_index])
         return None
 
-    def open_relative_player_item(self, item: dict) -> None:
+    def open_relative_player_item(self, item: dict, announce_start: bool = False) -> None:
         if not item.get("url"):
             return
         show_player = self.in_player_screen or not self.background_playback_enabled()
@@ -11682,7 +11684,7 @@ class MainFrame(wx.Frame):
             self.player_return_data = {"index": self.return_index}
         self.current_video_item = item
         self.current_video_info = dict(item)
-        self.play_url(str(item.get("url") or ""), str(item.get("title") or ""), show_player=show_player)
+        self.play_url(str(item.get("url") or ""), str(item.get("title") or ""), show_player=show_player, announce_start=announce_start)
 
     def playable_queue_item(self, item: dict | None) -> dict | None:
         if not item or item.get("kind") in {"channel", "playlist"}:
@@ -11873,11 +11875,11 @@ class MainFrame(wx.Frame):
         self.refresh_main_menu_after_playback_queue_change()
         return item
 
-    def open_playback_queue_item(self, item: dict) -> None:
+    def open_playback_queue_item(self, item: dict, announce_start: bool = False) -> None:
         show_player = self.in_player_screen or not self.background_playback_enabled()
-        self.open_playback_queue_item_with_mode(item, show_player=show_player)
+        self.open_playback_queue_item_with_mode(item, show_player=show_player, announce_start=announce_start)
 
-    def open_playback_queue_item_with_mode(self, item: dict, show_player: bool = True) -> None:
+    def open_playback_queue_item_with_mode(self, item: dict, show_player: bool = True, announce_start: bool = False) -> None:
         url = str(item.get("url") or "")
         if not url:
             self.announce_player(self.t("no_selection"))
@@ -11894,7 +11896,7 @@ class MainFrame(wx.Frame):
             self.player_return_data = {}
         self.current_video_item = item
         self.current_video_info = dict(item)
-        self.play_url(url, str(item.get("title") or ""), show_player=show_player)
+        self.play_url(url, str(item.get("title") or ""), show_player=show_player, announce_start=announce_start)
 
     def current_local_media_path(self) -> Path | None:
         item = self.current_video_item or self.current_video_info or {}
