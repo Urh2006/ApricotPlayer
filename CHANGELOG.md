@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.8.36
+
+- removed the redundant Open player screen button from the background player section
+- made the background player section start directly with the focusable Player target, followed by Previous, Play/Pause, Next, and the rest of the controls
+- kept explicit Tab and Shift+Tab handling so the Player target remains reachable in both directions on Search, main menu, and other screens
+
 ## What's new in version 0.8.35
 
 - fixed background player keyboard navigation so Tab and Shift+Tab move consistently through Open player screen, Player, Previous, Play/Pause, Next, and the rest of the controls on Search, main menu, and other screens
