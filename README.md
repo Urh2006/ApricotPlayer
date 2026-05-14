@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.8.36` (`0.8.36`)
+Current version: `0.8.37` (`0.8.37`)
 
 ## Download
 
@@ -32,7 +32,7 @@ py wx_main.py
 - Optional background playback while browsing results, settings, downloads, and the main menu, with a screen-reader named Player section and a Close player control
 - When background playback is enabled, normal player mode keeps the current result list visible and tabbable; Tab from results lands on Player, Tab from Player lands on Previous, Play/Pause, Next, and Shift+Tab from Player returns to results
 - Fullscreen player mode hides the result list and uses a Fullscreen checkbox plus Back to results to return to the normal player-with-results layout
-- When background playback is disabled, the player uses the classic focused layout with Back to results and no persistent result list
+- When background playback is disabled, the player uses the classic focused layout with Back to results, Back to main menu, and no persistent result list
 - Player background controls on result/library/settings screens, plus context-menu actions from the player for download, queue, favorites, playlists, stream URL, output device, equalizer, and close
 - Background player sections start with a focusable screen-reader named Player target, followed by Previous, Play/Pause, Next, with explicit Tab and Shift+Tab navigation for consistency across screens
 - Global `Ctrl+Space` background play/pause and `Ctrl+L` copy-link support from search results

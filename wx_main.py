@@ -202,8 +202,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.36"
-APP_VERSION_LABEL = "0.8.36"
+APP_VERSION = "0.8.37"
+APP_VERSION_LABEL = "0.8.37"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -10776,7 +10776,8 @@ class MainFrame(wx.Frame):
 
     def show_player_page(self, title: str) -> None:
         fullscreen_mode = self.player_fullscreen_mode_active()
-        embedded_results = self.background_playback_enabled() and not fullscreen_mode
+        background_enabled = self.background_playback_enabled()
+        embedded_results = background_enabled and not fullscreen_mode
         self.in_main_menu = False
         self.in_queue_screen = False
         self.search_screen_active = False
@@ -10797,10 +10798,12 @@ class MainFrame(wx.Frame):
         self.player_navigation_controls = []
         self.player_escape_stop_controls = []
         navigation_controls = []
-        if fullscreen_mode and self.background_playback_enabled():
+        if fullscreen_mode and background_enabled:
             navigation_controls.append((self.t("back_results"), self.exit_fullscreen_to_results))
         elif not embedded_results:
             navigation_controls.append((self.t("back_results"), self.leave_player_to_previous_screen))
+            if not background_enabled:
+                navigation_controls.append((self.t("back"), lambda: self.leave_player_to_main_menu(force_keep_playing=False)))
         else:
             navigation_controls.append((self.t("back"), lambda: self.leave_player_to_main_menu(force_keep_playing=True)))
         navigation_buttons = self.add_button_row(navigation_controls)
@@ -10822,7 +10825,7 @@ class MainFrame(wx.Frame):
             self.player_panel = existing_panel
             self.player_panel.Show()
         else:
-            self.player_panel = PlayerPanel(self.panel, style=wx.BORDER_SIMPLE)
+            self.player_panel = PlayerPanel(self.panel, style=wx.BORDER_SIMPLE | wx.WANTS_CHARS)
             self.player_panel.SetBackgroundColour(wx.BLACK)
             self.player_panel.Bind(wx.EVT_KEY_DOWN, self.on_player_key)
             self.player_panel.Bind(wx.EVT_CONTEXT_MENU, self.open_player_context_menu)
@@ -10847,8 +10850,9 @@ class MainFrame(wx.Frame):
             (self.t("copy_link"), self.copy_active_url),
             (self.t("copy_stream_url"), self.copy_direct_stream_url),
             (self.t("show_video_details"), self.show_video_details),
-            (self.t("close_player"), self.close_current_player),
         ]
+        if background_enabled:
+            player_controls.append((self.t("close_player"), self.close_current_player))
         self.player_escape_stop_controls = self.add_button_row(player_controls)
         self.fullscreen_checkbox = wx.CheckBox(self.panel, label=self.t("fullscreen"))
         self.fullscreen_checkbox.SetName(self.t("fullscreen"))
@@ -11003,7 +11007,19 @@ class MainFrame(wx.Frame):
                 return True
         controls = getattr(self, "player_escape_stop_controls", [])
         navigation_controls = getattr(self, "player_navigation_controls", [])
-        if navigation_controls and focus in navigation_controls and not event.ShiftDown():
+        if navigation_controls and focus in navigation_controls:
+            try:
+                nav_index = navigation_controls.index(focus)
+            except ValueError:
+                nav_index = -1
+            if event.ShiftDown():
+                if nav_index > 0:
+                    self.safe_set_focus(navigation_controls[nav_index - 1])
+                    return True
+                return False
+            if 0 <= nav_index < len(navigation_controls) - 1:
+                self.safe_set_focus(navigation_controls[nav_index + 1])
+                return True
             if panel is not None:
                 self.safe_set_focus(panel)
                 return True
