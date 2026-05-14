@@ -202,8 +202,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.32"
-APP_VERSION_LABEL = "0.8.32"
+APP_VERSION = "0.8.33"
+APP_VERSION_LABEL = "0.8.33"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -3821,6 +3821,7 @@ class MainFrame(wx.Frame):
         self.manual_background_playback_active = False
         self.player_navigation_controls = []
         self.player_escape_stop_controls = []
+        self.fullscreen_checkbox: wx.CheckBox | None = None
         self.details_label: wx.StaticText | None = None
         self.video_details: wx.TextCtrl | None = None
         self.details_button_sizer: wx.Sizer | None = None
@@ -5992,6 +5993,13 @@ class MainFrame(wx.Frame):
                 self.ShowFullScreen(True)
             except Exception:
                 pass
+
+    def on_player_fullscreen_changed(self, _event=None) -> None:
+        checked = bool(getattr(self, "fullscreen_checkbox", None) and self.fullscreen_checkbox.GetValue())
+        if checked:
+            self.enter_player_fullscreen()
+        else:
+            self.exit_fullscreen_to_results()
 
     def activate_menu(self) -> None:
         index = self.menu_list.GetSelection()
@@ -10784,6 +10792,8 @@ class MainFrame(wx.Frame):
         self.player_panel.SetName(self.t("player"))
         self.player_panel.SetLabel(self.t("player"))
         self.root_sizer.Add(self.player_panel, 1, wx.EXPAND | wx.ALL, 4)
+        if not self.settings.show_video_details_by_default:
+            self.player_panel.SetFocus()
         player_controls = [
             (self.t("previous"), lambda: self.play_relative_item(-1)),
             (self.t("play"), self.player_play_pause),
@@ -10792,7 +10802,6 @@ class MainFrame(wx.Frame):
             (self.t("add_to_playlist"), lambda: self.add_active_to_playlist(prefer_active=True)),
             (self.t("output_devices"), self.show_output_devices),
             (self.t("equalizer"), self.show_player_equalizer),
-            (self.t("fullscreen"), self.enter_player_fullscreen),
             (self.t("edit_mode"), self.toggle_edit_mode),
             (self.t("copy_link"), self.copy_active_url),
             (self.t("copy_stream_url"), self.copy_direct_stream_url),
@@ -10800,6 +10809,11 @@ class MainFrame(wx.Frame):
             (self.t("close_player"), self.close_current_player),
         ]
         self.player_escape_stop_controls = self.add_button_row(player_controls)
+        self.fullscreen_checkbox = wx.CheckBox(self.panel, label=self.t("fullscreen"))
+        self.fullscreen_checkbox.SetName(self.t("fullscreen"))
+        self.fullscreen_checkbox.SetValue(fullscreen_mode)
+        self.fullscreen_checkbox.Bind(wx.EVT_CHECKBOX, self.on_player_fullscreen_changed)
+        self.root_sizer.Add(self.fullscreen_checkbox, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
         self.repeat_checkbox = wx.CheckBox(self.panel, label=self.t("repeat"))
         self.repeat_checkbox.SetName(self.t("repeat"))
         self.repeat_checkbox.SetValue(self.repeat_current)
@@ -10927,6 +10941,8 @@ class MainFrame(wx.Frame):
             return False
         if focus is getattr(self, "player_panel", None):
             return True
+        if focus is getattr(self, "fullscreen_checkbox", None):
+            return True
         if focus is getattr(self, "repeat_checkbox", None):
             return True
         if focus is getattr(self, "bass_boost_checkbox", None):
@@ -10944,17 +10960,25 @@ class MainFrame(wx.Frame):
             if panel is not None:
                 self.safe_set_focus(panel)
                 return True
+        controls = getattr(self, "player_escape_stop_controls", [])
+        navigation_controls = getattr(self, "player_navigation_controls", [])
+        if navigation_controls and focus in navigation_controls and not event.ShiftDown():
+            if panel is not None:
+                self.safe_set_focus(panel)
+                return True
+        if controls and focus is controls[0] and event.ShiftDown():
+            if panel is not None:
+                self.safe_set_focus(panel)
+                return True
         if focus is panel:
             if event.ShiftDown():
                 if results is not None:
                     self.safe_set_focus(results)
                     return True
-                controls = getattr(self, "player_navigation_controls", [])
-                if controls:
-                    self.safe_set_focus(controls[-1])
+                if navigation_controls:
+                    self.safe_set_focus(navigation_controls[-1])
                     return True
                 return False
-            controls = getattr(self, "player_escape_stop_controls", [])
             if controls:
                 self.safe_set_focus(controls[0])
                 return True

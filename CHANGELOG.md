@@ -1,5 +1,12 @@
 # Changelog
 
+## What's new in version 0.8.33
+
+- fixed fullscreen player tab order so Shift+Tab from Previous now lands on Player before Back to results, while Tab from Player still lands on Previous
+- changed Fullscreen in the player from a button to a checkbox that reflects whether the current player screen is fullscreen
+- kept fullscreen mode hiding results; Back to results exits fullscreen and restores the normal player-with-results layout
+- focused Player earlier while constructing the player screen, reducing the slight delay before screen readers announce Player after starting playback
+
 ## What's new in version 0.8.32
 
 - fixed Tab getting trapped on the Player panel by explicitly routing Tab from results to Player and Tab from Player to Previous, Play/Pause, Next, and the rest of the controls
