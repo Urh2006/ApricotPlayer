@@ -1,5 +1,10 @@
 # Changelog
 
+## What's new in version 0.8.38
+
+- fixed Back to results from fullscreen so focus returns to the results list instead of landing back on Player
+- made fullscreen exit retry the results focus briefly after leaving fullscreen, avoiding Windows focus timing quirks
+
 ## What's new in version 0.8.37
 
 - fixed classic player navigation when background playback is disabled: Shift+Tab from Player now reaches the player navigation buttons instead of getting stuck

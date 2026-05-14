@@ -202,8 +202,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.37"
-APP_VERSION_LABEL = "0.8.37"
+APP_VERSION = "0.8.38"
+APP_VERSION_LABEL = "0.8.38"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -6013,8 +6013,10 @@ class MainFrame(wx.Frame):
             self.back_to_results(stop_playback=False)
             return
         self.exit_fullscreen_window()
-        self.show_player_page(self.current_player_title())
+        self.show_player_page(self.current_player_title(), focus_target="results")
         wx.CallAfter(self.focus_results_list, self.return_index)
+        wx.CallLater(100, self.focus_results_list, self.return_index)
+        wx.CallLater(300, self.focus_results_list, self.return_index)
 
     def enter_player_fullscreen(self) -> None:
         if not self.player_is_active():
@@ -10774,7 +10776,7 @@ class MainFrame(wx.Frame):
             except Exception:
                 time.sleep(0.12)
 
-    def show_player_page(self, title: str) -> None:
+    def show_player_page(self, title: str, focus_target: str = "player") -> None:
         fullscreen_mode = self.player_fullscreen_mode_active()
         background_enabled = self.background_playback_enabled()
         embedded_results = background_enabled and not fullscreen_mode
@@ -10836,7 +10838,7 @@ class MainFrame(wx.Frame):
         self.player_panel.SetName(self.t("player"))
         self.player_panel.SetLabel(self.t("player"))
         self.root_sizer.Add(self.player_panel, 1, wx.EXPAND | wx.ALL, 4)
-        if not self.settings.show_video_details_by_default:
+        if focus_target == "player" and not self.settings.show_video_details_by_default:
             self.player_panel.SetFocus()
         player_controls = [
             (self.t("previous"), lambda: self.play_relative_item(-1)),
@@ -10875,7 +10877,9 @@ class MainFrame(wx.Frame):
         self.details_opened_temporarily = False
         self.set_window_title(title)
         self.panel.Layout()
-        if self.settings.show_video_details_by_default:
+        if focus_target == "results":
+            wx.CallAfter(self.focus_results_list, self.return_index)
+        elif self.settings.show_video_details_by_default:
             wx.CallAfter(self.show_video_details, False)
         else:
             self.player_panel.SetFocus()
