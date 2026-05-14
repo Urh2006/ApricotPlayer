@@ -1,5 +1,14 @@
 # Changelog
 
+## What's new in version 0.8.27
+
+- fixed dynamic loading so search, channel, playlist, and trending result lists append new items without moving screen reader focus to the newly loaded rows
+- cached Play from folder results in memory for the current session, so returning from a local file no longer rescans huge folders
+- made auto-created folder playback queues clear when the folder playback session is stopped with Escape, while manual/background navigation keeps the queue available
+- preserved the current playback volume when moving to another result in the same player session, but still resets to the configured default after the player is fully closed
+- removed the embedded player tooltip that could cause repeated "Player tool tip" announcements, and added a fullscreen player button
+- reopened Settings at the first section after returning from the menu instead of remembering the previous section focus
+
 ## What's new in version 0.8.26
 
 - reverted updater download chunks to the previous 512 KB size because the larger 4 MB chunks were slower for some testers

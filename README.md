@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.8.26` (`0.8.26`)
+Current version: `0.8.27` (`0.8.27`)
 
 ## Download
 
@@ -34,10 +34,10 @@ py wx_main.py
 - Global `Ctrl+Space` background play/pause and `Ctrl+L` copy-link support from search results
 - Optional Trending screen, hidden by default, with country and category filters using the official YouTube most-popular API when a YouTube Data API key is configured
 - Channel result options for opening channel videos, playlists, home, or popular videos
-- Dynamic result loading keeps fetching 20 more search, channel, playlist, or folder items until the source has no more results
+- Dynamic result loading keeps fetching 20 more search, channel, playlist, or folder items until the source has no more results, without moving screen reader focus while new rows append
 - Local media file and whole-folder playback for common audio and video files, including file association support on Windows
 - First-run repair prompt if Windows media player registration is missing after an update
-- Play from folder for choosing local media inside ApricotPlayer, with folder contents shown as local media results
+- Play from folder for choosing local media inside ApricotPlayer, with folder contents shown as local media results and cached in memory for quick return from playback
 - Accessible 10-band equalizer with descriptive frequency sliders, global Settings controls, genre/sound presets, dynamic custom profiles, player-only live controls, and a player action to save the current EQ as a global preset
 - Player Bass boost checkbox for a temporary per-video EQ boost
 - Player hotkeys include `F2` volume boost, `F3` bass boost, `F4` equalizer, `R` repeat, and `Shift+S` shuffle
@@ -167,4 +167,4 @@ Helpful scripts:
 - `scripts/build_release.ps1 -PackageMode onedir` builds the fast app folder used by both the installer and portable ZIP
 - `scripts/build_installer.ps1` builds `ApricotPlayerSetup.exe` when Inno Setup is installed
 - `scripts/build_portable_zip.ps1` builds `ApricotPlayer.zip`
-- `scripts/publish_release.ps1 -Tag v0.8.26 -NotesFile release-notes/v0.8.26.md` publishes the installer and portable ZIP to GitHub Releases
+- `scripts/publish_release.ps1 -Tag v0.8.27 -NotesFile release-notes/v0.8.27.md` publishes the installer and portable ZIP to GitHub Releases

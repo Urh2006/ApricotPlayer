@@ -187,8 +187,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.26"
-APP_VERSION_LABEL = "0.8.26"
+APP_VERSION = "0.8.27"
+APP_VERSION_LABEL = "0.8.27"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -3838,6 +3838,7 @@ class MainFrame(wx.Frame):
         self.audio_device_refresh_running = False
         self.metadata_hydration_urls: set[str] = set()
         self.search_generation = 0
+        self.local_folder_cache: dict[str, list[dict]] = {}
         self.last_activation_check = 0.0
         self.settings_render_generation = 0
         self.settings_pending_section_index = -1
@@ -5527,6 +5528,26 @@ class MainFrame(wx.Frame):
             listbox.Thaw()
         return True
 
+    def append_listbox_items(self, listbox: wx.ListBox, labels: list[str], previous_count: int, selection: int) -> bool:
+        labels = [str(label) for label in labels]
+        if previous_count < 0 or previous_count > len(labels):
+            return False
+        try:
+            if listbox.GetCount() != previous_count:
+                return False
+        except RuntimeError:
+            return False
+        target_selection = min(max(0, selection), len(labels) - 1)
+        listbox.Freeze()
+        try:
+            for label in labels[previous_count:]:
+                listbox.Append(label)
+            if listbox.GetSelection() != target_selection:
+                listbox.SetSelection(target_selection)
+        finally:
+            listbox.Thaw()
+        return True
+
     def speak_text(self, text: str) -> None:
         if not text:
             return
@@ -5690,7 +5711,7 @@ class MainFrame(wx.Frame):
 
     def show_settings_from_tray(self) -> None:
         self.restore_from_tray()
-        wx.CallAfter(self.show_settings)
+        wx.CallAfter(self.open_settings_screen)
 
     def check_activation_signal(self) -> None:
         now = time.monotonic()
@@ -5794,6 +5815,7 @@ class MainFrame(wx.Frame):
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
         self.folder_screen_active = False
+        self.settings_section_index = 0
         self.clear()
         title = wx.StaticText(self.panel, label=self.t("main_menu"))
         self.root_sizer.Add(title, 0, wx.ALL, 4)
@@ -5859,6 +5881,7 @@ class MainFrame(wx.Frame):
             (self.t("add_to_playlist"), lambda: self.add_active_to_playlist(prefer_active=True)),
             (self.t("output_devices"), self.show_output_devices),
             (self.t("equalizer"), self.show_player_equalizer),
+            (self.t("fullscreen"), self.enter_player_fullscreen),
             (self.t("bass_boost"), self.toggle_bass_boost),
             (self.t("repeat"), self.toggle_repeat),
             (self.t("shuffle"), self.toggle_shuffle),
@@ -5896,6 +5919,24 @@ class MainFrame(wx.Frame):
             self.show_main_menu()
             return
         self.show_player_page(self.current_player_title())
+
+    def enter_player_fullscreen(self) -> None:
+        if not self.player_is_active():
+            self.announce_player(self.t("no_player"))
+            return
+        try:
+            if not self.in_player_screen:
+                self.show_current_player_screen()
+            if self.player_kind == "mpv":
+                self.mpv_request(["set_property", "fullscreen", True], timeout=0.5)
+            self.ShowFullScreen(True)
+            if self.player_panel is not None:
+                self.safe_set_focus(self.player_panel)
+        except Exception:
+            try:
+                self.ShowFullScreen(True)
+            except Exception:
+                pass
 
     def activate_menu(self) -> None:
         index = self.menu_list.GetSelection()
@@ -6944,7 +6985,7 @@ class MainFrame(wx.Frame):
             self.run_global_navigation_shortcut(self.show_rss_feeds)
 
     def open_settings_shortcut(self) -> None:
-        self.run_global_navigation_shortcut(self.show_settings)
+        self.run_global_navigation_shortcut(self.open_settings_screen)
 
     def refresh_notification_center(self) -> None:
         if not hasattr(self, "notification_list"):
@@ -8619,6 +8660,10 @@ class MainFrame(wx.Frame):
         text = re.sub(r"\n\s+", "\n", text)
         return text.strip()
 
+    def open_settings_screen(self) -> None:
+        self.settings_section_index = 0
+        self.show_settings()
+
     def show_settings(self) -> None:
         self.in_main_menu = False
         self.search_screen_active = False
@@ -9249,7 +9294,7 @@ class MainFrame(wx.Frame):
             "url": url,
         }
 
-    def show_results(self, results: list[dict], selection: int = 0, visible_count: int | None = None) -> None:
+    def show_results(self, results: list[dict], selection: int = 0, visible_count: int | None = None, focus_results: bool = True) -> None:
         self.all_results = list(results)
         if self.settings.results_limit == 0:
             count = visible_count if visible_count is not None else min(RESULTS_PAGE_SIZE, len(self.all_results))
@@ -9262,13 +9307,42 @@ class MainFrame(wx.Frame):
             selected_index = min(max(0, selection), len(self.results) - 1)
             labels = [self.result_line(index, item) for index, item in enumerate(self.results)]
             self.set_listbox_items(self.results_list, labels, selected_index)
-            self.safe_set_focus(self.results_list)
+            if focus_results:
+                self.safe_set_focus(self.results_list)
             self.set_status(self.t("found", count=len(self.results)))
             self.start_result_metadata_hydration()
         else:
             self.set_listbox_items(self.results_list, [self.t("no_results")], 0)
-            self.safe_set_focus(self.results_list)
+            if focus_results:
+                self.safe_set_focus(self.results_list)
             self.set_status(self.t("no_results"))
+
+    def current_results_selection(self, fallback: int = 0) -> int:
+        if not hasattr(self, "results_list"):
+            return max(0, fallback)
+        try:
+            selection = self.results_list.GetSelection()
+        except RuntimeError:
+            return max(0, fallback)
+        if selection == wx.NOT_FOUND:
+            return max(0, fallback)
+        return max(0, int(selection))
+
+    def result_identity_at(self, index: int) -> str:
+        if index < 0 or index >= len(self.results):
+            return ""
+        item = self.results[index]
+        return str(item.get("url") or item.get("webpage_url") or item.get("title") or "")
+
+    def result_index_for_identity(self, identity: str, fallback: int, limit: int | None = None) -> int:
+        if identity:
+            items = self.results[:limit] if limit is not None else self.results
+            for index, item in enumerate(items):
+                if str(item.get("url") or item.get("webpage_url") or item.get("title") or "") == identity:
+                    return index
+        if not self.results:
+            return 0
+        return min(max(0, fallback), len(self.results) - 1)
 
     def maybe_extend_results(self) -> None:
         if not self.dynamic_fetch_enabled or self.settings.results_limit != 0 or not hasattr(self, "results_list"):
@@ -9284,8 +9358,17 @@ class MainFrame(wx.Frame):
             self.fetch_more_dynamic_results(selection)
             return
         next_count = min(len(self.all_results), len(self.results) + RESULTS_PAGE_SIZE)
-        self.show_results(self.all_results, selection=selection, visible_count=next_count)
+        current_selection = self.current_results_selection(selection)
+        current_identity = self.result_identity_at(current_selection)
+        previous_count = len(self.results)
+        self.last_visible_count = next_count
+        self.results = self.all_results[: self.last_visible_count]
+        selected_index = self.result_index_for_identity(current_identity, current_selection, next_count)
+        labels = [self.result_line(index, item) for index, item in enumerate(self.results)]
+        if not self.append_listbox_items(self.results_list, labels, previous_count, selected_index):
+            self.set_listbox_items(self.results_list, labels, selected_index)
         self.set_status(self.t("search_more_loaded", count=len(self.results)))
+        self.start_result_metadata_hydration()
 
     def fetch_more_dynamic_results(self, selection: int) -> None:
         if self.loading_more_results:
@@ -9323,8 +9406,19 @@ class MainFrame(wx.Frame):
         if len(results) <= len(self.all_results):
             self.set_status(self.t("no_more_results"))
             return
-        self.show_results(results, selection=selection, visible_count=min(len(results), len(self.results) + RESULTS_PAGE_SIZE))
+        current_selection = self.current_results_selection(selection)
+        current_identity = self.result_identity_at(current_selection)
+        previous_count = len(self.results)
+        self.all_results = list(results)
+        visible_count = min(len(self.all_results), max(previous_count, previous_count + RESULTS_PAGE_SIZE))
+        self.last_visible_count = visible_count
+        self.results = self.all_results[:visible_count]
+        selected_index = self.result_index_for_identity(current_identity, current_selection, visible_count)
+        labels = [self.result_line(index, item) for index, item in enumerate(self.results)]
+        if not self.append_listbox_items(self.results_list, labels, previous_count, selected_index):
+            self.set_listbox_items(self.results_list, labels, selected_index)
         self.set_status(self.t("search_more_loaded", count=len(self.results)))
+        self.start_result_metadata_hydration()
 
     def show_more_results_if_current(self, generation: int, results: list[dict], selection: int) -> None:
         if generation == self.search_generation:
@@ -9486,7 +9580,7 @@ class MainFrame(wx.Frame):
             self.player_return_data = {}
         if self.folder_screen_active:
             items = [dict(result) for result in (self.all_results or self.results) if result.get("kind") == "local_file" and result.get("url")]
-            queue_items = [self.playback_queue_item_with_folder_return(result, items) for result in items[self.current_index + 1 :]]
+            queue_items = [self.playback_queue_item_with_folder_return(result, items, auto_folder_queue=True) for result in items[self.current_index + 1 :]]
             self.playback_queue = queue_items
             self.save_playback_queue()
         self.current_video_item = item
@@ -9923,6 +10017,20 @@ class MainFrame(wx.Frame):
             return []
         return sorted(files, key=lambda path: str(path.relative_to(folder)).lower())
 
+    @staticmethod
+    def local_folder_cache_key(folder: Path) -> str:
+        try:
+            return str(folder.expanduser().resolve()).lower()
+        except OSError:
+            return str(folder.expanduser()).lower()
+
+    def cached_local_folder_items(self, folder: Path) -> list[dict]:
+        return [dict(item) for item in self.local_folder_cache.get(self.local_folder_cache_key(folder), [])]
+
+    def cache_local_folder_items(self, folder: Path, items: list[dict]) -> None:
+        key = self.local_folder_cache_key(folder)
+        self.local_folder_cache[key] = [dict(item) for item in items]
+
     def show_play_from_folder(self) -> None:
         start_dir = self.settings.download_folder or str(Path.home())
         with wx.DirDialog(
@@ -9943,12 +10051,17 @@ class MainFrame(wx.Frame):
             self.message(self.t("folder_no_media"), wx.ICON_WARNING)
             self.show_main_menu()
             return
+        cached_items = self.cached_local_folder_items(folder)
+        if cached_items:
+            self.show_local_media_folder(folder, cached_items, selection=0)
+            return
         files = self.local_media_files_in_folder(folder)
         if not files:
             self.message(self.t("folder_no_media"), wx.ICON_INFORMATION)
             self.show_main_menu()
             return
         items = [self.local_media_item(path, folder) for path in files]
+        self.cache_local_folder_items(folder, items)
         self.show_local_media_folder(folder, items, selection=0)
 
     def show_local_media_folder(self, folder: Path, items: list[dict], selection: int = 0) -> None:
@@ -9997,6 +10110,7 @@ class MainFrame(wx.Frame):
         self.dynamic_fetch_enabled = False
         self.metadata_hydration_urls.clear()
         self.search_generation += 1
+        self.cache_local_folder_items(folder, items)
         self.show_results(items, selection=selection, visible_count=len(items))
         self.set_status(self.t("folder_loaded", count=len(items)))
         self.return_results = list(self.results)
@@ -10027,7 +10141,7 @@ class MainFrame(wx.Frame):
             self.shuffle_current = False
         current_item = dict(ordered[start_index])
         queue_items = ordered[start_index + 1 :]
-        self.playback_queue = [self.playback_queue_item_with_folder_return(item, items) for item in queue_items]
+        self.playback_queue = [self.playback_queue_item_with_folder_return(item, items, auto_folder_queue=True) for item in queue_items]
         self.save_playback_queue()
         self.player_return_screen = "folder"
         self.player_return_data = {
@@ -10059,7 +10173,7 @@ class MainFrame(wx.Frame):
         self.save_playback_queue()
         self.announce_player(self.t("folder_queue_added", count=added))
 
-    def playback_queue_item_with_folder_return(self, item: dict, source_items: list[dict]) -> dict:
+    def playback_queue_item_with_folder_return(self, item: dict, source_items: list[dict], auto_folder_queue: bool = False) -> dict:
         queue_item = self.playlist_item_from_media(item)
         queue_item["_return_screen"] = "folder"
         queue_item["_return_folder"] = self.last_search_query
@@ -10067,6 +10181,8 @@ class MainFrame(wx.Frame):
             (index for index, source in enumerate(source_items) if source.get("url") == item.get("url")),
             0,
         )
+        if auto_folder_queue:
+            queue_item["_auto_folder_queue"] = True
         return queue_item
 
     def open_local_media_file(self, value: str) -> None:
@@ -10578,6 +10694,7 @@ class MainFrame(wx.Frame):
                 (self.t("add_to_playlist"), lambda: self.add_active_to_playlist(prefer_active=True)),
                 (self.t("output_devices"), self.show_output_devices),
                 (self.t("equalizer"), self.show_player_equalizer),
+                (self.t("fullscreen"), self.enter_player_fullscreen),
                 (self.t("edit_mode"), self.toggle_edit_mode),
                 (self.t("copy_link"), self.copy_active_url),
                 (self.t("copy_stream_url"), self.copy_direct_stream_url),
@@ -10614,7 +10731,6 @@ class MainFrame(wx.Frame):
             self.player_panel.Bind(wx.EVT_CONTEXT_MENU, self.open_player_context_menu)
         self.player_panel.SetName(self.t("player"))
         self.player_panel.SetLabel(self.t("player"))
-        self.player_panel.SetToolTip(self.t("player"))
         self.root_sizer.Add(self.player_panel, 1, wx.EXPAND | wx.ALL, 4)
         self.details_label = None
         self.video_details = None
@@ -10744,6 +10860,8 @@ class MainFrame(wx.Frame):
             folder = Path(str(self.player_return_data.get("folder") or self.last_search_query or Path.home())).expanduser()
             index = int(self.player_return_data.get("index", self.return_index) or 0)
             results = list(self.return_all_results or self.all_results or self.return_results or self.results)
+            if not results:
+                results = self.cached_local_folder_items(folder)
             if not keep_playing:
                 self.player_return_screen = ""
                 self.player_return_data = {}
@@ -11334,6 +11452,14 @@ class MainFrame(wx.Frame):
             self.save_playback_queue()
             self.refresh_main_menu_after_playback_queue_change()
         return changed
+
+    def clear_auto_folder_playback_queue(self) -> None:
+        before = len(self.playback_queue)
+        self.playback_queue = [item for item in self.playback_queue if not item.get("_auto_folder_queue")]
+        if len(self.playback_queue) == before:
+            return
+        self.save_playback_queue()
+        self.refresh_main_menu_after_playback_queue_change()
 
     def refresh_main_menu_after_playback_queue_change(self) -> None:
         if self.playback_queue:
@@ -12721,6 +12847,8 @@ class MainFrame(wx.Frame):
         self.current_stream_headers = {}
         self.current_audio_device = ""
         if reset_session:
+            if self.player_return_screen == "folder":
+                self.clear_auto_folder_playback_queue()
             self.session_volume = None
             self.session_audio_output_device = ""
             self.session_equalizer_enabled = None
@@ -13035,6 +13163,8 @@ class MainFrame(wx.Frame):
                 self.hide_video_details()
                 return
             if self.in_player_screen:
+                if self.IsFullScreen():
+                    self.ShowFullScreen(False)
                 self.leave_player_to_previous_screen()
                 return
             if self.search_screen_active and self.search_results_stack:
