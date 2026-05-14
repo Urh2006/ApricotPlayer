@@ -187,8 +187,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.28"
-APP_VERSION_LABEL = "0.8.28"
+APP_VERSION = "0.8.29"
+APP_VERSION_LABEL = "0.8.29"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -3803,6 +3803,7 @@ class MainFrame(wx.Frame):
         self.player_panel: wx.Panel | None = None
         self.player_fullscreen_session = False
         self.player_fullscreen_results_override = False
+        self.manual_background_playback_active = False
         self.details_label: wx.StaticText | None = None
         self.video_details: wx.TextCtrl | None = None
         self.details_button_sizer: wx.Sizer | None = None
@@ -5309,6 +5310,9 @@ class MainFrame(wx.Frame):
     def background_playback_enabled(self) -> bool:
         return bool(getattr(self.settings, "enable_background_playback", False))
 
+    def background_player_section_enabled(self) -> bool:
+        return self.background_playback_enabled() or bool(getattr(self, "manual_background_playback_active", False))
+
     def current_player_title(self) -> str:
         info = self.current_video_info or {}
         item = self.current_video_item or {}
@@ -5629,7 +5633,7 @@ class MainFrame(wx.Frame):
             button.Bind(wx.EVT_BUTTON, lambda _evt, fn=handler: fn())
             row.Add(button, 0, wx.RIGHT, 6)
         self.root_sizer.Add(row, 0, wx.ALL, 4)
-        if self.background_playback_enabled() and not self.in_player_screen:
+        if self.background_player_section_enabled() and not self.in_player_screen:
             self.add_background_player_section()
 
     def setup_taskbar_icon(self) -> None:
@@ -5868,7 +5872,7 @@ class MainFrame(wx.Frame):
         if self.background_player_section_added:
             return
         self.background_player_controls = []
-        if not self.background_playback_enabled() or not self.player_is_active():
+        if not self.background_player_section_enabled() or not self.player_is_active():
             return
         self.background_player_section_added = True
         title = self.current_player_title()
@@ -10725,7 +10729,7 @@ class MainFrame(wx.Frame):
             controls.append((self.t("back_results"), self.exit_fullscreen_to_results))
         controls.extend(
             [
-                (self.t("back"), self.leave_player_to_main_menu),
+                (self.t("back"), lambda: self.leave_player_to_main_menu(force_keep_playing=True)),
                 (self.t("close_player"), self.close_current_player),
                 (self.t("previous"), lambda: self.play_relative_item(-1)),
                 (self.t("play"), self.player_play_pause),
@@ -10887,8 +10891,21 @@ class MainFrame(wx.Frame):
         self.shuffle_current = not self.shuffle_current
         self.announce_player(self.t("shuffle_on" if self.shuffle_current else "shuffle_off"))
 
-    def leave_player_to_main_menu(self) -> None:
-        keep_playing = self.background_playback_enabled()
+    def player_escape_closes_playback(self, focus: wx.Window | None) -> bool:
+        if focus is getattr(self, "results_list", None):
+            return False
+        if focus is getattr(self, "player_panel", None):
+            return True
+        if focus is getattr(self, "repeat_checkbox", None):
+            return True
+        if focus is getattr(self, "bass_boost_checkbox", None):
+            return True
+        return isinstance(focus, wx.Button)
+
+    def leave_player_to_main_menu(self, force_keep_playing: bool = False) -> None:
+        keep_playing = force_keep_playing or self.background_playback_enabled()
+        if keep_playing and force_keep_playing:
+            self.manual_background_playback_active = True
         self.exit_fullscreen_window()
         self.in_player_screen = False
         self.player_control_mode = keep_playing and self.player_control_mode
@@ -12937,6 +12954,7 @@ class MainFrame(wx.Frame):
                 self.clear_auto_folder_playback_queue()
             self.player_fullscreen_session = False
             self.player_fullscreen_results_override = False
+            self.manual_background_playback_active = False
             self.session_volume = None
             self.session_audio_output_device = ""
             self.session_equalizer_enabled = None
@@ -13251,9 +13269,12 @@ class MainFrame(wx.Frame):
                 self.hide_video_details()
                 return
             if self.in_player_screen:
-                if self.IsFullScreen():
-                    self.ShowFullScreen(False)
-                self.leave_player_to_previous_screen()
+                if self.player_escape_closes_playback(focus):
+                    if self.IsFullScreen():
+                        self.ShowFullScreen(False)
+                    self.leave_player_to_previous_screen()
+                else:
+                    self.leave_player_to_main_menu(force_keep_playing=True)
                 return
             if self.search_screen_active and self.search_results_stack:
                 self.restore_previous_search_results()

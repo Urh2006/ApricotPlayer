@@ -1,5 +1,10 @@
 # Changelog
 
+## What's new in version 0.8.29
+
+- refined Escape behavior in the new player-with-results layout: Escape on the Player itself still stops playback and returns to results, while Escape from the visible result list goes to the main menu and keeps playback available in the Player section
+- made the player Back to main menu button behave like manual navigation, keeping playback alive and tabbable from the main menu
+
 ## What's new in version 0.8.28
 
 - changed the player layout so normal playback keeps the result list visible and tabbable under the player; pressing Enter on another result starts it and returns focus to Player
