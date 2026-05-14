@@ -202,8 +202,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.34"
-APP_VERSION_LABEL = "0.8.34"
+APP_VERSION = "0.8.35"
+APP_VERSION_LABEL = "0.8.35"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -5959,6 +5959,14 @@ class MainFrame(wx.Frame):
             row.Add(button, 0, wx.RIGHT, 6)
             self.background_player_controls.append(button)
         self.root_sizer.Add(row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
+        previous_control = None
+        for control in self.background_player_controls:
+            if previous_control is not None:
+                try:
+                    control.MoveAfterInTabOrder(previous_control)
+                except RuntimeError:
+                    pass
+            previous_control = control
 
     def on_menu_key(self, event: wx.KeyEvent) -> None:
         if self.is_modifier_only_event(event):
@@ -5972,6 +5980,26 @@ class MainFrame(wx.Frame):
 
     def on_background_player_key(self, event: wx.KeyEvent) -> None:
         self.on_char_hook(event)
+
+    def handle_background_player_tab_navigation(self, event: wx.KeyEvent, focus: wx.Window | None) -> bool:
+        if event.GetKeyCode() != wx.WXK_TAB:
+            return False
+        controls = [
+            control
+            for control in getattr(self, "background_player_controls", [])
+            if control is not None and not getattr(control, "IsBeingDeleted", lambda: False)()
+        ]
+        if not controls or focus not in controls:
+            return False
+        try:
+            index = controls.index(focus)
+        except ValueError:
+            return False
+        next_index = index - 1 if event.ShiftDown() else index + 1
+        if 0 <= next_index < len(controls):
+            self.safe_set_focus(controls[next_index])
+            return True
+        return False
 
     def show_current_player_screen(self) -> None:
         if not self.player_is_active():
@@ -13288,6 +13316,8 @@ class MainFrame(wx.Frame):
             return
         if self.is_shortcut_capture_control(focus):
             self.on_shortcut_capture_key(event, focus)
+            return
+        if self.handle_background_player_tab_navigation(event, focus):
             return
         if self.handle_player_tab_navigation(event, focus):
             return

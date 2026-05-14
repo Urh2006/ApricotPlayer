@@ -1,5 +1,10 @@
 # Changelog
 
+## What's new in version 0.8.35
+
+- fixed background player keyboard navigation so Tab and Shift+Tab move consistently through Open player screen, Player, Previous, Play/Pause, Next, and the rest of the controls on Search, main menu, and other screens
+- made the background Player target reachable in both directions even when wx reuses the embedded video panel after returning from results or opening Search again
+
 ## What's new in version 0.8.34
 
 - fixed the background player tab order in the main menu and other screens so Open player screen is followed by the focusable Player section, then Previous, Play/Pause, Next, and the rest of the controls
