@@ -202,8 +202,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.44"
-APP_VERSION_LABEL = "0.8.44"
+APP_VERSION = "0.8.45"
+APP_VERSION_LABEL = "0.8.45"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -500,6 +500,7 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "download_video": "Ctrl+Shift+D",
     "subscribe_channel": "Ctrl+Shift+S",
     "unsubscribe_channel": "Ctrl+Shift+U",
+    "open_channel": "Ctrl+Shift+O",
     "queue_audio": "Shift+A",
     "add_to_playback_queue": "Ctrl+Shift+Q",
     "remove_from_playback_queue": "Ctrl+Shift+Delete",
@@ -565,6 +566,7 @@ SHORTCUT_DEFINITIONS = [
     ("download_video", "shortcut_download_video"),
     ("subscribe_channel", "shortcut_subscribe_channel"),
     ("unsubscribe_channel", "shortcut_unsubscribe_channel"),
+    ("open_channel", "shortcut_open_channel"),
     ("queue_audio", "shortcut_queue_audio"),
     ("add_to_playback_queue", "shortcut_add_to_playback_queue"),
     ("remove_from_playback_queue", "shortcut_remove_from_playback_queue"),
@@ -825,6 +827,7 @@ TEXT = {
         "download_playlist_done": "Playlist downloaded: {title}",
         "download_channel_done": "Channel downloaded: {title}",
         "add_favorite": "Add to favorites",
+        "open_channel": "Odpri kanal",
         "open_browser": "Open in browser",
         "copy_url": "Copy URL",
         "remove": "Remove",
@@ -977,6 +980,8 @@ TEXT = {
         "shortcut_download_video": "Prenesi video",
         "shortcut_subscribe_channel": "Naroci se na kanal",
         "shortcut_unsubscribe_channel": "Odjavi se od kanala",
+        "shortcut_open_channel": "Odpri kanal videa",
+        "no_channel": "Kanal ni na voljo.",
         "shortcut_queue_audio": "Oznaci video za prenos ali dodajanje v playliste",
         "shortcut_create_playlist": "Ustvari playlisto",
         "shortcut_add_to_playlist": "Dodaj v playlisto",
@@ -1238,6 +1243,7 @@ TEXT = {
         "download_playlist_done": "Playlist downloaded: {title}",
         "download_channel_done": "Channel downloaded: {title}",
         "add_favorite": "Add to favorites",
+        "open_channel": "Open channel",
         "open_browser": "Open in browser",
         "copy_url": "Copy URL",
         "remove": "Remove",
@@ -1263,6 +1269,7 @@ TEXT = {
         "subscription_new_videos_title": "New videos from {title}",
         "subscription_no_saved_new_videos": "No new videos saved for this channel.",
         "subscription_open_videos": "Open channel videos",
+        "no_channel": "Channel is not available.",
         "open_channel_videos": "Open channel videos",
         "open_playlist_videos": "Open playlist videos",
         "subscription_last_checked": "last checked {time}",
@@ -1404,6 +1411,7 @@ TEXT = {
         "shortcut_download_video": "Download video",
         "shortcut_subscribe_channel": "Subscribe to channel",
         "shortcut_unsubscribe_channel": "Unsubscribe from channel",
+        "shortcut_open_channel": "Open video's channel",
         "shortcut_queue_audio": "Select video for download or adding to playlists",
         "shortcut_copy_link": "Copy link",
         "shortcut_context_menu": "Context menu",
@@ -6824,6 +6832,8 @@ class MainFrame(wx.Frame):
             self.add_active_to_playback_queue()
         elif self.shortcut_matches(event, "remove_from_playback_queue"):
             self.remove_active_from_playback_queue()
+        elif self.shortcut_matches(event, "open_channel"):
+            self.open_item_channel(self.selected_user_playlist_item())
         elif self.shortcut_matches(event, "remove_from_playlist") or self.shortcut_matches(event, "remove_selected"):
             self.remove_selected_user_playlist_item()
         elif self.context_menu_shortcut_matches(event):
@@ -6833,6 +6843,7 @@ class MainFrame(wx.Frame):
 
     def open_user_playlist_items_context_menu(self, _event=None) -> None:
         menu = wx.Menu()
+        selected = self.selected_user_playlist_item()
         actions = [
             (self.t("play"), self.play_selected_user_playlist_item),
             (self.menu_label_with_shortcut("download_audio", "download_audio"), lambda: self.start_download(True, item=self.selected_user_playlist_item())),
@@ -6844,6 +6855,8 @@ class MainFrame(wx.Frame):
             (self.t("copy_url"), lambda: self.copy_item_url(self.selected_user_playlist_item())),
             (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda: self.copy_direct_stream_url(self.selected_user_playlist_item())),
         ]
+        if self.item_has_openable_youtube_channel(selected):
+            actions.insert(6, (self.menu_label_with_shortcut("open_channel", "open_channel"), lambda selected=dict(selected or {}): self.open_item_channel(selected)))
         for label, handler in actions:
             item = menu.Append(wx.ID_ANY, label)
             self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
@@ -7510,6 +7523,8 @@ class MainFrame(wx.Frame):
             self.subscribe_shortcut()
         elif self.shortcut_matches(event, "unsubscribe_channel"):
             self.unsubscribe_shortcut()
+        elif self.shortcut_matches(event, "open_channel"):
+            self.open_item_channel(self.selected_result())
         elif self.shortcut_matches(event, "copy_link"):
             self.copy_selected_url()
         elif self.shortcut_matches(event, "open_selected"):
@@ -7609,6 +7624,8 @@ class MainFrame(wx.Frame):
             self.subscribe_to_selected_channel(self.selected_favorite())
         elif self.shortcut_matches(event, "unsubscribe_channel"):
             self.unsubscribe_from_selected_channel(self.selected_favorite())
+        elif self.shortcut_matches(event, "open_channel"):
+            self.open_item_channel(self.selected_favorite())
         elif self.shortcut_matches(event, "add_to_playback_queue"):
             self.add_active_to_playback_queue()
         elif self.shortcut_matches(event, "remove_from_playback_queue"):
@@ -7620,6 +7637,7 @@ class MainFrame(wx.Frame):
 
     def open_favorites_context_menu(self, _event=None) -> None:
         menu = wx.Menu()
+        selected = self.selected_favorite()
         actions = [
             (self.t("play"), self.play_favorite),
             (self.menu_label_with_shortcut("download_audio", "download_audio"), lambda: self.start_download(True, item=self.selected_favorite())),
@@ -7633,6 +7651,8 @@ class MainFrame(wx.Frame):
             (self.t("copy_url"), lambda: self.copy_item_url(self.selected_favorite())),
             (self.t("remove"), self.remove_favorite),
         ]
+        if self.item_has_openable_youtube_channel(selected):
+            actions.insert(5, (self.menu_label_with_shortcut("open_channel", "open_channel"), lambda selected=dict(selected or {}): self.open_item_channel(selected)))
         for label, handler in actions:
             item = menu.Append(wx.ID_ANY, label)
             self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
@@ -7714,6 +7734,8 @@ class MainFrame(wx.Frame):
             self.subscribe_to_selected_channel(self.selected_history_item())
         elif self.shortcut_matches(event, "unsubscribe_channel"):
             self.unsubscribe_from_selected_channel(self.selected_history_item())
+        elif self.shortcut_matches(event, "open_channel"):
+            self.open_item_channel(self.selected_history_item())
         elif self.shortcut_matches(event, "add_to_playback_queue"):
             self.add_active_to_playback_queue()
         elif self.shortcut_matches(event, "remove_from_playback_queue"):
@@ -7727,6 +7749,7 @@ class MainFrame(wx.Frame):
 
     def open_history_context_menu(self, _event=None) -> None:
         menu = wx.Menu()
+        selected = self.selected_history_item()
         actions = [
             (self.t("play"), self.play_history_item),
             (self.menu_label_with_shortcut("download_audio", "download_audio"), lambda: self.start_download(True, item=self.selected_history_item())),
@@ -7742,6 +7765,8 @@ class MainFrame(wx.Frame):
             (self.t("remove_history_item"), self.remove_history_item),
             (self.t("clear_history"), self.clear_history),
         ]
+        if self.item_has_openable_youtube_channel(selected):
+            actions.insert(6, (self.menu_label_with_shortcut("open_channel", "open_channel"), lambda selected=dict(selected or {}): self.open_item_channel(selected)))
         for label, handler in actions:
             item = menu.Append(wx.ID_ANY, label)
             self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
@@ -11442,6 +11467,38 @@ class MainFrame(wx.Frame):
         item = self.current_video_item or self.current_video_info or {}
         self.copy_url_to_clipboard(str(item.get("url") or item.get("webpage_url") or ""))
 
+    def youtube_channel_item_for_video(self, item: dict | None) -> dict | None:
+        if not item or not isinstance(item, dict):
+            return None
+        kind = str(item.get("kind") or "").strip().lower()
+        if kind in {"channel", "playlist", "local_file", "rss_item", "podcast", "feed"}:
+            return None
+        channel_url = self.normalize_channel_url(item)
+        if not channel_url or "youtube.com" not in channel_url.lower():
+            return None
+        title = str(item.get("channel") or item.get("uploader") or item.get("channel_id") or channel_url).strip()
+        return {
+            "title": title,
+            "channel": title,
+            "url": channel_url,
+            "channel_url": channel_url,
+            "kind": "channel",
+            "type": self.t("channel"),
+        }
+
+    def item_has_openable_youtube_channel(self, item: dict | None) -> bool:
+        return self.youtube_channel_item_for_video(item) is not None
+
+    def open_item_channel(self, item: dict | None = None) -> None:
+        explicit_item = item is not None
+        channel_item = self.youtube_channel_item_for_video(item if explicit_item else self.active_item())
+        if channel_item is None and not explicit_item and self.player_is_active():
+            channel_item = self.youtube_channel_item_for_video(self.current_video_item or self.current_video_info)
+        if not channel_item:
+            self.announce_player(self.t("no_channel"))
+            return
+        self.open_channel_tab(channel_item, "videos", push_state=True)
+
     def show_output_devices(self) -> None:
         if not self.player_is_active():
             return
@@ -13453,6 +13510,9 @@ class MainFrame(wx.Frame):
         if self.shortcut_matches(event, "player_copy_link"):
             self.copy_current_player_url()
             return True
+        if self.shortcut_matches(event, "open_channel"):
+            self.open_item_channel(self.current_video_item or self.current_video_info)
+            return True
         if self.shortcut_matches(event, "player_equalizer"):
             self.show_player_equalizer()
             return True
@@ -13554,6 +13614,9 @@ class MainFrame(wx.Frame):
         if self.in_main_menu:
             if self.handle_player_shortcut_event(event, focus, details_has_focus):
                 return
+            if self.shortcut_matches(event, "open_channel"):
+                self.open_item_channel()
+                return
             if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "menu_list", None):
                 self.activate_menu()
                 return
@@ -13631,6 +13694,9 @@ class MainFrame(wx.Frame):
             return
         if self.shortcut_matches(event, "unsubscribe_channel"):
             self.unsubscribe_shortcut()
+            return
+        if self.shortcut_matches(event, "open_channel"):
+            self.open_item_channel()
             return
         if self.shortcut_matches(event, "create_playlist"):
             self.create_user_playlist_dialog()
@@ -13716,6 +13782,8 @@ class MainFrame(wx.Frame):
             (self.t("equalizer"), self.show_player_equalizer),
             (self.t("close_player"), self.close_current_player),
         ])
+        if self.item_has_openable_youtube_channel(item):
+            actions.insert(6, (self.menu_label_with_shortcut("open_channel", "open_channel"), lambda: self.open_item_channel(dict(item))))
         if item.get("kind") != "local_file":
             actions.insert(-5, (self.t("open_browser"), lambda: webbrowser.open(str(item.get("webpage_url") or item.get("url") or ""))))
         for label, handler in actions:
@@ -13771,6 +13839,8 @@ class MainFrame(wx.Frame):
                 (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda selected=dict(item or {}): self.copy_direct_stream_url(selected)),
                 (self.menu_label_with_shortcut("copy_url", "copy_link"), self.copy_selected_url),
             ]
+            if self.item_has_openable_youtube_channel(item):
+                actions.insert(7, (self.menu_label_with_shortcut("open_channel", "open_channel"), lambda selected=dict(item or {}): self.open_item_channel(selected)))
         if len(self.download_queue) > 1:
             actions[1:1] = [
                 (self.t("download_all_as_audio"), lambda: self.download_all_queued(True)),

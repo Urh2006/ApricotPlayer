@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.8.44` (`0.8.44`)
+Current version: `0.8.45` (`0.8.45`)
 
 ## Download
 
@@ -40,6 +40,7 @@ py wx_main.py
 - Global `Ctrl+Space` background play/pause and `Ctrl+L` copy-link support from search results
 - Optional Trending screen, hidden by default, with country and category filters using the official YouTube most-popular API when a YouTube Data API key is configured
 - Channel result options for opening channel videos, playlists, home, or popular videos
+- YouTube video context menus include Open channel when channel metadata is available, with a configurable `Ctrl+Shift+O` shortcut
 - Dynamic result loading keeps fetching 20 more search, channel, playlist, or folder items until the source has no more results, without moving screen reader focus while new rows append
 - Local media file and whole-folder playback for common audio and video files, including file association support on Windows
 - First-run repair prompt if Windows media player registration is missing after an update

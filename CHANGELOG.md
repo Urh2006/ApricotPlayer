@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.8.45
+
+- added Open channel for YouTube videos in result, player, favorites, history, and user playlist context menus when the video has channel metadata.
+- added a configurable Open channel shortcut, defaulting to Ctrl+Shift+O.
+- Open channel loads the video's channel videos inside ApricotPlayer instead of opening a browser.
+
 ## What's new in version 0.8.44
 
 - fixed classic player navigation when background playback is disabled: Tab from Player now goes to Previous, Play/Pause, Next, and the rest of the player controls instead of jumping into the Back buttons.
