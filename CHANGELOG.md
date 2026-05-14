@@ -1,5 +1,16 @@
 # Changelog
 
+## What's new in version 0.8.40
+
+- polished several stability issues before the next larger feature cycle
+- reduced screen-reader focus churn in the main menu by updating queue/download labels in place instead of rebuilding the whole menu
+- fixed player Escape handling on player buttons by preserving navigation controls in the internal focus map
+- made fullscreen launch obey the current fullscreen override state, so leaving fullscreen to results does not get undone by the saved default fullscreen setting
+- made settings section rendering smoother by freezing the settings panel while controls are rebuilt
+- ignored stale custom player paths when the configured player no longer exists, falling back to the bundled mpv instead
+- kept playback queue counts in the main menu synchronized when items are added, removed, played, or consumed automatically
+- reduced unnecessary play/pause button relayouts by only updating labels when the state actually changes
+
 ## What's new in version 0.8.38
 
 - fixed Back to results from fullscreen so focus returns to the results list instead of landing back on Player

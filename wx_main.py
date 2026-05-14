@@ -202,8 +202,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.38"
-APP_VERSION_LABEL = "0.8.38"
+APP_VERSION = "0.8.40"
+APP_VERSION_LABEL = "0.8.40"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -5343,18 +5343,26 @@ class MainFrame(wx.Frame):
 
     def update_play_pause_buttons(self) -> None:
         label = self.current_play_pause_label()
+        changed = False
         for button in list(getattr(self, "player_play_pause_buttons", [])):
             try:
                 if button and not button.IsBeingDeleted():
-                    button.SetLabel(label)
-                    button.SetName(label)
-                    button.SetToolTip(label)
+                    if button.GetLabel() != label:
+                        button.SetLabel(label)
+                        changed = True
+                    if button.GetName() != label:
+                        button.SetName(label)
+                        changed = True
+                    if button.GetToolTipText() != label:
+                        button.SetToolTip(label)
+                        changed = True
             except RuntimeError:
                 continue
-        try:
-            self.panel.Layout()
-        except Exception:
-            pass
+        if changed:
+            try:
+                self.panel.Layout()
+            except Exception:
+                pass
 
     def clear(self) -> None:
         preserved_player_panel = None
@@ -5529,8 +5537,13 @@ class MainFrame(wx.Frame):
         self.activate_window_later((0, 100, 350, 900, 1800, 3000))
 
     @staticmethod
-    def listbox_strings(listbox: wx.ListBox) -> list[str]:
-        return [listbox.GetString(index) for index in range(listbox.GetCount())]
+    def listbox_matches(listbox: wx.ListBox, labels: list[str]) -> bool:
+        try:
+            if listbox.GetCount() != len(labels):
+                return False
+            return all(listbox.GetString(index) == labels[index] for index in range(len(labels)))
+        except RuntimeError:
+            return False
 
     def set_listbox_items(self, listbox: wx.ListBox, labels: list[str], selection: int = 0) -> bool:
         labels = [str(label) for label in labels]
@@ -5538,7 +5551,7 @@ class MainFrame(wx.Frame):
             return False
         target_selection = min(max(0, selection), len(labels) - 1)
         current_selection = listbox.GetSelection()
-        if self.listbox_strings(listbox) == labels:
+        if self.listbox_matches(listbox, labels):
             if current_selection != target_selection:
                 listbox.SetSelection(target_selection)
                 return True
@@ -5848,15 +5861,27 @@ class MainFrame(wx.Frame):
         title = wx.StaticText(self.panel, label=self.t("main_menu"))
         self.root_sizer.Add(title, 0, wx.ALL, 4)
         self.add_background_player_section()
-        self.menu_actions = []
+        self.menu_actions = self.build_main_menu_actions()
+        self.menu_list = wx.ListBox(self.panel, choices=[item[0] for item in self.menu_actions])
+        self.menu_list.SetName(self.t("main_menu"))
+        self.menu_list.SetSelection(0)
+        self.menu_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _evt: self.activate_menu())
+        self.menu_list.Bind(wx.EVT_KEY_DOWN, self.on_menu_key)
+        self.root_sizer.Add(self.menu_list, 1, wx.EXPAND | wx.ALL, 4)
+        self.add_button_row([(self.t("open"), self.activate_menu)])
+        self.panel.Layout()
+        self.focus_later(self.menu_list)
+
+    def build_main_menu_actions(self) -> list[tuple[str, callable]]:
+        actions: list[tuple[str, callable]] = []
         pending_version = self.pending_app_update_version()
         if pending_version:
-            self.menu_actions.append((self.t("app_update_menu_item", version=pending_version), self.open_pending_app_update))
+            actions.append((self.t("app_update_menu_item", version=pending_version), self.open_pending_app_update))
         download_count = len(self.download_queue) + len(self.active_downloads)
         if download_count:
-            self.menu_actions.append((f"{self.t('current_downloads')} ({download_count})", self.show_download_queue))
+            actions.append((f"{self.t('current_downloads')} ({download_count})", self.show_download_queue))
         if self.playback_queue:
-            self.menu_actions.append((f"{self.t('playback_queue')} ({len(self.playback_queue)})", self.show_playback_queue))
+            actions.append((f"{self.t('playback_queue')} ({len(self.playback_queue)})", self.show_playback_queue))
         primary_actions = [
             (self.t("search_youtube"), self.show_search),
             (self.t("play_folder"), self.show_play_from_folder),
@@ -5868,26 +5893,18 @@ class MainFrame(wx.Frame):
         ]
         if getattr(self.settings, "enable_trending", False):
             primary_actions.insert(1, (self.t("trending"), self.show_trending))
-        self.menu_actions.extend(primary_actions)
+        actions.extend(primary_actions)
         if self.settings.enable_history:
-            self.menu_actions.append((self.t("history"), self.show_history))
+            actions.append((self.t("history"), self.show_history))
         if self.settings.enable_podcasts_rss:
-            self.menu_actions.append((self.t("rss_feeds"), self.show_rss_feeds))
-        self.menu_actions.extend([
+            actions.append((self.t("rss_feeds"), self.show_rss_feeds))
+        actions.extend([
             (self.t("file_converter"), self.show_file_converter),
             (self.t("folder_converter"), self.show_folder_converter),
             (self.t("settings"), self.show_settings),
             (self.t("exit"), self.quit_application),
         ])
-        self.menu_list = wx.ListBox(self.panel, choices=[item[0] for item in self.menu_actions])
-        self.menu_list.SetName(self.t("main_menu"))
-        self.menu_list.SetSelection(0)
-        self.menu_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _evt: self.activate_menu())
-        self.menu_list.Bind(wx.EVT_KEY_DOWN, self.on_menu_key)
-        self.root_sizer.Add(self.menu_list, 1, wx.EXPAND | wx.ALL, 4)
-        self.add_button_row([(self.t("open"), self.activate_menu)])
-        self.panel.Layout()
-        self.focus_later(self.menu_list)
+        return actions
 
     def add_background_player_section(self) -> None:
         if self.background_player_section_added:
@@ -8994,6 +9011,10 @@ class MainFrame(wx.Frame):
     def render_settings_section(self) -> None:
         if not hasattr(self, "settings_scroller"):
             return
+        try:
+            self.settings_scroller.Freeze()
+        except RuntimeError:
+            pass
         old_sizer = self.settings_scroller.GetSizer()
         if old_sizer:
             old_sizer.Clear(delete_windows=True)
@@ -9279,6 +9300,10 @@ class MainFrame(wx.Frame):
         self.settings_scroller.Layout()
         self.settings_scroller.FitInside()
         self.panel.Layout()
+        try:
+            self.settings_scroller.Thaw()
+        except RuntimeError:
+            pass
 
     def render_settings_section_and_focus(self, focus_key: str | None = None) -> None:
         self.render_settings_section()
@@ -10725,7 +10750,7 @@ class MainFrame(wx.Frame):
             for name, value in headers.items():
                 if name.lower() not in {"user-agent", "referer"} and value:
                     args.append(f"--http-header-fields-append={name}: {value}")
-            if self.settings.player_fullscreen:
+            if self.player_fullscreen_mode_active():
                 args.append("--fullscreen=yes")
             if self.settings.player_start_paused:
                 args.append("--pause=yes")
@@ -10855,7 +10880,7 @@ class MainFrame(wx.Frame):
         ]
         if background_enabled:
             player_controls.append((self.t("close_player"), self.close_current_player))
-        self.player_escape_stop_controls = self.add_button_row(player_controls)
+        self.player_escape_stop_controls.extend(self.add_button_row(player_controls))
         self.fullscreen_checkbox = wx.CheckBox(self.panel, label=self.t("fullscreen"))
         self.fullscreen_checkbox.SetName(self.t("fullscreen"))
         self.fullscreen_checkbox.SetValue(fullscreen_mode)
@@ -11678,6 +11703,7 @@ class MainFrame(wx.Frame):
             return
         self.playback_queue.append(item)
         self.save_playback_queue()
+        self.refresh_main_menu_after_playback_queue_change()
         self.announce_player(self.t("playback_queue_added", title=item.get("title", "")))
 
     def remove_active_from_playback_queue(self) -> None:
@@ -11708,11 +11734,9 @@ class MainFrame(wx.Frame):
         self.refresh_main_menu_after_playback_queue_change()
 
     def refresh_main_menu_after_playback_queue_change(self) -> None:
-        if self.playback_queue:
-            return
         if not self.in_main_menu or not hasattr(self, "menu_list"):
             return
-        wx.CallAfter(self.show_main_menu)
+        wx.CallAfter(self.refresh_main_menu_download_label)
 
     def playback_queue_line(self, item: dict, index: int) -> str:
         parts = [
@@ -11729,6 +11753,7 @@ class MainFrame(wx.Frame):
     def show_playback_queue(self) -> None:
         if not self.playback_queue:
             self.announce_player(self.t("playback_queue_empty"))
+            self.refresh_main_menu_after_playback_queue_change()
             return
         dialog = wx.Dialog(self, title=self.t("playback_queue"), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         dialog.SetName(self.t("playback_queue"))
@@ -11837,6 +11862,7 @@ class MainFrame(wx.Frame):
             return
         item = dict(self.playback_queue.pop(index))
         self.save_playback_queue()
+        self.refresh_main_menu_after_playback_queue_change()
         self.open_playback_queue_item(item)
 
     def pop_next_playback_queue_item(self) -> dict | None:
@@ -11844,6 +11870,7 @@ class MainFrame(wx.Frame):
             return None
         item = dict(self.playback_queue.pop(0))
         self.save_playback_queue()
+        self.refresh_main_menu_after_playback_queue_change()
         return item
 
     def open_playback_queue_item(self, item: dict) -> None:
@@ -12077,7 +12104,16 @@ class MainFrame(wx.Frame):
         if not getattr(self, "in_main_menu", False) or not hasattr(self, "menu_list"):
             return
         try:
-            self.show_main_menu()
+            old_selection = self.menu_list.GetSelection()
+            old_label = self.menu_list.GetString(old_selection) if old_selection != wx.NOT_FOUND else ""
+            self.menu_actions = self.build_main_menu_actions()
+            labels = [item[0] for item in self.menu_actions]
+            selection = old_selection
+            if old_label in labels:
+                selection = labels.index(old_label)
+            elif labels:
+                selection = min(max(0, old_selection), len(labels) - 1)
+            self.set_listbox_items(self.menu_list, labels, selection)
         except RuntimeError:
             pass
 
@@ -15962,7 +15998,7 @@ class MainFrame(wx.Frame):
 
     def resolve_player(self) -> tuple[str, str] | None:
         configured = self.settings.player_command.strip().strip('"')
-        if configured:
+        if configured and (Path(configured).exists() or shutil.which(configured)):
             lower = configured.lower()
             if "mpv" in lower:
                 return configured, "mpv"
