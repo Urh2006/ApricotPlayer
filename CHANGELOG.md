@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.8.34
+
+- fixed the background player tab order in the main menu and other screens so Open player screen is followed by the focusable Player section, then Previous, Play/Pause, Next, and the rest of the controls
+- restored the screen-reader named Player target when returning from results to the main menu while background playback is still active
+- kept the existing fullscreen player behavior from 0.8.33, with Fullscreen as a checkbox and Back to results used to leave fullscreen
+
 ## What's new in version 0.8.33
 
 - fixed fullscreen player tab order so Shift+Tab from Previous now lands on Player before Back to results, while Tab from Player still lands on Previous

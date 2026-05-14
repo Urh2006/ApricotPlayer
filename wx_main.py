@@ -202,8 +202,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.33"
-APP_VERSION_LABEL = "0.8.33"
+APP_VERSION = "0.8.34"
+APP_VERSION_LABEL = "0.8.34"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -5900,6 +5900,30 @@ class MainFrame(wx.Frame):
         label = wx.StaticText(self.panel, label=self.t("background_player_now_playing", title=title))
         label.SetName(self.t("background_player"))
         self.root_sizer.Add(label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 4)
+
+        open_row = wx.BoxSizer(wx.HORIZONTAL)
+        open_button = wx.Button(self.panel, label=self.t("open_player"))
+        open_button.SetName(f"{self.t('background_player')}: {self.t('open_player')}")
+        open_button.Bind(wx.EVT_BUTTON, lambda _evt: self.show_current_player_screen())
+        open_button.Bind(wx.EVT_KEY_DOWN, self.on_background_player_key)
+        open_row.Add(open_button, 0, wx.RIGHT, 6)
+        self.background_player_controls.append(open_button)
+        self.root_sizer.Add(open_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
+
+        if self.player_panel is not None:
+            try:
+                if not self.player_panel.IsBeingDeleted():
+                    self.player_panel.Show()
+                    self.player_panel.SetCanFocus(True)
+                    self.player_panel.SetName(self.t("player"))
+                    self.player_panel.SetLabel(self.t("player"))
+                    self.player_panel.SetMinSize((-1, 96))
+                    self.player_panel.MoveAfterInTabOrder(open_button)
+                    self.root_sizer.Add(self.player_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
+                    self.background_player_controls.append(self.player_panel)
+            except RuntimeError:
+                pass
+
         row = wx.BoxSizer(wx.HORIZONTAL)
         controls = [
             (self.t("previous"), lambda: self.play_relative_item(-1)),
@@ -5913,10 +5937,10 @@ class MainFrame(wx.Frame):
             (self.t("bass_boost"), self.toggle_bass_boost),
             (self.t("repeat"), self.toggle_repeat),
             (self.t("shuffle"), self.toggle_shuffle),
-            (self.t("open_player"), self.show_current_player_screen),
             (self.t("copy_link"), self.copy_current_player_url),
             (self.t("close_player"), self.close_current_player),
         ]
+        previous_button = None
         for label_text, handler in controls:
             button = wx.Button(self.panel, label=label_text)
             button.SetName(f"{self.t('background_player')}: {label_text}")
@@ -5924,6 +5948,14 @@ class MainFrame(wx.Frame):
             button.Bind(wx.EVT_KEY_DOWN, self.on_background_player_key)
             if getattr(handler, "__name__", "") == "player_play_pause":
                 self.player_play_pause_buttons.append(button)
+            if previous_button is None:
+                previous_button = button
+                if self.player_panel is not None:
+                    try:
+                        if not self.player_panel.IsBeingDeleted():
+                            previous_button.MoveAfterInTabOrder(self.player_panel)
+                    except RuntimeError:
+                        pass
             row.Add(button, 0, wx.RIGHT, 6)
             self.background_player_controls.append(button)
         self.root_sizer.Add(row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
