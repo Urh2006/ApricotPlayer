@@ -1,5 +1,10 @@
 # Changelog
 
+## What's new in version 0.8.42
+
+- fixed player shortcuts while background playback is visible in the main menu, so Space, seek, volume, speed, pitch, details, equalizer, and other player keys work when focus is on the background Player section.
+- centralized player shortcut handling so the same key behavior is used in the full player and in the background player controls.
+
 ## What's new in version 0.8.41
 
 - announced the title of the newly playing video, podcast episode, queue item, or local file when using player Next or Previous.

@@ -202,8 +202,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.41"
-APP_VERSION_LABEL = "0.8.41"
+APP_VERSION = "0.8.42"
+APP_VERSION_LABEL = "0.8.42"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -13348,6 +13348,113 @@ class MainFrame(wx.Frame):
             return True
         return False
 
+    def handle_player_shortcut_event(self, event: wx.KeyEvent, focus: wx.Window | None, details_has_focus: bool = False) -> bool:
+        if not (self.player_control_mode and self.player_shortcuts_allowed(focus)):
+            return False
+        if self.context_menu_shortcut_matches(event):
+            self.open_player_context_menu()
+            return True
+        if focus is getattr(self, "repeat_checkbox", None) and self.shortcut_matches(event, "player_play_pause"):
+            event.Skip()
+            return True
+        if focus is getattr(self, "bass_boost_checkbox", None) and self.shortcut_matches(event, "player_play_pause"):
+            event.Skip()
+            return True
+        if details_has_focus and self.details_text_navigation_key(event):
+            event.Skip()
+            return True
+        if self.shortcut_matches(event, "player_output_devices"):
+            self.show_output_devices()
+            return True
+        if self.shortcut_matches(event, "player_copy_link"):
+            self.copy_current_player_url()
+            return True
+        if self.shortcut_matches(event, "player_equalizer"):
+            self.show_player_equalizer()
+            return True
+        if self.shortcut_matches(event, "player_edit_mode"):
+            self.toggle_edit_mode()
+            return True
+        if self.shortcut_matches(event, "player_save_edit_copy"):
+            self.save_edited_local_file(replace_original=False)
+            return True
+        if self.shortcut_matches(event, "player_replace_edit_original"):
+            self.save_edited_local_file(replace_original=True)
+            return True
+        if self.shortcut_matches(event, "player_marker_start"):
+            self.set_clip_marker_async("start")
+            return True
+        if self.shortcut_matches(event, "player_marker_end"):
+            self.set_clip_marker_async("end")
+            return True
+        if self.shortcut_matches(event, "player_previous"):
+            self.play_relative_item(-1)
+            return True
+        if self.shortcut_matches(event, "player_next"):
+            self.play_relative_item(1)
+            return True
+        if self.shortcut_matches(event, "player_volume_boost"):
+            self.toggle_volume_boost()
+            return True
+        if self.shortcut_matches(event, "player_bass_boost"):
+            self.toggle_bass_boost()
+            return True
+        if self.shortcut_matches(event, "player_repeat"):
+            self.toggle_repeat()
+            return True
+        if self.shortcut_matches(event, "player_shuffle"):
+            self.toggle_shuffle()
+            return True
+        if self.shortcut_matches(event, "player_play_pause"):
+            self.player_play_pause()
+            return True
+        if self.shortcut_matches(event, "player_time"):
+            self.announce_time_async()
+            return True
+        if self.shortcut_matches(event, "player_speed_down"):
+            self.change_speed_async(-self.speed_step_value())
+            return True
+        if self.shortcut_matches(event, "player_speed_up"):
+            self.change_speed_async(self.speed_step_value())
+            return True
+        if self.shortcut_matches(event, "player_pitch_up"):
+            self.change_pitch_async(self.pitch_step_value())
+            return True
+        if self.shortcut_matches(event, "player_pitch_down"):
+            self.change_pitch_async(-self.pitch_step_value())
+            return True
+        if self.player_details_shortcut_matches(event):
+            self.show_video_details()
+            return True
+        if self.shortcut_matches(event, "player_volume_status"):
+            self.announce_volume_async()
+            return True
+        if self.shortcut_matches(event, "player_seek_back_huge"):
+            self.player_seek(-600)
+            return True
+        if self.shortcut_matches(event, "player_seek_forward_huge"):
+            self.player_seek(600)
+            return True
+        if self.shortcut_matches(event, "player_seek_back_large"):
+            self.player_seek(-60)
+            return True
+        if self.shortcut_matches(event, "player_seek_forward_large"):
+            self.player_seek(60)
+            return True
+        if self.shortcut_matches(event, "player_seek_back"):
+            self.player_seek(-5)
+            return True
+        if self.shortcut_matches(event, "player_seek_forward"):
+            self.player_seek(5)
+            return True
+        if self.shortcut_matches(event, "player_volume_up"):
+            self.change_volume_async(self.settings.volume_step)
+            return True
+        if self.shortcut_matches(event, "player_volume_down"):
+            self.change_volume_async(-self.settings.volume_step)
+            return True
+        return False
+
     def on_char_hook(self, event: wx.KeyEvent) -> None:
         focus = wx.Window.FindFocus()
         details_has_focus = focus is self.video_details
@@ -13361,6 +13468,8 @@ class MainFrame(wx.Frame):
         if self.handle_player_tab_navigation(event, focus):
             return
         if self.in_main_menu:
+            if self.handle_player_shortcut_event(event, focus, details_has_focus):
+                return
             if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "menu_list", None):
                 self.activate_menu()
                 return
@@ -13491,109 +13600,8 @@ class MainFrame(wx.Frame):
             event.Skip()
             wx.CallAfter(self.maybe_extend_results)
             return
-        if self.player_control_mode and self.player_shortcuts_allowed(focus):
-            if self.context_menu_shortcut_matches(event):
-                self.open_player_context_menu()
-                return
-            if focus is getattr(self, "repeat_checkbox", None) and self.shortcut_matches(event, "player_play_pause"):
-                event.Skip()
-                return
-            if focus is getattr(self, "bass_boost_checkbox", None) and self.shortcut_matches(event, "player_play_pause"):
-                event.Skip()
-                return
-            if details_has_focus and self.details_text_navigation_key(event):
-                event.Skip()
-                return
-            if self.shortcut_matches(event, "player_output_devices"):
-                self.show_output_devices()
-                return
-            if self.shortcut_matches(event, "player_copy_link"):
-                self.copy_current_player_url()
-                return
-            if self.shortcut_matches(event, "player_equalizer"):
-                self.show_player_equalizer()
-                return
-            if self.shortcut_matches(event, "player_edit_mode"):
-                self.toggle_edit_mode()
-                return
-            if self.shortcut_matches(event, "player_save_edit_copy"):
-                self.save_edited_local_file(replace_original=False)
-                return
-            if self.shortcut_matches(event, "player_replace_edit_original"):
-                self.save_edited_local_file(replace_original=True)
-                return
-            if self.shortcut_matches(event, "player_marker_start"):
-                self.set_clip_marker_async("start")
-                return
-            if self.shortcut_matches(event, "player_marker_end"):
-                self.set_clip_marker_async("end")
-                return
-            if self.shortcut_matches(event, "player_previous"):
-                self.play_relative_item(-1)
-                return
-            if self.shortcut_matches(event, "player_next"):
-                self.play_relative_item(1)
-                return
-            if self.shortcut_matches(event, "player_volume_boost"):
-                self.toggle_volume_boost()
-                return
-            if self.shortcut_matches(event, "player_bass_boost"):
-                self.toggle_bass_boost()
-                return
-            if self.shortcut_matches(event, "player_repeat"):
-                self.toggle_repeat()
-                return
-            if self.shortcut_matches(event, "player_shuffle"):
-                self.toggle_shuffle()
-                return
-            if self.shortcut_matches(event, "player_play_pause"):
-                self.player_play_pause()
-                return
-            if self.shortcut_matches(event, "player_time"):
-                self.announce_time_async()
-                return
-            if self.shortcut_matches(event, "player_speed_down"):
-                self.change_speed_async(-self.speed_step_value())
-                return
-            if self.shortcut_matches(event, "player_speed_up"):
-                self.change_speed_async(self.speed_step_value())
-                return
-            if self.shortcut_matches(event, "player_pitch_up"):
-                self.change_pitch_async(self.pitch_step_value())
-                return
-            if self.shortcut_matches(event, "player_pitch_down"):
-                self.change_pitch_async(-self.pitch_step_value())
-                return
-            if self.player_details_shortcut_matches(event):
-                self.show_video_details()
-                return
-            if self.shortcut_matches(event, "player_volume_status"):
-                self.announce_volume_async()
-                return
-            if self.shortcut_matches(event, "player_seek_back_huge"):
-                self.player_seek(-600)
-                return
-            if self.shortcut_matches(event, "player_seek_forward_huge"):
-                self.player_seek(600)
-                return
-            if self.shortcut_matches(event, "player_seek_back_large"):
-                self.player_seek(-60)
-                return
-            if self.shortcut_matches(event, "player_seek_forward_large"):
-                self.player_seek(60)
-                return
-            if self.shortcut_matches(event, "player_seek_back"):
-                self.player_seek(-5)
-                return
-            if self.shortcut_matches(event, "player_seek_forward"):
-                self.player_seek(5)
-                return
-            if self.shortcut_matches(event, "player_volume_up"):
-                self.change_volume_async(self.settings.volume_step)
-                return
-            if self.shortcut_matches(event, "player_volume_down"):
-                self.change_volume_async(-self.settings.volume_step)
-                return
+        if self.handle_player_shortcut_event(event, focus, details_has_focus):
+            return
         event.Skip()
 
     def open_player_context_menu(self, _event=None) -> None:
