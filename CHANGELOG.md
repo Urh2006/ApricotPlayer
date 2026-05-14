@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.8.31
+
+- made the combined player-plus-results layout conditional on Enable background playback, so disabling background playback restores the classic player with Back to results and no persistent result list
+- made the embedded Player panel keyboard-focusable, so Tab from the visible results list lands on Player and Tab from Player lands on Previous, Play/Pause, Next, and the other controls
+- kept background playback navigation cleaner: visible results remain available when returning to the player from the menu, while main-menu/background controls do not show a stale results list
+
 ## What's new in version 0.8.30
 
 - changed the normal player tab order so Shift+Tab from Player goes to the visible results list, while Tab from Player goes directly to Previous, Play/Pause, Next, and the rest of the player controls

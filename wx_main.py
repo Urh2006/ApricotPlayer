@@ -185,10 +185,25 @@ class SliderAccessible(wx.Accessible):
         return wx.ACC_NOT_IMPLEMENTED, 0
 
 
+class PlayerPanel(wx.Panel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        try:
+            self.SetCanFocus(True)
+        except Exception:
+            pass
+
+    def AcceptsFocus(self) -> bool:
+        return True
+
+    def AcceptsFocusFromKeyboard(self) -> bool:
+        return True
+
+
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.30"
-APP_VERSION_LABEL = "0.8.30"
+APP_VERSION = "0.8.31"
+APP_VERSION_LABEL = "0.8.31"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -5312,7 +5327,7 @@ class MainFrame(wx.Frame):
         return bool(getattr(self.settings, "enable_background_playback", False))
 
     def background_player_section_enabled(self) -> bool:
-        return self.background_playback_enabled() or bool(getattr(self, "manual_background_playback_active", False))
+        return self.background_playback_enabled()
 
     def current_player_title(self) -> str:
         info = self.current_video_info or {}
@@ -10711,6 +10726,7 @@ class MainFrame(wx.Frame):
 
     def show_player_page(self, title: str) -> None:
         fullscreen_mode = self.player_fullscreen_mode_active()
+        embedded_results = self.background_playback_enabled() and not fullscreen_mode
         self.in_main_menu = False
         self.in_queue_screen = False
         self.search_screen_active = False
@@ -10730,11 +10746,16 @@ class MainFrame(wx.Frame):
         self.player_control_mode = True
         self.player_escape_stop_controls = []
         navigation_controls = []
-        if fullscreen_mode:
+        if fullscreen_mode and self.background_playback_enabled():
             navigation_controls.append((self.t("back_results"), self.exit_fullscreen_to_results))
-        navigation_controls.append((self.t("back"), lambda: self.leave_player_to_main_menu(force_keep_playing=True)))
-        self.add_button_row(navigation_controls)
-        if not fullscreen_mode:
+        elif not embedded_results:
+            navigation_controls.append((self.t("back_results"), self.leave_player_to_previous_screen))
+        else:
+            navigation_controls.append((self.t("back"), lambda: self.leave_player_to_main_menu(force_keep_playing=True)))
+        navigation_buttons = self.add_button_row(navigation_controls)
+        if not embedded_results and not (fullscreen_mode and self.background_playback_enabled()):
+            self.player_escape_stop_controls.extend(navigation_buttons)
+        if embedded_results:
             self.add_player_results_section()
         label = wx.StaticText(self.panel, label=f"{self.t('internal_player')}: {title}")
         self.root_sizer.Add(label, 0, wx.ALL, 4)
@@ -10749,11 +10770,15 @@ class MainFrame(wx.Frame):
             self.player_panel = existing_panel
             self.player_panel.Show()
         else:
-            self.player_panel = wx.Panel(self.panel, style=wx.BORDER_SIMPLE)
+            self.player_panel = PlayerPanel(self.panel, style=wx.BORDER_SIMPLE | wx.WANTS_CHARS)
             self.player_panel.SetBackgroundColour(wx.BLACK)
             self.player_panel.Bind(wx.EVT_KEY_DOWN, self.on_player_key)
             self.player_panel.Bind(wx.EVT_CHAR_HOOK, self.on_char_hook)
             self.player_panel.Bind(wx.EVT_CONTEXT_MENU, self.open_player_context_menu)
+        try:
+            self.player_panel.SetCanFocus(True)
+        except Exception:
+            pass
         self.player_panel.SetName(self.t("player"))
         self.player_panel.SetLabel(self.t("player"))
         self.root_sizer.Add(self.player_panel, 1, wx.EXPAND | wx.ALL, 4)
@@ -10907,7 +10932,7 @@ class MainFrame(wx.Frame):
         return focus in getattr(self, "player_escape_stop_controls", [])
 
     def leave_player_to_main_menu(self, force_keep_playing: bool = False) -> None:
-        keep_playing = force_keep_playing or self.background_playback_enabled()
+        keep_playing = bool(force_keep_playing and self.background_playback_enabled())
         if keep_playing and force_keep_playing:
             self.manual_background_playback_active = True
         self.exit_fullscreen_window()
