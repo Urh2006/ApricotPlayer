@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.8.29` (`0.8.29`)
+Current version: `0.8.30` (`0.8.30`)
 
 ## Download
 
@@ -30,7 +30,7 @@ py wx_main.py
 - NVDA-friendly main menu and search flow
 - In-app YouTube playback with `mpv`
 - Optional background playback while browsing results, settings, downloads, and the main menu, with a screen-reader named Player section and a Close player control
-- Normal player mode keeps the current result list visible and tabbable; Escape on Player stops playback, while Escape from the visible results goes to the main menu and keeps Player controls available
+- Normal player mode keeps the current result list visible and tabbable; Shift+Tab from Player reaches results, while Tab from Player reaches Previous, Play/Pause, Next, and the rest of the player controls
 - Player background controls on result/library/settings screens, plus context-menu actions from the player for download, queue, favorites, playlists, stream URL, output device, equalizer, and close
 - Global `Ctrl+Space` background play/pause and `Ctrl+L` copy-link support from search results
 - Optional Trending screen, hidden by default, with country and category filters using the official YouTube most-popular API when a YouTube Data API key is configured
@@ -168,4 +168,4 @@ Helpful scripts:
 - `scripts/build_release.ps1 -PackageMode onedir` builds the fast app folder used by both the installer and portable ZIP
 - `scripts/build_installer.ps1` builds `ApricotPlayerSetup.exe` when Inno Setup is installed
 - `scripts/build_portable_zip.ps1` builds `ApricotPlayer.zip`
-- `scripts/publish_release.ps1 -Tag v0.8.29 -NotesFile release-notes/v0.8.29.md` publishes the installer and portable ZIP to GitHub Releases
+- `scripts/publish_release.ps1 -Tag v0.8.30 -NotesFile release-notes/v0.8.30.md` publishes the installer and portable ZIP to GitHub Releases

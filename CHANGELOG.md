@@ -1,5 +1,10 @@
 # Changelog
 
+## What's new in version 0.8.30
+
+- changed the normal player tab order so Shift+Tab from Player goes to the visible results list, while Tab from Player goes directly to Previous, Play/Pause, Next, and the rest of the player controls
+- kept Back to main menu before the results list, so Shift+Tab from Player reaches results first and then the main navigation button
+
 ## What's new in version 0.8.29
 
 - refined Escape behavior in the new player-with-results layout: Escape on the Player itself still stops playback and returns to results, while Escape from the visible result list goes to the main menu and keeps playback available in the Player section

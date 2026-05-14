@@ -187,8 +187,8 @@ class SliderAccessible(wx.Accessible):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.29"
-APP_VERSION_LABEL = "0.8.29"
+APP_VERSION = "0.8.30"
+APP_VERSION_LABEL = "0.8.30"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -3804,6 +3804,7 @@ class MainFrame(wx.Frame):
         self.player_fullscreen_session = False
         self.player_fullscreen_results_override = False
         self.manual_background_playback_active = False
+        self.player_escape_stop_controls = []
         self.details_label: wx.StaticText | None = None
         self.video_details: wx.TextCtrl | None = None
         self.details_button_sizer: wx.Sizer | None = None
@@ -5620,8 +5621,9 @@ class MainFrame(wx.Frame):
                 candidates.append(root / name)
         return candidates
 
-    def add_button_row(self, buttons: list[tuple[str, callable]]) -> None:
+    def add_button_row(self, buttons: list[tuple[str, callable]]) -> list[wx.Button]:
         row = wx.BoxSizer(wx.HORIZONTAL)
+        created_buttons = []
         for label, handler in buttons:
             is_play_pause = getattr(handler, "__name__", "") == "player_play_pause"
             button_label = self.current_play_pause_label() if is_play_pause else label
@@ -5632,9 +5634,11 @@ class MainFrame(wx.Frame):
                 self.player_play_pause_buttons.append(button)
             button.Bind(wx.EVT_BUTTON, lambda _evt, fn=handler: fn())
             row.Add(button, 0, wx.RIGHT, 6)
+            created_buttons.append(button)
         self.root_sizer.Add(row, 0, wx.ALL, 4)
         if self.background_player_section_enabled() and not self.in_player_screen:
             self.add_background_player_section()
+        return created_buttons
 
     def setup_taskbar_icon(self) -> None:
         if self.taskbar_icon is not None:
@@ -10724,40 +10728,16 @@ class MainFrame(wx.Frame):
         self.clear()
         self.in_player_screen = True
         self.player_control_mode = True
-        controls = []
+        self.player_escape_stop_controls = []
+        navigation_controls = []
         if fullscreen_mode:
-            controls.append((self.t("back_results"), self.exit_fullscreen_to_results))
-        controls.extend(
-            [
-                (self.t("back"), lambda: self.leave_player_to_main_menu(force_keep_playing=True)),
-                (self.t("close_player"), self.close_current_player),
-                (self.t("previous"), lambda: self.play_relative_item(-1)),
-                (self.t("play"), self.player_play_pause),
-                (self.t("next"), lambda: self.play_relative_item(1)),
-                (self.t("playback_queue"), self.show_playback_queue),
-                (self.t("add_to_playlist"), lambda: self.add_active_to_playlist(prefer_active=True)),
-                (self.t("output_devices"), self.show_output_devices),
-                (self.t("equalizer"), self.show_player_equalizer),
-                (self.t("fullscreen"), self.enter_player_fullscreen),
-                (self.t("edit_mode"), self.toggle_edit_mode),
-                (self.t("copy_link"), self.copy_active_url),
-                (self.t("copy_stream_url"), self.copy_direct_stream_url),
-                (self.t("show_video_details"), self.show_video_details),
-            ]
-        )
-        self.add_button_row(controls)
+            navigation_controls.append((self.t("back_results"), self.exit_fullscreen_to_results))
+        navigation_controls.append((self.t("back"), lambda: self.leave_player_to_main_menu(force_keep_playing=True)))
+        self.add_button_row(navigation_controls)
+        if not fullscreen_mode:
+            self.add_player_results_section()
         label = wx.StaticText(self.panel, label=f"{self.t('internal_player')}: {title}")
         self.root_sizer.Add(label, 0, wx.ALL, 4)
-        self.repeat_checkbox = wx.CheckBox(self.panel, label=self.t("repeat"))
-        self.repeat_checkbox.SetName(self.t("repeat"))
-        self.repeat_checkbox.SetValue(self.repeat_current)
-        self.repeat_checkbox.Bind(wx.EVT_CHECKBOX, self.on_repeat_changed)
-        self.root_sizer.Add(self.repeat_checkbox, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
-        self.bass_boost_checkbox = wx.CheckBox(self.panel, label=self.t("bass_boost"))
-        self.bass_boost_checkbox.SetName(self.t("bass_boost"))
-        self.bass_boost_checkbox.SetValue(self.bass_boost_enabled)
-        self.bass_boost_checkbox.Bind(wx.EVT_CHECKBOX, self.on_bass_boost_changed)
-        self.root_sizer.Add(self.bass_boost_checkbox, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
         existing_panel = None
         if self.player_is_active() and self.player_panel is not None:
             try:
@@ -10777,8 +10757,32 @@ class MainFrame(wx.Frame):
         self.player_panel.SetName(self.t("player"))
         self.player_panel.SetLabel(self.t("player"))
         self.root_sizer.Add(self.player_panel, 1, wx.EXPAND | wx.ALL, 4)
-        if not fullscreen_mode:
-            self.add_player_results_section()
+        player_controls = [
+            (self.t("previous"), lambda: self.play_relative_item(-1)),
+            (self.t("play"), self.player_play_pause),
+            (self.t("next"), lambda: self.play_relative_item(1)),
+            (self.t("playback_queue"), self.show_playback_queue),
+            (self.t("add_to_playlist"), lambda: self.add_active_to_playlist(prefer_active=True)),
+            (self.t("output_devices"), self.show_output_devices),
+            (self.t("equalizer"), self.show_player_equalizer),
+            (self.t("fullscreen"), self.enter_player_fullscreen),
+            (self.t("edit_mode"), self.toggle_edit_mode),
+            (self.t("copy_link"), self.copy_active_url),
+            (self.t("copy_stream_url"), self.copy_direct_stream_url),
+            (self.t("show_video_details"), self.show_video_details),
+            (self.t("close_player"), self.close_current_player),
+        ]
+        self.player_escape_stop_controls = self.add_button_row(player_controls)
+        self.repeat_checkbox = wx.CheckBox(self.panel, label=self.t("repeat"))
+        self.repeat_checkbox.SetName(self.t("repeat"))
+        self.repeat_checkbox.SetValue(self.repeat_current)
+        self.repeat_checkbox.Bind(wx.EVT_CHECKBOX, self.on_repeat_changed)
+        self.root_sizer.Add(self.repeat_checkbox, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
+        self.bass_boost_checkbox = wx.CheckBox(self.panel, label=self.t("bass_boost"))
+        self.bass_boost_checkbox.SetName(self.t("bass_boost"))
+        self.bass_boost_checkbox.SetValue(self.bass_boost_enabled)
+        self.bass_boost_checkbox.Bind(wx.EVT_CHECKBOX, self.on_bass_boost_changed)
+        self.root_sizer.Add(self.bass_boost_checkbox, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
         self.details_label = None
         self.video_details = None
         self.details_button_sizer = None
@@ -10900,7 +10904,7 @@ class MainFrame(wx.Frame):
             return True
         if focus is getattr(self, "bass_boost_checkbox", None):
             return True
-        return isinstance(focus, wx.Button)
+        return focus in getattr(self, "player_escape_stop_controls", [])
 
     def leave_player_to_main_menu(self, force_keep_playing: bool = False) -> None:
         keep_playing = force_keep_playing or self.background_playback_enabled()
