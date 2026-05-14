@@ -202,8 +202,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.31"
-APP_VERSION_LABEL = "0.8.31"
+APP_VERSION = "0.8.32"
+APP_VERSION_LABEL = "0.8.32"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -3819,6 +3819,7 @@ class MainFrame(wx.Frame):
         self.player_fullscreen_session = False
         self.player_fullscreen_results_override = False
         self.manual_background_playback_active = False
+        self.player_navigation_controls = []
         self.player_escape_stop_controls = []
         self.details_label: wx.StaticText | None = None
         self.video_details: wx.TextCtrl | None = None
@@ -10744,6 +10745,7 @@ class MainFrame(wx.Frame):
         self.clear()
         self.in_player_screen = True
         self.player_control_mode = True
+        self.player_navigation_controls = []
         self.player_escape_stop_controls = []
         navigation_controls = []
         if fullscreen_mode and self.background_playback_enabled():
@@ -10753,6 +10755,7 @@ class MainFrame(wx.Frame):
         else:
             navigation_controls.append((self.t("back"), lambda: self.leave_player_to_main_menu(force_keep_playing=True)))
         navigation_buttons = self.add_button_row(navigation_controls)
+        self.player_navigation_controls = list(navigation_buttons)
         if not embedded_results and not (fullscreen_mode and self.background_playback_enabled()):
             self.player_escape_stop_controls.extend(navigation_buttons)
         if embedded_results:
@@ -10770,10 +10773,9 @@ class MainFrame(wx.Frame):
             self.player_panel = existing_panel
             self.player_panel.Show()
         else:
-            self.player_panel = PlayerPanel(self.panel, style=wx.BORDER_SIMPLE | wx.WANTS_CHARS)
+            self.player_panel = PlayerPanel(self.panel, style=wx.BORDER_SIMPLE)
             self.player_panel.SetBackgroundColour(wx.BLACK)
             self.player_panel.Bind(wx.EVT_KEY_DOWN, self.on_player_key)
-            self.player_panel.Bind(wx.EVT_CHAR_HOOK, self.on_char_hook)
             self.player_panel.Bind(wx.EVT_CONTEXT_MENU, self.open_player_context_menu)
         try:
             self.player_panel.SetCanFocus(True)
@@ -10930,6 +10932,33 @@ class MainFrame(wx.Frame):
         if focus is getattr(self, "bass_boost_checkbox", None):
             return True
         return focus in getattr(self, "player_escape_stop_controls", [])
+
+    def handle_player_tab_navigation(self, event: wx.KeyEvent, focus: wx.Window | None) -> bool:
+        if not self.in_player_screen or event.GetKeyCode() != wx.WXK_TAB:
+            return False
+        panel = getattr(self, "player_panel", None)
+        results = getattr(self, "results_list", None)
+        if focus is results:
+            if event.ShiftDown():
+                return False
+            if panel is not None:
+                self.safe_set_focus(panel)
+                return True
+        if focus is panel:
+            if event.ShiftDown():
+                if results is not None:
+                    self.safe_set_focus(results)
+                    return True
+                controls = getattr(self, "player_navigation_controls", [])
+                if controls:
+                    self.safe_set_focus(controls[-1])
+                    return True
+                return False
+            controls = getattr(self, "player_escape_stop_controls", [])
+            if controls:
+                self.safe_set_focus(controls[0])
+                return True
+        return False
 
     def leave_player_to_main_menu(self, force_keep_playing: bool = False) -> None:
         keep_playing = bool(force_keep_playing and self.background_playback_enabled())
@@ -13203,6 +13232,8 @@ class MainFrame(wx.Frame):
             return
         if self.is_shortcut_capture_control(focus):
             self.on_shortcut_capture_key(event, focus)
+            return
+        if self.handle_player_tab_navigation(event, focus):
             return
         if self.in_main_menu:
             if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "menu_list", None):

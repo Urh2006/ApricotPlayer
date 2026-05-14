@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.8.32
+
+- fixed Tab getting trapped on the Player panel by explicitly routing Tab from results to Player and Tab from Player to Previous, Play/Pause, Next, and the rest of the controls
+- kept Shift+Tab from Player going back to the visible results list when background playback is enabled
+- confirmed fullscreen player mode hides the embedded result list and uses Back to results to return to the normal player-with-results layout
+
 ## What's new in version 0.8.31
 
 - made the combined player-plus-results layout conditional on Enable background playback, so disabling background playback restores the classic player with Back to results and no persistent result list
