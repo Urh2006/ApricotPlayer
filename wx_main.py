@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from importlib import import_module
 from pathlib import Path
-from urllib.parse import unquote, urlencode, urljoin, urlparse
+from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 import xml.etree.ElementTree as ET
@@ -202,8 +202,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.47"
-APP_VERSION_LABEL = "0.8.47"
+APP_VERSION = "0.8.48"
+APP_VERSION_LABEL = "0.8.48"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -758,6 +758,8 @@ TEXT = {
         "download_audio_done": "Audio downloaded: {title}",
         "download_video_done": "Video downloaded: {title}",
         "download_progress": "{mode}: {percent}% - {title}",
+        "download_progress_title": "Prenos v teku",
+        "download_progress_message": "{title}\nDokoncano: {completed} od {total}\nPreostalo: {remaining}",
         "download_processing": "{mode}: obdelujem - {title}",
         "download_audio_mode": "Audio",
         "download_video_mode": "Video",
@@ -855,6 +857,9 @@ TEXT = {
         "show_video_details_by_default": "Privzeto pokazi podrobnosti videa v predvajalniku",
         "enable_age_restricted_videos": "Podpora za starostno omejene YouTube videe (pocasnejsi fallback samo po potrebi)",
         "enable_stream_cache": "Omogoci predpomnilnik za predvajanje",
+        "enable_stream_url_cache": "Hitri predpomnilnik YouTube stream URL-jev",
+        "stream_url_cache_minutes": "Koliko minut naj se hranijo stream URL-ji",
+        "prefetch_next_stream_url": "V ozadju pripravi naslednji posnetek",
         "cache_folder": "Mapa za predpomnilnik",
         "cache_size_mb": "Velikost predpomnilnika v MB",
         "resume_playback": "Nadaljuj predvajanje tam, kjer si ostal",
@@ -1174,6 +1179,8 @@ TEXT = {
         "download_audio_done": "Audio downloaded: {title}",
         "download_video_done": "Video downloaded: {title}",
         "download_progress": "{mode}: {percent}% - {title}",
+        "download_progress_title": "Download in progress",
+        "download_progress_message": "{title}\nCompleted: {completed} of {total}\nRemaining: {remaining}",
         "download_processing": "{mode}: processing - {title}",
         "download_audio_mode": "Audio",
         "download_video_mode": "Video",
@@ -1504,6 +1511,9 @@ TEXT["en"].update(
         "notification_new_podcast": "{feed}: new episode {title}",
         "uploaded_unknown": "Uploaded unknown",
         "enable_stream_cache": "Enable playback cache",
+        "enable_stream_url_cache": "Fast YouTube stream URL cache",
+        "stream_url_cache_minutes": "Minutes to keep resolved stream URLs",
+        "prefetch_next_stream_url": "Prepare the next item in the background",
         "cache_folder": "Playback cache folder",
         "cache_size_mb": "Playback cache size in MB",
         "resume_playback": "Resume where you left off",
@@ -3264,6 +3274,13 @@ RELEASE_08_TRANSLATION_UPDATES = {
         "conversion_failed": "Pretvorba ni uspela: {error}",
         "conversion_cancelled": "Pretvorba preklicana.",
         "conversion_no_media_files": "V tej mapi ni podprtih medijskih datotek.",
+        "conversion_complete_popup": "Prikazi obvestilo, ko je pretvorba koncana",
+        "converter_create_new_file": "Ustvari novo datoteko",
+        "converter_replace_original_file": "Zamenjaj originalno datoteko",
+        "converter_create_new_folder": "Ustvari novo mapo za pretvorjene datoteke",
+        "converter_replace_originals": "Zamenjaj originalne datoteke v mapi",
+        "conversion_progress_title": "Pretvarjanje mape",
+        "conversion_progress_message": "{file}\nPretvorjeno: {converted} od {total}\nPreostalo: {remaining}",
         "unsupported_input_format": "Ta vhodni format ni podprt.",
         "choose_output_file": "Izberi ime in mesto pretvorjene datoteke",
         "choose_output_folder": "Izberi mapo za pretvorjene datoteke",
@@ -3297,6 +3314,13 @@ RELEASE_08_TRANSLATION_UPDATES = {
         "conversion_failed": "Conversion failed: {error}",
         "conversion_cancelled": "Conversion cancelled.",
         "conversion_no_media_files": "No supported media files were found in this folder.",
+        "conversion_complete_popup": "Show a message when conversion is finished",
+        "converter_create_new_file": "Create a new file",
+        "converter_replace_original_file": "Replace original file",
+        "converter_create_new_folder": "Create a new folder for converted files",
+        "converter_replace_originals": "Replace original files in the folder",
+        "conversion_progress_title": "Converting folder",
+        "conversion_progress_message": "{file}\nConverted: {converted} of {total}\nRemaining: {remaining}",
         "unsupported_input_format": "This input format is not supported.",
         "choose_output_file": "Choose converted file name and save location",
         "choose_output_folder": "Choose folder for converted files",
@@ -3638,6 +3662,9 @@ class Settings:
     direct_link_enter_action: str = DIRECT_LINK_ENTER_PLAY
     enable_age_restricted_videos: bool = False
     enable_stream_cache: bool = True
+    enable_stream_url_cache: bool = True
+    stream_url_cache_minutes: int = 20
+    prefetch_next_stream_url: bool = True
     cache_folder: str = str(DEFAULT_CACHE_DIR)
     cache_size_mb: int = 512
     resume_playback: bool = True
@@ -3671,6 +3698,7 @@ class Settings:
     restrict_filenames: bool = False
     open_folder_after_download: bool = False
     popup_when_download_complete: bool = True
+    popup_when_conversion_complete: bool = True
     auto_update_ytdlp: bool = True
     auto_update_app: bool = True
     app_update_interval_hours: float = 6.0
@@ -3842,7 +3870,10 @@ class MainFrame(wx.Frame):
         self.download_queue: dict[str, dict] = {}
         self.active_downloads: dict[str, dict] = {}
         self.download_cancel_events: dict[str, threading.Event] = {}
+        self.download_progress_dialog: wx.ProgressDialog | None = None
+        self.download_progress_task_id = ""
         self.download_task_counter = 0
+        self.conversion_progress_dialog: wx.ProgressDialog | None = None
         self.queue_items: list[dict] = []
         self.last_download_shortcut: tuple[str, str, float] = ("", "", 0.0)
         self.ipc_path: str | None = None
@@ -3857,6 +3888,9 @@ class MainFrame(wx.Frame):
         self.collection_result_type = ""
         self.current_stream_url = ""
         self.current_stream_headers: dict = {}
+        self.stream_url_cache: dict[str, dict] = {}
+        self.stream_url_cache_lock = threading.Lock()
+        self.prefetch_stream_urls: set[str] = set()
         self.current_audio_device = ""
         self.session_audio_output_device = ""
         self.edit_mode_enabled = False
@@ -6338,13 +6372,17 @@ class MainFrame(wx.Frame):
 
     def folder_has_audio_inputs(self, folder: Path) -> bool:
         try:
-            return any(path.is_file() and path.suffix.lower() in AUDIO_INPUT_EXTENSIONS for path in folder.iterdir())
+            return any(path.is_file() and path.suffix.lower() in AUDIO_INPUT_EXTENSIONS for path in folder.rglob("*"))
         except OSError:
             return False
 
     def converter_media_files_in_folder(self, folder: Path) -> list[Path]:
         try:
-            return sorted(path for path in folder.iterdir() if path.is_file() and path.suffix.lower() in CONVERTER_MEDIA_EXTENSIONS)
+            return sorted(
+                path
+                for path in folder.rglob("*")
+                if path.is_file() and path.suffix.lower() in CONVERTER_MEDIA_EXTENSIONS and ".apricot-converting" not in path.name
+            )
         except OSError:
             return []
 
@@ -6398,6 +6436,18 @@ class MainFrame(wx.Frame):
             form.Add(dark_box, 1, wx.EXPAND)
             form.Add(image_label, 0, wx.ALIGN_CENTER_VERTICAL)
             form.Add(image_row, 1, wx.EXPAND)
+
+            output_mode_label = wx.StaticText(dialog, label=self.t("output_format"))
+            create_new_box = wx.CheckBox(dialog, label=self.t("converter_create_new_folder" if folder_mode else "converter_create_new_file"))
+            create_new_box.SetName(self.t("converter_create_new_folder" if folder_mode else "converter_create_new_file"))
+            replace_box = wx.CheckBox(dialog, label=self.t("converter_replace_originals" if folder_mode else "converter_replace_original_file"))
+            replace_box.SetName(self.t("converter_replace_originals" if folder_mode else "converter_replace_original_file"))
+            create_new_box.SetValue(True)
+            output_mode_row = wx.BoxSizer(wx.VERTICAL)
+            output_mode_row.Add(create_new_box, 0, wx.BOTTOM, 3)
+            output_mode_row.Add(replace_box, 0)
+            form.Add(output_mode_label, 0, wx.ALIGN_TOP)
+            form.Add(output_mode_row, 1, wx.EXPAND)
 
             button_row = wx.BoxSizer(wx.HORIZONTAL)
             convert_button = wx.Button(dialog, label=self.t("convert"))
@@ -6488,6 +6538,18 @@ class MainFrame(wx.Frame):
                     add_image_box.SetValue(True)
                 update_audio_video_controls()
 
+            def on_create_new(_event=None) -> None:
+                if create_new_box.GetValue():
+                    replace_box.SetValue(False)
+                elif not replace_box.GetValue():
+                    create_new_box.SetValue(True)
+
+            def on_replace(_event=None) -> None:
+                if replace_box.GetValue():
+                    create_new_box.SetValue(False)
+                elif not create_new_box.GetValue():
+                    replace_box.SetValue(True)
+
             def convert(_event=None) -> None:
                 raw_path = path_ctrl.GetValue().strip().strip('"')
                 source = Path(raw_path).expanduser()
@@ -6501,32 +6563,42 @@ class MainFrame(wx.Frame):
                     self.message(self.t("select_image_file"), wx.ICON_WARNING)
                     return
                 if folder_mode:
-                    with wx.DirDialog(dialog, self.t("choose_output_folder"), defaultPath=str(source), style=wx.DD_DEFAULT_STYLE | wx.DD_DIR_MUST_EXIST) as chooser:
-                        if chooser.ShowModal() != wx.ID_OK:
-                            self.announce_player(self.t("conversion_cancelled"))
-                            return
-                        output_folder = Path(chooser.GetPath()).expanduser()
-                    self.start_folder_conversion(source, output_folder, target, image_path)
+                    if replace_box.GetValue():
+                        output_folder = source
+                        replace_originals = True
+                    else:
+                        with wx.DirDialog(dialog, self.t("choose_output_folder"), defaultPath=str(source), style=wx.DD_DEFAULT_STYLE | wx.DD_DIR_MUST_EXIST) as chooser:
+                            if chooser.ShowModal() != wx.ID_OK:
+                                self.announce_player(self.t("conversion_cancelled"))
+                                return
+                            chosen = Path(chooser.GetPath()).expanduser()
+                        output_folder = self.unique_folder_path(chosen / f"{source.name} converted")
+                        replace_originals = False
+                    self.start_folder_conversion(source, output_folder, target, image_path, replace_originals=replace_originals)
                 else:
                     if not self.converter_input_kind(source):
                         self.message(self.t("unsupported_input_format"), wx.ICON_WARNING)
                         return
-                    default_output = self.converter_default_output_path(source, target)
-                    with wx.FileDialog(
-                        dialog,
-                        self.t("choose_output_file"),
-                        defaultDir=str(default_output.parent),
-                        defaultFile=default_output.name,
-                        wildcard=self.converter_wildcard_for_target(target),
-                        style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT,
-                    ) as chooser:
-                        if chooser.ShowModal() != wx.ID_OK:
-                            self.announce_player(self.t("conversion_cancelled"))
-                            return
-                        output = Path(chooser.GetPath()).expanduser()
-                    if not output.suffix:
-                        output = output.with_suffix(f".{self.converter_output_extension(target)}")
-                    self.start_file_conversion(source, output, target, image_path)
+                    if replace_box.GetValue():
+                        output = source.with_suffix(f".{self.converter_output_extension(target)}")
+                        self.start_file_conversion(source, output, target, image_path, replace_original=True)
+                    else:
+                        default_output = self.converter_default_output_path(source, target)
+                        with wx.FileDialog(
+                            dialog,
+                            self.t("choose_output_file"),
+                            defaultDir=str(default_output.parent),
+                            defaultFile=default_output.name,
+                            wildcard=self.converter_wildcard_for_target(target),
+                            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT,
+                        ) as chooser:
+                            if chooser.ShowModal() != wx.ID_OK:
+                                self.announce_player(self.t("conversion_cancelled"))
+                                return
+                            output = Path(chooser.GetPath()).expanduser()
+                        if not output.suffix:
+                            output = output.with_suffix(f".{self.converter_output_extension(target)}")
+                        self.start_file_conversion(source, output, target, image_path, replace_original=False)
                 dialog.EndModal(wx.ID_OK)
 
             browse_button.Bind(wx.EVT_BUTTON, browse_path)
@@ -6535,6 +6607,8 @@ class MainFrame(wx.Frame):
             target_choice.Bind(wx.EVT_CHOICE, lambda evt: update_audio_video_controls())
             add_image_box.Bind(wx.EVT_CHECKBOX, on_add_image)
             dark_box.Bind(wx.EVT_CHECKBOX, on_dark)
+            create_new_box.Bind(wx.EVT_CHECKBOX, on_create_new)
+            replace_box.Bind(wx.EVT_CHECKBOX, on_replace)
             convert_button.Bind(wx.EVT_BUTTON, convert)
             update_detected_and_formats()
             dialog.Fit()
@@ -6558,31 +6632,36 @@ class MainFrame(wx.Frame):
         patterns = ";".join(f"*{extension}" for extension in sorted(CONVERTER_IMAGE_EXTENSIONS))
         return f"{self.t('image_files')}|{patterns}|{self.t('all_files')} (*.*)|*.*"
 
-    def start_file_conversion(self, source: Path, output: Path, target_format: str, image_path: Path | None = None) -> None:
-        output = self.unique_converter_output_path(output, source)
+    def start_file_conversion(self, source: Path, output: Path, target_format: str, image_path: Path | None = None, replace_original: bool = False) -> None:
+        output = output if replace_original else self.unique_converter_output_path(output, source)
         self.announce_player(self.t("conversion_started"))
         self.set_status(self.t("conversion_started"))
-        threading.Thread(target=self.file_conversion_worker, args=(source, output, target_format, image_path), daemon=True).start()
+        threading.Thread(target=self.file_conversion_worker, args=(source, output, target_format, image_path, replace_original), daemon=True).start()
 
-    def start_folder_conversion(self, source_folder: Path, output_folder: Path, target_format: str, image_path: Path | None = None) -> None:
+    def start_folder_conversion(self, source_folder: Path, output_folder: Path, target_format: str, image_path: Path | None = None, replace_originals: bool = False) -> None:
         self.announce_player(self.t("conversion_started"))
         self.set_status(self.t("conversion_started"))
-        threading.Thread(target=self.folder_conversion_worker, args=(source_folder, output_folder, target_format, image_path), daemon=True).start()
+        threading.Thread(target=self.folder_conversion_worker, args=(source_folder, output_folder, target_format, image_path, replace_originals), daemon=True).start()
 
-    def file_conversion_worker(self, source: Path, output: Path, target_format: str, image_path: Path | None = None) -> None:
+    def file_conversion_worker(self, source: Path, output: Path, target_format: str, image_path: Path | None = None, replace_original: bool = False) -> None:
         try:
             ffmpeg = self.ffmpeg_executable()
             if not ffmpeg:
                 raise RuntimeError("FFmpeg was not found")
             output.parent.mkdir(parents=True, exist_ok=True)
-            args = self.converter_ffmpeg_args(ffmpeg, source, output, target_format, image_path)
+            final_output = output
+            work_output = self.temporary_conversion_path(output) if replace_original else output
+            args = self.converter_ffmpeg_args(ffmpeg, source, work_output, target_format, image_path)
             self.run_ffmpeg_conversion(args)
-            wx.CallAfter(self.set_status, self.t("conversion_done", title=output.name))
-            wx.CallAfter(self.announce_player, self.t("conversion_done", title=output.name))
+            if replace_original:
+                self.replace_converted_original(source, work_output, final_output)
+            done_text = self.t("conversion_done", title=final_output.name)
+            wx.CallAfter(self.set_status, done_text)
+            wx.CallAfter(self.finish_conversion_message, done_text)
         except Exception as exc:
             wx.CallAfter(self.message, self.t("conversion_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
-    def folder_conversion_worker(self, source_folder: Path, output_folder: Path, target_format: str, image_path: Path | None = None) -> None:
+    def folder_conversion_worker(self, source_folder: Path, output_folder: Path, target_format: str, image_path: Path | None = None, replace_originals: bool = False) -> None:
         try:
             ffmpeg = self.ffmpeg_executable()
             if not ffmpeg:
@@ -6591,24 +6670,81 @@ class MainFrame(wx.Frame):
             if not files:
                 wx.CallAfter(self.message, self.t("conversion_no_media_files"), wx.ICON_INFORMATION)
                 return
-            output_folder.mkdir(parents=True, exist_ok=True)
+            if not replace_originals:
+                output_folder.mkdir(parents=True, exist_ok=True)
+            wx.CallAfter(self.show_conversion_progress_dialog, len(files))
             converted = 0
             failed = 0
             for index, source in enumerate(files, start=1):
-                target = self.unique_converter_output_path(output_folder / f"{source.stem}.{self.converter_output_extension(target_format)}", source)
+                if replace_originals:
+                    target = source.with_suffix(f".{self.converter_output_extension(target_format)}")
+                    work_target = self.temporary_conversion_path(target)
+                else:
+                    try:
+                        relative = source.relative_to(source_folder)
+                    except ValueError:
+                        relative = Path(source.name)
+                    target = self.unique_converter_output_path(output_folder / relative.with_suffix(f".{self.converter_output_extension(target_format)}"), source)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    work_target = target
                 self.ui_queue.put(("status", f"{self.t('conversion_started')} {index}/{len(files)}: {source.name}"))
+                self.ui_queue.put(("conversion_progress", {"file": source.name, "converted": converted, "total": len(files)}))
                 try:
-                    args = self.converter_ffmpeg_args(ffmpeg, source, target, target_format, image_path)
+                    args = self.converter_ffmpeg_args(ffmpeg, source, work_target, target_format, image_path)
                     self.run_ffmpeg_conversion(args)
+                    if replace_originals:
+                        self.replace_converted_original(source, work_target, target)
                     converted += 1
                 except Exception:
                     failed += 1
                     continue
+                self.ui_queue.put(("conversion_progress", {"file": source.name, "converted": converted, "total": len(files)}))
             text = self.t("conversion_folder_done_with_errors", count=converted, failed=failed) if failed else self.t("conversion_folder_done", count=converted)
             wx.CallAfter(self.set_status, text)
-            wx.CallAfter(self.announce_player, text)
+            wx.CallAfter(self.close_conversion_progress_dialog)
+            wx.CallAfter(self.finish_conversion_message, text)
         except Exception as exc:
+            wx.CallAfter(self.close_conversion_progress_dialog)
             wx.CallAfter(self.message, self.t("conversion_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
+
+    def finish_conversion_message(self, text: str) -> None:
+        if getattr(self.settings, "popup_when_conversion_complete", True):
+            self.message(text, wx.ICON_INFORMATION)
+        else:
+            self.announce_player(text)
+
+    def show_conversion_progress_dialog(self, total: int) -> None:
+        self.close_conversion_progress_dialog()
+        maximum = max(1, int(total or 1))
+        self.conversion_progress_dialog = wx.ProgressDialog(
+            self.t("conversion_progress_title"),
+            self.t("conversion_progress_message", file="", converted=0, total=maximum, remaining=maximum),
+            maximum=maximum,
+            parent=self,
+            style=wx.PD_ELAPSED_TIME | wx.PD_ESTIMATED_TIME | wx.PD_REMAINING_TIME,
+        )
+
+    def update_conversion_progress_dialog(self, payload: dict) -> None:
+        dialog = self.conversion_progress_dialog
+        if not dialog:
+            return
+        total = max(1, int(payload.get("total") or 1))
+        converted = max(0, min(total, int(payload.get("converted") or 0)))
+        remaining = max(0, total - converted)
+        message = self.t("conversion_progress_message", file=str(payload.get("file") or ""), converted=converted, total=total, remaining=remaining)
+        try:
+            dialog.Update(converted, message)
+        except RuntimeError:
+            self.conversion_progress_dialog = None
+
+    def close_conversion_progress_dialog(self) -> None:
+        dialog = self.conversion_progress_dialog
+        self.conversion_progress_dialog = None
+        if dialog:
+            try:
+                dialog.Destroy()
+            except RuntimeError:
+                pass
 
     @staticmethod
     def unique_converter_output_path(path: Path, source: Path | None = None) -> Path:
@@ -6618,6 +6754,30 @@ class MainFrame(wx.Frame):
             candidate = path.with_name(f"{path.stem} ({counter}){path.suffix}")
             counter += 1
         return candidate
+
+    @staticmethod
+    def unique_folder_path(path: Path) -> Path:
+        candidate = path
+        counter = 2
+        while candidate.exists():
+            candidate = path.with_name(f"{path.name} ({counter})")
+            counter += 1
+        return candidate
+
+    @staticmethod
+    def temporary_conversion_path(path: Path) -> Path:
+        return path.with_name(f"{path.stem}.apricot-converting{path.suffix}")
+
+    @staticmethod
+    def replace_converted_original(source: Path, work_output: Path, final_output: Path) -> None:
+        if not work_output.exists():
+            raise RuntimeError("Converted file was not created")
+        if source.exists() and source.resolve() != final_output.resolve():
+            source.unlink()
+        if final_output.exists() and final_output.resolve() != work_output.resolve():
+            final_output.unlink()
+        if work_output.resolve() != final_output.resolve():
+            shutil.move(str(work_output), str(final_output))
 
     def run_ffmpeg_conversion(self, args: list[str]) -> None:
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
@@ -9010,6 +9170,9 @@ class MainFrame(wx.Frame):
                 "show_video_details_by_default",
                 "enable_age_restricted_videos",
                 "enable_stream_cache",
+                "enable_stream_url_cache",
+                "stream_url_cache_minutes",
+                "prefetch_next_stream_url",
                 "cache_folder",
                 "cache_size_mb",
                 "resume_playback",
@@ -9050,6 +9213,7 @@ class MainFrame(wx.Frame):
                 "restrict_filenames",
                 "open_folder_after_download",
                 "popup_when_download_complete",
+                "popup_when_conversion_complete",
                 "confirm_before_download",
                 "download_archive",
             ],
@@ -9279,6 +9443,9 @@ class MainFrame(wx.Frame):
             check("show_video_details_by_default", self.settings.show_video_details_by_default)
             check("enable_age_restricted_videos", self.settings.enable_age_restricted_videos)
             check("enable_stream_cache", self.settings.enable_stream_cache)
+            check("enable_stream_url_cache", bool(getattr(self.settings, "enable_stream_url_cache", True)))
+            choice("stream_url_cache_minutes", str(getattr(self.settings, "stream_url_cache_minutes", 20)), ["5", "10", "20", "30", "60"])
+            check("prefetch_next_stream_url", bool(getattr(self.settings, "prefetch_next_stream_url", True)))
             text("cache_folder", self.settings.cache_folder or str(DEFAULT_CACHE_DIR))
             choice("cache_size_mb", str(self.settings.cache_size_mb), ["128", "256", "512", "1024", "2048", "4096"])
             check("resume_playback", self.settings.resume_playback)
@@ -9322,6 +9489,7 @@ class MainFrame(wx.Frame):
             check("confirm_download", self.settings.confirm_before_download)
             check("open_after_download", self.settings.open_folder_after_download)
             check("download_complete_popup", self.settings.popup_when_download_complete)
+            check("conversion_complete_popup", bool(getattr(self.settings, "popup_when_conversion_complete", True)))
             check("ask_download_location_each_time", self.settings.ask_download_location_each_time)
             choice("audio_format", self.settings.audio_format, ["mp3", "m4a", "opus", "wav", "flac"])
             choice("audio_quality", self.normalize_audio_quality_value(self.settings.audio_quality), AUDIO_QUALITY_OPTIONS, self.audio_quality_labels())
@@ -10512,6 +10680,7 @@ class MainFrame(wx.Frame):
             stream_url, headers, info = self.resolve_stream_url(url)
             wx.CallAfter(self.merge_current_video_info, info)
             wx.CallAfter(self.start_mpv, command, stream_url, title or url, headers, announce_start)
+            wx.CallAfter(self.schedule_next_stream_prefetch)
         except Exception as exc:
             if self.age_restricted_video_support_enabled() and self.is_cookie_auth_error(exc) and self.normalized_cookies_browser():
                 wx.CallAfter(self.prompt_cookie_refresh_for_playback, command, url, title, self.friendly_error(exc), announce_start)
@@ -10538,11 +10707,100 @@ class MainFrame(wx.Frame):
         except Exception as exc:
             wx.CallAfter(self.message, self.t("cookie_auto_refresh_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
+    def stream_url_cache_key(self, url: str) -> str:
+        parts = {
+            "url": url,
+            "video_format": self.normalized_video_format(),
+            "max_height": int(getattr(self.settings, "max_video_height", 1080) or 0),
+            "restricted": bool(getattr(self.settings, "enable_age_restricted_videos", False)),
+            "cookies_file": str(getattr(self.settings, "cookies_file", "") or ""),
+            "cookies_browser": str(getattr(self.settings, "cookies_browser", "") or ""),
+        }
+        return json.dumps(parts, sort_keys=True, ensure_ascii=False)
+
+    def stream_url_cache_minutes_value(self) -> int:
+        return self.to_int(str(getattr(self.settings, "stream_url_cache_minutes", 20)), 20, 5, 60)
+
+    def cached_stream_url(self, url: str) -> tuple[str, dict, dict] | None:
+        if not getattr(self.settings, "enable_stream_url_cache", True):
+            return None
+        key = self.stream_url_cache_key(url)
+        now = time.time()
+        with self.stream_url_cache_lock:
+            cached = self.stream_url_cache.get(key)
+            if not cached:
+                return None
+            if float(cached.get("expires_at") or 0) <= now:
+                self.stream_url_cache.pop(key, None)
+                return None
+            return str(cached.get("stream_url") or ""), dict(cached.get("headers") or {}), dict(cached.get("info") or {})
+
+    def cache_stream_url(self, source_url: str, stream_url: str, headers: dict, info: dict) -> None:
+        if not getattr(self.settings, "enable_stream_url_cache", True) or not source_url or not stream_url:
+            return
+        ttl_seconds = self.stream_url_cache_minutes_value() * 60
+        expires_at = time.time() + ttl_seconds
+        try:
+            expire_values = parse_qs(urlparse(stream_url).query).get("expire") or []
+            if expire_values:
+                remote_expiry = int(expire_values[0]) - 60
+                expires_at = min(expires_at, float(remote_expiry))
+        except (TypeError, ValueError, OverflowError):
+            pass
+        if expires_at <= time.time() + 30:
+            return
+        with self.stream_url_cache_lock:
+            now = time.time()
+            self.stream_url_cache = {key: value for key, value in self.stream_url_cache.items() if float(value.get("expires_at") or 0) > now}
+            if len(self.stream_url_cache) > 120:
+                oldest = sorted(self.stream_url_cache, key=lambda item_key: float(self.stream_url_cache[item_key].get("expires_at") or 0))
+                for old_key in oldest[: len(self.stream_url_cache) - 100]:
+                    self.stream_url_cache.pop(old_key, None)
+            self.stream_url_cache[self.stream_url_cache_key(source_url)] = {
+                "stream_url": stream_url,
+                "headers": dict(headers or {}),
+                "info": dict(info or {}),
+                "expires_at": expires_at,
+            }
+
+    def next_prefetch_candidate(self) -> dict | None:
+        if self.playback_queue:
+            return dict(self.playback_queue[0])
+        return self.relative_player_item(1)
+
+    def schedule_next_stream_prefetch(self) -> None:
+        if not getattr(self.settings, "prefetch_next_stream_url", True):
+            return
+        item = self.next_prefetch_candidate()
+        url = str((item or {}).get("url") or "")
+        if not url or self.local_media_path_from_input(url):
+            return
+        key = self.stream_url_cache_key(url)
+        with self.stream_url_cache_lock:
+            if key in self.stream_url_cache:
+                return
+            if key in self.prefetch_stream_urls:
+                return
+            self.prefetch_stream_urls.add(key)
+        threading.Thread(target=self.prefetch_stream_url_worker, args=(url, key), daemon=True).start()
+
+    def prefetch_stream_url_worker(self, url: str, key: str) -> None:
+        try:
+            self.resolve_stream_url(url)
+        except Exception:
+            pass
+        finally:
+            with self.stream_url_cache_lock:
+                self.prefetch_stream_urls.discard(key)
+
     def resolve_stream_url(self, url: str) -> tuple[str, dict, dict]:
         local_path = self.local_media_path_from_input(url)
         if local_path:
             info = self.local_media_item(local_path)
             return str(local_path), {}, info
+        cached = self.cached_stream_url(url)
+        if cached and cached[0]:
+            return cached
         options = {
             "quiet": True,
             "skip_download": True,
@@ -10564,7 +10822,9 @@ class MainFrame(wx.Frame):
                     info = self.ydl_extract_info(url, format_fallback_options, download=False, allow_cookie_retry=False)
                     stream_url = info.get("url")
                     if stream_url:
-                        return stream_url, info.get("http_headers") or {}, info
+                        headers = info.get("http_headers") or {}
+                        self.cache_stream_url(url, stream_url, headers, info)
+                        return stream_url, headers, info
                 except Exception as format_exc:
                     retry_error = format_exc
                     cookie_error = cookie_error or self.is_cookie_auth_error(format_exc)
@@ -10630,7 +10890,9 @@ class MainFrame(wx.Frame):
                 stream_url = formats[-1]["url"]
         if not stream_url:
             raise RuntimeError("No playable stream URL found")
-        return stream_url, info.get("http_headers") or {}, info
+        headers = info.get("http_headers") or {}
+        self.cache_stream_url(url, stream_url, headers, info)
+        return stream_url, headers, info
 
     def merge_current_video_info(self, info: dict) -> None:
         if not info:
@@ -12278,15 +12540,68 @@ class MainFrame(wx.Frame):
         if not task:
             return
         task.update(fields)
+        playlist_count = self.to_int(str(task.get("playlist_count") or 0), 0, 0)
+        if playlist_count and not self.to_int(str(task.get("total") or 0), 0, 0):
+            task["total"] = playlist_count
+        self.update_download_progress_dialog(task)
         self.refresh_download_views(update_menu=False)
 
     def finish_download_task(self, task_id: str, status_key: str = "download_state_done") -> None:
         task = self.active_downloads.get(task_id)
         if task:
             task["status_key"] = status_key
+        self.close_download_progress_dialog(task_id)
         self.download_cancel_events.pop(task_id, None)
         self.active_downloads.pop(task_id, None)
         self.refresh_download_views()
+
+    def show_download_progress_dialog(self, task_id: str, title: str) -> None:
+        self.close_download_progress_dialog()
+        self.download_progress_task_id = task_id
+        self.download_progress_dialog = wx.ProgressDialog(
+            self.t("download_progress_title"),
+            self.t("download_progress_message", title=title, completed=0, total=0, remaining=0),
+            maximum=100,
+            parent=self,
+            style=wx.PD_ELAPSED_TIME | wx.PD_ESTIMATED_TIME | wx.PD_REMAINING_TIME,
+        )
+
+    def update_download_progress_dialog(self, task: dict) -> None:
+        dialog = self.download_progress_dialog
+        if not dialog or str(task.get("task_id") or "") != self.download_progress_task_id:
+            return
+        total = self.to_int(str(task.get("total") or task.get("playlist_count") or 0), 0, 0)
+        completed = self.to_int(str(task.get("completed") or 0), 0, 0)
+        playlist_index = self.to_int(str(task.get("playlist_index") or 0), 0, 0)
+        if total and playlist_index:
+            if task.get("status_key") == "download_state_processing":
+                completed = max(completed, min(total, playlist_index))
+            else:
+                completed = max(completed, min(total, max(0, playlist_index - 1)))
+        remaining = max(0, total - completed) if total else 0
+        if total:
+            percent = max(0, min(100, int(round((completed / total) * 100))))
+        else:
+            percent = self.to_int(str(task.get("percent") or 0), 0, 0, 100)
+        title = str(task.get("current_title") or task.get("title") or "")
+        message = self.t("download_progress_message", title=title, completed=completed, total=total, remaining=remaining)
+        try:
+            dialog.Update(percent, message)
+        except RuntimeError:
+            self.download_progress_dialog = None
+            self.download_progress_task_id = ""
+
+    def close_download_progress_dialog(self, task_id: str | None = None) -> None:
+        if task_id is not None and task_id != self.download_progress_task_id:
+            return
+        dialog = self.download_progress_dialog
+        self.download_progress_dialog = None
+        self.download_progress_task_id = ""
+        if dialog:
+            try:
+                dialog.Destroy()
+            except RuntimeError:
+                pass
 
     def refresh_download_views(self, update_menu: bool = True) -> None:
         if self.in_queue_screen:
@@ -14056,6 +14371,7 @@ class MainFrame(wx.Frame):
         self.announce_player(self.t("download_started"))
         self.set_status(self.t(start_key))
         task_id, cancel_event = self.register_download_task(item, audio_only, kind, total=0)
+        self.show_download_progress_dialog(task_id, item.get("title") or self.t("channel" if kind == "channel" else "playlist"))
         threading.Thread(target=self.download_collection_worker, args=(dict(item), audio_only, task_id, cancel_event, target_folder), daemon=True).start()
 
     def download_audio_shortcut(self) -> None:
@@ -14623,6 +14939,8 @@ class MainFrame(wx.Frame):
         else:
             batch_title = self.t("download_all_selected")
         task_id, cancel_event = self.register_download_task({"title": batch_title, "kind": "batch"}, False, "batch", total=len(items))
+        if len(items) > 5 or any(item.get("kind") in {"playlist", "channel"} for item in items):
+            self.show_download_progress_dialog(task_id, batch_title)
         if self.in_queue_screen:
             self.show_download_queue()
         threading.Thread(target=self.download_batch_worker, args=(items, task_id, cancel_event, None, str(batch_folder) if batch_folder else None), daemon=True).start()
@@ -15014,6 +15332,8 @@ class MainFrame(wx.Frame):
             self.settings.open_folder_after_download = c["open_after_download"].GetValue()
         if "download_complete_popup" in c:
             self.settings.popup_when_download_complete = c["download_complete_popup"].GetValue()
+        if "conversion_complete_popup" in c:
+            self.settings.popup_when_conversion_complete = c["conversion_complete_popup"].GetValue()
         if "ask_download_location_each_time" in c:
             self.settings.ask_download_location_each_time = c["ask_download_location_each_time"].GetValue()
         if "audio_format" in c:
@@ -15085,6 +15405,12 @@ class MainFrame(wx.Frame):
             self.settings.enable_age_restricted_videos = c["enable_age_restricted_videos"].GetValue()
         if "enable_stream_cache" in c:
             self.settings.enable_stream_cache = c["enable_stream_cache"].GetValue()
+        if "enable_stream_url_cache" in c:
+            self.settings.enable_stream_url_cache = c["enable_stream_url_cache"].GetValue()
+        if "stream_url_cache_minutes" in c:
+            self.settings.stream_url_cache_minutes = self.to_int(self.selected_choice_value("stream_url_cache_minutes"), 20, 5, 60)
+        if "prefetch_next_stream_url" in c:
+            self.settings.prefetch_next_stream_url = c["prefetch_next_stream_url"].GetValue()
         if "cache_folder" in c:
             self.settings.cache_folder = c["cache_folder"].GetValue().strip() or str(DEFAULT_CACHE_DIR)
         if "cache_size_mb" in c:
@@ -16204,6 +16530,8 @@ class MainFrame(wx.Frame):
                 elif kind == "download_task" and isinstance(payload, dict):
                     task_id = str(payload.pop("task_id", ""))
                     self.update_download_task(task_id, **payload)
+                elif kind == "conversion_progress" and isinstance(payload, dict):
+                    self.update_conversion_progress_dialog(payload)
                 elif kind == "result_metadata" and isinstance(payload, dict):
                     self.apply_result_metadata(payload)
                 elif kind == "notify" and isinstance(payload, tuple):

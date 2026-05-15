@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.8.47` (`0.8.47`)
+Current version: `0.8.48` (`0.8.48`)
 
 ## Download
 
@@ -57,12 +57,15 @@ py wx_main.py
 - Optional Save As behavior for downloads, with file dialogs for single downloads and folder dialogs for channel or playlist downloads
 - File converter and folder converter menu items for accessible FFmpeg-powered conversion between common audio and video formats
 - Converter output names keep the original file name and only change the extension, with numbered fallback names for collisions
+- Converter output controls can create new files/folders or safely replace originals, with recursive folder conversion, progress, and optional completion messages
 - Audio-to-video conversion can create a dark-background video or use a chosen image as the video background
 - First-run language selection for new users before they start using the app
 - Clip marker shortcuts use physical `LeftBracket` and `RightBracket` keys, so they work across keyboard layouts
 - Optional screen reader announcement for Playing or Paused when pressing Space in the player
 - Configurable default playback volume and an optional volume boost default that lets the player start ready for volume above 100%
 - Audio and video downloads with progress updates
+- Playlist, channel, and larger batch downloads show a progress window with current item and remaining count
+- Optional stream URL cache and next-item prefetch can make repeated playback and Next/Previous transitions start faster without storing whole media files
 - Default downloads go to `Downloads\ApricotPlayer`, with YouTube music/video files under `music` and podcast episodes under `podcasts`
 - Video downloads default to MP4, with selectable video download format options in Settings
 - Audio download quality settings show clear VBR and kbps labels

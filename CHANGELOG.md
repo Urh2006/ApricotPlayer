@@ -1,5 +1,14 @@
 # Changelog
 
+## What's new in version 0.8.48
+
+- added a fast YouTube stream URL cache and next-item prefetch option so already resolved videos can start faster without storing full media files.
+- added Settings controls for stream URL cache duration, next-item prefetch, and conversion-finished popups.
+- added folder conversion progress windows with current file, completed count, and remaining count.
+- added safe converter output choices for creating new files/folders or replacing originals only after a successful conversion.
+- improved folder conversion to scan subfolders and preserve folder structure in the converted output.
+- added progress windows for playlist, channel, and larger batch downloads while keeping small single-video batches lightweight.
+
 ## What's new in version 0.8.47
 
 - fixed Player Shift+Tab navigation by using the real screen tab order and only falling back manually when focus is on the Player panel itself.
