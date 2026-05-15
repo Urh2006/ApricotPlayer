@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.8.48` (`0.8.48`)
+Current version: `0.8.49` (`0.8.49`)
 
 ## Download
 
@@ -42,11 +42,13 @@ py wx_main.py
 - Channel result options for opening channel videos, playlists, home, or popular videos
 - YouTube video context menus include Open channel when channel metadata is available, with a configurable `Ctrl+Shift+O` shortcut
 - Dynamic result loading keeps fetching 20 more search, channel, playlist, or folder items until the source has no more results, without moving screen reader focus while new rows append
+- Dynamic result playback preserves the exact selected item even if a new result page finishes loading at the same moment
 - Local media file and whole-folder playback for common audio and video files, including file association support on Windows
 - First-run repair prompt if Windows media player registration is missing after an update
 - Play from folder for choosing local media inside ApricotPlayer, with folder contents shown as local media results and cached in memory for quick return from playback
 - Accessible 10-band equalizer with descriptive frequency sliders, global Settings controls, genre/sound presets, dynamic custom profiles, player-only live controls, and a player action to save the current EQ as a global preset
-- Player Bass boost checkbox for a temporary per-video EQ boost
+- Player and global equalizers share selectable 6/12/18/24 dB slider ranges with quieter screen-reader value updates
+- Player Bass boost checkbox for a session-based EQ boost that stays active for the next item until turned off
 - Player hotkeys include `F2` volume boost, `F3` bass boost, `F4` equalizer, `R` repeat, and `Shift+S` shuffle
 - Optional Playback setting to announce or silence the “Playback finished” screen-reader message
 - Player clip markers and FFmpeg export for the marked section of the current video, local file, or podcast
@@ -65,7 +67,7 @@ py wx_main.py
 - Configurable default playback volume and an optional volume boost default that lets the player start ready for volume above 100%
 - Audio and video downloads with progress updates
 - Playlist, channel, and larger batch downloads show a progress window with current item and remaining count
-- Optional stream URL cache and next-item prefetch can make repeated playback and Next/Previous transitions start faster without storing whole media files
+- Optional stream URL cache and next-item prefetch can make repeated playback and Next/Previous transitions start faster without storing whole media files, with cache duration choices up to 7 days or permanent-until-YouTube-expires
 - Default downloads go to `Downloads\ApricotPlayer`, with YouTube music/video files under `music` and podcast episodes under `podcasts`
 - Video downloads default to MP4, with selectable video download format options in Settings
 - Audio download quality settings show clear VBR and kbps labels

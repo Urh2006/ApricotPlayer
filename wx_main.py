@@ -202,8 +202,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.48"
-APP_VERSION_LABEL = "0.8.48"
+APP_VERSION = "0.8.49"
+APP_VERSION_LABEL = "0.8.49"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -298,6 +298,7 @@ EQ_BANDS: list[tuple[str, str]] = [
     ("16000", "16 kHz air and sparkle"),
 ]
 EQ_RANGE_OPTIONS = ["6", "12", "18", "24"]
+STREAM_URL_CACHE_OPTIONS = ["5", "10", "20", "30", "60", "240", "1440", "10080", "0"]
 EQ_PRESET_FLAT = "flat"
 EQ_CUSTOM_PRESET_IDS = ["custom1", "custom2", "custom3"]
 EQ_FACTORY_PRESET_VALUES: dict[str, list[float]] = {
@@ -3613,6 +3614,26 @@ for language_code in LANGUAGE_CODES:
     for key, value in RELEASE_0823_TRANSLATION_UPDATES["en"].items():
         TEXT.setdefault(language_code, {}).setdefault(key, value)
 
+RELEASE_0849_TRANSLATION_UPDATES = {
+    "sl": {
+        "stream_cache_minutes_label": "{minutes} minut",
+        "stream_cache_hours_label": "{hours} ur",
+        "stream_cache_days_label": "{days} dni",
+        "stream_cache_permanent": "Trajno, dokler YouTube URL ne poteÄŤe",
+    },
+    "en": {
+        "stream_cache_minutes_label": "{minutes} minutes",
+        "stream_cache_hours_label": "{hours} hours",
+        "stream_cache_days_label": "{days} days",
+        "stream_cache_permanent": "Permanent, until the YouTube URL expires",
+    },
+}
+for language_code in LANGUAGE_CODES:
+    TEXT.setdefault(language_code, {}).update(RELEASE_0849_TRANSLATION_UPDATES.get(language_code, RELEASE_0849_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
+for language_code in LANGUAGE_CODES:
+    for key, value in RELEASE_0849_TRANSLATION_UPDATES["en"].items():
+        TEXT.setdefault(language_code, {}).setdefault(key, value)
+
 
 def default_equalizer_gains() -> dict[str, float]:
     return {band_id: 0.0 for band_id, _label in EQ_BANDS}
@@ -3883,6 +3904,9 @@ class MainFrame(wx.Frame):
         self.ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.loading_more_results = False
         self.dynamic_fetch_enabled = True
+        self.results_selection_update_suppressed = False
+        self.last_user_result_index = 0
+        self.last_user_result_identity = ""
         self.current_search_type_code = "All"
         self.collection_url = ""
         self.collection_result_type = ""
@@ -5459,8 +5483,11 @@ class MainFrame(wx.Frame):
         value_text = f"{float(ctrl.GetValue()) / 10.0:.1f} dB"
         name = str(label).strip() or self.t("equalizer")
         full_text = f"{name}: {value_text}"
-        ctrl.SetName(full_text)
-        ctrl.SetLabel(full_text)
+        previous_value = getattr(ctrl, "_apricot_accessible_value", None)
+        if ctrl.GetName() != name:
+            ctrl.SetName(name)
+        if ctrl.GetLabel() != name:
+            ctrl.SetLabel(name)
         ctrl.SetToolTip(full_text)
         ctrl._apricot_accessible_name = name
         ctrl._apricot_accessible_description = full_text
@@ -5471,11 +5498,16 @@ class MainFrame(wx.Frame):
                 ctrl.SetAccessible(ctrl._apricot_accessible)
             except Exception:
                 pass
-        try:
-            wx.Accessible.NotifyEvent(wx.ACC_EVENT_OBJECT_NAMECHANGE, ctrl, wx.OBJID_CLIENT, 0)
-            wx.Accessible.NotifyEvent(wx.ACC_EVENT_OBJECT_VALUECHANGE, ctrl, wx.OBJID_CLIENT, 0)
-        except Exception:
-            pass
+        if (
+            previous_value != value_text
+            and getattr(ctrl, "_apricot_accessible_initialized", False)
+            and not getattr(ctrl, "_apricot_suppress_accessible_notify", False)
+        ):
+            try:
+                wx.Accessible.NotifyEvent(wx.ACC_EVENT_OBJECT_VALUECHANGE, ctrl, wx.OBJID_CLIENT, 0)
+            except Exception:
+                pass
+        ctrl._apricot_accessible_initialized = True
 
     def set_integer_slider_accessibility(self, ctrl: wx.Slider, label: str, unit: str = "") -> None:
         value = int(ctrl.GetValue())
@@ -5601,19 +5633,30 @@ class MainFrame(wx.Frame):
             return False
         target_selection = min(max(0, selection), len(labels) - 1)
         current_selection = listbox.GetSelection()
+        suppress_results_selection = listbox is getattr(self, "results_list", None)
         if self.listbox_matches(listbox, labels):
             if current_selection != target_selection:
-                listbox.SetSelection(target_selection)
+                if suppress_results_selection:
+                    self.results_selection_update_suppressed = True
+                try:
+                    listbox.SetSelection(target_selection)
+                finally:
+                    if suppress_results_selection:
+                        wx.CallAfter(self.clear_results_selection_update_suppression)
                 return True
             return False
         listbox.Freeze()
         try:
+            if suppress_results_selection:
+                self.results_selection_update_suppressed = True
             listbox.Clear()
             for label in labels:
                 listbox.Append(label)
             listbox.SetSelection(target_selection)
         finally:
             listbox.Thaw()
+            if suppress_results_selection:
+                wx.CallAfter(self.clear_results_selection_update_suppression)
         return True
 
     def append_listbox_items(self, listbox: wx.ListBox, labels: list[str], previous_count: int, selection: int) -> bool:
@@ -5626,15 +5669,23 @@ class MainFrame(wx.Frame):
         except RuntimeError:
             return False
         target_selection = min(max(0, selection), len(labels) - 1)
+        suppress_results_selection = listbox is getattr(self, "results_list", None)
         listbox.Freeze()
         try:
+            if suppress_results_selection:
+                self.results_selection_update_suppressed = True
             for label in labels[previous_count:]:
                 listbox.Append(label)
             if listbox.GetSelection() != target_selection:
                 listbox.SetSelection(target_selection)
         finally:
             listbox.Thaw()
+            if suppress_results_selection:
+                wx.CallAfter(self.clear_results_selection_update_suppression)
         return True
+
+    def clear_results_selection_update_suppression(self) -> None:
+        self.results_selection_update_suppressed = False
 
     def speak_text(self, text: str) -> None:
         if not text:
@@ -7793,6 +7844,8 @@ class MainFrame(wx.Frame):
     def on_results_selection(self, event) -> None:
         event.Skip()
         selection = self.current_results_selection(-1)
+        if not getattr(self, "results_selection_update_suppressed", False):
+            self.remember_user_result_selection(selection)
         self.apply_deferred_result_line_updates(exclude_index=selection)
         self.maybe_extend_results()
 
@@ -9444,7 +9497,12 @@ class MainFrame(wx.Frame):
             check("enable_age_restricted_videos", self.settings.enable_age_restricted_videos)
             check("enable_stream_cache", self.settings.enable_stream_cache)
             check("enable_stream_url_cache", bool(getattr(self.settings, "enable_stream_url_cache", True)))
-            choice("stream_url_cache_minutes", str(getattr(self.settings, "stream_url_cache_minutes", 20)), ["5", "10", "20", "30", "60"])
+            choice(
+                "stream_url_cache_minutes",
+                str(self.normalized_stream_url_cache_minutes()),
+                STREAM_URL_CACHE_OPTIONS,
+                self.stream_url_cache_labels(STREAM_URL_CACHE_OPTIONS),
+            )
             check("prefetch_next_stream_url", bool(getattr(self.settings, "prefetch_next_stream_url", True)))
             text("cache_folder", self.settings.cache_folder or str(DEFAULT_CACHE_DIR))
             choice("cache_size_mb", str(self.settings.cache_size_mb), ["128", "256", "512", "1024", "2048", "4096"])
@@ -9476,7 +9534,8 @@ class MainFrame(wx.Frame):
                     name_ctrl = text("equalizer_preset_name", self.equalizer_custom_name(preset))
                     name_ctrl.Bind(wx.EVT_KILL_FOCUS, self.on_equalizer_settings_name_changed)
                 db_range = str(self.equalizer_db_range_value())
-                choice("equalizer_db_range", db_range, EQ_RANGE_OPTIONS)
+                range_choice = choice("equalizer_db_range", db_range, EQ_RANGE_OPTIONS)
+                range_choice.Bind(wx.EVT_CHOICE, self.on_equalizer_range_changed)
                 gains = self.equalizer_gains_for_preset(preset)
                 slider_min = -int(db_range) * 10
                 slider_max = int(db_range) * 10
@@ -9741,6 +9800,7 @@ class MainFrame(wx.Frame):
             selected_index = min(max(0, selection), len(self.results) - 1)
             labels = [self.result_line(index, item) for index, item in enumerate(self.results)]
             self.set_listbox_items(self.results_list, labels, selected_index)
+            self.remember_user_result_selection(selected_index)
             if focus_results:
                 self.safe_set_focus(self.results_list)
             self.set_status(self.t("found", count=len(self.results)))
@@ -9762,6 +9822,17 @@ class MainFrame(wx.Frame):
             return max(0, fallback)
         return max(0, int(selection))
 
+    def remember_user_result_selection(self, index: int | None = None) -> None:
+        if not self.results:
+            self.last_user_result_index = 0
+            self.last_user_result_identity = ""
+            return
+        if index is None:
+            index = self.current_results_selection(self.last_user_result_index)
+        index = min(max(0, int(index)), len(self.results) - 1)
+        self.last_user_result_index = index
+        self.last_user_result_identity = self.result_identity_at(index)
+
     def result_identity_at(self, index: int) -> str:
         if index < 0 or index >= len(self.results):
             return ""
@@ -9777,6 +9848,24 @@ class MainFrame(wx.Frame):
         if not self.results:
             return 0
         return min(max(0, fallback), len(self.results) - 1)
+
+    def stable_selected_result(self) -> dict | None:
+        if not hasattr(self, "results_list") or not self.results:
+            return None
+        selection = self.current_results_selection(self.last_user_result_index)
+        if wx.Window.FindFocus() is getattr(self, "results_list", None) and self.last_user_result_identity:
+            selection = self.result_index_for_identity(self.last_user_result_identity, self.last_user_result_index)
+        if selection < 0 or selection >= len(self.results):
+            return None
+        self.current_index = selection
+        try:
+            if self.results_list.GetSelection() != selection:
+                self.results_selection_update_suppressed = True
+                self.results_list.SetSelection(selection)
+                wx.CallAfter(self.clear_results_selection_update_suppression)
+        except RuntimeError:
+            pass
+        return self.results[selection]
 
     def maybe_extend_results(self) -> None:
         if not self.dynamic_fetch_enabled or self.settings.results_limit != 0 or not hasattr(self, "results_list"):
@@ -9801,6 +9890,7 @@ class MainFrame(wx.Frame):
         labels = [self.result_line(index, item) for index, item in enumerate(self.results)]
         if not self.append_listbox_items(self.results_list, labels, previous_count, selected_index):
             self.set_listbox_items(self.results_list, labels, selected_index)
+        self.remember_user_result_selection(selected_index)
         self.set_status(self.t("search_more_loaded", count=len(self.results)))
         self.start_result_metadata_hydration()
 
@@ -9851,6 +9941,7 @@ class MainFrame(wx.Frame):
         labels = [self.result_line(index, item) for index, item in enumerate(self.results)]
         if not self.append_listbox_items(self.results_list, labels, previous_count, selected_index):
             self.set_listbox_items(self.results_list, labels, selected_index)
+        self.remember_user_result_selection(selected_index)
         self.set_status(self.t("search_more_loaded", count=len(self.results)))
         self.start_result_metadata_hydration()
 
@@ -9979,13 +10070,15 @@ class MainFrame(wx.Frame):
             index = self.results_list.GetSelection()
         except RuntimeError:
             return None
+        if wx.Window.FindFocus() is getattr(self, "results_list", None) and getattr(self, "last_user_result_identity", ""):
+            index = self.result_index_for_identity(self.last_user_result_identity, self.last_user_result_index)
         if index == wx.NOT_FOUND or index < 0 or index >= len(self.results):
             return None
         self.current_index = index
         return self.results[index]
 
     def play_selected(self) -> None:
-        item = self.selected_result()
+        item = self.stable_selected_result()
         if not item:
             self.message(self.t("no_selection"))
             return
@@ -10639,7 +10732,7 @@ class MainFrame(wx.Frame):
         if generation == self.search_generation:
             self.loading_more_results = False
 
-    def play_url(self, url: str, title: str = "", show_player: bool = True, announce_start: bool = False) -> None:
+    def play_url(self, url: str, title: str = "", show_player: bool = True, announce_start: bool = False, focus_target: str = "player") -> None:
         player = self.resolve_player()
         if not player:
             self.message(self.t("player_missing"), wx.ICON_ERROR)
@@ -10654,7 +10747,6 @@ class MainFrame(wx.Frame):
             self.session_equalizer_enabled = None
             self.session_equalizer_gains = {}
             self.session_equalizer_before_bass_boost = None
-            self.bass_boost_enabled = False
             self.shuffle_current = False
         self.edit_mode_enabled = False
         self.equalizer_filter_active = False
@@ -10667,7 +10759,7 @@ class MainFrame(wx.Frame):
             self.message(self.t("player_missing"), wx.ICON_ERROR)
             return
         if show_player:
-            self.show_player_page(title)
+            self.show_player_page(title, focus_target=focus_target)
         else:
             self.in_player_screen = False
             self.player_control_mode = True
@@ -10719,7 +10811,7 @@ class MainFrame(wx.Frame):
         return json.dumps(parts, sort_keys=True, ensure_ascii=False)
 
     def stream_url_cache_minutes_value(self) -> int:
-        return self.to_int(str(getattr(self.settings, "stream_url_cache_minutes", 20)), 20, 5, 60)
+        return self.normalized_stream_url_cache_minutes()
 
     def cached_stream_url(self, url: str) -> tuple[str, dict, dict] | None:
         if not getattr(self.settings, "enable_stream_url_cache", True):
@@ -10738,7 +10830,8 @@ class MainFrame(wx.Frame):
     def cache_stream_url(self, source_url: str, stream_url: str, headers: dict, info: dict) -> None:
         if not getattr(self.settings, "enable_stream_url_cache", True) or not source_url or not stream_url:
             return
-        ttl_seconds = self.stream_url_cache_minutes_value() * 60
+        minutes = self.stream_url_cache_minutes_value()
+        ttl_seconds = (365 * 24 * 60 * 60) if minutes <= 0 else minutes * 60
         expires_at = time.time() + ttl_seconds
         try:
             expire_values = parse_qs(urlparse(stream_url).query).get("expire") or []
@@ -11290,6 +11383,7 @@ class MainFrame(wx.Frame):
         self.fullscreen_checkbox.SetName(self.t("fullscreen"))
         self.fullscreen_checkbox.SetValue(fullscreen_mode)
         self.fullscreen_checkbox.Bind(wx.EVT_CHECKBOX, self.on_player_fullscreen_changed)
+        self.fullscreen_checkbox.Bind(wx.EVT_KEY_DOWN, self.on_fullscreen_checkbox_key)
         self.bind_player_navigation_control(self.fullscreen_checkbox)
         self.root_sizer.Add(self.fullscreen_checkbox, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
         self.player_action_controls.append(self.fullscreen_checkbox)
@@ -11370,6 +11464,17 @@ class MainFrame(wx.Frame):
     def on_repeat_changed(self, _event=None) -> None:
         checked = bool(getattr(self, "repeat_checkbox", None) and self.repeat_checkbox.GetValue())
         self.set_repeat_enabled(checked)
+
+    def on_fullscreen_checkbox_key(self, event: wx.KeyEvent) -> None:
+        key = event.GetKeyCode()
+        if key in {wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER}:
+            try:
+                self.fullscreen_checkbox.SetValue(not self.fullscreen_checkbox.GetValue())
+            except RuntimeError:
+                return
+            self.on_player_fullscreen_changed()
+            return
+        event.Skip()
 
     def set_repeat_enabled(self, checked: bool, announce: bool = True) -> None:
         self.repeat_current = checked
@@ -11849,6 +11954,8 @@ class MainFrame(wx.Frame):
             self.announce_player(self.t("stream_url_failed", error=self.friendly_error(exc)))
 
     def effective_equalizer_state(self) -> tuple[bool, dict[str, float]]:
+        if self.bass_boost_enabled and self.session_equalizer_enabled is None:
+            return True, self.normalized_equalizer_gains(self.factory_equalizer_gains_for_preset("bass_boost"))
         if self.session_equalizer_enabled is not None:
             return bool(self.session_equalizer_enabled), self.normalized_equalizer_gains(self.session_equalizer_gains)
         preset = self.normalized_equalizer_preset(getattr(self.settings, "global_equalizer_preset", EQ_PRESET_FLAT))
@@ -11897,11 +12004,10 @@ class MainFrame(wx.Frame):
             return
         original_enabled = self.session_equalizer_enabled
         original_gains = dict(self.session_equalizer_gains)
+        original_db_range = self.equalizer_db_range_value()
         _enabled, gains = self.effective_equalizer_state()
         active_preset = self.normalized_equalizer_preset(getattr(self.settings, "global_equalizer_preset", EQ_PRESET_FLAT))
-        db_range = self.equalizer_db_range_value()
-        slider_min = -db_range * 10
-        slider_max = db_range * 10
+        dialog_db_range = original_db_range
         dialog = wx.Dialog(self, title=self.t("equalizer"), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         dialog.SetName(self.t("equalizer"))
         dialog.SetMinSize((520, 520))
@@ -11913,6 +12019,11 @@ class MainFrame(wx.Frame):
         preset_choice.SetName(self.t("equalizer_preset"))
         preset_choice.SetSelection(preset_options.index(active_preset) if active_preset in preset_options else 0)
         outer.Add(preset_choice, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+        outer.Add(wx.StaticText(dialog, label=self.t("equalizer_db_range")), 0, wx.LEFT | wx.RIGHT | wx.TOP, 8)
+        range_choice = wx.Choice(dialog, choices=EQ_RANGE_OPTIONS)
+        range_choice.SetName(self.t("equalizer_db_range"))
+        range_choice.SetSelection(EQ_RANGE_OPTIONS.index(str(dialog_db_range)) if str(dialog_db_range) in EQ_RANGE_OPTIONS else 1)
+        outer.Add(range_choice, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
         name_label = wx.StaticText(dialog, label=self.t("equalizer_preset_name"))
         name_ctrl = wx.TextCtrl(dialog, value=self.equalizer_custom_name(active_preset))
         name_ctrl.SetName(self.t("equalizer_preset_name"))
@@ -11922,12 +12033,12 @@ class MainFrame(wx.Frame):
         for band_id, band_label in EQ_BANDS:
             label_text = self.t("equalizer_band_gain", band=band_label)
             outer.Add(wx.StaticText(dialog, label=label_text), 0, wx.LEFT | wx.RIGHT | wx.TOP, 8)
-            band_value = min(max(int(round(gains.get(band_id, 0.0) * 10)), slider_min), slider_max)
+            band_value = min(max(int(round(gains.get(band_id, 0.0) * 10)), -dialog_db_range * 10), dialog_db_range * 10)
             slider = wx.Slider(
                 dialog,
                 value=band_value,
-                minValue=slider_min,
-                maxValue=slider_max,
+                minValue=-dialog_db_range * 10,
+                maxValue=dialog_db_range * 10,
                 style=wx.SL_HORIZONTAL,
             )
             self.set_equalizer_slider_accessibility(slider, label_text)
@@ -11958,6 +12069,14 @@ class MainFrame(wx.Frame):
             index = preset_choice.GetSelection()
             return preset_options[index] if 0 <= index < len(preset_options) else EQ_PRESET_FLAT
 
+        def set_dialog_slider_value(slider: wx.Slider, value: int, label: str, *, notify: bool = False) -> None:
+            slider._apricot_suppress_accessible_notify = not notify
+            try:
+                slider.SetValue(value)
+                self.set_equalizer_slider_accessibility(slider, label)
+            finally:
+                slider._apricot_suppress_accessible_notify = False
+
         def update_custom_name_visibility() -> None:
             visible = self.is_custom_equalizer_preset(current_preset())
             name_label.Show(visible)
@@ -11982,11 +12101,22 @@ class MainFrame(wx.Frame):
             dialog_visible_preset = self.normalized_equalizer_preset(preset_id)
             preset_gains = self.equalizer_gains_for_preset(preset_id)
             for band_id, band_label in EQ_BANDS:
-                value = min(max(preset_gains.get(band_id, 0.0), -db_range), db_range)
-                sliders[band_id].SetValue(int(round(value * 10)))
-                self.set_equalizer_slider_accessibility(sliders[band_id], self.t("equalizer_band_gain", band=band_label))
+                value = min(max(preset_gains.get(band_id, 0.0), -dialog_db_range), dialog_db_range)
+                set_dialog_slider_value(sliders[band_id], int(round(value * 10)), self.t("equalizer_band_gain", band=band_label))
             name_ctrl.SetValue(self.equalizer_custom_name(preset_id))
             update_custom_name_visibility()
+            live_apply()
+
+        def apply_dialog_db_range(value: int) -> None:
+            nonlocal dialog_db_range
+            dialog_db_range = min(24, max(6, int(value or 12)))
+            slider_min = -dialog_db_range * 10
+            slider_max = dialog_db_range * 10
+            for band_id, band_label in EQ_BANDS:
+                slider = sliders[band_id]
+                current = min(max(slider.GetValue(), slider_min), slider_max)
+                slider.SetRange(slider_min, slider_max)
+                set_dialog_slider_value(slider, current, self.t("equalizer_band_gain", band=band_label))
             live_apply()
 
         def refresh_preset_choices(selected_preset: str) -> None:
@@ -12008,16 +12138,21 @@ class MainFrame(wx.Frame):
                 self.set_equalizer_slider_accessibility(ctrl, label)
             live_apply()
 
+        def on_range_changed(_event: wx.CommandEvent) -> None:
+            index = range_choice.GetSelection()
+            value = EQ_RANGE_OPTIONS[index] if 0 <= index < len(EQ_RANGE_OPTIONS) else str(original_db_range)
+            apply_dialog_db_range(self.to_int(value, original_db_range, 6, 24))
+
         for band_id, band_label in EQ_BANDS:
             sliders[band_id].Bind(wx.EVT_SLIDER, lambda evt, label=self.t("equalizer_band_gain", band=band_label): on_slider(evt, label))
         preset_choice.Bind(wx.EVT_CHOICE, on_preset_changed)
+        range_choice.Bind(wx.EVT_CHOICE, on_range_changed)
 
         def reset_dialog_equalizer(_event=None) -> None:
             preset_gains = self.factory_equalizer_gains_for_preset(current_preset())
             for band_id, band_label in EQ_BANDS:
-                value = min(max(preset_gains.get(band_id, 0.0), -db_range), db_range)
-                sliders[band_id].SetValue(int(round(value * 10)))
-                self.set_equalizer_slider_accessibility(sliders[band_id], self.t("equalizer_band_gain", band=band_label))
+                value = min(max(preset_gains.get(band_id, 0.0), -dialog_db_range), dialog_db_range)
+                set_dialog_slider_value(sliders[band_id], int(round(value * 10)), self.t("equalizer_band_gain", band=band_label))
             live_apply()
 
         reset_button.Bind(wx.EVT_BUTTON, reset_dialog_equalizer)
@@ -12047,6 +12182,7 @@ class MainFrame(wx.Frame):
         result = dialog.ShowModal()
         if result == wx.ID_OK:
             save_current_dialog_name()
+            self.settings.equalizer_db_range = dialog_db_range
             self.save_settings()
         dialog.Destroy()
         if result == wx.ID_OK:
@@ -12056,14 +12192,15 @@ class MainFrame(wx.Frame):
             return
         self.session_equalizer_enabled = original_enabled
         self.session_equalizer_gains = original_gains
+        self.settings.equalizer_db_range = original_db_range
         self.apply_equalizer_to_player()
         self.announce_player(self.t("equalizer_closed"))
 
-    def play_relative_item(self, delta: int) -> None:
+    def play_relative_item(self, delta: int, preserve_focus: bool = False) -> None:
         if delta > 0:
             queued_item = self.pop_next_playback_queue_item()
             if queued_item:
-                self.open_playback_queue_item(queued_item, announce_start=True)
+                self.open_playback_queue_item(queued_item, announce_start=True, preserve_focus=preserve_focus)
                 return
         if delta < 0:
             item = self.relative_player_item(-1)
@@ -12075,7 +12212,7 @@ class MainFrame(wx.Frame):
             if not item:
                 self.announce_player(self.t("no_next_item"))
                 return
-        self.open_relative_player_item(item, announce_start=True)
+        self.open_relative_player_item(item, announce_start=True, preserve_focus=preserve_focus)
 
     def relative_player_item(self, delta: int) -> dict | None:
         screen = self.player_return_screen
@@ -12110,10 +12247,11 @@ class MainFrame(wx.Frame):
             return dict(playable[item_index])
         return None
 
-    def open_relative_player_item(self, item: dict, announce_start: bool = False) -> None:
+    def open_relative_player_item(self, item: dict, announce_start: bool = False, preserve_focus: bool = False) -> None:
         if not item.get("url"):
             return
         show_player = self.in_player_screen or not self.background_playback_enabled()
+        focus_target = "results" if preserve_focus and self.live_window(getattr(self, "results_list", None)) is not None else "player"
         if item.get("kind") == "rss_item":
             self.player_return_screen = "rss_items"
             self.player_return_data = {
@@ -12138,7 +12276,7 @@ class MainFrame(wx.Frame):
             self.player_return_data = {"index": self.return_index}
         self.current_video_item = item
         self.current_video_info = dict(item)
-        self.play_url(str(item.get("url") or ""), str(item.get("title") or ""), show_player=show_player, announce_start=announce_start)
+        self.play_url(str(item.get("url") or ""), str(item.get("title") or ""), show_player=show_player, announce_start=announce_start, focus_target=focus_target)
 
     def playable_queue_item(self, item: dict | None) -> dict | None:
         if not item or item.get("kind") in {"channel", "playlist"}:
@@ -12329,11 +12467,12 @@ class MainFrame(wx.Frame):
         self.refresh_main_menu_after_playback_queue_change()
         return item
 
-    def open_playback_queue_item(self, item: dict, announce_start: bool = False) -> None:
+    def open_playback_queue_item(self, item: dict, announce_start: bool = False, preserve_focus: bool = False) -> None:
         show_player = self.in_player_screen or not self.background_playback_enabled()
-        self.open_playback_queue_item_with_mode(item, show_player=show_player, announce_start=announce_start)
+        focus_target = "results" if preserve_focus and self.live_window(getattr(self, "results_list", None)) is not None else "player"
+        self.open_playback_queue_item_with_mode(item, show_player=show_player, announce_start=announce_start, focus_target=focus_target)
 
-    def open_playback_queue_item_with_mode(self, item: dict, show_player: bool = True, announce_start: bool = False) -> None:
+    def open_playback_queue_item_with_mode(self, item: dict, show_player: bool = True, announce_start: bool = False, focus_target: str = "player") -> None:
         url = str(item.get("url") or "")
         if not url:
             self.announce_player(self.t("no_selection"))
@@ -12350,7 +12489,7 @@ class MainFrame(wx.Frame):
             self.player_return_data = {}
         self.current_video_item = item
         self.current_video_info = dict(item)
-        self.play_url(url, str(item.get("title") or ""), show_player=show_player, announce_start=announce_start)
+        self.play_url(url, str(item.get("title") or ""), show_player=show_player, announce_start=announce_start, focus_target=focus_target)
 
     def current_local_media_path(self) -> Path | None:
         item = self.current_video_item or self.current_video_info or {}
@@ -13495,7 +13634,11 @@ class MainFrame(wx.Frame):
             self.settings.global_equalizer_enabled = True
             self.use_global_equalizer_for_live_preview()
             self.apply_equalizer_to_player()
-        event.Skip()
+
+    def on_equalizer_range_changed(self, _event: wx.CommandEvent) -> None:
+        self.save_visible_equalizer_gains_to_preset(getattr(self, "visible_equalizer_preset", EQ_PRESET_FLAT))
+        self.settings.equalizer_db_range = self.to_int(self.selected_choice_value("equalizer_db_range"), 12, 6, 24)
+        wx.CallAfter(self.render_settings_section_and_focus, "equalizer_db_range")
 
     def reset_visible_equalizer_controls(self) -> None:
         if not hasattr(self, "controls"):
@@ -13518,6 +13661,37 @@ class MainFrame(wx.Frame):
 
     def result_limit_labels(self, options: list[str]) -> list[str]:
         return [self.t("dynamic_results") if option == "0" else option for option in options]
+
+    def stream_url_cache_labels(self, options: list[str]) -> list[str]:
+        labels = []
+        for option in options:
+            try:
+                minutes = int(option)
+            except (TypeError, ValueError):
+                minutes = 20
+            if minutes <= 0:
+                labels.append(self.t("stream_cache_permanent"))
+            elif minutes < 60:
+                labels.append(self.t("stream_cache_minutes_label", minutes=minutes))
+            elif minutes % 1440 == 0:
+                days = minutes // 1440
+                labels.append(self.t("stream_cache_days_label", days=days))
+            elif minutes % 60 == 0:
+                hours = minutes // 60
+                labels.append(self.t("stream_cache_hours_label", hours=hours))
+            else:
+                labels.append(str(minutes))
+        return labels
+
+    def normalized_stream_url_cache_minutes(self, value=None) -> int:
+        raw = getattr(self.settings, "stream_url_cache_minutes", 20) if value is None else value
+        try:
+            minutes = int(raw)
+        except (TypeError, ValueError):
+            minutes = 20
+        if minutes <= 0:
+            return 0
+        return min(10080, max(5, minutes))
 
     def refresh_interval_labels(self) -> list[str]:
         return [self.refresh_interval_label(option) for option in REFRESH_INTERVAL_OPTIONS]
@@ -13648,7 +13822,6 @@ class MainFrame(wx.Frame):
             self.session_equalizer_enabled = None
             self.session_equalizer_gains = {}
             self.session_equalizer_before_bass_boost = None
-            self.bass_boost_enabled = False
             self.volume_boost_enabled = False
             self.shuffle_current = False
         if self.player_panel is not None:
@@ -13868,11 +14041,21 @@ class MainFrame(wx.Frame):
         if self.context_menu_shortcut_matches(event):
             self.open_player_context_menu()
             return True
-        if focus is getattr(self, "repeat_checkbox", None) and self.shortcut_matches(event, "player_play_pause"):
+        player_checkboxes = {
+            getattr(self, "fullscreen_checkbox", None),
+            getattr(self, "repeat_checkbox", None),
+            getattr(self, "bass_boost_checkbox", None),
+        }
+        player_checkboxes.discard(None)
+        if focus in player_checkboxes and self.shortcut_matches(event, "player_play_pause"):
             event.Skip()
             return True
-        if focus is getattr(self, "bass_boost_checkbox", None) and self.shortcut_matches(event, "player_play_pause"):
-            event.Skip()
+        if focus is getattr(self, "fullscreen_checkbox", None) and self.shortcut_matches(event, "open_selected"):
+            try:
+                self.fullscreen_checkbox.SetValue(not self.fullscreen_checkbox.GetValue())
+            except RuntimeError:
+                return True
+            self.on_player_fullscreen_changed()
             return True
         if details_has_focus and self.details_text_navigation_key(event):
             event.Skip()
@@ -13978,10 +14161,10 @@ class MainFrame(wx.Frame):
         if self.player_shortcuts_allowed(focus) or self.focus_accepts_text(focus):
             return False
         if self.shortcut_matches(event, "player_previous"):
-            self.play_relative_item(-1)
+            self.play_relative_item(-1, preserve_focus=True)
             return True
         if self.shortcut_matches(event, "player_next"):
-            self.play_relative_item(1)
+            self.play_relative_item(1, preserve_focus=True)
             return True
         return False
 
@@ -15408,7 +15591,7 @@ class MainFrame(wx.Frame):
         if "enable_stream_url_cache" in c:
             self.settings.enable_stream_url_cache = c["enable_stream_url_cache"].GetValue()
         if "stream_url_cache_minutes" in c:
-            self.settings.stream_url_cache_minutes = self.to_int(self.selected_choice_value("stream_url_cache_minutes"), 20, 5, 60)
+            self.settings.stream_url_cache_minutes = self.normalized_stream_url_cache_minutes(self.selected_choice_value("stream_url_cache_minutes"))
         if "prefetch_next_stream_url" in c:
             self.settings.prefetch_next_stream_url = c["prefetch_next_stream_url"].GetValue()
         if "cache_folder" in c:
@@ -16710,6 +16893,7 @@ class MainFrame(wx.Frame):
                 skipped_version = str(merged.get("skipped_update_version") or "")
                 if skipped_version and not self.is_newer_version(skipped_version, APP_VERSION):
                     merged["skipped_update_version"] = ""
+                merged["stream_url_cache_minutes"] = self.normalized_stream_url_cache_minutes(merged.get("stream_url_cache_minutes"))
                 self.settings_loaded_from_path = source
                 if source != SETTINGS_FILE:
                     self.settings_migrated = True

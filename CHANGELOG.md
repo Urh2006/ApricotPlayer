@@ -1,5 +1,14 @@
 # Changelog
 
+## What's new in version 0.8.49
+
+- fixed dynamic result playback so pressing Enter on a result keeps the exact selected video even if the next 20 results finish loading at the same moment.
+- stabilized equalizer sliders so their screen-reader names stay consistent, value updates are quieter, and the player equalizer now has the same 6/12/18/24 dB range selector as the global equalizer.
+- fixed the player Fullscreen checkbox so Space toggles the checkbox instead of play/pause, and Enter also toggles fullscreen.
+- made player Bass boost session-based, so it stays on for the next item until the user turns it off.
+- expanded stream URL cache duration choices up to 7 days and permanent-until-YouTube-expires.
+- kept focus in the current list when Next/Previous is triggered from results while playback continues in the background.
+
 ## What's new in version 0.8.48
 
 - added a fast YouTube stream URL cache and next-item prefetch option so already resolved videos can start faster without storing full media files.
