@@ -202,8 +202,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.46"
-APP_VERSION_LABEL = "0.8.46"
+APP_VERSION = "0.8.47"
+APP_VERSION_LABEL = "0.8.47"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -3835,6 +3835,8 @@ class MainFrame(wx.Frame):
         self.video_details: wx.TextCtrl | None = None
         self.details_button_sizer: wx.Sizer | None = None
         self.background_player_controls: list[wx.Window] = []
+        self.background_player_previous_control: wx.Window | None = None
+        self.last_button_row_controls: list[wx.Button] = []
         self.player_play_pause_buttons: list[wx.Button] = []
         self.background_player_section_added = False
         self.download_queue: dict[str, dict] = {}
@@ -3895,6 +3897,8 @@ class MainFrame(wx.Frame):
         self.status.SetStatusText(self.t("ready"))
 
         self.Bind(wx.EVT_CHAR_HOOK, self.on_char_hook)
+        self.Bind(wx.EVT_NAVIGATION_KEY, self.on_player_navigation_key)
+        self.panel.Bind(wx.EVT_NAVIGATION_KEY, self.on_player_navigation_key)
         self.Bind(wx.EVT_CLOSE, self.on_close)
         self.install_download_accelerators()
         self.setup_taskbar_icon()
@@ -5391,6 +5395,8 @@ class MainFrame(wx.Frame):
         self.background_player_controls = []
         self.player_action_controls = []
         self.player_play_pause_buttons = []
+        self.background_player_previous_control = None
+        self.last_button_row_controls = []
         self.background_player_section_added = False
         if not self.in_player_screen:
             if preserved_player_panel is not None:
@@ -5676,6 +5682,7 @@ class MainFrame(wx.Frame):
             row.Add(button, 0, wx.RIGHT, 6)
             created_buttons.append(button)
         self.root_sizer.Add(row, 0, wx.ALL, 4)
+        self.last_button_row_controls = list(created_buttons)
         if self.background_player_section_enabled() and not self.in_player_screen:
             self.add_background_player_section()
         return created_buttons
@@ -5870,7 +5877,6 @@ class MainFrame(wx.Frame):
         self.clear()
         title = wx.StaticText(self.panel, label=self.t("main_menu"))
         self.root_sizer.Add(title, 0, wx.ALL, 4)
-        self.add_background_player_section()
         self.menu_actions = self.build_main_menu_actions()
         self.menu_list = wx.ListBox(self.panel, choices=[item[0] for item in self.menu_actions])
         self.menu_list.SetName(self.t("main_menu"))
@@ -5923,6 +5929,7 @@ class MainFrame(wx.Frame):
         if not self.background_player_section_enabled() or not self.player_is_active():
             return
         self.background_player_section_added = True
+        self.background_player_previous_control = self.background_player_previous_target()
         title = self.current_player_title()
         label = wx.StaticText(self.panel, label=self.t("background_player_now_playing", title=title))
         label.SetName(self.t("background_player"))
@@ -5969,7 +5976,7 @@ class MainFrame(wx.Frame):
             row.Add(button, 0, wx.RIGHT, 6)
             self.background_player_controls.append(button)
         self.root_sizer.Add(row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
-        previous_control = None
+        previous_control = self.live_window(self.background_player_previous_control)
         for control in self.background_player_controls:
             if previous_control is not None:
                 try:
@@ -6015,7 +6022,27 @@ class MainFrame(wx.Frame):
             pass
         return control
 
+    @staticmethod
+    def window_is_or_descendant(window: wx.Window | None, ancestor: wx.Window | None) -> bool:
+        if window is None or ancestor is None:
+            return False
+        current = window
+        while current is not None:
+            if current is ancestor:
+                return True
+            try:
+                current = current.GetParent()
+            except RuntimeError:
+                return False
+            except Exception:
+                return False
+        return False
+
     def background_player_previous_target(self) -> wx.Window | None:
+        for control in reversed(getattr(self, "last_button_row_controls", [])):
+            target = self.live_window(control)
+            if target is not None and not self.focus_in_background_player_controls(target):
+                return target
         if getattr(self, "in_main_menu", False):
             return self.live_window(getattr(self, "menu_list", None))
         candidate_names = [
@@ -6047,26 +6074,22 @@ class MainFrame(wx.Frame):
             for control in getattr(self, "background_player_controls", [])
             if control is not None and not getattr(control, "IsBeingDeleted", lambda: False)()
         ]
-        if not controls or focus not in controls:
+        if not controls or not self.window_is_or_descendant(focus, controls[0]):
             return False
-        try:
-            index = controls.index(focus)
-        except ValueError:
-            return False
-        next_index = index + 1 if forward else index - 1
-        if 0 <= next_index < len(controls):
-            self.safe_set_focus(controls[next_index])
+        if forward and len(controls) > 1:
+            self.safe_set_focus(controls[1])
             return True
-        if not forward and index == 0:
-            target = self.background_player_previous_target()
-            if target is not None:
-                self.safe_set_focus(target)
-                return True
+        if not forward:
+            target = self.live_window(self.background_player_previous_control) or self.background_player_previous_target()
+            if target is None:
+                return False
+            self.safe_set_focus(target)
+            return True
         return False
 
     def on_player_navigation_key(self, event: wx.NavigationKeyEvent) -> None:
         try:
-            if not event.IsFromTab():
+            if event.IsWindowChange():
                 event.Skip()
                 return
             focus = event.GetCurrentFocus() or wx.Window.FindFocus()
@@ -11025,6 +11048,7 @@ class MainFrame(wx.Frame):
         self.root_sizer.Add(self.bass_boost_checkbox, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
         self.player_action_controls.append(self.bass_boost_checkbox)
         self.player_escape_stop_controls.append(self.bass_boost_checkbox)
+        self.apply_tab_order(self.player_tab_order())
         self.details_label = None
         self.video_details = None
         self.details_button_sizer = None
@@ -11161,6 +11185,31 @@ class MainFrame(wx.Frame):
                 visible_controls.append(live)
         return visible_controls
 
+    def apply_tab_order(self, controls: list[wx.Window]) -> None:
+        previous_control = None
+        for control in controls:
+            live = self.live_window(control)
+            if live is None:
+                continue
+            if previous_control is not None:
+                try:
+                    live.MoveAfterInTabOrder(previous_control)
+                except RuntimeError:
+                    pass
+            previous_control = live
+
+    def player_tab_order(self) -> list[wx.Window]:
+        ordered: list[wx.Window] = []
+        ordered.extend(self.visible_player_controls(getattr(self, "player_navigation_controls", [])))
+        results = self.live_window(getattr(self, "results_list", None))
+        if results is not None and self.in_player_screen:
+            ordered.append(results)
+        panel = self.live_window(getattr(self, "player_panel", None))
+        if panel is not None:
+            ordered.append(panel)
+        ordered.extend(self.visible_player_controls(getattr(self, "player_action_controls", [])))
+        return ordered
+
     def handle_player_tab_navigation(self, event: wx.KeyEvent, focus: wx.Window | None) -> bool:
         if not self.in_player_screen or event.GetKeyCode() != wx.WXK_TAB:
             return False
@@ -11170,60 +11219,17 @@ class MainFrame(wx.Frame):
         if not self.in_player_screen:
             return False
         panel = getattr(self, "player_panel", None)
-        results = getattr(self, "results_list", None)
-        if focus is results:
-            if not forward:
-                return False
-            if panel is not None:
-                self.safe_set_focus(panel)
-                return True
-        action_controls = self.visible_player_controls(getattr(self, "player_action_controls", []))
-        navigation_controls = self.visible_player_controls(getattr(self, "player_navigation_controls", []))
-        if navigation_controls and focus in navigation_controls:
-            try:
-                nav_index = navigation_controls.index(focus)
-            except ValueError:
-                nav_index = -1
-            if not forward:
-                if nav_index > 0:
-                    self.safe_set_focus(navigation_controls[nav_index - 1])
-                    return True
-                return False
-            if 0 <= nav_index < len(navigation_controls) - 1:
-                self.safe_set_focus(navigation_controls[nav_index + 1])
-                return True
-            if panel is not None:
-                self.safe_set_focus(panel)
-                return True
-        if action_controls and focus in action_controls:
-            try:
-                action_index = action_controls.index(focus)
-            except ValueError:
-                action_index = -1
-            if not forward:
-                if action_index > 0:
-                    self.safe_set_focus(action_controls[action_index - 1])
-                    return True
-                if panel is not None:
-                    self.safe_set_focus(panel)
-                    return True
-                return False
-            if 0 <= action_index < len(action_controls) - 1:
-                self.safe_set_focus(action_controls[action_index + 1])
-                return True
+        if not self.window_is_or_descendant(focus, panel):
             return False
-        if focus is panel:
-            if not forward:
-                if results is not None:
-                    self.safe_set_focus(results)
-                    return True
-                if navigation_controls:
-                    self.safe_set_focus(navigation_controls[-1])
-                    return True
-                return False
-            if action_controls:
-                self.safe_set_focus(action_controls[0])
-                return True
+        order = self.player_tab_order()
+        try:
+            index = order.index(panel)
+        except ValueError:
+            return False
+        next_index = index + 1 if forward else index - 1
+        if 0 <= next_index < len(order):
+            self.safe_set_focus(order[next_index])
+            return True
         return False
 
     def leave_player_to_main_menu(self, force_keep_playing: bool = False) -> None:
@@ -13368,10 +13374,17 @@ class MainFrame(wx.Frame):
     def focus_in_background_player_controls(self, focus: wx.Window | None) -> bool:
         if not focus:
             return False
-        return any(focus is control for control in getattr(self, "background_player_controls", []))
+        return any(self.window_is_or_descendant(focus, control) for control in getattr(self, "background_player_controls", []))
+
+    def focus_in_player_controls(self, focus: wx.Window | None) -> bool:
+        if not focus:
+            return False
+        if self.window_is_or_descendant(focus, getattr(self, "player_panel", None)):
+            return True
+        return any(focus is control for control in getattr(self, "player_action_controls", []))
 
     def player_shortcuts_allowed(self, focus: wx.Window | None = None) -> bool:
-        return self.in_player_screen or self.focus_in_background_player_controls(focus)
+        return self.focus_in_player_controls(focus) or self.focus_in_background_player_controls(focus)
 
     def save_current_playback_position(self) -> None:
         if not getattr(self.settings, "resume_playback", True) or not self.mpv_process_alive():
@@ -13644,6 +13657,19 @@ class MainFrame(wx.Frame):
             return True
         return False
 
+    def handle_active_player_global_shortcut_event(self, event: wx.KeyEvent, focus: wx.Window | None) -> bool:
+        if not (self.player_control_mode and self.player_is_active()):
+            return False
+        if self.player_shortcuts_allowed(focus) or self.focus_accepts_text(focus):
+            return False
+        if self.shortcut_matches(event, "player_previous"):
+            self.play_relative_item(-1)
+            return True
+        if self.shortcut_matches(event, "player_next"):
+            self.play_relative_item(1)
+            return True
+        return False
+
     def on_char_hook(self, event: wx.KeyEvent) -> None:
         focus = wx.Window.FindFocus()
         details_has_focus = focus is self.video_details
@@ -13667,9 +13693,13 @@ class MainFrame(wx.Frame):
                 return
             if self.handle_global_navigation_shortcut(event, focus):
                 return
+            if self.handle_active_player_global_shortcut_event(event, focus):
+                return
             event.Skip()
             return
         if self.handle_global_navigation_shortcut(event, focus):
+            return
+        if self.handle_active_player_global_shortcut_event(event, focus):
             return
         if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "menu_list", None):
             self.activate_menu()
