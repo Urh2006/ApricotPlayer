@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.8.46
+
+- fixed Shift+Tab from the Player area so keyboard focus can move backward to results or Back controls instead of getting stuck.
+- added wx navigation-key handling for player controls so NVDA and Windows focus traversal use the same player tab order.
+- preserved the existing forward Tab order from Player to Previous, Play/Pause, Next, and the rest of the player controls.
+
 ## What's new in version 0.8.45
 
 - added Open channel for YouTube videos in result, player, favorites, history, and user playlist context menus when the video has channel metadata.
