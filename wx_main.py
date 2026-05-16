@@ -202,8 +202,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.50"
-APP_VERSION_LABEL = "0.8.50"
+APP_VERSION = "0.8.51"
+APP_VERSION_LABEL = "0.8.51"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -285,6 +285,9 @@ TRENDING_PUBLIC_URLS: dict[str, list[str]] = {
 }
 EQ_FILTER_LABEL = "apricot_eq"
 EQ_FILTER_REF = f"@{EQ_FILTER_LABEL}"
+EQ_APPLY_DELAY_MS = 80
+NORMAL_VOLUME_MAX = 100
+BOOSTED_VOLUME_MAX = 300
 EQ_BANDS: list[tuple[str, str]] = [
     ("31", "31 Hz sub bass rumble"),
     ("62", "62 Hz bass thump"),
@@ -297,7 +300,16 @@ EQ_BANDS: list[tuple[str, str]] = [
     ("8000", "8 kHz brightness"),
     ("16000", "16 kHz air and sparkle"),
 ]
+EQ_BAND_WIDTHS_OCTAVES: dict[str, float] = {
+    "31": 1.45,
+    "62": 1.35,
+    "125": 1.2,
+}
+EQ_MIN_PROTECTION_HEADROOM_DB = 3.0
+EQ_MAX_PROTECTION_HEADROOM_DB = 9.0
+EQ_LIMITER_FILTER = "alimiter=limit=0.95"
 EQ_RANGE_OPTIONS = ["6", "12", "18", "24"]
+SEEK_SECONDS_OPTIONS = ["0.1", "0.25", "0.5", "0.75", "1", "1.5", "2", "2.5", "3", "4", "5", "7.5", "10", "15", "20", "30", "45", "60"]
 STREAM_URL_CACHE_OPTIONS = ["5", "10", "20", "30", "60", "240", "1440", "10080", "0"]
 EQ_PRESET_FLAT = "flat"
 EQ_CUSTOM_PRESET_IDS = ["custom1", "custom2", "custom3"]
@@ -1011,8 +1023,8 @@ TEXT = {
         "shortcut_player_next": "Predvajalnik: naslednji element",
         "shortcut_player_back": "Predvajalnik: nazaj ali zapri podrobnosti",
         "shortcut_player_volume_boost": "Predvajalnik: ojacanje glasnosti",
-        "shortcut_player_seek_back": "Predvajalnik: 5 sekund nazaj",
-        "shortcut_player_seek_forward": "Predvajalnik: 5 sekund naprej",
+        "shortcut_player_seek_back": "Predvajalnik: korak nazaj po nastavitvi seeka",
+        "shortcut_player_seek_forward": "Predvajalnik: korak naprej po nastavitvi seeka",
         "shortcut_player_seek_back_large": "Predvajalnik: 1 minuto nazaj",
         "shortcut_player_seek_forward_large": "Predvajalnik: 1 minuto naprej",
         "shortcut_player_seek_back_huge": "Predvajalnik: 10 minut nazaj",
@@ -1436,8 +1448,8 @@ TEXT = {
         "shortcut_player_details": "Player: video details",
         "shortcut_player_back": "Player: back or close details",
         "shortcut_player_volume_boost": "Player: volume boost",
-        "shortcut_player_seek_back": "Player: seek back 5 seconds",
-        "shortcut_player_seek_forward": "Player: seek forward 5 seconds",
+        "shortcut_player_seek_back": "Player: seek back by the configured step",
+        "shortcut_player_seek_forward": "Player: seek forward by the configured step",
         "shortcut_player_seek_back_large": "Player: seek back 1 minute",
         "shortcut_player_seek_forward_large": "Player: seek forward 1 minute",
         "shortcut_player_seek_back_huge": "Player: seek back 10 minutes",
@@ -3704,7 +3716,7 @@ class Settings:
     keep_playlist_order: bool = True
     filename_template: str = DEFAULT_FILENAME_TEMPLATE
     audio_quality: str = "0"
-    seek_seconds: int = 5
+    seek_seconds: float = 5.0
     volume_step: int = 5
     default_volume: int = 100
     volume_boost_by_default: bool = False
@@ -3868,6 +3880,8 @@ class MainFrame(wx.Frame):
         self.shuffle_current = False
         self.session_volume: float | None = None
         self.player_generation = 0
+        self.play_request_generation = 0
+        self.playback_start_pending = False
         self.player_ended = False
         self.player_paused = False
         self.current_video_item: dict | None = None
@@ -3921,6 +3935,8 @@ class MainFrame(wx.Frame):
         self.session_equalizer_enabled: bool | None = None
         self.session_equalizer_gains: dict[str, float] = {}
         self.session_equalizer_before_bass_boost: tuple[bool | None, dict[str, float]] | None = None
+        self.equalizer_apply_generation = 0
+        self.equalizer_apply_timer: wx.CallLater | None = None
         self.bass_boost_enabled = False
         self.equalizer_filter_active = False
         self.clip_start_marker: float | None = None
@@ -9542,10 +9558,11 @@ class MainFrame(wx.Frame):
             device_values, device_labels = self.audio_output_device_options(allow_probe=False)
             choice("default_audio_device", self.normalized_audio_output_device(), device_values, device_labels)
             self.refresh_audio_output_devices_async()
-            choice("seek_seconds", str(self.settings.seek_seconds), ["5", "10", "15", "30"])
+            choice("seek_seconds", self.format_seek_seconds_value(self.seek_seconds_value()), SEEK_SECONDS_OPTIONS)
             choice("volume_step", str(self.settings.volume_step), ["1", "2", "5", "10"])
-            int_slider("default_volume", self.t("default_volume"), self.default_volume_value(), 0, 300)
-            check("volume_boost_by_default", bool(getattr(self.settings, "volume_boost_by_default", False)))
+            int_slider("default_volume", self.t("default_volume"), self.default_volume_value(), 0, self.default_volume_max_value())
+            volume_boost_default_box = check("volume_boost_by_default", bool(getattr(self.settings, "volume_boost_by_default", False)))
+            volume_boost_default_box.Bind(wx.EVT_CHECKBOX, self.on_volume_boost_by_default_settings_changed)
             check("autoplay_next", self.settings.autoplay_next)
             check("browser_playback", self.settings.prefer_browser_playback)
             check("fullscreen", self.settings.player_fullscreen)
@@ -10780,7 +10797,7 @@ class MainFrame(wx.Frame):
         if self.current_video_item:
             self.record_history(self.current_video_item, "played")
         self.current_index = max(0, self.current_index)
-        continuing_session = self.player_is_active()
+        continuing_session = self.player_is_active() or bool(getattr(self, "playback_start_pending", False))
         self.remember_current_player_volume()
         self.stop_player(silent=True, reset_session=not continuing_session, preserve_panel=keep_current_ui)
         if not continuing_session:
@@ -10808,21 +10825,42 @@ class MainFrame(wx.Frame):
             self.player_control_mode = True
             self.set_window_title(title or self.current_player_title())
         self.set_status(self.t("preparing_stream", title=title or url))
-        threading.Thread(target=self.resolve_and_start_player, args=(command, url, title, announce_start), daemon=True).start()
+        self.play_request_generation += 1
+        request_generation = self.play_request_generation
+        self.playback_start_pending = True
+        threading.Thread(target=self.resolve_and_start_player, args=(command, url, title, announce_start, request_generation), daemon=True).start()
 
-    def resolve_and_start_player(self, command: str, url: str, title: str, announce_start: bool = False) -> None:
+    def playback_request_is_current(self, generation: int) -> bool:
+        return generation == getattr(self, "play_request_generation", 0)
+
+    def merge_current_video_info_for_request(self, info: dict, generation: int) -> None:
+        if self.playback_request_is_current(generation):
+            self.merge_current_video_info(info)
+
+    def schedule_next_stream_prefetch_for_request(self, generation: int) -> None:
+        if self.playback_request_is_current(generation):
+            self.schedule_next_stream_prefetch()
+
+    def resolve_and_start_player(self, command: str, url: str, title: str, announce_start: bool = False, request_generation: int = 0) -> None:
         try:
             stream_url, headers, info = self.resolve_stream_url(url)
-            wx.CallAfter(self.merge_current_video_info, info)
-            wx.CallAfter(self.start_mpv, command, stream_url, title or url, headers, announce_start)
-            wx.CallAfter(self.schedule_next_stream_prefetch)
+            if not self.playback_request_is_current(request_generation):
+                return
+            wx.CallAfter(self.merge_current_video_info_for_request, info, request_generation)
+            wx.CallAfter(self.start_mpv, command, stream_url, title or url, headers, announce_start, request_generation)
+            wx.CallAfter(self.schedule_next_stream_prefetch_for_request, request_generation)
         except Exception as exc:
+            if not self.playback_request_is_current(request_generation):
+                return
+            self.playback_start_pending = False
             if self.age_restricted_video_support_enabled() and self.is_cookie_auth_error(exc) and self.normalized_cookies_browser():
-                wx.CallAfter(self.prompt_cookie_refresh_for_playback, command, url, title, self.friendly_error(exc), announce_start)
+                wx.CallAfter(self.prompt_cookie_refresh_for_playback, command, url, title, self.friendly_error(exc), announce_start, request_generation)
             else:
                 wx.CallAfter(self.message, self.t("player_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
-    def prompt_cookie_refresh_for_playback(self, command: str, url: str, title: str, error: str, announce_start: bool = False) -> None:
+    def prompt_cookie_refresh_for_playback(self, command: str, url: str, title: str, error: str, announce_start: bool = False, request_generation: int = 0) -> None:
+        if not self.playback_request_is_current(request_generation):
+            return
         message = f"{self.t('player_failed', error=error)}\n\n{self.t('cookie_refresh_prompt_message')}"
         answer = wx.MessageBox(message, self.t("cookie_refresh_prompt_title"), wx.YES_NO | wx.ICON_QUESTION)
         if answer != wx.YES:
@@ -10832,14 +10870,20 @@ class MainFrame(wx.Frame):
             self.message(self.t("select_cookies_browser"), wx.ICON_WARNING)
             return
         self.announce_player(self.t("cookie_auto_refresh_start", browser=browser.title()))
-        threading.Thread(target=self.refresh_cookies_and_retry_playback_worker, args=(browser, command, url, title, announce_start), daemon=True).start()
+        threading.Thread(target=self.refresh_cookies_and_retry_playback_worker, args=(browser, command, url, title, announce_start, request_generation), daemon=True).start()
 
-    def refresh_cookies_and_retry_playback_worker(self, browser: str, command: str, url: str, title: str, announce_start: bool = False) -> None:
+    def refresh_cookies_and_retry_playback_worker(self, browser: str, command: str, url: str, title: str, announce_start: bool = False, request_generation: int = 0) -> None:
         try:
             result = self.export_browser_cookies_blocking(browser, allow_close=True)
+            if not self.playback_request_is_current(request_generation):
+                return
+            self.playback_start_pending = True
             self.ui_queue.put(("announce", self.t("cookie_auto_refresh_done", profile=result.get("profile_label", self.t("browser_profile_auto")))))
-            self.resolve_and_start_player(command, url, title, announce_start)
+            self.resolve_and_start_player(command, url, title, announce_start, request_generation)
         except Exception as exc:
+            if not self.playback_request_is_current(request_generation):
+                return
+            self.playback_start_pending = False
             wx.CallAfter(self.message, self.t("cookie_auto_refresh_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
     def stream_url_cache_key(self, url: str) -> str:
@@ -11210,19 +11254,41 @@ class MainFrame(wx.Frame):
         try:
             current = self.mpv_get_property("volume", timeout=0.3)
             if current is not None:
-                self.session_volume = max(0.0, min(300.0, float(current)))
+                self.session_volume = max(0.0, min(float(self.current_player_volume_max()), float(current)))
         except Exception:
             pass
 
+    def current_player_volume_max(self) -> int:
+        boosted = bool(self.volume_boost_enabled)
+        return BOOSTED_VOLUME_MAX if boosted else NORMAL_VOLUME_MAX
+
+    def configured_player_start_volume_max(self) -> int:
+        boosted = bool(self.volume_boost_enabled or getattr(self.settings, "volume_boost_by_default", False))
+        return BOOSTED_VOLUME_MAX if boosted else NORMAL_VOLUME_MAX
+
     def player_start_volume_value(self) -> float:
         if self.session_volume is not None:
-            return max(0.0, min(300.0, float(self.session_volume)))
+            return max(0.0, min(float(self.configured_player_start_volume_max()), float(self.session_volume)))
         return float(self.default_volume_value())
 
-    def start_mpv(self, command: str, stream_url: str, title: str, headers: dict, announce_start: bool = False) -> None:
+    def start_mpv(
+        self,
+        command: str,
+        stream_url: str,
+        title: str,
+        headers: dict,
+        announce_start: bool = False,
+        request_generation: int = 0,
+    ) -> None:
+        if request_generation and not self.playback_request_is_current(request_generation):
+            return
+        self.playback_start_pending = False
         try:
             self.ipc_path = self.make_ipc_path()
             target_volume = self.player_start_volume_value()
+            boost_volume = bool(self.volume_boost_enabled or getattr(self.settings, "volume_boost_by_default", False) or target_volume > NORMAL_VOLUME_MAX)
+            volume_max = BOOSTED_VOLUME_MAX if boost_volume else NORMAL_VOLUME_MAX
+            target_volume = max(0.0, min(float(volume_max), target_volume))
             embed_player = False
             hwnd = 0
             try:
@@ -11240,7 +11306,7 @@ class MainFrame(wx.Frame):
                 f"--input-ipc-server={self.ipc_path}",
                 "--idle=no",
                 "--keep-open=yes",
-                "--volume-max=300",
+                f"--volume-max={volume_max}",
                 f"--volume={target_volume:g}",
                 "--pitch=1.0",
                 f"--speed={self.settings.player_speed}",
@@ -11306,7 +11372,7 @@ class MainFrame(wx.Frame):
             self.current_stream_url = stream_url
             self.current_stream_headers = dict(headers or {})
             self.current_audio_device = audio_device
-            self.volume_boost_enabled = bool(self.volume_boost_enabled or getattr(self.settings, "volume_boost_by_default", False) or target_volume > 100)
+            self.volume_boost_enabled = boost_volume
             self.rubberband_pitch_filter_active = False
             self.equalizer_filter_active = False
             self.current_video_info["speed"] = self.format_playback_rate(float(self.settings.player_speed))
@@ -11316,19 +11382,20 @@ class MainFrame(wx.Frame):
             if announce_start:
                 self.announce_player(self.t("playing", title=title))
             wx.CallAfter(self.update_play_pause_buttons)
-            threading.Thread(target=self.apply_initial_volume_worker, args=(self.player_generation, target_volume), daemon=True).start()
+            threading.Thread(target=self.apply_initial_volume_worker, args=(self.player_generation, target_volume, volume_max), daemon=True).start()
             wx.CallLater(700, self.apply_equalizer_to_player)
             self.start_player_monitor(self.player_generation)
         except Exception as exc:
+            self.playback_start_pending = False
             self.message(self.t("player_failed", error=exc), wx.ICON_ERROR)
 
-    def apply_initial_volume_worker(self, generation: int, target_volume: float) -> None:
+    def apply_initial_volume_worker(self, generation: int, target_volume: float, volume_max: int) -> None:
         deadline = time.monotonic() + 2.0
         while time.monotonic() < deadline:
             if generation != self.player_generation or not self.mpv_process_alive():
                 return
             try:
-                self.mpv_set_property("volume-max", 300, timeout=0.4)
+                self.mpv_set_property("volume-max", volume_max, timeout=0.4)
                 self.mpv_set_property("volume", target_volume, timeout=0.4)
                 return
             except Exception:
@@ -11554,7 +11621,7 @@ class MainFrame(wx.Frame):
                 self.bass_boost_checkbox.SetValue(checked)
             except RuntimeError:
                 pass
-        self.apply_equalizer_to_player()
+        self.schedule_equalizer_apply(30)
         if announce:
             self.announce_player(self.t("bass_boost_on" if checked else "bass_boost_off"))
 
@@ -12012,14 +12079,48 @@ class MainFrame(wx.Frame):
         self.session_equalizer_before_bass_boost = None
 
     @staticmethod
-    def equalizer_filter(gains: dict[str, float]) -> str:
+    def equalizer_band_width(band_id: str) -> float:
+        return EQ_BAND_WIDTHS_OCTAVES.get(str(band_id), 1.0)
+
+    @staticmethod
+    def equalizer_protection_headroom_db(gains: dict[str, float]) -> float:
+        positive_gain = max((float(gains.get(band_id, 0.0) or 0.0) for band_id, _band_label in EQ_BANDS), default=0.0)
+        if positive_gain <= 0.05:
+            return 0.0
+        return min(EQ_MAX_PROTECTION_HEADROOM_DB, max(EQ_MIN_PROTECTION_HEADROOM_DB, positive_gain + 2.0))
+
+    @classmethod
+    def equalizer_filter(cls, gains: dict[str, float], protect_clipping: bool = False) -> str:
         filters = []
+        if protect_clipping:
+            headroom_db = cls.equalizer_protection_headroom_db(gains)
+            if headroom_db > 0.05:
+                filters.append(f"volume={10 ** (-headroom_db / 20.0):.4f}")
         for band_id, _band_label in EQ_BANDS:
             gain = max(-24.0, min(24.0, float(gains.get(band_id, 0.0) or 0.0)))
-            filters.append(f"equalizer=f={band_id}:t=q:w=1:g={gain:.1f}")
+            width = cls.equalizer_band_width(band_id)
+            filters.append(f"equalizer=f={band_id}:t=o:w={width:.2f}:g={gain:.1f}")
+        if protect_clipping and any(float(gains.get(band_id, 0.0) or 0.0) > 0.05 for band_id, _band_label in EQ_BANDS):
+            filters.append(EQ_LIMITER_FILTER)
         return f"{EQ_FILTER_REF}:lavfi=[{','.join(filters)}]"
 
-    def apply_equalizer_to_player(self) -> None:
+    def equalizer_needs_clipping_protection(self, gains: dict[str, float]) -> bool:
+        return bool(self.volume_boost_enabled and any(float(value or 0.0) > 0.05 for value in gains.values()))
+
+    def schedule_equalizer_apply(self, delay_ms: int = EQ_APPLY_DELAY_MS) -> None:
+        self.equalizer_apply_generation += 1
+        generation = self.equalizer_apply_generation
+        timer = getattr(self, "equalizer_apply_timer", None)
+        if timer is not None and timer.IsRunning():
+            timer.Stop()
+        self.equalizer_apply_timer = wx.CallLater(max(0, int(delay_ms)), self.apply_scheduled_equalizer_to_player, generation)
+
+    def apply_scheduled_equalizer_to_player(self, generation: int) -> None:
+        if generation != getattr(self, "equalizer_apply_generation", 0):
+            return
+        self.apply_equalizer_to_player()
+
+    def apply_equalizer_to_player(self, retry: bool = True) -> None:
         if self.player_kind != "mpv" or not self.mpv_process_alive():
             return
         enabled, gains = self.effective_equalizer_state()
@@ -12030,12 +12131,18 @@ class MainFrame(wx.Frame):
         self.equalizer_filter_active = False
         if not enabled or not any(abs(float(value)) >= 0.05 for value in gains.values()):
             return
+        protect_clipping = self.equalizer_needs_clipping_protection(gains)
         try:
-            response = self.mpv_request(["af", "add", self.equalizer_filter(gains)], timeout=1.0)
+            response = self.mpv_request(["af", "add", self.equalizer_filter(gains, protect_clipping=protect_clipping)], timeout=1.2)
+            if response.get("error") != "success" and protect_clipping:
+                response = self.mpv_request(["af", "add", self.equalizer_filter(gains, protect_clipping=False)], timeout=1.2)
             if response.get("error") == "success":
                 self.equalizer_filter_active = True
+                return
         except Exception:
             self.equalizer_filter_active = False
+        if retry:
+            wx.CallLater(180, self.apply_equalizer_to_player, False)
 
     def show_player_equalizer(self) -> None:
         if not self.player_is_active():
@@ -12133,7 +12240,7 @@ class MainFrame(wx.Frame):
         def live_apply() -> None:
             self.session_equalizer_enabled = True
             self.session_equalizer_gains = current_dialog_gains()
-            self.apply_equalizer_to_player()
+            self.schedule_equalizer_apply()
 
         def load_preset_into_sliders(preset_id: str) -> None:
             nonlocal dialog_visible_preset
@@ -12642,10 +12749,18 @@ class MainFrame(wx.Frame):
 
     def ffmpeg_equalizer_filters(self, gains: dict[str, float]) -> list[str]:
         filters: list[str] = []
+        protect_clipping = self.equalizer_needs_clipping_protection(gains)
+        if protect_clipping:
+            headroom_db = self.equalizer_protection_headroom_db(gains)
+            if headroom_db > 0.05:
+                filters.append(f"volume={10 ** (-headroom_db / 20.0):.4f}")
         for band_id, _band_label in EQ_BANDS:
             gain = max(-24.0, min(24.0, float(gains.get(band_id, 0.0) or 0.0)))
             if abs(gain) >= 0.05:
-                filters.append(f"equalizer=f={band_id}:t=q:w=1:g={gain:.1f}")
+                width = self.equalizer_band_width(band_id)
+                filters.append(f"equalizer=f={band_id}:t=o:w={width:.2f}:g={gain:.1f}")
+        if filters and protect_clipping:
+            filters.append(EQ_LIMITER_FILTER)
         return filters
 
     def local_edit_audio_filters(self) -> list[str]:
@@ -13331,8 +13446,9 @@ class MainFrame(wx.Frame):
         try:
             current = self.mpv_get_property("volume")
             volume = float(current if current is not None else 100.0)
-            maximum = 300.0 if self.volume_boost_enabled else 100.0
+            maximum = float(self.current_player_volume_max())
             volume = min(max(0.0, volume + float(delta)), maximum)
+            self.mpv_set_property("volume-max", maximum)
             self.mpv_set_property("volume", volume)
             self.session_volume = volume
         except Exception:
@@ -13354,9 +13470,18 @@ class MainFrame(wx.Frame):
     def toggle_volume_boost(self) -> None:
         self.volume_boost_enabled = not self.volume_boost_enabled
         if self.volume_boost_enabled:
+            threading.Thread(target=self.enable_volume_boost_worker, daemon=True).start()
+            self.schedule_equalizer_apply(30)
             self.announce_player(self.t("volume_boost_on"))
         else:
             threading.Thread(target=self.disable_volume_boost_worker, daemon=True).start()
+            self.schedule_equalizer_apply(30)
+
+    def enable_volume_boost_worker(self) -> None:
+        try:
+            self.mpv_set_property("volume-max", BOOSTED_VOLUME_MAX)
+        except Exception:
+            pass
 
     def disable_volume_boost_worker(self) -> None:
         try:
@@ -13366,6 +13491,7 @@ class MainFrame(wx.Frame):
                 self.session_volume = 100.0
             elif current is not None:
                 self.session_volume = max(0.0, min(100.0, float(current)))
+            self.mpv_set_property("volume-max", NORMAL_VOLUME_MAX)
         except Exception:
             pass
         wx.CallAfter(self.announce_player, self.t("volume_boost_off"))
@@ -13422,8 +13548,38 @@ class MainFrame(wx.Frame):
     def pitch_step_value(self) -> float:
         return self.to_float(str(getattr(self.settings, "pitch_step", 0.01)), 0.01, 0.01, 0.25)
 
+    def seek_seconds_value(self) -> float:
+        return self.to_float(str(getattr(self.settings, "seek_seconds", 5.0)), 5.0, 0.1, 600.0)
+
+    @staticmethod
+    def format_seek_seconds_value(value: float) -> str:
+        value = round(float(value), 2)
+        if abs(value - round(value)) < 0.001:
+            return str(int(round(value)))
+        return f"{value:.2f}".rstrip("0").rstrip(".")
+
+    @staticmethod
+    def default_volume_max_for_boost(boost_enabled: bool) -> int:
+        return BOOSTED_VOLUME_MAX if boost_enabled else NORMAL_VOLUME_MAX
+
+    def default_volume_max_value(self) -> int:
+        return self.default_volume_max_for_boost(bool(getattr(self.settings, "volume_boost_by_default", False)))
+
     def default_volume_value(self) -> int:
-        return self.to_int(str(getattr(self.settings, "default_volume", 100)), 100, 0, 300)
+        return self.to_int(str(getattr(self.settings, "default_volume", 100)), 100, 0, self.default_volume_max_value())
+
+    def on_volume_boost_by_default_settings_changed(self, event: wx.CommandEvent) -> None:
+        enabled = bool(event.IsChecked())
+        self.settings.volume_boost_by_default = enabled
+        slider = self.controls.get("default_volume") if hasattr(self, "controls") else None
+        if isinstance(slider, wx.Slider):
+            maximum = self.default_volume_max_for_boost(enabled)
+            value = min(max(0, int(slider.GetValue())), maximum)
+            slider.SetRange(0, maximum)
+            if slider.GetValue() != value:
+                slider.SetValue(value)
+            self.set_integer_slider_accessibility(slider, self.t("default_volume"), "percent")
+        event.Skip()
 
     def normalized_pitch_mode(self) -> str:
         mode = str(getattr(self.settings, "pitch_mode", PITCH_MODE_MPV) or PITCH_MODE_MPV)
@@ -13678,7 +13834,7 @@ class MainFrame(wx.Frame):
             self.settings.global_equalizer_enabled = ctrl.GetValue()
         if self.player_is_active():
             self.use_global_equalizer_for_live_preview()
-            self.apply_equalizer_to_player()
+            self.schedule_equalizer_apply(30)
         wx.CallAfter(self.render_settings_section_and_focus, "global_equalizer")
 
     def on_equalizer_settings_preset_changed(self, _event: wx.CommandEvent) -> None:
@@ -13688,7 +13844,7 @@ class MainFrame(wx.Frame):
         self.settings.global_equalizer_preset = self.normalized_equalizer_preset(preset)
         if self.player_is_active():
             self.use_global_equalizer_for_live_preview()
-            self.apply_equalizer_to_player()
+            self.schedule_equalizer_apply(30)
         wx.CallAfter(self.render_settings_section_and_focus, "equalizer_preset")
 
     def on_equalizer_settings_name_changed(self, event: wx.FocusEvent) -> None:
@@ -13699,7 +13855,11 @@ class MainFrame(wx.Frame):
             names[preset] = ctrl.GetValue().strip()[:80] or self.equalizer_custom_name(preset)
             self.settings.equalizer_custom_names = names
             self.save_visible_equalizer_gains_to_preset(preset)
-            wx.CallAfter(self.render_settings_section_and_focus, "equalizer_preset")
+            preset_ctrl = self.controls.get("equalizer_preset") if hasattr(self, "controls") else None
+            if isinstance(preset_ctrl, wx.Choice):
+                options = self.equalizer_preset_options()
+                if preset in options:
+                    preset_ctrl.SetString(options.index(preset), self.equalizer_preset_label(preset))
         event.Skip()
 
     def on_equalizer_settings_slider(self, event: wx.CommandEvent, label: str) -> None:
@@ -13710,7 +13870,7 @@ class MainFrame(wx.Frame):
         if self.player_is_active():
             self.settings.global_equalizer_enabled = True
             self.use_global_equalizer_for_live_preview()
-            self.apply_equalizer_to_player()
+            self.schedule_equalizer_apply()
 
     def on_equalizer_range_changed(self, _event: wx.CommandEvent) -> None:
         self.save_visible_equalizer_gains_to_preset(getattr(self, "visible_equalizer_preset", EQ_PRESET_FLAT))
@@ -13733,7 +13893,7 @@ class MainFrame(wx.Frame):
                 self.set_equalizer_slider_accessibility(ctrl, self.t("equalizer_band_gain", band=band_label))
         if self.player_is_active():
             self.use_global_equalizer_for_live_preview()
-            self.apply_equalizer_to_player()
+            self.schedule_equalizer_apply(30)
         self.announce_player(self.t("equalizer_saved"))
 
     def result_limit_labels(self, options: list[str]) -> list[str]:
@@ -13865,6 +14025,8 @@ class MainFrame(wx.Frame):
             pass
 
     def stop_player(self, silent: bool = False, reset_session: bool = True, preserve_panel: bool = False) -> None:
+        self.play_request_generation += 1
+        self.playback_start_pending = False
         self.save_current_playback_position()
         self.player_generation += 1
         self.player_ended = False
@@ -14219,10 +14381,10 @@ class MainFrame(wx.Frame):
             self.player_seek(60)
             return True
         if self.shortcut_matches(event, "player_seek_back"):
-            self.player_seek(-5)
+            self.player_seek(-self.seek_seconds_value())
             return True
         if self.shortcut_matches(event, "player_seek_forward"):
-            self.player_seek(5)
+            self.player_seek(self.seek_seconds_value())
             return True
         if self.shortcut_matches(event, "player_volume_up"):
             self.change_volume_async(self.settings.volume_step)
@@ -15580,13 +15742,19 @@ class MainFrame(wx.Frame):
         if "direct_link_enter_action" in c:
             self.settings.direct_link_enter_action = self.normalize_direct_link_enter_action(self.selected_choice_value("direct_link_enter_action"))
         if "seek_seconds" in c:
-            self.settings.seek_seconds = self.to_int(c["seek_seconds"].GetStringSelection(), 5, 1)
+            self.settings.seek_seconds = self.to_float(self.selected_choice_value("seek_seconds"), 5.0, 0.1, 600.0)
         if "volume_step" in c:
             self.settings.volume_step = self.to_int(c["volume_step"].GetStringSelection(), 5, 1)
+        boost_by_default = bool(c["volume_boost_by_default"].GetValue()) if "volume_boost_by_default" in c else bool(getattr(self.settings, "volume_boost_by_default", False))
         if "default_volume" in c:
-            self.settings.default_volume = self.to_int(str(c["default_volume"].GetValue()), 100, 0, 300)
+            self.settings.default_volume = self.to_int(
+                str(c["default_volume"].GetValue()),
+                100,
+                0,
+                self.default_volume_max_for_boost(boost_by_default),
+            )
         if "volume_boost_by_default" in c:
-            self.settings.volume_boost_by_default = c["volume_boost_by_default"].GetValue()
+            self.settings.volume_boost_by_default = boost_by_default
         if "speed_step" in c:
             self.settings.speed_step = self.to_float(c["speed_step"].GetStringSelection(), 0.01, 0.01, 0.25)
         if "pitch_step" in c:
@@ -16973,7 +17141,13 @@ class MainFrame(wx.Frame):
                     merged["equalizer_preset_gains"]["custom1"] = merged["global_equalizer_gains"]
                     self.settings_migrated = True
                 merged["equalizer_db_range"] = self.to_int(str(merged.get("equalizer_db_range") or "12"), 12, 6, 24)
-                merged["default_volume"] = self.to_int(str(merged.get("default_volume") or "100"), 100, 0, 300)
+                merged["seek_seconds"] = self.to_float(str(merged.get("seek_seconds") or "5"), 5.0, 0.1, 600.0)
+                merged["default_volume"] = self.to_int(
+                    str(merged.get("default_volume") or "100"),
+                    100,
+                    0,
+                    self.default_volume_max_for_boost(bool(merged.get("volume_boost_by_default", False))),
+                )
                 old_audio_quality = str(merged.get("audio_quality") or "")
                 merged["audio_quality"] = self.normalize_audio_quality_value(old_audio_quality)
                 if old_audio_quality and merged["audio_quality"] != old_audio_quality:

@@ -1,5 +1,15 @@
 # Changelog
 
+## What's new in version 0.8.51
+
+- debounced and retried equalizer live preview updates, so rapid slider changes no longer leave stale or missing mpv filters behind.
+- widened the 31 Hz, 62 Hz, and 125 Hz equalizer bands so sub bass and low bass changes are audible and consistent.
+- added EQ headroom and limiting when Volume boost is combined with positive EQ/Bass boost, reducing crackling and clipping.
+- guarded playback startup with request generations, so fast repeated Next/Previous commands ignore stale stream-resolution results instead of starting two items.
+- stopped custom equalizer preset rename focus loss from redrawing the Settings page, fixing Tab/Escape navigation after profile creation.
+- capped the Default playback volume slider at 100 unless Volume boost on by default is enabled, where the 300 range remains available.
+- expanded the Seek seconds setting down to 0.1 seconds and made the small seek shortcuts use that configured value.
+
 ## What's new in version 0.8.50
 
 - changed playlist and channel context-menu downloads into an Audio/Video submenu, while keeping `Ctrl+Shift+A` and `Ctrl+Shift+D` as direct audio/video downloads.
