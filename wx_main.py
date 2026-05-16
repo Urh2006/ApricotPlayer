@@ -202,8 +202,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.51"
-APP_VERSION_LABEL = "0.8.51"
+APP_VERSION = "0.8.52"
+APP_VERSION_LABEL = "0.8.52"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -301,10 +301,11 @@ EQ_BANDS: list[tuple[str, str]] = [
     ("16000", "16 kHz air and sparkle"),
 ]
 EQ_BAND_WIDTHS_OCTAVES: dict[str, float] = {
-    "31": 1.45,
-    "62": 1.35,
-    "125": 1.2,
+    "31": 2.4,
+    "62": 2.0,
+    "125": 1.45,
 }
+EQ_LOW_SHELF_BANDS = {"31", "62"}
 EQ_MIN_PROTECTION_HEADROOM_DB = 3.0
 EQ_MAX_PROTECTION_HEADROOM_DB = 9.0
 EQ_LIMITER_FILTER = "alimiter=limit=0.95"
@@ -3362,9 +3363,12 @@ RELEASE_086_TRANSLATION_UPDATES = {
         "trending_source_api": "Uradni YouTube most-popular feed.",
         "trending_source_public": "Javni YouTube charts/explore feed.",
         "add_equalizer_profile": "Dodaj equalizer profil",
+        "delete_equalizer_profile": "Izbrisi equalizer profil",
         "save_equalizer_as_global": "Shrani kot globalni equalizer preset",
         "equalizer_profile_name": "Ime equalizer profila",
         "equalizer_profile_saved": "Equalizer profil shranjen.",
+        "equalizer_profile_deleted": "Equalizer profil izbrisan.",
+        "equalizer_profile_delete_confirm": "Izbrisem ta equalizer profil?",
         "equalizer_global_preview_blocked": "Player equalizer je aktiven. Globalni equalizer bo slisen, ko resetiras player equalizer ali predvajas naslednji posnetek.",
         "cookie_export_diagnostics": "Cookie diagnostics:\n{details}",
         "open_youtube_login_profile": "Odpri YouTube v izbranem profilu",
@@ -3382,9 +3386,12 @@ RELEASE_086_TRANSLATION_UPDATES = {
         "trending_source_api": "Official YouTube most-popular feed.",
         "trending_source_public": "Public YouTube charts/explore feed.",
         "add_equalizer_profile": "Add equalizer profile",
+        "delete_equalizer_profile": "Delete equalizer profile",
         "save_equalizer_as_global": "Save as global equalizer preset",
         "equalizer_profile_name": "Equalizer profile name",
         "equalizer_profile_saved": "Equalizer profile saved.",
+        "equalizer_profile_deleted": "Equalizer profile deleted.",
+        "equalizer_profile_delete_confirm": "Delete this equalizer profile?",
         "equalizer_global_preview_blocked": "Player equalizer is active. Global equalizer changes will be audible after you reset the player equalizer or play the next item.",
         "cookie_export_diagnostics": "Cookie diagnostics:\n{details}",
         "open_youtube_login_profile": "Open YouTube in selected profile",
@@ -3924,6 +3931,7 @@ class MainFrame(wx.Frame):
         self.current_search_type_code = "All"
         self.collection_url = ""
         self.collection_result_type = ""
+        self.collection_sort_mode = ""
         self.current_stream_url = ""
         self.current_stream_headers: dict = {}
         self.stream_url_cache: dict[str, dict] = {}
@@ -3939,6 +3947,9 @@ class MainFrame(wx.Frame):
         self.equalizer_apply_timer: wx.CallLater | None = None
         self.bass_boost_enabled = False
         self.equalizer_filter_active = False
+        self.volume_change_lock = threading.Lock()
+        self.volume_change_pending_delta = 0.0
+        self.volume_change_timer: wx.CallLater | None = None
         self.clip_start_marker: float | None = None
         self.clip_end_marker: float | None = None
         self.audio_device_options_cache: tuple[float, list[str], list[str]] | None = None
@@ -8237,6 +8248,7 @@ class MainFrame(wx.Frame):
         self.current_search_type_code = "Video"
         self.collection_url = ""
         self.collection_result_type = ""
+        self.collection_sort_mode = ""
         self.loading_more_results = False
         self.dynamic_fetch_enabled = True
         self.metadata_hydration_urls.clear()
@@ -9593,6 +9605,8 @@ class MainFrame(wx.Frame):
                     slider(f"eq_{band_id}", label, gains.get(band_id, 0.0), slider_min, slider_max)
                 button("reset_equalizer", self.reset_visible_equalizer_controls)
                 button("add_equalizer_profile", self.add_equalizer_profile_from_settings)
+                if self.is_custom_equalizer_preset(preset):
+                    button("delete_equalizer_profile", self.delete_visible_equalizer_profile_from_settings)
         elif section_name == "downloads":
             check("confirm_download", self.settings.confirm_before_download)
             check("open_after_download", self.settings.open_folder_after_download)
@@ -9739,6 +9753,7 @@ class MainFrame(wx.Frame):
         self.current_search_type_code = self.search_type_code()
         self.collection_url = ""
         self.collection_result_type = ""
+        self.collection_sort_mode = ""
         self.search_results_stack = []
         self.loading_more_results = False
         self.dynamic_fetch_enabled = True
@@ -9958,7 +9973,11 @@ class MainFrame(wx.Frame):
         self.set_status(self.t("loading_more_results"))
         generation = self.search_generation
         if self.collection_url:
-            threading.Thread(target=self.load_collection_worker, args=(self.collection_url, self.collection_result_type or "Video", next_limit, selection, generation), daemon=True).start()
+            threading.Thread(
+                target=self.load_collection_worker,
+                args=(self.collection_url, self.collection_result_type or "Video", next_limit, selection, generation, self.collection_sort_mode),
+                daemon=True,
+            ).start()
         else:
             threading.Thread(target=self.search_more_worker, args=(self.last_search_query, self.current_search_type_code, next_limit, selection, generation), daemon=True).start()
 
@@ -10012,7 +10031,7 @@ class MainFrame(wx.Frame):
             url = str(item.get("url") or "")
             if item.get("kind") != "video" or not url or url in self.metadata_hydration_urls:
                 continue
-            if item.get("timestamp") or item.get("upload_date"):
+            if (item.get("timestamp") or item.get("upload_date")) and item.get("view_count") not in (None, ""):
                 continue
             candidates.append(dict(item))
             self.metadata_hydration_urls.add(url)
@@ -10058,6 +10077,30 @@ class MainFrame(wx.Frame):
             "duration": self.format_duration(info.get("duration", item.get("duration_seconds"))),
             "description": info.get("description") or item.get("description", ""),
         }
+
+    @staticmethod
+    def numeric_view_count(value) -> int:
+        if value in (None, ""):
+            return -1
+        try:
+            return int(float(str(value).replace(",", "").strip()))
+        except (TypeError, ValueError):
+            return -1
+
+    def sorted_popular_channel_results(self, results: list[dict]) -> list[dict]:
+        options = {"quiet": True, "skip_download": True, "noplaylist": True}
+        hydrated: list[dict] = []
+        for item in results:
+            updated = dict(item)
+            url = str(updated.get("url") or "")
+            if updated.get("kind") == "video" and url and self.numeric_view_count(updated.get("view_count")) < 0:
+                try:
+                    info = self.ydl_extract_info(url, options, download=False)
+                    updated.update({key: value for key, value in self.metadata_from_info(info, updated).items() if value not in (None, "")})
+                except Exception:
+                    pass
+            hydrated.append(updated)
+        return sorted(hydrated, key=lambda item: self.numeric_view_count(item.get("view_count")), reverse=True)
 
     def apply_result_metadata(self, payload: dict) -> None:
         url = str(payload.get("url") or "")
@@ -10180,6 +10223,7 @@ class MainFrame(wx.Frame):
                 "search_type": self.current_search_type_code,
                 "collection_url": self.collection_url,
                 "collection_result_type": self.collection_result_type,
+                "collection_sort_mode": self.collection_sort_mode,
                 "country_index": getattr(self, "last_trending_country_index", 0),
                 "category_index": getattr(self, "last_trending_category_index", 0),
             }
@@ -10218,6 +10262,7 @@ class MainFrame(wx.Frame):
         self.current_search_type_code = str(state.get("search_type") or "All")
         self.collection_url = str(state.get("collection_url") or "")
         self.collection_result_type = str(state.get("collection_result_type") or "")
+        self.collection_sort_mode = str(state.get("collection_sort_mode") or "")
         self.loading_more_results = False
         self.dynamic_fetch_enabled = True
         self.metadata_hydration_urls.clear()
@@ -10238,10 +10283,8 @@ class MainFrame(wx.Frame):
             return ""
         base = url.split("?", 1)[0].rstrip("/")
         base = re.sub(r"/(videos|playlists|featured|streams|shorts)$", "", base, flags=re.IGNORECASE)
-        if tab == "home":
-            return base
         if tab == "popular":
-            return f"{base}/videos?sort=p"
+            return f"{base}/videos?view=0&sort=p&flow=grid"
         if tab == "playlists":
             return f"{base}/playlists"
         return f"{base}/videos"
@@ -10254,7 +10297,6 @@ class MainFrame(wx.Frame):
         tabs = [
             ("videos", self.t("channel_videos")),
             ("playlists", self.t("channel_playlists")),
-            ("home", self.t("channel_home")),
             ("popular", self.t("channel_popular")),
         ]
         with wx.SingleChoiceDialog(self, item.get("title", self.t("channel")), self.t("channel_options"), [label for _tab, label in tabs]) as dialog:
@@ -10277,9 +10319,6 @@ class MainFrame(wx.Frame):
         if tab == "playlists":
             result_type = "Playlist"
             label = self.t("channel_playlists")
-        elif tab == "home":
-            result_type = "All"
-            label = self.t("channel_home")
         elif tab == "popular":
             result_type = "Video"
             label = self.t("channel_popular")
@@ -10289,12 +10328,13 @@ class MainFrame(wx.Frame):
         self.set_status(self.t("loading_channel", title=f"{title} - {label}"))
         self.collection_url = url
         self.collection_result_type = result_type
+        self.collection_sort_mode = "popular" if tab == "popular" else ""
         self.loading_more_results = False
         self.dynamic_fetch_enabled = True
         self.metadata_hydration_urls.clear()
         self.search_generation += 1
         generation = self.search_generation
-        threading.Thread(target=self.load_collection_worker, args=(url, result_type, self.initial_results_limit(), 0, generation), daemon=True).start()
+        threading.Thread(target=self.load_collection_worker, args=(url, result_type, self.initial_results_limit(), 0, generation, self.collection_sort_mode), daemon=True).start()
 
     def show_trending(self, auto_load: bool = True, country_index: int | None = None, category_index: int | None = None) -> None:
         if not getattr(self.settings, "enable_trending", False):
@@ -10370,6 +10410,7 @@ class MainFrame(wx.Frame):
         self.current_search_type_code = "Video"
         self.collection_url = ""
         self.collection_result_type = ""
+        self.collection_sort_mode = ""
         self.search_results_stack = []
         self.loading_more_results = False
         self.dynamic_fetch_enabled = False
@@ -10494,14 +10535,23 @@ class MainFrame(wx.Frame):
         self.set_status(self.t("loading_playlist", title=item["title"]))
         self.collection_url = item["url"]
         self.collection_result_type = "Video"
+        self.collection_sort_mode = ""
         self.loading_more_results = False
         self.dynamic_fetch_enabled = True
         self.metadata_hydration_urls.clear()
         self.search_generation += 1
         generation = self.search_generation
-        threading.Thread(target=self.load_collection_worker, args=(item["url"], "Video", self.initial_results_limit(), 0, generation), daemon=True).start()
+        threading.Thread(target=self.load_collection_worker, args=(item["url"], "Video", self.initial_results_limit(), 0, generation, ""), daemon=True).start()
 
-    def load_collection_worker(self, url: str, result_type: str, limit: int | None = None, selection: int = 0, generation: int | None = None) -> None:
+    def load_collection_worker(
+        self,
+        url: str,
+        result_type: str,
+        limit: int | None = None,
+        selection: int = 0,
+        generation: int | None = None,
+        sort_mode: str = "",
+    ) -> None:
         try:
             generation = self.search_generation if generation is None else generation
             limit = limit or self.initial_results_limit()
@@ -10514,6 +10564,8 @@ class MainFrame(wx.Frame):
             info = self.ydl_extract_info(url, options, download=False)
             entries = list(info.get("entries") or [])[:limit]
             normalized = [self.normalize_entry(entry, result_type) for entry in entries]
+            if sort_mode == "popular":
+                normalized = self.sorted_popular_channel_results(normalized)
             if self.settings.results_limit == 0 and selection:
                 wx.CallAfter(self.show_more_results_if_current, generation, normalized, selection)
             else:
@@ -10683,6 +10735,7 @@ class MainFrame(wx.Frame):
         self.current_search_type_code = "All"
         self.collection_url = ""
         self.collection_result_type = ""
+        self.collection_sort_mode = ""
         self.search_results_stack = []
         self.loading_more_results = False
         self.dynamic_fetch_enabled = False
@@ -11316,6 +11369,8 @@ class MainFrame(wx.Frame):
             ]
             if embed_player and hwnd:
                 args.insert(2, f"--wid={hwnd}")
+            elif urlparse(str(stream_url)).scheme in {"http", "https"}:
+                args.append("--vid=no")
             args.extend(self.speed_audio_filter_args())
             if getattr(self.settings, "enable_stream_cache", True):
                 cache_folder = self.cache_folder_path()
@@ -11471,9 +11526,9 @@ class MainFrame(wx.Frame):
         if focus_target == "player" and not self.settings.show_video_details_by_default:
             self.player_panel.SetFocus()
         player_controls = [
-            (self.t("previous"), lambda: self.play_relative_item(-1)),
+            (self.t("previous"), lambda: self.play_relative_item(-1, preserve_focus=True)),
             (self.current_play_pause_label(), self.player_play_pause),
-            (self.t("next"), lambda: self.play_relative_item(1)),
+            (self.t("next"), lambda: self.play_relative_item(1, preserve_focus=True)),
             (self.t("playback_queue"), self.show_playback_queue),
             (self.t("add_to_playlist"), lambda: self.add_active_to_playlist(prefer_active=True)),
             (self.t("output_devices"), self.show_output_devices),
@@ -12082,6 +12137,13 @@ class MainFrame(wx.Frame):
     def equalizer_band_width(band_id: str) -> float:
         return EQ_BAND_WIDTHS_OCTAVES.get(str(band_id), 1.0)
 
+    @classmethod
+    def equalizer_band_filter(cls, band_id: str, gain: float) -> str:
+        width = cls.equalizer_band_width(band_id)
+        if str(band_id) in EQ_LOW_SHELF_BANDS:
+            return f"bass=f={band_id}:t=o:w={width:.2f}:g={gain:.1f}"
+        return f"equalizer=f={band_id}:t=o:w={width:.2f}:g={gain:.1f}"
+
     @staticmethod
     def equalizer_protection_headroom_db(gains: dict[str, float]) -> float:
         positive_gain = max((float(gains.get(band_id, 0.0) or 0.0) for band_id, _band_label in EQ_BANDS), default=0.0)
@@ -12098,9 +12160,9 @@ class MainFrame(wx.Frame):
                 filters.append(f"volume={10 ** (-headroom_db / 20.0):.4f}")
         for band_id, _band_label in EQ_BANDS:
             gain = max(-24.0, min(24.0, float(gains.get(band_id, 0.0) or 0.0)))
-            width = cls.equalizer_band_width(band_id)
-            filters.append(f"equalizer=f={band_id}:t=o:w={width:.2f}:g={gain:.1f}")
-        if protect_clipping and any(float(gains.get(band_id, 0.0) or 0.0) > 0.05 for band_id, _band_label in EQ_BANDS):
+            if abs(gain) >= 0.05:
+                filters.append(cls.equalizer_band_filter(band_id, gain))
+        if filters and protect_clipping and any(float(gains.get(band_id, 0.0) or 0.0) > 0.05 for band_id, _band_label in EQ_BANDS):
             filters.append(EQ_LIMITER_FILTER)
         return f"{EQ_FILTER_REF}:lavfi=[{','.join(filters)}]"
 
@@ -12197,11 +12259,13 @@ class MainFrame(wx.Frame):
         reset_button = wx.Button(dialog, label=self.t("reset_equalizer"))
         save_global_button = wx.Button(dialog, label=self.t("save_equalizer_as_global"))
         add_profile_button = wx.Button(dialog, label=self.t("add_equalizer_profile"))
+        delete_profile_button = wx.Button(dialog, label=self.t("delete_equalizer_profile"))
         buttons.AddButton(ok_button)
         buttons.AddButton(cancel_button)
         buttons.Realize()
         row = wx.BoxSizer(wx.HORIZONTAL)
         row.Add(add_profile_button, 0, wx.RIGHT, 8)
+        row.Add(delete_profile_button, 0, wx.RIGHT, 8)
         row.Add(save_global_button, 0, wx.RIGHT, 8)
         row.Add(reset_button, 0, wx.RIGHT, 8)
         row.Add(buttons, 0)
@@ -12227,6 +12291,7 @@ class MainFrame(wx.Frame):
             visible = self.is_custom_equalizer_preset(current_preset())
             name_label.Show(visible)
             name_ctrl.Show(visible)
+            delete_profile_button.Enable(visible)
             dialog.Layout()
 
         def save_current_dialog_name(preset_id: str | None = None) -> None:
@@ -12325,6 +12390,16 @@ class MainFrame(wx.Frame):
 
         add_profile_button.Bind(wx.EVT_BUTTON, add_profile_from_dialog)
         save_global_button.Bind(wx.EVT_BUTTON, save_dialog_as_global)
+
+        def delete_profile_from_dialog(_event=None) -> None:
+            preset = current_preset()
+            replacement = self.delete_equalizer_profile(preset)
+            if not replacement:
+                return
+            refresh_preset_choices(replacement)
+            load_preset_into_sliders(replacement)
+
+        delete_profile_button.Bind(wx.EVT_BUTTON, delete_profile_from_dialog)
         update_custom_name_visibility()
         result = dialog.ShowModal()
         if result == wx.ID_OK:
@@ -12757,8 +12832,7 @@ class MainFrame(wx.Frame):
         for band_id, _band_label in EQ_BANDS:
             gain = max(-24.0, min(24.0, float(gains.get(band_id, 0.0) or 0.0)))
             if abs(gain) >= 0.05:
-                width = self.equalizer_band_width(band_id)
-                filters.append(f"equalizer=f={band_id}:t=o:w={width:.2f}:g={gain:.1f}")
+                filters.append(self.equalizer_band_filter(band_id, gain))
         if filters and protect_clipping:
             filters.append(EQ_LIMITER_FILTER)
         return filters
@@ -13440,9 +13514,23 @@ class MainFrame(wx.Frame):
             self.rubberband_pitch_filter_active = False
 
     def change_volume_async(self, delta: int) -> None:
+        with self.volume_change_lock:
+            self.volume_change_pending_delta += float(delta)
+            timer = self.volume_change_timer
+            if timer is not None and timer.IsRunning():
+                return
+            self.volume_change_timer = wx.CallLater(45, self.apply_pending_volume_change_async)
+
+    def apply_pending_volume_change_async(self) -> None:
+        with self.volume_change_lock:
+            delta = self.volume_change_pending_delta
+            self.volume_change_pending_delta = 0.0
+            self.volume_change_timer = None
+        if abs(delta) < 0.001:
+            return
         threading.Thread(target=self.change_volume_worker, args=(delta,), daemon=True).start()
 
-    def change_volume_worker(self, delta: int) -> None:
+    def change_volume_worker(self, delta: float) -> None:
         try:
             current = self.mpv_get_property("volume")
             volume = float(current if current is not None else 100.0)
@@ -13800,6 +13888,30 @@ class MainFrame(wx.Frame):
         self.announce_player(self.t("equalizer_profile_saved"))
         return preset_id
 
+    def delete_equalizer_profile(self, preset_id: str | None, confirm: bool = True) -> str:
+        preset_id = self.normalized_equalizer_preset(preset_id)
+        if not self.is_custom_equalizer_preset(preset_id):
+            return ""
+        if confirm:
+            answer = wx.MessageBox(self.t("equalizer_profile_delete_confirm"), self.t("equalizer"), wx.YES_NO | wx.ICON_QUESTION)
+            if answer != wx.YES:
+                return ""
+        names = self.normalized_equalizer_custom_names(getattr(self.settings, "equalizer_custom_names", {}) or {})
+        presets = self.normalized_equalizer_preset_gains(getattr(self.settings, "equalizer_preset_gains", {}) or {})
+        names.pop(preset_id, None)
+        if preset_id in EQ_CUSTOM_PRESET_IDS:
+            presets[preset_id] = default_equalizer_gains()
+        else:
+            presets.pop(preset_id, None)
+        self.settings.equalizer_custom_names = names
+        self.settings.equalizer_preset_gains = presets
+        replacement = EQ_PRESET_FLAT
+        self.settings.global_equalizer_preset = replacement
+        self.settings.global_equalizer_gains = self.equalizer_gains_for_preset(replacement)
+        self.save_settings()
+        self.announce_player(self.t("equalizer_profile_deleted"))
+        return replacement
+
     def choose_equalizer_profile_for_save(self, gains: dict[str, float]) -> str:
         profile_ids = self.equalizer_custom_ids()
         labels = [self.equalizer_custom_name(profile_id) for profile_id in profile_ids]
@@ -13825,6 +13937,16 @@ class MainFrame(wx.Frame):
         if not preset_id:
             return
         self.settings.global_equalizer_preset = preset_id
+        wx.CallAfter(self.render_settings_section_and_focus, "equalizer_preset")
+
+    def delete_visible_equalizer_profile_from_settings(self) -> None:
+        preset_id = self.normalized_equalizer_preset(getattr(self, "visible_equalizer_preset", getattr(self.settings, "global_equalizer_preset", EQ_PRESET_FLAT)))
+        replacement = self.delete_equalizer_profile(preset_id)
+        if not replacement:
+            return
+        self.visible_equalizer_preset = replacement
+        if self.player_is_active() and self.session_equalizer_enabled is None:
+            self.schedule_equalizer_apply(30)
         wx.CallAfter(self.render_settings_section_and_focus, "equalizer_preset")
 
     def on_global_equalizer_toggle(self, _event: wx.CommandEvent) -> None:
@@ -14327,10 +14449,10 @@ class MainFrame(wx.Frame):
             self.set_clip_marker_async("end")
             return True
         if self.shortcut_matches(event, "player_previous"):
-            self.play_relative_item(-1)
+            self.play_relative_item(-1, preserve_focus=True)
             return True
         if self.shortcut_matches(event, "player_next"):
-            self.play_relative_item(1)
+            self.play_relative_item(1, preserve_focus=True)
             return True
         if self.shortcut_matches(event, "player_volume_boost"):
             self.toggle_volume_boost()

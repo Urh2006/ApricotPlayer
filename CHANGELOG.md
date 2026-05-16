@@ -1,5 +1,13 @@
 # Changelog
 
+## What's new in version 0.8.52
+
+- fixed Previous playback so `Ctrl+PageUp` keeps using the embedded player instead of letting mpv open a separate stream window.
+- strengthened the low equalizer bands: 31 Hz and 62 Hz now use wider low-shelf filters, and 125 Hz is wider, so sub bass and low bass sliders make a clearer audible change.
+- made equalizer custom profiles deletable from Settings and from the player equalizer dialog.
+- coalesced rapid volume-key repeats before sending them to mpv, reducing repeated volume-change crackle on sensitive audio devices.
+- changed channel options to Videos, Playlists, and Popular only; Popular now fetches view counts and sorts videos by views.
+
 ## What's new in version 0.8.51
 
 - debounced and retried equalizer live preview updates, so rapid slider changes no longer leave stale or missing mpv filters behind.
