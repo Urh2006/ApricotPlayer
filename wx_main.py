@@ -202,8 +202,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.52"
-APP_VERSION_LABEL = "0.8.52"
+APP_VERSION = "0.8.53"
+APP_VERSION_LABEL = "0.8.53"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -304,8 +304,16 @@ EQ_BAND_WIDTHS_OCTAVES: dict[str, float] = {
     "31": 2.4,
     "62": 2.0,
     "125": 1.45,
+    "250": 1.15,
+    "500": 1.05,
+    "1000": 1.0,
+    "2000": 1.0,
+    "4000": 1.05,
+    "8000": 1.15,
+    "16000": 1.35,
 }
 EQ_LOW_SHELF_BANDS = {"31", "62"}
+EQ_HIGH_SHELF_BANDS = {"16000"}
 EQ_MIN_PROTECTION_HEADROOM_DB = 3.0
 EQ_MAX_PROTECTION_HEADROOM_DB = 9.0
 EQ_LIMITER_FILTER = "alimiter=limit=0.95"
@@ -9497,7 +9505,7 @@ class MainFrame(wx.Frame):
             )
             self.configure_equalizer_slider_steps(ctrl)
             self.set_equalizer_slider_accessibility(ctrl, label)
-            ctrl.Bind(wx.EVT_SLIDER, lambda evt, label_text=label: self.on_equalizer_settings_slider(evt, label_text))
+            self.bind_equalizer_slider_events(ctrl, lambda evt, label_text=label: self.on_equalizer_settings_slider(evt, label_text))
             form.Add(ctrl, 1, wx.EXPAND)
             remember(key, ctrl)
             return ctrl
@@ -12142,6 +12150,8 @@ class MainFrame(wx.Frame):
         width = cls.equalizer_band_width(band_id)
         if str(band_id) in EQ_LOW_SHELF_BANDS:
             return f"bass=f={band_id}:t=o:w={width:.2f}:g={gain:.1f}"
+        if str(band_id) in EQ_HIGH_SHELF_BANDS:
+            return f"treble=f={band_id}:t=o:w={width:.2f}:g={gain:.1f}"
         return f"equalizer=f={band_id}:t=o:w={width:.2f}:g={gain:.1f}"
 
     @staticmethod
@@ -12182,7 +12192,7 @@ class MainFrame(wx.Frame):
             return
         self.apply_equalizer_to_player()
 
-    def apply_equalizer_to_player(self, retry: bool = True) -> None:
+    def apply_equalizer_to_player(self, retries: int = 2) -> None:
         if self.player_kind != "mpv" or not self.mpv_process_alive():
             return
         enabled, gains = self.effective_equalizer_state()
@@ -12203,8 +12213,8 @@ class MainFrame(wx.Frame):
                 return
         except Exception:
             self.equalizer_filter_active = False
-        if retry:
-            wx.CallLater(180, self.apply_equalizer_to_player, False)
+        if retries > 0:
+            wx.CallLater(180, self.apply_equalizer_to_player, retries - 1)
 
     def show_player_equalizer(self) -> None:
         if not self.player_is_active():
@@ -12356,7 +12366,7 @@ class MainFrame(wx.Frame):
             apply_dialog_db_range(self.to_int(value, original_db_range, 6, 24))
 
         for band_id, band_label in EQ_BANDS:
-            sliders[band_id].Bind(wx.EVT_SLIDER, lambda evt, label=self.t("equalizer_band_gain", band=band_label): on_slider(evt, label))
+            self.bind_equalizer_slider_events(sliders[band_id], lambda evt, label=self.t("equalizer_band_gain", band=band_label): on_slider(evt, label))
         preset_choice.Bind(wx.EVT_CHOICE, on_preset_changed)
         range_choice.Bind(wx.EVT_CHOICE, on_range_changed)
 
@@ -13755,6 +13765,18 @@ class MainFrame(wx.Frame):
                     setter(value)
                 except Exception:
                     pass
+
+    @staticmethod
+    def bind_equalizer_slider_events(ctrl: wx.Slider, handler) -> None:
+        event_names = ("EVT_SLIDER", "EVT_SCROLL")
+        for event_name in event_names:
+            binder = getattr(wx, event_name, None)
+            if binder is None:
+                continue
+            try:
+                ctrl.Bind(binder, handler)
+            except Exception:
+                pass
 
     def normalized_equalizer_preset(self, preset: str | None) -> str:
         value = str(preset or EQ_PRESET_FLAT).strip()

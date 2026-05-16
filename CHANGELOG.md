@@ -1,5 +1,13 @@
 # Changelog
 
+## What's new in version 0.8.53
+
+- checked and polished the whole 10-band equalizer path, not just the low bands.
+- added explicit filter widths for every equalizer band from 31 Hz through 16 kHz so each slider maps to a stable, intentional audio range.
+- changed the 16 kHz band to a high-shelf treble filter, matching the low-shelf handling for sub bass and making the top band more audible.
+- bound equalizer sliders to both normal slider and wx scroll events so keyboard, page, arrow, mouse, and assistive-control changes all refresh the same way.
+- gave mpv equalizer application a few retries when filter replacement is briefly busy, reducing cases where a slider visually moves but the active audio filter does not update.
+
 ## What's new in version 0.8.52
 
 - fixed Previous playback so `Ctrl+PageUp` keeps using the embedded player instead of letting mpv open a separate stream window.

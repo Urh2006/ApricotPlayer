@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.8.52` (`0.8.52`)
+Current version: `0.8.53` (`0.8.53`)
 
 ## Download
 
