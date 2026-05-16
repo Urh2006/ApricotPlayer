@@ -202,8 +202,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.54"
-APP_VERSION_LABEL = "0.8.54"
+APP_VERSION = "0.8.55"
+APP_VERSION_LABEL = "0.8.55"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -836,6 +836,8 @@ TEXT = {
         "type": "Vrsta",
         "search": "Search",
         "video": "Video",
+        "live_stream": "Live stream",
+        "live_now": "V zivo zdaj",
         "playlist": "Playlist",
         "channel": "Kanal",
         "all": "Vse",
@@ -1257,6 +1259,8 @@ TEXT = {
         "type": "Type",
         "search": "Search",
         "video": "Video",
+        "live_stream": "Live stream",
+        "live_now": "Live now",
         "playlist": "Playlist",
         "channel": "Channel",
         "all": "All",
@@ -3658,6 +3662,22 @@ for language_code in LANGUAGE_CODES:
     TEXT.setdefault(language_code, {}).update(RELEASE_0849_TRANSLATION_UPDATES.get(language_code, RELEASE_0849_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
 for language_code in LANGUAGE_CODES:
     for key, value in RELEASE_0849_TRANSLATION_UPDATES["en"].items():
+        TEXT.setdefault(language_code, {}).setdefault(key, value)
+
+RELEASE_0855_TRANSLATION_UPDATES = {
+    "sl": {
+        "live_stream": "Live stream",
+        "live_now": "V zivo zdaj",
+    },
+    "en": {
+        "live_stream": "Live stream",
+        "live_now": "Live now",
+    },
+}
+for language_code in LANGUAGE_CODES:
+    TEXT.setdefault(language_code, {}).update(RELEASE_0855_TRANSLATION_UPDATES.get(language_code, RELEASE_0855_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
+for language_code in LANGUAGE_CODES:
+    for key, value in RELEASE_0855_TRANSLATION_UPDATES["en"].items():
         TEXT.setdefault(language_code, {}).setdefault(key, value)
 
 
@@ -7390,13 +7410,15 @@ class MainFrame(wx.Frame):
             "upload_date",
             "description",
             "type",
+            "live_status",
+            "is_live",
             "kind",
             "url",
             "webpage_url",
         ]
         playlist_item = {key: item.get(key, "") for key in keys}
         playlist_item["kind"] = playlist_item.get("kind") or "video"
-        playlist_item["type"] = playlist_item.get("type") or self.t("video")
+        playlist_item["type"] = self.item_type_label(playlist_item)
         playlist_item["added_at"] = time.time()
         return playlist_item
 
@@ -7896,7 +7918,7 @@ class MainFrame(wx.Frame):
             channel=str(item.get("channel") or self.t("unknown")),
             views=str(item.get("views") or self.t("unknown")),
             age=str(item.get("age") or self.t("uploaded_unknown")),
-            type=str(item.get("type") or self.t("video")),
+            type=self.item_type_label(item),
         )
 
     def on_results_selection(self, event) -> None:
@@ -9805,6 +9827,45 @@ class MainFrame(wx.Frame):
         if generation == self.search_generation:
             self.message(error, wx.ICON_ERROR)
 
+    @staticmethod
+    def metadata_live_status(info: dict | None) -> str:
+        if not isinstance(info, dict):
+            return ""
+        snippet = info.get("snippet") if isinstance(info.get("snippet"), dict) else {}
+        value = info.get("live_status") or info.get("liveBroadcastContent") or snippet.get("liveBroadcastContent") or ""
+        return str(value or "").strip().lower().replace("-", "_")
+
+    @staticmethod
+    def metadata_bool(value) -> bool:
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "y", "live", "is_live"}
+        return bool(value)
+
+    @classmethod
+    def metadata_is_live_stream(cls, info: dict | None) -> bool:
+        if not isinstance(info, dict):
+            return False
+        return cls.metadata_live_status(info) in {"is_live", "live"} or cls.metadata_bool(info.get("is_live"))
+
+    def item_type_label(self, item: dict | None, default: str | None = None) -> str:
+        if isinstance(item, dict) and str(item.get("kind") or "video") == "video" and self.metadata_is_live_stream(item):
+            return self.t("live_stream")
+        return str((item or {}).get("type") or default or self.t("video"))
+
+    def with_live_stream_display_fields(self, item: dict, source: dict | None = None) -> dict:
+        source = source if isinstance(source, dict) else item
+        live_status = self.metadata_live_status(source) or self.metadata_live_status(item)
+        is_live = self.metadata_is_live_stream(source) or self.metadata_is_live_stream(item)
+        if live_status:
+            item["live_status"] = live_status
+        item["is_live"] = bool(is_live)
+        if str(item.get("kind") or "video") == "video" and is_live:
+            item["type"] = self.t("live_stream")
+            item["age"] = self.t("live_now")
+        elif str(item.get("kind") or "video") == "video":
+            item["type"] = item.get("type") or self.t("video")
+        return item
+
     def normalize_entry(self, entry: dict, search_type: str) -> dict:
         url = entry.get("webpage_url") or entry.get("url") or ""
         ie_key = str(entry.get("ie_key") or "").lower()
@@ -9828,7 +9889,7 @@ class MainFrame(wx.Frame):
             display_type = self.t("playlist")
         else:
             kind = "video"
-            display_type = self.t("video")
+            display_type = self.t("live_stream") if self.metadata_is_live_stream(entry) else self.t("video")
         if url and not url.startswith("http"):
             if kind == "playlist":
                 clean_url = url.lstrip("/")
@@ -9842,9 +9903,10 @@ class MainFrame(wx.Frame):
                 url = f"https://www.youtube.com/watch?v={url}"
         timestamp = entry.get("timestamp") or entry.get("release_timestamp") or entry.get("modified_timestamp")
         upload_date = entry.get("upload_date")
-        age = self.format_age({"timestamp": timestamp, "upload_date": upload_date}) if kind == "video" else ""
+        is_live = kind == "video" and self.metadata_is_live_stream(entry)
+        age = self.t("live_now") if is_live else (self.format_age({"timestamp": timestamp, "upload_date": upload_date}) if kind == "video" else "")
         playlist_count = entry.get("playlist_count") or entry.get("n_entries") or entry.get("video_count") or entry.get("playlist_count_text")
-        return {
+        item = {
             "title": entry.get("title") or "",
             "channel": entry.get("uploader") or entry.get("channel") or "",
             "channel_url": self.normalize_channel_url(entry),
@@ -9861,7 +9923,10 @@ class MainFrame(wx.Frame):
             "kind": kind,
             "playlist_count": playlist_count if kind == "playlist" else "",
             "url": url,
+            "live_status": self.metadata_live_status(entry),
+            "is_live": is_live,
         }
+        return self.with_live_stream_display_fields(item, entry)
 
     def show_results(self, results: list[dict], selection: int = 0, visible_count: int | None = None, focus_results: bool = True) -> None:
         self.deferred_result_line_updates.clear()
@@ -10075,7 +10140,8 @@ class MainFrame(wx.Frame):
     def metadata_from_info(self, info: dict, item: dict) -> dict:
         timestamp = info.get("timestamp") or info.get("release_timestamp") or info.get("modified_timestamp") or item.get("timestamp")
         upload_date = info.get("upload_date") or item.get("upload_date")
-        return {
+        is_live = self.metadata_is_live_stream(info) or self.metadata_is_live_stream(item)
+        payload = {
             "url": item.get("url", ""),
             "title": info.get("title") or item.get("title", ""),
             "channel": info.get("uploader") or info.get("channel") or item.get("channel", ""),
@@ -10085,11 +10151,16 @@ class MainFrame(wx.Frame):
             "views": self.format_count(info.get("view_count", item.get("view_count"))),
             "timestamp": timestamp,
             "upload_date": upload_date,
-            "age": self.format_age({"timestamp": timestamp, "upload_date": upload_date}) or item.get("age") or self.t("uploaded_unknown"),
+            "age": self.t("live_now") if is_live else (self.format_age({"timestamp": timestamp, "upload_date": upload_date}) or item.get("age") or self.t("uploaded_unknown")),
             "duration_seconds": info.get("duration", item.get("duration_seconds")),
             "duration": self.format_duration(info.get("duration", item.get("duration_seconds"))),
             "description": info.get("description") or item.get("description", ""),
+            "kind": item.get("kind", "video"),
+            "type": self.t("live_stream") if is_live else item.get("type", self.t("video")),
+            "live_status": self.metadata_live_status(info) or self.metadata_live_status(item),
+            "is_live": is_live,
         }
+        return self.with_live_stream_display_fields(payload, info)
 
     @staticmethod
     def numeric_view_count(value) -> int:
@@ -10151,7 +10222,7 @@ class MainFrame(wx.Frame):
                 f"{self.t('views')}: {item['views']}",
                 item.get("age") or self.t("uploaded_unknown"),
                 item.get("duration", ""),
-                item["type"],
+                self.item_type_label(item),
             ]
         queued = self.download_queue.get(item.get("url", ""))
         if queued:
@@ -10523,23 +10594,28 @@ class MainFrame(wx.Frame):
         timestamp = self.timestamp_from_iso_datetime(published_at)
         duration_seconds = self.seconds_from_iso8601_duration(str(content_details.get("duration") or ""))
         view_count = statistics.get("viewCount")
-        return {
+        live_status = self.metadata_live_status(snippet)
+        is_live = self.metadata_is_live_stream(snippet)
+        normalized = {
             "title": title,
             "channel": channel,
             "channel_url": f"https://www.youtube.com/channel/{channel_id}" if channel_id else "",
             "channel_id": channel_id,
             "views": self.format_count(view_count),
             "view_count": view_count,
-            "age": self.format_age({"timestamp": timestamp}) if timestamp else self.t("uploaded_unknown"),
+            "age": self.t("live_now") if is_live else (self.format_age({"timestamp": timestamp}) if timestamp else self.t("uploaded_unknown")),
             "duration": self.format_duration(duration_seconds),
             "duration_seconds": duration_seconds,
             "timestamp": timestamp,
             "upload_date": "",
             "description": snippet.get("description") or "",
-            "type": self.t("video"),
+            "type": self.t("live_stream") if is_live else self.t("video"),
             "kind": "video",
             "url": f"https://www.youtube.com/watch?v={video_id}" if video_id else "",
+            "live_status": live_status,
+            "is_live": is_live,
         }
+        return self.with_live_stream_display_fields(normalized, snippet)
 
     def open_playlist_videos(self, item: dict, push_state: bool = True) -> None:
         if push_state:
@@ -11143,6 +11219,8 @@ class MainFrame(wx.Frame):
     def merge_current_video_info(self, info: dict) -> None:
         if not info:
             return
+        is_live = self.metadata_is_live_stream(info) or self.metadata_is_live_stream(self.current_video_info)
+        live_status = self.metadata_live_status(info) or self.metadata_live_status(self.current_video_info)
         self.current_video_info.update(
             {
                 "title": info.get("title") or self.current_video_info.get("title", ""),
@@ -11154,13 +11232,17 @@ class MainFrame(wx.Frame):
                 "views": self.format_count(info.get("view_count", self.current_video_info.get("view_count"))),
                 "timestamp": info.get("timestamp", self.current_video_info.get("timestamp")),
                 "upload_date": info.get("upload_date", self.current_video_info.get("upload_date")),
-                "age": self.format_age(info) or self.current_video_info.get("age", ""),
+                "age": self.t("live_now") if is_live else (self.format_age(info) or self.current_video_info.get("age", "")),
                 "duration_seconds": info.get("duration", self.current_video_info.get("duration_seconds")),
                 "duration": self.format_duration(info.get("duration", self.current_video_info.get("duration_seconds"))),
                 "description": info.get("description") or self.current_video_info.get("description", ""),
                 "ext": info.get("ext") or self.current_video_info.get("ext", ""),
+                "live_status": live_status,
+                "is_live": bool(is_live),
+                "type": self.t("live_stream") if is_live else self.current_video_info.get("type", self.t("video")),
             }
         )
+        self.with_live_stream_display_fields(self.current_video_info, info)
         if self.current_video_item is not None:
             self.current_video_item.update(self.current_video_info)
         if self.in_player_screen:
@@ -11172,6 +11254,8 @@ class MainFrame(wx.Frame):
         return str((item or {}).get("url") or (item or {}).get("webpage_url") or "").strip()
 
     def playback_resume_position(self) -> float:
+        if self.metadata_is_live_stream(self.current_video_info) or self.metadata_is_live_stream(self.current_video_item):
+            return 0.0
         key = self.playback_key()
         if not key or not getattr(self.settings, "resume_playback", True):
             return 0.0
@@ -11994,7 +12078,7 @@ class MainFrame(wx.Frame):
             f"{self.t('url')}: {info.get('url') or ''}",
             f"{self.t('views')}: {info.get('views') or self.format_count(info.get('view_count'))}",
             info.get("age") or self.format_age(info),
-            f"{self.t('type')}: {info.get('type') or 'Video'}",
+            f"{self.t('type')}: {self.item_type_label(info)}",
             f"Duration: {info.get('duration') or self.format_duration(info.get('duration_seconds'))}",
             f"Playback speed: {info.get('speed') or self.settings.player_speed}x",
             f"{self.t('pitch_label')}: {info.get('pitch') or '1.00'}x",
@@ -12589,7 +12673,7 @@ class MainFrame(wx.Frame):
             str(index + 1),
             item.get("title", ""),
             f"{self.t('channel')}: {item.get('channel', '')}" if item.get("channel") else "",
-            item.get("type", ""),
+            self.item_type_label(item, default=""),
         ]
         return ". ".join([parts[0], " | ".join(part for part in parts[1:] if part)])
 
@@ -15262,7 +15346,9 @@ class MainFrame(wx.Frame):
             "channel": item.get("channel", ""),
             "channel_url": item.get("channel_url", ""),
             "kind": item.get("kind", "video"),
-            "type": item.get("type", self.t("video")),
+            "type": self.item_type_label(item),
+            "live_status": item.get("live_status", ""),
+            "is_live": bool(item.get("is_live", False)),
             "url": item.get("url", ""),
         }
         if any(existing["url"] == favorite["url"] for existing in self.favorites):
@@ -17488,7 +17574,9 @@ class MainFrame(wx.Frame):
             "channel_id": item.get("channel_id", ""),
             "url": url,
             "kind": item.get("kind", "video"),
-            "type": item.get("type", self.t("video")),
+            "type": self.item_type_label(item),
+            "live_status": item.get("live_status", ""),
+            "is_live": bool(item.get("is_live", False)),
             "action": action,
             "timestamp": time.time(),
         }

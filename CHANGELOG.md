@@ -1,5 +1,12 @@
 # Changelog
 
+## What's new in version 0.8.55
+
+- detects currently live YouTube streams from `yt-dlp` `live_status` and `is_live` metadata.
+- shows currently live YouTube streams as Live stream instead of Video in search results, result details, player details, playback queue, favorites, history, and user playlists.
+- keeps live streams on the normal video playback path, so they still play through mpv like other YouTube videos.
+- disables saved resume-position seeking for live streams so a live broadcast starts at the live stream instead of trying to seek to an old timestamp.
+
 ## What's new in version 0.8.54
 
 - fixed equalizer slider state so moving one band updates only that band's draft value instead of re-reading and re-saving all ten sliders at once.
