@@ -202,8 +202,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.49"
-APP_VERSION_LABEL = "0.8.49"
+APP_VERSION = "0.8.50"
+APP_VERSION_LABEL = "0.8.50"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -6921,15 +6921,19 @@ class MainFrame(wx.Frame):
         self.folder_screen_active = False
         self.clear()
         self.add_background_player_section()
-        self.add_button_row(
-            [
-                (self.t("back"), self.show_main_menu),
-                (self.t("create_playlist"), self.create_user_playlist_dialog),
-                (self.t("open_playlist"), self.open_selected_user_playlist),
-                (self.t("download_user_playlist"), self.download_selected_user_playlist),
-                (self.t("remove_playlist"), self.remove_selected_user_playlist),
-            ]
-        )
+        playlist_actions = [
+            (self.t("back"), self.show_main_menu),
+            (self.t("create_playlist"), self.create_user_playlist_dialog),
+        ]
+        if self.user_playlists:
+            playlist_actions.extend(
+                [
+                    (self.t("open_playlist"), self.open_selected_user_playlist),
+                    (self.t("download_user_playlist"), self.download_selected_user_playlist),
+                    (self.t("remove_playlist"), self.remove_selected_user_playlist),
+                ]
+            )
+        self.add_button_row(playlist_actions)
         label = wx.StaticText(self.panel, label=self.t("playlists"))
         self.root_sizer.Add(label, 0, wx.ALL, 4)
         self.user_playlist_list = wx.ListBox(self.panel, choices=[])
@@ -6983,12 +6987,14 @@ class MainFrame(wx.Frame):
 
     def open_user_playlists_context_menu(self, _event=None) -> None:
         menu = wx.Menu()
-        actions = [
-            (self.t("open_playlist"), self.open_selected_user_playlist),
-            (self.menu_label_with_shortcut("create_playlist", "create_playlist"), self.create_user_playlist_dialog),
-            (self.t("download_user_playlist"), self.download_selected_user_playlist),
-            (self.t("remove_playlist"), self.remove_selected_user_playlist),
-        ]
+        actions = [(self.menu_label_with_shortcut("create_playlist", "create_playlist"), self.create_user_playlist_dialog)]
+        if self.user_playlists:
+            actions = [
+                (self.t("open_playlist"), self.open_selected_user_playlist),
+                *actions,
+                (self.t("download_user_playlist"), self.download_selected_user_playlist),
+                (self.t("remove_playlist"), self.remove_selected_user_playlist),
+            ]
         for label, handler in actions:
             item = menu.Append(wx.ID_ANY, label)
             self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
@@ -7011,7 +7017,10 @@ class MainFrame(wx.Frame):
         if initial_item:
             playlist["items"].append(self.playlist_item_from_media(initial_item))
         self.save_user_playlists()
-        self.refresh_user_playlists()
+        if self.user_playlists_screen_active:
+            wx.CallAfter(self.show_user_playlists)
+        else:
+            self.refresh_user_playlists()
         self.announce_player(self.t("playlist_created", title=title))
         return self.current_user_playlist_index
 
@@ -7041,15 +7050,17 @@ class MainFrame(wx.Frame):
         self.direct_link_screen_active = False
         self.clear()
         self.add_background_player_section()
-        self.add_button_row(
-            [
-                (self.t("back"), self.show_user_playlists),
-                (self.t("play"), self.play_selected_user_playlist_item),
-                (self.t("download_user_playlist"), self.download_current_user_playlist),
-                (self.t("remove_from_playlist"), self.remove_selected_user_playlist_item),
-            ]
-        )
         playlist = self.user_playlists[playlist_index]
+        item_actions = [(self.t("back"), self.show_user_playlists)]
+        if playlist.get("items"):
+            item_actions.extend(
+                [
+                    (self.t("play"), self.play_selected_user_playlist_item),
+                    (self.t("download_user_playlist"), self.download_current_user_playlist),
+                    (self.t("remove_from_playlist"), self.remove_selected_user_playlist_item),
+                ]
+            )
+        self.add_button_row(item_actions)
         label = wx.StaticText(self.panel, label=f"{self.t('playlist_items')}: {playlist.get('title', '')}")
         self.root_sizer.Add(label, 0, wx.ALL, 4)
         self.user_playlist_items = list(playlist.get("items") or [])
@@ -7108,16 +7119,22 @@ class MainFrame(wx.Frame):
     def open_user_playlist_items_context_menu(self, _event=None) -> None:
         menu = wx.Menu()
         selected = self.selected_user_playlist_item()
+        if not selected:
+            item = menu.Append(wx.ID_ANY, self.t("playlist_empty"))
+            item.Enable(False)
+            self.PopupMenu(menu)
+            menu.Destroy()
+            return
         actions = [
             (self.t("play"), self.play_selected_user_playlist_item),
-            (self.menu_label_with_shortcut("download_audio", "download_audio"), lambda: self.start_download(True, item=self.selected_user_playlist_item())),
-            (self.menu_label_with_shortcut("download_video", "download_video"), lambda: self.start_download(False, item=self.selected_user_playlist_item())),
+            (self.menu_label_with_shortcut("download_audio", "download_audio"), lambda selected=dict(selected): self.start_download(True, item=selected)),
+            (self.menu_label_with_shortcut("download_video", "download_video"), lambda selected=dict(selected): self.start_download(False, item=selected)),
             (self.t("download_user_playlist"), self.download_current_user_playlist),
             (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
             (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
             (self.menu_label_with_shortcut("remove_from_playlist", "remove_from_playlist"), self.remove_selected_user_playlist_item),
-            (self.t("copy_url"), lambda: self.copy_item_url(self.selected_user_playlist_item())),
-            (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda: self.copy_direct_stream_url(self.selected_user_playlist_item())),
+            (self.t("copy_url"), lambda selected=dict(selected): self.copy_item_url(selected)),
+            (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda selected=dict(selected): self.copy_direct_stream_url(selected)),
         ]
         if self.item_has_openable_youtube_channel(selected):
             actions.insert(6, (self.menu_label_with_shortcut("open_channel", "open_channel"), lambda selected=dict(selected or {}): self.open_item_channel(selected)))
@@ -7154,7 +7171,10 @@ class MainFrame(wx.Frame):
             playlist["items"] = items
             playlist["updated_at"] = time.time()
             self.save_user_playlists()
-            self.refresh_user_playlist_items(min(index, len(items) - 1))
+            if self.user_playlist_items_screen_active and not items:
+                wx.CallAfter(self.show_user_playlist_items, self.current_user_playlist_index)
+            else:
+                self.refresh_user_playlist_items(min(index, len(items) - 1))
             self.announce_player(self.t("removed_from_playlist"))
 
     def remove_selected_user_playlist(self) -> None:
@@ -7167,7 +7187,10 @@ class MainFrame(wx.Frame):
         del self.user_playlists[index]
         self.current_user_playlist_index = min(index, len(self.user_playlists) - 1)
         self.save_user_playlists()
-        self.refresh_user_playlists()
+        if self.user_playlists_screen_active and not self.user_playlists:
+            wx.CallAfter(self.show_user_playlists)
+        else:
+            self.refresh_user_playlists()
         self.announce_player(self.t("playlist_removed"))
 
     def download_selected_user_playlist(self) -> None:
@@ -7865,14 +7888,16 @@ class MainFrame(wx.Frame):
         self.folder_screen_active = False
         self.clear()
         self.add_background_player_section()
-        self.add_button_row(
-            [
-                (self.t("back"), self.show_main_menu),
-                (self.t("play"), self.play_favorite),
-                (self.t("remove"), self.remove_favorite),
-                (self.t("refresh"), self.refresh_favorites),
-            ]
-        )
+        favorite_actions = [(self.t("back"), self.show_main_menu)]
+        if self.favorites:
+            favorite_actions.extend(
+                [
+                    (self.t("play"), self.play_favorite),
+                    (self.t("remove"), self.remove_favorite),
+                    (self.t("refresh"), self.refresh_favorites),
+                ]
+            )
+        self.add_button_row(favorite_actions)
         self.favorites_list = wx.ListBox(self.panel, choices=[])
         self.favorites_list.SetName(self.t("favorites"))
         self.favorites_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _evt: self.play_favorite())
@@ -7904,17 +7929,23 @@ class MainFrame(wx.Frame):
     def open_favorites_context_menu(self, _event=None) -> None:
         menu = wx.Menu()
         selected = self.selected_favorite()
+        if not selected:
+            item = menu.Append(wx.ID_ANY, self.t("favorites_empty"))
+            item.Enable(False)
+            self.PopupMenu(menu)
+            menu.Destroy()
+            return
         actions = [
             (self.t("play"), self.play_favorite),
-            (self.menu_label_with_shortcut("download_audio", "download_audio"), lambda: self.start_download(True, item=self.selected_favorite())),
-            (self.menu_label_with_shortcut("download_video", "download_video"), lambda: self.start_download(False, item=self.selected_favorite())),
-            (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), lambda: self.subscribe_to_selected_channel(self.selected_favorite())),
-            (self.menu_label_with_shortcut("unsubscribe_channel", "unsubscribe_channel"), lambda: self.unsubscribe_from_selected_channel(self.selected_favorite())),
+            (self.menu_label_with_shortcut("download_audio", "download_audio"), lambda selected=dict(selected): self.start_download(True, item=selected)),
+            (self.menu_label_with_shortcut("download_video", "download_video"), lambda selected=dict(selected): self.start_download(False, item=selected)),
+            (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), lambda selected=dict(selected): self.subscribe_to_selected_channel(selected)),
+            (self.menu_label_with_shortcut("unsubscribe_channel", "unsubscribe_channel"), lambda selected=dict(selected): self.unsubscribe_from_selected_channel(selected)),
             (self.menu_label_with_shortcut("add_to_playlist", "add_to_playlist"), self.add_active_to_playlist),
             (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
             (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
-            (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda: self.copy_direct_stream_url(self.selected_favorite())),
-            (self.t("copy_url"), lambda: self.copy_item_url(self.selected_favorite())),
+            (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda selected=dict(selected): self.copy_direct_stream_url(selected)),
+            (self.t("copy_url"), lambda selected=dict(selected): self.copy_item_url(selected)),
             (self.t("remove"), self.remove_favorite),
         ]
         if self.item_has_openable_youtube_channel(selected):
@@ -9436,6 +9467,7 @@ class MainFrame(wx.Frame):
                 maxValue=maximum,
                 style=wx.SL_HORIZONTAL,
             )
+            self.configure_equalizer_slider_steps(ctrl)
             self.set_equalizer_slider_accessibility(ctrl, label)
             ctrl.Bind(wx.EVT_SLIDER, lambda evt, label_text=label: self.on_equalizer_settings_slider(evt, label_text))
             form.Add(ctrl, 1, wx.EXPAND)
@@ -10732,7 +10764,15 @@ class MainFrame(wx.Frame):
         if generation == self.search_generation:
             self.loading_more_results = False
 
-    def play_url(self, url: str, title: str = "", show_player: bool = True, announce_start: bool = False, focus_target: str = "player") -> None:
+    def play_url(
+        self,
+        url: str,
+        title: str = "",
+        show_player: bool = True,
+        announce_start: bool = False,
+        focus_target: str = "player",
+        keep_current_ui: bool = False,
+    ) -> None:
         player = self.resolve_player()
         if not player:
             self.message(self.t("player_missing"), wx.ICON_ERROR)
@@ -10742,7 +10782,7 @@ class MainFrame(wx.Frame):
         self.current_index = max(0, self.current_index)
         continuing_session = self.player_is_active()
         self.remember_current_player_volume()
-        self.stop_player(silent=True, reset_session=not continuing_session)
+        self.stop_player(silent=True, reset_session=not continuing_session, preserve_panel=keep_current_ui)
         if not continuing_session:
             self.session_equalizer_enabled = None
             self.session_equalizer_gains = {}
@@ -10758,7 +10798,10 @@ class MainFrame(wx.Frame):
         if kind != "mpv":
             self.message(self.t("player_missing"), wx.ICON_ERROR)
             return
-        if show_player:
+        if keep_current_ui:
+            self.player_control_mode = True
+            self.set_window_title(title or self.current_player_title())
+        elif show_player:
             self.show_player_page(title, focus_target=focus_target)
         else:
             self.in_player_screen = False
@@ -11183,10 +11226,11 @@ class MainFrame(wx.Frame):
             embed_player = False
             hwnd = 0
             try:
-                embed_player = bool(self.in_player_screen and self.player_panel and not self.player_panel.IsBeingDeleted())
-                if embed_player:
-                    self.player_panel.Update()
-                    hwnd = self.player_panel.GetHandle()
+                panel = self.live_window(getattr(self, "player_panel", None))
+                embed_player = bool(panel is not None)
+                if embed_player and panel is not None:
+                    panel.Update()
+                    hwnd = panel.GetHandle()
             except Exception:
                 embed_player = False
             args = [
@@ -11379,11 +11423,13 @@ class MainFrame(wx.Frame):
         for control in player_action_buttons:
             self.bind_player_navigation_control(control)
         self.player_escape_stop_controls.extend(player_action_buttons)
-        self.fullscreen_checkbox = wx.CheckBox(self.panel, label=self.t("fullscreen"))
+        self.fullscreen_checkbox = wx.CheckBox(self.panel, label=self.t("fullscreen"), style=wx.WANTS_CHARS)
         self.fullscreen_checkbox.SetName(self.t("fullscreen"))
         self.fullscreen_checkbox.SetValue(fullscreen_mode)
         self.fullscreen_checkbox.Bind(wx.EVT_CHECKBOX, self.on_player_fullscreen_changed)
         self.fullscreen_checkbox.Bind(wx.EVT_KEY_DOWN, self.on_fullscreen_checkbox_key)
+        self.fullscreen_checkbox.Bind(wx.EVT_CHAR_HOOK, self.on_fullscreen_checkbox_key)
+        self.fullscreen_checkbox.Bind(wx.EVT_CHAR, self.on_fullscreen_checkbox_key)
         self.bind_player_navigation_control(self.fullscreen_checkbox)
         self.root_sizer.Add(self.fullscreen_checkbox, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
         self.player_action_controls.append(self.fullscreen_checkbox)
@@ -11467,7 +11513,7 @@ class MainFrame(wx.Frame):
 
     def on_fullscreen_checkbox_key(self, event: wx.KeyEvent) -> None:
         key = event.GetKeyCode()
-        if key in {wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER}:
+        if key in {wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER} or self.shortcut_matches(event, "open_selected"):
             try:
                 self.fullscreen_checkbox.SetValue(not self.fullscreen_checkbox.GetValue())
             except RuntimeError:
@@ -11501,19 +11547,7 @@ class MainFrame(wx.Frame):
     def set_bass_boost_enabled(self, checked: bool, announce: bool = True) -> None:
         if checked == self.bass_boost_enabled:
             return
-        if checked:
-            self.session_equalizer_before_bass_boost = (self.session_equalizer_enabled, dict(self.session_equalizer_gains))
-            self.session_equalizer_enabled = True
-            self.session_equalizer_gains = self.factory_equalizer_gains_for_preset("bass_boost")
-        else:
-            previous = self.session_equalizer_before_bass_boost
-            if previous is None:
-                self.session_equalizer_enabled = None
-                self.session_equalizer_gains = {}
-            else:
-                self.session_equalizer_enabled, gains = previous
-                self.session_equalizer_gains = dict(gains)
-            self.session_equalizer_before_bass_boost = None
+        self.session_equalizer_before_bass_boost = None
         self.bass_boost_enabled = checked
         if getattr(self, "bass_boost_checkbox", None):
             try:
@@ -11954,24 +11988,28 @@ class MainFrame(wx.Frame):
             self.announce_player(self.t("stream_url_failed", error=self.friendly_error(exc)))
 
     def effective_equalizer_state(self) -> tuple[bool, dict[str, float]]:
-        if self.bass_boost_enabled and self.session_equalizer_enabled is None:
-            return True, self.normalized_equalizer_gains(self.factory_equalizer_gains_for_preset("bass_boost"))
+        enabled, gains = self.base_equalizer_state()
+        if self.bass_boost_enabled:
+            return True, self.equalizer_gains_with_bass_boost(gains if enabled else default_equalizer_gains())
+        return enabled, gains
+
+    def base_equalizer_state(self) -> tuple[bool, dict[str, float]]:
         if self.session_equalizer_enabled is not None:
             return bool(self.session_equalizer_enabled), self.normalized_equalizer_gains(self.session_equalizer_gains)
         preset = self.normalized_equalizer_preset(getattr(self.settings, "global_equalizer_preset", EQ_PRESET_FLAT))
         return bool(getattr(self.settings, "global_equalizer_enabled", False)), self.equalizer_gains_for_preset(preset)
 
+    def equalizer_gains_with_bass_boost(self, gains: dict[str, float]) -> dict[str, float]:
+        combined = self.normalized_equalizer_gains(gains)
+        boost = self.factory_equalizer_gains_for_preset("bass_boost")
+        for band_id, _band_label in EQ_BANDS:
+            combined[band_id] = round(max(-24.0, min(24.0, combined.get(band_id, 0.0) + boost.get(band_id, 0.0))), 1)
+        return combined
+
     def use_global_equalizer_for_live_preview(self) -> None:
         self.session_equalizer_enabled = None
         self.session_equalizer_gains = {}
-        if self.bass_boost_enabled:
-            self.bass_boost_enabled = False
-            self.session_equalizer_before_bass_boost = None
-            if getattr(self, "bass_boost_checkbox", None):
-                try:
-                    self.bass_boost_checkbox.SetValue(False)
-                except RuntimeError:
-                    pass
+        self.session_equalizer_before_bass_boost = None
 
     @staticmethod
     def equalizer_filter(gains: dict[str, float]) -> str:
@@ -12005,7 +12043,7 @@ class MainFrame(wx.Frame):
         original_enabled = self.session_equalizer_enabled
         original_gains = dict(self.session_equalizer_gains)
         original_db_range = self.equalizer_db_range_value()
-        _enabled, gains = self.effective_equalizer_state()
+        _enabled, gains = self.base_equalizer_state()
         active_preset = self.normalized_equalizer_preset(getattr(self.settings, "global_equalizer_preset", EQ_PRESET_FLAT))
         dialog_db_range = original_db_range
         dialog = wx.Dialog(self, title=self.t("equalizer"), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
@@ -12041,6 +12079,7 @@ class MainFrame(wx.Frame):
                 maxValue=dialog_db_range * 10,
                 style=wx.SL_HORIZONTAL,
             )
+            self.configure_equalizer_slider_steps(slider)
             self.set_equalizer_slider_accessibility(slider, label_text)
             sliders[band_id] = slider
             outer.Add(slider, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
@@ -12116,6 +12155,7 @@ class MainFrame(wx.Frame):
                 slider = sliders[band_id]
                 current = min(max(slider.GetValue(), slider_min), slider_max)
                 slider.SetRange(slider_min, slider_max)
+                self.configure_equalizer_slider_steps(slider)
                 set_dialog_slider_value(slider, current, self.t("equalizer_band_gain", band=band_label))
             live_apply()
 
@@ -12186,8 +12226,6 @@ class MainFrame(wx.Frame):
             self.save_settings()
         dialog.Destroy()
         if result == wx.ID_OK:
-            if self.bass_boost_enabled:
-                self.session_equalizer_before_bass_boost = (self.session_equalizer_enabled, dict(self.session_equalizer_gains))
             self.announce_player(self.t("equalizer_saved"))
             return
         self.session_equalizer_enabled = original_enabled
@@ -12250,8 +12288,9 @@ class MainFrame(wx.Frame):
     def open_relative_player_item(self, item: dict, announce_start: bool = False, preserve_focus: bool = False) -> None:
         if not item.get("url"):
             return
-        show_player = self.in_player_screen or not self.background_playback_enabled()
-        focus_target = "results" if preserve_focus and self.live_window(getattr(self, "results_list", None)) is not None else "player"
+        keep_current_ui = bool(preserve_focus and self.live_window(getattr(self, "player_panel", None)) is not None)
+        show_player = (self.in_player_screen or not self.background_playback_enabled()) and not keep_current_ui
+        focus_target = "player" if keep_current_ui else ("results" if preserve_focus and self.live_window(getattr(self, "results_list", None)) is not None else "player")
         if item.get("kind") == "rss_item":
             self.player_return_screen = "rss_items"
             self.player_return_data = {
@@ -12276,7 +12315,14 @@ class MainFrame(wx.Frame):
             self.player_return_data = {"index": self.return_index}
         self.current_video_item = item
         self.current_video_info = dict(item)
-        self.play_url(str(item.get("url") or ""), str(item.get("title") or ""), show_player=show_player, announce_start=announce_start, focus_target=focus_target)
+        self.play_url(
+            str(item.get("url") or ""),
+            str(item.get("title") or ""),
+            show_player=show_player,
+            announce_start=announce_start,
+            focus_target=focus_target,
+            keep_current_ui=keep_current_ui,
+        )
 
     def playable_queue_item(self, item: dict | None) -> dict | None:
         if not item or item.get("kind") in {"channel", "playlist"}:
@@ -12468,11 +12514,25 @@ class MainFrame(wx.Frame):
         return item
 
     def open_playback_queue_item(self, item: dict, announce_start: bool = False, preserve_focus: bool = False) -> None:
-        show_player = self.in_player_screen or not self.background_playback_enabled()
-        focus_target = "results" if preserve_focus and self.live_window(getattr(self, "results_list", None)) is not None else "player"
-        self.open_playback_queue_item_with_mode(item, show_player=show_player, announce_start=announce_start, focus_target=focus_target)
+        keep_current_ui = bool(preserve_focus and self.live_window(getattr(self, "player_panel", None)) is not None)
+        show_player = (self.in_player_screen or not self.background_playback_enabled()) and not keep_current_ui
+        focus_target = "player" if keep_current_ui else ("results" if preserve_focus and self.live_window(getattr(self, "results_list", None)) is not None else "player")
+        self.open_playback_queue_item_with_mode(
+            item,
+            show_player=show_player,
+            announce_start=announce_start,
+            focus_target=focus_target,
+            keep_current_ui=keep_current_ui,
+        )
 
-    def open_playback_queue_item_with_mode(self, item: dict, show_player: bool = True, announce_start: bool = False, focus_target: str = "player") -> None:
+    def open_playback_queue_item_with_mode(
+        self,
+        item: dict,
+        show_player: bool = True,
+        announce_start: bool = False,
+        focus_target: str = "player",
+        keep_current_ui: bool = False,
+    ) -> None:
         url = str(item.get("url") or "")
         if not url:
             self.announce_player(self.t("no_selection"))
@@ -12489,7 +12549,14 @@ class MainFrame(wx.Frame):
             self.player_return_data = {}
         self.current_video_item = item
         self.current_video_info = dict(item)
-        self.play_url(url, str(item.get("title") or ""), show_player=show_player, announce_start=announce_start, focus_target=focus_target)
+        self.play_url(
+            url,
+            str(item.get("title") or ""),
+            show_player=show_player,
+            announce_start=announce_start,
+            focus_target=focus_target,
+            keep_current_ui=keep_current_ui,
+        )
 
     def current_local_media_path(self) -> Path | None:
         item = self.current_video_item or self.current_video_info or {}
@@ -13435,6 +13502,16 @@ class MainFrame(wx.Frame):
             value = 12
         return min(24, max(6, value))
 
+    @staticmethod
+    def configure_equalizer_slider_steps(ctrl: wx.Slider) -> None:
+        for setter_name, value in (("SetLineSize", 10), ("SetPageSize", 30)):
+            setter = getattr(ctrl, setter_name, None)
+            if setter:
+                try:
+                    setter(value)
+                except Exception:
+                    pass
+
     def normalized_equalizer_preset(self, preset: str | None) -> str:
         value = str(preset or EQ_PRESET_FLAT).strip()
         if value in EQ_FACTORY_PRESET_VALUES or value in EQ_CUSTOM_PRESET_IDS or value.startswith(("custom_", "user_")):
@@ -13787,7 +13864,7 @@ class MainFrame(wx.Frame):
         except Exception:
             pass
 
-    def stop_player(self, silent: bool = False, reset_session: bool = True) -> None:
+    def stop_player(self, silent: bool = False, reset_session: bool = True, preserve_panel: bool = False) -> None:
         self.save_current_playback_position()
         self.player_generation += 1
         self.player_ended = False
@@ -13824,7 +13901,7 @@ class MainFrame(wx.Frame):
             self.session_equalizer_before_bass_boost = None
             self.volume_boost_enabled = False
             self.shuffle_current = False
-        if self.player_panel is not None:
+        if self.player_panel is not None and not preserve_panel:
             try:
                 self.root_sizer.Detach(self.player_panel)
             except Exception:
@@ -14367,6 +14444,15 @@ class MainFrame(wx.Frame):
         self.PopupMenu(menu)
         menu.Destroy()
 
+    def append_collection_download_submenu(self, menu: wx.Menu, item: dict) -> None:
+        kind = str(item.get("kind") or "playlist")
+        submenu = wx.Menu()
+        audio_item = submenu.Append(wx.ID_ANY, self.menu_label_with_shortcut("download_audio", "download_audio"))
+        video_item = submenu.Append(wx.ID_ANY, self.menu_label_with_shortcut("download_video", "download_video"))
+        self.Bind(wx.EVT_MENU, lambda _evt, selected=dict(item): self.download_collection(selected, audio_only=True), audio_item)
+        self.Bind(wx.EVT_MENU, lambda _evt, selected=dict(item): self.download_collection(selected, audio_only=False), video_item)
+        menu.AppendSubMenu(submenu, self.t("download_channel" if kind == "channel" else "download_playlist"))
+
     def open_context_menu(self, _event=None) -> None:
         menu = wx.Menu()
         item = self.selected_result()
@@ -14378,7 +14464,7 @@ class MainFrame(wx.Frame):
                     (self.t("channel_videos"), lambda selected=dict(item): self.open_channel_tab(selected, "videos")),
                     (self.t("channel_popular"), lambda selected=dict(item): self.open_channel_tab(selected, "popular")),
                     (self.t("channel_playlists"), lambda selected=dict(item): self.open_channel_tab(selected, "playlists")),
-                    (self.t("download_channel"), lambda selected=dict(item): self.download_collection(selected)),
+                    (None, None),
                     (self.menu_label_with_shortcut("add_favorite", "add_favorite"), self.add_selected_favorite),
                     (self.menu_label_with_shortcut("remove_favorite", "remove_favorite"), self.remove_selected_favorite_shortcut),
                     (self.t("open_browser"), self.open_selected_in_browser),
@@ -14387,7 +14473,7 @@ class MainFrame(wx.Frame):
             else:
                 actions = [
                     (self.t("open_playlist_videos"), self.play_selected),
-                    (self.t("download_playlist"), lambda selected=dict(item): self.download_collection(selected)),
+                    (None, None),
                     (self.menu_label_with_shortcut("add_favorite", "add_favorite"), self.add_selected_favorite),
                     (self.menu_label_with_shortcut("remove_favorite", "remove_favorite"), self.remove_selected_favorite_shortcut),
                     (self.t("open_browser"), self.open_selected_in_browser),
@@ -14419,9 +14505,13 @@ class MainFrame(wx.Frame):
                 (self.t("download_all_as_audio"), lambda: self.download_all_queued(True)),
                 (self.t("download_all_as_video"), lambda: self.download_all_queued(False)),
             ]
+        context_item = dict(item or {})
         for label, handler in actions:
-            item = menu.Append(wx.ID_ANY, label)
-            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
+            if label is None:
+                self.append_collection_download_submenu(menu, context_item)
+                continue
+            menu_item = menu.Append(wx.ID_ANY, label)
+            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), menu_item)
         selected = self.selected_result()
         if selected and selected.get("kind") not in {"playlist", "channel"}:
             self.append_add_to_playlist_menu(menu)
@@ -14844,7 +14934,10 @@ class MainFrame(wx.Frame):
         if index != wx.NOT_FOUND and 0 <= index < len(self.favorites):
             del self.favorites[index]
             self.save_favorites()
-            self.refresh_favorites()
+            if self.favorites_screen_active and not self.favorites:
+                wx.CallAfter(self.show_favorites)
+            else:
+                self.refresh_favorites()
             self.announce_player(self.t("favorite_removed"))
 
     def remove_selected_favorite_shortcut(self) -> None:
@@ -14863,7 +14956,10 @@ class MainFrame(wx.Frame):
                 del self.favorites[index]
                 self.save_favorites()
                 if self.favorites_screen_active:
-                    self.refresh_favorites()
+                    if self.favorites:
+                        self.refresh_favorites()
+                    else:
+                        wx.CallAfter(self.show_favorites)
                 self.announce_player(self.t("favorite_removed"))
                 return
         self.announce_player(self.t("not_in_favorites"))
@@ -16822,6 +16918,9 @@ class MainFrame(wx.Frame):
             repaired["add_favorite"] = DEFAULT_KEYBOARD_SHORTCUTS["add_favorite"]
         if not str(repaired.get("remove_favorite", "")).strip():
             repaired["remove_favorite"] = DEFAULT_KEYBOARD_SHORTCUTS["remove_favorite"]
+        for action in list(repaired):
+            if self.canonical_shortcut(repaired.get(action, "")) == "f5":
+                repaired[action] = DEFAULT_KEYBOARD_SHORTCUTS.get(action, "")
         seen: dict[str, str] = {}
         for action, _label_key in SHORTCUT_DEFINITIONS:
             canonical = self.canonical_shortcut(repaired.get(action, ""))

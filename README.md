@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.8.49` (`0.8.49`)
+Current version: `0.8.50` (`0.8.50`)
 
 ## Download
 
@@ -41,6 +41,7 @@ py wx_main.py
 - Optional Trending screen, hidden by default, with country and category filters using the official YouTube most-popular API when a YouTube Data API key is configured
 - Channel result options for opening channel videos, playlists, home, or popular videos
 - YouTube video context menus include Open channel when channel metadata is available, with a configurable `Ctrl+Shift+O` shortcut
+- Playlist and channel context menus offer Download as a submenu with separate audio and video choices, while `Ctrl+Shift+A` and `Ctrl+Shift+D` keep working directly.
 - Dynamic result loading keeps fetching 20 more search, channel, playlist, or folder items until the source has no more results, without moving screen reader focus while new rows append
 - Dynamic result playback preserves the exact selected item even if a new result page finishes loading at the same moment
 - Local media file and whole-folder playback for common audio and video files, including file association support on Windows
@@ -48,7 +49,8 @@ py wx_main.py
 - Play from folder for choosing local media inside ApricotPlayer, with folder contents shown as local media results and cached in memory for quick return from playback
 - Accessible 10-band equalizer with descriptive frequency sliders, global Settings controls, genre/sound presets, dynamic custom profiles, player-only live controls, and a player action to save the current EQ as a global preset
 - Player and global equalizers share selectable 6/12/18/24 dB slider ranges with quieter screen-reader value updates
-- Player Bass boost checkbox for a session-based EQ boost that stays active for the next item until turned off
+- Player and global equalizer sliders use stable keyboard steps across the full 24 dB range.
+- Player Bass boost checkbox for a session-based EQ boost that stays active for the next item until turned off without resetting equalizer settings.
 - Player hotkeys include `F2` volume boost, `F3` bass boost, `F4` equalizer, `R` repeat, and `Shift+S` shuffle
 - Optional Playback setting to announce or silence the “Playback finished” screen-reader message
 - Player clip markers and FFmpeg export for the marked section of the current video, local file, or podcast

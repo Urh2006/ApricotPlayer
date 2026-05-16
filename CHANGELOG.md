@@ -1,5 +1,15 @@
 # Changelog
 
+## What's new in version 0.8.50
+
+- changed playlist and channel context-menu downloads into an Audio/Video submenu, while keeping `Ctrl+Shift+A` and `Ctrl+Shift+D` as direct audio/video downloads.
+- hid unavailable playlist and favorites actions when those lists are empty, so only valid actions are shown.
+- fixed the Fullscreen checkbox so Enter toggles it reliably.
+- fixed equalizer slider keyboard steps so the full 24 dB range behaves correctly, including 3 dB PageUp/PageDown movement.
+- made Bass boost additive and independent from global and player equalizer settings instead of resetting them.
+- kept background Next/Previous playback embedded in the existing player panel and preserved focus instead of opening a separate mpv window.
+- repaired old custom F5 shortcuts by clearing them back to their default action bindings.
+
 ## What's new in version 0.8.49
 
 - fixed dynamic result playback so pressing Enter on a result keeps the exact selected video even if the next 20 results finish loading at the same moment.
