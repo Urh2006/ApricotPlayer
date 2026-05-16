@@ -1,5 +1,12 @@
 # Changelog
 
+## What's new in version 0.8.56
+
+- stabilized the equalizer after tester reports from 0.8.55: each slider now updates only its own band state and programmatic slider refreshes are ignored by the save/live-preview handlers.
+- changed player and local-edit EQ processing back to deterministic Q=1 peaking filters for all ten bands, avoiding the broad octave/shelf behavior that made lows, mids, and highs feel interdependent.
+- removed the automatic EQ headroom/limiter layer from the live equalizer path so changing one positive band no longer changes the whole output level or makes other bands sound like they moved.
+- reduced EQ event binding back to the primary slider event, preventing duplicate wx scroll events from re-saving stale values during keyboard or screen-reader slider changes.
+
 ## What's new in version 0.8.55
 
 - detects currently live YouTube streams from `yt-dlp` `live_status` and `is_live` metadata.

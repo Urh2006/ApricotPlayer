@@ -202,8 +202,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.55"
-APP_VERSION_LABEL = "0.8.55"
+APP_VERSION = "0.8.56"
+APP_VERSION_LABEL = "0.8.56"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -301,21 +301,7 @@ EQ_BANDS: list[tuple[str, str]] = [
     ("16000", "16 kHz air and sparkle"),
 ]
 EQ_BAND_IDS = {band_id for band_id, _label in EQ_BANDS}
-EQ_BAND_WIDTHS_OCTAVES: dict[str, float] = {
-    "31": 1.25,
-    "62": 1.1,
-    "125": 1.0,
-    "250": 0.95,
-    "500": 0.95,
-    "1000": 1.0,
-    "2000": 1.0,
-    "4000": 0.95,
-    "8000": 0.95,
-    "16000": 1.0,
-}
-EQ_MIN_PROTECTION_HEADROOM_DB = 3.0
-EQ_MAX_PROTECTION_HEADROOM_DB = 9.0
-EQ_LIMITER_FILTER = "alimiter=limit=0.95"
+EQ_FILTER_Q_WIDTH = 1.0
 EQ_RANGE_OPTIONS = ["6", "12", "18", "24"]
 SEEK_SECONDS_OPTIONS = ["0.1", "0.25", "0.5", "0.75", "1", "1.5", "2", "2.5", "3", "4", "5", "7.5", "10", "15", "20", "30", "45", "60"]
 STREAM_URL_CACHE_OPTIONS = ["5", "10", "20", "30", "60", "240", "1440", "10080", "0"]
@@ -3971,6 +3957,7 @@ class MainFrame(wx.Frame):
         self.session_equalizer_gains: dict[str, float] = {}
         self.session_equalizer_before_bass_boost: tuple[bool | None, dict[str, float]] | None = None
         self.visible_equalizer_draft_gains: dict[str, float] = {}
+        self.equalizer_controls_loading = False
         self.equalizer_apply_generation = 0
         self.equalizer_apply_timer: wx.CallLater | None = None
         self.bass_boost_enabled = False
@@ -9617,31 +9604,37 @@ class MainFrame(wx.Frame):
             check("announce_playback_finished", bool(getattr(self.settings, "announce_playback_finished", True)))
             check("enable_background_playback", bool(getattr(self.settings, "enable_background_playback", False)))
         elif section_name == "equalizer":
-            equalizer_enabled = bool(getattr(self.settings, "global_equalizer_enabled", False))
-            enabled_box = check("global_equalizer", equalizer_enabled)
-            enabled_box.Bind(wx.EVT_CHECKBOX, self.on_global_equalizer_toggle)
-            if equalizer_enabled:
-                preset = self.normalized_equalizer_preset(getattr(self.settings, "global_equalizer_preset", EQ_PRESET_FLAT))
-                self.visible_equalizer_preset = preset
-                preset_choice = choice("equalizer_preset", preset, self.equalizer_preset_options(), self.equalizer_preset_labels())
-                preset_choice.Bind(wx.EVT_CHOICE, self.on_equalizer_settings_preset_changed)
-                if self.is_custom_equalizer_preset(preset):
-                    name_ctrl = text("equalizer_preset_name", self.equalizer_custom_name(preset))
-                    name_ctrl.Bind(wx.EVT_KILL_FOCUS, self.on_equalizer_settings_name_changed)
-                db_range = str(self.equalizer_db_range_value())
-                range_choice = choice("equalizer_db_range", db_range, EQ_RANGE_OPTIONS)
-                range_choice.Bind(wx.EVT_CHOICE, self.on_equalizer_range_changed)
-                gains = self.equalizer_gains_for_preset(preset)
-                self.visible_equalizer_draft_gains = self.normalized_equalizer_gains(gains)
-                slider_min = -int(db_range) * 10
-                slider_max = int(db_range) * 10
-                for band_id, band_label in EQ_BANDS:
-                    label = self.t("equalizer_band_gain", band=band_label)
-                    slider(f"eq_{band_id}", label, gains.get(band_id, 0.0), slider_min, slider_max, band_id=band_id)
-                button("reset_equalizer", self.reset_visible_equalizer_controls)
-                button("add_equalizer_profile", self.add_equalizer_profile_from_settings)
-                if self.is_custom_equalizer_preset(preset):
-                    button("delete_equalizer_profile", self.delete_visible_equalizer_profile_from_settings)
+            self.equalizer_controls_loading = True
+            try:
+                equalizer_enabled = bool(getattr(self.settings, "global_equalizer_enabled", False))
+                enabled_box = check("global_equalizer", equalizer_enabled)
+                enabled_box.Bind(wx.EVT_CHECKBOX, self.on_global_equalizer_toggle)
+                if not equalizer_enabled:
+                    self.visible_equalizer_draft_gains = {}
+                if equalizer_enabled:
+                    preset = self.normalized_equalizer_preset(getattr(self.settings, "global_equalizer_preset", EQ_PRESET_FLAT))
+                    self.visible_equalizer_preset = preset
+                    preset_choice = choice("equalizer_preset", preset, self.equalizer_preset_options(), self.equalizer_preset_labels())
+                    preset_choice.Bind(wx.EVT_CHOICE, self.on_equalizer_settings_preset_changed)
+                    if self.is_custom_equalizer_preset(preset):
+                        name_ctrl = text("equalizer_preset_name", self.equalizer_custom_name(preset))
+                        name_ctrl.Bind(wx.EVT_KILL_FOCUS, self.on_equalizer_settings_name_changed)
+                    db_range = str(self.equalizer_db_range_value())
+                    range_choice = choice("equalizer_db_range", db_range, EQ_RANGE_OPTIONS)
+                    range_choice.Bind(wx.EVT_CHOICE, self.on_equalizer_range_changed)
+                    gains = self.equalizer_gains_for_preset(preset)
+                    self.visible_equalizer_draft_gains = self.normalized_equalizer_gains(gains)
+                    slider_min = -int(db_range) * 10
+                    slider_max = int(db_range) * 10
+                    for band_id, band_label in EQ_BANDS:
+                        label = self.t("equalizer_band_gain", band=band_label)
+                        slider(f"eq_{band_id}", label, gains.get(band_id, 0.0), slider_min, slider_max, band_id=band_id)
+                    button("reset_equalizer", self.reset_visible_equalizer_controls)
+                    button("add_equalizer_profile", self.add_equalizer_profile_from_settings)
+                    if self.is_custom_equalizer_preset(preset):
+                        button("delete_equalizer_profile", self.delete_visible_equalizer_profile_from_settings)
+            finally:
+                self.equalizer_controls_loading = False
         elif section_name == "downloads":
             check("confirm_download", self.settings.confirm_before_download)
             check("open_after_download", self.settings.open_folder_after_download)
@@ -12231,38 +12224,17 @@ class MainFrame(wx.Frame):
         self.session_equalizer_before_bass_boost = None
 
     @staticmethod
-    def equalizer_band_width(band_id: str) -> float:
-        return EQ_BAND_WIDTHS_OCTAVES.get(str(band_id), 1.0)
+    def equalizer_band_filter(band_id: str, gain: float) -> str:
+        return f"equalizer=f={band_id}:t=q:w={EQ_FILTER_Q_WIDTH:g}:g={gain:.1f}"
 
     @classmethod
-    def equalizer_band_filter(cls, band_id: str, gain: float) -> str:
-        width = cls.equalizer_band_width(band_id)
-        return f"equalizer=f={band_id}:t=o:w={width:.2f}:g={gain:.1f}"
-
-    @staticmethod
-    def equalizer_protection_headroom_db(gains: dict[str, float]) -> float:
-        positive_gain = max((float(gains.get(band_id, 0.0) or 0.0) for band_id, _band_label in EQ_BANDS), default=0.0)
-        if positive_gain <= 0.05:
-            return 0.0
-        return min(EQ_MAX_PROTECTION_HEADROOM_DB, max(EQ_MIN_PROTECTION_HEADROOM_DB, positive_gain + 2.0))
-
-    @classmethod
-    def equalizer_filter(cls, gains: dict[str, float], protect_clipping: bool = False) -> str:
+    def equalizer_filter(cls, gains: dict[str, float]) -> str:
         filters = []
-        if protect_clipping:
-            headroom_db = cls.equalizer_protection_headroom_db(gains)
-            if headroom_db > 0.05:
-                filters.append(f"volume={10 ** (-headroom_db / 20.0):.4f}")
         for band_id, _band_label in EQ_BANDS:
             gain = max(-24.0, min(24.0, float(gains.get(band_id, 0.0) or 0.0)))
             if abs(gain) >= 0.05:
                 filters.append(cls.equalizer_band_filter(band_id, gain))
-        if filters and protect_clipping and any(float(gains.get(band_id, 0.0) or 0.0) > 0.05 for band_id, _band_label in EQ_BANDS):
-            filters.append(EQ_LIMITER_FILTER)
         return f"{EQ_FILTER_REF}:lavfi=[{','.join(filters)}]"
-
-    def equalizer_needs_clipping_protection(self, gains: dict[str, float]) -> bool:
-        return bool(self.volume_boost_enabled and any(float(value or 0.0) > 0.05 for value in gains.values()))
 
     def schedule_equalizer_apply(self, delay_ms: int = EQ_APPLY_DELAY_MS) -> None:
         self.equalizer_apply_generation += 1
@@ -12288,11 +12260,8 @@ class MainFrame(wx.Frame):
         self.equalizer_filter_active = False
         if not enabled or not any(abs(float(value)) >= 0.05 for value in gains.values()):
             return
-        protect_clipping = self.equalizer_needs_clipping_protection(gains)
         try:
-            response = self.mpv_request(["af", "add", self.equalizer_filter(gains, protect_clipping=protect_clipping)], timeout=1.2)
-            if response.get("error") != "success" and protect_clipping:
-                response = self.mpv_request(["af", "add", self.equalizer_filter(gains, protect_clipping=False)], timeout=1.2)
+            response = self.mpv_request(["af", "add", self.equalizer_filter(gains)], timeout=1.2)
             if response.get("error") == "success":
                 self.equalizer_filter_active = True
                 return
@@ -12378,13 +12347,15 @@ class MainFrame(wx.Frame):
 
         def set_dialog_slider_value(slider: wx.Slider, value: int, label: str, *, notify: bool = False) -> None:
             slider._apricot_suppress_accessible_notify = not notify
+            slider._apricot_eq_programmatic_update = True
             try:
                 slider.SetValue(value)
                 band_id = self.equalizer_slider_band_id(slider)
                 if band_id:
-                    dialog_gains[band_id] = round(max(-24.0, min(24.0, float(value) / 10.0)), 1)
+                    dialog_gains[band_id] = self.equalizer_gain_from_slider_value(value)
                 self.set_equalizer_slider_accessibility(slider, label)
             finally:
+                slider._apricot_eq_programmatic_update = False
                 slider._apricot_suppress_accessible_notify = False
 
         def update_custom_name_visibility() -> None:
@@ -12428,7 +12399,11 @@ class MainFrame(wx.Frame):
             for band_id, band_label in EQ_BANDS:
                 slider = sliders[band_id]
                 current = min(max(int(round(dialog_gains.get(band_id, 0.0) * 10)), slider_min), slider_max)
-                slider.SetRange(slider_min, slider_max)
+                slider._apricot_eq_programmatic_update = True
+                try:
+                    slider.SetRange(slider_min, slider_max)
+                finally:
+                    slider._apricot_eq_programmatic_update = False
                 self.configure_equalizer_slider_steps(slider)
                 set_dialog_slider_value(slider, current, self.t("equalizer_band_gain", band=band_label))
             live_apply()
@@ -12449,10 +12424,13 @@ class MainFrame(wx.Frame):
         def on_slider(event: wx.CommandEvent, label: str) -> None:
             ctrl = event.GetEventObject()
             if isinstance(ctrl, wx.Slider):
+                if getattr(ctrl, "_apricot_eq_programmatic_update", False):
+                    event.Skip()
+                    return
                 band_id = self.equalizer_slider_band_id(ctrl)
                 if not band_id:
                     return
-                dialog_gains[band_id] = round(max(-24.0, min(24.0, float(ctrl.GetValue()) / 10.0)), 1)
+                dialog_gains[band_id] = self.equalizer_gain_from_slider_value(ctrl.GetValue())
                 self.set_equalizer_slider_accessibility(ctrl, label)
             live_apply()
 
@@ -12932,17 +12910,10 @@ class MainFrame(wx.Frame):
 
     def ffmpeg_equalizer_filters(self, gains: dict[str, float]) -> list[str]:
         filters: list[str] = []
-        protect_clipping = self.equalizer_needs_clipping_protection(gains)
-        if protect_clipping:
-            headroom_db = self.equalizer_protection_headroom_db(gains)
-            if headroom_db > 0.05:
-                filters.append(f"volume={10 ** (-headroom_db / 20.0):.4f}")
         for band_id, _band_label in EQ_BANDS:
             gain = max(-24.0, min(24.0, float(gains.get(band_id, 0.0) or 0.0)))
             if abs(gain) >= 0.05:
                 filters.append(self.equalizer_band_filter(band_id, gain))
-        if filters and protect_clipping:
-            filters.append(EQ_LIMITER_FILTER)
         return filters
 
     def local_edit_audio_filters(self) -> list[str]:
@@ -13866,15 +13837,7 @@ class MainFrame(wx.Frame):
 
     @staticmethod
     def bind_equalizer_slider_events(ctrl: wx.Slider, handler) -> None:
-        event_names = (
-            "EVT_SLIDER",
-            "EVT_SCROLL_CHANGED",
-            "EVT_SCROLL_THUMBTRACK",
-            "EVT_SCROLL_LINEUP",
-            "EVT_SCROLL_LINEDOWN",
-            "EVT_SCROLL_PAGEUP",
-            "EVT_SCROLL_PAGEDOWN",
-        )
+        event_names = ("EVT_SLIDER",)
         seen: set[int] = set()
         for event_name in event_names:
             binder = getattr(wx, event_name, None)
@@ -13972,15 +13935,25 @@ class MainFrame(wx.Frame):
         band_id = str(getattr(ctrl, "_apricot_eq_band_id", "") or "")
         return band_id if band_id in EQ_BAND_IDS else ""
 
+    @staticmethod
+    def equalizer_gain_from_slider_value(value: int | float) -> float:
+        return round(max(-24.0, min(24.0, float(value) / 10.0)), 1)
+
+    def visible_equalizer_base_gains(self) -> dict[str, float]:
+        preset = self.normalized_equalizer_preset(
+            getattr(self, "visible_equalizer_preset", getattr(self.settings, "global_equalizer_preset", EQ_PRESET_FLAT))
+        )
+        return self.equalizer_gains_for_preset(preset)
+
     def update_visible_equalizer_draft_from_slider(self, ctrl: wx.Slider) -> str:
         band_id = self.equalizer_slider_band_id(ctrl)
         if not band_id:
             return ""
         draft = getattr(self, "visible_equalizer_draft_gains", None)
         if not isinstance(draft, dict) or not all(band in draft for band in EQ_BAND_IDS):
-            draft = self.visible_equalizer_gains_from_controls()
+            draft = self.visible_equalizer_base_gains()
         draft = self.normalized_equalizer_gains(draft)
-        draft[band_id] = round(max(-24.0, min(24.0, float(ctrl.GetValue()) / 10.0)), 1)
+        draft[band_id] = self.equalizer_gain_from_slider_value(ctrl.GetValue())
         self.visible_equalizer_draft_gains = draft
         return band_id
 
@@ -14137,8 +14110,14 @@ class MainFrame(wx.Frame):
         event.Skip()
 
     def on_equalizer_settings_slider(self, event: wx.CommandEvent, label: str) -> None:
+        if getattr(self, "equalizer_controls_loading", False):
+            event.Skip()
+            return
         ctrl = event.GetEventObject()
         if isinstance(ctrl, wx.Slider):
+            if getattr(ctrl, "_apricot_eq_programmatic_update", False):
+                event.Skip()
+                return
             if not self.update_visible_equalizer_draft_from_slider(ctrl):
                 return
             self.set_equalizer_slider_accessibility(ctrl, label)
@@ -14173,8 +14152,12 @@ class MainFrame(wx.Frame):
             ctrl = self.controls.get(f"eq_{band_id}")
             if isinstance(ctrl, wx.Slider):
                 value = gains.get(band_id, 0.0)
-                ctrl.SetValue(int(round(value * 10)))
-                self.set_equalizer_slider_accessibility(ctrl, self.t("equalizer_band_gain", band=band_label))
+                ctrl._apricot_eq_programmatic_update = True
+                try:
+                    ctrl.SetValue(int(round(value * 10)))
+                    self.set_equalizer_slider_accessibility(ctrl, self.t("equalizer_band_gain", band=band_label))
+                finally:
+                    ctrl._apricot_eq_programmatic_update = False
         if self.player_is_active():
             self.use_global_equalizer_for_live_preview()
             self.schedule_equalizer_apply(30)
