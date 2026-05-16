@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.8.57
+
+- added an optional clipping-protection setting for the Volume boost + EQ/Bass boost combination; it uses a soft limiter only and does not reintroduce automatic EQ headroom changes.
+- changed channel Popular videos so it no longer sorts only the latest loaded batch. With a YouTube Data API key it loads the channel's most-viewed videos directly; without one it scans the available channel videos, hydrates view counts, sorts by all-time views, and then shows results using the existing dynamic page size.
+- kept the dynamic result behavior for Popular videos: dynamic mode reveals 20 at a time, while a fixed results-limit setting shows that fixed number of top videos.
+
 ## What's new in version 0.8.56
 
 - stabilized the equalizer after tester reports from 0.8.55: each slider now updates only its own band state and programmatic slider refreshes are ignored by the save/live-preview handlers.

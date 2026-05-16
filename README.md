@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.8.56` (`0.8.56`)
+Current version: `0.8.57` (`0.8.57`)
 
 ## Download
 
@@ -51,6 +51,7 @@ py wx_main.py
 - Player and global equalizers share selectable 6/12/18/24 dB slider ranges with quieter screen-reader value updates
 - Player and global equalizer sliders use stable keyboard steps across the full 24 dB range.
 - Player Bass boost checkbox for a session-based EQ boost that stays active for the next item until turned off without resetting equalizer settings.
+- Optional clipping protection for the Volume boost + EQ/Bass boost combination.
 - Player hotkeys include `F2` volume boost, `F3` bass boost, `F4` equalizer, `R` repeat, and `Shift+S` shuffle
 - Optional Playback setting to announce or silence the “Playback finished” screen-reader message
 - Player clip markers and FFmpeg export for the marked section of the current video, local file, or podcast

@@ -20,6 +20,7 @@ import time
 import webbrowser
 import zipfile
 import ctypes
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -202,8 +203,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.56"
-APP_VERSION_LABEL = "0.8.56"
+APP_VERSION = "0.8.57"
+APP_VERSION_LABEL = "0.8.57"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -266,6 +267,7 @@ TRENDING_CATEGORIES: list[tuple[str, str]] = [
     ("technology", "Science & Technology"),
 ]
 YOUTUBE_API_VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
+YOUTUBE_API_SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 TRENDING_CATEGORY_IDS: dict[str, str] = {
     "all": "0",
     "music": "10",
@@ -285,6 +287,7 @@ TRENDING_PUBLIC_URLS: dict[str, list[str]] = {
 }
 EQ_FILTER_LABEL = "apricot_eq"
 EQ_FILTER_REF = f"@{EQ_FILTER_LABEL}"
+EQ_LIMITER_FILTER = "alimiter=limit=0.95"
 EQ_APPLY_DELAY_MS = 80
 NORMAL_VOLUME_MAX = 100
 BOOSTED_VOLUME_MAX = 300
@@ -303,6 +306,8 @@ EQ_BANDS: list[tuple[str, str]] = [
 EQ_BAND_IDS = {band_id for band_id, _label in EQ_BANDS}
 EQ_FILTER_Q_WIDTH = 1.0
 EQ_RANGE_OPTIONS = ["6", "12", "18", "24"]
+POPULAR_CHANNEL_METADATA_WORKERS = 4
+POPULAR_CHANNEL_PROGRESS_INTERVAL = 25
 SEEK_SECONDS_OPTIONS = ["0.1", "0.25", "0.5", "0.75", "1", "1.5", "2", "2.5", "3", "4", "5", "7.5", "10", "15", "20", "30", "45", "60"]
 STREAM_URL_CACHE_OPTIONS = ["5", "10", "20", "30", "60", "240", "1440", "10080", "0"]
 EQ_PRESET_FLAT = "flat"
@@ -3666,6 +3671,22 @@ for language_code in LANGUAGE_CODES:
     for key, value in RELEASE_0855_TRANSLATION_UPDATES["en"].items():
         TEXT.setdefault(language_code, {}).setdefault(key, value)
 
+RELEASE_0857_TRANSLATION_UPDATES = {
+    "sl": {
+        "equalizer_clipping_protection": "Clipping zascita za Volume boost + EQ",
+        "popular_scan_status": "Sortiram popularne videe kanala po vseh ogledih: {done}/{total}.",
+    },
+    "en": {
+        "equalizer_clipping_protection": "Clipping protection for Volume boost + EQ",
+        "popular_scan_status": "Sorting channel popular videos by all-time views: {done}/{total}.",
+    },
+}
+for language_code in LANGUAGE_CODES:
+    TEXT.setdefault(language_code, {}).update(RELEASE_0857_TRANSLATION_UPDATES.get(language_code, RELEASE_0857_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
+for language_code in LANGUAGE_CODES:
+    for key, value in RELEASE_0857_TRANSLATION_UPDATES["en"].items():
+        TEXT.setdefault(language_code, {}).setdefault(key, value)
+
 
 def default_equalizer_gains() -> dict[str, float]:
     return {band_id: 0.0 for band_id, _label in EQ_BANDS}
@@ -3731,6 +3752,7 @@ class Settings:
     equalizer_preset_gains: dict[str, dict[str, float]] = field(default_factory=default_equalizer_preset_gains)
     equalizer_custom_names: dict[str, str] = field(default_factory=default_equalizer_custom_names)
     equalizer_db_range: int = 12
+    equalizer_clipping_protection: bool = False
     ask_download_location_each_time: bool = False
     quiet_downloads: bool = False
     keep_playlist_order: bool = True
@@ -3945,6 +3967,8 @@ class MainFrame(wx.Frame):
         self.collection_url = ""
         self.collection_result_type = ""
         self.collection_sort_mode = ""
+        self.collection_channel_id = ""
+        self.collection_fully_loaded = False
         self.current_stream_url = ""
         self.current_stream_headers: dict = {}
         self.stream_url_cache: dict[str, dict] = {}
@@ -8266,6 +8290,8 @@ class MainFrame(wx.Frame):
         self.collection_url = ""
         self.collection_result_type = ""
         self.collection_sort_mode = ""
+        self.collection_channel_id = ""
+        self.collection_fully_loaded = False
         self.loading_more_results = False
         self.dynamic_fetch_enabled = True
         self.metadata_hydration_urls.clear()
@@ -9321,6 +9347,7 @@ class MainFrame(wx.Frame):
                 "equalizer_preset_gains",
                 "equalizer_custom_names",
                 "equalizer_db_range",
+                "equalizer_clipping_protection",
             ],
             "downloads": [
                 "audio_format",
@@ -9609,6 +9636,8 @@ class MainFrame(wx.Frame):
                 equalizer_enabled = bool(getattr(self.settings, "global_equalizer_enabled", False))
                 enabled_box = check("global_equalizer", equalizer_enabled)
                 enabled_box.Bind(wx.EVT_CHECKBOX, self.on_global_equalizer_toggle)
+                clipping_box = check("equalizer_clipping_protection", bool(getattr(self.settings, "equalizer_clipping_protection", False)))
+                clipping_box.Bind(wx.EVT_CHECKBOX, self.on_equalizer_clipping_protection_changed)
                 if not equalizer_enabled:
                     self.visible_equalizer_draft_gains = {}
                 if equalizer_enabled:
@@ -9782,6 +9811,8 @@ class MainFrame(wx.Frame):
         self.collection_url = ""
         self.collection_result_type = ""
         self.collection_sort_mode = ""
+        self.collection_channel_id = ""
+        self.collection_fully_loaded = False
         self.search_results_stack = []
         self.loading_more_results = False
         self.dynamic_fetch_enabled = True
@@ -9819,6 +9850,10 @@ class MainFrame(wx.Frame):
     def show_search_error_if_current(self, generation: int, error: str) -> None:
         if generation == self.search_generation:
             self.message(error, wx.ICON_ERROR)
+
+    def set_status_if_current(self, generation: int, text: str) -> None:
+        if generation == self.search_generation:
+            self.set_status(text)
 
     @staticmethod
     def metadata_live_status(info: dict | None) -> str:
@@ -10032,6 +10067,9 @@ class MainFrame(wx.Frame):
     def fetch_more_dynamic_results(self, selection: int) -> None:
         if self.loading_more_results:
             return
+        if getattr(self, "collection_fully_loaded", False) and len(self.results) >= len(self.all_results):
+            self.set_status(self.t("no_more_results"))
+            return
         current_count = len(self.all_results)
         max_limit = self.max_results_limit()
         if max_limit and current_count >= max_limit:
@@ -10164,20 +10202,169 @@ class MainFrame(wx.Frame):
         except (TypeError, ValueError):
             return -1
 
-    def sorted_popular_channel_results(self, results: list[dict]) -> list[dict]:
-        options = {"quiet": True, "skip_download": True, "noplaylist": True}
-        hydrated: list[dict] = []
+    @staticmethod
+    def is_youtube_channel_id(value: str) -> bool:
+        return bool(re.fullmatch(r"UC[\w-]{20,}", str(value or "").strip()))
+
+    @staticmethod
+    def popular_result_sort_key(item: dict) -> tuple[int, int, str]:
+        timestamp = item.get("timestamp")
+        upload_date = item.get("upload_date")
+        try:
+            age_value = int(timestamp or 0)
+        except (TypeError, ValueError):
+            age_value = 0
+        if not age_value:
+            try:
+                age_value = int(str(upload_date or "0"))
+            except (TypeError, ValueError):
+                age_value = 0
+        return (
+            MainFrame.numeric_view_count(item.get("view_count")),
+            age_value,
+            str(item.get("title") or "").lower(),
+        )
+
+    def sort_popular_results(self, results: list[dict]) -> list[dict]:
+        return sorted(results, key=self.popular_result_sort_key, reverse=True)
+
+    def dedupe_results_by_url(self, results: list[dict]) -> list[dict]:
+        deduped: list[dict] = []
+        seen: set[str] = set()
         for item in results:
-            updated = dict(item)
-            url = str(updated.get("url") or "")
-            if updated.get("kind") == "video" and url and self.numeric_view_count(updated.get("view_count")) < 0:
+            url = str(item.get("url") or item.get("webpage_url") or "").strip()
+            key = url or str(item.get("title") or "")
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+        return deduped
+
+    def hydrate_video_metadata_for_popular(self, item: dict) -> dict:
+        updated = dict(item)
+        url = str(updated.get("url") or "")
+        if updated.get("kind") != "video" or not url or self.numeric_view_count(updated.get("view_count")) >= 0:
+            return updated
+        options = {"quiet": True, "skip_download": True, "noplaylist": True}
+        try:
+            info = self.ydl_extract_info(url, options, download=False)
+            updated.update({key: value for key, value in self.metadata_from_info(info, updated).items() if value not in (None, "")})
+        except Exception:
+            pass
+        return updated
+
+    def sorted_popular_channel_results(self, results: list[dict]) -> list[dict]:
+        return self.sort_popular_results([self.hydrate_video_metadata_for_popular(item) for item in results])
+
+    def resolve_channel_id_for_popular(self, url: str) -> str:
+        existing = str(getattr(self, "collection_channel_id", "") or "").strip()
+        if self.is_youtube_channel_id(existing):
+            return existing
+        try:
+            options = {"quiet": True, "extract_flat": True, "skip_download": True, "playlistend": 1}
+            info = self.ydl_extract_info(url, options, download=False)
+        except Exception:
+            return ""
+        channel_id = str((info or {}).get("channel_id") or (info or {}).get("id") or "").strip()
+        return channel_id if self.is_youtube_channel_id(channel_id) else ""
+
+    def fetch_youtube_api_videos_by_ids(self, video_ids: list[str]) -> list[dict]:
+        api_key = self.youtube_data_api_key()
+        ordered_ids = [video_id for video_id in video_ids if video_id]
+        if not api_key or not ordered_ids:
+            return []
+        videos_by_id: dict[str, dict] = {}
+        for start in range(0, len(ordered_ids), 50):
+            chunk = ordered_ids[start : start + 50]
+            params = {
+                "part": "snippet,contentDetails,statistics",
+                "id": ",".join(chunk),
+                "key": api_key,
+                "maxResults": str(len(chunk)),
+            }
+            request = Request(f"{YOUTUBE_API_VIDEOS_URL}?{urlencode(params)}", headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+            with self.open_url(request, timeout=25) as response:
+                payload = json.loads(response.read().decode("utf-8", errors="replace"))
+            if isinstance(payload, dict) and payload.get("error"):
+                error = payload.get("error") or {}
+                message = error.get("message") if isinstance(error, dict) else str(error)
+                raise RuntimeError(message or self.t("trending_api_key_required"))
+            for item in list((payload or {}).get("items") or []):
+                if isinstance(item, dict):
+                    video_id = str(item.get("id") or "")
+                    if video_id:
+                        videos_by_id[video_id] = item
+        return [self.normalize_youtube_api_video(videos_by_id[video_id]) for video_id in ordered_ids if video_id in videos_by_id]
+
+    def fetch_youtube_api_channel_popular(self, url: str, limit: int) -> tuple[list[dict], bool]:
+        api_key = self.youtube_data_api_key()
+        if not api_key:
+            return [], False
+        channel_id = self.resolve_channel_id_for_popular(url)
+        if not channel_id:
+            return [], False
+        video_ids: list[str] = []
+        next_page = ""
+        while len(video_ids) < limit:
+            params = {
+                "part": "snippet",
+                "channelId": channel_id,
+                "order": "viewCount",
+                "type": "video",
+                "maxResults": str(min(50, max(1, limit - len(video_ids)))),
+                "key": api_key,
+            }
+            if next_page:
+                params["pageToken"] = next_page
+            request = Request(f"{YOUTUBE_API_SEARCH_URL}?{urlencode(params)}", headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+            with self.open_url(request, timeout=25) as response:
+                payload = json.loads(response.read().decode("utf-8", errors="replace"))
+            if isinstance(payload, dict) and payload.get("error"):
+                error = payload.get("error") or {}
+                message = error.get("message") if isinstance(error, dict) else str(error)
+                raise RuntimeError(message or self.t("trending_api_key_required"))
+            for item in list((payload or {}).get("items") or []):
+                video_id = str(((item.get("id") or {}) if isinstance(item, dict) else {}).get("videoId") or "")
+                if video_id and video_id not in video_ids:
+                    video_ids.append(video_id)
+            next_page = str((payload or {}).get("nextPageToken") or "")
+            if not next_page:
+                break
+        return self.fetch_youtube_api_videos_by_ids(video_ids[:limit]), not next_page
+
+    def fetch_ytdlp_channel_popular(self, url: str, generation: int) -> tuple[list[dict], bool]:
+        options = {"quiet": True, "extract_flat": True, "skip_download": True}
+        info = self.ydl_extract_info(url, options, download=False)
+        entries = [entry for entry in list((info or {}).get("entries") or []) if isinstance(entry, dict)]
+        normalized = self.dedupe_results_by_url([self.normalize_entry(entry, "Video") for entry in entries])
+        total = len(normalized)
+        if not total:
+            return [], True
+        wx.CallAfter(self.set_status_if_current, generation, self.t("popular_scan_status", done=0, total=total))
+        hydrated: list[dict] = []
+        workers = min(POPULAR_CHANNEL_METADATA_WORKERS, total)
+        done = 0
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(self.hydrate_video_metadata_for_popular, item) for item in normalized]
+            for future in as_completed(futures):
                 try:
-                    info = self.ydl_extract_info(url, options, download=False)
-                    updated.update({key: value for key, value in self.metadata_from_info(info, updated).items() if value not in (None, "")})
+                    hydrated.append(future.result())
                 except Exception:
                     pass
-            hydrated.append(updated)
-        return sorted(hydrated, key=lambda item: self.numeric_view_count(item.get("view_count")), reverse=True)
+                done += 1
+                if done == total or done % POPULAR_CHANNEL_PROGRESS_INTERVAL == 0:
+                    wx.CallAfter(self.set_status_if_current, generation, self.t("popular_scan_status", done=done, total=total))
+        return self.sort_popular_results(hydrated), True
+
+    def fetch_popular_channel_results(self, url: str, limit: int, generation: int) -> tuple[list[dict], bool]:
+        if self.youtube_data_api_key():
+            try:
+                results, fully_loaded = self.fetch_youtube_api_channel_popular(url, limit)
+                if results:
+                    return self.sort_popular_results(results), fully_loaded
+            except Exception:
+                pass
+        return self.fetch_ytdlp_channel_popular(url, generation)
 
     def apply_result_metadata(self, payload: dict) -> None:
         url = str(payload.get("url") or "")
@@ -10301,6 +10488,8 @@ class MainFrame(wx.Frame):
                 "collection_url": self.collection_url,
                 "collection_result_type": self.collection_result_type,
                 "collection_sort_mode": self.collection_sort_mode,
+                "collection_channel_id": getattr(self, "collection_channel_id", ""),
+                "collection_fully_loaded": bool(getattr(self, "collection_fully_loaded", False)),
                 "country_index": getattr(self, "last_trending_country_index", 0),
                 "category_index": getattr(self, "last_trending_category_index", 0),
             }
@@ -10340,6 +10529,8 @@ class MainFrame(wx.Frame):
         self.collection_url = str(state.get("collection_url") or "")
         self.collection_result_type = str(state.get("collection_result_type") or "")
         self.collection_sort_mode = str(state.get("collection_sort_mode") or "")
+        self.collection_channel_id = str(state.get("collection_channel_id") or "")
+        self.collection_fully_loaded = bool(state.get("collection_fully_loaded", False))
         self.loading_more_results = False
         self.dynamic_fetch_enabled = True
         self.metadata_hydration_urls.clear()
@@ -10361,7 +10552,7 @@ class MainFrame(wx.Frame):
         base = url.split("?", 1)[0].rstrip("/")
         base = re.sub(r"/(videos|playlists|featured|streams|shorts)$", "", base, flags=re.IGNORECASE)
         if tab == "popular":
-            return f"{base}/videos?view=0&sort=p&flow=grid"
+            return f"{base}/videos"
         if tab == "playlists":
             return f"{base}/playlists"
         return f"{base}/videos"
@@ -10406,6 +10597,8 @@ class MainFrame(wx.Frame):
         self.collection_url = url
         self.collection_result_type = result_type
         self.collection_sort_mode = "popular" if tab == "popular" else ""
+        self.collection_channel_id = str(item.get("channel_id") or "")
+        self.collection_fully_loaded = False
         self.loading_more_results = False
         self.dynamic_fetch_enabled = True
         self.metadata_hydration_urls.clear()
@@ -10488,6 +10681,8 @@ class MainFrame(wx.Frame):
         self.collection_url = ""
         self.collection_result_type = ""
         self.collection_sort_mode = ""
+        self.collection_channel_id = ""
+        self.collection_fully_loaded = False
         self.search_results_stack = []
         self.loading_more_results = False
         self.dynamic_fetch_enabled = False
@@ -10618,6 +10813,8 @@ class MainFrame(wx.Frame):
         self.collection_url = item["url"]
         self.collection_result_type = "Video"
         self.collection_sort_mode = ""
+        self.collection_channel_id = ""
+        self.collection_fully_loaded = False
         self.loading_more_results = False
         self.dynamic_fetch_enabled = True
         self.metadata_hydration_urls.clear()
@@ -10637,6 +10834,17 @@ class MainFrame(wx.Frame):
         try:
             generation = self.search_generation if generation is None else generation
             limit = limit or self.initial_results_limit()
+            if sort_mode == "popular" and result_type == "Video":
+                normalized, fully_loaded = self.fetch_popular_channel_results(url, limit, generation)
+                if self.settings.results_limit != 0:
+                    normalized = normalized[:limit]
+                wx.CallAfter(self.mark_collection_fully_loaded_if_current, generation, fully_loaded)
+                if self.settings.results_limit == 0 and selection:
+                    wx.CallAfter(self.show_more_results_if_current, generation, normalized, selection)
+                else:
+                    wx.CallAfter(self.show_results_if_current, generation, normalized)
+                    wx.CallAfter(self.clear_loading_more_if_current, generation)
+                return
             options = {
                 "quiet": True,
                 "extract_flat": True,
@@ -10818,6 +11026,8 @@ class MainFrame(wx.Frame):
         self.collection_url = ""
         self.collection_result_type = ""
         self.collection_sort_mode = ""
+        self.collection_channel_id = ""
+        self.collection_fully_loaded = False
         self.search_results_stack = []
         self.loading_more_results = False
         self.dynamic_fetch_enabled = False
@@ -10915,6 +11125,10 @@ class MainFrame(wx.Frame):
     def clear_loading_more_if_current(self, generation: int) -> None:
         if generation == self.search_generation:
             self.loading_more_results = False
+
+    def mark_collection_fully_loaded_if_current(self, generation: int, fully_loaded: bool) -> None:
+        if generation == self.search_generation:
+            self.collection_fully_loaded = bool(fully_loaded)
 
     def play_url(
         self,
@@ -12227,14 +12441,33 @@ class MainFrame(wx.Frame):
     def equalizer_band_filter(band_id: str, gain: float) -> str:
         return f"equalizer=f={band_id}:t=q:w={EQ_FILTER_Q_WIDTH:g}:g={gain:.1f}"
 
+    @staticmethod
+    def equalizer_has_positive_gain(gains: dict[str, float]) -> bool:
+        for band_id, _band_label in EQ_BANDS:
+            try:
+                if float(gains.get(band_id, 0.0) or 0.0) > 0.05:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
     @classmethod
-    def equalizer_filter(cls, gains: dict[str, float]) -> str:
+    def equalizer_filter(cls, gains: dict[str, float], protect_clipping: bool = False) -> str:
         filters = []
         for band_id, _band_label in EQ_BANDS:
             gain = max(-24.0, min(24.0, float(gains.get(band_id, 0.0) or 0.0)))
             if abs(gain) >= 0.05:
                 filters.append(cls.equalizer_band_filter(band_id, gain))
+        if protect_clipping and filters:
+            filters.append(EQ_LIMITER_FILTER)
         return f"{EQ_FILTER_REF}:lavfi=[{','.join(filters)}]"
+
+    def equalizer_clipping_protection_active(self, gains: dict[str, float]) -> bool:
+        return (
+            bool(getattr(self.settings, "equalizer_clipping_protection", False))
+            and bool(getattr(self, "volume_boost_enabled", False))
+            and self.equalizer_has_positive_gain(gains)
+        )
 
     def schedule_equalizer_apply(self, delay_ms: int = EQ_APPLY_DELAY_MS) -> None:
         self.equalizer_apply_generation += 1
@@ -12261,7 +12494,10 @@ class MainFrame(wx.Frame):
         if not enabled or not any(abs(float(value)) >= 0.05 for value in gains.values()):
             return
         try:
-            response = self.mpv_request(["af", "add", self.equalizer_filter(gains)], timeout=1.2)
+            response = self.mpv_request(
+                ["af", "add", self.equalizer_filter(gains, self.equalizer_clipping_protection_active(gains))],
+                timeout=1.2,
+            )
             if response.get("error") == "success":
                 self.equalizer_filter_active = True
                 return
@@ -12914,6 +13150,8 @@ class MainFrame(wx.Frame):
             gain = max(-24.0, min(24.0, float(gains.get(band_id, 0.0) or 0.0)))
             if abs(gain) >= 0.05:
                 filters.append(self.equalizer_band_filter(band_id, gain))
+        if self.equalizer_clipping_protection_active(gains) and filters:
+            filters.append(EQ_LIMITER_FILTER)
         return filters
 
     def local_edit_audio_filters(self) -> list[str]:
@@ -14083,6 +14321,13 @@ class MainFrame(wx.Frame):
             self.use_global_equalizer_for_live_preview()
             self.schedule_equalizer_apply(30)
         wx.CallAfter(self.render_settings_section_and_focus, "global_equalizer")
+
+    def on_equalizer_clipping_protection_changed(self, _event: wx.CommandEvent) -> None:
+        ctrl = self.controls.get("equalizer_clipping_protection") if hasattr(self, "controls") else None
+        if isinstance(ctrl, wx.CheckBox):
+            self.settings.equalizer_clipping_protection = bool(ctrl.GetValue())
+        if self.player_is_active():
+            self.schedule_equalizer_apply(30)
 
     def on_equalizer_settings_preset_changed(self, _event: wx.CommandEvent) -> None:
         previous = getattr(self, "visible_equalizer_preset", getattr(self.settings, "global_equalizer_preset", EQ_PRESET_FLAT))
@@ -16094,6 +16339,8 @@ class MainFrame(wx.Frame):
             self.settings.pitch_mode = self.normalize_pitch_mode_value(self.selected_choice_value("pitch_mode"))
         if "global_equalizer" in c:
             self.settings.global_equalizer_enabled = c["global_equalizer"].GetValue()
+        if "equalizer_clipping_protection" in c:
+            self.settings.equalizer_clipping_protection = bool(c["equalizer_clipping_protection"].GetValue())
         selected_equalizer_preset = self.normalized_equalizer_preset(getattr(self.settings, "global_equalizer_preset", EQ_PRESET_FLAT))
         if "equalizer_preset" in c:
             selected_equalizer_preset = self.normalized_equalizer_preset(self.selected_choice_value("equalizer_preset"))
