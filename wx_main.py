@@ -202,8 +202,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.53"
-APP_VERSION_LABEL = "0.8.53"
+APP_VERSION = "0.8.54"
+APP_VERSION_LABEL = "0.8.54"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -300,20 +300,19 @@ EQ_BANDS: list[tuple[str, str]] = [
     ("8000", "8 kHz brightness"),
     ("16000", "16 kHz air and sparkle"),
 ]
+EQ_BAND_IDS = {band_id for band_id, _label in EQ_BANDS}
 EQ_BAND_WIDTHS_OCTAVES: dict[str, float] = {
-    "31": 2.4,
-    "62": 2.0,
-    "125": 1.45,
-    "250": 1.15,
-    "500": 1.05,
+    "31": 1.25,
+    "62": 1.1,
+    "125": 1.0,
+    "250": 0.95,
+    "500": 0.95,
     "1000": 1.0,
     "2000": 1.0,
-    "4000": 1.05,
-    "8000": 1.15,
-    "16000": 1.35,
+    "4000": 0.95,
+    "8000": 0.95,
+    "16000": 1.0,
 }
-EQ_LOW_SHELF_BANDS = {"31", "62"}
-EQ_HIGH_SHELF_BANDS = {"16000"}
 EQ_MIN_PROTECTION_HEADROOM_DB = 3.0
 EQ_MAX_PROTECTION_HEADROOM_DB = 9.0
 EQ_LIMITER_FILTER = "alimiter=limit=0.95"
@@ -3951,6 +3950,7 @@ class MainFrame(wx.Frame):
         self.session_equalizer_enabled: bool | None = None
         self.session_equalizer_gains: dict[str, float] = {}
         self.session_equalizer_before_bass_boost: tuple[bool | None, dict[str, float]] | None = None
+        self.visible_equalizer_draft_gains: dict[str, float] = {}
         self.equalizer_apply_generation = 0
         self.equalizer_apply_timer: wx.CallLater | None = None
         self.bass_boost_enabled = False
@@ -9440,6 +9440,8 @@ class MainFrame(wx.Frame):
         form = wx.FlexGridSizer(0, 2, 6, 6)
         form.AddGrowableCol(1, 1)
         section_name = self.settings_sections()[self.settings_section_index][1]
+        if section_name != "equalizer":
+            self.visible_equalizer_draft_gains = {}
 
         def remember(key: str, ctrl: wx.Window) -> None:
             self.controls[key] = ctrl
@@ -9493,7 +9495,7 @@ class MainFrame(wx.Frame):
             self.settings_control_order.append(ctrl)
             return ctrl
 
-        def slider(key: str, label: str, value: float, minimum: int, maximum: int):
+        def slider(key: str, label: str, value: float, minimum: int, maximum: int, band_id: str | None = None):
             form.Add(wx.StaticText(self.settings_scroller, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
             scaled_value = int(round(float(value) * 10))
             ctrl = wx.Slider(
@@ -9503,6 +9505,8 @@ class MainFrame(wx.Frame):
                 maxValue=maximum,
                 style=wx.SL_HORIZONTAL,
             )
+            if band_id:
+                ctrl._apricot_eq_band_id = str(band_id)
             self.configure_equalizer_slider_steps(ctrl)
             self.set_equalizer_slider_accessibility(ctrl, label)
             self.bind_equalizer_slider_events(ctrl, lambda evt, label_text=label: self.on_equalizer_settings_slider(evt, label_text))
@@ -9606,11 +9610,12 @@ class MainFrame(wx.Frame):
                 range_choice = choice("equalizer_db_range", db_range, EQ_RANGE_OPTIONS)
                 range_choice.Bind(wx.EVT_CHOICE, self.on_equalizer_range_changed)
                 gains = self.equalizer_gains_for_preset(preset)
+                self.visible_equalizer_draft_gains = self.normalized_equalizer_gains(gains)
                 slider_min = -int(db_range) * 10
                 slider_max = int(db_range) * 10
                 for band_id, band_label in EQ_BANDS:
                     label = self.t("equalizer_band_gain", band=band_label)
-                    slider(f"eq_{band_id}", label, gains.get(band_id, 0.0), slider_min, slider_max)
+                    slider(f"eq_{band_id}", label, gains.get(band_id, 0.0), slider_min, slider_max, band_id=band_id)
                 button("reset_equalizer", self.reset_visible_equalizer_controls)
                 button("add_equalizer_profile", self.add_equalizer_profile_from_settings)
                 if self.is_custom_equalizer_preset(preset):
@@ -12148,10 +12153,6 @@ class MainFrame(wx.Frame):
     @classmethod
     def equalizer_band_filter(cls, band_id: str, gain: float) -> str:
         width = cls.equalizer_band_width(band_id)
-        if str(band_id) in EQ_LOW_SHELF_BANDS:
-            return f"bass=f={band_id}:t=o:w={width:.2f}:g={gain:.1f}"
-        if str(band_id) in EQ_HIGH_SHELF_BANDS:
-            return f"treble=f={band_id}:t=o:w={width:.2f}:g={gain:.1f}"
         return f"equalizer=f={band_id}:t=o:w={width:.2f}:g={gain:.1f}"
 
     @staticmethod
@@ -12247,10 +12248,11 @@ class MainFrame(wx.Frame):
         outer.Add(name_label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 8)
         outer.Add(name_ctrl, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
         sliders: dict[str, wx.Slider] = {}
+        dialog_gains = self.normalized_equalizer_gains(gains)
         for band_id, band_label in EQ_BANDS:
             label_text = self.t("equalizer_band_gain", band=band_label)
             outer.Add(wx.StaticText(dialog, label=label_text), 0, wx.LEFT | wx.RIGHT | wx.TOP, 8)
-            band_value = min(max(int(round(gains.get(band_id, 0.0) * 10)), -dialog_db_range * 10), dialog_db_range * 10)
+            band_value = min(max(int(round(dialog_gains.get(band_id, 0.0) * 10)), -dialog_db_range * 10), dialog_db_range * 10)
             slider = wx.Slider(
                 dialog,
                 value=band_value,
@@ -12258,6 +12260,7 @@ class MainFrame(wx.Frame):
                 maxValue=dialog_db_range * 10,
                 style=wx.SL_HORIZONTAL,
             )
+            slider._apricot_eq_band_id = str(band_id)
             self.configure_equalizer_slider_steps(slider)
             self.set_equalizer_slider_accessibility(slider, label_text)
             sliders[band_id] = slider
@@ -12283,7 +12286,7 @@ class MainFrame(wx.Frame):
         dialog.SetSizer(outer)
 
         def current_dialog_gains() -> dict[str, float]:
-            return {band_id: round(float(ctrl.GetValue()) / 10.0, 1) for band_id, ctrl in sliders.items()}
+            return self.normalized_equalizer_gains(dialog_gains)
 
         def current_preset() -> str:
             index = preset_choice.GetSelection()
@@ -12293,6 +12296,9 @@ class MainFrame(wx.Frame):
             slider._apricot_suppress_accessible_notify = not notify
             try:
                 slider.SetValue(value)
+                band_id = self.equalizer_slider_band_id(slider)
+                if band_id:
+                    dialog_gains[band_id] = round(max(-24.0, min(24.0, float(value) / 10.0)), 1)
                 self.set_equalizer_slider_accessibility(slider, label)
             finally:
                 slider._apricot_suppress_accessible_notify = False
@@ -12319,8 +12325,10 @@ class MainFrame(wx.Frame):
 
         def load_preset_into_sliders(preset_id: str) -> None:
             nonlocal dialog_visible_preset
+            nonlocal dialog_gains
             dialog_visible_preset = self.normalized_equalizer_preset(preset_id)
             preset_gains = self.equalizer_gains_for_preset(preset_id)
+            dialog_gains = self.normalized_equalizer_gains(preset_gains)
             for band_id, band_label in EQ_BANDS:
                 value = min(max(preset_gains.get(band_id, 0.0), -dialog_db_range), dialog_db_range)
                 set_dialog_slider_value(sliders[band_id], int(round(value * 10)), self.t("equalizer_band_gain", band=band_label))
@@ -12335,7 +12343,7 @@ class MainFrame(wx.Frame):
             slider_max = dialog_db_range * 10
             for band_id, band_label in EQ_BANDS:
                 slider = sliders[band_id]
-                current = min(max(slider.GetValue(), slider_min), slider_max)
+                current = min(max(int(round(dialog_gains.get(band_id, 0.0) * 10)), slider_min), slider_max)
                 slider.SetRange(slider_min, slider_max)
                 self.configure_equalizer_slider_steps(slider)
                 set_dialog_slider_value(slider, current, self.t("equalizer_band_gain", band=band_label))
@@ -12357,6 +12365,10 @@ class MainFrame(wx.Frame):
         def on_slider(event: wx.CommandEvent, label: str) -> None:
             ctrl = event.GetEventObject()
             if isinstance(ctrl, wx.Slider):
+                band_id = self.equalizer_slider_band_id(ctrl)
+                if not band_id:
+                    return
+                dialog_gains[band_id] = round(max(-24.0, min(24.0, float(ctrl.GetValue()) / 10.0)), 1)
                 self.set_equalizer_slider_accessibility(ctrl, label)
             live_apply()
 
@@ -12371,7 +12383,9 @@ class MainFrame(wx.Frame):
         range_choice.Bind(wx.EVT_CHOICE, on_range_changed)
 
         def reset_dialog_equalizer(_event=None) -> None:
+            nonlocal dialog_gains
             preset_gains = self.factory_equalizer_gains_for_preset(current_preset())
+            dialog_gains = self.normalized_equalizer_gains(preset_gains)
             for band_id, band_label in EQ_BANDS:
                 value = min(max(preset_gains.get(band_id, 0.0), -dialog_db_range), dialog_db_range)
                 set_dialog_slider_value(sliders[band_id], int(round(value * 10)), self.t("equalizer_band_gain", band=band_label))
@@ -13768,11 +13782,21 @@ class MainFrame(wx.Frame):
 
     @staticmethod
     def bind_equalizer_slider_events(ctrl: wx.Slider, handler) -> None:
-        event_names = ("EVT_SLIDER", "EVT_SCROLL")
+        event_names = (
+            "EVT_SLIDER",
+            "EVT_SCROLL_CHANGED",
+            "EVT_SCROLL_THUMBTRACK",
+            "EVT_SCROLL_LINEUP",
+            "EVT_SCROLL_LINEDOWN",
+            "EVT_SCROLL_PAGEUP",
+            "EVT_SCROLL_PAGEDOWN",
+        )
+        seen: set[int] = set()
         for event_name in event_names:
             binder = getattr(wx, event_name, None)
-            if binder is None:
+            if binder is None or id(binder) in seen:
                 continue
+            seen.add(id(binder))
             try:
                 ctrl.Bind(binder, handler)
             except Exception:
@@ -13860,7 +13884,23 @@ class MainFrame(wx.Frame):
             return equalizer_gains_from_values(EQ_FACTORY_PRESET_VALUES[preset_id])
         return default_equalizer_gains()
 
-    def visible_equalizer_gains(self) -> dict[str, float]:
+    def equalizer_slider_band_id(self, ctrl: wx.Window | None) -> str:
+        band_id = str(getattr(ctrl, "_apricot_eq_band_id", "") or "")
+        return band_id if band_id in EQ_BAND_IDS else ""
+
+    def update_visible_equalizer_draft_from_slider(self, ctrl: wx.Slider) -> str:
+        band_id = self.equalizer_slider_band_id(ctrl)
+        if not band_id:
+            return ""
+        draft = getattr(self, "visible_equalizer_draft_gains", None)
+        if not isinstance(draft, dict) or not all(band in draft for band in EQ_BAND_IDS):
+            draft = self.visible_equalizer_gains_from_controls()
+        draft = self.normalized_equalizer_gains(draft)
+        draft[band_id] = round(max(-24.0, min(24.0, float(ctrl.GetValue()) / 10.0)), 1)
+        self.visible_equalizer_draft_gains = draft
+        return band_id
+
+    def visible_equalizer_gains_from_controls(self) -> dict[str, float]:
         gains: dict[str, float] = {}
         if not hasattr(self, "controls"):
             return gains
@@ -13869,6 +13909,12 @@ class MainFrame(wx.Frame):
             if isinstance(ctrl, wx.Slider):
                 gains[band_id] = round(float(ctrl.GetValue()) / 10.0, 1)
         return gains
+
+    def visible_equalizer_gains(self) -> dict[str, float]:
+        draft = getattr(self, "visible_equalizer_draft_gains", None)
+        if isinstance(draft, dict) and all(band_id in draft for band_id in EQ_BAND_IDS):
+            return self.normalized_equalizer_gains(draft)
+        return self.visible_equalizer_gains_from_controls()
 
     def save_visible_equalizer_gains_to_preset(self, preset_id: str | None = None) -> None:
         preset_id = self.normalized_equalizer_preset(preset_id or getattr(self, "visible_equalizer_preset", EQ_PRESET_FLAT))
@@ -14009,6 +14055,8 @@ class MainFrame(wx.Frame):
     def on_equalizer_settings_slider(self, event: wx.CommandEvent, label: str) -> None:
         ctrl = event.GetEventObject()
         if isinstance(ctrl, wx.Slider):
+            if not self.update_visible_equalizer_draft_from_slider(ctrl):
+                return
             self.set_equalizer_slider_accessibility(ctrl, label)
         self.save_visible_equalizer_gains_to_preset(getattr(self, "visible_equalizer_preset", EQ_PRESET_FLAT))
         if self.player_is_active():
@@ -14018,7 +14066,14 @@ class MainFrame(wx.Frame):
 
     def on_equalizer_range_changed(self, _event: wx.CommandEvent) -> None:
         self.save_visible_equalizer_gains_to_preset(getattr(self, "visible_equalizer_preset", EQ_PRESET_FLAT))
-        self.settings.equalizer_db_range = self.to_int(self.selected_choice_value("equalizer_db_range"), 12, 6, 24)
+        next_range = self.to_int(self.selected_choice_value("equalizer_db_range"), 12, 6, 24)
+        self.settings.equalizer_db_range = next_range
+        draft = self.visible_equalizer_gains()
+        self.visible_equalizer_draft_gains = {
+            band_id: round(max(-float(next_range), min(float(next_range), float(draft.get(band_id, 0.0) or 0.0))), 1)
+            for band_id, _band_label in EQ_BANDS
+        }
+        self.save_visible_equalizer_gains_to_preset(getattr(self, "visible_equalizer_preset", EQ_PRESET_FLAT))
         wx.CallAfter(self.render_settings_section_and_focus, "equalizer_db_range")
 
     def reset_visible_equalizer_controls(self) -> None:
@@ -14026,6 +14081,7 @@ class MainFrame(wx.Frame):
             return
         preset = self.normalized_equalizer_preset(self.selected_choice_value("equalizer_preset") or getattr(self, "visible_equalizer_preset", EQ_PRESET_FLAT))
         gains = self.factory_equalizer_gains_for_preset(preset)
+        self.visible_equalizer_draft_gains = self.normalized_equalizer_gains(gains)
         presets = self.normalized_equalizer_preset_gains(getattr(self.settings, "equalizer_preset_gains", {}) or {})
         presets[preset] = gains
         self.settings.equalizer_preset_gains = presets
@@ -15979,11 +16035,7 @@ class MainFrame(wx.Frame):
             self.settings.equalizer_custom_names = names
         if "equalizer_db_range" in c:
             self.settings.equalizer_db_range = self.to_int(self.selected_choice_value("equalizer_db_range"), 12, 6, 24)
-        eq_gains: dict[str, float] = {}
-        for band_id, _band_label in EQ_BANDS:
-            ctrl = c.get(f"eq_{band_id}")
-            if isinstance(ctrl, wx.Slider):
-                eq_gains[band_id] = round(float(ctrl.GetValue()) / 10.0, 1)
+        eq_gains: dict[str, float] = self.visible_equalizer_gains() if any(f"eq_{band_id}" in c for band_id, _band_label in EQ_BANDS) else {}
         if eq_gains:
             eq_gains = self.normalized_equalizer_gains(eq_gains)
             presets = self.normalized_equalizer_preset_gains(getattr(self.settings, "equalizer_preset_gains", {}) or {})

@@ -1,5 +1,13 @@
 # Changelog
 
+## What's new in version 0.8.54
+
+- fixed equalizer slider state so moving one band updates only that band's draft value instead of re-reading and re-saving all ten sliders at once.
+- fixed player equalizer live preview to keep an independent in-memory value for every band, preventing one slider event from rewriting neighboring bands.
+- changed EQ event binding from the broad wx scroll event to explicit slider and scroll-step events, reducing duplicate or misrouted slider updates from keyboard and screen-reader controls.
+- changed all EQ bands back to peaking filters with explicit per-band widths, so 31 Hz through 16 kHz behave like independent graphic-EQ bands instead of broad bass/treble shelves.
+- tightened the low, mid, and high band widths to reduce audible bleed between neighboring sliders while keeping low-frequency bands responsive.
+
 ## What's new in version 0.8.53
 
 - checked and polished the whole 10-band equalizer path, not just the low bands.
