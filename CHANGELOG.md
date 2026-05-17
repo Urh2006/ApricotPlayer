@@ -1,5 +1,10 @@
 # Changelog
 
+## What's new in version 0.8.66
+
+- fixed the remaining Settings Shift+Tab duplicate announcement by removing the extra manual reverse-focus handler and relying on wx's native tab traversal from the first setting back to the section list.
+- applies an explicit Settings tab order from the section list through the visible controls, matching the older main-menu focus-spam fix by stabilizing controls instead of rebuilding or refocusing them unnecessarily.
+
 ## What's new in version 0.8.65
 
 - fixed the remaining duplicate Settings announcement by cancelling the delayed initial section-list focus repair as soon as Settings receives real keyboard navigation.
