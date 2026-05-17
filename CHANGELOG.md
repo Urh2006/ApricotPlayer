@@ -1,5 +1,13 @@
 # Changelog
 
+## What's new in version 0.8.61
+
+- made first-screen startup lighter by loading cookie, RSS, browser, zip, sound, and certificate helper modules only when those features are actually used.
+- deferred NVDA controller DLL loading until the first spoken announcement, so launch does less filesystem work before the main menu appears.
+- deferred the tray icon setup on normal launches while still creating it immediately for start-in-tray and close-to-tray flows.
+- hardened main-menu and dynamic-results selection handling against stale or destroyed controls.
+- improved the background-player Full screen button so keyboard activation also announces that full screen turned on.
+
 ## What's new in version 0.8.60
 
 - fixed background-player buttons in the main menu so Space and Enter activate the focused button instead of being intercepted by player shortcuts.

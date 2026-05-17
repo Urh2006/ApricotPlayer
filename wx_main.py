@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import asyncio
-import http.cookiejar
 import json
 import hashlib
 import os
 import queue
 import random
 import re
-import shlex
 import shutil
 import ssl
 import socket
@@ -17,10 +14,7 @@ import sys
 import tempfile
 import threading
 import time
-import webbrowser
-import zipfile
 import ctypes
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -29,7 +23,6 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
-import xml.etree.ElementTree as ET
 
 import wx
 import wx.adv
@@ -38,11 +31,6 @@ try:
     import winreg
 except ImportError:
     winreg = None
-
-try:
-    import certifi
-except ImportError:
-    certifi = None
 
 from locales import EXTRA_TEXT, SL_TRANSLATION_FIXES
 
@@ -78,12 +66,6 @@ def disable_external_ytdlp_plugins() -> None:
         import_module("yt_dlp.globals").plugin_dirs.value = []
     except Exception:
         pass
-
-try:
-    import winsound
-except ImportError:
-    winsound = None
-
 
 class NullTextStream:
     encoding = "utf-8"
@@ -203,8 +185,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.60"
-APP_VERSION_LABEL = "0.8.60"
+APP_VERSION = "0.8.61"
+APP_VERSION_LABEL = "0.8.61"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -4057,7 +4039,8 @@ class MainFrame(wx.Frame):
         self.shortcut_editor_actions: list[str] = []
         self.shortcut_editor_current_action = ""
         self.details_opened_temporarily = False
-        self.nvda_client = self.load_nvda_client()
+        self.nvda_client = None
+        self.nvda_client_load_attempted = False
         self.update_progress_dialog: wx.ProgressDialog | None = None
         self.app_update_check_running = False
         self.pending_app_update_release: dict | None = None
@@ -4078,7 +4061,10 @@ class MainFrame(wx.Frame):
         self.panel.Bind(wx.EVT_NAVIGATION_KEY, self.on_player_navigation_key)
         self.Bind(wx.EVT_CLOSE, self.on_close)
         self.install_download_accelerators()
-        self.setup_taskbar_icon()
+        if self.started_hidden_in_tray:
+            self.setup_taskbar_icon()
+        else:
+            wx.CallLater(750, self.setup_taskbar_icon)
         self.show_main_menu()
         self.timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self.process_queue, self.timer)
@@ -4656,7 +4642,8 @@ class MainFrame(wx.Frame):
         return cookie_file if self.cookies_file_has_youtube_login(cookie_file) else ""
 
     def cookie_file_score(self, path: str | Path) -> tuple[int, int, int, bool]:
-        jar = http.cookiejar.MozillaCookieJar()
+        cookiejar = import_module("http.cookiejar")
+        jar = cookiejar.MozillaCookieJar()
         jar.load(str(path), ignore_discard=True, ignore_expires=True)
         score, youtube_count, total_count = self.cookie_jar_score(jar)
         return score, youtube_count, total_count, self.cookie_jar_has_login_cookies(jar)
@@ -4746,7 +4733,8 @@ class MainFrame(wx.Frame):
                 break
         http_only = self.cookie_bool(item.get("httpOnly") if "httpOnly" in item else item.get("http_only"))
         secure = self.cookie_bool(item.get("secure"))
-        return http.cookiejar.Cookie(
+        cookiejar = import_module("http.cookiejar")
+        return cookiejar.Cookie(
             version=0,
             name=name,
             value=str(value),
@@ -4787,7 +4775,8 @@ class MainFrame(wx.Frame):
                 yield from self.iter_cookie_json_items(value, child_default)
 
     def cookie_jar_from_json_data(self, data) -> http.cookiejar.MozillaCookieJar:
-        jar = http.cookiejar.MozillaCookieJar()
+        cookiejar = import_module("http.cookiejar")
+        jar = cookiejar.MozillaCookieJar()
         seen: set[tuple[str, str, str]] = set()
         for item, default_domain in self.iter_cookie_json_items(data):
             cookie = self.cookie_from_mapping(item, default_domain)
@@ -4843,7 +4832,8 @@ class MainFrame(wx.Frame):
         temp_path.parent.mkdir(parents=True, exist_ok=True)
         temp_path.write_text(normalized, encoding="utf-8", newline="\n")
         try:
-            jar = http.cookiejar.MozillaCookieJar()
+            cookiejar = import_module("http.cookiejar")
+            jar = cookiejar.MozillaCookieJar()
             jar.load(str(temp_path), ignore_discard=True, ignore_expires=True)
             return jar
         finally:
@@ -4860,7 +4850,8 @@ class MainFrame(wx.Frame):
             combined = combined.split(":", 1)[1].strip()
         if "=" not in combined or ";" not in combined:
             raise RuntimeError(self.t("cookies_file_unsupported"))
-        jar = http.cookiejar.MozillaCookieJar()
+        cookiejar = import_module("http.cookiejar")
+        jar = cookiejar.MozillaCookieJar()
         ignored = {"path", "expires", "max-age", "secure", "httponly", "samesite", "domain", "priority"}
         for part in combined.split(";"):
             if "=" not in part:
@@ -5243,7 +5234,8 @@ class MainFrame(wx.Frame):
             return json.loads(response.read().decode("utf-8", errors="replace"))
 
     def cdp_cookies_to_cookie_jar(self, cookies: list[dict]) -> http.cookiejar.MozillaCookieJar:
-        jar = http.cookiejar.MozillaCookieJar()
+        cookiejar = import_module("http.cookiejar")
+        jar = cookiejar.MozillaCookieJar()
         for item in cookies:
             name = str(item.get("name") or "")
             value = str(item.get("value") or "")
@@ -5258,7 +5250,7 @@ class MainFrame(wx.Frame):
                 expires = None
             if expires is not None and expires <= 0:
                 expires = None
-            cookie = http.cookiejar.Cookie(
+            cookie = cookiejar.Cookie(
                 version=0,
                 name=name,
                 value=value,
@@ -5308,7 +5300,8 @@ class MainFrame(wx.Frame):
             websocket_url = str(version_payload.get("webSocketDebuggerUrl") or "")
             if not websocket_url:
                 raise RuntimeError("browser devtools websocket is missing")
-            cookies = asyncio.run(self.devtools_get_all_cookies(websocket_url))
+            asyncio_module = import_module("asyncio")
+            cookies = asyncio_module.run(self.devtools_get_all_cookies(websocket_url))
             cookie_jar = self.cdp_cookies_to_cookie_jar(cookies)
             score, youtube_count, total_count = self.cookie_jar_score(cookie_jar)
             if total_count <= 0 or score <= 0 or not self.cookie_jar_has_login_cookies(cookie_jar):
@@ -5810,15 +5803,16 @@ class MainFrame(wx.Frame):
         if not text:
             return
         announced = False
-        if self.nvda_client:
+        client = self.ensure_nvda_client()
+        if client:
             try:
-                if hasattr(self.nvda_client, "nvdaController_cancelSpeech"):
-                    self.nvda_client.nvdaController_cancelSpeech()
-                result = self.nvda_client.nvdaController_speakText(str(text))
+                if hasattr(client, "nvdaController_cancelSpeech"):
+                    client.nvdaController_cancelSpeech()
+                result = client.nvdaController_speakText(str(text))
                 if result == 0:
                     announced = True
-                if hasattr(self.nvda_client, "nvdaController_brailleMessage"):
-                    braille_result = self.nvda_client.nvdaController_brailleMessage(str(text))
+                if hasattr(client, "nvdaController_brailleMessage"):
+                    braille_result = client.nvdaController_brailleMessage(str(text))
                     if braille_result == 0:
                         announced = True
             except Exception:
@@ -5835,6 +5829,12 @@ class MainFrame(wx.Frame):
             wx.Accessible.NotifyEvent(wx.ACC_EVENT_OBJECT_VALUECHANGE, self.status, wx.OBJID_CLIENT, 0)
         except Exception:
             pass
+
+    def ensure_nvda_client(self):
+        if not getattr(self, "nvda_client_load_attempted", False):
+            self.nvda_client_load_attempted = True
+            self.nvda_client = self.load_nvda_client()
+        return self.nvda_client
 
     def load_nvda_client(self):
         for path in self.nvda_client_candidates():
@@ -5892,6 +5892,8 @@ class MainFrame(wx.Frame):
         return created_buttons
 
     def setup_taskbar_icon(self) -> None:
+        if getattr(self, "exiting", False):
+            return
         if self.taskbar_icon is not None:
             return
         try:
@@ -5960,6 +5962,7 @@ class MainFrame(wx.Frame):
             event.Skip()
             return
         event.Veto()
+        self.setup_taskbar_icon()
         self.Hide()
         self.announce_player(self.t("tray_still_running"))
         self.show_desktop_notification(APP_NAME, self.t("tray_still_running"), enabled=self.settings.tray_notification)
@@ -6162,7 +6165,7 @@ class MainFrame(wx.Frame):
             (self.t("add_to_playlist"), lambda: self.add_active_to_playlist(prefer_active=True)),
             (self.t("output_devices"), self.show_output_devices),
             (self.t("equalizer"), self.show_player_equalizer),
-            (self.t("fullscreen"), self.enter_player_fullscreen),
+            (self.t("fullscreen"), lambda: self.enter_player_fullscreen(announce=True)),
             (self.t("bass_boost"), self.toggle_bass_boost),
             (self.t("repeat"), self.toggle_repeat),
             (self.t("shuffle"), self.toggle_shuffle),
@@ -6410,7 +6413,7 @@ class MainFrame(wx.Frame):
 
     def activate_menu(self) -> None:
         index = self.menu_list.GetSelection()
-        if index != wx.NOT_FOUND:
+        if index != wx.NOT_FOUND and 0 <= index < len(self.menu_actions):
             self.menu_actions[index][1]()
 
     def pending_app_update_version(self) -> str:
@@ -9181,6 +9184,7 @@ class MainFrame(wx.Frame):
         with self.open_url(request, timeout=30) as response:
             final_url = response.geturl()
             raw = response.read(3_000_000)
+        ET = import_module("xml.etree.ElementTree")
         root = ET.fromstring(raw)
         title, site_url, items = self.parse_feed_root(root, final_url)
         return {
@@ -10132,7 +10136,10 @@ class MainFrame(wx.Frame):
             return
         if not self.results and not self.all_results:
             return
-        selection = self.results_list.GetSelection()
+        try:
+            selection = self.results_list.GetSelection()
+        except RuntimeError:
+            return
         if selection == wx.NOT_FOUND:
             return
         if selection < len(self.results) - 1:
@@ -10434,9 +10441,10 @@ class MainFrame(wx.Frame):
         hydrated: list[dict] = []
         workers = min(POPULAR_CHANNEL_METADATA_WORKERS, total)
         done = 0
-        with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures_module = import_module("concurrent.futures")
+        with futures_module.ThreadPoolExecutor(max_workers=workers) as executor:
             futures = [executor.submit(self.hydrate_video_metadata_for_popular, item) for item in normalized]
-            for future in as_completed(futures):
+            for future in futures_module.as_completed(futures):
                 try:
                     hydrated.append(future.result())
                 except Exception:
@@ -13037,7 +13045,10 @@ class MainFrame(wx.Frame):
         action: dict[str, int | str] = {}
 
         def selected_index() -> int:
-            index = queue_list.GetSelection()
+            try:
+                index = queue_list.GetSelection()
+            except RuntimeError:
+                return -1
             return index if 0 <= index < len(self.playback_queue) else -1
 
         def play_selected(_event=None) -> None:
@@ -13617,7 +13628,8 @@ class MainFrame(wx.Frame):
         if self.player_kind != "mpv" or not self.ipc_path:
             return
         try:
-            self.mpv_send(shlex.split(command), timeout=0.5)
+            shlex_module = import_module("shlex")
+            self.mpv_send(shlex_module.split(command), timeout=0.5)
         except Exception:
             pass
 
@@ -14727,14 +14739,16 @@ class MainFrame(wx.Frame):
         return abs(value - 1.0) < 0.001
 
     def play_default_sound(self) -> None:
-        if winsound is None:
+        try:
+            winsound_module = import_module("winsound")
+        except ImportError:
             return
         sound_path = self.bundled_path("assets", DEFAULT_REACHED_SOUND)
         try:
             if sound_path.exists():
-                winsound.PlaySound(str(sound_path), winsound.SND_FILENAME | winsound.SND_ASYNC)
+                winsound_module.PlaySound(str(sound_path), winsound_module.SND_FILENAME | winsound_module.SND_ASYNC)
             else:
-                winsound.MessageBeep(winsound.MB_OK)
+                winsound_module.MessageBeep(winsound_module.MB_OK)
         except Exception:
             pass
 
@@ -15312,7 +15326,7 @@ class MainFrame(wx.Frame):
         if self.item_has_openable_youtube_channel(item):
             actions.insert(6, (self.menu_label_with_shortcut("open_channel", "open_channel"), lambda: self.open_item_channel(dict(item))))
         if item.get("kind") != "local_file":
-            actions.insert(-5, (self.t("open_browser"), lambda: webbrowser.open(str(item.get("webpage_url") or item.get("url") or ""))))
+            actions.insert(-5, (self.t("open_browser"), lambda: import_module("webbrowser").open(str(item.get("webpage_url") or item.get("url") or ""))))
         for label, handler in actions:
             menu_item = menu.Append(wx.ID_ANY, label)
             self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), menu_item)
@@ -15846,7 +15860,7 @@ class MainFrame(wx.Frame):
     def open_selected_in_browser(self) -> None:
         item = self.active_item()
         if item:
-            webbrowser.open(str(item.get("webpage_url") or item.get("url") or ""))
+            import_module("webbrowser").open(str(item.get("webpage_url") or item.get("url") or ""))
 
     def copy_selected_url(self) -> None:
         item = self.active_item()
@@ -16359,7 +16373,7 @@ class MainFrame(wx.Frame):
                 args.append("https://www.youtube.com/")
                 subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             else:
-                webbrowser.open("https://www.youtube.com/")
+                import_module("webbrowser").open("https://www.youtube.com/")
             self.announce_player(self.t("youtube_profile_opened"))
         except Exception as exc:
             self.message(self.t("youtube_profile_open_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
@@ -16711,7 +16725,8 @@ class MainFrame(wx.Frame):
             if wheel_sha256:
                 self.verify_file_sha256(wheel_path, wheel_sha256)
             extract_dir.mkdir(parents=True, exist_ok=True)
-            with zipfile.ZipFile(wheel_path) as archive:
+            zipfile_module = import_module("zipfile")
+            with zipfile_module.ZipFile(wheel_path) as archive:
                 self.safe_extract_zip(archive, extract_dir)
             package_source = extract_dir / "yt_dlp"
             if not package_source.exists():
@@ -17136,9 +17151,10 @@ class MainFrame(wx.Frame):
         if not path.exists() or path.stat().st_size < 1024 * 1024:
             raise RuntimeError("downloaded update is not a valid package")
         if MainFrame.is_portable_zip_asset(path):
-            if not zipfile.is_zipfile(path):
+            zipfile_module = import_module("zipfile")
+            if not zipfile_module.is_zipfile(path):
                 raise RuntimeError("downloaded portable update is not a valid zip file")
-            with zipfile.ZipFile(path) as archive:
+            with zipfile_module.ZipFile(path) as archive:
                 for member in archive.infolist():
                     cls.validate_zip_member_path(member.filename)
                 if not any(Path(member.filename.replace("\\", "/")).name.lower() == "apricotplayer.exe" for member in archive.infolist()):
@@ -17658,8 +17674,12 @@ class MainFrame(wx.Frame):
         global _SSL_CONTEXT
         if _SSL_CONTEXT is not None:
             return _SSL_CONTEXT
-        if certifi:
-            _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+        try:
+            certifi_module = import_module("certifi")
+        except ImportError:
+            certifi_module = None
+        if certifi_module is not None:
+            _SSL_CONTEXT = ssl.create_default_context(cafile=certifi_module.where())
         else:
             _SSL_CONTEXT = ssl.create_default_context()
         return _SSL_CONTEXT
