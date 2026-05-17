@@ -1,28 +1,18 @@
 from __future__ import annotations
 
 import json
-import hashlib
 import os
 import queue
 import random
 import re
-import shutil
-import ssl
-import socket
-import subprocess
 import sys
-import tempfile
 import threading
 import time
-import ctypes
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 from importlib import import_module
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlparse
-from urllib.request import Request, urlopen
-from urllib.error import HTTPError
 
 import wx
 import wx.adv
@@ -36,7 +26,51 @@ from locales import EXTRA_TEXT, SL_TRANSLATION_FIXES
 
 yt_dlp = None
 yt_dlp_import_error: Exception | None = None
-_SSL_CONTEXT: ssl.SSLContext | None = None
+_SSL_CONTEXT = None
+_URLLIB_REQUEST_MODULE = None
+_PARSEDATE_TO_DATETIME = None
+
+
+class LazyModule:
+    def __init__(self, module_name: str) -> None:
+        self.module_name = module_name
+        self.module = None
+
+    def __getattr__(self, name: str):
+        if self.module is None:
+            self.module = import_module(self.module_name)
+        return getattr(self.module, name)
+
+
+hashlib = LazyModule("hashlib")
+shutil = LazyModule("shutil")
+ssl = LazyModule("ssl")
+socket = LazyModule("socket")
+subprocess = LazyModule("subprocess")
+tempfile = LazyModule("tempfile")
+ctypes = LazyModule("ctypes")
+
+
+def urllib_request_module():
+    global _URLLIB_REQUEST_MODULE
+    if _URLLIB_REQUEST_MODULE is None:
+        _URLLIB_REQUEST_MODULE = import_module("urllib.request")
+    return _URLLIB_REQUEST_MODULE
+
+
+def Request(*args, **kwargs):
+    return urllib_request_module().Request(*args, **kwargs)
+
+
+def urlopen(*args, **kwargs):
+    return urllib_request_module().urlopen(*args, **kwargs)
+
+
+def parsedate_to_datetime(value: str):
+    global _PARSEDATE_TO_DATETIME
+    if _PARSEDATE_TO_DATETIME is None:
+        _PARSEDATE_TO_DATETIME = import_module("email.utils").parsedate_to_datetime
+    return _PARSEDATE_TO_DATETIME(value)
 
 
 def get_yt_dlp():
@@ -185,8 +219,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.62"
-APP_VERSION_LABEL = "0.8.62"
+APP_VERSION = "0.8.63"
+APP_VERSION_LABEL = "0.8.63"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -3905,7 +3939,8 @@ class MainFrame(wx.Frame):
         self.favorites = self.load_favorites()
         self.history = self.load_history()
         self.subscriptions = self.load_subscriptions()
-        self.rss_feeds = self.load_rss_feeds()
+        self.rss_feeds: list[dict] = []
+        self.rss_feeds_loaded = False
         self.user_playlists = self.load_user_playlists()
         self.notifications = self.load_notifications()
         self.playback_positions = self.load_playback_positions()
@@ -4087,7 +4122,7 @@ class MainFrame(wx.Frame):
             wx.CallLater(5500, self.start_app_update_check)
         if self.settings.subscription_check_enabled:
             wx.CallLater(8500, self.check_subscriptions_if_due)
-        if self.settings.enable_podcasts_rss and self.settings.rss_refresh_on_startup and self.rss_feeds:
+        if self.settings.enable_podcasts_rss and self.settings.rss_refresh_on_startup:
             wx.CallLater(9500, self.refresh_all_rss_feeds_background)
         if not self.started_hidden_in_tray:
             wx.CallLater(6500, self.check_saved_audio_device_available)
@@ -8638,6 +8673,7 @@ class MainFrame(wx.Frame):
         if not self.settings.enable_podcasts_rss:
             self.show_main_menu()
             return
+        self.ensure_rss_feeds_loaded()
         self.in_main_menu = False
         self.in_queue_screen = False
         self.search_screen_active = False
@@ -8883,6 +8919,7 @@ class MainFrame(wx.Frame):
     def add_rss_feed_url(self, url: str) -> None:
         if not url:
             return
+        self.ensure_rss_feeds_loaded()
         if not re.match(r"^https?://", url, flags=re.IGNORECASE):
             url = "https://" + url
         if any(str(feed.get("url") or "").rstrip("/") == url.rstrip("/") for feed in self.rss_feeds):
@@ -8902,6 +8939,7 @@ class MainFrame(wx.Frame):
             self.ui_queue.put(("announce", self.t("rss_refresh_failed", error=self.friendly_error(exc))))
 
     def refresh_all_rss_feeds(self) -> None:
+        self.ensure_rss_feeds_loaded()
         if not self.rss_feeds:
             self.announce_player(self.t("rss_feeds_empty"))
             return
@@ -8912,7 +8950,10 @@ class MainFrame(wx.Frame):
         threading.Thread(target=self.refresh_rss_feeds_worker, args=(None, False), daemon=True).start()
 
     def refresh_all_rss_feeds_background(self) -> None:
-        if not self.settings.enable_podcasts_rss or not self.rss_feeds or self.rss_refresh_running:
+        if not self.settings.enable_podcasts_rss:
+            return
+        self.ensure_rss_feeds_loaded()
+        if not self.rss_feeds or self.rss_refresh_running:
             return
         self.rss_refresh_running = True
         threading.Thread(target=self.refresh_rss_feeds_worker, args=(None, True), daemon=True).start()
@@ -8999,6 +9040,7 @@ class MainFrame(wx.Frame):
             self.announce_player(self.t("rss_feed_removed"))
 
     def show_rss_items(self, feed_index: int, selection: int = 0) -> None:
+        self.ensure_rss_feeds_loaded()
         if feed_index < 0 or feed_index >= len(self.rss_feeds):
             self.show_rss_feeds()
             return
@@ -17486,8 +17528,8 @@ class MainFrame(wx.Frame):
                 release = json.loads(response.read().decode("utf-8"))
             if isinstance(release, dict) and not release.get("draft"):
                 return release
-        except HTTPError as exc:
-            if exc.code != 404:
+        except Exception as exc:
+            if exc.__class__.__name__ != "HTTPError" or getattr(exc, "code", None) != 404:
                 raise
         return None
 
@@ -17997,8 +18039,15 @@ class MainFrame(wx.Frame):
     def load_rss_feeds(self) -> list[dict]:
         return self.load_json_list(RSS_FEEDS_FILE)
 
+    def ensure_rss_feeds_loaded(self) -> None:
+        if getattr(self, "rss_feeds_loaded", False):
+            return
+        self.rss_feeds = self.load_rss_feeds()
+        self.rss_feeds_loaded = True
+
     def save_rss_feeds(self) -> None:
         APP_DIR.mkdir(parents=True, exist_ok=True)
+        self.rss_feeds_loaded = True
         RSS_FEEDS_FILE.write_text(json.dumps(self.rss_feeds, indent=2, ensure_ascii=False), encoding="utf-8")
 
     def load_user_playlists(self) -> list[dict]:
