@@ -219,8 +219,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.64"
-APP_VERSION_LABEL = "0.8.64"
+APP_VERSION = "0.8.65"
+APP_VERSION_LABEL = "0.8.65"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -4073,6 +4073,7 @@ class MainFrame(wx.Frame):
         self.settings_render_generation = 0
         self.settings_pending_section_index = -1
         self.settings_controls_applied_for_pending = False
+        self.settings_initial_focus_pending = False
         self.shortcut_editor_values: dict[str, str] = {}
         self.shortcut_editor_actions: list[str] = []
         self.shortcut_editor_current_action = ""
@@ -9419,20 +9420,28 @@ class MainFrame(wx.Frame):
 
     def focus_settings_section_list_later(self) -> None:
         generation = self.settings_render_generation
+        self.settings_initial_focus_pending = True
         wx.CallAfter(self.focus_settings_section_list_if_safe, generation)
         wx.CallLater(100, self.focus_settings_section_list_if_safe, generation)
 
     def focus_settings_section_list_if_safe(self, generation: int) -> None:
+        if not getattr(self, "settings_initial_focus_pending", False):
+            return
         if generation != getattr(self, "settings_render_generation", -1):
             return
         target = self.live_window(getattr(self, "settings_section_list", None))
         if target is None:
             return
         focus = wx.Window.FindFocus()
+        if focus is target:
+            self.settings_initial_focus_pending = False
+            return
         if focus is not None:
             for control in getattr(self, "settings_control_order", []):
                 if self.window_is_or_descendant(focus, control):
+                    self.settings_initial_focus_pending = False
                     return
+        self.settings_initial_focus_pending = False
         self.safe_set_focus(target)
 
     def settings_sections(self) -> list[tuple[str, str]]:
@@ -9607,6 +9616,7 @@ class MainFrame(wx.Frame):
     def on_settings_section_key(self, event: wx.KeyEvent) -> None:
         key = event.GetKeyCode()
         if key == wx.WXK_TAB and not event.ShiftDown():
+            self.settings_initial_focus_pending = False
             self.flush_settings_section_render()
             self.focus_first_settings_control()
             return
@@ -9624,10 +9634,16 @@ class MainFrame(wx.Frame):
         if control is None or getattr(control, "_apricot_settings_navigation_bound", False):
             return
         try:
+            control.Bind(wx.EVT_KEY_DOWN, self.on_settings_control_key)
             control.Bind(wx.EVT_NAVIGATION_KEY, self.on_settings_navigation_key)
             control._apricot_settings_navigation_bound = True
         except Exception:
             pass
+
+    def on_settings_control_key(self, event: wx.KeyEvent) -> None:
+        if event.GetKeyCode() == wx.WXK_TAB and self.move_settings_tab_focus(not event.ShiftDown(), wx.Window.FindFocus()):
+            return
+        event.Skip()
 
     def on_settings_navigation_key(self, event: wx.NavigationKeyEvent) -> None:
         try:
@@ -9649,10 +9665,12 @@ class MainFrame(wx.Frame):
             return False
         first_control = self.live_window(self.settings_control_order[0])
         if forward and self.window_is_or_descendant(focus, section_list):
+            self.settings_initial_focus_pending = False
             self.flush_settings_section_render()
             self.focus_first_settings_control()
             return True
         if not forward and first_control is not None and self.window_is_or_descendant(focus, first_control):
+            self.settings_initial_focus_pending = False
             self.safe_set_focus(section_list)
             return True
         return False

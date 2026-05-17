@@ -1,5 +1,10 @@
 # Changelog
 
+## What's new in version 0.8.65
+
+- fixed the remaining duplicate Settings announcement by cancelling the delayed initial section-list focus repair as soon as Settings receives real keyboard navigation.
+- handles Tab and Shift+Tab on Settings controls at the key-down stage, so reverse navigation back to General is consumed before wx can also process the same key.
+
 ## What's new in version 0.8.64
 
 - fixed Settings keyboard navigation so Shift+Tab from the first setting back to the section list focuses General only once instead of letting wx and the focus repair path announce General twice.
