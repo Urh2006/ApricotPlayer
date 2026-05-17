@@ -1,5 +1,10 @@
 # Changelog
 
+## What's new in version 0.8.60
+
+- fixed background-player buttons in the main menu so Space and Enter activate the focused button instead of being intercepted by player shortcuts.
+- fixed the background-player Full screen button so keyboard users can start full screen from the main menu while playback continues in the background.
+
 ## What's new in version 0.8.59
 
 - narrowed the live EQ band filters so adjacent sliders, especially 62 Hz through 4 kHz, no longer stack so broadly that 12 dB feels like a much larger boost.

@@ -203,8 +203,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.59"
-APP_VERSION_LABEL = "0.8.59"
+APP_VERSION = "0.8.60"
+APP_VERSION_LABEL = "0.8.60"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -6172,6 +6172,7 @@ class MainFrame(wx.Frame):
         for label_text, handler in controls:
             button = wx.Button(self.panel, label=label_text)
             button.SetName(f"{self.t('background_player')}: {label_text}")
+            button._apricot_background_player_handler = handler
             button.Bind(wx.EVT_BUTTON, lambda _evt, fn=handler: fn())
             button.Bind(wx.EVT_KEY_DOWN, self.on_background_player_key)
             self.bind_player_navigation_control(button)
@@ -6200,6 +6201,13 @@ class MainFrame(wx.Frame):
         event.Skip()
 
     def on_background_player_key(self, event: wx.KeyEvent) -> None:
+        key = event.GetKeyCode()
+        if key in {wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER, wx.WXK_SPACE} and not event.ControlDown() and not event.AltDown():
+            control = event.GetEventObject()
+            handler = getattr(control, "_apricot_background_player_handler", None)
+            if callable(handler):
+                handler()
+                return
         self.on_char_hook(event)
 
     def bind_player_navigation_control(self, control: wx.Window | None) -> None:
