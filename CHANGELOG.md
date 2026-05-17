@@ -1,5 +1,9 @@
 # Changelog
 
+## What's new in version 0.8.64
+
+- fixed Settings keyboard navigation so Shift+Tab from the first setting back to the section list focuses General only once instead of letting wx and the focus repair path announce General twice.
+
 ## What's new in version 0.8.63
 
 - reduced launch work by lazy-loading several helper modules that are only needed for networking, updates, cookies, external processes, hashing, sockets, and Windows accessibility helpers.

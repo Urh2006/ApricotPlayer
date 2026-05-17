@@ -219,8 +219,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.63"
-APP_VERSION_LABEL = "0.8.63"
+APP_VERSION = "0.8.64"
+APP_VERSION_LABEL = "0.8.64"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -9406,6 +9406,7 @@ class MainFrame(wx.Frame):
         self.settings_section_list.SetSelection(self.settings_section_index)
         self.settings_section_list.Bind(wx.EVT_LISTBOX, self.on_settings_section_changed)
         self.settings_section_list.Bind(wx.EVT_KEY_DOWN, self.on_settings_section_key)
+        self.bind_settings_navigation_control(self.settings_section_list)
         body.Add(self.settings_section_list, 0, wx.EXPAND | wx.ALL, 4)
         self.settings_scroller = wx.ScrolledWindow(self.panel, style=wx.VSCROLL | wx.WANTS_CHARS)
         self.settings_scroller.SetName(self.t("settings"))
@@ -9619,6 +9620,43 @@ class MainFrame(wx.Frame):
         if self.settings_control_order:
             self.safe_set_focus(self.settings_control_order[0])
 
+    def bind_settings_navigation_control(self, control: wx.Window | None) -> None:
+        if control is None or getattr(control, "_apricot_settings_navigation_bound", False):
+            return
+        try:
+            control.Bind(wx.EVT_NAVIGATION_KEY, self.on_settings_navigation_key)
+            control._apricot_settings_navigation_bound = True
+        except Exception:
+            pass
+
+    def on_settings_navigation_key(self, event: wx.NavigationKeyEvent) -> None:
+        try:
+            if event.IsWindowChange():
+                event.Skip()
+                return
+            focus = event.GetCurrentFocus() or wx.Window.FindFocus()
+            forward = bool(event.GetDirection())
+        except Exception:
+            event.Skip()
+            return
+        if self.move_settings_tab_focus(forward, focus):
+            return
+        event.Skip()
+
+    def move_settings_tab_focus(self, forward: bool, focus: wx.Window | None) -> bool:
+        section_list = self.live_window(getattr(self, "settings_section_list", None))
+        if section_list is None or not getattr(self, "settings_control_order", []):
+            return False
+        first_control = self.live_window(self.settings_control_order[0])
+        if forward and self.window_is_or_descendant(focus, section_list):
+            self.flush_settings_section_render()
+            self.focus_first_settings_control()
+            return True
+        if not forward and first_control is not None and self.window_is_or_descendant(focus, first_control):
+            self.safe_set_focus(section_list)
+            return True
+        return False
+
     def on_advanced_network_toggle(self, _event: wx.CommandEvent) -> None:
         self.apply_settings_from_visible_controls()
         self.render_settings_section_and_focus("show_advanced_network_settings")
@@ -9645,6 +9683,7 @@ class MainFrame(wx.Frame):
         def remember(key: str, ctrl: wx.Window) -> None:
             self.controls[key] = ctrl
             self.settings_control_order.append(ctrl)
+            self.bind_settings_navigation_control(ctrl)
 
         def text(key: str, value: str, style: int = 0):
             form.Add(wx.StaticText(self.settings_scroller, label=self.t(key)), 0, wx.ALIGN_CENTER_VERTICAL)
@@ -9683,6 +9722,7 @@ class MainFrame(wx.Frame):
             ctrl.Bind(wx.EVT_BUTTON, lambda _evt, fn=handler: fn())
             form.Add(ctrl, 0)
             self.settings_control_order.append(ctrl)
+            self.bind_settings_navigation_control(ctrl)
             return ctrl
 
         def button_label(label: str, handler):
@@ -9692,6 +9732,7 @@ class MainFrame(wx.Frame):
             ctrl.Bind(wx.EVT_BUTTON, lambda _evt, fn=handler: fn())
             form.Add(ctrl, 0)
             self.settings_control_order.append(ctrl)
+            self.bind_settings_navigation_control(ctrl)
             return ctrl
 
         def slider(key: str, label: str, value: float, minimum: int, maximum: int, band_id: str | None = None):
