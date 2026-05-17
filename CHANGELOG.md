@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.8.58
+
+- fixed the player Full screen checkbox accessibility path: Space now uses the native checkbox behavior instead of being intercepted by custom key handlers.
+- kept Enter support for the Full screen checkbox while allowing Tab and Space to continue through normal control navigation.
+- kept focus on the Full screen checkbox after toggling full screen and added explicit Full screen on/off announcements, so screen readers have feedback and Tab can continue to the next player options.
+
 ## What's new in version 0.8.57
 
 - added an optional clipping-protection setting for the Volume boost + EQ/Bass boost combination; it uses a soft limiter only and does not reintroduce automatic EQ headroom changes.

@@ -203,8 +203,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.57"
-APP_VERSION_LABEL = "0.8.57"
+APP_VERSION = "0.8.58"
+APP_VERSION_LABEL = "0.8.58"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -3687,6 +3687,22 @@ for language_code in LANGUAGE_CODES:
     for key, value in RELEASE_0857_TRANSLATION_UPDATES["en"].items():
         TEXT.setdefault(language_code, {}).setdefault(key, value)
 
+RELEASE_0858_TRANSLATION_UPDATES = {
+    "sl": {
+        "fullscreen_on": "Celozaslonski nacin vklopljen.",
+        "fullscreen_off": "Celozaslonski nacin izklopljen.",
+    },
+    "en": {
+        "fullscreen_on": "Full screen on.",
+        "fullscreen_off": "Full screen off.",
+    },
+}
+for language_code in LANGUAGE_CODES:
+    TEXT.setdefault(language_code, {}).update(RELEASE_0858_TRANSLATION_UPDATES.get(language_code, RELEASE_0858_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
+for language_code in LANGUAGE_CODES:
+    for key, value in RELEASE_0858_TRANSLATION_UPDATES["en"].items():
+        TEXT.setdefault(language_code, {}).setdefault(key, value)
+
 
 def default_equalizer_gains() -> dict[str, float]:
     return {band_id: 0.0 for band_id, _label in EQ_BANDS}
@@ -6290,42 +6306,62 @@ class MainFrame(wx.Frame):
         wx.CallLater(100, self.focus_results_list, self.return_index)
         wx.CallLater(300, self.focus_results_list, self.return_index)
 
-    def exit_fullscreen_to_player(self) -> None:
+    def focus_player_target_later(self, focus_target: str) -> bool:
+        targets = {
+            "player": "player_panel",
+            "fullscreen_checkbox": "fullscreen_checkbox",
+            "repeat_checkbox": "repeat_checkbox",
+            "bass_boost_checkbox": "bass_boost_checkbox",
+        }
+        attr_name = targets.get(focus_target)
+        if not attr_name:
+            return False
+        control = self.live_window(getattr(self, attr_name, None))
+        if control is None:
+            return False
+        wx.CallAfter(self.safe_set_focus, control)
+        wx.CallLater(100, self.safe_set_focus, control)
+        wx.CallLater(300, self.safe_set_focus, control)
+        return True
+
+    def exit_fullscreen_to_player(self, focus_target: str = "player", announce: bool = False) -> None:
         if not self.player_is_active():
             self.back_to_results(stop_playback=False)
             return
         self.exit_fullscreen_window()
-        self.show_player_page(self.current_player_title(), focus_target="player")
-        if self.player_panel is not None:
-            wx.CallAfter(self.safe_set_focus, self.player_panel)
-            wx.CallLater(100, self.safe_set_focus, self.player_panel)
-            wx.CallLater(300, self.safe_set_focus, self.player_panel)
+        self.show_player_page(self.current_player_title(), focus_target=focus_target)
+        self.focus_player_target_later(focus_target)
+        if announce:
+            self.announce_player(self.t("fullscreen_off"))
 
-    def enter_player_fullscreen(self) -> None:
+    def enter_player_fullscreen(self, focus_target: str = "player", announce: bool = False) -> None:
         if not self.player_is_active():
             self.announce_player(self.t("no_player"))
             return
         self.player_fullscreen_session = True
         self.player_fullscreen_results_override = False
         try:
-            self.show_player_page(self.current_player_title())
+            self.show_player_page(self.current_player_title(), focus_target=focus_target)
             if self.player_kind == "mpv":
                 self.mpv_request(["set_property", "fullscreen", True], timeout=0.5)
             self.ShowFullScreen(True)
-            if self.player_panel is not None:
-                self.safe_set_focus(self.player_panel)
+            self.focus_player_target_later(focus_target)
+            if announce:
+                self.announce_player(self.t("fullscreen_on"))
         except Exception:
             try:
                 self.ShowFullScreen(True)
             except Exception:
                 pass
+            if announce:
+                self.announce_player(self.t("fullscreen_on"))
 
     def on_player_fullscreen_changed(self, _event=None) -> None:
         checked = bool(getattr(self, "fullscreen_checkbox", None) and self.fullscreen_checkbox.GetValue())
         if checked:
-            self.enter_player_fullscreen()
+            self.enter_player_fullscreen(focus_target="fullscreen_checkbox", announce=True)
         else:
-            self.exit_fullscreen_to_results()
+            self.exit_fullscreen_to_player(focus_target="fullscreen_checkbox", announce=True)
 
     def activate_menu(self) -> None:
         index = self.menu_list.GetSelection()
@@ -11849,13 +11885,11 @@ class MainFrame(wx.Frame):
         for control in player_action_buttons:
             self.bind_player_navigation_control(control)
         self.player_escape_stop_controls.extend(player_action_buttons)
-        self.fullscreen_checkbox = wx.CheckBox(self.panel, label=self.t("fullscreen"), style=wx.WANTS_CHARS)
+        self.fullscreen_checkbox = wx.CheckBox(self.panel, label=self.t("fullscreen"))
         self.fullscreen_checkbox.SetName(self.t("fullscreen"))
         self.fullscreen_checkbox.SetValue(fullscreen_mode)
         self.fullscreen_checkbox.Bind(wx.EVT_CHECKBOX, self.on_player_fullscreen_changed)
         self.fullscreen_checkbox.Bind(wx.EVT_KEY_DOWN, self.on_fullscreen_checkbox_key)
-        self.fullscreen_checkbox.Bind(wx.EVT_CHAR_HOOK, self.on_fullscreen_checkbox_key)
-        self.fullscreen_checkbox.Bind(wx.EVT_CHAR, self.on_fullscreen_checkbox_key)
         self.bind_player_navigation_control(self.fullscreen_checkbox)
         self.root_sizer.Add(self.fullscreen_checkbox, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
         self.player_action_controls.append(self.fullscreen_checkbox)
@@ -11885,10 +11919,13 @@ class MainFrame(wx.Frame):
         self.panel.Layout()
         if focus_target == "results":
             wx.CallAfter(self.focus_results_list, self.return_index)
+        elif focus_target != "player" and self.focus_player_target_later(focus_target):
+            pass
         elif self.settings.show_video_details_by_default:
             wx.CallAfter(self.show_video_details, False)
         else:
-            self.player_panel.SetFocus()
+            if not self.focus_player_target_later("player"):
+                self.player_panel.SetFocus()
         if fullscreen_mode:
             wx.CallAfter(self.ShowFullScreen, True)
 
@@ -11939,14 +11976,20 @@ class MainFrame(wx.Frame):
 
     def on_fullscreen_checkbox_key(self, event: wx.KeyEvent) -> None:
         key = event.GetKeyCode()
-        if key in {wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER} or self.shortcut_matches(event, "open_selected"):
-            try:
-                self.fullscreen_checkbox.SetValue(not self.fullscreen_checkbox.GetValue())
-            except RuntimeError:
-                return
-            self.on_player_fullscreen_changed()
+        if key in {wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER}:
+            self.toggle_player_fullscreen_checkbox()
             return
         event.Skip()
+
+    def toggle_player_fullscreen_checkbox(self) -> None:
+        checkbox = getattr(self, "fullscreen_checkbox", None)
+        if checkbox is None:
+            return
+        try:
+            checkbox.SetValue(not checkbox.GetValue())
+        except RuntimeError:
+            return
+        self.on_player_fullscreen_changed()
 
     def set_repeat_enabled(self, checked: bool, announce: bool = True) -> None:
         self.repeat_current = checked
@@ -14798,15 +14841,11 @@ class MainFrame(wx.Frame):
             getattr(self, "bass_boost_checkbox", None),
         }
         player_checkboxes.discard(None)
+        if focus is getattr(self, "fullscreen_checkbox", None) and event.GetKeyCode() in {wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER}:
+            self.toggle_player_fullscreen_checkbox()
+            return True
         if focus in player_checkboxes and self.shortcut_matches(event, "player_play_pause"):
             event.Skip()
-            return True
-        if focus is getattr(self, "fullscreen_checkbox", None) and self.shortcut_matches(event, "open_selected"):
-            try:
-                self.fullscreen_checkbox.SetValue(not self.fullscreen_checkbox.GetValue())
-            except RuntimeError:
-                return True
-            self.on_player_fullscreen_changed()
             return True
         if details_has_focus and self.details_text_navigation_key(event):
             event.Skip()
