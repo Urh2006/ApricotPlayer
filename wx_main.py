@@ -185,8 +185,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.61"
-APP_VERSION_LABEL = "0.8.61"
+APP_VERSION = "0.8.62"
+APP_VERSION_LABEL = "0.8.62"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -289,14 +289,14 @@ EQ_BANDS: list[tuple[str, str]] = [
 EQ_BAND_IDS = {band_id for band_id, _label in EQ_BANDS}
 EQ_FILTER_Q_WIDTH = 1.8
 EQ_FILTER_Q_WIDTHS = {
-    "31": 1.5,
-    "62": 1.8,
-    "125": 1.8,
-    "250": 1.8,
-    "500": 1.8,
-    "1000": 1.8,
-    "2000": 1.8,
-    "4000": 1.8,
+    "31": 1.7,
+    "62": 2.0,
+    "125": 2.6,
+    "250": 2.3,
+    "500": 2.1,
+    "1000": 2.0,
+    "2000": 1.9,
+    "4000": 1.9,
     "8000": 1.7,
     "16000": 1.5,
 }
@@ -704,6 +704,7 @@ TEXT = {
         "keyboard_shortcuts_section": "Bliznjicne tipke",
         "keyboard_shortcuts_help": "Vnesi bliznjice v obliki Ctrl+Shift+A, Space, Enter, Left ali F2. Spremembe se shranijo s tipko Shrani.",
         "search_results_empty": "Ni rezultatov iskanja.",
+        "result_list": "Seznam rezultatov",
         "no_results": "Ni rezultatov.",
         "favorites_empty": "Ni priljubljenih.",
         "empty": "Prazno.",
@@ -1133,6 +1134,7 @@ TEXT = {
         "shortcut_in_use": "{shortcut} is already assigned to {action}. Choose a different shortcut.",
         "shortcut_in_use_title": "Shortcut already in use",
         "search_results_empty": "No search results.",
+        "result_list": "Result list",
         "no_results": "No results.",
         "favorites_empty": "No favorites.",
         "empty": "Empty.",
@@ -3964,6 +3966,7 @@ class MainFrame(wx.Frame):
         self.player_panel: wx.Panel | None = None
         self.player_fullscreen_session = False
         self.player_fullscreen_results_override = False
+        self.fullscreen_checkbox_toggle_block_until = 0.0
         self.manual_background_playback_active = False
         self.player_navigation_controls = []
         self.player_action_controls = []
@@ -6165,7 +6168,7 @@ class MainFrame(wx.Frame):
             (self.t("add_to_playlist"), lambda: self.add_active_to_playlist(prefer_active=True)),
             (self.t("output_devices"), self.show_output_devices),
             (self.t("equalizer"), self.show_player_equalizer),
-            (self.t("fullscreen"), lambda: self.enter_player_fullscreen(announce=True)),
+            (self.t("fullscreen"), lambda: self.toggle_player_fullscreen(announce=True)),
             (self.t("bass_boost"), self.toggle_bass_boost),
             (self.t("repeat"), self.toggle_repeat),
             (self.t("shuffle"), self.toggle_shuffle),
@@ -6403,6 +6406,16 @@ class MainFrame(wx.Frame):
                 pass
             if announce:
                 self.announce_player(self.t("fullscreen_on"))
+
+    def toggle_player_fullscreen(self, focus_target: str = "player", announce: bool = False) -> None:
+        try:
+            fullscreen_active = bool(self.player_fullscreen_mode_active() or self.IsFullScreen())
+        except Exception:
+            fullscreen_active = bool(self.player_fullscreen_mode_active())
+        if fullscreen_active:
+            self.exit_fullscreen_to_player(focus_target=focus_target, announce=announce)
+        else:
+            self.enter_player_fullscreen(focus_target=focus_target, announce=announce)
 
     def on_player_fullscreen_changed(self, _event=None) -> None:
         checked = bool(getattr(self, "fullscreen_checkbox", None) and self.fullscreen_checkbox.GetValue())
@@ -7904,7 +7917,7 @@ class MainFrame(wx.Frame):
             ]
         )
         self.results_list = wx.ListBox(self.panel, choices=[self.t("search_results_empty")])
-        self.results_list.SetName(self.t("search_youtube"))
+        self.results_list.SetName(self.t("result_list"))
         self.results_list.SetSelection(0)
         self.results_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _evt: self.play_selected())
         self.results_list.Bind(wx.EVT_CONTEXT_MENU, self.open_context_menu)
@@ -9362,13 +9375,22 @@ class MainFrame(wx.Frame):
         self.focus_settings_section_list_later()
 
     def focus_settings_section_list_later(self) -> None:
+        generation = self.settings_render_generation
+        wx.CallAfter(self.focus_settings_section_list_if_safe, generation)
+        wx.CallLater(100, self.focus_settings_section_list_if_safe, generation)
+
+    def focus_settings_section_list_if_safe(self, generation: int) -> None:
+        if generation != getattr(self, "settings_render_generation", -1):
+            return
         target = self.live_window(getattr(self, "settings_section_list", None))
         if target is None:
             return
-        wx.CallAfter(self.safe_set_focus, target)
-        wx.CallLater(100, self.safe_set_focus, target)
-        wx.CallLater(300, self.safe_set_focus, target)
-        wx.CallLater(650, self.safe_set_focus, target)
+        focus = wx.Window.FindFocus()
+        if focus is not None:
+            for control in getattr(self, "settings_control_order", []):
+                if self.window_is_or_descendant(focus, control):
+                    return
+        self.safe_set_focus(target)
 
     def settings_sections(self) -> list[tuple[str, str]]:
         return [
@@ -9540,7 +9562,12 @@ class MainFrame(wx.Frame):
         self.render_settings_section()
 
     def on_settings_section_key(self, event: wx.KeyEvent) -> None:
-        if event.GetKeyCode() == wx.WXK_RETURN:
+        key = event.GetKeyCode()
+        if key == wx.WXK_TAB and not event.ShiftDown():
+            self.flush_settings_section_render()
+            self.focus_first_settings_control()
+            return
+        if key == wx.WXK_RETURN:
             self.flush_settings_section_render()
             self.focus_first_settings_control()
         else:
@@ -11267,6 +11294,8 @@ class MainFrame(wx.Frame):
             self.set_window_title(title or self.current_player_title())
         elif show_player:
             self.show_player_page(title, focus_target=focus_target)
+            if self.local_media_path_from_input(url):
+                wx.CallLater(500, self.focus_player_target_later, focus_target)
         else:
             self.in_player_screen = False
             self.player_control_mode = True
@@ -12015,12 +12044,12 @@ class MainFrame(wx.Frame):
         self.all_results = list(results)
         self.last_visible_count = visible_count
         self.results = self.all_results[:visible_count]
-        label = wx.StaticText(self.panel, label=self.t("search_youtube"))
-        label.SetName(self.t("search_youtube"))
+        label = wx.StaticText(self.panel, label=self.t("result_list"))
+        label.SetName(self.t("result_list"))
         self.root_sizer.Add(label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 4)
         labels = [self.result_line(index, item) for index, item in enumerate(self.results)]
         self.results_list = wx.ListBox(self.panel, choices=labels or [self.t("search_results_empty")])
-        self.results_list.SetName(self.t("search_youtube"))
+        self.results_list.SetName(self.t("result_list"))
         if labels:
             self.results_list.SetSelection(min(max(0, selection), len(labels) - 1))
         self.results_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _evt: self.play_selected())
@@ -12040,9 +12069,16 @@ class MainFrame(wx.Frame):
     def on_fullscreen_checkbox_key(self, event: wx.KeyEvent) -> None:
         key = event.GetKeyCode()
         if key in {wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER}:
-            self.toggle_player_fullscreen_checkbox()
+            self.request_player_fullscreen_checkbox_toggle()
             return
         event.Skip()
+
+    def request_player_fullscreen_checkbox_toggle(self) -> None:
+        now = time.monotonic()
+        if now < getattr(self, "fullscreen_checkbox_toggle_block_until", 0.0):
+            return
+        self.fullscreen_checkbox_toggle_block_until = now + 0.18
+        self.toggle_player_fullscreen_checkbox()
 
     def toggle_player_fullscreen_checkbox(self) -> None:
         checkbox = getattr(self, "fullscreen_checkbox", None)
@@ -14787,7 +14823,6 @@ class MainFrame(wx.Frame):
             self.player_fullscreen_results_override = False
             self.manual_background_playback_active = False
             self.session_volume = None
-            self.session_audio_output_device = ""
             self.session_equalizer_enabled = None
             self.session_equalizer_gains = {}
             self.session_equalizer_before_bass_boost = None
@@ -15017,7 +15052,7 @@ class MainFrame(wx.Frame):
         }
         player_checkboxes.discard(None)
         if focus is getattr(self, "fullscreen_checkbox", None) and event.GetKeyCode() in {wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER}:
-            self.toggle_player_fullscreen_checkbox()
+            self.request_player_fullscreen_checkbox_toggle()
             return True
         if focus in player_checkboxes and self.shortcut_matches(event, "player_play_pause"):
             event.Skip()
