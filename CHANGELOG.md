@@ -1,5 +1,14 @@
 # Changelog
 
+## What's new in version 0.8.59
+
+- narrowed the live EQ band filters so adjacent sliders, especially 62 Hz through 4 kHz, no longer stack so broadly that 12 dB feels like a much larger boost.
+- made EQ live changes less jumpy by coalescing slider updates a little longer before replacing the mpv audio filter.
+- strengthened the optional clipping protection: it now applies to any positive EQ or Bass boost, adds explicit headroom before the EQ, and keeps the limiter after the EQ to reduce bass clipping and vocal ducking on dense tracks.
+- kept the player audio output device as a true session choice until the player is closed, so choosing Bluetooth speakers or another device carries over to the next item.
+- fixed Settings opened from the main menu while the background player is visible so focus is forced back to the settings sections instead of the background player controls.
+- added a player shortcut, `P`, to preview only the marked clip between the start and end markers; it seeks to the marker start, plays the marked section, then pauses at the marker end.
+
 ## What's new in version 0.8.58
 
 - fixed the player Full screen checkbox accessibility path: Space now uses the native checkbox behavior instead of being intercepted by custom key handlers.

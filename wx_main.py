@@ -203,8 +203,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.58"
-APP_VERSION_LABEL = "0.8.58"
+APP_VERSION = "0.8.59"
+APP_VERSION_LABEL = "0.8.59"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -287,8 +287,9 @@ TRENDING_PUBLIC_URLS: dict[str, list[str]] = {
 }
 EQ_FILTER_LABEL = "apricot_eq"
 EQ_FILTER_REF = f"@{EQ_FILTER_LABEL}"
-EQ_LIMITER_FILTER = "alimiter=limit=0.95"
-EQ_APPLY_DELAY_MS = 80
+EQ_LIMITER_FILTER = "alimiter=limit=0.95:attack=5:release=80"
+EQ_APPLY_DELAY_MS = 160
+EQ_CLIPPING_HEADROOM_LIMIT_DB = 12.0
 NORMAL_VOLUME_MAX = 100
 BOOSTED_VOLUME_MAX = 300
 EQ_BANDS: list[tuple[str, str]] = [
@@ -304,7 +305,19 @@ EQ_BANDS: list[tuple[str, str]] = [
     ("16000", "16 kHz air and sparkle"),
 ]
 EQ_BAND_IDS = {band_id for band_id, _label in EQ_BANDS}
-EQ_FILTER_Q_WIDTH = 1.0
+EQ_FILTER_Q_WIDTH = 1.8
+EQ_FILTER_Q_WIDTHS = {
+    "31": 1.5,
+    "62": 1.8,
+    "125": 1.8,
+    "250": 1.8,
+    "500": 1.8,
+    "1000": 1.8,
+    "2000": 1.8,
+    "4000": 1.8,
+    "8000": 1.7,
+    "16000": 1.5,
+}
 EQ_RANGE_OPTIONS = ["6", "12", "18", "24"]
 POPULAR_CHANNEL_METADATA_WORKERS = 4
 POPULAR_CHANNEL_PROGRESS_INTERVAL = 25
@@ -544,6 +557,7 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "player_replace_edit_original": "Ctrl+R",
     "player_marker_start": "LeftBracket",
     "player_marker_end": "RightBracket",
+    "player_preview_marked_clip": "P",
     "player_previous": "Ctrl+PageUp",
     "player_next": "Ctrl+PageDown",
     "player_back": "Escape",
@@ -610,6 +624,7 @@ SHORTCUT_DEFINITIONS = [
     ("player_replace_edit_original", "shortcut_player_replace_edit_original"),
     ("player_marker_start", "shortcut_player_marker_start"),
     ("player_marker_end", "shortcut_player_marker_end"),
+    ("player_preview_marked_clip", "shortcut_player_preview_marked_clip"),
     ("player_previous", "shortcut_player_previous"),
     ("player_next", "shortcut_player_next"),
     ("player_back", "shortcut_player_back"),
@@ -3703,6 +3718,26 @@ for language_code in LANGUAGE_CODES:
     for key, value in RELEASE_0858_TRANSLATION_UPDATES["en"].items():
         TEXT.setdefault(language_code, {}).setdefault(key, value)
 
+RELEASE_0859_TRANSLATION_UPDATES = {
+    "sl": {
+        "clip_preview_started": "Predvajam oznaceni del od {start} do {end}.",
+        "clip_preview_finished": "Predogled oznacenega dela koncan.",
+        "equalizer_clipping_protection": "Clipping zascita za EQ in Bass boost",
+        "shortcut_player_preview_marked_clip": "Predvajalnik: predvajaj oznaceni del",
+    },
+    "en": {
+        "clip_preview_started": "Playing marked clip from {start} to {end}.",
+        "clip_preview_finished": "Marked clip preview finished.",
+        "equalizer_clipping_protection": "Clipping protection for EQ and Bass boost",
+        "shortcut_player_preview_marked_clip": "Player: play marked clip",
+    },
+}
+for language_code in LANGUAGE_CODES:
+    TEXT.setdefault(language_code, {}).update(RELEASE_0859_TRANSLATION_UPDATES.get(language_code, RELEASE_0859_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
+for language_code in LANGUAGE_CODES:
+    for key, value in RELEASE_0859_TRANSLATION_UPDATES["en"].items():
+        TEXT.setdefault(language_code, {}).setdefault(key, value)
+
 
 def default_equalizer_gains() -> dict[str, float]:
     return {band_id: 0.0 for band_id, _label in EQ_BANDS}
@@ -3990,6 +4025,7 @@ class MainFrame(wx.Frame):
         self.stream_url_cache: dict[str, dict] = {}
         self.stream_url_cache_lock = threading.Lock()
         self.prefetch_stream_urls: set[str] = set()
+        self.player_session_open = False
         self.current_audio_device = ""
         self.session_audio_output_device = ""
         self.edit_mode_enabled = False
@@ -4007,6 +4043,7 @@ class MainFrame(wx.Frame):
         self.volume_change_timer: wx.CallLater | None = None
         self.clip_start_marker: float | None = None
         self.clip_end_marker: float | None = None
+        self.clip_preview_generation = 0
         self.audio_device_options_cache: tuple[float, list[str], list[str]] | None = None
         self.audio_device_refresh_running = False
         self.metadata_hydration_urls: set[str] = set()
@@ -9310,7 +9347,16 @@ class MainFrame(wx.Frame):
         self.root_sizer.Add(body, 1, wx.EXPAND)
         self.render_settings_section()
         self.panel.Layout()
-        self.focus_later(self.settings_section_list)
+        self.focus_settings_section_list_later()
+
+    def focus_settings_section_list_later(self) -> None:
+        target = self.live_window(getattr(self, "settings_section_list", None))
+        if target is None:
+            return
+        wx.CallAfter(self.safe_set_focus, target)
+        wx.CallLater(100, self.safe_set_focus, target)
+        wx.CallLater(300, self.safe_set_focus, target)
+        wx.CallLater(650, self.safe_set_focus, target)
 
     def settings_sections(self) -> list[tuple[str, str]]:
         return [
@@ -11182,7 +11228,7 @@ class MainFrame(wx.Frame):
         if self.current_video_item:
             self.record_history(self.current_video_item, "played")
         self.current_index = max(0, self.current_index)
-        continuing_session = self.player_is_active() or bool(getattr(self, "playback_start_pending", False))
+        continuing_session = bool(getattr(self, "player_session_open", False)) or self.player_is_active() or bool(getattr(self, "playback_start_pending", False))
         self.remember_current_player_volume()
         self.stop_player(silent=True, reset_session=not continuing_session, preserve_panel=keep_current_ui)
         if not continuing_session:
@@ -11761,6 +11807,7 @@ class MainFrame(wx.Frame):
             )
             self.player_kind = "mpv"
             self.player_control_mode = True
+            self.player_session_open = True
             self.player_ended = False
             self.player_paused = bool(self.settings.player_start_paused)
             self.player_generation += 1
@@ -12482,7 +12529,8 @@ class MainFrame(wx.Frame):
 
     @staticmethod
     def equalizer_band_filter(band_id: str, gain: float) -> str:
-        return f"equalizer=f={band_id}:t=q:w={EQ_FILTER_Q_WIDTH:g}:g={gain:.1f}"
+        width = EQ_FILTER_Q_WIDTHS.get(str(band_id), EQ_FILTER_Q_WIDTH)
+        return f"equalizer=f={band_id}:t=q:w={width:g}:g={gain:.1f}"
 
     @staticmethod
     def equalizer_has_positive_gain(gains: dict[str, float]) -> bool:
@@ -12497,6 +12545,10 @@ class MainFrame(wx.Frame):
     @classmethod
     def equalizer_filter(cls, gains: dict[str, float], protect_clipping: bool = False) -> str:
         filters = []
+        if protect_clipping:
+            headroom = cls.equalizer_clipping_headroom_db(gains)
+            if headroom <= -0.05:
+                filters.append(f"volume={headroom:.1f}dB")
         for band_id, _band_label in EQ_BANDS:
             gain = max(-24.0, min(24.0, float(gains.get(band_id, 0.0) or 0.0)))
             if abs(gain) >= 0.05:
@@ -12505,10 +12557,19 @@ class MainFrame(wx.Frame):
             filters.append(EQ_LIMITER_FILTER)
         return f"{EQ_FILTER_REF}:lavfi=[{','.join(filters)}]"
 
+    @staticmethod
+    def equalizer_clipping_headroom_db(gains: dict[str, float]) -> float:
+        max_positive = 0.0
+        for band_id, _band_label in EQ_BANDS:
+            try:
+                max_positive = max(max_positive, float(gains.get(band_id, 0.0) or 0.0))
+            except (TypeError, ValueError):
+                continue
+        return -min(EQ_CLIPPING_HEADROOM_LIMIT_DB, max(0.0, max_positive))
+
     def equalizer_clipping_protection_active(self, gains: dict[str, float]) -> bool:
         return (
             bool(getattr(self.settings, "equalizer_clipping_protection", False))
-            and bool(getattr(self, "volume_boost_enabled", False))
             and self.equalizer_has_positive_gain(gains)
         )
 
@@ -13189,11 +13250,16 @@ class MainFrame(wx.Frame):
 
     def ffmpeg_equalizer_filters(self, gains: dict[str, float]) -> list[str]:
         filters: list[str] = []
+        protect_clipping = self.equalizer_clipping_protection_active(gains)
+        if protect_clipping:
+            headroom = self.equalizer_clipping_headroom_db(gains)
+            if headroom <= -0.05:
+                filters.append(f"volume={headroom:.1f}dB")
         for band_id, _band_label in EQ_BANDS:
             gain = max(-24.0, min(24.0, float(gains.get(band_id, 0.0) or 0.0)))
             if abs(gain) >= 0.05:
                 filters.append(self.equalizer_band_filter(band_id, gain))
-        if self.equalizer_clipping_protection_active(gains) and filters:
+        if protect_clipping and filters:
             filters.append(EQ_LIMITER_FILTER)
         return filters
 
@@ -13456,6 +13522,7 @@ class MainFrame(wx.Frame):
         self.toggle_player_pause()
 
     def toggle_player_pause(self) -> None:
+        self.cancel_clip_preview()
         try:
             paused = bool(self.mpv_get_property("pause", timeout=0.35))
             new_paused = not paused
@@ -13512,6 +13579,7 @@ class MainFrame(wx.Frame):
         return True
 
     def restart_current_playback(self, announce: bool = True) -> None:
+        self.cancel_clip_preview()
         self.player_ended = False
         self.player_paused = False
         if self.mpv_process_alive():
@@ -13548,6 +13616,7 @@ class MainFrame(wx.Frame):
     def player_seek(self, seconds: float) -> None:
         if self.player_kind != "mpv" or not self.ipc_path:
             return
+        self.cancel_clip_preview()
         was_ended = self.player_ended
         try:
             response = self.mpv_request(["seek", float(seconds), "relative+exact"], timeout=0.8)
@@ -13568,6 +13637,7 @@ class MainFrame(wx.Frame):
             self.start_player_monitor(self.player_generation)
 
     def set_clip_marker_async(self, marker: str) -> None:
+        self.cancel_clip_preview()
         threading.Thread(target=self.set_clip_marker_worker, args=(marker,), daemon=True).start()
 
     def set_clip_marker_worker(self, marker: str) -> None:
@@ -13600,15 +13670,96 @@ class MainFrame(wx.Frame):
     def clip_markers_partially_set(self) -> bool:
         return (self.clip_start_marker is None) != (self.clip_end_marker is None)
 
-    def export_marked_clip(self, audio_only: bool = False) -> None:
+    def marked_clip_range(self) -> tuple[float, float] | None:
         if self.clip_start_marker is None or self.clip_end_marker is None:
             self.announce_player(self.t("clip_markers_missing"))
-            return
+            return None
         start = float(self.clip_start_marker)
         end = float(self.clip_end_marker)
         if end - start < 0.25:
             self.announce_player(self.t("clip_marker_invalid"))
+            return None
+        return start, end
+
+    def cancel_clip_preview(self) -> None:
+        self.clip_preview_generation += 1
+
+    def preview_marked_clip(self) -> None:
+        clip_range = self.marked_clip_range()
+        if clip_range is None:
             return
+        if self.player_kind != "mpv" or not self.mpv_process_alive():
+            self.announce_player(self.t("no_player"))
+            return
+        self.clip_preview_generation += 1
+        preview_generation = self.clip_preview_generation
+        player_generation = self.player_generation
+        start, end = clip_range
+        threading.Thread(
+            target=self.preview_marked_clip_worker,
+            args=(player_generation, preview_generation, start, end),
+            daemon=True,
+        ).start()
+
+    def clip_preview_is_current(self, player_generation: int, preview_generation: int) -> bool:
+        return (
+            player_generation == self.player_generation
+            and preview_generation == self.clip_preview_generation
+            and self.player_kind == "mpv"
+            and self.mpv_process_alive()
+        )
+
+    def preview_marked_clip_worker(self, player_generation: int, preview_generation: int, start: float, end: float) -> None:
+        try:
+            if not self.clip_preview_is_current(player_generation, preview_generation):
+                return
+            self.mpv_send(["seek", float(start), "absolute+exact"], timeout=0.8)
+            self.mpv_set_property("pause", False, timeout=0.8)
+            wx.CallAfter(self.start_clip_preview_ui, player_generation, preview_generation, start, end)
+            deadline = time.monotonic() + max(1.0, end - start + 2.0)
+            while time.monotonic() < deadline:
+                if not self.clip_preview_is_current(player_generation, preview_generation):
+                    return
+                try:
+                    position = self.mpv_get_property("time-pos", timeout=0.25)
+                except Exception:
+                    position = None
+                if position is not None and float(position) >= end - 0.03:
+                    break
+                time.sleep(0.05)
+            if not self.clip_preview_is_current(player_generation, preview_generation):
+                return
+            try:
+                self.mpv_send(["seek", float(end), "absolute+exact"], timeout=0.6)
+            except Exception:
+                pass
+            self.mpv_set_property("pause", True, timeout=0.8)
+            wx.CallAfter(self.finish_clip_preview_ui, player_generation, preview_generation)
+        except Exception:
+            if self.clip_preview_is_current(player_generation, preview_generation):
+                wx.CallAfter(self.announce_player, self.t("timing_unavailable"))
+
+    def start_clip_preview_ui(self, player_generation: int, preview_generation: int, start: float, end: float) -> None:
+        if not self.clip_preview_is_current(player_generation, preview_generation):
+            return
+        self.player_ended = False
+        self.player_paused = False
+        self.update_play_pause_buttons()
+        self.announce_player(self.t("clip_preview_started", start=self.format_seconds(start), end=self.format_seconds(end)))
+
+    def finish_clip_preview_ui(self, player_generation: int, preview_generation: int) -> None:
+        if not self.clip_preview_is_current(player_generation, preview_generation):
+            return
+        self.player_paused = True
+        self.player_ended = False
+        self.update_play_pause_buttons()
+        self.announce_player(self.t("clip_preview_finished"))
+
+    def export_marked_clip(self, audio_only: bool = False) -> None:
+        clip_range = self.marked_clip_range()
+        if clip_range is None:
+            return
+        start, end = clip_range
         item = dict(self.current_video_item or self.current_video_info or {})
         stream_url = self.current_stream_url
         headers = dict(self.current_stream_headers or {})
@@ -14582,6 +14733,7 @@ class MainFrame(wx.Frame):
     def stop_player(self, silent: bool = False, reset_session: bool = True, preserve_panel: bool = False) -> None:
         self.play_request_generation += 1
         self.playback_start_pending = False
+        self.cancel_clip_preview()
         self.save_current_playback_position()
         self.player_generation += 1
         self.player_ended = False
@@ -14606,6 +14758,7 @@ class MainFrame(wx.Frame):
         self.current_stream_headers = {}
         self.current_audio_device = ""
         if reset_session:
+            self.player_session_open = False
             if self.player_return_screen == "folder":
                 self.clear_auto_folder_playback_queue()
             self.player_fullscreen_session = False
@@ -14876,6 +15029,9 @@ class MainFrame(wx.Frame):
             return True
         if self.shortcut_matches(event, "player_marker_end"):
             self.set_clip_marker_async("end")
+            return True
+        if self.shortcut_matches(event, "player_preview_marked_clip"):
+            self.preview_marked_clip()
             return True
         if self.shortcut_matches(event, "player_previous"):
             self.play_relative_item(-1, preserve_focus=True)
