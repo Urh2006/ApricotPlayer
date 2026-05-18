@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.8.67
+
+- fixed equalizer custom profile creation so the profile-name edit box starts blank and blank names become the next Custom profile instead of saving the label text as the name.
+- stopped new equalizer profiles and Settings slider edits from writing custom gains into factory presets such as Default / flat.
+- added Play playlist and Shuffle playlist to the result context menu for playlist results; Enter still opens the playlist videos list as before.
+
 ## What's new in version 0.8.66
 
 - fixed the remaining Settings Shift+Tab duplicate announcement by removing the extra manual reverse-focus handler and relying on wx's native tab traversal from the first setting back to the section list.

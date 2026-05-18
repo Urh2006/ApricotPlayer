@@ -219,8 +219,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.66"
-APP_VERSION_LABEL = "0.8.66"
+APP_VERSION = "0.8.67"
+APP_VERSION_LABEL = "0.8.67"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -3757,6 +3757,25 @@ for language_code in LANGUAGE_CODES:
         TEXT.setdefault(language_code, {}).setdefault(key, value)
 
 
+RELEASE_0867_TRANSLATION_UPDATES = {
+    "sl": {
+        "play_playlist": "Predvajaj playlisto",
+        "shuffle_playlist": "Shuffle playlisto",
+        "playlist_no_videos": "V tej playlisti ni predvajljivih videov.",
+    },
+    "en": {
+        "play_playlist": "Play playlist",
+        "shuffle_playlist": "Shuffle playlist",
+        "playlist_no_videos": "This playlist has no playable videos.",
+    },
+}
+for language_code in LANGUAGE_CODES:
+    TEXT.setdefault(language_code, {}).update(RELEASE_0867_TRANSLATION_UPDATES.get(language_code, RELEASE_0867_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
+for language_code in LANGUAGE_CODES:
+    for key, value in RELEASE_0867_TRANSLATION_UPDATES["en"].items():
+        TEXT.setdefault(language_code, {}).setdefault(key, value)
+
+
 def default_equalizer_gains() -> dict[str, float]:
     return {band_id: 0.0 for band_id, _label in EQ_BANDS}
 
@@ -4068,6 +4087,7 @@ class MainFrame(wx.Frame):
         self.audio_device_refresh_running = False
         self.metadata_hydration_urls: set[str] = set()
         self.search_generation = 0
+        self.playlist_play_generation = 0
         self.local_folder_cache: dict[str, list[dict]] = {}
         self.last_activation_check = 0.0
         self.settings_render_generation = 0
@@ -11010,6 +11030,58 @@ class MainFrame(wx.Frame):
         generation = self.search_generation
         threading.Thread(target=self.load_collection_worker, args=(item["url"], "Video", self.initial_results_limit(), 0, generation, ""), daemon=True).start()
 
+    def play_playlist_from_result(self, item: dict | None = None, shuffle: bool = False) -> None:
+        item = dict(item or self.stable_selected_result() or {})
+        if item.get("kind") != "playlist" or not item.get("url"):
+            self.announce_player(self.t("no_selection"))
+            return
+        self.return_results = list(self.results)
+        self.return_all_results = list(self.all_results or self.results)
+        self.return_index = max(0, self.current_index)
+        self.return_visible_count = self.last_visible_count or len(self.results)
+        self.playlist_play_generation += 1
+        generation = self.playlist_play_generation
+        self.set_status(self.t("loading_playlist", title=item.get("title") or self.t("playlist")))
+        threading.Thread(target=self.play_playlist_worker, args=(item, shuffle, generation), daemon=True).start()
+
+    def play_playlist_worker(self, item: dict, shuffle: bool, generation: int) -> None:
+        try:
+            options = {"quiet": True, "extract_flat": True, "skip_download": True}
+            info = self.ydl_extract_info(str(item.get("url") or ""), options, download=False)
+            entries = [entry for entry in list((info or {}).get("entries") or []) if isinstance(entry, dict)]
+            playable = [
+                result
+                for result in (self.normalize_entry(entry, "Video") for entry in entries)
+                if result.get("kind") == "video" and result.get("url")
+            ]
+            wx.CallAfter(self.start_playlist_playback_if_current, generation, item, playable, shuffle)
+        except Exception as exc:
+            wx.CallAfter(self.dynamic_fetch_failed_if_current, self.search_generation, self.friendly_error(exc))
+
+    def start_playlist_playback_if_current(self, generation: int, playlist_item: dict, items: list[dict], shuffle: bool) -> None:
+        if generation != self.playlist_play_generation:
+            return
+        self.start_playlist_playback(playlist_item, items, shuffle)
+
+    def start_playlist_playback(self, playlist_item: dict, items: list[dict], shuffle: bool) -> None:
+        if not items:
+            self.announce_player(self.t("playlist_no_videos"))
+            return
+        ordered = [dict(item) for item in items]
+        if shuffle:
+            random.shuffle(ordered)
+            self.shuffle_current = True
+        else:
+            self.shuffle_current = False
+        current_item = dict(ordered[0])
+        self.playback_queue = [self.playlist_item_from_media(item) for item in ordered[1:]]
+        self.save_playback_queue()
+        self.player_return_screen = "search"
+        self.player_return_data = {"index": self.return_index, "playlist_title": playlist_item.get("title", "")}
+        self.current_video_item = current_item
+        self.current_video_info = dict(current_item)
+        self.play_url(str(current_item.get("url") or ""), str(current_item.get("title") or ""))
+
     def load_collection_worker(
         self,
         url: str,
@@ -12640,6 +12712,11 @@ class MainFrame(wx.Frame):
     def use_global_equalizer_for_live_preview(self) -> None:
         self.session_equalizer_enabled = None
         self.session_equalizer_gains = {}
+        self.session_equalizer_before_bass_boost = None
+
+    def use_visible_equalizer_for_live_preview(self) -> None:
+        self.session_equalizer_enabled = True
+        self.session_equalizer_gains = self.visible_equalizer_gains()
         self.session_equalizer_before_bass_boost = None
 
     @staticmethod
@@ -14420,7 +14497,7 @@ class MainFrame(wx.Frame):
     def normalized_equalizer_preset_gains(self, presets: dict | None) -> dict[str, dict[str, float]]:
         normalized = default_equalizer_preset_gains()
         if isinstance(presets, dict):
-            for preset_id in list(EQ_FACTORY_PRESET_VALUES.keys()) + EQ_CUSTOM_PRESET_IDS:
+            for preset_id in EQ_CUSTOM_PRESET_IDS:
                 gains = presets.get(preset_id)
                 if isinstance(gains, dict):
                     normalized[preset_id] = self.normalized_equalizer_gains(gains)
@@ -14473,6 +14550,8 @@ class MainFrame(wx.Frame):
 
     def equalizer_gains_for_preset(self, preset_id: str | None) -> dict[str, float]:
         preset_id = self.normalized_equalizer_preset(preset_id)
+        if preset_id in EQ_FACTORY_PRESET_VALUES:
+            return self.factory_equalizer_gains_for_preset(preset_id)
         presets = self.normalized_equalizer_preset_gains(getattr(self.settings, "equalizer_preset_gains", {}) or {})
         return self.normalized_equalizer_gains(presets.get(preset_id) or {})
 
@@ -14529,10 +14608,15 @@ class MainFrame(wx.Frame):
         gains = self.visible_equalizer_gains()
         if not gains:
             return
-        presets = self.normalized_equalizer_preset_gains(getattr(self.settings, "equalizer_preset_gains", {}) or {})
-        presets[preset_id] = self.normalized_equalizer_gains(gains)
-        self.settings.equalizer_preset_gains = presets
-        self.settings.global_equalizer_gains = self.normalized_equalizer_gains(gains)
+        normalized_gains = self.normalized_equalizer_gains(gains)
+        if self.is_custom_equalizer_preset(preset_id):
+            presets = self.normalized_equalizer_preset_gains(getattr(self.settings, "equalizer_preset_gains", {}) or {})
+            presets[preset_id] = normalized_gains
+            self.settings.equalizer_preset_gains = presets
+        self.settings.global_equalizer_gains = normalized_gains
+
+    def equalizer_default_profile_name(self) -> str:
+        return f"Custom {len(self.equalizer_custom_ids()) + 1}"
 
     def next_equalizer_profile_id(self) -> str:
         existing = set(self.equalizer_preset_options())
@@ -14546,7 +14630,7 @@ class MainFrame(wx.Frame):
     def create_equalizer_profile(self, name: str, gains: dict[str, float] | None = None) -> str:
         preset_id = self.next_equalizer_profile_id()
         names = self.normalized_equalizer_custom_names(getattr(self.settings, "equalizer_custom_names", {}) or {})
-        names[preset_id] = (name.strip()[:80] if name.strip() else self.t("equalizer_profile_name"))
+        names[preset_id] = (name.strip()[:80] if name.strip() else self.equalizer_default_profile_name())
         presets = self.normalized_equalizer_preset_gains(getattr(self.settings, "equalizer_preset_gains", {}) or {})
         presets[preset_id] = self.normalized_equalizer_gains(gains or default_equalizer_gains())
         self.settings.equalizer_custom_names = names
@@ -14554,7 +14638,7 @@ class MainFrame(wx.Frame):
         return preset_id
 
     def create_equalizer_profile_dialog(self, gains: dict[str, float] | None = None) -> str:
-        with wx.TextEntryDialog(self, self.t("equalizer_profile_name"), self.t("add_equalizer_profile"), self.t("equalizer_profile_name")) as dialog:
+        with wx.TextEntryDialog(self, self.t("equalizer_profile_name"), self.t("add_equalizer_profile"), "") as dialog:
             if dialog.ShowModal() != wx.ID_OK:
                 return ""
             name = dialog.GetValue().strip()
@@ -14608,7 +14692,6 @@ class MainFrame(wx.Frame):
         return preset_id
 
     def add_equalizer_profile_from_settings(self) -> None:
-        self.save_visible_equalizer_gains_to_preset(getattr(self, "visible_equalizer_preset", EQ_PRESET_FLAT))
         preset_id = self.create_equalizer_profile_dialog(self.visible_equalizer_gains() or default_equalizer_gains())
         if not preset_id:
             return
@@ -14682,7 +14765,11 @@ class MainFrame(wx.Frame):
         self.save_visible_equalizer_gains_to_preset(getattr(self, "visible_equalizer_preset", EQ_PRESET_FLAT))
         if self.player_is_active():
             self.settings.global_equalizer_enabled = True
-            self.use_global_equalizer_for_live_preview()
+            preset = self.normalized_equalizer_preset(getattr(self, "visible_equalizer_preset", EQ_PRESET_FLAT))
+            if self.is_custom_equalizer_preset(preset):
+                self.use_global_equalizer_for_live_preview()
+            else:
+                self.use_visible_equalizer_for_live_preview()
             self.schedule_equalizer_apply()
 
     def on_equalizer_range_changed(self, _event: wx.CommandEvent) -> None:
@@ -14703,9 +14790,11 @@ class MainFrame(wx.Frame):
         preset = self.normalized_equalizer_preset(self.selected_choice_value("equalizer_preset") or getattr(self, "visible_equalizer_preset", EQ_PRESET_FLAT))
         gains = self.factory_equalizer_gains_for_preset(preset)
         self.visible_equalizer_draft_gains = self.normalized_equalizer_gains(gains)
-        presets = self.normalized_equalizer_preset_gains(getattr(self.settings, "equalizer_preset_gains", {}) or {})
-        presets[preset] = gains
-        self.settings.equalizer_preset_gains = presets
+        if self.is_custom_equalizer_preset(preset):
+            presets = self.normalized_equalizer_preset_gains(getattr(self.settings, "equalizer_preset_gains", {}) or {})
+            presets[preset] = gains
+            self.settings.equalizer_preset_gains = presets
+        self.settings.global_equalizer_gains = self.normalized_equalizer_gains(gains)
         for band_id, band_label in EQ_BANDS:
             ctrl = self.controls.get(f"eq_{band_id}")
             if isinstance(ctrl, wx.Slider):
@@ -14717,7 +14806,10 @@ class MainFrame(wx.Frame):
                 finally:
                     ctrl._apricot_eq_programmatic_update = False
         if self.player_is_active():
-            self.use_global_equalizer_for_live_preview()
+            if self.is_custom_equalizer_preset(preset):
+                self.use_global_equalizer_for_live_preview()
+            else:
+                self.use_visible_equalizer_for_live_preview()
             self.schedule_equalizer_apply(30)
         self.announce_player(self.t("equalizer_saved"))
 
@@ -15461,6 +15553,8 @@ class MainFrame(wx.Frame):
                 ]
             else:
                 actions = [
+                    (self.t("play_playlist"), lambda selected=dict(item): self.play_playlist_from_result(selected, shuffle=False)),
+                    (self.t("shuffle_playlist"), lambda selected=dict(item): self.play_playlist_from_result(selected, shuffle=True)),
                     (self.t("open_playlist_videos"), self.play_selected),
                     (None, None),
                     (self.menu_label_with_shortcut("add_favorite", "add_favorite"), self.add_selected_favorite),
@@ -16669,9 +16763,10 @@ class MainFrame(wx.Frame):
         eq_gains: dict[str, float] = self.visible_equalizer_gains() if any(f"eq_{band_id}" in c for band_id, _band_label in EQ_BANDS) else {}
         if eq_gains:
             eq_gains = self.normalized_equalizer_gains(eq_gains)
-            presets = self.normalized_equalizer_preset_gains(getattr(self.settings, "equalizer_preset_gains", {}) or {})
-            presets[selected_equalizer_preset] = eq_gains
-            self.settings.equalizer_preset_gains = presets
+            if self.is_custom_equalizer_preset(selected_equalizer_preset):
+                presets = self.normalized_equalizer_preset_gains(getattr(self.settings, "equalizer_preset_gains", {}) or {})
+                presets[selected_equalizer_preset] = eq_gains
+                self.settings.equalizer_preset_gains = presets
             self.settings.global_equalizer_gains = eq_gains
         if "show_video_details_by_default" in c:
             self.settings.show_video_details_by_default = c["show_video_details_by_default"].GetValue()
