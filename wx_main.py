@@ -219,8 +219,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.69"
-APP_VERSION_LABEL = "0.8.69"
+APP_VERSION = "0.8.70"
+APP_VERSION_LABEL = "0.8.70"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -229,6 +229,7 @@ START_IN_TRAY_ARG = "--start-in-tray"
 UPDATE_RELAUNCH_SENTINEL = APP_DIR / "updated-relaunch.json"
 ACTIVATE_SIGNAL_FILE = APP_DIR / "activate.json"
 SETTINGS_FILE = APP_DIR / "settings.json"
+WINDOWS_ERROR_ALREADY_EXISTS = 183
 FAVORITES_FILE = APP_DIR / "favorites.json"
 HISTORY_FILE = APP_DIR / "history.json"
 SUBSCRIPTIONS_FILE = APP_DIR / "subscriptions.json"
@@ -18431,6 +18432,14 @@ def startup_text(key: str) -> str:
     return TEXT.get(language, TEXT["en"]).get(key, TEXT["en"].get(key, key))
 
 
+def startup_close_to_tray_enabled() -> bool:
+    try:
+        data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        return bool(data.get("close_to_tray", False))
+    except Exception:
+        return False
+
+
 def update_relaunch_requested() -> bool:
     return any(arg == UPDATE_RELAUNCH_ARG for arg in sys.argv[1:])
 
@@ -18481,6 +18490,49 @@ def request_existing_instance_activation(action: str = "show", **extra_payload) 
         pass
 
 
+def create_startup_mutex(instance_name: str) -> tuple[object | None, bool]:
+    if os.name != "nt":
+        return None, False
+    try:
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", instance_name).strip("_") or APP_NAME
+        mutex_name = f"Local\\{safe_name}"
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+        kernel32.CreateMutexW.restype = ctypes.c_void_p
+        kernel32.GetLastError.restype = ctypes.c_ulong
+        handle = kernel32.CreateMutexW(None, 1, mutex_name)
+        already_running = bool(handle and kernel32.GetLastError() == WINDOWS_ERROR_ALREADY_EXISTS)
+        return handle, already_running
+    except Exception:
+        return None, False
+
+
+def close_startup_mutex(handle) -> None:
+    if os.name != "nt" or not handle:
+        return
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32.CloseHandle.restype = ctypes.c_int
+        kernel32.CloseHandle(handle)
+    except Exception:
+        pass
+
+
+def handle_already_running_startup(startup_media_path: str, tray_start: bool) -> bool:
+    if suppress_already_open_for_update():
+        return False
+    if startup_media_path:
+        request_existing_instance_activation("open_file", path=startup_media_path)
+    elif tray_start:
+        return False
+    elif startup_close_to_tray_enabled():
+        request_existing_instance_activation("show")
+    else:
+        wx.MessageBox(startup_text("already_open"), APP_NAME, wx.OK | wx.ICON_INFORMATION)
+    return False
+
+
 class App(wx.App):
     def OnInit(self) -> bool:
         update_relaunch = update_relaunch_requested()
@@ -18489,17 +18541,17 @@ class App(wx.App):
         startup_media_path = startup_media_path_argument()
         tray_start = start_in_tray_requested() and not startup_media_path
         instance_name = f"{APP_NAME}-{wx.GetUserId() or 'user'}"
-        self.instance_checker = wx.SingleInstanceChecker(instance_name)
-        if self.instance_checker.IsAnotherRunning():
-            if suppress_already_open_for_update():
-                return False
-            if startup_media_path:
-                request_existing_instance_activation("open_file", path=startup_media_path)
-            elif not tray_start:
-                request_existing_instance_activation("show")
-            else:
-                return False
-            return False
+        self.instance_mutex_handle, mutex_already_running = create_startup_mutex(instance_name)
+        self.instance_checker = None
+        checker_already_running = False
+        if not self.instance_mutex_handle:
+            self.instance_checker = wx.SingleInstanceChecker(instance_name)
+            checker_already_running = self.instance_checker.IsAnotherRunning()
+        if mutex_already_running or checker_already_running:
+            result = handle_already_running_startup(startup_media_path, tray_start)
+            close_startup_mutex(getattr(self, "instance_mutex_handle", None))
+            self.instance_mutex_handle = None
+            return result
         frame = MainFrame(start_hidden_in_tray=tray_start)
         self.SetTopWindow(frame)
         if tray_start:
@@ -18513,6 +18565,10 @@ class App(wx.App):
         if startup_media_path:
             wx.CallAfter(frame.open_local_media_file, startup_media_path)
         return True
+
+    def OnExit(self) -> int:
+        close_startup_mutex(getattr(self, "instance_mutex_handle", None))
+        return 0
 
 
 def main() -> int:

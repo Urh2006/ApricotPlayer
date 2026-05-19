@@ -1,5 +1,10 @@
 # Changelog
 
+## What's new in version 0.8.70
+
+- hardened startup single-instance handling with an early Windows mutex so rapid repeated launches cannot open multiple ApricotPlayer windows.
+- when ApricotPlayer is already open, a second launch now restores the existing tray-enabled session; without the tray option it shows "ApricotPlayer is already open." instead of silently opening another instance.
+
 ## What's new in version 0.8.69
 
 - renamed the visible results label to "Results" (and Slovenian "Rezultati"), so screen readers no longer announce "list" twice.
