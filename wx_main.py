@@ -219,8 +219,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.67"
-APP_VERSION_LABEL = "0.8.67"
+APP_VERSION = "0.8.68"
+APP_VERSION_LABEL = "0.8.68"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -4034,6 +4034,8 @@ class MainFrame(wx.Frame):
         self.last_button_row_controls: list[wx.Button] = []
         self.player_play_pause_buttons: list[wx.Button] = []
         self.background_player_section_added = False
+        self.background_player_section_pending = False
+        self.background_player_section_generation = 0
         self.download_queue: dict[str, dict] = {}
         self.active_downloads: dict[str, dict] = {}
         self.download_cancel_events: dict[str, threading.Event] = {}
@@ -4078,7 +4080,7 @@ class MainFrame(wx.Frame):
         self.bass_boost_enabled = False
         self.equalizer_filter_active = False
         self.volume_change_lock = threading.Lock()
-        self.volume_change_pending_delta = 0.0
+        self.volume_change_pending_target: float | None = None
         self.volume_change_timer: wx.CallLater | None = None
         self.clip_start_marker: float | None = None
         self.clip_end_marker: float | None = None
@@ -5627,6 +5629,8 @@ class MainFrame(wx.Frame):
         self.background_player_previous_control = None
         self.last_button_row_controls = []
         self.background_player_section_added = False
+        self.background_player_section_pending = False
+        self.background_player_section_generation += 1
         if not self.in_player_screen:
             if preserved_player_panel is not None:
                 self.player_panel = preserved_player_panel
@@ -6188,10 +6192,20 @@ class MainFrame(wx.Frame):
         ])
         return actions
 
-    def add_background_player_section(self) -> None:
+    def add_background_player_section(self, defer: bool = True) -> None:
         if self.background_player_section_added:
             return
+        if defer and not self.in_player_screen:
+            if self.background_player_section_pending:
+                return
+            if not self.background_player_section_enabled() or not self.player_is_active():
+                return
+            self.background_player_section_pending = True
+            generation = self.background_player_section_generation
+            wx.CallAfter(self.flush_background_player_section, generation)
+            return
         self.background_player_controls = []
+        self.background_player_section_pending = False
         if not self.background_player_section_enabled() or not self.player_is_active():
             return
         self.background_player_section_added = True
@@ -6251,6 +6265,18 @@ class MainFrame(wx.Frame):
                 except RuntimeError:
                     pass
             previous_control = control
+
+    def flush_background_player_section(self, generation: int) -> None:
+        if generation != getattr(self, "background_player_section_generation", -1):
+            return
+        self.background_player_section_pending = False
+        if self.in_player_screen:
+            return
+        self.add_background_player_section(defer=False)
+        try:
+            self.panel.Layout()
+        except Exception:
+            pass
 
     def on_menu_key(self, event: wx.KeyEvent) -> None:
         if self.is_modifier_only_event(event):
@@ -11868,6 +11894,11 @@ class MainFrame(wx.Frame):
         return self.normalized_speed_audio_mode() in {SPEED_AUDIO_MODE_MPV, SPEED_AUDIO_MODE_RUBBERBAND}
 
     def remember_current_player_volume(self) -> None:
+        with self.volume_change_lock:
+            pending_target = self.volume_change_pending_target
+        if pending_target is not None:
+            self.session_volume = max(0.0, min(float(self.current_player_volume_max()), float(pending_target)))
+            return
         if self.player_kind != "mpv" or not self.mpv_process_alive():
             return
         try:
@@ -11908,6 +11939,7 @@ class MainFrame(wx.Frame):
             boost_volume = bool(self.volume_boost_enabled or getattr(self.settings, "volume_boost_by_default", False) or target_volume > NORMAL_VOLUME_MAX)
             volume_max = BOOSTED_VOLUME_MAX if boost_volume else NORMAL_VOLUME_MAX
             target_volume = max(0.0, min(float(volume_max), target_volume))
+            self.session_volume = target_volume
             embed_player = False
             hwnd = 0
             try:
@@ -14222,7 +14254,13 @@ class MainFrame(wx.Frame):
 
     def change_volume_async(self, delta: int) -> None:
         with self.volume_change_lock:
-            self.volume_change_pending_delta += float(delta)
+            maximum = float(self.current_player_volume_max())
+            base = self.session_volume
+            if base is None:
+                base = self.default_volume_value()
+            target = min(max(0.0, float(base) + float(delta)), maximum)
+            self.session_volume = target
+            self.volume_change_pending_target = target
             timer = self.volume_change_timer
             if timer is not None and timer.IsRunning():
                 return
@@ -14230,19 +14268,17 @@ class MainFrame(wx.Frame):
 
     def apply_pending_volume_change_async(self) -> None:
         with self.volume_change_lock:
-            delta = self.volume_change_pending_delta
-            self.volume_change_pending_delta = 0.0
+            target = self.volume_change_pending_target
+            self.volume_change_pending_target = None
             self.volume_change_timer = None
-        if abs(delta) < 0.001:
+        if target is None:
             return
-        threading.Thread(target=self.change_volume_worker, args=(delta,), daemon=True).start()
+        threading.Thread(target=self.change_volume_worker, args=(target,), daemon=True).start()
 
-    def change_volume_worker(self, delta: float) -> None:
+    def change_volume_worker(self, target: float) -> None:
         try:
-            current = self.mpv_get_property("volume")
-            volume = float(current if current is not None else 100.0)
             maximum = float(self.current_player_volume_max())
-            volume = min(max(0.0, volume + float(delta)), maximum)
+            volume = min(max(0.0, float(target)), maximum)
             self.mpv_set_property("volume-max", maximum)
             self.mpv_set_property("volume", volume)
             self.session_volume = volume
@@ -14978,6 +15014,12 @@ class MainFrame(wx.Frame):
             self.player_fullscreen_results_override = False
             self.manual_background_playback_active = False
             self.session_volume = None
+            with self.volume_change_lock:
+                self.volume_change_pending_target = None
+                timer = self.volume_change_timer
+                if timer is not None and timer.IsRunning():
+                    timer.Stop()
+                self.volume_change_timer = None
             self.session_equalizer_enabled = None
             self.session_equalizer_gains = {}
             self.session_equalizer_before_bass_boost = None

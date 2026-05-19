@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.8.68
+
+- made player volume a true session value: volume changes are remembered while the player stays open, including when starting a completely different search, trending, playlist, podcast, queue, or folder item.
+- reset the session volume back to the configured default only when the player is actually closed.
+- fixed background playback menus so screens opened from the main menu build their own controls and lists first, then append the background Player section; this prevents the player buttons from hiding or taking over the opened screen.
+
 ## What's new in version 0.8.67
 
 - fixed equalizer custom profile creation so the profile-name edit box starts blank and blank names become the next Custom profile instead of saving the label text as the name.
