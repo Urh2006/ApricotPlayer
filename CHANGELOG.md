@@ -1,5 +1,9 @@
 # Changelog
 
+## What's new in version 0.8.69
+
+- renamed the visible results label to "Results" (and Slovenian "Rezultati"), so screen readers no longer announce "list" twice.
+
 ## What's new in version 0.8.68
 
 - made player volume a true session value: volume changes are remembered while the player stays open, including when starting a completely different search, trending, playlist, podcast, queue, or folder item.
@@ -38,7 +42,7 @@
 - stopped delayed Settings focus repair from stealing focus after the user has already tabbed into the visible settings controls.
 - kept the selected audio output device for the whole app session, including when starting another item from Search or Trending while the player is still running.
 - made the background-player Full screen control toggle full screen on and off, and debounced Enter on the player full-screen checkbox so it cannot double-toggle or fall through to play/pause.
-- renamed embedded/search result lists to "Result list" instead of "Search YouTube", so local folder playback no longer announces YouTube wording.
+- renamed embedded/search results to "Results" instead of "Search YouTube", so local folder playback no longer announces YouTube wording.
 - narrowed the low and low-mid EQ bands, especially 125 Hz upper bass warmth, to reduce muddy/watery overlap into vocals and neighboring instruments.
 
 ## What's new in version 0.8.61

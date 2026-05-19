@@ -219,8 +219,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.68"
-APP_VERSION_LABEL = "0.8.68"
+APP_VERSION = "0.8.69"
+APP_VERSION_LABEL = "0.8.69"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -738,7 +738,7 @@ TEXT = {
         "keyboard_shortcuts_section": "Bliznjicne tipke",
         "keyboard_shortcuts_help": "Vnesi bliznjice v obliki Ctrl+Shift+A, Space, Enter, Left ali F2. Spremembe se shranijo s tipko Shrani.",
         "search_results_empty": "Ni rezultatov iskanja.",
-        "result_list": "Seznam rezultatov",
+        "result_list": "Rezultati",
         "no_results": "Ni rezultatov.",
         "favorites_empty": "Ni priljubljenih.",
         "empty": "Prazno.",
@@ -1168,7 +1168,7 @@ TEXT = {
         "shortcut_in_use": "{shortcut} is already assigned to {action}. Choose a different shortcut.",
         "shortcut_in_use_title": "Shortcut already in use",
         "search_results_empty": "No search results.",
-        "result_list": "Result list",
+        "result_list": "Results",
         "no_results": "No results.",
         "favorites_empty": "No favorites.",
         "empty": "Empty.",
