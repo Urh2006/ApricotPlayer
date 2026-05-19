@@ -1,5 +1,13 @@
 # Changelog
 
+## What's new in version 0.9
+
+- added a Chapters button and shortcuts for chapter navigation: open the chapters list, press Enter to seek to a chapter, press Escape to return to the player, and use Alt+Left / Alt+Right in the player to jump between chapters with screen reader announcements.
+- added a Lyrics screen with local sidecar lyric support and LRCLIB online lookup when local lyrics are missing.
+- added a Comments screen for YouTube videos with 20-at-a-time loading through the YouTube Data API when an API key is configured, plus a yt-dlp fallback for the first comments page when no API key is available.
+- added keyboard shortcut settings for chapters, lyrics, comments, previous chapter, and next chapter.
+- added low-risk player polish from the 0.9 roadmap: mpv-level gapless audio where supported and optional ReplayGain / loudness normalization.
+
 ## What's new in version 0.8.72
 
 - fixed Bass boost changing or losing depth when Volume boost is turned on by replacing the EQ filter atomically: the new Bass boost/EQ chain is added before the old one is removed.

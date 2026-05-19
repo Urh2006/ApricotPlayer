@@ -26,6 +26,7 @@ $args = @(
     "--hidden-import", "ctypes",
     "--hidden-import", "email.utils",
     "--hidden-import", "hashlib",
+    "--hidden-import", "html",
     "--hidden-import", "shutil",
     "--hidden-import", "socket",
     "--hidden-import", "ssl",

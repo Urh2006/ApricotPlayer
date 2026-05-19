@@ -219,8 +219,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.72"
-APP_VERSION_LABEL = "0.8.72"
+APP_VERSION = "0.9"
+APP_VERSION_LABEL = "0.9"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -285,6 +285,9 @@ TRENDING_CATEGORIES: list[tuple[str, str]] = [
 ]
 YOUTUBE_API_VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
 YOUTUBE_API_SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
+YOUTUBE_API_COMMENT_THREADS_URL = "https://www.googleapis.com/youtube/v3/commentThreads"
+YOUTUBE_API_COMMENTS_URL = "https://www.googleapis.com/youtube/v3/comments"
+LRCLIB_API_GET_URL = "https://lrclib.net/api/get"
 TRENDING_CATEGORY_IDS: dict[str, str] = {
     "all": "0",
     "music": "10",
@@ -342,6 +345,10 @@ POPULAR_CHANNEL_METADATA_WORKERS = 4
 POPULAR_CHANNEL_PROGRESS_INTERVAL = 25
 SEEK_SECONDS_OPTIONS = ["0.1", "0.25", "0.5", "0.75", "1", "1.5", "2", "2.5", "3", "4", "5", "7.5", "10", "15", "20", "30", "45", "60"]
 STREAM_URL_CACHE_OPTIONS = ["5", "10", "20", "30", "60", "240", "1440", "10080", "0"]
+REPLAYGAIN_MODE_OFF = "no"
+REPLAYGAIN_MODE_TRACK = "track"
+REPLAYGAIN_MODE_ALBUM = "album"
+REPLAYGAIN_MODE_OPTIONS = [REPLAYGAIN_MODE_OFF, REPLAYGAIN_MODE_TRACK, REPLAYGAIN_MODE_ALBUM]
 EQ_PRESET_FLAT = "flat"
 EQ_CUSTOM_PRESET_IDS = ["custom1", "custom2", "custom3"]
 EQ_FACTORY_PRESET_VALUES: dict[str, list[float]] = {
@@ -571,6 +578,11 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "player_details": "F7",
     "player_output_devices": "O",
     "player_equalizer": "F4",
+    "player_chapters": "Ctrl+Shift+C",
+    "player_lyrics": "Ctrl+Shift+L",
+    "player_comments": "Ctrl+Shift+M",
+    "player_previous_chapter": "Alt+Left",
+    "player_next_chapter": "Alt+Right",
     "player_edit_mode": "E",
     "player_save_edit_copy": "Ctrl+S",
     "player_replace_edit_original": "Ctrl+R",
@@ -638,6 +650,11 @@ SHORTCUT_DEFINITIONS = [
     ("player_details", "shortcut_player_details"),
     ("player_output_devices", "shortcut_player_output_devices"),
     ("player_equalizer", "shortcut_player_equalizer"),
+    ("player_chapters", "shortcut_player_chapters"),
+    ("player_lyrics", "shortcut_player_lyrics"),
+    ("player_comments", "shortcut_player_comments"),
+    ("player_previous_chapter", "shortcut_player_previous_chapter"),
+    ("player_next_chapter", "shortcut_player_next_chapter"),
     ("player_edit_mode", "shortcut_player_edit_mode"),
     ("player_save_edit_copy", "shortcut_player_save_edit_copy"),
     ("player_replace_edit_original", "shortcut_player_replace_edit_original"),
@@ -3779,6 +3796,81 @@ for language_code in LANGUAGE_CODES:
         TEXT.setdefault(language_code, {}).setdefault(key, value)
 
 
+RELEASE_090_TRANSLATION_UPDATES = {
+    "sl": {
+        "chapters": "Chapters",
+        "chapter_list": "Chapters",
+        "no_chapters_available": "No chapters available.",
+        "chapter_selected": "{title}. {time}.",
+        "lyrics": "Lyrics",
+        "lyrics_fetching": "Fetching lyrics...",
+        "no_lyrics_available": "Could not fetch lyrics.",
+        "lyrics_source_local": "Local lyrics",
+        "lyrics_source_online": "Online lyrics",
+        "comments": "Comments",
+        "comments_loading": "Loading comments...",
+        "comments_need_api_key": "Enter a YouTube Data API key in Settings, Cookies and network, to read comments.",
+        "comments_disabled": "Comments are disabled or unavailable for this video.",
+        "comments_failed": "Could not load comments: {error}",
+        "comments_loaded": "Loaded {count} comments.",
+        "open_comment": "Open comment",
+        "load_more_comments": "Load more comments",
+        "no_more_comments": "No more comments.",
+        "comment_details": "Comment details",
+        "comment_replies": "Replies",
+        "gapless_playback": "Gapless playback where the player supports it",
+        "replaygain_mode": "ReplayGain / loudness normalization",
+        "replaygain_off": "Off",
+        "replaygain_track": "Track",
+        "replaygain_album": "Album",
+        "enable_online_lyrics": "Fetch lyrics online when local lyrics are missing",
+        "shortcut_player_chapters": "Predvajalnik: odpri chapters",
+        "shortcut_player_lyrics": "Predvajalnik: odpri lyrics",
+        "shortcut_player_comments": "Predvajalnik: odpri comments",
+        "shortcut_player_previous_chapter": "Predvajalnik: prejsnji chapter",
+        "shortcut_player_next_chapter": "Predvajalnik: naslednji chapter",
+    },
+    "en": {
+        "chapters": "Chapters",
+        "chapter_list": "Chapters",
+        "no_chapters_available": "No chapters available.",
+        "chapter_selected": "{title}. {time}.",
+        "lyrics": "Lyrics",
+        "lyrics_fetching": "Fetching lyrics...",
+        "no_lyrics_available": "Could not fetch lyrics.",
+        "lyrics_source_local": "Local lyrics",
+        "lyrics_source_online": "Online lyrics",
+        "comments": "Comments",
+        "comments_loading": "Loading comments...",
+        "comments_need_api_key": "Enter a YouTube Data API key in Settings, Cookies and network, to read comments.",
+        "comments_disabled": "Comments are disabled or unavailable for this video.",
+        "comments_failed": "Could not load comments: {error}",
+        "comments_loaded": "Loaded {count} comments.",
+        "open_comment": "Open comment",
+        "load_more_comments": "Load more comments",
+        "no_more_comments": "No more comments.",
+        "comment_details": "Comment details",
+        "comment_replies": "Replies",
+        "gapless_playback": "Gapless playback where the player supports it",
+        "replaygain_mode": "ReplayGain / loudness normalization",
+        "replaygain_off": "Off",
+        "replaygain_track": "Track",
+        "replaygain_album": "Album",
+        "enable_online_lyrics": "Fetch lyrics online when local lyrics are missing",
+        "shortcut_player_chapters": "Player: open chapters",
+        "shortcut_player_lyrics": "Player: open lyrics",
+        "shortcut_player_comments": "Player: open comments",
+        "shortcut_player_previous_chapter": "Player: previous chapter",
+        "shortcut_player_next_chapter": "Player: next chapter",
+    },
+}
+for language_code in LANGUAGE_CODES:
+    TEXT.setdefault(language_code, {}).update(RELEASE_090_TRANSLATION_UPDATES.get(language_code, RELEASE_090_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
+for language_code in LANGUAGE_CODES:
+    for key, value in RELEASE_090_TRANSLATION_UPDATES["en"].items():
+        TEXT.setdefault(language_code, {}).setdefault(key, value)
+
+
 def default_equalizer_gains() -> dict[str, float]:
     return {band_id: 0.0 for band_id, _label in EQ_BANDS}
 
@@ -3830,6 +3922,9 @@ class Settings:
     enable_stream_url_cache: bool = True
     stream_url_cache_minutes: int = 20
     prefetch_next_stream_url: bool = True
+    gapless_playback: bool = True
+    replaygain_mode: str = REPLAYGAIN_MODE_OFF
+    enable_online_lyrics: bool = True
     cache_folder: str = str(DEFAULT_CACHE_DIR)
     cache_size_mb: int = 512
     resume_playback: bool = True
@@ -9549,6 +9644,9 @@ class MainFrame(wx.Frame):
                 "enable_stream_url_cache",
                 "stream_url_cache_minutes",
                 "prefetch_next_stream_url",
+                "gapless_playback",
+                "replaygain_mode",
+                "enable_online_lyrics",
                 "cache_folder",
                 "cache_size_mb",
                 "resume_playback",
@@ -9849,6 +9947,9 @@ class MainFrame(wx.Frame):
                 self.stream_url_cache_labels(STREAM_URL_CACHE_OPTIONS),
             )
             check("prefetch_next_stream_url", bool(getattr(self.settings, "prefetch_next_stream_url", True)))
+            check("gapless_playback", bool(getattr(self.settings, "gapless_playback", True)))
+            choice("replaygain_mode", self.normalized_replaygain_mode(), REPLAYGAIN_MODE_OPTIONS, self.replaygain_mode_labels())
+            check("enable_online_lyrics", bool(getattr(self.settings, "enable_online_lyrics", True)))
             text("cache_folder", self.settings.cache_folder or str(DEFAULT_CACHE_DIR))
             choice("cache_size_mb", str(self.settings.cache_size_mb), ["128", "256", "512", "1024", "2048", "4096"])
             check("resume_playback", self.settings.resume_playback)
@@ -10118,6 +10219,58 @@ class MainFrame(wx.Frame):
             return self.t("live_stream")
         return str((item or {}).get("type") or default or self.t("video"))
 
+    def normalized_chapters(self, raw_chapters) -> list[dict]:
+        chapters: list[dict] = []
+        if not isinstance(raw_chapters, list):
+            return chapters
+        for index, chapter in enumerate(raw_chapters):
+            if not isinstance(chapter, dict):
+                continue
+            start = chapter.get("start_time", chapter.get("time"))
+            end = chapter.get("end_time")
+            try:
+                start_value = max(0.0, float(start))
+            except (TypeError, ValueError):
+                continue
+            try:
+                end_value = float(end) if end is not None else None
+            except (TypeError, ValueError):
+                end_value = None
+            title = str(chapter.get("title") or chapter.get("name") or self.t("chapters")).strip()
+            if not title:
+                title = f"{self.t('chapters')} {index + 1}"
+            normalized = {
+                "title": title,
+                "start_time": round(start_value, 3),
+            }
+            if end_value is not None and end_value > start_value:
+                normalized["end_time"] = round(end_value, 3)
+            chapters.append(normalized)
+        return sorted(chapters, key=lambda item: float(item.get("start_time") or 0.0))
+
+    def extract_youtube_video_id(self, item: dict | None = None) -> str:
+        item = item or self.current_video_info or self.current_video_item or {}
+        video_id = str((item or {}).get("id") or "").strip()
+        if video_id and re.fullmatch(r"[\w-]{8,}", video_id):
+            return video_id
+        url = str((item or {}).get("url") or (item or {}).get("webpage_url") or "").strip()
+        if not url:
+            return ""
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            return ""
+        host = (parsed.netloc or "").lower()
+        if "youtu.be" in host:
+            return parsed.path.strip("/").split("/", 1)[0]
+        if "youtube.com" not in host:
+            return ""
+        query_id = (parse_qs(parsed.query).get("v") or [""])[0]
+        if query_id:
+            return query_id
+        match = re.search(r"/(?:shorts|embed|live)/([\w-]+)", parsed.path or "")
+        return match.group(1) if match else ""
+
     def with_live_stream_display_fields(self, item: dict, source: dict | None = None) -> dict:
         source = source if isinstance(source, dict) else item
         live_status = self.metadata_live_status(source) or self.metadata_live_status(item)
@@ -10174,6 +10327,7 @@ class MainFrame(wx.Frame):
         playlist_count = entry.get("playlist_count") or entry.get("n_entries") or entry.get("video_count") or entry.get("playlist_count_text")
         item = {
             "title": entry.get("title") or "",
+            "id": entry.get("id") or "",
             "channel": entry.get("uploader") or entry.get("channel") or "",
             "channel_url": self.normalize_channel_url(entry),
             "channel_id": entry.get("channel_id") or entry.get("uploader_id") or "",
@@ -10185,6 +10339,10 @@ class MainFrame(wx.Frame):
             "timestamp": timestamp,
             "upload_date": upload_date,
             "description": entry.get("description") or "",
+            "artist": entry.get("artist") or entry.get("creator") or "",
+            "track": entry.get("track") or "",
+            "album": entry.get("album") or "",
+            "chapters": self.normalized_chapters(entry.get("chapters")),
             "type": display_type,
             "kind": kind,
             "playlist_count": playlist_count if kind == "playlist" else "",
@@ -10416,6 +10574,7 @@ class MainFrame(wx.Frame):
         payload = {
             "url": item.get("url", ""),
             "title": info.get("title") or item.get("title", ""),
+            "id": info.get("id") or item.get("id", ""),
             "channel": info.get("uploader") or info.get("channel") or item.get("channel", ""),
             "channel_url": self.normalize_channel_url(info) or item.get("channel_url", ""),
             "channel_id": info.get("channel_id") or info.get("uploader_id") or item.get("channel_id", ""),
@@ -10427,6 +10586,10 @@ class MainFrame(wx.Frame):
             "duration_seconds": info.get("duration", item.get("duration_seconds")),
             "duration": self.format_duration(info.get("duration", item.get("duration_seconds"))),
             "description": info.get("description") or item.get("description", ""),
+            "artist": info.get("artist") or info.get("creator") or item.get("artist", ""),
+            "track": info.get("track") or item.get("track", ""),
+            "album": info.get("album") or item.get("album", ""),
+            "chapters": self.normalized_chapters(info.get("chapters")) or item.get("chapters", []),
             "kind": item.get("kind", "video"),
             "type": self.t("live_stream") if is_live else item.get("type", self.t("video")),
             "live_status": self.metadata_live_status(info) or self.metadata_live_status(item),
@@ -11028,6 +11191,7 @@ class MainFrame(wx.Frame):
         is_live = self.metadata_is_live_stream(snippet)
         normalized = {
             "title": title,
+            "id": video_id,
             "channel": channel,
             "channel_url": f"https://www.youtube.com/channel/{channel_id}" if channel_id else "",
             "channel_id": channel_id,
@@ -11728,6 +11892,7 @@ class MainFrame(wx.Frame):
         self.current_video_info.update(
             {
                 "title": info.get("title") or self.current_video_info.get("title", ""),
+                "id": info.get("id") or self.current_video_info.get("id", ""),
                 "channel": info.get("uploader") or info.get("channel") or self.current_video_info.get("channel", ""),
                 "channel_url": self.normalize_channel_url(info) or self.current_video_info.get("channel_url", ""),
                 "channel_id": info.get("channel_id") or info.get("uploader_id") or self.current_video_info.get("channel_id", ""),
@@ -11741,6 +11906,10 @@ class MainFrame(wx.Frame):
                 "duration": self.format_duration(info.get("duration", self.current_video_info.get("duration_seconds"))),
                 "description": info.get("description") or self.current_video_info.get("description", ""),
                 "ext": info.get("ext") or self.current_video_info.get("ext", ""),
+                "artist": info.get("artist") or info.get("creator") or self.current_video_info.get("artist", ""),
+                "track": info.get("track") or self.current_video_info.get("track", ""),
+                "album": info.get("album") or self.current_video_info.get("album", ""),
+                "chapters": self.normalized_chapters(info.get("chapters")) or self.current_video_info.get("chapters", []),
                 "live_status": live_status,
                 "is_live": bool(is_live),
                 "type": self.t("live_stream") if is_live else self.current_video_info.get("type", self.t("video")),
@@ -11971,6 +12140,9 @@ class MainFrame(wx.Frame):
                 "--pitch=1.0",
                 f"--speed={self.settings.player_speed}",
                 f"--loop-file={'inf' if self.repeat_current else 'no'}",
+                f"--gapless-audio={'yes' if bool(getattr(self.settings, 'gapless_playback', True)) else 'no'}",
+                f"--replaygain={self.normalized_replaygain_mode()}",
+                "--replaygain-clip=yes",
                 "--term-playing-msg=",
                 "--msg-level=all=warn",
             ]
@@ -12142,6 +12314,9 @@ class MainFrame(wx.Frame):
             (self.t("add_to_playlist"), lambda: self.add_active_to_playlist(prefer_active=True)),
             (self.t("output_devices"), self.show_output_devices),
             (self.t("equalizer"), self.show_player_equalizer),
+            (self.t("chapters"), self.show_chapters),
+            (self.t("lyrics"), self.show_lyrics),
+            (self.t("comments"), self.show_comments),
             (self.t("edit_mode"), self.toggle_edit_mode),
             (self.t("copy_link"), self.copy_active_url),
             (self.t("copy_stream_url"), self.copy_direct_stream_url),
@@ -12571,6 +12746,484 @@ class MainFrame(wx.Frame):
         details = self.build_video_details_text()
         self.copy_plain_text_to_clipboard(details)
         self.announce_player(self.t("details_copied"))
+
+    def ensure_player_for_auxiliary_view(self, callback) -> bool:
+        if self.in_player_screen:
+            return True
+        if self.player_is_active():
+            self.show_current_player_screen()
+            wx.CallAfter(callback)
+            return False
+        self.announce_player(self.t("no_player"))
+        return False
+
+    def current_chapters(self) -> list[dict]:
+        chapters = self.normalized_chapters((self.current_video_info or {}).get("chapters"))
+        if chapters:
+            return chapters
+        if self.player_kind == "mpv" and self.mpv_process_alive():
+            try:
+                chapters = self.normalized_chapters(self.mpv_get_property("chapter-list", timeout=0.5))
+            except Exception:
+                chapters = []
+        if chapters:
+            self.current_video_info["chapters"] = chapters
+            if self.current_video_item is not None:
+                self.current_video_item["chapters"] = chapters
+        return chapters
+
+    def chapter_line(self, chapter: dict, index: int) -> str:
+        title = str(chapter.get("title") or f"{self.t('chapters')} {index + 1}")
+        start = self.format_seconds(float(chapter.get("start_time") or 0.0))
+        end = chapter.get("end_time")
+        if end is not None:
+            return f"{index + 1}. {start} - {self.format_seconds(float(end))}. {title}"
+        return f"{index + 1}. {start}. {title}"
+
+    def show_chapters(self) -> None:
+        if not self.ensure_player_for_auxiliary_view(self.show_chapters):
+            return
+        chapters = self.current_chapters()
+        if not chapters:
+            self.announce_player(self.t("no_chapters_available"))
+            return
+        dialog = wx.Dialog(self, title=self.t("chapters"), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        dialog.SetName(self.t("chapters"))
+        dialog.SetMinSize((560, 420))
+        outer = wx.BoxSizer(wx.VERTICAL)
+        chapter_list = wx.ListBox(dialog, choices=[self.chapter_line(chapter, index) for index, chapter in enumerate(chapters)])
+        chapter_list.SetName(self.t("chapter_list"))
+        chapter_list.SetSelection(max(0, self.current_chapter_index(chapters)))
+        outer.Add(chapter_list, 1, wx.EXPAND | wx.ALL, 8)
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        play_button = wx.Button(dialog, label=self.t("play"))
+        close_button = wx.Button(dialog, wx.ID_CANCEL, label=self.t("back"))
+        row.Add(play_button, 0, wx.RIGHT, 8)
+        row.Add(close_button, 0)
+        outer.Add(row, 0, wx.ALIGN_RIGHT | wx.ALL, 8)
+        dialog.SetSizer(outer)
+
+        def selected_index() -> int:
+            try:
+                index = chapter_list.GetSelection()
+            except RuntimeError:
+                return -1
+            return index if 0 <= index < len(chapters) else -1
+
+        def play_selected(_event=None) -> None:
+            index = selected_index()
+            if index >= 0:
+                self.seek_to_chapter(chapters[index])
+
+        def on_chapter_key(event: wx.KeyEvent) -> None:
+            if self.shortcut_matches(event, "open_selected"):
+                play_selected()
+                return
+            if self.shortcut_matches(event, "player_back"):
+                dialog.EndModal(wx.ID_CANCEL)
+                return
+            event.Skip()
+
+        chapter_list.Bind(wx.EVT_LISTBOX_DCLICK, play_selected)
+        chapter_list.Bind(wx.EVT_KEY_DOWN, on_chapter_key)
+        play_button.Bind(wx.EVT_BUTTON, play_selected)
+        dialog.ShowModal()
+        dialog.Destroy()
+        self.focus_player_target_later("player")
+
+    def current_chapter_index(self, chapters: list[dict] | None = None) -> int:
+        chapters = chapters or self.current_chapters()
+        if not chapters:
+            return -1
+        try:
+            position = float(self.mpv_get_property("time-pos", timeout=0.35) or 0.0)
+        except Exception:
+            position = 0.0
+        selected = 0
+        for index, chapter in enumerate(chapters):
+            if float(chapter.get("start_time") or 0.0) <= position + 0.1:
+                selected = index
+            else:
+                break
+        return selected
+
+    def seek_to_chapter(self, chapter: dict) -> None:
+        if self.player_kind != "mpv" or not self.mpv_process_alive():
+            self.announce_player(self.t("no_player"))
+            return
+        try:
+            start = max(0.0, float(chapter.get("start_time") or 0.0))
+            self.cancel_clip_preview()
+            self.mpv_send(["seek", start, "absolute+exact"], timeout=0.8)
+            title = str(chapter.get("title") or self.t("chapters"))
+            self.announce_player(self.t("chapter_selected", title=title, time=self.format_seconds(start)))
+        except Exception:
+            self.announce_player(self.t("timing_unavailable"))
+
+    def seek_relative_chapter(self, delta: int) -> None:
+        chapters = self.current_chapters()
+        if not chapters:
+            self.announce_player(self.t("no_chapters_available"))
+            return
+        try:
+            position = float(self.mpv_get_property("time-pos", timeout=0.35) or 0.0)
+        except Exception:
+            position = 0.0
+        target_index = -1
+        if delta > 0:
+            for index, chapter in enumerate(chapters):
+                if float(chapter.get("start_time") or 0.0) > position + 0.75:
+                    target_index = index
+                    break
+        else:
+            previous = [index for index, chapter in enumerate(chapters) if float(chapter.get("start_time") or 0.0) < position - 1.5]
+            target_index = previous[-1] if previous else 0
+        if target_index < 0 or target_index >= len(chapters):
+            self.announce_player(self.t("no_chapters_available"))
+            return
+        self.seek_to_chapter(chapters[target_index])
+
+    def show_lyrics(self) -> None:
+        if not self.ensure_player_for_auxiliary_view(self.show_lyrics):
+            return
+        dialog = wx.Dialog(self, title=self.t("lyrics"), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        dialog.SetName(self.t("lyrics"))
+        dialog.SetMinSize((620, 460))
+        outer = wx.BoxSizer(wx.VERTICAL)
+        lyrics_text = wx.TextCtrl(dialog, value=self.t("lyrics_fetching"), style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2 | wx.VSCROLL | wx.HSCROLL | wx.WANTS_CHARS)
+        lyrics_text.SetName(self.t("lyrics"))
+        outer.Add(lyrics_text, 1, wx.EXPAND | wx.ALL, 8)
+        close_button = wx.Button(dialog, wx.ID_CANCEL, label=self.t("back"))
+        outer.Add(close_button, 0, wx.ALIGN_RIGHT | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        dialog.SetSizer(outer)
+
+        def set_lyrics_text(text: str, source: str = "") -> None:
+            try:
+                value = text.strip() if text and text.strip() else self.t("no_lyrics_available")
+                if source and value != self.t("no_lyrics_available"):
+                    value = f"{source}\n\n{value}"
+                lyrics_text.SetValue(value)
+                lyrics_text.SetInsertionPoint(0)
+                lyrics_text.SetFocus()
+                self.announce_player(self.t("lyrics") if text else self.t("no_lyrics_available"))
+            except RuntimeError:
+                pass
+
+        local_lyrics = self.local_lyrics_text()
+        if local_lyrics:
+            wx.CallAfter(set_lyrics_text, local_lyrics, self.t("lyrics_source_local"))
+        elif bool(getattr(self.settings, "enable_online_lyrics", True)):
+            threading.Thread(target=self.fetch_lyrics_worker, args=(set_lyrics_text,), daemon=True).start()
+        else:
+            wx.CallAfter(set_lyrics_text, "", "")
+        dialog.ShowModal()
+        dialog.Destroy()
+        self.focus_player_target_later("player")
+
+    def local_lyrics_text(self) -> str:
+        item = self.current_video_item or self.current_video_info or {}
+        path = self.local_media_path_from_input(str(item.get("path") or item.get("url") or item.get("webpage_url") or ""))
+        if not path:
+            return ""
+        candidates = [
+            path.with_suffix(".lrc"),
+            path.with_suffix(".txt"),
+            path.with_name(f"{path.stem}.lyrics.txt"),
+        ]
+        for candidate in candidates:
+            try:
+                if candidate.exists() and candidate.is_file() and candidate.stat().st_size <= 512_000:
+                    return candidate.read_text(encoding="utf-8", errors="replace").strip()
+            except OSError:
+                continue
+        return ""
+
+    def lyrics_search_terms(self) -> tuple[str, str, str, int]:
+        info = self.current_video_info or self.current_video_item or {}
+        title = str(info.get("track") or info.get("title") or "").strip()
+        artist = str(info.get("artist") or info.get("creator") or "").strip()
+        album = str(info.get("album") or "").strip()
+        if not artist and " - " in title:
+            left, right = title.split(" - ", 1)
+            artist = left.strip()
+            title = right.strip()
+        title = re.sub(r"\s*[\(\[]\s*(official\s+)?(music\s+video|video|lyrics?|lyric\s+video|audio|visualizer|remaster(?:ed)?)\s*[\)\]]\s*", " ", title, flags=re.IGNORECASE)
+        title = re.sub(r"\s+", " ", title).strip(" -")
+        if not artist:
+            artist = str(info.get("channel") or "").strip()
+        duration = self.to_int(str(info.get("duration_seconds") or 0), 0, 0)
+        return artist, title, album, duration
+
+    def fetch_lyrics_worker(self, callback) -> None:
+        text = ""
+        try:
+            text = self.fetch_online_lyrics()
+        except Exception:
+            text = ""
+        wx.CallAfter(callback, text, self.t("lyrics_source_online") if text else "")
+
+    def fetch_online_lyrics(self) -> str:
+        artist, title, album, duration = self.lyrics_search_terms()
+        if not title:
+            return ""
+        params = {"track_name": title}
+        if artist:
+            params["artist_name"] = artist
+        if album:
+            params["album_name"] = album
+        if duration:
+            params["duration"] = str(duration)
+        request = Request(f"{LRCLIB_API_GET_URL}?{urlencode(params)}", headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+        with self.open_url(request, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+        if not isinstance(payload, dict):
+            return ""
+        return str(payload.get("syncedLyrics") or payload.get("plainLyrics") or "").strip()
+
+    def show_comments(self) -> None:
+        if not self.ensure_player_for_auxiliary_view(self.show_comments):
+            return
+        video_id = self.extract_youtube_video_id(self.current_video_info or self.current_video_item)
+        if not video_id:
+            self.announce_player(self.t("comments_disabled"))
+            return
+        dialog = wx.Dialog(self, title=self.t("comments"), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        dialog.SetName(self.t("comments"))
+        dialog.SetMinSize((680, 500))
+        outer = wx.BoxSizer(wx.VERTICAL)
+        comments_list = wx.ListBox(dialog, choices=[self.t("comments_loading")])
+        comments_list.SetName(self.t("comments"))
+        comments_list.SetSelection(0)
+        outer.Add(comments_list, 1, wx.EXPAND | wx.ALL, 8)
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        open_button = wx.Button(dialog, label=self.t("open_comment"))
+        more_button = wx.Button(dialog, label=self.t("load_more_comments"))
+        close_button = wx.Button(dialog, wx.ID_CANCEL, label=self.t("back"))
+        row.Add(open_button, 0, wx.RIGHT, 8)
+        row.Add(more_button, 0, wx.RIGHT, 8)
+        row.Add(close_button, 0)
+        outer.Add(row, 0, wx.ALIGN_RIGHT | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        dialog.SetSizer(outer)
+        state: dict[str, object] = {"comments": [], "next_page": "", "loading": False, "loaded_once": False}
+
+        def refresh_comments(selection: int = 0) -> None:
+            comments = list(state.get("comments") or [])
+            labels = [self.comment_line(comment, index) for index, comment in enumerate(comments)] or [self.t("comments_disabled")]
+            comments_list.Set(labels)
+            comments_list.SetSelection(min(max(0, selection), len(labels) - 1))
+            more_button.Enable(bool(state.get("next_page")) and not bool(state.get("loading")))
+
+        def finish_load(new_comments: list[dict], next_page: str, error: str = "") -> None:
+            try:
+                state["loading"] = False
+                if error:
+                    comments_list.Set([self.t("comments_failed", error=error)])
+                    comments_list.SetSelection(0)
+                    more_button.Enable(False)
+                    self.announce_player(self.t("comments_failed", error=error))
+                    return
+                existing = list(state.get("comments") or [])
+                state["comments"] = existing + list(new_comments or [])
+                state["next_page"] = next_page
+                state["loaded_once"] = True
+                refresh_comments(len(existing) if existing else 0)
+                self.announce_player(self.t("comments_loaded", count=len(state.get("comments") or [])) if state.get("comments") else self.t("comments_disabled"))
+            except RuntimeError:
+                pass
+
+        def load_more(_event=None) -> None:
+            if state.get("loading"):
+                return
+            if (state.get("comments") or state.get("loaded_once")) and not state.get("next_page"):
+                self.announce_player(self.t("no_more_comments"))
+                return
+            state["loading"] = True
+            more_button.Enable(False)
+            if not state.get("comments"):
+                comments_list.Set([self.t("comments_loading")])
+                comments_list.SetSelection(0)
+            page_token = str(state.get("next_page") or "")
+            threading.Thread(target=self.fetch_comments_worker, args=(video_id, page_token, finish_load), daemon=True).start()
+
+        def open_selected_comment(_event=None) -> None:
+            comments = list(state.get("comments") or [])
+            try:
+                index = comments_list.GetSelection()
+            except RuntimeError:
+                index = -1
+            if 0 <= index < len(comments):
+                self.show_comment_details(comments[index])
+
+        def on_comments_key(event: wx.KeyEvent) -> None:
+            if self.shortcut_matches(event, "open_selected"):
+                open_selected_comment()
+                return
+            if self.shortcut_matches(event, "player_back"):
+                dialog.EndModal(wx.ID_CANCEL)
+                return
+            event.Skip()
+
+        comments_list.Bind(wx.EVT_LISTBOX_DCLICK, open_selected_comment)
+        comments_list.Bind(wx.EVT_KEY_DOWN, on_comments_key)
+        open_button.Bind(wx.EVT_BUTTON, open_selected_comment)
+        more_button.Bind(wx.EVT_BUTTON, load_more)
+        load_more()
+        dialog.ShowModal()
+        dialog.Destroy()
+        self.focus_player_target_later("player")
+
+    def fetch_comments_worker(self, video_id: str, page_token: str, callback) -> None:
+        try:
+            if self.youtube_data_api_key():
+                comments, next_page = self.fetch_youtube_comments(video_id, page_token)
+            else:
+                comments, next_page = self.fetch_ytdlp_comments(video_id), ""
+            wx.CallAfter(callback, comments, next_page, "")
+        except Exception as exc:
+            wx.CallAfter(callback, [], "", self.friendly_error(exc))
+
+    def fetch_youtube_comments(self, video_id: str, page_token: str = "") -> tuple[list[dict], str]:
+        params = {
+            "part": "snippet,replies",
+            "videoId": video_id,
+            "maxResults": "20",
+            "order": "relevance",
+            "textFormat": "plainText",
+            "key": self.youtube_data_api_key(),
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        payload = self.youtube_api_json(YOUTUBE_API_COMMENT_THREADS_URL, params)
+        comments = [self.normalize_youtube_comment_thread(item) for item in list(payload.get("items") or []) if isinstance(item, dict)]
+        comments = [comment for comment in comments if comment.get("text")]
+        return comments, str(payload.get("nextPageToken") or "")
+
+    def fetch_ytdlp_comments(self, video_id: str) -> list[dict]:
+        item = self.current_video_info or self.current_video_item or {}
+        url = str(item.get("url") or item.get("webpage_url") or "").strip() or f"https://www.youtube.com/watch?v={video_id}"
+        options = {
+            "quiet": True,
+            "skip_download": True,
+            "noplaylist": True,
+            "getcomments": True,
+            "extractor_args": {"youtube": {"max_comments": ["20"]}},
+        }
+        info = self.ydl_extract_info(url, options, download=False)
+        comments: list[dict] = []
+        for raw in list((info or {}).get("comments") or [])[:20]:
+            if not isinstance(raw, dict):
+                continue
+            text = self.strip_html(str(raw.get("text") or ""))
+            if not text:
+                continue
+            comments.append(
+                {
+                    "id": str(raw.get("id") or ""),
+                    "author": str(raw.get("author") or raw.get("author_id") or "").strip(),
+                    "text": text,
+                    "published": self.format_history_time(raw.get("timestamp")) if raw.get("timestamp") else "",
+                    "likes": raw.get("like_count", 0),
+                    "reply_count": 0,
+                    "replies": [],
+                }
+            )
+        return comments
+
+    def youtube_api_json(self, url: str, params: dict, timeout: int = 25) -> dict:
+        request = Request(f"{url}?{urlencode(params)}", headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+        with self.open_url(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+        if isinstance(payload, dict) and payload.get("error"):
+            error = payload.get("error") or {}
+            reason = ""
+            try:
+                reason = str(((error.get("errors") or [{}])[0] or {}).get("reason") or "")
+            except Exception:
+                reason = ""
+            if reason == "commentsDisabled":
+                raise RuntimeError(self.t("comments_disabled"))
+            message = error.get("message") if isinstance(error, dict) else str(error)
+            raise RuntimeError(message or self.t("comments_failed", error=""))
+        return payload if isinstance(payload, dict) else {}
+
+    def normalize_comment_snippet(self, snippet: dict) -> dict:
+        text = self.strip_html(str(snippet.get("textOriginal") or snippet.get("textDisplay") or ""))
+        try:
+            text = import_module("html").unescape(text)
+        except Exception:
+            pass
+        return {
+            "author": str(snippet.get("authorDisplayName") or "").strip(),
+            "text": text.strip(),
+            "published": str(snippet.get("publishedAt") or "").strip(),
+            "updated": str(snippet.get("updatedAt") or "").strip(),
+            "likes": snippet.get("likeCount", 0),
+        }
+
+    def normalize_youtube_comment_thread(self, item: dict) -> dict:
+        snippet = item.get("snippet") or {}
+        top = snippet.get("topLevelComment") or {}
+        top_snippet = top.get("snippet") or {}
+        comment = self.normalize_comment_snippet(top_snippet)
+        comment["id"] = str(top.get("id") or item.get("id") or "")
+        comment["reply_count"] = self.to_int(str(snippet.get("totalReplyCount") or 0), 0, 0)
+        replies = []
+        for reply in list(((item.get("replies") or {}).get("comments") or [])):
+            if isinstance(reply, dict):
+                reply_data = self.normalize_comment_snippet(reply.get("snippet") or {})
+                reply_data["id"] = str(reply.get("id") or "")
+                if reply_data.get("text"):
+                    replies.append(reply_data)
+        comment["replies"] = replies
+        return comment
+
+    def comment_line(self, comment: dict, index: int) -> str:
+        text = " ".join(str(comment.get("text") or "").split())
+        if len(text) > 140:
+            text = text[:137].rstrip() + "..."
+        author = str(comment.get("author") or self.t("comments"))
+        likes = self.format_count(comment.get("likes"))
+        replies = self.to_int(str(comment.get("reply_count") or 0), 0, 0)
+        parts = [f"{index + 1}. {author}", text]
+        if likes:
+            parts.append(f"{likes} likes")
+        if replies:
+            parts.append(f"{replies} replies")
+        return " | ".join(part for part in parts if part)
+
+    def show_comment_details(self, comment: dict) -> None:
+        details = self.comment_details_text(comment)
+        dialog = wx.Dialog(self, title=self.t("comment_details"), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        dialog.SetName(self.t("comment_details"))
+        dialog.SetMinSize((620, 420))
+        outer = wx.BoxSizer(wx.VERTICAL)
+        text = wx.TextCtrl(dialog, value=details, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2 | wx.VSCROLL | wx.HSCROLL | wx.WANTS_CHARS)
+        text.SetName(self.t("comment_details"))
+        outer.Add(text, 1, wx.EXPAND | wx.ALL, 8)
+        close_button = wx.Button(dialog, wx.ID_CANCEL, label=self.t("back"))
+        outer.Add(close_button, 0, wx.ALIGN_RIGHT | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        dialog.SetSizer(outer)
+        wx.CallAfter(text.SetFocus)
+        dialog.ShowModal()
+        dialog.Destroy()
+
+    def comment_details_text(self, comment: dict) -> str:
+        lines = [
+            str(comment.get("author") or ""),
+            str(comment.get("published") or ""),
+            f"{self.format_count(comment.get('likes'))} likes" if comment.get("likes") not in (None, "") else "",
+            "",
+            str(comment.get("text") or ""),
+        ]
+        replies = list(comment.get("replies") or [])
+        if replies:
+            lines.extend(["", self.t("comment_replies")])
+            for reply in replies:
+                lines.extend(["", str(reply.get("author") or ""), str(reply.get("text") or "")])
+        reply_count = self.to_int(str(comment.get("reply_count") or 0), 0, 0)
+        if reply_count and reply_count > len(replies):
+            lines.extend(["", f"{reply_count - len(replies)} more replies are available on YouTube."])
+        return "\n".join(line for line in lines if line is not None)
 
     @staticmethod
     def show_sizer_items(sizer: wx.Sizer, show: bool) -> None:
@@ -14451,6 +15104,18 @@ class MainFrame(wx.Frame):
         action = str(getattr(self.settings, "direct_link_enter_action", DIRECT_LINK_ENTER_PLAY) or DIRECT_LINK_ENTER_PLAY)
         return self.normalize_direct_link_enter_action(action)
 
+    def normalized_replaygain_mode(self, value: str | None = None) -> str:
+        mode = str(value if value is not None else getattr(self.settings, "replaygain_mode", REPLAYGAIN_MODE_OFF) or REPLAYGAIN_MODE_OFF).strip().lower()
+        aliases = {
+            "off": REPLAYGAIN_MODE_OFF,
+            "none": REPLAYGAIN_MODE_OFF,
+            "disabled": REPLAYGAIN_MODE_OFF,
+            "track": REPLAYGAIN_MODE_TRACK,
+            "song": REPLAYGAIN_MODE_TRACK,
+            "album": REPLAYGAIN_MODE_ALBUM,
+        }
+        return aliases.get(mode, mode if mode in REPLAYGAIN_MODE_OPTIONS else REPLAYGAIN_MODE_OFF)
+
     def normalized_audio_output_device(self) -> str:
         device = str(getattr(self.settings, "audio_output_device", "auto") or "auto").strip()
         return device or "auto"
@@ -14487,6 +15152,13 @@ class MainFrame(wx.Frame):
             self.t("direct_link_enter_audio"),
             self.t("direct_link_enter_video"),
             self.t("direct_link_enter_stream"),
+        ]
+
+    def replaygain_mode_labels(self) -> list[str]:
+        return [
+            self.t("replaygain_off"),
+            self.t("replaygain_track"),
+            self.t("replaygain_album"),
         ]
 
     def video_format_labels(self) -> list[str]:
@@ -15297,6 +15969,21 @@ class MainFrame(wx.Frame):
         if self.shortcut_matches(event, "player_equalizer"):
             self.show_player_equalizer()
             return True
+        if self.shortcut_matches(event, "player_chapters"):
+            self.show_chapters()
+            return True
+        if self.shortcut_matches(event, "player_lyrics"):
+            self.show_lyrics()
+            return True
+        if self.shortcut_matches(event, "player_comments"):
+            self.show_comments()
+            return True
+        if self.shortcut_matches(event, "player_previous_chapter"):
+            self.seek_relative_chapter(-1)
+            return True
+        if self.shortcut_matches(event, "player_next_chapter"):
+            self.seek_relative_chapter(1)
+            return True
         if self.shortcut_matches(event, "player_edit_mode"):
             self.toggle_edit_mode()
             return True
@@ -15581,6 +16268,9 @@ class MainFrame(wx.Frame):
             (self.menu_label_with_shortcut("copy_url", "copy_link"), self.copy_current_player_url),
             (self.t("output_devices"), self.show_output_devices),
             (self.t("equalizer"), self.show_player_equalizer),
+            (self.menu_label_with_shortcut("chapters", "player_chapters"), self.show_chapters),
+            (self.menu_label_with_shortcut("lyrics", "player_lyrics"), self.show_lyrics),
+            (self.menu_label_with_shortcut("comments", "player_comments"), self.show_comments),
             (self.t("close_player"), self.close_current_player),
         ])
         if self.item_has_openable_youtube_channel(item):
@@ -16850,6 +17540,12 @@ class MainFrame(wx.Frame):
             self.settings.stream_url_cache_minutes = self.normalized_stream_url_cache_minutes(self.selected_choice_value("stream_url_cache_minutes"))
         if "prefetch_next_stream_url" in c:
             self.settings.prefetch_next_stream_url = c["prefetch_next_stream_url"].GetValue()
+        if "gapless_playback" in c:
+            self.settings.gapless_playback = c["gapless_playback"].GetValue()
+        if "replaygain_mode" in c:
+            self.settings.replaygain_mode = self.normalized_replaygain_mode(self.selected_choice_value("replaygain_mode"))
+        if "enable_online_lyrics" in c:
+            self.settings.enable_online_lyrics = c["enable_online_lyrics"].GetValue()
         if "cache_folder" in c:
             self.settings.cache_folder = c["cache_folder"].GetValue().strip() or str(DEFAULT_CACHE_DIR)
         if "cache_size_mb" in c:
@@ -18128,6 +18824,7 @@ class MainFrame(wx.Frame):
                 merged["pitch_mode"] = self.normalize_pitch_mode_value(str(merged.get("pitch_mode") or ""))
                 merged["speed_audio_mode"] = self.normalize_speed_audio_mode_value(str(merged.get("speed_audio_mode") or ""))
                 merged["direct_link_enter_action"] = self.normalize_direct_link_enter_action(str(merged.get("direct_link_enter_action") or ""))
+                merged["replaygain_mode"] = self.normalized_replaygain_mode(str(merged.get("replaygain_mode") or ""))
                 merged["video_format"] = self.normalize_video_format_value(str(merged.get("video_format") or ""))
                 merged["global_equalizer_gains"] = self.normalized_equalizer_gains(merged.get("global_equalizer_gains"))
                 merged["global_equalizer_preset"] = self.normalized_equalizer_preset(str(merged.get("global_equalizer_preset") or EQ_PRESET_FLAT))
