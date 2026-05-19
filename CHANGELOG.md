@@ -1,5 +1,10 @@
 # Changelog
 
+## What's new in version 0.8.71
+
+- fixed tray/session restore after the 0.8.70 single-instance guard: launching ApricotPlayer again now visibly brings the existing hidden instance back instead of silently exiting.
+- made activation restore more direct inside the running app and added a Windows-level restore fallback from the second launch process.
+
 ## What's new in version 0.8.70
 
 - hardened startup single-instance handling with an early Windows mutex so rapid repeated launches cannot open multiple ApricotPlayer windows.

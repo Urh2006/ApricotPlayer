@@ -219,8 +219,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.70"
-APP_VERSION_LABEL = "0.8.70"
+APP_VERSION = "0.8.71"
+APP_VERSION_LABEL = "0.8.71"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -6034,6 +6034,10 @@ class MainFrame(wx.Frame):
     def restore_from_tray(self) -> None:
         try:
             self.RequestUserAttention(wx.USER_ATTENTION_INFO)
+        except Exception:
+            pass
+        try:
+            self.activate_window()
         except Exception:
             pass
         self.activate_window_later((0, 75, 250, 700, 1400))
@@ -18490,6 +18494,48 @@ def request_existing_instance_activation(action: str = "show", **extra_payload) 
         pass
 
 
+def activate_existing_instance_window() -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        user32 = ctypes.windll.user32
+        user32.GetWindowTextLengthW.argtypes = [ctypes.c_void_p]
+        user32.GetWindowTextLengthW.restype = ctypes.c_int
+        user32.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
+        user32.GetWindowTextW.restype = ctypes.c_int
+        target_hwnd = ctypes.c_void_p()
+
+        enum_proc_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        user32.EnumWindows.argtypes = [enum_proc_type, ctypes.c_void_p]
+        user32.EnumWindows.restype = ctypes.c_int
+
+        def enum_proc(hwnd, _lparam):
+            nonlocal target_hwnd
+            title_length = user32.GetWindowTextLengthW(hwnd)
+            if title_length <= 0:
+                return True
+            title_buffer = ctypes.create_unicode_buffer(title_length + 1)
+            user32.GetWindowTextW(hwnd, title_buffer, title_length + 1)
+            if str(title_buffer.value).startswith(APP_NAME):
+                target_hwnd = ctypes.c_void_p(hwnd)
+                return False
+            return True
+
+        callback = enum_proc_type(enum_proc)
+        user32.EnumWindows(callback, None)
+        hwnd = target_hwnd.value
+        if not hwnd:
+            return False
+        user32.ShowWindow(ctypes.c_void_p(hwnd), 9)
+        user32.ShowWindow(ctypes.c_void_p(hwnd), 5)
+        user32.BringWindowToTop(ctypes.c_void_p(hwnd))
+        user32.SetForegroundWindow(ctypes.c_void_p(hwnd))
+        user32.SetActiveWindow(ctypes.c_void_p(hwnd))
+        return True
+    except Exception:
+        return False
+
+
 def create_startup_mutex(instance_name: str) -> tuple[object | None, bool]:
     if os.name != "nt":
         return None, False
@@ -18524,10 +18570,12 @@ def handle_already_running_startup(startup_media_path: str, tray_start: bool) ->
         return False
     if startup_media_path:
         request_existing_instance_activation("open_file", path=startup_media_path)
+        activate_existing_instance_window()
     elif tray_start:
         return False
     elif startup_close_to_tray_enabled():
         request_existing_instance_activation("show")
+        activate_existing_instance_window()
     else:
         wx.MessageBox(startup_text("already_open"), APP_NAME, wx.OK | wx.ICON_INFORMATION)
     return False
