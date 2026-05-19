@@ -1,5 +1,10 @@
 # Changelog
 
+## What's new in version 0.8.72
+
+- fixed Bass boost changing or losing depth when Volume boost is turned on by replacing the EQ filter atomically: the new Bass boost/EQ chain is added before the old one is removed.
+- delayed the EQ refresh until after mpv accepts the Volume boost volume range, reducing filter races during playback.
+
 ## What's new in version 0.8.71
 
 - fixed tray/session restore after the 0.8.70 single-instance guard: launching ApricotPlayer again now visibly brings the existing hidden instance back instead of silently exiting.

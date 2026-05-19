@@ -219,8 +219,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.8.71"
-APP_VERSION_LABEL = "0.8.71"
+APP_VERSION = "0.8.72"
+APP_VERSION_LABEL = "0.8.72"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -304,6 +304,8 @@ TRENDING_PUBLIC_URLS: dict[str, list[str]] = {
 }
 EQ_FILTER_LABEL = "apricot_eq"
 EQ_FILTER_REF = f"@{EQ_FILTER_LABEL}"
+EQ_FILTER_ALT_LABEL = "apricot_eq_next"
+EQ_FILTER_ALT_REF = f"@{EQ_FILTER_ALT_LABEL}"
 EQ_LIMITER_FILTER = "alimiter=limit=0.95:attack=5:release=80"
 EQ_APPLY_DELAY_MS = 160
 EQ_CLIPPING_HEADROOM_LIMIT_DB = 12.0
@@ -4080,6 +4082,7 @@ class MainFrame(wx.Frame):
         self.equalizer_apply_timer: wx.CallLater | None = None
         self.bass_boost_enabled = False
         self.equalizer_filter_active = False
+        self.equalizer_filter_ref = EQ_FILTER_REF
         self.volume_change_lock = threading.Lock()
         self.volume_change_pending_target: float | None = None
         self.volume_change_timer: wx.CallLater | None = None
@@ -11447,6 +11450,7 @@ class MainFrame(wx.Frame):
             self.shuffle_current = False
         self.edit_mode_enabled = False
         self.equalizer_filter_active = False
+        self.equalizer_filter_ref = EQ_FILTER_REF
         self.clip_start_marker = None
         self.clip_end_marker = None
         self.current_stream_headers = {}
@@ -12034,6 +12038,7 @@ class MainFrame(wx.Frame):
             self.volume_boost_enabled = boost_volume
             self.rubberband_pitch_filter_active = False
             self.equalizer_filter_active = False
+            self.equalizer_filter_ref = EQ_FILTER_REF
             self.current_video_info["speed"] = self.format_playback_rate(float(self.settings.player_speed))
             self.current_video_info["pitch"] = self.format_playback_rate(1.0)
             self.update_details_text()
@@ -12772,7 +12777,7 @@ class MainFrame(wx.Frame):
         return False
 
     @classmethod
-    def equalizer_filter(cls, gains: dict[str, float], protect_clipping: bool = False) -> str:
+    def equalizer_filter(cls, gains: dict[str, float], protect_clipping: bool = False, label: str = EQ_FILTER_LABEL) -> str:
         filters = []
         if protect_clipping:
             headroom = cls.equalizer_clipping_headroom_db(gains)
@@ -12784,7 +12789,7 @@ class MainFrame(wx.Frame):
                 filters.append(cls.equalizer_band_filter(band_id, gain))
         if protect_clipping and filters:
             filters.append(EQ_LIMITER_FILTER)
-        return f"{EQ_FILTER_REF}:lavfi=[{','.join(filters)}]"
+        return f"@{label}:lavfi=[{','.join(filters)}]"
 
     @staticmethod
     def equalizer_clipping_headroom_db(gains: dict[str, float]) -> float:
@@ -12819,25 +12824,42 @@ class MainFrame(wx.Frame):
         if self.player_kind != "mpv" or not self.mpv_process_alive():
             return
         enabled, gains = self.effective_equalizer_state()
-        try:
-            self.mpv_request(["af", "remove", EQ_FILTER_REF], timeout=0.8)
-        except Exception:
-            pass
-        self.equalizer_filter_active = False
         if not enabled or not any(abs(float(value)) >= 0.05 for value in gains.values()):
+            self.clear_equalizer_filters()
             return
+        current_ref = getattr(self, "equalizer_filter_ref", EQ_FILTER_REF) if self.equalizer_filter_active else ""
+        next_ref = EQ_FILTER_ALT_REF if current_ref == EQ_FILTER_REF else EQ_FILTER_REF
+        next_label = EQ_FILTER_ALT_LABEL if next_ref == EQ_FILTER_ALT_REF else EQ_FILTER_LABEL
         try:
+            self.mpv_request(["af", "remove", next_ref], timeout=0.8)
             response = self.mpv_request(
-                ["af", "add", self.equalizer_filter(gains, self.equalizer_clipping_protection_active(gains))],
+                ["af", "add", self.equalizer_filter(gains, self.equalizer_clipping_protection_active(gains), next_label)],
                 timeout=1.2,
             )
             if response.get("error") == "success":
+                if current_ref and current_ref != next_ref:
+                    self.mpv_request(["af", "remove", current_ref], timeout=0.8)
+                stale_ref = EQ_FILTER_ALT_REF if next_ref == EQ_FILTER_REF else EQ_FILTER_REF
+                if stale_ref != current_ref:
+                    self.mpv_request(["af", "remove", stale_ref], timeout=0.8)
+                self.equalizer_filter_ref = next_ref
                 self.equalizer_filter_active = True
                 return
         except Exception:
+            pass
+        if not current_ref:
             self.equalizer_filter_active = False
         if retries > 0:
             wx.CallLater(180, self.apply_equalizer_to_player, retries - 1)
+
+    def clear_equalizer_filters(self) -> None:
+        for filter_ref in (EQ_FILTER_REF, EQ_FILTER_ALT_REF):
+            try:
+                self.mpv_request(["af", "remove", filter_ref], timeout=0.8)
+            except Exception:
+                pass
+        self.equalizer_filter_ref = EQ_FILTER_REF
+        self.equalizer_filter_active = False
 
     def show_player_equalizer(self) -> None:
         if not self.player_is_active():
@@ -14307,17 +14329,16 @@ class MainFrame(wx.Frame):
         self.volume_boost_enabled = not self.volume_boost_enabled
         if self.volume_boost_enabled:
             threading.Thread(target=self.enable_volume_boost_worker, daemon=True).start()
-            self.schedule_equalizer_apply(30)
             self.announce_player(self.t("volume_boost_on"))
         else:
             threading.Thread(target=self.disable_volume_boost_worker, daemon=True).start()
-            self.schedule_equalizer_apply(30)
 
     def enable_volume_boost_worker(self) -> None:
         try:
             self.mpv_set_property("volume-max", BOOSTED_VOLUME_MAX)
         except Exception:
             pass
+        wx.CallAfter(self.schedule_equalizer_apply, 40)
 
     def disable_volume_boost_worker(self) -> None:
         try:
@@ -14330,6 +14351,7 @@ class MainFrame(wx.Frame):
             self.mpv_set_property("volume-max", NORMAL_VOLUME_MAX)
         except Exception:
             pass
+        wx.CallAfter(self.schedule_equalizer_apply, 40)
         wx.CallAfter(self.announce_player, self.t("volume_boost_off"))
 
     @staticmethod
@@ -15008,6 +15030,7 @@ class MainFrame(wx.Frame):
         self.player_paused = False
         self.rubberband_pitch_filter_active = False
         self.equalizer_filter_active = False
+        self.equalizer_filter_ref = EQ_FILTER_REF
         self.current_stream_url = ""
         self.current_stream_headers = {}
         self.current_audio_device = ""
