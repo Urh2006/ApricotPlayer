@@ -219,8 +219,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.9"
-APP_VERSION_LABEL = "0.9"
+APP_VERSION = "0.9.1"
+APP_VERSION_LABEL = "0.9.1"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -287,6 +287,7 @@ YOUTUBE_API_VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
 YOUTUBE_API_SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 YOUTUBE_API_COMMENT_THREADS_URL = "https://www.googleapis.com/youtube/v3/commentThreads"
 YOUTUBE_API_COMMENTS_URL = "https://www.googleapis.com/youtube/v3/comments"
+YOUTUBE_API_CREDENTIALS_URL = "https://console.cloud.google.com/apis/credentials"
 LRCLIB_API_GET_URL = "https://lrclib.net/api/get"
 TRENDING_CATEGORY_IDS: dict[str, str] = {
     "all": "0",
@@ -3868,6 +3869,41 @@ for language_code in LANGUAGE_CODES:
     TEXT.setdefault(language_code, {}).update(RELEASE_090_TRANSLATION_UPDATES.get(language_code, RELEASE_090_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
 for language_code in LANGUAGE_CODES:
     for key, value in RELEASE_090_TRANSLATION_UPDATES["en"].items():
+        TEXT.setdefault(language_code, {}).setdefault(key, value)
+
+
+RELEASE_091_TRANSLATION_UPDATES = {
+    "sl": {
+        "youtube_data_api_key": "YouTube Data API key za uradne trende in komentarje",
+        "comments_need_api_key": "YouTube Data API key ni obvezen. Brez njega ApricotPlayer poskusi naloziti komentarje prek yt-dlp.",
+        "comments_source_api": "YouTube Data API",
+        "comments_source_ytdlp": "yt-dlp",
+        "comments_loaded_from_source": "Nalozenih {count} komentarjev prek {source}.",
+        "comment_likes": "{count} likes",
+        "comment_replies_count": "{count} replies",
+        "comment_more_replies": "{count} more replies are available on YouTube.",
+        "obtain_youtube_api_key": "Obtain YouTube API key",
+        "youtube_api_key_page_opened": "Odprta je stran Google Cloud Credentials za ustvarjanje API keyja.",
+        "youtube_api_key_page_open_failed": "Strani za YouTube API key ni bilo mogoce odpreti: {error}",
+    },
+    "en": {
+        "youtube_data_api_key": "YouTube Data API key for official trending and comments",
+        "comments_need_api_key": "A YouTube Data API key is optional. Without one, ApricotPlayer tries to load comments through yt-dlp.",
+        "comments_source_api": "YouTube Data API",
+        "comments_source_ytdlp": "yt-dlp",
+        "comments_loaded_from_source": "Loaded {count} comments from {source}.",
+        "comment_likes": "{count} likes",
+        "comment_replies_count": "{count} replies",
+        "comment_more_replies": "{count} more replies are available on YouTube.",
+        "obtain_youtube_api_key": "Obtain YouTube API key",
+        "youtube_api_key_page_opened": "Opened the Google Cloud Credentials page for creating an API key.",
+        "youtube_api_key_page_open_failed": "Could not open the YouTube API key page: {error}",
+    },
+}
+for language_code in LANGUAGE_CODES:
+    TEXT.setdefault(language_code, {}).update(RELEASE_091_TRANSLATION_UPDATES.get(language_code, RELEASE_091_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
+for language_code in LANGUAGE_CODES:
+    for key, value in RELEASE_091_TRANSLATION_UPDATES["en"].items():
         TEXT.setdefault(language_code, {}).setdefault(key, value)
 
 
@@ -10068,6 +10104,7 @@ class MainFrame(wx.Frame):
             button("export_browser_cookies", self.export_browser_cookies_from_settings)
             text("proxy", self.settings.proxy)
             text("youtube_data_api_key", getattr(self.settings, "youtube_data_api_key", ""))
+            button("obtain_youtube_api_key", self.open_youtube_api_key_page_from_settings)
             advanced_box = check("show_advanced_network_settings", bool(getattr(self.settings, "show_advanced_network_settings", False)))
             advanced_box.Bind(wx.EVT_CHECKBOX, self.on_advanced_network_toggle)
             if bool(getattr(self.settings, "show_advanced_network_settings", False)):
@@ -10270,6 +10307,24 @@ class MainFrame(wx.Frame):
             return query_id
         match = re.search(r"/(?:shorts|embed|live)/([\w-]+)", parsed.path or "")
         return match.group(1) if match else ""
+
+    def youtube_comments_source_url(self, item: dict | None, video_id: str) -> str:
+        item = item if isinstance(item, dict) else {}
+        for key in ("webpage_url", "original_url", "watch_url", "url"):
+            url = str(item.get(key) or "").strip()
+            if not url:
+                continue
+            try:
+                host = (urlparse(url).netloc or "").lower()
+            except Exception:
+                continue
+            if "googlevideo.com" in host or "youtubei.googleapis.com" in host:
+                continue
+            if "youtube.com" not in host and "youtu.be" not in host:
+                continue
+            if self.extract_youtube_video_id({"url": url}) == video_id:
+                return url
+        return f"https://www.youtube.com/watch?v={video_id}"
 
     def with_live_stream_display_fields(self, item: dict, source: dict | None = None) -> dict:
         source = source if isinstance(source, dict) else item
@@ -12767,6 +12822,8 @@ class MainFrame(wx.Frame):
             except Exception:
                 chapters = []
         if chapters:
+            if not isinstance(self.current_video_info, dict):
+                self.current_video_info = {}
             self.current_video_info["chapters"] = chapters
             if self.current_video_item is not None:
                 self.current_video_item["chapters"] = chapters
@@ -12913,7 +12970,7 @@ class MainFrame(wx.Frame):
         if local_lyrics:
             wx.CallAfter(set_lyrics_text, local_lyrics, self.t("lyrics_source_local"))
         elif bool(getattr(self.settings, "enable_online_lyrics", True)):
-            threading.Thread(target=self.fetch_lyrics_worker, args=(set_lyrics_text,), daemon=True).start()
+            threading.Thread(target=self.fetch_lyrics_worker, args=(self.lyrics_search_terms(), set_lyrics_text), daemon=True).start()
         else:
             wx.CallAfter(set_lyrics_text, "", "")
         dialog.ShowModal()
@@ -12954,16 +13011,16 @@ class MainFrame(wx.Frame):
         duration = self.to_int(str(info.get("duration_seconds") or 0), 0, 0)
         return artist, title, album, duration
 
-    def fetch_lyrics_worker(self, callback) -> None:
+    def fetch_lyrics_worker(self, search_terms: tuple[str, str, str, int], callback) -> None:
         text = ""
         try:
-            text = self.fetch_online_lyrics()
+            text = self.fetch_online_lyrics(search_terms)
         except Exception:
             text = ""
         wx.CallAfter(callback, text, self.t("lyrics_source_online") if text else "")
 
-    def fetch_online_lyrics(self) -> str:
-        artist, title, album, duration = self.lyrics_search_terms()
+    def fetch_online_lyrics(self, search_terms: tuple[str, str, str, int] | None = None) -> str:
+        artist, title, album, duration = search_terms or self.lyrics_search_terms()
         if not title:
             return ""
         params = {"track_name": title}
@@ -12983,10 +13040,12 @@ class MainFrame(wx.Frame):
     def show_comments(self) -> None:
         if not self.ensure_player_for_auxiliary_view(self.show_comments):
             return
-        video_id = self.extract_youtube_video_id(self.current_video_info or self.current_video_item)
+        source_item = self.current_video_info or self.current_video_item or {}
+        video_id = self.extract_youtube_video_id(source_item)
         if not video_id:
             self.announce_player(self.t("comments_disabled"))
             return
+        source_url = self.youtube_comments_source_url(source_item, video_id)
         dialog = wx.Dialog(self, title=self.t("comments"), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         dialog.SetName(self.t("comments"))
         dialog.SetMinSize((680, 500))
@@ -13004,16 +13063,19 @@ class MainFrame(wx.Frame):
         row.Add(close_button, 0)
         outer.Add(row, 0, wx.ALIGN_RIGHT | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         dialog.SetSizer(outer)
-        state: dict[str, object] = {"comments": [], "next_page": "", "loading": False, "loaded_once": False}
+        open_button.Enable(False)
+        more_button.Enable(False)
+        state: dict[str, object] = {"comments": [], "next_page": "", "loading": False, "loaded_once": False, "source_key": ""}
 
         def refresh_comments(selection: int = 0) -> None:
             comments = list(state.get("comments") or [])
             labels = [self.comment_line(comment, index) for index, comment in enumerate(comments)] or [self.t("comments_disabled")]
             comments_list.Set(labels)
             comments_list.SetSelection(min(max(0, selection), len(labels) - 1))
+            open_button.Enable(bool(comments))
             more_button.Enable(bool(state.get("next_page")) and not bool(state.get("loading")))
 
-        def finish_load(new_comments: list[dict], next_page: str, error: str = "") -> None:
+        def finish_load(new_comments: list[dict], next_page: str, error: str = "", source_key: str = "") -> None:
             try:
                 state["loading"] = False
                 if error:
@@ -13025,9 +13087,17 @@ class MainFrame(wx.Frame):
                 existing = list(state.get("comments") or [])
                 state["comments"] = existing + list(new_comments or [])
                 state["next_page"] = next_page
+                if source_key:
+                    state["source_key"] = source_key
                 state["loaded_once"] = True
                 refresh_comments(len(existing) if existing else 0)
-                self.announce_player(self.t("comments_loaded", count=len(state.get("comments") or [])) if state.get("comments") else self.t("comments_disabled"))
+                total = len(state.get("comments") or [])
+                if total:
+                    source = self.t(str(state.get("source_key") or ""))
+                    message = self.t("comments_loaded_from_source", count=total, source=source) if source else self.t("comments_loaded", count=total)
+                else:
+                    message = self.t("comments_disabled")
+                self.announce_player(message)
             except RuntimeError:
                 pass
 
@@ -13043,7 +13113,7 @@ class MainFrame(wx.Frame):
                 comments_list.Set([self.t("comments_loading")])
                 comments_list.SetSelection(0)
             page_token = str(state.get("next_page") or "")
-            threading.Thread(target=self.fetch_comments_worker, args=(video_id, page_token, finish_load), daemon=True).start()
+            threading.Thread(target=self.fetch_comments_worker, args=(video_id, page_token, source_url, finish_load), daemon=True).start()
 
         def open_selected_comment(_event=None) -> None:
             comments = list(state.get("comments") or [])
@@ -13072,15 +13142,25 @@ class MainFrame(wx.Frame):
         dialog.Destroy()
         self.focus_player_target_later("player")
 
-    def fetch_comments_worker(self, video_id: str, page_token: str, callback) -> None:
+    def fetch_comments_worker(self, video_id: str, page_token: str, source_url: str, callback) -> None:
+        api_error = ""
         try:
             if self.youtube_data_api_key():
-                comments, next_page = self.fetch_youtube_comments(video_id, page_token)
-            else:
-                comments, next_page = self.fetch_ytdlp_comments(video_id), ""
-            wx.CallAfter(callback, comments, next_page, "")
+                try:
+                    comments, next_page = self.fetch_youtube_comments(video_id, page_token)
+                    wx.CallAfter(callback, comments, next_page, "", "comments_source_api")
+                    return
+                except Exception as exc:
+                    api_error = self.friendly_error(exc)
+                    if page_token:
+                        raise
+            comments = self.fetch_ytdlp_comments(video_id, source_url)
+            wx.CallAfter(callback, comments, "", "", "comments_source_ytdlp")
         except Exception as exc:
-            wx.CallAfter(callback, [], "", self.friendly_error(exc))
+            error = self.friendly_error(exc)
+            if api_error and api_error != error:
+                error = f"{api_error}\n\n{error}"
+            wx.CallAfter(callback, [], "", error)
 
     def fetch_youtube_comments(self, video_id: str, page_token: str = "") -> tuple[list[dict], str]:
         params = {
@@ -13098,9 +13178,8 @@ class MainFrame(wx.Frame):
         comments = [comment for comment in comments if comment.get("text")]
         return comments, str(payload.get("nextPageToken") or "")
 
-    def fetch_ytdlp_comments(self, video_id: str) -> list[dict]:
-        item = self.current_video_info or self.current_video_item or {}
-        url = str(item.get("url") or item.get("webpage_url") or "").strip() or f"https://www.youtube.com/watch?v={video_id}"
+    def fetch_ytdlp_comments(self, video_id: str, source_url: str = "") -> list[dict]:
+        url = str(source_url or "").strip() or f"https://www.youtube.com/watch?v={video_id}"
         options = {
             "quiet": True,
             "skip_download": True,
@@ -13186,9 +13265,9 @@ class MainFrame(wx.Frame):
         replies = self.to_int(str(comment.get("reply_count") or 0), 0, 0)
         parts = [f"{index + 1}. {author}", text]
         if likes:
-            parts.append(f"{likes} likes")
+            parts.append(self.t("comment_likes", count=likes))
         if replies:
-            parts.append(f"{replies} replies")
+            parts.append(self.t("comment_replies_count", count=replies))
         return " | ".join(part for part in parts if part)
 
     def show_comment_details(self, comment: dict) -> None:
@@ -13211,7 +13290,7 @@ class MainFrame(wx.Frame):
         lines = [
             str(comment.get("author") or ""),
             str(comment.get("published") or ""),
-            f"{self.format_count(comment.get('likes'))} likes" if comment.get("likes") not in (None, "") else "",
+            self.t("comment_likes", count=self.format_count(comment.get("likes"))) if comment.get("likes") not in (None, "") else "",
             "",
             str(comment.get("text") or ""),
         ]
@@ -13222,7 +13301,7 @@ class MainFrame(wx.Frame):
                 lines.extend(["", str(reply.get("author") or ""), str(reply.get("text") or "")])
         reply_count = self.to_int(str(comment.get("reply_count") or 0), 0, 0)
         if reply_count and reply_count > len(replies):
-            lines.extend(["", f"{reply_count - len(replies)} more replies are available on YouTube."])
+            lines.extend(["", self.t("comment_more_replies", count=reply_count - len(replies))])
         return "\n".join(line for line in lines if line is not None)
 
     @staticmethod
@@ -17329,6 +17408,14 @@ class MainFrame(wx.Frame):
             self.announce_player(self.t("youtube_profile_opened"))
         except Exception as exc:
             self.message(self.t("youtube_profile_open_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
+
+    def open_youtube_api_key_page_from_settings(self) -> None:
+        self.apply_settings_from_visible_controls()
+        try:
+            import_module("webbrowser").open(YOUTUBE_API_CREDENTIALS_URL)
+            self.announce_player(self.t("youtube_api_key_page_opened"))
+        except Exception as exc:
+            self.message(self.t("youtube_api_key_page_open_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
     def cookie_browser_process_names(self, browser: str) -> list[str]:
         return COOKIES_BROWSER_PROCESS_NAMES.get(str(browser or "").lower(), [])

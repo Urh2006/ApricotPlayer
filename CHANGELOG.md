@@ -1,5 +1,13 @@
 # Changelog
 
+## What's new in version 0.9.1
+
+- made YouTube comments work without a YouTube Data API key by defaulting to the yt-dlp comments path when no key is configured.
+- kept the YouTube Data API path for users who do add a key, with a first-page fallback to yt-dlp if the API request fails.
+- added an Obtain YouTube API key button in Settings, Cookies and network, which opens the official Google Cloud credentials page.
+- fixed comment loading to use the stable YouTube watch URL instead of direct media stream URLs, and kept loading tied to the video that opened the comments screen.
+- fixed small 0.9 race conditions in lyrics and chapter metadata while moving quickly between player items.
+
 ## What's new in version 0.9
 
 - added a Chapters button and shortcuts for chapter navigation: open the chapters list, press Enter to seek to a chapter, press Escape to return to the player, and use Alt+Left / Alt+Right in the player to jump between chapters with screen reader announcements.
