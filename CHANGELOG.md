@@ -1,5 +1,14 @@
 # Changelog
 
+## What's new in version 0.9.6
+
+- fixed folder Previous and Next shortcuts by repairing the local-folder relative playback path.
+- stopped Play folder from generating and overwriting the real playback queue; folder navigation now uses the folder result list while the queue stays user-controlled.
+- fixed end-of-file autoplay so queued items are only consumed automatically when "Automatically play next item" is enabled.
+- added a Clear queue button and context-menu action to Playback queue.
+- made player shortcuts work across the player screen, including when focus is on the embedded results list, so Up/Down volume and T time are handled consistently.
+- clarified the Gapless playback setting label: it only controls mpv's audio transition behavior and does not choose or start the next item.
+
 ## What's new in version 0.9.5
 
 - changed the File converter and Folder converter format control so screen readers land on a single "Format to convert to" combo box instead of a separate "Detected format" field.

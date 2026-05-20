@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.9.5` (`0.9.5`)
+Current version: `0.9.6` (`0.9.6`)
 
 ## Download
 
@@ -58,7 +58,7 @@ py wx_main.py
 - Marked clips now export through the normal download shortcuts: `Ctrl+Shift+A` for audio clips and `Ctrl+Shift+D` for video clips
 - Start and end clip marker shortcuts toggle markers on and off, so accidental markers can be cleared immediately
 - Local-file edit mode for changing speed, pitch, or equalizer, then saving an edited copy or replacing the original file
-- Playback queue with add, remove, open queue, Enter-to-play, and automatic next-item playback
+- Playback queue with add, remove, clear, open queue, Enter-to-play, and automatic next-item playback when enabled
 - Optional Save As behavior for downloads, with file dialogs for single downloads and folder dialogs for channel or playlist downloads
 - File converter and folder converter menu items for accessible FFmpeg-powered conversion between common audio and video formats
 - Converter output names keep the original file name and only change the extension, with numbered fallback names for collisions

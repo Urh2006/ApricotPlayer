@@ -219,8 +219,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.9.5"
-APP_VERSION_LABEL = "0.9.5"
+APP_VERSION = "0.9.6"
+APP_VERSION_LABEL = "0.9.6"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -3259,6 +3259,8 @@ RELEASE_071_TRANSLATION_UPDATES = {
         "clip_end_marker_cleared": "End marker izbrisan.",
         "playback_queue": "Vrstni red predvajanja",
         "playback_queue_empty": "Vrstni red predvajanja je prazen.",
+        "clear_playback_queue": "Pocisti vrstni red predvajanja",
+        "playback_queue_cleared": "Vrstni red predvajanja je pociscen.",
         "playback_queue_instructions": "Pritisni Enter za takojĹˇnje predvajanje izbranega elementa.",
         "playback_queue_added": "Dodano v vrstni red predvajanja: {title}",
         "playback_queue_removed": "Odstranjeno iz vrstnega reda predvajanja: {title}",
@@ -3291,6 +3293,8 @@ RELEASE_071_TRANSLATION_UPDATES = {
         "clip_end_marker_cleared": "End marker cleared.",
         "playback_queue": "Playback queue",
         "playback_queue_empty": "Playback queue is empty.",
+        "clear_playback_queue": "Clear queue",
+        "playback_queue_cleared": "Playback queue cleared.",
         "playback_queue_instructions": "Press Enter to play the selected item immediately.",
         "playback_queue_added": "Added to playback queue: {title}",
         "playback_queue_removed": "Removed from playback queue: {title}",
@@ -3821,7 +3825,7 @@ RELEASE_090_TRANSLATION_UPDATES = {
         "no_more_comments": "No more comments.",
         "comment_details": "Comment details",
         "comment_replies": "Replies",
-        "gapless_playback": "Gapless playback where the player supports it",
+        "gapless_playback": "Gapless audio prehod, kjer ga player podpira (ne predvaja naslednjega elementa)",
         "replaygain_mode": "ReplayGain / loudness normalization",
         "replaygain_off": "Off",
         "replaygain_track": "Track",
@@ -3854,7 +3858,7 @@ RELEASE_090_TRANSLATION_UPDATES = {
         "no_more_comments": "No more comments.",
         "comment_details": "Comment details",
         "comment_replies": "Replies",
-        "gapless_playback": "Gapless playback where the player supports it",
+        "gapless_playback": "Gapless audio transition where the player supports it (does not play the next item)",
         "replaygain_mode": "ReplayGain / loudness normalization",
         "replaygain_off": "Off",
         "replaygain_track": "Track",
@@ -11063,11 +11067,7 @@ class MainFrame(wx.Frame):
             self.player_return_screen = "search"
             self.player_return_data = {}
         if folder_context:
-            items = self.selected_local_folder_items()
-            folder_index = int(self.player_return_data.get("index") or self.current_index)
-            queue_items = [self.playback_queue_item_with_folder_return(result, items, auto_folder_queue=True) for result in items[folder_index + 1 :]]
-            self.playback_queue = queue_items
-            self.save_playback_queue()
+            self.clear_auto_folder_playback_queue()
         self.current_video_item = item
         self.current_video_info = dict(item)
         self.play_url(item["url"], item["title"])
@@ -11733,9 +11733,7 @@ class MainFrame(wx.Frame):
             self.shuffle_current = False
         current_item = dict(ordered[start_index])
         current_source_index = next((index for index, item in enumerate(items) if item.get("url") == current_item.get("url")), start_index)
-        queue_items = ordered[start_index + 1 :]
-        self.playback_queue = [self.playback_queue_item_with_folder_return(item, items, auto_folder_queue=True) for item in queue_items]
-        self.save_playback_queue()
+        self.clear_auto_folder_playback_queue()
         self.player_return_screen = "folder"
         self.player_return_data = {
             "index": current_source_index,
@@ -14097,7 +14095,7 @@ class MainFrame(wx.Frame):
         self.announce_player(self.t("equalizer_closed"))
 
     def play_relative_item(self, delta: int, preserve_focus: bool = False) -> None:
-        if delta > 0:
+        if delta > 0 and self.player_return_screen != "folder":
             queued_item = self.pop_next_playback_queue_item()
             if queued_item:
                 self.open_playback_queue_item(queued_item, announce_start=True, preserve_focus=preserve_focus)
@@ -14150,6 +14148,7 @@ class MainFrame(wx.Frame):
     def open_relative_player_item(self, item: dict, announce_start: bool = False, preserve_focus: bool = False) -> None:
         if not item.get("url"):
             return
+        data = dict(self.player_return_data or {})
         keep_current_ui = bool(preserve_focus and self.live_window(getattr(self, "player_panel", None)) is not None)
         show_player = (self.in_player_screen or not self.background_playback_enabled()) and not keep_current_ui
         focus_target = "player" if keep_current_ui else ("results" if preserve_focus and self.live_window(getattr(self, "results_list", None)) is not None else "player")
@@ -14281,11 +14280,13 @@ class MainFrame(wx.Frame):
         move_up_button = wx.Button(dialog, label=self.t("move_up"))
         move_down_button = wx.Button(dialog, label=self.t("move_down"))
         remove_button = wx.Button(dialog, label=self.t("remove_from_playback_queue"))
+        clear_button = wx.Button(dialog, label=self.t("clear_playback_queue"))
         close_button = wx.Button(dialog, wx.ID_CANCEL, label=self.t("back"))
         row.Add(play_button, 0, wx.RIGHT, 8)
         row.Add(move_up_button, 0, wx.RIGHT, 8)
         row.Add(move_down_button, 0, wx.RIGHT, 8)
         row.Add(remove_button, 0, wx.RIGHT, 8)
+        row.Add(clear_button, 0, wx.RIGHT, 8)
         row.Add(close_button, 0)
         outer.Add(row, 0, wx.ALIGN_RIGHT | wx.ALL, 8)
         dialog.SetSizer(outer)
@@ -14324,6 +14325,16 @@ class MainFrame(wx.Frame):
             if self.playback_queue:
                 queue_list.SetSelection(min(max(0, selection), len(self.playback_queue) - 1))
 
+        def clear_queue(_event=None) -> None:
+            if not self.playback_queue:
+                self.announce_player(self.t("playback_queue_empty"))
+                return
+            self.playback_queue = []
+            self.save_playback_queue()
+            refresh_queue_list(0)
+            self.announce_player(self.t("playback_queue_cleared"))
+            dialog.EndModal(wx.ID_CANCEL)
+
         def move_selected(delta: int) -> None:
             index = selected_index()
             target = index + delta
@@ -14341,6 +14352,7 @@ class MainFrame(wx.Frame):
                 (self.t("move_up"), lambda _evt=None: move_selected(-1)),
                 (self.t("move_down"), lambda _evt=None: move_selected(1)),
                 (self.t("remove_from_playback_queue"), remove_selected),
+                (self.t("clear_playback_queue"), clear_queue),
             ]
             for label, handler in actions:
                 menu_item = menu.Append(wx.ID_ANY, label)
@@ -14364,6 +14376,7 @@ class MainFrame(wx.Frame):
         move_up_button.Bind(wx.EVT_BUTTON, lambda _evt: move_selected(-1))
         move_down_button.Bind(wx.EVT_BUTTON, lambda _evt: move_selected(1))
         remove_button.Bind(wx.EVT_BUTTON, remove_selected)
+        clear_button.Bind(wx.EVT_BUTTON, clear_queue)
         result = dialog.ShowModal()
         dialog.Destroy()
         self.refresh_main_menu_after_playback_queue_change()
@@ -14755,11 +14768,16 @@ class MainFrame(wx.Frame):
             self.update_play_pause_buttons()
             self.restart_current_playback(announce=False)
             return
-        queued_item = self.pop_next_playback_queue_item()
-        if queued_item:
-            self.open_playback_queue_item_with_mode(queued_item, show_player=self.in_player_screen or not self.background_playback_enabled())
-            return
-        if self.shuffle_current or self.settings.autoplay_next:
+        if self.settings.autoplay_next and self.player_return_screen == "folder":
+            next_item = self.relative_player_item(1)
+            if next_item:
+                self.open_relative_player_item(next_item)
+                return
+        if self.settings.autoplay_next:
+            queued_item = self.pop_next_playback_queue_item()
+            if queued_item:
+                self.open_playback_queue_item_with_mode(queued_item, show_player=self.in_player_screen or not self.background_playback_enabled())
+                return
             next_item = self.relative_player_item(1)
             if next_item:
                 self.open_relative_player_item(next_item)
@@ -16143,6 +16161,8 @@ class MainFrame(wx.Frame):
         return any(focus is control for control in getattr(self, "player_action_controls", []))
 
     def player_shortcuts_allowed(self, focus: wx.Window | None = None) -> bool:
+        if self.in_player_screen and not self.focus_accepts_text(focus):
+            return True
         return self.focus_in_player_controls(focus) or self.focus_in_background_player_controls(focus)
 
     def save_current_playback_position(self) -> None:
@@ -16609,6 +16629,8 @@ class MainFrame(wx.Frame):
             return
         if self.player_details_shortcut_matches(event) and (self.in_player_screen or self.focus_in_background_player_controls(focus)):
             self.show_video_details()
+            return
+        if self.in_player_screen and self.handle_player_shortcut_event(event, focus, details_has_focus):
             return
         if self.in_player_screen and focus is getattr(self, "results_list", None):
             event.Skip()
