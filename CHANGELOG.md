@@ -1,5 +1,12 @@
 # Changelog
 
+## What's new in version 0.9.9
+
+- fixed results-list arrow navigation after returning from the player: plain Up/Down/Page/Home/End now stay with the results list instead of being interpreted as player volume shortcuts.
+- made player Ctrl+PageDown load the next dynamic result page when it reaches the end of the currently loaded results, then continue playback automatically.
+- restored the correct search/channel/playlist dynamic-loading context when returning from the player, preventing stale playlist URLs from causing unrelated "playlist unviewable" errors while browsing results.
+- changed dynamic-load failures to non-modal status/screen-reader messages so navigating the result list does not get trapped by an error dialog.
+
 ## What's new in version 0.9.8
 
 - restored folder queue creation for the explicit Play folder and Shuffle folder actions.

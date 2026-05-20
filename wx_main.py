@@ -219,8 +219,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.9.8"
-APP_VERSION_LABEL = "0.9.8"
+APP_VERSION = "0.9.9"
+APP_VERSION_LABEL = "0.9.9"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -4255,6 +4255,8 @@ class MainFrame(wx.Frame):
         self.collection_sort_mode = ""
         self.collection_channel_id = ""
         self.collection_fully_loaded = False
+        self.pending_player_next_after_dynamic_load = False
+        self.pending_player_next_preserve_focus = False
         self.current_stream_url = ""
         self.current_stream_headers: dict = {}
         self.stream_url_cache: dict[str, dict] = {}
@@ -8172,6 +8174,9 @@ class MainFrame(wx.Frame):
         menu.Destroy()
 
     def show_search(self, restore_search: bool = False) -> None:
+        self.in_player_screen = False
+        if not self.player_is_active():
+            self.player_control_mode = False
         self.in_main_menu = False
         self.in_queue_screen = False
         self.search_screen_active = True
@@ -10621,6 +10626,27 @@ class MainFrame(wx.Frame):
             pass
         return self.results[selection]
 
+    def search_return_data(self, index: int | None = None) -> dict:
+        return {
+            "index": self.current_index if index is None else int(index),
+            "collection_url": str(self.collection_url or ""),
+            "collection_result_type": str(self.collection_result_type or ""),
+            "collection_sort_mode": str(self.collection_sort_mode or ""),
+            "collection_channel_id": str(self.collection_channel_id or ""),
+            "collection_fully_loaded": bool(self.collection_fully_loaded),
+            "dynamic_fetch_enabled": bool(self.dynamic_fetch_enabled),
+        }
+
+    def restore_search_return_context(self, data: dict | None = None) -> None:
+        data = data if isinstance(data, dict) else {}
+        self.collection_url = str(data.get("collection_url") or "")
+        self.collection_result_type = str(data.get("collection_result_type") or "")
+        self.collection_sort_mode = str(data.get("collection_sort_mode") or "")
+        self.collection_channel_id = str(data.get("collection_channel_id") or "")
+        self.collection_fully_loaded = bool(data.get("collection_fully_loaded", False))
+        self.dynamic_fetch_enabled = bool(data.get("dynamic_fetch_enabled", True))
+        self.loading_more_results = False
+
     def maybe_extend_results(self) -> None:
         if not self.dynamic_fetch_enabled or self.settings.results_limit != 0 or not hasattr(self, "results_list"):
             return
@@ -10693,6 +10719,10 @@ class MainFrame(wx.Frame):
         self.loading_more_results = False
         if len(results) <= len(self.all_results):
             self.set_status(self.t("no_more_results"))
+            if self.pending_player_next_after_dynamic_load:
+                self.pending_player_next_after_dynamic_load = False
+                self.pending_player_next_preserve_focus = False
+                self.announce_player(self.t("no_next_item"))
             return
         current_selection = self.current_results_selection(selection)
         current_identity = self.result_identity_at(current_selection)
@@ -10708,6 +10738,11 @@ class MainFrame(wx.Frame):
         self.remember_user_result_selection(selected_index)
         self.set_status(self.t("search_more_loaded", count=len(self.results)))
         self.start_result_metadata_hydration()
+        if self.player_return_screen in {"search", "trending"}:
+            self.return_all_results = list(self.all_results)
+            self.return_results = list(self.results)
+            self.return_visible_count = self.last_visible_count
+        self.finish_pending_player_next_after_dynamic_load()
 
     def show_more_results_if_current(self, generation: int, results: list[dict], selection: int) -> None:
         if generation == self.search_generation:
@@ -10715,11 +10750,49 @@ class MainFrame(wx.Frame):
 
     def dynamic_fetch_failed(self, error: str) -> None:
         self.loading_more_results = False
-        self.message(error, wx.ICON_ERROR)
+        if self.pending_player_next_after_dynamic_load:
+            self.pending_player_next_after_dynamic_load = False
+            self.pending_player_next_preserve_focus = False
+            self.set_status(error)
+            self.announce_player(error)
+            return
+        self.set_status(error)
+        self.announce_player(error)
 
     def dynamic_fetch_failed_if_current(self, generation: int, error: str) -> None:
         if generation == self.search_generation:
             self.dynamic_fetch_failed(error)
+
+    def request_player_next_dynamic_load(self, preserve_focus: bool = False) -> bool:
+        if not self.dynamic_fetch_enabled or self.settings.results_limit != 0 or not hasattr(self, "results_list"):
+            return False
+        if self.loading_more_results:
+            self.pending_player_next_after_dynamic_load = True
+            self.pending_player_next_preserve_focus = bool(preserve_focus)
+            return True
+        current_count = len(self.all_results)
+        if current_count <= 0:
+            return False
+        max_limit = self.max_results_limit()
+        if max_limit and current_count >= max_limit:
+            return False
+        if getattr(self, "collection_fully_loaded", False) and len(self.results) >= len(self.all_results):
+            return False
+        self.pending_player_next_after_dynamic_load = True
+        self.pending_player_next_preserve_focus = bool(preserve_focus)
+        selection = max(0, len(self.results) - 1)
+        self.fetch_more_dynamic_results(selection)
+        return True
+
+    def finish_pending_player_next_after_dynamic_load(self) -> None:
+        if not self.pending_player_next_after_dynamic_load:
+            return
+        preserve_focus = bool(self.pending_player_next_preserve_focus)
+        self.pending_player_next_after_dynamic_load = False
+        self.pending_player_next_preserve_focus = False
+        if not self.player_is_active():
+            return
+        wx.CallAfter(self.play_relative_item, 1, preserve_focus)
 
     def start_result_metadata_hydration(self) -> None:
         candidates: list[dict] = []
@@ -11065,7 +11138,7 @@ class MainFrame(wx.Frame):
             }
         else:
             self.player_return_screen = "search"
-            self.player_return_data = {}
+            self.player_return_data = self.search_return_data(self.current_index)
         if folder_context:
             self.clear_auto_folder_playback_queue()
         self.current_video_item = item
@@ -11211,6 +11284,9 @@ class MainFrame(wx.Frame):
             self.announce_player(self.t("trending_disabled"))
             self.show_main_menu()
             return
+        self.in_player_screen = False
+        if not self.player_is_active():
+            self.player_control_mode = False
         self.in_main_menu = False
         self.search_screen_active = True
         self.trending_screen_active = True
@@ -11648,6 +11724,9 @@ class MainFrame(wx.Frame):
         folder_items = [dict(item) for item in items if item.get("kind") == "local_file" and item.get("url")]
         self.current_local_folder_path = str(folder)
         self.current_local_folder_items = list(folder_items)
+        self.in_player_screen = False
+        if not self.player_is_active():
+            self.player_control_mode = False
         self.in_main_menu = False
         self.in_queue_screen = False
         self.search_screen_active = False
@@ -12887,6 +12966,7 @@ class MainFrame(wx.Frame):
         if results:
             self.metadata_hydration_urls.clear()
             self.search_generation += 1
+            self.restore_search_return_context(self.player_return_data)
             self.show_search(restore_search=True)
             self.show_results(results, selection=self.return_index, visible_count=self.return_visible_count)
             if results:
@@ -14109,9 +14189,21 @@ class MainFrame(wx.Frame):
         else:
             item = self.relative_player_item(1)
             if not item:
+                if self.request_player_next_dynamic_load(preserve_focus=preserve_focus):
+                    self.set_status(self.t("loading_more_results"))
+                    return
                 self.announce_player(self.t("no_next_item"))
                 return
         self.open_relative_player_item(item, announce_start=True, preserve_focus=preserve_focus)
+
+    def player_navigation_results(self) -> list[dict]:
+        collections = [self.return_all_results, self.all_results, self.return_results, self.results]
+        non_empty = [list(items) for items in collections if items]
+        if not non_empty:
+            return []
+        if self.player_return_screen in {"search", "trending", "playback_queue"}:
+            return max(non_empty, key=len)
+        return non_empty[0]
 
     def relative_player_item(self, delta: int) -> dict | None:
         screen = self.player_return_screen
@@ -14130,7 +14222,7 @@ class MainFrame(wx.Frame):
                 items = list(self.user_playlists[playlist_index].get("items") or [])
                 if 0 <= item_index < len(items):
                     return dict(items[item_index], user_playlist_index=playlist_index, user_playlist_item_index=item_index)
-        results = self.return_all_results or self.all_results or self.return_results or self.results
+        results = self.player_navigation_results()
         item_index = int(data.get("index", self.return_index) or self.return_index) + delta
         playable = [item for item in results if item.get("kind") not in {"channel", "playlist"}]
         if not playable:
@@ -14183,7 +14275,7 @@ class MainFrame(wx.Frame):
             results = self.return_all_results or self.all_results or self.return_results or self.results
             self.return_index = next((i for i, result in enumerate(results) if result.get("url") == item.get("url")), self.return_index)
             self.player_return_screen = "search"
-            self.player_return_data = {"index": self.return_index}
+            self.player_return_data = self.search_return_data(self.return_index)
         self.current_video_item = item
         self.current_video_info = dict(item)
         self.play_url(
@@ -16328,9 +16420,26 @@ class MainFrame(wx.Frame):
             return True
         return False
 
+    @staticmethod
+    def results_list_native_navigation_key(event: wx.KeyEvent) -> bool:
+        if event.ControlDown() or event.AltDown():
+            return False
+        return event.GetKeyCode() in {
+            wx.WXK_UP,
+            wx.WXK_DOWN,
+            wx.WXK_HOME,
+            wx.WXK_END,
+            wx.WXK_PAGEUP,
+            wx.WXK_PAGEDOWN,
+        }
+
     def handle_player_shortcut_event(self, event: wx.KeyEvent, focus: wx.Window | None, details_has_focus: bool = False) -> bool:
         if not (self.player_control_mode and self.player_shortcuts_allowed(focus)):
             return False
+        if focus is getattr(self, "results_list", None) and self.results_list_native_navigation_key(event):
+            event.Skip()
+            wx.CallAfter(self.maybe_extend_results)
+            return True
         if self.context_menu_shortcut_matches(event):
             self.open_player_context_menu()
             return True
