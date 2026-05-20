@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.9.5
+
+- changed the File converter and Folder converter format control so screen readers land on a single "Format to convert to" combo box instead of a separate "Detected format" field.
+- made opening a new local file while ApricotPlayer is hidden in the system tray feel immediate again: the existing instance is shown and foregrounded right away, with the new file title applied before playback is rebuilt.
+- kept the 0.9.2 screen-reader title fix by setting the new local file title before the window is restored, so the old file title should not be announced first.
+
 ## What's new in version 0.9.4
 
 - fixed the Chapters dialog so Enter on a selected chapter immediately jumps there and closes the chapter list, matching the Play button and double-click behavior.

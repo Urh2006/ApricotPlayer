@@ -219,8 +219,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.9.4"
-APP_VERSION_LABEL = "0.9.4"
+APP_VERSION = "0.9.5"
+APP_VERSION_LABEL = "0.9.5"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -3334,7 +3334,7 @@ RELEASE_08_TRANSLATION_UPDATES = {
         "browse_folder": "Izberi mapo",
         "detected_format": "Zaznan format",
         "output_format": "Izhodni format",
-        "convert_to": "Pretvori v",
+        "convert_to": "Format za pretvorbo v",
         "add_image": "Dodaj sliko",
         "dark_background": "Temno ozadje",
         "image_path": "Pot do slike",
@@ -3374,7 +3374,7 @@ RELEASE_08_TRANSLATION_UPDATES = {
         "browse_folder": "Browse folder",
         "detected_format": "Detected format",
         "output_format": "Output format",
-        "convert_to": "Convert to",
+        "convert_to": "Format to convert to",
         "add_image": "Add image",
         "dark_background": "Dark background",
         "image_path": "Image path",
@@ -6928,11 +6928,6 @@ class MainFrame(wx.Frame):
             form.Add(path_label, 0, wx.ALIGN_CENTER_VERTICAL)
             form.Add(path_row, 1, wx.EXPAND)
 
-            detected_ctrl = wx.TextCtrl(dialog, value=self.t("empty"), style=wx.TE_READONLY)
-            detected_ctrl.SetName(self.t("detected_format"))
-            form.Add(wx.StaticText(dialog, label=self.t("detected_format")), 0, wx.ALIGN_CENTER_VERTICAL)
-            form.Add(detected_ctrl, 1, wx.EXPAND)
-
             target_choice = wx.Choice(dialog, choices=[])
             target_choice.SetName(self.t("convert_to"))
             target_values: list[str] = []
@@ -7010,19 +7005,14 @@ class MainFrame(wx.Frame):
                 dialog.Layout()
                 dialog.Fit()
 
-            def update_detected_and_formats(_event=None) -> None:
+            def update_formats(_event=None) -> None:
                 nonlocal target_values
                 raw_path = path_ctrl.GetValue().strip().strip('"')
                 path = Path(raw_path) if raw_path else Path()
                 if folder_mode:
-                    detected = self.t("folder_converter") if raw_path else self.t("empty")
                     input_kind = ""
                 else:
                     input_kind = self.converter_input_kind(path) if raw_path else ""
-                    detected = (path.suffix.lower().lstrip(".") or self.t("empty")) if input_kind else self.t("unsupported_input_format")
-                    if not raw_path:
-                        detected = self.t("empty")
-                detected_ctrl.SetValue(detected)
                 current = selected_target() if target_values else ""
                 target_values = self.converter_format_values(input_kind)
                 target_choice.Set(self.converter_format_labels(target_values))
@@ -7039,7 +7029,7 @@ class MainFrame(wx.Frame):
                     with wx.FileDialog(dialog, self.t("browse_file"), wildcard=wildcard, style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as chooser:
                         if chooser.ShowModal() == wx.ID_OK:
                             path_ctrl.SetValue(chooser.GetPath())
-                update_detected_and_formats()
+                update_formats()
 
             def browse_image(_event=None) -> None:
                 with wx.FileDialog(dialog, self.t("select_image_file"), wildcard=self.converter_image_wildcard(), style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as chooser:
@@ -7125,14 +7115,14 @@ class MainFrame(wx.Frame):
 
             browse_button.Bind(wx.EVT_BUTTON, browse_path)
             image_button.Bind(wx.EVT_BUTTON, browse_image)
-            path_ctrl.Bind(wx.EVT_TEXT, update_detected_and_formats)
+            path_ctrl.Bind(wx.EVT_TEXT, update_formats)
             target_choice.Bind(wx.EVT_CHOICE, lambda evt: update_audio_video_controls())
             add_image_box.Bind(wx.EVT_CHECKBOX, on_add_image)
             dark_box.Bind(wx.EVT_CHECKBOX, on_dark)
             create_new_box.Bind(wx.EVT_CHECKBOX, on_create_new)
             replace_box.Bind(wx.EVT_CHECKBOX, on_replace)
             convert_button.Bind(wx.EVT_BUTTON, convert)
-            update_detected_and_formats()
+            update_formats()
             dialog.Fit()
             dialog.SetMinSize((600, -1))
             dialog.ShowModal()
@@ -11799,6 +11789,14 @@ class MainFrame(wx.Frame):
             self.player_return_data = {}
             self.current_video_item = item
             self.current_video_info = dict(item)
+            if activate_after_open:
+                self.set_window_title(item["title"])
+                self.set_status(self.t("preparing_stream", title=item["title"]))
+                self.ensure_window_visible()
+                try:
+                    self.foreground_window()
+                except Exception:
+                    pass
             self.play_url(str(path), item["title"], announce_start=activate_after_open)
             if activate_after_open:
                 self.restore_from_tray()
@@ -19612,7 +19610,7 @@ def request_existing_instance_activation(action: str = "show", **extra_payload) 
         pass
 
 
-def activate_existing_instance_window() -> bool:
+def activate_existing_instance_window(title_hint: str = "") -> bool:
     if os.name != "nt":
         return False
     try:
@@ -19621,6 +19619,8 @@ def activate_existing_instance_window() -> bool:
         user32.GetWindowTextLengthW.restype = ctypes.c_int
         user32.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
         user32.GetWindowTextW.restype = ctypes.c_int
+        user32.SetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p]
+        user32.SetWindowTextW.restype = ctypes.c_int
         target_hwnd = ctypes.c_void_p()
 
         enum_proc_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
@@ -19644,6 +19644,12 @@ def activate_existing_instance_window() -> bool:
         hwnd = target_hwnd.value
         if not hwnd:
             return False
+        title = re.sub(r"\s+", " ", str(title_hint or "").strip())
+        if title:
+            try:
+                user32.SetWindowTextW(ctypes.c_void_p(hwnd), f"{title} - {WINDOW_TITLE}")
+            except Exception:
+                pass
         user32.ShowWindow(ctypes.c_void_p(hwnd), 9)
         user32.ShowWindow(ctypes.c_void_p(hwnd), 5)
         user32.BringWindowToTop(ctypes.c_void_p(hwnd))
@@ -19688,6 +19694,7 @@ def handle_already_running_startup(startup_media_path: str, tray_start: bool) ->
         return False
     if startup_media_path:
         request_existing_instance_activation("open_file", path=startup_media_path)
+        activate_existing_instance_window(Path(startup_media_path).stem)
     elif tray_start:
         return False
     elif startup_close_to_tray_enabled():
