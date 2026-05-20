@@ -1,5 +1,12 @@
 # Changelog
 
+## What's new in version 0.9.12
+
+- made session volume the authoritative value between songs, so unstable mpv reads during track changes no longer reset playback to 100, 0, or the saved default volume.
+- cancelled pending volume timers when carrying volume into the next item, preventing an old volume key press from landing on the newly started mpv process.
+- added player-generation guards to delayed volume and volume-boost workers so stale volume updates cannot modify the next song.
+- preserved boosted session volumes across next/previous playback when the current session volume is above 100.
+
 ## What's new in version 0.9.11
 
 - made result playback navigation use the result collection that contains the currently playing URL instead of whichever list is longest, preventing next from jumping to unrelated result positions.

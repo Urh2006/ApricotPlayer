@@ -219,8 +219,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.9.11"
-APP_VERSION_LABEL = "0.9.11"
+APP_VERSION = "0.9.12"
+APP_VERSION_LABEL = "0.9.12"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -12396,20 +12396,64 @@ class MainFrame(wx.Frame):
     def speed_uses_mpv_auto_pitch_correction(self) -> bool:
         return self.normalized_speed_audio_mode() in {SPEED_AUDIO_MODE_MPV, SPEED_AUDIO_MODE_RUBBERBAND}
 
-    def remember_current_player_volume(self) -> None:
+    def session_volume_max(self) -> int:
+        if self.volume_boost_enabled or getattr(self.settings, "volume_boost_by_default", False):
+            return BOOSTED_VOLUME_MAX
+        try:
+            if self.session_volume is not None and float(self.session_volume) > NORMAL_VOLUME_MAX:
+                return BOOSTED_VOLUME_MAX
+        except (TypeError, ValueError):
+            pass
+        return NORMAL_VOLUME_MAX
+
+    def clamp_session_volume(self, value) -> float:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            numeric = float(self.default_volume_value())
+        return max(0.0, min(float(self.session_volume_max()), numeric))
+
+    def consume_pending_volume_target(self) -> float | None:
         with self.volume_change_lock:
             pending_target = self.volume_change_pending_target
-        if pending_target is not None:
-            self.session_volume = max(0.0, min(float(self.current_player_volume_max()), float(pending_target)))
+            if pending_target is None:
+                return None
+            self.volume_change_pending_target = None
+            timer = self.volume_change_timer
+            if timer is not None and timer.IsRunning():
+                timer.Stop()
+            self.volume_change_timer = None
+        self.session_volume = self.clamp_session_volume(pending_target)
+        return self.session_volume
+
+    def remember_current_player_volume(self) -> None:
+        if self.consume_pending_volume_target() is not None:
+            return
+        if self.session_volume is not None:
+            self.session_volume = self.clamp_session_volume(self.session_volume)
             return
         if self.player_kind != "mpv" or not self.mpv_process_alive():
             return
         try:
             current = self.mpv_get_property("volume", timeout=0.3)
             if current is not None:
-                self.session_volume = max(0.0, min(float(self.current_player_volume_max()), float(current)))
+                self.session_volume = self.clamp_session_volume(current)
         except Exception:
             pass
+
+    def current_player_volume(self) -> float:
+        self.remember_current_player_volume()
+        if self.session_volume is not None:
+            return self.clamp_session_volume(self.session_volume)
+        return float(self.default_volume_value())
+
+    def cancel_pending_volume_change(self) -> None:
+        with self.volume_change_lock:
+            self.volume_change_pending_target = None
+            timer = self.volume_change_timer
+            if timer is not None and timer.IsRunning():
+                timer.Stop()
+            self.volume_change_timer = None
 
     def current_player_volume_max(self) -> int:
         boosted = bool(self.volume_boost_enabled)
@@ -12421,7 +12465,7 @@ class MainFrame(wx.Frame):
 
     def player_start_volume_value(self) -> float:
         if self.session_volume is not None:
-            return max(0.0, min(float(self.configured_player_start_volume_max()), float(self.session_volume)))
+            return self.clamp_session_volume(self.session_volume)
         return float(self.default_volume_value())
 
     def start_mpv(
@@ -15495,15 +15539,23 @@ class MainFrame(wx.Frame):
             self.volume_change_timer = None
         if target is None:
             return
-        threading.Thread(target=self.change_volume_worker, args=(target,), daemon=True).start()
+        generation = self.player_generation
+        threading.Thread(target=self.change_volume_worker, args=(target, generation), daemon=True).start()
 
-    def change_volume_worker(self, target: float) -> None:
+    def change_volume_worker(self, target: float, generation: int | None = None) -> None:
         try:
+            if generation is not None and generation != self.player_generation:
+                return
+            if self.player_kind != "mpv" or not self.mpv_process_alive():
+                return
             maximum = float(self.current_player_volume_max())
             volume = min(max(0.0, float(target)), maximum)
             self.mpv_set_property("volume-max", maximum)
+            if generation is not None and generation != self.player_generation:
+                return
             self.mpv_set_property("volume", volume)
-            self.session_volume = volume
+            if generation is None or generation == self.player_generation:
+                self.session_volume = volume
         except Exception:
             pass
 
@@ -15522,27 +15574,40 @@ class MainFrame(wx.Frame):
 
     def toggle_volume_boost(self) -> None:
         self.volume_boost_enabled = not self.volume_boost_enabled
+        generation = self.player_generation
         if self.volume_boost_enabled:
-            threading.Thread(target=self.enable_volume_boost_worker, daemon=True).start()
+            threading.Thread(target=self.enable_volume_boost_worker, args=(generation,), daemon=True).start()
             self.announce_player(self.t("volume_boost_on"))
         else:
-            threading.Thread(target=self.disable_volume_boost_worker, daemon=True).start()
+            threading.Thread(target=self.disable_volume_boost_worker, args=(generation,), daemon=True).start()
 
-    def enable_volume_boost_worker(self) -> None:
+    def enable_volume_boost_worker(self, generation: int | None = None) -> None:
         try:
+            if generation is not None and generation != self.player_generation:
+                return
+            if self.player_kind != "mpv" or not self.mpv_process_alive():
+                return
             self.mpv_set_property("volume-max", BOOSTED_VOLUME_MAX)
         except Exception:
             pass
         wx.CallAfter(self.schedule_equalizer_apply, 40)
 
-    def disable_volume_boost_worker(self) -> None:
+    def disable_volume_boost_worker(self, generation: int | None = None) -> None:
         try:
+            if generation is not None and generation != self.player_generation:
+                return
+            if self.player_kind != "mpv" or not self.mpv_process_alive():
+                return
             current = self.mpv_get_property("volume")
+            if generation is not None and generation != self.player_generation:
+                return
             if current is not None and float(current) > 100.0:
                 self.mpv_set_property("volume", 100.0)
                 self.session_volume = 100.0
             elif current is not None:
                 self.session_volume = max(0.0, min(100.0, float(current)))
+            if generation is not None and generation != self.player_generation:
+                return
             self.mpv_set_property("volume-max", NORMAL_VOLUME_MAX)
         except Exception:
             pass
@@ -16256,12 +16321,7 @@ class MainFrame(wx.Frame):
             self.player_fullscreen_results_override = False
             self.manual_background_playback_active = False
             self.session_volume = None
-            with self.volume_change_lock:
-                self.volume_change_pending_target = None
-                timer = self.volume_change_timer
-                if timer is not None and timer.IsRunning():
-                    timer.Stop()
-                self.volume_change_timer = None
+            self.cancel_pending_volume_change()
             self.session_equalizer_enabled = None
             self.session_equalizer_gains = {}
             self.session_equalizer_before_bass_boost = None
