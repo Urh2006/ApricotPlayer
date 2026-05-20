@@ -1,5 +1,13 @@
 # Changelog
 
+## What's new in version 0.9.3
+
+- added podcast chapter support beyond embedded media chapters: ApricotPlayer now reads inline Podlove/PSC chapters from podcast RSS items.
+- added support for Podcasting 2.0 `podcast:chapters` JSON chapter URLs, loaded lazily when the Chapters screen or chapter shortcuts are used.
+- expanded chapter time parsing so chapter starts such as `00:01:23.500`, `01:23`, numeric seconds, `start`, and `startTime` all work.
+- added a manual Check yt-dlp updates now button next to the automatic yt-dlp update setting.
+- manual yt-dlp checks now announce when YouTube support is already up to date.
+
 ## What's new in version 0.9.2
 
 - fixed opening a new local file from disk while ApricotPlayer is already running: the existing instance now switches to the new file before it brings the window forward, so screen readers do not announce the previous title first.

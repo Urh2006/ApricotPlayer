@@ -219,8 +219,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.9.2"
-APP_VERSION_LABEL = "0.9.2"
+APP_VERSION = "0.9.3"
+APP_VERSION_LABEL = "0.9.3"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -3943,6 +3943,23 @@ for language_code in LANGUAGE_CODES:
     TEXT.setdefault(language_code, {}).update(RELEASE_092_TRANSLATION_UPDATES.get(language_code, RELEASE_092_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
 for language_code in LANGUAGE_CODES:
     for key, value in RELEASE_092_TRANSLATION_UPDATES["en"].items():
+        TEXT.setdefault(language_code, {}).setdefault(key, value)
+
+
+RELEASE_093_TRANSLATION_UPDATES = {
+    "sl": {
+        "check_ytdlp_updates_now": "Preveri yt-dlp posodobitve zdaj",
+        "podcast_chapters_source": "Podcast chapters",
+    },
+    "en": {
+        "check_ytdlp_updates_now": "Check yt-dlp updates now",
+        "podcast_chapters_source": "Podcast chapters",
+    },
+}
+for language_code in LANGUAGE_CODES:
+    TEXT.setdefault(language_code, {}).update(RELEASE_093_TRANSLATION_UPDATES.get(language_code, RELEASE_093_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
+for language_code in LANGUAGE_CODES:
+    for key, value in RELEASE_093_TRANSLATION_UPDATES["en"].items():
         TEXT.setdefault(language_code, {}).setdefault(key, value)
 
 
@@ -9517,6 +9534,7 @@ class MainFrame(wx.Frame):
         guid = self.child_text(item, "guid")
         url = media_url or page_url or self.absolute_url(guid, base_url)
         duration = self.child_text(item, "duration")
+        chapters_url, chapters_type = self.podcast_chapters_reference(item, base_url)
         return {
             "title": title or page_url or media_url,
             "url": url,
@@ -9524,6 +9542,9 @@ class MainFrame(wx.Frame):
             "media_url": media_url,
             "description": description,
             "duration": duration,
+            "chapters": self.parse_inline_podcast_chapters(item),
+            "chapters_url": chapters_url,
+            "chapters_type": chapters_type,
             "timestamp": timestamp,
             "channel": feed_title,
             "kind": "rss_item",
@@ -9545,6 +9566,7 @@ class MainFrame(wx.Frame):
         item_id = self.child_text(entry, "id")
         url = media_url or page_url or self.absolute_url(item_id, base_url)
         duration = self.child_text(entry, "duration")
+        chapters_url, chapters_type = self.podcast_chapters_reference(entry, base_url)
         return {
             "title": title or page_url or media_url,
             "url": url,
@@ -9552,6 +9574,9 @@ class MainFrame(wx.Frame):
             "media_url": media_url,
             "description": description,
             "duration": duration,
+            "chapters": self.parse_inline_podcast_chapters(entry),
+            "chapters_url": chapters_url,
+            "chapters_type": chapters_type,
             "timestamp": timestamp,
             "channel": feed_title,
             "kind": "rss_item",
@@ -9566,6 +9591,29 @@ class MainFrame(wx.Frame):
                 if href:
                     return self.absolute_url(href, base_url)
         return ""
+
+    def parse_inline_podcast_chapters(self, element: ET.Element) -> list[dict]:
+        raw_chapters: list[dict] = []
+        for chapters_element in self.children(element, "chapters"):
+            chapter_children = self.children(chapters_element, "chapter")
+            if not chapter_children:
+                continue
+            for chapter in chapter_children:
+                raw_chapters.append(
+                    {
+                        "start": chapter.get("start") or chapter.get("time") or self.child_text(chapter, "start"),
+                        "end": chapter.get("end") or self.child_text(chapter, "end"),
+                        "title": chapter.get("title") or self.child_text(chapter, "title") or (chapter.text or ""),
+                    }
+                )
+        return self.normalized_chapters(raw_chapters)
+
+    def podcast_chapters_reference(self, element: ET.Element, base_url: str) -> tuple[str, str]:
+        for child in self.children(element, "chapters"):
+            url = str(child.get("url") or child.get("href") or "").strip()
+            if url:
+                return self.absolute_url(url, base_url), str(child.get("type") or "").strip()
+        return "", ""
 
     @staticmethod
     def xml_local_name(tag: str) -> str:
@@ -10017,6 +10065,7 @@ class MainFrame(wx.Frame):
                 REFRESH_INTERVAL_OPTIONS,
                 self.refresh_interval_labels(),
             )
+            button("check_ytdlp_updates_now", self.manual_ytdlp_update_check)
             button("check_app_updates_now", self.manual_app_update_check)
             check("close_to_tray", self.settings.close_to_tray)
             check("start_with_windows", self.settings.start_with_windows)
@@ -10312,6 +10361,30 @@ class MainFrame(wx.Frame):
             return self.t("live_stream")
         return str((item or {}).get("type") or default or self.t("video"))
 
+    @staticmethod
+    def parse_chapter_seconds(value) -> float | None:
+        if value is None or value == "":
+            return None
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return max(0.0, float(value))
+        text = str(value).strip().replace(",", ".")
+        if not text:
+            return None
+        if re.fullmatch(r"\d+(?:\.\d+)?", text):
+            return max(0.0, float(text))
+        parts = text.split(":")
+        if 1 < len(parts) <= 3:
+            try:
+                total = 0.0
+                for part in parts:
+                    total = total * 60.0 + float(part)
+                return max(0.0, total)
+            except ValueError:
+                return None
+        return None
+
     def normalized_chapters(self, raw_chapters) -> list[dict]:
         chapters: list[dict] = []
         if not isinstance(raw_chapters, list):
@@ -10319,16 +10392,12 @@ class MainFrame(wx.Frame):
         for index, chapter in enumerate(raw_chapters):
             if not isinstance(chapter, dict):
                 continue
-            start = chapter.get("start_time", chapter.get("time"))
-            end = chapter.get("end_time")
-            try:
-                start_value = max(0.0, float(start))
-            except (TypeError, ValueError):
+            start = chapter.get("start_time", chapter.get("time", chapter.get("start", chapter.get("startTime"))))
+            end = chapter.get("end_time", chapter.get("end", chapter.get("endTime")))
+            start_value = self.parse_chapter_seconds(start)
+            if start_value is None:
                 continue
-            try:
-                end_value = float(end) if end is not None else None
-            except (TypeError, ValueError):
-                end_value = None
+            end_value = self.parse_chapter_seconds(end)
             title = str(chapter.get("title") or chapter.get("name") or self.t("chapters")).strip()
             if not title:
                 title = f"{self.t('chapters')} {index + 1}"
@@ -12876,6 +12945,9 @@ class MainFrame(wx.Frame):
         chapters = self.normalized_chapters((self.current_video_info or {}).get("chapters"))
         if chapters:
             return chapters
+        chapters = self.current_podcast_chapters()
+        if chapters:
+            return chapters
         if self.player_kind == "mpv" and self.mpv_process_alive():
             try:
                 chapters = self.normalized_chapters(self.mpv_get_property("chapter-list", timeout=0.5))
@@ -12888,6 +12960,43 @@ class MainFrame(wx.Frame):
             if self.current_video_item is not None:
                 self.current_video_item["chapters"] = chapters
         return chapters
+
+    def current_podcast_chapters(self) -> list[dict]:
+        item = self.current_video_info or self.current_video_item or {}
+        if not isinstance(item, dict):
+            return []
+        chapters_url = str(item.get("chapters_url") or "").strip()
+        if not chapters_url or bool(item.get("_chapters_url_checked")):
+            return []
+        try:
+            chapters = self.fetch_podcast_chapters(chapters_url)
+        except Exception:
+            chapters = []
+        self.cache_current_podcast_chapters(chapters, checked=True)
+        return chapters
+
+    def fetch_podcast_chapters(self, url: str) -> list[dict]:
+        request = Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+        with self.open_url(request, timeout=20) as response:
+            payload = json.loads(response.read(1_000_000).decode("utf-8", errors="replace"))
+        if isinstance(payload, dict):
+            raw = payload.get("chapters") or payload.get("items") or []
+        else:
+            raw = payload
+        return self.normalized_chapters(raw)
+
+    def cache_current_podcast_chapters(self, chapters: list[dict], checked: bool = False) -> None:
+        if not isinstance(self.current_video_info, dict):
+            self.current_video_info = {}
+        if chapters:
+            self.current_video_info["chapters"] = chapters
+        if checked:
+            self.current_video_info["_chapters_url_checked"] = True
+        if self.current_video_item is not None:
+            if chapters:
+                self.current_video_item["chapters"] = chapters
+            if checked:
+                self.current_video_item["_chapters_url_checked"] = True
 
     def chapter_line(self, chapter: dict, index: int) -> str:
         title = str(chapter.get("title") or f"{self.t('chapters')} {index + 1}")
@@ -17856,10 +17965,16 @@ class MainFrame(wx.Frame):
             return values[selection]
         return ctrl.GetStringSelection()
 
-    def start_ytdlp_update_check(self) -> None:
-        threading.Thread(target=self.update_ytdlp_worker, daemon=True).start()
+    def start_ytdlp_update_check(self, manual: bool = False) -> None:
+        threading.Thread(target=self.update_ytdlp_worker, args=(manual,), daemon=True).start()
 
-    def update_ytdlp_worker(self) -> None:
+    def manual_ytdlp_update_check(self) -> None:
+        self.apply_settings_from_visible_controls()
+        self.set_status(self.t("checking_updates"))
+        self.announce_player(self.t("checking_updates"))
+        self.start_ytdlp_update_check(manual=True)
+
+    def update_ytdlp_worker(self, manual: bool = False) -> None:
         ytdlp = get_yt_dlp()
         if ytdlp is None:
             self.ui_queue.put(("announce", self.t("missing_ytdlp")))
@@ -17868,6 +17983,8 @@ class MainFrame(wx.Frame):
             updated = self.update_ytdlp_component_package(ytdlp)
             if updated:
                 self.ui_queue.put(("announce", self.t("components_updated")))
+            elif manual:
+                self.ui_queue.put(("announce", self.t("updates_ok")))
         except Exception as exc:
             self.ui_queue.put(("announce", self.t("updates_failed", error=exc)))
 
