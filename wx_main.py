@@ -219,8 +219,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.9.12"
-APP_VERSION_LABEL = "0.9.12"
+APP_VERSION = "0.9.13"
+APP_VERSION_LABEL = "0.9.13"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -10596,14 +10596,18 @@ class MainFrame(wx.Frame):
     def result_identity_at(self, index: int) -> str:
         if index < 0 or index >= len(self.results):
             return ""
-        item = self.results[index]
-        return str(item.get("url") or item.get("webpage_url") or item.get("title") or "")
+        return self.result_identity_for_item(self.results[index])
+
+    @staticmethod
+    def result_identity_for_item(item: dict | None) -> str:
+        item = item or {}
+        return str(item.get("url") or item.get("webpage_url") or item.get("id") or item.get("title") or "")
 
     def result_index_for_identity(self, identity: str, fallback: int, limit: int | None = None) -> int:
         if identity:
             items = self.results[:limit] if limit is not None else self.results
             for index, item in enumerate(items):
-                if str(item.get("url") or item.get("webpage_url") or item.get("title") or "") == identity:
+                if self.result_identity_for_item(item) == identity:
                     return index
         if not self.results:
             return 0
@@ -10716,9 +10720,36 @@ class MainFrame(wx.Frame):
         except Exception as exc:
             wx.CallAfter(self.dynamic_fetch_failed_if_current, generation, self.friendly_error(exc))
 
+    def merge_dynamic_results(self, existing: list[dict], fetched: list[dict], anchor_identity: str = "") -> list[dict]:
+        existing_items = [dict(item) for item in existing]
+        fetched_items = [dict(item) for item in fetched]
+        if not existing_items:
+            return fetched_items
+        merged = list(existing_items)
+        seen = {identity for identity in (self.result_identity_for_item(item) for item in merged) if identity}
+        ordered_fetched = list(fetched_items)
+        if anchor_identity:
+            anchor_index = next(
+                (index for index, item in enumerate(fetched_items) if self.result_identity_for_item(item) == anchor_identity),
+                -1,
+            )
+            if anchor_index >= 0:
+                ordered_fetched = fetched_items[anchor_index + 1 :] + fetched_items[: anchor_index + 1]
+        for item in ordered_fetched:
+            identity = self.result_identity_for_item(item)
+            if identity and identity in seen:
+                continue
+            merged.append(item)
+            if identity:
+                seen.add(identity)
+        return merged
+
     def show_more_results(self, results: list[dict], selection: int) -> None:
         self.loading_more_results = False
-        if len(results) <= len(self.all_results):
+        current_selection = self.current_results_selection(selection)
+        current_identity = str(self.pending_player_next_current_url or "") if self.pending_player_next_after_dynamic_load else self.result_identity_at(current_selection)
+        merged_results = self.merge_dynamic_results(self.all_results, results, current_identity)
+        if len(merged_results) <= len(self.all_results):
             self.set_status(self.t("no_more_results"))
             if self.pending_player_next_after_dynamic_load:
                 self.pending_player_next_after_dynamic_load = False
@@ -10726,10 +10757,8 @@ class MainFrame(wx.Frame):
                 self.pending_player_next_current_url = ""
                 self.announce_player(self.t("no_next_item"))
             return
-        current_selection = self.current_results_selection(selection)
-        current_identity = self.result_identity_at(current_selection)
         previous_count = len(self.results)
-        self.all_results = list(results)
+        self.all_results = list(merged_results)
         visible_count = min(len(self.all_results), max(previous_count, previous_count + RESULTS_PAGE_SIZE))
         self.last_visible_count = visible_count
         self.results = self.all_results[:visible_count]

@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.9.13
+
+- fixed dynamic Next at the end of the currently visible results so loading more results preserves the already-loaded order instead of adopting a reshuffled YouTube response.
+- when player Next triggers dynamic loading, ApricotPlayer now anchors the merge to the currently playing URL, not the possibly stale focused row in Results.
+- appended newly fetched results after the current/last loaded item first, preventing Next from skipping several videos when YouTube returns the expanded search page in a slightly different order.
+
 ## What's new in version 0.9.12
 
 - made session volume the authoritative value between songs, so unstable mpv reads during track changes no longer reset playback to 100, 0, or the saved default volume.
