@@ -1,5 +1,13 @@
 # Changelog
 
+## What's new in version 0.9.4
+
+- fixed the Chapters dialog so Enter on a selected chapter immediately jumps there and closes the chapter list, matching the Play button and double-click behavior.
+- fixed tray restore after Alt+F4/background playback: the running ApricotPlayer window is now explicitly shown, restored, raised, and focused when reopening from a file, desktop shortcut, or tray action.
+- fixed Play folder after YouTube playback so the folder screen keeps its own isolated local-file list instead of accidentally reusing old YouTube results.
+- tightened folder queue state so Play folder, individual folder items, Previous, and Next use the same local folder list and folder return metadata.
+- added natural local-file sorting so numbered files such as `Telemach(1).mp3`, `Telemach(2).mp3`, and `Telemach(10).mp3` appear in numeric order, with the base file before numbered copies.
+
 ## What's new in version 0.9.3
 
 - added podcast chapter support beyond embedded media chapters: ApricotPlayer now reads inline Podlove/PSC chapters from podcast RSS items.

@@ -219,8 +219,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.9.3"
-APP_VERSION_LABEL = "0.9.3"
+APP_VERSION = "0.9.4"
+APP_VERSION_LABEL = "0.9.4"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -4282,6 +4282,8 @@ class MainFrame(wx.Frame):
         self.search_generation = 0
         self.playlist_play_generation = 0
         self.local_folder_cache: dict[str, list[dict]] = {}
+        self.current_local_folder_path = ""
+        self.current_local_folder_items: list[dict] = []
         self.last_activation_check = 0.0
         self.settings_render_generation = 0
         self.settings_pending_section_index = -1
@@ -5984,7 +5986,18 @@ class MainFrame(wx.Frame):
         if focus:
             self.safe_set_focus(focus)
 
+    def ensure_window_visible(self) -> None:
+        try:
+            if not self.IsShown():
+                self.Show()
+            if self.IsIconized():
+                self.Iconize(False)
+            self.Raise()
+        except RuntimeError:
+            pass
+
     def activate_window(self) -> None:
+        self.ensure_window_visible()
         focus = wx.Window.FindFocus()
         primary = self.primary_focus_candidate()
         if primary is not None and focus is primary and self.app_has_focus():
@@ -6240,6 +6253,7 @@ class MainFrame(wx.Frame):
         self.show_desktop_notification(APP_NAME, self.t("tray_still_running"), enabled=self.settings.tray_notification)
 
     def restore_from_tray(self) -> None:
+        self.ensure_window_visible()
         try:
             self.RequestUserAttention(wx.USER_ATTENTION_INFO)
         except Exception:
@@ -11036,8 +11050,18 @@ class MainFrame(wx.Frame):
         folder_context = self.folder_screen_active or (self.in_player_screen and self.player_return_screen == "folder")
         trending_context = getattr(self, "trending_screen_active", False) or (self.in_player_screen and self.player_return_screen == "trending")
         if folder_context:
+            items = self.selected_local_folder_items()
+            if items:
+                item_url = str(item.get("url") or "")
+                folder_index = next((index for index, result in enumerate(items) if str(result.get("url") or "") == item_url), self.current_index)
+                folder_index = min(max(0, folder_index), len(items) - 1)
+                self.return_results = list(items)
+                self.return_all_results = list(items)
+                self.return_index = folder_index
+                self.return_visible_count = len(items)
+                self.current_index = folder_index
             self.player_return_screen = "folder"
-            self.player_return_data = {"index": self.current_index, "folder": self.last_search_query}
+            self.player_return_data = {"index": self.current_index, "folder": self.current_local_folder_path or self.last_search_query}
         elif trending_context:
             self.player_return_screen = "trending"
             self.player_return_data = {
@@ -11049,8 +11073,9 @@ class MainFrame(wx.Frame):
             self.player_return_screen = "search"
             self.player_return_data = {}
         if folder_context:
-            items = [dict(result) for result in (self.all_results or self.results) if result.get("kind") == "local_file" and result.get("url")]
-            queue_items = [self.playback_queue_item_with_folder_return(result, items, auto_folder_queue=True) for result in items[self.current_index + 1 :]]
+            items = self.selected_local_folder_items()
+            folder_index = int(self.player_return_data.get("index") or self.current_index)
+            queue_items = [self.playback_queue_item_with_folder_return(result, items, auto_folder_queue=True) for result in items[folder_index + 1 :]]
             self.playback_queue = queue_items
             self.save_playback_queue()
         self.current_video_item = item
@@ -11555,6 +11580,13 @@ class MainFrame(wx.Frame):
         patterns = ";".join(f"*{extension}" for extension in sorted(LOCAL_MEDIA_EXTENSIONS))
         return f"{self.t('media_files')} ({patterns})|{patterns}|{self.t('all_files')} (*.*)|*.*"
 
+    @staticmethod
+    def natural_sort_key(value) -> list[tuple[int, object]]:
+        text = str(value or "").casefold()
+        text = re.sub(r"\.([^./\\]+)$", lambda match: "\x00" + match.group(1), text)
+        parts = re.split(r"(\d+)", text)
+        return [(1, int(part)) if part.isdigit() else (0, part) for part in parts]
+
     def local_media_files_in_folder(self, folder: Path) -> list[Path]:
         files: list[Path] = []
 
@@ -11563,8 +11595,8 @@ class MainFrame(wx.Frame):
 
         try:
             for root, directories, names in os.walk(folder, onerror=ignore_walk_error):
-                directories.sort(key=str.lower)
-                for name in sorted(names, key=str.lower):
+                directories.sort(key=self.natural_sort_key)
+                for name in sorted(names, key=self.natural_sort_key):
                     path = Path(root) / name
                     try:
                         if path.is_file() and path.suffix.lower() in LOCAL_MEDIA_EXTENSIONS:
@@ -11573,7 +11605,7 @@ class MainFrame(wx.Frame):
                         continue
         except OSError:
             return []
-        return sorted(files, key=lambda path: str(path.relative_to(folder)).lower())
+        return sorted(files, key=lambda path: self.natural_sort_key(str(path.relative_to(folder))))
 
     @staticmethod
     def local_folder_cache_key(folder: Path) -> str:
@@ -11623,6 +11655,9 @@ class MainFrame(wx.Frame):
         self.show_local_media_folder(folder, items, selection=0)
 
     def show_local_media_folder(self, folder: Path, items: list[dict], selection: int = 0) -> None:
+        folder_items = [dict(item) for item in items if item.get("kind") == "local_file" and item.get("url")]
+        self.current_local_folder_path = str(folder)
+        self.current_local_folder_items = list(folder_items)
         self.in_main_menu = False
         self.in_queue_screen = False
         self.search_screen_active = False
@@ -11669,19 +11704,23 @@ class MainFrame(wx.Frame):
         self.search_results_stack = []
         self.loading_more_results = False
         self.dynamic_fetch_enabled = False
+        self.last_user_result_index = 0
+        self.last_user_result_identity = ""
         self.metadata_hydration_urls.clear()
         self.search_generation += 1
-        self.cache_local_folder_items(folder, items)
-        self.show_results(items, selection=selection, visible_count=len(items))
-        self.set_status(self.t("folder_loaded", count=len(items)))
-        self.return_results = list(self.results)
-        self.return_all_results = list(self.all_results or self.results)
-        self.return_index = min(max(0, selection), len(items) - 1)
-        self.return_visible_count = self.last_visible_count or len(self.results)
+        self.cache_local_folder_items(folder, folder_items)
+        self.show_results(folder_items, selection=selection, visible_count=len(folder_items))
+        self.set_status(self.t("folder_loaded", count=len(folder_items)))
+        self.return_results = list(folder_items)
+        self.return_all_results = list(folder_items)
+        self.return_index = min(max(0, selection), max(0, len(folder_items) - 1))
+        self.return_visible_count = len(folder_items)
         self.panel.Layout()
         self.focus_later(self.results_list)
 
     def selected_local_folder_items(self) -> list[dict]:
+        if (self.folder_screen_active or self.player_return_screen == "folder") and getattr(self, "current_local_folder_items", None):
+            return [dict(item) for item in self.current_local_folder_items if item.get("kind") == "local_file" and item.get("url")]
         return [dict(item) for item in (self.all_results or self.results) if item.get("kind") == "local_file" and item.get("url")]
 
     def play_local_folder(self, start_index: int = 0, shuffle: bool = False) -> None:
@@ -11689,9 +11728,11 @@ class MainFrame(wx.Frame):
         if not items:
             self.announce_player(self.t("folder_no_media"))
             return
-        current = self.selected_result()
-        if current and any(item.get("url") == current.get("url") for item in items):
-            start_index = next((index for index, item in enumerate(items) if item.get("url") == current.get("url")), start_index)
+        if self.folder_screen_active:
+            selected_index = self.current_results_selection(start_index)
+            if 0 <= selected_index < len(self.results):
+                selected_url = self.results[selected_index].get("url")
+                start_index = next((index for index, item in enumerate(items) if item.get("url") == selected_url), start_index)
         start_index = min(max(0, start_index), len(items) - 1)
         ordered = list(items)
         if shuffle:
@@ -11701,18 +11742,20 @@ class MainFrame(wx.Frame):
         else:
             self.shuffle_current = False
         current_item = dict(ordered[start_index])
+        current_source_index = next((index for index, item in enumerate(items) if item.get("url") == current_item.get("url")), start_index)
         queue_items = ordered[start_index + 1 :]
         self.playback_queue = [self.playback_queue_item_with_folder_return(item, items, auto_folder_queue=True) for item in queue_items]
         self.save_playback_queue()
         self.player_return_screen = "folder"
         self.player_return_data = {
-            "index": next((index for index, item in enumerate(items) if item.get("url") == current_item.get("url")), start_index),
-            "folder": self.last_search_query,
+            "index": current_source_index,
+            "folder": self.current_local_folder_path or self.last_search_query,
         }
-        self.return_results = list(self.results)
-        self.return_all_results = list(self.all_results or self.results)
-        self.return_index = int(self.player_return_data.get("index") or 0)
-        self.return_visible_count = self.last_visible_count or len(self.results)
+        self.return_results = list(items)
+        self.return_all_results = list(items)
+        self.return_index = current_source_index
+        self.return_visible_count = len(items)
+        self.current_index = current_source_index
         self.current_video_item = current_item
         self.current_video_info = dict(current_item)
         self.play_url(str(current_item.get("url") or ""), str(current_item.get("title") or ""))
@@ -11737,7 +11780,7 @@ class MainFrame(wx.Frame):
     def playback_queue_item_with_folder_return(self, item: dict, source_items: list[dict], auto_folder_queue: bool = False) -> dict:
         queue_item = self.playlist_item_from_media(item)
         queue_item["_return_screen"] = "folder"
-        queue_item["_return_folder"] = self.last_search_query
+        queue_item["_return_folder"] = self.current_local_folder_path or self.last_search_query
         queue_item["_return_index"] = next(
             (index for index, source in enumerate(source_items) if source.get("url") == item.get("url")),
             0,
@@ -13040,9 +13083,11 @@ class MainFrame(wx.Frame):
             index = selected_index()
             if index >= 0:
                 self.seek_to_chapter(chapters[index])
+                dialog.EndModal(wx.ID_OK)
 
         def on_chapter_key(event: wx.KeyEvent) -> None:
-            if self.shortcut_matches(event, "open_selected"):
+            key_code = event.GetKeyCode()
+            if self.shortcut_matches(event, "open_selected") or key_code in {wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER}:
                 play_selected()
                 return
             if self.shortcut_matches(event, "player_back"):
@@ -13052,7 +13097,12 @@ class MainFrame(wx.Frame):
 
         chapter_list.Bind(wx.EVT_LISTBOX_DCLICK, play_selected)
         chapter_list.Bind(wx.EVT_KEY_DOWN, on_chapter_key)
+        dialog.Bind(wx.EVT_CHAR_HOOK, on_chapter_key)
         play_button.Bind(wx.EVT_BUTTON, play_selected)
+        try:
+            play_button.SetDefault()
+        except RuntimeError:
+            pass
         dialog.ShowModal()
         dialog.Destroy()
         self.focus_player_target_later("player")
@@ -14118,10 +14168,19 @@ class MainFrame(wx.Frame):
                 "item_index": int(item.get("user_playlist_item_index", 0) or 0),
             }
         elif self.player_return_screen == "folder" or item.get("kind") == "local_file":
-            results = self.return_all_results or self.all_results or self.return_results or self.results
+            folder = str(data.get("folder") or self.current_local_folder_path or self.last_search_query)
+            results = [dict(result) for result in (self.return_all_results or self.current_local_folder_items or self.all_results or self.return_results or self.results) if result.get("kind") == "local_file" and result.get("url")]
+            if folder and not results:
+                results = self.cached_local_folder_items(Path(folder))
+            if results:
+                self.current_local_folder_path = folder
+                self.current_local_folder_items = [dict(result) for result in results]
+                self.return_results = list(results)
+                self.return_all_results = list(results)
+                self.return_visible_count = len(results)
             self.return_index = next((i for i, result in enumerate(results) if result.get("url") == item.get("url")), self.return_index)
             self.player_return_screen = "folder"
-            self.player_return_data = {"index": self.return_index, "folder": self.last_search_query}
+            self.player_return_data = {"index": self.return_index, "folder": folder}
         else:
             results = self.return_all_results or self.all_results or self.return_results or self.results
             self.return_index = next((i for i, result in enumerate(results) if result.get("url") == item.get("url")), self.return_index)
@@ -14356,11 +14415,22 @@ class MainFrame(wx.Frame):
             return
         source_screen = str(item.get("_return_screen") or "")
         if source_screen == "folder":
+            folder = str(item.get("_return_folder") or self.current_local_folder_path or self.last_search_query)
+            folder_items = self.current_local_folder_items if folder == self.current_local_folder_path else []
+            if folder and not folder_items:
+                folder_items = self.cached_local_folder_items(Path(folder))
+            if folder_items:
+                self.current_local_folder_path = folder
+                self.current_local_folder_items = [dict(result) for result in folder_items]
+                self.return_results = list(self.current_local_folder_items)
+                self.return_all_results = list(self.current_local_folder_items)
+                self.return_visible_count = len(self.current_local_folder_items)
             self.player_return_screen = "folder"
             self.player_return_data = {
                 "index": int(item.get("_return_index") or 0),
-                "folder": str(item.get("_return_folder") or self.last_search_query),
+                "folder": folder,
             }
+            self.return_index = int(item.get("_return_index") or 0)
         else:
             self.player_return_screen = "playback_queue"
             self.player_return_data = {}
@@ -19564,7 +19634,7 @@ def activate_existing_instance_window() -> bool:
                 return True
             title_buffer = ctypes.create_unicode_buffer(title_length + 1)
             user32.GetWindowTextW(hwnd, title_buffer, title_length + 1)
-            if str(title_buffer.value).startswith(APP_NAME):
+            if APP_NAME in str(title_buffer.value):
                 target_hwnd = ctypes.c_void_p(hwnd)
                 return False
             return True
