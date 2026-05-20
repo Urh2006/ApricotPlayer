@@ -1,5 +1,12 @@
 # Changelog
 
+## What's new in version 0.9.10
+
+- fixed result-list letter navigation while the embedded player layout is active: plain keys such as P and V now stay with the list instead of triggering player shortcuts.
+- kept Ctrl+PageUp and Ctrl+PageDown available from results for player previous and next, but made unmodified result-list keys belong to the list.
+- made player-next after dynamic loading continue from the exact current video URL, so the next item is deterministic instead of falling back to stale index or shuffle state.
+- limited player-triggered dynamic next loading to search and trending result contexts, so folders and other finite lists keep their normal no-next behavior.
+
 ## What's new in version 0.9.9
 
 - fixed results-list arrow navigation after returning from the player: plain Up/Down/Page/Home/End now stay with the results list instead of being interpreted as player volume shortcuts.

@@ -219,8 +219,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.9.9"
-APP_VERSION_LABEL = "0.9.9"
+APP_VERSION = "0.9.10"
+APP_VERSION_LABEL = "0.9.10"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -4257,6 +4257,7 @@ class MainFrame(wx.Frame):
         self.collection_fully_loaded = False
         self.pending_player_next_after_dynamic_load = False
         self.pending_player_next_preserve_focus = False
+        self.pending_player_next_current_url = ""
         self.current_stream_url = ""
         self.current_stream_headers: dict = {}
         self.stream_url_cache: dict[str, dict] = {}
@@ -10722,6 +10723,7 @@ class MainFrame(wx.Frame):
             if self.pending_player_next_after_dynamic_load:
                 self.pending_player_next_after_dynamic_load = False
                 self.pending_player_next_preserve_focus = False
+                self.pending_player_next_current_url = ""
                 self.announce_player(self.t("no_next_item"))
             return
         current_selection = self.current_results_selection(selection)
@@ -10753,6 +10755,7 @@ class MainFrame(wx.Frame):
         if self.pending_player_next_after_dynamic_load:
             self.pending_player_next_after_dynamic_load = False
             self.pending_player_next_preserve_focus = False
+            self.pending_player_next_current_url = ""
             self.set_status(error)
             self.announce_player(error)
             return
@@ -10764,11 +10767,14 @@ class MainFrame(wx.Frame):
             self.dynamic_fetch_failed(error)
 
     def request_player_next_dynamic_load(self, preserve_focus: bool = False) -> bool:
+        if self.player_return_screen not in {"search", "trending"}:
+            return False
         if not self.dynamic_fetch_enabled or self.settings.results_limit != 0 or not hasattr(self, "results_list"):
             return False
         if self.loading_more_results:
             self.pending_player_next_after_dynamic_load = True
             self.pending_player_next_preserve_focus = bool(preserve_focus)
+            self.pending_player_next_current_url = str((self.current_video_item or {}).get("url") or "")
             return True
         current_count = len(self.all_results)
         if current_count <= 0:
@@ -10780,6 +10786,7 @@ class MainFrame(wx.Frame):
             return False
         self.pending_player_next_after_dynamic_load = True
         self.pending_player_next_preserve_focus = bool(preserve_focus)
+        self.pending_player_next_current_url = str((self.current_video_item or {}).get("url") or "")
         selection = max(0, len(self.results) - 1)
         self.fetch_more_dynamic_results(selection)
         return True
@@ -10788,11 +10795,27 @@ class MainFrame(wx.Frame):
         if not self.pending_player_next_after_dynamic_load:
             return
         preserve_focus = bool(self.pending_player_next_preserve_focus)
+        current_url = str(self.pending_player_next_current_url or "")
         self.pending_player_next_after_dynamic_load = False
         self.pending_player_next_preserve_focus = False
+        self.pending_player_next_current_url = ""
         if not self.player_is_active():
             return
+        next_item = self.next_player_item_after_url(current_url)
+        if next_item:
+            wx.CallAfter(self.open_relative_player_item, next_item, True, preserve_focus)
+            return
         wx.CallAfter(self.play_relative_item, 1, preserve_focus)
+
+    def next_player_item_after_url(self, current_url: str) -> dict | None:
+        if not current_url:
+            return None
+        playable = [item for item in self.player_navigation_results() if item.get("kind") not in {"channel", "playlist"}]
+        current_pos = next((index for index, item in enumerate(playable) if str(item.get("url") or "") == current_url), -1)
+        target = current_pos + 1
+        if 0 <= current_pos and target < len(playable):
+            return dict(playable[target])
+        return None
 
     def start_result_metadata_hydration(self) -> None:
         candidates: list[dict] = []
@@ -16433,13 +16456,27 @@ class MainFrame(wx.Frame):
             wx.WXK_PAGEDOWN,
         }
 
+    @staticmethod
+    def results_list_owns_key(event: wx.KeyEvent) -> bool:
+        if event.ControlDown() or event.AltDown():
+            return False
+        return True
+
     def handle_player_shortcut_event(self, event: wx.KeyEvent, focus: wx.Window | None, details_has_focus: bool = False) -> bool:
         if not (self.player_control_mode and self.player_shortcuts_allowed(focus)):
             return False
-        if focus is getattr(self, "results_list", None) and self.results_list_native_navigation_key(event):
-            event.Skip()
-            wx.CallAfter(self.maybe_extend_results)
-            return True
+        if focus is getattr(self, "results_list", None):
+            if self.shortcut_matches(event, "player_previous"):
+                self.play_relative_item(-1, preserve_focus=True)
+                return True
+            if self.shortcut_matches(event, "player_next"):
+                self.play_relative_item(1, preserve_focus=True)
+                return True
+            if self.results_list_owns_key(event):
+                event.Skip()
+                wx.CallAfter(self.maybe_extend_results)
+                return True
+            return False
         if self.context_menu_shortcut_matches(event):
             self.open_player_context_menu()
             return True
