@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.9.8
+
+- restored folder queue creation for the explicit Play folder and Shuffle folder actions.
+- kept single-file playback clean: pressing Enter or Play on one local file does not auto-fill the queue with the whole folder.
+- preserved manually queued items when Play folder or Shuffle folder creates its folder queue; the new folder queue plays first, then the previous manual queue remains.
+
 ## What's new in version 0.9.7
 
 - restored the intended queue priority for Next and end-of-item autoplay: manually queued items are still played before the normal folder/result next item.
