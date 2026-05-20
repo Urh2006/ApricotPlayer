@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from importlib import import_module
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlparse
+from urllib.parse import parse_qs, parse_qsl, unquote, urlencode, urljoin, urlparse
 
 import wx
 import wx.adv
@@ -219,8 +219,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.9.1"
-APP_VERSION_LABEL = "0.9.1"
+APP_VERSION = "0.9.2"
+APP_VERSION_LABEL = "0.9.2"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -569,6 +569,7 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "new_subscription_videos": "Ctrl+Shift+V",
     "remove_selected": "Delete",
     "player_copy_link": "L",
+    "player_copy_timestamp_link": "Ctrl+Shift+L",
     "player_play_pause": "Space",
     "player_time": "T",
     "player_speed_down": "S",
@@ -580,7 +581,7 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "player_output_devices": "O",
     "player_equalizer": "F4",
     "player_chapters": "Ctrl+Shift+C",
-    "player_lyrics": "Ctrl+Shift+L",
+    "player_lyrics": "Ctrl+Shift+Y",
     "player_comments": "Ctrl+Shift+M",
     "player_previous_chapter": "Alt+Left",
     "player_next_chapter": "Alt+Right",
@@ -641,6 +642,7 @@ SHORTCUT_DEFINITIONS = [
     ("new_subscription_videos", "shortcut_new_subscription_videos"),
     ("remove_selected", "shortcut_remove_selected"),
     ("player_copy_link", "shortcut_player_copy_link"),
+    ("player_copy_timestamp_link", "shortcut_player_copy_timestamp_link"),
     ("player_play_pause", "shortcut_player_play_pause"),
     ("player_time", "shortcut_player_time"),
     ("player_speed_down", "shortcut_player_speed_down"),
@@ -3907,6 +3909,43 @@ for language_code in LANGUAGE_CODES:
         TEXT.setdefault(language_code, {}).setdefault(key, value)
 
 
+RELEASE_092_TRANSLATION_UPDATES = {
+    "sl": {
+        "video_details": "Podrobnosti",
+        "show_video_details": "Pokazi podrobnosti",
+        "show_video_details_by_default": "Privzeto pokazi podrobnosti v predvajalniku",
+        "copy_path": "Kopiraj pot",
+        "path_copied": "Pot je kopirana.",
+        "copy_timestamp_link": "Kopiraj povezavo na trenutni cas",
+        "timestamp_url_copied": "Povezava na trenutni cas je kopirana.",
+        "timestamp_url_unavailable": "Povezava na trenutni cas je na voljo samo za YouTube videe.",
+        "direct_media_link_unavailable_local": "Direktni media URL ni potreben za lokalne datoteke. Uporabi Kopiraj pot.",
+        "shortcut_player_copy_timestamp_link": "Predvajalnik: kopiraj povezavo na trenutni cas",
+        "shortcut_player_lyrics": "Predvajalnik: odpri lyrics",
+        "shortcut_player_details": "Predvajalnik: podrobnosti",
+    },
+    "en": {
+        "video_details": "Details",
+        "show_video_details": "Show details",
+        "show_video_details_by_default": "Show details in the player by default",
+        "copy_path": "Copy path",
+        "path_copied": "Path copied.",
+        "copy_timestamp_link": "Copy link at current time",
+        "timestamp_url_copied": "Link at current time copied.",
+        "timestamp_url_unavailable": "A link at the current time is only available for YouTube videos.",
+        "direct_media_link_unavailable_local": "A direct media URL is not needed for local files. Use Copy path.",
+        "shortcut_player_copy_timestamp_link": "Player: copy link at current time",
+        "shortcut_player_lyrics": "Player: open lyrics",
+        "shortcut_player_details": "Player: show details",
+    },
+}
+for language_code in LANGUAGE_CODES:
+    TEXT.setdefault(language_code, {}).update(RELEASE_092_TRANSLATION_UPDATES.get(language_code, RELEASE_092_TRANSLATION_UPDATES["sl" if language_code == "sl" else "en"]))
+for language_code in LANGUAGE_CODES:
+    for key, value in RELEASE_092_TRANSLATION_UPDATES["en"].items():
+        TEXT.setdefault(language_code, {}).setdefault(key, value)
+
+
 def default_equalizer_gains() -> dict[str, float]:
     return {band_id: 0.0 for band_id, _label in EQ_BANDS}
 
@@ -5715,6 +5754,24 @@ class MainFrame(wx.Frame):
         item = self.current_video_item or {}
         return str(info.get("title") or item.get("title") or self.t("player")).strip()
 
+    def current_player_item(self) -> dict:
+        item = self.current_video_item or self.current_video_info or {}
+        return item if isinstance(item, dict) else {}
+
+    def item_is_local_media(self, item: dict | None) -> bool:
+        if not isinstance(item, dict):
+            return False
+        if str(item.get("kind") or "").strip().lower() == "local_file":
+            return True
+        value = str(item.get("path") or item.get("url") or "").strip()
+        return bool(value and self.local_media_path_from_input(value))
+
+    def current_player_is_local_media(self) -> bool:
+        return self.item_is_local_media(self.current_player_item())
+
+    def player_copy_reference_label_key(self) -> str:
+        return "copy_path" if self.current_player_is_local_media() else "copy_link"
+
     def current_play_pause_label(self) -> str:
         if not self.player_is_active() or self.player_ended or self.player_paused:
             return self.t("play")
@@ -6194,10 +6251,9 @@ class MainFrame(wx.Frame):
             return
         action = str(payload.get("action") or "show")
         if action == "open_file":
-            self.restore_from_tray()
             path = str(payload.get("path") or "")
             if path:
-                wx.CallAfter(self.open_local_media_file, path)
+                wx.CallAfter(self.open_local_media_file, path, True)
         elif action == "settings":
             self.show_settings_from_tray()
         else:
@@ -11621,7 +11677,7 @@ class MainFrame(wx.Frame):
             queue_item["_auto_folder_queue"] = True
         return queue_item
 
-    def open_local_media_file(self, value: str) -> None:
+    def open_local_media_file(self, value: str, activate_after_open: bool = False) -> None:
         try:
             path = self.local_media_path_from_input(value)
             if not path:
@@ -11631,7 +11687,9 @@ class MainFrame(wx.Frame):
             self.player_return_data = {}
             self.current_video_item = item
             self.current_video_info = dict(item)
-            self.play_url(str(path), item["title"])
+            self.play_url(str(path), item["title"], announce_start=activate_after_open)
+            if activate_after_open:
+                self.restore_from_tray()
         except Exception as exc:
             self.message(self.t("local_file_open_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
@@ -12361,6 +12419,7 @@ class MainFrame(wx.Frame):
         self.root_sizer.Add(self.player_panel, 1, wx.EXPAND | wx.ALL, 4)
         if focus_target == "player" and not self.settings.show_video_details_by_default:
             self.player_panel.SetFocus()
+        is_local_media = self.current_player_is_local_media()
         player_controls = [
             (self.t("previous"), lambda: self.play_relative_item(-1, preserve_focus=True)),
             (self.current_play_pause_label(), self.player_play_pause),
@@ -12373,10 +12432,11 @@ class MainFrame(wx.Frame):
             (self.t("lyrics"), self.show_lyrics),
             (self.t("comments"), self.show_comments),
             (self.t("edit_mode"), self.toggle_edit_mode),
-            (self.t("copy_link"), self.copy_active_url),
-            (self.t("copy_stream_url"), self.copy_direct_stream_url),
+            (self.t("copy_path" if is_local_media else "copy_link"), self.copy_current_player_url),
             (self.t("show_video_details"), self.show_video_details),
         ]
+        if not is_local_media:
+            player_controls.insert(-1, (self.t("copy_stream_url"), self.copy_direct_stream_url))
         if background_enabled:
             player_controls.append((self.t("close_player"), self.close_current_player))
         player_action_buttons = self.add_button_row(player_controls)
@@ -13387,14 +13447,68 @@ class MainFrame(wx.Frame):
                 wx.TheClipboard.Close()
         self.announce_player(self.t("url_copied"))
 
+    def copy_path_to_clipboard(self, path: str) -> None:
+        if not path:
+            return
+        self.copy_plain_text_to_clipboard(path)
+        self.announce_player(self.t("path_copied"))
+
     def copy_active_url(self) -> None:
         item = self.active_item()
         if item:
             self.copy_url_to_clipboard(item.get("url", ""))
 
     def copy_current_player_url(self) -> None:
-        item = self.current_video_item or self.current_video_info or {}
-        self.copy_url_to_clipboard(str(item.get("url") or item.get("webpage_url") or ""))
+        item = self.current_player_item()
+        if self.item_is_local_media(item):
+            self.copy_path_to_clipboard(str(item.get("path") or item.get("url") or item.get("webpage_url") or ""))
+            return
+        self.copy_url_to_clipboard(str(item.get("webpage_url") or item.get("url") or ""))
+
+    def current_player_position_seconds(self) -> int:
+        if self.player_kind == "mpv" and self.mpv_process_alive():
+            try:
+                return max(0, int(float(self.mpv_get_property("time-pos", timeout=0.35) or 0.0)))
+            except Exception:
+                pass
+        return 0
+
+    def youtube_url_at_timestamp(self, item: dict | None, seconds: int) -> str:
+        video_id = self.extract_youtube_video_id(item)
+        if not video_id:
+            return ""
+        source_url = ""
+        if isinstance(item, dict):
+            for key in ("webpage_url", "original_url", "watch_url", "url"):
+                candidate = str(item.get(key) or "").strip()
+                if not candidate:
+                    continue
+                try:
+                    host = (urlparse(candidate).netloc or "").lower()
+                except Exception:
+                    continue
+                if ("youtube.com" in host or "youtu.be" in host) and "googlevideo.com" not in host:
+                    source_url = candidate
+                    break
+        params: list[tuple[str, str]] = [("v", video_id)]
+        if source_url:
+            try:
+                for key, value in parse_qsl(urlparse(source_url).query, keep_blank_values=True):
+                    if key.lower() in {"v", "t", "start", "time_continue"}:
+                        continue
+                    params.append((key, value))
+            except Exception:
+                pass
+        params.append(("t", f"{max(0, int(seconds))}s"))
+        return f"https://www.youtube.com/watch?{urlencode(params)}"
+
+    def copy_current_player_timestamp_url(self) -> None:
+        url = self.youtube_url_at_timestamp(self.current_player_item(), self.current_player_position_seconds())
+        if not url:
+            self.announce_player(self.t("timestamp_url_unavailable"))
+            return
+        self.copy_plain_text_to_clipboard(url)
+        self.announce_player(self.t("timestamp_url_copied"))
 
     def youtube_channel_item_for_video(self, item: dict | None) -> dict | None:
         if not item or not isinstance(item, dict):
@@ -16042,6 +16156,9 @@ class MainFrame(wx.Frame):
         if self.shortcut_matches(event, "player_copy_link"):
             self.copy_current_player_url()
             return True
+        if self.shortcut_matches(event, "player_copy_timestamp_link"):
+            self.copy_current_player_timestamp_url()
+            return True
         if self.shortcut_matches(event, "open_channel"):
             self.open_item_channel(self.current_video_item or self.current_video_info)
             return True
@@ -16328,7 +16445,8 @@ class MainFrame(wx.Frame):
         item = self.current_video_item or self.current_video_info or {}
         menu = wx.Menu()
         actions = []
-        if item.get("kind") != "local_file":
+        is_local_media = self.item_is_local_media(item)
+        if not is_local_media:
             actions.extend(
                 [
                     (self.menu_label_with_shortcut("download_audio", "download_audio"), lambda: self.start_download(True, item=dict(item))),
@@ -16343,8 +16461,7 @@ class MainFrame(wx.Frame):
             (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
             (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
             (self.menu_label_with_shortcut("remove_from_playlist", "remove_from_playlist"), self.remove_active_from_playlist),
-            (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda: self.copy_direct_stream_url(dict(item))),
-            (self.menu_label_with_shortcut("copy_url", "copy_link"), self.copy_current_player_url),
+            (self.menu_label_with_shortcut("copy_path" if is_local_media else "copy_link", "player_copy_link"), self.copy_current_player_url),
             (self.t("output_devices"), self.show_output_devices),
             (self.t("equalizer"), self.show_player_equalizer),
             (self.menu_label_with_shortcut("chapters", "player_chapters"), self.show_chapters),
@@ -16352,9 +16469,13 @@ class MainFrame(wx.Frame):
             (self.menu_label_with_shortcut("comments", "player_comments"), self.show_comments),
             (self.t("close_player"), self.close_current_player),
         ])
+        if not is_local_media:
+            actions.insert(-6, (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda: self.copy_direct_stream_url(dict(item))))
+        if self.youtube_url_at_timestamp(item, 0):
+            actions.insert(-6, (self.menu_label_with_shortcut("copy_timestamp_link", "player_copy_timestamp_link"), self.copy_current_player_timestamp_url))
         if self.item_has_openable_youtube_channel(item):
             actions.insert(6, (self.menu_label_with_shortcut("open_channel", "open_channel"), lambda: self.open_item_channel(dict(item))))
-        if item.get("kind") != "local_file":
+        if not is_local_media:
             actions.insert(-5, (self.t("open_browser"), lambda: import_module("webbrowser").open(str(item.get("webpage_url") or item.get("url") or ""))))
         for label, handler in actions:
             menu_item = menu.Append(wx.ID_ANY, label)
@@ -16904,6 +17025,9 @@ class MainFrame(wx.Frame):
 
     def copy_direct_stream_url(self, item: dict | None = None) -> None:
         item = item or self.active_item()
+        if self.in_player_screen and self.item_is_local_media(item or self.current_player_item()):
+            self.announce_player(self.t("direct_media_link_unavailable_local"))
+            return
         if self.in_player_screen and not item and self.current_stream_url:
             self.copy_url_to_clipboard(self.current_stream_url)
             self.announce_player(self.t("stream_url_copied"))
@@ -19377,7 +19501,6 @@ def handle_already_running_startup(startup_media_path: str, tray_start: bool) ->
         return False
     if startup_media_path:
         request_existing_instance_activation("open_file", path=startup_media_path)
-        activate_existing_instance_window()
     elif tray_start:
         return False
     elif startup_close_to_tray_enabled():
@@ -19413,12 +19536,14 @@ class App(wx.App):
             frame.Hide()
         else:
             frame.Show()
-            if update_relaunch:
+            if startup_media_path:
+                pass
+            elif update_relaunch:
                 frame.activate_after_update_relaunch()
             else:
                 frame.activate_window_later()
         if startup_media_path:
-            wx.CallAfter(frame.open_local_media_file, startup_media_path)
+            wx.CallAfter(frame.open_local_media_file, startup_media_path, True)
         return True
 
     def OnExit(self) -> int:

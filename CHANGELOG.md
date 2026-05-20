@@ -1,5 +1,13 @@
 # Changelog
 
+## What's new in version 0.9.2
+
+- fixed opening a new local file from disk while ApricotPlayer is already running: the existing instance now switches to the new file before it brings the window forward, so screen readers do not announce the previous title first.
+- added a player-only Copy link at current time action. The default shortcut is Ctrl+Shift+L and the player context menu shows it for YouTube videos.
+- moved the default Lyrics shortcut to Ctrl+Shift+Y so it does not conflict with the new timestamp-link shortcut.
+- changed local-file player controls from Copy link to Copy path, and hid Copy direct media URL for local files.
+- renamed Show video details / Player: video details to Show details / Player: show details.
+
 ## What's new in version 0.9.1
 
 - made YouTube comments work without a YouTube Data API key by defaulting to the yt-dlp comments path when no key is configured.
