@@ -219,8 +219,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.9.10"
-APP_VERSION_LABEL = "0.9.10"
+APP_VERSION = "0.9.11"
+APP_VERSION_LABEL = "0.9.11"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -10613,7 +10613,7 @@ class MainFrame(wx.Frame):
         if not hasattr(self, "results_list") or not self.results:
             return None
         selection = self.current_results_selection(self.last_user_result_index)
-        if wx.Window.FindFocus() is getattr(self, "results_list", None) and self.last_user_result_identity:
+        if self.focus_in_results_control(wx.Window.FindFocus()) and self.last_user_result_identity:
             selection = self.result_index_for_identity(self.last_user_result_identity, self.last_user_result_index)
         if selection < 0 or selection >= len(self.results):
             return None
@@ -10805,7 +10805,7 @@ class MainFrame(wx.Frame):
         if next_item:
             wx.CallAfter(self.open_relative_player_item, next_item, True, preserve_focus)
             return
-        wx.CallAfter(self.play_relative_item, 1, preserve_focus)
+        self.announce_player(self.t("no_next_item"))
 
     def next_player_item_after_url(self, current_url: str) -> dict | None:
         if not current_url:
@@ -11115,7 +11115,7 @@ class MainFrame(wx.Frame):
             index = self.results_list.GetSelection()
         except RuntimeError:
             return None
-        if wx.Window.FindFocus() is getattr(self, "results_list", None) and getattr(self, "last_user_result_identity", ""):
+        if self.focus_in_results_control(wx.Window.FindFocus()) and getattr(self, "last_user_result_identity", ""):
             index = self.result_index_for_identity(self.last_user_result_identity, self.last_user_result_index)
         if index == wx.NOT_FOUND or index < 0 or index >= len(self.results):
             return None
@@ -11133,6 +11133,7 @@ class MainFrame(wx.Frame):
         if item.get("kind") == "playlist":
             self.open_playlist_videos(item)
             return
+        self.shuffle_current = False
         self.return_results = list(self.results)
         self.return_all_results = list(self.all_results or self.results)
         self.return_index = self.current_index
@@ -12812,7 +12813,7 @@ class MainFrame(wx.Frame):
         self.announce_player(self.t("shuffle_on" if self.shuffle_current else "shuffle_off"))
 
     def player_escape_closes_playback(self, focus: wx.Window | None) -> bool:
-        if focus is getattr(self, "results_list", None):
+        if self.focus_in_results_control(focus):
             return False
         if focus is getattr(self, "player_panel", None):
             return True
@@ -13666,7 +13667,7 @@ class MainFrame(wx.Frame):
 
     def active_item(self) -> dict | None:
         focus = wx.Window.FindFocus()
-        if focus is getattr(self, "results_list", None):
+        if self.focus_in_results_control(focus):
             return self.selected_result()
         if self.current_video_item and (self.in_player_screen or self.focus_in_background_player_controls(focus)):
             return self.current_video_item
@@ -14225,8 +14226,43 @@ class MainFrame(wx.Frame):
         if not non_empty:
             return []
         if self.player_return_screen in {"search", "trending", "playback_queue"}:
-            return max(non_empty, key=len)
+            current_url = str((self.current_video_item or {}).get("url") or "")
+            if current_url:
+                for items in non_empty:
+                    if any(str(item.get("url") or "") == current_url for item in items):
+                        return items
         return non_empty[0]
+
+    def sync_results_selection_to_player_item(self, item: dict | None) -> None:
+        results_list = self.live_window(getattr(self, "results_list", None))
+        if results_list is None or not item:
+            return
+        url = str(item.get("url") or "")
+        if not url:
+            return
+        all_results = list(self.player_navigation_results() or self.all_results or self.return_all_results or self.results or self.return_results)
+        index = next((i for i, result in enumerate(all_results) if str(result.get("url") or "") == url), -1)
+        if index < 0:
+            return
+        if index >= len(self.results) and index < len(all_results):
+            previous_count = len(self.results)
+            self.all_results = list(all_results)
+            self.last_visible_count = min(len(self.all_results), index + 1)
+            self.results = self.all_results[: self.last_visible_count]
+            labels = [self.result_line(row, result) for row, result in enumerate(self.results)]
+            if not self.append_listbox_items(results_list, labels, previous_count, index):
+                self.set_listbox_items(results_list, labels, index)
+        if index >= len(self.results):
+            return
+        self.current_index = index
+        self.remember_user_result_selection(index)
+        try:
+            if results_list.GetSelection() != index:
+                self.results_selection_update_suppressed = True
+                results_list.SetSelection(index)
+                wx.CallAfter(self.clear_results_selection_update_suppression)
+        except RuntimeError:
+            pass
 
     def relative_player_item(self, delta: int) -> dict | None:
         screen = self.player_return_screen
@@ -14301,6 +14337,7 @@ class MainFrame(wx.Frame):
             self.player_return_data = self.search_return_data(self.return_index)
         self.current_video_item = item
         self.current_video_info = dict(item)
+        self.sync_results_selection_to_player_item(item)
         self.play_url(
             str(item.get("url") or ""),
             str(item.get("title") or ""),
@@ -16270,16 +16307,22 @@ class MainFrame(wx.Frame):
             return False
         return any(self.window_is_or_descendant(focus, control) for control in getattr(self, "background_player_controls", []))
 
+    def focus_in_results_control(self, focus: wx.Window | None) -> bool:
+        return self.window_is_or_descendant(focus, getattr(self, "results_list", None))
+
     def focus_in_player_controls(self, focus: wx.Window | None) -> bool:
         if not focus:
             return False
         if self.window_is_or_descendant(focus, getattr(self, "player_panel", None)):
             return True
-        return any(focus is control for control in getattr(self, "player_action_controls", []))
+        controls = list(getattr(self, "player_action_controls", [])) + list(getattr(self, "player_navigation_controls", []))
+        return any(focus is control for control in controls)
 
     def player_shortcuts_allowed(self, focus: wx.Window | None = None) -> bool:
-        if self.in_player_screen and not self.focus_accepts_text(focus):
+        if self.focus_in_results_control(focus):
             return True
+        if self.in_player_screen and not self.focus_accepts_text(focus):
+            return self.focus_in_player_controls(focus)
         return self.focus_in_player_controls(focus) or self.focus_in_background_player_controls(focus)
 
     def save_current_playback_position(self) -> None:
@@ -16465,7 +16508,7 @@ class MainFrame(wx.Frame):
     def handle_player_shortcut_event(self, event: wx.KeyEvent, focus: wx.Window | None, details_has_focus: bool = False) -> bool:
         if not (self.player_control_mode and self.player_shortcuts_allowed(focus)):
             return False
-        if focus is getattr(self, "results_list", None):
+        if self.focus_in_results_control(focus):
             if self.shortcut_matches(event, "player_previous"):
                 self.play_relative_item(-1, preserve_focus=True)
                 return True
@@ -16476,7 +16519,7 @@ class MainFrame(wx.Frame):
                 event.Skip()
                 wx.CallAfter(self.maybe_extend_results)
                 return True
-            return False
+            return True
         if self.context_menu_shortcut_matches(event):
             self.open_player_context_menu()
             return True
@@ -16655,6 +16698,7 @@ class MainFrame(wx.Frame):
             return
         if self.handle_active_player_global_shortcut_event(event, focus):
             return
+        results_focus = self.focus_in_results_control(focus)
         if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "menu_list", None):
             self.activate_menu()
             return
@@ -16688,10 +16732,10 @@ class MainFrame(wx.Frame):
         if focus is getattr(self, "queue_list", None) and self.shortcut_matches(event, "open_selected"):
             self.download_selected_queue_item()
             return
-        if focus is getattr(self, "results_list", None) and self.shortcut_matches(event, "queue_audio"):
+        if results_focus and self.shortcut_matches(event, "queue_audio"):
             self.toggle_download_queue()
             return
-        if focus is getattr(self, "results_list", None) and self.result_details_key(event):
+        if results_focus and self.result_details_key(event):
             self.announce_selected_result_details()
             return
         if self.shortcut_matches(event, "add_to_playback_queue"):
@@ -16700,16 +16744,16 @@ class MainFrame(wx.Frame):
         if self.shortcut_matches(event, "remove_from_playback_queue"):
             self.remove_active_from_playback_queue()
             return
-        if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "results_list", None):
+        if self.shortcut_matches(event, "open_selected") and results_focus:
             self.play_selected()
             return
-        if focus is getattr(self, "results_list", None) and self.shortcut_matches(event, "copy_link"):
+        if results_focus and self.shortcut_matches(event, "copy_link"):
             self.copy_selected_url()
             return
-        if focus is getattr(self, "results_list", None) and self.shortcut_matches(event, "add_favorite"):
+        if results_focus and self.shortcut_matches(event, "add_favorite"):
             self.add_selected_favorite()
             return
-        if focus is getattr(self, "results_list", None) and self.shortcut_matches(event, "remove_favorite"):
+        if results_focus and self.shortcut_matches(event, "remove_favorite"):
             self.remove_selected_favorite_shortcut()
             return
         if self.shortcut_matches(event, "download_audio"):
@@ -16775,12 +16819,12 @@ class MainFrame(wx.Frame):
         if self.shortcut_matches(event, "copy_stream_url"):
             self.copy_direct_stream_url()
             return
-        if self.player_details_shortcut_matches(event) and (self.in_player_screen or self.focus_in_background_player_controls(focus)):
+        if self.player_details_shortcut_matches(event) and (self.focus_in_player_controls(focus) or self.focus_in_background_player_controls(focus)):
             self.show_video_details()
             return
         if self.in_player_screen and self.handle_player_shortcut_event(event, focus, details_has_focus):
             return
-        if self.in_player_screen and focus is getattr(self, "results_list", None):
+        if self.in_player_screen and results_focus:
             event.Skip()
             wx.CallAfter(self.maybe_extend_results)
             return

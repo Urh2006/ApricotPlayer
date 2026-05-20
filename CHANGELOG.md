@@ -1,5 +1,13 @@
 # Changelog
 
+## What's new in version 0.9.11
+
+- made result playback navigation use the result collection that contains the currently playing URL instead of whichever list is longest, preventing next from jumping to unrelated result positions.
+- synchronized the embedded Results selection with the item that actually starts playing, so focus no longer stays on an older row while a later video is playing.
+- stopped ambiguous dynamic next completion from falling back to shuffle or stale indexes; if the exact current URL cannot be continued, ApricotPlayer now says there is no next item.
+- blocked player-only shortcuts such as chapters, lyrics, comments, and details while focus is in Results, while keeping Ctrl+PageUp and Ctrl+PageDown available for player previous and next.
+- reset shuffle when a normal result is opened directly, so an earlier Shuffle folder or Shuffle playlist action does not make later search navigation random.
+
 ## What's new in version 0.9.10
 
 - fixed result-list letter navigation while the embedded player layout is active: plain keys such as P and V now stay with the list instead of triggering player shortcuts.
