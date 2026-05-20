@@ -219,8 +219,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.9.6"
-APP_VERSION_LABEL = "0.9.6"
+APP_VERSION = "0.9.7"
+APP_VERSION_LABEL = "0.9.7"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -11975,8 +11975,9 @@ class MainFrame(wx.Frame):
             }
 
     def next_prefetch_candidate(self) -> dict | None:
-        if self.playback_queue:
-            return dict(self.playback_queue[0])
+        queued_item = next((dict(item) for item in self.playback_queue if not item.get("_auto_folder_queue")), None)
+        if queued_item:
+            return queued_item
         return self.relative_player_item(1)
 
     def schedule_next_stream_prefetch(self) -> None:
@@ -14095,7 +14096,7 @@ class MainFrame(wx.Frame):
         self.announce_player(self.t("equalizer_closed"))
 
     def play_relative_item(self, delta: int, preserve_focus: bool = False) -> None:
-        if delta > 0 and self.player_return_screen != "folder":
+        if delta > 0:
             queued_item = self.pop_next_playback_queue_item()
             if queued_item:
                 self.open_playback_queue_item(queued_item, announce_start=True, preserve_focus=preserve_focus)
@@ -14393,12 +14394,19 @@ class MainFrame(wx.Frame):
         self.open_playback_queue_item(item)
 
     def pop_next_playback_queue_item(self) -> dict | None:
-        if not self.playback_queue:
-            return None
-        item = dict(self.playback_queue.pop(0))
-        self.save_playback_queue()
-        self.refresh_main_menu_after_playback_queue_change()
-        return item
+        removed_auto_items = False
+        while self.playback_queue:
+            item = dict(self.playback_queue.pop(0))
+            if item.get("_auto_folder_queue"):
+                removed_auto_items = True
+                continue
+            self.save_playback_queue()
+            self.refresh_main_menu_after_playback_queue_change()
+            return item
+        if removed_auto_items:
+            self.save_playback_queue()
+            self.refresh_main_menu_after_playback_queue_change()
+        return None
 
     def open_playback_queue_item(self, item: dict, announce_start: bool = False, preserve_focus: bool = False) -> None:
         keep_current_ui = bool(preserve_focus and self.live_window(getattr(self, "player_panel", None)) is not None)
@@ -14768,11 +14776,6 @@ class MainFrame(wx.Frame):
             self.update_play_pause_buttons()
             self.restart_current_playback(announce=False)
             return
-        if self.settings.autoplay_next and self.player_return_screen == "folder":
-            next_item = self.relative_player_item(1)
-            if next_item:
-                self.open_relative_player_item(next_item)
-                return
         if self.settings.autoplay_next:
             queued_item = self.pop_next_playback_queue_item()
             if queued_item:

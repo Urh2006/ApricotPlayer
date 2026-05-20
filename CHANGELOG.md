@@ -1,5 +1,11 @@
 # Changelog
 
+## What's new in version 0.9.7
+
+- restored the intended queue priority for Next and end-of-item autoplay: manually queued items are still played before the normal folder/result next item.
+- kept the 0.9.6 folder fix by ignoring old auto-generated folder queue entries, so Play folder no longer overwrites or pollutes the real playback queue.
+- made next-item stream prefetch ignore legacy auto-folder queue entries and prefetch the first real queued item instead.
+
 ## What's new in version 0.9.6
 
 - fixed folder Previous and Next shortcuts by repairing the local-folder relative playback path.
