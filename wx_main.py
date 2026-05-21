@@ -222,8 +222,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.9.17"
-APP_VERSION_LABEL = "0.9.17"
+APP_VERSION = "0.9.18"
+APP_VERSION_LABEL = "0.9.18"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -724,6 +724,7 @@ class Settings:
     max_video_height: int = 1080
     player_command: str = ""
     autoplay_next: bool = False
+    autoplay_related: bool = False
     prefer_browser_playback: bool = False
     player_fullscreen: bool = False
     player_start_paused: bool = False
@@ -6641,6 +6642,7 @@ class MainFrame(wx.Frame):
             ],
             "playback": [
                 "autoplay_next",
+                "autoplay_related",
                 "prefer_browser_playback",
                 "player_fullscreen",
                 "player_start_paused",
@@ -6974,6 +6976,7 @@ class MainFrame(wx.Frame):
             volume_boost_default_box = check("volume_boost_by_default", bool(getattr(self.settings, "volume_boost_by_default", False)))
             volume_boost_default_box.Bind(wx.EVT_CHECKBOX, self.on_volume_boost_by_default_settings_changed)
             check("autoplay_next", self.settings.autoplay_next)
+            check("autoplay_related", self.settings.autoplay_related)
             check("browser_playback", self.settings.prefer_browser_playback)
             check("fullscreen", self.settings.player_fullscreen)
             check("start_paused", self.settings.player_start_paused)
@@ -11940,6 +11943,9 @@ class MainFrame(wx.Frame):
             self.restart_current_playback(announce=False)
             return
         if self.effective_autoplay_next():
+            if getattr(self.settings, "autoplay_related", False) and self.current_video_item and self.is_youtube_url(self.current_video_item.get("url")):
+                threading.Thread(target=self.fetch_related_and_play_next, args=(self.current_video_item, generation), daemon=True).start()
+                return
             sequence_active = self.current_player_sequence_active()
             if not sequence_active:
                 queued_item = self.pop_next_playback_queue_item()
@@ -11958,10 +11964,186 @@ class MainFrame(wx.Frame):
         self.player_ended = True
         self.player_paused = True
         self.update_play_pause_buttons()
+
+    def play_next_standard_fallback(self) -> None:
+        sequence_active = self.current_player_sequence_active()
+        if not sequence_active:
+            queued_item = self.pop_next_playback_queue_item()
+            if queued_item:
+                self.open_playback_queue_item_with_mode(queued_item, show_player=self.in_player_screen or not self.background_playback_enabled())
+                return
+        next_item = self.relative_player_item(1)
+        if next_item:
+            self.open_relative_player_item(next_item)
+            return
+        if sequence_active:
+            queued_item = self.pop_next_playback_queue_item()
+            if queued_item:
+                self.open_playback_queue_item_with_mode(queued_item, show_player=self.in_player_screen or not self.background_playback_enabled())
+                return
+        self.player_ended = True
+        self.player_paused = True
+        self.update_play_pause_buttons()
         if bool(getattr(self.settings, "announce_playback_finished", True)):
             self.announce_player(self.t("playback_finished"))
         else:
             self.set_status(self.t("playback_finished"))
+
+    def fetch_related_and_play_next(self, current_item: dict, generation: int) -> None:
+        try:
+            url = current_item.get("url") or ""
+            video_id = current_item.get("id") or ""
+            if not url and video_id:
+                url = f"https://www.youtube.com/watch?v={video_id}"
+            
+            if not url or not self.is_youtube_url(url):
+                wx.CallAfter(self.play_next_standard_fallback)
+                return
+            
+            req = Request(
+                url,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+            )
+            with urlopen(req, timeout=10) as response:
+                html = response.read().decode('utf-8')
+            
+            m = re.search(r'var ytInitialData\s*=\s*({.*?});\s*</script>', html)
+            if not m:
+                m = re.search(r'window\["ytInitialData"\]\s*=\s*({.*?});', html)
+            if not m:
+                m = re.search(r'ytInitialData\s*=\s*({.*?});', html)
+            
+            if not m:
+                wx.CallAfter(self.play_next_standard_fallback)
+                return
+            
+            data = json.loads(m.group(1))
+            videos = []
+            
+            def recurse(item):
+                if isinstance(item, dict):
+                    if 'lockupViewModel' in item:
+                        lvm = item['lockupViewModel']
+                        vid = None
+                        title = None
+                        channel = None
+                        
+                        overlays = lvm.get('contentImage', {}).get('thumbnailViewModel', {}).get('overlays', [])
+                        for ov in overlays:
+                            badge = ov.get('thumbnailBottomOverlayViewModel', {}).get('badges', [])
+                            for b in badge:
+                                badge_vm = b.get('thumbnailBadgeViewModel', {})
+                                if 'animationActivationTargetId' in badge_vm:
+                                    vid = badge_vm['animationActivationTargetId']
+                        
+                        if not vid:
+                            def find_vid_in_dict(d):
+                                for k, v in d.items():
+                                    if k == 'videoId':
+                                        return v
+                                    elif k == 'watchEndpoint' and isinstance(v, dict):
+                                        if 'videoId' in v:
+                                            return v['videoId']
+                                    elif isinstance(v, dict):
+                                        res = find_vid_in_dict(v)
+                                        if res:
+                                            return res
+                                    elif isinstance(v, list):
+                                        for x in v:
+                                            if isinstance(x, dict):
+                                                res = find_vid_in_dict(x)
+                                                if res:
+                                                    return res
+                                return None
+                            vid = find_vid_in_dict(lvm)
+                        
+                        meta = lvm.get('metadata', {}).get('lockupMetadataViewModel', {})
+                        title_obj = meta.get('title', {})
+                        if isinstance(title_obj, dict):
+                            title = title_obj.get('content')
+                        
+                        byline = meta.get('byline', {})
+                        if isinstance(byline, dict):
+                            channel = byline.get('content')
+                        elif isinstance(byline, list) and len(byline) > 0:
+                            channel = byline[0].get('content')
+                        
+                        if vid and title:
+                            videos.append({
+                                'id': vid,
+                                'title': title,
+                                'channel': channel or "Unknown"
+                            })
+                    else:
+                        if 'compactVideoRenderer' in item:
+                            cvr = item['compactVideoRenderer']
+                            title_text = ""
+                            title = cvr.get('title', {})
+                            if 'runs' in title and len(title['runs']) > 0:
+                                title_text = title['runs'][0].get('text', '')
+                            elif 'simpleText' in title:
+                                title_text = title.get('simpleText', '')
+                            
+                            channel_name = ""
+                            long_channel = cvr.get('longBylineText', {})
+                            if 'runs' in long_channel and len(long_channel['runs']) > 0:
+                                channel_name = long_channel['runs'][0].get('text', '')
+                            
+                            videos.append({
+                                'id': cvr.get('videoId'),
+                                'title': title_text,
+                                'channel': channel_name or "Unknown"
+                            })
+                        
+                        for k, v in item.items():
+                            recurse(v)
+                elif isinstance(item, list):
+                    for x in item:
+                        recurse(x)
+            
+            recurse(data)
+            
+            seen = {video_id}
+            deduped = []
+            for v in videos:
+                if v['id'] not in seen:
+                    seen.add(v['id'])
+                    deduped.append(v)
+            
+            if not deduped:
+                wx.CallAfter(self.play_next_standard_fallback)
+                return
+            
+            normalized_results = []
+            for entry in deduped:
+                raw_entry = {
+                    "webpage_url": f"https://www.youtube.com/watch?v={entry['id']}",
+                    "id": entry['id'],
+                    "title": entry['title'],
+                    "uploader": entry['channel'],
+                }
+                try:
+                    normalized = self.normalize_entry(raw_entry, "Video")
+                    normalized_results.append(normalized)
+                except Exception:
+                    pass
+            
+            if not normalized_results:
+                wx.CallAfter(self.play_next_standard_fallback)
+                return
+            
+            wx.CallAfter(self.apply_related_videos_and_play, normalized_results, generation)
+            
+        except Exception:
+            wx.CallAfter(self.play_next_standard_fallback)
+
+    def apply_related_videos_and_play(self, normalized_results: list[dict], generation: int) -> None:
+        if generation != self.player_generation:
+            return
+        self.show_results(normalized_results, focus_results=False)
+        first_item = normalized_results[0]
+        self.open_relative_player_item(first_item)
+
 
     def player_play_pause(self) -> None:
         if self.player_kind != "mpv":
@@ -13564,10 +13746,20 @@ class MainFrame(wx.Frame):
             getattr(self, "fullscreen_checkbox", None),
             getattr(self, "repeat_checkbox", None),
             getattr(self, "bass_boost_checkbox", None),
+            getattr(self, "session_autoplay_checkbox", None),
         }
         player_checkboxes.discard(None)
-        if focus is getattr(self, "fullscreen_checkbox", None) and event.GetKeyCode() in {wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER}:
-            self.request_player_fullscreen_checkbox_toggle()
+        if focus in player_checkboxes and event.GetKeyCode() in {wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER}:
+            if focus is getattr(self, "fullscreen_checkbox", None):
+                self.request_player_fullscreen_checkbox_toggle()
+            elif focus is getattr(self, "repeat_checkbox", None):
+                self.toggle_repeat()
+            elif focus is getattr(self, "bass_boost_checkbox", None):
+                self.toggle_bass_boost()
+            elif focus is getattr(self, "session_autoplay_checkbox", None):
+                val = not focus.GetValue()
+                focus.SetValue(val)
+                self.on_session_autoplay_next_changed(None)
             return True
         if focus in player_checkboxes and self.shortcut_matches(event, "player_play_pause"):
             event.Skip()
@@ -15096,6 +15288,8 @@ class MainFrame(wx.Frame):
             self.settings.tray_notification = c["tray_notification"].GetValue()
         if "autoplay_next" in c:
             self.settings.autoplay_next = c["autoplay_next"].GetValue()
+        if "autoplay_related" in c:
+            self.settings.autoplay_related = c["autoplay_related"].GetValue()
         if "confirm_download" in c:
             self.settings.confirm_before_download = c["confirm_download"].GetValue()
         if "open_after_download" in c:

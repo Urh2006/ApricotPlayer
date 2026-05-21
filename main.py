@@ -277,6 +277,7 @@ class Settings:
     max_video_height: int = 1080
     player_command: str = ""
     autoplay_next: bool = False
+    autoplay_related: bool = False
     prefer_browser_playback: bool = False
     player_fullscreen: bool = False
     player_start_paused: bool = False

@@ -1,5 +1,12 @@
 # Changelog
 
+## What's new in version 0.9.18
+
+- fixed keyboard accessibility where the Session Autoplay Checkbox (and other playback checkboxes) did not respond properly to Space or Enter keys when focused.
+- added "Autoplay Suggested Videos" feature: when enabled and YouTube autoplay next is active, instead of playing the next item from the main search results list, the player dynamically fetches and plays a related or suggested video recommended by YouTube.
+- added global setting under playback options to enable/disable "Autoplay Suggested Videos".
+- fully translated the new setting into all 27 supported languages.
+
 ## What's new in version 0.9.17
 
 - added support for Live Streams under channel options dialog and within the channel context menu (Issue 1).
