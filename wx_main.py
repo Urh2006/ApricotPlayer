@@ -219,8 +219,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.9.13"
-APP_VERSION_LABEL = "0.9.13"
+APP_VERSION = "0.9.14"
+APP_VERSION_LABEL = "0.9.14"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -923,6 +923,9 @@ TEXT = {
         "speed_audio_mode_rubberband": "Rubberband visoka kakovost (priporoceno)",
         "auto_update": "Ob vsakem zagonu preveri posodobitve yt-dlp",
         "autoplay_next": "Po koncu posnetka samodejno predvajaj naslednjega",
+        "autoplay_next_session": "Samodejno predvajaj naslednji element v tej seji playerja",
+        "autoplay_next_on": "Samodejno predvajanje naslednjega elementa vklopljeno.",
+        "autoplay_next_off": "Samodejno predvajanje naslednjega elementa izklopljeno.",
         "show_video_details_by_default": "Privzeto pokazi podrobnosti videa v predvajalniku",
         "enable_age_restricted_videos": "Podpora za starostno omejene YouTube videe (pocasnejsi fallback samo po potrebi)",
         "enable_stream_cache": "Omogoci predpomnilnik za predvajanje",
@@ -1389,6 +1392,9 @@ TEXT = {
         "pitch_mode_linked_speed": "Linked pitch and speed - pitch keys change both",
         "auto_update": "Check yt-dlp updates on every startup",
         "autoplay_next": "Automatically play next item",
+        "autoplay_next_session": "Automatically play next item in this player session",
+        "autoplay_next_on": "Auto-play next item on.",
+        "autoplay_next_off": "Auto-play next item off.",
         "confirm_download": "Ask before starting a download",
         "open_after_download": "Open download folder after download",
         "download_complete_popup": "Show popup when download completes",
@@ -4203,6 +4209,7 @@ class MainFrame(wx.Frame):
         self.in_queue_screen = False
         self.repeat_current = False
         self.shuffle_current = False
+        self.session_autoplay_next = False
         self.session_volume: float | None = None
         self.player_generation = 0
         self.play_request_generation = 0
@@ -4220,6 +4227,7 @@ class MainFrame(wx.Frame):
         self.player_action_controls = []
         self.player_escape_stop_controls = []
         self.fullscreen_checkbox: wx.CheckBox | None = None
+        self.session_autoplay_checkbox: wx.CheckBox | None = None
         self.details_label: wx.StaticText | None = None
         self.video_details: wx.TextCtrl | None = None
         self.details_button_sizer: wx.Sizer | None = None
@@ -4260,6 +4268,7 @@ class MainFrame(wx.Frame):
         self.pending_player_next_current_url = ""
         self.current_stream_url = ""
         self.current_stream_headers: dict = {}
+        self.player_sequence_results: list[dict] = []
         self.stream_url_cache: dict[str, dict] = {}
         self.stream_url_cache_lock = threading.Lock()
         self.prefetch_stream_urls: set[str] = set()
@@ -6834,6 +6843,7 @@ class MainFrame(wx.Frame):
             return
         self.player_return_screen = "direct_link"
         self.player_return_data = {}
+        self.clear_player_sequence()
         self.current_video_item = item
         self.current_video_info = dict(item)
         self.play_url(str(item.get("url") or ""), str(item.get("title") or ""))
@@ -7622,6 +7632,7 @@ class MainFrame(wx.Frame):
             "playlist_index": self.current_user_playlist_index,
             "item_index": int(item.get("user_playlist_item_index") or 0),
         }
+        self.clear_player_sequence()
         self.current_video_item = item
         self.current_video_info = dict(item)
         self.play_url(str(item.get("url") or ""), str(item.get("title") or ""))
@@ -9438,6 +9449,7 @@ class MainFrame(wx.Frame):
             "feed_index": self.current_rss_feed_index,
             "item_index": int(item.get("rss_item_index") or 0),
         }
+        self.clear_player_sequence()
         self.current_video_item = item
         self.current_video_info = dict(item)
         self.play_url(item.get("url", ""), item.get("title", ""))
@@ -11162,6 +11174,7 @@ class MainFrame(wx.Frame):
         if item.get("kind") == "playlist":
             self.open_playlist_videos(item)
             return
+        self.clear_player_sequence()
         self.shuffle_current = False
         self.return_results = list(self.results)
         self.return_all_results = list(self.all_results or self.results)
@@ -11592,12 +11605,10 @@ class MainFrame(wx.Frame):
         ordered = [dict(item) for item in items]
         if shuffle:
             random.shuffle(ordered)
-            self.shuffle_current = True
-        else:
-            self.shuffle_current = False
-        current_item = dict(ordered[0])
-        self.playback_queue = [self.playlist_item_from_media(item) for item in ordered[1:]]
-        self.save_playback_queue()
+        self.shuffle_current = False
+        sequence = [self.playlist_item_from_media(item) for item in ordered]
+        self.set_player_sequence(sequence)
+        current_item = dict(sequence[0])
         self.player_return_screen = "search"
         self.player_return_data = {"index": self.return_index, "playlist_title": playlist_item.get("title", "")}
         self.current_video_item = current_item
@@ -11864,6 +11875,7 @@ class MainFrame(wx.Frame):
         else:
             self.shuffle_current = False
         current_item = dict(ordered[start_index])
+        self.clear_player_sequence()
         current_source_index = next((index for index, item in enumerate(items) if item.get("url") == current_item.get("url")), start_index)
         queue_items = [self.playback_queue_item_with_folder_return(item, items, auto_folder_queue=True) for item in ordered[start_index + 1 :]]
         self.set_auto_folder_playback_queue(queue_items)
@@ -11965,6 +11977,7 @@ class MainFrame(wx.Frame):
             self.session_equalizer_enabled = None
             self.session_equalizer_gains = {}
             self.session_equalizer_before_bass_boost = None
+            self.session_autoplay_next = False
             self.shuffle_current = False
         self.edit_mode_enabled = False
         self.equalizer_filter_active = False
@@ -12108,6 +12121,8 @@ class MainFrame(wx.Frame):
             }
 
     def next_prefetch_candidate(self) -> dict | None:
+        if self.current_player_sequence_active():
+            return self.relative_player_item(1)
         if self.playback_queue:
             return dict(self.playback_queue[0])
         return self.relative_player_item(1)
@@ -12746,6 +12761,16 @@ class MainFrame(wx.Frame):
         self.root_sizer.Add(self.repeat_checkbox, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
         self.player_action_controls.append(self.repeat_checkbox)
         self.player_escape_stop_controls.append(self.repeat_checkbox)
+        self.session_autoplay_checkbox = None
+        if not bool(getattr(self.settings, "autoplay_next", False)):
+            self.session_autoplay_checkbox = wx.CheckBox(self.panel, label=self.t("autoplay_next_session"))
+            self.session_autoplay_checkbox.SetName(self.t("autoplay_next_session"))
+            self.session_autoplay_checkbox.SetValue(bool(self.session_autoplay_next))
+            self.session_autoplay_checkbox.Bind(wx.EVT_CHECKBOX, self.on_session_autoplay_next_changed)
+            self.bind_player_navigation_control(self.session_autoplay_checkbox)
+            self.root_sizer.Add(self.session_autoplay_checkbox, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
+            self.player_action_controls.append(self.session_autoplay_checkbox)
+            self.player_escape_stop_controls.append(self.session_autoplay_checkbox)
         self.bass_boost_checkbox = wx.CheckBox(self.panel, label=self.t("bass_boost"))
         self.bass_boost_checkbox.SetName(self.t("bass_boost"))
         self.bass_boost_checkbox.SetValue(self.bass_boost_enabled)
@@ -12885,6 +12910,28 @@ class MainFrame(wx.Frame):
         self.shuffle_current = not self.shuffle_current
         self.announce_player(self.t("shuffle_on" if self.shuffle_current else "shuffle_off"))
 
+    def effective_autoplay_next(self) -> bool:
+        return bool(getattr(self.settings, "autoplay_next", False) or self.session_autoplay_next)
+
+    def on_session_autoplay_next_changed(self, _event=None) -> None:
+        checkbox = getattr(self, "session_autoplay_checkbox", None)
+        checked = bool(checkbox and checkbox.GetValue())
+        self.set_session_autoplay_next(checked)
+
+    def set_session_autoplay_next(self, checked: bool, announce: bool = True) -> None:
+        if getattr(self.settings, "autoplay_next", False):
+            self.session_autoplay_next = False
+            return
+        self.session_autoplay_next = bool(checked)
+        checkbox = getattr(self, "session_autoplay_checkbox", None)
+        if checkbox is not None:
+            try:
+                checkbox.SetValue(self.session_autoplay_next)
+            except RuntimeError:
+                pass
+        if announce:
+            self.announce_player(self.t("autoplay_next_on" if self.session_autoplay_next else "autoplay_next_off"))
+
     def player_escape_closes_playback(self, focus: wx.Window | None) -> bool:
         if self.focus_in_results_control(focus):
             return False
@@ -12893,6 +12940,8 @@ class MainFrame(wx.Frame):
         if focus is getattr(self, "fullscreen_checkbox", None):
             return True
         if focus is getattr(self, "repeat_checkbox", None):
+            return True
+        if focus is getattr(self, "session_autoplay_checkbox", None):
             return True
         if focus is getattr(self, "bass_boost_checkbox", None):
             return True
@@ -14273,7 +14322,8 @@ class MainFrame(wx.Frame):
         self.announce_player(self.t("equalizer_closed"))
 
     def play_relative_item(self, delta: int, preserve_focus: bool = False) -> None:
-        if delta > 0:
+        sequence_active = self.current_player_sequence_active()
+        if delta > 0 and not sequence_active:
             queued_item = self.pop_next_playback_queue_item()
             if queued_item:
                 self.open_playback_queue_item(queued_item, announce_start=True, preserve_focus=preserve_focus)
@@ -14286,20 +14336,39 @@ class MainFrame(wx.Frame):
         else:
             item = self.relative_player_item(1)
             if not item:
-                if self.request_player_next_dynamic_load(preserve_focus=preserve_focus):
+                if not sequence_active and self.request_player_next_dynamic_load(preserve_focus=preserve_focus):
                     self.set_status(self.t("loading_more_results"))
                     return
                 self.announce_player(self.t("no_next_item"))
                 return
         self.open_relative_player_item(item, announce_start=True, preserve_focus=preserve_focus)
 
+    def clear_player_sequence(self) -> None:
+        self.player_sequence_results = []
+
+    def set_player_sequence(self, items: list[dict]) -> None:
+        self.player_sequence_results = [dict(item) for item in items if item.get("url")]
+
+    def player_sequence_contains_url(self, url: str) -> bool:
+        if not url:
+            return False
+        return any(str(item.get("url") or "") == url for item in self.player_sequence_results)
+
+    def player_sequence_contains_item(self, item: dict | None) -> bool:
+        return self.player_sequence_contains_url(str((item or {}).get("url") or ""))
+
+    def current_player_sequence_active(self) -> bool:
+        return self.player_sequence_contains_url(str((self.current_video_item or {}).get("url") or ""))
+
     def player_navigation_results(self) -> list[dict]:
+        current_url = str((self.current_video_item or {}).get("url") or "")
+        if self.player_sequence_results and current_url and self.player_sequence_contains_url(current_url):
+            return list(self.player_sequence_results)
         collections = [self.return_all_results, self.all_results, self.return_results, self.results]
         non_empty = [list(items) for items in collections if items]
         if not non_empty:
             return []
         if self.player_return_screen in {"search", "trending", "playback_queue"}:
-            current_url = str((self.current_video_item or {}).get("url") or "")
             if current_url:
                 for items in non_empty:
                     if any(str(item.get("url") or "") == current_url for item in items):
@@ -14313,7 +14382,7 @@ class MainFrame(wx.Frame):
         url = str(item.get("url") or "")
         if not url:
             return
-        all_results = list(self.player_navigation_results() or self.all_results or self.return_all_results or self.results or self.return_results)
+        all_results = list(self.return_all_results or self.all_results or self.return_results or self.results)
         index = next((i for i, result in enumerate(all_results) if str(result.get("url") or "") == url), -1)
         if index < 0:
             return
@@ -14373,6 +14442,8 @@ class MainFrame(wx.Frame):
     def open_relative_player_item(self, item: dict, announce_start: bool = False, preserve_focus: bool = False) -> None:
         if not item.get("url"):
             return
+        if not self.player_sequence_contains_item(item):
+            self.clear_player_sequence()
         data = dict(self.player_return_data or {})
         keep_current_ui = bool(preserve_focus and self.live_window(getattr(self, "player_panel", None)) is not None)
         show_player = (self.in_player_screen or not self.background_playback_enabled()) and not keep_current_ui
@@ -14656,6 +14727,7 @@ class MainFrame(wx.Frame):
         if not url:
             self.announce_player(self.t("no_selection"))
             return
+        self.clear_player_sequence()
         source_screen = str(item.get("_return_screen") or "")
         if source_screen == "folder":
             folder = str(item.get("_return_folder") or self.current_local_folder_path or self.last_search_query)
@@ -14843,6 +14915,7 @@ class MainFrame(wx.Frame):
         if not url:
             self.announce_player(self.t("no_selection"))
             return
+        self.clear_player_sequence()
         self.current_video_item = item
         self.current_video_info = dict(item)
         self.player_return_screen = screen
@@ -15000,15 +15073,22 @@ class MainFrame(wx.Frame):
             self.update_play_pause_buttons()
             self.restart_current_playback(announce=False)
             return
-        if self.settings.autoplay_next:
-            queued_item = self.pop_next_playback_queue_item()
-            if queued_item:
-                self.open_playback_queue_item_with_mode(queued_item, show_player=self.in_player_screen or not self.background_playback_enabled())
-                return
+        if self.effective_autoplay_next():
+            sequence_active = self.current_player_sequence_active()
+            if not sequence_active:
+                queued_item = self.pop_next_playback_queue_item()
+                if queued_item:
+                    self.open_playback_queue_item_with_mode(queued_item, show_player=self.in_player_screen or not self.background_playback_enabled())
+                    return
             next_item = self.relative_player_item(1)
             if next_item:
                 self.open_relative_player_item(next_item)
                 return
+            if sequence_active:
+                queued_item = self.pop_next_playback_queue_item()
+                if queued_item:
+                    self.open_playback_queue_item_with_mode(queued_item, show_player=self.in_player_screen or not self.background_playback_enabled())
+                    return
         self.player_ended = True
         self.player_paused = True
         self.update_play_pause_buttons()
@@ -16351,11 +16431,13 @@ class MainFrame(wx.Frame):
             self.manual_background_playback_active = False
             self.session_volume = None
             self.cancel_pending_volume_change()
+            self.session_autoplay_next = False
             self.session_equalizer_enabled = None
             self.session_equalizer_gains = {}
             self.session_equalizer_before_bass_boost = None
             self.volume_boost_enabled = False
             self.shuffle_current = False
+            self.player_sequence_results = []
         if self.player_panel is not None and not preserve_panel:
             try:
                 self.root_sizer.Detach(self.player_panel)

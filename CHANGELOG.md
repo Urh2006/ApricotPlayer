@@ -1,5 +1,12 @@
 # Changelog
 
+## What's new in version 0.9.14
+
+- added a player-session auto-play next checkbox that appears only when the global auto-play next setting is off.
+- kept the session auto-play setting alive across new items while the player stays open, then reset it when the player is closed.
+- fixed Play playlist navigation so playlist items use a stable now-playing sequence instead of being consumed from the playback queue.
+- fixed playlist Previous/Next so it no longer skips several videos or says there is no previous item while a previous playlist item exists.
+
 ## What's new in version 0.9.13
 
 - fixed dynamic Next at the end of the currently visible results so loading more results preserves the already-loaded order instead of adopting a reshuffled YouTube response.
