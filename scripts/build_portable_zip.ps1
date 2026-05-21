@@ -23,20 +23,14 @@ if (-not (Test-Path $sourceExe)) {
 $outputDir = Split-Path -Parent $OutputPath
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
 
-$tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("ApricotPlayerPortable-" + [Guid]::NewGuid().ToString())
-$portableRoot = Join-Path $tempRoot "ApricotPlayer"
-
 try {
-    New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
-    Copy-Item -LiteralPath $SourceDir -Destination $portableRoot -Recurse -Force
     if (Test-Path $OutputPath) {
         Remove-Item -LiteralPath $OutputPath -Force
     }
-    Compress-Archive -Path $portableRoot -DestinationPath $OutputPath -Force
+    python (Join-Path $projectRoot "scripts\zip_folder.py") $SourceDir $OutputPath
     Get-Item -LiteralPath $OutputPath
 }
-finally {
-    if (Test-Path $tempRoot) {
-        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
-    }
+catch {
+    throw $_
 }
+
