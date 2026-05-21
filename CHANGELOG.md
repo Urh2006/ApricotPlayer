@@ -1,5 +1,13 @@
 # Changelog
 
+## What's new in version 0.9.17
+
+- added support for Live Streams under channel options dialog and within the channel context menu (Issue 1).
+- added import from / export to OPML for Podcasts and RSS Feeds (Issue 2).
+- expanded podcast search catalog coverage to support 49 countries including AR, BE, BR, CH, CL, CO, CZ, DK, EG, FI, GR, HK, HU, ID, IE, IL, IN, JP, KR, MX, NO, NZ, PH, PT, RO, RU, SG, SK, TH, TR, TW, UA, VN, ZA (Issue 2).
+- added "Play file" feature to open and play individual local media files symmetrically to "Play folder" (Issue 3).
+- fixed and verified internal mpv player environment issues.
+
 ## What's new in version 0.9.16
 
 - fixed multiple type annotation errors in `wx_main.py` involving global imports of `http.cookiejar`, `xml.etree.ElementTree as ET`, and `zipfile`.

@@ -222,8 +222,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.9.16"
-APP_VERSION_LABEL = "0.9.16"
+APP_VERSION = "0.9.17"
+APP_VERSION_LABEL = "0.9.17"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
@@ -493,7 +493,7 @@ VIDEO_FORMAT_OPTIONS = [VIDEO_FORMAT_MP4, VIDEO_FORMAT_BEST_ANY, VIDEO_FORMAT_MP
 AUDIO_QUALITY_OPTIONS = ["0", "320", "256", "192", "160", "128", "96", "64", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
 PODCAST_DIRECTORY_PROVIDER_APPLE = "apple"
 PODCAST_DIRECTORY_PROVIDER_OPTIONS = [PODCAST_DIRECTORY_PROVIDER_APPLE]
-PODCAST_COUNTRY_OPTIONS = ["US", "SI", "GB", "DE", "FR", "ES", "IT", "AT", "HR", "RS", "CA", "AU", "NL", "SE", "PL"]
+PODCAST_COUNTRY_OPTIONS = ["US", "SI", "GB", "DE", "FR", "ES", "IT", "AT", "HR", "RS", "CA", "AU", "NL", "SE", "PL", "AR", "BE", "BR", "CH", "CL", "CO", "CZ", "DK", "EG", "FI", "GR", "HK", "HU", "ID", "IE", "IL", "IN", "JP", "KR", "MX", "NO", "NZ", "PH", "PT", "RO", "RU", "SG", "SK", "TH", "TR", "TW", "UA", "VN", "ZA"]
 LEGACY_VIDEO_FORMAT_MAP = {
     "bestvideo+bestaudio/best": VIDEO_FORMAT_MP4,
     "best": VIDEO_FORMAT_BEST_ANY,
@@ -3128,6 +3128,7 @@ class MainFrame(wx.Frame):
         primary_actions = [
             (self.t("search_youtube"), self.show_search),
             (self.t("play_folder"), self.show_play_from_folder),
+            (self.t("play_file"), self.show_play_file),
             (self.t("direct_link"), self.show_direct_link),
             (self.t("favorites"), self.show_favorites),
             (self.t("playlists"), self.show_user_playlists),
@@ -5694,8 +5695,14 @@ class MainFrame(wx.Frame):
                 (self.t("search_podcasts"), self.search_podcasts),
                 (self.t("add_rss_feed"), self.add_rss_feed),
                 (self.t("refresh_feeds"), self.refresh_all_rss_feeds),
+            ]
+        )
+        self.add_button_row(
+            [
                 (self.t("open_feed"), self.open_selected_rss_feed),
                 (self.t("remove_feed"), self.remove_rss_feed),
+                (self.t("import_opml"), self.import_rss_from_opml),
+                (self.t("export_opml"), self.export_rss_to_opml),
             ]
         )
         self.rss_feed_list = wx.ListBox(self.panel, choices=[])
@@ -5936,6 +5943,129 @@ class MainFrame(wx.Frame):
             self.ui_queue.put(("announce", self.t("rss_feed_added", title=feed.get("title") or self.t("rss_unknown_feed_title"))))
         except Exception as exc:
             self.ui_queue.put(("announce", self.t("rss_refresh_failed", error=self.friendly_error(exc))))
+
+    def export_rss_to_opml(self) -> None:
+        self.ensure_rss_feeds_loaded()
+        if not self.rss_feeds:
+            self.message(self.t("opml_no_feeds"))
+            return
+        
+        start_dir = self.settings.download_folder or str(Path.home())
+        with wx.FileDialog(
+            self,
+            self.t("export_opml"),
+            defaultDir=start_dir if Path(start_dir).exists() else str(Path.home()),
+            defaultFile="apricot_feeds.opml",
+            wildcard=f"{self.t('opml_files')} (*.opml)|*.opml",
+            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT,
+        ) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            path = dialog.GetPath()
+            
+        try:
+            opml = ET.Element("opml", version="2.0")
+            head = ET.SubElement(opml, "head")
+            title = ET.SubElement(head, "title")
+            title.text = "ApricotPlayer RSS Feeds Export"
+            
+            body = ET.SubElement(opml, "body")
+            outline_parent = ET.SubElement(body, "outline", text="Apricot RSS Feeds", title="Apricot RSS Feeds")
+            
+            for feed in self.rss_feeds:
+                feed_title = feed.get("title") or "Unknown Feed"
+                feed_url = feed.get("url") or ""
+                if not feed_url:
+                    continue
+                ET.SubElement(
+                    outline_parent,
+                    "outline",
+                    type="rss",
+                    text=feed_title,
+                    title=feed_title,
+                    xmlUrl=feed_url,
+                    htmlUrl=feed_url,
+                )
+                
+            tree = ET.ElementTree(opml)
+            ET.indent(tree, space="  ", level=0)
+            with open(path, "wb") as f:
+                tree.write(f, encoding="utf-8", xml_declaration=True)
+                
+            self.message(self.t("opml_export_success"))
+        except Exception as exc:
+            self.message(self.t("opml_export_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
+
+    def import_rss_from_opml(self) -> None:
+        start_dir = self.settings.download_folder or str(Path.home())
+        with wx.FileDialog(
+            self,
+            self.t("import_opml"),
+            defaultDir=start_dir if Path(start_dir).exists() else str(Path.home()),
+            wildcard=f"{self.t('opml_files')} (*.opml)|*.opml",
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+        ) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            path = dialog.GetPath()
+            
+        try:
+            tree = ET.parse(path)
+            root = tree.getroot()
+            
+            feed_urls = []
+            for outline in root.findall(".//outline"):
+                xml_url = outline.get("xmlUrl")
+                if xml_url:
+                    xml_url = xml_url.strip()
+                    title = outline.get("title") or outline.get("text") or "RSS Feed"
+                    if xml_url:
+                        feed_urls.append((xml_url, title))
+                        
+            if not feed_urls:
+                self.message(self.t("opml_no_feeds"), wx.ICON_WARNING)
+                return
+                
+            self.ensure_rss_feeds_loaded()
+            existing_urls = {str(feed.get("url") or "").rstrip("/").lower() for feed in self.rss_feeds}
+            
+            to_import = []
+            for url, title in feed_urls:
+                normalized = url.rstrip("/").lower()
+                if normalized not in existing_urls:
+                    to_import.append((url, title))
+                    existing_urls.add(normalized)
+                    
+            if not to_import:
+                self.message(self.t("opml_all_feeds_exist"))
+                return
+                
+            self.announce_player(self.t("opml_import_started", count=len(to_import)))
+            threading.Thread(target=self.import_opml_worker, args=(to_import,), daemon=True).start()
+        except Exception as exc:
+            self.message(self.t("opml_import_failed_msg", error=self.friendly_error(exc)), wx.ICON_ERROR)
+
+    def import_opml_worker(self, to_import: list[tuple[str, str]]) -> None:
+        imported_count = 0
+        failed_count = 0
+        
+        for i, (url, title) in enumerate(to_import):
+            self.ui_queue.put(("announce", self.t("opml_import_progress", current=i + 1, total=len(to_import), title=title)))
+            try:
+                feed = self.fetch_rss_feed(url)
+                self.rss_feeds.append(feed)
+                imported_count += 1
+            except Exception:
+                failed_count += 1
+                
+        if imported_count > 0:
+            self.save_rss_feeds()
+            self.ui_queue.put(("rss_feeds_changed", None))
+            
+        if failed_count == 0:
+            self.ui_queue.put(("announce", self.t("opml_import_done", count=imported_count)))
+        else:
+            self.ui_queue.put(("announce", self.t("opml_import_done_with_errors", imported=imported_count, failed=failed_count)))
 
     def refresh_all_rss_feeds(self) -> None:
         self.ensure_rss_feeds_loaded()
@@ -8009,6 +8139,8 @@ class MainFrame(wx.Frame):
             return f"{base}/videos"
         if tab == "playlists":
             return f"{base}/playlists"
+        if tab == "streams":
+            return f"{base}/streams"
         return f"{base}/videos"
 
     def show_channel_options(self, item: dict | None = None) -> None:
@@ -8019,6 +8151,7 @@ class MainFrame(wx.Frame):
         tabs = [
             ("videos", self.t("channel_videos")),
             ("playlists", self.t("channel_playlists")),
+            ("streams", self.t("channel_live_streams")),
             ("popular", self.t("channel_popular")),
         ]
         with wx.SingleChoiceDialog(self, item.get("title", self.t("channel")), self.t("channel_options"), [label for _tab, label in tabs]) as dialog:
@@ -8044,6 +8177,9 @@ class MainFrame(wx.Frame):
         elif tab == "popular":
             result_type = "Video"
             label = self.t("channel_popular")
+        elif tab == "streams":
+            result_type = "Video"
+            label = self.t("channel_live_streams")
         else:
             result_type = "Video"
             label = self.t("channel_videos")
@@ -8465,6 +8601,21 @@ class MainFrame(wx.Frame):
     def cache_local_folder_items(self, folder: Path, items: list[dict]) -> None:
         key = self.local_folder_cache_key(folder)
         self.local_folder_cache[key] = [dict(item) for item in items]
+
+    def show_play_file(self) -> None:
+        start_dir = self.settings.download_folder or str(Path.home())
+        with wx.FileDialog(
+            self,
+            self.t("play_file"),
+            defaultDir=start_dir if Path(start_dir).exists() else str(Path.home()),
+            wildcard=self.local_media_wildcard(),
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+        ) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                self.show_main_menu()
+                return
+            path = dialog.GetPath()
+        self.open_local_media_file(path, True)
 
     def show_play_from_folder(self) -> None:
         start_dir = self.settings.download_folder or str(Path.home())
@@ -13782,6 +13933,7 @@ class MainFrame(wx.Frame):
                     (self.t("channel_videos"), lambda selected=dict(item): self.open_channel_tab(selected, "videos")),
                     (self.t("channel_popular"), lambda selected=dict(item): self.open_channel_tab(selected, "popular")),
                     (self.t("channel_playlists"), lambda selected=dict(item): self.open_channel_tab(selected, "playlists")),
+                    (self.t("channel_live_streams"), lambda selected=dict(item): self.open_channel_tab(selected, "streams")),
                     (None, None),
                     (self.menu_label_with_shortcut("add_favorite", "add_favorite"), self.add_selected_favorite),
                     (self.menu_label_with_shortcut("remove_favorite", "remove_favorite"), self.remove_selected_favorite_shortcut),
