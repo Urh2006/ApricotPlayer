@@ -1,5 +1,14 @@
 # Changelog
 
+## What's new in version 0.9.16
+
+- fixed multiple type annotation errors in `wx_main.py` involving global imports of `http.cookiejar`, `xml.etree.ElementTree as ET`, and `zipfile`.
+- improved codebase stability and correctness by resolving static analysis undefined name errors.
+
+## What's new in version 0.9.15
+
+- completed static analysis code review.
+
 ## What's new in version 0.9.14
 
 - added a player-session auto-play next checkbox that appears only when the global auto-play next setting is off.
