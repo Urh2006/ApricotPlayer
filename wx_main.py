@@ -5,9 +5,12 @@ import os
 import queue
 import random
 import re
+import http.cookiejar
 import sys
 import threading
 import time
+import xml.etree.ElementTree as ET
+import zipfile
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from importlib import import_module
