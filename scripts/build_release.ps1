@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$PythonExe = "python",
     [string]$OutputDir = "$env:USERPROFILE\Downloads",
     [string]$AppName = "ApricotPlayer",
@@ -10,6 +10,12 @@ $ErrorActionPreference = "Stop"
 
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $workPath = Join-Path $projectRoot "build_wx"
+
+Write-Host "Running pre-build syntax checks..."
+& $PythonExe -m py_compile "$projectRoot\wx_main.py" "$projectRoot\main.py"
+if ($LASTEXITCODE -ne 0) {
+    throw "CRITICAL: Syntax error detected! Build aborted to prevent publishing broken executables."
+}
 $specPath = $projectRoot
 
 $args = @(
@@ -77,6 +83,9 @@ if (Test-Path (Join-Path $nvdaDir "nvdaControllerClient64.dll")) {
     $args += @("--add-data", "$nvdaDir;nvda")
 }
 
+if (Test-Path (Join-Path $projectRoot "apricot\locales")) {
+    $args += @("--add-data", "apricot\locales;apricot\locales")
+}
 if (Test-Path $assetsDir) {
     $args += @("--add-data", "$assetsDir;assets")
 }
@@ -94,3 +103,5 @@ try {
 finally {
     Pop-Location
 }
+
+

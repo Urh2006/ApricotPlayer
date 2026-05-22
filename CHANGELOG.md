@@ -1,4 +1,25 @@
+# v0.9.23 - The Modular Update & Caraoke
+
+## What's New
+- **Massive Codebase Split**: wx_main.py has been split into dedicated modules under the pricot directory! This makes the codebase vastly more maintainable, stable, and less prone to random errors without modifying existing functionality. The logic is now cleanly organized into mixins (PlaybackMixin, MpvMixin, DataManagerMixin, YoutubeMixin, etc.).
+- **Caraoke Sync Improvements**: The synchronized lyrics UI was re-implemented using wx.TextCtrl. The UI is now fully copy-pasteable, scrollable, and it no longer reads out timestamps via NVDA when tracking lines, resulting in a much smoother and unintrusive screen-reading experience! 
+
+## Fixes
+- Addressed multiple import issues (Settings, Path, locales) and random Traceback popups during launch due to the codebase division. 
+- Restored 0.9.23 to full working order with identical UI & features.
+
 # Changelog
+
+## What's new in version 0.9.20
+
+- fixed an issue where searching on SoundCloud incorrectly treated single tracks as "Channels" and prevented them from loading. The search filters will now dynamically lock when SoundCloud is selected, ensuring all tracks load and play instantly. Direct SoundCloud profile links pasted into the search bar are also now fully supported!
+
+## What's new in version 0.9.19
+
+- added Synced Lyrics (.lrc) / Karaoke Mode! When reading lyrics for a song, the app will automatically fetch synchronized `.lrc` lyrics from the web and highlight the currently playing line, keeping in perfect sync with the playback.
+- added Lyrics Provider selection in Settings. Users can choose between multiple providers like LRCLIB and NetEase to ensure they get the best synchronized lyrics.
+- added SoundCloud integration! The main search bar now has a dropdown menu to choose between "YouTube" and "SoundCloud", allowing you to search and play directly from the SoundCloud catalog using native yt-dlp capabilities.
+- ensured complete translation for the new search and lyrics UI across all 27 supported languages.
 
 ## What's new in version 0.9.18
 
@@ -1106,3 +1127,7 @@
 - dynamic results loading
 - in-app playback
 - download progress reporting
+
+
+
+

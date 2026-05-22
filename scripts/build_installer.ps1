@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$AppVersion = "",
     [string]$ExecutablePath = "",
     [string]$SourceDir = "",
@@ -10,10 +10,10 @@ $ErrorActionPreference = "Stop"
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
 if (-not $AppVersion) {
-    $mainPath = Join-Path $projectRoot "wx_main.py"
+    $mainPath = Join-Path $projectRoot "apricot\constants.py"
     $versionLine = Select-String -Path $mainPath -Pattern '^APP_VERSION\s*=\s*"([^"]+)"' | Select-Object -First 1
     if (-not $versionLine) {
-        throw "Could not read APP_VERSION from wx_main.py."
+        throw "Could not read APP_VERSION from apricot\constants.py."
     }
     $AppVersion = $versionLine.Matches[0].Groups[1].Value
 }
@@ -75,3 +75,4 @@ else {
 }
 
 & $InnoSetupCompiler @compilerArgs $issPath
+

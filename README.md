@@ -1,8 +1,8 @@
-# ApricotPlayer
+# ApricotPlayer (v0.9.20)
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.9.18` (`0.9.18`)
+Current version: `0.9.20` (`0.9.20`)
 
 ## Download
 

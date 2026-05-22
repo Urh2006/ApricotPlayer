@@ -278,6 +278,8 @@ class Settings:
     player_command: str = ""
     autoplay_next: bool = False
     autoplay_related: bool = False
+    synced_lyrics: bool = True
+    lyrics_provider: str = "LRCLIB"
     prefer_browser_playback: bool = False
     player_fullscreen: bool = False
     player_start_paused: bool = False

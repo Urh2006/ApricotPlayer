@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$SourceDir = "",
     [string]$OutputPath = ""
 )
@@ -33,4 +33,5 @@ try {
 catch {
     throw $_
 }
+
 
