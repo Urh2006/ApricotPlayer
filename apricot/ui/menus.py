@@ -230,23 +230,33 @@ class MenusUI:
                 actions.insert(5, (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), self.subscribe_shortcut))
                 actions.insert(6, (self.menu_label_with_shortcut("unsubscribe_channel", "unsubscribe_channel"), self.unsubscribe_shortcut))
         else:
-            actions = [
-                (self.t("play"), self.play_selected),
-                (self.menu_label_with_shortcut("download_audio", "download_audio"), self.download_audio),
-                (self.menu_label_with_shortcut("download_video", "download_video"), self.download_video),
-                (self.menu_label_with_shortcut("add_favorite", "add_favorite"), self.add_selected_favorite),
-                (self.menu_label_with_shortcut("remove_favorite", "remove_favorite"), self.remove_selected_favorite_shortcut),
-                (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), self.subscribe_shortcut),
-                (self.menu_label_with_shortcut("unsubscribe_channel", "unsubscribe_channel"), self.unsubscribe_shortcut),
-                (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
-                (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
-                (self.menu_label_with_shortcut("remove_from_playlist", "remove_from_playlist"), self.remove_active_from_playlist),
-                (self.t("open_browser"), self.open_selected_in_browser),
-                (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda selected=dict(item or {}): self.copy_direct_stream_url(selected)),
-                (self.menu_label_with_shortcut("copy_url", "copy_link"), self.copy_selected_url),
-            ]
-            if self.item_has_openable_youtube_channel(item):
-                actions.insert(7, (self.menu_label_with_shortcut("open_channel", "open_channel"), lambda selected=dict(item or {}): self.open_item_channel(selected)))
+            is_local = self.item_is_local_media(item)
+            if is_local:
+                actions = [
+                    (self.t("play"), self.play_selected),
+                    (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
+                    (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
+                    (self.menu_label_with_shortcut("remove_from_playlist", "remove_from_playlist"), self.remove_active_from_playlist),
+                    (self.menu_label_with_shortcut("copy_link", "copy_link"), self.copy_selected_url),
+                ]
+            else:
+                actions = [
+                    (self.t("play"), self.play_selected),
+                    (self.menu_label_with_shortcut("download_audio", "download_audio"), self.download_audio),
+                    (self.menu_label_with_shortcut("download_video", "download_video"), self.download_video),
+                    (self.menu_label_with_shortcut("add_favorite", "add_favorite"), self.add_selected_favorite),
+                    (self.menu_label_with_shortcut("remove_favorite", "remove_favorite"), self.remove_selected_favorite_shortcut),
+                    (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), self.subscribe_shortcut),
+                    (self.menu_label_with_shortcut("unsubscribe_channel", "unsubscribe_channel"), self.unsubscribe_shortcut),
+                    (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
+                    (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
+                    (self.menu_label_with_shortcut("remove_from_playlist", "remove_from_playlist"), self.remove_active_from_playlist),
+                    (self.t("open_browser"), self.open_selected_in_browser),
+                    (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda selected=dict(item or {}): self.copy_direct_stream_url(selected)),
+                    (self.menu_label_with_shortcut("copy_url", "copy_link"), self.copy_selected_url),
+                ]
+                if self.item_has_openable_youtube_channel(item):
+                    actions.insert(7, (self.menu_label_with_shortcut("open_channel", "open_channel"), lambda selected=dict(item or {}): self.open_item_channel(selected)))
         if len(self.download_queue) > 1:
             actions[1:1] = [
                 (self.t("download_all_as_audio"), lambda: self.download_all_queued(True)),

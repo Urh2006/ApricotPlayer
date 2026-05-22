@@ -721,7 +721,7 @@ class MiscUI:
     def metadata_is_live_stream(cls, info: dict | None) -> bool:
         if not isinstance(info, dict):
             return False
-        return __import__("wx_main").MainFrame.metadata_live_status(info) in {"is_live", "live"} or __import__("wx_main").MainFrame.metadata_bool(info.get("is_live"))
+        return MiscUI.metadata_live_status(info) in {"is_live", "live"} or MiscUI.metadata_bool(info.get("is_live"))
 
     def with_live_stream_display_fields(self, item: dict, source: dict | None = None) -> dict:
         source = source if isinstance(source, dict) else item
@@ -1801,7 +1801,7 @@ class MiscUI:
 
     @staticmethod
     def next_pitch_value(current: float, delta: float) -> float:
-        return __import__("wx_main").MainFrame.clamp_rate(current + delta, 0.5, 2.0)
+        return MiscUI.clamp_rate(current + delta, 0.5, 2.0)
 
     @staticmethod
     def clamp_rate(value: float, minimum: float, maximum: float) -> float:
@@ -1934,7 +1934,7 @@ class MiscUI:
             16, 17, 18,
             160, 161, 162, 163, 164, 165,
         }
-        codes = __import__("wx_main").MainFrame.key_event_codes(event)
+        codes = MiscUI.key_event_codes(event)
         return bool(codes) and all(code in modifier_codes for code in codes)
 
     @staticmethod
@@ -1943,7 +1943,7 @@ class MiscUI:
         lower = letter.lower()
         control_code = ord(upper) - ord("A") + 1
         wanted = {ord(upper), ord(lower), control_code}
-        for code in __import__("wx_main").MainFrame.key_event_codes(event):
+        for code in MiscUI.key_event_codes(event):
             if code in wanted:
                 return True
             if 65 <= code <= 90 and chr(code) == upper:
@@ -1956,13 +1956,13 @@ class MiscUI:
     def is_shift_letter(event: wx.KeyEvent, letter: str) -> bool:
         if not event.ShiftDown():
             return False
-        return __import__("wx_main").MainFrame.key_event_matches_letter(event, letter)
+        return MiscUI.key_event_matches_letter(event, letter)
 
     @staticmethod
     def is_ctrl_shift_letter(event: wx.KeyEvent, letter: str) -> bool:
         if not (event.ControlDown() and event.ShiftDown()):
             return False
-        return __import__("wx_main").MainFrame.key_event_matches_letter(event, letter)
+        return MiscUI.key_event_matches_letter(event, letter)
 
     @staticmethod
     def safe_folder_name(value: str) -> str:

@@ -526,7 +526,7 @@ class AppUpdaterMixin:
     def validate_update_package(cls, path: Path) -> None:
         if not path.exists() or path.stat().st_size < 1024 * 1024:
             raise RuntimeError("downloaded update is not a valid package")
-        if MainFrame.is_portable_zip_asset(path):
+        if cls.is_portable_zip_asset(path):
             zipfile_module = import_module("zipfile")
             if not zipfile_module.is_zipfile(path):
                 raise RuntimeError("downloaded portable update is not a valid zip file")

@@ -279,6 +279,16 @@ class UtilsMixin:
 
 
     @staticmethod
+    def format_ago(timestamp: int) -> str:
+        diff = max(0, int(time.time()) - int(timestamp))
+        for name, size in (("year", 31536000), ("month", 2592000), ("day", 86400), ("hour", 3600), ("minute", 60)):
+            if diff >= size:
+                amount = diff // size
+                return f"{amount} {name}{'' if amount == 1 else 's'} ago"
+        return "just now"
+
+
+    @staticmethod
     def format_age(entry: dict) -> str:
         timestamp = entry.get("timestamp")
         if not timestamp:
@@ -290,7 +300,7 @@ class UtilsMixin:
                 except ValueError:
                     timestamp = None
         if timestamp:
-            return f"uploaded {MainFrame.format_ago(int(timestamp))}"
+            return f"uploaded {UtilsMixin.format_ago(int(timestamp))}"
         return ""
 
 

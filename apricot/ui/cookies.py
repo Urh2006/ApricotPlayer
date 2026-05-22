@@ -2,6 +2,7 @@ from apricot.constants import *
 import wx
 import os
 from pathlib import Path
+from apricot.ui.misc import MiscUI
 
 class CookiesUI:
     def effective_cookies_file(self) -> str:
@@ -595,7 +596,7 @@ class CookiesUI:
 
     @staticmethod
     def cookie_jar_has_login_cookies(cookie_jar) -> bool:
-        auth_names = __import__("wx_main").MainFrame.youtube_auth_cookie_names()
+        auth_names = MiscUI.youtube_auth_cookie_names()
         for cookie in cookie_jar:
             domain = str(getattr(cookie, "domain", "") or "").lower()
             name = str(getattr(cookie, "name", "") or "").lower()
@@ -605,7 +606,7 @@ class CookiesUI:
 
     @staticmethod
     def cookie_jar_score(cookie_jar) -> tuple[int, int, int]:
-        auth_names = __import__("wx_main").MainFrame.youtube_auth_cookie_names()
+        auth_names = MiscUI.youtube_auth_cookie_names()
         score = 0
         youtube_count = 0
         total_count = 0

@@ -2,6 +2,7 @@ from apricot.constants import *
 import wx
 import os
 from pathlib import Path
+from apricot.ui.misc import MiscUI
 
 class EventsUI:
     def add_button_row(self, buttons: list[tuple[str, callable]]) -> list[wx.Button]:
@@ -317,7 +318,7 @@ class EventsUI:
             return False
         target = wx.WXK_F1 + number - 1
         raw_target = 0x70 + number - 1
-        return __import__("wx_main").MainFrame.event_key_code(event) == target or __import__("wx_main").MainFrame.event_raw_key_code(event) == raw_target
+        return MiscUI.event_key_code(event) == target or MiscUI.event_raw_key_code(event) == raw_target
 
     @staticmethod
     def details_text_navigation_key(event: wx.KeyEvent) -> bool:
@@ -335,9 +336,9 @@ class EventsUI:
         }
         if key in navigation:
             return True
-        if event.ControlDown() and __import__("wx_main").MainFrame.key_event_matches_letter(event, "c"):
+        if event.ControlDown() and MiscUI.key_event_matches_letter(event, "c"):
             return True
-        if event.ControlDown() and __import__("wx_main").MainFrame.key_event_matches_letter(event, "a"):
+        if event.ControlDown() and MiscUI.key_event_matches_letter(event, "a"):
             return True
         return False
 

@@ -2,6 +2,7 @@ from apricot.constants import *
 import wx
 import os
 from pathlib import Path
+from apricot.ui.misc import MiscUI
 
 class SystemUI:
     def chromium_profile_launch_args(self, browser: str, profile: str | None, headless: bool = True) -> tuple[str, list[str]]:
@@ -300,7 +301,7 @@ class SystemUI:
 
     @staticmethod
     def looks_like_local_media_path(value: str) -> bool:
-        path = __import__("wx_main").MainFrame.local_media_path_from_input(value)
+        path = MiscUI.local_media_path_from_input(value)
         return bool(path and (path.suffix.lower() in LOCAL_MEDIA_EXTENSIONS or path.is_file()))
 
     def local_media_files_in_folder(self, folder: Path) -> list[Path]:

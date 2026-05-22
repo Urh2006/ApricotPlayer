@@ -2,6 +2,7 @@ from apricot.constants import *
 import wx
 import os
 from pathlib import Path
+from apricot.ui.misc import MiscUI
 
 class ListsUI:
     def item_is_local_media(self, item: dict | None) -> bool:
@@ -459,7 +460,7 @@ class ListsUI:
             except (TypeError, ValueError):
                 age_value = 0
         return (
-            __import__("wx_main").MainFrame.numeric_view_count(item.get("view_count")),
+            MiscUI.numeric_view_count(item.get("view_count")),
             age_value,
             str(item.get("title") or "").lower(),
         )

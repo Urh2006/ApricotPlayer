@@ -2,6 +2,7 @@ from apricot.constants import *
 import wx
 import os
 from pathlib import Path
+from apricot.ui.misc import MiscUI
 
 class PlayerUI:
     def age_restricted_video_support_enabled(self) -> bool:
@@ -1542,7 +1543,7 @@ class PlayerUI:
 
     @staticmethod
     def next_playback_speed(current: float, delta: float) -> float:
-        return __import__("wx_main").MainFrame.clamp_rate(current + delta, 0.25, 4.0)
+        return MiscUI.clamp_rate(current + delta, 0.25, 4.0)
 
     @staticmethod
     def format_playback_rate(value: float) -> str:
