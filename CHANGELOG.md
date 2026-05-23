@@ -1,3 +1,13 @@
+# v0.9.44-beta.2 - Keyboard Lag and Checkbox Fix
+
+## Fixes
+- Fixed checkboxes not responding correctly to Space. When a checkbox had focus, Space was falling through to the player shortcut layer (triggering play/pause or another bound action) instead of toggling the checkbox. Root cause: `on_char_hook` had no early-exit for native checkbox/slider/spinner keys before running the full shortcut matching loop. Fix: `wx.CheckBox`, `wx.Slider`, and `wx.SpinCtrl` now pass Space and arrow/navigation keys straight through to the widget. Enter is deliberately excluded so player-screen checkbox toggles (repeat, bass boost, etc.) still work.
+
+## Performance
+- Eliminated the primary source of keyboard lag. `shortcut_matches()` is called more than 30 times per keypress inside the central `on_char_hook` handler. Each call bottomed out in `shortcut_key_code()`, which rebuilt a 30-entry alias dictionary and compiled two regex patterns from scratch every time. All three objects are now module-level constants built once at import time. Per-keypress shortcut-matching overhead drops to near zero, making Enter, arrow keys, and Space feel immediately responsive again.
+- Pre-compiled the `|`-separator split pattern used in `event_matches_shortcut`. It was also compiled fresh on every shortcut check.
+- Reduced startup activation overhead. `activate_window_later()` was scheduling `foreground_window()` (win32 `AttachThreadInput` + several other calls) at four delays (0 ms, 75 ms, 250 ms, 750 ms). Default is now two delays (0 ms, 250 ms). Tray-restore and post-update relaunch keep their own explicit lists and are not affected.
+
 # v0.9.44-beta.1 - Performance Pass and Bug Fixes
 
 ## Performance

@@ -252,7 +252,7 @@ class MiscUI:
         self.foreground_window()
         self.focus_primary_control()
 
-    def activate_window_later(self, delays: tuple[int, ...] = (0, 75, 250, 750)) -> None:
+    def activate_window_later(self, delays: tuple[int, ...] = (0, 250)) -> None:
         for delay in delays:
             if delay <= 0:
                 wx.CallAfter(self.activate_window)
