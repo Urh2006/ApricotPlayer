@@ -1,0 +1,148 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*.[0-9]*.[0-9]*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v0.9.32)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install Python dependencies
+        run: pip install pyinstaller -r requirements.txt
+
+      - name: Determine tag and version
+        id: meta
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $tag = "${{ github.event.inputs.tag }}"
+          } else {
+            $tag = "${{ github.ref_name }}"
+          }
+          $version = python -c "from apricot.constants import APP_VERSION; print(APP_VERSION)"
+          echo "tag=$tag" >> $env:GITHUB_OUTPUT
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Tag: $tag  Version: $version"
+
+      - name: Download mpv
+        shell: pwsh
+        run: |
+          $mpvDir = "vendor\mpv"
+          New-Item -ItemType Directory -Force -Path $mpvDir | Out-Null
+          Write-Host "Fetching latest mpv release from shinchiro..."
+          $headers = @{ "User-Agent" = "ApricotPlayer-CI"; "Authorization" = "Bearer ${{ secrets.GITHUB_TOKEN }}" }
+          $releases = Invoke-RestMethod "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases" -Headers $headers
+          $release = $releases | Select-Object -First 1
+          $asset = $release.assets | Where-Object { $_.name -match "^mpv-x86_64.*\.7z$" -and $_.name -notmatch "debug" } | Select-Object -First 1
+          if (-not $asset) { throw "Could not find mpv x86_64 asset. Assets: $($release.assets.name -join ', ')" }
+          Write-Host "Downloading: $($asset.name)"
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "mpv.7z" -UseBasicParsing
+          Write-Host "Extracting mpv files..."
+          & "7z" e mpv.7z -o"$mpvDir" -y | Out-Null
+          $exeCount = (Get-ChildItem $mpvDir).Count
+          Write-Host "Extracted $exeCount files to $mpvDir"
+          if (-not (Test-Path "$mpvDir\mpv.exe")) { throw "mpv.exe not found after extraction" }
+          Write-Host "mpv.exe: $([math]::Round((Get-Item "$mpvDir\mpv.exe").Length / 1MB, 1)) MB"
+
+      - name: Download ffmpeg
+        shell: pwsh
+        run: |
+          $ffmpegDir = "vendor\ffmpeg"
+          New-Item -ItemType Directory -Force -Path $ffmpegDir | Out-Null
+          Write-Host "Fetching latest ffmpeg release from BtbN..."
+          $headers = @{ "User-Agent" = "ApricotPlayer-CI"; "Authorization" = "Bearer ${{ secrets.GITHUB_TOKEN }}" }
+          $releases = Invoke-RestMethod "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases" -Headers $headers
+          $release = $releases | Where-Object { -not $_.prerelease } | Select-Object -First 1
+          $asset = $release.assets | Where-Object { $_.name -eq "ffmpeg-master-latest-win64-gpl.zip" } | Select-Object -First 1
+          if (-not $asset) { throw "Could not find ffmpeg-master-latest-win64-gpl.zip" }
+          Write-Host "Downloading: $($asset.name)"
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "ffmpeg.zip" -UseBasicParsing
+          Write-Host "Extracting ffmpeg..."
+          Expand-Archive -Path "ffmpeg.zip" -DestinationPath "ffmpeg-tmp" -Force
+          Get-ChildItem -Recurse -Filter "*.exe" -Path "ffmpeg-tmp" | ForEach-Object {
+            Copy-Item $_.FullName "$ffmpegDir\$($_.Name)"
+            Write-Host "Copied: $($_.Name)"
+          }
+          if (-not (Test-Path "$ffmpegDir\ffmpeg.exe")) { throw "ffmpeg.exe not found after extraction" }
+          Write-Host "ffmpeg.exe: $([math]::Round((Get-Item "$ffmpegDir\ffmpeg.exe").Length / 1MB, 1)) MB"
+
+      - name: Build executable with PyInstaller
+        shell: pwsh
+        run: |
+          $outDir = "release-dist\installer-app"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          .\scripts\build_release.ps1 -OutputDir $outDir
+
+      - name: Install Inno Setup
+        run: choco install innosetup --yes --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          .\scripts\build_installer.ps1 `
+            -AppVersion "${{ steps.meta.outputs.version }}" `
+            -SourceDir "release-dist\installer-app" `
+            -OutputDir "release-dist"
+
+      - name: Build portable zip
+        shell: pwsh
+        run: |
+          .\scripts\build_portable_zip.ps1 `
+            -SourceDir "release-dist\installer-app" `
+            -OutputPath "release-dist\ApricotPlayer.zip"
+
+      - name: Verify artifacts
+        shell: pwsh
+        run: |
+          $installer = "release-dist\ApricotPlayerSetup.exe"
+          $portable  = "release-dist\ApricotPlayer.zip"
+          foreach ($f in @($installer, $portable)) {
+            if (-not (Test-Path $f)) { throw "Missing artifact: $f" }
+            $mb = [math]::Round((Get-Item $f).Length / 1MB, 1)
+            Write-Host "$f  ($mb MB)"
+          }
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        shell: pwsh
+        run: |
+          $changelog = Get-Content "CHANGELOG.md" -Raw -Encoding UTF8
+          if ($changelog -match "(?ms)(^# v[^\n]+\n.+?)(?=^# v|\z)") {
+            $notes = $matches[1].Trim()
+          } else {
+            $notes = "See CHANGELOG.md for full details."
+          }
+          $notes | Set-Content "release-notes-current.md" -Encoding UTF8
+          Write-Host "Release notes ($($notes.Length) chars) written."
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ApricotPlayer ${{ steps.meta.outputs.version }}
+          body_path: release-notes-current.md
+          files: |
+            release-dist/ApricotPlayerSetup.exe
+            release-dist/ApricotPlayer.zip
+          draft: false
+          prerelease: false
