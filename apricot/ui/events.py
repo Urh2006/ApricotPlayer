@@ -351,6 +351,21 @@ class EventsUI:
         if self.is_shortcut_capture_control(focus):
             self.on_shortcut_capture_key(event, focus)
             return
+
+        # Ensure native Tab & Shift+Tab work flawlessly everywhere outside active player screens
+        key = event.GetKeyCode()
+        if key == wx.WXK_TAB:
+            in_background_player = self.focus_in_background_player_controls(focus)
+            if not self.in_player_screen and not in_background_player:
+                event.Skip()
+                return
+
+        # Ensure editable text fields accept native typing and navigation (arrows, tab, backspace, etc.)
+        if self.focus_accepts_text(focus):
+            if key not in {wx.WXK_ESCAPE, wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER}:
+                event.Skip()
+                return
+
         if self.handle_background_player_tab_navigation(event, focus):
             return
         if self.handle_player_tab_navigation(event, focus):
