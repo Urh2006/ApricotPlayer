@@ -500,9 +500,9 @@ class ListsUI:
                     parts.append(count_text)
         else:
             parts = [
-                item["title"],
-                f"{self.t('channel')}: {item['channel']}",
-                f"{self.t('views')}: {item['views']}",
+                str(item.get("title") or ""),
+                f"{self.t('channel')}: {item.get('channel') or ''}",
+                f"{self.t('views')}: {item.get('views') or ''}",
                 item.get("age") or self.t("uploaded_unknown"),
                 item.get("duration", ""),
                 self.item_type_label(item),

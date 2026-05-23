@@ -362,6 +362,15 @@ class EventsUI:
 
         # Ensure editable text fields accept native typing and navigation (arrows, tab, backspace, etc.)
         if self.focus_accepts_text(focus):
+            if key in {wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER}:
+                if focus is getattr(self, "query", None):
+                    self.search()
+                    return
+                if focus is getattr(self, "direct_link_ctrl", None):
+                    self.activate_direct_link_enter_action()
+                    return
+                event.Skip()
+                return
             if key not in {wx.WXK_ESCAPE, wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER}:
                 event.Skip()
                 return

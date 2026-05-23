@@ -1,3 +1,13 @@
+# v0.9.29 - Search and Results Stability Hotfix
+
+## What's New
+- Restored Enter in the search query box so it reliably starts a search and moves users into the results workflow again.
+- Restored Enter in the direct-link field so it still follows the selected direct-link action after the global keyboard hook refactor.
+
+## Fixes
+- Hardened result row rendering so partial provider results cannot break the results list when metadata such as channel or view count is missing.
+- Rechecked search result loading, dynamic result extension, keyboard interception, syntax compilation, and runtime-risk static analysis after the modular refactor.
+
 # v0.9.23 - The Modular Update & Caraoke
 
 ## What's New
