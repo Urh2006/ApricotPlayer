@@ -1,3 +1,13 @@
+# v0.9.30 - Modular Codebase Safety Review
+
+## What's New
+- Added a stronger release-build preflight that syntax-checks every tracked Apricot module before PyInstaller runs, not just the tiny `wx_main.py` entry point.
+- Synchronized the package `apricot.__version__` value with the app version again.
+
+## Fixes
+- Hardened locale loading so languages with missing newer keys automatically inherit the English fallback keys at runtime.
+- Rechecked MainFrame mixin method availability, module imports, locale key coverage, settings rendering, dynamic results, direct links, local folder sorting, and the major navigable screens after the modular refactor.
+
 # v0.9.29 - Search and Results Stability Hotfix
 
 ## What's New

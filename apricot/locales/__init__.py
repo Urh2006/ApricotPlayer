@@ -13,14 +13,24 @@ def load_locales():
     if not locales_dir.exists():
         locales_dir = Path(__file__).parent
         
-    TEXT = {}
+    text = {}
     for json_file in locales_dir.glob("*.json"):
         lang = json_file.stem
         try:
             with open(json_file, "r", encoding="utf-8") as f:
-                TEXT[lang] = json.load(f)
+                data = json.load(f)
+                if isinstance(data, dict):
+                    text[lang] = data
         except Exception as e:
             print(f"Error loading {json_file}: {e}")
-    return TEXT
+    english = dict(text.get("en") or {})
+    if english:
+        for lang, data in list(text.items()):
+            merged = dict(english)
+            merged.update(data)
+            text[lang] = merged
+    else:
+        text.setdefault("en", {})
+    return text
 
 TEXT = load_locales()

@@ -12,7 +12,29 @@ $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $workPath = Join-Path $projectRoot "build_wx"
 
 Write-Host "Running pre-build syntax checks..."
-& $PythonExe -m py_compile "$projectRoot\wx_main.py" "$projectRoot\main.py"
+$pythonFiles = @(
+    (Join-Path $projectRoot "wx_main.py"),
+    (Join-Path $projectRoot "main.py")
+)
+$pythonFiles += Get-ChildItem -Path (Join-Path $projectRoot "apricot") -Recurse -File -Filter "*.py" | ForEach-Object { $_.FullName }
+$compileScript = @'
+import pathlib
+import sys
+
+failed = []
+for filename in sys.argv[1:]:
+    path = pathlib.Path(filename)
+    try:
+        compile(path.read_text(encoding='utf-8-sig'), str(path), 'exec')
+    except Exception as exc:
+        failed.append((str(path), type(exc).__name__, str(exc)))
+
+if failed:
+    for filename, exc_type, message in failed:
+        print('{}: {}: {}'.format(filename, exc_type, message))
+    sys.exit(1)
+'@
+& $PythonExe -c $compileScript @pythonFiles
 if ($LASTEXITCODE -ne 0) {
     throw "CRITICAL: Syntax error detected! Build aborted to prevent publishing broken executables."
 }
