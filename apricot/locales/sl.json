@@ -811,5 +811,22 @@
     "soundcloud": "SoundCloud",
     "lrclib": "LRCLIB",
     "netease": "NetEase",
-    "youtube": "YouTube"
+    "youtube": "YouTube",
+    "update_channel": "Kanal za posodobitve",
+    "update_channel_stable": "Stabilen",
+    "update_channel_beta": "Beta",
+    "podcast_categories": "Brskaj po kategorijah",
+    "podcast_categories_title": "Kategorije podcastov",
+    "fetching_category_podcasts": "Pridobivanje najboljših podcastov za kategorijo...",
+    "podcast_category_empty": "V tej kategoriji ni bilo najdenih podcastov.",
+    "genre_arts": "Umetnost",
+    "genre_business": "Posel",
+    "genre_comedy": "Komedija",
+    "genre_education": "Izobraževanje",
+    "genre_music": "Glasba",
+    "genre_news": "Novice",
+    "genre_science": "Znanost",
+    "genre_sports": "Šport",
+    "genre_technology": "Tehnologija",
+    "genre_true_crime": "Resnični zločini"
 }

@@ -142,19 +142,28 @@ class LibraryMixin:
             self.PopupMenu(menu)
             menu.Destroy()
             return
-        actions = [
-            (self.t("play"), self.play_selected_user_playlist_item),
-            (self.menu_label_with_shortcut("download_audio", "download_audio"), lambda selected=dict(selected): self.start_download(True, item=selected)),
-            (self.menu_label_with_shortcut("download_video", "download_video"), lambda selected=dict(selected): self.start_download(False, item=selected)),
-            (self.t("download_user_playlist"), self.download_current_user_playlist),
-            (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
-            (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
-            (self.menu_label_with_shortcut("remove_from_playlist", "remove_from_playlist"), self.remove_selected_user_playlist_item),
-            (self.t("copy_url"), lambda selected=dict(selected): self.copy_item_url(selected)),
-            (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda selected=dict(selected): self.copy_direct_stream_url(selected)),
-        ]
-        if self.item_has_openable_youtube_channel(selected):
-            actions.insert(6, (self.menu_label_with_shortcut("open_channel", "open_channel"), lambda selected=dict(selected or {}): self.open_item_channel(selected)))
+        if self.item_is_local_media(selected):
+            actions = [
+                (self.t("play"), self.play_selected_user_playlist_item),
+                (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
+                (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
+                (self.menu_label_with_shortcut("remove_from_playlist", "remove_from_playlist"), self.remove_selected_user_playlist_item),
+                (self.t("copy_path"), lambda selected=dict(selected): self.copy_item_url(selected)),
+            ]
+        else:
+            actions = [
+                (self.t("play"), self.play_selected_user_playlist_item),
+                (self.menu_label_with_shortcut("download_audio", "download_audio"), lambda selected=dict(selected): self.start_download(True, item=selected)),
+                (self.menu_label_with_shortcut("download_video", "download_video"), lambda selected=dict(selected): self.start_download(False, item=selected)),
+                (self.t("download_user_playlist"), self.download_current_user_playlist),
+                (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
+                (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
+                (self.menu_label_with_shortcut("remove_from_playlist", "remove_from_playlist"), self.remove_selected_user_playlist_item),
+                (self.t("copy_url"), lambda selected=dict(selected): self.copy_item_url(selected)),
+                (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda selected=dict(selected): self.copy_direct_stream_url(selected)),
+            ]
+            if self.item_has_openable_youtube_channel(selected):
+                actions.insert(7, (self.menu_label_with_shortcut("open_channel", "open_channel"), lambda selected=dict(selected or {}): self.open_item_channel(selected)))
         for label, handler in actions:
             item = menu.Append(wx.ID_ANY, label)
             self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
@@ -375,6 +384,7 @@ class LibraryMixin:
 
 
     def show_favorites(self) -> None:
+        self.last_activated_menu_action = self.show_favorites
         self.in_main_menu = False
         self.search_screen_active = False
         self.favorites_screen_active = True
@@ -439,21 +449,31 @@ class LibraryMixin:
             self.PopupMenu(menu)
             menu.Destroy()
             return
-        actions = [
-            (self.t("play"), self.play_favorite),
-            (self.menu_label_with_shortcut("download_audio", "download_audio"), lambda selected=dict(selected): self.start_download(True, item=selected)),
-            (self.menu_label_with_shortcut("download_video", "download_video"), lambda selected=dict(selected): self.start_download(False, item=selected)),
-            (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), lambda selected=dict(selected): self.subscribe_to_selected_channel(selected)),
-            (self.menu_label_with_shortcut("unsubscribe_channel", "unsubscribe_channel"), lambda selected=dict(selected): self.unsubscribe_from_selected_channel(selected)),
-            (self.menu_label_with_shortcut("add_to_playlist", "add_to_playlist"), self.add_active_to_playlist),
-            (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
-            (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
-            (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda selected=dict(selected): self.copy_direct_stream_url(selected)),
-            (self.t("copy_url"), lambda selected=dict(selected): self.copy_item_url(selected)),
-            (self.t("remove"), self.remove_favorite),
-        ]
-        if self.item_has_openable_youtube_channel(selected):
-            actions.insert(5, (self.menu_label_with_shortcut("open_channel", "open_channel"), lambda selected=dict(selected or {}): self.open_item_channel(selected)))
+        if self.item_is_local_media(selected):
+            actions = [
+                (self.t("play"), self.play_favorite),
+                (self.menu_label_with_shortcut("add_to_playlist", "add_to_playlist"), self.add_active_to_playlist),
+                (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
+                (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
+                (self.t("copy_path"), lambda selected=dict(selected): self.copy_item_url(selected)),
+                (self.t("remove"), self.remove_favorite),
+            ]
+        else:
+            actions = [
+                (self.t("play"), self.play_favorite),
+                (self.menu_label_with_shortcut("download_audio", "download_audio"), lambda selected=dict(selected): self.start_download(True, item=selected)),
+                (self.menu_label_with_shortcut("download_video", "download_video"), lambda selected=dict(selected): self.start_download(False, item=selected)),
+                (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), lambda selected=dict(selected): self.subscribe_to_selected_channel(selected)),
+                (self.menu_label_with_shortcut("unsubscribe_channel", "unsubscribe_channel"), lambda selected=dict(selected): self.unsubscribe_from_selected_channel(selected)),
+                (self.menu_label_with_shortcut("add_to_playlist", "add_to_playlist"), self.add_active_to_playlist),
+                (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
+                (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
+                (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda selected=dict(selected): self.copy_direct_stream_url(selected)),
+                (self.t("copy_url"), lambda selected=dict(selected): self.copy_item_url(selected)),
+                (self.t("remove"), self.remove_favorite),
+            ]
+            if self.item_has_openable_youtube_channel(selected):
+                actions.insert(5, (self.menu_label_with_shortcut("open_channel", "open_channel"), lambda selected=dict(selected or {}): self.open_item_channel(selected)))
         for label, handler in actions:
             item = menu.Append(wx.ID_ANY, label)
             self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
@@ -465,6 +485,7 @@ class LibraryMixin:
         if not self.settings.enable_history:
             self.show_main_menu()
             return
+        self.last_activated_menu_action = self.show_history
         self.in_main_menu = False
         self.in_queue_screen = False
         self.search_screen_active = False
@@ -557,23 +578,35 @@ class LibraryMixin:
     def open_history_context_menu(self, _event=None) -> None:
         menu = wx.Menu()
         selected = self.selected_history_item()
-        actions = [
-            (self.t("play"), self.play_history_item),
-            (self.menu_label_with_shortcut("download_audio", "download_audio"), lambda: self.start_download(True, item=self.selected_history_item())),
-            (self.menu_label_with_shortcut("download_video", "download_video"), lambda: self.start_download(False, item=self.selected_history_item())),
-            (self.t("add_favorite"), lambda: self.add_favorite_item(self.selected_history_item())),
-            (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), lambda: self.subscribe_to_selected_channel(self.selected_history_item())),
-            (self.menu_label_with_shortcut("unsubscribe_channel", "unsubscribe_channel"), lambda: self.unsubscribe_from_selected_channel(self.selected_history_item())),
-            (self.menu_label_with_shortcut("add_to_playlist", "add_to_playlist"), self.add_active_to_playlist),
-            (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
-            (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
-            (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda: self.copy_direct_stream_url(self.selected_history_item())),
-            (self.t("copy_url"), lambda: self.copy_item_url(self.selected_history_item())),
-            (self.t("remove_history_item"), self.remove_history_item),
-            (self.t("clear_history"), self.clear_history),
-        ]
-        if self.item_has_openable_youtube_channel(selected):
-            actions.insert(6, (self.menu_label_with_shortcut("open_channel", "open_channel"), lambda selected=dict(selected or {}): self.open_item_channel(selected)))
+        if self.item_is_local_media(selected):
+            actions = [
+                (self.t("play"), self.play_history_item),
+                (self.t("add_favorite"), lambda: self.add_favorite_item(self.selected_history_item())),
+                (self.menu_label_with_shortcut("add_to_playlist", "add_to_playlist"), self.add_active_to_playlist),
+                (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
+                (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
+                (self.t("copy_path"), lambda: self.copy_item_url(self.selected_history_item())),
+                (self.t("remove_history_item"), self.remove_history_item),
+                (self.t("clear_history"), self.clear_history),
+            ]
+        else:
+            actions = [
+                (self.t("play"), self.play_history_item),
+                (self.menu_label_with_shortcut("download_audio", "download_audio"), lambda: self.start_download(True, item=self.selected_history_item())),
+                (self.menu_label_with_shortcut("download_video", "download_video"), lambda: self.start_download(False, item=self.selected_history_item())),
+                (self.t("add_favorite"), lambda: self.add_favorite_item(self.selected_history_item())),
+                (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), lambda: self.subscribe_to_selected_channel(self.selected_history_item())),
+                (self.menu_label_with_shortcut("unsubscribe_channel", "unsubscribe_channel"), lambda: self.unsubscribe_from_selected_channel(self.selected_history_item())),
+                (self.menu_label_with_shortcut("add_to_playlist", "add_to_playlist"), self.add_active_to_playlist),
+                (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
+                (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
+                (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda: self.copy_direct_stream_url(self.selected_history_item())),
+                (self.t("copy_url"), lambda: self.copy_item_url(self.selected_history_item())),
+                (self.t("remove_history_item"), self.remove_history_item),
+                (self.t("clear_history"), self.clear_history),
+            ]
+            if self.item_has_openable_youtube_channel(selected):
+                actions.insert(6, (self.menu_label_with_shortcut("open_channel", "open_channel"), lambda selected=dict(selected or {}): self.open_item_channel(selected)))
         for label, handler in actions:
             item = menu.Append(wx.ID_ANY, label)
             self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
@@ -599,6 +632,7 @@ class LibraryMixin:
 
 
     def show_subscriptions(self) -> None:
+        self.last_activated_menu_action = self.show_subscriptions
         self.in_main_menu = False
         self.in_queue_screen = False
         self.search_screen_active = False
@@ -958,6 +992,7 @@ class LibraryMixin:
         if not self.settings.enable_podcasts_rss:
             self.show_main_menu()
             return
+        self.last_activated_menu_action = self.show_rss_feeds
         self.ensure_rss_feeds_loaded()
         self.in_main_menu = False
         self.in_queue_screen = False
@@ -978,6 +1013,7 @@ class LibraryMixin:
             [
                 (self.t("back"), self.show_main_menu),
                 (self.t("search_podcasts"), self.search_podcasts),
+                (self.t("podcast_categories"), self.show_podcast_categories),
                 (self.t("add_rss_feed"), self.add_rss_feed),
                 (self.t("refresh_feeds"), self.refresh_all_rss_feeds),
             ]
@@ -1668,5 +1704,146 @@ class LibraryMixin:
                 self.announce_player(self.t("favorite_removed"))
                 return
         self.announce_player(self.t("not_in_favorites"))
+
+
+    def show_podcast_categories(self) -> None:
+        self.last_activated_menu_action = self.show_rss_feeds
+        self.in_main_menu = False
+        self.search_screen_active = False
+        self.favorites_screen_active = False
+        self.history_screen_active = False
+        self.subscriptions_screen_active = False
+        self.rss_feeds_screen_active = False
+        self.rss_items_screen_active = False
+        self.podcast_search_screen_active = False
+        self.podcast_categories_screen_active = True
+        self.user_playlists_screen_active = False
+        self.user_playlist_items_screen_active = False
+        self.notification_center_screen_active = False
+        self.direct_link_screen_active = False
+        self.folder_screen_active = False
+        self.clear()
+        self.add_background_player_section()
+        self.add_button_row(
+            [
+                (self.t("back"), self.show_rss_feeds),
+                (self.t("open"), self.open_selected_podcast_category),
+            ]
+        )
+        label = wx.StaticText(self.panel, label=self.t("podcast_categories_title"))
+        self.root_sizer.Add(label, 0, wx.ALL, 4)
+
+        self.podcast_genres = [
+            ("genre_arts", 1301),
+            ("genre_business", 1304),
+            ("genre_comedy", 1303),
+            ("genre_education", 1307),
+            ("genre_music", 1310),
+            ("genre_news", 1311),
+            ("genre_science", 1315),
+            ("genre_sports", 1316),
+            ("genre_technology", 1318),
+            ("genre_true_crime", 1324)
+        ]
+        choices = [self.t(key) for key, _ in self.podcast_genres]
+        self.podcast_categories_list = wx.ListBox(self.panel, choices=choices)
+        self.podcast_categories_list.SetName(self.t("podcast_categories_title"))
+        self.podcast_categories_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _evt: self.open_selected_podcast_category())
+        self.podcast_categories_list.Bind(wx.EVT_KEY_DOWN, self.on_podcast_categories_key)
+        self.root_sizer.Add(self.podcast_categories_list, 1, wx.EXPAND | wx.ALL, 4)
+        if choices:
+            self.podcast_categories_list.SetSelection(0)
+        self.panel.Layout()
+        self.focus_later(self.podcast_categories_list)
+
+
+    def on_podcast_categories_key(self, event: wx.KeyEvent) -> None:
+        if self.shortcut_matches(event, "open_selected"):
+            self.open_selected_podcast_category()
+        elif self.shortcut_matches(event, "player_back"):
+            self.show_rss_feeds()
+        else:
+            event.Skip()
+
+
+    def open_selected_podcast_category(self) -> None:
+        if not hasattr(self, "podcast_categories_list"):
+            return
+        idx = self.podcast_categories_list.GetSelection()
+        if idx == wx.NOT_FOUND or idx < 0 or idx >= len(self.podcast_genres):
+            return
+        genre_key, genre_id = self.podcast_genres[idx]
+        category_name = self.t(genre_key)
+        self.announce_player(self.t("fetching_category_podcasts"))
+        self.set_status(self.t("fetching_category_podcasts"))
+        threading.Thread(
+            target=self.fetch_category_podcasts_worker,
+            args=(category_name, genre_id),
+            daemon=True
+        ).start()
+
+
+    def fetch_category_podcasts_worker(self, category_name: str, genre_id: int) -> None:
+        try:
+            url = f"https://itunes.apple.com/us/rss/toppodcasts/limit=40/genre={genre_id}/json"
+            request = Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+            with self.open_url(request, timeout=20) as response:
+                payload = json.loads(response.read().decode("utf-8", errors="replace"))
+
+            feed = payload.get("feed", {})
+            entries = feed.get("entry", [])
+            if not isinstance(entries, list):
+                entries = [entries] if entries else []
+
+            podcast_ids = []
+            for entry in entries:
+                pid = None
+                if isinstance(entry, dict):
+                    im_id_data = entry.get("id", {})
+                    if isinstance(im_id_data, dict):
+                        attrs = im_id_data.get("attributes", {})
+                        if isinstance(attrs, dict):
+                            pid = attrs.get("im:id")
+
+                if not pid and isinstance(entry, dict):
+                    label = entry.get("id", {}).get("label") if isinstance(entry.get("id"), dict) else None
+                    if label:
+                        match = re.search(r'id(\d+)', str(label))
+                        if match:
+                            pid = match.group(1)
+
+                if pid:
+                    pid_str = str(pid).strip()
+                    if pid_str and pid_str not in podcast_ids:
+                        podcast_ids.append(pid_str)
+
+            if not podcast_ids:
+                self.ui_queue.put(("podcast_results", {"query": category_name, "results": []}))
+                return
+
+            lookup_url = f"https://itunes.apple.com/lookup?id={','.join(podcast_ids)}"
+            request_lookup = Request(lookup_url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+            with self.open_url(request_lookup, timeout=20) as response_lookup:
+                payload_lookup = json.loads(response_lookup.read().decode("utf-8", errors="replace"))
+
+            lookup_results = payload_lookup.get("results", [])
+            id_to_rank = {pid: idx for idx, pid in enumerate(podcast_ids)}
+
+            results = []
+            for item in lookup_results:
+                if not isinstance(item, dict):
+                    continue
+                track_id = str(item.get("trackId") or item.get("collectionId") or "")
+                normalized = self.normalize_podcast_result(item)
+                if normalized.get("url"):
+                    normalized["_rank"] = id_to_rank.get(track_id, 9999)
+                    results.append(normalized)
+
+            results.sort(key=lambda x: x.get("_rank", 9999))
+            self.ui_queue.put(("podcast_results", {"query": category_name, "results": results}))
+
+        except Exception as exc:
+            self.ui_queue.put(("announce", self.t("podcast_search_failed", error=self.friendly_error(exc))))
+
 
 

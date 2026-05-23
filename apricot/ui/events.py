@@ -131,6 +131,7 @@ class EventsUI:
                 pass
 
     def show_notification_center(self) -> None:
+        self.last_activated_menu_action = self.show_notification_center
         self.in_main_menu = False
         self.in_queue_screen = False
         self.search_screen_active = False
@@ -481,6 +482,9 @@ class EventsUI:
                 self.show_user_playlists()
                 return
             if self.podcast_search_screen_active:
+                self.show_rss_feeds()
+                return
+            if getattr(self, "podcast_categories_screen_active", False):
                 self.show_rss_feeds()
                 return
             if self.rss_feeds_screen_active:

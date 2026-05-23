@@ -97,6 +97,7 @@ class ListsUI:
         }
 
     def show_user_playlists(self) -> None:
+        self.last_activated_menu_action = self.show_user_playlists
         self.in_main_menu = False
         self.in_queue_screen = False
         self.search_screen_active = False

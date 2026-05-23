@@ -805,19 +805,29 @@ class AppUpdaterMixin:
 
 
     def fetch_latest_release(self) -> dict | None:
-        try:
-            release = self.fetch_github_latest_release()
-            if release:
-                return release
-        except Exception:
-            pass
-        try:
-            releases = self.fetch_public_releases()
-            if releases:
-                return releases[0]
-        except Exception:
-            pass
-        return self.fetch_github_latest_release()
+        channel = getattr(self.settings, "update_channel", "stable")
+        if channel == "beta":
+            try:
+                releases = self.fetch_public_releases()
+                if releases:
+                    return releases[0]
+            except Exception:
+                pass
+            return None
+        else:
+            try:
+                release = self.fetch_github_latest_release()
+                if release and not release.get("prerelease"):
+                    return release
+            except Exception:
+                pass
+            try:
+                releases = self.fetch_public_releases()
+                if releases:
+                    return releases[0]
+            except Exception:
+                pass
+            return None
 
 
     def fetch_github_latest_release(self) -> dict | None:
@@ -840,13 +850,22 @@ class AppUpdaterMixin:
         request = Request(GITHUB_RELEASES_API_URL, headers=self.github_headers(""))
         with self.open_url(request, timeout=30) as response:
             payload = json.loads(response.read().decode("utf-8"))
+        channel = getattr(self.settings, "update_channel", "stable")
         if not isinstance(payload, list):
             releases = []
         else:
-            releases = [release for release in payload if isinstance(release, dict) and not release.get("draft")]
+            releases = []
+            for release in payload:
+                if not isinstance(release, dict):
+                    continue
+                if release.get("draft"):
+                    continue
+                if channel == "stable" and release.get("prerelease"):
+                    continue
+                releases.append(release)
         try:
             latest = self.fetch_github_latest_release()
-            if latest:
+            if latest and not (channel == "stable" and latest.get("prerelease")):
                 latest_tag = str(latest.get("tag_name") or "")
                 latest_id = latest.get("id")
                 if not any(release.get("id") == latest_id or str(release.get("tag_name") or "") == latest_tag for release in releases):

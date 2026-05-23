@@ -107,6 +107,7 @@ class DownloadsUI:
         )
 
     def show_download_queue(self) -> None:
+        self.last_activated_menu_action = self.show_download_queue
         self.in_main_menu = False
         self.in_queue_screen = True
         self.search_screen_active = False

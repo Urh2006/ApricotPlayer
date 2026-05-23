@@ -811,5 +811,22 @@
     "soundcloud": "SoundCloud",
     "lrclib": "LRCLIB",
     "netease": "NetEase",
-    "youtube": "YouTube"
+    "youtube": "YouTube",
+    "update_channel": "Update channel",
+    "update_channel_stable": "Stable",
+    "update_channel_beta": "Beta",
+    "podcast_categories": "Browse categories",
+    "podcast_categories_title": "Podcast Categories",
+    "fetching_category_podcasts": "Fetching top podcasts for category...",
+    "podcast_category_empty": "No podcasts found in this category.",
+    "genre_arts": "Arts",
+    "genre_business": "Business",
+    "genre_comedy": "Comedy",
+    "genre_education": "Education",
+    "genre_music": "Music",
+    "genre_news": "News",
+    "genre_science": "Science",
+    "genre_sports": "Sports",
+    "genre_technology": "Technology",
+    "genre_true_crime": "True Crime"
 }

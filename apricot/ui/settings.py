@@ -111,6 +111,7 @@ class SettingsMixin:
                 "start_with_windows",
                 "tray_notification",
                 "skipped_update_version",
+                "update_channel",
             ],
             "playback": [
                 "autoplay_next",
@@ -408,6 +409,12 @@ class SettingsMixin:
             choice("direct_link_enter_action", self.normalized_direct_link_enter_action(), DIRECT_LINK_ENTER_OPTIONS, self.direct_link_enter_action_labels())
             check("auto_update", self.settings.auto_update_ytdlp)
             check("auto_update_app", self.settings.auto_update_app)
+            choice(
+                "update_channel",
+                getattr(self.settings, "update_channel", "stable"),
+                ["stable", "beta"],
+                [self.t("update_channel_stable"), self.t("update_channel_beta")]
+            )
             choice(
                 "app_update_interval",
                 self.format_refresh_interval_value(self.settings.app_update_interval_hours, 6.0),
@@ -863,6 +870,8 @@ class SettingsMixin:
             self.settings.auto_update_ytdlp = c["auto_update"].GetValue()
         if "auto_update_app" in c:
             self.settings.auto_update_app = c["auto_update_app"].GetValue()
+        if "update_channel" in c:
+            self.settings.update_channel = self.selected_choice_value("update_channel") or "stable"
         if "app_update_interval" in c:
             self.settings.app_update_interval_hours = self.to_float(self.selected_choice_value("app_update_interval"), 6.0, 0.5, 24.0)
         if "close_to_tray" in c:

@@ -59,6 +59,7 @@ class SearchMixin:
 
 
     def show_search(self, restore_search: bool = False) -> None:
+        self.last_activated_menu_action = self.show_search
         self.in_player_screen = False
         if not self.player_is_active():
             self.player_control_mode = False
@@ -80,7 +81,7 @@ class SearchMixin:
         self.clear()
         self.add_background_player_section()
         self.add_button_row([(self.t("back"), self.back_from_search)])
-        grid = wx.FlexGridSizer(2, 2, 6, 6)
+        grid = wx.FlexGridSizer(3, 2, 6, 6)
         grid.AddGrowableCol(1, 1)
         grid.Add(wx.StaticText(self.panel, label=self.t("search_query")), 0, wx.ALIGN_CENTER_VERTICAL)
         self.query = wx.TextCtrl(self.panel, style=wx.TE_PROCESS_ENTER)
@@ -89,6 +90,18 @@ class SearchMixin:
             self.query.SetValue(self.last_search_query)
         self.query.Bind(wx.EVT_TEXT_ENTER, lambda _evt: self.search())
         grid.Add(self.query, 1, wx.EXPAND)
+
+        grid.Add(wx.StaticText(self.panel, label=self.t("search_provider")), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.search_provider = wx.Choice(
+            self.panel,
+            choices=[self.t("youtube"), self.t("soundcloud")],
+        )
+        self.search_provider.SetName(self.t("search_provider"))
+        restored_provider_index = getattr(self, "last_search_provider_index", 0) if restore_search else 0
+        self.search_provider.SetSelection(restored_provider_index if 0 <= restored_provider_index < self.search_provider.GetCount() else 0)
+        self.search_provider.Bind(wx.EVT_CHOICE, self.on_search_provider_change)
+        grid.Add(self.search_provider, 1, wx.EXPAND)
+
         grid.Add(wx.StaticText(self.panel, label=self.t("type")), 0, wx.ALIGN_CENTER_VERTICAL)
         self.search_type = wx.Choice(
             self.panel,
@@ -98,6 +111,12 @@ class SearchMixin:
         restored_type_index = self.last_search_type_index if restore_search else 0
         self.search_type.SetSelection(restored_type_index if 0 <= restored_type_index < self.search_type.GetCount() else 0)
         grid.Add(self.search_type, 1, wx.EXPAND)
+
+        if self.search_provider.GetSelection() == 1:
+            self.search_type.Disable()
+        else:
+            self.search_type.Enable()
+
         self.root_sizer.Add(grid, 0, wx.EXPAND | wx.ALL, 4)
         self.add_button_row(
             [
@@ -119,6 +138,13 @@ class SearchMixin:
         self.panel.Layout()
         if not restore_search:
             self.focus_later(self.query)
+
+    def on_search_provider_change(self, event=None) -> None:
+        idx = self.search_provider.GetSelection()
+        if idx == 1:
+            self.search_type.Disable()
+        else:
+            self.search_type.Enable()
 
     def back_from_search(self) -> None:
         if self.search_results_stack:
@@ -298,7 +324,9 @@ class SearchMixin:
             return
         self.last_search_query = query
         self.last_search_type_index = self.search_type.GetSelection()
+        self.last_search_provider_index = self.search_provider.GetSelection()
         self.current_search_type_code = self.search_type_code()
+        self.current_search_provider = "youtube" if self.last_search_provider_index == 0 else "soundcloud"
         self.collection_url = ""
         self.collection_result_type = ""
         self.collection_sort_mode = ""
@@ -311,7 +339,7 @@ class SearchMixin:
         self.set_status(self.t("searching", query=query))
         self.search_generation += 1
         generation = self.search_generation
-        threading.Thread(target=self.search_worker, args=(query, self.current_search_type_code, self.initial_results_limit(), generation), daemon=True).start()
+        threading.Thread(target=self.search_worker, args=(query, self.current_search_type_code, self.initial_results_limit(), generation, self.current_search_provider), daemon=True).start()
 
 
     def effective_results_limit(self) -> int:
@@ -326,15 +354,17 @@ class SearchMixin:
         return DYNAMIC_RESULTS_MAX if self.settings.results_limit == 0 else self.effective_results_limit()
 
 
-    def search_worker(self, query: str, search_type: str, limit: int, generation: int) -> None:
+    def search_worker(self, query: str, search_type: str, limit: int, generation: int, provider: str = "youtube") -> None:
         try:
             options = {"quiet": True, "extract_flat": True, "skip_download": True, "playlistend": limit}
-            if search_type == "Video":
+            if provider == "soundcloud":
+                info = self.ydl_extract_info(f"scsearch{limit}:{query}", options, download=False)
+            elif search_type == "Video":
                 info = self.ydl_extract_info(f"ytsearch{limit}:{query}", options, download=False)
             else:
                 info = self.ydl_extract_info(self.youtube_search_url(query, search_type), options, download=False)
             entries = list(info.get("entries") or [])[:limit]
-            wx.CallAfter(self.show_results_if_current, generation, [self.normalize_entry(entry, search_type) for entry in entries])
+            wx.CallAfter(self.show_results_if_current, generation, [self.normalize_entry(entry, search_type, provider) for entry in entries])
         except Exception as exc:
             wx.CallAfter(self.show_search_error_if_current, generation, self.friendly_error(exc))
 
@@ -350,13 +380,14 @@ class SearchMixin:
 
 
 
-    def normalize_entry(self, entry: dict, search_type: str) -> dict:
+    def normalize_entry(self, entry: dict, search_type: str, provider: str = "youtube") -> dict:
         url = entry.get("webpage_url") or entry.get("url") or ""
         ie_key = str(entry.get("ie_key") or "").lower()
         entry_type = str(entry.get("_type") or entry.get("result_type") or "").lower()
         url_text = str(url)
-        is_playlist = search_type == "Playlist" or "playlist" in ie_key or "playlist" in entry_type or "list=" in url_text
-        is_channel = (
+        is_soundcloud = provider == "soundcloud" or "soundcloud" in ie_key or "soundcloud" in url_text
+        is_playlist = not is_soundcloud and (search_type == "Playlist" or "playlist" in ie_key or "playlist" in entry_type or "list=" in url_text)
+        is_channel = not is_soundcloud and (
             search_type in {"Channel", "Kanal"}
             or "channel" in ie_key
             or "channel" in entry_type
@@ -373,21 +404,27 @@ class SearchMixin:
             display_type = self.t("playlist")
         else:
             kind = "video"
-            display_type = self.t("live_stream") if self.metadata_is_live_stream(entry) else self.t("video")
+            display_type = self.t("live_stream") if (not is_soundcloud and self.metadata_is_live_stream(entry)) else self.t("video")
         if url and not url.startswith("http"):
-            if kind == "playlist":
-                clean_url = url.lstrip("/")
-                if url.startswith("/") or "list=" in clean_url:
-                    url = f"https://www.youtube.com/{clean_url}"
+            if is_soundcloud:
+                if "soundcloud.com" in url:
+                    url = f"https://{url}"
                 else:
-                    url = f"https://www.youtube.com/playlist?list={clean_url}"
-            elif kind == "channel":
-                url = f"https://www.youtube.com/{url.lstrip('/')}"
+                    url = f"https://soundcloud.com/{url}"
             else:
-                url = f"https://www.youtube.com/watch?v={url}"
+                if kind == "playlist":
+                    clean_url = url.lstrip("/")
+                    if url.startswith("/") or "list=" in clean_url:
+                        url = f"https://www.youtube.com/{clean_url}"
+                    else:
+                        url = f"https://www.youtube.com/playlist?list={clean_url}"
+                elif kind == "channel":
+                    url = f"https://www.youtube.com/{url.lstrip('/')}"
+                else:
+                    url = f"https://www.youtube.com/watch?v={url}"
         timestamp = entry.get("timestamp") or entry.get("release_timestamp") or entry.get("modified_timestamp")
         upload_date = entry.get("upload_date")
-        is_live = kind == "video" and self.metadata_is_live_stream(entry)
+        is_live = kind == "video" and (not is_soundcloud and self.metadata_is_live_stream(entry))
         age = self.t("live_now") if is_live else (self.format_age({"timestamp": timestamp, "upload_date": upload_date}) if kind == "video" else "")
         playlist_count = entry.get("playlist_count") or entry.get("n_entries") or entry.get("video_count") or entry.get("playlist_count_text")
         item = {
@@ -535,18 +572,20 @@ class SearchMixin:
                 daemon=True,
             ).start()
         else:
-            threading.Thread(target=self.search_more_worker, args=(self.last_search_query, self.current_search_type_code, next_limit, selection, generation), daemon=True).start()
+            threading.Thread(target=self.search_more_worker, args=(self.last_search_query, self.current_search_type_code, next_limit, selection, generation, getattr(self, "current_search_provider", "youtube")), daemon=True).start()
 
 
-    def search_more_worker(self, query: str, search_type: str, limit: int, selection: int, generation: int) -> None:
+    def search_more_worker(self, query: str, search_type: str, limit: int, selection: int, generation: int, provider: str = "youtube") -> None:
         try:
             options = {"quiet": True, "extract_flat": True, "skip_download": True, "playlistend": limit}
-            if search_type == "Video":
+            if provider == "soundcloud":
+                info = self.ydl_extract_info(f"scsearch{limit}:{query}", options, download=False)
+            elif search_type == "Video":
                 info = self.ydl_extract_info(f"ytsearch{limit}:{query}", options, download=False)
             else:
                 info = self.ydl_extract_info(self.youtube_search_url(query, search_type), options, download=False)
             entries = list(info.get("entries") or [])[:limit]
-            wx.CallAfter(self.show_more_results_if_current, generation, [self.normalize_entry(entry, search_type) for entry in entries], selection)
+            wx.CallAfter(self.show_more_results_if_current, generation, [self.normalize_entry(entry, search_type, provider) for entry in entries], selection)
         except Exception as exc:
             wx.CallAfter(self.dynamic_fetch_failed_if_current, generation, self.friendly_error(exc))
 

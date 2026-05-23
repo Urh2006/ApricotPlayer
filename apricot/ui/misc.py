@@ -79,6 +79,7 @@ class MiscUI:
         return self.t("pause")
 
     def clear(self) -> None:
+        self.podcast_categories_screen_active = False
         preserved_player_panel = None
         if self.player_is_active() and self.player_panel is not None:
             try:
@@ -660,6 +661,7 @@ class MiscUI:
         return text.strip()
 
     def show_settings(self) -> None:
+        self.last_activated_menu_action = self.show_settings
         self.in_main_menu = False
         self.search_screen_active = False
         self.favorites_screen_active = False
@@ -812,6 +814,7 @@ class MiscUI:
             self.announce_player(self.t("trending_disabled"))
             self.show_main_menu()
             return
+        self.last_activated_menu_action = self.show_trending
         self.in_player_screen = False
         if not self.player_is_active():
             self.player_control_mode = False
@@ -913,6 +916,7 @@ class MiscUI:
             return str(folder.expanduser()).lower()
 
     def show_play_from_folder(self) -> None:
+        self.last_activated_menu_action = self.show_play_from_folder
         start_dir = self.settings.download_folder or str(Path.home())
         with wx.DirDialog(
             self,

@@ -1,4 +1,4 @@
-﻿param(
+param(
     [string]$SourceDir = "",
     [string]$OutputPath = ""
 )
@@ -15,6 +15,11 @@ if (-not $OutputPath) {
 }
 
 $SourceDir = (Resolve-Path $SourceDir).Path
+$nestedExe = Join-Path $SourceDir "ApricotPlayer\ApricotPlayer.exe"
+if (Test-Path $nestedExe) {
+    $SourceDir = Join-Path $SourceDir "ApricotPlayer"
+    Write-Host "Detected double-nested PyInstaller folder. Adjusting SourceDir to: $SourceDir"
+}
 $sourceExe = Join-Path $SourceDir "ApricotPlayer.exe"
 if (-not (Test-Path $sourceExe)) {
     throw "ApricotPlayer.exe was not found in source directory: $SourceDir"

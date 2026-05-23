@@ -27,7 +27,13 @@ class MenusUI:
         self.menu_actions = self.build_main_menu_actions()
         self.menu_list = wx.ListBox(self.panel, choices=[item[0] for item in self.menu_actions])
         self.menu_list.SetName(self.t("main_menu"))
-        self.menu_list.SetSelection(0)
+        selection_index = 0
+        if hasattr(self, "last_activated_menu_action"):
+            for i, item in enumerate(self.menu_actions):
+                if item[1] == self.last_activated_menu_action:
+                    selection_index = i
+                    break
+        self.menu_list.SetSelection(selection_index)
         self.menu_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _evt: self.activate_menu())
         self.menu_list.Bind(wx.EVT_KEY_DOWN, self.on_menu_key)
         self.root_sizer.Add(self.menu_list, 1, wx.EXPAND | wx.ALL, 4)
@@ -83,6 +89,7 @@ class MenusUI:
     def activate_menu(self) -> None:
         index = self.menu_list.GetSelection()
         if index != wx.NOT_FOUND and 0 <= index < len(self.menu_actions):
+            self.last_activated_menu_action = self.menu_actions[index][1]
             self.menu_actions[index][1]()
 
     def open_user_playlists_context_menu(self, _event=None) -> None:
@@ -158,37 +165,41 @@ class MenusUI:
         menu = wx.Menu()
         actions = []
         is_local_media = self.item_is_local_media(item)
+
         if not is_local_media:
-            actions.extend(
-                [
-                    (self.menu_label_with_shortcut("download_audio", "download_audio"), lambda: self.start_download(True, item=dict(item))),
-                    (self.menu_label_with_shortcut("download_video", "download_video"), lambda: self.start_download(False, item=dict(item))),
-                ]
-            )
-        actions.extend([
-            (self.menu_label_with_shortcut("add_favorite", "add_favorite"), lambda: self.add_favorite_item(dict(item))),
-            (self.menu_label_with_shortcut("remove_favorite", "remove_favorite"), lambda: self.remove_favorite_item(dict(item))),
-            (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), lambda: self.subscribe_to_selected_channel(dict(item))),
-            (self.menu_label_with_shortcut("unsubscribe_channel", "unsubscribe_channel"), lambda: self.unsubscribe_from_selected_channel(dict(item))),
-            (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
-            (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
-            (self.menu_label_with_shortcut("remove_from_playlist", "remove_from_playlist"), self.remove_active_from_playlist),
-            (self.menu_label_with_shortcut("copy_path" if is_local_media else "copy_link", "player_copy_link"), self.copy_current_player_url),
-            (self.t("output_devices"), self.show_output_devices),
-            (self.t("equalizer"), self.show_player_equalizer),
-            (self.menu_label_with_shortcut("chapters", "player_chapters"), self.show_chapters),
-            (self.menu_label_with_shortcut("lyrics", "player_lyrics"), self.show_lyrics),
-            (self.menu_label_with_shortcut("comments", "player_comments"), self.show_comments),
-            (self.t("close_player"), self.close_current_player),
-        ])
+            actions.append((self.menu_label_with_shortcut("download_audio", "download_audio"), lambda: self.start_download(True, item=dict(item))))
+            actions.append((self.menu_label_with_shortcut("download_video", "download_video"), lambda: self.start_download(False, item=dict(item))))
+
+        actions.append((self.menu_label_with_shortcut("add_favorite", "add_favorite"), lambda: self.add_favorite_item(dict(item))))
+        actions.append((self.menu_label_with_shortcut("remove_favorite", "remove_favorite"), lambda: self.remove_favorite_item(dict(item))))
+
         if not is_local_media:
-            actions.insert(-6, (self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda: self.copy_direct_stream_url(dict(item))))
-        if self.youtube_url_at_timestamp(item, 0):
-            actions.insert(-6, (self.menu_label_with_shortcut("copy_timestamp_link", "player_copy_timestamp_link"), self.copy_current_player_timestamp_url))
-        if self.item_has_openable_youtube_channel(item):
-            actions.insert(6, (self.menu_label_with_shortcut("open_channel", "open_channel"), lambda: self.open_item_channel(dict(item))))
+            actions.append((self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), lambda: self.subscribe_to_selected_channel(dict(item))))
+            actions.append((self.menu_label_with_shortcut("unsubscribe_channel", "unsubscribe_channel"), lambda: self.unsubscribe_from_selected_channel(dict(item))))
+            if self.item_has_openable_youtube_channel(item):
+                actions.append((self.menu_label_with_shortcut("open_channel", "open_channel"), lambda: self.open_item_channel(dict(item))))
+
+        actions.append((self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue))
+        actions.append((self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue))
+        actions.append((self.menu_label_with_shortcut("remove_from_playlist", "remove_from_playlist"), self.remove_active_from_playlist))
+        actions.append((self.menu_label_with_shortcut("copy_path" if is_local_media else "copy_link", "player_copy_link"), self.copy_current_player_url))
+
         if not is_local_media:
-            actions.insert(-5, (self.t("open_browser"), lambda: import_module("webbrowser").open(str(item.get("webpage_url") or item.get("url") or ""))))
+            actions.append((self.menu_label_with_shortcut("copy_stream_url", "copy_stream_url"), lambda: self.copy_direct_stream_url(dict(item))))
+            if self.youtube_url_at_timestamp(item, 0):
+                actions.append((self.menu_label_with_shortcut("copy_timestamp_link", "player_copy_timestamp_link"), self.copy_current_player_timestamp_url))
+
+        actions.append((self.t("output_devices"), self.show_output_devices))
+        actions.append((self.t("equalizer"), self.show_player_equalizer))
+        actions.append((self.menu_label_with_shortcut("chapters", "player_chapters"), self.show_chapters))
+        actions.append((self.menu_label_with_shortcut("lyrics", "player_lyrics"), self.show_lyrics))
+
+        if not is_local_media:
+            actions.append((self.menu_label_with_shortcut("comments", "player_comments"), self.show_comments))
+            actions.append((self.t("open_browser"), lambda: import_module("webbrowser").open(str(item.get("webpage_url") or item.get("url") or ""))))
+
+        actions.append((self.t("close_player"), self.close_current_player))
+
         for label, handler in actions:
             menu_item = menu.Append(wx.ID_ANY, label)
             self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), menu_item)
@@ -237,7 +248,7 @@ class MenusUI:
                     (self.menu_label_with_shortcut("add_to_playback_queue", "add_to_playback_queue"), self.add_active_to_playback_queue),
                     (self.menu_label_with_shortcut("remove_from_playback_queue", "remove_from_playback_queue"), self.remove_active_from_playback_queue),
                     (self.menu_label_with_shortcut("remove_from_playlist", "remove_from_playlist"), self.remove_active_from_playlist),
-                    (self.menu_label_with_shortcut("copy_link", "copy_link"), self.copy_selected_url),
+                    (self.menu_label_with_shortcut("copy_path", "copy_link"), self.copy_selected_url),
                 ]
             else:
                 actions = [

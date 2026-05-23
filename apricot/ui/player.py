@@ -1121,6 +1121,7 @@ class PlayerUI:
         return ". ".join([parts[0], " | ".join(part for part in parts[1:] if part)])
 
     def show_playback_queue(self) -> None:
+        self.last_activated_menu_action = self.show_playback_queue
         if not self.playback_queue:
             self.announce_player(self.t("playback_queue_empty"))
             self.refresh_main_menu_after_playback_queue_change()

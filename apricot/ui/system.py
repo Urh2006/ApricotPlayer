@@ -101,6 +101,7 @@ class SystemUI:
                 self.show_main_menu()
 
     def show_direct_link(self) -> None:
+        self.last_activated_menu_action = self.show_direct_link
         self.in_main_menu = False
         self.in_queue_screen = False
         self.search_screen_active = False
@@ -325,6 +326,7 @@ class SystemUI:
         return sorted(files, key=lambda path: self.natural_sort_key(str(path.relative_to(folder))))
 
     def show_play_file(self) -> None:
+        self.last_activated_menu_action = self.show_play_file
         start_dir = self.settings.download_folder or str(Path.home())
         with wx.FileDialog(
             self,
