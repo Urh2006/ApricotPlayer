@@ -2048,10 +2048,17 @@ class MiscUI:
         self.check_activation_signal()
         processed = 0
         max_items_per_tick = 200
-        try:
-            while processed < max_items_per_tick:
+        while processed < max_items_per_tick:
+            # Only let queue.Empty escape — stop draining when there's nothing left.
+            # Each handler is guarded separately so a bug in one handler cannot
+            # propagate out of this method and crash the app via wxPython's
+            # OnExceptionInMainLoop (which terminates on unhandled exceptions).
+            try:
                 kind, payload = self.ui_queue.get_nowait()
-                processed += 1
+            except queue.Empty:
+                break
+            processed += 1
+            try:
                 if kind == "results":
                     self.show_results(payload)
                 elif kind == "status":
@@ -2088,8 +2095,8 @@ class MiscUI:
                     self.show_podcast_search_results(list(payload.get("results") or []), str(payload.get("query") or ""))
                 elif kind == "error":
                     self.message(str(payload), wx.ICON_ERROR)
-        except queue.Empty:
-            pass
+            except Exception:
+                pass
 
     def set_status(self, text: str) -> None:
         self.status.SetStatusText(text)

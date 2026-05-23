@@ -1,3 +1,12 @@
+# v0.9.44-beta.3 - Crash Fix, Volume Persistence, and Memory Reduction
+
+## Fixes
+- Fixed automatic crash during navigation in results and menus. Background-worker results are delivered to the UI via a timer-driven queue (`process_queue`). The original drain loop wrapped both the queue read and every handler inside a single `try/except queue.Empty` block, so an unhandled exception from any handler (e.g. a `RuntimeError` when wxPython tries to access a destroyed list control during rapid navigation) propagated straight to wxPython's main-loop exception handler, which terminates the process. Queue read and handler dispatch are now guarded by separate try/except blocks; exceptions inside handlers are caught and discarded so the app keeps running.
+- Fixed volume resetting to default when closing the player screen with Escape. `stop_player()` was clearing `session_volume` whenever `reset_session=True` (the default). Because `back_to_results()` always calls `stop_player()` with that default, every Escape press wiped the manually set volume. The clear is removed; volume now persists for the entire app session and resets naturally when the app closes.
+
+## Performance
+- Reduced memory use during long browsing sessions. `metadata_hydration_urls` is a set used to avoid re-fetching yt-dlp metadata for the same result URL twice. It was never cleared, so extended sessions with many searches could accumulate thousands of URL strings. The set is now cleared automatically once it exceeds 1 000 entries, capping steady-state size to a few tens of kilobytes. A handful of previously-hydrated results may be re-fetched once per reset, which is negligible.
+
 # v0.9.44-beta.2 - Keyboard Lag and Checkbox Fix
 
 ## Fixes
