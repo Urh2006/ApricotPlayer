@@ -1,3 +1,12 @@
+# v0.9.32 - Cookie and Settings Navigation Fix
+
+## Fixes
+- Fixed cookies not working on Chrome, Brave, and other Chromium-based browsers. The `youtube_auth_cookie_names` method was missing from `MiscUI` after the modular refactor, causing all cookie validation to crash silently. This unblocks Chrome 127+ App-Bound Encryption detection and the CDP devtools fallback path for Brave and Chrome users.
+- Fixed arrow key navigation in the Settings sections list (General, Playback, Equalizer, Downloads, etc.). On Windows, `EVT_LISTBOX` does not reliably fire for keyboard navigation, so section switching now uses an explicit `wx.CallAfter` poll after each arrow/Home/End/PageUp/PageDown key to detect the new selection and render the correct section.
+- Fixed `AttributeError` crash when pressing function keys (F1–F24, e.g. F7 for player details). `event_key_code` and `event_raw_key_code` were referenced on `MiscUI` but only existed in `ShortcutsUI`; both are now properly defined in `MiscUI`.
+- Fixed `AttributeError` in the equalizer when applying EQ gains. The `equalizer_filter` classmethod incorrectly called `MiscUI.equalizer_clipping_headroom_db` and `MiscUI.equalizer_band_filter`; corrected to `cls.*` since both methods live in `EqualizerUI` itself.
+- Fixed `AttributeError` in media-path detection. `looks_like_local_media_path` in `SystemUI` incorrectly called `MiscUI.local_media_path_from_input`; corrected to `SystemUI.local_media_path_from_input`.
+
 # v0.9.31 - Results and Keyboard Regression Hotfix
 
 ## Fixes
