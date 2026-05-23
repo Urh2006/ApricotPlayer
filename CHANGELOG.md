@@ -1,3 +1,13 @@
+# v0.9.44-beta.1 - Performance Pass and Bug Fixes
+
+## Performance
+- Pre-compiled all hot-path regex patterns at module load time in `misc.py`, `utils.py`, and `lists.py`. Patterns previously recompiled on every call now pay their overhead once at startup. The most noticeable gains are in `strip_html` (called for every result description and RSS item), `natural_sort_key` (called O(n log n) when sorting local folders), and `safe_folder_name` (called during every download).
+- Removed ~500 leftover blank lines from `wx_main.py` that were introduced during the modular refactor. Python parses every line in a file so these were dead parse-time cost on every startup.
+
+## Fixes
+- Fixed a file handle leak in `MpvMixin.start_mpv`. If `subprocess.Popen` raised an exception after the mpv log file had already been opened, the file handle was silently orphaned until the next playback attempt. The exception handler now closes and clears the handle immediately.
+- Added `--prerelease` support to `publish_release.ps1`. The script now auto-detects beta/alpha/rc in the tag name and marks the GitHub release as a pre-release automatically, with an explicit `-PreRelease` switch for overrides.
+
 # v0.9.33 - Combo Box Navigation, Updater Reliability, and Locale Completeness
 
 ## Fixes

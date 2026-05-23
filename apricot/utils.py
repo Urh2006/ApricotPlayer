@@ -36,6 +36,10 @@ from apricot.locales import TEXT
 
 _SSL_CONTEXT = None
 
+# Pre-compiled regex patterns
+_RE_VERSION          = re.compile(r"^v?(\d+)\.(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([A-Za-z]+)(?:[.-]?(\d+))?)?$")
+_RE_ISO8601_DURATION = re.compile(r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$")
+
 
 class UtilsMixin:
 
@@ -93,7 +97,7 @@ class UtilsMixin:
 
     @staticmethod
     def parse_version(value: str) -> tuple[int, int, int, int, int, int]:
-        match = re.match(r"^v?(\d+)\.(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([A-Za-z]+)(?:[.-]?(\d+))?)?$", value.strip())
+        match = _RE_VERSION.match(value.strip())
         if not match:
             return (0, 0, 0, 0, 0, 0)
         major, minor, patch, hotfix = (
@@ -244,7 +248,7 @@ class UtilsMixin:
 
     @staticmethod
     def seconds_from_iso8601_duration(value: str) -> int:
-        match = re.fullmatch(r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?", str(value or ""))
+        match = _RE_ISO8601_DURATION.match(str(value or ""))
         if not match:
             return 0
         days, hours, minutes, seconds = (int(part or 0) for part in match.groups())

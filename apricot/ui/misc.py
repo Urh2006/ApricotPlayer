@@ -1,7 +1,24 @@
 from apricot.constants import *
+import re
 import wx
 import os
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Pre-compiled regex patterns — compiling once at module load is measurably
+# faster than re-compiling an identical pattern on every call, especially in
+# hot paths like strip_html (called for every result description), natural_sort_key
+# (called O(n log n) times when sorting a folder), and safe_folder_name.
+# ---------------------------------------------------------------------------
+_RE_HTML_BR       = re.compile(r"<br\s*/?>", re.IGNORECASE)
+_RE_HTML_TAG      = re.compile(r"<[^>]+>")
+_RE_INLINE_SPACE  = re.compile(r"[ \t]+")
+_RE_NEWLINE_SPACE = re.compile(r"\n\s+")
+_RE_WHITESPACE    = re.compile(r"\s+")
+_RE_FILE_EXT      = re.compile(r"\.([^./\\]+)$")
+_RE_INT_SPLIT     = re.compile(r"(\d+)")
+_RE_LRC_LINE      = re.compile(r'^\[(\d+):(\d+\.\d+)\](.*)$')
+_RE_UNSAFE_CHARS  = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 class MiscUI:
     @staticmethod
@@ -61,7 +78,7 @@ class MiscUI:
             return int(sock.getsockname()[1])
 
     def set_window_title(self, media_title: str | None = None) -> None:
-        title = re.sub(r"\s+", " ", str(media_title or "").strip())
+        title = _RE_WHITESPACE.sub(" ", str(media_title or "").strip())
         if title:
             window_title = f"{title} - {WINDOW_TITLE}"
         else:
@@ -654,10 +671,10 @@ class MiscUI:
 
     @staticmethod
     def strip_html(value: str) -> str:
-        text = re.sub(r"<br\s*/?>", "\n", str(value or ""), flags=re.IGNORECASE)
-        text = re.sub(r"<[^>]+>", " ", text)
-        text = re.sub(r"[ \t]+", " ", text)
-        text = re.sub(r"\n\s+", "\n", text)
+        text = _RE_HTML_BR.sub("\n", str(value or ""))
+        text = _RE_HTML_TAG.sub(" ", text)
+        text = _RE_INLINE_SPACE.sub(" ", text)
+        text = _RE_NEWLINE_SPACE.sub("\n", text)
         return text.strip()
 
     def show_settings(self) -> None:
@@ -904,8 +921,8 @@ class MiscUI:
     @staticmethod
     def natural_sort_key(value) -> list[tuple[int, object]]:
         text = str(value or "").casefold()
-        text = re.sub(r"\.([^./\\]+)$", lambda match: "\x00" + match.group(1), text)
-        parts = re.split(r"(\d+)", text)
+        text = _RE_FILE_EXT.sub(lambda m: "\x00" + m.group(1), text)
+        parts = _RE_INT_SPLIT.split(text)
         return [(1, int(part)) if part.isdigit() else (0, part) for part in parts]
 
     @staticmethod
@@ -1202,8 +1219,6 @@ class MiscUI:
                 parsed_lines = []
                 clean_text = ""
                 
-                lrc_pattern = re.compile(r'^\[(\d+):(\d+\.\d+)\](.*)$')
-                
                 header = f"{source}\n\n" if source and text.strip() else ""
                 clean_text += header
                 current_pos = len(clean_text)
@@ -1212,7 +1227,7 @@ class MiscUI:
                     line = line.strip()
                     if not line:
                         continue
-                    match = lrc_pattern.match(line)
+                    match = _RE_LRC_LINE.match(line)
                     if match:
                         minutes = int(match.group(1))
                         seconds = float(match.group(2))
@@ -1997,8 +2012,8 @@ class MiscUI:
 
     @staticmethod
     def safe_folder_name(value: str) -> str:
-        cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", str(value or "").strip())
-        cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
+        cleaned = _RE_UNSAFE_CHARS.sub(" ", str(value or "").strip())
+        cleaned = _RE_WHITESPACE.sub(" ", cleaned).strip(" .")
         return cleaned[:150] or "Download"
 
     def play_favorite(self) -> None:

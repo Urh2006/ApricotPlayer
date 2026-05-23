@@ -1,8 +1,11 @@
 from apricot.constants import *
+import re
 import wx
 import os
 from pathlib import Path
 from apricot.ui.misc import MiscUI
+
+_RE_URL_SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 
 class ListsUI:
     def item_is_local_media(self, item: dict | None) -> bool:
@@ -85,7 +88,7 @@ class ListsUI:
         url = self.direct_link_ctrl.GetValue().strip()
         if not url:
             return None
-        if not re.match(r"^[a-z][a-z0-9+.-]*://", url, flags=re.IGNORECASE):
+        if not _RE_URL_SCHEME.match(url):
             url = "https://" + url
         return {
             "title": url,

@@ -6,7 +6,8 @@ param(
     [string[]]$AssetPaths = @(),
     [string]$Title = "",
     [string]$Notes = "",
-    [string]$NotesFile = ""
+    [string]$NotesFile = "",
+    [switch]$PreRelease
 )
 
 $ErrorActionPreference = "Stop"
@@ -38,6 +39,14 @@ if (-not $Title) {
 
 if (-not $Notes -and -not $NotesFile) {
     throw "Release notes are required. Use -Notes or -NotesFile."
+}
+
+# Auto-detect pre-release from the tag name (beta/alpha/rc) if not explicitly set
+if (-not $PreRelease) {
+    if ($Tag -match '-(beta|alpha|rc)[\.\-]?[\d]*$') {
+        $PreRelease = $true
+        Write-Host "Auto-detected pre-release from tag: $Tag"
+    }
 }
 
 if ($NotesFile) {
@@ -116,6 +125,9 @@ try {
     }
     else {
         $createArgs = @("release", "create", $Tag) + $AssetPaths + @("--title", $Title, "--notes-file", $resolvedNotesFile, "--repo", $Repo)
+        if ($PreRelease) {
+            $createArgs += "--prerelease"
+        }
         [void](Invoke-GhChecked -Arguments $createArgs)
     }
 }

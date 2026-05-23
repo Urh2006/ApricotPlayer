@@ -165,6 +165,12 @@ class MpvMixin:
             self.start_player_monitor(self.player_generation)
         except Exception as exc:
             self.playback_start_pending = False
+            if self.player_log_handle is not None:
+                try:
+                    self.player_log_handle.close()
+                except Exception:
+                    pass
+                self.player_log_handle = None
             self.message(self.t("player_failed", error=exc), wx.ICON_ERROR)
 
 

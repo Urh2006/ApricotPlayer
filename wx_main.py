@@ -281,491 +281,6 @@ class MainFrame(CookiesUI, DownloadsUI, EqualizerUI, EventsUI, ListsUI, MenusUI,
         if self.first_run_without_settings and not self.settings.language_prompted and not self.started_hidden_in_tray:
             wx.CallAfter(self.prompt_initial_language)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def startup_language() -> str:
     try:
         data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
@@ -774,11 +289,9 @@ def startup_language() -> str:
     except Exception:
         return "en"
 
-
 def startup_text(key: str) -> str:
     language = startup_language()
     return TEXT.get(language, TEXT["en"]).get(key, TEXT["en"].get(key, key))
-
 
 def startup_close_to_tray_enabled() -> bool:
     try:
@@ -787,14 +300,11 @@ def startup_close_to_tray_enabled() -> bool:
     except Exception:
         return False
 
-
 def update_relaunch_requested() -> bool:
     return any(arg == UPDATE_RELAUNCH_ARG for arg in sys.argv[1:])
 
-
 def start_in_tray_requested() -> bool:
     return any(arg == START_IN_TRAY_ARG for arg in sys.argv[1:])
-
 
 def mark_update_relaunch_window(seconds: int = 45) -> None:
     try:
@@ -803,7 +313,6 @@ def mark_update_relaunch_window(seconds: int = 45) -> None:
         UPDATE_RELAUNCH_SENTINEL.write_text(json.dumps(payload), encoding="utf-8")
     except Exception:
         pass
-
 
 def suppress_already_open_for_update() -> bool:
     try:
@@ -816,7 +325,6 @@ def suppress_already_open_for_update() -> bool:
         pass
     return False
 
-
 def startup_media_path_argument(argv: list[str] | None = None) -> str:
     args = list(sys.argv[1:] if argv is None else argv)
     for arg in args:
@@ -827,7 +335,6 @@ def startup_media_path_argument(argv: list[str] | None = None) -> str:
             return str(path)
     return ""
 
-
 def request_existing_instance_activation(action: str = "show", **extra_payload) -> None:
     try:
         APP_DIR.mkdir(parents=True, exist_ok=True)
@@ -836,7 +343,6 @@ def request_existing_instance_activation(action: str = "show", **extra_payload) 
         ACTIVATE_SIGNAL_FILE.write_text(json.dumps(payload), encoding="utf-8")
     except Exception:
         pass
-
 
 def activate_existing_instance_window(title_hint: str = "") -> bool:
     if os.name != "nt":
@@ -887,7 +393,6 @@ def activate_existing_instance_window(title_hint: str = "") -> bool:
     except Exception:
         return False
 
-
 def create_startup_mutex(instance_name: str) -> tuple[object | None, bool]:
     if os.name != "nt":
         return None, False
@@ -904,7 +409,6 @@ def create_startup_mutex(instance_name: str) -> tuple[object | None, bool]:
     except Exception:
         return None, False
 
-
 def close_startup_mutex(handle) -> None:
     if os.name != "nt" or not handle:
         return
@@ -915,7 +419,6 @@ def close_startup_mutex(handle) -> None:
         kernel32.CloseHandle(handle)
     except Exception:
         pass
-
 
 def handle_already_running_startup(startup_media_path: str, tray_start: bool) -> bool:
     if suppress_already_open_for_update():
@@ -931,7 +434,6 @@ def handle_already_running_startup(startup_media_path: str, tray_start: bool) ->
     else:
         wx.MessageBox(startup_text("already_open"), APP_NAME, wx.OK | wx.ICON_INFORMATION)
     return False
-
 
 class App(wx.App):
     def OnInit(self) -> bool:
@@ -982,15 +484,11 @@ class App(wx.App):
         close_startup_mutex(getattr(self, "instance_mutex_handle", None))
         return 0
 
-
 def main() -> int:
     app = App(False)
     app.MainLoop()
     return 0
 
-
 if __name__ == "__main__":
     sys.exit(main())
-
-
 
