@@ -302,7 +302,7 @@ class SystemUI:
 
     @staticmethod
     def looks_like_local_media_path(value: str) -> bool:
-        path = MiscUI.local_media_path_from_input(value)
+        path = SystemUI.local_media_path_from_input(value)
         return bool(path and (path.suffix.lower() in LOCAL_MEDIA_EXTENSIONS or path.is_file()))
 
     def local_media_files_in_folder(self, folder: Path) -> list[Path]:

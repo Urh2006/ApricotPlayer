@@ -1915,6 +1915,34 @@ class MiscUI:
             pass
 
     @staticmethod
+    def youtube_auth_cookie_names() -> set[str]:
+        return {
+            "sid", "sidcc", "lsid", "osid", "hsid", "ssid",
+            "apisid", "sapisid", "login_info", "account_chooser",
+            "__secure-osid", "__secure-1psid", "__secure-3psid",
+            "__secure-1papisid", "__secure-3papisid",
+            "__secure-1psidcc", "__secure-3psidcc",
+            "__secure-1psidts", "__secure-3psidts",
+        }
+
+    @staticmethod
+    def event_key_code(event: wx.KeyEvent) -> int:
+        try:
+            return int(event.GetKeyCode())
+        except Exception:
+            return -1
+
+    @staticmethod
+    def event_raw_key_code(event: wx.KeyEvent) -> int:
+        getter = getattr(event, "GetRawKeyCode", None)
+        if not getter:
+            return -1
+        try:
+            return int(getter())
+        except Exception:
+            return -1
+
+    @staticmethod
     def key_event_codes(event: wx.KeyEvent) -> set[int]:
         codes: set[int] = set()
         for getter_name in ("GetKeyCode", "GetUnicodeKey", "GetRawKeyCode"):

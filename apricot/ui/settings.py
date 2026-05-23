@@ -264,8 +264,26 @@ class SettingsMixin:
         if key == wx.WXK_RETURN:
             self.flush_settings_section_render()
             self.focus_first_settings_control()
-        else:
-            event.Skip()
+            return
+        event.Skip()
+        if key in {wx.WXK_UP, wx.WXK_DOWN, wx.WXK_HOME, wx.WXK_END, wx.WXK_PAGEUP, wx.WXK_PAGEDOWN}:
+            wx.CallAfter(self._sync_settings_section_from_list)
+
+    def _sync_settings_section_from_list(self) -> None:
+        if not hasattr(self, "settings_section_list"):
+            return
+        try:
+            new_index = self.settings_section_list.GetSelection()
+        except RuntimeError:
+            return
+        if new_index < 0 or (new_index == self.settings_section_index and self.settings_pending_section_index < 0):
+            return
+        if not self.settings_controls_applied_for_pending:
+            self.apply_settings_from_visible_controls()
+            self.settings_controls_applied_for_pending = True
+        self.settings_pending_section_index = new_index
+        self.settings_render_generation += 1
+        wx.CallLater(140, self.render_pending_settings_section, self.settings_render_generation)
 
 
     def focus_first_settings_control(self) -> None:

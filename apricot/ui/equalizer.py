@@ -83,13 +83,13 @@ class EqualizerUI:
     def equalizer_filter(cls, gains: dict[str, float], protect_clipping: bool = False, label: str = EQ_FILTER_LABEL) -> str:
         filters = []
         if protect_clipping:
-            headroom = MiscUI.equalizer_clipping_headroom_db(gains)
+            headroom = cls.equalizer_clipping_headroom_db(gains)
             if headroom <= -0.05:
                 filters.append(f"volume={headroom:.1f}dB")
         for band_id, _band_label in EQ_BANDS:
             gain = max(-24.0, min(24.0, float(gains.get(band_id, 0.0) or 0.0)))
             if abs(gain) >= 0.05:
-                filters.append(MiscUI.equalizer_band_filter(band_id, gain))
+                filters.append(cls.equalizer_band_filter(band_id, gain))
         if protect_clipping and filters:
             filters.append(EQ_LIMITER_FILTER)
         return f"@{label}:lavfi=[{','.join(filters)}]"
