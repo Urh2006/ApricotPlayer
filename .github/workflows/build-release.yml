@@ -2,19 +2,43 @@ name: Build and Release
 
 on:
   push:
-    tags:
-      - 'v[0-9]*.[0-9]*.[0-9]*'
+    branches:
+      - main
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Tag to release (e.g. v0.9.32)'
-        required: true
 
 permissions:
   contents: write
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      version: ${{ steps.check.outputs.version }}
+      tag: ${{ steps.check.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check if version already released
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(python3 -c "from apricot.constants import APP_VERSION; print(APP_VERSION)")
+          TAG="v$VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          if gh release view "$TAG" --repo "${{ github.repository }}" &>/dev/null; then
+            echo "Release $TAG already exists — skipping build."
+            echo "should_release=false" >> $GITHUB_OUTPUT
+          else
+            echo "Release $TAG not found — building."
+            echo "should_release=true" >> $GITHUB_OUTPUT
+          fi
+
   build:
+    needs: check
+    if: needs.check.outputs.should_release == 'true'
     runs-on: windows-latest
 
     steps:
@@ -29,20 +53,6 @@ jobs:
 
       - name: Install Python dependencies
         run: pip install pyinstaller -r requirements.txt
-
-      - name: Determine tag and version
-        id: meta
-        shell: pwsh
-        run: |
-          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
-            $tag = "${{ github.event.inputs.tag }}"
-          } else {
-            $tag = "${{ github.ref_name }}"
-          }
-          $version = python -c "from apricot.constants import APP_VERSION; print(APP_VERSION)"
-          echo "tag=$tag" >> $env:GITHUB_OUTPUT
-          echo "version=$version" >> $env:GITHUB_OUTPUT
-          Write-Host "Tag: $tag  Version: $version"
 
       - name: Download mpv
         shell: pwsh
@@ -59,8 +69,6 @@ jobs:
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "mpv.7z" -UseBasicParsing
           Write-Host "Extracting mpv files..."
           & "7z" e mpv.7z -o"$mpvDir" -y | Out-Null
-          $exeCount = (Get-ChildItem $mpvDir).Count
-          Write-Host "Extracted $exeCount files to $mpvDir"
           if (-not (Test-Path "$mpvDir\mpv.exe")) { throw "mpv.exe not found after extraction" }
           Write-Host "mpv.exe: $([math]::Round((Get-Item "$mpvDir\mpv.exe").Length / 1MB, 1)) MB"
 
@@ -77,11 +85,9 @@ jobs:
           if (-not $asset) { throw "Could not find ffmpeg-master-latest-win64-gpl.zip" }
           Write-Host "Downloading: $($asset.name)"
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "ffmpeg.zip" -UseBasicParsing
-          Write-Host "Extracting ffmpeg..."
           Expand-Archive -Path "ffmpeg.zip" -DestinationPath "ffmpeg-tmp" -Force
           Get-ChildItem -Recurse -Filter "*.exe" -Path "ffmpeg-tmp" | ForEach-Object {
             Copy-Item $_.FullName "$ffmpegDir\$($_.Name)"
-            Write-Host "Copied: $($_.Name)"
           }
           if (-not (Test-Path "$ffmpegDir\ffmpeg.exe")) { throw "ffmpeg.exe not found after extraction" }
           Write-Host "ffmpeg.exe: $([math]::Round((Get-Item "$ffmpegDir\ffmpeg.exe").Length / 1MB, 1)) MB"
@@ -100,7 +106,7 @@ jobs:
         shell: pwsh
         run: |
           .\scripts\build_installer.ps1 `
-            -AppVersion "${{ steps.meta.outputs.version }}" `
+            -AppVersion "${{ needs.check.outputs.version }}" `
             -SourceDir "release-dist\installer-app" `
             -OutputDir "release-dist"
 
@@ -114,10 +120,8 @@ jobs:
       - name: Verify artifacts
         shell: pwsh
         run: |
-          $installer = "release-dist\ApricotPlayerSetup.exe"
-          $portable  = "release-dist\ApricotPlayer.zip"
-          foreach ($f in @($installer, $portable)) {
-            if (-not (Test-Path $f)) { throw "Missing artifact: $f" }
+          foreach ($f in @("release-dist\ApricotPlayerSetup.exe", "release-dist\ApricotPlayer.zip")) {
+            if (-not (Test-Path $f)) { throw "Missing: $f" }
             $mb = [math]::Round((Get-Item $f).Length / 1MB, 1)
             Write-Host "$f  ($mb MB)"
           }
@@ -133,13 +137,12 @@ jobs:
             $notes = "See CHANGELOG.md for full details."
           }
           $notes | Set-Content "release-notes-current.md" -Encoding UTF8
-          Write-Host "Release notes ($($notes.Length) chars) written."
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.meta.outputs.tag }}
-          name: ApricotPlayer ${{ steps.meta.outputs.version }}
+          tag_name: ${{ needs.check.outputs.tag }}
+          name: ApricotPlayer ${{ needs.check.outputs.version }}
           body_path: release-notes-current.md
           files: |
             release-dist/ApricotPlayerSetup.exe
