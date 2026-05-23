@@ -1,3 +1,11 @@
+# v0.9.31 - Results and Keyboard Regression Hotfix
+
+## Fixes
+- Fixed result-list keyboard ownership so arrows, Space, and letter navigation stay in the results instead of leaking into player shortcuts.
+- Fixed Space and Enter activation for command buttons such as Back and Back to main menu when the global key hook is active.
+- Stopped normal YouTube search, channel, playlist browsing, subscription checks, and metadata hydration from doing cookie auto-retry or showing cookie sign-in hints.
+- Disabled external yt-dlp plugins before loading yt-dlp, preventing stale third-party plugins from changing ApricotPlayer's YouTube behavior.
+
 # v0.9.30 - Modular Codebase Safety Review
 
 ## What's New

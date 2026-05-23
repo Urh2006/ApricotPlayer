@@ -983,7 +983,7 @@ class LibraryMixin:
     def fetch_subscription_entries(self, subscription: dict) -> list[dict]:
         url = self.collection_download_url({"kind": "channel", "url": subscription.get("url", "")})
         options = {"quiet": True, "extract_flat": True, "skip_download": True, "playlistend": 5}
-        info = self.ydl_extract_info(url, options, download=False)
+        info = self.ydl_extract_info(url, options, download=False, allow_cookie_retry=False)
         entries = list(info.get("entries") or [])[:5]
         return [self.normalize_entry(entry, "Video") for entry in entries]
 

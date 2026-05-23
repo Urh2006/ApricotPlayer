@@ -358,15 +358,15 @@ class SearchMixin:
         try:
             options = {"quiet": True, "extract_flat": True, "skip_download": True, "playlistend": limit}
             if provider == "soundcloud":
-                info = self.ydl_extract_info(f"scsearch{limit}:{query}", options, download=False)
+                info = self.ydl_extract_info(f"scsearch{limit}:{query}", options, download=False, allow_cookie_retry=False)
             elif search_type == "Video":
-                info = self.ydl_extract_info(f"ytsearch{limit}:{query}", options, download=False)
+                info = self.ydl_extract_info(f"ytsearch{limit}:{query}", options, download=False, allow_cookie_retry=False)
             else:
-                info = self.ydl_extract_info(self.youtube_search_url(query, search_type), options, download=False)
+                info = self.ydl_extract_info(self.youtube_search_url(query, search_type), options, download=False, allow_cookie_retry=False)
             entries = list(info.get("entries") or [])[:limit]
             wx.CallAfter(self.show_results_if_current, generation, [self.normalize_entry(entry, search_type, provider) for entry in entries])
         except Exception as exc:
-            wx.CallAfter(self.show_search_error_if_current, generation, self.friendly_error(exc))
+            wx.CallAfter(self.show_search_error_if_current, generation, self.friendly_error(exc, include_youtube_auth_hint=False))
 
 
     def show_results_if_current(self, generation: int, results: list[dict]) -> None:
@@ -579,15 +579,15 @@ class SearchMixin:
         try:
             options = {"quiet": True, "extract_flat": True, "skip_download": True, "playlistend": limit}
             if provider == "soundcloud":
-                info = self.ydl_extract_info(f"scsearch{limit}:{query}", options, download=False)
+                info = self.ydl_extract_info(f"scsearch{limit}:{query}", options, download=False, allow_cookie_retry=False)
             elif search_type == "Video":
-                info = self.ydl_extract_info(f"ytsearch{limit}:{query}", options, download=False)
+                info = self.ydl_extract_info(f"ytsearch{limit}:{query}", options, download=False, allow_cookie_retry=False)
             else:
-                info = self.ydl_extract_info(self.youtube_search_url(query, search_type), options, download=False)
+                info = self.ydl_extract_info(self.youtube_search_url(query, search_type), options, download=False, allow_cookie_retry=False)
             entries = list(info.get("entries") or [])[:limit]
             wx.CallAfter(self.show_more_results_if_current, generation, [self.normalize_entry(entry, search_type, provider) for entry in entries], selection)
         except Exception as exc:
-            wx.CallAfter(self.dynamic_fetch_failed_if_current, generation, self.friendly_error(exc))
+            wx.CallAfter(self.dynamic_fetch_failed_if_current, generation, self.friendly_error(exc, include_youtube_auth_hint=False))
 
 
     def merge_dynamic_results(self, existing: list[dict], fetched: list[dict], anchor_identity: str = "") -> list[dict]:
@@ -928,7 +928,30 @@ class SearchMixin:
     def results_list_owns_key(event: wx.KeyEvent) -> bool:
         if event.ControlDown() or event.AltDown():
             return False
-        return True
+        key = event.GetKeyCode()
+        if key in {
+            wx.WXK_UP,
+            wx.WXK_DOWN,
+            wx.WXK_LEFT,
+            wx.WXK_RIGHT,
+            wx.WXK_HOME,
+            wx.WXK_END,
+            wx.WXK_PAGEUP,
+            wx.WXK_PAGEDOWN,
+            wx.WXK_SPACE,
+            wx.WXK_BACK,
+            wx.WXK_DELETE,
+        }:
+            return True
+        if key in {wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER, wx.WXK_ESCAPE}:
+            return False
+        try:
+            unicode_key = event.GetUnicodeKey()
+        except Exception:
+            unicode_key = 0
+        if unicode_key and chr(unicode_key).isprintable():
+            return True
+        return False
 
 
 

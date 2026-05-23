@@ -43,14 +43,14 @@ class MiscUI:
             return {"node": {"path": node}}
         return {"deno": {}, "node": {}, "quickjs": {}, "bun": {}}
 
-    def friendly_error(self, exc: Exception | str) -> str:
+    def friendly_error(self, exc: Exception | str, include_youtube_auth_hint: bool = True) -> str:
         text = str(exc)
         lowered = text.lower()
         if "failed to decrypt with dpapi" in lowered or "nonetype" in lowered and "decode" in lowered:
             return f"{text}\n\n{self.t('cookie_copy_hint')}"
         if "could not copy" in lowered and "cookie" in lowered and "database" in lowered:
             return f"{text}\n\n{self.t('cookie_copy_hint')}"
-        if "sign in to confirm" in lowered or "not a bot" in lowered or "cookies-from-browser" in lowered:
+        if include_youtube_auth_hint and ("sign in to confirm" in lowered or "not a bot" in lowered or "cookies-from-browser" in lowered):
             return f"{text}\n\n{self.t('youtube_auth_hint')}"
         return text
 
@@ -784,7 +784,7 @@ class MiscUI:
             return existing
         try:
             options = {"quiet": True, "extract_flat": True, "skip_download": True, "playlistend": 1}
-            info = self.ydl_extract_info(url, options, download=False)
+            info = self.ydl_extract_info(url, options, download=False, allow_cookie_retry=False)
         except Exception:
             return ""
         channel_id = str((info or {}).get("channel_id") or (info or {}).get("id") or "").strip()

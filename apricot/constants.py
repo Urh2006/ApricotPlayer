@@ -83,6 +83,7 @@ def get_yt_dlp():
     if yt_dlp_import_error is not None:
         return None
     try:
+        os.environ.setdefault("YTDLP_NO_PLUGINS", "1")
         components_dir = globals().get("COMPONENTS_DIR")
         if components_dir:
             components_path = Path(components_dir)
@@ -99,6 +100,7 @@ def get_yt_dlp():
 
 
 def disable_external_ytdlp_plugins() -> None:
+    os.environ.setdefault("YTDLP_NO_PLUGINS", "1")
     try:
         import_module("yt_dlp.globals").plugin_dirs.value = []
     except Exception:
@@ -222,8 +224,8 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.9.30"
-APP_VERSION_LABEL = "0.9.30"
+APP_VERSION = "0.9.31"
+APP_VERSION_LABEL = "0.9.31"
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"

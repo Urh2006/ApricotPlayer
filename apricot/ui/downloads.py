@@ -165,7 +165,7 @@ class DownloadsUI:
 
     def fetch_ytdlp_channel_popular(self, url: str, generation: int) -> tuple[list[dict], bool]:
         options = {"quiet": True, "extract_flat": True, "skip_download": True}
-        info = self.ydl_extract_info(url, options, download=False)
+        info = self.ydl_extract_info(url, options, download=False, allow_cookie_retry=False)
         entries = [entry for entry in list((info or {}).get("entries") or []) if isinstance(entry, dict)]
         normalized = self.dedupe_results_by_url([self.normalize_entry(entry, "Video") for entry in entries])
         total = len(normalized)

@@ -421,7 +421,7 @@ class ShortcutsUI:
 
     def player_shortcuts_allowed(self, focus: wx.Window | None = None) -> bool:
         if self.focus_in_results_control(focus):
-            return True
+            return False
         if self.in_player_screen and not self.focus_accepts_text(focus):
             return self.focus_in_player_controls(focus)
         return self.focus_in_player_controls(focus) or self.focus_in_background_player_controls(focus)
@@ -643,6 +643,8 @@ class ShortcutsUI:
         if not (self.player_control_mode and self.player_is_active()):
             return False
         if self.player_shortcuts_allowed(focus) or self.focus_accepts_text(focus):
+            return False
+        if self.focus_in_results_control(focus) or isinstance(focus, (wx.ListBox, wx.Button, wx.CheckBox, wx.Choice, wx.ComboBox, wx.Slider, wx.SpinCtrl)):
             return False
         if self.shortcut_matches(event, "player_previous"):
             self.play_relative_item(-1, preserve_focus=True)

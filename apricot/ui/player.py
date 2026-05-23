@@ -358,7 +358,7 @@ class PlayerUI:
             return updated
         options = {"quiet": True, "skip_download": True, "noplaylist": True}
         try:
-            info = self.ydl_extract_info(url, options, download=False)
+            info = self.ydl_extract_info(url, options, download=False, allow_cookie_retry=False)
             updated.update({key: value for key, value in self.metadata_from_info(info, updated).items() if value not in (None, "")})
         except Exception:
             pass

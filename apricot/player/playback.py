@@ -249,7 +249,7 @@ class PlaybackMixin:
     def play_playlist_worker(self, item: dict, shuffle: bool, generation: int) -> None:
         try:
             options = {"quiet": True, "extract_flat": True, "skip_download": True}
-            info = self.ydl_extract_info(str(item.get("url") or ""), options, download=False)
+            info = self.ydl_extract_info(str(item.get("url") or ""), options, download=False, allow_cookie_retry=False)
             entries = [entry for entry in list((info or {}).get("entries") or []) if isinstance(entry, dict)]
             playable = [
                 result

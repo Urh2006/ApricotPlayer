@@ -5,6 +5,26 @@ from pathlib import Path
 from apricot.ui.misc import MiscUI
 
 class EventsUI:
+    def activate_focused_button_from_key(self, event: wx.KeyEvent, focus: wx.Window | None) -> bool:
+        if event.ControlDown() or event.AltDown():
+            return False
+        if event.GetKeyCode() not in {wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER, wx.WXK_SPACE}:
+            return False
+        if not isinstance(focus, wx.Button):
+            return False
+        handler = getattr(focus, "_apricot_button_handler", None)
+        if callable(handler):
+            handler()
+            return True
+        try:
+            command = wx.CommandEvent(wx.EVT_BUTTON.typeId, focus.GetId())
+            command.SetEventObject(focus)
+            focus.Command(command)
+            return True
+        except Exception:
+            event.Skip()
+            return True
+
     def add_button_row(self, buttons: list[tuple[str, callable]]) -> list[wx.Button]:
         row = wx.BoxSizer(wx.HORIZONTAL)
         created_buttons = []
@@ -12,6 +32,7 @@ class EventsUI:
             is_play_pause = getattr(handler, "__name__", "") == "player_play_pause"
             button_label = self.current_play_pause_label() if is_play_pause else label
             button = wx.Button(self.panel, label=button_label)
+            button._apricot_button_handler = handler
             if is_play_pause:
                 button.SetName(button_label)
                 button.SetToolTip(button_label)
@@ -252,7 +273,7 @@ class EventsUI:
                 "skip_download": True,
                 "playlistend": limit,
             }
-            info = self.ydl_extract_info(url, options, download=False)
+            info = self.ydl_extract_info(url, options, download=False, allow_cookie_retry=False)
             entries = list(info.get("entries") or [])[:limit]
             normalized = [self.normalize_entry(entry, result_type) for entry in entries]
             if sort_mode == "popular":
@@ -263,7 +284,7 @@ class EventsUI:
                 wx.CallAfter(self.show_results_if_current, generation, normalized)
                 wx.CallAfter(self.clear_loading_more_if_current, generation)
         except Exception as exc:
-            wx.CallAfter(self.dynamic_fetch_failed_if_current, generation or self.search_generation, self.friendly_error(exc))
+            wx.CallAfter(self.dynamic_fetch_failed_if_current, generation or self.search_generation, self.friendly_error(exc, include_youtube_auth_hint=False))
 
     def mark_collection_fully_loaded_if_current(self, generation: int, fully_loaded: bool) -> None:
         if generation == self.search_generation:
@@ -360,6 +381,9 @@ class EventsUI:
                 event.Skip()
                 return
 
+        if self.activate_focused_button_from_key(event, focus):
+            return
+
         # Ensure editable text fields accept native typing and navigation (arrows, tab, backspace, etc.)
         if self.focus_accepts_text(focus):
             if key in {wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER}:
@@ -374,6 +398,12 @@ class EventsUI:
             if key not in {wx.WXK_ESCAPE, wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER}:
                 event.Skip()
                 return
+
+        results_focus = self.focus_in_results_control(focus)
+        if results_focus and self.results_list_owns_key(event):
+            event.Skip()
+            wx.CallAfter(self.maybe_extend_results)
+            return
 
         if self.handle_background_player_tab_navigation(event, focus):
             return
@@ -398,7 +428,6 @@ class EventsUI:
             return
         if self.handle_active_player_global_shortcut_event(event, focus):
             return
-        results_focus = self.focus_in_results_control(focus)
         if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "menu_list", None):
             self.activate_menu()
             return

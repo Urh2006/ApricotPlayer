@@ -439,7 +439,7 @@ class ListsUI:
                 if not url:
                     continue
                 try:
-                    info = self.ydl_extract_info(url, options, download=False)
+                    info = self.ydl_extract_info(url, options, download=False, allow_cookie_retry=False)
                     payload = self.metadata_from_info(info, item)
                     self.ui_queue.put(("result_metadata", payload))
                 except Exception:
