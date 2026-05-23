@@ -102,7 +102,18 @@ class DataManagerMixin:
                 if skipped_version and not self.is_newer_version(skipped_version, APP_VERSION):
                     merged["skipped_update_version"] = ""
                 if merged.get("update_channel") not in ("stable", "beta"):
-                    merged["update_channel"] = "stable"
+                    merged["update_channel"] = "beta"
+                # During pre-release cycles no stable builds exist, so a stored
+                # "stable" channel means the updater silently reports "up to date"
+                # on every check. Migrate existing users to "beta" automatically
+                # whenever the running build is itself a pre-release.
+                _is_prerelease = any(
+                    tag in APP_VERSION.lower()
+                    for tag in ("alpha", "beta", "rc")
+                )
+                if _is_prerelease and merged.get("update_channel") == "stable":
+                    merged["update_channel"] = "beta"
+                    self.settings_migrated = True
                 merged["stream_url_cache_minutes"] = self.normalized_stream_url_cache_minutes(merged.get("stream_url_cache_minutes"))
                 self.settings_loaded_from_path = source
                 if source != SETTINGS_FILE:

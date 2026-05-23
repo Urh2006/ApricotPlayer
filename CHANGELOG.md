@@ -1,3 +1,9 @@
+# v0.9.44-beta.4 - Updater and Installer Fix
+
+## Fixes
+- Fixed the in-app updater silently reporting "already up to date" for all beta testers. The update channel defaulted to "stable", so beta releases were never offered. Default is now "beta". Existing users whose settings have "stable" stored are migrated to "beta" automatically on first launch of this build.
+- Fixed the installer resetting to the default install directory on update. `UsePreviousAppDir=no` caused the installer to ignore the previous install path and default back to `C:\Program Files\ApricotPlayer`, leaving existing shortcuts pointing at the old installation. Changed to `UsePreviousAppDir=yes`.
+
 # v0.9.44-beta.3 - Crash Fix, Volume Persistence, and Memory Reduction
 
 ## Fixes

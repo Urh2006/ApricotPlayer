@@ -71,7 +71,7 @@ class Settings:
     app_update_interval_hours: float = 6.0
     app_update_notifications: bool = True
     skipped_update_version: str = ""
-    update_channel: str = "stable"
+    update_channel: str = "beta"
     confirm_before_download: bool = False
     download_archive: bool = False
     rate_limit: str = ""
