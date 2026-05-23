@@ -716,7 +716,7 @@ def default_equalizer_preset_gains() -> dict[str, dict[str, float]]:
 
 
 def default_equalizer_custom_names() -> dict[str, str]:
-    return {custom_id: f"Custom $index" for index, custom_id in enumerate(EQ_CUSTOM_PRESET_IDS, start=1)}
+    return {custom_id: f"Custom {index}" for index, custom_id in enumerate(EQ_CUSTOM_PRESET_IDS, start=1)}
 
 
 

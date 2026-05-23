@@ -233,6 +233,9 @@ class MainFrame(CookiesUI, DownloadsUI, EqualizerUI, EventsUI, ListsUI, MenusUI,
         self.rss_refresh_running = False
         self.exiting = False
         self.taskbar_icon: ApricotTaskBarIcon | None = None
+        self.controls: dict = {}
+        self.choice_values: dict = {}
+        self.settings_control_order: list = []
 
         self.panel = wx.Panel(self)
         self.root_sizer = wx.BoxSizer(wx.VERTICAL)
@@ -953,7 +956,12 @@ class App(wx.App):
         try:
             frame = MainFrame(start_hidden_in_tray=tray_start)
         except Exception:
-            with open('error.log', 'w') as f:
+            try:
+                APP_DIR.mkdir(parents=True, exist_ok=True)
+                error_log_path = APP_DIR / "error.log"
+            except Exception:
+                error_log_path = Path("error.log")
+            with open(error_log_path, "w", encoding="utf-8") as f:
                 traceback.print_exc(file=f)
             raise
         self.SetTopWindow(frame)
@@ -961,12 +969,11 @@ class App(wx.App):
             frame.Hide()
         else:
             frame.Show()
-            if startup_media_path:
-                pass
-            elif update_relaunch:
-                frame.activate_after_update_relaunch()
-            else:
-                frame.activate_window_later()
+            if not startup_media_path:
+                if update_relaunch:
+                    frame.activate_after_update_relaunch()
+                else:
+                    frame.activate_window_later()
         if startup_media_path:
             wx.CallAfter(frame.open_local_media_file, startup_media_path, True)
         return True

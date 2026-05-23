@@ -1,7 +1,4 @@
 from __future__ import annotations
-_SSL_CONTEXT = None
-_URLLIB_REQUEST_MODULE = None
-_PARSEDATE_TO_DATETIME = None
 import json
 import os
 import queue
@@ -36,6 +33,9 @@ except ImportError:
 
 from apricot.constants import *
 from apricot.locales import TEXT
+
+_SSL_CONTEXT = None
+
 
 class UtilsMixin:
 
@@ -307,7 +307,7 @@ class UtilsMixin:
 
     @staticmethod
     def make_ipc_path() -> str:
-        return rf"\\.\pipe\urhasaurus-youtube-{os.getpid()}" if os.name == "nt" else f"/tmp/urhasaurus-youtube-{os.getpid()}.sock"
+        return rf"\\.\pipe\apricotplayer-{os.getpid()}" if os.name == "nt" else f"/tmp/apricotplayer-{os.getpid()}.sock"
 
 
 
