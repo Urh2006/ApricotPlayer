@@ -1202,7 +1202,6 @@ class MiscUI:
                 parsed_lines = []
                 clean_text = ""
                 
-                import re
                 lrc_pattern = re.compile(r'^\[(\d+):(\d+\.\d+)\](.*)$')
                 
                 header = f"{source}\n\n" if source and text.strip() else ""

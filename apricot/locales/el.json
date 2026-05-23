@@ -804,5 +804,8 @@
     "direct_media_link_unavailable_local": "Î”ÎµÎ˝ Î±Ď€Î±ÎąĎ„ÎµÎŻĎ„Î±Îą Î¬ÎĽÎµĎÎ· Î´ÎąÎµĎŤÎ¸Ď…Î˝ĎÎ· URL Ď€ÎżÎ»Ď…ÎĽÎ­ĎĎ‰Î˝ ÎłÎąÎ± Ď„ÎżĎ€ÎąÎşÎ¬ Î±ĎĎ‡ÎµÎŻÎ±. Î§ĎÎ·ĎÎąÎĽÎżĎ€ÎżÎąÎ®ĎĎ„Îµ Ď„Î· Î´ÎąÎ±Î´ĎÎżÎĽÎ® Î±Î˝Ď„ÎąÎłĎÎ±Ď†Î®Ď‚.",
     "shortcut_player_copy_timestamp_link": "Î Î±ÎŻÎşĎ„Î·Ď‚: Î±Î˝Ď„ÎąÎłĎÎ¬ĎĎ„Îµ Ď„ÎżÎ˝ ĎĎŤÎ˝Î´ÎµĎÎĽÎż Ď„Î·Î˝ Ď„ĎÎ­Ď‡ÎżĎ…ĎÎ± ĎŽĎÎ±",
     "check_ytdlp_updates_now": "Î•Î»Î­ÎłÎľĎ„Îµ Ď„ĎŽĎÎ± Ď„ÎąĎ‚ ÎµÎ˝Î·ÎĽÎµĎĎŽĎÎµÎąĎ‚ yt-dlp",
-    "podcast_chapters_source": "ÎšÎµĎ†Î¬Î»Î±ÎąÎ± podcast"
+    "podcast_chapters_source": "ÎšÎµĎ†Î¬Î»Î±ÎąÎ± podcast",
+    "update_channel": "Update channel",
+    "update_channel_stable": "Stable",
+    "update_channel_beta": "Beta"
 }

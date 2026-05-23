@@ -384,6 +384,11 @@ class EventsUI:
         if self.activate_focused_button_from_key(event, focus):
             return
 
+        # Ensure wx.Choice and wx.ComboBox receive all native key events (arrow navigation, etc.)
+        if isinstance(focus, (wx.Choice, wx.ComboBox)):
+            event.Skip()
+            return
+
         # Ensure editable text fields accept native typing and navigation (arrows, tab, backspace, etc.)
         if self.focus_accepts_text(focus):
             if key in {wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER}:

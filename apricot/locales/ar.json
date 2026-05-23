@@ -811,5 +811,8 @@
     "soundcloud": "SoundCloud",
     "lrclib": "LRCLIB",
     "netease": "NetEase",
-    "youtube": "YouTube"
+    "youtube": "YouTube",
+    "update_channel": "Update channel",
+    "update_channel_stable": "Stable",
+    "update_channel_beta": "Beta"
 }

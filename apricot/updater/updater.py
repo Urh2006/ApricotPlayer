@@ -145,12 +145,19 @@ class AppUpdaterMixin:
 
     @staticmethod
     def reload_ytdlp_after_component_update() -> None:
-        global yt_dlp, yt_dlp_import_error
+        # Clear sys.modules so the next import fetches the updated files from disk
         for name in list(sys.modules):
             if name == "yt_dlp" or name.startswith("yt_dlp."):
                 sys.modules.pop(name, None)
-        yt_dlp = None
-        yt_dlp_import_error = None
+        # Reset the cached module reference in apricot.constants so get_yt_dlp()
+        # will re-import on the next call.  A bare "global" here would only affect
+        # this module's namespace, not the one that get_yt_dlp() reads.
+        try:
+            import apricot.constants as _apricot_constants
+            _apricot_constants.yt_dlp = None
+            _apricot_constants.yt_dlp_import_error = None
+        except Exception:
+            pass
 
 
     def manual_app_update_check(self) -> None:

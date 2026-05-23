@@ -101,6 +101,8 @@ class DataManagerMixin:
                 skipped_version = str(merged.get("skipped_update_version") or "")
                 if skipped_version and not self.is_newer_version(skipped_version, APP_VERSION):
                     merged["skipped_update_version"] = ""
+                if merged.get("update_channel") not in ("stable", "beta"):
+                    merged["update_channel"] = "stable"
                 merged["stream_url_cache_minutes"] = self.normalized_stream_url_cache_minutes(merged.get("stream_url_cache_minutes"))
                 self.settings_loaded_from_path = source
                 if source != SETTINGS_FILE:

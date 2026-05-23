@@ -1,3 +1,12 @@
+# v0.9.33 - Combo Box Navigation, Updater Reliability, and Locale Completeness
+
+## Fixes
+- Fixed arrow key navigation on combo boxes (wx.Choice). Pressing Up/Down while a drop-down control had focus was silently swallowed by the global key hook before the OS COMBOBOX control could act on it. The hook now passes all key events straight through for focused `wx.Choice` and `wx.ComboBox` controls so native arrow, Home, End, and keyboard-search behaviour is fully restored.
+- Fixed yt-dlp reload after a component update. `reload_ytdlp_after_component_update` used a `global` statement that resolved to updater.py's module namespace (a stale value copied in via `from apricot.constants import *`) instead of the `apricot.constants` module that `get_yt_dlp()` actually reads. The function now imports `apricot.constants` by name and resets the cached references directly on that module object, so the next call to `get_yt_dlp()` picks up the freshly extracted yt-dlp.
+- Fixed update channel setting being silently discarded on load when the stored value is unrecognised. `load_settings` now validates `update_channel` and falls back to `"stable"` instead of passing the raw value through into the Settings object.
+- Added missing update-channel locale keys (`update_channel`, `update_channel_stable`, `update_channel_beta`) to all 25 non-English locale files (ar, cs, de, el, es, fi, fr, hi, hr, hu, id, it, ja, ko, nl, pl, pt, ro, ru, sk, sr, sv, tr, uk, zh). Without these keys the Settings screen would display an empty label for the Update Channel control in every non-English language.
+- Removed a redundant `import re` statement that was buried inside the `set_lyrics_text` nested function in `MiscUI.show_lyrics`. The `re` module is already imported at module level; the duplicate was dead code and slightly slowed down every lyrics refresh.
+
 # v0.9.32 - Cookie, Navigation, and Modular Cleanup
 
 ## Fixes
