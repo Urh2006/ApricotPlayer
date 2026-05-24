@@ -677,6 +677,10 @@ class MiscUI:
             except Exception:
                 pass
         try:
+            self.save_stream_url_cache()
+        except Exception:
+            pass
+        try:
             self.stop_player(silent=True)
         except Exception:
             pass

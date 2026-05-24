@@ -1,3 +1,8 @@
+# v0.9.44-beta.11 - Persistent Stream URL Cache
+
+## Improvements
+- **Stream URL cache now persists across restarts.** Previously the URL resolver cache (which makes second plays of the same track instant) was in-memory only — closing and reopening the app wiped it, so there was no speed benefit on the first play after a restart. The cache is now saved to disk (`ApricotPlayer/stream_url_cache.json`) when the app exits and reloaded on startup, with expired entries filtered out automatically. The first play after a restart is now as fast as the second play within a session, as long as the cached resolution hasn't expired.
+
 # v0.9.44-beta.10 - Seek Stall Fix
 
 ## Fixes
