@@ -1,3 +1,9 @@
+# v0.9.44-beta.6 - Seek Performance and Keyboard Hook Fix
+
+## Fixes
+- Fixed seek performance regression. `start_mpv` was passing `--demuxer-max-back-bytes` to mpv; the correct option name is `--demuxer-back-bytes`. Mpv silently ignored the unknown option, leaving the back-buffer at zero. Every backward seek had to re-download from the network. The correct option name restores on-disk cache-backed seeking.
+- Fixed keyboard lag and double-activation on buttons. Two pre-checks added during the modular refactor — an early Tab-key skip and an `activate_focused_button_from_key` call — were not present in the original codebase. The Tab block bypassed the proper Tab-navigation handlers in non-player contexts. The button-activation call double-fired handlers on focused buttons (once from the hook, once from the native `EVT_BUTTON` binding) and discarded the native keypress, losing visual press feedback. Both are removed; `on_char_hook` now matches pre-refactor behaviour.
+
 # v0.9.44-beta.5 - Audio Quality, Startup Speed, and RAM Fix
 
 ## Fixes

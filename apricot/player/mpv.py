@@ -104,7 +104,7 @@ class MpvMixin:
                         "--cache-on-disk=yes",
                         f"--demuxer-cache-dir={cache_folder}",
                         f"--demuxer-max-bytes={cache_size}MiB",
-                        f"--demuxer-max-back-bytes={back_cache}MiB",
+                        f"--demuxer-back-bytes={back_cache}MiB",
                         "--cache-pause=no",
                     ]
                 )
