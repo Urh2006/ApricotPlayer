@@ -436,7 +436,7 @@ class ShortcutsUI:
 
     def player_shortcuts_allowed(self, focus: wx.Window | None = None) -> bool:
         if self.focus_in_results_control(focus):
-            return False
+            return True
         if self.in_player_screen and not self.focus_accepts_text(focus):
             return self.focus_in_player_controls(focus)
         return self.focus_in_player_controls(focus) or self.focus_in_background_player_controls(focus)
@@ -509,7 +509,6 @@ class ShortcutsUI:
                 event.Skip()
                 wx.CallAfter(self.maybe_extend_results)
                 return True
-            return True
         if self.context_menu_shortcut_matches(event):
             self.open_player_context_menu()
             return True

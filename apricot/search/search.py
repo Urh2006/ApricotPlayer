@@ -154,41 +154,44 @@ class SearchMixin:
 
 
     def on_results_key(self, event: wx.KeyEvent) -> None:
-        if self.result_details_key(event):
-            self.announce_selected_result_details()
-        elif self.shortcut_matches(event, "queue_audio"):
-            self.toggle_download_queue()
-        elif self.shortcut_matches(event, "add_to_playback_queue"):
-            self.add_active_to_playback_queue()
-        elif self.shortcut_matches(event, "remove_from_playback_queue"):
-            self.remove_active_from_playback_queue()
-        elif self.shortcut_matches(event, "add_favorite"):
-            self.add_selected_favorite()
-        elif self.shortcut_matches(event, "remove_favorite"):
-            self.remove_selected_favorite_shortcut()
-        elif self.shortcut_matches(event, "add_to_playlist"):
-            self.add_active_to_playlist()
-        elif self.shortcut_matches(event, "remove_from_playlist"):
-            self.remove_active_from_playlist()
-        elif self.shortcut_matches(event, "download_audio"):
-            self.download_audio_shortcut()
-        elif self.shortcut_matches(event, "download_video"):
-            self.download_video_shortcut()
-        elif self.shortcut_matches(event, "subscribe_channel"):
-            self.subscribe_shortcut()
-        elif self.shortcut_matches(event, "unsubscribe_channel"):
-            self.unsubscribe_shortcut()
-        elif self.shortcut_matches(event, "open_channel"):
-            self.open_item_channel(self.selected_result())
-        elif self.shortcut_matches(event, "copy_link"):
-            self.copy_selected_url()
-        elif self.shortcut_matches(event, "open_selected"):
-            self.play_selected()
-        elif self.context_menu_shortcut_matches(event):
-            self.open_context_menu()
-        else:
-            event.Skip()
-            wx.CallAfter(self.maybe_extend_results)
+        try:
+            if self.result_details_key(event):
+                self.announce_selected_result_details()
+            elif self.shortcut_matches(event, "queue_audio"):
+                self.toggle_download_queue()
+            elif self.shortcut_matches(event, "add_to_playback_queue"):
+                self.add_active_to_playback_queue()
+            elif self.shortcut_matches(event, "remove_from_playback_queue"):
+                self.remove_active_from_playback_queue()
+            elif self.shortcut_matches(event, "add_favorite"):
+                self.add_selected_favorite()
+            elif self.shortcut_matches(event, "remove_favorite"):
+                self.remove_selected_favorite_shortcut()
+            elif self.shortcut_matches(event, "add_to_playlist"):
+                self.add_active_to_playlist()
+            elif self.shortcut_matches(event, "remove_from_playlist"):
+                self.remove_active_from_playlist()
+            elif self.shortcut_matches(event, "download_audio"):
+                self.download_audio_shortcut()
+            elif self.shortcut_matches(event, "download_video"):
+                self.download_video_shortcut()
+            elif self.shortcut_matches(event, "subscribe_channel"):
+                self.subscribe_shortcut()
+            elif self.shortcut_matches(event, "unsubscribe_channel"):
+                self.unsubscribe_shortcut()
+            elif self.shortcut_matches(event, "open_channel"):
+                self.open_item_channel(self.selected_result())
+            elif self.shortcut_matches(event, "copy_link"):
+                self.copy_selected_url()
+            elif self.shortcut_matches(event, "open_selected"):
+                self.play_selected()
+            elif self.context_menu_shortcut_matches(event):
+                self.open_context_menu()
+            else:
+                event.Skip()
+                wx.CallAfter(self.maybe_extend_results)
+        except Exception:
+            pass
 
 
 

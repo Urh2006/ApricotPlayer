@@ -1,3 +1,9 @@
+# v0.9.44-beta.12 - JAWS Shortcut Fix and Crash Prevention
+
+## Fixes
+- **JAWS now announces F2, F3, V and other player shortcuts from the results list.** `player_shortcuts_allowed` was incorrectly returning `False` when focus was in the results list, preventing all player shortcuts from firing. A secondary bug — a stray `return True` in `handle_player_shortcut_event` — consumed non-navigation keys silently without executing their actions. Both are fixed.
+- **Fixed crashes when pressing keys in the results list.** `on_results_key` had no exception guard; any unhandled error (e.g. during download or playback initiation) propagated to wxPython's main loop and terminated the app. The handler is now protected with `try/except`.
+
 # v0.9.44-beta.11 - Persistent Stream URL Cache
 
 ## Improvements
