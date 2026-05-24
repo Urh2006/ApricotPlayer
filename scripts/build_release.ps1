@@ -1,15 +1,22 @@
 ﻿param(
     [string]$PythonExe = "python",
-    [string]$OutputDir = "$env:USERPROFILE\Downloads",
+    [string]$OutputDir = "",
     [string]$AppName = "ApricotPlayer",
     [ValidateSet("onefile", "onedir")]
-    [string]$PackageMode = "onedir"
+    [string]$PackageMode = "onedir",
+    [switch]$SkipInstaller
 )
 
 $ErrorActionPreference = "Stop"
 
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $workPath = Join-Path $projectRoot "build_wx"
+
+# Default output directory: release-dist\installer-app so that build_installer.ps1
+# and build_portable_zip.ps1 can automatically pick up the fresh PyInstaller output.
+if (-not $OutputDir) {
+    $OutputDir = Join-Path $projectRoot "release-dist\installer-app"
+}
 
 Write-Host "Running pre-build syntax checks..."
 $pythonFiles = @(
@@ -126,4 +133,31 @@ finally {
     Pop-Location
 }
 
+if ($LASTEXITCODE -ne 0) {
+    throw "PyInstaller failed with exit code $LASTEXITCODE"
+}
+
+if (-not $SkipInstaller) {
+    # The PyInstaller onedir output lands at $OutputDir\$AppName.
+    $pyInstallerOut = Join-Path $OutputDir $AppName
+
+    Write-Host ""
+    Write-Host "=== Building installer (Inno Setup) ==="
+    & (Join-Path $PSScriptRoot "build_installer.ps1") -SourceDir $pyInstallerOut
+    if ($LASTEXITCODE -ne 0) {
+        throw "build_installer.ps1 failed with exit code $LASTEXITCODE"
+    }
+
+    Write-Host ""
+    Write-Host "=== Building portable ZIP ==="
+    & (Join-Path $PSScriptRoot "build_portable_zip.ps1") -SourceDir $pyInstallerOut
+    if ($LASTEXITCODE -ne 0) {
+        throw "build_portable_zip.ps1 failed with exit code $LASTEXITCODE"
+    }
+
+    Write-Host ""
+    Write-Host "=== Build complete ==="
+    Write-Host "  Installer : $(Join-Path $projectRoot 'release-dist\ApricotPlayerSetup.exe')"
+    Write-Host "  Portable  : $(Join-Path $projectRoot 'release-dist\ApricotPlayer.zip')"
+}
 

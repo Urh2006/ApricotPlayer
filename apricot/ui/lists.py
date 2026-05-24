@@ -417,6 +417,12 @@ class ListsUI:
         return self.results[selection]
 
     def start_result_metadata_hydration(self) -> None:
+        # Keep the tracking set from growing unboundedly over a long session.
+        # Clearing it when it gets large just means a handful of URLs may be
+        # re-fetched; that is harmless and far cheaper than holding thousands
+        # of strings in memory indefinitely.
+        if len(self.metadata_hydration_urls) > 1000:
+            self.metadata_hydration_urls.clear()
         candidates: list[dict] = []
         for item in list(self.results):
             url = str(item.get("url") or "")

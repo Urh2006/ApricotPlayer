@@ -106,6 +106,12 @@ class MpvMixin:
                         f"--demuxer-max-bytes={cache_size}MiB",
                         f"--demuxer-max-back-bytes={back_cache}MiB",
                         "--cache-pause=no",
+                        # Reconnect seekable streams after a network drop.
+                        # reconnect_streamed is intentionally omitted: it causes
+                        # ffmpeg to tear down and reconnect the HTTP connection on
+                        # every seek, adding 2-5 s of stall after each seek command.
+                        "--stream-lavf-o=reconnect=1",
+                        "--stream-lavf-o=reconnect_delay_max=5",
                     ]
                 )
             else:

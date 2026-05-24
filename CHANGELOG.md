@@ -1,3 +1,78 @@
+# v0.9.44-beta.12 - JAWS Shortcut Fix and Crash Prevention
+
+## Fixes
+- **JAWS now announces F2, F3, V and other player shortcuts from the results list.** `player_shortcuts_allowed` was incorrectly returning `False` when focus was in the results list, preventing all player shortcuts from firing. A secondary bug — a stray `return True` in `handle_player_shortcut_event` — consumed non-navigation keys silently without executing their actions. Both are fixed.
+- **Fixed crashes when pressing keys in the results list.** `on_results_key` had no exception guard; any unhandled error (e.g. during download or playback initiation) propagated to wxPython's main loop and terminated the app. The handler is now protected with `try/except`.
+
+# v0.9.44-beta.11 - Persistent Stream URL Cache
+
+## Improvements
+- **Stream URL cache now persists across restarts.** Previously the URL resolver cache (which makes second plays of the same track instant) was in-memory only — closing and reopening the app wiped it, so there was no speed benefit on the first play after a restart. The cache is now saved to disk (`ApricotPlayer/stream_url_cache.json`) when the app exits and reloaded on startup, with expired entries filtered out automatically. The first play after a restart is now as fast as the second play within a session, as long as the cached resolution hasn't expired.
+
+# v0.9.44-beta.10 - Seek Stall Fix
+
+## Fixes
+- **Fixed seek stall regression from beta.7.** Seeking forward or backward in any web stream (YouTube, SoundCloud, etc.) now responds instantly. The cause was `--stream-lavf-o=reconnect_streamed=1` which tells ffmpeg to fully reconnect the HTTP connection after every seek on a streaming URL, adding 2–5 s of stall per keypress. That flag is removed; `reconnect=1` and `reconnect_delay_max=5` are kept for resilience against real network drops on seekable streams.
+
+# v0.9.44-beta.9 - JAWS Screen Reader Support
+
+## New features
+- **JAWS screen reader support.** All player announcements (track started, volume, seek, speed, repeat, shuffle, etc.) now reach JAWS via its COM automation server (`FreedomSci.JawsApi`). Implemented entirely with `ctypes` — no extra packages required. JAWS is tried only when NVDA has not already handled the text, so there is no duplicate speech when both screen readers run simultaneously. On machines where JAWS is not installed the ProgID lookup is performed once and cached; all subsequent calls return immediately with near-zero overhead. `EVENT_SYSTEM_ALERT` is suppressed when JAWS (or NVDA) has already spoken the text; `EVENT_OBJECT_NAMECHANGE` and `EVENT_OBJECT_VALUECHANGE` are always fired for Narrator and other IAccessible-based screen readers.
+
+# v0.9.44-beta.8 - NVDA Audio Ducking Fix
+
+## Fixes
+- Fixed Alt+Tab to player muting the system's main audio output while the window has focus when NVDA is running. Every `announce_player` call was sending text to NVDA twice: once via `nvdaController_speakText` (the explicit controller call) and once via `wx.ACC_EVENT_SYSTEM_ALERT` (a WinEvent NVDA monitors independently). NVDA would interrupt itself and restart speech from the top, keeping Windows audio ducking active far longer than expected — appearing as permanent speaker muting to anyone with "When Windows detects communications activity: Mute all other sounds" configured. Fix: `raise_accessibility_alert` now suppresses `EVENT_SYSTEM_ALERT` when the NVDA controller already handled the text, eliminating the double-announcement. The `EVENT_OBJECT_NAMECHANGE` and `EVENT_OBJECT_VALUECHANGE` WinEvents are still always fired for JAWS, Narrator, and other screen readers.
+
+# v0.9.44-beta.7 - Critical Playback Fix, Reconnect, Stream Stability
+
+## Fixes
+- Fixed critical playback regression from beta.6: `--demuxer-back-bytes` is not a valid mpv 0.41 option; mpv exited with "Fatal error" on every launch when disk cache was enabled (the default). Reverted to `--demuxer-max-back-bytes`.
+- Fixed stream stuck after network drop. Added mpv reconnect options (`--stream-lavf-o=reconnect=1`, `reconnect_streamed=1`, `reconnect_delay_max=5`) so mpv automatically retries the HTTP connection after a drop.
+- Fixed stream stalling after a few seconds (regression from beta.5). The `bestaudio/…` format selector returns DASH segment URLs in some cases; mpv plays one segment then stops. Reverted format selector to `best[ext=mp4]/best` and removed the `requested_formats` fallback.
+- Fixed background player Tab navigation broken by wrong dispatch order in `on_char_hook`. The tab-navigation handlers now run before the results-list key check, matching the original code structure.
+
+# v0.9.44-beta.6 - Seek Performance and Keyboard Hook Fix
+
+## Fixes
+- Fixed seek performance regression. `start_mpv` was passing `--demuxer-max-back-bytes` to mpv; the correct option name is `--demuxer-back-bytes`. Mpv silently ignored the unknown option, leaving the back-buffer at zero. Every backward seek had to re-download from the network. The correct option name restores on-disk cache-backed seeking.
+- Fixed keyboard lag and double-activation on buttons. Two pre-checks added during the modular refactor — an early Tab-key skip and an `activate_focused_button_from_key` call — were not present in the original codebase. The Tab block bypassed the proper Tab-navigation handlers in non-player contexts. The button-activation call double-fired handlers on focused buttons (once from the hook, once from the native `EVT_BUTTON` binding) and discarded the native keypress, losing visual press feedback. Both are removed; `on_char_hook` now matches pre-refactor behaviour.
+
+# v0.9.44-beta.5 - Audio Quality, Startup Speed, and RAM Fix
+
+## Fixes
+- Fixed audio quality regression introduced during the modular refactor. `resolve_stream_url` was using a hardcoded `"best[ext=mp4]/best"` format selector, which always picks a combined 720p MP4 stream with AAC 128 kbps audio. The selector now prefers `bestaudio[ext=m4a]/bestaudio` first so YouTube delivers M4A 256 kbps or Opus 160 kbps — meaningfully better stereo and dynamic range. Falls back to the user-configured video format and known-safe format IDs (18/22) if no audio-only stream is found.
+- Fixed slow song startup. The same format bug caused mpv to download a full 720p video stream (2–4 Mbit/s) for audio-only playback, discarding all the video data. With an audio-only stream at ~160 kbps the initial buffer fills much faster.
+- Fixed DASH multi-track stream URL extraction. When `bestvideo+bestaudio` is selected, `info["url"]` is absent; the code now walks `info["requested_formats"]` (preferring audio) before falling back to the format list.
+
+## Performance
+- Reduced RAM use from the stream URL cache. The raw yt-dlp info dict includes formats (100+ entries), automatic captions (30+ languages of timed data), thumbnails, heatmap, etc. — 10–50 MB per video in Python memory. Only the small metadata fields needed by the player UI are now stored; heavy bulk fields are stripped before caching. Cache footprint drops from several GB (after extended sessions) to a few MB.
+
+# v0.9.44-beta.4 - Updater and Installer Fix
+
+## Fixes
+- Fixed the in-app updater silently reporting "already up to date" for all beta testers. The update channel defaulted to "stable", so beta releases were never offered. Default is now "beta". Existing users whose settings have "stable" stored are migrated to "beta" automatically on first launch of this build.
+- Fixed the installer resetting to the default install directory on update. `UsePreviousAppDir=no` caused the installer to ignore the previous install path and default back to `C:\Program Files\ApricotPlayer`, leaving existing shortcuts pointing at the old installation. Changed to `UsePreviousAppDir=yes`.
+
+# v0.9.44-beta.3 - Crash Fix, Volume Persistence, and Memory Reduction
+
+## Fixes
+- Fixed automatic crash during navigation in results and menus. Background-worker results are delivered to the UI via a timer-driven queue (`process_queue`). The original drain loop wrapped both the queue read and every handler inside a single `try/except queue.Empty` block, so an unhandled exception from any handler (e.g. a `RuntimeError` when wxPython tries to access a destroyed list control during rapid navigation) propagated straight to wxPython's main-loop exception handler, which terminates the process. Queue read and handler dispatch are now guarded by separate try/except blocks; exceptions inside handlers are caught and discarded so the app keeps running.
+- Fixed volume resetting to default when closing the player screen with Escape. `stop_player()` was clearing `session_volume` whenever `reset_session=True` (the default). Because `back_to_results()` always calls `stop_player()` with that default, every Escape press wiped the manually set volume. The clear is removed; volume now persists for the entire app session and resets naturally when the app closes.
+
+## Performance
+- Reduced memory use during long browsing sessions. `metadata_hydration_urls` is a set used to avoid re-fetching yt-dlp metadata for the same result URL twice. It was never cleared, so extended sessions with many searches could accumulate thousands of URL strings. The set is now cleared automatically once it exceeds 1 000 entries, capping steady-state size to a few tens of kilobytes. A handful of previously-hydrated results may be re-fetched once per reset, which is negligible.
+
+# v0.9.44-beta.2 - Keyboard Lag and Checkbox Fix
+
+## Fixes
+- Fixed checkboxes not responding correctly to Space. When a checkbox had focus, Space was falling through to the player shortcut layer (triggering play/pause or another bound action) instead of toggling the checkbox. Root cause: `on_char_hook` had no early-exit for native checkbox/slider/spinner keys before running the full shortcut matching loop. Fix: `wx.CheckBox`, `wx.Slider`, and `wx.SpinCtrl` now pass Space and arrow/navigation keys straight through to the widget. Enter is deliberately excluded so player-screen checkbox toggles (repeat, bass boost, etc.) still work.
+
+## Performance
+- Eliminated the primary source of keyboard lag. `shortcut_matches()` is called more than 30 times per keypress inside the central `on_char_hook` handler. Each call bottomed out in `shortcut_key_code()`, which rebuilt a 30-entry alias dictionary and compiled two regex patterns from scratch every time. All three objects are now module-level constants built once at import time. Per-keypress shortcut-matching overhead drops to near zero, making Enter, arrow keys, and Space feel immediately responsive again.
+- Pre-compiled the `|`-separator split pattern used in `event_matches_shortcut`. It was also compiled fresh on every shortcut check.
+- Reduced startup activation overhead. `activate_window_later()` was scheduling `foreground_window()` (win32 `AttachThreadInput` + several other calls) at four delays (0 ms, 75 ms, 250 ms, 750 ms). Default is now two delays (0 ms, 250 ms). Tray-restore and post-update relaunch keep their own explicit lists and are not affected.
+
 # v0.9.44-beta.1 - Performance Pass and Bug Fixes
 
 ## Performance

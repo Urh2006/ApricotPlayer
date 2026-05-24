@@ -373,23 +373,27 @@ class EventsUI:
             self.on_shortcut_capture_key(event, focus)
             return
 
-        # Ensure native Tab & Shift+Tab work flawlessly everywhere outside active player screens
-        key = event.GetKeyCode()
-        if key == wx.WXK_TAB:
-            in_background_player = self.focus_in_background_player_controls(focus)
-            if not self.in_player_screen and not in_background_player:
-                event.Skip()
-                return
-
-        if self.activate_focused_button_from_key(event, focus):
-            return
-
         # Ensure wx.Choice and wx.ComboBox receive all native key events (arrow navigation, etc.)
         if isinstance(focus, (wx.Choice, wx.ComboBox)):
             event.Skip()
             return
 
+        # Ensure checkboxes, sliders, and spin controls handle their natural keys natively.
+        # Without this, Space on a checkbox would fall through to the player_play_pause shortcut
+        # instead of toggling the checkbox.  Enter is intentionally excluded so the player-screen
+        # checkbox handlers (toggle_repeat, toggle_bass_boost, etc.) still fire via
+        # handle_player_shortcut_event.
+        if isinstance(focus, (wx.CheckBox, wx.Slider, wx.SpinCtrl)):
+            if event.GetKeyCode() in {
+                wx.WXK_SPACE,
+                wx.WXK_UP, wx.WXK_DOWN, wx.WXK_LEFT, wx.WXK_RIGHT,
+                wx.WXK_HOME, wx.WXK_END, wx.WXK_PAGEUP, wx.WXK_PAGEDOWN,
+            }:
+                event.Skip()
+                return
+
         # Ensure editable text fields accept native typing and navigation (arrows, tab, backspace, etc.)
+        key = event.GetKeyCode()
         if self.focus_accepts_text(focus):
             if key in {wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER}:
                 if focus is getattr(self, "query", None):
@@ -404,15 +408,15 @@ class EventsUI:
                 event.Skip()
                 return
 
+        if self.handle_background_player_tab_navigation(event, focus):
+            return
+        if self.handle_player_tab_navigation(event, focus):
+            return
+
         results_focus = self.focus_in_results_control(focus)
         if results_focus and self.results_list_owns_key(event):
             event.Skip()
             wx.CallAfter(self.maybe_extend_results)
-            return
-
-        if self.handle_background_player_tab_navigation(event, focus):
-            return
-        if self.handle_player_tab_navigation(event, focus):
             return
         if self.in_main_menu:
             if self.handle_player_shortcut_event(event, focus, details_has_focus):

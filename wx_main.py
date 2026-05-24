@@ -183,8 +183,8 @@ class MainFrame(CookiesUI, DownloadsUI, EqualizerUI, EventsUI, ListsUI, MenusUI,
         self.current_stream_url = ""
         self.current_stream_headers: dict = {}
         self.player_sequence_results: list[dict] = []
-        self.stream_url_cache: dict[str, dict] = {}
         self.stream_url_cache_lock = threading.Lock()
+        self.stream_url_cache: dict[str, dict] = self.load_stream_url_cache()
         self.prefetch_stream_urls: set[str] = set()
         self.player_session_open = False
         self.current_audio_device = ""

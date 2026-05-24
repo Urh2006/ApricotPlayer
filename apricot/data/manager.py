@@ -102,7 +102,18 @@ class DataManagerMixin:
                 if skipped_version and not self.is_newer_version(skipped_version, APP_VERSION):
                     merged["skipped_update_version"] = ""
                 if merged.get("update_channel") not in ("stable", "beta"):
-                    merged["update_channel"] = "stable"
+                    merged["update_channel"] = "beta"
+                # During pre-release cycles no stable builds exist, so a stored
+                # "stable" channel means the updater silently reports "up to date"
+                # on every check. Migrate existing users to "beta" automatically
+                # whenever the running build is itself a pre-release.
+                _is_prerelease = any(
+                    tag in APP_VERSION.lower()
+                    for tag in ("alpha", "beta", "rc")
+                )
+                if _is_prerelease and merged.get("update_channel") == "stable":
+                    merged["update_channel"] = "beta"
+                    self.settings_migrated = True
                 merged["stream_url_cache_minutes"] = self.normalized_stream_url_cache_minutes(merged.get("stream_url_cache_minutes"))
                 self.settings_loaded_from_path = source
                 if source != SETTINGS_FILE:
@@ -220,4 +231,48 @@ class DataManagerMixin:
     def save_playback_queue(self) -> None:
         APP_DIR.mkdir(parents=True, exist_ok=True)
         PLAYBACK_QUEUE_FILE.write_text(json.dumps(self.playback_queue, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+    def load_stream_url_cache(self) -> dict:
+        """Load the persisted stream-URL cache from disk.
+
+        Expired entries are filtered out at load time so stale data never
+        reaches the running session.  Any read / parse error silently returns
+        an empty dict — the cache is a pure performance optimisation and loss
+        is never fatal.
+        """
+        try:
+            if STREAM_URL_CACHE_FILE.exists():
+                data = json.loads(STREAM_URL_CACHE_FILE.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    now = time.time()
+                    return {
+                        k: v
+                        for k, v in data.items()
+                        if isinstance(v, dict) and float(v.get("expires_at") or 0) > now
+                    }
+        except Exception:
+            pass
+        return {}
+
+
+    def save_stream_url_cache(self) -> None:
+        """Persist the in-memory stream-URL cache to disk.
+
+        Takes a snapshot under the lock, filters expired entries, then writes
+        outside the lock so IO never blocks the UI thread.
+        """
+        try:
+            lock = getattr(self, "stream_url_cache_lock", None)
+            if lock is not None:
+                with lock:
+                    snapshot = dict(self.stream_url_cache)
+            else:
+                snapshot = dict(getattr(self, "stream_url_cache", {}))
+            now = time.time()
+            to_save = {k: v for k, v in snapshot.items() if isinstance(v, dict) and float(v.get("expires_at") or 0) > now}
+            APP_DIR.mkdir(parents=True, exist_ok=True)
+            STREAM_URL_CACHE_FILE.write_text(json.dumps(to_save, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
 

@@ -3,6 +3,66 @@ import wx
 import os
 from pathlib import Path
 
+# ---------------------------------------------------------------------------
+# Hot-path constants — built once at import time.
+#
+# shortcut_matches() is called 30+ times per keypress in on_char_hook.
+# Each call chains down to shortcut_key_code(), which previously rebuilt a
+# 30-entry alias dict and compiled two regex patterns on every invocation.
+# Moving them here reduces per-keypress regex overhead to near zero.
+# ---------------------------------------------------------------------------
+
+_RE_SHORTCUT_SPACES = re.compile(r"\s+")
+_RE_SHORTCUT_FKEY   = re.compile(r"f(\d{1,2})")
+_RE_SHORTCUT_ALT    = re.compile(r"\s*\|\s*")
+
+_SHORTCUT_KEY_ALIASES: dict[str, int] = {
+    "enter":                  wx.WXK_RETURN,
+    "return":                 wx.WXK_RETURN,
+    "space":                  wx.WXK_SPACE,
+    "spacebar":               wx.WXK_SPACE,
+    "escape":                 wx.WXK_ESCAPE,
+    "esc":                    wx.WXK_ESCAPE,
+    "delete":                 wx.WXK_DELETE,
+    "del":                    wx.WXK_DELETE,
+    "backspace":              wx.WXK_BACK,
+    "back":                   wx.WXK_BACK,
+    "insert":                 wx.WXK_INSERT,
+    "ins":                    wx.WXK_INSERT,
+    "home":                   wx.WXK_HOME,
+    "end":                    wx.WXK_END,
+    "pageup":                 wx.WXK_PAGEUP,
+    "page up":                wx.WXK_PAGEUP,
+    "pagedown":               wx.WXK_PAGEDOWN,
+    "page down":              wx.WXK_PAGEDOWN,
+    "left":                   wx.WXK_LEFT,
+    "left arrow":             wx.WXK_LEFT,
+    "right":                  wx.WXK_RIGHT,
+    "right arrow":            wx.WXK_RIGHT,
+    "up":                     wx.WXK_UP,
+    "up arrow":               wx.WXK_UP,
+    "down":                   wx.WXK_DOWN,
+    "down arrow":             wx.WXK_DOWN,
+    "applications":           getattr(wx, "WXK_WINDOWS_MENU", getattr(wx, "WXK_MENU", getattr(wx, "WXK_APPS", -1))),
+    "application":            getattr(wx, "WXK_WINDOWS_MENU", getattr(wx, "WXK_MENU", getattr(wx, "WXK_APPS", -1))),
+    "apps":                   getattr(wx, "WXK_WINDOWS_MENU", getattr(wx, "WXK_MENU", getattr(wx, "WXK_APPS", -1))),
+    "menu":                   getattr(wx, "WXK_WINDOWS_MENU", getattr(wx, "WXK_MENU", getattr(wx, "WXK_APPS", -1))),
+    "context menu":           getattr(wx, "WXK_WINDOWS_MENU", getattr(wx, "WXK_MENU", getattr(wx, "WXK_APPS", -1))),
+    "[":                      VK_OEM_4_LEFT_BRACKET,
+    "leftbracket":            VK_OEM_4_LEFT_BRACKET,
+    "left bracket":           VK_OEM_4_LEFT_BRACKET,
+    "openbracket":            VK_OEM_4_LEFT_BRACKET,
+    "open bracket":           VK_OEM_4_LEFT_BRACKET,
+    "physical left bracket":  VK_OEM_4_LEFT_BRACKET,
+    "]":                      VK_OEM_6_RIGHT_BRACKET,
+    "rightbracket":           VK_OEM_6_RIGHT_BRACKET,
+    "right bracket":          VK_OEM_6_RIGHT_BRACKET,
+    "closebracket":           VK_OEM_6_RIGHT_BRACKET,
+    "close bracket":          VK_OEM_6_RIGHT_BRACKET,
+    "physical right bracket": VK_OEM_6_RIGHT_BRACKET,
+}
+
+
 class ShortcutsUI:
     def shortcut_for(self, action: str) -> str:
         shortcuts = getattr(self.settings, "keyboard_shortcuts", {}) or {}
@@ -58,55 +118,10 @@ class ShortcutsUI:
     @staticmethod
     def shortcut_key_code(key_name: str) -> int | None:
         normalized = key_name.strip().lower().replace("_", " ").replace("-", " ")
-        normalized = re.sub(r"\s+", " ", normalized)
-        aliases = {
-            "enter": wx.WXK_RETURN,
-            "return": wx.WXK_RETURN,
-            "space": wx.WXK_SPACE,
-            "spacebar": wx.WXK_SPACE,
-            "escape": wx.WXK_ESCAPE,
-            "esc": wx.WXK_ESCAPE,
-            "delete": wx.WXK_DELETE,
-            "del": wx.WXK_DELETE,
-            "backspace": wx.WXK_BACK,
-            "back": wx.WXK_BACK,
-            "insert": wx.WXK_INSERT,
-            "ins": wx.WXK_INSERT,
-            "home": wx.WXK_HOME,
-            "end": wx.WXK_END,
-            "pageup": wx.WXK_PAGEUP,
-            "page up": wx.WXK_PAGEUP,
-            "pagedown": wx.WXK_PAGEDOWN,
-            "page down": wx.WXK_PAGEDOWN,
-            "left": wx.WXK_LEFT,
-            "left arrow": wx.WXK_LEFT,
-            "right": wx.WXK_RIGHT,
-            "right arrow": wx.WXK_RIGHT,
-            "up": wx.WXK_UP,
-            "up arrow": wx.WXK_UP,
-            "down": wx.WXK_DOWN,
-            "down arrow": wx.WXK_DOWN,
-            "applications": getattr(wx, "WXK_WINDOWS_MENU", getattr(wx, "WXK_MENU", getattr(wx, "WXK_APPS", -1))),
-            "application": getattr(wx, "WXK_WINDOWS_MENU", getattr(wx, "WXK_MENU", getattr(wx, "WXK_APPS", -1))),
-            "apps": getattr(wx, "WXK_WINDOWS_MENU", getattr(wx, "WXK_MENU", getattr(wx, "WXK_APPS", -1))),
-            "menu": getattr(wx, "WXK_WINDOWS_MENU", getattr(wx, "WXK_MENU", getattr(wx, "WXK_APPS", -1))),
-            "context menu": getattr(wx, "WXK_WINDOWS_MENU", getattr(wx, "WXK_MENU", getattr(wx, "WXK_APPS", -1))),
-            "[": VK_OEM_4_LEFT_BRACKET,
-            "leftbracket": VK_OEM_4_LEFT_BRACKET,
-            "left bracket": VK_OEM_4_LEFT_BRACKET,
-            "openbracket": VK_OEM_4_LEFT_BRACKET,
-            "open bracket": VK_OEM_4_LEFT_BRACKET,
-            "physical left bracket": VK_OEM_4_LEFT_BRACKET,
-            "]": VK_OEM_6_RIGHT_BRACKET,
-            "rightbracket": VK_OEM_6_RIGHT_BRACKET,
-            "right bracket": VK_OEM_6_RIGHT_BRACKET,
-            "closebracket": VK_OEM_6_RIGHT_BRACKET,
-            "close bracket": VK_OEM_6_RIGHT_BRACKET,
-            "physical right bracket": VK_OEM_6_RIGHT_BRACKET,
-        }
-        if normalized in aliases:
-            return aliases[normalized]
-        match = re.fullmatch(r"f(\d{1,2})", normalized)
+        normalized = _RE_SHORTCUT_SPACES.sub(" ", normalized)
+        if normalized in _SHORTCUT_KEY_ALIASES:
+            return _SHORTCUT_KEY_ALIASES[normalized]
+        match = _RE_SHORTCUT_FKEY.fullmatch(normalized)
         if match:
             number = int(match.group(1))
             if 1 <= number <= 24:
@@ -350,7 +365,7 @@ class ShortcutsUI:
         return not ctrl and not alt and len(key_name.strip()) == 1 and key_name.strip().isprintable()
 
     def event_matches_shortcut(self, event: wx.KeyEvent, shortcut: str) -> bool:
-        alternatives = re.split(r"\s*\|\s*", str(shortcut or ""))
+        alternatives = _RE_SHORTCUT_ALT.split(str(shortcut or ""))
         return any(self.event_matches_single_shortcut(event, alternative) for alternative in alternatives if alternative.strip())
 
     def event_matches_single_shortcut(self, event: wx.KeyEvent, shortcut: str) -> bool:
@@ -421,7 +436,7 @@ class ShortcutsUI:
 
     def player_shortcuts_allowed(self, focus: wx.Window | None = None) -> bool:
         if self.focus_in_results_control(focus):
-            return False
+            return True
         if self.in_player_screen and not self.focus_accepts_text(focus):
             return self.focus_in_player_controls(focus)
         return self.focus_in_player_controls(focus) or self.focus_in_background_player_controls(focus)
@@ -494,7 +509,6 @@ class ShortcutsUI:
                 event.Skip()
                 wx.CallAfter(self.maybe_extend_results)
                 return True
-            return True
         if self.context_menu_shortcut_matches(event):
             self.open_player_context_menu()
             return True

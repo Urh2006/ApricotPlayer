@@ -415,7 +415,6 @@ class PlaybackMixin:
             self.player_fullscreen_session = False
             self.player_fullscreen_results_override = False
             self.manual_background_playback_active = False
-            self.session_volume = None
             self.cancel_pending_volume_change()
             self.session_autoplay_next = False
             self.session_equalizer_enabled = None

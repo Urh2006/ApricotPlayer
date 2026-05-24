@@ -10,10 +10,11 @@ $ErrorActionPreference = "Stop"
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
 if (-not $AppVersion) {
-    $mainPath = Join-Path $projectRoot "apricot\constants.py"
-    $versionLine = Select-String -Path $mainPath -Pattern '^APP_VERSION\s*=\s*"([^"]+)"' | Select-Object -First 1
+    # Single source of truth: apricot/__init__.py  (constants.py now derives from it)
+    $initPath = Join-Path $projectRoot "apricot\__init__.py"
+    $versionLine = Select-String -Path $initPath -Pattern '^__version__\s*=\s*"([^"]+)"' | Select-Object -First 1
     if (-not $versionLine) {
-        throw "Could not read APP_VERSION from apricot\constants.py."
+        throw "Could not read __version__ from apricot\__init__.py."
     }
     $AppVersion = $versionLine.Matches[0].Groups[1].Value
 }

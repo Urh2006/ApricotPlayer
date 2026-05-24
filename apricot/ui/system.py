@@ -4,6 +4,34 @@ import os
 from pathlib import Path
 from apricot.ui.misc import MiscUI
 
+# Fields that are large in a raw yt-dlp info dict but not needed after stream
+# URL resolution.  Stripping them before caching keeps the stream URL cache
+# from growing into the gigabytes over a long session.
+_INFO_CACHE_STRIP_KEYS: frozenset[str] = frozenset({
+    "formats",
+    "requested_formats",
+    "thumbnails",
+    "automatic_captions",
+    "subtitles",
+    "requested_subtitles",
+    "comments",
+    "heatmap",
+    "entries",
+    "requested_entries",
+    "_format_sort_fields",
+    "_formats_info",
+})
+
+def _slim_info_for_cache(info: dict) -> dict:
+    """Return a copy of *info* with the bulk fields removed.
+
+    The full yt-dlp info dict for a YouTube video can be 10–50 MB in Python
+    memory (100+ format entries, 30+ languages of automatic captions, dozens
+    of thumbnail URLs, heatmap data, …).  For the stream URL cache we only
+    need the small metadata fields used by the player UI.
+    """
+    return {k: v for k, v in info.items() if k not in _INFO_CACHE_STRIP_KEYS}
+
 class SystemUI:
     def chromium_profile_launch_args(self, browser: str, profile: str | None, headless: bool = True) -> tuple[str, list[str]]:
         root = self.cookie_browser_root(browser)
@@ -437,7 +465,7 @@ class SystemUI:
             self.stream_url_cache[self.stream_url_cache_key(source_url)] = {
                 "stream_url": stream_url,
                 "headers": dict(headers or {}),
-                "info": dict(info or {}),
+                "info": _slim_info_for_cache(dict(info or {})),
                 "expires_at": expires_at,
             }
 
