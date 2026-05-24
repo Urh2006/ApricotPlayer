@@ -1,3 +1,8 @@
+# v0.9.44-beta.8 - NVDA Audio Ducking Fix
+
+## Fixes
+- Fixed Alt+Tab to player muting the system's main audio output while the window has focus when NVDA is running. Every `announce_player` call was sending text to NVDA twice: once via `nvdaController_speakText` (the explicit controller call) and once via `wx.ACC_EVENT_SYSTEM_ALERT` (a WinEvent NVDA monitors independently). NVDA would interrupt itself and restart speech from the top, keeping Windows audio ducking active far longer than expected — appearing as permanent speaker muting to anyone with "When Windows detects communications activity: Mute all other sounds" configured. Fix: `raise_accessibility_alert` now suppresses `EVENT_SYSTEM_ALERT` when the NVDA controller already handled the text, eliminating the double-announcement. The `EVENT_OBJECT_NAMECHANGE` and `EVENT_OBJECT_VALUECHANGE` WinEvents are still always fired for JAWS, Narrator, and other screen readers.
+
 # v0.9.44-beta.7 - Critical Playback Fix, Reconnect, Stream Stability
 
 ## Fixes

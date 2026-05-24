@@ -277,15 +277,26 @@ class MiscUI:
                         announced = True
             except Exception:
                 self.nvda_client = None
-        self.raise_accessibility_alert(text)
+        # When NVDA already handled the speech via its controller, do NOT fire
+        # EVENT_SYSTEM_ALERT.  That WinEvent causes NVDA to read the same text a
+        # second time (interrupting itself and restarting the ducking timer),
+        # which is what makes the main speakers appear permanently muted while
+        # the player window has focus.  The other two WinEvents are kept for
+        # JAWS, Narrator, and other screen readers that rely on them but do not
+        # expose an nvdaController-style API.
+        self.raise_accessibility_alert(text, skip_alert_event=announced)
         if announced:
             return
 
-    def raise_accessibility_alert(self, text: str) -> None:
+    def raise_accessibility_alert(self, text: str, skip_alert_event: bool = False) -> None:
         self.SetName(text)
         try:
             wx.Accessible.NotifyEvent(wx.ACC_EVENT_OBJECT_NAMECHANGE, self, wx.OBJID_CLIENT, 0)
-            wx.Accessible.NotifyEvent(wx.ACC_EVENT_SYSTEM_ALERT, self, wx.OBJID_ALERT, 0)
+            if not skip_alert_event:
+                # EVENT_SYSTEM_ALERT causes NVDA to re-read the text.  Suppress it
+                # when NVDA already received the text via nvdaController_speakText
+                # to prevent double-announcement and the resulting audio ducking.
+                wx.Accessible.NotifyEvent(wx.ACC_EVENT_SYSTEM_ALERT, self, wx.OBJID_ALERT, 0)
             wx.Accessible.NotifyEvent(wx.ACC_EVENT_OBJECT_VALUECHANGE, self.status, wx.OBJID_CLIENT, 0)
         except Exception:
             pass
