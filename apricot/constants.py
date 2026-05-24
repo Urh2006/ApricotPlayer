@@ -224,8 +224,20 @@ class PlayerPanel(wx.Panel):
 
 YTDLP_LOGGER = QuietYtdlpLogger()
 APP_NAME = "ApricotPlayer"
-APP_VERSION = "0.9.44-beta.5"
-APP_VERSION_LABEL = "0.9.44 Beta 5"
+# Single source of truth: apricot/__init__.py  ←  bump only that file per release.
+# This module derives APP_VERSION and the human-readable label from it so that
+# the window title, update comparisons, and installer metadata always agree.
+from apricot import __version__ as APP_VERSION  # e.g. "0.9.44-beta.8"
+def _make_version_label(v: str) -> str:
+    # "0.9.44-beta.8"  →  "0.9.44 Beta 8"
+    # "1.0.0"          →  "1.0.0"
+    parts = v.split("-", 1)
+    if len(parts) == 2:
+        pre = parts[1].replace(".", " ").title()
+        return f"{parts[0]} {pre}"
+    return v
+APP_VERSION_LABEL = _make_version_label(APP_VERSION)
+del _make_version_label
 WINDOW_TITLE = f"{APP_NAME} {APP_VERSION_LABEL}"
 LEGACY_APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "UrhasaurusYouTubePlayer"
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "ApricotPlayer"
