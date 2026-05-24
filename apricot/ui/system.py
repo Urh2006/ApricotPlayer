@@ -477,14 +477,34 @@ class SystemUI:
         cached = self.cached_stream_url(url)
         if cached and cached[0]:
             return cached
+        # Prefer a single progressive HTTPS file (whole-file range-requestable) so
+        # mpv can seek instantly and buffer the full track at full network speed.
+        # [protocol=https] excludes DASH segment URLs — those cause mpv to play one
+        # short segment then stop, with no backward buffer and no seeking support.
+        # Audio-only m4a is tried first: it is ~30x smaller than a combined 720p
+        # video+audio stream, fills the demuxer cache much faster, and keeps mpv
+        # RAM low because no video codec is initialised.
         options = {
             "quiet": True,
             "skip_download": True,
-            "format": "best[ext=mp4]/best",
+            "format": (
+                "bestaudio[ext=m4a][protocol=https]"
+                "/bestaudio[protocol=https]"
+                "/best[ext=mp4][protocol=https]"
+                "/best[acodec!=none][vcodec!=none][protocol=https]"
+                "/best[ext=mp4]"
+                "/best[acodec!=none][vcodec!=none]"
+                "/best"
+            ),
             "noplaylist": True,
         }
         format_fallback_options = dict(options)
-        format_fallback_options["format"] = "best[acodec!=none][vcodec!=none]/18/22/17/best"
+        format_fallback_options["format"] = (
+            "bestaudio[protocol=https]"
+            "/best[acodec!=none][protocol=https]"
+            "/best[acodec!=none][vcodec!=none]"
+            "/18/22/17/best"
+        )
         try:
             info = self.ydl_extract_info(url, options, download=False, allow_cookie_retry=False)
         except Exception as exc:
@@ -561,9 +581,17 @@ class SystemUI:
                     raise retry_error if isinstance(retry_error, Exception) else exc
         stream_url = info.get("url")
         if not stream_url and info.get("formats"):
-            formats = [fmt for fmt in info["formats"] if fmt.get("url") and fmt.get("vcodec") != "none" and fmt.get("acodec") != "none"]
-            if formats:
-                stream_url = formats[-1]["url"]
+            fmts = info["formats"]
+            # Prefer: audio-only progressive → combined progressive → any with audio
+            _candidates = (
+                [f for f in fmts if f.get("url") and f.get("acodec") not in (None, "none", "") and f.get("protocol", "").startswith("http")],
+                [f for f in fmts if f.get("url") and f.get("vcodec") not in (None, "none", "") and f.get("acodec") not in (None, "none", "")],
+                [f for f in fmts if f.get("url") and f.get("acodec") not in (None, "none", "")],
+            )
+            for _group in _candidates:
+                if _group:
+                    stream_url = _group[-1]["url"]
+                    break
         if not stream_url:
             raise RuntimeError("No playable stream URL found")
         headers = info.get("http_headers") or {}

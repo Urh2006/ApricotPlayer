@@ -1,3 +1,8 @@
+# v0.9.45 - Stream Format Fix
+
+## Fixes
+- **Fixed broken/slow seeking and high RAM on YouTube streams.** The format selector `best[ext=mp4]/best` fell back to a DASH segment URL (a few seconds of audio) for content with no combined progressive MP4 (YouTube Music, very long videos, some regional content). mpv received the segment, played it, then stopped; seeking had no backward buffer. Combined 720p video+audio was also selected for audio-only playback, filling the demuxer cache with video data and forcing mpv to initialise a full video pipeline (~300 MB RAM). New selector: `bestaudio[ext=m4a][protocol=https]/bestaudio[protocol=https]/best[ext=mp4][protocol=https]/…/best`. `[protocol=https]` ensures a whole-file range-requestable URL (not a DASH segment). m4a audio is preferred: ~30× smaller, instant seeking, ~30–80 MB RAM instead of ~300+ MB.
+
 # v0.9.44-beta.12 - JAWS Shortcut Fix and Crash Prevention
 
 ## Fixes
