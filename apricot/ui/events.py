@@ -408,15 +408,15 @@ class EventsUI:
                 event.Skip()
                 return
 
+        if self.handle_background_player_tab_navigation(event, focus):
+            return
+        if self.handle_player_tab_navigation(event, focus):
+            return
+
         results_focus = self.focus_in_results_control(focus)
         if results_focus and self.results_list_owns_key(event):
             event.Skip()
             wx.CallAfter(self.maybe_extend_results)
-            return
-
-        if self.handle_background_player_tab_navigation(event, focus):
-            return
-        if self.handle_player_tab_navigation(event, focus):
             return
         if self.in_main_menu:
             if self.handle_player_shortcut_event(event, focus, details_has_focus):

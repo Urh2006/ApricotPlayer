@@ -477,18 +477,10 @@ class SystemUI:
         cached = self.cached_stream_url(url)
         if cached and cached[0]:
             return cached
-        # Build a format string that prefers an audio-only stream so that mpv
-        # receives a compact audio payload instead of a full video stream it
-        # will ignore when playing in background/audio-only mode.  The chain
-        # is: best audio m4a → best audio any → user-configured video format
-        # → safe combined-stream fallback.  This restores the audio quality
-        # that existed before the modular refactor (opus/AAC-256 on YouTube
-        # instead of the 128 kbps AAC embedded in a progressive MP4).
-        _video_fmt = self.video_format_selector(self.normalized_video_format())
         options = {
             "quiet": True,
             "skip_download": True,
-            "format": f"bestaudio[ext=m4a]/bestaudio/{_video_fmt}",
+            "format": "best[ext=mp4]/best",
             "noplaylist": True,
         }
         format_fallback_options = dict(options)
@@ -568,19 +560,6 @@ class SystemUI:
                 except Exception:
                     raise retry_error if isinstance(retry_error, Exception) else exc
         stream_url = info.get("url")
-        # For DASH multi-track results (bestvideo+bestaudio), info["url"] may be
-        # absent.  Fall back through requested_formats (prefer audio-only, then
-        # video) before scanning the full format list.
-        if not stream_url and info.get("requested_formats"):
-            _rf = info["requested_formats"]
-            _audio = [f for f in _rf if f.get("url") and f.get("acodec") not in (None, "none") and f.get("vcodec") in (None, "none")]
-            _video = [f for f in _rf if f.get("url") and f.get("vcodec") not in (None, "none")]
-            _either = [f for f in _rf if f.get("url")]
-            stream_url = (
-                (_audio[-1]["url"] if _audio else None)
-                or (_video[-1]["url"] if _video else None)
-                or (_either[-1]["url"] if _either else None)
-            )
         if not stream_url and info.get("formats"):
             formats = [fmt for fmt in info["formats"] if fmt.get("url") and fmt.get("vcodec") != "none" and fmt.get("acodec") != "none"]
             if formats:

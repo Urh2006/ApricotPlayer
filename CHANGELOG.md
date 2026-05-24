@@ -1,3 +1,11 @@
+# v0.9.44-beta.7 - Critical Playback Fix, Reconnect, Stream Stability
+
+## Fixes
+- Fixed critical playback regression from beta.6: `--demuxer-back-bytes` is not a valid mpv 0.41 option; mpv exited with "Fatal error" on every launch when disk cache was enabled (the default). Reverted to `--demuxer-max-back-bytes`.
+- Fixed stream stuck after network drop. Added mpv reconnect options (`--stream-lavf-o=reconnect=1`, `reconnect_streamed=1`, `reconnect_delay_max=5`) so mpv automatically retries the HTTP connection after a drop.
+- Fixed stream stalling after a few seconds (regression from beta.5). The `bestaudio/…` format selector returns DASH segment URLs in some cases; mpv plays one segment then stops. Reverted format selector to `best[ext=mp4]/best` and removed the `requested_formats` fallback.
+- Fixed background player Tab navigation broken by wrong dispatch order in `on_char_hook`. The tab-navigation handlers now run before the results-list key check, matching the original code structure.
+
 # v0.9.44-beta.6 - Seek Performance and Keyboard Hook Fix
 
 ## Fixes

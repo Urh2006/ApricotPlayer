@@ -104,8 +104,14 @@ class MpvMixin:
                         "--cache-on-disk=yes",
                         f"--demuxer-cache-dir={cache_folder}",
                         f"--demuxer-max-bytes={cache_size}MiB",
-                        f"--demuxer-back-bytes={back_cache}MiB",
+                        f"--demuxer-max-back-bytes={back_cache}MiB",
                         "--cache-pause=no",
+                        # Reconnect on network drop for HTTP streams.
+                        # Without these, mpv stalls permanently after a brief
+                        # disconnect because it has no instruction to retry.
+                        "--stream-lavf-o=reconnect=1",
+                        "--stream-lavf-o=reconnect_streamed=1",
+                        "--stream-lavf-o=reconnect_delay_max=5",
                     ]
                 )
             else:
