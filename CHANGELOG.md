@@ -1,3 +1,8 @@
+# v0.9.44-beta.9 - JAWS Screen Reader Support
+
+## New features
+- **JAWS screen reader support.** All player announcements (track started, volume, seek, speed, repeat, shuffle, etc.) now reach JAWS via its COM automation server (`FreedomSci.JawsApi`). Implemented entirely with `ctypes` — no extra packages required. JAWS is tried only when NVDA has not already handled the text, so there is no duplicate speech when both screen readers run simultaneously. On machines where JAWS is not installed the ProgID lookup is performed once and cached; all subsequent calls return immediately with near-zero overhead. `EVENT_SYSTEM_ALERT` is suppressed when JAWS (or NVDA) has already spoken the text; `EVENT_OBJECT_NAMECHANGE` and `EVENT_OBJECT_VALUECHANGE` are always fired for Narrator and other IAccessible-based screen readers.
+
 # v0.9.44-beta.8 - NVDA Audio Ducking Fix
 
 ## Fixes

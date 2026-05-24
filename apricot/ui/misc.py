@@ -20,6 +20,227 @@ _RE_INT_SPLIT     = re.compile(r"(\d+)")
 _RE_LRC_LINE      = re.compile(r'^\[(\d+):(\d+\.\d+)\](.*)$')
 _RE_UNSAFE_CHARS  = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
+# ---------------------------------------------------------------------------
+# JAWS COM API — ctypes-only, no external dependencies required.
+#
+# Talks directly to a running JAWS process via its IDispatch COM automation
+# server ("FreedomSci.JawsApi").  A fresh IDispatch reference is acquired on
+# every call through CoGetActiveObject so stale-pointer issues cannot occur
+# even if JAWS restarts mid-session.
+#
+# CLSID lookup (CLSIDFromProgID) is performed once and cached; it succeeds
+# as soon as JAWS is installed (registry entry present), even when JAWS is
+# not currently running.  When JAWS is not installed the result is None and
+# all subsequent calls return False immediately with near-zero overhead.
+# ---------------------------------------------------------------------------
+if os.name == "nt":
+    class _JAWS_GUID(ctypes.Structure):
+        _fields_ = [
+            ("Data1", ctypes.c_uint32),
+            ("Data2", ctypes.c_uint16),
+            ("Data3", ctypes.c_uint16),
+            ("Data4", ctypes.c_uint8 * 8),
+        ]
+
+    class _JAWS_VARIANT(ctypes.Structure):
+        """Minimal 16-byte VARIANT covering VT_BOOL and VT_BSTR only."""
+        class _Val(ctypes.Union):
+            _fields_ = [
+                ("boolVal", ctypes.c_int16),    # VT_BOOL  (11)
+                ("bstrVal", ctypes.c_void_p),   # VT_BSTR  (8)
+                ("_pad",    ctypes.c_int64),    # ensures 8-byte slot
+            ]
+        _fields_ = [
+            ("vt",   ctypes.c_uint16), ("_r1", ctypes.c_uint16),
+            ("_r2",  ctypes.c_uint16), ("_r3", ctypes.c_uint16),
+            ("_val", _Val),
+        ]
+
+    class _JAWS_DISPPARAMS(ctypes.Structure):
+        _fields_ = [
+            ("rgvarg",            ctypes.POINTER(_JAWS_VARIANT)),
+            ("rgdispidNamedArgs", ctypes.c_void_p),
+            ("cArgs",             ctypes.c_uint32),
+            ("cNamedArgs",        ctypes.c_uint32),
+        ]
+
+    # IID_IDispatch: {00020400-0000-0000-C000-000000000046}
+    _JAWS_IID_IDISPATCH = _JAWS_GUID(
+        0x00020400, 0x0000, 0x0000,
+        (ctypes.c_uint8 * 8)(0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46),
+    )
+
+    _JAWS_CLSID: "type[_JAWS_GUID] | None" = None
+    _JAWS_CLSID_READY: bool = False
+
+    def _jaws_get_clsid():
+        """Resolve 'FreedomSci.JawsApi' to a CLSID once and cache it.
+
+        Returns a _JAWS_GUID on success (JAWS installed) or None if JAWS is
+        not installed / the ProgID is not registered on this machine.
+        """
+        global _JAWS_CLSID, _JAWS_CLSID_READY
+        if _JAWS_CLSID_READY:
+            return _JAWS_CLSID
+        _JAWS_CLSID_READY = True
+        try:
+            ole32 = ctypes.windll.ole32
+            ole32.CLSIDFromProgID.argtypes = [ctypes.c_wchar_p, ctypes.POINTER(_JAWS_GUID)]
+            ole32.CLSIDFromProgID.restype  = ctypes.c_long
+            clsid = _JAWS_GUID()
+            if ole32.CLSIDFromProgID("FreedomSci.JawsApi", ctypes.byref(clsid)) == 0:
+                _JAWS_CLSID = clsid
+        except Exception:
+            pass
+        return _JAWS_CLSID
+
+    def _jaws_speak_ctypes(text: str, flush: bool = True) -> bool:
+        """Speak *text* via the JAWS COM IDispatch automation server.
+
+        Uses only ctypes — no external packages (pywin32, comtypes, …) needed.
+        Returns True when JAWS was running and the SayString call succeeded.
+        Falls back gracefully on any error, including JAWS not being installed
+        or not running.
+
+        IDispatch vtable layout (COM standard):
+          slot 0  QueryInterface
+          slot 1  AddRef
+          slot 2  Release
+          slot 3  GetTypeInfoCount
+          slot 4  GetTypeInfo
+          slot 5  GetIDsOfNames
+          slot 6  Invoke
+        """
+        clsid = _jaws_get_clsid()
+        if clsid is None:
+            return False   # JAWS not installed — skip without any COM calls
+        try:
+            ole32    = ctypes.windll.ole32
+            oleaut32 = ctypes.windll.oleaut32
+
+            # Set up argtypes/restype for the COM helper functions so ctypes
+            # handles pointer sizes correctly on both 32-bit and 64-bit Windows.
+            ole32.CoInitialize.argtypes    = [ctypes.c_void_p]
+            ole32.CoInitialize.restype     = ctypes.c_long
+            ole32.CoGetActiveObject.argtypes = [
+                ctypes.POINTER(_JAWS_GUID),
+                ctypes.POINTER(_JAWS_GUID),
+                ctypes.POINTER(ctypes.c_void_p),
+            ]
+            ole32.CoGetActiveObject.restype  = ctypes.c_long
+            oleaut32.SysAllocString.argtypes = [ctypes.c_wchar_p]
+            oleaut32.SysAllocString.restype  = ctypes.c_void_p
+            oleaut32.SysFreeString.argtypes  = [ctypes.c_void_p]
+            oleaut32.SysFreeString.restype   = None
+
+            # Ensure COM is initialised for this thread (no-op if already done).
+            ole32.CoInitialize(None)
+
+            # Ask Windows for a reference to the already-running JAWS IDispatch.
+            pdisp = ctypes.c_void_p()
+            hr = ole32.CoGetActiveObject(
+                ctypes.byref(clsid),
+                ctypes.byref(_JAWS_IID_IDISPATCH),
+                ctypes.byref(pdisp),
+            )
+            if hr != 0 or not pdisp.value:
+                return False   # JAWS not currently running
+
+            disp   = pdisp.value                   # raw IDispatch* as Python int
+            ptr_sz = ctypes.sizeof(ctypes.c_size_t)
+
+            # The IDispatch interface pointer points to a struct whose first
+            # member is a pointer to the vtable (array of function pointers).
+            vtbl = ctypes.c_size_t.from_address(disp).value
+
+            def _vtfn_addr(slot: int) -> int:
+                return ctypes.c_size_t.from_address(vtbl + slot * ptr_sz).value
+
+            try:
+                # ── vtable slot 5: GetIDsOfNames ─────────────────────────
+                GetIDsOfNames = ctypes.WINFUNCTYPE(
+                    ctypes.c_long,                     # HRESULT
+                    ctypes.c_void_p,                   # this
+                    ctypes.c_void_p,                   # riid  (IID_NULL → None)
+                    ctypes.POINTER(ctypes.c_wchar_p),  # rgszNames
+                    ctypes.c_uint32,                   # cNames
+                    ctypes.c_uint32,                   # lcid
+                    ctypes.POINTER(ctypes.c_long),     # rgDispId
+                )(_vtfn_addr(5))
+
+                names  = (ctypes.c_wchar_p * 1)("SayString")
+                dispid = ctypes.c_long(-1)
+                hr = GetIDsOfNames(
+                    ctypes.c_void_p(disp), None,
+                    names, 1, 0x0400,               # 0x0400 = LOCALE_USER_DEFAULT
+                    ctypes.byref(dispid),
+                )
+                if hr != 0 or dispid.value < 0:
+                    return False
+
+                # ── Build DISPPARAMS ─────────────────────────────────────
+                # COM IDispatch passes arguments in reverse declaration order.
+                # SayString(text: BSTR, flush: BOOL)
+                #   argv[0] = flush (last declared param, first in rgvarg)
+                #   argv[1] = text  (first declared param, last in rgvarg)
+                argv = (_JAWS_VARIANT * 2)()
+
+                argv[0].vt          = 11                      # VT_BOOL
+                argv[0]._val.boolVal = -1 if flush else 0     # VARIANT_BOOL: -1=True
+
+                bstr = oleaut32.SysAllocString(text)
+                if not bstr:
+                    return False
+                argv[1].vt           = 8                      # VT_BSTR
+                argv[1]._val.bstrVal = bstr
+
+                dp            = _JAWS_DISPPARAMS()
+                dp.rgvarg     = argv
+                dp.cArgs      = 2
+                dp.cNamedArgs = 0
+
+                # ── vtable slot 6: Invoke ────────────────────────────────
+                Invoke = ctypes.WINFUNCTYPE(
+                    ctypes.c_long,                         # HRESULT
+                    ctypes.c_void_p,                       # this
+                    ctypes.c_long,                         # dispIdMember
+                    ctypes.c_void_p,                       # riid  (IID_NULL)
+                    ctypes.c_uint32,                       # lcid
+                    ctypes.c_uint16,                       # wFlags
+                    ctypes.POINTER(_JAWS_DISPPARAMS),      # pDispParams
+                    ctypes.c_void_p,                       # pVarResult  (unused)
+                    ctypes.c_void_p,                       # pExcepInfo  (unused)
+                    ctypes.c_void_p,                       # puArgErr    (unused)
+                )(_vtfn_addr(6))
+
+                hr = Invoke(
+                    ctypes.c_void_p(disp),
+                    dispid.value,
+                    None,          # IID_NULL
+                    0x0400,        # LOCALE_USER_DEFAULT
+                    1,             # DISPATCH_METHOD
+                    ctypes.byref(dp),
+                    None, None, None,
+                )
+                oleaut32.SysFreeString(bstr)
+                return hr == 0
+
+            finally:
+                # Always release the IDispatch reference (vtable slot 2).
+                Release = ctypes.WINFUNCTYPE(
+                    ctypes.c_ulong, ctypes.c_void_p,
+                )(_vtfn_addr(2))
+                Release(ctypes.c_void_p(disp))
+
+        except Exception:
+            return False
+
+else:
+    def _jaws_speak_ctypes(text: str, flush: bool = True) -> bool:  # type: ignore[misc]
+        """No-op on non-Windows platforms."""
+        return False
+
+
 class MiscUI:
     @staticmethod
     def focus_accepts_text(focus: wx.Window | None) -> bool:
@@ -263,6 +484,8 @@ class MiscUI:
         if not text:
             return
         announced = False
+
+        # ── NVDA controller ───────────────────────────────────────────────────
         client = self.ensure_nvda_client()
         if client:
             try:
@@ -277,13 +500,30 @@ class MiscUI:
                         announced = True
             except Exception:
                 self.nvda_client = None
-        # When NVDA already handled the speech via its controller, do NOT fire
-        # EVENT_SYSTEM_ALERT.  That WinEvent causes NVDA to read the same text a
-        # second time (interrupting itself and restarting the ducking timer),
-        # which is what makes the main speakers appear permanently muted while
-        # the player window has focus.  The other two WinEvents are kept for
-        # JAWS, Narrator, and other screen readers that rely on them but do not
-        # expose an nvdaController-style API.
+
+        # ── JAWS COM API ──────────────────────────────────────────────────────
+        # Only attempted when NVDA did not handle the text — avoids duplicate
+        # speech on the rare system where both screen readers run simultaneously.
+        if not announced:
+            try:
+                if _jaws_speak_ctypes(str(text)):
+                    announced = True
+            except Exception:
+                pass
+
+        # ── WinEvents (Narrator / other IAccessible-based screen readers) ─────
+        # EVENT_OBJECT_NAMECHANGE and EVENT_OBJECT_VALUECHANGE are always fired
+        # so that Narrator and any other IAccessible SR still receives the text.
+        #
+        # EVENT_SYSTEM_ALERT is suppressed when NVDA or JAWS already received
+        # the text directly:
+        #   • NVDA monitors EVENT_SYSTEM_ALERT independently of its controller
+        #     API.  Firing it after nvdaController_speakText causes NVDA to read
+        #     the text a second time, interrupting itself and restarting the
+        #     Windows audio-ducking timer — making the system speakers appear
+        #     permanently muted while the player window has focus.
+        #   • JAWS may also respond to EVENT_SYSTEM_ALERT independently; skipping
+        #     it when SayString succeeded prevents a potential double-announce.
         self.raise_accessibility_alert(text, skip_alert_event=announced)
         if announced:
             return
