@@ -4,6 +4,34 @@ import os
 from pathlib import Path
 from apricot.ui.misc import MiscUI
 
+# Fields that are large in a raw yt-dlp info dict but not needed after stream
+# URL resolution.  Stripping them before caching keeps the stream URL cache
+# from growing into the gigabytes over a long session.
+_INFO_CACHE_STRIP_KEYS: frozenset[str] = frozenset({
+    "formats",
+    "requested_formats",
+    "thumbnails",
+    "automatic_captions",
+    "subtitles",
+    "requested_subtitles",
+    "comments",
+    "heatmap",
+    "entries",
+    "requested_entries",
+    "_format_sort_fields",
+    "_formats_info",
+})
+
+def _slim_info_for_cache(info: dict) -> dict:
+    """Return a copy of *info* with the bulk fields removed.
+
+    The full yt-dlp info dict for a YouTube video can be 10–50 MB in Python
+    memory (100+ format entries, 30+ languages of automatic captions, dozens
+    of thumbnail URLs, heatmap data, …).  For the stream URL cache we only
+    need the small metadata fields used by the player UI.
+    """
+    return {k: v for k, v in info.items() if k not in _INFO_CACHE_STRIP_KEYS}
+
 class SystemUI:
     def chromium_profile_launch_args(self, browser: str, profile: str | None, headless: bool = True) -> tuple[str, list[str]]:
         root = self.cookie_browser_root(browser)
@@ -437,7 +465,7 @@ class SystemUI:
             self.stream_url_cache[self.stream_url_cache_key(source_url)] = {
                 "stream_url": stream_url,
                 "headers": dict(headers or {}),
-                "info": dict(info or {}),
+                "info": _slim_info_for_cache(dict(info or {})),
                 "expires_at": expires_at,
             }
 
@@ -449,10 +477,18 @@ class SystemUI:
         cached = self.cached_stream_url(url)
         if cached and cached[0]:
             return cached
+        # Build a format string that prefers an audio-only stream so that mpv
+        # receives a compact audio payload instead of a full video stream it
+        # will ignore when playing in background/audio-only mode.  The chain
+        # is: best audio m4a → best audio any → user-configured video format
+        # → safe combined-stream fallback.  This restores the audio quality
+        # that existed before the modular refactor (opus/AAC-256 on YouTube
+        # instead of the 128 kbps AAC embedded in a progressive MP4).
+        _video_fmt = self.video_format_selector(self.normalized_video_format())
         options = {
             "quiet": True,
             "skip_download": True,
-            "format": "best[ext=mp4]/best",
+            "format": f"bestaudio[ext=m4a]/bestaudio/{_video_fmt}",
             "noplaylist": True,
         }
         format_fallback_options = dict(options)
@@ -532,6 +568,19 @@ class SystemUI:
                 except Exception:
                     raise retry_error if isinstance(retry_error, Exception) else exc
         stream_url = info.get("url")
+        # For DASH multi-track results (bestvideo+bestaudio), info["url"] may be
+        # absent.  Fall back through requested_formats (prefer audio-only, then
+        # video) before scanning the full format list.
+        if not stream_url and info.get("requested_formats"):
+            _rf = info["requested_formats"]
+            _audio = [f for f in _rf if f.get("url") and f.get("acodec") not in (None, "none") and f.get("vcodec") in (None, "none")]
+            _video = [f for f in _rf if f.get("url") and f.get("vcodec") not in (None, "none")]
+            _either = [f for f in _rf if f.get("url")]
+            stream_url = (
+                (_audio[-1]["url"] if _audio else None)
+                or (_video[-1]["url"] if _video else None)
+                or (_either[-1]["url"] if _either else None)
+            )
         if not stream_url and info.get("formats"):
             formats = [fmt for fmt in info["formats"] if fmt.get("url") and fmt.get("vcodec") != "none" and fmt.get("acodec") != "none"]
             if formats:

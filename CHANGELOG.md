@@ -1,3 +1,13 @@
+# v0.9.44-beta.5 - Audio Quality, Startup Speed, and RAM Fix
+
+## Fixes
+- Fixed audio quality regression introduced during the modular refactor. `resolve_stream_url` was using a hardcoded `"best[ext=mp4]/best"` format selector, which always picks a combined 720p MP4 stream with AAC 128 kbps audio. The selector now prefers `bestaudio[ext=m4a]/bestaudio` first so YouTube delivers M4A 256 kbps or Opus 160 kbps — meaningfully better stereo and dynamic range. Falls back to the user-configured video format and known-safe format IDs (18/22) if no audio-only stream is found.
+- Fixed slow song startup. The same format bug caused mpv to download a full 720p video stream (2–4 Mbit/s) for audio-only playback, discarding all the video data. With an audio-only stream at ~160 kbps the initial buffer fills much faster.
+- Fixed DASH multi-track stream URL extraction. When `bestvideo+bestaudio` is selected, `info["url"]` is absent; the code now walks `info["requested_formats"]` (preferring audio) before falling back to the format list.
+
+## Performance
+- Reduced RAM use from the stream URL cache. The raw yt-dlp info dict includes formats (100+ entries), automatic captions (30+ languages of timed data), thumbnails, heatmap, etc. — 10–50 MB per video in Python memory. Only the small metadata fields needed by the player UI are now stored; heavy bulk fields are stripped before caching. Cache footprint drops from several GB (after extended sessions) to a few MB.
+
 # v0.9.44-beta.4 - Updater and Installer Fix
 
 ## Fixes
