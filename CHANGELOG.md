@@ -1,3 +1,8 @@
+# v0.9.44-beta.10 - Seek Stall Fix
+
+## Fixes
+- **Fixed seek stall regression from beta.7.** Seeking forward or backward in any web stream (YouTube, SoundCloud, etc.) now responds instantly. The cause was `--stream-lavf-o=reconnect_streamed=1` which tells ffmpeg to fully reconnect the HTTP connection after every seek on a streaming URL, adding 2–5 s of stall per keypress. That flag is removed; `reconnect=1` and `reconnect_delay_max=5` are kept for resilience against real network drops on seekable streams.
+
 # v0.9.44-beta.9 - JAWS Screen Reader Support
 
 ## New features
