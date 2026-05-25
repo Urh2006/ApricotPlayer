@@ -23,6 +23,30 @@ _INFO_CACHE_STRIP_KEYS: frozenset[str] = frozenset({
     "_formats_info",
 })
 
+STREAM_FORMAT_PROFILE = "progressive-mp4-fast-seek-v2"
+FAST_SEEK_STREAM_FORMAT = (
+    "best[ext=mp4][vcodec!=none][acodec!=none][height<=360][protocol=https]"
+    "/best[ext=mp4][vcodec!=none][acodec!=none][height<=480][protocol=https]"
+    "/best[ext=mp4][vcodec!=none][acodec!=none][protocol=https]"
+    "/best[acodec!=none][vcodec!=none][protocol=https]"
+    "/bestaudio[ext=m4a][protocol=https]"
+    "/bestaudio[protocol=https]"
+    "/best[ext=mp4]"
+    "/best[acodec!=none][vcodec!=none]"
+    "/best"
+)
+FAST_SEEK_FALLBACK_FORMAT = (
+    "best[ext=mp4][vcodec!=none][acodec!=none][height<=360]"
+    "/best[ext=mp4][vcodec!=none][acodec!=none][height<=480]"
+    "/best[ext=mp4][vcodec!=none][acodec!=none]"
+    "/best[acodec!=none][vcodec!=none]"
+    "/18"
+    "/22"
+    "/17"
+    "/bestaudio[protocol=https]"
+    "/best"
+)
+
 def _slim_info_for_cache(info: dict) -> dict:
     """Return a copy of *info* with the bulk fields removed.
 
@@ -423,6 +447,7 @@ class SystemUI:
             "restricted": bool(getattr(self.settings, "enable_age_restricted_videos", False)),
             "cookies_file": str(getattr(self.settings, "cookies_file", "") or ""),
             "cookies_browser": str(getattr(self.settings, "cookies_from_browser", "none") or "none"),
+            "stream_format_profile": STREAM_FORMAT_PROFILE,
         }
         return json.dumps(parts, sort_keys=True, ensure_ascii=False)
 
@@ -480,34 +505,18 @@ class SystemUI:
         cached = self.cached_stream_url(url)
         if cached and cached[0]:
             return cached
-        # Prefer a single progressive HTTPS file (whole-file range-requestable) so
-        # mpv can seek instantly and buffer the full track at full network speed.
-        # [protocol=https] excludes DASH segment URLs — those cause mpv to play one
-        # short segment then stop, with no backward buffer and no seeking support.
-        # Audio-only m4a is tried first: it is ~30x smaller than a combined 720p
-        # video+audio stream, fills the demuxer cache much faster, and keeps mpv
-        # RAM low because no video codec is initialised.
+        # Prefer a small progressive MP4 with audio+video, matching the old
+        # fast-seek behaviour: mpv gets one range-requestable file and can jump
+        # far ahead immediately after playback starts. Audio-only is still kept
+        # as a fallback for videos without a progressive MP4.
         options = {
             "quiet": True,
             "skip_download": True,
-            "format": (
-                "bestaudio[ext=m4a][protocol=https]"
-                "/bestaudio[protocol=https]"
-                "/best[ext=mp4][protocol=https]"
-                "/best[acodec!=none][vcodec!=none][protocol=https]"
-                "/best[ext=mp4]"
-                "/best[acodec!=none][vcodec!=none]"
-                "/best"
-            ),
+            "format": FAST_SEEK_STREAM_FORMAT,
             "noplaylist": True,
         }
         format_fallback_options = dict(options)
-        format_fallback_options["format"] = (
-            "bestaudio[protocol=https]"
-            "/best[acodec!=none][protocol=https]"
-            "/best[acodec!=none][vcodec!=none]"
-            "/18/22/17/best"
-        )
+        format_fallback_options["format"] = FAST_SEEK_FALLBACK_FORMAT
         try:
             info = self.ydl_extract_info(url, options, download=False, allow_cookie_retry=False)
         except Exception as exc:
@@ -585,10 +594,33 @@ class SystemUI:
         stream_url = info.get("url")
         if not stream_url and info.get("formats"):
             fmts = info["formats"]
-            # Prefer: audio-only progressive → combined progressive → any with audio
+            # Prefer: small combined progressive MP4 -> any combined HTTP -> audio-only.
             _candidates = (
-                [f for f in fmts if f.get("url") and f.get("acodec") not in (None, "none", "") and f.get("protocol", "").startswith("http")],
-                [f for f in fmts if f.get("url") and f.get("vcodec") not in (None, "none", "") and f.get("acodec") not in (None, "none", "")],
+                [
+                    f for f in fmts
+                    if f.get("url")
+                    and f.get("ext") == "mp4"
+                    and f.get("vcodec") not in (None, "none", "")
+                    and f.get("acodec") not in (None, "none", "")
+                    and str(f.get("protocol") or "").startswith("http")
+                    and int(f.get("height") or 9999) <= 360
+                ],
+                [
+                    f for f in fmts
+                    if f.get("url")
+                    and f.get("ext") == "mp4"
+                    and f.get("vcodec") not in (None, "none", "")
+                    and f.get("acodec") not in (None, "none", "")
+                    and str(f.get("protocol") or "").startswith("http")
+                ],
+                [
+                    f for f in fmts
+                    if f.get("url")
+                    and f.get("vcodec") not in (None, "none", "")
+                    and f.get("acodec") not in (None, "none", "")
+                    and str(f.get("protocol") or "").startswith("http")
+                ],
+                [f for f in fmts if f.get("url") and f.get("acodec") not in (None, "none", "") and str(f.get("protocol") or "").startswith("http")],
                 [f for f in fmts if f.get("url") and f.get("acodec") not in (None, "none", "")],
             )
             for _group in _candidates:

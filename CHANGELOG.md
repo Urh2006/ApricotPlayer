@@ -1,3 +1,9 @@
+# v0.9.53 - Restore Fast YouTube Seeking
+
+## Fixes
+- **Restored the old fast-seek playback stream selection.** The 0.9.45 stream selector tried audio-only m4a first to lower RAM, but that changed the behaviour users relied on: immediately after starting a YouTube video, repeated large seek commands could feel stuck or sequentially buffered. Playback now prefers a small progressive MP4 with audio+video first, matching the pre-refactor behaviour where mpv receives one range-requestable file and can jump far ahead right away. Audio-only remains as a fallback for videos without a progressive MP4.
+- **Invalidated old audio-first stream URL cache entries.** The stream URL cache key now includes a playback format profile, so existing cached m4a URLs from 0.9.45-0.9.52 are not reused after this update.
+
 # v0.9.52 - Faster Player Transitions
 
 ## Fixes
