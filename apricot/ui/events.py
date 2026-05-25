@@ -373,11 +373,6 @@ class EventsUI:
             self.on_shortcut_capture_key(event, focus)
             return
 
-        # Ensure wx.Choice and wx.ComboBox receive all native key events (arrow navigation, etc.)
-        if isinstance(focus, (wx.Choice, wx.ComboBox)):
-            event.Skip()
-            return
-
         # SpinCtrl handles Up/Down/Home/End/PageUp/PageDown natively for value increment.
         # CheckBox and Slider are intentionally excluded so player shortcuts (seek, play/pause)
         # fire when those controls are focused — matching pre-refactoring behaviour.
@@ -401,9 +396,13 @@ class EventsUI:
                     return
                 event.Skip()
                 return
-            if key not in {wx.WXK_ESCAPE, wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER}:
-                event.Skip()
-                return
+            # OLD behaviour: Ctrl/Alt-modified shortcuts (e.g. Ctrl+L copy link, Ctrl+D
+            # download) fire even when a text field is focused. Plain navigation keys
+            # (arrows, backspace, typing) go through native handling as before.
+            if not (event.ControlDown() or event.AltDown()):
+                if key not in {wx.WXK_ESCAPE, wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER}:
+                    event.Skip()
+                    return
 
         if self.handle_background_player_tab_navigation(event, focus):
             return
@@ -411,12 +410,14 @@ class EventsUI:
             return
 
         results_focus = self.focus_in_results_control(focus)
-        if results_focus and self.results_list_owns_key(event):
-            event.Skip()
-            wx.CallAfter(self.maybe_extend_results)
-            return
         if self.in_main_menu:
             if self.handle_player_shortcut_event(event, focus, details_has_focus):
+                return
+            # Player shortcuts have priority; results-list native navigation comes after.
+            # Matches pre-refactoring behaviour where player_shortcut_event was checked first.
+            if results_focus and self.results_list_owns_key(event):
+                event.Skip()
+                wx.CallAfter(self.maybe_extend_results)
                 return
             if self.shortcut_matches(event, "open_channel"):
                 self.open_item_channel()
@@ -433,6 +434,12 @@ class EventsUI:
         if self.handle_global_navigation_shortcut(event, focus):
             return
         if self.handle_active_player_global_shortcut_event(event, focus):
+            return
+        # Player shortcuts have priority; results-list native navigation comes after.
+        # Matches pre-refactoring behaviour where player_shortcut_event was checked first.
+        if results_focus and self.results_list_owns_key(event):
+            event.Skip()
+            wx.CallAfter(self.maybe_extend_results)
             return
         if self.shortcut_matches(event, "open_selected") and focus is getattr(self, "menu_list", None):
             self.activate_menu()

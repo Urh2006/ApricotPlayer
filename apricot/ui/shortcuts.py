@@ -509,6 +509,11 @@ class ShortcutsUI:
                 event.Skip()
                 wx.CallAfter(self.maybe_extend_results)
                 return True
+            # OLD behaviour: when focus is in results, do not fall through into
+            # player-checkbox/edit-mode/details-navigation handlers. Return False so
+            # on_char_hook can dispatch the results-specific shortcuts (add_favorite,
+            # queue_audio, play_selected, etc.) from its own branch.
+            return False
         if self.context_menu_shortcut_matches(event):
             self.open_player_context_menu()
             return True
@@ -658,7 +663,7 @@ class ShortcutsUI:
             return False
         if self.player_shortcuts_allowed(focus) or self.focus_accepts_text(focus):
             return False
-        if self.focus_in_results_control(focus) or isinstance(focus, (wx.ListBox, wx.Button, wx.CheckBox, wx.Choice, wx.ComboBox, wx.Slider, wx.SpinCtrl)):
+        if self.focus_in_results_control(focus):
             return False
         if self.shortcut_matches(event, "player_previous"):
             self.play_relative_item(-1, preserve_focus=True)
