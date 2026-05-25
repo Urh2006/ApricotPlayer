@@ -1,3 +1,10 @@
+# v0.9.49 - Restore True Pre-Refactor Player Behaviour
+
+## Fixes
+- **Reverted three incorrect "restore" changes from v0.9.47 in `handle_player_eof`.** A prior analysis incorrectly claimed that the pre-refactoring code (`wx_main.py` v0.9.18) contained `shuffle_current` in the autoplay guard, an unconditional `else:`-branch queue-pop when autoplay is off, and a "playback finished" announcement at the terminal state. Direct comparison against the original monolith shows none of these existed — all three were new additions mistakenly labelled as restorations. The handler is now an exact mirror of the original: only `effective_autoplay_next()` gates track advancement; the queue is never popped when autoplay is off; and `handle_player_eof` is silent on exhaustion (the announcement lives only in `play_next_standard_fallback`, which is called by manual-next actions).
+- **Fixed player keyboard shortcuts not firing when focus is on a slider or checkbox.** A block added post-modularisation caused `Space`, arrow keys, `Home`, `End`, `PageUp`, and `PageDown` to skip straight to the native widget handler when a `wx.CheckBox` or `wx.Slider` held focus — before `handle_player_shortcut_event` was ever consulted. This meant pressing `Space` on a player checkbox triggered the checkbox toggle instead of play/pause, and pressing arrow keys on the volume slider moved the slider instead of seeking. The block is now limited to `wx.SpinCtrl` only (where native increment is the correct behaviour). `wx.CheckBox` and `wx.Slider` now follow the original flow: player shortcut wins if bound, native widget handles if not.
+- **Fixed results list "freezing" after a handler exception.** `on_results_key` wrapped its entire body in `try/except: pass`, which meant that if any shortcut handler raised an exception, the `else` branch's `event.Skip() + wx.CallAfter(self.maybe_extend_results)` was silently skipped — leaving the list unable to scroll further. The exception handler now explicitly calls `event.Skip()` and `wx.CallAfter(self.maybe_extend_results)` so the list remains responsive even when a handler fails.
+
 # v0.9.48 - Settings and Cache Key Fixes
 
 ## Fixes

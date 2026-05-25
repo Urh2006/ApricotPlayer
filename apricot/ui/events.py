@@ -378,16 +378,13 @@ class EventsUI:
             event.Skip()
             return
 
-        # Ensure checkboxes, sliders, and spin controls handle their natural keys natively.
-        # Without this, Space on a checkbox would fall through to the player_play_pause shortcut
-        # instead of toggling the checkbox.  Enter is intentionally excluded so the player-screen
-        # checkbox handlers (toggle_repeat, toggle_bass_boost, etc.) still fire via
-        # handle_player_shortcut_event.
-        if isinstance(focus, (wx.CheckBox, wx.Slider, wx.SpinCtrl)):
+        # SpinCtrl handles Up/Down/Home/End/PageUp/PageDown natively for value increment.
+        # CheckBox and Slider are intentionally excluded so player shortcuts (seek, play/pause)
+        # fire when those controls are focused — matching pre-refactoring behaviour.
+        if isinstance(focus, wx.SpinCtrl):
             if event.GetKeyCode() in {
-                wx.WXK_SPACE,
-                wx.WXK_UP, wx.WXK_DOWN, wx.WXK_LEFT, wx.WXK_RIGHT,
-                wx.WXK_HOME, wx.WXK_END, wx.WXK_PAGEUP, wx.WXK_PAGEDOWN,
+                wx.WXK_UP, wx.WXK_DOWN, wx.WXK_HOME, wx.WXK_END,
+                wx.WXK_PAGEUP, wx.WXK_PAGEDOWN,
             }:
                 event.Skip()
                 return

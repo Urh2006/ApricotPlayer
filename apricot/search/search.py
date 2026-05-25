@@ -195,7 +195,8 @@ class SearchMixin:
                 event.Skip()
                 wx.CallAfter(self.maybe_extend_results)
         except Exception:
-            pass
+            event.Skip()
+            wx.CallAfter(self.maybe_extend_results)
 
 
 

@@ -1377,9 +1377,7 @@ class PlayerUI:
             self.update_play_pause_buttons()
             self.restart_current_playback(announce=False)
             return
-        # shuffle_current enables next-track advance even when autoplay_next is off
-        # (matches pre-refactoring behaviour in wx_main.py)
-        if self.effective_autoplay_next() or self.shuffle_current:
+        if self.effective_autoplay_next():
             if getattr(self.settings, "autoplay_related", False) and self.current_video_item and self.is_youtube_url(self.current_video_item.get("url")):
                 threading.Thread(target=self.fetch_related_and_play_next, args=(self.current_video_item, generation), daemon=True).start()
                 return
@@ -1398,21 +1396,9 @@ class PlayerUI:
                 if queued_item:
                     self.open_playback_queue_item_with_mode(queued_item, show_player=self.in_player_screen or not self.background_playback_enabled())
                     return
-        else:
-            # Autoplay off — playback queue still advances unconditionally
-            # (matches pre-refactoring behaviour: queue was checked before the
-            # autoplay guard and therefore fired regardless of autoplay setting)
-            queued_item = self.pop_next_playback_queue_item()
-            if queued_item:
-                self.open_playback_queue_item_with_mode(queued_item, show_player=self.in_player_screen or not self.background_playback_enabled())
-                return
         self.player_ended = True
         self.player_paused = True
         self.update_play_pause_buttons()
-        if bool(getattr(self.settings, "announce_playback_finished", True)):
-            self.announce_player(self.t("playback_finished"))
-        else:
-            self.set_status(self.t("playback_finished"))
 
     def apply_related_videos_and_play(self, normalized_results: list[dict], generation: int) -> None:
         if generation != self.player_generation:
