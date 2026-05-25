@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract release notes from CHANGELOG.md
+        id: notes
+        shell: python
+        run: |
+          import re, os, sys
+
+          tag = os.environ["GITHUB_REF_NAME"]           # e.g. v0.9.47
+          version = tag.lstrip("v")                     # e.g. 0.9.47
+
+          changelog = open("CHANGELOG.md", encoding="utf-8").read()
+
+          # Find the block for this version: everything between the first
+          # "# vX.Y.Z" heading that matches and the next "# v" heading.
+          pattern = rf"(^#\s+v{re.escape(version)}\b.*?)(?=^#\s+v|\Z)"
+          match = re.search(pattern, changelog, re.MULTILINE | re.DOTALL)
+
+          if match:
+              body = match.group(1).strip()
+          else:
+              body = f"Release {tag}"
+
+          # Write to a file so we don't have to worry about quoting
+          with open("release_notes.md", "w", encoding="utf-8") as f:
+              f.write(body)
+
+          print(f"Extracted {len(body)} chars for {tag}")
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+
+      - name: Determine pre-release flag
+        id: prerelease
+        run: |
+          TAG="${{ github.ref_name }}"
+          if [[ "$TAG" == *"-beta"* || "$TAG" == *"-alpha"* || "$TAG" == *"-rc"* ]]; then
+            echo "flag=--prerelease" >> "$GITHUB_OUTPUT"
+          else
+            echo "flag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "ApricotPlayer ${{ github.ref_name }}" \
+            --notes-file release_notes.md \
+            ${{ steps.prerelease.outputs.flag }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
