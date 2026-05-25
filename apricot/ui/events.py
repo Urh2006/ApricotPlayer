@@ -273,7 +273,7 @@ class EventsUI:
                 "skip_download": True,
                 "playlistend": limit,
             }
-            info = self.ydl_extract_info(url, options, download=False, allow_cookie_retry=False)
+            info = self.ydl_extract_info(url, options, download=False)
             entries = list(info.get("entries") or [])[:limit]
             normalized = [self.normalize_entry(entry, result_type) for entry in entries]
             if sort_mode == "popular":
@@ -284,7 +284,7 @@ class EventsUI:
                 wx.CallAfter(self.show_results_if_current, generation, normalized)
                 wx.CallAfter(self.clear_loading_more_if_current, generation)
         except Exception as exc:
-            wx.CallAfter(self.dynamic_fetch_failed_if_current, generation or self.search_generation, self.friendly_error(exc, include_youtube_auth_hint=False))
+            wx.CallAfter(self.dynamic_fetch_failed_if_current, generation or self.search_generation, self.friendly_error(exc))
 
     def mark_collection_fully_loaded_if_current(self, generation: int, fully_loaded: bool) -> None:
         if generation == self.search_generation:

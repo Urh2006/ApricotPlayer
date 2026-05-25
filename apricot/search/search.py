@@ -587,15 +587,15 @@ class SearchMixin:
         try:
             options = {"quiet": True, "extract_flat": True, "skip_download": True, "playlistend": limit}
             if provider == "soundcloud":
-                info = self.ydl_extract_info(f"scsearch{limit}:{query}", options, download=False, allow_cookie_retry=False)
+                info = self.ydl_extract_info(f"scsearch{limit}:{query}", options, download=False)
             elif search_type == "Video":
-                info = self.ydl_extract_info(f"ytsearch{limit}:{query}", options, download=False, allow_cookie_retry=False)
+                info = self.ydl_extract_info(f"ytsearch{limit}:{query}", options, download=False)
             else:
-                info = self.ydl_extract_info(self.youtube_search_url(query, search_type), options, download=False, allow_cookie_retry=False)
+                info = self.ydl_extract_info(self.youtube_search_url(query, search_type), options, download=False)
             entries = list(info.get("entries") or [])[:limit]
             wx.CallAfter(self.show_more_results_if_current, generation, [self.normalize_entry(entry, search_type, provider) for entry in entries], selection)
         except Exception as exc:
-            wx.CallAfter(self.dynamic_fetch_failed_if_current, generation, self.friendly_error(exc, include_youtube_auth_hint=False))
+            wx.CallAfter(self.dynamic_fetch_failed_if_current, generation, self.friendly_error(exc))
 
 
     def merge_dynamic_results(self, existing: list[dict], fetched: list[dict], anchor_identity: str = "") -> list[dict]:

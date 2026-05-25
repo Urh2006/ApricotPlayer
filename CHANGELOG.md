@@ -1,3 +1,8 @@
+# v0.9.51 - Dynamic Results Cookie Retry Fix
+
+## Fixes
+- **Fixed dynamic result loading still bypassing cookie retry.** The v0.9.50 search fix restored cookie retry and the YouTube auth hint for the first page of search results, but the follow-up paths used by dynamic "load the next 20 results" and channel/playlist collection loading still explicitly disabled that retry and suppressed the helpful error text. Those paths now use the same yt-dlp retry behaviour as normal search, so navigating beyond the first page should no longer produce avoidable "sign in / cookies" failures.
+
 # v0.9.50 - Restore True Pre-Refactor Keyboard Routing and Search Behaviour
 
 ## Fixes
