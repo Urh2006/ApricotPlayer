@@ -794,12 +794,13 @@ class ListsUI:
         }
         self.history = [existing for existing in self.history if existing.get("url") != url]
         self.history.insert(0, entry)
-        self.trim_history()
-        self.save_history()
+        self.trim_history(save=False)
+        self.save_history_async()
 
-    def trim_history(self) -> None:
+    def trim_history(self, save: bool = True) -> None:
         limit = max(10, int(getattr(self.settings, "history_limit", 500) or 500))
         if len(self.history) > limit:
             self.history = self.history[:limit]
-            self.save_history()
+            if save:
+                self.save_history()
 

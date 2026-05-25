@@ -1658,12 +1658,21 @@ class PlayerUI:
         if not key:
             return
         try:
-            elapsed = self.mpv_get_property("time-pos", timeout=0.35)
-            duration = self.mpv_get_property("duration", timeout=0.35)
+            elapsed = self.mpv_get_property("time-pos", timeout=0.08)
             if elapsed is None:
                 return
             position = float(elapsed)
-            total = float(duration or 0.0)
+            total = 0.0
+            for source in (self.current_video_info, self.current_video_item):
+                try:
+                    total = float((source or {}).get("duration") or 0.0)
+                except (TypeError, ValueError):
+                    total = 0.0
+                if total:
+                    break
+            if not total:
+                duration = self.mpv_get_property("duration", timeout=0.05)
+                total = float(duration or 0.0)
             if position < 5.0:
                 self.playback_positions.pop(key, None)
             elif total and position > max(5.0, total - 8.0):

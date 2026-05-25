@@ -1,3 +1,12 @@
+# v0.9.52 - Faster Player Transitions
+
+## Fixes
+- **Reduced the small delay when switching from results into the player or back through active playback paths.** Recording the previous item in history now updates memory immediately and writes the history file in the background, so pressing Enter on a result no longer waits for a JSON disk write before the player page appears.
+- **Stopped slow mpv IPC calls from blocking UI transitions.** Saving resume position now uses a short IPC timeout and prefers already-known duration metadata before asking mpv, which keeps switching tracks responsive even if mpv is momentarily slow to answer.
+- **Shortened mpv shutdown waits when replacing playback.** Starting a new item no longer allows the old mpv process to hold the UI for up to two seconds during termination.
+- **Avoided treating web URLs as possible local paths.** YouTube and other streamed URLs now skip unnecessary filesystem checks in player UI paths.
+- **Kept history safe on exit.** Pending background history writes are superseded by one final synchronous save during shutdown, so the faster hot path does not lose recent playback history.
+
 # v0.9.51 - Dynamic Results Cookie Retry Fix
 
 ## Fixes

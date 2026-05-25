@@ -1,6 +1,7 @@
 from apricot.constants import *
 import wx
 import os
+import re
 from pathlib import Path
 from apricot.ui.misc import MiscUI
 
@@ -320,6 +321,8 @@ class SystemUI:
                 text = path_text[1:]
             else:
                 text = path_text
+        elif re.match(r"^[a-z][a-z0-9+.-]*://", text, re.IGNORECASE):
+            return None
         candidate = Path(text).expanduser()
         try:
             if candidate.exists() and candidate.is_file():

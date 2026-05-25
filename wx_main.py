@@ -164,6 +164,8 @@ class MainFrame(CookiesUI, DownloadsUI, EqualizerUI, EventsUI, ListsUI, MenusUI,
         self.ipc_path: str | None = None
         self.mpv_ipc_lock = threading.Lock()
         self.cookie_repair_lock = threading.Lock()
+        self.history_save_lock = threading.Lock()
+        self.history_save_generation = 0
         self.cookie_repair_suppressed_until = 0.0
         self.ui_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.loading_more_results = False

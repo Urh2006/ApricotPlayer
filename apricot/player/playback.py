@@ -392,7 +392,7 @@ class PlaybackMixin:
         if self.player_process and self.player_process.poll() is None:
             self.player_process.terminate()
             try:
-                self.player_process.wait(timeout=2)
+                self.player_process.wait(timeout=0.5)
             except subprocess.TimeoutExpired:
                 self.player_process.kill()
         self.player_process = None

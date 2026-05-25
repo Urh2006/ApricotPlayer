@@ -165,10 +165,46 @@ class DataManagerMixin:
     def load_history(self) -> list[dict]:
         return self.load_json_list(HISTORY_FILE)
 
+    def history_save_mutex(self) -> threading.Lock:
+        lock = getattr(self, "history_save_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self.history_save_lock = lock
+        return lock
+
+    def write_history_snapshot(self, snapshot: list[dict]) -> None:
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(snapshot, indent=2, ensure_ascii=False)
+        temp_file = HISTORY_FILE.with_suffix(".json.tmp")
+        temp_file.write_text(payload, encoding="utf-8")
+        os.replace(temp_file, HISTORY_FILE)
+
+    def next_history_save_generation(self) -> int:
+        generation = int(getattr(self, "history_save_generation", 0) or 0) + 1
+        self.history_save_generation = generation
+        return generation
 
     def save_history(self) -> None:
-        APP_DIR.mkdir(parents=True, exist_ok=True)
-        HISTORY_FILE.write_text(json.dumps(self.history, indent=2, ensure_ascii=False), encoding="utf-8")
+        snapshot = list(self.history)
+        generation = self.next_history_save_generation()
+        with self.history_save_mutex():
+            if generation != getattr(self, "history_save_generation", generation):
+                return
+            self.write_history_snapshot(snapshot)
+
+    def save_history_async(self) -> None:
+        snapshot = list(self.history)
+        generation = self.next_history_save_generation()
+        threading.Thread(target=self.save_history_snapshot_worker, args=(snapshot, generation), daemon=True).start()
+
+    def save_history_snapshot_worker(self, snapshot: list[dict], generation: int) -> None:
+        try:
+            with self.history_save_mutex():
+                if generation != getattr(self, "history_save_generation", generation):
+                    return
+                self.write_history_snapshot(snapshot)
+        except Exception:
+            pass
 
 
     def load_subscriptions(self) -> list[dict]:
