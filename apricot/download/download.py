@@ -172,8 +172,8 @@ class DownloaderMixin:
         submenu = wx.Menu()
         audio_item = submenu.Append(wx.ID_ANY, self.menu_label_with_shortcut("download_audio", "download_audio"))
         video_item = submenu.Append(wx.ID_ANY, self.menu_label_with_shortcut("download_video", "download_video"))
-        self.Bind(wx.EVT_MENU, lambda _evt, selected=dict(item): self.download_collection(selected, audio_only=True), audio_item)
-        self.Bind(wx.EVT_MENU, lambda _evt, selected=dict(item): self.download_collection(selected, audio_only=False), video_item)
+        submenu.Bind(wx.EVT_MENU, lambda _evt, selected=dict(item): self.download_collection(selected, audio_only=True), audio_item)
+        submenu.Bind(wx.EVT_MENU, lambda _evt, selected=dict(item): self.download_collection(selected, audio_only=False), video_item)
         menu.AppendSubMenu(submenu, self.t("download_channel" if kind == "channel" else "download_playlist"))
 
 

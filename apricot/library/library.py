@@ -166,7 +166,7 @@ class LibraryMixin:
                 actions.insert(7, (self.menu_label_with_shortcut("open_channel", "open_channel"), lambda selected=dict(selected or {}): self.open_item_channel(selected)))
         for label, handler in actions:
             item = menu.Append(wx.ID_ANY, label)
-            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
+            menu.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
         self.PopupMenu(menu)
         menu.Destroy()
 
@@ -350,13 +350,13 @@ class LibraryMixin:
             submenu = wx.Menu()
             for index, playlist in enumerate(self.user_playlists):
                 menu_item = submenu.Append(wx.ID_ANY, str(playlist.get("title") or self.t("playlists")))
-                self.Bind(wx.EVT_MENU, lambda _evt, idx=index, prefer=prefer_active: self.add_items_to_playlist(idx, self.playlist_candidate_items(prefer_active=prefer)), menu_item)
+                submenu.Bind(wx.EVT_MENU, lambda _evt, idx=index, prefer=prefer_active: self.add_items_to_playlist(idx, self.playlist_candidate_items(prefer_active=prefer)), menu_item)
             create_item = submenu.Append(wx.ID_ANY, self.t("create_playlist"))
-            self.Bind(wx.EVT_MENU, lambda _evt, prefer=prefer_active: self.add_active_to_playlist(prefer_active=prefer), create_item)
+            submenu.Bind(wx.EVT_MENU, lambda _evt, prefer=prefer_active: self.add_active_to_playlist(prefer_active=prefer), create_item)
             menu.AppendSubMenu(submenu, self.menu_label_with_shortcut("add_to_playlist", "add_to_playlist"))
         else:
             item = menu.Append(wx.ID_ANY, self.menu_label_with_shortcut("add_to_playlist", "add_to_playlist"))
-            self.Bind(wx.EVT_MENU, lambda _evt, prefer=prefer_active: self.add_active_to_playlist(prefer_active=prefer), item)
+            menu.Bind(wx.EVT_MENU, lambda _evt, prefer=prefer_active: self.add_active_to_playlist(prefer_active=prefer), item)
 
 
 
@@ -476,7 +476,7 @@ class LibraryMixin:
                 actions.insert(5, (self.menu_label_with_shortcut("open_channel", "open_channel"), lambda selected=dict(selected or {}): self.open_item_channel(selected)))
         for label, handler in actions:
             item = menu.Append(wx.ID_ANY, label)
-            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
+            menu.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
         self.PopupMenu(menu)
         menu.Destroy()
 
@@ -609,7 +609,7 @@ class LibraryMixin:
                 actions.insert(6, (self.menu_label_with_shortcut("open_channel", "open_channel"), lambda selected=dict(selected or {}): self.open_item_channel(selected)))
         for label, handler in actions:
             item = menu.Append(wx.ID_ANY, label)
-            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
+            menu.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
         self.PopupMenu(menu)
         menu.Destroy()
 
@@ -732,7 +732,7 @@ class LibraryMixin:
         ]
         for label, handler in actions:
             item = menu.Append(wx.ID_ANY, label)
-            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
+            menu.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
         self.PopupMenu(menu)
         menu.Destroy()
 
@@ -1095,7 +1095,7 @@ class LibraryMixin:
         ]
         for label, handler in actions:
             item = menu.Append(wx.ID_ANY, label)
-            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
+            menu.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
         self.PopupMenu(menu)
         menu.Destroy()
 
@@ -1457,7 +1457,7 @@ class LibraryMixin:
         ]
         for label, handler in actions:
             item = menu.Append(wx.ID_ANY, label)
-            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
+            menu.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
         self.PopupMenu(menu)
         menu.Destroy()
 
@@ -1615,13 +1615,15 @@ class LibraryMixin:
             random.shuffle(ordered)
         self.shuffle_current = False
         sequence = [self.playlist_item_from_media(item) for item in ordered]
-        self.set_player_sequence(sequence)
         current_item = dict(sequence[0])
         self.player_return_screen = "search"
         self.player_return_data = {"index": self.return_index, "playlist_title": playlist_item.get("title", "")}
         self.current_video_item = current_item
         self.current_video_info = dict(current_item)
         self.play_url(str(current_item.get("url") or ""), str(current_item.get("title") or ""))
+        # Set sequence AFTER play_url so that stop_player(reset_session=True) inside
+        # play_url cannot clear it before it is established.
+        self.set_player_sequence(sequence)
 
 
 

@@ -104,7 +104,7 @@ class MenusUI:
             ]
         for label, handler in actions:
             item = menu.Append(wx.ID_ANY, label)
-            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
+            menu.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
         self.PopupMenu(menu)
         menu.Destroy()
 
@@ -117,7 +117,7 @@ class MenusUI:
         ]
         for label, handler in actions:
             item = menu.Append(wx.ID_ANY, label)
-            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
+            menu.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
         self.PopupMenu(menu)
         menu.Destroy()
 
@@ -140,7 +140,7 @@ class MenusUI:
             ]
         for label, handler in actions:
             item = menu.Append(wx.ID_ANY, label)
-            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
+            menu.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
         self.PopupMenu(menu)
         menu.Destroy()
 
@@ -202,7 +202,7 @@ class MenusUI:
 
         for label, handler in actions:
             menu_item = menu.Append(wx.ID_ANY, label)
-            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), menu_item)
+            menu.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), menu_item)
         if self.playlist_item_is_supported(item):
             self.append_add_to_playlist_menu(menu, prefer_active=True)
         self.PopupMenu(menu)
@@ -279,7 +279,7 @@ class MenusUI:
                 self.append_collection_download_submenu(menu, context_item)
                 continue
             menu_item = menu.Append(wx.ID_ANY, label)
-            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), menu_item)
+            menu.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), menu_item)
         selected = self.selected_result()
         if selected and selected.get("kind") not in {"playlist", "channel"}:
             self.append_add_to_playlist_menu(menu)

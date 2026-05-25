@@ -79,6 +79,10 @@ class SearchMixin:
         self.direct_link_screen_active = False
         self.folder_screen_active = False
         self.clear()
+        if not restore_search:
+            self.results = []
+            self.all_results = []
+            self.last_visible_count = 0
         self.add_background_player_section()
         self.add_button_row([(self.t("back"), self.back_from_search)])
         grid = wx.FlexGridSizer(3, 2, 6, 6)
@@ -305,7 +309,7 @@ class SearchMixin:
         ]
         for label, handler in actions:
             item = menu.Append(wx.ID_ANY, label)
-            self.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
+            menu.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), item)
         self.PopupMenu(menu)
         menu.Destroy()
 

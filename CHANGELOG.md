@@ -1,3 +1,11 @@
+# v0.9.46 - Playlist Navigation Fix and Context Menu Fixes
+
+## Fixes
+- **Fixed playlist navigation playing wrong video (search result instead of next playlist item).** When starting playlist playback `set_player_sequence` was called before `play_url`, which internally calls `stop_player(reset_session=True)` and wipes `player_sequence_results`. Next-track navigation therefore found an empty sequence and fell back to the search results list, playing a seemingly random video. Fix: `set_player_sequence` is now called after `play_url` so the sequence is established after the reset.
+- **Fixed context menus showing wrong options or triggering wrong actions on repeated open.** All context menu handlers used `self.Bind(wx.EVT_MENU, handler, item)` (binding to the frame) instead of `menu.Bind(wx.EVT_MENU, handler, item)` (binding to the temporary menu object). wx recycles freed menu-item IDs; when the same ID was reused in a new menu, both the old and new handler fired together. This caused wrong actions, phantom options, and missing items (e.g. missing video-type combobox after closing a context menu with Escape). All context menus across `menus.py`, `library.py`, `search.py`, and `download.py` are now bound to their menu/submenu object so handlers are released when the menu is destroyed.
+- **Fixed stale search results playing on empty query or fast navigation.** `show_search(restore_search=False)` did not clear `self.results` / `self.all_results`. If the user pressed Enter before focus moved to the query field, the old results list was still populated and `play_selected()` returned the first item from the previous search. Results are now cleared immediately when opening a fresh (non-restored) search screen.
+- **Improved reconnection on flaky networks.** Added `reconnect_on_network_error=1` to the mpv `--stream-lavf-o` option string so that HTTP-level errors (5xx, dropped connections) trigger a reconnect attempt in addition to pure network-drop reconnects. This reduces stucking/buffering on unstable mobile connections.
+
 # v0.9.45 - Stream Format Fix
 
 ## Fixes

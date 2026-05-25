@@ -110,8 +110,7 @@ class MpvMixin:
                         # reconnect_streamed is intentionally omitted: it causes
                         # ffmpeg to tear down and reconnect the HTTP connection on
                         # every seek, adding 2-5 s of stall after each seek command.
-                        "--stream-lavf-o=reconnect=1",
-                        "--stream-lavf-o=reconnect_delay_max=5",
+                        "--stream-lavf-o=reconnect=1,reconnect_on_network_error=1,reconnect_delay_max=5",
                     ]
                 )
             else:
