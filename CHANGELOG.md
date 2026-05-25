@@ -1,3 +1,11 @@
+# v0.9.47 - Player Regression Fixes (v0.8 parity)
+
+## Fixes
+- **Fixed session volume leaking across playback sessions.** `stop_player(reset_session=True)` did not reset `session_volume` to `None`, so the volume level from the previous session (including any boost or manual change) bled into the next fresh session. The original pre-refactoring code reset it; the refactored version accidentally dropped that line. Fixed.
+- **Fixed shuffle mode not advancing to next track.** `handle_player_eof` checked only `effective_autoplay_next()` (settings.autoplay_next + session override), omitting `shuffle_current`. In the original code the condition was `shuffle_current OR autoplay_next`, so shuffle always advanced the track even when autoplay was off. Fixed: condition is now `effective_autoplay_next() OR shuffle_current`.
+- **Fixed playback queue not playing when autoplay is off.** Manually queued items were only dequeued inside the `effective_autoplay_next()` block, so with autoplay disabled the queue was never consumed. In the original code the queue check was unconditional (ran before the autoplay guard). Fixed: when autoplay is off the queue is still checked and played.
+- **Restored "Playback finished" announcement.** After a track ends with nothing next to play, the original code announced/set status "Playback finished." The refactored `handle_player_eof` dropped this line entirely. `play_next_standard_fallback` in misc.py had it but was only reached via the autoplay-related code path. Fixed: the announcement is restored in the terminal block of `handle_player_eof`.
+
 # v0.9.46 - Playlist Navigation Fix and Context Menu Fixes
 
 ## Fixes
