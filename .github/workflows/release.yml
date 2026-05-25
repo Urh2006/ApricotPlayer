@@ -138,10 +138,25 @@ jobs:
           if (-not $asset) { throw "Could not find mpv x86_64 release asset" }
           Write-Host "Downloading mpv asset: $($asset.name)"
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile mpv.7z -Headers $headers
+
+          Write-Host "Extracting mpv archive..."
           & "C:\Program Files\7-Zip\7z.exe" x mpv.7z -o"mpv_extracted" -y | Out-Null
-          $innerDir = Get-ChildItem -Path mpv_extracted -Directory | Select-Object -First 1
+
+          # Robustly find mpv.exe regardless of archive structure
+          # (some shinchiro builds are flat, some have a root wrapper directory)
+          $mpvExe = Get-ChildItem -Path mpv_extracted -Filter "mpv.exe" -Recurse | Select-Object -First 1
+          if (-not $mpvExe) {
+            Write-Host "Archive contents:"
+            Get-ChildItem mpv_extracted -Recurse | Select-Object FullName
+            throw "mpv.exe was not found anywhere in the extracted archive"
+          }
+          Write-Host "Found mpv.exe at: $($mpvExe.FullName)"
+
+          # Copy mpv.exe and all sibling files (required DLLs) to vendor\mpv
           New-Item -ItemType Directory -Force -Path vendor\mpv | Out-Null
-          Copy-Item -Path "$($innerDir.FullName)\*" -Destination vendor\mpv\ -Force
+          Get-ChildItem -Path $mpvExe.Directory.FullName -File |
+            Copy-Item -Destination vendor\mpv\ -Force
+
           Write-Host "mpv installed. Files in vendor\mpv:"
           Get-ChildItem vendor\mpv -Name
         env:
