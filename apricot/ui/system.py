@@ -419,7 +419,7 @@ class SystemUI:
             "max_height": int(getattr(self.settings, "max_video_height", 1080) or 0),
             "restricted": bool(getattr(self.settings, "enable_age_restricted_videos", False)),
             "cookies_file": str(getattr(self.settings, "cookies_file", "") or ""),
-            "cookies_browser": str(getattr(self.settings, "cookies_browser", "") or ""),
+            "cookies_browser": str(getattr(self.settings, "cookies_from_browser", "none") or "none"),
         }
         return json.dumps(parts, sort_keys=True, ensure_ascii=False)
 

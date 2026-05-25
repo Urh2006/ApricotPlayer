@@ -429,7 +429,7 @@ class SettingsMixin:
             check("auto_update_app", self.settings.auto_update_app)
             choice(
                 "update_channel",
-                getattr(self.settings, "update_channel", "stable"),
+                getattr(self.settings, "update_channel", "beta"),
                 ["stable", "beta"],
                 [self.t("update_channel_stable"), self.t("update_channel_beta")]
             )
@@ -889,7 +889,7 @@ class SettingsMixin:
         if "auto_update_app" in c:
             self.settings.auto_update_app = c["auto_update_app"].GetValue()
         if "update_channel" in c:
-            self.settings.update_channel = self.selected_choice_value("update_channel") or "stable"
+            self.settings.update_channel = self.selected_choice_value("update_channel") or "beta"
         if "app_update_interval" in c:
             self.settings.app_update_interval_hours = self.to_float(self.selected_choice_value("app_update_interval"), 6.0, 0.5, 24.0)
         if "close_to_tray" in c:

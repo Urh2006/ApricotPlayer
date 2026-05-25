@@ -1,3 +1,9 @@
+# v0.9.48 - Settings and Cache Key Fixes
+
+## Fixes
+- **Fixed update channel defaulting to "stable" instead of "beta".** Both the settings render path and the save path used `"stable"` as the fallback when the stored `update_channel` value was empty or missing, overriding the model default of `"beta"`. Users who had never explicitly chosen a channel were silently placed on the stable channel. Both paths now fall back to `"beta"` to match the model default.
+- **Fixed stream URL cache not varying by browser cookie source.** `stream_url_cache_key` used `getattr(self.settings, "cookies_browser", "")` — a typo: the model field is `cookies_from_browser`, not `cookies_browser`. The fallback always returned an empty string, so all cache keys looked identical regardless of which browser was configured for cookie extraction. Fixed to use the correct attribute name `cookies_from_browser` with fallback `"none"`.
+
 # v0.9.47 - Player Regression Fixes (v0.8 parity)
 
 ## Fixes
