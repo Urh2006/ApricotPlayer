@@ -777,13 +777,13 @@ class PlayerUI:
     def move_player_tab_focus(self, forward: bool, focus: wx.Window | None) -> bool:
         if not self.in_player_screen:
             return False
+        panel = self.live_window(getattr(self, "player_panel", None))
+        if panel is None or not self.window_is_or_descendant(focus, panel):
+            return False
         order = self.player_tab_order()
-        index = -1
-        for candidate_index, control in enumerate(order):
-            if self.window_is_or_descendant(focus, control):
-                index = candidate_index
-                break
-        if index < 0:
+        try:
+            index = order.index(panel)
+        except ValueError:
             return False
         next_index = index + 1 if forward else index - 1
         if 0 <= next_index < len(order):

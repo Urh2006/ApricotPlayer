@@ -1,3 +1,9 @@
+# v0.9.56 - Player Tab Responsiveness Hotfix
+
+## Fixes
+- **Reduced Tab and Shift+Tab lag in the player.** Apricot now uses native wx tab navigation for normal player buttons, checkboxes, and embedded result lists again, while keeping the custom fallback only for the embedded mpv player panel that needs it.
+- **Kept the 0.9.55 background-player tab order fix.** Search, channel, and playlist screens still keep their normal control order while playback continues in the background.
+
 # v0.9.55 - Playback Startup and Background UI Hotfix
 
 ## Fixes
