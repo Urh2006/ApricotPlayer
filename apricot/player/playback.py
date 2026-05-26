@@ -331,7 +331,13 @@ class PlaybackMixin:
         if self.current_video_item:
             self.record_history(self.current_video_item, "played")
         self.current_index = max(0, self.current_index)
-        continuing_session = bool(getattr(self, "player_session_open", False)) or self.player_is_active() or bool(getattr(self, "playback_start_pending", False))
+        continuing_session = (
+            bool(getattr(self, "player_session_open", False))
+            or self.player_is_active()
+            or bool(getattr(self, "playback_start_pending", False))
+        )
+        if continuing_session:
+            self.player_session_open = True
         self.remember_current_player_volume()
         self.stop_player(silent=True, reset_session=not continuing_session, preserve_panel=keep_current_ui)
         if not continuing_session:
@@ -417,13 +423,18 @@ class PlaybackMixin:
             self.manual_background_playback_active = False
             self.session_volume = None
             self.cancel_pending_volume_change()
+            self.session_audio_output_device = ""
             self.session_autoplay_next = False
             self.session_equalizer_enabled = None
             self.session_equalizer_gains = {}
             self.session_equalizer_before_bass_boost = None
             self.volume_boost_enabled = False
+            self.bass_boost_enabled = False
+            self.repeat_current = False
             self.shuffle_current = False
             self.player_sequence_results = []
+        else:
+            self.player_session_open = True
         if self.player_panel is not None and not preserve_panel:
             try:
                 self.root_sizer.Detach(self.player_panel)

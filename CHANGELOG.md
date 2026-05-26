@@ -1,3 +1,10 @@
+# v0.9.57 - Player Session Audio Hotfix
+
+## Fixes
+- **Fixed session volume persistence when changing videos.** If the user changes volume in the player and then plays another item without closing the player, Apricot keeps that session volume across search results, channel videos, playlists, queue playback, and background playback.
+- **Made real player close reset all session-only audio state.** Closing the player with Escape or Close player now resets session volume, output device, bass boost, volume boost, repeat, autoplay-next session state, shuffle, and EQ session values back to defaults for the next player session.
+- **Clarified the session boundary in code.** Internal handoffs that stop mpv only to start the next item now explicitly keep the player session open, so the short process restart between videos no longer looks like a fresh player session.
+
 # v0.9.56 - Player Tab Responsiveness Hotfix
 
 ## Fixes
