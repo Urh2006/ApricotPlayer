@@ -106,14 +106,10 @@ class PlayerUI:
             row.Add(button, 0, wx.RIGHT, 6)
             self.background_player_controls.append(button)
         self.root_sizer.Add(row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
-        previous_control = self.live_window(self.background_player_previous_control)
-        for control in self.background_player_controls:
-            if previous_control is not None:
-                try:
-                    control.MoveAfterInTabOrder(previous_control)
-                except RuntimeError:
-                    pass
-            previous_control = control
+        # Keep the active screen's native tab order intact. The background
+        # player section is appended after the screen content; only its own
+        # internal controls need deterministic ordering.
+        self.apply_tab_order(list(self.background_player_controls))
 
     def flush_background_player_section(self, generation: int) -> None:
         if generation != getattr(self, "background_player_section_generation", -1):
@@ -148,12 +144,6 @@ class PlayerUI:
             pass
 
     def background_player_previous_target(self) -> wx.Window | None:
-        for control in reversed(getattr(self, "last_button_row_controls", [])):
-            target = self.live_window(control)
-            if target is not None and not self.focus_in_background_player_controls(target):
-                return target
-        if getattr(self, "in_main_menu", False):
-            return self.live_window(getattr(self, "menu_list", None))
         candidate_names = [
             "results_list",
             "queue_list",
@@ -165,9 +155,17 @@ class PlayerUI:
             "notification_list",
             "history_list",
             "direct_link_ctrl",
+            "query",
+            "settings_scroller",
+            "settings_section_list",
+            "menu_list",
         ]
         for name in candidate_names:
             target = self.live_window(getattr(self, name, None))
+            if target is not None and not self.focus_in_background_player_controls(target):
+                return target
+        for control in reversed(getattr(self, "last_button_row_controls", [])):
+            target = self.live_window(control)
             if target is not None and not self.focus_in_background_player_controls(target):
                 return target
         return None

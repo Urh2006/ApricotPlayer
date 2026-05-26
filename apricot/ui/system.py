@@ -23,17 +23,14 @@ _INFO_CACHE_STRIP_KEYS: frozenset[str] = frozenset({
     "_formats_info",
 })
 
-STREAM_FORMAT_PROFILE = "progressive-mp4-fast-seek-v2"
+STREAM_FORMAT_PROFILE = "progressive-mp4-fast-seek-v3-no-youtube-audio-fallback"
 FAST_SEEK_STREAM_FORMAT = (
     "best[ext=mp4][vcodec!=none][acodec!=none][height<=360][protocol=https]"
     "/best[ext=mp4][vcodec!=none][acodec!=none][height<=480][protocol=https]"
     "/best[ext=mp4][vcodec!=none][acodec!=none][protocol=https]"
     "/best[acodec!=none][vcodec!=none][protocol=https]"
-    "/bestaudio[ext=m4a][protocol=https]"
-    "/bestaudio[protocol=https]"
     "/best[ext=mp4]"
     "/best[acodec!=none][vcodec!=none]"
-    "/best"
 )
 FAST_SEEK_FALLBACK_FORMAT = (
     "best[ext=mp4][vcodec!=none][acodec!=none][height<=360]"
@@ -43,7 +40,11 @@ FAST_SEEK_FALLBACK_FORMAT = (
     "/18"
     "/22"
     "/17"
+)
+NON_YOUTUBE_STREAM_FORMAT = (
+    "bestaudio[ext=m4a][protocol=https]"
     "/bestaudio[protocol=https]"
+    "/bestaudio"
     "/best"
 )
 
@@ -505,18 +506,18 @@ class SystemUI:
         cached = self.cached_stream_url(url)
         if cached and cached[0]:
             return cached
-        # Prefer a small progressive MP4 with audio+video, matching the old
-        # fast-seek behaviour: mpv gets one range-requestable file and can jump
-        # far ahead immediately after playback starts. Audio-only is still kept
-        # as a fallback for videos without a progressive MP4.
+        # For YouTube, prefer only progressive audio+video streams. The
+        # audio-only fallback caused noticeably slower starts and worse seeking
+        # for testers because mpv could no longer jump through one combined MP4.
+        youtube_source = self.is_youtube_url(url)
         options = {
             "quiet": True,
             "skip_download": True,
-            "format": FAST_SEEK_STREAM_FORMAT,
+            "format": FAST_SEEK_STREAM_FORMAT if youtube_source else NON_YOUTUBE_STREAM_FORMAT,
             "noplaylist": True,
         }
         format_fallback_options = dict(options)
-        format_fallback_options["format"] = FAST_SEEK_FALLBACK_FORMAT
+        format_fallback_options["format"] = FAST_SEEK_FALLBACK_FORMAT if youtube_source else NON_YOUTUBE_STREAM_FORMAT
         try:
             info = self.ydl_extract_info(url, options, download=False, allow_cookie_retry=False)
         except Exception as exc:
@@ -594,8 +595,8 @@ class SystemUI:
         stream_url = info.get("url")
         if not stream_url and info.get("formats"):
             fmts = info["formats"]
-            # Prefer: small combined progressive MP4 -> any combined HTTP -> audio-only.
-            _candidates = (
+            # Prefer: small combined progressive MP4 -> any combined HTTP.
+            _candidates = [
                 [
                     f for f in fmts
                     if f.get("url")
@@ -620,9 +621,14 @@ class SystemUI:
                     and f.get("acodec") not in (None, "none", "")
                     and str(f.get("protocol") or "").startswith("http")
                 ],
-                [f for f in fmts if f.get("url") and f.get("acodec") not in (None, "none", "") and str(f.get("protocol") or "").startswith("http")],
-                [f for f in fmts if f.get("url") and f.get("acodec") not in (None, "none", "")],
-            )
+            ]
+            if not youtube_source:
+                _candidates.extend(
+                    [
+                        [f for f in fmts if f.get("url") and f.get("acodec") not in (None, "none", "") and str(f.get("protocol") or "").startswith("http")],
+                        [f for f in fmts if f.get("url") and f.get("acodec") not in (None, "none", "")],
+                    ]
+                )
             for _group in _candidates:
                 if _group:
                     stream_url = _group[-1]["url"]

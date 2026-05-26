@@ -1,3 +1,10 @@
+# v0.9.55 - Playback Startup and Background UI Hotfix
+
+## Fixes
+- **Removed the YouTube audio-only playback fallback.** YouTube playback now sticks to progressive audio+video streams for the fast-start/fast-seek path, and the stream URL cache profile was bumped so old audio-only cached URLs are not reused.
+- **Kept non-YouTube audio sources working.** SoundCloud and other audio-only providers still use an audio-compatible stream format, but YouTube videos no longer fall back to m4a/bestaudio.
+- **Fixed background-player controls disrupting search/channel/playlist tab order.** When a video keeps playing in the background and the user opens search, a channel, or a playlist, Apricot now appends the background player section without forcing it into the middle of the active screen's controls.
+
 # v0.9.54 - Seek Hold and Focus Fixes
 
 ## Fixes
