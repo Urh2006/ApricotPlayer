@@ -210,7 +210,7 @@ class MenusUI:
 
     def open_context_menu(self, _event=None) -> None:
         menu = wx.Menu()
-        item = self.selected_result()
+        item = self.selected_result(stable=False)
         if item and item.get("kind") in {"playlist", "channel"}:
             is_channel = item.get("kind") == "channel"
             if is_channel:
@@ -280,7 +280,7 @@ class MenusUI:
                 continue
             menu_item = menu.Append(wx.ID_ANY, label)
             menu.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), menu_item)
-        selected = self.selected_result()
+        selected = self.selected_result(stable=False)
         if selected and selected.get("kind") not in {"playlist", "channel"}:
             self.append_add_to_playlist_menu(menu)
         self.PopupMenu(menu)

@@ -521,14 +521,14 @@ class ListsUI:
             parts.append(self.queue_mode_label(queued))
         return " | ".join(part for part in parts if part)
 
-    def selected_result(self) -> dict | None:
+    def selected_result(self, stable: bool = True) -> dict | None:
         if not hasattr(self, "results_list"):
             return None
         try:
             index = self.results_list.GetSelection()
         except RuntimeError:
             return None
-        if self.focus_in_results_control(wx.Window.FindFocus()) and getattr(self, "last_user_result_identity", ""):
+        if stable and self.focus_in_results_control(wx.Window.FindFocus()) and getattr(self, "last_user_result_identity", ""):
             index = self.result_index_for_identity(self.last_user_result_identity, self.last_user_result_index)
         if index == wx.NOT_FOUND or index < 0 or index >= len(self.results):
             return None

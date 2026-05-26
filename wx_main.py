@@ -238,6 +238,15 @@ class MainFrame(CookiesUI, DownloadsUI, EqualizerUI, EventsUI, ListsUI, MenusUI,
         self.controls: dict = {}
         self.choice_values: dict = {}
         self.settings_control_order: list = []
+        self.seek_hold_active = False
+        self.seek_hold_generation = 0
+        self.seek_hold_seconds = 0.0
+        self.seek_hold_key_code = -1
+        self.seek_hold_raw_key_code = -1
+        self.seek_hold_ctrl = False
+        self.seek_hold_shift = False
+        self.seek_hold_alt = False
+        self.seek_hold_call: wx.CallLater | None = None
 
         self.panel = wx.Panel(self)
         self.root_sizer = wx.BoxSizer(wx.VERTICAL)
@@ -246,8 +255,10 @@ class MainFrame(CookiesUI, DownloadsUI, EqualizerUI, EventsUI, ListsUI, MenusUI,
         self.status.SetStatusText(self.t("ready"))
 
         self.Bind(wx.EVT_CHAR_HOOK, self.on_char_hook)
+        self.Bind(wx.EVT_KEY_UP, self.on_player_key_up)
         self.Bind(wx.EVT_NAVIGATION_KEY, self.on_player_navigation_key)
         self.panel.Bind(wx.EVT_NAVIGATION_KEY, self.on_player_navigation_key)
+        self.panel.Bind(wx.EVT_KEY_UP, self.on_player_key_up)
         self.Bind(wx.EVT_CLOSE, self.on_close)
         self.install_download_accelerators()
         if self.started_hidden_in_tray:

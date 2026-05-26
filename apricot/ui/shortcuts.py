@@ -633,22 +633,22 @@ class ShortcutsUI:
             self.announce_volume_async()
             return True
         if self.shortcut_matches(event, "player_seek_back_huge"):
-            self.player_seek(-600)
+            self.start_player_seek_hold(-600, event)
             return True
         if self.shortcut_matches(event, "player_seek_forward_huge"):
-            self.player_seek(600)
+            self.start_player_seek_hold(600, event)
             return True
         if self.shortcut_matches(event, "player_seek_back_large"):
-            self.player_seek(-60)
+            self.start_player_seek_hold(-60, event)
             return True
         if self.shortcut_matches(event, "player_seek_forward_large"):
-            self.player_seek(60)
+            self.start_player_seek_hold(60, event)
             return True
         if self.shortcut_matches(event, "player_seek_back"):
-            self.player_seek(-self.seek_seconds_value())
+            self.start_player_seek_hold(-self.seek_seconds_value(), event)
             return True
         if self.shortcut_matches(event, "player_seek_forward"):
-            self.player_seek(self.seek_seconds_value())
+            self.start_player_seek_hold(self.seek_seconds_value(), event)
             return True
         if self.shortcut_matches(event, "player_volume_up"):
             self.change_volume_async(self.settings.volume_step)

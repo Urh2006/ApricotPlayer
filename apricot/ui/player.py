@@ -142,6 +142,7 @@ class PlayerUI:
             return
         try:
             control.Bind(wx.EVT_NAVIGATION_KEY, self.on_player_navigation_key)
+            control.Bind(wx.EVT_KEY_UP, self.on_player_key_up)
             control._apricot_navigation_bound = True
         except Exception:
             pass
@@ -778,19 +779,25 @@ class PlayerUI:
     def move_player_tab_focus(self, forward: bool, focus: wx.Window | None) -> bool:
         if not self.in_player_screen:
             return False
-        panel = getattr(self, "player_panel", None)
-        if not self.window_is_or_descendant(focus, panel):
-            return False
         order = self.player_tab_order()
-        try:
-            index = order.index(panel)
-        except ValueError:
+        index = -1
+        for candidate_index, control in enumerate(order):
+            if self.window_is_or_descendant(focus, control):
+                index = candidate_index
+                break
+        if index < 0:
             return False
         next_index = index + 1 if forward else index - 1
         if 0 <= next_index < len(order):
             self.safe_set_focus(order[next_index])
             return True
         return False
+
+    def on_player_key_up(self, event: wx.KeyEvent) -> None:
+        if self.seek_hold_active and self.seek_hold_event_matches(event):
+            self.stop_player_seek_hold()
+            return
+        event.Skip()
 
     def leave_player_to_previous_screen(self) -> None:
         self.back_to_results(stop_playback=True)
@@ -1501,9 +1508,99 @@ class PlayerUI:
         except Exception:
             pass
 
+    def start_player_seek_hold(self, seconds: float, event: wx.KeyEvent) -> None:
+        if self.player_kind != "mpv" or not self.ipc_path:
+            return
+        key_code = MiscUI.event_key_code(event)
+        raw_key_code = MiscUI.event_raw_key_code(event)
+        same_key = (
+            self.seek_hold_active
+            and self.seek_hold_key_code == key_code
+            and self.seek_hold_raw_key_code == raw_key_code
+            and self.seek_hold_ctrl == bool(event.ControlDown())
+            and self.seek_hold_shift == bool(event.ShiftDown())
+            and self.seek_hold_alt == bool(event.AltDown())
+            and abs(float(self.seek_hold_seconds) - float(seconds)) < 0.001
+        )
+        if same_key:
+            return
+        self.stop_player_seek_hold(cancel_generation=False)
+        self.seek_hold_active = True
+        self.seek_hold_generation += 1
+        self.seek_hold_seconds = float(seconds)
+        self.seek_hold_key_code = key_code
+        self.seek_hold_raw_key_code = raw_key_code
+        self.seek_hold_ctrl = bool(event.ControlDown())
+        self.seek_hold_shift = bool(event.ShiftDown())
+        self.seek_hold_alt = bool(event.AltDown())
+        generation = self.seek_hold_generation
+        self.player_seek_for_hold(self.seek_hold_seconds)
+        self.seek_hold_call = wx.CallLater(180, self.player_seek_hold_tick, generation)
+
+    def stop_player_seek_hold(self, cancel_generation: bool = True) -> None:
+        self.seek_hold_active = False
+        if cancel_generation:
+            self.seek_hold_generation += 1
+        call = self.seek_hold_call
+        self.seek_hold_call = None
+        if call is not None:
+            try:
+                if call.IsRunning():
+                    call.Stop()
+            except RuntimeError:
+                pass
+
+    def seek_hold_event_matches(self, event: wx.KeyEvent) -> bool:
+        key_code = MiscUI.event_key_code(event)
+        raw_key_code = MiscUI.event_raw_key_code(event)
+        return key_code in {self.seek_hold_key_code, self.seek_hold_raw_key_code} or raw_key_code in {self.seek_hold_key_code, self.seek_hold_raw_key_code}
+
+    @staticmethod
+    def key_state_down(key_code: int) -> bool:
+        if key_code <= 0:
+            return False
+        try:
+            return bool(wx.GetKeyState(key_code))
+        except Exception:
+            return False
+
+    def seek_hold_keys_still_down(self) -> bool:
+        primary_down = self.key_state_down(self.seek_hold_key_code) or self.key_state_down(self.seek_hold_raw_key_code)
+        if not primary_down:
+            return False
+        if self.seek_hold_ctrl and not self.key_state_down(wx.WXK_CONTROL):
+            return False
+        if self.seek_hold_shift and not self.key_state_down(wx.WXK_SHIFT):
+            return False
+        if self.seek_hold_alt and not self.key_state_down(wx.WXK_ALT):
+            return False
+        return True
+
+    def player_seek_hold_tick(self, generation: int) -> None:
+        if generation != self.seek_hold_generation or not self.seek_hold_active:
+            return
+        if not self.player_is_active() or not self.seek_hold_keys_still_down():
+            self.stop_player_seek_hold()
+            return
+        self.player_seek_for_hold(self.seek_hold_seconds)
+        self.seek_hold_call = wx.CallLater(110, self.player_seek_hold_tick, generation)
+
+    def player_seek_for_hold(self, seconds: float) -> None:
+        if self.player_kind != "mpv" or not self.ipc_path:
+            self.stop_player_seek_hold()
+            return
+        self.cancel_clip_preview()
+        was_ended = self.player_ended
+        try:
+            self.mpv_send(["seek", float(seconds), "relative+exact"], timeout=0.08)
+            self.after_player_seek(seconds, was_ended)
+        except Exception:
+            self.stop_player_seek_hold()
+
     def player_seek(self, seconds: float) -> None:
         if self.player_kind != "mpv" or not self.ipc_path:
             return
+        self.stop_player_seek_hold()
         self.cancel_clip_preview()
         was_ended = self.player_ended
         try:

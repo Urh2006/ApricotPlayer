@@ -1,3 +1,10 @@
+# v0.9.54 - Seek Hold and Focus Fixes
+
+## Fixes
+- **Restored hold-to-seek scrubbing in the player.** Holding the seek forward/backward shortcuts now keeps moving through playback continuously, instead of requiring repeated key presses. The hold path uses short non-blocking mpv seek sends so key repeat does not stall the UI.
+- **Made player Tab and Shift+Tab navigation deterministic again.** The player page now routes focus through the same ordered controls even when focus starts on embedded results, navigation buttons, the player panel, or player action buttons, reducing cases where focus could wander into unexpected controls.
+- **Fixed playlist context menus using stale result selection.** The application/context menu now builds playlist/channel actions from the actually focused result row, so Play playlist and Shuffle playlist should not disappear after returning from the player or reopening search results.
+
 # v0.9.53 - Restore Fast YouTube Seeking
 
 ## Fixes
