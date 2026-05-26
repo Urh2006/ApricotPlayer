@@ -1,9 +1,9 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  # Automatic tag releases are disabled for now because GitHub-hosted runners
+  # currently fail checkout with HTTP 403 before the build starts. Releases are
+  # still created from local builds and can be run manually here if needed.
   workflow_dispatch:
     inputs:
       tag:
