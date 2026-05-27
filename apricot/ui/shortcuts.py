@@ -561,6 +561,9 @@ class ShortcutsUI:
         if self.shortcut_matches(event, "player_chapters"):
             self.show_chapters()
             return True
+        if self.shortcut_matches(event, "player_transcript"):
+            self.show_transcript()
+            return True
         if self.shortcut_matches(event, "player_lyrics"):
             self.show_lyrics()
             return True

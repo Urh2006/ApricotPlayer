@@ -1,3 +1,12 @@
+# v1.0.0-beta.2 - Transcript Browser Beta
+
+## New
+- **Added a transcript/captions browser in the player.** Open it with the new Transcript button, the player context menu, or `Ctrl+Shift+T`.
+- **Added transcript search and timestamp jumping.** Press Enter on a transcript line to jump playback to that caption timestamp.
+- **Added transcript copy actions.** Users can copy the selected transcript line, the full transcript, or a YouTube timestamp link for the selected line.
+- **Added local transcript sidecar support.** Local media can use nearby `.vtt` or `.srt` caption files.
+- **Added the missing Copy lyrics button.** The existing lyrics dialog now exposes the copy action directly.
+
 # v1.0.0-beta.1 - Diagnostic Report Beta
 
 ## New

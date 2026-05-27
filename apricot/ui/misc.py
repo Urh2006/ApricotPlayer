@@ -1426,6 +1426,179 @@ class MiscUI:
             return
         self.seek_to_chapter(chapters[target_index])
 
+    def show_transcript(self) -> None:
+        if not self.ensure_player_for_auxiliary_view(self.show_transcript):
+            return
+        source_item = dict(self.current_video_item or {})
+        if isinstance(self.current_video_info, dict):
+            for key, value in self.current_video_info.items():
+                if key not in source_item:
+                    source_item[key] = value
+        dialog = wx.Dialog(self, title=self.t("transcript"), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        dialog.SetName(self.t("transcript"))
+        dialog.SetMinSize((700, 520))
+        outer = wx.BoxSizer(wx.VERTICAL)
+        search_box = wx.TextCtrl(dialog, style=wx.TE_PROCESS_ENTER | wx.WANTS_CHARS)
+        search_box.SetName(self.t("transcript_search"))
+        outer.Add(search_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
+        transcript_list = wx.ListBox(dialog, choices=[self.t("transcript_loading")])
+        transcript_list.SetName(self.t("transcript"))
+        transcript_list.SetSelection(0)
+        outer.Add(transcript_list, 1, wx.EXPAND | wx.ALL, 8)
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        jump_button = wx.Button(dialog, label=self.t("play"))
+        copy_line_button = wx.Button(dialog, label=self.t("copy_transcript_line"))
+        copy_all_button = wx.Button(dialog, label=self.t("copy_transcript"))
+        copy_time_button = wx.Button(dialog, label=self.t("copy_timestamp_link"))
+        close_button = wx.Button(dialog, wx.ID_CANCEL, label=self.t("back"))
+        row.Add(jump_button, 0, wx.RIGHT, 8)
+        row.Add(copy_line_button, 0, wx.RIGHT, 8)
+        row.Add(copy_all_button, 0, wx.RIGHT, 8)
+        row.Add(copy_time_button, 0, wx.RIGHT, 8)
+        row.Add(close_button, 0)
+        outer.Add(row, 0, wx.ALIGN_RIGHT | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        dialog.SetSizer(outer)
+        jump_button.Enable(False)
+        copy_line_button.Enable(False)
+        copy_all_button.Enable(False)
+        copy_time_button.Enable(False)
+        state: dict[str, object] = {"entries": [], "filtered": [], "source_key": "", "loading": True}
+
+        def selected_entry() -> tuple[int, dict] | None:
+            filtered = list(state.get("filtered") or [])
+            try:
+                selection = transcript_list.GetSelection()
+            except RuntimeError:
+                return None
+            if 0 <= selection < len(filtered):
+                original_index, entry = filtered[selection]
+                if isinstance(entry, dict):
+                    return int(original_index), entry
+            return None
+
+        def refresh_transcript(selection: int = 0) -> None:
+            entries = list(state.get("entries") or [])
+            query = search_box.GetValue().strip().lower()
+            filtered: list[tuple[int, dict]] = []
+            for index, entry in enumerate(entries):
+                line = self.transcript_line(entry, index)
+                if not query or query in line.lower():
+                    filtered.append((index, entry))
+            state["filtered"] = filtered
+            if filtered:
+                labels = [self.transcript_line(entry, index) for index, entry in filtered]
+            elif entries:
+                labels = [self.t("transcript_no_search_results")]
+            else:
+                labels = [self.t("no_transcript_available")]
+            transcript_list.Set(labels)
+            transcript_list.SetSelection(min(max(0, selection), len(labels) - 1))
+            has_entries = bool(filtered)
+            jump_button.Enable(has_entries)
+            copy_line_button.Enable(has_entries)
+            copy_all_button.Enable(bool(entries))
+            copy_time_button.Enable(has_entries and bool(self.youtube_url_at_timestamp(source_item, 0)))
+
+        def finish_load(entries: list[dict], source_key: str = "", error: str = "") -> None:
+            try:
+                state["loading"] = False
+                if error:
+                    transcript_list.Set([self.t("transcript_failed", error=error)])
+                    transcript_list.SetSelection(0)
+                    self.announce_player(self.t("transcript_failed", error=error))
+                    return
+                state["entries"] = list(entries or [])
+                state["source_key"] = source_key
+                refresh_transcript(0)
+                if entries:
+                    source = self.t(source_key) if source_key else ""
+                    message = self.t("transcript_loaded_from_source", count=len(entries), source=source) if source else self.t("transcript_loaded", count=len(entries))
+                    self.announce_player(message)
+                else:
+                    self.announce_player(self.t("no_transcript_available"))
+            except RuntimeError:
+                pass
+
+        def seek_selected(_event=None) -> None:
+            selected = selected_entry()
+            if not selected:
+                self.announce_player(self.t("no_transcript_available"))
+                return
+            _index, entry = selected
+            if self.player_kind != "mpv" or not self.mpv_process_alive():
+                self.announce_player(self.t("no_player"))
+                return
+            try:
+                start = max(0.0, float(entry.get("start") or 0.0))
+                self.cancel_clip_preview()
+                self.mpv_send(["seek", start, "absolute+exact"], timeout=0.8)
+                text = str(entry.get("text") or "").strip()
+                if len(text) > 90:
+                    text = text[:87].rstrip() + "..."
+                self.announce_player(self.t("transcript_selected", time=self.format_seconds(start), text=text))
+            except Exception:
+                self.announce_player(self.t("timing_unavailable"))
+
+        def copy_selected_line(_event=None) -> None:
+            selected = selected_entry()
+            if not selected:
+                self.announce_player(self.t("no_transcript_available"))
+                return
+            index, entry = selected
+            self.copy_plain_text_to_clipboard(self.transcript_line(entry, index))
+            self.announce_player(self.t("transcript_line_copied"))
+
+        def copy_full_transcript(_event=None) -> None:
+            entries = list(state.get("entries") or [])
+            if not entries:
+                self.announce_player(self.t("no_transcript_available"))
+                return
+            self.copy_plain_text_to_clipboard(self.transcript_full_text(entries))
+            self.announce_player(self.t("transcript_copied"))
+
+        def copy_selected_timestamp(_event=None) -> None:
+            selected = selected_entry()
+            if not selected:
+                self.announce_player(self.t("no_transcript_available"))
+                return
+            _index, entry = selected
+            url = self.youtube_url_at_timestamp(source_item, int(float(entry.get("start") or 0.0)))
+            if not url:
+                self.announce_player(self.t("timestamp_url_unavailable"))
+                return
+            self.copy_plain_text_to_clipboard(url)
+            self.announce_player(self.t("timestamp_url_copied"))
+
+        def on_search_changed(_event=None) -> None:
+            refresh_transcript(0)
+
+        def on_transcript_key(event: wx.KeyEvent) -> None:
+            if self.shortcut_matches(event, "player_back"):
+                dialog.EndModal(wx.ID_CANCEL)
+                return
+            if self.shortcut_matches(event, "open_selected"):
+                focused = wx.Window.FindFocus()
+                if focused in (jump_button, copy_line_button, copy_all_button, copy_time_button, close_button):
+                    event.Skip()
+                    return
+                seek_selected()
+                return
+            event.Skip()
+
+        search_box.Bind(wx.EVT_TEXT, on_search_changed)
+        transcript_list.Bind(wx.EVT_LISTBOX_DCLICK, seek_selected)
+        transcript_list.Bind(wx.EVT_KEY_DOWN, on_transcript_key)
+        dialog.Bind(wx.EVT_CHAR_HOOK, on_transcript_key)
+        jump_button.Bind(wx.EVT_BUTTON, seek_selected)
+        copy_line_button.Bind(wx.EVT_BUTTON, copy_selected_line)
+        copy_all_button.Bind(wx.EVT_BUTTON, copy_full_transcript)
+        copy_time_button.Bind(wx.EVT_BUTTON, copy_selected_timestamp)
+        threading.Thread(target=self.fetch_transcript_worker, args=(source_item, finish_load), daemon=True).start()
+        wx.CallAfter(search_box.SetFocus)
+        dialog.ShowModal()
+        dialog.Destroy()
+        self.focus_player_target_later("player")
+
     def show_lyrics(self) -> None:
         if not self.ensure_player_for_auxiliary_view(self.show_lyrics):
             return
@@ -1436,8 +1609,12 @@ class MiscUI:
         lyrics_text = wx.TextCtrl(dialog, value=self.t("lyrics_fetching"), style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2 | wx.VSCROLL | wx.HSCROLL | wx.WANTS_CHARS)
         lyrics_text.SetName(self.t("lyrics"))
         outer.Add(lyrics_text, 1, wx.EXPAND | wx.ALL, 8)
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        copy_button = wx.Button(dialog, label=self.t("copy_lyrics"))
         close_button = wx.Button(dialog, wx.ID_CANCEL, label=self.t("back"))
-        outer.Add(close_button, 0, wx.ALIGN_RIGHT | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        row.Add(copy_button, 0, wx.RIGHT, 8)
+        row.Add(close_button, 0)
+        outer.Add(row, 0, wx.ALIGN_RIGHT | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         dialog.SetSizer(outer)
 
         dialog.lyrics_lines = []
@@ -1523,6 +1700,16 @@ class MiscUI:
             threading.Thread(target=self.fetch_lyrics_worker, args=(self.lyrics_search_terms(), set_lyrics_text), daemon=True).start()
         else:
             wx.CallAfter(set_lyrics_text, "", "")
+
+        def copy_current_lyrics(_event=None) -> None:
+            text = lyrics_text.GetValue().strip()
+            if not text or text in {self.t("lyrics_fetching"), self.t("no_lyrics_available")}:
+                self.announce_player(self.t("no_lyrics_available"))
+                return
+            self.copy_plain_text_to_clipboard(text)
+            self.announce_player(self.t("lyrics_copied"))
+
+        copy_button.Bind(wx.EVT_BUTTON, copy_current_lyrics)
             
         dialog.ShowModal()
         dialog.lyrics_timer.Stop()

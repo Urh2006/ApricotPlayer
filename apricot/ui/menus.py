@@ -193,6 +193,7 @@ class MenusUI:
         actions.append((self.t("output_devices"), self.show_output_devices))
         actions.append((self.t("equalizer"), self.show_player_equalizer))
         actions.append((self.menu_label_with_shortcut("chapters", "player_chapters"), self.show_chapters))
+        actions.append((self.menu_label_with_shortcut("transcript", "player_transcript"), self.show_transcript))
         actions.append((self.menu_label_with_shortcut("lyrics", "player_lyrics"), self.show_lyrics))
 
         if not is_local_media:

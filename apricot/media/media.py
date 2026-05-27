@@ -601,6 +601,283 @@ class MediaMixin:
 
 
 
+    def current_transcript_entries(self) -> list[dict]:
+        for source in (self.current_video_info, self.current_video_item):
+            if not isinstance(source, dict):
+                continue
+            entries = source.get("transcript_entries")
+            if isinstance(entries, list) and entries:
+                return [entry for entry in entries if isinstance(entry, dict)]
+        return []
+
+
+    def cache_current_transcript_entries(self, entries: list[dict], checked: bool = False, source_key: str = "") -> None:
+        if not isinstance(self.current_video_info, dict):
+            self.current_video_info = {}
+        for target in (self.current_video_info, self.current_video_item):
+            if not isinstance(target, dict):
+                continue
+            if entries:
+                target["transcript_entries"] = entries
+            if checked:
+                target["_transcript_checked"] = True
+            if source_key:
+                target["transcript_source_key"] = source_key
+
+
+    def local_transcript_entries(self, item: dict | None = None) -> list[dict]:
+        item = item if isinstance(item, dict) else self.current_player_item()
+        path = self.local_media_path_from_input(str(item.get("path") or item.get("url") or item.get("webpage_url") or ""))
+        if not path:
+            return []
+        languages = self.transcript_language_candidates()
+        candidates = [
+            path.with_suffix(".vtt"),
+            path.with_suffix(".srt"),
+            path.with_name(f"{path.stem}.captions.vtt"),
+            path.with_name(f"{path.stem}.captions.srt"),
+            path.with_name(f"{path.stem}.transcript.vtt"),
+            path.with_name(f"{path.stem}.transcript.srt"),
+        ]
+        for language in languages:
+            safe_language = re.sub(r"[^A-Za-z0-9_-]+", "", language)
+            if not safe_language:
+                continue
+            candidates.extend([
+                path.with_name(f"{path.stem}.{safe_language}.vtt"),
+                path.with_name(f"{path.stem}.{safe_language}.srt"),
+            ])
+        seen: set[Path] = set()
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            try:
+                if candidate.exists() and candidate.is_file() and candidate.stat().st_size <= 5_000_000:
+                    text = candidate.read_text(encoding="utf-8", errors="replace")
+                    entries = self.parse_transcript_text(text, candidate.suffix.lower())
+                    if entries:
+                        return entries
+            except OSError:
+                continue
+        return []
+
+
+    def transcript_language_candidates(self) -> list[str]:
+        languages = self.parse_csv(str(getattr(self.settings, "subtitle_languages", "") or ""))
+        languages.extend(["en", "sl"])
+        result: list[str] = []
+        seen: set[str] = set()
+        for language in languages:
+            value = str(language or "").strip()
+            if not value:
+                continue
+            lowered = value.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            result.append(value)
+        return result
+
+
+    @staticmethod
+    def transcript_track_matches_language(track_language: str, requested_language: str) -> bool:
+        available = str(track_language or "").lower()
+        requested = str(requested_language or "").lower()
+        if not available or not requested:
+            return False
+        return available == requested or available.startswith(f"{requested}-") or requested.startswith(f"{available}-")
+
+
+    def transcript_source_url(self, item: dict | None = None) -> str:
+        item = item if isinstance(item, dict) else self.current_player_item()
+        if self.item_is_local_media(item):
+            return ""
+        for key in ("webpage_url", "original_url", "watch_url", "url"):
+            candidate = str((item or {}).get(key) or "").strip()
+            if not candidate:
+                continue
+            try:
+                parsed = urlparse(candidate)
+                host = (parsed.netloc or "").lower()
+            except Exception:
+                continue
+            if not parsed.scheme.startswith("http") or "googlevideo.com" in host:
+                continue
+            return candidate
+        return ""
+
+
+    def select_transcript_track(self, info: dict) -> tuple[dict | None, str]:
+        if not isinstance(info, dict):
+            return None, ""
+        candidates = self.transcript_language_candidates()
+        groups = [
+            (info.get("requested_subtitles"), "transcript_source_subtitles"),
+            (info.get("subtitles"), "transcript_source_subtitles"),
+            (info.get("automatic_captions"), "transcript_source_auto_captions"),
+        ]
+        for group, source_key in groups:
+            track = self.select_transcript_track_from_group(group, candidates)
+            if track:
+                return track, source_key
+        return None, ""
+
+
+    def select_transcript_track_from_group(self, group, candidates: list[str]) -> dict | None:
+        if not isinstance(group, dict):
+            return None
+        ordered_languages: list[str] = []
+        for requested in candidates:
+            for language in group:
+                if language not in ordered_languages and self.transcript_track_matches_language(language, requested):
+                    ordered_languages.append(language)
+        for language in group:
+            if language not in ordered_languages:
+                ordered_languages.append(language)
+        for language in ordered_languages:
+            tracks = group.get(language)
+            if isinstance(tracks, dict):
+                tracks = [tracks]
+            if not isinstance(tracks, list):
+                continue
+            normalized = [track for track in tracks if isinstance(track, dict) and track.get("url")]
+            for extension in ("vtt", "srt"):
+                for track in normalized:
+                    if str(track.get("ext") or "").lower() == extension:
+                        return track
+            if normalized:
+                return normalized[0]
+        return None
+
+
+    def fetch_transcript_worker(self, item: dict, callback) -> None:
+        entries: list[dict] = []
+        source_key = ""
+        error = ""
+        try:
+            entries, source_key = self.fetch_transcript_entries(item)
+        except Exception as exc:
+            error = self.friendly_error(exc)
+        wx.CallAfter(callback, entries, source_key, error)
+
+
+    def fetch_transcript_entries(self, item: dict | None = None) -> tuple[list[dict], str]:
+        item = item if isinstance(item, dict) else self.current_player_item()
+        cached = self.current_transcript_entries()
+        if cached:
+            return cached, str((self.current_video_info or {}).get("transcript_source_key") or "transcript_source_subtitles")
+        local_entries = self.local_transcript_entries(item)
+        if local_entries:
+            self.cache_current_transcript_entries(local_entries, checked=True, source_key="transcript_source_local")
+            return local_entries, "transcript_source_local"
+        if bool((self.current_video_info or {}).get("_transcript_checked")) or bool((self.current_video_item or {}).get("_transcript_checked")):
+            return [], ""
+        url = self.transcript_source_url(item)
+        if not url:
+            self.cache_current_transcript_entries([], checked=True)
+            return [], ""
+        options = {
+            "quiet": True,
+            "skip_download": True,
+            "noplaylist": True,
+            "writesubtitles": True,
+            "writeautomaticsub": True,
+            "subtitleslangs": self.transcript_language_candidates(),
+            "subtitlesformat": "vtt/srt/best",
+            "ignore_no_formats_error": True,
+        }
+        info = self.ydl_extract_info(url, options=options, download=False, allow_cookie_retry=False)
+        track, source_key = self.select_transcript_track(info)
+        if not track:
+            self.cache_current_transcript_entries([], checked=True)
+            return [], ""
+        text = self.fetch_transcript_text_from_url(str(track.get("url") or ""))
+        entries = self.parse_transcript_text(text, str(track.get("ext") or ""))
+        self.cache_current_transcript_entries(entries, checked=True, source_key=source_key if entries else "")
+        return entries, source_key if entries else ""
+
+
+    def fetch_transcript_text_from_url(self, url: str) -> str:
+        if not url:
+            return ""
+        request = Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+        with self.open_url(request, timeout=20) as response:
+            return response.read(5_000_000).decode("utf-8", errors="replace")
+
+
+    def parse_transcript_text(self, text: str, source: str = "") -> list[dict]:
+        lines = str(text or "").replace("\ufeff", "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        entries: list[dict] = []
+        index = 0
+        while index < len(lines):
+            line = lines[index].strip()
+            upper = line.upper()
+            if not line or upper == "WEBVTT" or upper.startswith("KIND:") or upper.startswith("LANGUAGE:"):
+                index += 1
+                continue
+            if upper.startswith(("NOTE", "STYLE", "REGION")):
+                index += 1
+                while index < len(lines) and lines[index].strip():
+                    index += 1
+                continue
+            if "-->" not in line and index + 1 < len(lines) and "-->" in lines[index + 1]:
+                index += 1
+                line = lines[index].strip()
+            if "-->" not in line:
+                index += 1
+                continue
+            start, end = self.parse_transcript_timing(line)
+            index += 1
+            text_lines: list[str] = []
+            while index < len(lines) and lines[index].strip():
+                cue_line = lines[index].strip()
+                if cue_line and not cue_line.isdigit():
+                    text_lines.append(cue_line)
+                index += 1
+            body = self.clean_transcript_line(" ".join(text_lines))
+            if body and start is not None:
+                entry = {"start": round(start, 3), "text": body}
+                if end is not None and end > start:
+                    entry["end"] = round(end, 3)
+                if not entries or entries[-1].get("text") != body or abs(float(entries[-1].get("start") or 0.0) - start) > 0.2:
+                    entries.append(entry)
+        return entries
+
+
+    def parse_transcript_timing(self, line: str) -> tuple[float | None, float | None]:
+        left, _sep, right = str(line or "").partition("-->")
+        start = self.parse_chapter_seconds(left.strip())
+        end_token = str(right or "").strip().split(" ")[0] if right else ""
+        end = self.parse_chapter_seconds(end_token.strip())
+        return start, end
+
+
+    @staticmethod
+    def clean_transcript_line(text: str) -> str:
+        cleaned = re.sub(r"<\d{1,2}:\d{2}(?::\d{2})?[.,]\d+>", " ", str(text or ""))
+        cleaned = re.sub(r"<[^>]+>", " ", cleaned)
+        try:
+            cleaned = import_module("html").unescape(cleaned)
+        except Exception:
+            pass
+        cleaned = cleaned.replace("\xa0", " ")
+        return re.sub(r"\s+", " ", cleaned).strip()
+
+
+    def transcript_line(self, entry: dict, index: int) -> str:
+        start = self.format_seconds(float(entry.get("start") or 0.0))
+        end = entry.get("end")
+        text = str(entry.get("text") or "").strip()
+        if end is not None:
+            return f"{index + 1}. {start} - {self.format_seconds(float(end))}. {text}"
+        return f"{index + 1}. {start}. {text}"
+
+
+    def transcript_full_text(self, entries: list[dict]) -> str:
+        return "\n".join(self.transcript_line(entry, index) for index, entry in enumerate(entries))
+
+
     def local_lyrics_text(self) -> str:
         item = self.current_video_item or self.current_video_info or {}
         path = self.local_media_path_from_input(str(item.get("path") or item.get("url") or item.get("webpage_url") or ""))

@@ -4,14 +4,13 @@ This beta cycle should keep the stable `main` branch untouched until the full 1.
 
 Planned feature order:
 
-1. Diagnostic report for testers.
-2. Transcript and captions browser with search, copy, and timestamp jump.
-3. Bookmarks and named markers.
-4. Audio normalization / ReplayGain-style playback mode.
-5. Equalizer Profiles 2.0: rename, delete, import, export, per-device defaults, and A/B compare.
-6. Command search / action finder with a shortcut that does not use Ctrl+Shift+P.
-7. Better queue and session restore.
-8. Comments 2.0: sorting, search, replies, copy, and author/channel actions.
-9. Podcast mode: played state, downloads, resume, chapters, transcripts, and per-podcast speed presets.
-10. Stable/beta release-channel polish.
-
+1. [x] Diagnostic report for testers.
+2. [x] Transcript and captions browser with search, copy, and timestamp jump.
+3. [ ] Bookmarks and named markers.
+4. [ ] Audio normalization / ReplayGain-style playback mode.
+5. [ ] Equalizer Profiles 2.0: rename, delete, import, export, per-device defaults, and A/B compare.
+6. [ ] Command search / action finder with a shortcut that does not use Ctrl+Shift+P.
+7. [ ] Better queue and session restore.
+8. [ ] Comments 2.0: sorting, search, replies, copy, and author/channel actions.
+9. [ ] Podcast mode: played state, downloads, resume, chapters, transcripts, and per-podcast speed presets.
+10. [ ] Stable/beta release-channel polish.

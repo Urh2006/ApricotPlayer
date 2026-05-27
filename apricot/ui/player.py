@@ -645,6 +645,7 @@ class PlayerUI:
             (self.t("output_devices"), self.show_output_devices),
             (self.t("equalizer"), self.show_player_equalizer),
             (self.t("chapters"), self.show_chapters),
+            (self.t("transcript"), self.show_transcript),
             (self.t("lyrics"), self.show_lyrics),
             (self.t("comments"), self.show_comments),
             (self.t("edit_mode"), self.toggle_edit_mode),
