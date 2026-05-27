@@ -478,6 +478,7 @@ class ShortcutsUI:
             ("open_playback_queue", self.open_playback_queue_shortcut),
             ("new_subscription_videos", self.open_notification_center_shortcut),
             ("background_play_pause", self.background_play_pause_shortcut),
+            ("copy_diagnostic_report", self.copy_diagnostic_report),
         ]
         for action, handler in actions:
             if self.shortcut_matches(event, action) and self.shortcut_allowed_for_focus(action, focus):

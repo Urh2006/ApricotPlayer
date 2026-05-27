@@ -71,6 +71,7 @@ class MenusUI:
         actions.extend([
             (self.t("file_converter"), self.show_file_converter),
             (self.t("folder_converter"), self.show_folder_converter),
+            (self.menu_label_with_shortcut("copy_diagnostic_report", "copy_diagnostic_report"), self.copy_diagnostic_report),
             (self.t("settings"), self.show_settings),
             (self.t("exit"), self.quit_application),
         ])

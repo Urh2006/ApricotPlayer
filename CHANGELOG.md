@@ -1,3 +1,11 @@
+# v1.0.0-beta.1 - Diagnostic Report Beta
+
+## New
+- **Added Copy diagnostic report.** Testers can now copy a support report from the main menu or with `Ctrl+Alt+Shift+D`. The report includes app/update-channel info, yt-dlp/mpv/FFmpeg status, active player state, audio/session state, current media metadata, queue/result counts, and redacted mpv/updater log tails.
+- **Added the diagnostic shortcut to Settings > Keyboard shortcuts.** The default shortcut avoids the existing download and stream-copy shortcuts.
+- **Saved the 1.0 roadmap in the repo.** `docs/ROADMAP_1.0.md` keeps the agreed beta feature list visible so the next beta can continue from the same plan.
+- **Started the 1.0 beta line on the beta branch.** This build is intended for beta-channel updater testing and is published as a GitHub prerelease.
+
 # v0.9.57 - Player Session Audio Hotfix
 
 ## Fixes
