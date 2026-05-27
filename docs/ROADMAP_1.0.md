@@ -6,7 +6,7 @@ Planned feature order:
 
 1. [x] Diagnostic report for testers.
 2. [x] Transcript and captions browser with search, copy, and timestamp jump.
-3. [ ] Bookmarks and named markers.
+3. [x] Bookmarks and named markers.
 4. [ ] Audio normalization / ReplayGain-style playback mode.
 5. [ ] Equalizer Profiles 2.0: rename, delete, import, export, per-device defaults, and A/B compare.
 6. [ ] Command search / action finder with a shortcut that does not use Ctrl+Shift+P.

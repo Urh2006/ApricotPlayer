@@ -44,6 +44,7 @@ class DownloaderMixin:
             ("open_play_from_folder", self.open_play_from_folder_shortcut),
             ("open_direct_link", self.open_direct_link_shortcut),
             ("open_favorites", self.open_favorites_shortcut),
+            ("open_bookmarks", self.open_bookmarks_shortcut),
             ("open_playlists", self.open_playlists_shortcut),
             ("open_subscriptions", self.open_subscriptions_shortcut),
             ("open_current_downloads", self.open_current_downloads_shortcut),

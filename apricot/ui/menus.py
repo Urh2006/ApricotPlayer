@@ -10,6 +10,7 @@ class MenusUI:
         self.search_screen_active = False
         self.trending_screen_active = False
         self.favorites_screen_active = False
+        self.bookmarks_screen_active = False
         self.history_screen_active = False
         self.subscriptions_screen_active = False
         self.rss_feeds_screen_active = False
@@ -57,6 +58,7 @@ class MenusUI:
             (self.t("play_file"), self.show_play_file),
             (self.t("direct_link"), self.show_direct_link),
             (self.t("favorites"), self.show_favorites),
+            (self.t("bookmarks"), self.show_bookmarks),
             (self.t("playlists"), self.show_user_playlists),
             (self.t("subscriptions"), self.show_subscriptions),
             (self.t("notification_center"), self.show_notification_center),
@@ -192,6 +194,8 @@ class MenusUI:
 
         actions.append((self.t("output_devices"), self.show_output_devices))
         actions.append((self.t("equalizer"), self.show_player_equalizer))
+        actions.append((self.menu_label_with_shortcut("add_bookmark", "player_add_bookmark"), self.add_current_bookmark))
+        actions.append((self.menu_label_with_shortcut("bookmarks", "player_bookmarks"), self.show_player_bookmarks))
         actions.append((self.menu_label_with_shortcut("chapters", "player_chapters"), self.show_chapters))
         actions.append((self.menu_label_with_shortcut("transcript", "player_transcript"), self.show_transcript))
         actions.append((self.menu_label_with_shortcut("lyrics", "player_lyrics"), self.show_lyrics))

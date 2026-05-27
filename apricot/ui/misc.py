@@ -1332,6 +1332,339 @@ class MiscUI:
                     pass
             previous_control = live
 
+    def bookmark_media_key(self, item: dict | None) -> str:
+        if not isinstance(item, dict):
+            return ""
+        for key in ("url", "webpage_url", "path", "original_url", "watch_url"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                return value
+        return ""
+
+    def bookmark_media_item(self, bookmark: dict) -> dict:
+        media = bookmark.get("media") if isinstance(bookmark.get("media"), dict) else {}
+        item = dict(media)
+        for key in ("title", "channel", "kind", "url", "webpage_url", "path", "duration", "duration_seconds", "type"):
+            if key not in item and bookmark.get(key) not in (None, ""):
+                item[key] = bookmark.get(key)
+        if not item.get("url"):
+            item["url"] = bookmark.get("url") or bookmark.get("path") or bookmark.get("webpage_url") or ""
+        if not item.get("title"):
+            item["title"] = bookmark.get("media_title") or bookmark.get("name") or self.t("bookmarks")
+        if not item.get("kind"):
+            item["kind"] = "local_file" if self.local_media_path_from_input(str(item.get("url") or item.get("path") or "")) else "video"
+        if item.get("kind") == "local_file" and not item.get("path"):
+            item["path"] = item.get("url", "")
+        return item
+
+    def current_bookmark_media_item(self) -> dict:
+        item = dict(self.current_player_item())
+        try:
+            media = self.playlist_item_from_media(item)
+        except Exception:
+            media = dict(item)
+        for key in ("path", "original_url", "watch_url"):
+            if item.get(key) and not media.get(key):
+                media[key] = item.get(key)
+        if not media.get("url"):
+            media["url"] = item.get("url") or item.get("path") or item.get("webpage_url") or ""
+        return media
+
+    def bookmark_position(self, bookmark: dict) -> float:
+        try:
+            return max(0.0, float(bookmark.get("position") or 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    def bookmark_line(self, bookmark: dict, index: int, include_media: bool = True) -> str:
+        name = str(bookmark.get("name") or self.t("bookmark")).strip()
+        media = bookmark.get("media") if isinstance(bookmark.get("media"), dict) else {}
+        media_title = str(bookmark.get("media_title") or media.get("title") or "").strip()
+        position = self.format_seconds(self.bookmark_position(bookmark))
+        parts = [f"{index + 1}. {position}", name]
+        if include_media and media_title:
+            parts.append(media_title)
+        return " | ".join(part for part in parts if part)
+
+    def normalized_bookmarks(self) -> list[dict]:
+        normalized: list[dict] = []
+        changed = False
+        for bookmark in list(getattr(self, "bookmarks", []) or []):
+            if not isinstance(bookmark, dict):
+                changed = True
+                continue
+            item = self.bookmark_media_item(bookmark)
+            media_key = str(bookmark.get("media_key") or self.bookmark_media_key(item)).strip()
+            if not media_key:
+                changed = True
+                continue
+            copy = dict(bookmark)
+            if not copy.get("id"):
+                copy["id"] = f"{int(time.time() * 1000)}-{len(normalized)}"
+                changed = True
+            copy["media"] = item
+            copy["media_key"] = media_key
+            copy["position"] = round(self.bookmark_position(copy), 1)
+            copy["media_title"] = str(copy.get("media_title") or item.get("title") or "").strip()
+            normalized.append(copy)
+        if changed:
+            self.bookmarks = normalized
+            self.save_bookmarks()
+        return normalized
+
+    def bookmarks_for_item(self, item: dict | None) -> list[dict]:
+        media_key = self.bookmark_media_key(item)
+        if not media_key:
+            return []
+        return sorted(
+            [bookmark for bookmark in self.normalized_bookmarks() if str(bookmark.get("media_key") or "") == media_key],
+            key=lambda bookmark: (self.bookmark_position(bookmark), str(bookmark.get("name") or "").casefold()),
+        )
+
+    def sorted_bookmarks(self) -> list[dict]:
+        return sorted(
+            self.normalized_bookmarks(),
+            key=lambda bookmark: (
+                str(bookmark.get("media_title") or "").casefold(),
+                self.bookmark_position(bookmark),
+                str(bookmark.get("name") or "").casefold(),
+            ),
+        )
+
+    def add_current_bookmark(self, _event=None) -> dict | None:
+        if not self.player_is_active():
+            self.announce_player(self.t("no_player"))
+            return None
+        item = self.current_bookmark_media_item()
+        media_key = self.bookmark_media_key(item)
+        if not media_key:
+            self.announce_player(self.t("no_selection"))
+            return None
+        position = float(self.current_player_position_seconds())
+        default_name = self.t("bookmark_default_name", time=self.format_seconds(position))
+        with wx.TextEntryDialog(self, self.t("bookmark_name_prompt"), self.t("add_bookmark"), default_name) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return None
+            name = dialog.GetValue().strip() or default_name
+        bookmark = {
+            "id": f"{int(time.time() * 1000)}-{random.randint(1000, 9999)}",
+            "name": name,
+            "position": round(position, 1),
+            "media_key": media_key,
+            "media_title": str(item.get("title") or self.current_player_title() or "").strip(),
+            "media": item,
+            "created_at": time.time(),
+            "updated_at": time.time(),
+        }
+        self.bookmarks.append(bookmark)
+        self.save_bookmarks()
+        self.announce_player(self.t("bookmark_added", name=name, time=self.format_seconds(position)))
+        return bookmark
+
+    def show_player_bookmarks(self) -> None:
+        if not self.ensure_player_for_auxiliary_view(self.show_player_bookmarks):
+            return
+        self.show_bookmarks_dialog(current_only=True)
+
+    def show_bookmarks(self) -> None:
+        self.last_activated_menu_action = self.show_bookmarks
+        self.show_bookmarks_dialog(current_only=False)
+
+    def show_bookmarks_dialog(self, current_only: bool = False) -> None:
+        current_item = self.current_bookmark_media_item() if self.player_is_active() else {}
+        dialog = wx.Dialog(self, title=self.t("bookmarks"), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        dialog.SetName(self.t("bookmarks"))
+        dialog.SetMinSize((680, 480))
+        outer = wx.BoxSizer(wx.VERTICAL)
+        bookmark_list = wx.ListBox(dialog, choices=[self.t("bookmarks_empty")])
+        bookmark_list.SetName(self.t("bookmarks"))
+        bookmark_list.SetSelection(0)
+        outer.Add(bookmark_list, 1, wx.EXPAND | wx.ALL, 8)
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        add_button = wx.Button(dialog, label=self.t("add_bookmark"))
+        play_button = wx.Button(dialog, label=self.t("play"))
+        rename_button = wx.Button(dialog, label=self.t("rename_bookmark"))
+        delete_button = wx.Button(dialog, label=self.t("delete_bookmark"))
+        copy_button = wx.Button(dialog, label=self.t("copy_timestamp_link"))
+        close_button = wx.Button(dialog, wx.ID_CANCEL, label=self.t("back"))
+        row.Add(add_button, 0, wx.RIGHT, 8)
+        row.Add(play_button, 0, wx.RIGHT, 8)
+        row.Add(rename_button, 0, wx.RIGHT, 8)
+        row.Add(delete_button, 0, wx.RIGHT, 8)
+        row.Add(copy_button, 0, wx.RIGHT, 8)
+        row.Add(close_button, 0)
+        outer.Add(row, 0, wx.ALIGN_RIGHT | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+        dialog.SetSizer(outer)
+        state: dict[str, object] = {"bookmarks": [], "action": "", "bookmark": None}
+
+        def visible_bookmarks() -> list[dict]:
+            return self.bookmarks_for_item(current_item) if current_only else self.sorted_bookmarks()
+
+        def selected_index() -> int:
+            try:
+                index = bookmark_list.GetSelection()
+            except RuntimeError:
+                return -1
+            bookmarks = list(state.get("bookmarks") or [])
+            return index if 0 <= index < len(bookmarks) else -1
+
+        def selected_bookmark() -> dict | None:
+            index = selected_index()
+            bookmarks = list(state.get("bookmarks") or [])
+            return bookmarks[index] if 0 <= index < len(bookmarks) else None
+
+        def refresh_bookmark_list(selection: int = 0) -> None:
+            bookmarks = visible_bookmarks()
+            state["bookmarks"] = bookmarks
+            include_media = not current_only
+            labels = [self.bookmark_line(bookmark, index, include_media=include_media) for index, bookmark in enumerate(bookmarks)] or [self.t("bookmarks_empty")]
+            bookmark_list.Set(labels)
+            bookmark_list.SetSelection(min(max(0, selection), len(labels) - 1))
+            has_bookmarks = bool(bookmarks)
+            can_add = bool(self.player_is_active() and self.bookmark_media_key(current_item))
+            add_button.Enable(can_add)
+            play_button.Enable(has_bookmarks)
+            rename_button.Enable(has_bookmarks)
+            delete_button.Enable(has_bookmarks)
+            copy_button.Enable(has_bookmarks)
+
+        def play_selected(_event=None) -> None:
+            bookmark = selected_bookmark()
+            if not bookmark:
+                self.announce_player(self.t("bookmarks_empty"))
+                return
+            state["action"] = "play"
+            state["bookmark"] = dict(bookmark)
+            dialog.EndModal(wx.ID_OK)
+
+        def add_bookmark_from_dialog(_event=None) -> None:
+            bookmark = self.add_current_bookmark()
+            if bookmark:
+                refresh_bookmark_list(len(visible_bookmarks()) - 1)
+
+        def rename_selected(_event=None) -> None:
+            bookmark = selected_bookmark()
+            if not bookmark:
+                return
+            current_name = str(bookmark.get("name") or self.t("bookmark")).strip()
+            with wx.TextEntryDialog(self, self.t("bookmark_name_prompt"), self.t("rename_bookmark"), current_name) as name_dialog:
+                if name_dialog.ShowModal() != wx.ID_OK:
+                    return
+                new_name = name_dialog.GetValue().strip()
+            if not new_name:
+                return
+            target_id = str(bookmark.get("id") or "")
+            for stored in self.bookmarks:
+                if str(stored.get("id") or "") == target_id:
+                    stored["name"] = new_name
+                    stored["updated_at"] = time.time()
+                    break
+            self.save_bookmarks()
+            refresh_bookmark_list(selected_index())
+            self.announce_player(self.t("bookmark_renamed", name=new_name))
+
+        def delete_selected(_event=None) -> None:
+            bookmark = selected_bookmark()
+            if not bookmark:
+                return
+            target_id = str(bookmark.get("id") or "")
+            index = selected_index()
+            self.bookmarks = [stored for stored in self.bookmarks if str(stored.get("id") or "") != target_id]
+            self.save_bookmarks()
+            refresh_bookmark_list(index)
+            self.announce_player(self.t("bookmark_deleted"))
+
+        def copy_selected_timestamp(_event=None) -> None:
+            bookmark = selected_bookmark()
+            if not bookmark:
+                return
+            item = self.bookmark_media_item(bookmark)
+            url = self.youtube_url_at_timestamp(item, int(self.bookmark_position(bookmark)))
+            if not url:
+                self.announce_player(self.t("timestamp_url_unavailable"))
+                return
+            self.copy_plain_text_to_clipboard(url)
+            self.announce_player(self.t("timestamp_url_copied"))
+
+        def open_bookmark_context_menu(_event=None) -> None:
+            menu = wx.Menu()
+            actions = [
+                (self.t("play"), play_selected),
+                (self.t("add_bookmark"), add_bookmark_from_dialog),
+                (self.t("rename_bookmark"), rename_selected),
+                (self.t("delete_bookmark"), delete_selected),
+                (self.t("copy_timestamp_link"), copy_selected_timestamp),
+            ]
+            for label, handler in actions:
+                menu_item = menu.Append(wx.ID_ANY, label)
+                dialog.Bind(wx.EVT_MENU, lambda _evt, fn=handler: fn(), menu_item)
+            bookmark_list.PopupMenu(menu)
+            menu.Destroy()
+
+        def on_bookmark_key(event: wx.KeyEvent) -> None:
+            if self.shortcut_matches(event, "open_selected"):
+                play_selected()
+                return
+            if self.shortcut_matches(event, "remove_selected"):
+                delete_selected()
+                return
+            if self.context_menu_shortcut_matches(event):
+                open_bookmark_context_menu(event)
+                return
+            if self.shortcut_matches(event, "player_back"):
+                dialog.EndModal(wx.ID_CANCEL)
+                return
+            event.Skip()
+
+        bookmark_list.Bind(wx.EVT_LISTBOX_DCLICK, play_selected)
+        bookmark_list.Bind(wx.EVT_CONTEXT_MENU, open_bookmark_context_menu)
+        bookmark_list.Bind(wx.EVT_KEY_DOWN, on_bookmark_key)
+        play_button.Bind(wx.EVT_BUTTON, play_selected)
+        add_button.Bind(wx.EVT_BUTTON, add_bookmark_from_dialog)
+        rename_button.Bind(wx.EVT_BUTTON, rename_selected)
+        delete_button.Bind(wx.EVT_BUTTON, delete_selected)
+        copy_button.Bind(wx.EVT_BUTTON, copy_selected_timestamp)
+        refresh_bookmark_list(0)
+        result = dialog.ShowModal()
+        action = str(state.get("action") or "")
+        bookmark = dict(state.get("bookmark") or {})
+        dialog.Destroy()
+        if result == wx.ID_OK and action == "play" and bookmark:
+            self.play_bookmark(bookmark)
+
+    def seek_to_bookmark(self, bookmark: dict) -> None:
+        if self.player_kind != "mpv" or not self.mpv_process_alive():
+            self.announce_player(self.t("no_player"))
+            return
+        position = self.bookmark_position(bookmark)
+        try:
+            self.cancel_clip_preview()
+            self.mpv_send(["seek", position, "absolute+exact"], timeout=0.8)
+            self.announce_player(self.t("bookmark_selected", name=str(bookmark.get("name") or self.t("bookmark")), time=self.format_seconds(position)))
+        except Exception:
+            self.announce_player(self.t("timing_unavailable"))
+
+    def play_bookmark(self, bookmark: dict) -> None:
+        item = self.bookmark_media_item(bookmark)
+        url = str(item.get("url") or item.get("path") or item.get("webpage_url") or "").strip()
+        if not url:
+            self.announce_player(self.t("no_selection"))
+            return
+        if self.player_is_active() and self.bookmark_media_key(item) == self.bookmark_media_key(self.current_player_item()):
+            self.seek_to_bookmark(bookmark)
+            return
+        item["_bookmark_start_position"] = self.bookmark_position(bookmark)
+        self.clear_player_sequence()
+        self.return_results = []
+        self.return_all_results = []
+        self.return_visible_count = 0
+        self.return_index = 0
+        self.player_return_screen = "bookmarks"
+        self.player_return_data = {}
+        self.current_video_item = item
+        self.current_video_info = dict(item)
+        self.play_url(url, str(item.get("title") or bookmark.get("media_title") or bookmark.get("name") or ""))
+
     def show_chapters(self) -> None:
         if not self.ensure_player_for_auxiliary_view(self.show_chapters):
             return

@@ -71,6 +71,7 @@ class MainFrame(CookiesUI, DownloadsUI, EqualizerUI, EventsUI, ListsUI, MenusUI,
         if not settings_file_existed or self.settings_migrated:
             self.save_settings()
         self.favorites = self.load_favorites()
+        self.bookmarks = self.load_bookmarks()
         self.history = self.load_history()
         self.subscriptions = self.load_subscriptions()
         self.rss_feeds: list[dict] = []
@@ -95,6 +96,7 @@ class MainFrame(CookiesUI, DownloadsUI, EqualizerUI, EventsUI, ListsUI, MenusUI,
         self.search_screen_active = False
         self.trending_screen_active = False
         self.favorites_screen_active = False
+        self.bookmarks_screen_active = False
         self.history_screen_active = False
         self.subscriptions_screen_active = False
         self.rss_feeds_screen_active = False
@@ -209,6 +211,7 @@ class MainFrame(CookiesUI, DownloadsUI, EqualizerUI, EventsUI, ListsUI, MenusUI,
         self.clip_start_marker: float | None = None
         self.clip_end_marker: float | None = None
         self.clip_preview_generation = 0
+        self.pending_player_start_position: float | None = None
         self.audio_device_options_cache: tuple[float, list[str], list[str]] | None = None
         self.audio_device_refresh_running = False
         self.metadata_hydration_urls: set[str] = set()

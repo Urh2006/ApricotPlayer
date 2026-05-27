@@ -1,3 +1,12 @@
+# v1.0.0-beta.3 - Bookmarks Beta
+
+## New
+- **Added persistent bookmarks and named markers.** Bookmarks are stored in `bookmarks.json` and can point to local files or online media.
+- **Added bookmark controls to the player.** Use Add bookmark to name the current timestamp, or Bookmarks to browse saved positions for the current item.
+- **Added global bookmarks access.** The main menu now includes Bookmarks, and `Ctrl+Alt+K` opens the bookmark list.
+- **Added player bookmark shortcuts.** `Ctrl+Shift+B` adds a bookmark at the current player position, and `Ctrl+Shift+K` opens bookmarks for the current player item.
+- **Added bookmark management.** Bookmarks can be played, renamed, deleted, and copied as YouTube timestamp links when possible.
+
 # v1.0.0-beta.2 - Transcript Browser Beta
 
 ## New

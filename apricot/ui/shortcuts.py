@@ -412,6 +412,9 @@ class ShortcutsUI:
     def open_direct_link_shortcut(self) -> None:
         self.run_global_navigation_shortcut(self.show_direct_link)
 
+    def open_bookmarks_shortcut(self) -> None:
+        self.run_global_navigation_shortcut(self.show_bookmarks)
+
     def subscribe_shortcut(self) -> None:
         if self.in_main_menu:
             return
@@ -469,6 +472,7 @@ class ShortcutsUI:
             ("open_play_from_folder", self.open_play_from_folder_shortcut),
             ("open_direct_link", self.open_direct_link_shortcut),
             ("open_favorites", self.open_favorites_shortcut),
+            ("open_bookmarks", self.open_bookmarks_shortcut),
             ("open_playlists", self.open_playlists_shortcut),
             ("open_subscriptions", self.open_subscriptions_shortcut),
             ("open_current_downloads", self.open_current_downloads_shortcut),
@@ -557,6 +561,12 @@ class ShortcutsUI:
             return True
         if self.shortcut_matches(event, "player_equalizer"):
             self.show_player_equalizer()
+            return True
+        if self.shortcut_matches(event, "player_add_bookmark"):
+            self.add_current_bookmark()
+            return True
+        if self.shortcut_matches(event, "player_bookmarks"):
+            self.show_player_bookmarks()
             return True
         if self.shortcut_matches(event, "player_chapters"):
             self.show_chapters()

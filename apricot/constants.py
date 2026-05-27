@@ -248,6 +248,7 @@ ACTIVATE_SIGNAL_FILE = APP_DIR / "activate.json"
 SETTINGS_FILE = APP_DIR / "settings.json"
 WINDOWS_ERROR_ALREADY_EXISTS = 183
 FAVORITES_FILE = APP_DIR / "favorites.json"
+BOOKMARKS_FILE = APP_DIR / "bookmarks.json"
 HISTORY_FILE = APP_DIR / "history.json"
 SUBSCRIPTIONS_FILE = APP_DIR / "subscriptions.json"
 RSS_FEEDS_FILE = APP_DIR / "rss_feeds.json"
@@ -559,6 +560,7 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "open_play_from_folder": "Ctrl+Alt+O",
     "open_direct_link": "Ctrl+Alt+L",
     "open_favorites": "Ctrl+Alt+F",
+    "open_bookmarks": "Ctrl+Alt+K",
     "open_playlists": "Ctrl+Alt+P",
     "open_subscriptions": "Ctrl+Alt+B",
     "open_current_downloads": "Ctrl+Alt+D",
@@ -599,6 +601,8 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "player_details": "F7",
     "player_output_devices": "O",
     "player_equalizer": "F4",
+    "player_add_bookmark": "Ctrl+Shift+B",
+    "player_bookmarks": "Ctrl+Shift+K",
     "player_chapters": "Ctrl+Shift+C",
     "player_transcript": "Ctrl+Shift+T",
     "player_lyrics": "Ctrl+Shift+Y",
@@ -634,6 +638,7 @@ SHORTCUT_DEFINITIONS = [
     ("open_play_from_folder", "shortcut_open_play_from_folder"),
     ("open_direct_link", "shortcut_open_direct_link"),
     ("open_favorites", "shortcut_open_favorites"),
+    ("open_bookmarks", "shortcut_open_bookmarks"),
     ("open_playlists", "shortcut_open_playlists"),
     ("open_subscriptions", "shortcut_open_subscriptions"),
     ("open_current_downloads", "shortcut_open_current_downloads"),
@@ -674,6 +679,8 @@ SHORTCUT_DEFINITIONS = [
     ("player_details", "shortcut_player_details"),
     ("player_output_devices", "shortcut_player_output_devices"),
     ("player_equalizer", "shortcut_player_equalizer"),
+    ("player_add_bookmark", "shortcut_player_add_bookmark"),
+    ("player_bookmarks", "shortcut_player_bookmarks"),
     ("player_chapters", "shortcut_player_chapters"),
     ("player_transcript", "shortcut_player_transcript"),
     ("player_lyrics", "shortcut_player_lyrics"),

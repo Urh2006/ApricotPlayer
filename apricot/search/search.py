@@ -859,6 +859,12 @@ class SearchMixin:
                 self.player_return_data = {}
             self.show_main_menu()
             return
+        if self.player_return_screen == "bookmarks":
+            if not keep_playing:
+                self.player_return_screen = ""
+                self.player_return_data = {}
+            self.show_main_menu()
+            return
         if self.player_return_screen == "favorites":
             if not keep_playing:
                 self.player_return_screen = ""

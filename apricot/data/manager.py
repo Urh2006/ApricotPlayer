@@ -162,6 +162,15 @@ class DataManagerMixin:
         FAVORITES_FILE.write_text(json.dumps(self.favorites, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+    def load_bookmarks(self) -> list[dict]:
+        return self.load_json_list(BOOKMARKS_FILE)
+
+
+    def save_bookmarks(self) -> None:
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        BOOKMARKS_FILE.write_text(json.dumps(self.bookmarks, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
     def load_history(self) -> list[dict]:
         return self.load_json_list(HISTORY_FILE)
 

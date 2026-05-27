@@ -398,6 +398,7 @@ class PlayerUI:
         except Exception as exc:
             if not self.playback_request_is_current(request_generation):
                 return
+            self.pending_player_start_position = None
             self.playback_start_pending = False
             if self.age_restricted_video_support_enabled() and self.is_cookie_auth_error(exc) and self.normalized_cookies_browser():
                 wx.CallAfter(self.prompt_cookie_refresh_for_playback, command, url, title, self.friendly_error(exc), announce_start, request_generation)
@@ -443,6 +444,13 @@ class PlayerUI:
         self.update_details_text()
 
     def playback_resume_position(self) -> float:
+        pending_raw = getattr(self, "pending_player_start_position", None)
+        self.pending_player_start_position = None
+        if pending_raw is not None:
+            try:
+                return max(0.0, float(pending_raw))
+            except (TypeError, ValueError):
+                return 0.0
         if self.metadata_is_live_stream(self.current_video_info) or self.metadata_is_live_stream(self.current_video_item):
             return 0.0
         key = self.playback_key()
@@ -574,6 +582,7 @@ class PlayerUI:
         self.in_queue_screen = False
         self.search_screen_active = False
         self.favorites_screen_active = False
+        self.bookmarks_screen_active = False
         self.history_screen_active = False
         self.subscriptions_screen_active = False
         self.rss_feeds_screen_active = False
@@ -642,6 +651,8 @@ class PlayerUI:
             (self.t("next"), lambda: self.play_relative_item(1, preserve_focus=True)),
             (self.t("playback_queue"), self.show_playback_queue),
             (self.t("add_to_playlist"), lambda: self.add_active_to_playlist(prefer_active=True)),
+            (self.t("add_bookmark"), self.add_current_bookmark),
+            (self.t("bookmarks"), self.show_player_bookmarks),
             (self.t("output_devices"), self.show_output_devices),
             (self.t("equalizer"), self.show_player_equalizer),
             (self.t("chapters"), self.show_chapters),

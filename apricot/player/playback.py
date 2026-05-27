@@ -330,6 +330,12 @@ class PlaybackMixin:
             return
         if self.current_video_item:
             self.record_history(self.current_video_item, "played")
+        pending_start = None
+        if isinstance(self.current_video_item, dict) and "_bookmark_start_position" in self.current_video_item:
+            pending_start = self.current_video_item.pop("_bookmark_start_position", None)
+        if isinstance(self.current_video_info, dict):
+            self.current_video_info.pop("_bookmark_start_position", None)
+        self.pending_player_start_position = pending_start
         self.current_index = max(0, self.current_index)
         continuing_session = (
             bool(getattr(self, "player_session_open", False))
