@@ -194,6 +194,7 @@ class MenusUI:
 
         actions.append((self.t("output_devices"), self.show_output_devices))
         actions.append((self.t("equalizer"), self.show_player_equalizer))
+        actions.append((self.menu_label_with_shortcut("audio_normalization", "player_replaygain"), self.cycle_replaygain_mode))
         actions.append((self.menu_label_with_shortcut("add_bookmark", "player_add_bookmark"), self.add_current_bookmark))
         actions.append((self.menu_label_with_shortcut("bookmarks", "player_bookmarks"), self.show_player_bookmarks))
         actions.append((self.menu_label_with_shortcut("chapters", "player_chapters"), self.show_chapters))

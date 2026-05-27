@@ -503,6 +503,14 @@ class ShortcutsUI:
     def handle_player_shortcut_event(self, event: wx.KeyEvent, focus: wx.Window | None, details_has_focus: bool = False) -> bool:
         if not (self.player_control_mode and self.player_shortcuts_allowed(focus)):
             return False
+        if (
+            self.is_function_key_event(event, 5)
+            and not event.ControlDown()
+            and not event.ShiftDown()
+            and not event.AltDown()
+        ):
+            event.Skip()
+            return True
         if self.focus_in_results_control(focus):
             if self.shortcut_matches(event, "player_previous"):
                 self.play_relative_item(-1, preserve_focus=True)
@@ -561,6 +569,9 @@ class ShortcutsUI:
             return True
         if self.shortcut_matches(event, "player_equalizer"):
             self.show_player_equalizer()
+            return True
+        if self.shortcut_matches(event, "player_replaygain"):
+            self.cycle_replaygain_mode()
             return True
         if self.shortcut_matches(event, "player_add_bookmark"):
             self.add_current_bookmark()

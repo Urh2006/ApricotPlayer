@@ -645,6 +645,7 @@ class PlayerUI:
         if focus_target == "player" and not self.settings.show_video_details_by_default:
             self.player_panel.SetFocus()
         is_local_media = self.current_player_is_local_media()
+        replaygain_label = self.audio_normalization_status_label()
         player_controls = [
             (self.t("previous"), lambda: self.play_relative_item(-1, preserve_focus=True)),
             (self.current_play_pause_label(), self.player_play_pause),
@@ -655,6 +656,7 @@ class PlayerUI:
             (self.t("bookmarks"), self.show_player_bookmarks),
             (self.t("output_devices"), self.show_output_devices),
             (self.t("equalizer"), self.show_player_equalizer),
+            (replaygain_label, self.cycle_replaygain_mode),
             (self.t("chapters"), self.show_chapters),
             (self.t("transcript"), self.show_transcript),
             (self.t("lyrics"), self.show_lyrics),
@@ -668,6 +670,11 @@ class PlayerUI:
         if background_enabled:
             player_controls.append((self.t("close_player"), self.close_current_player))
         player_action_buttons = self.add_button_row(player_controls)
+        self.replaygain_button = None
+        for (label, _handler), control in zip(player_controls, player_action_buttons):
+            if label == replaygain_label:
+                self.replaygain_button = control
+                break
         self.player_action_controls = list(player_action_buttons)
         for control in player_action_buttons:
             self.bind_player_navigation_control(control)

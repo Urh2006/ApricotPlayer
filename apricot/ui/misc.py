@@ -2660,6 +2660,45 @@ class MiscUI:
             self.t("replaygain_album"),
         ]
 
+    def replaygain_mode_label(self, mode: str | None = None) -> str:
+        normalized = self.normalized_replaygain_mode(mode)
+        labels = dict(zip(REPLAYGAIN_MODE_OPTIONS, self.replaygain_mode_labels()))
+        return labels.get(normalized, self.t("replaygain_off"))
+
+    def audio_normalization_status_label(self) -> str:
+        return self.t("audio_normalization_status", mode=self.replaygain_mode_label())
+
+    def cycle_replaygain_mode(self) -> None:
+        current = self.normalized_replaygain_mode()
+        try:
+            index = REPLAYGAIN_MODE_OPTIONS.index(current)
+        except ValueError:
+            index = 0
+        next_mode = REPLAYGAIN_MODE_OPTIONS[(index + 1) % len(REPLAYGAIN_MODE_OPTIONS)]
+        self.settings.replaygain_mode = next_mode
+        self.save_settings()
+        if self.player_kind == "mpv" and self.mpv_process_alive():
+            threading.Thread(target=self.apply_replaygain_mode_worker, args=(next_mode,), daemon=True).start()
+        self.announce_player(self.t("audio_normalization_changed", mode=self.replaygain_mode_label(next_mode)))
+        self.update_player_replaygain_button_label()
+
+    def apply_replaygain_mode_worker(self, mode: str) -> None:
+        try:
+            self.mpv_set_property("replaygain", self.normalized_replaygain_mode(mode), timeout=0.6)
+            self.mpv_set_property("replaygain-clip", "yes", timeout=0.6)
+        except Exception:
+            wx.CallAfter(self.announce_player, self.t("audio_normalization_restart_needed"))
+
+    def update_player_replaygain_button_label(self) -> None:
+        button = getattr(self, "replaygain_button", None)
+        if not isinstance(button, wx.Button):
+            return
+        try:
+            button.SetLabel(self.audio_normalization_status_label())
+            button.SetName(self.audio_normalization_status_label())
+        except RuntimeError:
+            pass
+
     def refresh_interval_labels(self) -> list[str]:
         return [self.refresh_interval_label(option) for option in REFRESH_INTERVAL_OPTIONS]
 

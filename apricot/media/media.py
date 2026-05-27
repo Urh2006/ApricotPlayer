@@ -14,6 +14,7 @@ import shutil
 import tempfile
 import urllib.request
 import urllib.parse
+import urllib.error
 from urllib.request import Request
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
@@ -787,23 +788,100 @@ class MediaMixin:
             "subtitlesformat": "vtt/srt/best",
             "ignore_no_formats_error": True,
         }
-        info = self.ydl_extract_info(url, options=options, download=False, allow_cookie_retry=False)
+        info = self.ydl_extract_info(url, options=options, download=False, allow_cookie_retry=True)
         track, source_key = self.select_transcript_track(info)
         if not track:
             self.cache_current_transcript_entries([], checked=True)
             return [], ""
-        text = self.fetch_transcript_text_from_url(str(track.get("url") or ""))
+        try:
+            text = self.fetch_transcript_text_from_url(str(track.get("url") or ""), source_url=url, track=track, info=info)
+        except Exception as direct_exc:
+            try:
+                text = self.fetch_transcript_text_with_ytdlp(url)
+            except Exception as fallback_exc:
+                if self.is_transcript_rate_limited_error(fallback_exc):
+                    self.cache_current_transcript_entries([], checked=True)
+                    raise RuntimeError(self.t("transcript_rate_limited")) from fallback_exc
+                raise
+            if not text:
+                if self.is_transcript_rate_limited_error(direct_exc):
+                    self.cache_current_transcript_entries([], checked=True)
+                    raise RuntimeError(self.t("transcript_rate_limited")) from direct_exc
+                raise
         entries = self.parse_transcript_text(text, str(track.get("ext") or ""))
         self.cache_current_transcript_entries(entries, checked=True, source_key=source_key if entries else "")
         return entries, source_key if entries else ""
 
 
-    def fetch_transcript_text_from_url(self, url: str) -> str:
+    @staticmethod
+    def is_transcript_rate_limited_error(exc: Exception | str) -> bool:
+        if isinstance(exc, urllib.error.HTTPError) and getattr(exc, "code", None) == 429:
+            return True
+        text = str(exc).lower()
+        return "http error 429" in text or "too many requests" in text
+
+
+    def transcript_request_headers(self, source_url: str = "", track: dict | None = None, info: dict | None = None) -> dict:
+        headers: dict[str, str] = {}
+        for candidate in (
+            (info or {}).get("http_headers") if isinstance(info, dict) else None,
+            (track or {}).get("http_headers") if isinstance(track, dict) else None,
+        ):
+            if isinstance(candidate, dict):
+                headers.update({str(key): str(value) for key, value in candidate.items() if value})
+        cookie_user_agent = str(getattr(self.settings, "cookie_user_agent", "") or "").strip()
+        headers.setdefault("User-Agent", cookie_user_agent or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36")
+        headers["Accept"] = "text/vtt,text/plain,*/*"
+        headers.setdefault("Accept-Language", "en-US,en;q=0.9")
+        if source_url:
+            headers.setdefault("Referer", source_url)
+        return headers
+
+
+    def fetch_transcript_text_from_url(self, url: str, source_url: str = "", track: dict | None = None, info: dict | None = None) -> str:
         if not url:
             return ""
-        request = Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+        request = Request(url, headers=self.transcript_request_headers(source_url, track, info))
         with self.open_url(request, timeout=20) as response:
             return response.read(5_000_000).decode("utf-8", errors="replace")
+
+
+    def fetch_transcript_text_with_ytdlp(self, url: str) -> str:
+        if not url:
+            return ""
+        with tempfile.TemporaryDirectory(prefix="apricot-transcript-") as temp_dir:
+            temp_path = Path(temp_dir)
+            options = {
+                "quiet": True,
+                "skip_download": True,
+                "noplaylist": True,
+                "writesubtitles": True,
+                "writeautomaticsub": True,
+                "subtitleslangs": self.transcript_language_candidates(),
+                "subtitlesformat": "vtt/srt/best",
+                "outtmpl": str(temp_path / "%(id)s.%(ext)s"),
+                "ignore_no_formats_error": True,
+            }
+            try:
+                self.ydl_extract_info(url, options=options, download=True, allow_cookie_retry=True)
+            except Exception as exc:
+                if self.is_transcript_rate_limited_error(exc):
+                    raise RuntimeError(self.t("transcript_rate_limited")) from exc
+                raise
+            candidates = sorted(
+                [path for path in temp_path.rglob("*") if path.suffix.lower() in {".vtt", ".srt"} and path.is_file()],
+                key=lambda path: path.stat().st_mtime,
+                reverse=True,
+            )
+            for candidate in candidates:
+                try:
+                    if candidate.stat().st_size <= 5_000_000:
+                        text = candidate.read_text(encoding="utf-8", errors="replace")
+                        if text.strip():
+                            return text
+                except OSError:
+                    continue
+        return ""
 
 
     def parse_transcript_text(self, text: str, source: str = "") -> list[dict]:

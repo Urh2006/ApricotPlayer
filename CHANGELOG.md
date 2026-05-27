@@ -1,3 +1,14 @@
+# v1.0.0-beta.4 - Audio Normalization Beta
+
+## New
+- **Added a player audio-normalization control.** The player now exposes ReplayGain / loudness normalization directly as a button, context-menu action, and configurable shortcut.
+- **Added `Ctrl+Shift+G` for audio normalization.** The shortcut cycles Off, Track, and Album modes and announces the selected mode for screen reader users.
+
+## Fixes
+- **Made transcript loading less likely to hit YouTube caption rate limits.** Transcript downloads now reuse yt-dlp/YouTube request headers and fall back to yt-dlp's subtitle downloader when the direct caption request fails.
+- **Replaced raw transcript HTTP 429 errors with a screen-reader friendly rate-limit message.**
+- **Stopped plain F5 from announcing the player duration.** Time/duration announcement remains on the configured Player: announce time shortcut, which defaults to `T`.
+
 # v1.0.0-beta.3 - Bookmarks Beta
 
 ## New
