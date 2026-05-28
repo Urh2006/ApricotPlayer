@@ -1,3 +1,11 @@
+# v1.0.0-beta.11 - Comments 2.0 Beta
+
+## New
+- **Expanded the YouTube Comments screen.** Comments now have a search box, a sort selector, Copy comment, Copy visible comments, and Open author channel actions.
+- **Added local comment sorting.** Loaded comments can be shown in original order, newest first, oldest first, most liked, or most replies without reloading playback.
+- **Made comments more useful without an API key.** yt-dlp-loaded comments now keep timestamps and author-channel metadata when available, so sorting and author actions work there too.
+- **Included replies in search and copied text.** Replies already shown in comment details are now searchable and included when copying a comment.
+
 # v1.0.0-beta.10 - Fast Startup Restoration Hotfix
 
 ## Fixes

@@ -11,6 +11,6 @@ Planned feature order:
 5. [ ] Equalizer Profiles 2.0: rename, delete, import, export, per-device defaults, and A/B compare. Beta 5 adds import, export, and A/B compare; per-device defaults remain planned.
 6. [x] Command search / action finder with a shortcut that does not use Ctrl+Shift+P.
 7. [ ] Better queue and session restore.
-8. [ ] Comments 2.0: sorting, search, replies, copy, and author/channel actions.
+8. [x] Comments 2.0: sorting, search, replies, copy, and author/channel actions.
 9. [ ] Podcast mode: played state, downloads, resume, chapters, transcripts, and per-podcast speed presets.
 10. [ ] Stable/beta release-channel polish.

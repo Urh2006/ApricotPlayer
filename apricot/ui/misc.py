@@ -2060,31 +2060,96 @@ class MiscUI:
         source_url = self.youtube_comments_source_url(source_item, video_id)
         dialog = wx.Dialog(self, title=self.t("comments"), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         dialog.SetName(self.t("comments"))
-        dialog.SetMinSize((680, 500))
+        dialog.SetMinSize((820, 520))
         outer = wx.BoxSizer(wx.VERTICAL)
+
+        filter_row = wx.BoxSizer(wx.HORIZONTAL)
+        search_box = wx.TextCtrl(dialog, value="", style=wx.TE_PROCESS_ENTER)
+        search_box.SetName(self.t("search_comments"))
+        sort_choices = [
+            ("relevance", self.t("comments_sort_relevance")),
+            ("newest", self.t("comments_sort_newest")),
+            ("oldest", self.t("comments_sort_oldest")),
+            ("likes", self.t("comments_sort_likes")),
+            ("replies", self.t("comments_sort_replies")),
+        ]
+        sort_box = wx.Choice(dialog, choices=[label for _value, label in sort_choices])
+        sort_box.SetName(self.t("comments_sort"))
+        sort_box.SetSelection(0)
+        filter_row.Add(search_box, 1, wx.RIGHT, 8)
+        filter_row.Add(sort_box, 0)
+        outer.Add(filter_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
+
         comments_list = wx.ListBox(dialog, choices=[self.t("comments_loading")])
         comments_list.SetName(self.t("comments"))
         comments_list.SetSelection(0)
         outer.Add(comments_list, 1, wx.EXPAND | wx.ALL, 8)
         row = wx.BoxSizer(wx.HORIZONTAL)
         open_button = wx.Button(dialog, label=self.t("open_comment"))
+        copy_button = wx.Button(dialog, label=self.t("copy_comment"))
+        copy_all_button = wx.Button(dialog, label=self.t("copy_visible_comments"))
+        author_button = wx.Button(dialog, label=self.t("open_comment_author_channel"))
         more_button = wx.Button(dialog, label=self.t("load_more_comments"))
         close_button = wx.Button(dialog, wx.ID_CANCEL, label=self.t("back"))
         row.Add(open_button, 0, wx.RIGHT, 8)
+        row.Add(copy_button, 0, wx.RIGHT, 8)
+        row.Add(copy_all_button, 0, wx.RIGHT, 8)
+        row.Add(author_button, 0, wx.RIGHT, 8)
         row.Add(more_button, 0, wx.RIGHT, 8)
         row.Add(close_button, 0)
         outer.Add(row, 0, wx.ALIGN_RIGHT | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         dialog.SetSizer(outer)
         open_button.Enable(False)
+        copy_button.Enable(False)
+        copy_all_button.Enable(False)
+        author_button.Enable(False)
         more_button.Enable(False)
-        state: dict[str, object] = {"comments": [], "next_page": "", "loading": False, "loaded_once": False, "source_key": ""}
+        state: dict[str, object] = {
+            "comments": [],
+            "visible_comments": [],
+            "next_page": "",
+            "loading": False,
+            "loaded_once": False,
+            "source_key": "",
+            "sort": "relevance",
+        }
+
+        def visible_comments() -> list[dict]:
+            query = ""
+            try:
+                query = search_box.GetValue()
+            except RuntimeError:
+                query = ""
+            comments = [comment for comment in list(state.get("comments") or []) if self.comment_matches_query(comment, query)]
+            return self.comments_sorted(comments, str(state.get("sort") or "relevance"))
+
+        def selected_comment() -> dict | None:
+            comments = list(state.get("visible_comments") or [])
+            try:
+                index = comments_list.GetSelection()
+            except RuntimeError:
+                index = -1
+            if 0 <= index < len(comments):
+                return comments[index]
+            return None
 
         def refresh_comments(selection: int = 0) -> None:
-            comments = list(state.get("comments") or [])
-            labels = [self.comment_line(comment, index) for index, comment in enumerate(comments)] or [self.t("comments_disabled")]
+            comments = visible_comments()
+            state["visible_comments"] = comments
+            query_active = False
+            try:
+                query_active = bool(search_box.GetValue().strip())
+            except RuntimeError:
+                query_active = False
+            placeholder = self.t("no_matching_comments") if query_active and state.get("comments") else self.t("comments_disabled")
+            labels = [self.comment_line(comment, index) for index, comment in enumerate(comments)] or [placeholder]
             comments_list.Set(labels)
             comments_list.SetSelection(min(max(0, selection), len(labels) - 1))
             open_button.Enable(bool(comments))
+            copy_button.Enable(bool(comments))
+            copy_all_button.Enable(bool(comments))
+            selected_index = comments_list.GetSelection()
+            author_button.Enable(bool(0 <= selected_index < len(comments) and self.comment_author_channel_url(comments[selected_index])))
             more_button.Enable(bool(state.get("next_page")) and not bool(state.get("loading")))
 
         def finish_load(new_comments: list[dict], next_page: str, error: str = "", source_key: str = "") -> None:
@@ -2128,13 +2193,47 @@ class MiscUI:
             threading.Thread(target=self.fetch_comments_worker, args=(video_id, page_token, source_url, finish_load), daemon=True).start()
 
         def open_selected_comment(_event=None) -> None:
-            comments = list(state.get("comments") or [])
-            try:
-                index = comments_list.GetSelection()
-            except RuntimeError:
-                index = -1
-            if 0 <= index < len(comments):
-                self.show_comment_details(comments[index])
+            comment = selected_comment()
+            if comment:
+                self.show_comment_details(comment)
+
+        def copy_selected_comment(_event=None) -> None:
+            comment = selected_comment()
+            if not comment:
+                self.announce_player(self.t("no_matching_comments") if search_box.GetValue().strip() else self.t("comments_disabled"))
+                return
+            self.copy_plain_text_to_clipboard(self.comment_copy_text(comment))
+            self.announce_player(self.t("comment_copied"))
+
+        def copy_visible_comments(_event=None) -> None:
+            comments = list(state.get("visible_comments") or [])
+            if not comments:
+                self.announce_player(self.t("no_matching_comments") if search_box.GetValue().strip() else self.t("comments_disabled"))
+                return
+            self.copy_plain_text_to_clipboard(self.comments_copy_text(comments))
+            self.announce_player(self.t("comments_copied", count=len(comments)))
+
+        def open_author_channel(_event=None) -> None:
+            comment = selected_comment()
+            url = self.comment_author_channel_url(comment or {})
+            if not url:
+                self.announce_player(self.t("comment_author_channel_unavailable"))
+                return
+            import_module("webbrowser").open(url)
+            self.announce_player(self.t("comment_author_channel_opened"))
+
+        def on_filter_changed(_event=None) -> None:
+            refresh_comments(0)
+
+        def on_sort_changed(_event=None) -> None:
+            selection = sort_box.GetSelection()
+            if 0 <= selection < len(sort_choices):
+                state["sort"] = sort_choices[selection][0]
+            refresh_comments(0)
+
+        def on_comment_selection_changed(event: wx.CommandEvent) -> None:
+            author_button.Enable(bool(self.comment_author_channel_url(selected_comment() or {})))
+            event.Skip()
 
         def on_comments_key(event: wx.KeyEvent) -> None:
             if self.shortcut_matches(event, "open_selected"):
@@ -2145,11 +2244,45 @@ class MiscUI:
                 return
             event.Skip()
 
+        def show_comments_context_menu(_event=None) -> None:
+            menu = wx.Menu()
+            open_id = wx.NewIdRef()
+            copy_id = wx.NewIdRef()
+            copy_all_id = wx.NewIdRef()
+            author_id = wx.NewIdRef()
+            more_id = wx.NewIdRef()
+            menu.Append(open_id, self.t("open_comment"))
+            menu.Append(copy_id, self.t("copy_comment"))
+            menu.Append(copy_all_id, self.t("copy_visible_comments"))
+            menu.Append(author_id, self.t("open_comment_author_channel"))
+            menu.AppendSeparator()
+            menu.Append(more_id, self.t("load_more_comments"))
+            menu.Enable(open_id, bool(state.get("visible_comments")))
+            menu.Enable(copy_id, bool(state.get("visible_comments")))
+            menu.Enable(copy_all_id, bool(state.get("visible_comments")))
+            menu.Enable(author_id, bool(self.comment_author_channel_url(selected_comment() or {})))
+            menu.Enable(more_id, bool(state.get("next_page")) and not bool(state.get("loading")))
+            dialog.Bind(wx.EVT_MENU, lambda _event: open_selected_comment(), id=open_id)
+            dialog.Bind(wx.EVT_MENU, lambda _event: copy_selected_comment(), id=copy_id)
+            dialog.Bind(wx.EVT_MENU, lambda _event: copy_visible_comments(), id=copy_all_id)
+            dialog.Bind(wx.EVT_MENU, lambda _event: open_author_channel(), id=author_id)
+            dialog.Bind(wx.EVT_MENU, lambda _event: load_more(), id=more_id)
+            comments_list.PopupMenu(menu)
+            menu.Destroy()
+
+        search_box.Bind(wx.EVT_TEXT, on_filter_changed)
+        sort_box.Bind(wx.EVT_CHOICE, on_sort_changed)
+        comments_list.Bind(wx.EVT_LISTBOX, on_comment_selection_changed)
         comments_list.Bind(wx.EVT_LISTBOX_DCLICK, open_selected_comment)
         comments_list.Bind(wx.EVT_KEY_DOWN, on_comments_key)
+        comments_list.Bind(wx.EVT_CONTEXT_MENU, show_comments_context_menu)
         open_button.Bind(wx.EVT_BUTTON, open_selected_comment)
+        copy_button.Bind(wx.EVT_BUTTON, copy_selected_comment)
+        copy_all_button.Bind(wx.EVT_BUTTON, copy_visible_comments)
+        author_button.Bind(wx.EVT_BUTTON, open_author_channel)
         more_button.Bind(wx.EVT_BUTTON, load_more)
         load_more()
+        wx.CallAfter(search_box.SetFocus)
         dialog.ShowModal()
         dialog.Destroy()
         self.focus_player_target_later("player")

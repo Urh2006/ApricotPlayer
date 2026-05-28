@@ -290,15 +290,24 @@ class DownloadsUI:
             text = self.strip_html(str(raw.get("text") or ""))
             if not text:
                 continue
+            author_channel_url = str(raw.get("author_url") or "").strip()
+            author_id = str(raw.get("author_id") or "").strip()
+            if author_channel_url and not author_channel_url.startswith("http"):
+                author_channel_url = f"https://www.youtube.com/{author_channel_url.lstrip('/')}"
+            if not author_channel_url and author_id.startswith("UC"):
+                author_channel_url = f"https://www.youtube.com/channel/{author_id}"
             comments.append(
                 {
                     "id": str(raw.get("id") or ""),
-                    "author": str(raw.get("author") or raw.get("author_id") or "").strip(),
+                    "author": str(raw.get("author") or author_id or "").strip(),
                     "text": text,
                     "published": self.format_history_time(raw.get("timestamp")) if raw.get("timestamp") else "",
+                    "timestamp": self.to_int(str(raw.get("timestamp") or 0), 0, 0),
                     "likes": raw.get("like_count", 0),
                     "reply_count": 0,
                     "replies": [],
+                    "author_channel_url": author_channel_url,
+                    "author_channel_id": author_id,
                 }
             )
         return comments

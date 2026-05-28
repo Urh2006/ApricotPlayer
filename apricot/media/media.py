@@ -1026,12 +1026,25 @@ class MediaMixin:
             text = import_module("html").unescape(text)
         except Exception:
             pass
+        channel_id = ""
+        raw_channel_id = snippet.get("authorChannelId")
+        if isinstance(raw_channel_id, dict):
+            channel_id = str(raw_channel_id.get("value") or "").strip()
+        elif raw_channel_id:
+            channel_id = str(raw_channel_id).strip()
+        author_channel_url = str(snippet.get("authorChannelUrl") or "").strip()
+        if not author_channel_url and channel_id:
+            author_channel_url = f"https://www.youtube.com/channel/{channel_id}"
+        published = str(snippet.get("publishedAt") or "").strip()
         return {
             "author": str(snippet.get("authorDisplayName") or "").strip(),
             "text": text.strip(),
-            "published": str(snippet.get("publishedAt") or "").strip(),
+            "published": published,
+            "timestamp": self.timestamp_from_iso_datetime(published) or 0,
             "updated": str(snippet.get("updatedAt") or "").strip(),
             "likes": snippet.get("likeCount", 0),
+            "author_channel_url": author_channel_url,
+            "author_channel_id": channel_id,
         }
 
     def comment_line(self, comment: dict, index: int) -> str:
@@ -1047,6 +1060,70 @@ class MediaMixin:
         if replies:
             parts.append(self.t("comment_replies_count", count=replies))
         return " | ".join(part for part in parts if part)
+
+
+    @staticmethod
+    def comment_numeric_value(comment: dict, key: str, default: int = 0) -> int:
+        try:
+            return int(float(comment.get(key) or default))
+        except (TypeError, ValueError):
+            return default
+
+
+    def comments_sorted(self, comments: list[dict], sort_mode: str) -> list[dict]:
+        items = list(comments or [])
+        if sort_mode == "newest":
+            return sorted(items, key=lambda comment: self.comment_numeric_value(comment, "timestamp"), reverse=True)
+        if sort_mode == "oldest":
+            return sorted(items, key=lambda comment: self.comment_numeric_value(comment, "timestamp"))
+        if sort_mode == "likes":
+            return sorted(items, key=lambda comment: self.comment_numeric_value(comment, "likes"), reverse=True)
+        if sort_mode == "replies":
+            return sorted(items, key=lambda comment: self.comment_numeric_value(comment, "reply_count"), reverse=True)
+        return items
+
+
+    @staticmethod
+    def comment_matches_query(comment: dict, query: str) -> bool:
+        normalized = str(query or "").strip().lower()
+        if not normalized:
+            return True
+        parts = [
+            str(comment.get("author") or ""),
+            str(comment.get("text") or ""),
+            str(comment.get("published") or ""),
+        ]
+        for reply in list(comment.get("replies") or []):
+            if isinstance(reply, dict):
+                parts.append(str(reply.get("author") or ""))
+                parts.append(str(reply.get("text") or ""))
+        return normalized in " ".join(parts).lower()
+
+
+    def comment_copy_text(self, comment: dict, index: int | None = None) -> str:
+        prefix = f"{index + 1}. " if index is not None else ""
+        lines = [
+            f"{prefix}{str(comment.get('author') or self.t('comments'))}",
+            str(comment.get("published") or ""),
+            self.t("comment_likes", count=self.format_count(comment.get("likes"))) if comment.get("likes") not in (None, "") else "",
+            "",
+            str(comment.get("text") or ""),
+        ]
+        replies = [reply for reply in list(comment.get("replies") or []) if isinstance(reply, dict)]
+        if replies:
+            lines.extend(["", self.t("comment_replies")])
+            for reply in replies:
+                lines.extend(["", str(reply.get("author") or ""), str(reply.get("text") or "")])
+        return "\n".join(line for line in lines if line is not None).strip()
+
+
+    def comments_copy_text(self, comments: list[dict]) -> str:
+        return "\n\n---\n\n".join(self.comment_copy_text(comment, index) for index, comment in enumerate(comments or [])).strip()
+
+
+    @staticmethod
+    def comment_author_channel_url(comment: dict) -> str:
+        return str(comment.get("author_channel_url") or "").strip()
 
 
 
