@@ -645,6 +645,8 @@
     "playback_queue_not_found": "Item is not in the playback queue.",
     "add_to_playback_queue": "Add to playback queue",
     "remove_from_playback_queue": "Remove from playback queue",
+    "resume_last_session": "Resume last playback session",
+    "resume_last_session_unavailable": "No saved playback session.",
     "edit_mode": "Edit mode",
     "edit_mode_on": "Edit mode on.",
     "edit_mode_off": "Edit mode off.",

@@ -645,6 +645,8 @@
     "playback_queue_not_found": "Element ni v vrstnem redu predvajanja.",
     "add_to_playback_queue": "Dodaj v vrstni red predvajanja",
     "remove_from_playback_queue": "Odstrani iz vrstnega reda predvajanja",
+    "resume_last_session": "Nadaljuj zadnjo sejo predvajanja",
+    "resume_last_session_unavailable": "Ni shranjene seje predvajanja.",
     "edit_mode": "NaÄŤin urejanja",
     "edit_mode_on": "NaÄŤin urejanja vklopljen.",
     "edit_mode_off": "NaÄŤin urejanja izklopljen.",

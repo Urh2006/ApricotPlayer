@@ -1,3 +1,13 @@
+# v1.0.0-beta.14 - Session Restore Beta
+
+## New
+- **Added Resume last playback session.** Apricot now stores a small snapshot of the last played item and shows a main-menu and Action finder entry to reopen it later.
+- **Reuses existing resume-position behavior.** If Resume where you left off is enabled, the restored item starts from the saved playback position; live streams still start live.
+- **Added last-session diagnostics.** Diagnostic reports now include the title of the saved player session to make tester reports easier to line up.
+
+## Notes
+- **Kept playback hot paths untouched.** This beta does not change mpv startup arguments, stream resolving, seek controls, EQ, bass boost, volume boost, or Next/Previous sequence logic.
+
 # v1.0.0-beta.13 - Per-Device Equalizer Presets Beta
 
 ## New

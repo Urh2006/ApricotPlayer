@@ -278,6 +278,31 @@ class DataManagerMixin:
         APP_DIR.mkdir(parents=True, exist_ok=True)
         PLAYBACK_QUEUE_FILE.write_text(json.dumps(self.playback_queue, indent=2, ensure_ascii=False), encoding="utf-8")
 
+    def load_last_player_session(self) -> dict:
+        data = self.load_json_dict(LAST_PLAYER_SESSION_FILE)
+        item = data.get("item") if isinstance(data, dict) else None
+        if not isinstance(item, dict):
+            return {}
+        url = str(item.get("url") or item.get("webpage_url") or item.get("local_path") or item.get("path") or "").strip()
+        return data if url else {}
+
+
+    def write_last_player_session_snapshot(self, snapshot: dict) -> None:
+        try:
+            APP_DIR.mkdir(parents=True, exist_ok=True)
+            temp_file = LAST_PLAYER_SESSION_FILE.with_name(f"{LAST_PLAYER_SESSION_FILE.stem}.{threading.get_ident()}.tmp")
+            temp_file.write_text(json.dumps(snapshot, indent=2, ensure_ascii=False), encoding="utf-8")
+            os.replace(temp_file, LAST_PLAYER_SESSION_FILE)
+        except Exception:
+            pass
+
+
+    def save_last_player_session(self) -> None:
+        snapshot = getattr(self, "last_player_session", {})
+        if not isinstance(snapshot, dict):
+            snapshot = {}
+        self.write_last_player_session_snapshot(snapshot)
+
 
     def load_stream_url_cache(self) -> dict:
         """Load the persisted stream-URL cache from disk.

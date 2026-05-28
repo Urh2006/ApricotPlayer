@@ -378,6 +378,7 @@ class PlaybackMixin:
         self.play_request_generation += 1
         request_generation = self.play_request_generation
         self.playback_start_pending = True
+        self.save_last_player_session_from_current(url, title)
         threading.Thread(target=self.resolve_and_start_player, args=(command, url, title, announce_start, request_generation), daemon=True).start()
 
 
@@ -389,6 +390,96 @@ class PlaybackMixin:
     def playback_key(self, item: dict | None = None) -> str:
         item = item or self.current_video_item or self.current_video_info
         return str((item or {}).get("url") or (item or {}).get("webpage_url") or "").strip()
+
+    @staticmethod
+    def last_session_item_url(item: dict | None) -> str:
+        item = item or {}
+        return str(item.get("url") or item.get("webpage_url") or item.get("local_path") or item.get("path") or "").strip()
+
+
+    def last_player_session_available(self) -> bool:
+        session = getattr(self, "last_player_session", {})
+        if not isinstance(session, dict):
+            return False
+        item = session.get("item")
+        return isinstance(item, dict) and bool(self.last_session_item_url(item))
+
+
+    def json_safe_player_session_value(self, value, depth: int = 0):
+        if depth > 5:
+            return str(value) if value is not None else None
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, Path):
+            return str(value)
+        if isinstance(value, dict):
+            skipped = {
+                "formats",
+                "requested_formats",
+                "automatic_captions",
+                "subtitles",
+                "requested_subtitles",
+                "thumbnails",
+                "heatmap",
+                "entries",
+                "comments",
+            }
+            safe = {}
+            for key, child in value.items():
+                key_text = str(key)
+                if key_text in skipped:
+                    continue
+                safe[key_text] = self.json_safe_player_session_value(child, depth + 1)
+            return safe
+        if isinstance(value, (list, tuple)):
+            return [self.json_safe_player_session_value(child, depth + 1) for child in list(value)[:200]]
+        return str(value)
+
+
+    def save_last_player_session_from_current(self, url: str = "", title: str = "") -> None:
+        item = dict(self.current_video_item or self.current_video_info or {})
+        if url and not self.last_session_item_url(item):
+            item["url"] = url
+        if title and not str(item.get("title") or "").strip():
+            item["title"] = title
+        if not self.last_session_item_url(item):
+            return
+        safe_item = self.json_safe_player_session_value(item)
+        safe_return_data = self.json_safe_player_session_value(dict(getattr(self, "player_return_data", {}) or {}))
+        session = {
+            "version": 1,
+            "saved_at": time.time(),
+            "title": str(safe_item.get("title") or title or self.last_session_item_url(safe_item)),
+            "item": safe_item,
+            "return_screen": str(getattr(self, "player_return_screen", "") or ""),
+            "return_data": safe_return_data if isinstance(safe_return_data, dict) else {},
+        }
+        self.last_player_session = session
+        threading.Thread(target=self.write_last_player_session_snapshot, args=(session,), daemon=True).start()
+
+
+    def resume_last_player_session(self) -> None:
+        session = getattr(self, "last_player_session", {})
+        if not isinstance(session, dict) or not self.last_player_session_available():
+            session = self.load_last_player_session()
+            self.last_player_session = session
+        item = dict((session or {}).get("item") or {})
+        url = self.last_session_item_url(item)
+        if not url:
+            self.announce_player(self.t("resume_last_session_unavailable"))
+            return
+        title = str(item.get("title") or (session or {}).get("title") or url)
+        self.clear_player_sequence()
+        self.player_return_screen = str((session or {}).get("return_screen") or "main_menu")
+        return_data = (session or {}).get("return_data")
+        self.player_return_data = dict(return_data) if isinstance(return_data, dict) else {}
+        if self.player_return_screen == "folder":
+            folder = str(self.player_return_data.get("folder") or "")
+            if folder:
+                self.current_local_folder_path = folder
+        self.current_video_item = item
+        self.current_video_info = dict(item)
+        self.play_url(url, title)
 
 
 

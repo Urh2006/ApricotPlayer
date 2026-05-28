@@ -131,6 +131,7 @@ class DiagnosticsMixin:
             self.diagnostic_line("Return all results", len(getattr(self, "return_all_results", []) or [])),
             self.diagnostic_line("Player sequence count", len(getattr(self, "player_sequence_results", []) or [])),
             self.diagnostic_line("Playback queue count", len(getattr(self, "playback_queue", []) or [])),
+            self.diagnostic_line("Last player session", (getattr(self, "last_player_session", {}) or {}).get("title", "") if isinstance(getattr(self, "last_player_session", {}), dict) else ""),
             self.diagnostic_line("Dynamic fetch enabled", getattr(self, "dynamic_fetch_enabled", False)),
             self.diagnostic_line("Loading more results", getattr(self, "loading_more_results", False)),
             self.diagnostic_line("Collection URL", getattr(self, "collection_url", "")),

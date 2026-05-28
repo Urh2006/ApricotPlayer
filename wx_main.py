@@ -80,6 +80,7 @@ class MainFrame(CookiesUI, DownloadsUI, EqualizerUI, EventsUI, ListsUI, MenusUI,
         self.notifications = self.load_notifications()
         self.playback_positions = self.load_playback_positions()
         self.playback_queue = self.load_playback_queue()
+        self.last_player_session = self.load_last_player_session()
         self.rss_items: list[dict] = []
         self.podcast_search_results: list[dict] = []
         self.results: list[dict] = []
