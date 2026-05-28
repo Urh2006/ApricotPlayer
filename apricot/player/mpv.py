@@ -200,15 +200,18 @@ class MpvMixin:
     def quiet_current_mpv_for_stop(self) -> None:
         if self.player_kind != "mpv" or not self.ipc_path or not self.mpv_process_alive():
             return
-        for command in (
+        commands = (
             ["set_property", "mute", True],
             ["set_property", "volume", 0],
             ["set_property", "pause", True],
-        ):
-            try:
-                self.mpv_send(command, timeout=0.05)
-            except Exception:
-                pass
+        )
+        payload = "".join(json.dumps({"command": command}) + "\n" for command in commands)
+        try:
+            with self.mpv_ipc_lock:
+                with self.open_mpv_pipe("w", timeout=0.0, encoding="utf-8") as pipe:
+                    pipe.write(payload)
+        except Exception:
+            pass
 
 
     def open_mpv_pipe(self, mode: str, timeout: float = MPV_IPC_TIMEOUT_SECONDS, buffering: int = -1, encoding: str | None = None):

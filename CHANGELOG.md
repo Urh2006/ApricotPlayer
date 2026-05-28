@@ -1,3 +1,8 @@
+# v1.0.0-beta.9 - No-Lag Audio Handoff Hotfix
+
+## Fixes
+- **Kept the beta 8 loud-burst protection but made it non-blocking.** Apricot now sends the stop-time mute/volume-zero/pause handoff to mpv in one best-effort IPC write instead of three separate commands, so the protection should not add noticeable delay when changing tracks or opening the next player item.
+
 # v1.0.0-beta.8 - Volume Boost Handoff Hotfix
 
 ## Fixes
