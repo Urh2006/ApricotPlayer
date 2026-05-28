@@ -1397,6 +1397,7 @@ class PlayerUI:
                     return
             except Exception:
                 pass
+        self.mark_current_podcast_episode_played(announce=False, refresh=False)
         if self.repeat_current:
             self.player_ended = False
             self.player_paused = False
@@ -1817,6 +1818,7 @@ class PlayerUI:
                 self.playback_positions.pop(key, None)
             elif total and position > max(5.0, total - 8.0):
                 self.playback_positions.pop(key, None)
+                self.mark_current_podcast_episode_played(announce=False, refresh=False)
             else:
                 self.playback_positions[key] = round(position, 1)
             self.save_playback_positions()

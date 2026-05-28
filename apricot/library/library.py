@@ -1055,9 +1055,11 @@ class LibraryMixin:
     def rss_feed_line(self, feed: dict) -> str:
         checked = self.format_history_time(feed.get("last_checked")) if feed.get("last_checked") else self.t("rss_feed_never_checked")
         count = len(feed.get("items") or [])
+        played_count = sum(1 for item in feed.get("items") or [] if item.get("played"))
         parts = [
             feed.get("title") or self.t("rss_unknown_feed_title"),
             self.t("rss_feed_item_count", count=count),
+            self.t("rss_feed_played_count", count=played_count) if played_count else "",
             self.t("rss_feed_last_checked", time=checked) if feed.get("last_checked") else checked,
         ]
         return " | ".join(part for part in parts if part)
@@ -1286,6 +1288,7 @@ class LibraryMixin:
                     known_urls = {str(item.get("url") or "") for item in existing.get("items") or [] if item.get("url")}
                     refreshed = self.fetch_rss_feed(str(existing.get("url") or ""))
                     refreshed["created_at"] = existing.get("created_at", refreshed.get("created_at", time.time()))
+                    self.preserve_rss_episode_state(refreshed, existing)
                     updated_feeds[index] = refreshed
                     if known_urls:
                         for entry in list(refreshed.get("items") or []):
@@ -1403,14 +1406,129 @@ class LibraryMixin:
     def rss_item_line(self, item: dict) -> str:
         published = self.format_history_time(item.get("timestamp")) if item.get("timestamp") else ""
         queued = self.t("podcast_audio_queued_marker") if str(item.get("url") or "") in self.download_queue else ""
+        played = self.t("played_marker") if item.get("played") else ""
         parts = [
             item.get("title", ""),
+            played,
             f"{self.t('published')}: {published}" if published else "",
             item.get("duration", ""),
             item.get("type", self.t("podcast_episode")),
             queued,
         ]
         return " | ".join(part for part in parts if part)
+
+    @staticmethod
+    def rss_episode_identity(item: dict | None) -> str:
+        item = item or {}
+        return str(item.get("url") or item.get("guid") or item.get("webpage_url") or item.get("title") or "").strip()
+
+
+    def preserve_rss_episode_state(self, refreshed: dict, existing: dict) -> None:
+        old_items = {
+            self.rss_episode_identity(item): item
+            for item in list(existing.get("items") or [])
+            if self.rss_episode_identity(item)
+        }
+        for entry in list(refreshed.get("items") or []):
+            previous = old_items.get(self.rss_episode_identity(entry))
+            if not previous:
+                continue
+            for key in ("played", "played_at", "play_count"):
+                if key in previous:
+                    entry[key] = previous[key]
+
+
+    def set_rss_item_played_state(
+        self,
+        feed_index: int,
+        item_index: int,
+        played: bool,
+        announce: bool = True,
+        refresh: bool = True,
+    ) -> bool:
+        self.ensure_rss_feeds_loaded()
+        if feed_index < 0 or feed_index >= len(self.rss_feeds):
+            return False
+        items = self.rss_feeds[feed_index].setdefault("items", [])
+        if item_index < 0 or item_index >= len(items):
+            return False
+        item = items[item_index]
+        now = time.time()
+        if played:
+            item["played"] = True
+            item["played_at"] = now
+            try:
+                item["play_count"] = max(1, int(item.get("play_count") or 0))
+            except (TypeError, ValueError):
+                item["play_count"] = 1
+        else:
+            item["played"] = False
+            item.pop("played_at", None)
+        url = str(item.get("url") or "")
+        for target in (self.current_video_item, self.current_video_info):
+            if isinstance(target, dict) and str(target.get("url") or "") == url:
+                target["played"] = bool(played)
+                if played:
+                    target["played_at"] = item.get("played_at")
+                    target["play_count"] = item.get("play_count")
+                else:
+                    target.pop("played_at", None)
+        if feed_index == self.current_rss_feed_index:
+            self.rss_items = list(items)
+            if refresh and self.rss_items_screen_active:
+                self.refresh_rss_items_list(item_index)
+        self.save_rss_feeds()
+        if announce:
+            key = "episode_marked_played" if played else "episode_marked_unplayed"
+            self.announce_player(self.t(key, title=item.get("title", "")))
+        return True
+
+
+    def set_rss_item_played_state_by_item(
+        self,
+        item: dict | None,
+        played: bool,
+        announce: bool = True,
+        refresh: bool = True,
+    ) -> bool:
+        if not item:
+            return False
+        try:
+            feed_index = int(item.get("rss_feed_index", -1))
+            item_index = int(item.get("rss_item_index", -1))
+        except (TypeError, ValueError):
+            feed_index = -1
+            item_index = -1
+        if feed_index >= 0 and item_index >= 0 and self.set_rss_item_played_state(feed_index, item_index, played, announce, refresh):
+            return True
+        identity = self.rss_episode_identity(item)
+        if not identity:
+            return False
+        self.ensure_rss_feeds_loaded()
+        for feed_pos, feed in enumerate(self.rss_feeds):
+            for episode_pos, episode in enumerate(feed.get("items") or []):
+                if self.rss_episode_identity(episode) == identity:
+                    return self.set_rss_item_played_state(feed_pos, episode_pos, played, announce, refresh)
+        return False
+
+
+    def toggle_selected_rss_item_played(self) -> None:
+        item = self.selected_rss_item()
+        if not item:
+            self.message(self.t("no_selection"))
+            return
+        self.set_rss_item_played_state_by_item(item, not bool(item.get("played")), announce=True, refresh=True)
+
+
+    def mark_current_podcast_episode_played(self, announce: bool = False, refresh: bool = False) -> bool:
+        item = self.current_video_item or self.current_video_info or {}
+        if not isinstance(item, dict) or item.get("kind") != "rss_item":
+            return False
+        data = dict(getattr(self, "player_return_data", {}) or {})
+        enriched = dict(item)
+        enriched.setdefault("rss_feed_index", data.get("feed_index", self.current_rss_feed_index))
+        enriched.setdefault("rss_item_index", data.get("item_index", 0))
+        return self.set_rss_item_played_state_by_item(enriched, True, announce=announce, refresh=refresh)
 
 
     def selected_rss_item(self) -> dict | None:
@@ -1432,6 +1550,8 @@ class LibraryMixin:
             self.toggle_rss_item_queue()
         elif self.shortcut_matches(event, "download_audio"):
             self.download_selected_rss_item()
+        elif self.shortcut_matches(event, "toggle_podcast_played"):
+            self.toggle_selected_rss_item_played()
         elif self.shortcut_matches(event, "add_to_playback_queue"):
             self.add_active_to_playback_queue()
         elif self.shortcut_matches(event, "remove_from_playback_queue"):
@@ -1444,8 +1564,11 @@ class LibraryMixin:
 
     def open_rss_item_context_menu(self, _event=None) -> None:
         menu = wx.Menu()
+        selected = self.selected_rss_item()
+        played_label_key = "mark_episode_unplayed" if selected and selected.get("played") else "mark_episode_played"
         actions = [
             (self.t("play_episode"), self.play_selected_rss_item),
+            (self.menu_label_with_shortcut(played_label_key, "toggle_podcast_played"), self.toggle_selected_rss_item_played),
             (self.menu_label_with_shortcut("download_episode_audio", "download_audio"), self.download_selected_rss_item),
             (self.menu_label_with_shortcut("queue_episode_audio", "queue_audio"), self.toggle_rss_item_queue),
             (self.menu_label_with_shortcut("add_to_playlist", "add_to_playlist"), self.add_active_to_playlist),
@@ -1570,6 +1693,7 @@ class LibraryMixin:
             "title": title or page_url or media_url,
             "url": url,
             "webpage_url": page_url or url,
+            "guid": guid,
             "media_url": media_url,
             "description": description,
             "duration": duration,

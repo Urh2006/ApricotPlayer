@@ -350,6 +350,7 @@ class ListsUI:
             "title": title or page_url or media_url,
             "url": url,
             "webpage_url": page_url or url,
+            "guid": item_id,
             "media_url": media_url,
             "description": description,
             "duration": duration,

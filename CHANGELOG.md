@@ -1,3 +1,14 @@
+# v1.0.0-beta.15 - Podcast Played State Beta
+
+## New
+- **Added podcast episode played/unplayed state.** Feed item lists now announce a `played` marker, and feed lists show how many episodes are played.
+- **Added a podcast played toggle.** Use `Ctrl+Shift+X` or the episode context menu to mark the selected podcast episode played or unplayed.
+- **Auto-marks completed podcast episodes.** When an RSS/podcast episode reaches EOF, Apricot stores it as played.
+- **Preserves played state across feed refreshes.** Refreshing a podcast/RSS feed keeps existing played markers by episode URL, GUID, webpage URL, or title.
+
+## Notes
+- **Kept player hot paths scoped.** This beta only adds RSS/podcast metadata state and does not change mpv startup, YouTube resolving, seek controls, EQ, bass boost, volume boost, or normal Next/Previous logic.
+
 # v1.0.0-beta.14 - Session Restore Beta
 
 ## New
