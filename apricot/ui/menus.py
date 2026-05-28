@@ -136,6 +136,7 @@ class MenusUI:
                 (self.menu_label_with_shortcut("copy_path" if is_local_media else "copy_link", "player_copy_link"), self.copy_current_player_url),
                 (self.menu_label_with_shortcut("show_video_details", "player_details"), self.show_video_details),
                 (self.menu_label_with_shortcut("output_devices", "player_output_devices"), self.show_output_devices),
+                (self.menu_label_with_shortcut("fullscreen", "player_fullscreen"), lambda: self.toggle_player_fullscreen(announce=True)),
                 (self.menu_label_with_shortcut("equalizer", "player_equalizer"), self.show_player_equalizer),
                 (self.menu_label_with_shortcut("audio_normalization", "player_replaygain"), self.cycle_replaygain_mode),
                 (self.menu_label_with_shortcut("add_bookmark", "player_add_bookmark"), self.add_current_bookmark),
@@ -331,6 +332,7 @@ class MenusUI:
                 actions.append((self.menu_label_with_shortcut("copy_timestamp_link", "player_copy_timestamp_link"), self.copy_current_player_timestamp_url))
 
         actions.append((self.t("output_devices"), self.show_output_devices))
+        actions.append((self.menu_label_with_shortcut("fullscreen", "player_fullscreen"), lambda: self.toggle_player_fullscreen(announce=True)))
         actions.append((self.t("equalizer"), self.show_player_equalizer))
         actions.append((self.menu_label_with_shortcut("audio_normalization", "player_replaygain"), self.cycle_replaygain_mode))
         if self.is_youtube_url(str(item.get("url") or item.get("webpage_url") or "")):

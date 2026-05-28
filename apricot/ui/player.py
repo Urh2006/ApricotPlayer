@@ -87,7 +87,7 @@ class PlayerUI:
             (self.label_with_shortcut(self.t("add_to_playlist"), "add_to_playlist"), lambda: self.add_active_to_playlist(prefer_active=True)),
             (self.label_with_shortcut(self.t("output_devices"), "player_output_devices"), self.show_output_devices),
             (self.label_with_shortcut(self.t("equalizer"), "player_equalizer"), self.show_player_equalizer),
-            (self.t("fullscreen"), lambda: self.toggle_player_fullscreen(announce=True)),
+            (self.label_with_shortcut(self.t("fullscreen"), "player_fullscreen"), lambda: self.toggle_player_fullscreen(announce=True)),
             (self.label_with_shortcut(self.t("bass_boost"), "player_bass_boost"), self.toggle_bass_boost),
             (self.label_with_shortcut(self.t("repeat"), "player_repeat"), self.toggle_repeat),
             (self.label_with_shortcut(self.t("shuffle"), "player_shuffle"), self.toggle_shuffle),
@@ -679,8 +679,9 @@ class PlayerUI:
         for control in player_action_buttons:
             self.bind_player_navigation_control(control)
         self.player_escape_stop_controls.extend(player_action_buttons)
-        self.fullscreen_checkbox = wx.CheckBox(self.panel, label=self.t("fullscreen"))
-        self.fullscreen_checkbox.SetName(self.t("fullscreen"))
+        fullscreen_label = self.label_with_shortcut(self.t("fullscreen"), "player_fullscreen")
+        self.fullscreen_checkbox = wx.CheckBox(self.panel, label=fullscreen_label)
+        self.fullscreen_checkbox.SetName(fullscreen_label)
         self.fullscreen_checkbox.SetValue(fullscreen_mode)
         self.fullscreen_checkbox.Bind(wx.EVT_CHECKBOX, self.on_player_fullscreen_changed)
         self.fullscreen_checkbox.Bind(wx.EVT_KEY_DOWN, self.on_fullscreen_checkbox_key)

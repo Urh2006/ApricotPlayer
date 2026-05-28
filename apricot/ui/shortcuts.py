@@ -537,6 +537,9 @@ class ShortcutsUI:
             if self.shortcut_matches(event, "player_next"):
                 self.play_relative_item(1, preserve_focus=True)
                 return True
+            if self.shortcut_matches(event, "player_fullscreen"):
+                self.toggle_player_fullscreen(focus_target="results", announce=True)
+                return True
             if self.results_list_owns_key(event):
                 event.Skip()
                 wx.CallAfter(self.maybe_extend_results)
@@ -588,6 +591,9 @@ class ShortcutsUI:
             return True
         if self.shortcut_matches(event, "player_equalizer"):
             self.show_player_equalizer()
+            return True
+        if self.shortcut_matches(event, "player_fullscreen"):
+            self.toggle_player_fullscreen(announce=True)
             return True
         if self.shortcut_matches(event, "player_replaygain"):
             self.cycle_replaygain_mode()
@@ -720,6 +726,9 @@ class ShortcutsUI:
             return True
         if self.shortcut_matches(event, "player_next"):
             self.play_relative_item(1, preserve_focus=True)
+            return True
+        if self.shortcut_matches(event, "player_fullscreen"):
+            self.toggle_player_fullscreen(announce=True)
             return True
         return False
 

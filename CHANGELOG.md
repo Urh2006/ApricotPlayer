@@ -1,3 +1,14 @@
+# v1.0.0-beta.16 - Full Screen Shortcut and Podcast Resume Polish Beta
+
+## New
+- **Added a configurable Player full-screen shortcut.** `F11` now toggles full screen from the player, background player controls, and Action finder, and appears in Settings > Keyboard shortcuts.
+- **Added shortcut labels to full-screen controls.** The player full-screen checkbox and the background-player full-screen button now show the configured shortcut when shortcut labels are enabled.
+- **Added podcast resume progress labels.** Podcast/RSS episode lists now show `resume at ...` when Apricot has a saved resume position for an unfinished episode.
+- **Added clear episode progress.** Use `Ctrl+Shift+R` or the episode context menu to clear a podcast/RSS episode's saved resume position.
+
+## Notes
+- **Kept playback hot paths scoped.** This beta does not change mpv startup arguments, YouTube resolving, seek timing, EQ, bass boost, volume boost, or normal Next/Previous sequence logic.
+
 # v1.0.0-beta.15 - Podcast Played State Beta
 
 ## New

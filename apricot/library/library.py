@@ -1407,15 +1407,37 @@ class LibraryMixin:
         published = self.format_history_time(item.get("timestamp")) if item.get("timestamp") else ""
         queued = self.t("podcast_audio_queued_marker") if str(item.get("url") or "") in self.download_queue else ""
         played = self.t("played_marker") if item.get("played") else ""
+        resume = self.rss_item_resume_marker(item)
         parts = [
             item.get("title", ""),
             played,
+            resume,
             f"{self.t('published')}: {published}" if published else "",
             item.get("duration", ""),
             item.get("type", self.t("podcast_episode")),
             queued,
         ]
         return " | ".join(part for part in parts if part)
+
+    def rss_item_resume_position(self, item: dict | None) -> float:
+        if not item or item.get("played"):
+            return 0.0
+        key = self.playback_key(item)
+        if not key:
+            return 0.0
+        try:
+            position = float(self.playback_positions.get(key, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+        return position if position >= 5.0 else 0.0
+
+
+    def rss_item_resume_marker(self, item: dict | None) -> str:
+        position = self.rss_item_resume_position(item)
+        if position <= 0:
+            return ""
+        return self.t("episode_resume_marker", time=self.format_seconds(position))
+
 
     @staticmethod
     def rss_episode_identity(item: dict | None) -> str:
@@ -1461,6 +1483,10 @@ class LibraryMixin:
                 item["play_count"] = max(1, int(item.get("play_count") or 0))
             except (TypeError, ValueError):
                 item["play_count"] = 1
+            key = self.playback_key(item)
+            if key and key in self.playback_positions:
+                self.playback_positions.pop(key, None)
+                self.save_playback_positions()
         else:
             item["played"] = False
             item.pop("played_at", None)
@@ -1520,6 +1546,21 @@ class LibraryMixin:
         self.set_rss_item_played_state_by_item(item, not bool(item.get("played")), announce=True, refresh=True)
 
 
+    def clear_selected_rss_item_progress(self) -> None:
+        item = self.selected_rss_item()
+        if not item:
+            self.message(self.t("no_selection"))
+            return
+        key = self.playback_key(item)
+        if not key or key not in self.playback_positions:
+            self.announce_player(self.t("episode_progress_not_found"))
+            return
+        self.playback_positions.pop(key, None)
+        self.save_playback_positions()
+        self.refresh_rss_items_list(int(item.get("rss_item_index") or 0))
+        self.announce_player(self.t("episode_progress_cleared", title=item.get("title", "")))
+
+
     def mark_current_podcast_episode_played(self, announce: bool = False, refresh: bool = False) -> bool:
         item = self.current_video_item or self.current_video_info or {}
         if not isinstance(item, dict) or item.get("kind") != "rss_item":
@@ -1552,6 +1593,8 @@ class LibraryMixin:
             self.download_selected_rss_item()
         elif self.shortcut_matches(event, "toggle_podcast_played"):
             self.toggle_selected_rss_item_played()
+        elif self.shortcut_matches(event, "clear_podcast_progress"):
+            self.clear_selected_rss_item_progress()
         elif self.shortcut_matches(event, "add_to_playback_queue"):
             self.add_active_to_playback_queue()
         elif self.shortcut_matches(event, "remove_from_playback_queue"):
@@ -1569,6 +1612,7 @@ class LibraryMixin:
         actions = [
             (self.t("play_episode"), self.play_selected_rss_item),
             (self.menu_label_with_shortcut(played_label_key, "toggle_podcast_played"), self.toggle_selected_rss_item_played),
+            (self.menu_label_with_shortcut("clear_episode_progress", "clear_podcast_progress"), self.clear_selected_rss_item_progress),
             (self.menu_label_with_shortcut("download_episode_audio", "download_audio"), self.download_selected_rss_item),
             (self.menu_label_with_shortcut("queue_episode_audio", "queue_audio"), self.toggle_rss_item_queue),
             (self.menu_label_with_shortcut("add_to_playlist", "add_to_playlist"), self.add_active_to_playlist),
