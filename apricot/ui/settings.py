@@ -514,6 +514,8 @@ class SettingsMixin:
                         slider(f"eq_{band_id}", label, gains.get(band_id, 0.0), slider_min, slider_max, band_id=band_id)
                     button("reset_equalizer", self.reset_visible_equalizer_controls)
                     button("add_equalizer_profile", self.add_equalizer_profile_from_settings)
+                    button("import_equalizer_profile", self.import_equalizer_profile_from_settings)
+                    button("export_equalizer_profile", self.export_visible_equalizer_profile_from_settings)
                     if self.is_custom_equalizer_preset(preset):
                         button("delete_equalizer_profile", self.delete_visible_equalizer_profile_from_settings)
             finally:
@@ -656,6 +658,23 @@ class SettingsMixin:
             return
         self.settings.global_equalizer_preset = preset_id
         wx.CallAfter(self.render_settings_section_and_focus, "equalizer_preset")
+
+
+    def import_equalizer_profile_from_settings(self) -> None:
+        preset_id = self.import_equalizer_profile_dialog()
+        if not preset_id:
+            return
+        self.visible_equalizer_preset = preset_id
+        if self.player_is_active() and self.session_equalizer_enabled is None:
+            self.schedule_equalizer_apply(30)
+        wx.CallAfter(self.render_settings_section_and_focus, "equalizer_preset")
+
+
+    def export_visible_equalizer_profile_from_settings(self) -> None:
+        preset_id = self.normalized_equalizer_preset(getattr(self, "visible_equalizer_preset", getattr(self.settings, "global_equalizer_preset", EQ_PRESET_FLAT)))
+        self.save_visible_equalizer_gains_to_preset(preset_id)
+        name = self.equalizer_preset_label(preset_id)
+        self.export_equalizer_profile_dialog(name, self.visible_equalizer_gains() or self.equalizer_gains_for_preset(preset_id), preset_id)
 
 
     def delete_visible_equalizer_profile_from_settings(self) -> None:

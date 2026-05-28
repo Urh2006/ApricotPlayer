@@ -504,7 +504,7 @@ class ShortcutsUI:
         if not (self.player_control_mode and self.player_shortcuts_allowed(focus)):
             return False
         if (
-            self.is_function_key_event(event, 5)
+            (self.is_function_key_event(event, 1) or self.is_function_key_event(event, 5))
             and not event.ControlDown()
             and not event.ShiftDown()
             and not event.AltDown()
@@ -514,6 +514,9 @@ class ShortcutsUI:
         if self.focus_in_results_control(focus):
             if self.shortcut_matches(event, "player_previous"):
                 self.play_relative_item(-1, preserve_focus=True)
+                return True
+            if self.shortcut_matches(event, "player_next_related"):
+                self.play_related_item()
                 return True
             if self.shortcut_matches(event, "player_next"):
                 self.play_relative_item(1, preserve_focus=True)
@@ -618,6 +621,9 @@ class ShortcutsUI:
         if self.shortcut_matches(event, "player_previous"):
             self.play_relative_item(-1, preserve_focus=True)
             return True
+        if self.shortcut_matches(event, "player_next_related"):
+            self.play_related_item()
+            return True
         if self.shortcut_matches(event, "player_next"):
             self.play_relative_item(1, preserve_focus=True)
             return True
@@ -693,6 +699,9 @@ class ShortcutsUI:
         if self.shortcut_matches(event, "player_previous"):
             self.play_relative_item(-1, preserve_focus=True)
             return True
+        if self.shortcut_matches(event, "player_next_related"):
+            self.play_related_item()
+            return True
         if self.shortcut_matches(event, "player_next"):
             self.play_relative_item(1, preserve_focus=True)
             return True
@@ -749,6 +758,8 @@ class ShortcutsUI:
             repaired["add_favorite"] = DEFAULT_KEYBOARD_SHORTCUTS["add_favorite"]
         if not str(repaired.get("remove_favorite", "")).strip():
             repaired["remove_favorite"] = DEFAULT_KEYBOARD_SHORTCUTS["remove_favorite"]
+        if self.canonical_shortcut(repaired.get("player_preview_marked_clip", "")) == "f1":
+            repaired["player_preview_marked_clip"] = DEFAULT_KEYBOARD_SHORTCUTS["player_preview_marked_clip"]
         for action in list(repaired):
             if self.canonical_shortcut(repaired.get(action, "")) == "f5":
                 repaired[action] = DEFAULT_KEYBOARD_SHORTCUTS.get(action, "")

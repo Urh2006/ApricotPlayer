@@ -1,6 +1,8 @@
 from apricot.constants import *
+import json
 import wx
 import os
+import re
 from pathlib import Path
 from apricot.ui.misc import MiscUI
 
@@ -220,12 +222,18 @@ class EqualizerUI:
         save_global_button = wx.Button(dialog, label=self.t("save_equalizer_as_global"))
         add_profile_button = wx.Button(dialog, label=self.t("add_equalizer_profile"))
         delete_profile_button = wx.Button(dialog, label=self.t("delete_equalizer_profile"))
+        import_profile_button = wx.Button(dialog, label=self.t("import_equalizer_profile"))
+        export_profile_button = wx.Button(dialog, label=self.t("export_equalizer_profile"))
+        compare_profile_button = wx.Button(dialog, label=self.t("compare_equalizer_profile"))
         buttons.AddButton(ok_button)
         buttons.AddButton(cancel_button)
         buttons.Realize()
         row = wx.BoxSizer(wx.HORIZONTAL)
         row.Add(add_profile_button, 0, wx.RIGHT, 8)
         row.Add(delete_profile_button, 0, wx.RIGHT, 8)
+        row.Add(import_profile_button, 0, wx.RIGHT, 8)
+        row.Add(export_profile_button, 0, wx.RIGHT, 8)
+        row.Add(compare_profile_button, 0, wx.RIGHT, 8)
         row.Add(save_global_button, 0, wx.RIGHT, 8)
         row.Add(reset_button, 0, wx.RIGHT, 8)
         row.Add(buttons, 0)
@@ -271,6 +279,20 @@ class EqualizerUI:
             self.session_equalizer_enabled = True
             self.session_equalizer_gains = current_dialog_gains()
             self.schedule_equalizer_apply()
+
+        compare_showing_original = False
+
+        def compare_dialog_equalizer(_event=None) -> None:
+            nonlocal compare_showing_original
+            compare_showing_original = not compare_showing_original
+            if compare_showing_original:
+                self.session_equalizer_enabled = original_enabled
+                self.session_equalizer_gains = dict(original_gains)
+                self.apply_equalizer_to_player()
+                self.announce_player(self.t("equalizer_compare_original"))
+                return
+            live_apply()
+            self.announce_player(self.t("equalizer_compare_current"))
 
         def load_preset_into_sliders(preset_id: str) -> None:
             nonlocal dialog_visible_preset
@@ -357,6 +379,19 @@ class EqualizerUI:
             name_ctrl.SetValue(self.equalizer_custom_name(preset_id))
             live_apply()
 
+        def import_profile_from_dialog(_event=None) -> None:
+            preset_id = self.import_equalizer_profile_dialog()
+            if not preset_id:
+                return
+            refresh_preset_choices(preset_id)
+            load_preset_into_sliders(preset_id)
+
+        def export_profile_from_dialog(_event=None) -> None:
+            save_current_dialog_name()
+            preset_id = current_preset()
+            name = name_ctrl.GetValue().strip() if self.is_custom_equalizer_preset(preset_id) else self.equalizer_preset_label(preset_id)
+            self.export_equalizer_profile_dialog(name, current_dialog_gains(), preset_id)
+
         def save_dialog_as_global(_event=None) -> None:
             save_current_dialog_name()
             preset_id = self.choose_equalizer_profile_for_save(current_dialog_gains())
@@ -369,6 +404,9 @@ class EqualizerUI:
             self.announce_player(self.t("equalizer_profile_saved"))
 
         add_profile_button.Bind(wx.EVT_BUTTON, add_profile_from_dialog)
+        import_profile_button.Bind(wx.EVT_BUTTON, import_profile_from_dialog)
+        export_profile_button.Bind(wx.EVT_BUTTON, export_profile_from_dialog)
+        compare_profile_button.Bind(wx.EVT_BUTTON, compare_dialog_equalizer)
         save_global_button.Bind(wx.EVT_BUTTON, save_dialog_as_global)
 
         def delete_profile_from_dialog(_event=None) -> None:
@@ -611,6 +649,72 @@ class EqualizerUI:
         self.settings.global_equalizer_preset = preset_id
         self.save_settings()
         self.announce_player(self.t("equalizer_profile_saved"))
+        return preset_id
+
+    def equalizer_profile_export_payload(self, name: str, gains: dict[str, float], preset_id: str = "") -> dict:
+        return {
+            "type": "apricot_equalizer_profile",
+            "version": 1,
+            "name": str(name or "").strip()[:80] or self.equalizer_default_profile_name(),
+            "preset_id": str(preset_id or ""),
+            "bands": [band_id for band_id, _band_label in EQ_BANDS],
+            "gains": self.normalized_equalizer_gains(gains),
+        }
+
+    def equalizer_profile_from_payload(self, payload: dict) -> tuple[str, dict[str, float]]:
+        if not isinstance(payload, dict):
+            raise ValueError(self.t("equalizer_profile_invalid"))
+        raw_gains = payload.get("gains")
+        if not isinstance(raw_gains, dict):
+            raise ValueError(self.t("equalizer_profile_invalid"))
+        name = str(payload.get("name") or "").strip()[:80] or self.equalizer_default_profile_name()
+        return name, self.normalized_equalizer_gains(raw_gains)
+
+    def export_equalizer_profile_dialog(self, name: str, gains: dict[str, float], preset_id: str = "") -> None:
+        safe_name = re.sub(r"[^A-Za-z0-9._ -]+", "_", str(name or "").strip())[:80].strip(" ._") or "equalizer-profile"
+        wildcard = f"{self.t('equalizer_profile_file')} (*.json)|*.json|{self.t('all_files')} (*.*)|*.*"
+        with wx.FileDialog(
+            self,
+            self.t("export_equalizer_profile"),
+            defaultFile=f"{safe_name}.json",
+            wildcard=wildcard,
+            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT,
+        ) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            path = Path(dialog.GetPath())
+        if path.suffix.lower() != ".json":
+            path = path.with_suffix(".json")
+        try:
+            payload = self.equalizer_profile_export_payload(name, gains, preset_id)
+            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as exc:
+            wx.MessageBox(self.t("equalizer_profile_export_failed", error=str(exc)), self.t("equalizer"), wx.OK | wx.ICON_ERROR)
+            return
+        self.announce_player(self.t("equalizer_profile_exported", path=str(path)))
+
+    def import_equalizer_profile_dialog(self) -> str:
+        wildcard = f"{self.t('equalizer_profile_file')} (*.json)|*.json|{self.t('all_files')} (*.*)|*.*"
+        with wx.FileDialog(
+            self,
+            self.t("import_equalizer_profile"),
+            wildcard=wildcard,
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+        ) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return ""
+            path = Path(dialog.GetPath())
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            name, gains = self.equalizer_profile_from_payload(payload)
+            preset_id = self.create_equalizer_profile(name, gains)
+            self.settings.global_equalizer_preset = preset_id
+            self.settings.global_equalizer_gains = self.normalized_equalizer_gains(gains)
+            self.save_settings()
+        except Exception as exc:
+            wx.MessageBox(self.t("equalizer_profile_import_failed", error=str(exc)), self.t("equalizer"), wx.OK | wx.ICON_ERROR)
+            return ""
+        self.announce_player(self.t("equalizer_profile_imported", name=name))
         return preset_id
 
     def delete_equalizer_profile(self, preset_id: str | None, confirm: bool = True) -> str:

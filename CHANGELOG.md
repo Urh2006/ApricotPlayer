@@ -1,3 +1,13 @@
+# v1.0.0-beta.5 - Related Playback and EQ Profiles Beta
+
+## New
+- **Added a dedicated related-video next command.** `Ctrl+Shift+PageDown` now plays a related/suggested video from the current YouTube item, while `Ctrl+PageDown` keeps moving through the normal results, folder, playlist, or queue sequence.
+- **Started Equalizer Profiles 2.0.** Player EQ profiles can now be imported/exported as JSON, and the player EQ dialog has an A/B compare button for quickly switching between the original EQ state and the edited profile preview.
+
+## Fixes
+- **Fixed Autoplay related suggested videos actually using related playback.** When that setting is enabled, ending a YouTube video can now continue with a related suggestion even when normal autoplay-next is disabled.
+- **Removed the accidental F1 marked-preview shortcut.** Marked clip preview remains on the configured player preview shortcut, which defaults to `P`.
+
 # v1.0.0-beta.4 - Audio Normalization Beta
 
 ## New

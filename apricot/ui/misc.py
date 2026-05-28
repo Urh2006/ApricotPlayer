@@ -2252,26 +2252,29 @@ class MiscUI:
         args.append(str(output))
         return args
 
-    def play_next_standard_fallback(self) -> None:
-        sequence_active = self.current_player_sequence_active()
-        if not sequence_active:
-            queued_item = self.pop_next_playback_queue_item()
-            if queued_item:
-                self.open_playback_queue_item_with_mode(queued_item, show_player=self.in_player_screen or not self.background_playback_enabled())
+    def play_next_standard_fallback(self, allow_standard: bool = True, announce_no_related: bool = False) -> None:
+        if allow_standard:
+            sequence_active = self.current_player_sequence_active()
+            if not sequence_active:
+                queued_item = self.pop_next_playback_queue_item()
+                if queued_item:
+                    self.open_playback_queue_item_with_mode(queued_item, show_player=self.in_player_screen or not self.background_playback_enabled())
+                    return
+            next_item = self.relative_player_item(1)
+            if next_item:
+                self.open_relative_player_item(next_item)
                 return
-        next_item = self.relative_player_item(1)
-        if next_item:
-            self.open_relative_player_item(next_item)
-            return
-        if sequence_active:
-            queued_item = self.pop_next_playback_queue_item()
-            if queued_item:
-                self.open_playback_queue_item_with_mode(queued_item, show_player=self.in_player_screen or not self.background_playback_enabled())
-                return
+            if sequence_active:
+                queued_item = self.pop_next_playback_queue_item()
+                if queued_item:
+                    self.open_playback_queue_item_with_mode(queued_item, show_player=self.in_player_screen or not self.background_playback_enabled())
+                    return
         self.player_ended = True
         self.player_paused = True
         self.update_play_pause_buttons()
-        if bool(getattr(self.settings, "announce_playback_finished", True)):
+        if announce_no_related:
+            self.announce_player(self.t("no_related_video"))
+        elif bool(getattr(self.settings, "announce_playback_finished", True)):
             self.announce_player(self.t("playback_finished"))
         else:
             self.set_status(self.t("playback_finished"))

@@ -355,7 +355,16 @@ class DownloadsUI:
             except RuntimeError:
                 pass
 
-    def fetch_related_and_play_next(self, current_item: dict, generation: int) -> None:
+    def fetch_related_and_play_next(
+        self,
+        current_item: dict,
+        generation: int,
+        allow_standard_fallback: bool = True,
+        announce_no_related: bool = False,
+    ) -> None:
+        def fallback() -> None:
+            wx.CallAfter(self.play_next_standard_fallback, allow_standard_fallback, announce_no_related)
+
         try:
             url = current_item.get("url") or ""
             video_id = current_item.get("id") or ""
@@ -363,7 +372,7 @@ class DownloadsUI:
                 url = f"https://www.youtube.com/watch?v={video_id}"
             
             if not url or not self.is_youtube_url(url):
-                wx.CallAfter(self.play_next_standard_fallback)
+                fallback()
                 return
             
             req = Request(
@@ -380,7 +389,7 @@ class DownloadsUI:
                 m = re.search(r'ytInitialData\s*=\s*({.*?});', html)
             
             if not m:
-                wx.CallAfter(self.play_next_standard_fallback)
+                fallback()
                 return
             
             data = json.loads(m.group(1))
@@ -477,7 +486,7 @@ class DownloadsUI:
                     deduped.append(v)
             
             if not deduped:
-                wx.CallAfter(self.play_next_standard_fallback)
+                fallback()
                 return
             
             normalized_results = []
@@ -495,13 +504,13 @@ class DownloadsUI:
                     pass
             
             if not normalized_results:
-                wx.CallAfter(self.play_next_standard_fallback)
+                fallback()
                 return
             
             wx.CallAfter(self.apply_related_videos_and_play, normalized_results, generation)
             
         except Exception:
-            wx.CallAfter(self.play_next_standard_fallback)
+            fallback()
 
     @staticmethod
     def format_rate_for_speech(value: float) -> str:

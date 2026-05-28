@@ -1401,10 +1401,16 @@ class PlayerUI:
             self.update_play_pause_buttons()
             self.restart_current_playback(announce=False)
             return
-        if self.effective_autoplay_next():
-            if getattr(self.settings, "autoplay_related", False) and self.current_video_item and self.is_youtube_url(self.current_video_item.get("url")):
-                threading.Thread(target=self.fetch_related_and_play_next, args=(self.current_video_item, generation), daemon=True).start()
-                return
+        related_autoplay = bool(getattr(self.settings, "autoplay_related", False))
+        normal_autoplay = self.effective_autoplay_next()
+        if related_autoplay and self.current_video_item and self.is_youtube_url(self.current_video_item.get("url")):
+            threading.Thread(
+                target=self.fetch_related_and_play_next,
+                args=(self.current_video_item, generation, normal_autoplay, False),
+                daemon=True,
+            ).start()
+            return
+        if normal_autoplay:
             sequence_active = self.current_player_sequence_active()
             if not sequence_active:
                 queued_item = self.pop_next_playback_queue_item()
@@ -1424,8 +1430,26 @@ class PlayerUI:
         self.player_paused = True
         self.update_play_pause_buttons()
 
+    def play_related_item(self) -> None:
+        item = dict(self.current_video_item or self.current_video_info or {})
+        if not self.player_is_active() or not item:
+            self.announce_player(self.t("no_player"))
+            return
+        if not self.is_youtube_url(str(item.get("url") or item.get("webpage_url") or "")):
+            self.announce_player(self.t("no_related_video"))
+            return
+        self.set_status(self.t("loading_related_video"))
+        threading.Thread(
+            target=self.fetch_related_and_play_next,
+            args=(item, self.player_generation, False, True),
+            daemon=True,
+        ).start()
+
     def apply_related_videos_and_play(self, normalized_results: list[dict], generation: int) -> None:
         if generation != self.player_generation:
+            return
+        if not normalized_results:
+            self.play_next_standard_fallback(False, True)
             return
         self.show_results(normalized_results, focus_results=False)
         first_item = normalized_results[0]
