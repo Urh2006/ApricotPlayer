@@ -396,18 +396,24 @@ class PlaybackMixin:
         self.play_request_generation += 1
         self.playback_start_pending = False
         self.cancel_clip_preview()
-        self.save_current_playback_position()
         self.player_generation += 1
         self.player_ended = False
         if not reset_session:
             self.remember_current_player_volume()
+        self.quiet_current_mpv_for_stop()
+        self.save_current_playback_position()
         if self.player_process and self.player_process.poll() is None:
             self.player_process.terminate()
             try:
                 self.player_process.wait(timeout=0.5)
             except subprocess.TimeoutExpired:
                 self.player_process.kill()
+                try:
+                    self.player_process.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    pass
         self.player_process = None
+        self.ipc_path = None
         if self.player_log_handle:
             self.player_log_handle.close()
             self.player_log_handle = None

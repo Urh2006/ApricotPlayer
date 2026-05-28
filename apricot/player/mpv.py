@@ -197,6 +197,20 @@ class MpvMixin:
         return bool(self.player_process and self.player_process.poll() is None)
 
 
+    def quiet_current_mpv_for_stop(self) -> None:
+        if self.player_kind != "mpv" or not self.ipc_path or not self.mpv_process_alive():
+            return
+        for command in (
+            ["set_property", "mute", True],
+            ["set_property", "volume", 0],
+            ["set_property", "pause", True],
+        ):
+            try:
+                self.mpv_send(command, timeout=0.05)
+            except Exception:
+                pass
+
+
     def open_mpv_pipe(self, mode: str, timeout: float = MPV_IPC_TIMEOUT_SECONDS, buffering: int = -1, encoding: str | None = None):
         if self.player_kind != "mpv" or not self.ipc_path:
             raise RuntimeError("mpv is not running")

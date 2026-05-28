@@ -1,3 +1,10 @@
+# v1.0.0-beta.8 - Volume Boost Handoff Hotfix
+
+## Fixes
+- **Silenced the old mpv instance before replacing playback.** When Apricot switches to the next file/video, the previous player is now muted, set to volume 0, and paused before it is terminated. This targets the tester report where audio briefly sounded like it jumped to boosted volume before settling back to the intended volume.
+- **Preserved session volume before silencing the old player.** Internal handoffs still remember the user's current volume first, so the stop routine cannot accidentally learn the temporary muted handoff volume.
+- **Invalidated old player workers earlier during stop.** Startup/volume workers from the previous playback generation are now stopped before Apricot saves position or terminates mpv, reducing the chance of a stale worker unmuting a player that is already being replaced.
+
 # v1.0.0-beta.7 - Startup Audio Gate Hotfix
 
 ## Fixes
