@@ -1,3 +1,14 @@
+# v1.0.0-beta.13 - Per-Device Equalizer Presets Beta
+
+## New
+- **Added per-output-device equalizer defaults.** When global EQ is enabled, Apricot can now select a different EQ preset for each output device, including `auto`.
+- **Added Equalizer Settings support for device presets.** The Equalizer section now lets the user choose the preset for the current default output device.
+- **Added Player Equalizer actions for device presets.** The player EQ dialog can save the current preset as the default for the current output device or clear that device default.
+- **Improved diagnostics for EQ testing.** Diagnostic reports now include the effective EQ preset and the number of saved output-device EQ mappings.
+
+## Notes
+- **Kept EQ audio processing unchanged.** This beta only chooses which preset is active for a device; it does not change slider math, EQ filters, bass boost, clipping protection, mpv startup, or stream resolving.
+
 # v1.0.0-beta.12 - Shortcut Discoverability Beta
 
 ## New

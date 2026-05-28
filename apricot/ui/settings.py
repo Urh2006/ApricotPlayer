@@ -152,6 +152,7 @@ class SettingsMixin:
                 "global_equalizer_gains",
                 "equalizer_preset_gains",
                 "equalizer_custom_names",
+                "equalizer_device_presets",
                 "equalizer_db_range",
                 "equalizer_clipping_protection",
             ],
@@ -501,6 +502,11 @@ class SettingsMixin:
                     self.visible_equalizer_preset = preset
                     preset_choice = choice("equalizer_preset", preset, self.equalizer_preset_options(), self.equalizer_preset_labels())
                     preset_choice.Bind(wx.EVT_CHOICE, self.on_equalizer_settings_preset_changed)
+                    device_key = self.equalizer_current_device_key()
+                    device_presets = self.normalized_equalizer_device_presets(getattr(self.settings, "equalizer_device_presets", {}) or {})
+                    device_preset = device_presets.get(device_key, "")
+                    device_choice = choice("equalizer_device_preset", device_preset, self.equalizer_device_preset_options(), self.equalizer_device_preset_labels())
+                    device_choice.Bind(wx.EVT_CHOICE, self.on_equalizer_device_preset_changed)
                     if self.is_custom_equalizer_preset(preset):
                         name_ctrl = text("equalizer_preset_name", self.equalizer_custom_name(preset))
                         name_ctrl.Bind(wx.EVT_KILL_FOCUS, self.on_equalizer_settings_name_changed)
@@ -983,6 +989,8 @@ class SettingsMixin:
         if "equalizer_preset" in c:
             selected_equalizer_preset = self.normalized_equalizer_preset(self.selected_choice_value("equalizer_preset"))
             self.settings.global_equalizer_preset = selected_equalizer_preset
+        if "equalizer_device_preset" in c:
+            self.set_equalizer_device_preset(self.equalizer_current_device_key(), self.selected_choice_value("equalizer_device_preset"))
         if "equalizer_preset_name" in c and self.is_custom_equalizer_preset(selected_equalizer_preset):
             names = self.normalized_equalizer_custom_names(getattr(self.settings, "equalizer_custom_names", {}) or {})
             names[selected_equalizer_preset] = c["equalizer_preset_name"].GetValue().strip()[:80] or self.equalizer_custom_name(selected_equalizer_preset)

@@ -43,6 +43,7 @@ class Settings:
     global_equalizer_gains: dict[str, float] = field(default_factory=default_equalizer_gains)
     equalizer_preset_gains: dict[str, dict[str, float]] = field(default_factory=default_equalizer_preset_gains)
     equalizer_custom_names: dict[str, str] = field(default_factory=default_equalizer_custom_names)
+    equalizer_device_presets: dict[str, str] = field(default_factory=dict)
     equalizer_db_range: int = 12
     equalizer_clipping_protection: bool = False
     ask_download_location_each_time: bool = False

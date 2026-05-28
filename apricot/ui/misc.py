@@ -2335,6 +2335,8 @@ class MiscUI:
             self.mpv_set_property("audio-device", value)
             self.session_audio_output_device = value
             self.current_audio_device = value
+            if self.session_equalizer_enabled is None:
+                self.schedule_equalizer_apply(30)
             self.announce_player(self.t("output_device_set", device=choices[index]))
         except Exception as exc:
             self.announce_player(self.t("stream_url_failed", error=self.friendly_error(exc)))

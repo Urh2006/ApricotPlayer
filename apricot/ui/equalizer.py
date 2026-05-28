@@ -46,7 +46,7 @@ class EqualizerUI:
     def base_equalizer_state(self) -> tuple[bool, dict[str, float]]:
         if self.session_equalizer_enabled is not None:
             return bool(self.session_equalizer_enabled), self.normalized_equalizer_gains(self.session_equalizer_gains)
-        preset = self.normalized_equalizer_preset(getattr(self.settings, "global_equalizer_preset", EQ_PRESET_FLAT))
+        preset = self.effective_equalizer_preset()
         return bool(getattr(self.settings, "global_equalizer_enabled", False)), self.equalizer_gains_for_preset(preset)
 
     def equalizer_gains_with_bass_boost(self, gains: dict[str, float]) -> dict[str, float]:
@@ -173,7 +173,7 @@ class EqualizerUI:
         original_gains = dict(self.session_equalizer_gains)
         original_db_range = self.equalizer_db_range_value()
         _enabled, gains = self.base_equalizer_state()
-        active_preset = self.normalized_equalizer_preset(getattr(self.settings, "global_equalizer_preset", EQ_PRESET_FLAT))
+        active_preset = self.effective_equalizer_preset()
         dialog_db_range = original_db_range
         dialog = wx.Dialog(self, title=self.t("equalizer"), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         dialog.SetName(self.t("equalizer"))
@@ -225,6 +225,8 @@ class EqualizerUI:
         import_profile_button = wx.Button(dialog, label=self.t("import_equalizer_profile"))
         export_profile_button = wx.Button(dialog, label=self.t("export_equalizer_profile"))
         compare_profile_button = wx.Button(dialog, label=self.t("compare_equalizer_profile"))
+        save_device_button = wx.Button(dialog, label=self.t("save_equalizer_as_device_default"))
+        clear_device_button = wx.Button(dialog, label=self.t("clear_equalizer_device_default"))
         buttons.AddButton(ok_button)
         buttons.AddButton(cancel_button)
         buttons.Realize()
@@ -234,6 +236,8 @@ class EqualizerUI:
         row.Add(import_profile_button, 0, wx.RIGHT, 8)
         row.Add(export_profile_button, 0, wx.RIGHT, 8)
         row.Add(compare_profile_button, 0, wx.RIGHT, 8)
+        row.Add(save_device_button, 0, wx.RIGHT, 8)
+        row.Add(clear_device_button, 0, wx.RIGHT, 8)
         row.Add(save_global_button, 0, wx.RIGHT, 8)
         row.Add(reset_button, 0, wx.RIGHT, 8)
         row.Add(buttons, 0)
@@ -403,10 +407,38 @@ class EqualizerUI:
             refresh_preset_choices(preset_id)
             self.announce_player(self.t("equalizer_profile_saved"))
 
+        def save_dialog_as_device_default(_event=None) -> None:
+            save_current_dialog_name()
+            gains = current_dialog_gains()
+            preset_id = current_preset()
+            if self.is_custom_equalizer_preset(preset_id):
+                presets = self.normalized_equalizer_preset_gains(getattr(self.settings, "equalizer_preset_gains", {}) or {})
+                presets[preset_id] = gains
+                self.settings.equalizer_preset_gains = presets
+            elif not self.equalizer_gains_match(gains, self.equalizer_gains_for_preset(preset_id)):
+                preset_id = self.choose_equalizer_profile_for_save(gains)
+                if not preset_id:
+                    return
+            device = self.equalizer_current_device_key()
+            self.settings.global_equalizer_enabled = True
+            self.set_equalizer_device_preset(device, preset_id, save=True)
+            self.use_global_equalizer_for_live_preview()
+            self.schedule_equalizer_apply(30)
+            self.announce_player(self.t("equalizer_device_profile_saved", device=self.equalizer_device_display_name(device), preset=self.equalizer_preset_label(preset_id)))
+
+        def clear_dialog_device_default(_event=None) -> None:
+            device = self.equalizer_current_device_key()
+            self.set_equalizer_device_preset(device, "", save=True)
+            self.use_global_equalizer_for_live_preview()
+            self.schedule_equalizer_apply(30)
+            self.announce_player(self.t("equalizer_device_profile_cleared", device=self.equalizer_device_display_name(device)))
+
         add_profile_button.Bind(wx.EVT_BUTTON, add_profile_from_dialog)
         import_profile_button.Bind(wx.EVT_BUTTON, import_profile_from_dialog)
         export_profile_button.Bind(wx.EVT_BUTTON, export_profile_from_dialog)
         compare_profile_button.Bind(wx.EVT_BUTTON, compare_dialog_equalizer)
+        save_device_button.Bind(wx.EVT_BUTTON, save_dialog_as_device_default)
+        clear_device_button.Bind(wx.EVT_BUTTON, clear_dialog_device_default)
         save_global_button.Bind(wx.EVT_BUTTON, save_dialog_as_global)
 
         def delete_profile_from_dialog(_event=None) -> None:
@@ -511,6 +543,74 @@ class EqualizerUI:
                 if isinstance(gains, dict):
                     normalized[preset_text] = self.normalized_equalizer_gains(gains)
         return normalized
+
+    def normalized_equalizer_device_presets(self, presets: dict | None) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        if isinstance(presets, dict):
+            for device, preset in presets.items():
+                device_key = self.equalizer_device_key(device)
+                if not device_key:
+                    continue
+                raw_preset = str(preset or "").strip()
+                if not raw_preset:
+                    continue
+                preset_id = self.normalized_equalizer_preset(raw_preset)
+                if preset_id:
+                    normalized[device_key] = preset_id
+        return normalized
+
+    @staticmethod
+    def equalizer_device_key(device: str | None) -> str:
+        return str(device or "auto").strip() or "auto"
+
+    def equalizer_current_device_key(self) -> str:
+        session_device = str(getattr(self, "session_audio_output_device", "") or "").strip()
+        if session_device:
+            return self.equalizer_device_key(session_device)
+        if self.player_is_active():
+            return self.equalizer_device_key(self.player_audio_output_device())
+        return self.equalizer_device_key(self.normalized_audio_output_device())
+
+    def equalizer_device_display_name(self, device: str | None) -> str:
+        key = self.equalizer_device_key(device)
+        if key.lower() == "auto":
+            return "auto"
+        return key
+
+    def effective_equalizer_preset(self, device: str | None = None) -> str:
+        fallback = self.normalized_equalizer_preset(getattr(self.settings, "global_equalizer_preset", EQ_PRESET_FLAT))
+        device_key = self.equalizer_device_key(device) if device is not None else self.equalizer_current_device_key()
+        device_presets = self.normalized_equalizer_device_presets(getattr(self.settings, "equalizer_device_presets", {}) or {})
+        return self.normalized_equalizer_preset(device_presets.get(device_key) or fallback)
+
+    def equalizer_device_preset_options(self) -> list[str]:
+        return [""] + self.equalizer_preset_options()
+
+    def equalizer_device_preset_labels(self) -> list[str]:
+        return [self.t("equalizer_use_global_preset")] + self.equalizer_preset_labels()
+
+    def set_equalizer_device_preset(self, device: str | None, preset: str | None, save: bool = False) -> None:
+        device_key = self.equalizer_device_key(device)
+        presets = self.normalized_equalizer_device_presets(getattr(self.settings, "equalizer_device_presets", {}) or {})
+        raw_preset = str(preset or "").strip()
+        preset_id = self.normalized_equalizer_preset(raw_preset)
+        if raw_preset:
+            presets[device_key] = preset_id
+        else:
+            presets.pop(device_key, None)
+        self.settings.equalizer_device_presets = presets
+        if save:
+            self.save_settings()
+
+    @staticmethod
+    def equalizer_gains_match(left: dict[str, float], right: dict[str, float]) -> bool:
+        for band_id, _band_label in EQ_BANDS:
+            try:
+                if abs(float(left.get(band_id, 0.0) or 0.0) - float(right.get(band_id, 0.0) or 0.0)) >= 0.05:
+                    return False
+            except (TypeError, ValueError):
+                return False
+        return True
 
     def normalized_equalizer_custom_names(self, names: dict | None) -> dict[str, str]:
         normalized = default_equalizer_custom_names()
@@ -734,6 +834,8 @@ class EqualizerUI:
             presets.pop(preset_id, None)
         self.settings.equalizer_custom_names = names
         self.settings.equalizer_preset_gains = presets
+        device_presets = self.normalized_equalizer_device_presets(getattr(self.settings, "equalizer_device_presets", {}) or {})
+        self.settings.equalizer_device_presets = {device: preset for device, preset in device_presets.items() if preset != preset_id}
         replacement = EQ_PRESET_FLAT
         self.settings.global_equalizer_preset = replacement
         self.settings.global_equalizer_gains = self.equalizer_gains_for_preset(replacement)
@@ -775,6 +877,13 @@ class EqualizerUI:
         if isinstance(ctrl, wx.CheckBox):
             self.settings.equalizer_clipping_protection = bool(ctrl.GetValue())
         if self.player_is_active():
+            self.schedule_equalizer_apply(30)
+
+    def on_equalizer_device_preset_changed(self, _event: wx.CommandEvent) -> None:
+        if not hasattr(self, "controls"):
+            return
+        self.set_equalizer_device_preset(self.equalizer_current_device_key(), self.selected_choice_value("equalizer_device_preset"))
+        if self.player_is_active() and self.session_equalizer_enabled is None:
             self.schedule_equalizer_apply(30)
 
     def on_equalizer_range_changed(self, _event: wx.CommandEvent) -> None:

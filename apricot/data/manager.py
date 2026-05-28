@@ -70,6 +70,7 @@ class DataManagerMixin:
                 merged["global_equalizer_preset"] = self.normalized_equalizer_preset(str(merged.get("global_equalizer_preset") or EQ_PRESET_FLAT))
                 merged["equalizer_preset_gains"] = self.normalized_equalizer_preset_gains(merged.get("equalizer_preset_gains"))
                 merged["equalizer_custom_names"] = self.normalized_equalizer_custom_names(merged.get("equalizer_custom_names"))
+                merged["equalizer_device_presets"] = self.normalized_equalizer_device_presets(merged.get("equalizer_device_presets"))
                 if "global_equalizer_preset" not in data and any(abs(value) >= 0.05 for value in merged["global_equalizer_gains"].values()):
                     merged["global_equalizer_preset"] = "custom1"
                     merged["equalizer_custom_names"]["custom1"] = "Imported"
