@@ -1,4 +1,5 @@
 from apricot.constants import *
+import threading
 import wx
 import os
 import re
@@ -497,6 +498,9 @@ class SystemUI:
                 "info": _slim_info_for_cache(dict(info or {})),
                 "expires_at": expires_at,
             }
+        # Persist to disk in the background so the cache survives crashes and
+        # force-quits, not just clean shutdowns.
+        threading.Thread(target=self.save_stream_url_cache, daemon=True).start()
 
     def resolve_stream_url(self, url: str) -> tuple[str, dict, dict]:
         local_path = self.local_media_path_from_input(url)

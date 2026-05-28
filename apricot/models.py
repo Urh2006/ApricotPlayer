@@ -26,7 +26,7 @@ class Settings:
     enable_age_restricted_videos: bool = False
     enable_stream_cache: bool = True
     enable_stream_url_cache: bool = True
-    stream_url_cache_minutes: int = 20
+    stream_url_cache_minutes: int = 360
     prefetch_next_stream_url: bool = True
     gapless_playback: bool = True
     replaygain_mode: str = REPLAYGAIN_MODE_OFF

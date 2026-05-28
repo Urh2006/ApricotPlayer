@@ -1,3 +1,9 @@
+# v1.0.0-beta.19 - Persistent Stream URL Cache Fix
+
+## Fixes
+- **Fixed stream URL cache effectively not persisting across restarts.** The cache was already saved to disk on clean shutdown, but the default TTL was 20 minutes — meaning any restart more than 20 minutes after the previous session resulted in an empty cache. The default is now 6 hours (360 minutes), which matches the typical lifespan of a YouTube stream URL. YouTube's own URL expiry (embedded in the URL's `expire` parameter) is still respected as an upper bound, so entries never stay valid longer than the stream URL itself allows.
+- **Stream URL cache now survives crashes and force-quits.** Previously the cache was only written to disk on a clean shutdown. It is now also flushed to disk in a background thread each time a new entry is added, so a crash or task-kill no longer empties the cache.
+
 # v1.0.0-beta.18 - Resume Session Improvements
 
 ## New
