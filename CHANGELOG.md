@@ -1,3 +1,10 @@
+# v1.0.0-beta.10 - Fast Startup Restoration Hotfix
+
+## Fixes
+- **Removed the beta 7 startup pause/mute gate.** Apricot now lets mpv start immediately again while still passing the intended volume, volume limit, speed, ReplayGain, output device, and initial EQ filter directly on the mpv command line.
+- **Kept Start paused behavior correct.** The only time Apricot now starts mpv paused is when the user's Start paused setting is enabled.
+- **Kept the beta 9 old-player handoff protection.** Track changes still silence the previous mpv process with a no-wait best-effort write, but new playback is no longer delayed by waiting for IPC before unpausing.
+
 # v1.0.0-beta.9 - No-Lag Audio Handoff Hotfix
 
 ## Fixes

@@ -128,41 +128,6 @@ class VolumeMixin:
                 time.sleep(0.12)
 
 
-    def apply_initial_audio_startup_worker(
-        self,
-        generation: int,
-        target_volume: float,
-        volume_max: int,
-        release_pause: bool,
-    ) -> None:
-        deadline = time.monotonic() + 2.0
-        startup_ready = False
-        while time.monotonic() < deadline:
-            if generation != self.player_generation or not self.mpv_process_alive():
-                return
-            try:
-                self.mpv_set_property("volume-max", volume_max, timeout=0.25)
-                self.mpv_set_property("volume", target_volume, timeout=0.25)
-                startup_ready = True
-                break
-            except Exception:
-                time.sleep(0.04)
-        if generation != self.player_generation or not self.mpv_process_alive():
-            return
-        try:
-            self.mpv_set_property("mute", False, timeout=0.25)
-            if release_pause:
-                self.mpv_set_property("pause", False, timeout=0.25)
-                self.player_paused = False
-                wx.CallAfter(self.update_play_pause_buttons)
-            elif startup_ready:
-                self.player_paused = True
-                wx.CallAfter(self.update_play_pause_buttons)
-        except Exception:
-            pass
-
-
-
     def change_volume_async(self, delta: int) -> None:
         with self.volume_change_lock:
             maximum = float(self.current_player_volume_max())
