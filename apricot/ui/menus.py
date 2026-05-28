@@ -49,33 +49,34 @@ class MenusUI:
             actions.append((self.t("app_update_menu_item", version=pending_version), self.open_pending_app_update))
         download_count = len(self.download_queue) + len(self.active_downloads)
         if download_count:
-            actions.append((f"{self.t('current_downloads')} ({download_count})", self.show_download_queue))
+            label = self.label_with_shortcut(f"{self.t('current_downloads')} ({download_count})", "open_current_downloads", "\t")
+            actions.append((label, self.show_download_queue))
         if self.playback_queue:
-            actions.append((f"{self.t('playback_queue')} ({len(self.playback_queue)})", self.show_playback_queue))
+            label = self.label_with_shortcut(f"{self.t('playback_queue')} ({len(self.playback_queue)})", "open_playback_queue", "\t")
+            actions.append((label, self.show_playback_queue))
         primary_actions = [
-            (self.t("search_youtube"), self.show_search),
-            (self.t("play_folder"), self.show_play_from_folder),
-            (self.t("play_file"), self.show_play_file),
-            (self.t("direct_link"), self.show_direct_link),
-            (self.t("favorites"), self.show_favorites),
-            (self.t("bookmarks"), self.show_bookmarks),
-            (self.t("playlists"), self.show_user_playlists),
-            (self.t("subscriptions"), self.show_subscriptions),
-            (self.t("notification_center"), self.show_notification_center),
+            (self.menu_label_with_shortcut("search_youtube", "open_search"), self.show_search),
+            (self.menu_label_with_shortcut("play_folder", "open_play_from_folder"), self.show_play_from_folder),
+            (self.menu_label_with_shortcut("play_file", "open_play_file"), self.show_play_file),
+            (self.menu_label_with_shortcut("direct_link", "open_direct_link"), self.show_direct_link),
+            (self.menu_label_with_shortcut("favorites", "open_favorites"), self.show_favorites),
+            (self.menu_label_with_shortcut("bookmarks", "open_bookmarks"), self.show_bookmarks),
+            (self.menu_label_with_shortcut("playlists", "open_playlists"), self.show_user_playlists),
+            (self.menu_label_with_shortcut("subscriptions", "open_subscriptions"), self.show_subscriptions),
+            (self.menu_label_with_shortcut("notification_center", "new_subscription_videos"), self.show_notification_center),
         ]
         if getattr(self.settings, "enable_trending", False):
             primary_actions.insert(1, (self.t("trending"), self.show_trending))
         actions.extend(primary_actions)
         if self.settings.enable_history:
-            actions.append((self.t("history"), self.show_history))
+            actions.append((self.menu_label_with_shortcut("history", "open_history"), self.show_history))
         if self.settings.enable_podcasts_rss:
-            actions.append((self.t("rss_feeds"), self.show_rss_feeds))
+            actions.append((self.menu_label_with_shortcut("rss_feeds", "open_podcasts_rss"), self.show_rss_feeds))
         actions.extend([
             (self.t("file_converter"), self.show_file_converter),
             (self.t("folder_converter"), self.show_folder_converter),
-            (self.menu_label_with_shortcut("action_finder", "open_action_finder"), self.show_action_finder),
             (self.menu_label_with_shortcut("copy_diagnostic_report", "copy_diagnostic_report"), self.copy_diagnostic_report),
-            (self.t("settings"), self.show_settings),
+            (self.menu_label_with_shortcut("settings", "open_settings"), self.show_settings),
             (self.t("exit"), self.quit_application),
         ])
         return actions
@@ -101,7 +102,7 @@ class MenusUI:
             (self.menu_label_with_shortcut("main_menu", "open_main_menu"), self.show_main_menu),
             (self.menu_label_with_shortcut("search_youtube", "open_search"), self.show_search),
             (self.menu_label_with_shortcut("play_folder", "open_play_from_folder"), self.show_play_from_folder),
-            (self.t("play_file"), self.show_play_file),
+            (self.menu_label_with_shortcut("play_file", "open_play_file"), self.show_play_file),
             (self.menu_label_with_shortcut("direct_link", "open_direct_link"), self.show_direct_link),
             (self.menu_label_with_shortcut("favorites", "open_favorites"), self.show_favorites),
             (self.menu_label_with_shortcut("bookmarks", "open_bookmarks"), self.show_bookmarks),

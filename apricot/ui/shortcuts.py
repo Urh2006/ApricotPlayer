@@ -69,9 +69,17 @@ class ShortcutsUI:
         value = str(shortcuts.get(action) or DEFAULT_KEYBOARD_SHORTCUTS.get(action) or "").strip()
         return value or DEFAULT_KEYBOARD_SHORTCUTS.get(action, "")
 
-    def menu_label_with_shortcut(self, label_key: str, action: str) -> str:
+    def show_shortcuts_in_labels(self) -> bool:
+        return bool(getattr(self.settings, "show_shortcuts_in_labels", True))
+
+    def label_with_shortcut(self, label: str, action: str, separator: str = " ") -> str:
+        if not self.show_shortcuts_in_labels():
+            return label
         shortcut = self.shortcut_for(action)
-        return f"{self.t(label_key)}\t{shortcut}" if shortcut else self.t(label_key)
+        return f"{label}{separator}{shortcut}" if shortcut else label
+
+    def menu_label_with_shortcut(self, label_key: str, action: str) -> str:
+        return self.label_with_shortcut(self.t(label_key), action, "\t")
 
     def shortcut_to_accelerator(self, shortcut: str) -> tuple[int, int] | None:
         parsed = self.parse_shortcut(shortcut)
@@ -409,6 +417,9 @@ class ShortcutsUI:
     def open_play_from_folder_shortcut(self) -> None:
         self.run_global_navigation_shortcut(self.show_play_from_folder)
 
+    def open_play_file_shortcut(self) -> None:
+        self.run_global_navigation_shortcut(self.show_play_file)
+
     def open_direct_link_shortcut(self) -> None:
         self.run_global_navigation_shortcut(self.show_direct_link)
 
@@ -473,6 +484,7 @@ class ShortcutsUI:
             ("open_main_menu", self.open_main_menu_shortcut),
             ("open_search", self.open_search_shortcut),
             ("open_play_from_folder", self.open_play_from_folder_shortcut),
+            ("open_play_file", self.open_play_file_shortcut),
             ("open_direct_link", self.open_direct_link_shortcut),
             ("open_favorites", self.open_favorites_shortcut),
             ("open_bookmarks", self.open_bookmarks_shortcut),

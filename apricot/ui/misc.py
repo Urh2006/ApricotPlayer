@@ -2830,8 +2830,9 @@ class MiscUI:
         if not isinstance(button, wx.Button):
             return
         try:
-            button.SetLabel(self.audio_normalization_status_label())
-            button.SetName(self.audio_normalization_status_label())
+            label = self.label_with_shortcut(self.audio_normalization_status_label(), "player_replaygain")
+            button.SetLabel(label)
+            button.SetName(label)
         except RuntimeError:
             pass
 

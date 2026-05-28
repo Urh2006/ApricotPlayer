@@ -13,4 +13,4 @@ Planned feature order:
 7. [ ] Better queue and session restore.
 8. [x] Comments 2.0: sorting, search, replies, copy, and author/channel actions.
 9. [ ] Podcast mode: played state, downloads, resume, chapters, transcripts, and per-podcast speed presets.
-10. [ ] Stable/beta release-channel polish.
+10. [ ] Stable/beta release-channel polish. Beta 12 adds optional shortcut labels for beta discoverability; final 1.0 channel polish remains planned.

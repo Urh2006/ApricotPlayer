@@ -103,6 +103,7 @@ class SettingsMixin:
                 "download_folder",
                 "results_limit",
                 "direct_link_enter_action",
+                "show_shortcuts_in_labels",
                 "auto_update_ytdlp",
                 "auto_update_app",
                 "app_update_interval_hours",
@@ -425,6 +426,7 @@ class SettingsMixin:
             result_limit_options = ["0", "10", "20", "50", "100", "150", "200", "250"]
             choice("results_limit", results_limit_value, result_limit_options, self.result_limit_labels(result_limit_options))
             choice("direct_link_enter_action", self.normalized_direct_link_enter_action(), DIRECT_LINK_ENTER_OPTIONS, self.direct_link_enter_action_labels())
+            check("show_shortcuts_in_labels", bool(getattr(self.settings, "show_shortcuts_in_labels", True)))
             check("auto_update", self.settings.auto_update_ytdlp)
             check("auto_update_app", self.settings.auto_update_app)
             choice(
@@ -885,6 +887,8 @@ class SettingsMixin:
             self.settings.results_limit = self.to_int(self.selected_choice_value("results_limit"), 0, 0, 250)
         if "direct_link_enter_action" in c:
             self.settings.direct_link_enter_action = self.normalize_direct_link_enter_action(self.selected_choice_value("direct_link_enter_action"))
+        if "show_shortcuts_in_labels" in c:
+            self.settings.show_shortcuts_in_labels = c["show_shortcuts_in_labels"].GetValue()
         if "seek_seconds" in c:
             self.settings.seek_seconds = self.to_float(self.selected_choice_value("seek_seconds"), 5.0, 0.1, 600.0)
         if "volume_step" in c:

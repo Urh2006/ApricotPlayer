@@ -1,3 +1,13 @@
+# v1.0.0-beta.12 - Shortcut Discoverability Beta
+
+## New
+- **Added optional shortcut labels throughout the main menu and player.** Menu items and player buttons now show the user's configured shortcuts by default, while Settings includes a new checkbox to hide those labels.
+- **Added a Play file shortcut.** `Ctrl+Alt+I` now opens Play file, appears in the shortcut editor, and is displayed beside the Play file menu item.
+
+## Changed
+- **Removed Action finder from the main menu.** It remains globally available with `Ctrl+Shift+J`.
+- **Kept YouTube playback hot paths untouched.** This beta does not change stream resolving, mpv startup, volume, bass boost, or equalizer processing.
+
 # v1.0.0-beta.11 - Comments 2.0 Beta
 
 ## New

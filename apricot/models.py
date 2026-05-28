@@ -98,6 +98,7 @@ class Settings:
     enable_trending: bool = False
     enable_history: bool = True
     enable_podcasts_rss: bool = True
+    show_shortcuts_in_labels: bool = True
     podcast_search_provider: str = PODCAST_DIRECTORY_PROVIDER_APPLE
     podcast_search_country: str = "US"
     podcast_search_limit: int = 20

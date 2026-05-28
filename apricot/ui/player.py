@@ -80,19 +80,19 @@ class PlayerUI:
 
         row = wx.BoxSizer(wx.HORIZONTAL)
         controls = [
-            (self.t("previous"), lambda: self.play_relative_item(-1)),
+            (self.label_with_shortcut(self.t("previous"), "player_previous"), lambda: self.play_relative_item(-1)),
             (self.current_play_pause_label(), self.player_play_pause),
-            (self.t("next"), lambda: self.play_relative_item(1)),
-            (self.t("playback_queue"), self.show_playback_queue),
-            (self.t("add_to_playlist"), lambda: self.add_active_to_playlist(prefer_active=True)),
-            (self.t("output_devices"), self.show_output_devices),
-            (self.t("equalizer"), self.show_player_equalizer),
+            (self.label_with_shortcut(self.t("next"), "player_next"), lambda: self.play_relative_item(1)),
+            (self.label_with_shortcut(self.t("playback_queue"), "open_playback_queue"), self.show_playback_queue),
+            (self.label_with_shortcut(self.t("add_to_playlist"), "add_to_playlist"), lambda: self.add_active_to_playlist(prefer_active=True)),
+            (self.label_with_shortcut(self.t("output_devices"), "player_output_devices"), self.show_output_devices),
+            (self.label_with_shortcut(self.t("equalizer"), "player_equalizer"), self.show_player_equalizer),
             (self.t("fullscreen"), lambda: self.toggle_player_fullscreen(announce=True)),
-            (self.t("bass_boost"), self.toggle_bass_boost),
-            (self.t("repeat"), self.toggle_repeat),
-            (self.t("shuffle"), self.toggle_shuffle),
-            (self.t("copy_link"), self.copy_current_player_url),
-            (self.t("close_player"), self.close_current_player),
+            (self.label_with_shortcut(self.t("bass_boost"), "player_bass_boost"), self.toggle_bass_boost),
+            (self.label_with_shortcut(self.t("repeat"), "player_repeat"), self.toggle_repeat),
+            (self.label_with_shortcut(self.t("shuffle"), "player_shuffle"), self.toggle_shuffle),
+            (self.label_with_shortcut(self.t("copy_link"), "player_copy_link"), self.copy_current_player_url),
+            (self.label_with_shortcut(self.t("close_player"), "player_back"), self.close_current_player),
         ]
         for label_text, handler in controls:
             button = wx.Button(self.panel, label=label_text)
@@ -601,13 +601,13 @@ class PlayerUI:
         self.player_escape_stop_controls = []
         navigation_controls = []
         if fullscreen_mode and background_enabled:
-            navigation_controls.append((self.t("back_results"), self.exit_fullscreen_to_results))
+            navigation_controls.append((self.label_with_shortcut(self.t("back_results"), "player_back"), self.exit_fullscreen_to_results))
         elif not embedded_results:
-            navigation_controls.append((self.t("back_results"), self.leave_player_to_previous_screen))
+            navigation_controls.append((self.label_with_shortcut(self.t("back_results"), "player_back"), self.leave_player_to_previous_screen))
             if not background_enabled:
-                navigation_controls.append((self.t("back"), lambda: self.leave_player_to_main_menu(force_keep_playing=False)))
+                navigation_controls.append((self.label_with_shortcut(self.t("back"), "player_back"), lambda: self.leave_player_to_main_menu(force_keep_playing=False)))
         else:
-            navigation_controls.append((self.t("back"), lambda: self.leave_player_to_main_menu(force_keep_playing=True)))
+            navigation_controls.append((self.label_with_shortcut(self.t("back"), "player_back"), lambda: self.leave_player_to_main_menu(force_keep_playing=True)))
         navigation_buttons = self.add_button_row(navigation_controls)
         self.player_navigation_controls = list(navigation_buttons)
         for control in navigation_buttons:
@@ -645,30 +645,30 @@ class PlayerUI:
         if focus_target == "player" and not self.settings.show_video_details_by_default:
             self.player_panel.SetFocus()
         is_local_media = self.current_player_is_local_media()
-        replaygain_label = self.audio_normalization_status_label()
+        replaygain_label = self.label_with_shortcut(self.audio_normalization_status_label(), "player_replaygain")
         player_controls = [
-            (self.t("previous"), lambda: self.play_relative_item(-1, preserve_focus=True)),
+            (self.label_with_shortcut(self.t("previous"), "player_previous"), lambda: self.play_relative_item(-1, preserve_focus=True)),
             (self.current_play_pause_label(), self.player_play_pause),
-            (self.t("next"), lambda: self.play_relative_item(1, preserve_focus=True)),
-            (self.t("playback_queue"), self.show_playback_queue),
-            (self.t("add_to_playlist"), lambda: self.add_active_to_playlist(prefer_active=True)),
-            (self.t("add_bookmark"), self.add_current_bookmark),
-            (self.t("bookmarks"), self.show_player_bookmarks),
-            (self.t("output_devices"), self.show_output_devices),
-            (self.t("equalizer"), self.show_player_equalizer),
+            (self.label_with_shortcut(self.t("next"), "player_next"), lambda: self.play_relative_item(1, preserve_focus=True)),
+            (self.label_with_shortcut(self.t("playback_queue"), "open_playback_queue"), self.show_playback_queue),
+            (self.label_with_shortcut(self.t("add_to_playlist"), "add_to_playlist"), lambda: self.add_active_to_playlist(prefer_active=True)),
+            (self.label_with_shortcut(self.t("add_bookmark"), "player_add_bookmark"), self.add_current_bookmark),
+            (self.label_with_shortcut(self.t("bookmarks"), "player_bookmarks"), self.show_player_bookmarks),
+            (self.label_with_shortcut(self.t("output_devices"), "player_output_devices"), self.show_output_devices),
+            (self.label_with_shortcut(self.t("equalizer"), "player_equalizer"), self.show_player_equalizer),
             (replaygain_label, self.cycle_replaygain_mode),
-            (self.t("chapters"), self.show_chapters),
-            (self.t("transcript"), self.show_transcript),
-            (self.t("lyrics"), self.show_lyrics),
-            (self.t("comments"), self.show_comments),
-            (self.t("edit_mode"), self.toggle_edit_mode),
-            (self.t("copy_path" if is_local_media else "copy_link"), self.copy_current_player_url),
-            (self.t("show_video_details"), self.show_video_details),
+            (self.label_with_shortcut(self.t("chapters"), "player_chapters"), self.show_chapters),
+            (self.label_with_shortcut(self.t("transcript"), "player_transcript"), self.show_transcript),
+            (self.label_with_shortcut(self.t("lyrics"), "player_lyrics"), self.show_lyrics),
+            (self.label_with_shortcut(self.t("comments"), "player_comments"), self.show_comments),
+            (self.label_with_shortcut(self.t("edit_mode"), "player_edit_mode"), self.toggle_edit_mode),
+            (self.label_with_shortcut(self.t("copy_path" if is_local_media else "copy_link"), "player_copy_link"), self.copy_current_player_url),
+            (self.label_with_shortcut(self.t("show_video_details"), "player_details"), self.show_video_details),
         ]
         if not is_local_media:
-            player_controls.insert(-1, (self.t("copy_stream_url"), self.copy_direct_stream_url))
+            player_controls.insert(-1, (self.label_with_shortcut(self.t("copy_stream_url"), "copy_stream_url"), self.copy_direct_stream_url))
         if background_enabled:
-            player_controls.append((self.t("close_player"), self.close_current_player))
+            player_controls.append((self.label_with_shortcut(self.t("close_player"), "player_back"), self.close_current_player))
         player_action_buttons = self.add_button_row(player_controls)
         self.replaygain_button = None
         for (label, _handler), control in zip(player_controls, player_action_buttons):
@@ -688,8 +688,9 @@ class PlayerUI:
         self.root_sizer.Add(self.fullscreen_checkbox, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
         self.player_action_controls.append(self.fullscreen_checkbox)
         self.player_escape_stop_controls.append(self.fullscreen_checkbox)
-        self.repeat_checkbox = wx.CheckBox(self.panel, label=self.t("repeat"))
-        self.repeat_checkbox.SetName(self.t("repeat"))
+        repeat_label = self.label_with_shortcut(self.t("repeat"), "player_repeat")
+        self.repeat_checkbox = wx.CheckBox(self.panel, label=repeat_label)
+        self.repeat_checkbox.SetName(repeat_label)
         self.repeat_checkbox.SetValue(self.repeat_current)
         self.repeat_checkbox.Bind(wx.EVT_CHECKBOX, self.on_repeat_changed)
         self.bind_player_navigation_control(self.repeat_checkbox)
@@ -706,8 +707,9 @@ class PlayerUI:
             self.root_sizer.Add(self.session_autoplay_checkbox, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
             self.player_action_controls.append(self.session_autoplay_checkbox)
             self.player_escape_stop_controls.append(self.session_autoplay_checkbox)
-        self.bass_boost_checkbox = wx.CheckBox(self.panel, label=self.t("bass_boost"))
-        self.bass_boost_checkbox.SetName(self.t("bass_boost"))
+        bass_boost_label = self.label_with_shortcut(self.t("bass_boost"), "player_bass_boost")
+        self.bass_boost_checkbox = wx.CheckBox(self.panel, label=bass_boost_label)
+        self.bass_boost_checkbox.SetName(bass_boost_label)
         self.bass_boost_checkbox.SetValue(self.bass_boost_enabled)
         self.bass_boost_checkbox.Bind(wx.EVT_CHECKBOX, self.on_bass_boost_changed)
         self.bind_player_navigation_control(self.bass_boost_checkbox)
