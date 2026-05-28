@@ -88,6 +88,15 @@ class MpvMixin:
                 "--term-playing-msg=",
                 "--msg-level=all=warn",
             ]
+            initial_eq_filter = ""
+            initial_eq_enabled, initial_eq_gains = self.effective_equalizer_state()
+            if initial_eq_enabled and any(abs(float(value)) >= 0.05 for value in initial_eq_gains.values()):
+                initial_eq_filter = self.equalizer_filter(
+                    initial_eq_gains,
+                    self.equalizer_clipping_protection_active(initial_eq_gains),
+                    EQ_FILTER_LABEL,
+                )
+                args.append(f"--af={initial_eq_filter}")
             if embed_player and hwnd:
                 args.insert(2, f"--wid={hwnd}")
             elif urlparse(str(stream_url)).scheme in {"http", "https"}:
@@ -156,7 +165,7 @@ class MpvMixin:
             self.current_audio_device = audio_device
             self.volume_boost_enabled = boost_volume
             self.rubberband_pitch_filter_active = False
-            self.equalizer_filter_active = False
+            self.equalizer_filter_active = bool(initial_eq_filter)
             self.equalizer_filter_ref = EQ_FILTER_REF
             self.current_video_info["speed"] = self.format_playback_rate(float(self.settings.player_speed))
             self.current_video_info["pitch"] = self.format_playback_rate(1.0)
@@ -166,6 +175,7 @@ class MpvMixin:
                 self.announce_player(self.t("playing", title=title))
             wx.CallAfter(self.update_play_pause_buttons)
             threading.Thread(target=self.apply_initial_volume_worker, args=(self.player_generation, target_volume, volume_max), daemon=True).start()
+            wx.CallLater(80, self.apply_equalizer_to_player, 6)
             wx.CallLater(700, self.apply_equalizer_to_player)
             self.start_player_monitor(self.player_generation)
         except Exception as exc:

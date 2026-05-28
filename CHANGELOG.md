@@ -1,3 +1,12 @@
+# v1.0.0-beta.6 - Action Finder and EQ Startup Smoothing Beta
+
+## New
+- **Added Action finder.** Use `Ctrl+Shift+J` or the main menu item to search ApricotPlayer actions by name and run them directly. It includes global navigation actions and player actions when playback is active.
+- **Added the Action finder shortcut to Settings > Keyboard shortcuts.** The default shortcut avoids `Ctrl+Shift+P`, which is already used by another command.
+
+## Fixes
+- **Reduced the startup loudness jump with EQ/clipping protection.** Apricot now passes the active EQ/clipping-protection filter directly to mpv at playback start and then verifies it shortly after startup, instead of waiting before applying it. This targets the “volume gets loud, then settles” report from local files with boosted EQ profiles.
+
 # v1.0.0-beta.5 - Related Playback and EQ Profiles Beta
 
 ## New

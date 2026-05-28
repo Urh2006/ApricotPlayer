@@ -431,6 +431,9 @@ class ShortcutsUI:
     def open_playback_queue_shortcut(self) -> None:
         self.show_playback_queue()
 
+    def open_action_finder_shortcut(self) -> None:
+        self.show_action_finder()
+
     def background_play_pause_shortcut(self) -> None:
         if self.player_is_active():
             self.player_play_pause()
@@ -479,6 +482,7 @@ class ShortcutsUI:
             ("open_history", self.open_history_shortcut),
             ("open_podcasts_rss", self.open_podcasts_rss_shortcut),
             ("open_settings", self.open_settings_shortcut),
+            ("open_action_finder", self.open_action_finder_shortcut),
             ("open_playback_queue", self.open_playback_queue_shortcut),
             ("new_subscription_videos", self.open_notification_center_shortcut),
             ("background_play_pause", self.background_play_pause_shortcut),

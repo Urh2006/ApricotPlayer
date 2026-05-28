@@ -73,6 +73,7 @@ class MenusUI:
         actions.extend([
             (self.t("file_converter"), self.show_file_converter),
             (self.t("folder_converter"), self.show_folder_converter),
+            (self.menu_label_with_shortcut("action_finder", "open_action_finder"), self.show_action_finder),
             (self.menu_label_with_shortcut("copy_diagnostic_report", "copy_diagnostic_report"), self.copy_diagnostic_report),
             (self.t("settings"), self.show_settings),
             (self.t("exit"), self.quit_application),
@@ -94,6 +95,138 @@ class MenusUI:
         if index != wx.NOT_FOUND and 0 <= index < len(self.menu_actions):
             self.last_activated_menu_action = self.menu_actions[index][1]
             self.menu_actions[index][1]()
+
+    def action_finder_actions(self) -> list[tuple[str, callable]]:
+        actions = [
+            (self.menu_label_with_shortcut("main_menu", "open_main_menu"), self.show_main_menu),
+            (self.menu_label_with_shortcut("search_youtube", "open_search"), self.show_search),
+            (self.menu_label_with_shortcut("play_folder", "open_play_from_folder"), self.show_play_from_folder),
+            (self.t("play_file"), self.show_play_file),
+            (self.menu_label_with_shortcut("direct_link", "open_direct_link"), self.show_direct_link),
+            (self.menu_label_with_shortcut("favorites", "open_favorites"), self.show_favorites),
+            (self.menu_label_with_shortcut("bookmarks", "open_bookmarks"), self.show_bookmarks),
+            (self.menu_label_with_shortcut("playlists", "open_playlists"), self.show_user_playlists),
+            (self.menu_label_with_shortcut("subscriptions", "open_subscriptions"), self.show_subscriptions),
+            (self.menu_label_with_shortcut("notification_center", "new_subscription_videos"), self.show_notification_center),
+            (self.menu_label_with_shortcut("playback_queue", "open_playback_queue"), self.show_playback_queue),
+            (self.t("file_converter"), self.show_file_converter),
+            (self.t("folder_converter"), self.show_folder_converter),
+            (self.menu_label_with_shortcut("copy_diagnostic_report", "copy_diagnostic_report"), self.copy_diagnostic_report),
+            (self.menu_label_with_shortcut("settings", "open_settings"), self.show_settings),
+        ]
+        if getattr(self.settings, "enable_trending", False):
+            actions.insert(2, (self.t("trending"), self.show_trending))
+        if self.settings.enable_history:
+            actions.append((self.menu_label_with_shortcut("history", "open_history"), self.show_history))
+        if self.settings.enable_podcasts_rss:
+            actions.append((self.menu_label_with_shortcut("rss_feeds", "open_podcasts_rss"), self.show_rss_feeds))
+        if self.player_is_active():
+            item = dict(self.current_video_item or self.current_video_info or {})
+            is_local_media = self.is_local_media_item(item)
+            is_youtube = self.is_youtube_url(str(item.get("url") or item.get("webpage_url") or ""))
+            player_actions = [
+                (self.menu_label_with_shortcut("pause" if not self.player_paused else "play", "player_play_pause"), self.player_play_pause),
+                (self.menu_label_with_shortcut("previous", "player_previous"), lambda: self.play_relative_item(-1, preserve_focus=True)),
+                (self.menu_label_with_shortcut("next", "player_next"), lambda: self.play_relative_item(1, preserve_focus=True)),
+                (self.menu_label_with_shortcut("copy_path" if is_local_media else "copy_link", "player_copy_link"), self.copy_current_player_url),
+                (self.menu_label_with_shortcut("show_video_details", "player_details"), self.show_video_details),
+                (self.menu_label_with_shortcut("output_devices", "player_output_devices"), self.show_output_devices),
+                (self.menu_label_with_shortcut("equalizer", "player_equalizer"), self.show_player_equalizer),
+                (self.menu_label_with_shortcut("audio_normalization", "player_replaygain"), self.cycle_replaygain_mode),
+                (self.menu_label_with_shortcut("add_bookmark", "player_add_bookmark"), self.add_current_bookmark),
+                (self.menu_label_with_shortcut("bookmarks", "player_bookmarks"), self.show_player_bookmarks),
+                (self.menu_label_with_shortcut("chapters", "player_chapters"), self.show_chapters),
+                (self.menu_label_with_shortcut("transcript", "player_transcript"), self.show_transcript),
+                (self.menu_label_with_shortcut("lyrics", "player_lyrics"), self.show_lyrics),
+                (self.menu_label_with_shortcut("close_player", "player_back"), self.close_current_player),
+            ]
+            if is_youtube:
+                player_actions.insert(3, (self.menu_label_with_shortcut("play_related_video", "player_next_related"), self.play_related_item))
+                player_actions.insert(5, (self.menu_label_with_shortcut("copy_timestamp_link", "player_copy_timestamp_link"), self.copy_current_player_timestamp_url))
+                player_actions.insert(-1, (self.menu_label_with_shortcut("comments", "player_comments"), self.show_comments))
+            actions.extend(player_actions)
+        return actions
+
+    def show_action_finder(self) -> None:
+        actions = self.action_finder_actions()
+        state: dict[str, object] = {"filtered": actions, "handler": None}
+        dialog = wx.Dialog(self, title=self.t("action_finder"), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        dialog.SetName(self.t("action_finder"))
+        dialog.SetMinSize((520, 420))
+        outer = wx.BoxSizer(wx.VERTICAL)
+        outer.Add(wx.StaticText(dialog, label=self.t("action_finder_search")), 0, wx.LEFT | wx.RIGHT | wx.TOP, 8)
+        query = wx.TextCtrl(dialog, style=wx.TE_PROCESS_ENTER)
+        query.SetName(self.t("action_finder_search"))
+        outer.Add(query, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+        action_list = wx.ListBox(dialog, choices=[])
+        action_list.SetName(self.t("action_finder_results"))
+        outer.Add(action_list, 1, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+
+        def filtered_actions() -> list[tuple[str, callable]]:
+            needle = query.GetValue().strip().lower()
+            if not needle:
+                return list(actions)
+            words = [part for part in needle.split() if part]
+            return [(label, handler) for label, handler in actions if all(word in label.lower() for word in words)]
+
+        def refresh_actions(_event=None) -> None:
+            filtered = filtered_actions()
+            state["filtered"] = filtered
+            labels = [label.replace("\t", ", ") for label, _handler in filtered] or [self.t("action_finder_no_results")]
+            action_list.Set(labels)
+            action_list.SetSelection(0)
+
+        def activate(_event=None) -> None:
+            filtered = state.get("filtered")
+            if not isinstance(filtered, list) or not filtered:
+                return
+            index = action_list.GetSelection()
+            if index == wx.NOT_FOUND:
+                index = 0
+            if 0 <= index < len(filtered):
+                _label, handler = filtered[index]
+                state["handler"] = handler
+                dialog.EndModal(wx.ID_OK)
+
+        def on_query_key(event: wx.KeyEvent) -> None:
+            if event.GetKeyCode() in {wx.WXK_DOWN, wx.WXK_UP}:
+                action_list.SetFocus()
+                return
+            if event.GetKeyCode() == wx.WXK_ESCAPE:
+                dialog.EndModal(wx.ID_CANCEL)
+                return
+            event.Skip()
+
+        def on_list_key(event: wx.KeyEvent) -> None:
+            if event.GetKeyCode() in {wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER}:
+                activate()
+                return
+            if event.GetKeyCode() == wx.WXK_ESCAPE:
+                dialog.EndModal(wx.ID_CANCEL)
+                return
+            event.Skip()
+
+        query.Bind(wx.EVT_TEXT, refresh_actions)
+        query.Bind(wx.EVT_TEXT_ENTER, activate)
+        query.Bind(wx.EVT_KEY_DOWN, on_query_key)
+        action_list.Bind(wx.EVT_LISTBOX_DCLICK, activate)
+        action_list.Bind(wx.EVT_KEY_DOWN, on_list_key)
+        button_sizer = wx.StdDialogButtonSizer()
+        open_button = wx.Button(dialog, wx.ID_OK, self.t("open"))
+        cancel_button = wx.Button(dialog, wx.ID_CANCEL)
+        open_button.Bind(wx.EVT_BUTTON, activate)
+        button_sizer.AddButton(open_button)
+        button_sizer.AddButton(cancel_button)
+        button_sizer.Realize()
+        outer.Add(button_sizer, 0, wx.ALIGN_RIGHT | wx.ALL, 8)
+        dialog.SetSizer(outer)
+        refresh_actions()
+        query.SetFocus()
+        result = dialog.ShowModal()
+        handler = state.get("handler") if result == wx.ID_OK else None
+        dialog.Destroy()
+        if callable(handler):
+            wx.CallAfter(handler)
 
     def open_user_playlists_context_menu(self, _event=None) -> None:
         menu = wx.Menu()
