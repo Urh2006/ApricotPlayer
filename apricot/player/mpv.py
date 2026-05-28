@@ -79,6 +79,8 @@ class MpvMixin:
                 "--keep-open=yes",
                 f"--volume-max={volume_max}",
                 f"--volume={target_volume:g}",
+                "--pause=yes",
+                "--mute=yes",
                 "--pitch=1.0",
                 f"--speed={self.settings.player_speed}",
                 f"--loop-file={'inf' if self.repeat_current else 'no'}",
@@ -139,8 +141,6 @@ class MpvMixin:
                     args.append(f"--http-header-fields-append={name}: {value}")
             if self.player_fullscreen_mode_active():
                 args.append("--fullscreen=yes")
-            if self.settings.player_start_paused:
-                args.append("--pause=yes")
             args.append(stream_url)
             log_file = APP_DIR / "mpv.log"
             if self.player_log_handle:
@@ -174,8 +174,11 @@ class MpvMixin:
             if announce_start:
                 self.announce_player(self.t("playing", title=title))
             wx.CallAfter(self.update_play_pause_buttons)
-            threading.Thread(target=self.apply_initial_volume_worker, args=(self.player_generation, target_volume, volume_max), daemon=True).start()
-            wx.CallLater(80, self.apply_equalizer_to_player, 6)
+            threading.Thread(
+                target=self.apply_initial_audio_startup_worker,
+                args=(self.player_generation, target_volume, volume_max, not bool(self.settings.player_start_paused)),
+                daemon=True,
+            ).start()
             wx.CallLater(700, self.apply_equalizer_to_player)
             self.start_player_monitor(self.player_generation)
         except Exception as exc:

@@ -1,3 +1,9 @@
+# v1.0.0-beta.7 - Startup Audio Gate Hotfix
+
+## Fixes
+- **Fixed the remaining startup volume burst on instant-starting local files.** mpv now starts briefly muted and paused while Apricot applies the target volume, volume limit, and startup audio state, then playback is released immediately. This prevents the first 0.0-second audio frame from playing before volume/EQ state is ready.
+- **Kept Start paused behavior intact.** If the user has Start paused enabled, Apricot prepares the same safe startup audio state but leaves playback paused.
+
 # v1.0.0-beta.6 - Action Finder and EQ Startup Smoothing Beta
 
 ## New
