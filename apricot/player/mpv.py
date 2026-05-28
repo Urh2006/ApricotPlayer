@@ -59,6 +59,7 @@ class MpvMixin:
             boost_volume = bool(self.volume_boost_enabled or getattr(self.settings, "volume_boost_by_default", False) or target_volume > NORMAL_VOLUME_MAX)
             volume_max = BOOSTED_VOLUME_MAX if boost_volume else NORMAL_VOLUME_MAX
             target_volume = max(0.0, min(float(volume_max), target_volume))
+            target_speed = self.player_start_speed_value()
             self.session_volume = target_volume
             embed_player = False
             hwnd = 0
@@ -80,7 +81,7 @@ class MpvMixin:
                 f"--volume-max={volume_max}",
                 f"--volume={target_volume:g}",
                 "--pitch=1.0",
-                f"--speed={self.settings.player_speed}",
+                f"--speed={target_speed:g}",
                 f"--loop-file={'inf' if self.repeat_current else 'no'}",
                 f"--gapless-audio={'yes' if bool(getattr(self.settings, 'gapless_playback', True)) else 'no'}",
                 f"--replaygain={self.normalized_replaygain_mode()}",
@@ -167,7 +168,7 @@ class MpvMixin:
             self.rubberband_pitch_filter_active = False
             self.equalizer_filter_active = bool(initial_eq_filter)
             self.equalizer_filter_ref = EQ_FILTER_REF
-            self.current_video_info["speed"] = self.format_playback_rate(float(self.settings.player_speed))
+            self.current_video_info["speed"] = self.format_playback_rate(target_speed)
             self.current_video_info["pitch"] = self.format_playback_rate(1.0)
             self.update_details_text()
             self.set_status(self.t("playing", title=title))

@@ -673,6 +673,9 @@ class ShortcutsUI:
         if self.shortcut_matches(event, "player_speed_up"):
             self.change_speed_async(self.speed_step_value())
             return True
+        if self.shortcut_matches(event, "save_podcast_speed_preset"):
+            self.save_current_speed_as_podcast_preset()
+            return True
         if self.shortcut_matches(event, "player_pitch_up"):
             self.change_pitch_async(self.pitch_step_value())
             return True

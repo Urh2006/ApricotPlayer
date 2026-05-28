@@ -129,6 +129,7 @@ class MenusUI:
             item = dict(self.current_video_item or self.current_video_info or {})
             is_local_media = self.is_local_media_item(item)
             is_youtube = self.is_youtube_url(str(item.get("url") or item.get("webpage_url") or ""))
+            is_podcast_episode = item.get("kind") == "rss_item"
             player_actions = [
                 (self.menu_label_with_shortcut("pause" if not self.player_paused else "play", "player_play_pause"), self.player_play_pause),
                 (self.menu_label_with_shortcut("previous", "player_previous"), lambda: self.play_relative_item(-1, preserve_focus=True)),
@@ -150,6 +151,8 @@ class MenusUI:
                 player_actions.insert(3, (self.menu_label_with_shortcut("play_related_video", "player_next_related"), self.play_related_item))
                 player_actions.insert(5, (self.menu_label_with_shortcut("copy_timestamp_link", "player_copy_timestamp_link"), self.copy_current_player_timestamp_url))
                 player_actions.insert(-1, (self.menu_label_with_shortcut("comments", "player_comments"), self.show_comments))
+            if is_podcast_episode:
+                player_actions.insert(-1, (self.menu_label_with_shortcut("save_podcast_speed_preset", "save_podcast_speed_preset"), self.save_current_speed_as_podcast_preset))
             actions.extend(player_actions)
         return actions
 
@@ -335,6 +338,8 @@ class MenusUI:
         actions.append((self.menu_label_with_shortcut("fullscreen", "player_fullscreen"), lambda: self.toggle_player_fullscreen(announce=True)))
         actions.append((self.t("equalizer"), self.show_player_equalizer))
         actions.append((self.menu_label_with_shortcut("audio_normalization", "player_replaygain"), self.cycle_replaygain_mode))
+        if item.get("kind") == "rss_item":
+            actions.append((self.menu_label_with_shortcut("save_podcast_speed_preset", "save_podcast_speed_preset"), self.save_current_speed_as_podcast_preset))
         if self.is_youtube_url(str(item.get("url") or item.get("webpage_url") or "")):
             actions.append((self.menu_label_with_shortcut("play_related_video", "player_next_related"), self.play_related_item))
         actions.append((self.menu_label_with_shortcut("add_bookmark", "player_add_bookmark"), self.add_current_bookmark))

@@ -1,3 +1,14 @@
+# v1.0.0-beta.17 - Podcast Speed Presets Beta
+
+## New
+- **Added per-podcast playback speed presets.** RSS/podcast feeds can now remember their own speed instead of always using the global player speed.
+- **Added a feed context action.** Use the podcast/RSS feed context menu to choose a speed preset or return that feed to the global player speed.
+- **Added a player shortcut and action.** While a podcast episode is playing, use `Ctrl+Shift+E`, the player button, the player context menu, or Action finder to save the current speed for that podcast.
+
+## Notes
+- **Preserves presets across feed refreshes.** Refreshing a feed keeps its saved podcast speed.
+- **Kept playback scope narrow.** Non-podcast playback still starts from the existing global speed setting; the mpv startup speed only changes when an RSS/podcast episode has a feed preset. This beta does not change YouTube resolving, seek timing, EQ, bass boost, or volume boost.
+
 # v1.0.0-beta.16 - Full Screen Shortcut and Podcast Resume Polish Beta
 
 ## New

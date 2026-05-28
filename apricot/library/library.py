@@ -1056,13 +1056,152 @@ class LibraryMixin:
         checked = self.format_history_time(feed.get("last_checked")) if feed.get("last_checked") else self.t("rss_feed_never_checked")
         count = len(feed.get("items") or [])
         played_count = sum(1 for item in feed.get("items") or [] if item.get("played"))
+        speed_preset = self.rss_feed_speed_preset_label(feed)
         parts = [
             feed.get("title") or self.t("rss_unknown_feed_title"),
             self.t("rss_feed_item_count", count=count),
             self.t("rss_feed_played_count", count=played_count) if played_count else "",
+            speed_preset,
             self.t("rss_feed_last_checked", time=checked) if feed.get("last_checked") else checked,
         ]
         return " | ".join(part for part in parts if part)
+
+
+    def normalized_podcast_speed_preset(self, value) -> float | None:
+        if value in (None, ""):
+            return None
+        try:
+            speed = float(str(value).replace("x", "").strip())
+        except (TypeError, ValueError):
+            return None
+        if speed < 0.25 or speed > 4.0:
+            return None
+        return round(speed, 2)
+
+
+    def rss_feed_speed_preset_label(self, feed: dict | None) -> str:
+        speed = self.normalized_podcast_speed_preset((feed or {}).get("speed_preset"))
+        if speed is None:
+            return ""
+        return self.t("podcast_speed_preset_marker", speed=self.format_playback_rate(speed))
+
+
+    def podcast_feed_index_for_item(self, item: dict | None = None) -> int:
+        item = item or self.current_video_item or self.current_video_info or {}
+        if not isinstance(item, dict) or item.get("kind") != "rss_item":
+            return -1
+        for key in ("rss_feed_index", "feed_index"):
+            try:
+                index = int(item.get(key, -1))
+            except (TypeError, ValueError):
+                index = -1
+            if 0 <= index < len(self.rss_feeds):
+                return index
+        data = dict(getattr(self, "player_return_data", {}) or {})
+        if getattr(self, "player_return_screen", "") == "rss_items":
+            try:
+                index = int(data.get("feed_index", -1))
+            except (TypeError, ValueError):
+                index = -1
+            if 0 <= index < len(self.rss_feeds):
+                return index
+        identity = self.rss_episode_identity(item)
+        if not identity:
+            return -1
+        self.ensure_rss_feeds_loaded()
+        for feed_index, feed in enumerate(self.rss_feeds):
+            for episode in feed.get("items") or []:
+                if self.rss_episode_identity(episode) == identity:
+                    return feed_index
+        return -1
+
+
+    def podcast_speed_preset_for_item(self, item: dict | None = None) -> float | None:
+        item = item or self.current_video_item or self.current_video_info or {}
+        if not isinstance(item, dict) or item.get("kind") != "rss_item":
+            return None
+        self.ensure_rss_feeds_loaded()
+        feed_index = self.podcast_feed_index_for_item(item)
+        if not (0 <= feed_index < len(self.rss_feeds)):
+            return None
+        return self.normalized_podcast_speed_preset(self.rss_feeds[feed_index].get("speed_preset"))
+
+
+    def set_podcast_feed_speed_preset(self, feed_index: int, speed: float | None, announce: bool = True) -> bool:
+        self.ensure_rss_feeds_loaded()
+        if feed_index < 0 or feed_index >= len(self.rss_feeds):
+            if announce:
+                self.announce_player(self.t("no_selection"))
+            return False
+        feed = self.rss_feeds[feed_index]
+        normalized = self.normalized_podcast_speed_preset(speed)
+        if normalized is None:
+            feed.pop("speed_preset", None)
+            message = self.t("podcast_speed_preset_cleared", title=feed.get("title") or self.t("rss_unknown_feed_title"))
+        else:
+            feed["speed_preset"] = normalized
+            message = self.t(
+                "podcast_speed_preset_saved",
+                title=feed.get("title") or self.t("rss_unknown_feed_title"),
+                speed=self.format_playback_rate(normalized),
+            )
+        self.save_rss_feeds()
+        if self.rss_feeds_screen_active:
+            self.refresh_rss_feed_list()
+        if self.rss_items_screen_active and feed_index == self.current_rss_feed_index:
+            selection = 0
+            rss_items_list = getattr(self, "rss_items_list", None)
+            if rss_items_list is not None:
+                try:
+                    selection = max(0, rss_items_list.GetSelection())
+                except RuntimeError:
+                    selection = 0
+            self.refresh_rss_items_list(selection)
+        if announce:
+            self.announce_player(message)
+        return True
+
+
+    def set_selected_rss_feed_speed_preset(self) -> None:
+        feed = self.selected_rss_feed()
+        if not feed:
+            self.message(self.t("no_selection"))
+            return
+        feed_index = self.current_rss_feed_index
+        speeds = list(PLAYBACK_SPEED_STEPS)
+        choices = [self.t("podcast_speed_use_global")] + [self.t("playback_rate_x", speed=self.format_playback_rate(speed)) for speed in speeds]
+        current = self.normalized_podcast_speed_preset(feed.get("speed_preset"))
+        selection = 0
+        if current is not None:
+            selection = next((index + 1 for index, speed in enumerate(speeds) if abs(float(speed) - current) < 0.001), 0)
+        with wx.SingleChoiceDialog(
+            self,
+            self.t("podcast_speed_preset_prompt", title=feed.get("title") or self.t("rss_unknown_feed_title")),
+            self.t("podcast_speed_preset"),
+            choices,
+        ) as dialog:
+            dialog.SetSelection(selection)
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            selected = dialog.GetSelection()
+        self.set_podcast_feed_speed_preset(feed_index, None if selected <= 0 else speeds[selected - 1])
+
+
+    def save_current_speed_as_podcast_preset(self) -> None:
+        item = self.current_video_item or self.current_video_info or {}
+        if not isinstance(item, dict) or item.get("kind") != "rss_item":
+            self.announce_player(self.t("podcast_speed_preset_no_episode"))
+            return
+        feed_index = self.podcast_feed_index_for_item(item)
+        if feed_index < 0:
+            self.announce_player(self.t("podcast_speed_preset_no_episode"))
+            return
+        try:
+            current = self.mpv_get_property("speed", timeout=0.15) if self.player_is_active() else None
+            speed = float(current if current is not None else self.current_speed_value())
+        except Exception:
+            speed = self.current_speed_value()
+        self.set_podcast_feed_speed_preset(feed_index, speed, announce=True)
 
 
     def selected_rss_feed(self) -> dict | None:
@@ -1091,6 +1230,7 @@ class LibraryMixin:
         actions = [
             (self.t("open_feed"), self.open_selected_rss_feed),
             (self.t("download_feed"), self.download_selected_rss_feed),
+            (self.t("podcast_speed_preset"), self.set_selected_rss_feed_speed_preset),
             (self.t("refresh_feed"), self.refresh_selected_rss_feed),
             (self.t("copy_url"), lambda: self.copy_item_url(self.selected_rss_feed())),
             (self.t("remove_feed"), self.remove_rss_feed),
@@ -1446,6 +1586,8 @@ class LibraryMixin:
 
 
     def preserve_rss_episode_state(self, refreshed: dict, existing: dict) -> None:
+        if "speed_preset" in existing:
+            refreshed["speed_preset"] = existing.get("speed_preset")
         old_items = {
             self.rss_episode_identity(item): item
             for item in list(existing.get("items") or [])

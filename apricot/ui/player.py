@@ -41,6 +41,9 @@ class PlayerUI:
     def current_player_is_local_media(self) -> bool:
         return self.item_is_local_media(self.current_player_item())
 
+    def current_player_is_podcast_episode(self) -> bool:
+        return self.current_player_item().get("kind") == "rss_item"
+
     def add_background_player_section(self, defer: bool = True) -> None:
         if self.background_player_section_added:
             return
@@ -667,6 +670,8 @@ class PlayerUI:
         ]
         if not is_local_media:
             player_controls.insert(-1, (self.label_with_shortcut(self.t("copy_stream_url"), "copy_stream_url"), self.copy_direct_stream_url))
+        if self.current_player_is_podcast_episode():
+            player_controls.insert(-1, (self.label_with_shortcut(self.t("save_podcast_speed_preset"), "save_podcast_speed_preset"), self.save_current_speed_as_podcast_preset))
         if background_enabled:
             player_controls.append((self.label_with_shortcut(self.t("close_player"), "player_back"), self.close_current_player))
         player_action_buttons = self.add_button_row(player_controls)
@@ -1693,6 +1698,16 @@ class PlayerUI:
         if abs(value - round(value)) < 0.001:
             return f"{value:.1f}"
         return f"{value:.2f}".rstrip("0").rstrip(".")
+
+    def player_start_speed_value(self) -> float:
+        raw_value = getattr(self, "pending_player_speed_override", None)
+        if raw_value is None:
+            raw_value = getattr(self.settings, "player_speed", 1.0)
+        try:
+            speed = float(str(raw_value).replace("x", "").strip())
+        except (TypeError, ValueError):
+            speed = 1.0
+        return max(0.25, min(4.0, speed))
 
     def normalized_speed_audio_mode(self) -> str:
         mode = str(getattr(self.settings, "speed_audio_mode", SPEED_AUDIO_MODE_RUBBERBAND) or SPEED_AUDIO_MODE_RUBBERBAND)

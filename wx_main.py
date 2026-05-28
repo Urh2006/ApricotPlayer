@@ -213,6 +213,7 @@ class MainFrame(CookiesUI, DownloadsUI, EqualizerUI, EventsUI, ListsUI, MenusUI,
         self.clip_end_marker: float | None = None
         self.clip_preview_generation = 0
         self.pending_player_start_position: float | None = None
+        self.pending_player_speed_override: float | None = None
         self.audio_device_options_cache: tuple[float, list[str], list[str]] | None = None
         self.audio_device_refresh_running = False
         self.metadata_hydration_urls: set[str] = set()

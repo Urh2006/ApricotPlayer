@@ -336,6 +336,9 @@ class PlaybackMixin:
         if isinstance(self.current_video_info, dict):
             self.current_video_info.pop("_bookmark_start_position", None)
         self.pending_player_start_position = pending_start
+        self.pending_player_speed_override = self.podcast_speed_preset_for_item(
+            self.current_video_item or self.current_video_info
+        )
         self.current_index = max(0, self.current_index)
         continuing_session = (
             bool(getattr(self, "player_session_open", False))
@@ -531,6 +534,7 @@ class PlaybackMixin:
             self.session_equalizer_enabled = None
             self.session_equalizer_gains = {}
             self.session_equalizer_before_bass_boost = None
+            self.pending_player_speed_override = None
             self.volume_boost_enabled = False
             self.bass_boost_enabled = False
             self.repeat_current = False
