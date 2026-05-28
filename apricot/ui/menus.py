@@ -54,8 +54,6 @@ class MenusUI:
         if self.playback_queue:
             label = self.label_with_shortcut(f"{self.t('playback_queue')} ({len(self.playback_queue)})", "open_playback_queue", "\t")
             actions.append((label, self.show_playback_queue))
-        if self.last_player_session_available():
-            actions.append((self.t("resume_last_session"), self.resume_last_player_session))
         primary_actions = [
             (self.menu_label_with_shortcut("search_youtube", "open_search"), self.show_search),
             (self.menu_label_with_shortcut("play_folder", "open_play_from_folder"), self.show_play_from_folder),
@@ -70,6 +68,14 @@ class MenusUI:
         if getattr(self.settings, "enable_trending", False):
             primary_actions.insert(1, (self.t("trending"), self.show_trending))
         actions.extend(primary_actions)
+        if self.last_player_session_available() and getattr(self.settings, "show_resume_in_menu", True):
+            # Insert resume just after "search youtube" (index 0 among primary actions,
+            # offset by any dynamic items already prepended above)
+            search_idx = next(
+                (i for i, a in enumerate(actions) if a[1] == self.show_search),
+                len(actions) - 1,
+            )
+            actions.insert(search_idx + 1, (self.t("resume_last_session"), self.resume_last_player_session))
         if self.settings.enable_history:
             actions.append((self.menu_label_with_shortcut("history", "open_history"), self.show_history))
         if self.settings.enable_podcasts_rss:

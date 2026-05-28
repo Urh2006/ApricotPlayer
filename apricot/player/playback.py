@@ -480,6 +480,16 @@ class PlaybackMixin:
             folder = str(self.player_return_data.get("folder") or "")
             if folder:
                 self.current_local_folder_path = folder
+        # If "resume where you left off" is enabled, inject the saved position so
+        # play_url picks it up via _bookmark_start_position → pending_player_start_position.
+        if getattr(self.settings, "resume_playback", True):
+            try:
+                saved_pos = float(self.playback_positions.get(url, 0.0) or 0.0)
+                if saved_pos >= 5.0:
+                    item = dict(item)
+                    item["_bookmark_start_position"] = saved_pos
+            except (TypeError, ValueError):
+                pass
         self.current_video_item = item
         self.current_video_info = dict(item)
         self.play_url(url, title)

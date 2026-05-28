@@ -137,6 +137,7 @@ class SettingsMixin:
                 "cache_folder",
                 "cache_size_mb",
                 "resume_playback",
+                "show_resume_in_menu",
                 "audio_output_device",
                 "speed_step",
                 "pitch_step",
@@ -471,6 +472,7 @@ class SettingsMixin:
             text("cache_folder", self.settings.cache_folder or str(DEFAULT_CACHE_DIR))
             choice("cache_size_mb", str(self.settings.cache_size_mb), ["128", "256", "512", "1024", "2048", "4096"])
             check("resume_playback", self.settings.resume_playback)
+            check("show_resume_in_menu", bool(getattr(self.settings, "show_resume_in_menu", True)))
             device_values, device_labels = self.audio_output_device_options(allow_probe=False)
             choice("default_audio_device", self.normalized_audio_output_device(), device_values, device_labels)
             self.refresh_audio_output_devices_async()
@@ -1029,6 +1031,8 @@ class SettingsMixin:
             self.settings.cache_size_mb = self.to_int(c["cache_size_mb"].GetStringSelection(), 512, 128, 4096)
         if "resume_playback" in c:
             self.settings.resume_playback = c["resume_playback"].GetValue()
+        if "show_resume_in_menu" in c:
+            self.settings.show_resume_in_menu = c["show_resume_in_menu"].GetValue()
         if "default_audio_device" in c:
             self.settings.audio_output_device = self.selected_choice_value("default_audio_device") or "auto"
         if "browser_playback" in c:

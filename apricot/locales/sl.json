@@ -537,6 +537,7 @@
     "cache_folder": "Mapa za predpomnilnik",
     "cache_size_mb": "Velikost predpomnilnika v MB",
     "resume_playback": "Nadaljuj predvajanje tam, kjer si ostal",
+    "show_resume_in_menu": "Prikaži \"Nadaljuj zadnjo sejo predvajanja\" v glavnem meniju",
     "player": "Predvajalnik",
     "background_player": "Predvajalnik",
     "background_player_now_playing": "Predvajalnik: {title}",

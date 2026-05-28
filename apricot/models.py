@@ -34,6 +34,7 @@ class Settings:
     cache_folder: str = str(DEFAULT_CACHE_DIR)
     cache_size_mb: int = 512
     resume_playback: bool = True
+    show_resume_in_menu: bool = True
     audio_output_device: str = "auto"
     speed_step: float = 0.01
     pitch_step: float = 0.01

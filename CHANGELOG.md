@@ -1,3 +1,10 @@
+# v1.0.0-beta.18 - Resume Session Improvements
+
+## New
+- **Added setting to control whether "Resume last playback session" appears in the main menu.** A new checkbox in the Playback settings section lets you hide the resume option from the main menu if you prefer a cleaner list.
+- **"Resume last playback session" now appears below "Search YouTube" instead of at the top of the menu.** The option no longer pushes other items down when it appears — it sits naturally after the primary search action.
+- **Resume last session now starts from where you left off.** When "Resume where you left off" is enabled in Playback settings, the resume menu action will seek to the last saved playback position instead of always starting from the beginning.
+
 # v1.0.0-beta.17 - Podcast Speed Presets Beta
 
 ## New

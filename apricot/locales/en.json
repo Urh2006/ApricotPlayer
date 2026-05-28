@@ -537,6 +537,7 @@
     "cache_folder": "Playback cache folder",
     "cache_size_mb": "Playback cache size in MB",
     "resume_playback": "Resume where you left off",
+    "show_resume_in_menu": "Show \"Resume last playback session\" in main menu",
     "player": "Player",
     "background_player": "Player",
     "background_player_now_playing": "Player: {title}",
