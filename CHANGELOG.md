@@ -1,3 +1,8 @@
+# v1.0.0-beta.20 - CapsLock Shortcut False-Positive Fix
+
+## Fixes
+- **Fixed CapsLock (and other special keys) incorrectly triggering letter-bound shortcuts.** `key_event_matches_letter` always included the Ctrl-character code for a letter in its match set — for 'T' that code is 20, which is identical to the Windows virtual key code for CapsLock (VK_CAPITAL = 0x14). `GetRawKeyCode()` returns the virtual key code on every key press, so pressing CapsLock produced a code-20 event that matched the 'T' shortcut, causing `player_time` (show duration) to fire on CapsLock. The same root cause affected other keys: Backspace (VK=8) matched Ctrl+H shortcuts, Tab (VK=9) matched Ctrl+I shortcuts, etc. The Ctrl-character code is now only added to the match set when Ctrl is actually held, eliminating all such false positives.
+
 # v1.0.0-beta.19 - Persistent Stream URL Cache Fix
 
 ## Fixes

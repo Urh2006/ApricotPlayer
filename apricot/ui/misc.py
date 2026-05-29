@@ -2944,8 +2944,14 @@ class MiscUI:
     def key_event_matches_letter(event: wx.KeyEvent, letter: str) -> bool:
         upper = letter.upper()
         lower = letter.lower()
-        control_code = ord(upper) - ord("A") + 1
-        wanted = {ord(upper), ord(lower), control_code}
+        wanted = {ord(upper), ord(lower)}
+        # Control-character code (e.g. Ctrl+T → 20) only applies when Ctrl is
+        # actually held.  Adding it unconditionally caused false positives: for
+        # 'T' the control code is 20 which equals VK_CAPITAL (CapsLock), so
+        # pressing CapsLock incorrectly fired the player_time shortcut.
+        # Similarly Backspace (VK=8) == Ctrl+H code, Tab (VK=9) == Ctrl+I, etc.
+        if event.ControlDown():
+            wanted.add(ord(upper) - ord("A") + 1)
         for code in MiscUI.key_event_codes(event):
             if code in wanted:
                 return True
