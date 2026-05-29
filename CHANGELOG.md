@@ -1,3 +1,8 @@
+# v1.0.0-beta.21 - System Tray Icon Fix
+
+## Fixes
+- **Fixed system tray icon never appearing.** The `ApricotTaskBarIcon` class was lost during the modular refactoring, so the tray icon setup silently failed with a `NameError` that was swallowed by an `except Exception: pass` guard. The class has been restored: it handles left-click and double-click to restore the window, provides a right-click context menu with Show, Settings, Check Subscriptions, and Exit options, and uses the standard information icon with the app name as the tooltip.
+
 # v1.0.0-beta.20 - CapsLock Shortcut False-Positive Fix
 
 ## Fixes

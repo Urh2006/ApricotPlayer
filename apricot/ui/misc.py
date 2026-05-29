@@ -241,6 +241,41 @@ else:
         return False
 
 
+class ApricotTaskBarIcon(wx.adv.TaskBarIcon):
+    def __init__(self, frame: "MiscUI") -> None:
+        super().__init__()
+        self.frame = frame
+        self.show_id = wx.NewIdRef()
+        self.settings_id = wx.NewIdRef()
+        self.check_id = wx.NewIdRef()
+        self.exit_id = wx.NewIdRef()
+        for event_name in ("EVT_TASKBAR_LEFT_UP", "EVT_TASKBAR_LEFT_DCLICK"):
+            event_binder = getattr(wx.adv, event_name, None)
+            if event_binder is not None:
+                self.Bind(event_binder, lambda _event: self.frame.restore_from_tray())
+        self.Bind(wx.EVT_MENU, lambda _event: self.frame.restore_from_tray(), id=int(self.show_id))
+        self.Bind(wx.EVT_MENU, lambda _event: self.frame.show_settings_from_tray(), id=int(self.settings_id))
+        self.Bind(wx.EVT_MENU, lambda _event: self.frame.check_subscriptions(manual=True), id=int(self.check_id))
+        self.Bind(wx.EVT_MENU, lambda _event: self.frame.quit_application(), id=int(self.exit_id))
+        self.SetIcon(self.make_icon(), APP_NAME)
+
+    def CreatePopupMenu(self) -> wx.Menu:
+        menu = wx.Menu()
+        menu.Append(int(self.show_id), self.frame.t("tray_show"))
+        menu.Append(int(self.settings_id), self.frame.t("tray_settings"))
+        menu.Append(int(self.check_id), self.frame.t("tray_check_subscriptions"))
+        menu.AppendSeparator()
+        menu.Append(int(self.exit_id), self.frame.t("tray_exit"))
+        return menu
+
+    @staticmethod
+    def make_icon() -> wx.Icon:
+        bitmap = wx.ArtProvider.GetBitmap(wx.ART_INFORMATION, wx.ART_OTHER, (16, 16))
+        icon = wx.Icon()
+        icon.CopyFromBitmap(bitmap)
+        return icon
+
+
 class MiscUI:
     @staticmethod
     def focus_accepts_text(focus: wx.Window | None) -> bool:
