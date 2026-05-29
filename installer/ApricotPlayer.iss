@@ -7,7 +7,7 @@
 #endif
 
 #ifndef SourceDir
-#define SourceDir ""
+#define SourceDir "..\dist\ApricotPlayer"
 #endif
 
 #ifndef OutputDir
