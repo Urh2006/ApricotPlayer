@@ -106,6 +106,23 @@ class MpvMixin:
             if getattr(self.settings, "enable_stream_cache", True):
                 cache_folder = self.cache_folder_path()
                 cache_folder.mkdir(parents=True, exist_ok=True)
+                # mpv is killed (not gracefully exited) when the user stops or
+                # changes a video, so it cannot clean up its own demuxer cache
+                # files.  Over multiple sessions these accumulate to several GB,
+                # eventually filling the drive and silently disabling the cache —
+                # every seek then requires a fresh network round-trip.
+                # The previous mpv is always dead by the time we reach this
+                # point (stop_player terminates+waits before play_url spawns
+                # the resolve thread), so it is safe to wipe the folder now.
+                try:
+                    for _stale in list(cache_folder.iterdir()):
+                        try:
+                            if _stale.is_file():
+                                _stale.unlink()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
                 cache_size = max(128, min(4096, int(getattr(self.settings, "cache_size_mb", 512) or 512)))
                 back_cache = max(32, min(cache_size, cache_size // 4))
                 args.extend(

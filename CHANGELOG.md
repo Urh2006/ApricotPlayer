@@ -1,3 +1,8 @@
+# v1.0.0-beta.24 - Fix Seek Stalling After Playing Multiple Videos
+
+## Fixes
+- **Fixed seek stalling and requiring a full network reload after playing several videos.** mpv is killed (not gracefully exited) when the user stops or changes a video, so it cannot clean up its own demuxer cache files. These stale files accumulate in the cache folder across sessions — after 5–6 videos the folder can hold several GB of leftover data. When the disk fills up, mpv silently falls back to no disk cache, and every backward or forward seek requires a fresh network round-trip instead of reading from the local buffer. The cache folder is now wiped before each new mpv session starts, ensuring mpv always has space to write its cache and backward seeks within the cached window are instant.
+
 # v1.0.0-beta.23 - Fix Player Silently Stopping on Network Drop or URL Expiry
 
 ## Fixes
