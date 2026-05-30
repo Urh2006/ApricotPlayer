@@ -1384,7 +1384,13 @@ class PlayerUI:
     def player_monitor_worker(self, generation: int) -> None:
         while generation == self.player_generation and self.mpv_process_alive():
             time.sleep(0.5)
-            if generation != self.player_generation or not self.mpv_process_alive():
+            if generation != self.player_generation:
+                return
+            if not self.mpv_process_alive():
+                # mpv exited without signalling EOF (e.g. URL expired, network
+                # drop, OOM).  Treat it the same as a normal EOF so that
+                # autoplay, cleanup and UI state update correctly.
+                wx.CallAfter(self.handle_player_eof, generation)
                 return
             try:
                 eof_reached = bool(self.mpv_get_property("eof-reached", timeout=0.25))
@@ -1393,6 +1399,9 @@ class PlayerUI:
             if eof_reached:
                 wx.CallAfter(self.handle_player_eof, generation)
                 return
+        # mpv exited between the alive-check and the eof-reached query.
+        if generation == self.player_generation:
+            wx.CallAfter(self.handle_player_eof, generation)
 
     def handle_player_eof(self, generation: int) -> None:
         if generation != self.player_generation:

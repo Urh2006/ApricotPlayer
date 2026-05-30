@@ -1,3 +1,8 @@
+# v1.0.0-beta.23 - Fix Player Silently Stopping on Network Drop or URL Expiry
+
+## Fixes
+- **Fixed player silently stopping without any notification when mpv exits unexpectedly.** Previously, if mpv crashed or was killed by the OS (e.g. due to a YouTube CDN URL expiring mid-playback, a network drop, or an out-of-memory event), the player monitor thread simply exited without doing anything — the UI remained frozen in "playing" state with no audio and no error message. Now the monitor detects when mpv exits for any reason other than a normal end-of-file and triggers the standard EOF handler, which correctly updates the UI, announces the end of playback, and advances to the next item if autoplay is enabled.
+
 # v1.0.0-beta.22 - Tab Navigation and Play/Pause Announcement Fixes
 
 ## Fixes
