@@ -47,6 +47,8 @@ class PlayerUI:
     def add_background_player_section(self, defer: bool = True) -> None:
         if self.background_player_section_added:
             return
+        if getattr(self, "settings_screen_active", False):
+            return
         if defer and not self.in_player_screen:
             if self.background_player_section_pending:
                 return

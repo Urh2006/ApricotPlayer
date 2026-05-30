@@ -375,6 +375,7 @@ class MiscUI:
         self.background_player_section_added = False
         self.background_player_section_pending = False
         self.background_player_section_generation += 1
+        self.settings_screen_active = False
         if not self.in_player_screen:
             if preserved_player_panel is not None:
                 self.player_panel = preserved_player_panel
@@ -986,6 +987,7 @@ class MiscUI:
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
         self.clear()
+        self.settings_screen_active = True
         self.add_button_row([(self.t("back"), self.show_main_menu), (self.t("save"), self.save_settings_from_ui), (self.t("restore_defaults"), self.restore_default_settings)])
         self.controls = {}
         self.choice_values = {}

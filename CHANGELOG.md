@@ -1,7 +1,7 @@
 # v1.0.0-beta.25 - Hide Background Player Controls in Settings Screen
 
 ## Fixes
-- **Background player controls no longer appear in the Settings screen.** When background playback was active and the user opened Settings, the player panel and play/pause/skip buttons were inserted at the top of the screen. Tab and Shift+Tab navigation would cycle through the player buttons instead of the settings sections and controls. The player controls are now hidden while the Settings screen is open; all keyboard shortcuts for controlling playback still work.
+- **Background player controls no longer appear in the Settings screen.** When background playback was active and the user opened Settings, the player panel and play/pause/skip buttons were inserted at the top of the screen. Tab and Shift+Tab navigation would cycle through the player buttons instead of the settings sections and controls. The controls are now suppressed via a `settings_screen_active` flag that blocks `add_background_player_section()` — including the deferred `wx.CallAfter` path — for the entire duration of the Settings screen. All keyboard shortcuts for controlling playback still work.
 
 # v1.0.0-beta.24 - Fix Seek Stalling After Playing Multiple Videos
 
