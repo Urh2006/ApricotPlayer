@@ -1,3 +1,8 @@
+# v1.0.0-beta.25 - Hide Background Player Controls in Settings Screen
+
+## Fixes
+- **Background player controls no longer appear in the Settings screen.** When background playback was active and the user opened Settings, the player panel and play/pause/skip buttons were inserted at the top of the screen. Tab and Shift+Tab navigation would cycle through the player buttons instead of the settings sections and controls. The player controls are now hidden while the Settings screen is open; all keyboard shortcuts for controlling playback still work.
+
 # v1.0.0-beta.24 - Fix Seek Stalling After Playing Multiple Videos
 
 ## Fixes

@@ -986,7 +986,6 @@ class MiscUI:
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
         self.clear()
-        self.add_background_player_section()
         self.add_button_row([(self.t("back"), self.show_main_menu), (self.t("save"), self.save_settings_from_ui), (self.t("restore_defaults"), self.restore_default_settings)])
         self.controls = {}
         self.choice_values = {}
