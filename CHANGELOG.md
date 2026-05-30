@@ -1,3 +1,10 @@
+# v1.0.0-beta.22 - Tab Navigation and Play/Pause Announcement Fixes
+
+## Fixes
+- **Fixed Tab key not working from background player buttons and most other controls.** `on_char_hook` was consuming Tab events without calling `event.Skip()` when no custom navigation handler claimed them. This meant Tab from the play/pause, next, previous and other background player buttons produced no focus movement at all — only the first button (reachable from screen content) and the second button (via a dedicated custom handler) were Tab-accessible. All other controls in the window (search, results, settings sections) appeared unreachable. Now Tab is explicitly passed through to native wx focus traversal when no custom handler handles it.
+- **Fixed Shift-Tab not working from background player buttons.** Same root cause as above — Shift-Tab from player buttons other than the first one was silently consumed. Native wx now handles Shift-Tab for those buttons correctly.
+- **Fixed play/pause state being announced twice by screen readers.** When the play/pause button had keyboard focus, pressing it caused the screen reader to read both the new button label ("Play") from the automatic accessibility name-change event, and the explicit programmatic announcement ("Paused.") — resulting in "Paused. Play" or similar double reads. The explicit announcement is now suppressed when a play/pause button has focus, since the label change already provides the feedback.
+
 # v1.0.0-beta.21 - System Tray Icon Fix
 
 ## Fixes

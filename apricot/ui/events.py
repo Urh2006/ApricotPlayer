@@ -409,6 +409,14 @@ class EventsUI:
         if self.handle_player_tab_navigation(event, focus):
             return
 
+        # Tab was not claimed by any custom navigation handler.  Without an
+        # explicit Skip here, on_char_hook consumes the event and EVT_NAVIGATION_KEY
+        # never fires — so Tab from background-player buttons and most other
+        # non-text controls produced no focus movement at all.
+        if key == wx.WXK_TAB:
+            event.Skip()
+            return
+
         results_focus = self.focus_in_results_control(focus)
         if self.in_main_menu:
             if self.handle_player_shortcut_event(event, focus, details_has_focus):

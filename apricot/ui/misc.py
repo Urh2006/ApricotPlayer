@@ -2461,8 +2461,18 @@ class MiscUI:
             pass
 
     def announce_play_pause_state(self, paused: bool) -> None:
-        if self.settings.announce_play_pause:
-            self.announce_player(self.t("playback_paused" if paused else "playback_playing"))
+        if not self.settings.announce_play_pause:
+            return
+        # When a play/pause button has focus, the screen reader will read the
+        # new button label automatically (SetLabel fires EVENT_OBJECT_NAMECHANGE).
+        # A separate speakText call on top of that produces a double announcement
+        # ("Paused." then "Play", or vice versa).  Skip the explicit announce and
+        # rely on the button label change for SR feedback in that case.
+        focus = wx.Window.FindFocus()
+        play_pause_buttons = getattr(self, "player_play_pause_buttons", [])
+        if focus is not None and any(focus is b for b in play_pause_buttons):
+            return
+        self.announce_player(self.t("playback_paused" if paused else "playback_playing"))
 
     def set_clip_marker_async(self, marker: str) -> None:
         self.cancel_clip_preview()
