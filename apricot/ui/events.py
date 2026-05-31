@@ -567,6 +567,11 @@ class EventsUI:
             if self.user_playlists_screen_active or self.notification_center_screen_active or self.direct_link_screen_active:
                 self.show_main_menu()
                 return
+            if getattr(self, "settings_screen_active", False):
+                # Escape from Settings should return to the player when the
+                # user opened Settings via shortcut from the player screen.
+                self.back_from_settings()
+                return
             self.show_main_menu()
             return
         if self.shortcut_matches(event, "copy_stream_url"):

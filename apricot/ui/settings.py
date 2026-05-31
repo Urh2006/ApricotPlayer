@@ -36,6 +36,10 @@ from apricot.locales import TEXT
 
 class SettingsMixin:
     def open_settings_shortcut(self) -> None:
+        # Remember whether the user invoked the shortcut from the player screen,
+        # so back_from_settings can restore it (along with the embedded result
+        # list) instead of dumping the user on the main menu.
+        self.entered_settings_from_player = bool(self.in_player_screen)
         self.run_global_navigation_shortcut(self.open_settings_screen)
 
 
@@ -43,6 +47,16 @@ class SettingsMixin:
     def open_settings_screen(self) -> None:
         self.settings_section_index = 0
         self.show_settings()
+
+
+
+    def back_from_settings(self) -> None:
+        came_from_player = bool(getattr(self, "entered_settings_from_player", False))
+        self.entered_settings_from_player = False
+        if came_from_player and self.player_is_active():
+            self.show_player_page(self.current_player_title())
+            return
+        self.show_main_menu()
 
 
 

@@ -988,7 +988,7 @@ class MiscUI:
         self.direct_link_screen_active = False
         self.clear()
         self.settings_screen_active = True
-        self.add_button_row([(self.t("back"), self.show_main_menu), (self.t("save"), self.save_settings_from_ui), (self.t("restore_defaults"), self.restore_default_settings)])
+        self.add_button_row([(self.t("back"), self.back_from_settings), (self.t("save"), self.save_settings_from_ui), (self.t("restore_defaults"), self.restore_default_settings)])
         self.controls = {}
         self.choice_values = {}
         self.settings_control_order = []

@@ -456,6 +456,14 @@ class DownloaderMixin:
             options["download_archive"] = str(APP_DIR / "download-archive.txt")
         if audio_only:
             options.update({"format": "bestaudio/best", "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": self.settings.audio_format, "preferredquality": self.settings.audio_quality}]})
+            # Match the throughput tuning used for video downloads: more
+            # concurrent DASH fragments, larger HTTP range chunks and a fatter
+            # socket buffer.  Audio-only downloads were stuck on yt-dlp defaults
+            # (4 fragments, no chunk size, no buffersize) and were several times
+            # slower than they need to be.
+            options["concurrent_fragment_downloads"] = max(self.settings.concurrent_fragments, VIDEO_DOWNLOAD_MIN_FRAGMENTS)
+            options["http_chunk_size"] = VIDEO_DOWNLOAD_HTTP_CHUNK_SIZE
+            options["buffersize"] = VIDEO_DOWNLOAD_BUFFER_SIZE
         else:
             video_mode = self.normalized_video_format()
             options["concurrent_fragment_downloads"] = max(self.settings.concurrent_fragments, VIDEO_DOWNLOAD_MIN_FRAGMENTS)

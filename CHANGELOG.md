@@ -1,3 +1,9 @@
+# v1.0.0-beta.26 - Settings Returns to Player; Audio Downloads Match Video Speed
+
+## Fixes
+- **Escape from Settings (and the Back button) now returns to the player when Settings was opened from the player via shortcut.** Previously, opening Settings from the player screen via shortcut and then pressing Escape or clicking Back dumped the user on the main menu, losing the player screen, the embedded result list, and the next/previous navigation. The shortcut now remembers it was invoked from the player, and `back_from_settings` rebuilds the player page (including the result list when background playback is on). Opening Settings from the main menu still returns to the main menu.
+- **Audio downloads now match the throughput tuning used for video downloads.** Audio downloads were left on yt-dlp's defaults (4 concurrent DASH fragments, no HTTP chunk size, no socket buffer size) while video downloads use 8 concurrent fragments, 10 MiB HTTP range chunks, and a 1 MiB buffer. Audio downloads now use the same tuning and finish several times faster on high-bandwidth connections.
+
 # v1.0.0-beta.25 - Hide Background Player Controls in Settings Screen
 
 ## Fixes

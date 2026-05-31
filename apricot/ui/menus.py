@@ -6,6 +6,9 @@ from pathlib import Path
 class MenusUI:
     def show_main_menu(self) -> None:
         self.in_main_menu = True
+        # Clear any stale "came from player to settings" flag so the next time
+        # the user opens Settings from the main menu, Back goes to main menu.
+        self.entered_settings_from_player = False
         self.in_queue_screen = False
         self.search_screen_active = False
         self.trending_screen_active = False
