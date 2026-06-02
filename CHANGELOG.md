@@ -1,3 +1,14 @@
+# v1.0.0-beta.27 - Session Sequence Restore and Release Channel Polish
+
+## New
+- **Resume last playback session now restores the active player sequence.** When a session is saved from a folder, playlist, playback queue, or other explicit player sequence, Apricot stores a slim sequence snapshot. Resuming the session restores that sequence so Next/Previous keep working in the same context instead of falling back to empty or stale results.
+
+## Changed
+- **Update channel defaults now match the build type.** Pre-release builds still default and migrate to the beta channel, while future stable builds default to the stable channel for fresh installs. This keeps beta testing smooth without accidentally putting stable users onto beta releases.
+
+## Notes
+- **Installer `_internal` update fix preserved.** The Inno Setup cleanup that removes the old `{app}\_internal` folder before installing remains untouched, so bundled DLL/module updates are not left half-old during in-app updates.
+
 # v1.0.0-beta.26 - Settings Returns to Player; Audio Downloads Match Video Speed
 
 ## Fixes
@@ -1558,7 +1569,6 @@
 - dynamic results loading
 - in-app playback
 - download progress reporting
-
 
 
 

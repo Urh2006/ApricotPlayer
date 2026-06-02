@@ -439,6 +439,35 @@ class PlaybackMixin:
         return str(value)
 
 
+    def player_session_sequence_snapshot(self, current_item: dict | None = None) -> list[dict]:
+        sequence = list(getattr(self, "player_sequence_results", []) or [])
+        if not sequence:
+            return []
+        current_url = self.last_session_item_url(current_item or self.current_video_item or self.current_video_info)
+        if current_url and not any(self.last_session_item_url(item) == current_url for item in sequence):
+            return []
+        snapshot: list[dict] = []
+        for item in sequence[:200]:
+            if not isinstance(item, dict) or not self.last_session_item_url(item):
+                continue
+            snapshot.append(self.playlist_item_from_media(item))
+        return snapshot
+
+
+    def normalized_player_session_sequence(self, value, current_item: dict | None = None) -> list[dict]:
+        if not isinstance(value, list):
+            return []
+        sequence = []
+        for item in value[:200]:
+            if not isinstance(item, dict) or not self.last_session_item_url(item):
+                continue
+            sequence.append(dict(item))
+        current_url = self.last_session_item_url(current_item)
+        if current_url and not any(self.last_session_item_url(item) == current_url for item in sequence):
+            return []
+        return sequence
+
+
     def save_last_player_session_from_current(self, url: str = "", title: str = "") -> None:
         item = dict(self.current_video_item or self.current_video_info or {})
         if url and not self.last_session_item_url(item):
@@ -447,16 +476,21 @@ class PlaybackMixin:
             item["title"] = title
         if not self.last_session_item_url(item):
             return
+        pending_sequence = item.pop("_session_sequence", None)
         safe_item = self.json_safe_player_session_value(item)
         safe_return_data = self.json_safe_player_session_value(dict(getattr(self, "player_return_data", {}) or {}))
+        sequence = self.normalized_player_session_sequence(pending_sequence, item) if pending_sequence else self.player_session_sequence_snapshot(item)
+        safe_sequence = self.json_safe_player_session_value(sequence) if sequence else []
         session = {
-            "version": 1,
+            "version": 2,
             "saved_at": time.time(),
             "title": str(safe_item.get("title") or title or self.last_session_item_url(safe_item)),
             "item": safe_item,
             "return_screen": str(getattr(self, "player_return_screen", "") or ""),
             "return_data": safe_return_data if isinstance(safe_return_data, dict) else {},
         }
+        if isinstance(safe_sequence, list) and safe_sequence:
+            session["sequence"] = safe_sequence
         self.last_player_session = session
         threading.Thread(target=self.write_last_player_session_snapshot, args=(session,), daemon=True).start()
 
@@ -490,9 +524,25 @@ class PlaybackMixin:
                     item["_bookmark_start_position"] = saved_pos
             except (TypeError, ValueError):
                 pass
+        sequence = self.normalized_player_session_sequence((session or {}).get("sequence"), item)
+        if sequence:
+            item = dict(item)
+            item["_session_sequence"] = sequence
         self.current_video_item = item
         self.current_video_info = dict(item)
         self.play_url(url, title)
+        for target in (self.current_video_item, self.current_video_info):
+            if isinstance(target, dict):
+                target.pop("_session_sequence", None)
+        if sequence:
+            self.set_player_sequence(sequence)
+            if self.player_return_screen == "folder":
+                folder_items = [dict(row) for row in sequence if row.get("kind") == "local_file"]
+                if folder_items:
+                    self.current_local_folder_items = folder_items
+                    self.return_results = list(folder_items)
+                    self.return_all_results = list(folder_items)
+                    self.return_visible_count = len(folder_items)
 
 
 

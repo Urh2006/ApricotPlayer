@@ -102,17 +102,14 @@ class DataManagerMixin:
                 skipped_version = str(merged.get("skipped_update_version") or "")
                 if skipped_version and not self.is_newer_version(skipped_version, APP_VERSION):
                     merged["skipped_update_version"] = ""
-                if merged.get("update_channel") not in ("stable", "beta"):
-                    merged["update_channel"] = "beta"
+                default_channel = self.default_update_channel()
+                if "update_channel" not in data or merged.get("update_channel") not in ("stable", "beta"):
+                    merged["update_channel"] = default_channel
                 # During pre-release cycles no stable builds exist, so a stored
                 # "stable" channel means the updater silently reports "up to date"
                 # on every check. Migrate existing users to "beta" automatically
                 # whenever the running build is itself a pre-release.
-                _is_prerelease = any(
-                    tag in APP_VERSION.lower()
-                    for tag in ("alpha", "beta", "rc")
-                )
-                if _is_prerelease and merged.get("update_channel") == "stable":
+                if self.current_build_is_prerelease() and merged.get("update_channel") == "stable":
                     merged["update_channel"] = "beta"
                     self.settings_migrated = True
                 merged["stream_url_cache_minutes"] = self.normalized_stream_url_cache_minutes(merged.get("stream_url_cache_minutes"))
@@ -127,7 +124,9 @@ class DataManagerMixin:
         if SETTINGS_FILE.exists() or backup_settings.exists():
             self.settings_save_blocked = True
             self.log_update_event("Settings load failed; automatic settings saves are blocked to avoid overwriting user preferences. " + " | ".join(load_errors[-3:]))
-        return Settings()
+        settings = Settings()
+        settings.update_channel = self.default_update_channel()
+        return settings
 
 
     def save_settings(self) -> None:

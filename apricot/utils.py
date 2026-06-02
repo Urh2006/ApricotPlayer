@@ -94,6 +94,29 @@ class UtilsMixin:
         return False
 
 
+    @staticmethod
+    def version_is_prerelease(value: str) -> bool:
+        return bool(re.search(r"-(alpha|beta|rc)(?:[.-]?\d+)?$", str(value or "").strip().lower()))
+
+
+    @classmethod
+    def current_build_is_prerelease(cls) -> bool:
+        return cls.version_is_prerelease(APP_VERSION)
+
+
+    @classmethod
+    def default_update_channel(cls) -> str:
+        return "beta" if cls.current_build_is_prerelease() else "stable"
+
+
+    @classmethod
+    def normalized_update_channel_value(cls, value: str | None = None) -> str:
+        channel = str(value or "").strip().lower()
+        if channel in {"stable", "beta"}:
+            return channel
+        return cls.default_update_channel()
+
+
 
     @staticmethod
     def parse_version(value: str) -> tuple[int, int, int, int, int, int]:

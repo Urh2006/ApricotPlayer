@@ -812,7 +812,7 @@ class AppUpdaterMixin:
 
 
     def fetch_latest_release(self) -> dict | None:
-        channel = getattr(self.settings, "update_channel", "stable")
+        channel = self.normalized_update_channel_value(getattr(self.settings, "update_channel", ""))
         if channel == "beta":
             try:
                 releases = self.fetch_public_releases()
@@ -857,7 +857,7 @@ class AppUpdaterMixin:
         request = Request(GITHUB_RELEASES_API_URL, headers=self.github_headers(""))
         with self.open_url(request, timeout=30) as response:
             payload = json.loads(response.read().decode("utf-8"))
-        channel = getattr(self.settings, "update_channel", "stable")
+        channel = self.normalized_update_channel_value(getattr(self.settings, "update_channel", ""))
         if not isinstance(payload, list):
             releases = []
         else:
