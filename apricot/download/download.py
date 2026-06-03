@@ -464,6 +464,7 @@ class DownloaderMixin:
             options["concurrent_fragment_downloads"] = max(self.settings.concurrent_fragments, VIDEO_DOWNLOAD_MIN_FRAGMENTS)
             options["http_chunk_size"] = VIDEO_DOWNLOAD_HTTP_CHUNK_SIZE
             options["buffersize"] = VIDEO_DOWNLOAD_BUFFER_SIZE
+            options["progress_delta"] = 0.5
         else:
             video_mode = self.normalized_video_format()
             options["concurrent_fragment_downloads"] = max(self.settings.concurrent_fragments, VIDEO_DOWNLOAD_MIN_FRAGMENTS)

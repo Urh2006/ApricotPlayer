@@ -1414,23 +1414,31 @@ class PlayerUI:
                     return
             except Exception:
                 pass
-        self.mark_current_podcast_episode_played(announce=False, refresh=False)
         if self.repeat_current:
             self.player_ended = False
             self.player_paused = False
             self.update_play_pause_buttons()
             self.restart_current_playback(announce=False)
             return
+        # Mark the podcast episode played only once playback has actually
+        # finished — not on every repeat loop (this used to run before the
+        # repeat check, re-marking the episode on each loop).
+        self.mark_current_podcast_episode_played(announce=False, refresh=False)
         related_autoplay = bool(getattr(self.settings, "autoplay_related", False))
         normal_autoplay = self.effective_autoplay_next()
-        if related_autoplay and self.current_video_item and self.is_youtube_url(self.current_video_item.get("url")):
-            threading.Thread(
-                target=self.fetch_related_and_play_next,
-                args=(self.current_video_item, generation, normal_autoplay, False),
-                daemon=True,
-            ).start()
-            return
+        # Autoplay-related only applies when "Automatically play next item" is
+        # also enabled: it selects WHAT plays next (a related video) instead of
+        # the next item in the list.  This matches the pre-refactor behaviour —
+        # with autoplay-next off, playback stops at the end of the current item
+        # rather than chaining endless related videos.
         if normal_autoplay:
+            if related_autoplay and self.current_video_item and self.is_youtube_url(self.current_video_item.get("url")):
+                threading.Thread(
+                    target=self.fetch_related_and_play_next,
+                    args=(self.current_video_item, generation, normal_autoplay, False),
+                    daemon=True,
+                ).start()
+                return
             sequence_active = self.current_player_sequence_active()
             if not sequence_active:
                 queued_item = self.pop_next_playback_queue_item()
@@ -1833,13 +1841,19 @@ class PlayerUI:
             total = 0.0
             for source in (self.current_video_info, self.current_video_item):
                 try:
-                    total = float((source or {}).get("duration") or 0.0)
+                    # current_video_info["duration"] is a *formatted* string
+                    # (e.g. "3:45"); the numeric value lives in
+                    # "duration_seconds".  Reading "duration" here always raised
+                    # ValueError, leaving total=0 and forcing the IPC fallback —
+                    # and when that timed out, near-end positions were saved
+                    # instead of cleared, so resume got stuck near the end.
+                    total = float((source or {}).get("duration_seconds") or 0.0)
                 except (TypeError, ValueError):
                     total = 0.0
                 if total:
                     break
             if not total:
-                duration = self.mpv_get_property("duration", timeout=0.05)
+                duration = self.mpv_get_property("duration", timeout=0.2)
                 total = float(duration or 0.0)
             if position < 5.0:
                 self.playback_positions.pop(key, None)

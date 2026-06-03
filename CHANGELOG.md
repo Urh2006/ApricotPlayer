@@ -1,3 +1,16 @@
+# v1.0.0-beta.30 - Autoplay, Resume Position and Podcast Fixes
+
+## Investigation
+- **Video download speed: no code regression found.** Following tester reports that video downloads felt slower than before the modular refactoring, the entire download pipeline was compared line-by-line against the pre-refactor monolith (v0.9.18). The download options, format selectors, yt-dlp invocation, tuning constants (8 concurrent fragments, 10 MiB HTTP chunks, 1 MiB buffer), ffmpeg resolution, threading model, and progress hook are all byte-identical between the old and new code. The bundled yt-dlp is current (2026.03.17) and ffmpeg is bundled correctly. Any perceived slowdown is therefore from YouTube server-side throttling, network conditions, or a per-machine `concurrent_fragments` setting — not from a code change. No speed-affecting code was altered on the video path.
+
+## Fixes
+- **"Autoplay related suggested videos" now requires "Automatically play next item" to be on, matching pre-refactor behaviour.** After the refactor, enabling only "Autoplay related" caused a related YouTube video to auto-start at the end of every video even when "Automatically play next item" was turned off — so playback never stopped. Autoplay-related is once again treated as a refinement of autoplay-next (it chooses *what* plays next), so with autoplay-next off, playback stops at the end of the current item.
+- **Resume position no longer gets stuck near the end of long videos and podcasts.** When saving the playback position, the code read the human-formatted duration string (e.g. "3:45") instead of the numeric `duration_seconds`, which always failed and forced a 50 ms mpv query. When that query timed out, a position a few seconds from the end was *saved* instead of cleared, so the next session resumed near the very end. The numeric duration is now read directly, and the fallback query timeout was widened, so finished items correctly start fresh next time.
+- **Podcast episodes are no longer marked "played" on every repeat loop.** When repeating a single episode, the "mark played" step ran on each loop instead of only when playback actually moves on. It now runs after the repeat check, so a looped episode keeps its unplayed state until you stop or move to another item.
+
+## Changed
+- **Audio downloads now also set `progress_delta`, matching the video download path.** This is a minor alignment that slightly reduces yt-dlp's internal progress-callback overhead during audio downloads.
+
 # v1.0.0-beta.29 - Step-by-Step Results Back Navigation
 
 ## Fixes
