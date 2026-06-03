@@ -1894,11 +1894,17 @@ class LibraryMixin:
 
 
     def open_playlist_videos(self, item: dict, push_state: bool = True) -> None:
+        url = str(item.get("url") or "")
+        if not url:
+            self.message(self.t("no_selection"))
+            return
+        title = str(item.get("title") or self.t("playlist"))
         if push_state:
             self.push_search_state()
+        self.prepare_collection_results_screen()
         self.trending_screen_active = False
-        self.set_status(self.t("loading_playlist", title=item["title"]))
-        self.collection_url = item["url"]
+        self.set_status(self.t("loading_playlist", title=title))
+        self.collection_url = url
         self.collection_result_type = "Video"
         self.collection_sort_mode = ""
         self.collection_channel_id = ""
@@ -1908,7 +1914,7 @@ class LibraryMixin:
         self.metadata_hydration_urls.clear()
         self.search_generation += 1
         generation = self.search_generation
-        threading.Thread(target=self.load_collection_worker, args=(item["url"], "Video", self.initial_results_limit(), 0, generation, ""), daemon=True).start()
+        threading.Thread(target=self.load_collection_worker, args=(url, "Video", self.initial_results_limit(), 0, generation, ""), daemon=True).start()
 
     def start_playlist_playback_if_current(self, generation: int, playlist_item: dict, items: list[dict], shuffle: bool) -> None:
         if generation != self.playlist_play_generation:

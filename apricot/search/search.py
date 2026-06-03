@@ -143,6 +143,17 @@ class SearchMixin:
         if not restore_search:
             self.focus_later(self.query)
 
+
+    def prepare_collection_results_screen(self) -> None:
+        results_list = self.live_window(getattr(self, "results_list", None))
+        if self.search_screen_active and results_list is not None:
+            return
+        if self.in_player_screen:
+            self.leave_player_for_global_navigation()
+        results_list = self.live_window(getattr(self, "results_list", None))
+        if not self.search_screen_active or results_list is None:
+            self.show_search(restore_search=True)
+
     def on_search_provider_change(self, event=None) -> None:
         idx = self.search_provider.GetSelection()
         if idx == 1:

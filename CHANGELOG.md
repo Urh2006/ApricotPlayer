@@ -1,3 +1,8 @@
+# v1.0.0-beta.28 - Channel and Playlist Return Fix
+
+## Fixes
+- **Channel and playlist result lists opened from the player now use the proper results screen.** Opening a video's channel or a playlist while the player was active could load the collection without first restoring the normal search/results UI. After playing from that collection, Escape could therefore fall back to the main menu instead of returning one screen back to the channel or playlist results. Collection tabs now prepare the results screen before loading, so closing the player returns to the expected list.
+
 # v1.0.0-beta.27 - Session Sequence Restore and Release Channel Polish
 
 ## New
@@ -1569,6 +1574,5 @@
 - dynamic results loading
 - in-app playback
 - download progress reporting
-
 
 

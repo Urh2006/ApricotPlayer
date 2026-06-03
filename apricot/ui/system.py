@@ -300,13 +300,14 @@ class SystemUI:
         return f"{base}/videos"
 
     def open_channel_tab(self, item: dict, tab: str = "videos", push_state: bool = True) -> None:
-        if push_state:
-            self.push_search_state()
-        self.trending_screen_active = False
         url = self.channel_tab_url(item, tab)
         if not url:
             self.message(self.t("no_selection"))
             return
+        if push_state:
+            self.push_search_state()
+        self.prepare_collection_results_screen()
+        self.trending_screen_active = False
         title = str(item.get("title") or self.t("channel"))
         if tab == "playlists":
             result_type = "Playlist"
