@@ -1901,7 +1901,7 @@ class LibraryMixin:
         title = str(item.get("title") or self.t("playlist"))
         if push_state:
             self.push_search_state()
-        self.prepare_collection_results_screen()
+        self.prepare_collection_results_screen(preserve_player_return_state=push_state)
         self.trending_screen_active = False
         self.set_status(self.t("loading_playlist", title=title))
         self.collection_url = url

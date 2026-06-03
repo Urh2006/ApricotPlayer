@@ -1,3 +1,8 @@
+# v1.0.0-beta.29 - Step-by-Step Results Back Navigation
+
+## Fixes
+- **Escape now steps back correctly after opening channel or playlist results from the player.** Beta 28 returned from the player to the channel/playlist results, but the next Escape could still jump to the main menu because the original result list was not saved when the collection was opened from the player. Apricot now preserves the player's previous search/trending result snapshot before loading that collection, so the back chain works one screen at a time.
+
 # v1.0.0-beta.28 - Channel and Playlist Return Fix
 
 ## Fixes
@@ -1574,5 +1579,4 @@
 - dynamic results loading
 - in-app playback
 - download progress reporting
-
 

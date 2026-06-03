@@ -306,7 +306,7 @@ class SystemUI:
             return
         if push_state:
             self.push_search_state()
-        self.prepare_collection_results_screen()
+        self.prepare_collection_results_screen(preserve_player_return_state=push_state)
         self.trending_screen_active = False
         title = str(item.get("title") or self.t("channel"))
         if tab == "playlists":

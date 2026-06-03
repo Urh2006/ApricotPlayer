@@ -144,11 +144,43 @@ class SearchMixin:
             self.focus_later(self.query)
 
 
-    def prepare_collection_results_screen(self) -> None:
+    def push_player_return_search_state(self) -> None:
+        screen = str(getattr(self, "player_return_screen", "") or "")
+        if screen not in {"search", "trending"}:
+            return
+        results = list(getattr(self, "return_all_results", []) or getattr(self, "all_results", []) or getattr(self, "return_results", []) or getattr(self, "results", []))
+        if not results:
+            return
+        data = dict(getattr(self, "player_return_data", {}) or {})
+        selection = int(data.get("index", getattr(self, "return_index", 0)) or 0)
+        visible_count = int(getattr(self, "return_visible_count", 0) or len(getattr(self, "return_results", []) or getattr(self, "results", []) or results))
+        state = {
+            "screen": "trending" if screen == "trending" else "search",
+            "results": list(getattr(self, "return_results", []) or getattr(self, "results", []) or results[:visible_count]),
+            "all_results": results,
+            "index": max(0, selection),
+            "visible_count": min(max(1, visible_count), len(results)),
+            "query": self.last_search_query,
+            "type_index": self.last_search_type_index,
+            "search_type": self.current_search_type_code,
+            "collection_url": str(data.get("collection_url") or self.collection_url or ""),
+            "collection_result_type": str(data.get("collection_result_type") or self.collection_result_type or ""),
+            "collection_sort_mode": str(data.get("collection_sort_mode") or self.collection_sort_mode or ""),
+            "collection_channel_id": str(data.get("collection_channel_id") or getattr(self, "collection_channel_id", "") or ""),
+            "collection_fully_loaded": bool(data.get("collection_fully_loaded", getattr(self, "collection_fully_loaded", False))),
+            "country_index": int(data.get("country_index", getattr(self, "last_trending_country_index", 0)) or 0),
+            "category_index": int(data.get("category_index", getattr(self, "last_trending_category_index", 0)) or 0),
+        }
+        self.search_results_stack.append(state)
+
+
+    def prepare_collection_results_screen(self, preserve_player_return_state: bool = True) -> None:
         results_list = self.live_window(getattr(self, "results_list", None))
         if self.search_screen_active and results_list is not None:
             return
         if self.in_player_screen:
+            if preserve_player_return_state:
+                self.push_player_return_search_state()
             self.leave_player_for_global_navigation()
         results_list = self.live_window(getattr(self, "results_list", None))
         if not self.search_screen_active or results_list is None:
