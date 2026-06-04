@@ -392,7 +392,7 @@ class PlaybackMixin:
 
     def playback_key(self, item: dict | None = None) -> str:
         item = item or self.current_video_item or self.current_video_info
-        return str((item or {}).get("url") or (item or {}).get("webpage_url") or "").strip()
+        return str((item or {}).get("url") or (item or {}).get("webpage_url") or (item or {}).get("local_path") or (item or {}).get("path") or "").strip()
 
     @staticmethod
     def last_session_item_url(item: dict | None) -> str:
@@ -580,6 +580,7 @@ class PlaybackMixin:
         self.current_stream_url = ""
         self.current_stream_headers = {}
         self.current_audio_device = ""
+        self.playback_position_item = {}
         if reset_session:
             self.player_session_open = False
             if self.player_return_screen == "folder":

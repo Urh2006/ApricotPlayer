@@ -1703,8 +1703,8 @@ class LibraryMixin:
         self.announce_player(self.t("episode_progress_cleared", title=item.get("title", "")))
 
 
-    def mark_current_podcast_episode_played(self, announce: bool = False, refresh: bool = False) -> bool:
-        item = self.current_video_item or self.current_video_info or {}
+    def mark_current_podcast_episode_played(self, announce: bool = False, refresh: bool = False, item: dict | None = None) -> bool:
+        item = item or self.current_video_item or self.current_video_info or {}
         if not isinstance(item, dict) or item.get("kind") != "rss_item":
             return False
         data = dict(getattr(self, "player_return_data", {}) or {})

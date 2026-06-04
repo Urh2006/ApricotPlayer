@@ -1,3 +1,8 @@
+# v1.0.0-beta.31 - Per-Item Resume Position Fix
+
+## Fixes
+- **Resume positions are now saved against the media item that mpv is actually playing.** If a file/video was still playing in the background and another local file was opened, Apricot could replace the UI's current item before stopping the old mpv process. The old file's timestamp was then saved under the new file's key, so the new file incorrectly resumed at the old file's position. Apricot now keeps a separate active-playback item snapshot for position saving, so resume timestamps remain independent for local files, YouTube items, playlists, folders, and podcasts.
+
 # v1.0.0-beta.30 - Autoplay, Resume Position and Podcast Fixes
 
 ## Investigation
@@ -1592,4 +1597,3 @@
 - dynamic results loading
 - in-app playback
 - download progress reporting
-

@@ -175,6 +175,7 @@ class MpvMixin:
             self.player_kind = "mpv"
             self.player_control_mode = True
             self.player_session_open = True
+            self.playback_position_item = dict(self.current_video_item or self.current_video_info or {})
             self.player_ended = False
             self.player_paused = bool(self.settings.player_start_paused)
             self.player_generation += 1

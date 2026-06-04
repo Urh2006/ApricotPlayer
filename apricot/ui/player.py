@@ -467,6 +467,12 @@ class PlayerUI:
             return 0.0
         return position if position >= 5.0 else 0.0
 
+    def playback_position_source_item(self) -> dict:
+        item = getattr(self, "playback_position_item", {}) or {}
+        if isinstance(item, dict) and self.playback_key(item):
+            return dict(item)
+        return dict(self.current_video_item or self.current_video_info or {})
+
     def audio_output_device_options(self, force_refresh: bool = False, allow_probe: bool = True) -> tuple[list[str], list[str]]:
         now = time.monotonic()
         if not force_refresh and self.audio_device_options_cache and now - self.audio_device_options_cache[0] < 20:
@@ -1830,7 +1836,8 @@ class PlayerUI:
     def save_current_playback_position(self) -> None:
         if not getattr(self.settings, "resume_playback", True) or not self.mpv_process_alive():
             return
-        key = self.playback_key()
+        item = self.playback_position_source_item()
+        key = self.playback_key(item)
         if not key:
             return
         try:
@@ -1839,7 +1846,7 @@ class PlayerUI:
                 return
             position = float(elapsed)
             total = 0.0
-            for source in (self.current_video_info, self.current_video_item):
+            for source in (item,):
                 try:
                     # current_video_info["duration"] is a *formatted* string
                     # (e.g. "3:45"); the numeric value lives in
@@ -1859,7 +1866,7 @@ class PlayerUI:
                 self.playback_positions.pop(key, None)
             elif total and position > max(5.0, total - 8.0):
                 self.playback_positions.pop(key, None)
-                self.mark_current_podcast_episode_played(announce=False, refresh=False)
+                self.mark_current_podcast_episode_played(announce=False, refresh=False, item=item)
             else:
                 self.playback_positions[key] = round(position, 1)
             self.save_playback_positions()
