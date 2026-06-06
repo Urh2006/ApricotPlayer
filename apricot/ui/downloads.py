@@ -67,9 +67,6 @@ class DownloadsUI:
                 merged["http_headers"] = headers
         return merged
 
-    def is_requested_format_error(self, exc: Exception | str) -> bool:
-        return "requested format is not available" in str(exc).lower()
-
     def ydl_extract_info(
         self,
         url: str,
@@ -116,12 +113,7 @@ class DownloadsUI:
                 ydl.download(urls)
 
         def run_with_cookies() -> None:
-            try:
-                run_once(use_cookies=True)
-            except Exception as exc:
-                if not self.is_requested_format_error(exc):
-                    raise
-                run_once(use_cookies=True, use_js_solver=True)
+            run_once(use_cookies=True, use_js_solver=True)
 
         try:
             run_once()

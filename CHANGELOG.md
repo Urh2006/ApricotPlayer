@@ -1,3 +1,9 @@
+# v1.0.0-beta.36 - Faster VPN Download Start
+
+## Fixes
+- **Removed a redundant authenticated yt-dlp attempt from VPN-restricted downloads.** After YouTube explicitly requests authentication, ApricotPlayer now retries with configured cookies and its bundled JavaScript solver in one step instead of first making a cookie-only request that cannot expose the requested formats.
+- **Normal download speed and quality remain unchanged.** Successful anonymous downloads still use one request with no cookies or JavaScript solver. Format selection, yt-dlp, FFmpeg, fragment settings, audio conversion, and the 250 ms worker startup timing are unchanged.
+
 # v1.0.0-beta.35 - VPN Download Format Recovery
 
 ## Fixes
