@@ -1,3 +1,9 @@
+# v1.0.0-beta.35 - VPN Download Format Recovery
+
+## Fixes
+- **YouTube downloads now recover when a VPN triggers the authenticated JavaScript challenge path.** ApricotPlayer still tries anonymously first and then retries with configured cookies only after YouTube requests authentication. If that cookie attempt reports that the requested format is unavailable because challenge solving hid the media formats, Apricot retries that failed attempt with its bundled Node and yt-dlp EJS solver.
+- **Normal downloads remain unchanged.** The JavaScript solver adds no request or delay to successful anonymous downloads or successful cookie downloads, and no fragment, FFmpeg, format-quality, or startup timing settings were changed.
+
 # v1.0.0-beta.34 - Conservative Cookie Download Fallback
 
 ## Fixes

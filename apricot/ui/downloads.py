@@ -109,9 +109,19 @@ class DownloadsUI:
         if ytdlp is None:
             raise RuntimeError(self.t("missing_ytdlp"))
 
-        def run_once(use_cookies: bool = False) -> None:
-            with ytdlp.YoutubeDL(self.ydl_options(options, use_cookies=use_cookies)) as ydl:
+        def run_once(use_cookies: bool = False, use_js_solver: bool = False) -> None:
+            with ytdlp.YoutubeDL(
+                self.ydl_options(options, use_cookies=use_cookies, use_js_solver=use_js_solver)
+            ) as ydl:
                 ydl.download(urls)
+
+        def run_with_cookies() -> None:
+            try:
+                run_once(use_cookies=True)
+            except Exception as exc:
+                if not self.is_requested_format_error(exc):
+                    raise
+                run_once(use_cookies=True, use_js_solver=True)
 
         try:
             run_once()
@@ -121,14 +131,14 @@ class DownloadsUI:
             retry_error: Exception | str = exc
             if self.effective_cookies_file():
                 try:
-                    run_once(use_cookies=True)
+                    run_with_cookies()
                     return
                 except Exception as cookie_exc:
                     retry_error = cookie_exc
                     if not self.is_cookie_auth_error(cookie_exc):
                         raise
             if self.repair_cookies_for_error(retry_error):
-                run_once(use_cookies=True)
+                run_with_cookies()
                 return
             raise retry_error if isinstance(retry_error, Exception) else exc
 
