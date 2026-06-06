@@ -1,3 +1,9 @@
+# v1.0.0-beta.34 - Conservative Cookie Download Fallback
+
+## Fixes
+- **Restored the established cookie fallback order for YouTube downloads.** ApricotPlayer first attempts the download without cookies, exactly as in v0.9.20 and earlier beta builds. The configured cookie file is used only when YouTube returns an authentication or sign-in error.
+- **Kept the safe Beta 33 improvements.** Single downloads still begin after 250 ms, the original Documents cookie path remains persistent and automatically refreshed, and cookie-dependent stream cache entries are invalidated when the source changes.
+
 # v1.0.0-beta.33 - Faster Authenticated Downloads and Cookie Source Recovery
 
 ## Fixes
