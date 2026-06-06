@@ -600,7 +600,7 @@ class SettingsMixin:
             check("subscription_notifications", self.settings.subscription_notifications)
             check("app_update_notifications", self.settings.app_update_notifications)
         elif section_name == "cookies":
-            text("cookies", self.settings.cookies_file)
+            text("cookies", self.configured_cookies_display_path())
             button("choose_cookies_file", self.choose_cookies_file)
             choice("cookies_from_browser", self.settings.cookies_from_browser or "none", COOKIES_BROWSER_OPTIONS)
             profile_values = self.cookie_profile_choice_values(self.settings.cookies_from_browser or "none")
@@ -1068,7 +1068,11 @@ class SettingsMixin:
         if "youtube_data_api_key" in c:
             self.settings.youtube_data_api_key = c["youtube_data_api_key"].GetValue().strip()
         if "cookies" in c:
-            self.settings.cookies_file = c["cookies"].GetValue()
+            entered_cookies_path = c["cookies"].GetValue().strip()
+            if entered_cookies_path != self.configured_cookies_display_path():
+                self.settings.cookies_source_file = entered_cookies_path
+                self.settings.cookies_source_signature = ""
+                self.settings.cookies_file = entered_cookies_path
         if "cookies_from_browser" in c:
             self.settings.cookies_from_browser = c["cookies_from_browser"].GetStringSelection() or "none"
         if "cookies_browser_profile" in c:

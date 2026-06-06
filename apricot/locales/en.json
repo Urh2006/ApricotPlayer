@@ -177,6 +177,8 @@
     "download_progress": "{mode}: {percent}% - {title}",
     "download_progress_title": "Download in progress",
     "download_progress_message": "{title}\nCompleted: {completed} of {total}\nRemaining: {remaining}",
+    "download_progress_hide": "Hide",
+    "download_progress_details": "See details",
     "download_processing": "{mode}: processing - {title}",
     "download_audio_mode": "Audio",
     "download_video_mode": "Video",

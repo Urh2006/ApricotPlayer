@@ -177,6 +177,8 @@
     "download_progress": "{mode}: {percent} % - {title}",
     "download_progress_title": "Prenos v teku",
     "download_progress_message": "{title}\nDokoncano: {completed} od {total}\nPreostalo: {remaining}",
+    "download_progress_hide": "Skrij",
+    "download_progress_details": "Pokaži podrobnosti",
     "download_processing": "{mode}: obdelujem - {title}",
     "download_audio_mode": "Zvok",
     "download_video_mode": "Video",

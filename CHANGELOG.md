@@ -1,3 +1,16 @@
+# v1.0.0-beta.32 - Download Performance and Background Progress
+
+## Fixes
+- **Restored audio download behaviour from v0.9.57.** Beta 26 applied video-specific DASH fragment, HTTP range chunk, and socket buffer tuning to audio-only downloads. Cross-testing showed that this made some connections dramatically slower and left downloads at 100% processing for much longer. Audio downloads once again use yt-dlp's proven audio defaults while retaining the same format conversion and metadata behaviour.
+- **Playlist, channel, and large queued downloads now use a separate non-blocking progress window.** The window can be hidden while ApricotPlayer and the player remain fully usable. Closing or hiding it no longer affects the main application, and completing a playlist closes only the progress window.
+- **Multiple long-running downloads now share the progress window safely.** Finishing one task switches the window to another active task instead of destroying its progress UI.
+- **Updated cookie files are detected automatically.** ApricotPlayer now remembers the original selected cookie file separately from its normalized internal copy. When the same source file is edited or replaced, the internal yt-dlp cookie file is refreshed automatically without requiring the user to select it again.
+- **Cookie login detection is invalidated after every successful refresh.** Playback and downloads immediately see newly imported YouTube login cookies instead of reusing an old in-memory result.
+
+## Verified
+- The video download format, fragment, chunk, buffer, FFmpeg, and post-processing path remains unchanged from v0.9.57.
+- The installer `_internal` replacement fix remains intact.
+
 # v1.0.0-beta.31 - Per-Item Resume Position Fix
 
 ## Fixes

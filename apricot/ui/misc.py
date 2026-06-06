@@ -701,6 +701,10 @@ class MiscUI:
 
     def shutdown_runtime(self) -> None:
         self.exiting = True
+        try:
+            self.close_download_progress_dialog()
+        except Exception:
+            pass
         for timer in (
             getattr(self, "timer", None),
             getattr(self, "subscription_timer", None),

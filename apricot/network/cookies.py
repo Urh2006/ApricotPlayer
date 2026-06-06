@@ -51,14 +51,12 @@ class CookiesMixin:
             self.message(self.t("cookies_file_load_failed", error=self.friendly_error(exc)), wx.ICON_WARNING)
             return
         imported_path = str(result["path"])
-        self.settings.cookies_file = imported_path
-        self.settings.cookies_from_browser = "none"
-        self.settings.cookies_browser_profile = COOKIE_PROFILE_AUTO
+        self.remember_cookie_source(path, imported_path)
         self.cookie_repair_suppressed_until = 0.0
         self.save_settings()
         if hasattr(self, "controls"):
             if "cookies" in self.controls:
-                self.controls["cookies"].SetValue(imported_path)
+                self.controls["cookies"].SetValue(str(path))
             if "cookies_from_browser" in self.controls:
                 self.controls["cookies_from_browser"].SetSelection(0)
             if "cookies_browser_profile" in self.controls:
@@ -132,6 +130,8 @@ class CookiesMixin:
 
     def finish_browser_cookies_export(self, path: str, profile_label: str, browser: str) -> None:
         self.settings.cookies_file = path
+        self.settings.cookies_source_file = ""
+        self.settings.cookies_source_signature = ""
         self.settings.cookies_from_browser = browser
         self.cookie_repair_suppressed_until = 0.0
         self.save_settings()

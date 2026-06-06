@@ -3,6 +3,45 @@ import wx
 import os
 from pathlib import Path
 
+
+class DownloadProgressWindow(wx.Frame):
+    def __init__(self, owner, title: str, message: str) -> None:
+        style = wx.CAPTION | wx.CLOSE_BOX | wx.MINIMIZE_BOX | wx.SYSTEM_MENU
+        super().__init__(None, title=title, style=style)
+        self.owner = owner
+        panel = wx.Panel(self)
+        root = wx.BoxSizer(wx.VERTICAL)
+        self.message = wx.StaticText(panel, label=message)
+        self.message.Wrap(520)
+        root.Add(self.message, 0, wx.ALL | wx.EXPAND, 12)
+        self.gauge = wx.Gauge(panel, range=100)
+        root.Add(self.gauge, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 12)
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        hide_button = wx.Button(panel, label=owner.t("download_progress_hide"))
+        details_button = wx.Button(panel, label=owner.t("download_progress_details"))
+        hide_button.Bind(wx.EVT_BUTTON, lambda _event: self.Hide())
+        details_button.Bind(wx.EVT_BUTTON, lambda _event: owner.show_download_progress_details())
+        buttons.AddStretchSpacer()
+        buttons.Add(hide_button, 0, wx.RIGHT, 8)
+        buttons.Add(details_button)
+        root.Add(buttons, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 12)
+        panel.SetSizer(root)
+        self.SetMinSize((560, 190))
+        self.SetSize((560, 190))
+        self.SetName(title)
+        self.Bind(wx.EVT_CLOSE, self.on_close)
+
+    def on_close(self, event: wx.CloseEvent) -> None:
+        self.Hide()
+        event.Veto()
+
+    def set_progress(self, percent: int, message: str) -> None:
+        self.gauge.SetValue(max(0, min(100, int(percent))))
+        self.message.SetLabel(message)
+        self.message.Wrap(520)
+        self.Layout()
+
+
 class DownloadsUI:
     def ydl_options(self, options: dict | None = None, use_cookies: bool = False, use_js_solver: bool = False) -> dict:
         disable_external_ytdlp_plugins()
@@ -317,19 +356,32 @@ class DownloadsUI:
         return f"{prefix}-{self.download_task_counter}-{int(time.time() * 1000)}"
 
     def show_download_progress_dialog(self, task_id: str, title: str) -> None:
-        self.close_download_progress_dialog()
+        self.download_progress_task_ids.add(task_id)
         self.download_progress_task_id = task_id
-        self.download_progress_dialog = wx.ProgressDialog(
-            self.t("download_progress_title"),
-            self.t("download_progress_message", title=title, completed=0, total=0, remaining=0),
-            maximum=100,
-            parent=self,
-            style=wx.PD_ELAPSED_TIME | wx.PD_ESTIMATED_TIME | wx.PD_REMAINING_TIME,
-        )
+        message = self.t("download_progress_message", title=title, completed=0, total=0, remaining=0)
+        dialog = self.download_progress_dialog
+        if dialog is None:
+            dialog = DownloadProgressWindow(self, self.t("download_progress_title"), message)
+            self.download_progress_dialog = dialog
+            dialog.CentreOnScreen()
+        else:
+            dialog.set_progress(0, message)
+        dialog.Show()
+        dialog.Raise()
+
+    def show_download_progress_details(self) -> None:
+        dialog = self.download_progress_dialog
+        if dialog:
+            dialog.Hide()
+        self.restore_from_tray()
+        wx.CallAfter(self.show_download_queue)
 
     def update_download_progress_dialog(self, task: dict) -> None:
         dialog = self.download_progress_dialog
-        if not dialog or str(task.get("task_id") or "") != self.download_progress_task_id:
+        task_id = str(task.get("task_id") or "")
+        if not dialog or task_id not in self.download_progress_task_ids:
+            return
+        if task_id != self.download_progress_task_id:
             return
         total = self.to_int(str(task.get("total") or task.get("playlist_count") or 0), 0, 0)
         completed = self.to_int(str(task.get("completed") or 0), 0, 0)
@@ -347,13 +399,30 @@ class DownloadsUI:
         title = str(task.get("current_title") or task.get("title") or "")
         message = self.t("download_progress_message", title=title, completed=completed, total=total, remaining=remaining)
         try:
-            dialog.Update(percent, message)
+            dialog.set_progress(percent, message)
         except RuntimeError:
             self.download_progress_dialog = None
             self.download_progress_task_id = ""
+            self.download_progress_task_ids.clear()
 
     def close_download_progress_dialog(self, task_id: str | None = None) -> None:
+        if task_id is None:
+            self.download_progress_task_ids.clear()
+        else:
+            self.download_progress_task_ids.discard(task_id)
         if task_id is not None and task_id != self.download_progress_task_id:
+            return
+        next_task_id = next(
+            (
+                candidate
+                for candidate in self.download_progress_task_ids
+                if candidate in self.active_downloads
+            ),
+            "",
+        )
+        if next_task_id:
+            self.download_progress_task_id = next_task_id
+            self.update_download_progress_dialog(self.active_downloads[next_task_id])
             return
         dialog = self.download_progress_dialog
         self.download_progress_dialog = None

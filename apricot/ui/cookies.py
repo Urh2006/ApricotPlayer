@@ -5,26 +5,68 @@ from pathlib import Path
 from apricot.ui.misc import MiscUI
 
 class CookiesUI:
+    @staticmethod
+    def cookie_source_signature(path: Path) -> str:
+        stat = path.stat()
+        return f"{stat.st_mtime_ns}:{stat.st_size}"
+
+    def configured_cookies_display_path(self) -> str:
+        source = str(getattr(self.settings, "cookies_source_file", "") or "").strip()
+        return source or str(getattr(self.settings, "cookies_file", "") or "").strip()
+
+    def clear_cookie_login_cache(self) -> None:
+        cache = getattr(self, "_youtube_cookie_login_cache", None)
+        if isinstance(cache, dict):
+            cache.clear()
+
+    def remember_cookie_source(self, source_path: str | Path, imported_path: str) -> None:
+        source = Path(os.path.expandvars(str(source_path).strip('"'))).expanduser()
+        self.settings.cookies_source_file = str(source)
+        try:
+            self.settings.cookies_source_signature = self.cookie_source_signature(source)
+        except OSError:
+            self.settings.cookies_source_signature = ""
+        self.settings.cookies_file = imported_path
+        self.settings.cookies_from_browser = "none"
+        self.settings.cookies_browser_profile = COOKIE_PROFILE_AUTO
+
     def effective_cookies_file(self) -> str:
         configured = str(getattr(self.settings, "cookies_file", "") or "").strip()
+        source_value = str(getattr(self.settings, "cookies_source_file", "") or "").strip()
+        if source_value:
+            source_path = Path(os.path.expandvars(source_value.strip('"'))).expanduser()
+            try:
+                signature = self.cookie_source_signature(source_path)
+            except OSError:
+                signature = ""
+            cache_ready = False
+            try:
+                cache_ready = CACHED_COOKIES_FILE.exists() and CACHED_COOKIES_FILE.stat().st_size > 0
+            except OSError:
+                pass
+            if signature and (
+                signature != str(getattr(self.settings, "cookies_source_signature", "") or "")
+                or not cache_ready
+            ):
+                try:
+                    result = self.import_cookie_file_to_cache(source_path)
+                    self.remember_cookie_source(source_path, str(result["path"]))
+                    self.save_settings()
+                    return str(result["path"])
+                except Exception:
+                    pass
+            if cache_ready:
+                return str(CACHED_COOKIES_FILE)
         if configured:
             configured_path = Path(os.path.expandvars(configured.strip('"'))).expanduser()
             try:
                 same_as_cache = configured_path.resolve() == CACHED_COOKIES_FILE.resolve()
             except OSError:
                 same_as_cache = False
-            attempts = getattr(self, "_cookies_file_auto_import_attempts", None)
-            if attempts is None:
-                attempts = set()
-                self._cookies_file_auto_import_attempts = attempts
-            attempt_key = str(configured_path)
-            if not same_as_cache and attempt_key not in attempts and configured_path.exists():
-                attempts.add(attempt_key)
+            if not same_as_cache and configured_path.exists():
                 try:
                     result = self.import_cookie_file_to_cache(configured_path)
-                    self.settings.cookies_file = str(result["path"])
-                    self.settings.cookies_from_browser = "none"
-                    self.settings.cookies_browser_profile = COOKIE_PROFILE_AUTO
+                    self.remember_cookie_source(configured_path, str(result["path"]))
                     self.save_settings()
                     return str(result["path"])
                 except Exception:
@@ -270,6 +312,7 @@ class CookiesUI:
         temp_path = CACHED_COOKIES_FILE.with_suffix(".txt.tmp")
         cookie_jar.save(str(temp_path), ignore_discard=True, ignore_expires=True)
         os.replace(temp_path, CACHED_COOKIES_FILE)
+        self.clear_cookie_login_cache()
 
     def import_cookie_file_to_cache(self, source_path: str | Path) -> dict:
         source = Path(source_path)
@@ -705,7 +748,10 @@ class CookiesUI:
         _score, label, cookie_jar, _summary = best
         CACHED_COOKIES_FILE.parent.mkdir(parents=True, exist_ok=True)
         cookie_jar.save(str(CACHED_COOKIES_FILE), ignore_discard=True, ignore_expires=True)
+        self.clear_cookie_login_cache()
         self.settings.cookies_file = str(CACHED_COOKIES_FILE)
+        self.settings.cookies_source_file = ""
+        self.settings.cookies_source_signature = ""
         self.settings.cookies_from_browser = browser
         self.cookie_repair_suppressed_until = 0.0
         self.save_settings()

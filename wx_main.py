@@ -159,8 +159,9 @@ class MainFrame(CookiesUI, DownloadsUI, EqualizerUI, EventsUI, ListsUI, MenusUI,
         self.download_queue: dict[str, dict] = {}
         self.active_downloads: dict[str, dict] = {}
         self.download_cancel_events: dict[str, threading.Event] = {}
-        self.download_progress_dialog: wx.ProgressDialog | None = None
+        self.download_progress_dialog: wx.Frame | None = None
         self.download_progress_task_id = ""
+        self.download_progress_task_ids: set[str] = set()
         self.download_task_counter = 0
         self.conversion_progress_dialog: wx.ProgressDialog | None = None
         self.queue_items: list[dict] = []

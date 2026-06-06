@@ -80,6 +80,8 @@ class Settings:
     proxy: str = ""
     youtube_data_api_key: str = ""
     cookies_file: str = ""
+    cookies_source_file: str = ""
+    cookies_source_signature: str = ""
     cookies_from_browser: str = "none"
     cookies_browser_profile: str = COOKIE_PROFILE_AUTO
     show_advanced_network_settings: bool = False
