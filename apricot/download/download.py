@@ -280,7 +280,7 @@ class DownloaderMixin:
         self.announce_player(self.t("download_started"))
         self.set_status(self.t("download_audio_start" if audio_only else "download_video_start"))
         task_id, cancel_event = self.register_download_task(item, audio_only, "single", total=1)
-        wx.CallLater(900, self.start_download_worker_thread, item, audio_only, task_id, cancel_event, target_path)
+        wx.CallLater(250, self.start_download_worker_thread, item, audio_only, task_id, cancel_event, target_path)
 
 
     def start_download_worker_thread(self, item: dict, audio_only: bool, task_id: str, cancel_event: threading.Event, target_path: Path | None = None) -> None:

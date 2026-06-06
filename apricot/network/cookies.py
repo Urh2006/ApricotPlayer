@@ -66,7 +66,7 @@ class CookiesMixin:
             "header": "cookies_file_header_imported",
             "netscape": "cookies_file_netscape_imported",
         }.get(str(result.get("kind") or ""), "cookies_file_imported")
-        self.announce_player(self.t(message_key, path=imported_path))
+        self.announce_player(self.t(message_key, path=path))
         if result.get("has_login"):
             self.announce_player(self.t("cookies_file_login_found"))
         else:

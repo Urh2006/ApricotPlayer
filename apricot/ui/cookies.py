@@ -10,14 +10,118 @@ class CookiesUI:
         stat = path.stat()
         return f"{stat.st_mtime_ns}:{stat.st_size}"
 
+    @staticmethod
+    def paths_match(first: str | Path, second: str | Path) -> bool:
+        def expanded(value: str | Path) -> Path:
+            return Path(os.path.expandvars(str(value).strip('"'))).expanduser()
+
+        try:
+            return expanded(first).resolve() == expanded(second).resolve()
+        except OSError:
+            return os.path.normcase(os.path.abspath(str(expanded(first)))) == os.path.normcase(os.path.abspath(str(expanded(second))))
+
+    @staticmethod
+    def windows_documents_folders() -> list[Path]:
+        folders: list[Path] = []
+        if os.name == "nt" and winreg is not None:
+            try:
+                with winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER,
+                    r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders",
+                ) as key:
+                    value, _value_type = winreg.QueryValueEx(key, "Personal")
+                    if value:
+                        folders.append(Path(os.path.expandvars(str(value))).expanduser())
+            except OSError:
+                pass
+        folders.append(Path.home() / "Documents")
+        for variable in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial"):
+            root = str(os.getenv(variable, "") or "").strip()
+            if root:
+                folders.append(Path(root) / "Documents")
+        unique: list[Path] = []
+        seen: set[str] = set()
+        for folder in folders:
+            key = os.path.normcase(os.path.abspath(str(folder)))
+            if key not in seen:
+                seen.add(key)
+                unique.append(folder)
+        return unique
+
+    def discover_legacy_cookie_source(self) -> Path | None:
+        if str(getattr(self.settings, "cookies_source_file", "") or "").strip():
+            return None
+        if self.normalized_cookies_browser():
+            return None
+        configured = str(getattr(self.settings, "cookies_file", "") or "").strip()
+        if not configured or not self.paths_match(configured, CACHED_COOKIES_FILE):
+            return None
+        candidates: list[Path] = []
+        for folder in self.windows_documents_folders():
+            if not folder.is_dir():
+                continue
+            exact = folder / CACHED_COOKIES_FILE.name
+            if exact.is_file():
+                candidates.append(exact)
+            try:
+                candidates.extend(
+                    path for path in folder.glob("*cookies*.txt")
+                    if path.is_file() and path not in candidates
+                )
+            except OSError:
+                pass
+        valid: list[tuple[int, int, Path]] = []
+        for candidate in candidates:
+            try:
+                _score, _youtube_count, total_count, _has_login = self.cookie_file_score(candidate)
+                if total_count > 0:
+                    exact_name = int(candidate.name.lower() == CACHED_COOKIES_FILE.name.lower())
+                    valid.append((exact_name, candidate.stat().st_mtime_ns, candidate))
+            except (OSError, ValueError):
+                continue
+            except Exception:
+                continue
+        if not valid:
+            return None
+        return max(valid, key=lambda item: (item[0], item[1]))[2]
+
+    def migrate_legacy_cookie_source(self) -> str:
+        source = self.discover_legacy_cookie_source()
+        if source is None:
+            return ""
+        try:
+            result = self.import_cookie_file_to_cache(source)
+            self.remember_cookie_source(source, str(result["path"]))
+            self.save_settings()
+            return str(source)
+        except Exception:
+            return ""
+
     def configured_cookies_display_path(self) -> str:
         source = str(getattr(self.settings, "cookies_source_file", "") or "").strip()
+        if not source:
+            source = self.migrate_legacy_cookie_source()
         return source or str(getattr(self.settings, "cookies_file", "") or "").strip()
 
     def clear_cookie_login_cache(self) -> None:
         cache = getattr(self, "_youtube_cookie_login_cache", None)
         if isinstance(cache, dict):
             cache.clear()
+
+    def clear_cookie_dependent_stream_cache(self) -> None:
+        cache = getattr(self, "stream_url_cache", None)
+        if not isinstance(cache, dict):
+            return
+        lock = getattr(self, "stream_url_cache_lock", None)
+        if lock is None:
+            cache.clear()
+        else:
+            with lock:
+                cache.clear()
+        try:
+            self.save_stream_url_cache()
+        except Exception:
+            pass
 
     def remember_cookie_source(self, source_path: str | Path, imported_path: str) -> None:
         source = Path(os.path.expandvars(str(source_path).strip('"'))).expanduser()
@@ -33,6 +137,8 @@ class CookiesUI:
     def effective_cookies_file(self) -> str:
         configured = str(getattr(self.settings, "cookies_file", "") or "").strip()
         source_value = str(getattr(self.settings, "cookies_source_file", "") or "").strip()
+        if not source_value:
+            source_value = self.migrate_legacy_cookie_source()
         if source_value:
             source_path = Path(os.path.expandvars(source_value.strip('"'))).expanduser()
             try:
@@ -313,6 +419,7 @@ class CookiesUI:
         cookie_jar.save(str(temp_path), ignore_discard=True, ignore_expires=True)
         os.replace(temp_path, CACHED_COOKIES_FILE)
         self.clear_cookie_login_cache()
+        self.clear_cookie_dependent_stream_cache()
 
     def import_cookie_file_to_cache(self, source_path: str | Path) -> dict:
         source = Path(source_path)

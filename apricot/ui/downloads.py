@@ -113,13 +113,19 @@ class DownloadsUI:
             with ytdlp.YoutubeDL(self.ydl_options(options, use_cookies=use_cookies)) as ydl:
                 ydl.download(urls)
 
+        cookie_file = self.effective_cookies_file()
+        use_configured_cookies = bool(
+            cookie_file
+            and any(self.is_youtube_url(url) for url in urls)
+            and self.cookies_file_has_youtube_login(cookie_file)
+        )
         try:
-            run_once()
+            run_once(use_cookies=use_configured_cookies)
         except Exception as exc:
             if not self.is_cookie_auth_error(exc):
                 raise
             retry_error: Exception | str = exc
-            if self.effective_cookies_file():
+            if cookie_file and not use_configured_cookies:
                 try:
                     run_once(use_cookies=True)
                     return

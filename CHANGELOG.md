@@ -1,3 +1,16 @@
+# v1.0.0-beta.33 - Faster Authenticated Downloads and Cookie Source Recovery
+
+## Fixes
+- **YouTube downloads with valid login cookies now use them on the first attempt.** ApricotPlayer no longer performs a full anonymous extraction/download attempt before retrying the same URL with the configured cookies file. This avoids duplicated network work on connections where YouTube requires sign-in.
+- **Single audio and video downloads begin 650 ms sooner.** The worker startup delay was reduced from 900 ms to 250 ms while retaining the screen-reader download-start announcement.
+- **Legacy cookie selections are reconnected to the original Documents file.** Users whose saved setting only points to ApricotPlayer's internal AppData copy are migrated automatically when a valid `cookies.txt` is found in the Windows Documents folder, including OneDrive Documents.
+- **Edited cookie files now invalidate cookie-dependent stream cache entries.** Replacing or editing the selected source is reflected immediately instead of leaving playback tied to a stream URL resolved with older cookies.
+- **The cookie picker now announces the selected source path.** It no longer reports ApricotPlayer's normalized AppData copy as though that were the file selected by the user.
+
+## Verified
+- The complete download methods and packaged yt-dlp, FFmpeg, mpv, and Python runtime were compared against the pre-refactor v0.9.20/v0.9.22 build. The format selectors, post-processing settings, downloader options, and bundled media tools are unchanged.
+- Cookie source migration, automatic source refresh, stream-cache invalidation, and first-pass cookie use were exercised with focused local tests.
+
 # v1.0.0-beta.32 - Download Performance and Background Progress
 
 ## Fixes

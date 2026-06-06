@@ -443,12 +443,25 @@ class SystemUI:
             self.message(self.t("local_file_open_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
     def stream_url_cache_key(self, url: str) -> str:
+        cookie_path = (
+            str(getattr(self.settings, "cookies_source_file", "") or "").strip()
+            or str(getattr(self.settings, "cookies_file", "") or "").strip()
+        )
+        cookie_signature = ""
+        if cookie_path:
+            try:
+                cookie_signature = self.cookie_source_signature(
+                    Path(os.path.expandvars(cookie_path.strip('"'))).expanduser()
+                )
+            except OSError:
+                pass
         parts = {
             "url": url,
             "video_format": self.normalized_video_format(),
             "max_height": int(getattr(self.settings, "max_video_height", 1080) or 0),
             "restricted": bool(getattr(self.settings, "enable_age_restricted_videos", False)),
-            "cookies_file": str(getattr(self.settings, "cookies_file", "") or ""),
+            "cookies_file": cookie_path,
+            "cookies_signature": cookie_signature,
             "cookies_browser": str(getattr(self.settings, "cookies_from_browser", "none") or "none"),
             "stream_format_profile": STREAM_FORMAT_PROFILE,
         }
