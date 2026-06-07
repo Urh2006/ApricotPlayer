@@ -1,3 +1,9 @@
+# v1.0.0-beta.37 - Player Start Hotfix
+
+## Fixes
+- **Fixed online media failing to start with `MainFrame object has no attribute is_requested_format_error`.** The shared format-error detector used by stream resolution is restored, including playback started from History.
+- **Kept the Beta 36 download-speed improvement intact.** Authenticated downloads still skip the redundant cookie-only request.
+
 # v1.0.0-beta.36 - Faster VPN Download Start
 
 ## Fixes

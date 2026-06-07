@@ -67,6 +67,10 @@ class DownloadsUI:
                 merged["http_headers"] = headers
         return merged
 
+    @staticmethod
+    def is_requested_format_error(exc: Exception | str) -> bool:
+        return "requested format is not available" in str(exc).lower()
+
     def ydl_extract_info(
         self,
         url: str,
