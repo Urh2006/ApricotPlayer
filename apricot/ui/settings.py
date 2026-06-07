@@ -33,6 +33,7 @@ except ImportError:
 
 from apricot.constants import *
 from apricot.locales import TEXT
+from apricot.models import Settings
 
 class SettingsMixin:
     def open_settings_shortcut(self) -> None:
@@ -462,7 +463,6 @@ class SettingsMixin:
             check("close_to_tray", self.settings.close_to_tray)
             check("start_with_windows", self.settings.start_with_windows)
             check("tray_notification", self.settings.tray_notification)
-            button("reset_all_settings", self.restore_default_settings)
         elif section_name == "playback":
             choice("player_speed", self.settings.player_speed, [self.format_playback_rate(step) for step in PLAYBACK_SPEED_STEPS if step <= 2.0])
             choice("speed_audio_mode", self.normalized_speed_audio_mode(), SPEED_AUDIO_MODE_OPTIONS, self.speed_audio_mode_labels())

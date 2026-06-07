@@ -43,6 +43,18 @@ class DownloadProgressWindow(wx.Frame):
 
 
 class DownloadsUI:
+    def unseen_related_videos(self, videos: list[dict], current_video_id: str = "") -> list[dict]:
+        seen = set(getattr(self, "related_autoplay_seen_ids", set()) or set())
+        if current_video_id:
+            seen.add(str(current_video_id))
+        unseen: list[dict] = []
+        for video in videos:
+            candidate_id = str(video.get("id") or "")
+            if candidate_id and candidate_id not in seen:
+                seen.add(candidate_id)
+                unseen.append(video)
+        return unseen
+
     def ydl_options(self, options: dict | None = None, use_cookies: bool = False, use_js_solver: bool = False) -> dict:
         disable_external_ytdlp_plugins()
         merged = {
@@ -562,12 +574,7 @@ class DownloadsUI:
             
             recurse(data)
             
-            seen = {video_id}
-            deduped = []
-            for v in videos:
-                if v['id'] not in seen:
-                    seen.add(v['id'])
-                    deduped.append(v)
+            deduped = self.unseen_related_videos(videos, str(video_id or ""))
             
             if not deduped:
                 fallback()

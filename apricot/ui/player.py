@@ -1487,6 +1487,9 @@ class PlayerUI:
             return
         self.show_results(normalized_results, focus_results=False)
         first_item = normalized_results[0]
+        video_id = self.extract_youtube_video_id(first_item)
+        if video_id:
+            self.related_autoplay_seen_ids.add(video_id)
         self.open_relative_player_item(first_item)
 
     def player_play_pause(self) -> None:

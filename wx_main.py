@@ -187,6 +187,7 @@ class MainFrame(CookiesUI, DownloadsUI, EqualizerUI, EventsUI, ListsUI, MenusUI,
         self.pending_player_next_after_dynamic_load = False
         self.pending_player_next_preserve_focus = False
         self.pending_player_next_current_url = ""
+        self.related_autoplay_seen_ids: set[str] = set()
         self.current_stream_url = ""
         self.current_stream_headers: dict = {}
         self.player_sequence_results: list[dict] = []

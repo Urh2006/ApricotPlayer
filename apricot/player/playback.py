@@ -355,6 +355,10 @@ class PlaybackMixin:
             self.session_equalizer_before_bass_boost = None
             self.session_autoplay_next = False
             self.shuffle_current = False
+            self.related_autoplay_seen_ids.clear()
+        related_video_id = self.extract_youtube_video_id(self.current_video_item or self.current_video_info)
+        if related_video_id:
+            self.related_autoplay_seen_ids.add(related_video_id)
         self.edit_mode_enabled = False
         self.equalizer_filter_active = False
         self.equalizer_filter_ref = EQ_FILTER_REF
@@ -601,6 +605,7 @@ class PlaybackMixin:
             self.repeat_current = False
             self.shuffle_current = False
             self.player_sequence_results = []
+            self.related_autoplay_seen_ids.clear()
         else:
             self.player_session_open = True
         if self.player_panel is not None and not preserve_panel:

@@ -1,3 +1,15 @@
+# v1.0.0-beta.38 - Settings Reset and Related Autoplay
+
+## Fixes
+- **Fixed every settings reset action.** The modular settings screen was missing its `Settings` model import, so Restore to defaults and each per-section reset raised a hidden event-handler error and appeared to do nothing.
+- **Removed the duplicate Reset all settings button from General.** Restore to defaults in the main settings button row is the single global reset action; per-section reset buttons remain available in each section.
+- **Related autoplay no longer repeatedly chooses videos already played in the current player session.** ApricotPlayer now tracks YouTube video IDs until the player is closed and selects the first unseen related suggestion.
+- **Expanded cookie diagnostics.** Diagnostic reports now show the configured cookie cache, source file, source signature, browser, and browser profile so remaining machine-specific refresh problems can be identified without changing working cookie behavior.
+
+## Verification
+- The external cookies source refresh was tested after changing the source file and after a simulated application restart; it refreshed correctly without selecting the file again.
+- Long-video mpv cache and seek arguments are unchanged from the existing fixed implementation because no code regression was found.
+
 # v1.0.0-beta.37 - Player Start Hotfix
 
 ## Fixes
