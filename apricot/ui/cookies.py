@@ -7,8 +7,11 @@ from apricot.ui.misc import MiscUI
 class CookiesUI:
     @staticmethod
     def cookie_source_signature(path: Path) -> str:
-        stat = path.stat()
-        return f"{stat.st_mtime_ns}:{stat.st_size}"
+        digest = hashlib.sha256()
+        with path.open("rb") as source:
+            while chunk := source.read(1024 * 1024):
+                digest.update(chunk)
+        return digest.hexdigest()
 
     @staticmethod
     def paths_match(first: str | Path, second: str | Path) -> bool:
@@ -137,14 +140,16 @@ class CookiesUI:
     def effective_cookies_file(self) -> str:
         configured = str(getattr(self.settings, "cookies_file", "") or "").strip()
         source_value = str(getattr(self.settings, "cookies_source_file", "") or "").strip()
+        self.cookie_source_refresh_error = ""
         if not source_value:
             source_value = self.migrate_legacy_cookie_source()
         if source_value:
             source_path = Path(os.path.expandvars(source_value.strip('"'))).expanduser()
             try:
                 signature = self.cookie_source_signature(source_path)
-            except OSError:
+            except OSError as exc:
                 signature = ""
+                self.cookie_source_refresh_error = str(exc)
             cache_ready = False
             try:
                 cache_ready = CACHED_COOKIES_FILE.exists() and CACHED_COOKIES_FILE.stat().st_size > 0
@@ -159,8 +164,8 @@ class CookiesUI:
                     self.remember_cookie_source(source_path, str(result["path"]))
                     self.save_settings()
                     return str(result["path"])
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self.cookie_source_refresh_error = self.friendly_error(exc)
             if cache_ready:
                 return str(CACHED_COOKIES_FILE)
         if configured:
@@ -820,7 +825,7 @@ class CookiesUI:
                 continue
             break
         needs_devtools_fallback = copy_lock_error_seen or not best or (best is not None and not self.cookie_jar_has_login_cookies(best[2]))
-        if allow_close and browser in CHROMIUM_COOKIE_BROWSERS and needs_devtools_fallback:
+        if allow_close and browser in CHROMIUM_COOKIE_BROWSERS and browser != "chrome" and needs_devtools_fallback:
             self.close_cookie_browser_processes(browser)
             self.wait_for_cookie_browser_exit(browser, timeout=8.0)
             tried_profiles: set[str] = set()

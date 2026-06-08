@@ -156,6 +156,7 @@ class DiagnosticsMixin:
             self.diagnostic_line("Cookies file", getattr(self.settings, "cookies_file", "")),
             self.diagnostic_line("Cookies source file", getattr(self.settings, "cookies_source_file", "")),
             self.diagnostic_line("Cookies source signature", getattr(self.settings, "cookies_source_signature", "")),
+            self.diagnostic_line("Cookies source refresh error", getattr(self, "cookie_source_refresh_error", "")),
             self.diagnostic_line("Cookies browser", getattr(self.settings, "cookies_from_browser", "")),
             self.diagnostic_line("Cookies browser profile", getattr(self.settings, "cookies_browser_profile", "")),
             self.diagnostic_line("YouTube API key configured", bool(getattr(self.settings, "youtube_data_api_key", ""))),

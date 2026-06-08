@@ -419,7 +419,7 @@
     "download_done": "Download finished: {title}",
     "download_failed": "Download failed: {error}",
     "youtube_auth_hint": "YouTube asks for sign-in or bot confirmation. Open Settings and choose Cookies from browser, for example Brave, so ApricotPlayer can refresh cookies.txt automatically.",
-    "cookie_copy_hint": "ApricotPlayer could not read the Chrome cookie database. Choose the correct browser and profile in Settings, then use Export browser cookies; ApricotPlayer will close the browser if needed and try all profiles.",
+    "cookie_copy_hint": "Chrome protects its cookie database with App-Bound Encryption on current Windows versions, so direct Chrome cookie export may not work. Export YouTube cookies to a Netscape cookies.txt file and select that file in Settings, or use Firefox or Brave browser cookies.",
     "favorite_added": "Added to favorites.",
     "favorite_exists": "This item is already in favorites.",
     "favorite_removed": "Removed from favorites.",

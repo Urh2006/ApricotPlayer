@@ -1,3 +1,13 @@
+# v1.0.0-beta.39 - Reliable Cookie File Refresh
+
+## Fixes
+- **Updated external cookies files are now detected by their contents.** ApricotPlayer uses a SHA-256 signature instead of only the file timestamp and size, so replacing or editing the same `cookies.txt` file is picked up automatically without selecting it again.
+- **Cookie source refresh failures are now included in diagnostic reports** instead of silently falling back to an older cached copy with no explanation.
+- **Removed the ineffective Chrome DevTools fallback for the default Chrome profile.** Chrome 136 and newer block remote debugging of the default data directory, so ApricotPlayer now avoids the long failed retry and gives accurate guidance to use an exported Netscape `cookies.txt`, Firefox, or Brave.
+
+## Unchanged
+- Playback, media cache, and long-video scrubbing behavior were not modified.
+
 # v1.0.0-beta.38 - Settings Reset and Related Autoplay
 
 ## Fixes

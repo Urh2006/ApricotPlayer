@@ -419,7 +419,7 @@
     "download_done": "Prenos konÄŤan: {title}",
     "download_failed": "Prenos ni uspel: {error}",
     "youtube_auth_hint": "YouTube zahteva prijavo ali bot potrditev. V nastavitvah izberi PiĹˇkotki iz brskalnika, na primer Brave, da ApricotPlayer lahko sam osveĹľi cookies.txt.",
-    "cookie_copy_hint": "ApricotPlayer ne more prebrati Chromove baze piĹˇkotkov. Izberi pravi brskalnik in profil v nastavitvah, potem uporabi Izvozi piĹˇkotke brskalnika; ApricotPlayer bo po potrebi zaprl brskalnik in poskusil vse profile.",
+    "cookie_copy_hint": "Chrome na trenutnih razliÄŤicah Windows svojo bazo piĹˇkotkov ĹˇÄŤiti z App-Bound Encryption, zato neposreden izvoz iz Chroma morda ne deluje. Izvozi YouTube piĹˇkotke v Netscape cookies.txt in izberi to datoteko v nastavitvah ali uporabi piĹˇkotke iz Firefoxa oziroma Brava.",
     "favorite_added": "Dodano med priljubljene.",
     "favorite_exists": "Ta element je Ĺľe med priljubljenimi.",
     "favorite_removed": "Odstranjeno iz priljubljenih.",
