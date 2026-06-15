@@ -516,6 +516,50 @@ class SystemUI:
         # force-quits, not just clean shutdowns.
         threading.Thread(target=self.save_stream_url_cache, daemon=True).start()
 
+    @staticmethod
+    def playable_stream_url(info: dict, youtube_source: bool) -> str:
+        stream_url = str(info.get("url") or "")
+        if stream_url or not info.get("formats"):
+            return stream_url
+        formats = info["formats"]
+        candidates = [
+            [
+                item for item in formats
+                if item.get("url")
+                and item.get("ext") == "mp4"
+                and item.get("vcodec") not in (None, "none", "")
+                and item.get("acodec") not in (None, "none", "")
+                and str(item.get("protocol") or "").startswith("http")
+                and int(item.get("height") or 9999) <= 360
+            ],
+            [
+                item for item in formats
+                if item.get("url")
+                and item.get("ext") == "mp4"
+                and item.get("vcodec") not in (None, "none", "")
+                and item.get("acodec") not in (None, "none", "")
+                and str(item.get("protocol") or "").startswith("http")
+            ],
+            [
+                item for item in formats
+                if item.get("url")
+                and item.get("vcodec") not in (None, "none", "")
+                and item.get("acodec") not in (None, "none", "")
+                and str(item.get("protocol") or "").startswith("http")
+            ],
+        ]
+        if not youtube_source:
+            candidates.extend(
+                [
+                    [item for item in formats if item.get("url") and item.get("acodec") not in (None, "none", "") and str(item.get("protocol") or "").startswith("http")],
+                    [item for item in formats if item.get("url") and item.get("acodec") not in (None, "none", "")],
+                ]
+            )
+        for group in candidates:
+            if group:
+                return str(group[-1]["url"])
+        return ""
+
     def resolve_stream_url(self, url: str) -> tuple[str, dict, dict]:
         local_path = self.local_media_path_from_input(url)
         if local_path:
@@ -539,7 +583,6 @@ class SystemUI:
         try:
             info = self.ydl_extract_info(url, options, download=False, allow_cookie_retry=False)
         except Exception as exc:
-            cookie_file = self.playback_cookies_file_for_url(url)
             cookie_error = self.is_cookie_auth_error(exc)
             age_or_js_error = self.is_age_or_js_playback_error(exc)
             requested_format_error = self.is_requested_format_error(exc)
@@ -547,7 +590,7 @@ class SystemUI:
             if requested_format_error:
                 try:
                     info = self.ydl_extract_info(url, format_fallback_options, download=False, allow_cookie_retry=False)
-                    stream_url = info.get("url")
+                    stream_url = self.playable_stream_url(info, youtube_source)
                     if stream_url:
                         headers = info.get("http_headers") or {}
                         self.cache_stream_url(url, stream_url, headers, info)
@@ -556,6 +599,7 @@ class SystemUI:
                     retry_error = format_exc
                     cookie_error = cookie_error or self.is_cookie_auth_error(format_exc)
                     age_or_js_error = age_or_js_error or self.is_age_or_js_playback_error(format_exc)
+            cookie_file = self.playback_cookies_file_for_url(url) if (cookie_error or age_or_js_error) else ""
             can_retry_with_cookies = bool(cookie_file) and (cookie_error or age_or_js_error)
             can_retry_with_restricted_fallback = self.age_restricted_video_support_enabled() and (cookie_error or age_or_js_error)
             can_retry_with_js_format_fallback = requested_format_error and age_or_js_error
@@ -576,7 +620,7 @@ class SystemUI:
                     raise retry_error if isinstance(retry_error, Exception) else exc
             else:
                 info = None
-            if cookie_file:
+            if can_retry_with_cookies:
                 try:
                     info = self.ydl_extract_info(
                         url,
@@ -610,47 +654,7 @@ class SystemUI:
                     )
                 except Exception:
                     raise retry_error if isinstance(retry_error, Exception) else exc
-        stream_url = info.get("url")
-        if not stream_url and info.get("formats"):
-            fmts = info["formats"]
-            # Prefer: small combined progressive MP4 -> any combined HTTP.
-            _candidates = [
-                [
-                    f for f in fmts
-                    if f.get("url")
-                    and f.get("ext") == "mp4"
-                    and f.get("vcodec") not in (None, "none", "")
-                    and f.get("acodec") not in (None, "none", "")
-                    and str(f.get("protocol") or "").startswith("http")
-                    and int(f.get("height") or 9999) <= 360
-                ],
-                [
-                    f for f in fmts
-                    if f.get("url")
-                    and f.get("ext") == "mp4"
-                    and f.get("vcodec") not in (None, "none", "")
-                    and f.get("acodec") not in (None, "none", "")
-                    and str(f.get("protocol") or "").startswith("http")
-                ],
-                [
-                    f for f in fmts
-                    if f.get("url")
-                    and f.get("vcodec") not in (None, "none", "")
-                    and f.get("acodec") not in (None, "none", "")
-                    and str(f.get("protocol") or "").startswith("http")
-                ],
-            ]
-            if not youtube_source:
-                _candidates.extend(
-                    [
-                        [f for f in fmts if f.get("url") and f.get("acodec") not in (None, "none", "") and str(f.get("protocol") or "").startswith("http")],
-                        [f for f in fmts if f.get("url") and f.get("acodec") not in (None, "none", "")],
-                    ]
-                )
-            for _group in _candidates:
-                if _group:
-                    stream_url = _group[-1]["url"]
-                    break
+        stream_url = self.playable_stream_url(info, youtube_source)
         if not stream_url:
             raise RuntimeError("No playable stream URL found")
         headers = info.get("http_headers") or {}

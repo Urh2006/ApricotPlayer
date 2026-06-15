@@ -1,3 +1,13 @@
+# v1.0.0-beta.40 - Cookie Playback Fallback
+
+## Fixes
+- **Unrestricted YouTube videos no longer enter the cookie fallback after a successful format fallback.** If the fast preferred format is unavailable but yt-dlp successfully returns other playable formats without cookies, ApricotPlayer now uses that result directly.
+- **Cookie loading is deferred until an authentication, age restriction, or JavaScript extraction failure actually requires it.** Importing a cookies file no longer changes the normal playback path for unrestricted videos.
+
+## Unchanged
+- Age-restricted and sign-in-protected videos still retry with valid YouTube login cookies.
+- Player caching, seeking, audio processing, and download behavior were not changed.
+
 # v1.0.0-beta.39 - Reliable Cookie File Refresh
 
 ## Fixes
