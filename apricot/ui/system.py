@@ -24,7 +24,7 @@ _INFO_CACHE_STRIP_KEYS: frozenset[str] = frozenset({
     "_formats_info",
 })
 
-STREAM_FORMAT_PROFILE = "progressive-mp4-fast-seek-v4-truncated-stream-fallback"
+STREAM_FORMAT_PROFILE = "progressive-mp4-fast-seek-v5-truncated-stream-recovery"
 FAST_SEEK_STREAM_FORMAT = (
     "best[ext=mp4][vcodec!=none][acodec!=none][height<=360][protocol=https]"
     "/best[ext=mp4][vcodec!=none][acodec!=none][height<=480][protocol=https]"
@@ -41,11 +41,6 @@ FAST_SEEK_FALLBACK_FORMAT = (
     "/18"
     "/22"
     "/17"
-)
-TRUNCATED_YOUTUBE_FALLBACK_FORMAT = (
-    "best[protocol^=m3u8][vcodec!=none][acodec!=none][height<=360]"
-    "/best[protocol^=m3u8][vcodec!=none][acodec!=none][height<=480]"
-    "/best[protocol^=m3u8][vcodec!=none][acodec!=none]"
 )
 NON_YOUTUBE_STREAM_FORMAT = (
     "bestaudio[ext=m4a][protocol=https]"
@@ -637,8 +632,13 @@ class SystemUI:
         options = {
             "quiet": True,
             "skip_download": True,
-            "format": TRUNCATED_YOUTUBE_FALLBACK_FORMAT,
             "noplaylist": True,
+            # The default authenticated YouTube clients can expose only the
+            # malformed progressive MP4 for some videos. web_safari also
+            # exposes the valid combined HLS variants. Fetch the complete
+            # format list and select from formats that actually exist instead
+            # of asking yt-dlp to satisfy a speculative format expression.
+            "extractor_args": {"youtube": {"player_client": ["web_safari"]}},
         }
         retry_error: Exception | None = None
         try:
@@ -666,7 +666,9 @@ class SystemUI:
                 use_js_solver=True,
                 allow_cookie_retry=False,
             )
-        selected_info = self.playable_stream_info(fallback_info, True)
+        fallback_formats = dict(fallback_info)
+        fallback_formats.pop("url", None)
+        selected_info = self.playable_stream_info(fallback_formats, True)
         if not selected_info:
             if retry_error is not None:
                 raise retry_error

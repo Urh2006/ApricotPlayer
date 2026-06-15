@@ -1,3 +1,14 @@
+# v1.0.0-beta.43 - Reliable Truncated Stream Recovery
+
+## Fixes
+- **Fixed the Beta 42 `Requested format is not available` player error.** The recovery path no longer asks yt-dlp to satisfy a speculative HLS format expression.
+- **Recovery now inspects the formats YouTube actually provides.** For affected videos, ApricotPlayer uses the `web_safari` client to expose valid combined HLS streams and selects a 360p stream with the original audio language.
+- **Normal YouTube playback remains unchanged.** The extra extraction runs only after the selected progressive MP4 is demonstrably truncated.
+
+## Verification
+- Reproduced with YouTube video `ezFU3UrbcTI` using the same cookie fallback path that failed in Beta 42.
+- The recovered `93-9` stream started from 0:00 and completed a direct seek to 10:00 with the bundled mpv.
+
 # v1.0.0-beta.42 - Truncated YouTube Stream Recovery
 
 ## Fixes
