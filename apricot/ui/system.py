@@ -24,7 +24,7 @@ _INFO_CACHE_STRIP_KEYS: frozenset[str] = frozenset({
     "_formats_info",
 })
 
-STREAM_FORMAT_PROFILE = "progressive-mp4-fast-seek-v3-no-youtube-audio-fallback"
+STREAM_FORMAT_PROFILE = "progressive-mp4-fast-seek-v4-truncated-stream-fallback"
 FAST_SEEK_STREAM_FORMAT = (
     "best[ext=mp4][vcodec!=none][acodec!=none][height<=360][protocol=https]"
     "/best[ext=mp4][vcodec!=none][acodec!=none][height<=480][protocol=https]"
@@ -41,6 +41,11 @@ FAST_SEEK_FALLBACK_FORMAT = (
     "/18"
     "/22"
     "/17"
+)
+TRUNCATED_YOUTUBE_FALLBACK_FORMAT = (
+    "best[protocol^=m3u8][vcodec!=none][acodec!=none][height<=360]"
+    "/best[protocol^=m3u8][vcodec!=none][acodec!=none][height<=480]"
+    "/best[protocol^=m3u8][vcodec!=none][acodec!=none]"
 )
 NON_YOUTUBE_STREAM_FORMAT = (
     "bestaudio[ext=m4a][protocol=https]"
@@ -470,6 +475,18 @@ class SystemUI:
     def stream_url_cache_minutes_value(self) -> int:
         return self.normalized_stream_url_cache_minutes()
 
+    @staticmethod
+    def stream_url_remote_expiry(stream_url: str) -> int:
+        try:
+            parsed = urlparse(stream_url)
+            expire_values = parse_qs(parsed.query).get("expire") or []
+            if expire_values:
+                return int(expire_values[0])
+            match = re.search(r"/expire/(\d+)(?:/|$)", parsed.path)
+            return int(match.group(1)) if match else 0
+        except (TypeError, ValueError, OverflowError):
+            return 0
+
     def cached_stream_url(self, url: str) -> tuple[str, dict, dict] | None:
         if not getattr(self.settings, "enable_stream_url_cache", True):
             return None
@@ -490,13 +507,9 @@ class SystemUI:
         minutes = self.stream_url_cache_minutes_value()
         ttl_seconds = (365 * 24 * 60 * 60) if minutes <= 0 else minutes * 60
         expires_at = time.time() + ttl_seconds
-        try:
-            expire_values = parse_qs(urlparse(stream_url).query).get("expire") or []
-            if expire_values:
-                remote_expiry = int(expire_values[0]) - 60
-                expires_at = min(expires_at, float(remote_expiry))
-        except (TypeError, ValueError, OverflowError):
-            pass
+        remote_expiry = self.stream_url_remote_expiry(stream_url)
+        if remote_expiry:
+            expires_at = min(expires_at, float(remote_expiry - 60))
         if expires_at <= time.time() + 30:
             return
         with self.stream_url_cache_lock:
@@ -517,37 +530,97 @@ class SystemUI:
         threading.Thread(target=self.save_stream_url_cache, daemon=True).start()
 
     @staticmethod
-    def playable_stream_url(info: dict, youtube_source: bool) -> str:
+    def youtube_stream_looks_truncated(info: dict, stream_url: str) -> bool:
+        if not stream_url:
+            return False
+        try:
+            query = parse_qs(urlparse(stream_url).query)
+            actual_size = int((query.get("clen") or [0])[0] or 0)
+        except (TypeError, ValueError, OverflowError):
+            actual_size = 0
+        if actual_size <= 0:
+            return False
+        expected_size = 0
+        for key in ("filesize", "filesize_approx"):
+            try:
+                expected_size = int(info.get(key) or 0)
+            except (TypeError, ValueError, OverflowError):
+                expected_size = 0
+            if expected_size > 0:
+                break
+        if expected_size >= 4 * 1024 * 1024 and actual_size < expected_size * 0.25:
+            return True
+        has_video = info.get("vcodec") not in (None, "none", "")
+        has_audio = info.get("acodec") not in (None, "none", "")
+        if not (has_video and has_audio):
+            return False
+        try:
+            duration = float(info.get("duration") or (query.get("dur") or [0])[0] or 0)
+        except (TypeError, ValueError, OverflowError):
+            duration = 0.0
+        return duration >= 60.0 and actual_size / duration < 2000.0
+
+    @classmethod
+    def playable_stream_info(cls, info: dict, youtube_source: bool) -> dict:
         stream_url = str(info.get("url") or "")
-        if stream_url or not info.get("formats"):
-            return stream_url
-        formats = info["formats"]
+        if stream_url and not (youtube_source and cls.youtube_stream_looks_truncated(info, stream_url)):
+            return dict(info)
+        formats = list(info.get("formats") or [])
+        if not formats:
+            return {}
+
+        def combined(item: dict) -> bool:
+            return (
+                bool(item.get("url"))
+                and item.get("vcodec") not in (None, "none", "")
+                and item.get("acodec") not in (None, "none", "")
+                and not (youtube_source and cls.youtube_stream_looks_truncated(item, str(item.get("url") or "")))
+            )
+
+        def selected(group: list[dict]) -> dict:
+            if not group:
+                return {}
+            result = dict(info)
+            result.update(group[-1])
+            result["formats"] = formats
+            return result
+
         candidates = [
             [
                 item for item in formats
-                if item.get("url")
+                if combined(item)
                 and item.get("ext") == "mp4"
-                and item.get("vcodec") not in (None, "none", "")
-                and item.get("acodec") not in (None, "none", "")
                 and str(item.get("protocol") or "").startswith("http")
                 and int(item.get("height") or 9999) <= 360
             ],
             [
                 item for item in formats
-                if item.get("url")
+                if combined(item)
                 and item.get("ext") == "mp4"
-                and item.get("vcodec") not in (None, "none", "")
-                and item.get("acodec") not in (None, "none", "")
                 and str(item.get("protocol") or "").startswith("http")
             ],
             [
                 item for item in formats
-                if item.get("url")
-                and item.get("vcodec") not in (None, "none", "")
-                and item.get("acodec") not in (None, "none", "")
+                if combined(item)
                 and str(item.get("protocol") or "").startswith("http")
             ],
         ]
+        if youtube_source:
+            candidates.extend(
+                [
+                    [
+                        item for item in formats
+                        if combined(item)
+                        and str(item.get("protocol") or "").startswith("m3u8")
+                        and int(item.get("height") or 9999) <= 360
+                    ],
+                    [
+                        item for item in formats
+                        if combined(item)
+                        and str(item.get("protocol") or "").startswith("m3u8")
+                    ],
+                ]
+            )
         if not youtube_source:
             candidates.extend(
                 [
@@ -557,8 +630,60 @@ class SystemUI:
             )
         for group in candidates:
             if group:
-                return str(group[-1]["url"])
-        return ""
+                return selected(group)
+        return {}
+
+    def recover_truncated_youtube_stream(self, url: str, original_info: dict) -> dict:
+        options = {
+            "quiet": True,
+            "skip_download": True,
+            "format": TRUNCATED_YOUTUBE_FALLBACK_FORMAT,
+            "noplaylist": True,
+        }
+        retry_error: Exception | None = None
+        try:
+            fallback_info = self.ydl_extract_info(
+                url,
+                options,
+                download=False,
+                use_cookies=False,
+                use_js_solver=True,
+                allow_cookie_retry=False,
+            )
+        except Exception as exc:
+            retry_error = exc
+            cookie_file = self.playback_cookies_file_for_url(url)
+            if not cookie_file or not (
+                self.is_cookie_auth_error(exc)
+                or self.is_age_or_js_playback_error(exc)
+            ):
+                raise
+            fallback_info = self.ydl_extract_info(
+                url,
+                options,
+                download=False,
+                use_cookies=True,
+                use_js_solver=True,
+                allow_cookie_retry=False,
+            )
+        selected_info = self.playable_stream_info(fallback_info, True)
+        if not selected_info:
+            if retry_error is not None:
+                raise retry_error
+            raise RuntimeError("No playable fallback stream URL found")
+        for key, value in original_info.items():
+            if key not in selected_info or selected_info.get(key) in (None, ""):
+                selected_info[key] = value
+        return selected_info
+
+    def resolved_playable_stream_info(self, url: str, info: dict, youtube_source: bool) -> dict:
+        selected_info = self.playable_stream_info(info, youtube_source)
+        if selected_info:
+            return selected_info
+        stream_url = str(info.get("url") or "")
+        if youtube_source and self.youtube_stream_looks_truncated(info, stream_url):
+            return self.recover_truncated_youtube_stream(url, info)
+        return {}
 
     def resolve_stream_url(self, url: str) -> tuple[str, dict, dict]:
         local_path = self.local_media_path_from_input(url)
@@ -590,11 +715,12 @@ class SystemUI:
             if requested_format_error:
                 try:
                     info = self.ydl_extract_info(url, format_fallback_options, download=False, allow_cookie_retry=False)
-                    stream_url = self.playable_stream_url(info, youtube_source)
+                    selected_info = self.resolved_playable_stream_info(url, info, youtube_source)
+                    stream_url = str(selected_info.get("url") or "")
                     if stream_url:
-                        headers = info.get("http_headers") or {}
-                        self.cache_stream_url(url, stream_url, headers, info)
-                        return stream_url, headers, info
+                        headers = selected_info.get("http_headers") or info.get("http_headers") or {}
+                        self.cache_stream_url(url, stream_url, headers, selected_info)
+                        return stream_url, headers, selected_info
                 except Exception as format_exc:
                     retry_error = format_exc
                     cookie_error = cookie_error or self.is_cookie_auth_error(format_exc)
@@ -654,12 +780,13 @@ class SystemUI:
                     )
                 except Exception:
                     raise retry_error if isinstance(retry_error, Exception) else exc
-        stream_url = self.playable_stream_url(info, youtube_source)
+        selected_info = self.resolved_playable_stream_info(url, info, youtube_source)
+        stream_url = str(selected_info.get("url") or "")
         if not stream_url:
             raise RuntimeError("No playable stream URL found")
-        headers = info.get("http_headers") or {}
-        self.cache_stream_url(url, stream_url, headers, info)
-        return stream_url, headers, info
+        headers = selected_info.get("http_headers") or info.get("http_headers") or {}
+        self.cache_stream_url(url, stream_url, headers, selected_info)
+        return stream_url, headers, selected_info
 
     def cache_folder_path(self) -> Path:
         return Path(str(getattr(self.settings, "cache_folder", "") or DEFAULT_CACHE_DIR)).expanduser()

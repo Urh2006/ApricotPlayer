@@ -1,3 +1,16 @@
+# v1.0.0-beta.42 - Truncated YouTube Stream Recovery
+
+## Fixes
+- **Fixed some YouTube videos opening at their total duration and refusing to play.** ApricotPlayer now detects progressive MP4 URLs whose real content length is drastically smaller than yt-dlp's expected media size.
+- **Affected videos fall back to a valid combined HLS stream.** The fallback preserves video and the original audio language, starts at 0:00, and remains seekable.
+- **Normal YouTube videos keep the existing fast path.** No additional extraction or delay is added unless the selected stream is demonstrably truncated.
+- **HLS stream cache expiry is now read from YouTube manifest paths.** Permanent URL caching no longer keeps an expired HLS fallback for a year.
+- **Removed the unrelated Beta 41 resume/restart workaround.** The reported failure was caused by a malformed YouTube stream, not a saved playback position.
+
+## Verification
+- Reproduced with YouTube video `ezFU3UrbcTI`: yt-dlp selected a 31:40 MP4 whose actual size was only 974,656 bytes instead of the expected approximately 54.7 MB.
+- The replacement HLS stream started from 0:00 and completed an exact seek to 10:00 through the bundled mpv.
+
 # v1.0.0-beta.41 - End-of-Video Resume Recovery
 
 ## Fixes
