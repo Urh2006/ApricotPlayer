@@ -182,6 +182,8 @@ class MpvMixin:
             self.current_stream_url = stream_url
             self.current_stream_headers = dict(headers or {})
             self.current_audio_device = audio_device
+            self.player_resume_start_position = resume_position
+            self.player_started_monotonic = time.monotonic()
             self.volume_boost_enabled = boost_volume
             self.rubberband_pitch_filter_active = False
             self.equalizer_filter_active = bool(initial_eq_filter)

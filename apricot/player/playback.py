@@ -522,8 +522,13 @@ class PlaybackMixin:
         # play_url picks it up via _bookmark_start_position → pending_player_start_position.
         if getattr(self.settings, "resume_playback", True):
             try:
-                saved_pos = float(self.playback_positions.get(url, 0.0) or 0.0)
-                if saved_pos >= 5.0:
+                saved_pos = self.validated_playback_resume_position(
+                    self.playback_positions.get(url, 0.0),
+                    item,
+                    end_margin=8.0,
+                    discard_stale=True,
+                )
+                if saved_pos:
                     item = dict(item)
                     item["_bookmark_start_position"] = saved_pos
             except (TypeError, ValueError):
@@ -585,6 +590,8 @@ class PlaybackMixin:
         self.current_stream_headers = {}
         self.current_audio_device = ""
         self.playback_position_item = {}
+        self.player_resume_start_position = 0.0
+        self.player_started_monotonic = 0.0
         if reset_session:
             self.player_session_open = False
             if self.player_return_screen == "folder":

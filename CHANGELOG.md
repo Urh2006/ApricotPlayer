@@ -1,3 +1,15 @@
+# v1.0.0-beta.41 - End-of-Video Resume Recovery
+
+## Fixes
+- **Videos with a stale saved position at 100% now start from the beginning.** Resume positions are checked against the resolved media duration before mpv receives its start position.
+- **Play at the end now verifies that mpv actually restarted.** ApricotPlayer no longer announces a successful restart after merely sending a seek command.
+- **Failed end-of-file seeks recover with a fresh player load.** The stale saved position is removed and the same item is reopened from zero without closing the player session.
+- **Immediate EOF after a resume is recovered automatically.** This covers media whose duration was unavailable until mpv started.
+
+## Unchanged
+- Valid resume positions in the middle of media continue to work.
+- Cookie selection, stream caching, EQ, audio processing, downloads, and normal player startup were not changed.
+
 # v1.0.0-beta.40 - Cookie Playback Fallback
 
 ## Fixes

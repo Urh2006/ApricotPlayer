@@ -448,24 +448,84 @@ class PlayerUI:
             self.set_window_title(str(self.current_video_info.get("title") or ""))
         self.update_details_text()
 
+    def playback_item_duration_seconds(self, item: dict | None = None) -> float:
+        sources = (
+            item,
+            getattr(self, "current_video_info", None),
+            getattr(self, "current_video_item", None),
+        )
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            for key in ("duration_seconds", "duration"):
+                raw = source.get(key)
+                if raw in (None, ""):
+                    continue
+                try:
+                    value = float(raw)
+                except (TypeError, ValueError):
+                    parts = str(raw).strip().split(":")
+                    if not parts or len(parts) > 3:
+                        continue
+                    try:
+                        value = 0.0
+                        for part in parts:
+                            value = value * 60.0 + float(part)
+                    except (TypeError, ValueError):
+                        continue
+                if value > 0:
+                    return value
+        return 0.0
+
+    def discard_saved_playback_position(self, item: dict | None = None) -> None:
+        key = self.playback_key(item)
+        if key and key in self.playback_positions:
+            self.playback_positions.pop(key, None)
+            self.save_playback_positions()
+
+    def validated_playback_resume_position(
+        self,
+        position,
+        item: dict | None = None,
+        end_margin: float = 8.0,
+        discard_stale: bool = False,
+    ) -> float:
+        try:
+            value = max(0.0, float(position or 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+        if value < 5.0:
+            return 0.0
+        duration = self.playback_item_duration_seconds(item)
+        if duration and value >= max(5.0, duration - max(0.35, float(end_margin))):
+            if discard_stale:
+                self.discard_saved_playback_position(item)
+            return 0.0
+        return value
+
     def playback_resume_position(self) -> float:
+        if getattr(self, "force_player_start_from_beginning", False):
+            self.force_player_start_from_beginning = False
+            self.discard_saved_playback_position()
+            self.pending_player_start_position = None
+            return 0.0
         pending_raw = getattr(self, "pending_player_start_position", None)
         self.pending_player_start_position = None
         if pending_raw is not None:
-            try:
-                return max(0.0, float(pending_raw))
-            except (TypeError, ValueError):
-                return 0.0
+            return self.validated_playback_resume_position(
+                pending_raw,
+                end_margin=0.35,
+            )
         if self.metadata_is_live_stream(self.current_video_info) or self.metadata_is_live_stream(self.current_video_item):
             return 0.0
         key = self.playback_key()
         if not key or not getattr(self.settings, "resume_playback", True):
             return 0.0
-        try:
-            position = float(self.playback_positions.get(key, 0.0) or 0.0)
-        except (TypeError, ValueError):
-            return 0.0
-        return position if position >= 5.0 else 0.0
+        return self.validated_playback_resume_position(
+            self.playback_positions.get(key, 0.0),
+            end_margin=8.0,
+            discard_stale=True,
+        )
 
     def playback_position_source_item(self) -> dict:
         item = getattr(self, "playback_position_item", {}) or {}
@@ -1420,6 +1480,13 @@ class PlayerUI:
                     return
             except Exception:
                 pass
+        resume_start_raw = float(getattr(self, "player_resume_start_position", 0.0) or 0.0)
+        resume_start = self.validated_playback_resume_position(resume_start_raw, end_margin=8.0)
+        startup_age = time.monotonic() - float(getattr(self, "player_started_monotonic", 0.0) or 0.0)
+        if resume_start_raw >= 5.0 and not resume_start and 0.0 <= startup_age <= 3.0:
+            self.player_resume_start_position = 0.0
+            self.restart_current_playback(announce=False)
+            return
         if self.repeat_current:
             self.player_ended = False
             self.player_paused = False
@@ -1552,12 +1619,21 @@ class PlayerUI:
 
     def restart_current_playback(self, announce: bool = True) -> None:
         self.cancel_clip_preview()
-        self.player_ended = False
-        self.player_paused = False
+        item = dict(self.current_video_item or self.current_video_info or {})
+        self.discard_saved_playback_position(item)
         if self.mpv_process_alive():
             try:
-                self.mpv_send(["seek", 0, "absolute+exact"], timeout=0.8)
+                response = self.mpv_request(["seek", 0, "absolute+exact"], timeout=0.8)
+                if not response or response.get("error") != "success":
+                    raise RuntimeError(str(response.get("error") if response else "seek failed"))
                 self.mpv_set_property("pause", False, timeout=0.8)
+                eof_reached = bool(self.mpv_get_property("eof-reached", timeout=0.25))
+                elapsed = self.mpv_get_property("time-pos", timeout=0.25)
+                if eof_reached and elapsed is not None and float(elapsed) > 1.0:
+                    raise RuntimeError("mpv remained at end of file")
+                self.player_ended = False
+                self.player_paused = False
+                self.player_resume_start_position = 0.0
                 self.start_player_monitor(self.player_generation)
                 self.update_play_pause_buttons()
                 if announce:
@@ -1565,14 +1641,11 @@ class PlayerUI:
                 return
             except Exception:
                 pass
-        item = dict(self.current_video_item or self.current_video_info or {})
         url = str(item.get("url") or "")
         if not url:
             return
-        key = self.playback_key(item)
-        if key and key in self.playback_positions:
-            self.playback_positions.pop(key, None)
-            self.save_playback_positions()
+        self.force_player_start_from_beginning = True
+        self.player_resume_start_position = 0.0
         self.current_video_item = item
         self.current_video_info = dict(item)
         self.play_url(url, str(item.get("title") or ""))
