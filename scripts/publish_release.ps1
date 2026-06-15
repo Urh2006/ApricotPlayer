@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Tag,
     [string]$Repo = "Urh2006/ApricotPlayer",
+    [string]$Target = "",
     [string]$ExecutablePath = "",
     [string[]]$AssetPaths = @(),
     [string]$Title = "",
@@ -13,6 +14,13 @@ param(
 $ErrorActionPreference = "Stop"
 $tempNotesFile = $null
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+
+if (-not $Target) {
+    $Target = (& git -C $projectRoot rev-parse HEAD 2>$null).Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $Target) {
+        throw "Could not determine the current commit for the release target. Pass -Target explicitly."
+    }
+}
 
 if (-not $ExecutablePath) {
     $ExecutablePath = Join-Path $projectRoot "release-dist\ApricotPlayer.exe"
@@ -124,7 +132,12 @@ try {
         }
     }
     else {
-        $createArgs = @("release", "create", $Tag) + $AssetPaths + @("--title", $Title, "--notes-file", $resolvedNotesFile, "--repo", $Repo)
+        $createArgs = @("release", "create", $Tag) + $AssetPaths + @(
+            "--title", $Title,
+            "--notes-file", $resolvedNotesFile,
+            "--target", $Target,
+            "--repo", $Repo
+        )
         if ($PreRelease) {
             $createArgs += "--prerelease"
         }
