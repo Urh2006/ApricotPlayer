@@ -601,6 +601,7 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "player_time": "T",
     "player_speed_down": "S",
     "player_speed_up": "D",
+    "player_reset_speed_pitch": "Ctrl+0",
     "player_pitch_up": "Ctrl+Up",
     "player_pitch_down": "Ctrl+Down",
     "player_volume_status": "V",
@@ -637,6 +638,8 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "player_seek_forward_large": "Ctrl+Right",
     "player_seek_back_huge": "Ctrl+Shift+Left",
     "player_seek_forward_huge": "Ctrl+Shift+Right",
+    "player_seek_start": "Ctrl+Home",
+    "player_seek_end": "Ctrl+End",
     "player_volume_up": "Up",
     "player_volume_down": "Down",
 }
@@ -687,6 +690,7 @@ SHORTCUT_DEFINITIONS = [
     ("player_time", "shortcut_player_time"),
     ("player_speed_down", "shortcut_player_speed_down"),
     ("player_speed_up", "shortcut_player_speed_up"),
+    ("player_reset_speed_pitch", "shortcut_player_reset_speed_pitch"),
     ("player_pitch_up", "shortcut_player_pitch_up"),
     ("player_pitch_down", "shortcut_player_pitch_down"),
     ("player_volume_status", "shortcut_player_volume_status"),
@@ -723,6 +727,8 @@ SHORTCUT_DEFINITIONS = [
     ("player_seek_forward_large", "shortcut_player_seek_forward_large"),
     ("player_seek_back_huge", "shortcut_player_seek_back_huge"),
     ("player_seek_forward_huge", "shortcut_player_seek_forward_huge"),
+    ("player_seek_start", "shortcut_player_seek_start"),
+    ("player_seek_end", "shortcut_player_seek_end"),
     ("player_volume_up", "shortcut_player_volume_up"),
     ("player_volume_down", "shortcut_player_volume_down"),
 ]

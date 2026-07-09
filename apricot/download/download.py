@@ -441,6 +441,11 @@ class DownloaderMixin:
             "socket_timeout": self.settings.socket_timeout,
             "progress_hooks": [progress_hook],
         }
+        if allow_playlist:
+            options["ignoreerrors"] = True
+            options["skip_unavailable_fragments"] = True
+            if task_id:
+                options["logger"] = self.make_download_error_logger(title)
         for key, value in (("ratelimit", self.settings.rate_limit), ("proxy", self.settings.proxy), ("ffmpeg_location", self.settings.ffmpeg_location)):
             if value.strip():
                 options[key] = value.strip()
@@ -466,6 +471,33 @@ class DownloaderMixin:
             if video_mode in {VIDEO_FORMAT_MP4, VIDEO_FORMAT_MP4_SINGLE, VIDEO_FORMAT_SMALLEST}:
                 options["merge_output_format"] = "mp4"
         return options
+
+
+    def make_download_error_logger(self, title: str):
+        owner = self
+        seen: set[str] = set()
+
+        class DownloadErrorLogger(QuietYtdlpLogger):
+            def _report(self, message: str) -> None:
+                text = str(message or "").strip()
+                if not text:
+                    return
+                lowered = text.lower()
+                if not any(marker in lowered for marker in ("error", "unavailable", "private", "removed", "blocked")):
+                    return
+                if text in seen:
+                    return
+                seen.add(text)
+                owner.ui_queue.put(("announce", owner.t("batch_download_item_failed", title=title, error=owner.friendly_error(text))))
+
+            def warning(self, message: str, *args, **kwargs) -> None:
+                self._report(message)
+
+            def error(self, message: str, *args, **kwargs) -> None:
+                self._report(message)
+
+
+        return DownloadErrorLogger()
 
 
 
@@ -706,6 +738,7 @@ class DownloaderMixin:
                 raise RuntimeError(self.t("missing_ytdlp"))
             folder.mkdir(parents=True, exist_ok=True)
             total = len(items)
+            failed = 0
             for index, item in enumerate(items, start=1):
                 if cancel_event.is_set():
                     raise DownloadCancelled()
@@ -740,10 +773,30 @@ class DownloaderMixin:
                 item_folder.mkdir(parents=True, exist_ok=True)
                 last_item_folder = item_folder
                 options = self.download_options(item_folder, audio_only, item.get("title", ""), allow_playlist=allow_playlist, task_id=task_id, cancel_event=cancel_event)
-                self.ydl_download_urls([url], options)
+                try:
+                    self.ydl_download_urls([url], options)
+                except DownloadCancelled:
+                    raise
+                except Exception as item_exc:
+                    if cancel_event.is_set():
+                        raise DownloadCancelled()
+                    failed += 1
+                    self.ui_queue.put(
+                        (
+                            "announce",
+                            self.t(
+                                "batch_download_item_failed",
+                                title=item.get("title", "") or url,
+                                error=self.friendly_error(item_exc),
+                            ),
+                        )
+                    )
                 self.ui_queue.put(("download_task", {"task_id": task_id, "completed": index, "total": total}))
             wx.CallAfter(self.finish_download_task, task_id)
-            wx.CallAfter(self.finish_batch_download, finish_folder or str(last_item_folder if len(items) == 1 else folder), done_text)
+            final_text = done_text
+            if failed:
+                final_text = self.t("batch_download_done_with_errors", failed=failed)
+            wx.CallAfter(self.finish_batch_download, finish_folder or str(last_item_folder if len(items) == 1 else folder), final_text)
         except DownloadCancelled:
             wx.CallAfter(self.finish_download_task, task_id, "download_state_cancelled")
             wx.CallAfter(self.announce_player, self.t("download_cancelled"))

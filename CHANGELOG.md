@@ -1,3 +1,22 @@
+# v1.0.0-beta.44 - Player Seek Shortcuts and Batch Download Recovery
+
+## Added
+- Added `Ctrl+0` to reset playback speed to the user's configured default speed and pitch to `1.0x`.
+- Added `Ctrl+Home` and `Ctrl+End` for quick jumps to the start and end of the current video or local file.
+- Added the new reset and jump actions to Settings > Keyboard shortcuts.
+
+## Fixes
+- Batch downloads now continue after one video fails instead of stopping the whole queue.
+- Playlist and channel downloads now skip unavailable entries/fragments and keep the collection download moving.
+- YouTube download recovery now tries the `web_safari` client after recoverable format or unavailable-video failures, then cookies only if needed and configured.
+- Playback stream resolution has the same conservative YouTube client recovery after normal extraction and format fallback fail.
+
+## Verification
+- Confirmed the successful download path still makes only one yt-dlp call.
+- Confirmed fallback recovery runs only after recoverable download errors.
+- Confirmed batch download processing continues after a failed item and reports the failure count.
+- Reviewed mpv cache and seek settings; no cache behavior was changed.
+
 # v1.0.0-beta.43 - Reliable Truncated Stream Recovery
 
 ## Fixes

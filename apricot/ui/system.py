@@ -707,6 +707,8 @@ class SystemUI:
         }
         format_fallback_options = dict(options)
         format_fallback_options["format"] = FAST_SEEK_FALLBACK_FORMAT if youtube_source else NON_YOUTUBE_STREAM_FORMAT
+        client_recovery_options = self.youtube_web_safari_options(format_fallback_options) if youtube_source else format_fallback_options
+        client_recovery_attempted = False
         try:
             info = self.ydl_extract_info(url, options, download=False, allow_cookie_retry=False)
         except Exception as exc:
@@ -727,6 +729,27 @@ class SystemUI:
                     retry_error = format_exc
                     cookie_error = cookie_error or self.is_cookie_auth_error(format_exc)
                     age_or_js_error = age_or_js_error or self.is_age_or_js_playback_error(format_exc)
+            if youtube_source and self.is_youtube_download_recoverable_error(retry_error):
+                client_recovery_attempted = True
+                try:
+                    info = self.ydl_extract_info(
+                        url,
+                        client_recovery_options,
+                        download=False,
+                        use_cookies=False,
+                        use_js_solver=True,
+                        allow_cookie_retry=False,
+                    )
+                    selected_info = self.resolved_playable_stream_info(url, info, youtube_source)
+                    stream_url = str(selected_info.get("url") or "")
+                    if stream_url:
+                        headers = selected_info.get("http_headers") or info.get("http_headers") or {}
+                        self.cache_stream_url(url, stream_url, headers, selected_info)
+                        return stream_url, headers, selected_info
+                except Exception as client_exc:
+                    retry_error = client_exc
+                    cookie_error = cookie_error or self.is_cookie_auth_error(client_exc)
+                    age_or_js_error = age_or_js_error or self.is_age_or_js_playback_error(client_exc)
             cookie_file = self.playback_cookies_file_for_url(url) if (cookie_error or age_or_js_error) else ""
             can_retry_with_cookies = bool(cookie_file) and (cookie_error or age_or_js_error)
             can_retry_with_restricted_fallback = self.age_restricted_video_support_enabled() and (cookie_error or age_or_js_error)
@@ -752,10 +775,10 @@ class SystemUI:
                 try:
                     info = self.ydl_extract_info(
                         url,
-                        format_fallback_options if requested_format_error else options,
+                        client_recovery_options if client_recovery_attempted else (format_fallback_options if requested_format_error else options),
                         download=False,
                         use_cookies=True,
-                        use_js_solver=False,
+                        use_js_solver=client_recovery_attempted,
                         allow_cookie_retry=False,
                     )
                 except Exception as cookie_exc:
@@ -764,7 +787,7 @@ class SystemUI:
                         raise
                     info = self.ydl_extract_info(
                         url,
-                        format_fallback_options if requested_format_error else options,
+                        client_recovery_options if client_recovery_attempted else (format_fallback_options if requested_format_error else options),
                         download=False,
                         use_cookies=True,
                         use_js_solver=True,

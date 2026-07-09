@@ -13,6 +13,8 @@ class PlayerUI:
         checks = (
             "requested format is not available",
             "no video formats found",
+            "video unavailable",
+            "this video is unavailable",
             "nsig extraction failed",
             "signature extraction failed",
             "n challenge",
@@ -1693,6 +1695,40 @@ class PlayerUI:
             self.after_player_seek(seconds, was_ended)
         except Exception:
             pass
+
+    def player_seek_absolute(self, position: float, announcement_key: str) -> None:
+        if self.player_kind != "mpv" or not self.ipc_path:
+            return
+        self.stop_player_seek_hold()
+        self.cancel_clip_preview()
+        try:
+            target = max(0.0, float(position))
+            response = self.mpv_request(["seek", target, "absolute+exact"], timeout=0.8)
+            if response.get("error") != "success":
+                self.mpv_send(["seek", target, "absolute+exact"], timeout=0.8)
+            if target <= 0.001 and self.player_ended:
+                self.player_ended = False
+                self.start_player_monitor(self.player_generation)
+            self.announce_player(self.t(announcement_key))
+        except Exception:
+            self.announce_player(self.t("timing_unavailable"))
+
+    def player_seek_to_start(self) -> None:
+        self.player_seek_absolute(0.0, "seeked_to_start")
+
+    def player_seek_to_end(self) -> None:
+        if self.player_kind != "mpv" or not self.ipc_path:
+            return
+        try:
+            duration = self.mpv_get_property("duration", timeout=0.35)
+            if duration is None:
+                self.announce_player(self.t("timing_unavailable"))
+                return
+            target = max(0.0, float(duration) - 0.5)
+        except Exception:
+            self.announce_player(self.t("timing_unavailable"))
+            return
+        self.player_seek_absolute(target, "seeked_to_end")
 
     def after_player_seek(self, seconds: float, was_ended: bool) -> None:
         if seconds < 0 and was_ended:

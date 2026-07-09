@@ -673,6 +673,9 @@ class ShortcutsUI:
         if self.shortcut_matches(event, "player_speed_up"):
             self.change_speed_async(self.speed_step_value())
             return True
+        if self.shortcut_matches(event, "player_reset_speed_pitch"):
+            self.reset_speed_pitch_async()
+            return True
         if self.shortcut_matches(event, "save_podcast_speed_preset"):
             self.save_current_speed_as_podcast_preset()
             return True
@@ -693,6 +696,12 @@ class ShortcutsUI:
             return True
         if self.shortcut_matches(event, "player_seek_forward_huge"):
             self.start_player_seek_hold(600, event)
+            return True
+        if self.shortcut_matches(event, "player_seek_start"):
+            self.player_seek_to_start()
+            return True
+        if self.shortcut_matches(event, "player_seek_end"):
+            self.player_seek_to_end()
             return True
         if self.shortcut_matches(event, "player_seek_back_large"):
             self.start_player_seek_hold(-60, event)

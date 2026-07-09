@@ -83,6 +83,31 @@ class DownloadsUI:
     def is_requested_format_error(exc: Exception | str) -> bool:
         return "requested format is not available" in str(exc).lower()
 
+    @staticmethod
+    def is_youtube_download_recoverable_error(exc: Exception | str) -> bool:
+        lowered = str(exc).lower()
+        checks = (
+            "video unavailable",
+            "this video is unavailable",
+            "no video formats found",
+            "requested format is not available",
+            "nsig extraction failed",
+            "signature extraction failed",
+            "n challenge",
+            "unable to extract",
+        )
+        return any(check in lowered for check in checks)
+
+    @staticmethod
+    def youtube_web_safari_options(options: dict | None = None) -> dict:
+        merged = dict(options or {})
+        extractor_args = dict(merged.get("extractor_args") or {})
+        youtube_args = dict(extractor_args.get("youtube") or {})
+        youtube_args["player_client"] = ["web_safari"]
+        extractor_args["youtube"] = youtube_args
+        merged["extractor_args"] = extractor_args
+        return merged
+
     def ydl_extract_info(
         self,
         url: str,
@@ -122,31 +147,52 @@ class DownloadsUI:
         if ytdlp is None:
             raise RuntimeError(self.t("missing_ytdlp"))
 
-        def run_once(use_cookies: bool = False, use_js_solver: bool = False) -> None:
+        def run_once(use_cookies: bool = False, use_js_solver: bool = False, run_options: dict | None = None) -> None:
             with ytdlp.YoutubeDL(
-                self.ydl_options(options, use_cookies=use_cookies, use_js_solver=use_js_solver)
+                self.ydl_options(run_options if run_options is not None else options, use_cookies=use_cookies, use_js_solver=use_js_solver)
             ) as ydl:
                 ydl.download(urls)
 
-        def run_with_cookies() -> None:
-            run_once(use_cookies=True, use_js_solver=True)
+        def run_with_cookies(run_options: dict | None = None) -> None:
+            run_once(use_cookies=True, use_js_solver=True, run_options=run_options)
 
         try:
             run_once()
         except Exception as exc:
-            if not self.is_cookie_auth_error(exc):
-                raise
             retry_error: Exception | str = exc
-            if self.effective_cookies_file():
+            recovery_options = self.youtube_web_safari_options(options)
+            recovery_attempted = False
+            if self.is_youtube_download_recoverable_error(exc):
+                recovery_attempted = True
                 try:
-                    run_with_cookies()
+                    run_once(use_cookies=False, use_js_solver=True, run_options=recovery_options)
+                    return
+                except Exception as recovery_exc:
+                    retry_error = recovery_exc
+                    if not self.is_cookie_auth_error(recovery_exc) and not self.is_youtube_download_recoverable_error(recovery_exc):
+                        raise
+            needs_cookies = self.is_cookie_auth_error(retry_error)
+            recoverable_after_failure = self.is_youtube_download_recoverable_error(retry_error)
+            if not (needs_cookies or recoverable_after_failure):
+                raise retry_error if isinstance(retry_error, Exception) else exc
+            if self.effective_cookies_file():
+                cookie_options = recovery_options if (recovery_attempted or recoverable_after_failure) else options
+                try:
+                    run_with_cookies(cookie_options)
                     return
                 except Exception as cookie_exc:
                     retry_error = cookie_exc
+                    if self.is_youtube_download_recoverable_error(cookie_exc) and not recovery_attempted:
+                        try:
+                            run_with_cookies(recovery_options)
+                            return
+                        except Exception as cookie_recovery_exc:
+                            retry_error = cookie_recovery_exc
                     if not self.is_cookie_auth_error(cookie_exc):
-                        raise
-            if self.repair_cookies_for_error(retry_error):
-                run_with_cookies()
+                        raise retry_error if isinstance(retry_error, Exception) else cookie_exc
+            if needs_cookies and self.repair_cookies_for_error(retry_error):
+                cookie_options = recovery_options if (recovery_attempted or recoverable_after_failure) else options
+                run_with_cookies(cookie_options)
                 return
             raise retry_error if isinstance(retry_error, Exception) else exc
 

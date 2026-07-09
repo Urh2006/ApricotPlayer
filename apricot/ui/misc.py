@@ -2698,6 +2698,13 @@ class MiscUI:
     def change_speed_async(self, delta: float) -> None:
         threading.Thread(target=self.change_speed_worker, args=(delta,), daemon=True).start()
 
+    def default_speed_value(self) -> float:
+        try:
+            speed = self.parse_rate_value(getattr(self.settings, "player_speed", "1.0") or "1.0")
+        except (TypeError, ValueError):
+            speed = 1.0
+        return self.clamp_rate(speed, 0.25, 4.0)
+
     def change_speed_worker(self, delta: float) -> None:
         try:
             current = self.mpv_get_property("speed")
@@ -2710,6 +2717,31 @@ class MiscUI:
             wx.CallAfter(self.announce_player, self.t("speed_announcement", speed=self.format_rate_for_speech(speed)))
             if self.is_default_rate(speed):
                 wx.CallAfter(self.play_default_sound)
+            wx.CallAfter(self.update_details_text)
+        except Exception:
+            wx.CallAfter(self.announce_player, self.t("timing_unavailable"))
+
+    def reset_speed_pitch_async(self) -> None:
+        threading.Thread(target=self.reset_speed_pitch_worker, daemon=True).start()
+
+    def reset_speed_pitch_worker(self) -> None:
+        try:
+            speed = self.default_speed_value()
+            pitch = 1.0
+            self.mpv_set_property("audio-pitch-correction", self.speed_uses_mpv_auto_pitch_correction())
+            self.mpv_set_property("speed", speed)
+            self.apply_pitch_value(pitch)
+            self.current_video_info["speed"] = self.format_playback_rate(speed)
+            self.current_video_info["pitch"] = self.format_playback_rate(pitch)
+            wx.CallAfter(
+                self.announce_player,
+                self.t(
+                    "speed_pitch_reset",
+                    speed=self.format_rate_for_speech(speed),
+                    pitch=self.format_rate_for_speech(pitch),
+                ),
+            )
+            wx.CallAfter(self.play_default_sound)
             wx.CallAfter(self.update_details_text)
         except Exception:
             wx.CallAfter(self.announce_player, self.t("timing_unavailable"))
