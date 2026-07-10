@@ -1,12 +1,12 @@
-# ApricotPlayer (v0.9.33)
+# ApricotPlayer (v1.0.0 Beta 45)
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `0.9.33` (`0.9.33`)
+Current version: `1.0.0-beta.45` (`1.0.0 Beta 45`)
 
 ## Download
 
-Download the latest Windows installer or portable ZIP from the [GitHub Releases page](https://github.com/Urh2006/ApricotPlayer/releases/latest).
+Download the latest Windows installer or portable ZIP from the [GitHub Releases page](https://github.com/Urh2006/ApricotPlayer/releases). Beta builds are published as prereleases and are offered only when the updater channel is set to Beta.
 
 The installer adds ApricotPlayer to the Windows Start Menu, can create a desktop shortcut, and can register ApricotPlayer as a Windows media player for common audio/video files. User settings are stored per user in `%APPDATA%\ApricotPlayer\settings.json`.
 
@@ -47,7 +47,15 @@ py wx_main.py
 - Local media file and whole-folder playback for common audio and video files, including file association support on Windows
 - First-run repair prompt if Windows media player registration is missing after an update
 - Play from folder for choosing local media inside ApricotPlayer, with folder contents shown as local media results and cached in memory for quick return from playback
+- Accessible chapter lists for YouTube media and podcasts, with Enter-to-jump playback and chapter navigation announcements
+- Searchable timed transcripts and captions with Enter-to-jump, copy-line, copy-all, and timestamp-link actions, including local `.vtt` and `.srt` sidecars
+- Local and online lyrics with copy and export actions
+- YouTube comments through the official API when configured or yt-dlp by default, with search, sorting, replies, copy actions, and author-channel access
+- Persistent named playback bookmarks with add, rename, delete, resume, and timestamp-link actions
+- ReplayGain track/album normalization and per-podcast speed presets
+- Global Action finder on `Ctrl+Shift+J`, available from anywhere without adding another main-menu item
 - Accessible 10-band equalizer with descriptive frequency sliders, global Settings controls, genre/sound presets, dynamic custom profiles, delete support for custom profiles, player-only live controls, and a player action to save the current EQ as a global preset
+- Equalizer profile import/export, A/B comparison, and optional presets tied to individual output devices
 - Player and global equalizers share selectable 6/12/18/24 dB slider ranges with quieter screen-reader value updates
 - Player and global equalizer sliders use stable keyboard steps across the full 24 dB range.
 - Player Bass boost checkbox for a session-based EQ boost that stays active for the next item until turned off without resetting equalizer settings.
@@ -117,7 +125,7 @@ py wx_main.py
 - Dynamic search mode is the default for new settings, loading results in chunks of 20
 - Dynamic result metadata hydration covers newly loaded result pages, not only the first page
 - GitHub release updater for installed and packaged builds, with installer updates applied to the exact running install folder and restarted from the newly installed executable
-- Update downloads are hardened with trusted asset names, HTTPS checks, GitHub/PyPI SHA-256 verification when published, and safe ZIP extraction checks
+- Update downloads require trusted asset names, HTTPS hosts, published GitHub/PyPI SHA-256 digests, bounded responses, and validated ZIP layouts before installation
 - Updater HTTPS checks use the bundled `certifi` certificate store for more reliable GitHub access
 - yt-dlp component updater that can refresh the Python package into `%APPDATA%\ApricotPlayer\components` and only announces component updating when an update is actually being installed
 - Per-user settings in `%APPDATA%\ApricotPlayer\settings.json`
@@ -131,10 +139,20 @@ py wx_main.py
 - `Up/Down`: volume up/down
 - `Ctrl+Up/Down`: pitch up/down
 - `S` / `D`: slower / faster playback
+- `Ctrl+0`: reset speed to the configured default and pitch to `1.0x`
+- `Ctrl+Home/End`: jump to the start or end
 - `T`: announce elapsed, remaining, and total time
-- `V`: open video details
+- `V`: announce volume
+- `F7`: show details
 - `O`: choose audio output device for the current video
-- `G`: open the player equalizer
+- `F4`: open the player equalizer
+- `F11`: toggle full screen
+- `Ctrl+Shift+G`: cycle ReplayGain / audio normalization
+- `Ctrl+Shift+B` / `Ctrl+Shift+K`: add or open playback bookmarks
+- `Ctrl+Shift+C`: open chapters; `Alt+Left/Right` moves between chapters
+- `Ctrl+Shift+T`: open transcript or captions
+- `Ctrl+Shift+Y`: open lyrics
+- `Ctrl+Shift+M`: open comments
 - `E`: toggle local-file edit mode
 - `LeftBracket` / `RightBracket`: set clip start and end markers
 - `Ctrl+Shift+A`: export marked section as audio when both markers are set
@@ -143,8 +161,10 @@ py wx_main.py
 - `Ctrl+R`: replace the original file in local-file edit mode
 - `Ctrl+Alt+Q`: open playback queue
 - `L`: copy current video link
+- `Ctrl+Shift+L`: copy a timestamped link at the current position
 - `Ctrl+D`: copy the direct media stream URL
 - `Ctrl+PageUp/PageDown`: previous or next item
+- `Ctrl+Shift+PageDown`: play a related YouTube video
 - `Ctrl+Space`: play/pause while playback continues in the background
 - `Escape`: leave the player and keep playback running in the background
 
@@ -156,8 +176,8 @@ py wx_main.py
 - `Ctrl+Shift+S`: subscribe to the focused item's channel
 - `Ctrl+L`: copy the focused result link
 - `Ctrl+Shift+N`: create playlist
-- `Ctrl+Shift+P`: add the focused or queued videos to a playlist
-- `Ctrl+Shift+R`: remove an item from a user playlist
+- `Ctrl+P`: add the focused or queued videos to a playlist
+- `Ctrl+Shift+P`: remove an item from a user playlist
 - `Ctrl+Shift+Q`: add the focused item to the playback queue
 - `Ctrl+Shift+Delete`: remove the focused item from the playback queue
 - `Ctrl+Shift+V`: open the notification center
@@ -182,4 +202,8 @@ Helpful scripts:
 - `scripts/build_release.ps1 -PackageMode onedir` builds the fast app folder used by both the installer and portable ZIP
 - `scripts/build_installer.ps1` builds `ApricotPlayerSetup.exe` when Inno Setup is installed
 - `scripts/build_portable_zip.ps1` builds `ApricotPlayer.zip`
-- `scripts/publish_release.ps1 -Tag v0.8.33 -NotesFile release-notes/v0.8.33.md` publishes the installer and portable ZIP to GitHub Releases
+- `scripts/publish_release.ps1 -Tag v1.0.0-beta.45 -NotesFile release-notes/v1.0.0-beta.45.md` publishes the installer and portable ZIP to GitHub Releases
+
+## Security
+
+Dependencies and release runtimes are version-locked and audited in CI. Update packages are size-checked, digest-verified, and applied with rollback protection. Please report suspected vulnerabilities through [GitHub private vulnerability reporting](https://github.com/Urh2006/ApricotPlayer/security/advisories/new), not a public issue.

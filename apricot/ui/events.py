@@ -62,12 +62,33 @@ class EventsUI:
         if now - self.last_activation_check < 0.05:
             return
         self.last_activation_check = now
+        claimed_path: Path | None = None
         try:
             if not ACTIVATE_SIGNAL_FILE.exists():
                 return
-            payload = json.loads(ACTIVATE_SIGNAL_FILE.read_text(encoding="utf-8"))
-            ACTIVATE_SIGNAL_FILE.unlink(missing_ok=True)
+            claimed_path = ACTIVATE_SIGNAL_FILE.with_name(
+                f".{ACTIVATE_SIGNAL_FILE.name}-read-{os.getpid()}-{time.time_ns()}.tmp"
+            )
+            os.replace(ACTIVATE_SIGNAL_FILE, claimed_path)
+            if claimed_path.stat().st_size > ACTIVATION_SIGNAL_MAX_BYTES:
+                raise RuntimeError("activation signal is too large")
+            payload = json.loads(claimed_path.read_text(encoding="utf-8"))
         except Exception:
+            return
+        finally:
+            if claimed_path is not None:
+                try:
+                    claimed_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+        if not isinstance(payload, dict):
+            return
+        try:
+            created_at = float(payload.get("timestamp") or 0)
+        except (TypeError, ValueError):
+            return
+        wall_time = time.time()
+        if created_at <= 0 or wall_time - created_at > ACTIVATION_SIGNAL_MAX_AGE_SECONDS or created_at - wall_time > 5:
             return
         action = str(payload.get("action") or "show")
         if action == "open_file":
@@ -114,6 +135,11 @@ class EventsUI:
                         self.replace_converted_original(source, work_target, target)
                     converted += 1
                 except Exception:
+                    if replace_originals:
+                        try:
+                            work_target.unlink(missing_ok=True)
+                        except Exception:
+                            pass
                     failed += 1
                     continue
                 self.ui_queue.put(("conversion_progress", {"file": source.name, "converted": converted, "total": len(files)}))

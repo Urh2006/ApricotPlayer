@@ -115,12 +115,13 @@ class MpvMixin:
                 # point (stop_player terminates+waits before play_url spawns
                 # the resolve thread), so it is safe to wipe the folder now.
                 try:
-                    for _stale in list(cache_folder.iterdir()):
-                        try:
-                            if _stale.is_file():
-                                _stale.unlink()
-                        except Exception:
-                            pass
+                    if not self.cache_path_is_link(cache_folder):
+                        for _stale in cache_folder.iterdir():
+                            try:
+                                if _stale.is_file() or _stale.is_symlink():
+                                    _stale.unlink()
+                            except Exception:
+                                pass
                 except Exception:
                     pass
                 cache_size = max(128, min(4096, int(getattr(self.settings, "cache_size_mb", 512) or 512)))
@@ -255,6 +256,27 @@ class MpvMixin:
             with self.open_mpv_pipe("w", timeout=timeout, encoding="utf-8") as pipe:
                 pipe.write(payload)
 
+    @staticmethod
+    def mpv_pipe_available_bytes(pipe) -> int:
+        if os.name == "nt":
+            msvcrt = import_module("msvcrt")
+            available = ctypes.c_ulong(0)
+            handle = msvcrt.get_osfhandle(pipe.fileno())
+            success = ctypes.windll.kernel32.PeekNamedPipe(
+                ctypes.c_void_p(handle),
+                None,
+                0,
+                None,
+                ctypes.byref(available),
+                None,
+            )
+            if not success:
+                raise OSError("could not read the mpv IPC pipe")
+            return int(available.value)
+        select_module = import_module("select")
+        readable, _writable, _exceptional = select_module.select([pipe], [], [], 0)
+        return 1 if readable else 0
+
 
     def mpv_request(self, command: list, timeout: float = MPV_IPC_TIMEOUT_SECONDS) -> dict:
         if self.player_kind != "mpv" or not self.ipc_path:
@@ -265,17 +287,28 @@ class MpvMixin:
             with self.open_mpv_pipe("r+b", timeout=timeout, buffering=0) as pipe:
                 deadline = time.monotonic() + max(0.0, timeout)
                 pipe.write(payload)
+                response_buffer = bytearray()
                 while time.monotonic() < deadline:
-                    raw = pipe.readline()
-                    if not raw:
-                        time.sleep(0.01)
+                    available = self.mpv_pipe_available_bytes(pipe)
+                    if available <= 0:
+                        time.sleep(MPV_IPC_POLL_INTERVAL_SECONDS)
                         continue
-                    try:
-                        response = json.loads(raw.decode("utf-8", errors="replace"))
-                    except json.JSONDecodeError:
+                    chunk = os.read(pipe.fileno(), min(available, 64 * 1024))
+                    if not chunk:
+                        time.sleep(MPV_IPC_POLL_INTERVAL_SECONDS)
                         continue
-                    if response.get("request_id") == request_id:
-                        return response
+                    response_buffer.extend(chunk)
+                    if len(response_buffer) > MPV_IPC_MAX_RESPONSE_BYTES:
+                        raise RuntimeError("mpv IPC response exceeded the safe size limit")
+                    while b"\n" in response_buffer:
+                        raw, _, remainder = response_buffer.partition(b"\n")
+                        response_buffer = bytearray(remainder)
+                        try:
+                            response = json.loads(raw.decode("utf-8", errors="replace"))
+                        except json.JSONDecodeError:
+                            continue
+                        if response.get("request_id") == request_id:
+                            return response
         return {}
 
 

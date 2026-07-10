@@ -199,7 +199,10 @@ class DownloadsUI:
     def fetch_devtools_json(self, port: int, endpoint: str, timeout: float = 1.0) -> dict:
         request = Request(f"http://127.0.0.1:{port}{endpoint}", headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
         with urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8", errors="replace"))
+            self.validate_loopback_http_url(response.geturl(), port, "browser DevTools response")
+            return json.loads(
+                self.read_response_limited(response, DEVTOOLS_JSON_MAX_BYTES, "browser DevTools response").decode("utf-8", errors="replace")
+            )
 
     def show_download_complete_notification(self, message: str) -> bool:
         return self.show_desktop_notification(
@@ -522,7 +525,8 @@ class DownloadsUI:
                 headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
             )
             with urlopen(req, timeout=10) as response:
-                html = response.read().decode('utf-8')
+                self.validate_trusted_https_url(response.geturl(), {"youtube.com"}, "YouTube page")
+                html = self.read_response_limited(response, REMOTE_WEB_PAGE_MAX_BYTES, "YouTube page").decode("utf-8", errors="replace")
             
             m = re.search(r'var ytInitialData\s*=\s*({.*?});\s*</script>', html)
             if not m:

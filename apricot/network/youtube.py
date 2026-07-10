@@ -39,10 +39,18 @@ class YoutubeMixin:
     @staticmethod
     def is_youtube_url(url: str) -> bool:
         try:
-            host = (urlparse(str(url or "")).netloc or "").lower()
+            host = (urlparse(str(url or "")).hostname or "").lower()
         except Exception:
             return False
-        return "youtube.com" in host or "youtu.be" in host
+        return YoutubeMixin.host_matches_domain(host, "youtube.com") or YoutubeMixin.host_matches_domain(host, "youtu.be")
+
+    @staticmethod
+    def host_matches_domain(host: str, domain: str) -> bool:
+        normalized_host = str(host or "").strip().lower().rstrip(".")
+        normalized_domain = str(domain or "").strip().lower().lstrip(".").rstrip(".")
+        return bool(normalized_host and normalized_domain) and (
+            normalized_host == normalized_domain or normalized_host.endswith("." + normalized_domain)
+        )
 
 
     def cookies_file_has_youtube_login(self, path: str) -> bool:
@@ -108,10 +116,10 @@ class YoutubeMixin:
             parsed = urlparse(url)
         except Exception:
             return ""
-        host = (parsed.netloc or "").lower()
-        if "youtu.be" in host:
+        host = (parsed.hostname or "").lower()
+        if self.host_matches_domain(host, "youtu.be"):
             return parsed.path.strip("/").split("/", 1)[0]
-        if "youtube.com" not in host:
+        if not self.host_matches_domain(host, "youtube.com"):
             return ""
         query_id = (parse_qs(parsed.query).get("v") or [""])[0]
         if query_id:
@@ -126,13 +134,7 @@ class YoutubeMixin:
             url = str(item.get(key) or "").strip()
             if not url:
                 continue
-            try:
-                host = (urlparse(url).netloc or "").lower()
-            except Exception:
-                continue
-            if "googlevideo.com" in host or "youtubei.googleapis.com" in host:
-                continue
-            if "youtube.com" not in host and "youtu.be" not in host:
+            if not self.is_youtube_url(url):
                 continue
             if self.extract_youtube_video_id({"url": url}) == video_id:
                 return url
@@ -162,7 +164,10 @@ class YoutubeMixin:
             }
             request = Request(f"{YOUTUBE_API_VIDEOS_URL}?{urlencode(params)}", headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
             with self.open_url(request, timeout=25) as response:
-                payload = json.loads(response.read().decode("utf-8", errors="replace"))
+                self.validate_trusted_https_url(response.geturl(), {"googleapis.com"}, "YouTube API")
+                payload = json.loads(
+                    self.read_response_limited(response, REMOTE_JSON_MAX_BYTES, "YouTube API response").decode("utf-8", errors="replace")
+                )
             if isinstance(payload, dict) and payload.get("error"):
                 error = payload.get("error") or {}
                 message = error.get("message") if isinstance(error, dict) else str(error)
@@ -197,7 +202,10 @@ class YoutubeMixin:
                 params["pageToken"] = next_page
             request = Request(f"{YOUTUBE_API_SEARCH_URL}?{urlencode(params)}", headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
             with self.open_url(request, timeout=25) as response:
-                payload = json.loads(response.read().decode("utf-8", errors="replace"))
+                self.validate_trusted_https_url(response.geturl(), {"googleapis.com"}, "YouTube API")
+                payload = json.loads(
+                    self.read_response_limited(response, REMOTE_JSON_MAX_BYTES, "YouTube API response").decode("utf-8", errors="replace")
+                )
             if isinstance(payload, dict) and payload.get("error"):
                 error = payload.get("error") or {}
                 message = error.get("message") if isinstance(error, dict) else str(error)
@@ -236,7 +244,10 @@ class YoutubeMixin:
             params["videoCategoryId"] = category_id
         request = Request(f"{YOUTUBE_API_VIDEOS_URL}?{urlencode(params)}", headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
         with self.open_url(request, timeout=25) as response:
-            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+            self.validate_trusted_https_url(response.geturl(), {"googleapis.com"}, "YouTube API")
+            payload = json.loads(
+                self.read_response_limited(response, REMOTE_JSON_MAX_BYTES, "YouTube API response").decode("utf-8", errors="replace")
+            )
         if isinstance(payload, dict) and payload.get("error"):
             error = payload.get("error") or {}
             message = error.get("message") if isinstance(error, dict) else str(error)
@@ -304,7 +315,10 @@ class YoutubeMixin:
     def youtube_api_json(self, url: str, params: dict, timeout: int = 25) -> dict:
         request = Request(f"{url}?{urlencode(params)}", headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
         with self.open_url(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+            self.validate_trusted_https_url(response.geturl(), {"googleapis.com"}, "YouTube API")
+            payload = json.loads(
+                self.read_response_limited(response, REMOTE_JSON_MAX_BYTES, "YouTube API response").decode("utf-8", errors="replace")
+            )
         if isinstance(payload, dict) and payload.get("error"):
             error = payload.get("error") or {}
             reason = ""
@@ -349,11 +363,7 @@ class YoutubeMixin:
                 candidate = str(item.get(key) or "").strip()
                 if not candidate:
                     continue
-                try:
-                    host = (urlparse(candidate).netloc or "").lower()
-                except Exception:
-                    continue
-                if ("youtube.com" in host or "youtu.be" in host) and "googlevideo.com" not in host:
+                if self.is_youtube_url(candidate):
                     source_url = candidate
                     break
         params: list[tuple[str, str]] = [("v", video_id)]

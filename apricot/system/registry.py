@@ -45,7 +45,10 @@ class RegistryMixin:
             self.announce_player(self.t("default_player_settings_opened"))
         except Exception as exc:
             try:
-                subprocess.Popen(["control.exe", "/name", "Microsoft.DefaultPrograms"])
+                control = self.windows_system_executable("control.exe")
+                if not control:
+                    raise RuntimeError("Windows Control Panel was not found")
+                subprocess.Popen([control, "/name", "Microsoft.DefaultPrograms"])
                 self.announce_player(self.t("default_player_settings_opened"))
             except Exception:
                 self.message(self.t("default_player_settings_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)

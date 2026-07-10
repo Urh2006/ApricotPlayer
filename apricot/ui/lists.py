@@ -589,7 +589,10 @@ class ListsUI:
 
     def cache_local_folder_items(self, folder: Path, items: list[dict]) -> None:
         key = self.local_folder_cache_key(folder)
+        self.local_folder_cache.pop(key, None)
         self.local_folder_cache[key] = [dict(item) for item in items]
+        while len(self.local_folder_cache) > LOCAL_FOLDER_CACHE_MAX_ENTRIES:
+            self.local_folder_cache.pop(next(iter(self.local_folder_cache)))
 
     def selected_local_folder_items(self) -> list[dict]:
         if (self.folder_screen_active or self.player_return_screen == "folder") and getattr(self, "current_local_folder_items", None):
@@ -712,7 +715,15 @@ class ListsUI:
     def open_selected_in_browser(self) -> None:
         item = self.active_item()
         if item:
-            import_module("webbrowser").open(str(item.get("webpage_url") or item.get("url") or ""))
+            self.open_remote_url_in_browser(str(item.get("webpage_url") or item.get("url") or ""))
+
+    def open_remote_url_in_browser(self, url: str, announce_error: bool = True) -> bool:
+        try:
+            return self.open_http_url_in_browser(url)
+        except RuntimeError as exc:
+            if announce_error:
+                self.announce_player(self.friendly_error(exc))
+            return False
 
     def copy_selected_url(self) -> None:
         item = self.active_item()

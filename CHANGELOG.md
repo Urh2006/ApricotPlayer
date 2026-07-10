@@ -1,3 +1,25 @@
+# v1.0.0-beta.45 - Security, Data Integrity, and Updater Hardening
+
+## Security
+- App and yt-dlp updates now require published SHA-256 digests, trusted HTTPS redirect hosts, bounded downloads, and validated package layouts before installation.
+- ZIP validation now rejects traversal, absolute paths, alternate data streams, reserved Windows devices, duplicate paths, encrypted entries, links, special files, oversized members, and compression bombs.
+- Portable updates now lock the verified archive while extracting it, replace both `ApricotPlayer.exe` and `_internal` as one transaction, and restore both components after a failed copy. The legacy executable updater also preserves its original rollback copy across retries.
+- XML imports and podcast/RSS parsing now use `defusedxml` with DTD, entity, and external-reference protection. Remote feeds, chapters, transcripts, lyrics, API responses, pages, and DevTools responses have explicit size limits and redirect validation.
+- Browser-cookie export now requests and stores only YouTube/Google-related cookies, validates exact cookie domains and fields, and rejects control-character injection. Diagnostic reports remove credentials, URL query/fragment secrets, proxy user information, cookie signatures, and user-profile paths.
+- Windows helper executables resolve from trusted system locations. Release dependencies and runtimes are version-locked, hash-checked, and covered by a weekly dependency/security workflow.
+
+## Reliability and Performance
+- Settings, history, favorites, bookmarks, queues, playback positions, playlists, subscriptions, notifications, the last player session, and stream-cache state now use atomic replacement writes. Generation guards prevent older background saves from overwriting newer state.
+- mpv IPC reads are now genuinely nonblocking and bounded, so a missing response respects its timeout instead of hanging on `readline()`.
+- Custom mpv cache cleanup is restricted to ApricotPlayer's own child directory and avoids links/reparse points. Local-folder metadata caching is bounded.
+- Download templates, generated media extensions, Windows device namespaces, and generated folder names are validated before filesystem use.
+- Updated the bundled runtimes to yt-dlp 2026.7.4, mpv 0.41.0-744-g304426c39, FFmpeg N-125515-g35f8f4bdc0, and Node.js 24.18.0 LTS.
+
+## Verification
+- Added 26 focused security regression tests, dependency auditing, critical Ruff checks, and Dependabot configuration.
+- Verified source GUI startup/shutdown, real mpv IPC, EQ plus limiter filters, Rubberband speed/pitch, current yt-dlp extraction, FFmpeg media generation, strict portable-package validation, and both successful and forced-rollback updater paths.
+- Player startup timing, seek/cache policy, volume, bass boost, clipping protection, and EQ behavior were not changed by this release.
+
 # v1.0.0-beta.44 - Player Seek Shortcuts and Batch Download Recovery
 
 ## Added

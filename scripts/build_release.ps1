@@ -10,6 +10,15 @@
 $ErrorActionPreference = "Stop"
 
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$pythonCommand = Get-Command $PythonExe -CommandType Application -ErrorAction SilentlyContinue
+if (-not $pythonCommand) {
+    throw "Python executable was not found: $PythonExe"
+}
+$PythonExe = $pythonCommand.Source
+$pythonSignature = Get-AuthenticodeSignature -LiteralPath $PythonExe
+if ($pythonSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+    throw "Refusing to build with an unsigned or invalid Python executable: $PythonExe"
+}
 $workPath = Join-Path $projectRoot "build_wx"
 
 # Default output directory: release-dist\installer-app so that build_installer.ps1
@@ -88,16 +97,19 @@ $mpvDir = Join-Path $projectRoot "vendor\mpv"
 $ffmpegDir = Join-Path $projectRoot "vendor\ffmpeg"
 $nvdaDir = Join-Path $projectRoot "vendor\nvda"
 $assetsDir = Join-Path $projectRoot "assets"
-$nodeExe = $null
-
-try {
-    $nodeCommand = Get-Command "node.exe" -ErrorAction SilentlyContinue
-    if ($nodeCommand) {
-        $nodeExe = $nodeCommand.Source
+$nodeCandidates = @(
+    (Join-Path $projectRoot "vendor\node\node.exe"),
+    "$env:ProgramFiles\nodejs\node.exe",
+    "$env:LOCALAPPDATA\Programs\nodejs\node.exe",
+    (Get-Command "node.exe" -CommandType Application -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue)
+) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+$nodeExe = @($nodeCandidates | Select-Object -Unique)[0]
+if ($nodeExe) {
+    $nodeExe = (Resolve-Path -LiteralPath $nodeExe).Path
+    $nodeSignature = Get-AuthenticodeSignature -LiteralPath $nodeExe
+    if ($nodeSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+        throw "Refusing to bundle an unsigned or invalid Node.js executable: $nodeExe"
     }
-}
-catch {
-    $nodeExe = $null
 }
 
 if (Test-Path (Join-Path $mpvDir "mpv.exe")) {
@@ -150,7 +162,7 @@ if (-not $SkipInstaller) {
 
     Write-Host ""
     Write-Host "=== Building portable ZIP ==="
-    & (Join-Path $PSScriptRoot "build_portable_zip.ps1") -SourceDir $pyInstallerOut
+    & (Join-Path $PSScriptRoot "build_portable_zip.ps1") -SourceDir $pyInstallerOut -PythonExe $PythonExe
     if ($LASTEXITCODE -ne 0) {
         throw "build_portable_zip.ps1 failed with exit code $LASTEXITCODE"
     }

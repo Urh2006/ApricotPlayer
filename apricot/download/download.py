@@ -119,11 +119,11 @@ class DownloaderMixin:
         return task_id, cancel_event
 
 
-    def update_download_task(self, task_id: str, **fields) -> None:
+    def update_download_task(self, task_id: str, **updates) -> None:
         task = self.active_downloads.get(task_id)
         if not task:
             return
-        task.update(fields)
+        task.update(updates)
         playlist_count = self.to_int(str(task.get("playlist_count") or 0), 0, 0)
         if playlist_count and not self.to_int(str(task.get("total") or 0), 0, 0):
             task["total"] = playlist_count
@@ -416,7 +416,7 @@ class DownloaderMixin:
         target_path: Path | None = None,
     ) -> dict:
         progress_hook = self.make_download_progress_hook(title, audio_only, task_id=task_id, cancel_event=cancel_event)
-        template = self.settings.filename_template or DEFAULT_FILENAME_TEMPLATE
+        template = self.safe_download_filename_template(self.settings.filename_template)
         if allow_playlist and self.settings.keep_playlist_order and "%(playlist_index)" not in template:
             template = "%(playlist_index)s - " + template
         if target_path and audio_only:
@@ -471,6 +471,23 @@ class DownloaderMixin:
             if video_mode in {VIDEO_FORMAT_MP4, VIDEO_FORMAT_MP4_SINGLE, VIDEO_FORMAT_SMALLEST}:
                 options["merge_output_format"] = "mp4"
         return options
+
+    @staticmethod
+    def safe_download_filename_template(value: str) -> str:
+        template = str(value or "").strip() or DEFAULT_FILENAME_TEMPLATE
+        normalized = template.replace("\\", "/")
+        parts = [part for part in normalized.split("/") if part]
+        if (
+            "\x00" in normalized
+            or normalized.startswith("/")
+            or re.match(r"^[A-Za-z]:", normalized)
+            or ":" in normalized
+            or any(part in {".", ".."} for part in parts)
+            or any(part.rstrip(" .") != part for part in parts)
+            or any(part.split(".", 1)[0].casefold() in WINDOWS_RESERVED_PATH_STEMS for part in parts)
+        ):
+            return DEFAULT_FILENAME_TEMPLATE
+        return template
 
 
     def make_download_error_logger(self, title: str):

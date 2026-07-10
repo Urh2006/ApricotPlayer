@@ -34,6 +34,8 @@ except ImportError:
 from apricot.constants import *
 from apricot.locales import TEXT
 
+_UPDATE_LOG_LOCK = threading.Lock()
+
 class AppUpdaterMixin:
 
     def start_ytdlp_update_check(self, manual: bool = False) -> None:
@@ -81,14 +83,32 @@ class AppUpdaterMixin:
         try:
             request = Request(wheel_url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
             with self.open_url(request, timeout=120) as response, wheel_path.open("wb") as handle:
-                self.validate_https_response_url(response.geturl())
-                shutil.copyfileobj(response, handle)
-            if wheel_sha256:
-                self.verify_file_sha256(wheel_path, wheel_sha256)
+                self.validate_https_response_url(response.geturl(), {"pypi.org", "pythonhosted.org"})
+                content_length = str(response.headers.get("Content-Length") or "").strip()
+                if content_length.isdigit() and int(content_length) > YTDLP_WHEEL_MAX_BYTES:
+                    raise RuntimeError("yt-dlp wheel is larger than the safe download limit")
+                downloaded = 0
+                while True:
+                    chunk = response.read(UPDATE_DOWNLOAD_CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    downloaded += len(chunk)
+                    if downloaded > YTDLP_WHEEL_MAX_BYTES:
+                        raise RuntimeError("yt-dlp wheel is larger than the safe download limit")
+                    handle.write(chunk)
+            if not re.fullmatch(r"[0-9a-fA-F]{64}", str(wheel_sha256 or "")):
+                raise RuntimeError("PyPI did not publish a valid SHA-256 digest for the yt-dlp wheel")
+            self.verify_file_sha256(wheel_path, wheel_sha256)
             extract_dir.mkdir(parents=True, exist_ok=True)
             zipfile_module = import_module("zipfile")
             with zipfile_module.ZipFile(wheel_path) as archive:
-                self.safe_extract_zip(archive, extract_dir)
+                self.safe_extract_zip(
+                    archive,
+                    extract_dir,
+                    max_uncompressed_bytes=YTDLP_WHEEL_MAX_UNCOMPRESSED_BYTES,
+                    max_member_bytes=YTDLP_WHEEL_MAX_MEMBER_BYTES,
+                    max_compression_ratio=YTDLP_WHEEL_MAX_COMPRESSION_RATIO,
+                )
             package_source = extract_dir / "yt_dlp"
             if not package_source.exists():
                 raise RuntimeError("yt-dlp wheel did not contain yt_dlp package")
@@ -121,7 +141,10 @@ class AppUpdaterMixin:
     def fetch_latest_ytdlp_wheel(self) -> tuple[str, str, str]:
         request = Request(YTDLP_PYPI_JSON_URL, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
         with self.open_url(request, timeout=30) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+            self.validate_trusted_https_url(response.geturl(), {"pypi.org"}, "PyPI metadata")
+            payload = json.loads(
+                self.read_response_limited(response, UPDATE_METADATA_MAX_BYTES, "PyPI metadata").decode("utf-8", errors="replace")
+            )
         latest_version = str((payload.get("info") or {}).get("version") or "")
         urls = payload.get("urls") or []
         for item in urls:
@@ -244,7 +267,7 @@ class AppUpdaterMixin:
 
     def prompt_for_app_update(self, release: dict, asset: dict) -> None:
         version = self.release_version(release)
-        self.log_update_event(f"Prompting for update {version} with asset {asset.get('name')}")
+        self.log_update_event(f"Prompting for update {version} with asset {asset.get('name')}")  # nosec B608 - no SQL is used.
         if not getattr(sys, "frozen", False):
             self.message(self.t("update_source_only", version=version))
             return
@@ -369,8 +392,9 @@ class AppUpdaterMixin:
             self.log_update_event(f"Downloaded update {version}; size={downloaded_path.stat().st_size}")
             self.verify_release_asset_file(asset, downloaded_path)
             self.validate_update_package(downloaded_path)
+            verified_sha256 = self.file_sha256(downloaded_path)
             wx.CallAfter(self.update_app_update_finished, version)
-            wx.CallAfter(self.finish_app_update_install, str(downloaded_path), version)
+            wx.CallAfter(self.finish_app_update_install, str(downloaded_path), version, verified_sha256)
         except Exception as exc:
             if temp_dir:
                 try:
@@ -392,6 +416,12 @@ class AppUpdaterMixin:
             attempts.append((api_url, self.github_headers("", accept="application/octet-stream")))
         if not attempts:
             raise RuntimeError("missing download url")
+        expected_size = asset.get("size")
+        if not isinstance(expected_size, int) or expected_size <= 0:
+            expected_size = 0
+        if expected_size > UPDATE_ASSET_MAX_BYTES:
+            raise RuntimeError("update asset is larger than the safe download limit")
+        maximum_size = expected_size or UPDATE_ASSET_MAX_BYTES
         last_error: Exception | None = None
         for download_url, headers in attempts:
             try:
@@ -399,9 +429,11 @@ class AppUpdaterMixin:
                 self.log_update_event(f"Download attempt: host={urlparse(download_url).hostname or ''}; asset={asset.get('name')}; expected_size={asset.get('size') or 'unknown'}")
                 request = Request(download_url, headers=headers)
                 with self.open_url(request, timeout=300) as response, downloaded_path.open("wb") as handle:
-                    self.validate_https_response_url(response.geturl())
+                    self.validate_https_response_url(response.geturl(), {"github.com", "githubusercontent.com"})
                     total_header = response.headers.get("Content-Length")
                     total = int(total_header) if total_header and total_header.isdigit() else 0
+                    if total and total > maximum_size:
+                        raise RuntimeError("update response is larger than the published asset size")
                     downloaded = 0
                     last_percent = -1
                     last_progress_time = 0.0
@@ -409,8 +441,10 @@ class AppUpdaterMixin:
                         chunk = response.read(UPDATE_DOWNLOAD_CHUNK_SIZE)
                         if not chunk:
                             break
-                        handle.write(chunk)
                         downloaded += len(chunk)
+                        if downloaded > maximum_size:
+                            raise RuntimeError("update response exceeded the published asset size")
+                        handle.write(chunk)
                         now = time.monotonic()
                         if total:
                             percent = int(downloaded * 100 / total)
@@ -438,7 +472,7 @@ class AppUpdaterMixin:
     def safe_asset_filename(asset: dict) -> str:
         name = Path(str(asset.get("name") or "")).name
         if name not in {INSTALLER_ASSET_NAME, PORTABLE_ZIP_ASSET_NAME, LEGACY_PORTABLE_ZIP_ASSET_NAME}:
-            raise RuntimeError(f"unexpected update asset name: {name or 'missing'}")
+            raise RuntimeError(f"unexpected update asset name: {name or 'missing'}")  # nosec B608 - no SQL is used.
         return name
 
 
@@ -451,10 +485,15 @@ class AppUpdaterMixin:
 
 
     @staticmethod
-    def validate_https_response_url(download_url: str) -> None:
+    def validate_https_response_url(download_url: str, allowed_host_roots: set[str] | None = None) -> None:
         parsed = urlparse(str(download_url or ""))
         if parsed.scheme.lower() != "https":
             raise RuntimeError(f"download redirected to a non-HTTPS URL: {download_url}")
+        host = (parsed.hostname or "").lower()
+        if allowed_host_roots:
+            roots = {str(root).lower().lstrip(".") for root in allowed_host_roots}
+            if not host or not any(host == root or host.endswith("." + root) for root in roots):
+                raise RuntimeError(f"download redirected to an untrusted host: {download_url}")
 
 
     @staticmethod
@@ -483,21 +522,24 @@ class AppUpdaterMixin:
         expected_size = asset.get("size")
         if isinstance(expected_size, int) and expected_size > 0 and path.stat().st_size != expected_size:
             raise RuntimeError("downloaded update size did not match the GitHub release asset size")
-        cls.verify_file_sha256(path, str(asset.get("digest") or ""))
+        expected_digest = str(asset.get("digest") or "").strip()
+        if not re.fullmatch(r"(?:sha256:)?[0-9a-fA-F]{64}", expected_digest):
+            raise RuntimeError("GitHub did not publish a valid SHA-256 digest for this update asset")
+        cls.verify_file_sha256(path, expected_digest)
 
 
-    def finish_app_update_install(self, downloaded_path: str, version: str) -> None:
+    def finish_app_update_install(self, downloaded_path: str, version: str, verified_sha256: str = "") -> None:
         if not getattr(sys, "frozen", False):
             self.message(self.t("update_source_only", version=version))
             return
         current_exe = Path(sys.executable)
         self.log_update_event(f"Preparing install for {version}; package={downloaded_path}; current_exe={current_exe}")
         if self.is_installer_asset(downloaded_path):
-            script_path = self.write_installer_update_script(downloaded_path, str(current_exe.parent), os.getpid(), str(UPDATE_LOG_FILE), restart=True)
+            script_path = self.write_installer_update_script(downloaded_path, str(current_exe.parent), os.getpid(), str(UPDATE_LOG_FILE), restart=True, expected_sha256=verified_sha256)
         elif self.is_portable_zip_asset(downloaded_path):
-            script_path = self.write_portable_zip_update_script(downloaded_path, str(current_exe.parent), str(current_exe), os.getpid(), str(UPDATE_LOG_FILE), restart=True)
+            script_path = self.write_portable_zip_update_script(downloaded_path, str(current_exe.parent), str(current_exe), os.getpid(), str(UPDATE_LOG_FILE), restart=True, expected_sha256=verified_sha256)
         else:
-            script_path = self.write_update_script(downloaded_path, str(current_exe), os.getpid(), str(UPDATE_LOG_FILE), restart=True)
+            script_path = self.write_update_script(downloaded_path, str(current_exe), os.getpid(), str(UPDATE_LOG_FILE), restart=True, expected_sha256=verified_sha256)
         self.log_update_event(f"Launching update script {script_path}")
         self.launch_update_script(script_path)
         self.set_status(self.t("installing_update", version=version))
@@ -520,15 +562,6 @@ class AppUpdaterMixin:
         return name in {PORTABLE_ZIP_ASSET_NAME.lower(), LEGACY_PORTABLE_ZIP_ASSET_NAME.lower()} or (name.endswith(".zip") and "apricotplayer" in name)
 
 
-    @staticmethod
-    def validate_zip_member_path(member_name: str) -> None:
-        normalized = member_name.replace("\\", "/")
-        if not normalized or normalized.startswith("/") or re.match(r"^[A-Za-z]:", normalized):
-            raise RuntimeError("zip package contains an unsafe absolute path")
-        parts = [part for part in normalized.split("/") if part]
-        if any(part == ".." for part in parts):
-            raise RuntimeError("zip package contains an unsafe parent-directory path")
-
     @classmethod
     def validate_update_package(cls, path: Path) -> None:
         if not path.exists() or path.stat().st_size < 1024 * 1024:
@@ -538,19 +571,52 @@ class AppUpdaterMixin:
             if not zipfile_module.is_zipfile(path):
                 raise RuntimeError("downloaded portable update is not a valid zip file")
             with zipfile_module.ZipFile(path) as archive:
-                for member in archive.infolist():
-                    cls.validate_zip_member_path(member.filename)
-                if not any(Path(member.filename.replace("\\", "/")).name.lower() == "apricotplayer.exe" for member in archive.infolist()):
-                    raise RuntimeError("downloaded portable update does not contain ApricotPlayer.exe")
+                cls.validate_zip_archive(archive)
+                normalized_names = [member.filename.replace("\\", "/").strip("/") for member in archive.infolist()]
+                folded_names = {name.casefold() for name in normalized_names}
+                allowed_roots = {
+                    "apricotplayer",
+                    "apricotplayer/apricotplayer.exe",
+                    "apricotplayer/_internal",
+                }
+                if any(
+                    name not in allowed_roots and not name.startswith("apricotplayer/_internal/")
+                    for name in folded_names
+                ):
+                    raise RuntimeError("downloaded portable update contains an unexpected file layout")
+                if "apricotplayer/apricotplayer.exe" not in folded_names:
+                    raise RuntimeError("downloaded portable update does not contain ApricotPlayer/ApricotPlayer.exe")
+                if not any(name == "apricotplayer/_internal" or name.startswith("apricotplayer/_internal/") for name in folded_names):
+                    raise RuntimeError("downloaded portable update does not contain ApricotPlayer/_internal")
             return
         with path.open("rb") as handle:
             if handle.read(2) != b"MZ":
                 raise RuntimeError("downloaded update is not a Windows executable")
 
 
+    @staticmethod
+    def write_secure_update_script(script: str, prefix: str) -> Path:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8-sig",
+            prefix=prefix,
+            suffix=".ps1",
+            delete=False,
+        ) as handle:
+            handle.write(script)
+            return Path(handle.name)
+
+
     @classmethod
-    def write_update_script(cls, downloaded_path: str, target_path: str, process_id: int, log_path: str, restart: bool = True) -> Path:
-        script_path = Path(tempfile.gettempdir()) / f"apricotplayer-update-{int(time.time())}.ps1"
+    def write_update_script(
+        cls,
+        downloaded_path: str,
+        target_path: str,
+        process_id: int,
+        log_path: str,
+        restart: bool = True,
+        expected_sha256: str = "",
+    ) -> Path:
         restart_value = "$true" if restart else "$false"
         script = "\n".join(
             [
@@ -560,8 +626,9 @@ class AppUpdaterMixin:
                 f"$log = {cls.powershell_literal(log_path)}",
                 f"$processIdToWait = {int(process_id)}",
                 f"$restart = {restart_value}",
+                f"$expectedSha256 = {cls.powershell_literal(str(expected_sha256 or '').lower())}",
                 "$targetDir = Split-Path -Parent $target",
-                "$oldTarget = \"$target.old\"",
+                "$oldTarget = Join-Path $targetDir ((Split-Path -Leaf $target) + '.apricot-old-' + [Guid]::NewGuid().ToString())",
                 "New-Item -ItemType Directory -Path (Split-Path -Parent $log) -Force | Out-Null",
                 "function Log($message) { Add-Content -LiteralPath $log -Value ((Get-Date -Format o) + ' ' + $message) -Encoding UTF8 }",
                 "Set-Content -LiteralPath $log -Value ((Get-Date -Format o) + ' Starting ApricotPlayer update') -Encoding UTF8",
@@ -575,25 +642,40 @@ class AppUpdaterMixin:
                 "        if ($stillRunning) { Log 'ApricotPlayer did not exit; forcing shutdown'; Stop-Process -Id $processIdToWait -Force -ErrorAction SilentlyContinue }",
                 "    } catch { Log \"Force shutdown warning: $($_.Exception.Message)\" }",
                 "}",
+                "if ($expectedSha256) {",
+                "    $actualSha256 = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant()",
+                "    if ($actualSha256 -ne $expectedSha256) { Log 'Update package changed after verification'; exit 1 }",
+                "}",
+                "try {",
+                "    if (Test-Path -LiteralPath $target) { Move-Item -LiteralPath $target -Destination $oldTarget -Force -ErrorAction Stop }",
+                "} catch {",
+                "    Log \"Could not back up the current executable: $($_.Exception.Message)\"",
+                "    exit 1",
+                "}",
                 "$copied = $false",
                 "for ($attempt = 0; $attempt -lt 180; $attempt++) {",
                 "    try {",
-                "        if (Test-Path -LiteralPath $oldTarget) { Remove-Item -LiteralPath $oldTarget -Force -ErrorAction SilentlyContinue }",
-                "        if (Test-Path -LiteralPath $target) { Rename-Item -LiteralPath $target -NewName (Split-Path -Leaf $oldTarget) -Force -ErrorAction Stop }",
+                "        if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Force -ErrorAction Stop }",
                 "        Copy-Item -LiteralPath $source -Destination $target -Force -ErrorAction Stop",
                 "        if ((Get-Item -LiteralPath $target).Length -lt 1048576) { throw 'Copied file is too small.' }",
+                "        if ($expectedSha256) {",
+                "            $targetSha256 = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant()",
+                "            if ($targetSha256 -ne $expectedSha256) { throw 'Copied update failed SHA-256 verification.' }",
+                "        }",
                 "        $copied = $true",
                 "        Log \"Copy succeeded on attempt $attempt\"",
                 "        break",
                 "    } catch {",
                 "        Log \"Copy attempt $attempt failed: $($_.Exception.Message)\"",
-                "        if ((Test-Path -LiteralPath $oldTarget) -and -not (Test-Path -LiteralPath $target)) {",
-                "            try { Rename-Item -LiteralPath $oldTarget -NewName (Split-Path -Leaf $target) -Force -ErrorAction SilentlyContinue } catch { }",
-                "        }",
+                "        try { if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue } } catch { }",
                 "        Start-Sleep -Seconds 1",
                 "    }",
                 "}",
-                "if (-not $copied) { Log 'Update failed: could not copy new executable'; exit 1 }",
+                "if (-not $copied) {",
+                "    Log 'Update failed: could not copy new executable'",
+                "    try { if (Test-Path -LiteralPath $oldTarget) { Move-Item -LiteralPath $oldTarget -Destination $target -Force -ErrorAction Stop } } catch { Log \"Executable rollback failed: $($_.Exception.Message)\" }",
+                "    exit 1",
+                "}",
                 "Remove-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue",
                 "if (Test-Path -LiteralPath $oldTarget) { Remove-Item -LiteralPath $oldTarget -Force -ErrorAction SilentlyContinue }",
                 f"if ($restart) {{ Log 'Restarting ApricotPlayer'; Start-Process -FilePath $target -WorkingDirectory $targetDir -ArgumentList {cls.powershell_literal(UPDATE_RELAUNCH_ARG)} }}",
@@ -602,13 +684,20 @@ class AppUpdaterMixin:
                 "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
             ]
         )
-        script_path.write_text(script, encoding="utf-8-sig")
-        return script_path
+        return cls.write_secure_update_script(script, "apricotplayer-update-")
 
 
     @classmethod
-    def write_portable_zip_update_script(cls, downloaded_path: str, target_dir: str, target_exe: str, process_id: int, log_path: str, restart: bool = True) -> Path:
-        script_path = Path(tempfile.gettempdir()) / f"apricotplayer-portable-update-{int(time.time())}.ps1"
+    def write_portable_zip_update_script(
+        cls,
+        downloaded_path: str,
+        target_dir: str,
+        target_exe: str,
+        process_id: int,
+        log_path: str,
+        restart: bool = True,
+        expected_sha256: str = "",
+    ) -> Path:
         restart_value = "$true" if restart else "$false"
         script = "\n".join(
             [
@@ -619,7 +708,15 @@ class AppUpdaterMixin:
                 f"$log = {cls.powershell_literal(log_path)}",
                 f"$processIdToWait = {int(process_id)}",
                 f"$restart = {restart_value}",
+                f"$expectedSha256 = {cls.powershell_literal(str(expected_sha256 or '').lower())}",
                 "$extractRoot = Join-Path ([IO.Path]::GetTempPath()) ('apricotplayer-portable-' + [Guid]::NewGuid().ToString())",
+                "$targetInternal = Join-Path $targetDir '_internal'",
+                "$backupRoot = Join-Path $targetDir ('.apricot-update-backup-' + [Guid]::NewGuid().ToString())",
+                "$oldInternal = Join-Path $backupRoot '_internal'",
+                "$oldExe = Join-Path $backupRoot 'ApricotPlayer.exe'",
+                "$oldInternalMoved = $false",
+                "$oldExeMoved = $false",
+                "$replacementStarted = $false",
                 "New-Item -ItemType Directory -Path (Split-Path -Parent $log) -Force | Out-Null",
                 "function Log($message) { Add-Content -LiteralPath $log -Value ((Get-Date -Format o) + ' ' + $message) -Encoding UTF8 }",
                 "Set-Content -LiteralPath $log -Value ((Get-Date -Format o) + ' Starting ApricotPlayer portable update') -Encoding UTF8",
@@ -635,38 +732,72 @@ class AppUpdaterMixin:
                 "}",
                 "try {",
                 "    New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null",
-                "    Expand-Archive -LiteralPath $source -DestinationPath $extractRoot -Force",
-                "    $sourceAppDir = Join-Path $extractRoot 'ApricotPlayer'",
-                "    if (-not (Test-Path -LiteralPath (Join-Path $sourceAppDir 'ApricotPlayer.exe'))) {",
-                "        $candidate = Get-ChildItem -LiteralPath $extractRoot -Filter 'ApricotPlayer.exe' -Recurse -File | Select-Object -First 1",
-                "        if (-not $candidate) { throw 'ApricotPlayer.exe was not found in portable zip.' }",
-                "        $sourceAppDir = Split-Path -Parent $candidate.FullName",
+                "    $sourceHandle = [IO.File]::Open($source, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)",
+                "    try {",
+                "        if ($expectedSha256) {",
+                "            $actualSha256 = (Get-FileHash -InputStream $sourceHandle -Algorithm SHA256).Hash.ToLowerInvariant()",
+                "            if ($actualSha256 -ne $expectedSha256) { throw 'Update package changed after verification.' }",
+                "            $sourceHandle.Position = 0",
+                "        }",
+                "        Expand-Archive -LiteralPath $source -DestinationPath $extractRoot -Force",
+                "        if ($expectedSha256) {",
+                "            $sourceHandle.Position = 0",
+                "            $postExtractSha256 = (Get-FileHash -InputStream $sourceHandle -Algorithm SHA256).Hash.ToLowerInvariant()",
+                "            if ($postExtractSha256 -ne $expectedSha256) { throw 'Update package changed during extraction.' }",
+                "        }",
+                "    } finally {",
+                "        $sourceHandle.Dispose()",
                 "    }",
+                "    $sourceAppDir = Join-Path $extractRoot 'ApricotPlayer'",
+                "    if (-not (Test-Path -LiteralPath (Join-Path $sourceAppDir 'ApricotPlayer.exe'))) { throw 'ApricotPlayer.exe was not found in the expected portable zip folder.' }",
+                "    if (-not (Test-Path -LiteralPath (Join-Path $sourceAppDir '_internal'))) { throw 'The portable zip is missing its _internal folder.' }",
                 "    Log \"Extracted app directory: $sourceAppDir\"",
+                "    New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null",
+                "    if (Test-Path -LiteralPath $targetExe) { Move-Item -LiteralPath $targetExe -Destination $oldExe -Force -ErrorAction Stop; $oldExeMoved = $true }",
+                "    if (Test-Path -LiteralPath $targetInternal) { Move-Item -LiteralPath $targetInternal -Destination $oldInternal -Force -ErrorAction Stop; $oldInternalMoved = $true }",
+                "    $replacementStarted = $true",
                 "    Get-ChildItem -LiteralPath $sourceAppDir -Force | ForEach-Object {",
                 "        Copy-Item -LiteralPath $_.FullName -Destination $targetDir -Recurse -Force -ErrorAction Stop",
                 "    }",
                 "    if (-not (Test-Path -LiteralPath $targetExe)) { throw 'Updated ApricotPlayer.exe is missing after copy.' }",
-                "    Remove-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue",
-                "    Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue",
-                f"    if ($restart) {{ Log 'Restarting ApricotPlayer'; Start-Process -FilePath $targetExe -WorkingDirectory $targetDir -ArgumentList {cls.powershell_literal(UPDATE_RELAUNCH_ARG)} }}",
-                "    Log 'Update complete'",
+                "    if ((Get-Item -LiteralPath $targetExe).Length -lt 1048576) { throw 'Updated ApricotPlayer.exe is too small.' }",
+                "    if (-not (Test-Path -LiteralPath $targetInternal)) { throw 'Updated _internal folder is missing after copy.' }",
                 "} catch {",
                 "    Log \"Portable update failed: $($_.Exception.Message)\"",
+                "    try {",
+                "        if ($replacementStarted) {",
+                "            if (Test-Path -LiteralPath $targetExe) { Remove-Item -LiteralPath $targetExe -Force -ErrorAction SilentlyContinue }",
+                "            if (Test-Path -LiteralPath $targetInternal) { Remove-Item -LiteralPath $targetInternal -Recurse -Force -ErrorAction SilentlyContinue }",
+                "        }",
+                "        if ($oldExeMoved -and (Test-Path -LiteralPath $oldExe)) { Move-Item -LiteralPath $oldExe -Destination $targetExe -Force -ErrorAction SilentlyContinue }",
+                "        if ($oldInternalMoved -and (Test-Path -LiteralPath $oldInternal)) { Move-Item -LiteralPath $oldInternal -Destination $targetInternal -Force -ErrorAction SilentlyContinue }",
+                "        if (Test-Path -LiteralPath $backupRoot) { Remove-Item -LiteralPath $backupRoot -Recurse -Force -ErrorAction SilentlyContinue }",
+                "    } catch { Log \"Portable rollback warning: $($_.Exception.Message)\" }",
                 "    try { if (Test-Path -LiteralPath $extractRoot) { Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue } } catch { }",
                 "    exit 1",
                 "}",
+                "if (Test-Path -LiteralPath $backupRoot) { Remove-Item -LiteralPath $backupRoot -Recurse -Force -ErrorAction SilentlyContinue }",
+                "Remove-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue",
+                "Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue",
+                f"if ($restart) {{ try {{ Log 'Restarting ApricotPlayer'; Start-Process -FilePath $targetExe -WorkingDirectory $targetDir -ArgumentList {cls.powershell_literal(UPDATE_RELAUNCH_ARG)} }} catch {{ Log \"Restart warning: $($_.Exception.Message)\" }} }}",
+                "Log 'Update complete'",
                 "Start-Sleep -Seconds 2",
                 "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
             ]
         )
-        script_path.write_text(script, encoding="utf-8-sig")
-        return script_path
+        return cls.write_secure_update_script(script, "apricotplayer-portable-update-")
 
 
     @classmethod
-    def write_installer_update_script(cls, downloaded_path: str, install_dir: str, process_id: int, log_path: str, restart: bool = True) -> Path:
-        script_path = Path(tempfile.gettempdir()) / f"apricotplayer-installer-update-{int(time.time())}.ps1"
+    def write_installer_update_script(
+        cls,
+        downloaded_path: str,
+        install_dir: str,
+        process_id: int,
+        log_path: str,
+        restart: bool = True,
+        expected_sha256: str = "",
+    ) -> Path:
         restart_value = "$true" if restart else "$false"
         script = "\n".join(
             [
@@ -676,6 +807,7 @@ class AppUpdaterMixin:
                 f"$log = {cls.powershell_literal(log_path)}",
                 f"$processIdToWait = {int(process_id)}",
                 f"$restart = {restart_value}",
+                f"$expectedSha256 = {cls.powershell_literal(str(expected_sha256 or '').lower())}",
                 "$installerLog = [IO.Path]::ChangeExtension($log, '.inno.log')",
                 "$silentArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', '/TASKS=desktopicon,mediaassoc', ('/DIR=\"' + $installDir + '\"'), ('/LOG=\"' + $installerLog + '\"'))",
                 "$installCandidates = @()",
@@ -745,9 +877,19 @@ class AppUpdaterMixin:
                 "$knownDirs = @($installCandidates | ForEach-Object { Split-Path -Parent $_ } | Where-Object { $_ } | Select-Object -Unique)",
                 "Stop-ApricotProcesses $knownDirs",
                 "try {",
-                "    Log 'Launching installer'",
-                "    $process = Start-Process -FilePath $source -ArgumentList $silentArgs -Verb runAs -Wait -PassThru",
-                "    if ($process -and $process.ExitCode -ne 0) { throw \"Installer exited with code $($process.ExitCode)\" }",
+                "    $sourceHandle = [IO.File]::Open($source, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)",
+                "    try {",
+                "        if ($expectedSha256) {",
+                "            $actualSha256 = (Get-FileHash -InputStream $sourceHandle -Algorithm SHA256).Hash.ToLowerInvariant()",
+                "            if ($actualSha256 -ne $expectedSha256) { throw 'Update package changed after verification.' }",
+                "            $sourceHandle.Position = 0",
+                "        }",
+                "        Log 'Launching installer'",
+                "        $process = Start-Process -FilePath $source -ArgumentList $silentArgs -Verb runAs -Wait -PassThru",
+                "        if ($process -and $process.ExitCode -ne 0) { throw \"Installer exited with code $($process.ExitCode)\" }",
+                "    } finally {",
+                "        $sourceHandle.Dispose()",
+                "    }",
                 "    Log 'Installer completed'",
                 "    $installedExe = Find-InstalledApricotExe",
                 "    if (-not $installedExe) { $installedExe = Join-Path $installDir 'ApricotPlayer.exe' }",
@@ -773,13 +915,12 @@ class AppUpdaterMixin:
                 "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
             ]
         )
-        script_path.write_text(script, encoding="utf-8-sig")
-        return script_path
+        return cls.write_secure_update_script(script, "apricotplayer-installer-update-")
 
 
-    @staticmethod
-    def launch_update_script(script_path: Path) -> None:
-        powershell = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
+    @classmethod
+    def launch_update_script(cls, script_path: Path) -> None:
+        powershell = cls.trusted_powershell_executable()
         if not powershell:
             raise RuntimeError("PowerShell was not found")
         args = [powershell, "-NoProfile"]
@@ -791,10 +932,19 @@ class AppUpdaterMixin:
     @staticmethod
     def log_update_event(message: str) -> None:
         try:
-            APP_DIR.mkdir(parents=True, exist_ok=True)
-            line = f"{datetime.now(timezone.utc).isoformat()} {message}\n"
-            with UPDATE_LOG_FILE.open("a", encoding="utf-8") as handle:
-                handle.write(line)
+            with _UPDATE_LOG_LOCK:
+                APP_DIR.mkdir(parents=True, exist_ok=True)
+                if UPDATE_LOG_FILE.exists() and UPDATE_LOG_FILE.stat().st_size > UPDATE_LOG_MAX_BYTES:
+                    with UPDATE_LOG_FILE.open("rb") as source:
+                        source.seek(max(0, UPDATE_LOG_FILE.stat().st_size - UPDATE_LOG_TAIL_BYTES))
+                        tail = source.read(UPDATE_LOG_TAIL_BYTES)
+                    UPDATE_LOG_FILE.write_text(
+                        "Older update log entries were truncated.\n" + tail.decode("utf-8", errors="replace"),
+                        encoding="utf-8",
+                    )
+                line = f"{datetime.now(timezone.utc).isoformat()} {message}\n"
+                with UPDATE_LOG_FILE.open("a", encoding="utf-8") as handle:
+                    handle.write(line)
         except Exception:
             pass
 
@@ -844,7 +994,10 @@ class AppUpdaterMixin:
         )
         try:
             with self.open_url(latest_request, timeout=30) as response:
-                release = json.loads(response.read().decode("utf-8"))
+                self.validate_trusted_https_url(response.geturl(), {"github.com"}, "GitHub release metadata")
+                release = json.loads(
+                    self.read_response_limited(response, UPDATE_METADATA_MAX_BYTES, "GitHub release metadata").decode("utf-8", errors="replace")
+                )
             if isinstance(release, dict) and not release.get("draft"):
                 return release
         except Exception as exc:
@@ -856,7 +1009,10 @@ class AppUpdaterMixin:
     def fetch_public_releases(self) -> list[dict]:
         request = Request(GITHUB_RELEASES_API_URL, headers=self.github_headers(""))
         with self.open_url(request, timeout=30) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+            self.validate_trusted_https_url(response.geturl(), {"github.com"}, "GitHub release metadata")
+            payload = json.loads(
+                self.read_response_limited(response, UPDATE_METADATA_MAX_BYTES, "GitHub release metadata").decode("utf-8", errors="replace")
+            )
         channel = self.normalized_update_channel_value(getattr(self.settings, "update_channel", ""))
         if not isinstance(payload, list):
             releases = []

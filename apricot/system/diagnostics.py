@@ -12,6 +12,9 @@ from urllib.parse import urlparse, urlunparse
 from apricot.constants import *
 
 _RE_URL = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
+_RE_SECRET_FIELD = re.compile(
+    r"(?im)\b(cookie|authorization|proxy-authorization|x-api-key|youtube_data_api_key)\s*[:=]\s*[^\r\n]+"
+)
 
 
 class DiagnosticsMixin:
@@ -155,7 +158,7 @@ class DiagnosticsMixin:
             self.diagnostic_line("Cookies file configured", bool(getattr(self.settings, "cookies_file", ""))),
             self.diagnostic_line("Cookies file", getattr(self.settings, "cookies_file", "")),
             self.diagnostic_line("Cookies source file", getattr(self.settings, "cookies_source_file", "")),
-            self.diagnostic_line("Cookies source signature", getattr(self.settings, "cookies_source_signature", "")),
+            self.diagnostic_line("Cookies source signature configured", bool(getattr(self.settings, "cookies_source_signature", ""))),
             self.diagnostic_line("Cookies source refresh error", getattr(self, "cookie_source_refresh_error", "")),
             self.diagnostic_line("Cookies browser", getattr(self.settings, "cookies_from_browser", "")),
             self.diagnostic_line("Cookies browser profile", getattr(self.settings, "cookies_browser_profile", "")),
@@ -175,7 +178,16 @@ class DiagnosticsMixin:
 
     def diagnostic_file_tail(self, path: Path, line_count: int = 50) -> str:
         try:
-            text = path.read_text(encoding="utf-8", errors="replace")
+            with path.open("rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                size = handle.tell()
+                start = max(0, size - DIAGNOSTIC_LOG_TAIL_MAX_BYTES)
+                handle.seek(start)
+                raw = handle.read(DIAGNOSTIC_LOG_TAIL_MAX_BYTES)
+            if start > 0:
+                first_newline = raw.find(b"\n")
+                raw = raw[first_newline + 1 :] if first_newline >= 0 else b""
+            text = raw.decode("utf-8", errors="replace")
         except Exception:
             return ""
         lines = text.splitlines()[-line_count:]
@@ -228,8 +240,6 @@ class DiagnosticsMixin:
             return "yes" if value else "no"
         if value is None:
             return "none"
-        if isinstance(value, Path):
-            return str(value)
         if isinstance(value, float):
             return f"{value:.3f}".rstrip("0").rstrip(".")
         if isinstance(value, (dict, list, tuple)):
@@ -255,10 +265,28 @@ class DiagnosticsMixin:
         if len(path) > 100:
             path = path[:97] + "..."
         query_state = "yes" if parsed.query else "no"
-        return f"{parsed.scheme}://{parsed.netloc}{path} (query={query_state}, length={len(url)})"
+        host = parsed.hostname or ""
+        try:
+            port = parsed.port
+        except ValueError:
+            port = None
+        if port:
+            host = f"{host}:{port}"
+        return f"{parsed.scheme}://{host}{path} (query={query_state}, length={len(url)})"
 
     def diagnostic_redact_text(self, text: str) -> str:
-        return _RE_URL.sub(lambda match: self.diagnostic_redact_url(match.group(0)), str(text or ""))
+        redacted = _RE_URL.sub(lambda match: self.diagnostic_redact_url(match.group(0)), str(text or ""))
+        redacted = _RE_SECRET_FIELD.sub(lambda match: f"{match.group(1)}: <redacted>", redacted)
+        roots = {
+            str(os.environ.get("APPDATA") or ""): "%APPDATA%",
+            str(os.environ.get("LOCALAPPDATA") or ""): "%LOCALAPPDATA%",
+            str(os.environ.get("USERPROFILE") or Path.home()): "%USERPROFILE%",
+            str(os.environ.get("TEMP") or ""): "%TEMP%",
+        }
+        for root, replacement in sorted(roots.items(), key=lambda item: len(item[0]), reverse=True):
+            if root:
+                redacted = re.sub(re.escape(root), lambda _match, value=replacement: value, redacted, flags=re.IGNORECASE)
+        return redacted
 
     @staticmethod
     def diagnostic_redact_url(url: str) -> str:
@@ -266,6 +294,21 @@ class DiagnosticsMixin:
             parsed = urlparse(url)
         except Exception:
             return url
-        if not parsed.query:
-            return url
-        return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, "...", parsed.fragment))
+        host = parsed.hostname or ""
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        try:
+            port = parsed.port
+        except ValueError:
+            port = None
+        netloc = f"{host}:{port}" if port else host
+        return urlunparse(
+            (
+                parsed.scheme,
+                netloc,
+                parsed.path,
+                parsed.params,
+                "..." if parsed.query else "",
+                "..." if parsed.fragment else "",
+            )
+        )

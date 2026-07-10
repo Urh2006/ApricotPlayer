@@ -18,6 +18,9 @@ if (-not $AppVersion) {
     }
     $AppVersion = $versionLine.Matches[0].Groups[1].Value
 }
+if ($AppVersion -notmatch '^\d+\.\d+\.\d+(?:\.\d+)?(?:-(?:alpha|beta|rc)(?:\.\d+)?)?$') {
+    throw "Invalid ApricotPlayer version: $AppVersion"
+}
 
 if (-not $ExecutablePath) {
     $ExecutablePath = Join-Path $projectRoot "release-dist\ApricotPlayer.exe"
@@ -50,10 +53,10 @@ New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 
 if (-not $InnoSetupCompiler) {
     $candidates = @(
-        (Get-Command "ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue),
         "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
         "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
-        "C:\Program Files\Inno Setup 6\ISCC.exe"
+        "C:\Program Files\Inno Setup 6\ISCC.exe",
+        (Get-Command "ISCC.exe" -CommandType Application -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue)
     ) | Where-Object { $_ -and (Test-Path $_) }
 
     if (-not $candidates) {
@@ -61,6 +64,11 @@ if (-not $InnoSetupCompiler) {
     }
 
     $InnoSetupCompiler = @($candidates)[0]
+}
+$InnoSetupCompiler = (Resolve-Path -LiteralPath $InnoSetupCompiler).Path
+$compilerSignature = Get-AuthenticodeSignature -LiteralPath $InnoSetupCompiler
+if ($compilerSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+    throw "Refusing to run an unsigned or invalid Inno Setup compiler: $InnoSetupCompiler"
 }
 
 $issPath = Join-Path $projectRoot "installer\ApricotPlayer.iss"

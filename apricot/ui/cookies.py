@@ -275,6 +275,9 @@ class CookiesUI:
         if not domain:
             return None
         path = str(item.get("path") or item.get("Path") or "/")
+        value = str(value)
+        if not self.cookie_fields_are_safe(name, value, domain, path):
+            return None
         expires = None
         for key in ("expirationDate", "expiration_date", "expires", "expiry", "expiration", "Expiry"):
             if key in item:
@@ -286,7 +289,7 @@ class CookiesUI:
         return cookiejar.Cookie(
             version=0,
             name=name,
-            value=str(value),
+            value=value,
             port=None,
             port_specified=False,
             domain=domain,
@@ -302,6 +305,10 @@ class CookiesUI:
             rest={"HttpOnly": None} if http_only else {},
             rfc2109=False,
         )
+
+    @staticmethod
+    def cookie_fields_are_safe(name: str, value: str, domain: str, path: str) -> bool:
+        return all(not re.search(r"[\x00-\x1f\x7f]", str(field or "")) for field in (name, value, domain, path))
 
     def iter_cookie_json_items(self, data, default_domain: str = ""):
         if isinstance(data, list):
@@ -377,17 +384,25 @@ class CookiesUI:
 
     def cookie_jar_from_netscape_text(self, text: str) -> http.cookiejar.MozillaCookieJar:
         normalized = self.normalized_netscape_cookie_text(text)
-        temp_path = CACHED_COOKIES_FILE.with_suffix(".import.tmp")
-        temp_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path.write_text(normalized, encoding="utf-8", newline="\n")
+        CACHED_COOKIES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temp_name = tempfile.mkstemp(prefix=".cookies-import-", suffix=".tmp", dir=str(CACHED_COOKIES_FILE.parent))
+        temp_path = Path(temp_name)
         try:
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+                descriptor = -1
+                handle.write(normalized)
             cookiejar = import_module("http.cookiejar")
             jar = cookiejar.MozillaCookieJar()
             jar.load(str(temp_path), ignore_discard=True, ignore_expires=True)
             return jar
         finally:
+            if descriptor >= 0:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
             try:
-                temp_path.unlink()
+                temp_path.unlink(missing_ok=True)
             except OSError:
                 pass
 
@@ -419,15 +434,26 @@ class CookiesUI:
         return sum(1 for _cookie in cookie_jar)
 
     def save_cookie_jar_to_cache(self, cookie_jar) -> None:
+        cookie_jar = self.youtube_cookie_jar(cookie_jar)
         CACHED_COOKIES_FILE.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = CACHED_COOKIES_FILE.with_suffix(".txt.tmp")
-        cookie_jar.save(str(temp_path), ignore_discard=True, ignore_expires=True)
-        os.replace(temp_path, CACHED_COOKIES_FILE)
+        descriptor, temp_name = tempfile.mkstemp(prefix=".cookies-save-", suffix=".tmp", dir=str(CACHED_COOKIES_FILE.parent))
+        os.close(descriptor)
+        temp_path = Path(temp_name)
+        try:
+            cookie_jar.save(str(temp_path), ignore_discard=True, ignore_expires=True)
+            os.replace(temp_path, CACHED_COOKIES_FILE)
+        finally:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
         self.clear_cookie_login_cache()
         self.clear_cookie_dependent_stream_cache()
 
     def import_cookie_file_to_cache(self, source_path: str | Path) -> dict:
         source = Path(source_path)
+        if source.stat().st_size > COOKIES_FILE_MAX_BYTES:
+            raise RuntimeError(self.t("cookies_file_unsupported"))
         text = self.decode_cookie_file_bytes(source.read_bytes())
         import_kind = "netscape"
         jar: http.cookiejar.MozillaCookieJar | None = None
@@ -444,6 +470,7 @@ class CookiesUI:
         if jar is None:
             jar = self.cookie_jar_from_header_text(text)
             import_kind = "header"
+        jar = self.youtube_cookie_jar(jar)
         total_count = self.cookie_jar_total(jar)
         if total_count <= 0:
             raise RuntimeError(self.t("cookies_file_unsupported"))
@@ -634,10 +661,43 @@ class CookiesUI:
                 return str(candidate)
         return ""
 
+    @staticmethod
+    def validate_devtools_websocket_url(websocket_url: str, expected_port: int) -> str:
+        websocket = urlparse(str(websocket_url or ""))
+        try:
+            port = websocket.port
+        except ValueError:
+            port = None
+        if (
+            websocket.scheme.lower() not in {"ws", "wss"}
+            or (websocket.hostname or "").lower() not in {"127.0.0.1", "localhost", "::1"}
+            or websocket.username is not None
+            or websocket.password is not None
+            or port != int(expected_port)
+        ):
+            raise RuntimeError("browser devtools websocket is missing")
+        return websocket_url
+
     async def devtools_get_all_cookies(self, websocket_url: str) -> list[dict]:
         websockets = import_module("websockets")
         async with websockets.connect(websocket_url, max_size=32_000_000) as ws:
-            await ws.send(json.dumps({"id": 1, "method": "Storage.getCookies", "params": {}}))
+            await ws.send(
+                json.dumps(
+                    {
+                        "id": 1,
+                        "method": "Network.getCookies",
+                        "params": {
+                            "urls": [
+                                "https://www.youtube.com/",
+                                "https://music.youtube.com/",
+                                "https://accounts.google.com/",
+                                "https://www.google.com/",
+                                "https://redirector.googlevideo.com/",
+                            ]
+                        },
+                    }
+                )
+            )
             while True:
                 payload = json.loads(await ws.recv())
                 if payload.get("id") != 1:
@@ -650,40 +710,33 @@ class CookiesUI:
         cookiejar = import_module("http.cookiejar")
         jar = cookiejar.MozillaCookieJar()
         for item in cookies:
-            name = str(item.get("name") or "")
-            value = str(item.get("value") or "")
-            domain = str(item.get("domain") or "")
-            if not name or not domain:
-                continue
-            path = str(item.get("path") or "/")
-            expires_value = item.get("expires")
-            try:
-                expires = int(float(expires_value)) if expires_value not in (None, "", -1) else None
-            except (TypeError, ValueError):
-                expires = None
-            if expires is not None and expires <= 0:
-                expires = None
-            cookie = cookiejar.Cookie(
-                version=0,
-                name=name,
-                value=value,
-                port=None,
-                port_specified=False,
-                domain=domain,
-                domain_specified=domain.startswith("."),
-                domain_initial_dot=domain.startswith("."),
-                path=path,
-                path_specified=True,
-                secure=bool(item.get("secure")),
-                expires=expires,
-                discard=expires is None,
-                comment=None,
-                comment_url=None,
-                rest={"HttpOnly": None} if item.get("httpOnly") else {},
-                rfc2109=False,
-            )
-            jar.set_cookie(cookie)
+            cookie = self.cookie_from_mapping(item)
+            if cookie and self.cookie_domain_is_youtube_related(cookie.domain):
+                jar.set_cookie(cookie)
         return jar
+
+    @staticmethod
+    def cookie_domain_is_youtube_related(domain: str) -> bool:
+        return any(CookiesUI.cookie_domain_matches(domain, root) for root in YOUTUBE_COOKIE_DOMAIN_ROOTS)
+
+    @staticmethod
+    def cookie_domain_matches(domain: str, root: str) -> bool:
+        host = str(domain or "").strip().lower().lstrip(".").rstrip(".")
+        normalized_root = str(root or "").strip().lower().lstrip(".").rstrip(".")
+        return bool(host and normalized_root) and (host == normalized_root or host.endswith("." + normalized_root))
+
+    def youtube_cookie_jar(self, cookie_jar) -> http.cookiejar.MozillaCookieJar:
+        cookiejar = import_module("http.cookiejar")
+        filtered = cookiejar.MozillaCookieJar()
+        for cookie in cookie_jar:
+            if self.cookie_domain_is_youtube_related(str(getattr(cookie, "domain", "") or "")) and self.cookie_fields_are_safe(
+                str(getattr(cookie, "name", "") or ""),
+                str(getattr(cookie, "value", "") or ""),
+                str(getattr(cookie, "domain", "") or ""),
+                str(getattr(cookie, "path", "") or "/"),
+            ):
+                filtered.set_cookie(cookie)
+        return filtered
 
     def export_chromium_cookies_via_devtools(self, browser: str, profile: str | None, headless: bool = True) -> tuple[str, object]:
         executable = self.cookie_browser_executable(browser)
@@ -694,6 +747,7 @@ class CookiesUI:
         args = [
             executable,
             f"--remote-debugging-port={port}",
+            "--remote-debugging-address=127.0.0.1",
             *base_args,
             "https://www.youtube.com/",
         ]
@@ -711,8 +765,7 @@ class CookiesUI:
             if not version_payload:
                 raise RuntimeError("browser devtools endpoint did not start")
             websocket_url = str(version_payload.get("webSocketDebuggerUrl") or "")
-            if not websocket_url:
-                raise RuntimeError("browser devtools websocket is missing")
+            self.validate_devtools_websocket_url(websocket_url, port)
             asyncio_module = import_module("asyncio")
             cookies = asyncio_module.run(self.devtools_get_all_cookies(websocket_url))
             cookie_jar = self.cdp_cookies_to_cookie_jar(cookies)
@@ -755,7 +808,10 @@ class CookiesUI:
         for cookie in cookie_jar:
             domain = str(getattr(cookie, "domain", "") or "").lower()
             name = str(getattr(cookie, "name", "") or "").lower()
-            if ("google.com" in domain or "youtube.com" in domain) and name in auth_names:
+            if (
+                CookiesUI.cookie_domain_matches(domain, "google.com")
+                or CookiesUI.cookie_domain_matches(domain, "youtube.com")
+            ) and name in auth_names:
                 return True
         return False
 
@@ -769,10 +825,12 @@ class CookiesUI:
             total_count += 1
             domain = str(getattr(cookie, "domain", "") or "").lower()
             name = str(getattr(cookie, "name", "") or "").lower()
-            if "youtube.com" in domain:
+            is_youtube = CookiesUI.cookie_domain_matches(domain, "youtube.com")
+            is_google = CookiesUI.cookie_domain_matches(domain, "google.com")
+            if is_youtube:
                 youtube_count += 1
                 score += 3
-            if "google.com" in domain or "youtube.com" in domain:
+            if is_google or is_youtube:
                 score += 1
                 if name in auth_names:
                     score += 100
@@ -858,9 +916,7 @@ class CookiesUI:
             detail = "\n".join(details)
             raise RuntimeError(f"{self.t('browser_cookies_no_youtube')}\n\n{self.t('cookie_export_diagnostics', details=detail)}")
         _score, label, cookie_jar, _summary = best
-        CACHED_COOKIES_FILE.parent.mkdir(parents=True, exist_ok=True)
-        cookie_jar.save(str(CACHED_COOKIES_FILE), ignore_discard=True, ignore_expires=True)
-        self.clear_cookie_login_cache()
+        self.save_cookie_jar_to_cache(cookie_jar)
         self.settings.cookies_file = str(CACHED_COOKIES_FILE)
         self.settings.cookies_source_file = ""
         self.settings.cookies_source_signature = ""

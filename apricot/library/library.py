@@ -1341,8 +1341,13 @@ class LibraryMixin:
             path = dialog.GetPath()
             
         try:
-            tree = ET.parse(path)
-            root = tree.getroot()
+            opml_path = Path(path)
+            if opml_path.stat().st_size > OPML_MAX_BYTES:
+                raise RuntimeError("OPML file is larger than the allowed limit")
+            raw_opml = opml_path.read_bytes()
+            if len(raw_opml) > OPML_MAX_BYTES:
+                raise RuntimeError("OPML file is larger than the allowed limit")
+            root = self.parse_xml_bytes_safely(raw_opml, "OPML file")
             
             feed_urls = []
             for outline in root.findall(".//outline"):
@@ -1842,12 +1847,12 @@ class LibraryMixin:
 
 
     def fetch_rss_feed(self, url: str) -> dict:
+        url = self.validate_remote_http_url(url, "RSS feed URL")
         request = Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
         with self.open_url(request, timeout=30) as response:
-            final_url = response.geturl()
-            raw = response.read(3_000_000)
-        ET = import_module("xml.etree.ElementTree")
-        root = ET.fromstring(raw)
+            final_url = self.validate_remote_http_url(response.geturl(), "RSS feed redirect URL")
+            raw = self.read_response_limited(response, RSS_FEED_MAX_BYTES, "RSS feed")
+        root = self.parse_xml_bytes_safely(raw, "RSS feed")
         title, site_url, items = self.parse_feed_root(root, final_url)
         return {
             "title": title or self.t("rss_unknown_feed_title"),
@@ -2106,7 +2111,10 @@ class LibraryMixin:
             url = f"https://itunes.apple.com/us/rss/toppodcasts/limit=40/genre={genre_id}/json"
             request = Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
             with self.open_url(request, timeout=20) as response:
-                payload = json.loads(response.read().decode("utf-8", errors="replace"))
+                self.validate_trusted_https_url(response.geturl(), {"apple.com"}, "Apple Podcasts")
+                payload = json.loads(
+                    self.read_response_limited(response, REMOTE_JSON_MAX_BYTES, "Apple Podcasts response").decode("utf-8", errors="replace")
+                )
 
             feed = payload.get("feed", {})
             entries = feed.get("entry", [])
@@ -2142,7 +2150,10 @@ class LibraryMixin:
             lookup_url = f"https://itunes.apple.com/lookup?id={','.join(podcast_ids)}"
             request_lookup = Request(lookup_url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
             with self.open_url(request_lookup, timeout=20) as response_lookup:
-                payload_lookup = json.loads(response_lookup.read().decode("utf-8", errors="replace"))
+                self.validate_trusted_https_url(response_lookup.geturl(), {"apple.com"}, "Apple Podcasts")
+                payload_lookup = json.loads(
+                    self.read_response_limited(response_lookup, REMOTE_JSON_MAX_BYTES, "Apple Podcasts lookup response").decode("utf-8", errors="replace")
+                )
 
             lookup_results = payload_lookup.get("results", [])
             id_to_rank = {pid: idx for idx, pid in enumerate(podcast_ids)}

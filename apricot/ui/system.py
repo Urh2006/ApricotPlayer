@@ -3,6 +3,8 @@ import threading
 import wx
 import os
 import re
+import secrets
+import stat
 from pathlib import Path
 from apricot.ui.misc import MiscUI
 
@@ -249,7 +251,7 @@ class SystemUI:
 
     @staticmethod
     def temporary_conversion_path(path: Path) -> Path:
-        return path.with_name(f"{path.stem}.apricot-converting{path.suffix}")
+        return path.with_name(f".{path.stem}.apricot-converting-{secrets.token_hex(6)}{path.suffix}")
 
     @staticmethod
     def canonical_channel_url(url: str) -> str:
@@ -283,7 +285,11 @@ class SystemUI:
         value = str(value or "").strip()
         if not value:
             return ""
-        return urljoin(base_url, value)
+        resolved = urljoin(base_url, value)
+        parsed = urlparse(resolved)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            return ""
+        return resolved
 
     def channel_tab_url(self, item: dict, tab: str) -> str:
         url = str(item.get("url") or item.get("channel_url") or "").strip()
@@ -350,6 +356,8 @@ class SystemUI:
                 text = path_text
         elif re.match(r"^[a-z][a-z0-9+.-]*://", text, re.IGNORECASE):
             return None
+        if SystemUI.local_path_is_device_namespace(text):
+            return None
         candidate = Path(text).expanduser()
         try:
             if candidate.exists() and candidate.is_file():
@@ -357,6 +365,11 @@ class SystemUI:
         except OSError:
             return None
         return None
+
+    @staticmethod
+    def local_path_is_device_namespace(value: str) -> bool:
+        normalized = str(value or "").replace("/", "\\").lower()
+        return normalized.startswith("\\\\.\\") or normalized.startswith("\\\\?\\globalroot\\") or normalized.startswith("\\\\?\\pipe\\")
 
     @staticmethod
     def looks_like_local_media_path(value: str) -> bool:
@@ -814,7 +827,32 @@ class SystemUI:
         return stream_url, headers, selected_info
 
     def cache_folder_path(self) -> Path:
-        return Path(str(getattr(self.settings, "cache_folder", "") or DEFAULT_CACHE_DIR)).expanduser()
+        configured = Path(str(getattr(self.settings, "cache_folder", "") or DEFAULT_CACHE_DIR)).expanduser()
+        try:
+            if configured.resolve() == DEFAULT_CACHE_DIR.resolve():
+                return configured
+        except OSError:
+            if os.path.normcase(os.path.abspath(str(configured))) == os.path.normcase(os.path.abspath(str(DEFAULT_CACHE_DIR))):
+                return configured
+        if configured.name.casefold() == CUSTOM_MPV_CACHE_SUBDIR.casefold():
+            candidate = configured
+        else:
+            # A custom setting is treated as a root. mpv cache cleanup must never
+            # delete unrelated files placed directly in a user-selected folder.
+            candidate = configured / CUSTOM_MPV_CACHE_SUBDIR
+        if self.cache_path_is_link(candidate):
+            return DEFAULT_CACHE_DIR
+        return candidate
+
+    @staticmethod
+    def cache_path_is_link(path: Path) -> bool:
+        try:
+            metadata = os.lstat(path)
+        except OSError:
+            return False
+        attributes = int(getattr(metadata, "st_file_attributes", 0) or 0)
+        reparse_flag = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400) or 0x400)
+        return stat.S_ISLNK(metadata.st_mode) or bool(attributes & reparse_flag)
 
     def update_details_text(self) -> None:
         if not self.video_details:
@@ -865,12 +903,13 @@ class SystemUI:
         threading.Thread(target=self.save_edited_local_file_worker, args=(source, replace_original), daemon=True).start()
 
     def save_edited_local_file_worker(self, source: Path, replace_original: bool = False) -> None:
+        temp_output: Path | None = None
         try:
             ffmpeg = self.ffmpeg_executable()
             if not ffmpeg:
                 raise RuntimeError("FFmpeg was not found")
             output = self.edited_output_path(source, replace_original)
-            temp_output = output.with_name(f"{output.stem}.apricot-temp{output.suffix}") if replace_original else output
+            temp_output = self.temporary_conversion_path(output) if replace_original else output
             args = self.local_edit_ffmpeg_args(ffmpeg, source, temp_output)
             creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
             result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=creationflags)
@@ -883,6 +922,11 @@ class SystemUI:
             else:
                 wx.CallAfter(self.announce_player, self.t("edit_save_done", title=output.name))
         except Exception as exc:
+            if replace_original and temp_output is not None:
+                try:
+                    temp_output.unlink(missing_ok=True)
+                except Exception:
+                    pass
             wx.CallAfter(self.message, self.t("edit_save_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
     def edited_output_path(self, source: Path, replace_original: bool = False) -> Path:

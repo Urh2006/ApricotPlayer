@@ -280,7 +280,10 @@ class SearchMixin:
             url = f"https://itunes.apple.com/search?{urlencode(params)}"
             request = Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
             with self.open_url(request, timeout=30) as response:
-                payload = json.loads(response.read().decode("utf-8", errors="replace"))
+                self.validate_trusted_https_url(response.geturl(), {"apple.com"}, "Apple Podcasts")
+                payload = json.loads(
+                    self.read_response_limited(response, REMOTE_JSON_MAX_BYTES, "podcast search response").decode("utf-8", errors="replace")
+                )
             results = [self.normalize_podcast_result(item) for item in payload.get("results") or []]
             results = [item for item in results if item.get("url")]
             self.ui_queue.put(("podcast_results", {"query": query, "results": results}))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from apricot import __version__ as APP_VERSION
 import json
 import os
 import queue
@@ -227,7 +228,6 @@ APP_NAME = "ApricotPlayer"
 # Single source of truth: apricot/__init__.py  ←  bump only that file per release.
 # This module derives APP_VERSION and the human-readable label from it so that
 # the window title, update comparisons, and installer metadata always agree.
-from apricot import __version__ as APP_VERSION  # e.g. "0.9.44-beta.8"
 def _make_version_label(v: str) -> str:
     # "0.9.44-beta.8"  →  "0.9.44 Beta 8"
     # "1.0.0"          →  "1.0.0"
@@ -264,10 +264,34 @@ LEGACY_SETTINGS_FILE = LEGACY_APP_DIR / "settings.json"
 LEGACY_FAVORITES_FILE = LEGACY_APP_DIR / "favorites.json"
 DEFAULT_DOWNLOAD_ROOT = Path.home() / "Downloads" / "ApricotPlayer"
 DEFAULT_CACHE_DIR = APP_DIR / "cache"
+CUSTOM_MPV_CACHE_SUBDIR = "ApricotPlayer-mpv-cache"
 DEFAULT_FILENAME_TEMPLATE = "%(title)s.%(ext)s"
 OLD_FILENAME_TEMPLATE = "%(title)s [%(id)s].%(ext)s"
+WINDOWS_RESERVED_PATH_STEMS = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{index}" for index in range(1, 10)}
+    | {f"lpt{index}" for index in range(1, 10)}
+)
 RESULTS_PAGE_SIZE = 20
 RESULT_METADATA_HYDRATION_BATCH = 5
+LOCAL_FOLDER_CACHE_MAX_ENTRIES = 3
+RSS_FEED_MAX_BYTES = 3_000_000
+OPML_MAX_BYTES = 5_000_000
+PODCAST_CHAPTERS_MAX_BYTES = 1_000_000
+TRANSCRIPT_MAX_BYTES = 5_000_000
+LYRICS_RESPONSE_MAX_BYTES = 2_000_000
+REMOTE_JSON_MAX_BYTES = 10_000_000
+REMOTE_WEB_PAGE_MAX_BYTES = 12_000_000
+DEVTOOLS_JSON_MAX_BYTES = 1_000_000
+COOKIES_FILE_MAX_BYTES = 64 * 1024 * 1024
+YOUTUBE_COOKIE_DOMAIN_ROOTS = (
+    "google.com",
+    "googlevideo.com",
+    "youtube.com",
+    "youtube-nocookie.com",
+    "ytimg.com",
+)
+UPDATE_METADATA_MAX_BYTES = 4_000_000
 VIDEO_DOWNLOAD_MIN_FRAGMENTS = 8
 VIDEO_DOWNLOAD_HTTP_CHUNK_SIZE = 10 << 20
 VIDEO_DOWNLOAD_BUFFER_SIZE = 1024 << 10
@@ -463,6 +487,20 @@ LEGACY_PORTABLE_ZIP_ASSET_NAME = "ApricotPlayerPortable.zip"
 UPDATE_LOG_FILE = APP_DIR / "updater.log"
 UPDATE_DOWNLOAD_CHUNK_SIZE = 1024 * 512
 UPDATE_PROGRESS_MIN_INTERVAL = 0.35
+UPDATE_ASSET_MAX_BYTES = 1024 * 1024 * 1024
+YTDLP_WHEEL_MAX_BYTES = 64 * 1024 * 1024
+YTDLP_WHEEL_MAX_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
+YTDLP_WHEEL_MAX_MEMBER_BYTES = 64 * 1024 * 1024
+YTDLP_WHEEL_MAX_COMPRESSION_RATIO = 100
+UPDATE_ZIP_MAX_ENTRIES = 10_000
+UPDATE_ZIP_MAX_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
+UPDATE_ZIP_MAX_MEMBER_BYTES = 512 * 1024 * 1024
+UPDATE_ZIP_MAX_COMPRESSION_RATIO = 200
+DIAGNOSTIC_LOG_TAIL_MAX_BYTES = 256 * 1024
+UPDATE_LOG_MAX_BYTES = 2 * 1024 * 1024
+UPDATE_LOG_TAIL_BYTES = 512 * 1024
+ACTIVATION_SIGNAL_MAX_BYTES = 64 * 1024
+ACTIVATION_SIGNAL_MAX_AGE_SECONDS = 30
 YTDLP_PYPI_JSON_URL = "https://pypi.org/pypi/yt-dlp/json"
 PLAYBACK_SPEED_STEPS = [0.25, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1.0, 1.1, 1.2, 1.25, 1.3, 1.4, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0]
 PITCH_STEPS = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0]
@@ -519,6 +557,8 @@ LEGACY_VIDEO_FORMAT_MAP = {
     "worst": VIDEO_FORMAT_SMALLEST,
 }
 MPV_IPC_TIMEOUT_SECONDS = 2.5
+MPV_IPC_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+MPV_IPC_POLL_INTERVAL_SECONDS = 0.001
 MPV_PITCH_RETRY_ATTEMPTS = 8
 MPV_PITCH_RETRY_DELAY_SECONDS = 0.12
 VK_OEM_4_LEFT_BRACKET = 0xDB

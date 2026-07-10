@@ -4,6 +4,8 @@ import os
 import queue
 import random
 import re
+import secrets
+import stat as stat_module
 import http.cookiejar
 import sys
 import threading
@@ -22,6 +24,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, parse_qsl, unquote, urlencode, urljoin, urlparse
 import wx
 import wx.adv
+from defusedxml.common import DefusedXmlException
+from defusedxml.ElementTree import fromstring as safe_xml_fromstring
 try:
     import winreg
 except ImportError:
@@ -43,17 +47,161 @@ _RE_ISO8601_DURATION = re.compile(r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d
 
 class UtilsMixin:
 
+    @staticmethod
+    def validate_zip_member_path(member_name: str) -> None:
+        normalized = str(member_name or "").replace("\\", "/")
+        if not normalized or "\x00" in normalized or normalized.startswith("/") or re.match(r"^[A-Za-z]:", normalized):
+            raise RuntimeError("zip package contains an unsafe absolute path")
+        parts = [part for part in normalized.split("/") if part]
+        if not parts or any(part in {".", ".."} for part in parts):
+            raise RuntimeError("zip package contains an unsafe relative path")
+        for part in parts:
+            if ":" in part or part.rstrip(" .") != part:
+                raise RuntimeError("zip package contains an unsafe Windows path")
+            if part.split(".", 1)[0].casefold() in WINDOWS_RESERVED_PATH_STEMS:
+                raise RuntimeError("zip package contains a reserved Windows path")
+
+
     @classmethod
-    def safe_extract_zip(cls, archive: zipfile.ZipFile, target_dir: Path) -> None:
+    def validate_zip_archive(
+        cls,
+        archive: zipfile.ZipFile,
+        *,
+        max_entries: int = UPDATE_ZIP_MAX_ENTRIES,
+        max_uncompressed_bytes: int = UPDATE_ZIP_MAX_UNCOMPRESSED_BYTES,
+        max_member_bytes: int = UPDATE_ZIP_MAX_MEMBER_BYTES,
+        max_compression_ratio: int = UPDATE_ZIP_MAX_COMPRESSION_RATIO,
+    ) -> None:
+        members = archive.infolist()
+        if len(members) > max_entries:
+            raise RuntimeError("zip package contains too many entries")
+        total_size = 0
+        normalized_names: set[str] = set()
+        for member in members:
+            cls.validate_zip_member_path(member.filename)
+            normalized = "/".join(part for part in member.filename.replace("\\", "/").split("/") if part).casefold()
+            if normalized in normalized_names:
+                raise RuntimeError("zip package contains duplicate paths")
+            normalized_names.add(normalized)
+            if member.flag_bits & 0x1:
+                raise RuntimeError("zip package contains an encrypted entry")
+            unix_mode = (member.external_attr >> 16) & 0xFFFF
+            file_type = stat_module.S_IFMT(unix_mode)
+            if file_type not in {0, stat_module.S_IFREG, stat_module.S_IFDIR}:
+                raise RuntimeError("zip package contains a link or special file")
+            if member.file_size < 0 or member.file_size > max_member_bytes:
+                raise RuntimeError("zip package member is too large")
+            total_size += member.file_size
+            if total_size > max_uncompressed_bytes:
+                raise RuntimeError("zip package expands beyond the safe size limit")
+            if member.file_size > 1024 * 1024:
+                if member.compress_size <= 0 or member.file_size / member.compress_size > max_compression_ratio:
+                    raise RuntimeError("zip package has an unsafe compression ratio")
+
+
+    @classmethod
+    def safe_extract_zip(
+        cls,
+        archive: zipfile.ZipFile,
+        target_dir: Path,
+        **validation_limits: int,
+    ) -> None:
+        cls.validate_zip_archive(archive, **validation_limits)
         target_root = target_dir.resolve()
         for member in archive.infolist():
-            cls.validate_zip_member_path(member.filename)
             destination = (target_root / member.filename).resolve()
             try:
                 destination.relative_to(target_root)
             except ValueError:
                 raise RuntimeError("zip package member would extract outside the target directory") from None
         archive.extractall(target_root)
+
+
+    @staticmethod
+    def validate_remote_http_url(value: str, label: str = "URL") -> str:
+        text = str(value or "").strip()
+        parsed = urlparse(text)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            raise RuntimeError(f"{label} must use HTTP or HTTPS")
+        return text
+
+    @staticmethod
+    def validate_trusted_https_url(value: str, allowed_host_roots: set[str], label: str = "URL") -> str:
+        text = str(value or "").strip()
+        parsed = urlparse(text)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        roots = {str(root).lower().lstrip(".").rstrip(".") for root in allowed_host_roots}
+        if parsed.scheme.lower() != "https" or not host or not any(host == root or host.endswith("." + root) for root in roots):
+            raise RuntimeError(f"{label} redirected to an untrusted address")
+        return text
+
+    @staticmethod
+    def validate_loopback_http_url(value: str, expected_port: int, label: str = "URL") -> str:
+        text = str(value or "").strip()
+        parsed = urlparse(text)
+        try:
+            port = parsed.port
+        except ValueError:
+            port = None
+        if parsed.scheme.lower() != "http" or (parsed.hostname or "").lower() not in {"127.0.0.1", "localhost", "::1"} or port != int(expected_port):
+            raise RuntimeError(f"{label} left the expected local address")
+        return text
+
+    @classmethod
+    def open_http_url_in_browser(cls, value: str) -> bool:
+        url = cls.validate_remote_http_url(value)
+        return bool(import_module("webbrowser").open(url))
+
+
+    @staticmethod
+    def read_response_limited(response, maximum_bytes: int, label: str = "response") -> bytes:
+        maximum = max(1, int(maximum_bytes))
+        content_length = str(response.headers.get("Content-Length") or "").strip()
+        if content_length.isdigit() and int(content_length) > maximum:
+            raise RuntimeError(f"{label} is larger than the allowed limit")
+        data = response.read(maximum + 1)
+        if len(data) > maximum:
+            raise RuntimeError(f"{label} is larger than the allowed limit")
+        return data
+
+
+    @staticmethod
+    def parse_xml_bytes_safely(data: bytes, label: str = "XML") -> ET.Element:
+        raw = bytes(data or b"")
+        # Removing NULs also exposes declarations encoded as UTF-16/UTF-32.
+        inspection = raw.replace(b"\x00", b"")
+        if re.search(br"<!\s*(?:doctype|entity)\b", inspection, flags=re.IGNORECASE):
+            raise RuntimeError(f"{label} contains a disallowed DTD or entity declaration")
+        try:
+            return safe_xml_fromstring(raw, forbid_dtd=True, forbid_entities=True, forbid_external=True)
+        except (ET.ParseError, DefusedXmlException) as exc:
+            raise RuntimeError(f"{label} is not valid XML: {exc}") from exc
+
+
+    @staticmethod
+    def windows_system_executable(filename: str) -> str:
+        name = Path(str(filename or "")).name
+        if not name or name != str(filename or ""):
+            return ""
+        if os.name != "nt":
+            return shutil.which(name) or ""
+        system_root = Path(str(os.environ.get("SystemRoot") or r"C:\Windows"))
+        candidate = system_root / "System32" / name
+        return str(candidate) if candidate.is_file() else ""
+
+
+    @classmethod
+    def trusted_powershell_executable(cls) -> str:
+        if os.name != "nt":
+            return shutil.which("pwsh") or shutil.which("powershell") or ""
+        candidates = [
+            Path(str(os.environ.get("SystemRoot") or r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe",
+            Path(str(os.environ.get("ProgramFiles") or r"C:\Program Files")) / "PowerShell" / "7" / "pwsh.exe",
+        ]
+        for candidate in candidates:
+            if candidate.is_file():
+                return str(candidate)
+        return ""
 
 
 
@@ -334,7 +482,11 @@ class UtilsMixin:
 
     @staticmethod
     def make_ipc_path() -> str:
-        return rf"\\.\pipe\apricotplayer-{os.getpid()}" if os.name == "nt" else f"/tmp/apricotplayer-{os.getpid()}.sock"
+        token = secrets.token_hex(8)
+        if os.name == "nt":
+            return rf"\\.\pipe\apricotplayer-{os.getpid()}-{token}"
+        user_id = getattr(os, "getuid", lambda: 0)()
+        return str(Path(tempfile.gettempdir()) / f"apricotplayer-{user_id}-{os.getpid()}-{token}.sock")
 
 
 

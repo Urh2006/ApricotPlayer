@@ -35,7 +35,54 @@ except ImportError:
 from apricot.constants import *
 from apricot.locales import TEXT
 
+_DATA_FILE_LOCKS_GUARD = threading.Lock()
+
 class DataManagerMixin:
+
+    def data_file_lock(self, path: Path) -> threading.RLock:
+        locks = getattr(self, "_data_file_locks", None)
+        if locks is None:
+            with _DATA_FILE_LOCKS_GUARD:
+                locks = getattr(self, "_data_file_locks", None)
+                if locks is None:
+                    locks = {}
+                    self._data_file_locks = locks
+        key = os.path.normcase(os.path.abspath(str(path)))
+        with _DATA_FILE_LOCKS_GUARD:
+            lock = locks.get(key)
+            if lock is None:
+                lock = threading.RLock()
+                locks[key] = lock
+            return lock
+
+
+    def atomic_write_text(self, path: Path, text: str) -> None:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with self.data_file_lock(path):
+            descriptor, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+            temp_path = Path(temp_name)
+            try:
+                handle = os.fdopen(descriptor, "w", encoding="utf-8", newline="\n")
+                descriptor = -1
+                with handle:
+                    handle.write(text)
+                    handle.flush()
+                os.replace(temp_path, path)
+            finally:
+                if descriptor >= 0:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+
+    def atomic_write_json(self, path: Path, value, *, indent: int | None = 2) -> None:
+        self.atomic_write_text(path, json.dumps(value, indent=indent, ensure_ascii=False))
 
     def load_settings(self) -> Settings:
         backup_settings = SETTINGS_FILE.with_suffix(".json.bak")
@@ -135,15 +182,14 @@ class DataManagerMixin:
             return
         APP_DIR.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(asdict(self.settings), indent=2, ensure_ascii=False)
-        temp_file = SETTINGS_FILE.with_suffix(".json.tmp")
         backup_file = SETTINGS_FILE.with_suffix(".json.bak")
-        temp_file.write_text(payload, encoding="utf-8")
-        if SETTINGS_FILE.exists():
-            try:
-                shutil.copy2(SETTINGS_FILE, backup_file)
-            except OSError:
-                pass
-        os.replace(temp_file, SETTINGS_FILE)
+        with self.data_file_lock(SETTINGS_FILE):
+            if SETTINGS_FILE.exists():
+                try:
+                    self.atomic_write_text(backup_file, SETTINGS_FILE.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError):
+                    pass
+            self.atomic_write_text(SETTINGS_FILE, payload)
 
 
     def load_favorites(self) -> list[dict]:
@@ -158,8 +204,7 @@ class DataManagerMixin:
 
 
     def save_favorites(self) -> None:
-        APP_DIR.mkdir(parents=True, exist_ok=True)
-        FAVORITES_FILE.write_text(json.dumps(self.favorites, indent=2, ensure_ascii=False), encoding="utf-8")
+        self.atomic_write_json(FAVORITES_FILE, self.favorites)
 
 
     def load_bookmarks(self) -> list[dict]:
@@ -167,8 +212,7 @@ class DataManagerMixin:
 
 
     def save_bookmarks(self) -> None:
-        APP_DIR.mkdir(parents=True, exist_ok=True)
-        BOOKMARKS_FILE.write_text(json.dumps(self.bookmarks, indent=2, ensure_ascii=False), encoding="utf-8")
+        self.atomic_write_json(BOOKMARKS_FILE, self.bookmarks)
 
 
     def load_history(self) -> list[dict]:
@@ -177,21 +221,21 @@ class DataManagerMixin:
     def history_save_mutex(self) -> threading.Lock:
         lock = getattr(self, "history_save_lock", None)
         if lock is None:
-            lock = threading.Lock()
-            self.history_save_lock = lock
+            with _DATA_FILE_LOCKS_GUARD:
+                lock = getattr(self, "history_save_lock", None)
+                if lock is None:
+                    lock = threading.Lock()
+                    self.history_save_lock = lock
         return lock
 
     def write_history_snapshot(self, snapshot: list[dict]) -> None:
-        APP_DIR.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps(snapshot, indent=2, ensure_ascii=False)
-        temp_file = HISTORY_FILE.with_suffix(".json.tmp")
-        temp_file.write_text(payload, encoding="utf-8")
-        os.replace(temp_file, HISTORY_FILE)
+        self.atomic_write_json(HISTORY_FILE, snapshot)
 
     def next_history_save_generation(self) -> int:
-        generation = int(getattr(self, "history_save_generation", 0) or 0) + 1
-        self.history_save_generation = generation
-        return generation
+        with _DATA_FILE_LOCKS_GUARD:
+            generation = int(getattr(self, "history_save_generation", 0) or 0) + 1
+            self.history_save_generation = generation
+            return generation
 
     def save_history(self) -> None:
         snapshot = list(self.history)
@@ -221,8 +265,7 @@ class DataManagerMixin:
 
 
     def save_subscriptions(self) -> None:
-        APP_DIR.mkdir(parents=True, exist_ok=True)
-        SUBSCRIPTIONS_FILE.write_text(json.dumps(self.subscriptions, indent=2, ensure_ascii=False), encoding="utf-8")
+        self.atomic_write_json(SUBSCRIPTIONS_FILE, self.subscriptions)
 
 
     def load_rss_feeds(self) -> list[dict]:
@@ -237,9 +280,8 @@ class DataManagerMixin:
 
 
     def save_rss_feeds(self) -> None:
-        APP_DIR.mkdir(parents=True, exist_ok=True)
         self.rss_feeds_loaded = True
-        RSS_FEEDS_FILE.write_text(json.dumps(self.rss_feeds, indent=2, ensure_ascii=False), encoding="utf-8")
+        self.atomic_write_json(RSS_FEEDS_FILE, self.rss_feeds)
 
 
     def load_user_playlists(self) -> list[dict]:
@@ -247,8 +289,7 @@ class DataManagerMixin:
 
 
     def save_user_playlists(self) -> None:
-        APP_DIR.mkdir(parents=True, exist_ok=True)
-        USER_PLAYLISTS_FILE.write_text(json.dumps(self.user_playlists, indent=2, ensure_ascii=False), encoding="utf-8")
+        self.atomic_write_json(USER_PLAYLISTS_FILE, self.user_playlists)
 
 
     def load_notifications(self) -> list[dict]:
@@ -256,8 +297,7 @@ class DataManagerMixin:
 
 
     def save_notifications(self) -> None:
-        APP_DIR.mkdir(parents=True, exist_ok=True)
-        NOTIFICATIONS_FILE.write_text(json.dumps(self.notifications, indent=2, ensure_ascii=False), encoding="utf-8")
+        self.atomic_write_json(NOTIFICATIONS_FILE, self.notifications)
 
 
     def load_playback_positions(self) -> dict:
@@ -265,8 +305,7 @@ class DataManagerMixin:
 
 
     def save_playback_positions(self) -> None:
-        APP_DIR.mkdir(parents=True, exist_ok=True)
-        PLAYBACK_POSITIONS_FILE.write_text(json.dumps(self.playback_positions, indent=2, ensure_ascii=False), encoding="utf-8")
+        self.atomic_write_json(PLAYBACK_POSITIONS_FILE, self.playback_positions)
 
 
     def load_playback_queue(self) -> list[dict]:
@@ -274,8 +313,7 @@ class DataManagerMixin:
 
 
     def save_playback_queue(self) -> None:
-        APP_DIR.mkdir(parents=True, exist_ok=True)
-        PLAYBACK_QUEUE_FILE.write_text(json.dumps(self.playback_queue, indent=2, ensure_ascii=False), encoding="utf-8")
+        self.atomic_write_json(PLAYBACK_QUEUE_FILE, self.playback_queue)
 
     def load_last_player_session(self) -> dict:
         data = self.load_json_dict(LAST_PLAYER_SESSION_FILE)
@@ -286,12 +324,42 @@ class DataManagerMixin:
         return data if url else {}
 
 
+    def last_player_session_save_mutex(self) -> threading.Lock:
+        lock = getattr(self, "last_player_session_save_lock", None)
+        if lock is None:
+            with _DATA_FILE_LOCKS_GUARD:
+                lock = getattr(self, "last_player_session_save_lock", None)
+                if lock is None:
+                    lock = threading.Lock()
+                    self.last_player_session_save_lock = lock
+        return lock
+
+    def next_last_player_session_save_generation(self) -> int:
+        with _DATA_FILE_LOCKS_GUARD:
+            generation = int(getattr(self, "last_player_session_save_generation", 0) or 0) + 1
+            self.last_player_session_save_generation = generation
+            return generation
+
     def write_last_player_session_snapshot(self, snapshot: dict) -> None:
         try:
-            APP_DIR.mkdir(parents=True, exist_ok=True)
-            temp_file = LAST_PLAYER_SESSION_FILE.with_name(f"{LAST_PLAYER_SESSION_FILE.stem}.{threading.get_ident()}.tmp")
-            temp_file.write_text(json.dumps(snapshot, indent=2, ensure_ascii=False), encoding="utf-8")
-            os.replace(temp_file, LAST_PLAYER_SESSION_FILE)
+            self.atomic_write_json(LAST_PLAYER_SESSION_FILE, snapshot)
+        except Exception:
+            pass
+
+    def save_last_player_session_snapshot_async(self, snapshot: dict) -> None:
+        generation = self.next_last_player_session_save_generation()
+        threading.Thread(
+            target=self.save_last_player_session_snapshot_worker,
+            args=(snapshot, generation),
+            daemon=True,
+        ).start()
+
+    def save_last_player_session_snapshot_worker(self, snapshot: dict, generation: int) -> None:
+        try:
+            with self.last_player_session_save_mutex():
+                if generation != getattr(self, "last_player_session_save_generation", generation):
+                    return
+                self.write_last_player_session_snapshot(snapshot)
         except Exception:
             pass
 
@@ -300,7 +368,10 @@ class DataManagerMixin:
         snapshot = getattr(self, "last_player_session", {})
         if not isinstance(snapshot, dict):
             snapshot = {}
-        self.write_last_player_session_snapshot(snapshot)
+        generation = self.next_last_player_session_save_generation()
+        with self.last_player_session_save_mutex():
+            if generation == getattr(self, "last_player_session_save_generation", generation):
+                self.write_last_player_session_snapshot(snapshot)
 
 
     def load_stream_url_cache(self) -> dict:
@@ -333,16 +404,16 @@ class DataManagerMixin:
         outside the lock so IO never blocks the UI thread.
         """
         try:
-            lock = getattr(self, "stream_url_cache_lock", None)
-            if lock is not None:
-                with lock:
-                    snapshot = dict(self.stream_url_cache)
-            else:
-                snapshot = dict(getattr(self, "stream_url_cache", {}))
-            now = time.time()
-            to_save = {k: v for k, v in snapshot.items() if isinstance(v, dict) and float(v.get("expires_at") or 0) > now}
-            APP_DIR.mkdir(parents=True, exist_ok=True)
-            STREAM_URL_CACHE_FILE.write_text(json.dumps(to_save, ensure_ascii=False), encoding="utf-8")
+            with self.data_file_lock(STREAM_URL_CACHE_FILE):
+                lock = getattr(self, "stream_url_cache_lock", None)
+                if lock is not None:
+                    with lock:
+                        snapshot = dict(self.stream_url_cache)
+                else:
+                    snapshot = dict(getattr(self, "stream_url_cache", {}))
+                now = time.time()
+                to_save = {k: v for k, v in snapshot.items() if isinstance(v, dict) and float(v.get("expires_at") or 0) > now}
+                self.atomic_write_json(STREAM_URL_CACHE_FILE, to_save, indent=None)
         except Exception:
             pass
 

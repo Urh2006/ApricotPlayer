@@ -15,24 +15,33 @@ jobs:
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.tag.outputs.name }}
     permissions:
       contents: write
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
       - name: Resolve tag name
         id: tag
+        env:
+          REQUESTED_TAG: ${{ inputs.tag }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "name=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$REQUESTED_TAG"
           else
-            echo "name=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            TAG="$GITHUB_REF_NAME"
           fi
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?(-(alpha|beta|rc)(\.[0-9]+)?)?$ ]]; then
+            echo "Invalid release tag: $TAG" >&2
+            exit 1
+          fi
+          echo "name=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Extract release notes from CHANGELOG.md
         id: notes
@@ -62,8 +71,10 @@ jobs:
 
       - name: Determine pre-release flag
         id: prerelease
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.name }}
         run: |
-          TAG="${{ steps.tag.outputs.name }}"
+          TAG="$RELEASE_TAG"
           if [[ "$TAG" == *"-beta"* || "$TAG" == *"-alpha"* || "$TAG" == *"-rc"* ]]; then
             echo "flag=--prerelease" >> "$GITHUB_OUTPUT"
           else
@@ -71,8 +82,12 @@ jobs:
           fi
 
       - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.tag.outputs.name }}
+          PRERELEASE_FLAG: ${{ steps.prerelease.outputs.flag }}
         run: |
-          TAG="${{ steps.tag.outputs.name }}"
+          TAG="$RELEASE_TAG"
           if gh release view "$TAG" > /dev/null 2>&1; then
             echo "Release $TAG already exists — updating notes only"
             gh release edit "$TAG" \
@@ -82,10 +97,8 @@ jobs:
             gh release create "$TAG" \
               --title "ApricotPlayer $TAG" \
               --notes-file release_notes.md \
-              ${{ steps.prerelease.outputs.flag }}
+              $PRERELEASE_FLAG
           fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build:
     name: Build Windows Installer and Portable ZIP
@@ -98,46 +111,40 @@ jobs:
       - name: Resolve tag name
         id: tag
         shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.release.outputs.release_tag }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "name=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "name=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          fi
+          echo "name=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          ref: ${{ needs.release.outputs.release_tag }}
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
 
       - name: Install Python dependencies and PyInstaller
-        run: pip install -r requirements.txt pyinstaller
+        run: pip install -r requirements-build.txt
 
-      - name: Download mpv (shinchiro latest x86_64)
+      - name: Download locked mpv x86_64 runtime
         shell: pwsh
         run: |
           $headers = @{
             Authorization = "Bearer $env:GITHUB_TOKEN"
             Accept        = "application/vnd.github+json"
           }
-          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest" -Headers $headers
-          # Prefer plain x86_64 7z (not bootstrapper, not x86_64-v3)
-          $asset = $release.assets |
-            Where-Object { $_.name -match '^mpv-x86_64-\d{8}-git-[0-9a-f]+\.7z$' } |
-            Select-Object -First 1
-          if (-not $asset) {
-            $asset = $release.assets |
-              Where-Object { $_.name -match 'x86_64' -and $_.name -match '\.7z$' } |
-              Select-Object -First 1
-          }
-          if (-not $asset) { throw "Could not find mpv x86_64 release asset" }
+          $expectedMpvHash = 'FACAC536BAA73C7B925771AF5E39A3C9CB16B8D75B59A6E9800DE89799DFFCA7'
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/tags/20260610" -Headers $headers
+          $asset = $release.assets | Where-Object { $_.name -eq 'mpv-x86_64-20260610-git-304426c.7z' } | Select-Object -First 1
+          if (-not $asset) { throw "Could not find the locked mpv x86_64 release asset" }
           Write-Host "Downloading mpv asset: $($asset.name)"
-          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile mpv.7z -Headers $headers
+          if ($asset.digest -ne "sha256:$($expectedMpvHash.ToLowerInvariant())") { throw "mpv release metadata digest changed" }
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile mpv.7z
+          $actualMpvHash = (Get-FileHash -LiteralPath mpv.7z -Algorithm SHA256).Hash
+          if ($actualMpvHash -ne $expectedMpvHash) { throw "mpv SHA-256 verification failed" }
 
           Write-Host "Extracting mpv archive..."
           & "C:\Program Files\7-Zip\7z.exe" x mpv.7z -o"mpv_extracted" -y | Out-Null
@@ -162,21 +169,48 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download ffmpeg (BtbN latest win64 GPL)
+      - name: Download locked FFmpeg win64 GPL runtime
         shell: pwsh
         run: |
-          $url = "https://github.com/BtbN/ffmpeg-builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
-          Write-Host "Downloading ffmpeg..."
-          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
+          $headers = @{
+            Authorization = "Bearer $env:GITHUB_TOKEN"
+            Accept        = "application/vnd.github+json"
+          }
+          $expectedFfmpegHash = '8069A62DFEC0B2F57A3F226695B94F4FACF1102AF517291E4BFD0E3DB42DF5DC'
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/autobuild-2026-07-10-13-44" -Headers $headers
+          $asset = $release.assets | Where-Object { $_.name -eq 'ffmpeg-N-125515-g35f8f4bdc0-win64-gpl.zip' } | Select-Object -First 1
+          if (-not $asset) { throw "Could not find the locked FFmpeg release asset" }
+          Write-Host "Downloading ffmpeg asset: $($asset.name)"
+          if ($asset.digest -ne "sha256:$($expectedFfmpegHash.ToLowerInvariant())") { throw "FFmpeg release metadata digest changed" }
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile ffmpeg.zip
+          $actualFfmpegHash = (Get-FileHash -LiteralPath ffmpeg.zip -Algorithm SHA256).Hash
+          if ($actualFfmpegHash -ne $expectedFfmpegHash) { throw "ffmpeg SHA-256 verification failed" }
           Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg_extracted -Force
           $ffmpegExe = Get-ChildItem -Path ffmpeg_extracted -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
           if (-not $ffmpegExe) { throw "ffmpeg.exe not found in archive" }
           New-Item -ItemType Directory -Force -Path vendor\ffmpeg | Out-Null
           Copy-Item -Path $ffmpegExe.FullName -Destination vendor\ffmpeg\ffmpeg.exe -Force
           Write-Host "ffmpeg.exe placed in vendor\ffmpeg"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download locked Node.js LTS runtime
+        shell: pwsh
+        run: |
+          $nodeVersion = '24.18.0'
+          $expectedNodeHash = '9A4EB5F1C29C6A2E93852EAD46B999E284A6A5CA8BAB4D4E241D587D025A52DE'
+          New-Item -ItemType Directory -Force -Path vendor\node | Out-Null
+          Invoke-WebRequest -Uri "https://nodejs.org/dist/v$nodeVersion/win-x64/node.exe" -OutFile vendor\node\node.exe
+          $actualNodeHash = (Get-FileHash -LiteralPath vendor\node\node.exe -Algorithm SHA256).Hash
+          if ($actualNodeHash -ne $expectedNodeHash) { throw "Node.js SHA-256 verification failed" }
+          $signature = Get-AuthenticodeSignature -LiteralPath vendor\node\node.exe
+          if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+            throw "Node.js Authenticode verification failed"
+          }
+          & vendor\node\node.exe --version
 
       - name: Install Inno Setup 6
-        run: choco install innosetup --yes --no-progress
+        run: choco install innosetup --version=6.7.3 --yes --no-progress
 
       - name: Build installer and portable ZIP
         shell: pwsh
@@ -184,10 +218,11 @@ jobs:
 
       - name: Upload assets to GitHub Release
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.tag.outputs.name }}
         run: |
-          gh release upload "${{ steps.tag.outputs.name }}" `
+          gh release upload "$env:RELEASE_TAG" `
             release-dist\ApricotPlayerSetup.exe `
             release-dist\ApricotPlayer.zip `
             --clobber
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

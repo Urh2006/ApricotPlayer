@@ -356,12 +356,13 @@ class MediaMixin:
     def replace_converted_original(source: Path, work_output: Path, final_output: Path) -> None:
         if not work_output.exists():
             raise RuntimeError("Converted file was not created")
-        if source.exists() and source.resolve() != final_output.resolve():
+        source_path = source.resolve()
+        work_path = work_output.resolve()
+        final_path = final_output.resolve()
+        if work_path != final_path:
+            os.replace(work_output, final_output)
+        if source_path != final_path and source.exists():
             source.unlink()
-        if final_output.exists() and final_output.resolve() != work_output.resolve():
-            final_output.unlink()
-        if work_output.resolve() != final_output.resolve():
-            shutil.move(str(work_output), str(final_output))
 
 
 
@@ -550,9 +551,12 @@ class MediaMixin:
 
 
     def fetch_podcast_chapters(self, url: str) -> list[dict]:
+        url = self.validate_remote_http_url(url, "Podcast chapters URL")
         request = Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
         with self.open_url(request, timeout=20) as response:
-            payload = json.loads(response.read(1_000_000).decode("utf-8", errors="replace"))
+            self.validate_remote_http_url(response.geturl(), "Podcast chapters redirect URL")
+            raw = self.read_response_limited(response, PODCAST_CHAPTERS_MAX_BYTES, "Podcast chapters response")
+            payload = json.loads(raw.decode("utf-8", errors="replace"))
         if isinstance(payload, dict):
             raw = payload.get("chapters") or payload.get("items") or []
         else:
@@ -841,9 +845,11 @@ class MediaMixin:
     def fetch_transcript_text_from_url(self, url: str, source_url: str = "", track: dict | None = None, info: dict | None = None) -> str:
         if not url:
             return ""
+        url = self.validate_remote_http_url(url, "Transcript URL")
         request = Request(url, headers=self.transcript_request_headers(source_url, track, info))
         with self.open_url(request, timeout=20) as response:
-            return response.read(5_000_000).decode("utf-8", errors="replace")
+            self.validate_remote_http_url(response.geturl(), "Transcript redirect URL")
+            return self.read_response_limited(response, TRANSCRIPT_MAX_BYTES, "Transcript").decode("utf-8", errors="replace")
 
 
     def fetch_transcript_text_with_ytdlp(self, url: str) -> str:
@@ -1014,7 +1020,9 @@ class MediaMixin:
             params["duration"] = str(duration)
         request = Request(f"{LRCLIB_API_GET_URL}?{urlencode(params)}", headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
         with self.open_url(request, timeout=20) as response:
-            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+            self.validate_trusted_https_url(response.geturl(), {"lrclib.net"}, "Lyrics API")
+            raw = self.read_response_limited(response, LYRICS_RESPONSE_MAX_BYTES, "Lyrics response")
+            payload = json.loads(raw.decode("utf-8", errors="replace"))
         if not isinstance(payload, dict):
             return ""
         return str(payload.get("syncedLyrics") or payload.get("plainLyrics") or "").strip()

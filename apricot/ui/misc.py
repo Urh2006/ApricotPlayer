@@ -2259,8 +2259,10 @@ class MiscUI:
             if not url:
                 self.announce_player(self.t("comment_author_channel_unavailable"))
                 return
-            import_module("webbrowser").open(url)
-            self.announce_player(self.t("comment_author_channel_opened"))
+            if self.open_remote_url_in_browser(url, announce_error=False):
+                self.announce_player(self.t("comment_author_channel_opened"))
+            else:
+                self.announce_player(self.t("comment_author_channel_unavailable"))
 
         def on_filter_changed(_event=None) -> None:
             refresh_comments(0)
@@ -2631,7 +2633,7 @@ class MiscUI:
         if local_path and local_path.suffix:
             return local_path.suffix.lower()
         ext = str(item.get("ext") or "").strip().lower().lstrip(".")
-        if ext:
+        if re.fullmatch(r"[a-z0-9]{1,10}", ext):
             return f".{ext}"
         kind = str(item.get("kind") or "")
         if kind == "rss_item":
@@ -3059,6 +3061,8 @@ class MiscUI:
     def safe_folder_name(value: str) -> str:
         cleaned = _RE_UNSAFE_CHARS.sub(" ", str(value or "").strip())
         cleaned = _RE_WHITESPACE.sub(" ", cleaned).strip(" .")
+        if cleaned.split(".", 1)[0].casefold() in WINDOWS_RESERVED_PATH_STEMS:
+            cleaned = f"_{cleaned}"
         return cleaned[:150] or "Download"
 
     def play_favorite(self) -> None:

@@ -10,6 +10,10 @@ def main():
         
     source_dir = Path(sys.argv[1]).resolve()
     output_zip = Path(sys.argv[2]).resolve()
+    if not source_dir.is_dir():
+        raise RuntimeError(f"Source directory does not exist: {source_dir}")
+    if output_zip.is_relative_to(source_dir):
+        raise RuntimeError("Output ZIP must not be created inside the source directory")
     
     print(f"Zipping {source_dir} to {output_zip}...")
     
@@ -21,6 +25,8 @@ def main():
         for root, dirs, files in os.walk(source_dir):
             for file in files:
                 full_path = Path(root) / file
+                if full_path.is_symlink():
+                    raise RuntimeError(f"Refusing to package symbolic link: {full_path}")
                 rel_path = full_path.relative_to(source_dir)
                 archive_name = f"ApricotPlayer/{rel_path.as_posix()}"
                 z.write(full_path, archive_name)

@@ -15,12 +15,38 @@ $ErrorActionPreference = "Stop"
 $tempNotesFile = $null
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
+if ($Tag -notmatch '^v\d+\.\d+\.\d+(?:\.\d+)?(?:-(?:alpha|beta|rc)(?:\.\d+)?)?$') {
+    throw "Invalid release tag: $Tag"
+}
+if ($Repo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+    throw "Invalid GitHub repository name: $Repo"
+}
+
+$gitCandidates = @(
+    "C:\Program Files\Git\cmd\git.exe",
+    "$env:LOCALAPPDATA\Programs\Git\cmd\git.exe",
+    (Get-Command git.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue)
+) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+if (-not $gitCandidates) {
+    throw "Git was not found."
+}
+$git = (Resolve-Path -LiteralPath @($gitCandidates)[0]).Path
+$gitSignature = Get-AuthenticodeSignature -LiteralPath $git
+if ($gitSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+    throw "Refusing to run an unsigned or invalid Git executable: $git"
+}
+
 if (-not $Target) {
-    $Target = (& git -C $projectRoot rev-parse HEAD 2>$null).Trim()
+    $Target = (& $git -C $projectRoot rev-parse HEAD 2>$null).Trim()
     if ($LASTEXITCODE -ne 0 -or -not $Target) {
         throw "Could not determine the current commit for the release target. Pass -Target explicitly."
     }
 }
+$resolvedTarget = (& $git -C $projectRoot rev-parse "$Target^{commit}" 2>$null).Trim()
+if ($LASTEXITCODE -ne 0 -or $resolvedTarget -notmatch '^[0-9a-fA-F]{40}$') {
+    throw "Release target is not a valid commit: $Target"
+}
+$Target = $resolvedTarget
 
 if (-not $ExecutablePath) {
     $ExecutablePath = Join-Path $projectRoot "release-dist\ApricotPlayer.exe"
@@ -70,9 +96,9 @@ else {
 }
 
 $ghCandidates = @(
-    (Get-Command gh -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue),
     "C:\Program Files\GitHub CLI\gh.exe",
-    "$env:LOCALAPPDATA\Programs\GitHub CLI\gh.exe"
+    "$env:LOCALAPPDATA\Programs\GitHub CLI\gh.exe",
+    (Get-Command gh.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue)
 ) | Where-Object { $_ -and (Test-Path $_) }
 
 if (-not $ghCandidates) {
@@ -80,6 +106,11 @@ if (-not $ghCandidates) {
 }
 
 $gh = @($ghCandidates)[0]
+$gh = (Resolve-Path -LiteralPath $gh).Path
+$ghSignature = Get-AuthenticodeSignature -LiteralPath $gh
+if ($ghSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+    throw "Refusing to run an unsigned or invalid GitHub CLI executable: $gh"
+}
 
 foreach ($assetPath in $AssetPaths) {
     if (-not (Test-Path $assetPath)) {

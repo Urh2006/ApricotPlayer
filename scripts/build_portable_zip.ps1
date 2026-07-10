@@ -1,10 +1,20 @@
 param(
     [string]$SourceDir = "",
-    [string]$OutputPath = ""
+    [string]$OutputPath = "",
+    [string]$PythonExe = "python"
 )
 
 $ErrorActionPreference = "Stop"
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$pythonCommand = Get-Command $PythonExe -CommandType Application -ErrorAction SilentlyContinue
+if (-not $pythonCommand) {
+    throw "Python executable was not found: $PythonExe"
+}
+$PythonExe = $pythonCommand.Source
+$pythonSignature = Get-AuthenticodeSignature -LiteralPath $PythonExe
+if ($pythonSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+    throw "Refusing to package with an unsigned or invalid Python executable: $PythonExe"
+}
 
 if (-not $SourceDir) {
     $SourceDir = Join-Path $projectRoot "release-dist\installer-app\ApricotPlayer"
@@ -32,7 +42,7 @@ try {
     if (Test-Path $OutputPath) {
         Remove-Item -LiteralPath $OutputPath -Force
     }
-    python (Join-Path $projectRoot "scripts\zip_folder.py") $SourceDir $OutputPath
+    & $PythonExe (Join-Path $projectRoot "scripts\zip_folder.py") $SourceDir $OutputPath
     Get-Item -LiteralPath $OutputPath
 }
 catch {

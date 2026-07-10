@@ -81,11 +81,14 @@ class CookiesMixin:
     def cookie_browser_is_running(self, browser: str) -> bool:
         if os.name != "nt":
             return False
+        tasklist = self.windows_system_executable("tasklist.exe")
+        if not tasklist:
+            return False
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         for name in self.cookie_browser_process_names(browser):
             try:
                 result = subprocess.run(
-                    ["tasklist", "/FI", f"IMAGENAME eq {name}.exe", "/NH"],
+                    [tasklist, "/FI", f"IMAGENAME eq {name}.exe", "/NH"],
                     capture_output=True,
                     text=True,
                     timeout=2,
@@ -101,13 +104,16 @@ class CookiesMixin:
     def close_cookie_browser_processes(self, browser: str) -> bool:
         if os.name != "nt":
             return False
+        taskkill = self.windows_system_executable("taskkill.exe")
+        if not taskkill:
+            return False
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         attempted = False
         for name in self.cookie_browser_process_names(browser):
             attempted = True
             try:
                 subprocess.run(
-                    ["taskkill", "/IM", f"{name}.exe", "/T", "/F"],
+                    [taskkill, "/IM", f"{name}.exe", "/T", "/F"],
                     capture_output=True,
                     text=True,
                     timeout=5,

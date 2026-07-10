@@ -359,7 +359,7 @@ class MenusUI:
 
         if not is_local_media:
             actions.append((self.menu_label_with_shortcut("comments", "player_comments"), self.show_comments))
-            actions.append((self.t("open_browser"), lambda: import_module("webbrowser").open(str(item.get("webpage_url") or item.get("url") or ""))))
+            actions.append((self.t("open_browser"), lambda: self.open_remote_url_in_browser(str(item.get("webpage_url") or item.get("url") or ""))))
 
         actions.append((self.t("close_player"), self.close_current_player))
 

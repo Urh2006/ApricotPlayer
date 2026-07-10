@@ -32,6 +32,7 @@ import os
 import queue
 import random
 import re
+import secrets
 import http.cookiejar
 import sys
 import threading
@@ -358,13 +359,22 @@ def startup_media_path_argument(argv: list[str] | None = None) -> str:
     return ""
 
 def request_existing_instance_activation(action: str = "show", **extra_payload) -> None:
+    temp_path: Path | None = None
     try:
         APP_DIR.mkdir(parents=True, exist_ok=True)
         payload = {"action": action, "pid": os.getpid(), "timestamp": time.time()}
         payload.update(extra_payload)
-        ACTIVATE_SIGNAL_FILE.write_text(json.dumps(payload), encoding="utf-8")
+        temp_path = ACTIVATE_SIGNAL_FILE.with_name(f".{ACTIVATE_SIGNAL_FILE.name}-{os.getpid()}-{secrets.token_hex(4)}.tmp")
+        temp_path.write_text(json.dumps(payload), encoding="utf-8")
+        os.replace(temp_path, ACTIVATE_SIGNAL_FILE)
     except Exception:
         pass
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
 def activate_existing_instance_window(title_hint: str = "") -> bool:
     if os.name != "nt":
@@ -390,7 +400,8 @@ def activate_existing_instance_window(title_hint: str = "") -> bool:
                 return True
             title_buffer = ctypes.create_unicode_buffer(title_length + 1)
             user32.GetWindowTextW(hwnd, title_buffer, title_length + 1)
-            if APP_NAME in str(title_buffer.value):
+            window_title = str(title_buffer.value)
+            if window_title == WINDOW_TITLE or window_title.endswith(f" - {WINDOW_TITLE}"):
                 target_hwnd = ctypes.c_void_p(hwnd)
                 return False
             return True

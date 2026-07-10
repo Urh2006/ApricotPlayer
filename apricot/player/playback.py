@@ -496,7 +496,7 @@ class PlaybackMixin:
         if isinstance(safe_sequence, list) and safe_sequence:
             session["sequence"] = safe_sequence
         self.last_player_session = session
-        threading.Thread(target=self.write_last_player_session_snapshot, args=(session,), daemon=True).start()
+        self.save_last_player_session_snapshot_async(session)
 
 
     def resume_last_player_session(self) -> None:
