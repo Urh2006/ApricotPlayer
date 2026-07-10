@@ -210,7 +210,7 @@ jobs:
           & vendor\node\node.exe --version
 
       - name: Install Inno Setup 6
-        run: choco install innosetup --version=6.7.3 --yes --no-progress
+        run: choco install innosetup --version=6.7.1 --yes --no-progress
 
       - name: Build installer and portable ZIP
         shell: pwsh
