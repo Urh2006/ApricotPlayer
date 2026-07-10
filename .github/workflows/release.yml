@@ -214,7 +214,7 @@ jobs:
 
       - name: Build installer and portable ZIP
         shell: pwsh
-        run: .\scripts\build_release.ps1
+        run: .\scripts\build_release.ps1 -PythonExe (Join-Path $env:pythonLocation 'python.exe')
 
       - name: Upload assets to GitHub Release
         shell: pwsh

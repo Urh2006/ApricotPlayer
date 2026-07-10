@@ -10,7 +10,7 @@
 $ErrorActionPreference = "Stop"
 
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$pythonCommand = Get-Command $PythonExe -CommandType Application -ErrorAction SilentlyContinue
+$pythonCommand = Get-Command $PythonExe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $pythonCommand) {
     throw "Python executable was not found: $PythonExe"
 }
