@@ -666,6 +666,13 @@
 
 # Changelog
 
+## 1.0.0 Beta 49
+
+- Fixed AudioVault movie playback falsely reporting that the internal mpv player was missing in some installed or updater layouts. Apricot now checks the frozen runtime, installed `_internal` folder, portable folder, source vendor folder, and system PATH.
+- Fixed Enter on an AudioVault TV show calling an obsolete parameter name instead of opening or preparing its episode list.
+- AudioVault result lines no longer include irrelevant uploaded-age metadata.
+- The experimental libmpv backend is not included in this release; beta 49 continues to use the established `mpv.exe` process backend.
+
 ## 1.0.0 Beta 48
 
 - Added an accessible AudioVault integration with account login, exact registration link, movie and TV-show search, keyboard navigation, direct movie playback, episode lists, and audio downloads.

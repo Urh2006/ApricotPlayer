@@ -279,7 +279,7 @@ class AudioVaultMixin:
         if not item:
             return
         if item.get("kind") == "audiovault_show":
-            self.prepare_audiovault_show(item, play_after=False)
+            self.prepare_audiovault_show(item, download_after=False)
         elif item.get("kind") == "audiovault_episode":
             self.play_audiovault_local_item(item)
         else:

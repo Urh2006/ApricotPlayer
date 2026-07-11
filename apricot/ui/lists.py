@@ -561,6 +561,11 @@ class ListsUI:
                 format=str(item.get("ext") or self.t("file_format_unknown")),
                 folder=str(item.get("folder") or item.get("channel") or ""),
             )
+        if str(item.get("kind") or "").startswith("audiovault_"):
+            parts = [str(item.get("title") or ""), self.item_type_label(item)]
+            if item.get("kind") == "audiovault_episode" and item.get("duration"):
+                parts.append(str(item.get("duration") or ""))
+            return " | ".join(part for part in parts if part)
         if item.get("kind") in {"playlist", "channel"}:
             parts = [item.get("title", ""), item.get("type", self.t("playlist" if item.get("kind") == "playlist" else "channel"))]
             if item.get("kind") == "playlist":

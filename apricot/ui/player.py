@@ -1,6 +1,7 @@
 from apricot.constants import *
 import wx
 import os
+import sys
 from pathlib import Path
 from apricot.ui.misc import MiscUI
 
@@ -1936,12 +1937,24 @@ class PlayerUI:
             lower = configured.lower()
             if "mpv" in lower:
                 return configured, "mpv"
-        bundled = self.bundled_path("mpv", "mpv.exe")
-        if bundled.exists():
-            return str(bundled), "mpv"
-        local = Path(__file__).resolve().parent / "vendor" / "mpv" / "mpv.exe"
-        if local.exists():
-            return str(local), "mpv"
+        executable_dir = Path(sys.executable).resolve().parent
+        candidates = [
+            self.bundled_path("mpv", "mpv.exe"),
+            executable_dir / "_internal" / "mpv" / "mpv.exe",
+            executable_dir / "mpv" / "mpv.exe",
+            Path(__file__).resolve().parents[2] / "vendor" / "mpv" / "mpv.exe",
+        ]
+        seen: set[str] = set()
+        for candidate in candidates:
+            normalized = os.path.normcase(os.path.abspath(str(candidate)))
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            try:
+                if candidate.is_file() and candidate.stat().st_size > 0:
+                    return str(candidate), "mpv"
+            except OSError:
+                continue
         mpv = shutil.which("mpv")
         if mpv:
             return mpv, "mpv"

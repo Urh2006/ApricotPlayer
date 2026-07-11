@@ -4,6 +4,7 @@ import zipfile
 from pathlib import Path
 
 from apricot.network.audiovault import AudioVaultMixin, _VaultPageParser
+from apricot.ui.lists import ListsUI
 
 
 class AudioVaultParserTests(unittest.TestCase):
@@ -37,6 +38,36 @@ class AudioVaultParserTests(unittest.TestCase):
             output = root / "output"
             AudioVaultMixin.safe_extract_audiovault_zip(archive, output)
             self.assertEqual((output / "Season 1" / "Episode 01.mp3").read_bytes(), b"audio")
+
+    def test_show_activation_uses_current_download_after_argument(self):
+        class Harness(AudioVaultMixin):
+            def selected_audiovault_item(self):
+                return {"kind": "audiovault_show", "title": "Test show"}
+
+            def prepare_audiovault_show(self, item, download_after=False):
+                self.prepared = (item, download_after)
+
+        harness = Harness()
+        harness.activate_audiovault_item()
+        self.assertEqual(harness.prepared[0]["title"], "Test show")
+        self.assertFalse(harness.prepared[1])
+
+    def test_audiovault_result_line_omits_uploaded_metadata(self):
+        class Harness(ListsUI):
+            @staticmethod
+            def item_type_label(item):
+                return item.get("type", "")
+
+        line = Harness().result_line(
+            0,
+            {
+                "kind": "audiovault_movie",
+                "title": "Example movie",
+                "type": "Movie",
+                "age": "Uploaded 2 days ago",
+            },
+        )
+        self.assertEqual(line, "Example movie | Movie")
 
 
 if __name__ == "__main__":
