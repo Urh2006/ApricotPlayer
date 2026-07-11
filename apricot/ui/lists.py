@@ -266,6 +266,65 @@ class ListsUI:
             return
         self.announce_player(self.result_details_text(item))
 
+
+    def result_metadata_columns(self, item: dict) -> list[tuple[str, str]]:
+        columns = [
+            (self.t("media_field_title"), str(item.get("title") or "").strip()),
+            (self.t("media_field_type"), str(item.get("type") or "").strip()),
+            (self.t("media_field_channel"), str(item.get("channel") or "").strip()),
+            (self.t("media_field_duration"), str(item.get("duration") or "").strip()),
+            (self.t("media_field_views"), str(item.get("views") or "").strip()),
+            (self.t("media_field_uploaded"), str(item.get("age") or "").strip()),
+            (self.t("media_field_album"), str(item.get("album") or "").strip()),
+            (self.t("media_field_playlist_count"), str(item.get("playlist_count") or "").strip()),
+        ]
+        local_path = str(item.get("path") or "").strip()
+        if not local_path and self.item_is_local_media(item):
+            local_path = str(item.get("url") or "").strip()
+        if local_path:
+            columns.append((self.t("media_field_path"), local_path))
+        return [(label, value) for label, value in columns if value]
+
+
+    @staticmethod
+    def result_metadata_identity(item: dict) -> str:
+        return "\x1f".join(str(item.get(key) or "") for key in ("id", "url", "path", "title"))
+
+
+    def focus_in_media_list_control(self, focus: wx.Window | None) -> bool:
+        controls = (
+            "results_list",
+            "favorites_list",
+            "history_list",
+            "subscriptions_list",
+            "rss_feed_list",
+            "rss_items_list",
+            "podcast_result_list",
+            "user_playlist_list",
+            "user_playlist_items_list",
+            "queue_list",
+        )
+        return any(self.window_is_or_descendant(focus, getattr(self, name, None)) for name in controls)
+
+
+    def announce_active_media_column(self, direction: int) -> None:
+        item = self.active_item()
+        if not item:
+            self.announce_player(self.t("no_selection"))
+            return
+        columns = self.result_metadata_columns(item)
+        if not columns:
+            self.announce_player(self.t("result_column_unavailable"))
+            return
+        identity = self.result_metadata_identity(item)
+        if identity != getattr(self, "result_metadata_column_identity", ""):
+            self.result_metadata_column_identity = identity
+            self.result_metadata_column_index = -1 if direction >= 0 else 0
+        index = (int(getattr(self, "result_metadata_column_index", -1)) + direction) % len(columns)
+        self.result_metadata_column_index = index
+        label, value = columns[index]
+        self.announce_player(self.t("result_column_value", label=label, value=value, current=index + 1, total=len(columns)))
+
     def result_details_text(self, item: dict) -> str:
         kind = str(item.get("kind") or "")
         title = str(item.get("title") or "")

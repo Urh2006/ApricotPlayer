@@ -4,6 +4,9 @@ import os
 from pathlib import Path
 
 class MenusUI:
+    def search_provider_menu_label(self) -> str:
+        return self.label_with_shortcut(f"{self.t('search_youtube')} / {self.t('soundcloud')}", "open_search", "\t")
+
     def show_main_menu(self) -> None:
         self.in_main_menu = True
         # Clear any stale "came from player to settings" flag so the next time
@@ -58,7 +61,7 @@ class MenusUI:
             label = self.label_with_shortcut(f"{self.t('playback_queue')} ({len(self.playback_queue)})", "open_playback_queue", "\t")
             actions.append((label, self.show_playback_queue))
         primary_actions = [
-            (self.menu_label_with_shortcut("search_youtube", "open_search"), self.show_search),
+            (self.search_provider_menu_label(), self.show_search),
             (self.menu_label_with_shortcut("play_folder", "open_play_from_folder"), self.show_play_from_folder),
             (self.menu_label_with_shortcut("play_file", "open_play_file"), self.show_play_file),
             (self.menu_label_with_shortcut("direct_link", "open_direct_link"), self.show_direct_link),
@@ -111,7 +114,7 @@ class MenusUI:
     def action_finder_actions(self) -> list[tuple[str, callable]]:
         actions = [
             (self.menu_label_with_shortcut("main_menu", "open_main_menu"), self.show_main_menu),
-            (self.menu_label_with_shortcut("search_youtube", "open_search"), self.show_search),
+            (self.search_provider_menu_label(), self.show_search),
             (self.menu_label_with_shortcut("play_folder", "open_play_from_folder"), self.show_play_from_folder),
             (self.menu_label_with_shortcut("play_file", "open_play_file"), self.show_play_file),
             (self.menu_label_with_shortcut("direct_link", "open_direct_link"), self.show_direct_link),

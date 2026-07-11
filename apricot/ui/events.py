@@ -444,6 +444,7 @@ class EventsUI:
             return
 
         results_focus = self.focus_in_results_control(focus)
+        media_list_focus = self.focus_in_media_list_control(focus)
         if self.in_main_menu:
             if self.handle_player_shortcut_event(event, focus, details_has_focus):
                 return
@@ -510,6 +511,12 @@ class EventsUI:
             return
         if results_focus and self.shortcut_matches(event, "queue_audio"):
             self.toggle_download_queue()
+            return
+        if media_list_focus and self.shortcut_matches(event, "result_column_previous"):
+            self.announce_active_media_column(-1)
+            return
+        if media_list_focus and self.shortcut_matches(event, "result_column_next"):
+            self.announce_active_media_column(1)
             return
         if results_focus and self.result_details_key(event):
             self.announce_selected_result_details()

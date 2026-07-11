@@ -15,9 +15,11 @@ from types import SimpleNamespace
 from apricot.constants import CUSTOM_MPV_CACHE_SUBDIR, DEFAULT_CACHE_DIR, LOCAL_FOLDER_CACHE_MAX_ENTRIES
 from apricot.data.manager import DataManagerMixin
 from apricot.download.download import DownloaderMixin
+from apricot.library.library import LibraryMixin
 from apricot.media.media import MediaMixin
 from apricot.network.youtube import YoutubeMixin
 from apricot.player.mpv import MpvMixin
+from apricot.search.search import SearchMixin
 from apricot.system.diagnostics import DiagnosticsMixin
 from apricot.ui.cookies import CookiesUI
 from apricot.ui.lists import ListsUI
@@ -38,6 +40,35 @@ class FolderCacheHarness(ListsUI):
     @staticmethod
     def local_folder_cache_key(folder: Path) -> str:
         return str(folder)
+
+
+class ResultColumnsHarness(ListsUI):
+    def t(self, key: str, **values) -> str:
+        return key.format(**values)
+
+
+class SearchHarness(SearchMixin):
+    def __init__(self) -> None:
+        self.search_generation = 7
+        self.requested_url = ""
+        self.shown_results: list[dict] = []
+
+    def ydl_extract_info(self, url: str, _options: dict, download: bool = False) -> dict:
+        self.assertFalse(download)
+        self.requested_url = url
+        return {"entries": [{"title": "Track"}]}
+
+    @staticmethod
+    def normalize_entry(entry: dict, _search_type: str, _provider: str = "youtube") -> dict:
+        return dict(entry)
+
+    def show_results_if_current(self, generation: int, results: list[dict]) -> None:
+        if generation == self.search_generation:
+            self.shown_results = results
+
+    def assertFalse(self, value) -> None:
+        if value:
+            raise AssertionError("unexpected truthy value")
 
 
 class FakeResponse:
@@ -151,20 +182,75 @@ class SecurityRegressionTests(unittest.TestCase):
     def test_saved_subscriptions_and_rss_feeds_sort_by_title(self) -> None:
         manager = DataManagerMixin()
         manager.load_json_list = lambda _path: [
-            {"title": "zebra", "url": "https://example.test/z"},
-            {"title": "Alpha", "url": "https://example.test/a"},
-            {"title": "beta", "url": "https://example.test/b"},
+            {"title": "zebra", "url": "https://example.test/z", "category": "Music"},
+            {"title": "Alpha", "url": "https://example.test/a", "category": "Audio"},
+            {"title": "beta", "url": "https://example.test/b", "category": "Music"},
         ]
         self.assertEqual([item["title"] for item in manager.load_subscriptions()], ["Alpha", "beta", "zebra"])
         self.assertEqual([item["title"] for item in manager.load_rss_feeds()], ["Alpha", "beta", "zebra"])
 
         manager.subscriptions = [{"title": "Zulu"}, {"title": "apple"}]
-        manager.rss_feeds = [{"title": "Podcast"}, {"title": "Audiobook"}]
+        manager.rss_feeds = [{"title": "Podcast", "category": "Shows"}, {"title": "Audiobook", "category": "Books"}]
+        manager.current_rss_feed_index = 0
         manager.atomic_write_json = mock.Mock()
         manager.save_subscriptions()
         manager.save_rss_feeds()
         self.assertEqual([item["title"] for item in manager.subscriptions], ["apple", "Zulu"])
         self.assertEqual([item["title"] for item in manager.rss_feeds], ["Audiobook", "Podcast"])
+        self.assertEqual(manager.current_rss_feed_index, 1)
+
+    def test_collection_categories_filter_and_normalize(self) -> None:
+        library = LibraryMixin()
+        items = [
+            {"title": "One", "category": "  Music  "},
+            {"title": "Two", "category": "Podcasts"},
+            {"title": "Four", "category": "music"},
+            {"title": "Three"},
+        ]
+        self.assertEqual(library.normalized_collection_category("  Music\tLibrary  "), "Music Library")
+        self.assertEqual([item["title"] for item in library.collection_items_for_category(items, "music")], ["One", "Four"])
+        self.assertEqual(library.collection_category_names(items), ["Music", "Podcasts"])
+
+    def test_result_metadata_columns_are_individual_and_complete(self) -> None:
+        columns = ResultColumnsHarness().result_metadata_columns(
+            {
+                "title": "A track",
+                "type": "Video",
+                "channel": "A channel",
+                "duration": "3:45",
+                "views": "1,234",
+                "age": "today",
+                "album": "An album",
+                "playlist_count": 12,
+            }
+        )
+        self.assertEqual(
+            columns,
+            [
+                ("media_field_title", "A track"),
+                ("media_field_type", "Video"),
+                ("media_field_channel", "A channel"),
+                ("media_field_duration", "3:45"),
+                ("media_field_views", "1,234"),
+                ("media_field_uploaded", "today"),
+                ("media_field_album", "An album"),
+                ("media_field_playlist_count", "12"),
+            ],
+        )
+
+    def test_soundcloud_search_uses_the_dedicated_ytdlp_search_path(self) -> None:
+        search = SearchHarness()
+        with mock.patch("apricot.search.search.wx.CallAfter", side_effect=lambda callback, *args: callback(*args)):
+            search.search_worker("artist track", "Video", 5, 7, provider="soundcloud")
+        self.assertEqual(search.requested_url, "scsearch5:artist track")
+        self.assertEqual(search.shown_results, [{"title": "Track"}])
+
+    def test_youtube_shorts_urls_resolve_to_playable_video_ids(self) -> None:
+        youtube = YoutubeMixin()
+        self.assertEqual(
+            youtube.extract_youtube_video_id({"url": "https://www.youtube.com/shorts/AbCdEfGhI12"}),
+            "AbCdEfGhI12",
+        )
 
     def test_stale_last_session_save_is_ignored(self) -> None:
         manager = DataManagerMixin()

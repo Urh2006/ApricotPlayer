@@ -658,6 +658,12 @@ class LibraryMixin:
                 (self.t("remove"), self.remove_subscription),
             ]
         )
+        self.add_button_row(
+            [
+                (self.t("filter_category"), self.choose_subscription_category_filter),
+                (self.t("set_category"), self.set_selected_subscription_category),
+            ]
+        )
         self.subscriptions_list = wx.ListBox(self.panel, choices=[])
         self.subscriptions_list.SetName(self.t("subscriptions"))
         self.subscriptions_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _evt: self.open_selected_subscription_videos())
@@ -676,9 +682,19 @@ class LibraryMixin:
             selection = self.subscriptions_list.GetSelection()
             if selection == wx.NOT_FOUND:
                 selection = 0
+            old_visible = getattr(self, "visible_subscription_items", self.subscriptions)
+            selected_item = old_visible[selection] if 0 <= selection < len(old_visible) else None
             if self.subscriptions:
-                self.set_listbox_items(self.subscriptions_list, [self.subscription_line(item) for item in self.subscriptions], selection)
+                visible = self.collection_items_for_category(self.subscriptions, getattr(self, "subscription_category_filter", ""))
+                self.visible_subscription_items = visible
+                if visible:
+                    target_selection = next((index for index, candidate in enumerate(visible) if candidate is selected_item), selection)
+                    self.set_listbox_items(self.subscriptions_list, [self.subscription_line(item) for item in visible], target_selection)
+                else:
+                    self.set_listbox_items(self.subscriptions_list, [self.t("category_filter_empty")], 0)
+                    self.set_status(self.t("category_filter_empty"))
             else:
+                self.visible_subscription_items = []
                 self.set_listbox_items(self.subscriptions_list, [self.t("subscription_empty")], 0)
                 self.set_status(self.t("subscription_empty"))
         except RuntimeError:
@@ -690,6 +706,7 @@ class LibraryMixin:
         new_count = int(item.get("last_new_count") or 0)
         parts = [
             item.get("title", ""),
+            self.category_display_text(item),
             self.t("subscription_last_checked", time=checked) if item.get("last_checked") else checked,
             self.t("subscription_new_videos", count=new_count, title=item.get("title", "")) if new_count else "",
         ]
@@ -700,9 +717,10 @@ class LibraryMixin:
         if not hasattr(self, "subscriptions_list"):
             return None
         index = self.subscriptions_list.GetSelection()
-        if index == wx.NOT_FOUND or index < 0 or index >= len(self.subscriptions):
+        visible = getattr(self, "visible_subscription_items", self.subscriptions)
+        if index == wx.NOT_FOUND or index < 0 or index >= len(visible):
             return None
-        return self.subscriptions[index]
+        return visible[index]
 
 
     def on_subscriptions_key(self, event: wx.KeyEvent) -> None:
@@ -726,6 +744,8 @@ class LibraryMixin:
             (self.t("subscription_open_videos"), self.open_selected_subscription_videos),
             (self.t("subscription_new_videos_button"), self.open_selected_subscription_new_videos),
             (self.t("subscription_check_now"), lambda: self.check_subscriptions(manual=True)),
+            (self.t("set_category"), self.set_selected_subscription_category),
+            (self.t("filter_category"), self.choose_subscription_category_filter),
             (self.t("copy_url"), lambda: self.copy_item_url(self.selected_subscription())),
             (self.menu_label_with_shortcut("unsubscribe_channel", "unsubscribe_channel"), self.remove_subscription),
             (self.t("remove"), self.remove_subscription),
@@ -780,14 +800,106 @@ class LibraryMixin:
 
 
     def remove_subscription(self) -> None:
-        if not hasattr(self, "subscriptions_list"):
-            return
-        index = self.subscriptions_list.GetSelection()
-        if index != wx.NOT_FOUND and 0 <= index < len(self.subscriptions):
+        item = self.selected_subscription()
+        if item:
+            index = next((index for index, candidate in enumerate(self.subscriptions) if candidate is item), -1)
+            if index < 0:
+                return
             item = self.subscriptions.pop(index)
             self.save_subscriptions()
             self.refresh_subscriptions()
             self.announce_player(self.t("subscription_removed", title=item.get("title", "")))
+
+
+    @staticmethod
+    def normalized_collection_category(value) -> str:
+        return " ".join(str(value or "").split())[:80]
+
+
+    def collection_items_for_category(self, items: list[dict], category: str = "") -> list[dict]:
+        normalized = self.normalized_collection_category(category).casefold()
+        if not normalized:
+            return list(items)
+        return [item for item in items if self.normalized_collection_category(item.get("category")).casefold() == normalized]
+
+
+    def collection_category_names(self, items: list[dict]) -> list[str]:
+        names: dict[str, str] = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = self.normalized_collection_category(item.get("category"))
+            if name:
+                names.setdefault(name.casefold(), name)
+        return sorted(names.values(), key=str.casefold)
+
+
+    def category_display_text(self, item: dict) -> str:
+        category = self.normalized_collection_category(item.get("category"))
+        return self.t("category_value", category=category) if category else ""
+
+
+    def choose_collection_category_filter(self, collection: str) -> None:
+        items = self.subscriptions if collection == "subscriptions" else self.rss_feeds
+        categories = self.collection_category_names(items)
+        choices = [self.t("all_categories")] + categories
+        filter_attr = "subscription_category_filter" if collection == "subscriptions" else "rss_category_filter"
+        current = self.normalized_collection_category(getattr(self, filter_attr, ""))
+        selection = next((index + 1 for index, value in enumerate(categories) if value.casefold() == current.casefold()), 0)
+        with wx.SingleChoiceDialog(self, self.t("category_filter_prompt"), self.t("filter_category"), choices) as dialog:
+            dialog.SetSelection(selection)
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            selected = dialog.GetSelection()
+        setattr(self, filter_attr, "" if selected <= 0 else categories[selected - 1])
+        if collection == "subscriptions":
+            self.refresh_subscriptions()
+        else:
+            self.refresh_rss_feed_list()
+        if selected <= 0:
+            self.announce_player(self.t("category_filter_all"))
+        else:
+            self.announce_player(self.t("category_filter_applied", category=categories[selected - 1]))
+
+
+    def set_collection_item_category(self, item: dict | None, collection: str) -> None:
+        if not item:
+            self.message(self.t("no_selection"))
+            return
+        title = str(item.get("title") or item.get("channel") or self.t("category"))
+        current = self.normalized_collection_category(item.get("category"))
+        with wx.TextEntryDialog(
+            self,
+            self.t("category_prompt", title=title),
+            self.t("set_category"),
+            value=current,
+        ) as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            category = self.normalized_collection_category(dialog.GetValue())
+        if category:
+            item["category"] = category
+        else:
+            item.pop("category", None)
+        if collection == "subscriptions":
+            self.save_subscriptions()
+            self.refresh_subscriptions()
+        else:
+            self.save_rss_feeds()
+            self.refresh_rss_feed_list()
+        self.announce_player(
+            self.t("category_assigned", title=title, category=category)
+            if category
+            else self.t("category_cleared", title=title)
+        )
+
+
+    def choose_subscription_category_filter(self) -> None:
+        self.choose_collection_category_filter("subscriptions")
+
+
+    def set_selected_subscription_category(self) -> None:
+        self.set_collection_item_category(self.selected_subscription(), "subscriptions")
 
 
 
@@ -1022,6 +1134,8 @@ class LibraryMixin:
             [
                 (self.t("open_feed"), self.open_selected_rss_feed),
                 (self.t("remove_feed"), self.remove_rss_feed),
+                (self.t("filter_category"), self.choose_rss_category_filter),
+                (self.t("set_category"), self.set_selected_rss_feed_category),
                 (self.t("import_opml"), self.import_rss_from_opml),
                 (self.t("export_opml"), self.export_rss_to_opml),
             ]
@@ -1041,11 +1155,22 @@ class LibraryMixin:
         if not hasattr(self, "rss_feed_list"):
             return
         try:
+            selection = self.rss_feed_list.GetSelection()
+            old_visible = getattr(self, "visible_rss_feed_items", self.rss_feeds)
+            selected_item = old_visible[selection] if 0 <= selection < len(old_visible) else None
             if self.rss_feeds:
-                labels = [self.rss_feed_line(feed) for feed in self.rss_feeds]
-                index = min(max(0, self.current_rss_feed_index), len(self.rss_feeds) - 1)
-                self.set_listbox_items(self.rss_feed_list, labels, index)
+                visible = self.collection_items_for_category(self.rss_feeds, getattr(self, "rss_category_filter", ""))
+                self.visible_rss_feed_items = visible
+                if visible:
+                    current = self.rss_feeds[self.current_rss_feed_index] if 0 <= self.current_rss_feed_index < len(self.rss_feeds) else None
+                    target_item = selected_item or current
+                    index = next((index for index, candidate in enumerate(visible) if candidate is target_item), 0)
+                    self.set_listbox_items(self.rss_feed_list, [self.rss_feed_line(feed) for feed in visible], index)
+                else:
+                    self.set_listbox_items(self.rss_feed_list, [self.t("category_filter_empty")], 0)
+                    self.set_status(self.t("category_filter_empty"))
             else:
+                self.visible_rss_feed_items = []
                 self.set_listbox_items(self.rss_feed_list, [self.t("rss_feeds_empty")], 0)
                 self.set_status(self.t("rss_feeds_empty"))
         except RuntimeError:
@@ -1059,6 +1184,7 @@ class LibraryMixin:
         speed_preset = self.rss_feed_speed_preset_label(feed)
         parts = [
             feed.get("title") or self.t("rss_unknown_feed_title"),
+            self.category_display_text(feed),
             self.t("rss_feed_item_count", count=count),
             self.t("rss_feed_played_count", count=played_count) if played_count else "",
             speed_preset,
@@ -1208,10 +1334,12 @@ class LibraryMixin:
         if not hasattr(self, "rss_feed_list"):
             return None
         index = self.rss_feed_list.GetSelection()
-        if index == wx.NOT_FOUND or index < 0 or index >= len(self.rss_feeds):
+        visible = getattr(self, "visible_rss_feed_items", self.rss_feeds)
+        if index == wx.NOT_FOUND or index < 0 or index >= len(visible):
             return None
-        self.current_rss_feed_index = index
-        return self.rss_feeds[index]
+        item = visible[index]
+        self.current_rss_feed_index = next((item_index for item_index, candidate in enumerate(self.rss_feeds) if candidate is item), -1)
+        return item if self.current_rss_feed_index >= 0 else None
 
 
     def on_rss_feed_key(self, event: wx.KeyEvent) -> None:
@@ -1232,6 +1360,8 @@ class LibraryMixin:
             (self.t("download_feed"), self.download_selected_rss_feed),
             (self.t("podcast_speed_preset"), self.set_selected_rss_feed_speed_preset),
             (self.t("refresh_feed"), self.refresh_selected_rss_feed),
+            (self.t("set_category"), self.set_selected_rss_feed_category),
+            (self.t("filter_category"), self.choose_rss_category_filter),
             (self.t("copy_url"), lambda: self.copy_item_url(self.selected_rss_feed())),
             (self.t("remove_feed"), self.remove_rss_feed),
         ]
@@ -1433,6 +1563,9 @@ class LibraryMixin:
                     known_urls = {str(item.get("url") or "") for item in existing.get("items") or [] if item.get("url")}
                     refreshed = self.fetch_rss_feed(str(existing.get("url") or ""))
                     refreshed["created_at"] = existing.get("created_at", refreshed.get("created_at", time.time()))
+                    category = self.normalized_collection_category(existing.get("category"))
+                    if category:
+                        refreshed["category"] = category
                     self.preserve_rss_episode_state(refreshed, existing)
                     updated_feeds[index] = refreshed
                     if known_urls:
@@ -1480,15 +1613,24 @@ class LibraryMixin:
 
 
     def remove_rss_feed(self) -> None:
-        if not hasattr(self, "rss_feed_list"):
-            return
-        index = self.rss_feed_list.GetSelection()
-        if index != wx.NOT_FOUND and 0 <= index < len(self.rss_feeds):
+        feed = self.selected_rss_feed()
+        if feed:
+            index = next((item_index for item_index, candidate in enumerate(self.rss_feeds) if candidate is feed), -1)
+            if index < 0:
+                return
             del self.rss_feeds[index]
             self.current_rss_feed_index = min(index, len(self.rss_feeds) - 1)
             self.save_rss_feeds()
             self.refresh_rss_feed_list()
             self.announce_player(self.t("rss_feed_removed"))
+
+
+    def choose_rss_category_filter(self) -> None:
+        self.choose_collection_category_filter("rss")
+
+
+    def set_selected_rss_feed_category(self) -> None:
+        self.set_collection_item_category(self.selected_rss_feed(), "rss")
 
 
     def show_rss_items(self, feed_index: int, selection: int = 0) -> None:

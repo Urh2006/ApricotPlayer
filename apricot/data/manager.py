@@ -282,15 +282,30 @@ class DataManagerMixin:
 
     def save_rss_feeds(self) -> None:
         self.rss_feeds_loaded = True
+        current_feed = None
+        try:
+            current_index = int(getattr(self, "current_rss_feed_index", -1))
+        except (TypeError, ValueError):
+            current_index = -1
+        if 0 <= current_index < len(self.rss_feeds):
+            current_feed = self.rss_feeds[current_index]
         self.rss_feeds = self.sorted_saved_collection_items(self.rss_feeds)
+        if current_feed is not None:
+            self.current_rss_feed_index = next(
+                (index for index, candidate in enumerate(self.rss_feeds) if candidate is current_feed),
+                -1,
+            )
         self.atomic_write_json(RSS_FEEDS_FILE, self.rss_feeds)
 
 
     @staticmethod
-    def saved_collection_sort_key(item: dict) -> tuple[str, str]:
+    def saved_collection_sort_key(item: dict) -> tuple[str, str, str]:
+        if not isinstance(item, dict):
+            return "", "", ""
+        category = str(item.get("category") or "").strip()
         title = str(item.get("title") or item.get("channel") or item.get("name") or "").strip()
         url = str(item.get("url") or "").strip()
-        return title.casefold(), url.casefold()
+        return category.casefold(), title.casefold(), url.casefold()
 
 
     def sorted_saved_collection_items(self, items: list[dict]) -> list[dict]:

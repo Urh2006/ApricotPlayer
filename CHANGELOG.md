@@ -1,3 +1,17 @@
+# v1.0.0-beta.47 - Categorized Libraries and Accessible Media Fields
+
+## Added
+- Saved YouTube subscriptions and RSS/podcast feeds can now be assigned a category. Entering a category creates it, clearing the field removes it, and the category is retained when RSS feeds refresh.
+- Subscription and RSS screens include category filters. Stored collections group by category and then title while preserving focus on the selected item after reordering.
+- `Ctrl+Alt+Left` and `Ctrl+Alt+Right` announce the previous or next individual metadata field for the selected media item. They work in search results, local folders, favorites, history, subscriptions, RSS, podcast, playlist, and queue lists, and are configurable under Settings > Keyboard shortcuts.
+- The main menu and Action Finder now identify the search screen as `Search YouTube / SoundCloud`, making the existing provider selector discoverable.
+
+## Completed Issues
+- Podcast catalogue category browsing, SoundCloud search, YouTube Shorts URL playback, main-menu focus restoration, and the updater version mismatch report are verified in the current codebase.
+
+## Verification
+- Added offline regression coverage for category filtering/sorting, focused RSS reordering, individual media fields, SoundCloud search routing, and Shorts URL parsing.
+
 # v1.0.0-beta.46 - Repository Cleanup and Library Ordering
 
 ## Fixed
