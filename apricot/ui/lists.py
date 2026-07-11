@@ -486,6 +486,9 @@ class ListsUI:
         if len(self.metadata_hydration_urls) > 1000:
             self.metadata_hydration_urls.clear()
         candidates: list[dict] = []
+        api_key_getter = getattr(self, "youtube_data_api_key", None)
+        api_batch_available = callable(api_key_getter) and bool(api_key_getter())
+        batch_size = 50 if api_batch_available else RESULT_METADATA_HYDRATION_BATCH
         for item in list(self.results):
             url = str(item.get("url") or "")
             if item.get("kind") != "video" or not url or url in self.metadata_hydration_urls:
@@ -494,7 +497,7 @@ class ListsUI:
                 continue
             candidates.append(dict(item))
             self.metadata_hydration_urls.add(url)
-            if len(candidates) >= RESULT_METADATA_HYDRATION_BATCH:
+            if len(candidates) >= batch_size:
                 break
         if candidates:
             self.metadata_hydration_running = True
@@ -502,13 +505,29 @@ class ListsUI:
             threading.Thread(target=self.result_metadata_worker, args=(candidates, generation), daemon=True).start()
 
     def result_metadata_worker(self, items: list[dict], generation: int | None = None) -> None:
+        remaining_items = list(items)
+        api_fetcher = getattr(self, "fetch_youtube_api_videos_by_ids", None)
+        api_key_getter = getattr(self, "youtube_data_api_key", None)
+        if callable(api_fetcher) and callable(api_key_getter) and api_key_getter():
+            try:
+                hydrated, hydrated_ids = self.hydrate_results_with_youtube_api(remaining_items)
+                for payload in hydrated:
+                    self.ui_queue.put(("result_metadata", payload))
+                remaining_items = [
+                    item for item in remaining_items if self.result_video_id(item) not in hydrated_ids
+                ]
+            except Exception:
+                remaining_items = list(items)
+        if not remaining_items:
+            wx.CallAfter(self.finish_result_metadata_hydration, generation)
+            return
         ytdlp = get_yt_dlp()
         if ytdlp is None:
             wx.CallAfter(self.finish_result_metadata_hydration, generation)
             return
         options = {"quiet": True, "skip_download": True, "noplaylist": True}
         try:
-            for item in items:
+            for item in remaining_items:
                 url = str(item.get("url") or "")
                 if not url:
                     continue
@@ -522,6 +541,32 @@ class ListsUI:
             pass
         finally:
             wx.CallAfter(self.finish_result_metadata_hydration, generation)
+
+    def result_video_id(self, item: dict) -> str:
+        extractor = getattr(self, "extract_youtube_video_id", None)
+        if callable(extractor):
+            return str(extractor(item) or "")
+        return str(item.get("id") or "")
+
+    def hydrate_results_with_youtube_api(self, items: list[dict]) -> tuple[list[dict], set[str]]:
+        video_ids = [video_id for item in items if (video_id := self.result_video_id(item))]
+        if not video_ids:
+            return [], set()
+        fetched = self.fetch_youtube_api_videos_by_ids(video_ids)
+        details_by_id = {str(item.get("id") or ""): item for item in fetched}
+        hydrated: list[dict] = []
+        hydrated_ids: set[str] = set()
+        for original in items:
+            video_id = self.result_video_id(original)
+            details = details_by_id.get(video_id)
+            if not details:
+                continue
+            payload = dict(original)
+            payload.update({key: value for key, value in details.items() if value not in (None, "")})
+            payload["url"] = original.get("url") or details.get("url") or ""
+            hydrated.append(payload)
+            hydrated_ids.add(video_id)
+        return hydrated, hydrated_ids
 
     def finish_result_metadata_hydration(self, generation: int | None = None) -> None:
         self.metadata_hydration_running = False

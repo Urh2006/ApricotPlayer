@@ -666,6 +666,12 @@
 
 # Changelog
 
+## 1.0.0 Beta 51
+
+- Channel and playlist video upload times now use one batched YouTube Data API request when an API key is configured, so the first visible page can open with complete upload metadata instead of waiting minutes for individual yt-dlp lookups.
+- Loading more collection results fetches metadata only for the newly added page and does not repeat requests for videos already shown.
+- If the YouTube API is unavailable or no key is configured, the existing non-blocking yt-dlp background hydration remains available as a fallback.
+
 ## 1.0.0 Beta 50
 
 - AudioVault login now persists across ApricotPlayer restarts. The saved password is encrypted with Windows DPAPI for the current Windows user and is never stored as plain text.

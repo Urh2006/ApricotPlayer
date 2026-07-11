@@ -116,6 +116,34 @@ class AudioVaultParserTests(unittest.TestCase):
         self.assertEqual(len(harness.metadata_hydration_urls), 12)
         self.assertFalse(harness.metadata_hydration_running)
 
+    def test_youtube_api_hydration_preserves_original_result_url(self):
+        class Harness(ListsUI):
+            @staticmethod
+            def result_video_id(item):
+                return str(item.get("id") or "")
+
+            @staticmethod
+            def fetch_youtube_api_videos_by_ids(video_ids):
+                return [
+                    {
+                        "id": video_id,
+                        "url": f"https://www.youtube.com/watch?v={video_id}",
+                        "age": "Uploaded 1 day ago",
+                        "timestamp": 123,
+                        "view_count": 456,
+                    }
+                    for video_id in video_ids
+                ]
+
+        original_url = "https://www.youtube.com/watch?v=abcdefghijk&list=channel"
+        hydrated, hydrated_ids = Harness().hydrate_results_with_youtube_api(
+            [{"id": "abcdefghijk", "url": original_url, "title": "Original"}]
+        )
+
+        self.assertEqual(hydrated_ids, {"abcdefghijk"})
+        self.assertEqual(hydrated[0]["url"], original_url)
+        self.assertEqual(hydrated[0]["age"], "Uploaded 1 day ago")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -302,6 +302,17 @@ class EventsUI:
             info = self.ydl_extract_info(url, options, download=False)
             entries = list(info.get("entries") or [])[:limit]
             normalized = [self.normalize_entry(entry, result_type) for entry in entries]
+            if result_type == "Video" and self.youtube_data_api_key():
+                try:
+                    start = min(max(0, selection), len(normalized))
+                    hydrated, _hydrated_ids = self.hydrate_results_with_youtube_api(normalized[start:])
+                    hydrated_by_id = {self.result_video_id(item): item for item in hydrated}
+                    for index in range(start, len(normalized)):
+                        replacement = hydrated_by_id.get(self.result_video_id(normalized[index]))
+                        if replacement:
+                            normalized[index] = replacement
+                except Exception:
+                    pass
             if sort_mode == "popular":
                 normalized = self.sorted_popular_channel_results(normalized)
             if self.settings.results_limit == 0 and selection:
