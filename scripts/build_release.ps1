@@ -29,8 +29,7 @@ if (-not $OutputDir) {
 
 Write-Host "Running pre-build syntax checks..."
 $pythonFiles = @(
-    (Join-Path $projectRoot "wx_main.py"),
-    (Join-Path $projectRoot "main.py")
+    (Join-Path $projectRoot "wx_main.py")
 )
 $pythonFiles += Get-ChildItem -Path (Join-Path $projectRoot "apricot") -Recurse -File -Filter "*.py" | ForEach-Object { $_.FullName }
 $compileScript = @'

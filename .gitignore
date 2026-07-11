@@ -14,3 +14,23 @@ vendor/*
 !vendor/.gitkeep
 !vendor/nvda/
 !vendor/nvda/nvdaControllerClient64.dll
+
+# Local reverse-engineering and one-off refactor artifacts.
+ApricotPlayer.exe_extracted/
+ApricotPlayer_v*.zip
+check*.py
+clean_wx_main.py
+dump_methods.py
+extract_ui.py
+fix_mainframe.py
+fix_static.py
+fix_static_import.py
+group.py
+list_functions.py
+list_methods.py
+recovery/
+test_itunes_lookup.py
+test_itunes_rss.py
+ui_methods.txt
+update_wx.py
+wx_main_cleaned.py

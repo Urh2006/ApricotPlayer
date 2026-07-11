@@ -261,15 +261,16 @@ class DataManagerMixin:
 
 
     def load_subscriptions(self) -> list[dict]:
-        return self.load_json_list(SUBSCRIPTIONS_FILE)
+        return self.sorted_saved_collection_items(self.load_json_list(SUBSCRIPTIONS_FILE))
 
 
     def save_subscriptions(self) -> None:
+        self.subscriptions = self.sorted_saved_collection_items(self.subscriptions)
         self.atomic_write_json(SUBSCRIPTIONS_FILE, self.subscriptions)
 
 
     def load_rss_feeds(self) -> list[dict]:
-        return self.load_json_list(RSS_FEEDS_FILE)
+        return self.sorted_saved_collection_items(self.load_json_list(RSS_FEEDS_FILE))
 
 
     def ensure_rss_feeds_loaded(self) -> None:
@@ -281,7 +282,19 @@ class DataManagerMixin:
 
     def save_rss_feeds(self) -> None:
         self.rss_feeds_loaded = True
+        self.rss_feeds = self.sorted_saved_collection_items(self.rss_feeds)
         self.atomic_write_json(RSS_FEEDS_FILE, self.rss_feeds)
+
+
+    @staticmethod
+    def saved_collection_sort_key(item: dict) -> tuple[str, str]:
+        title = str(item.get("title") or item.get("channel") or item.get("name") or "").strip()
+        url = str(item.get("url") or "").strip()
+        return title.casefold(), url.casefold()
+
+
+    def sorted_saved_collection_items(self, items: list[dict]) -> list[dict]:
+        return sorted(items, key=self.saved_collection_sort_key)
 
 
     def load_user_playlists(self) -> list[dict]:

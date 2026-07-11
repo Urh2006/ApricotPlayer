@@ -148,6 +148,24 @@ class SecurityRegressionTests(unittest.TestCase):
             self.assertEqual(path.read_text(encoding="utf-8"), '{\n  "value": 2\n}')
             self.assertFalse(any(candidate.suffix == ".tmp" for candidate in path.parent.iterdir()))
 
+    def test_saved_subscriptions_and_rss_feeds_sort_by_title(self) -> None:
+        manager = DataManagerMixin()
+        manager.load_json_list = lambda _path: [
+            {"title": "zebra", "url": "https://example.test/z"},
+            {"title": "Alpha", "url": "https://example.test/a"},
+            {"title": "beta", "url": "https://example.test/b"},
+        ]
+        self.assertEqual([item["title"] for item in manager.load_subscriptions()], ["Alpha", "beta", "zebra"])
+        self.assertEqual([item["title"] for item in manager.load_rss_feeds()], ["Alpha", "beta", "zebra"])
+
+        manager.subscriptions = [{"title": "Zulu"}, {"title": "apple"}]
+        manager.rss_feeds = [{"title": "Podcast"}, {"title": "Audiobook"}]
+        manager.atomic_write_json = mock.Mock()
+        manager.save_subscriptions()
+        manager.save_rss_feeds()
+        self.assertEqual([item["title"] for item in manager.subscriptions], ["apple", "Zulu"])
+        self.assertEqual([item["title"] for item in manager.rss_feeds], ["Audiobook", "Podcast"])
+
     def test_stale_last_session_save_is_ignored(self) -> None:
         manager = DataManagerMixin()
         manager.last_player_session_save_generation = 2

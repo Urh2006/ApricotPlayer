@@ -1,3 +1,16 @@
+# v1.0.0-beta.46 - Repository Cleanup and Library Ordering
+
+## Fixed
+- Saved YouTube subscriptions and saved RSS/podcast feeds now sort alphabetically by title when loaded and whenever they are saved.
+- Updated the release and security workflows to current SHA-pinned `actions/checkout` and `actions/setup-python` releases, removing the obsolete Node 20 action runtime warning.
+
+## Maintenance
+- Removed the unused pre-wx Tkinter app, PyInstaller extraction, and one-off refactor scripts from the repository.
+- Added narrow ignore rules for local recovery, extraction, diagnostic, and old-archive artifacts so they cannot be committed accidentally.
+
+## Verification
+- Added regression coverage for persisted collection ordering and ran the full test suite, dependency audit, critical Ruff checks, source startup, and a release build.
+
 # v1.0.0-beta.45 - Security, Data Integrity, and Updater Hardening
 
 ## Security
