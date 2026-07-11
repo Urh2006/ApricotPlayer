@@ -22,6 +22,7 @@ from apricot.ui.system import SystemUI
 from apricot.player.playback import PlaybackMixin
 from apricot.player.mpv import MpvMixin
 from apricot.network.youtube import YoutubeMixin
+from apricot.network.audiovault import AudioVaultMixin
 from apricot.system.registry import RegistryMixin
 from apricot.system.diagnostics import DiagnosticsMixin
 from apricot.updater.updater import AppUpdaterMixin
@@ -57,7 +58,7 @@ from apricot.locales import TEXT
 
 from apricot.constants import *
 
-class MainFrame(CookiesUI, DownloadsUI, EqualizerUI, EventsUI, ListsUI, MenusUI, MiscUI, PlayerUI, SearchUI, ShortcutsUI, SystemUI, SettingsMixin, DownloaderMixin, MediaMixin, LibraryMixin, SearchMixin, VolumeMixin, CookiesMixin, DialogsMixin, PlaybackMixin, MpvMixin, YoutubeMixin, RegistryMixin, DiagnosticsMixin, AppUpdaterMixin, DataManagerMixin, UtilsMixin, wx.Frame):
+class MainFrame(AudioVaultMixin, CookiesUI, DownloadsUI, EqualizerUI, EventsUI, ListsUI, MenusUI, MiscUI, PlayerUI, SearchUI, ShortcutsUI, SystemUI, SettingsMixin, DownloaderMixin, MediaMixin, LibraryMixin, SearchMixin, VolumeMixin, CookiesMixin, DialogsMixin, PlaybackMixin, MpvMixin, YoutubeMixin, RegistryMixin, DiagnosticsMixin, AppUpdaterMixin, DataManagerMixin, UtilsMixin, wx.Frame):
     def __init__(self, start_hidden_in_tray: bool = False) -> None:
         super().__init__(None, title=WINDOW_TITLE, size=(950, 680))
         APP_DIR.mkdir(parents=True, exist_ok=True)
@@ -69,6 +70,7 @@ class MainFrame(CookiesUI, DownloadsUI, EqualizerUI, EventsUI, ListsUI, MenusUI,
         self.settings_load_errors: list[str] = []
         self.settings_save_blocked = False
         self.settings = self.load_settings()
+        self.init_audiovault()
         if not settings_file_existed or self.settings_migrated:
             self.save_settings()
         self.favorites = self.load_favorites()

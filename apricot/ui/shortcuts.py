@@ -483,6 +483,7 @@ class ShortcutsUI:
         actions = [
             ("open_main_menu", self.open_main_menu_shortcut),
             ("open_search", self.open_search_shortcut),
+            ("open_audiovault", self.open_audiovault_shortcut),
             ("open_play_from_folder", self.open_play_from_folder_shortcut),
             ("open_play_file", self.open_play_file_shortcut),
             ("open_direct_link", self.open_direct_link_shortcut),

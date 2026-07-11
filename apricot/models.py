@@ -79,6 +79,7 @@ class Settings:
     rate_limit: str = ""
     proxy: str = ""
     youtube_data_api_key: str = ""
+    audiovault_email: str = ""
     cookies_file: str = ""
     cookies_source_file: str = ""
     cookies_source_signature: str = ""

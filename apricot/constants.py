@@ -598,6 +598,7 @@ LANGUAGE_NAMES = {code: name for code, name in LANGUAGES}
 DEFAULT_KEYBOARD_SHORTCUTS = {
     "open_main_menu": "Ctrl+Alt+M",
     "open_search": "Ctrl+Alt+Y",
+    "open_audiovault": "Ctrl+Alt+A",
     "open_play_from_folder": "Ctrl+Alt+O",
     "open_play_file": "Ctrl+Alt+I",
     "open_direct_link": "Ctrl+Alt+L",
@@ -689,6 +690,7 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
 SHORTCUT_DEFINITIONS = [
     ("open_main_menu", "shortcut_open_main_menu"),
     ("open_search", "shortcut_open_search"),
+    ("open_audiovault", "shortcut_open_audiovault"),
     ("open_play_from_folder", "shortcut_open_play_from_folder"),
     ("open_play_file", "shortcut_open_play_file"),
     ("open_direct_link", "shortcut_open_direct_link"),

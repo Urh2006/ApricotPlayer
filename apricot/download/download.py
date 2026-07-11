@@ -41,6 +41,7 @@ class DownloaderMixin:
         global_actions = [
             ("open_main_menu", self.open_main_menu_shortcut),
             ("open_search", self.open_search_shortcut),
+            ("open_audiovault", self.open_audiovault_shortcut),
             ("open_play_from_folder", self.open_play_from_folder_shortcut),
             ("open_direct_link", self.open_direct_link_shortcut),
             ("open_favorites", self.open_favorites_shortcut),
@@ -256,6 +257,12 @@ class DownloaderMixin:
         item = item or self.active_item()
         if not item:
             self.message(self.t("no_selection"))
+            return
+        if str(item.get("kind") or "").startswith("audiovault_"):
+            if not audio_only:
+                self.announce_player(self.t("audiovault_video_unavailable"))
+                return
+            self.download_audiovault_item(item)
             return
         if self.in_player_screen and self.clip_markers_are_set():
             self.export_marked_clip(audio_only=audio_only)

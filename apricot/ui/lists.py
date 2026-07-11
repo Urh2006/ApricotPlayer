@@ -666,6 +666,10 @@ class ListsUI:
                 window.Show(show)
 
     def active_item(self) -> dict | None:
+        if getattr(self, "audiovault_screen_active", False):
+            item = self.selected_audiovault_item()
+            if item:
+                return item
         focus = wx.Window.FindFocus()
         if self.focus_in_results_control(focus):
             return self.selected_result()

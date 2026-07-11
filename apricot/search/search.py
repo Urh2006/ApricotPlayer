@@ -853,6 +853,15 @@ class SearchMixin:
                 self.player_return_data = {}
             self.show_rss_items(feed_index, selection=item_index)
             return
+        if self.player_return_screen == "audiovault":
+            results = list(self.player_return_data.get("results") or self.audiovault_results)
+            if not keep_playing:
+                self.player_return_screen = ""
+                self.player_return_data = {}
+            self.show_audiovault_search()
+            if results:
+                self.show_audiovault_results(results)
+            return
         if self.player_return_screen == "history":
             if not keep_playing:
                 self.player_return_screen = ""

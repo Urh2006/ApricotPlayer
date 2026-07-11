@@ -99,6 +99,7 @@ class SettingsMixin:
             (self.t("podcasts_section"), "podcasts"),
             (self.t("notifications_section"), "notifications"),
             (self.t("cookies_network_section"), "cookies"),
+            (self.t("audiovault_section"), "audiovault"),
             (self.t("keyboard_shortcuts_section"), "shortcuts"),
         ]
 
@@ -234,6 +235,7 @@ class SettingsMixin:
                 "retries",
                 "socket_timeout",
             ],
+            "audiovault": ["audiovault_email"],
             "shortcuts": ["keyboard_shortcuts"],
         }
 
@@ -620,6 +622,11 @@ class SettingsMixin:
                 choice("fragments", str(self.settings.concurrent_fragments), ["1", "2", "4", "8", "16"])
             choice("retries", str(self.settings.retries), ["0", "3", "5", "10", "20"])
             choice("timeout", str(self.settings.socket_timeout), ["5", "10", "20", "30", "60"])
+        elif section_name == "audiovault":
+            text("audiovault_email", getattr(self.settings, "audiovault_email", ""))
+            button("audiovault_login", self.show_audiovault_login)
+            button("audiovault_logout", self.logout_audiovault)
+            button("register", self.open_audiovault_registration)
         elif section_name == "shortcuts":
             form.Add(wx.StaticText(self.settings_scroller, label=self.t("keyboard_shortcuts_help")), 0, wx.ALIGN_CENTER_VERTICAL)
             form.AddSpacer(1)
@@ -1067,6 +1074,8 @@ class SettingsMixin:
             self.settings.proxy = c["proxy"].GetValue()
         if "youtube_data_api_key" in c:
             self.settings.youtube_data_api_key = c["youtube_data_api_key"].GetValue().strip()
+        if "audiovault_email" in c:
+            self.settings.audiovault_email = c["audiovault_email"].GetValue().strip()
         if "cookies" in c:
             entered_cookies_path = c["cookies"].GetValue().strip()
             if entered_cookies_path != self.configured_cookies_display_path():

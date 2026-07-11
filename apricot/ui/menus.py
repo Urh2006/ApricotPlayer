@@ -27,6 +27,7 @@ class MenusUI:
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
         self.folder_screen_active = False
+        self.audiovault_screen_active = False
         self.settings_section_index = 0
         self.clear()
         title = wx.StaticText(self.panel, label=self.t("main_menu"))
@@ -62,6 +63,7 @@ class MenusUI:
             actions.append((label, self.show_playback_queue))
         primary_actions = [
             (self.search_provider_menu_label(), self.show_search),
+            (self.menu_label_with_shortcut("search_audiovault", "open_audiovault"), self.show_audiovault_search),
             (self.menu_label_with_shortcut("play_folder", "open_play_from_folder"), self.show_play_from_folder),
             (self.menu_label_with_shortcut("play_file", "open_play_file"), self.show_play_file),
             (self.menu_label_with_shortcut("direct_link", "open_direct_link"), self.show_direct_link),
@@ -115,6 +117,7 @@ class MenusUI:
         actions = [
             (self.menu_label_with_shortcut("main_menu", "open_main_menu"), self.show_main_menu),
             (self.search_provider_menu_label(), self.show_search),
+            (self.menu_label_with_shortcut("search_audiovault", "open_audiovault"), self.show_audiovault_search),
             (self.menu_label_with_shortcut("play_folder", "open_play_from_folder"), self.show_play_from_folder),
             (self.menu_label_with_shortcut("play_file", "open_play_file"), self.show_play_file),
             (self.menu_label_with_shortcut("direct_link", "open_direct_link"), self.show_direct_link),

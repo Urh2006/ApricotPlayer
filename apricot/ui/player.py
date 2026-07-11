@@ -396,7 +396,13 @@ class PlayerUI:
 
     def resolve_and_start_player(self, command: str, url: str, title: str, announce_start: bool = False, request_generation: int = 0) -> None:
         try:
-            stream_url, headers, info = self.resolve_stream_url(url)
+            item = self.current_video_item or {}
+            if item.get("_audiovault_stream_url"):
+                stream_url = str(item["_audiovault_stream_url"])
+                headers = dict(item.get("_audiovault_headers") or {})
+                info = dict(item)
+            else:
+                stream_url, headers, info = self.resolve_stream_url(url)
             if not self.playback_request_is_current(request_generation):
                 return
             wx.CallAfter(self.merge_current_video_info_for_request, info, request_generation)
@@ -606,6 +612,7 @@ class PlayerUI:
         self.notification_center_screen_active = False
         self.direct_link_screen_active = False
         self.folder_screen_active = False
+        self.audiovault_screen_active = False
         self.clear()
         self.in_player_screen = True
         self.player_control_mode = True

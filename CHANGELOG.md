@@ -666,6 +666,14 @@
 
 # Changelog
 
+## 1.0.0 Beta 48
+
+- Added an accessible AudioVault integration with account login, exact registration link, movie and TV-show search, keyboard navigation, direct movie playback, episode lists, and audio downloads.
+- TV-show packages are cached once, safely extracted with path and size validation, naturally sorted, and exposed as normal playable episode lists with previous and next navigation.
+- Added AudioVault account controls in Settings and a configurable `Ctrl+Alt+A` shortcut. AudioVault video downloads are explicitly rejected because the service provides audio-only described content.
+- AudioVault sessions remain in memory and passwords are never written to settings. Requests are restricted to trusted AudioVault HTTPS hosts and avoid background catalog crawling to respect the service's daily limits.
+- The normal YouTube, local playback, mpv startup, seek, volume, bass boost, and equalizer paths are unchanged.
+
 ## What's new in version 0.9.20
 
 - fixed an issue where searching on SoundCloud incorrectly treated single tracks as "Channels" and prevented them from loading. The search filters will now dynamically lock when SoundCloud is selected, ensuring all tracks load and play instantly. Direct SoundCloud profile links pasted into the search bar are also now fully supported!
