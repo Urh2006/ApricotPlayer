@@ -24,7 +24,10 @@ class PlayerResolutionTests(unittest.TestCase):
             mpv.parent.mkdir(parents=True)
             mpv.write_bytes(b"mpv")
             with patch("apricot.ui.player.sys.executable", str(executable)), patch("apricot.ui.player.shutil.which", return_value=None):
-                self.assertEqual(Harness().resolve_player(), (str(mpv), "mpv"))
+                resolved = Harness().resolve_player()
+                self.assertIsNotNone(resolved)
+                self.assertEqual(resolved[1], "mpv")
+                self.assertTrue(Path(resolved[0]).samefile(mpv))
 
 
 if __name__ == "__main__":
