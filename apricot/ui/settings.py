@@ -235,7 +235,7 @@ class SettingsMixin:
                 "retries",
                 "socket_timeout",
             ],
-            "audiovault": ["audiovault_email"],
+            "audiovault": ["audiovault_email", "audiovault_password_protected"],
             "shortcuts": ["keyboard_shortcuts"],
         }
 
@@ -624,7 +624,7 @@ class SettingsMixin:
             choice("timeout", str(self.settings.socket_timeout), ["5", "10", "20", "30", "60"])
         elif section_name == "audiovault":
             text("audiovault_email", getattr(self.settings, "audiovault_email", ""))
-            button("audiovault_login", self.show_audiovault_login)
+            button("audiovault_login", self.login_audiovault_from_settings)
             button("audiovault_logout", self.logout_audiovault)
             button("register", self.open_audiovault_registration)
         elif section_name == "shortcuts":
@@ -803,6 +803,9 @@ class SettingsMixin:
                     CACHED_COOKIES_FILE.unlink()
             except OSError:
                 pass
+        elif section_name == "audiovault":
+            self.audiovault_cookie_jar.clear()
+            self.audiovault_logged_in = False
         self.save_settings()
         self.sync_windows_startup_registration(show_error=True)
         self.configure_subscription_timer()
@@ -1075,7 +1078,11 @@ class SettingsMixin:
         if "youtube_data_api_key" in c:
             self.settings.youtube_data_api_key = c["youtube_data_api_key"].GetValue().strip()
         if "audiovault_email" in c:
-            self.settings.audiovault_email = c["audiovault_email"].GetValue().strip()
+            audiovault_email = c["audiovault_email"].GetValue().strip()
+            if audiovault_email != getattr(self.settings, "audiovault_email", ""):
+                self.settings.audiovault_password_protected = ""
+                self.audiovault_logged_in = False
+            self.settings.audiovault_email = audiovault_email
         if "cookies" in c:
             entered_cookies_path = c["cookies"].GetValue().strip()
             if entered_cookies_path != self.configured_cookies_display_path():

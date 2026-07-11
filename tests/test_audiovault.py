@@ -1,13 +1,28 @@
+import os
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
-from apricot.network.audiovault import AudioVaultMixin, _VaultPageParser
+from apricot.network.audiovault import (
+    AudioVaultMixin,
+    _VaultPageParser,
+    protect_audiovault_password,
+    unprotect_audiovault_password,
+)
 from apricot.ui.lists import ListsUI
 
 
 class AudioVaultParserTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "AudioVault credentials use Windows DPAPI")
+    def test_password_protection_round_trip_is_not_plaintext(self):
+        password = "not-written-in-plain-text"
+        protected = protect_audiovault_password(password)
+        self.assertTrue(protected)
+        self.assertNotIn(password, protected)
+        self.assertEqual(unprotect_audiovault_password(protected), password)
+
     def test_parser_reads_result_rows_links_and_csrf_token(self):
         parser = _VaultPageParser()
         parser.feed(
@@ -68,6 +83,38 @@ class AudioVaultParserTests(unittest.TestCase):
             },
         )
         self.assertEqual(line, "Example movie | Movie")
+
+    def test_metadata_hydration_continues_through_all_visible_results(self):
+        class Harness(ListsUI):
+            def __init__(self):
+                self.results = [
+                    {"kind": "video", "url": f"https://example.test/{index}"}
+                    for index in range(12)
+                ]
+                self.metadata_hydration_urls = set()
+                self.metadata_hydration_running = False
+                self.search_generation = 4
+                self.batches = []
+
+            def result_metadata_worker(self, items, generation=None):
+                self.batches.append([item["url"] for item in items])
+                self.finish_result_metadata_hydration(generation)
+
+        class ImmediateThread:
+            def __init__(self, target, args=(), **_kwargs):
+                self.target = target
+                self.args = args
+
+            def start(self):
+                self.target(*self.args)
+
+        harness = Harness()
+        with mock.patch("apricot.ui.lists.threading.Thread", ImmediateThread):
+            harness.start_result_metadata_hydration()
+
+        self.assertEqual([len(batch) for batch in harness.batches], [5, 5, 2])
+        self.assertEqual(len(harness.metadata_hydration_urls), 12)
+        self.assertFalse(harness.metadata_hydration_running)
 
 
 if __name__ == "__main__":

@@ -80,6 +80,7 @@ class Settings:
     proxy: str = ""
     youtube_data_api_key: str = ""
     audiovault_email: str = ""
+    audiovault_password_protected: str = ""
     cookies_file: str = ""
     cookies_source_file: str = ""
     cookies_source_signature: str = ""

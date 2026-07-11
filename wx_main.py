@@ -223,6 +223,7 @@ class MainFrame(AudioVaultMixin, CookiesUI, DownloadsUI, EqualizerUI, EventsUI, 
         self.audio_device_options_cache: tuple[float, list[str], list[str]] | None = None
         self.audio_device_refresh_running = False
         self.metadata_hydration_urls: set[str] = set()
+        self.metadata_hydration_running = False
         self.search_generation = 0
         self.playlist_play_generation = 0
         self.local_folder_cache: dict[str, list[dict]] = {}

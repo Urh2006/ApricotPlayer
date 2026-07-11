@@ -477,6 +477,8 @@ class ListsUI:
         return self.results[selection]
 
     def start_result_metadata_hydration(self) -> None:
+        if getattr(self, "metadata_hydration_running", False):
+            return
         # Keep the tracking set from growing unboundedly over a long session.
         # Clearing it when it gets large just means a handful of URLs may be
         # re-fetched; that is harmless and far cheaper than holding thousands
@@ -495,11 +497,14 @@ class ListsUI:
             if len(candidates) >= RESULT_METADATA_HYDRATION_BATCH:
                 break
         if candidates:
-            threading.Thread(target=self.result_metadata_worker, args=(candidates,), daemon=True).start()
+            self.metadata_hydration_running = True
+            generation = self.search_generation
+            threading.Thread(target=self.result_metadata_worker, args=(candidates, generation), daemon=True).start()
 
-    def result_metadata_worker(self, items: list[dict]) -> None:
+    def result_metadata_worker(self, items: list[dict], generation: int | None = None) -> None:
         ytdlp = get_yt_dlp()
         if ytdlp is None:
+            wx.CallAfter(self.finish_result_metadata_hydration, generation)
             return
         options = {"quiet": True, "skip_download": True, "noplaylist": True}
         try:
@@ -514,7 +519,15 @@ class ListsUI:
                 except Exception:
                     continue
         except Exception:
+            pass
+        finally:
+            wx.CallAfter(self.finish_result_metadata_hydration, generation)
+
+    def finish_result_metadata_hydration(self, generation: int | None = None) -> None:
+        self.metadata_hydration_running = False
+        if generation is not None and generation != self.search_generation:
             return
+        self.start_result_metadata_hydration()
 
     @staticmethod
     def popular_result_sort_key(item: dict) -> tuple[int, int, str]:

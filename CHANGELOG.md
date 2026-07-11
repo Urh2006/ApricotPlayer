@@ -666,6 +666,13 @@
 
 # Changelog
 
+## 1.0.0 Beta 50
+
+- AudioVault login now persists across ApricotPlayer restarts. The saved password is encrypted with Windows DPAPI for the current Windows user and is never stored as plain text.
+- The initial AudioVault login dialog now focuses the email field instead of the OK button.
+- Logging out, changing the saved email, resetting AudioVault settings, or restoring all defaults now also clears the protected saved login and active AudioVault session.
+- Fixed channel and playlist upload ages often appearing only for the first few results. Metadata continues loading in small background batches without delaying the initial result list.
+
 ## 1.0.0 Beta 49
 
 - Fixed AudioVault movie playback falsely reporting that the internal mpv player was missing in some installed or updater layouts. Apricot now checks the frozen runtime, installed `_internal` folder, portable folder, source vendor folder, and system PATH.

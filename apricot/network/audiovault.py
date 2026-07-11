@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import html
 import http.cookiejar
+import base64
+import ctypes
 import os
 import re
 import shutil
@@ -25,6 +27,102 @@ AUDIOVAULT_MAX_RESPONSE = 8 * 1024 * 1024
 AUDIOVAULT_MAX_ARCHIVE = 8 * 1024 * 1024 * 1024
 AUDIOVAULT_MAX_EXTRACTED = 16 * 1024 * 1024 * 1024
 _AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".m4b", ".mp3", ".ogg", ".opus", ".wav", ".wma"}
+_AUDIOVAULT_DPAPI_ENTROPY = b"ApricotPlayer AudioVault credentials v1"
+
+
+class _DataBlob(ctypes.Structure):
+    _fields_ = [("cbData", ctypes.c_ulong), ("pbData", ctypes.POINTER(ctypes.c_ubyte))]
+
+
+def _blob_from_bytes(data: bytes):
+    buffer = ctypes.create_string_buffer(data)
+    blob = _DataBlob(len(data), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte)))
+    return blob, buffer
+
+
+def _windows_crypto_libraries():
+    crypt32 = ctypes.windll.crypt32
+    kernel32 = ctypes.windll.kernel32
+    blob_pointer = ctypes.POINTER(_DataBlob)
+    crypt32.CryptProtectData.argtypes = [
+        blob_pointer,
+        ctypes.c_wchar_p,
+        blob_pointer,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_ulong,
+        blob_pointer,
+    ]
+    crypt32.CryptProtectData.restype = ctypes.c_bool
+    crypt32.CryptUnprotectData.argtypes = [
+        blob_pointer,
+        ctypes.c_void_p,
+        blob_pointer,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_ulong,
+        blob_pointer,
+    ]
+    crypt32.CryptUnprotectData.restype = ctypes.c_bool
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel32.LocalFree.restype = ctypes.c_void_p
+    return crypt32, kernel32
+
+
+def protect_audiovault_password(password: str) -> str:
+    if os.name != "nt" or not password:
+        return ""
+    raw_blob, raw_buffer = _blob_from_bytes(password.encode("utf-8"))
+    entropy_blob, entropy_buffer = _blob_from_bytes(_AUDIOVAULT_DPAPI_ENTROPY)
+    output = _DataBlob()
+    crypt32, kernel32 = _windows_crypto_libraries()
+    success = crypt32.CryptProtectData(
+        ctypes.byref(raw_blob),
+        "ApricotPlayer AudioVault",
+        ctypes.byref(entropy_blob),
+        None,
+        None,
+        0x1,
+        ctypes.byref(output),
+    )
+    _ = raw_buffer, entropy_buffer
+    if not success:
+        raise ctypes.WinError()
+    try:
+        return base64.b64encode(ctypes.string_at(output.pbData, output.cbData)).decode("ascii")
+    finally:
+        kernel32.LocalFree(ctypes.cast(output.pbData, ctypes.c_void_p))
+
+
+def unprotect_audiovault_password(value: str) -> str:
+    if os.name != "nt" or not value:
+        return ""
+    try:
+        encrypted = base64.b64decode(value.encode("ascii"), validate=True)
+    except (ValueError, UnicodeError):
+        return ""
+    encrypted_blob, encrypted_buffer = _blob_from_bytes(encrypted)
+    entropy_blob, entropy_buffer = _blob_from_bytes(_AUDIOVAULT_DPAPI_ENTROPY)
+    output = _DataBlob()
+    crypt32, kernel32 = _windows_crypto_libraries()
+    success = crypt32.CryptUnprotectData(
+        ctypes.byref(encrypted_blob),
+        None,
+        ctypes.byref(entropy_blob),
+        None,
+        None,
+        0x1,
+        ctypes.byref(output),
+    )
+    _ = encrypted_buffer, entropy_buffer
+    if not success:
+        return ""
+    try:
+        return ctypes.string_at(output.pbData, output.cbData).decode("utf-8")
+    except UnicodeError:
+        return ""
+    finally:
+        kernel32.LocalFree(ctypes.cast(output.pbData, ctypes.c_void_p))
 
 
 class _VaultPageParser(HTMLParser):
@@ -117,6 +215,8 @@ class AudioVaultMixin:
         outer.Add(buttons, 0, wx.ALL | wx.ALIGN_RIGHT, 10)
         dialog.SetSizerAndFit(outer)
         password.Bind(wx.EVT_TEXT_ENTER, lambda _evt: dialog.EndModal(wx.ID_OK))
+        email.SetFocus()
+        wx.CallAfter(email.SetFocus)
         if dialog.ShowModal() != wx.ID_OK:
             dialog.Destroy()
             return False
@@ -126,10 +226,10 @@ class AudioVaultMixin:
             self.message(self.t("audiovault_credentials_required"), wx.ICON_ERROR)
             return False
         self.set_status(self.t("audiovault_logging_in"))
-        threading.Thread(target=self.audiovault_login_worker, args=(address, secret, after_login), daemon=True).start()
+        threading.Thread(target=self.audiovault_login_worker, args=(address, secret, after_login, True), daemon=True).start()
         return True
 
-    def audiovault_login_worker(self, email: str, password: str, after_login=None) -> None:
+    def audiovault_login_worker(self, email: str, password: str, after_login=None, remember: bool = True) -> None:
         try:
             with self.audiovault_request(f"{AUDIOVAULT_BASE_URL}/login") as response:
                 parser = _VaultPageParser()
@@ -146,20 +246,46 @@ class AudioVaultMixin:
                 raise ValueError(self.t("audiovault_login_failed"))
             self.audiovault_logged_in = True
             self.settings.audiovault_email = email
+            if remember:
+                self.settings.audiovault_password_protected = protect_audiovault_password(password)
             self.save_settings()
             wx.CallAfter(self.set_status, self.t("audiovault_logged_in"))
             if after_login:
                 wx.CallAfter(after_login)
         except Exception as exc:
             self.audiovault_logged_in = False
-            wx.CallAfter(self.message, self.t("audiovault_login_error", error=self.friendly_error(exc)), wx.ICON_ERROR)
+            retry_interactively = not remember
+            if retry_interactively:
+                self.settings.audiovault_password_protected = ""
+                self.save_settings()
+            wx.CallAfter(
+                self.finish_audiovault_login_error,
+                self.t("audiovault_login_error", error=self.friendly_error(exc)),
+                after_login,
+                retry_interactively,
+            )
+
+    def finish_audiovault_login_error(self, message: str, after_login=None, retry_interactively: bool = False) -> None:
+        self.message(message, wx.ICON_ERROR)
+        if retry_interactively:
+            self.show_audiovault_login(after_login)
 
     def open_audiovault_shortcut(self) -> None:
         self.run_global_navigation_shortcut(self.show_audiovault_search)
 
     def show_audiovault_search(self) -> None:
         if not self.audiovault_logged_in:
-            self.show_audiovault_login(self.show_audiovault_search)
+            email = str(getattr(self.settings, "audiovault_email", "") or "").strip()
+            password = unprotect_audiovault_password(str(getattr(self.settings, "audiovault_password_protected", "") or ""))
+            if email and password:
+                self.set_status(self.t("audiovault_logging_in"))
+                threading.Thread(
+                    target=self.audiovault_login_worker,
+                    args=(email, password, self.show_audiovault_search, False),
+                    daemon=True,
+                ).start()
+            else:
+                self.show_audiovault_login(self.show_audiovault_search)
             return
         self.last_activated_menu_action = self.show_audiovault_search
         self.in_main_menu = False
@@ -481,6 +607,14 @@ class AudioVaultMixin:
     def open_audiovault_registration(self) -> None:
         webbrowser.open(AUDIOVAULT_REGISTER_URL)
 
+    def login_audiovault_from_settings(self) -> None:
+        self.apply_settings_from_visible_controls()
+        self.show_audiovault_login()
+
     def logout_audiovault(self) -> None:
-        self.init_audiovault()
+        self.audiovault_cookie_jar.clear()
+        self.audiovault_logged_in = False
+        self.settings.audiovault_email = ""
+        self.settings.audiovault_password_protected = ""
+        self.save_settings()
         self.set_status(self.t("audiovault_logged_out"))
