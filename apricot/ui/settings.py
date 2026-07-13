@@ -470,18 +470,18 @@ class SettingsMixin:
         elif section_name == "main_menu":
             options = self.main_menu_customization_options()
             hidden = set(getattr(self.settings, "main_menu_hidden_actions", []) or [])
-            form.AddSpacer(1)
-            menu_items = wx.CheckListBox(self.settings_scroller, choices=[label for _action_id, label in options])
-            menu_items.SetName(self.t("main_menu_items"))
-            menu_items.SetMinSize((-1, 360))
-            menu_items._apricot_main_menu_action_ids = [action_id for action_id, _label in options]
-            for index, (action_id, _label) in enumerate(options):
-                menu_items.Check(index, action_id not in hidden)
-            if options:
-                menu_items.SetSelection(0)
-            menu_items.Bind(wx.EVT_KEY_DOWN, self.on_main_menu_items_key)
-            form.Add(menu_items, 1, wx.EXPAND)
-            remember("main_menu_items", menu_items)
+            menu_items = []
+            for action_id, label in options:
+                form.AddSpacer(1)
+                item = wx.CheckBox(self.settings_scroller, label=label)
+                item.SetName(label)
+                item.SetValue(action_id not in hidden)
+                item._apricot_main_menu_action_id = action_id
+                item.Bind(wx.EVT_KEY_DOWN, self.on_main_menu_item_key)
+                form.Add(item, 1, wx.EXPAND)
+                menu_items.append(item)
+                self.settings_control_order.append(item)
+            self.controls["main_menu_items"] = menu_items
         elif section_name == "playback":
             choice("player_speed", self.settings.player_speed, [self.format_playback_rate(step) for step in PLAYBACK_SPEED_STEPS if step <= 2.0])
             choice("speed_audio_mode", self.normalized_speed_audio_mode(), SPEED_AUDIO_MODE_OPTIONS, self.speed_audio_mode_labels())
@@ -700,15 +700,28 @@ class SettingsMixin:
             self.focus_later(focus)
 
 
-    def on_main_menu_items_key(self, event: wx.KeyEvent) -> None:
-        control = event.GetEventObject()
-        if event.GetKeyCode() != wx.WXK_SPACE or not isinstance(control, wx.CheckListBox):
+    def on_main_menu_item_key(self, event: wx.KeyEvent, control: wx.CheckBox | None = None) -> None:
+        control = control or event.GetEventObject()
+        key = event.GetKeyCode()
+        if key not in {wx.WXK_UP, wx.WXK_DOWN, wx.WXK_HOME, wx.WXK_END} or not isinstance(control, wx.CheckBox):
             event.Skip()
             return
-        selection = control.GetSelection()
-        if selection == wx.NOT_FOUND:
+        menu_items = self.controls.get("main_menu_items", []) if hasattr(self, "controls") else []
+        if control not in menu_items:
             return
-        control.Check(selection, not control.IsChecked(selection))
+        current_index = menu_items.index(control)
+        if key == wx.WXK_HOME:
+            target_index = 0
+        elif key == wx.WXK_END:
+            target_index = len(menu_items) - 1
+        else:
+            offset = -1 if key == wx.WXK_UP else 1
+            target_index = min(max(current_index + offset, 0), len(menu_items) - 1)
+        target = menu_items[target_index]
+        self.safe_set_focus(target)
+        scroller = self.live_window(getattr(self, "settings_scroller", None))
+        if scroller is not None and hasattr(scroller, "ScrollChildIntoView"):
+            wx.CallAfter(scroller.ScrollChildIntoView, target)
 
 
     def add_equalizer_profile_from_settings(self) -> None:
@@ -951,9 +964,10 @@ class SettingsMixin:
             self.settings.show_shortcuts_in_labels = c["show_shortcuts_in_labels"].GetValue()
         if "main_menu_items" in c:
             menu_items = c["main_menu_items"]
-            action_ids = list(getattr(menu_items, "_apricot_main_menu_action_ids", []))
             self.settings.main_menu_hidden_actions = [
-                action_id for index, action_id in enumerate(action_ids) if not menu_items.IsChecked(index)
+                item._apricot_main_menu_action_id
+                for item in menu_items
+                if not item.GetValue()
             ]
         if "seek_seconds" in c:
             self.settings.seek_seconds = self.to_float(self.selected_choice_value("seek_seconds"), 5.0, 0.1, 600.0)

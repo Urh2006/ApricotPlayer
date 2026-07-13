@@ -666,6 +666,12 @@
 
 # Changelog
 
+## 1.0.0 Beta 53
+
+- Replaced the Customize main menu checklist with individual native checkbox controls that screen readers identify as checked or unchecked.
+- Up and Down move between menu-item checkboxes, Home and End jump to the first or last checkbox, and Space uses the native checkbox action with screen-reader state feedback.
+- Main-menu visibility, saved preferences, resets, global shortcuts, and Action Finder behavior remain unchanged.
+
 ## 1.0.0 Beta 52
 
 - Added a Customize main menu section in Settings with an accessible checklist of every permanent and conditional main-menu action.

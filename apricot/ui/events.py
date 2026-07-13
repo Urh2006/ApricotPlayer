@@ -403,12 +403,22 @@ class EventsUI:
 
     def on_char_hook(self, event: wx.KeyEvent) -> None:
         focus = wx.Window.FindFocus()
+        key = event.GetKeyCode()
         details_has_focus = focus is self.video_details
         if self.is_modifier_only_event(event):
             return
         if self.is_shortcut_capture_control(focus):
             self.on_shortcut_capture_key(event, focus)
             return
+
+        main_menu_items = self.controls.get("main_menu_items", []) if hasattr(self, "controls") else []
+        if focus in main_menu_items:
+            if key in {wx.WXK_UP, wx.WXK_DOWN, wx.WXK_HOME, wx.WXK_END}:
+                self.on_main_menu_item_key(event, focus)
+                return
+            if key == wx.WXK_SPACE:
+                event.Skip()
+                return
 
         # SpinCtrl handles Up/Down/Home/End/PageUp/PageDown natively for value increment.
         # CheckBox and Slider are intentionally excluded so player shortcuts (seek, play/pause)
@@ -422,7 +432,6 @@ class EventsUI:
                 return
 
         # Ensure editable text fields accept native typing and navigation (arrows, tab, backspace, etc.)
-        key = event.GetKeyCode()
         if self.focus_accepts_text(focus):
             if key in {wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER}:
                 if focus is getattr(self, "query", None):

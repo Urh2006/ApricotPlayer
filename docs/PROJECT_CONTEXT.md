@@ -2,8 +2,8 @@
 
 ## Trenutni posnetek
 
-- Datum posnetka: 11. julij 2026.
-- Trenutna verzija: `1.0.0-beta.47`.
+- Datum posnetka: 13. julij 2026.
+- Trenutna verzija: `1.0.0-beta.53`.
 - Trenutna razvojna veja: `beta`.
 - Stabilna 1.0 še ni izdana.
 - Obstoječi 1.0 roadmap je izveden, vendar je AudioVault še potrjen del obsega pred stabilno 1.0.
@@ -44,7 +44,7 @@ Pregledani so bili vsi trenutno dosegljivi Codex chati o projektu:
 
 - prvotni razvoj od začetka do `0.8.49`;
 - obnovitveni chat in izdaja `0.8.50`;
-- nadaljevanje od `0.8.51` do `1.0.0-beta.47`;
+- nadaljevanje od `0.8.51` do `1.0.0-beta.53`;
 - prekinjeni chat o neodvisnem resume času.
 
 Prekinjeni resume problem ni odprta naloga: poznejša `1.0.0-beta.31` ga je rešila tako, da se shranjena pozicija veže na dejansko predvajani item, ne na novi item, ki ga UI ravno odpira.
