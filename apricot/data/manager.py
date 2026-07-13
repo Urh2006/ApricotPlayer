@@ -160,6 +160,15 @@ class DataManagerMixin:
                     merged["update_channel"] = "beta"
                     self.settings_migrated = True
                 merged["stream_url_cache_minutes"] = self.normalized_stream_url_cache_minutes(merged.get("stream_url_cache_minutes"))
+                hidden_main_menu_actions = merged.get("main_menu_hidden_actions")
+                if not isinstance(hidden_main_menu_actions, list):
+                    hidden_main_menu_actions = []
+                    self.settings_migrated = True
+                merged["main_menu_hidden_actions"] = [
+                    action_id
+                    for action_id in MAIN_MENU_CUSTOMIZABLE_IDS
+                    if action_id in {str(value) for value in hidden_main_menu_actions}
+                ]
                 self.settings_loaded_from_path = source
                 if source != SETTINGS_FILE:
                     self.settings_migrated = True

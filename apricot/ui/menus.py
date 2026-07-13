@@ -50,52 +50,50 @@ class MenusUI:
         self.focus_later(self.menu_list)
 
     def build_main_menu_actions(self) -> list[tuple[str, callable]]:
-        actions: list[tuple[str, callable]] = []
         pending_version = self.pending_app_update_version()
-        if pending_version:
-            actions.append((self.t("app_update_menu_item", version=pending_version), self.open_pending_app_update))
         download_count = len(self.download_queue) + len(self.active_downloads)
-        if download_count:
-            label = self.label_with_shortcut(f"{self.t('current_downloads')} ({download_count})", "open_current_downloads", "\t")
-            actions.append((label, self.show_download_queue))
-        if self.playback_queue:
-            label = self.label_with_shortcut(f"{self.t('playback_queue')} ({len(self.playback_queue)})", "open_playback_queue", "\t")
-            actions.append((label, self.show_playback_queue))
-        primary_actions = [
-            (self.search_provider_menu_label(), self.show_search),
-            (self.menu_label_with_shortcut("search_audiovault", "open_audiovault"), self.show_audiovault_search),
-            (self.menu_label_with_shortcut("play_folder", "open_play_from_folder"), self.show_play_from_folder),
-            (self.menu_label_with_shortcut("play_file", "open_play_file"), self.show_play_file),
-            (self.menu_label_with_shortcut("direct_link", "open_direct_link"), self.show_direct_link),
-            (self.menu_label_with_shortcut("favorites", "open_favorites"), self.show_favorites),
-            (self.menu_label_with_shortcut("bookmarks", "open_bookmarks"), self.show_bookmarks),
-            (self.menu_label_with_shortcut("playlists", "open_playlists"), self.show_user_playlists),
-            (self.menu_label_with_shortcut("subscriptions", "open_subscriptions"), self.show_subscriptions),
-            (self.menu_label_with_shortcut("notification_center", "new_subscription_videos"), self.show_notification_center),
+        definitions = {
+            "app_update": (self.t("app_update_menu_item", version=pending_version), self.open_pending_app_update, bool(pending_version)),
+            "current_downloads": (self.label_with_shortcut(f"{self.t('current_downloads')} ({download_count})", "open_current_downloads", "\t"), self.show_download_queue, bool(download_count)),
+            "playback_queue": (self.label_with_shortcut(f"{self.t('playback_queue')} ({len(self.playback_queue)})", "open_playback_queue", "\t"), self.show_playback_queue, bool(self.playback_queue)),
+            "search": (self.search_provider_menu_label(), self.show_search, True),
+            "resume_last_session": (self.t("resume_last_session"), self.resume_last_player_session, self.last_player_session_available() and getattr(self.settings, "show_resume_in_menu", True)),
+            "trending": (self.t("trending"), self.show_trending, bool(getattr(self.settings, "enable_trending", False))),
+            "audiovault": (self.menu_label_with_shortcut("search_audiovault", "open_audiovault"), self.show_audiovault_search, True),
+            "play_folder": (self.menu_label_with_shortcut("play_folder", "open_play_from_folder"), self.show_play_from_folder, True),
+            "play_file": (self.menu_label_with_shortcut("play_file", "open_play_file"), self.show_play_file, True),
+            "direct_link": (self.menu_label_with_shortcut("direct_link", "open_direct_link"), self.show_direct_link, True),
+            "favorites": (self.menu_label_with_shortcut("favorites", "open_favorites"), self.show_favorites, True),
+            "bookmarks": (self.menu_label_with_shortcut("bookmarks", "open_bookmarks"), self.show_bookmarks, True),
+            "playlists": (self.menu_label_with_shortcut("playlists", "open_playlists"), self.show_user_playlists, True),
+            "subscriptions": (self.menu_label_with_shortcut("subscriptions", "open_subscriptions"), self.show_subscriptions, True),
+            "notification_center": (self.menu_label_with_shortcut("notification_center", "new_subscription_videos"), self.show_notification_center, True),
+            "history": (self.menu_label_with_shortcut("history", "open_history"), self.show_history, bool(self.settings.enable_history)),
+            "rss_feeds": (self.menu_label_with_shortcut("rss_feeds", "open_podcasts_rss"), self.show_rss_feeds, bool(self.settings.enable_podcasts_rss)),
+            "file_converter": (self.t("file_converter"), self.show_file_converter, True),
+            "folder_converter": (self.t("folder_converter"), self.show_folder_converter, True),
+            "diagnostic_report": (self.menu_label_with_shortcut("copy_diagnostic_report", "copy_diagnostic_report"), self.copy_diagnostic_report, True),
+        }
+        hidden = set(getattr(self.settings, "main_menu_hidden_actions", []) or [])
+        actions = [
+            (definitions[action_id][0], definitions[action_id][1])
+            for action_id, _label_key in MAIN_MENU_CUSTOMIZABLE_ITEMS
+            if action_id not in hidden and definitions[action_id][2]
         ]
-        if getattr(self.settings, "enable_trending", False):
-            primary_actions.insert(1, (self.t("trending"), self.show_trending))
-        actions.extend(primary_actions)
-        if self.last_player_session_available() and getattr(self.settings, "show_resume_in_menu", True):
-            # Insert resume just after "search youtube" (index 0 among primary actions,
-            # offset by any dynamic items already prepended above)
-            search_idx = next(
-                (i for i, a in enumerate(actions) if a[1] == self.show_search),
-                len(actions) - 1,
-            )
-            actions.insert(search_idx + 1, (self.t("resume_last_session"), self.resume_last_player_session))
-        if self.settings.enable_history:
-            actions.append((self.menu_label_with_shortcut("history", "open_history"), self.show_history))
-        if self.settings.enable_podcasts_rss:
-            actions.append((self.menu_label_with_shortcut("rss_feeds", "open_podcasts_rss"), self.show_rss_feeds))
         actions.extend([
-            (self.t("file_converter"), self.show_file_converter),
-            (self.t("folder_converter"), self.show_folder_converter),
-            (self.menu_label_with_shortcut("copy_diagnostic_report", "copy_diagnostic_report"), self.copy_diagnostic_report),
             (self.menu_label_with_shortcut("settings", "open_settings"), self.show_settings),
             (self.t("exit"), self.quit_application),
         ])
         return actions
+
+    def main_menu_customization_options(self) -> list[tuple[str, str]]:
+        labels = {
+            "search": f"{self.t('search_youtube')} / {self.t('soundcloud')}",
+        }
+        return [
+            (action_id, labels.get(action_id, self.t(label_key)))
+            for action_id, label_key in MAIN_MENU_CUSTOMIZABLE_ITEMS
+        ]
 
     def on_menu_key(self, event: wx.KeyEvent) -> None:
         if self.is_modifier_only_event(event):

@@ -44,6 +44,7 @@ Za trenutno verzijo vedno preberi `apricot/__init__.py`, `apricot/constants.py`,
 - Izogibaj se širokim refaktorjem med ozkim bugfixom. Ohrani vedenje, ki ni povezano z zahtevo.
 - Ne dodajaj čakanja, dodatnega yt-dlp klica, cookies poti ali omrežnega fallbacka na običajno uspešno pot brez dokazane potrebe.
 - Uporabniške nastavitve, zgodovina, favorites, playlisti, pozicije, bookmarks, subscriptions in RSS podatki se pri posodobitvah ne smejo izgubiti ali prepisati.
+- Vsako novo možnost glavnega menija dodaj v `MAIN_MENU_CUSTOMIZABLE_ITEMS`, da jo lahko uporabnik skrije v sekciji Customize main menu. Skrivanje ne sme onemogočiti pripadajoče globalne bližnjice. `Settings` in `Exit` morata vedno ostati vidna in zato ne sodita v nastavljivi katalog.
 
 ## Preverjanje
 

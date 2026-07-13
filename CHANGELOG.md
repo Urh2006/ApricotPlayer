@@ -666,6 +666,13 @@
 
 # Changelog
 
+## 1.0.0 Beta 52
+
+- Added a Customize main menu section in Settings with an accessible checklist of every permanent and conditional main-menu action.
+- Unchecked actions are hidden after saving while their global keyboard shortcuts and Action Finder entries continue to work.
+- Settings and Exit are permanent and cannot be hidden. All customizable actions are enabled by default and return to enabled when the section or all settings are reset.
+- Dynamic entries such as application updates, current downloads, playback queue, and resume last session respect the same visibility preference whenever they become available.
+
 ## 1.0.0 Beta 51
 
 - Channel and playlist video upload times now use one batched YouTube Data API request when an API key is configured, so the first visible page can open with complete upload metadata instead of waiting minutes for individual yt-dlp lookups.

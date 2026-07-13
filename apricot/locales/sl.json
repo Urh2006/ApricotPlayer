@@ -1,6 +1,10 @@
 {
     "ready": "Pripravljen.",
     "main_menu": "Glavni meni",
+    "customize_main_menu_section": "Prilagodi glavni meni",
+    "main_menu_items": "Elementi glavnega menija",
+    "main_menu_application_update": "Posodobitev programa",
+    "main_menu_search": "Iskanje YouTube / SoundCloud",
     "download_all": "Prenesi vse",
     "download_all_as_audio": "Prenesi vse kot zvok",
     "download_all_as_video": "Prenesi vse kot video",

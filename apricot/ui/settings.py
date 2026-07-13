@@ -92,6 +92,7 @@ class SettingsMixin:
     def settings_sections(self) -> list[tuple[str, str]]:
         return [
             (self.t("general_section"), "general"),
+            (self.t("customize_main_menu_section"), "main_menu"),
             (self.t("playback_section"), "playback"),
             (self.t("equalizer_section"), "equalizer"),
             (self.t("downloads_section"), "downloads"),
@@ -130,6 +131,7 @@ class SettingsMixin:
                 "skipped_update_version",
                 "update_channel",
             ],
+            "main_menu": ["main_menu_hidden_actions"],
             "playback": [
                 "autoplay_next",
                 "autoplay_related",
@@ -465,6 +467,21 @@ class SettingsMixin:
             check("close_to_tray", self.settings.close_to_tray)
             check("start_with_windows", self.settings.start_with_windows)
             check("tray_notification", self.settings.tray_notification)
+        elif section_name == "main_menu":
+            options = self.main_menu_customization_options()
+            hidden = set(getattr(self.settings, "main_menu_hidden_actions", []) or [])
+            form.AddSpacer(1)
+            menu_items = wx.CheckListBox(self.settings_scroller, choices=[label for _action_id, label in options])
+            menu_items.SetName(self.t("main_menu_items"))
+            menu_items.SetMinSize((-1, 360))
+            menu_items._apricot_main_menu_action_ids = [action_id for action_id, _label in options]
+            for index, (action_id, _label) in enumerate(options):
+                menu_items.Check(index, action_id not in hidden)
+            if options:
+                menu_items.SetSelection(0)
+            menu_items.Bind(wx.EVT_KEY_DOWN, self.on_main_menu_items_key)
+            form.Add(menu_items, 1, wx.EXPAND)
+            remember("main_menu_items", menu_items)
         elif section_name == "playback":
             choice("player_speed", self.settings.player_speed, [self.format_playback_rate(step) for step in PLAYBACK_SPEED_STEPS if step <= 2.0])
             choice("speed_audio_mode", self.normalized_speed_audio_mode(), SPEED_AUDIO_MODE_OPTIONS, self.speed_audio_mode_labels())
@@ -681,6 +698,17 @@ class SettingsMixin:
             focus = self.settings_control_order[0]
         if focus is not None:
             self.focus_later(focus)
+
+
+    def on_main_menu_items_key(self, event: wx.KeyEvent) -> None:
+        control = event.GetEventObject()
+        if event.GetKeyCode() != wx.WXK_SPACE or not isinstance(control, wx.CheckListBox):
+            event.Skip()
+            return
+        selection = control.GetSelection()
+        if selection == wx.NOT_FOUND:
+            return
+        control.Check(selection, not control.IsChecked(selection))
 
 
     def add_equalizer_profile_from_settings(self) -> None:
@@ -921,6 +949,12 @@ class SettingsMixin:
             self.settings.direct_link_enter_action = self.normalize_direct_link_enter_action(self.selected_choice_value("direct_link_enter_action"))
         if "show_shortcuts_in_labels" in c:
             self.settings.show_shortcuts_in_labels = c["show_shortcuts_in_labels"].GetValue()
+        if "main_menu_items" in c:
+            menu_items = c["main_menu_items"]
+            action_ids = list(getattr(menu_items, "_apricot_main_menu_action_ids", []))
+            self.settings.main_menu_hidden_actions = [
+                action_id for index, action_id in enumerate(action_ids) if not menu_items.IsChecked(index)
+            ]
         if "seek_seconds" in c:
             self.settings.seek_seconds = self.to_float(self.selected_choice_value("seek_seconds"), 5.0, 0.1, 600.0)
         if "volume_step" in c:
