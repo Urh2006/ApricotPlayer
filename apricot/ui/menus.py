@@ -53,7 +53,6 @@ class MenusUI:
         pending_version = self.pending_app_update_version()
         download_count = len(self.download_queue) + len(self.active_downloads)
         definitions = {
-            "app_update": (self.t("app_update_menu_item", version=pending_version), self.open_pending_app_update, bool(pending_version)),
             "current_downloads": (self.label_with_shortcut(f"{self.t('current_downloads')} ({download_count})", "open_current_downloads", "\t"), self.show_download_queue, bool(download_count)),
             "playback_queue": (self.label_with_shortcut(f"{self.t('playback_queue')} ({len(self.playback_queue)})", "open_playback_queue", "\t"), self.show_playback_queue, bool(self.playback_queue)),
             "search": (self.search_provider_menu_label(), self.show_search, True),
@@ -75,11 +74,14 @@ class MenusUI:
             "diagnostic_report": (self.menu_label_with_shortcut("copy_diagnostic_report", "copy_diagnostic_report"), self.copy_diagnostic_report, True),
         }
         hidden = set(getattr(self.settings, "main_menu_hidden_actions", []) or [])
-        actions = [
+        actions = []
+        if pending_version:
+            actions.append((self.t("app_update_menu_item", version=pending_version), self.open_pending_app_update))
+        actions.extend([
             (definitions[action_id][0], definitions[action_id][1])
             for action_id, _label_key in MAIN_MENU_CUSTOMIZABLE_ITEMS
             if action_id not in hidden and definitions[action_id][2]
-        ]
+        ])
         actions.extend([
             (self.menu_label_with_shortcut("settings", "open_settings"), self.show_settings),
             (self.t("exit"), self.quit_application),

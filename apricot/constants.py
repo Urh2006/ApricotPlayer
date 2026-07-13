@@ -595,10 +595,9 @@ LANGUAGES = [
 LANGUAGE_CODES = [code for code, _name in LANGUAGES]
 LANGUAGE_NAMES = {code: name for code, name in LANGUAGES}
 
-# This is the single ordered catalog for optional main-menu entries. Settings
-# and Exit are intentionally absent because they must always remain visible.
+# This is the single ordered catalog for optional main-menu entries. Application
+# updates, Settings, and Exit are absent because they must always remain visible.
 MAIN_MENU_CUSTOMIZABLE_ITEMS = (
-    ("app_update", "main_menu_application_update"),
     ("current_downloads", "current_downloads"),
     ("playback_queue", "playback_queue"),
     ("search", "main_menu_search"),

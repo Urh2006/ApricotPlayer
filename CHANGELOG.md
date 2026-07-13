@@ -666,6 +666,12 @@
 
 # Changelog
 
+## 1.0.0 Beta 54
+
+- Application update notifications can no longer be hidden through Customize main menu.
+- When an update is available, its action is always shown at the top of the main menu regardless of saved customization from earlier betas.
+- Other optional and session-specific main-menu actions remain customizable.
+
 ## 1.0.0 Beta 53
 
 - Replaced the Customize main menu checklist with individual native checkbox controls that screen readers identify as checked or unchecked.

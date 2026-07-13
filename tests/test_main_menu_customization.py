@@ -6,9 +6,10 @@ from apricot.ui.menus import MenusUI
 
 
 class MainMenuHarness(MenusUI):
-    def __init__(self, hidden=None):
+    def __init__(self, hidden=None, pending_update=""):
         self.settings = Settings()
         self.settings.main_menu_hidden_actions = list(hidden or [])
+        self.pending_update = pending_update
         self.download_queue = {}
         self.active_downloads = {}
         self.playback_queue = []
@@ -30,9 +31,8 @@ class MainMenuHarness(MenusUI):
     def menu_label_with_shortcut(self, label_key, _action):
         return self.t(label_key)
 
-    @staticmethod
-    def pending_app_update_version():
-        return ""
+    def pending_app_update_version(self):
+        return self.pending_update
 
     @staticmethod
     def last_player_session_available():
@@ -48,10 +48,18 @@ class MainMenuCustomizationTests(unittest.TestCase):
         harness = MainMenuHarness()
 
         self.assertEqual(Settings().main_menu_hidden_actions, [])
+        self.assertNotIn("app_update", MAIN_MENU_CUSTOMIZABLE_IDS)
         self.assertEqual(
             [action_id for action_id, _label in harness.main_menu_customization_options()],
             list(MAIN_MENU_CUSTOMIZABLE_IDS),
         )
+
+    def test_available_update_is_always_visible(self):
+        harness = MainMenuHarness({"app_update"}, pending_update="1.0.0-beta.54")
+
+        labels = [label for label, _handler in harness.build_main_menu_actions()]
+
+        self.assertEqual(labels[0], "app_update_menu_item")
 
     def test_hidden_items_are_removed_but_settings_and_exit_remain(self):
         harness = MainMenuHarness({"search", "audiovault", "diagnostic_report"})
