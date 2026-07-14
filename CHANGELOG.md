@@ -666,6 +666,15 @@
 
 # Changelog
 
+## 1.0.0 Beta 56
+
+- Fixed Enter on the AudioVault submenu doing nothing for Search, recently added TV shows, and recently added movies.
+- Fixed Enter on AudioVault movies and shows going through the generic YouTube results path, which could surface `Unsupported URL: https://direct.audiovault.net/login` instead of playing the selected content.
+- Protected AudioVault catalog, stream, TV-show, and download requests now detect an expired server session, securely sign in again from saved DPAPI-protected credentials, and retry the original action once.
+- If no saved AudioVault credentials are available, the login dialog still opens on the first AudioVault action. Normal application updates preserve the saved email and protected password.
+- File access errors remain file/download errors and no longer risk being mistaken for an expired AudioVault session.
+- Added focused regression tests for both Enter routes, missing credentials, catalog login redirects, stream reauthentication, and file-permission handling.
+
 ## 1.0.0 Beta 55
 
 - SoundCloud search now offers Track, Playlist, and Artist types. Playlists open through the existing playlist workflow, while artists open their track list with the same accessible result navigation and dynamic loading.

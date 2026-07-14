@@ -493,6 +493,18 @@ class EventsUI:
             return
         if self.handle_active_player_global_shortcut_event(event, focus):
             return
+        audiovault_open = self.shortcut_matches(event, "open_selected") or (
+            key in {wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER}
+            and not event.ControlDown()
+            and not event.AltDown()
+        )
+        if getattr(self, "audiovault_screen_active", False) and audiovault_open:
+            if focus is getattr(self, "audiovault_menu_list", None):
+                self.activate_audiovault_menu_item()
+                return
+            if results_focus:
+                self.activate_audiovault_item()
+                return
         # Player shortcuts have priority; results-list native navigation comes after.
         # Matches pre-refactoring behaviour where player_shortcut_event was checked first.
         if results_focus and self.results_list_owns_key(event):

@@ -30,6 +30,10 @@ _AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".m4b", ".mp3", ".ogg", ".opus", "
 _AUDIOVAULT_DPAPI_ENTROPY = b"ApricotPlayer AudioVault credentials v1"
 
 
+class AudioVaultSessionExpired(PermissionError):
+    pass
+
+
 class _DataBlob(ctypes.Structure):
     _fields_ = [("cbData", ctypes.c_ulong), ("pbData", ctypes.POINTER(ctypes.c_ubyte))]
 
@@ -214,6 +218,18 @@ class AudioVaultMixin:
             raise ValueError("AudioVault response is unexpectedly large.")
         return data.decode("utf-8", errors="replace")
 
+    @staticmethod
+    def audiovault_response_is_login(response, page: str = "") -> bool:
+        path = urllib.parse.urlparse(str(response.geturl() or "")).path.rstrip("/") or "/"
+        return path == "/login" or 'name="password"' in page or "name='password'" in page
+
+    def audiovault_read_authenticated_page(self, response) -> str:
+        page = self.audiovault_read_page(response)
+        if self.audiovault_response_is_login(response, page):
+            self.audiovault_logged_in = False
+            raise AudioVaultSessionExpired(self.t("audiovault_session_expired"))
+        return page
+
     def show_audiovault_login(self, after_login=None) -> bool:
         dialog = wx.Dialog(self, title=self.t("audiovault_login"), style=wx.DEFAULT_DIALOG_STYLE)
         dialog.SetName(self.t("audiovault_login"))
@@ -309,6 +325,14 @@ class AudioVaultMixin:
         else:
             self.show_audiovault_login(after_login)
         return False
+
+    def retry_audiovault_after_login(self, callback) -> None:
+        self.audiovault_logged_in = False
+        try:
+            self.audiovault_cookie_jar.clear()
+        except Exception:
+            pass
+        self.ensure_audiovault_login(callback)
 
     def prepare_audiovault_screen(self, view: str) -> None:
         self.in_main_menu = False
@@ -413,23 +437,31 @@ class AudioVaultMixin:
         self.add_audiovault_results_list(title)
         self.panel.Layout()
 
-    def show_audiovault_recent(self, mode: str) -> None:
+    def show_audiovault_recent(self, mode: str, allow_auth_retry: bool = True) -> None:
         if mode not in {"shows", "movies"}:
             return
         self.audiovault_mode = mode
         title = self.t("audiovault_recent_tv_shows" if mode == "shows" else "audiovault_recent_movies")
         self.show_audiovault_results_screen(title, f"recent_{mode}")
         self.set_status(self.t("audiovault_loading_recent"))
-        threading.Thread(target=self.load_audiovault_recent_worker, args=(mode,), daemon=True).start()
+        threading.Thread(target=self.load_audiovault_recent_worker, args=(mode, allow_auth_retry), daemon=True).start()
 
-    def load_audiovault_recent_worker(self, mode: str) -> None:
+    def load_audiovault_recent_worker(self, mode: str, allow_auth_retry: bool = True) -> None:
         try:
             with self.audiovault_request(f"{AUDIOVAULT_BASE_URL}/") as response:
                 parser = _VaultPageParser()
-                parser.feed(self.audiovault_read_page(response))
+                parser.feed(self.audiovault_read_authenticated_page(response))
             section = "recent shows" if mode == "shows" else "recent movies"
             results = self.audiovault_results_from_records(parser.records, mode, section=section)
             wx.CallAfter(self.show_audiovault_results, results)
+        except AudioVaultSessionExpired as exc:
+            if allow_auth_retry:
+                wx.CallAfter(
+                    self.retry_audiovault_after_login,
+                    lambda: self.show_audiovault_recent(mode, allow_auth_retry=False),
+                )
+            else:
+                wx.CallAfter(self.message, self.t("audiovault_search_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
         except Exception as exc:
             wx.CallAfter(self.message, self.t("audiovault_search_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
@@ -483,14 +515,26 @@ class AudioVaultMixin:
         self.set_status(self.t("searching", query=query))
         threading.Thread(target=self.search_audiovault_worker, args=(query, self.audiovault_mode), daemon=True).start()
 
-    def search_audiovault_worker(self, query: str, mode: str) -> None:
+    def search_audiovault_worker(self, query: str, mode: str, allow_auth_retry: bool = True) -> None:
         try:
             url = self.audiovault_catalog_url(mode, query)
             with self.audiovault_request(url) as response:
                 parser = _VaultPageParser()
-                parser.feed(self.audiovault_read_page(response))
+                parser.feed(self.audiovault_read_authenticated_page(response))
             results = self.audiovault_results_from_records(parser.records, mode)
             wx.CallAfter(self.show_audiovault_results, results)
+        except AudioVaultSessionExpired as exc:
+            if allow_auth_retry:
+                wx.CallAfter(
+                    self.retry_audiovault_after_login,
+                    lambda: threading.Thread(
+                        target=self.search_audiovault_worker,
+                        args=(query, mode, False),
+                        daemon=True,
+                    ).start(),
+                )
+            else:
+                wx.CallAfter(self.message, self.t("audiovault_search_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
         except Exception as exc:
             wx.CallAfter(self.message, self.t("audiovault_search_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
@@ -555,21 +599,21 @@ class AudioVaultMixin:
         final_url = response.geturl()
         content_type = str(response.headers.get("Content-Type") or "").lower()
         disposition = str(response.headers.get("Content-Disposition") or "")
-        if "text/html" in content_type or urllib.parse.urlparse(final_url).path == "/login":
+        if "text/html" in content_type or self.audiovault_response_is_login(response):
             response.close()
             self.audiovault_logged_in = False
-            raise PermissionError(self.t("audiovault_session_expired"))
+            raise AudioVaultSessionExpired(self.t("audiovault_session_expired"))
         headers = {"User-Agent": f"{APP_NAME}/{APP_VERSION}", "Referer": AUDIOVAULT_BASE_URL}
         cookie = self.audiovault_cookie_header()
         if cookie:
             headers["Cookie"] = cookie
         return response, final_url, content_type, disposition, headers
 
-    def play_audiovault_remote_item(self, item: dict) -> None:
+    def play_audiovault_remote_item(self, item: dict, allow_auth_retry: bool = True) -> None:
         self.set_status(self.t("preparing_stream", title=item.get("title", "")))
-        threading.Thread(target=self.play_audiovault_remote_worker, args=(dict(item),), daemon=True).start()
+        threading.Thread(target=self.play_audiovault_remote_worker, args=(dict(item), allow_auth_retry), daemon=True).start()
 
-    def play_audiovault_remote_worker(self, item: dict) -> None:
+    def play_audiovault_remote_worker(self, item: dict, allow_auth_retry: bool = True) -> None:
         try:
             response, final_url, content_type, disposition, headers = self.resolve_audiovault_stream(item["url"])
             response.close()
@@ -578,6 +622,14 @@ class AudioVaultMixin:
                 return
             item.update({"stream_url": final_url, "http_headers": headers})
             wx.CallAfter(self.start_audiovault_player, item, final_url, headers)
+        except AudioVaultSessionExpired as exc:
+            if allow_auth_retry:
+                wx.CallAfter(
+                    self.retry_audiovault_after_login,
+                    lambda: self.play_audiovault_remote_item(item, allow_auth_retry=False),
+                )
+            else:
+                wx.CallAfter(self.message, self.t("player_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
         except Exception as exc:
             wx.CallAfter(self.message, self.t("player_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
@@ -615,7 +667,12 @@ class AudioVaultMixin:
         self.audiovault_parent_title = str(data.get("parent_title") or "")
         self.show_audiovault_results(results)
 
-    def prepare_audiovault_show(self, item: dict, download_after: bool = False) -> None:
+    def prepare_audiovault_show(
+        self,
+        item: dict,
+        download_after: bool = False,
+        allow_auth_retry: bool = True,
+    ) -> None:
         cache_dir = self.audiovault_show_cache_dir(item)
         episodes = self.audiovault_episode_items(cache_dir, item)
         if episodes:
@@ -625,13 +682,23 @@ class AudioVaultMixin:
                 self.show_audiovault_episodes(item, episodes)
             return
         self.set_status(self.t("audiovault_preparing_show", title=item.get("title", "")))
-        threading.Thread(target=self.audiovault_show_worker, args=(dict(item), cache_dir, download_after), daemon=True).start()
+        threading.Thread(
+            target=self.audiovault_show_worker,
+            args=(dict(item), cache_dir, download_after, allow_auth_retry),
+            daemon=True,
+        ).start()
 
     def audiovault_show_cache_dir(self, item: dict) -> Path:
         safe_id = re.sub(r"[^0-9A-Za-z._-]", "_", str(item.get("id") or "show"))
         return Path(self.settings.cache_folder).expanduser() / "audiovault" / safe_id
 
-    def audiovault_show_worker(self, item: dict, cache_dir: Path, download_after: bool = False) -> None:
+    def audiovault_show_worker(
+        self,
+        item: dict,
+        cache_dir: Path,
+        download_after: bool = False,
+        allow_auth_retry: bool = True,
+    ) -> None:
         archive = cache_dir.with_suffix(".zip.part")
         try:
             cache_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -661,6 +728,19 @@ class AudioVaultMixin:
                 wx.CallAfter(self.copy_audiovault_show_to_downloads, item, cache_dir)
             else:
                 wx.CallAfter(self.show_audiovault_episodes, item, episodes)
+        except AudioVaultSessionExpired as exc:
+            archive.unlink(missing_ok=True)
+            if allow_auth_retry:
+                wx.CallAfter(
+                    self.retry_audiovault_after_login,
+                    lambda: self.prepare_audiovault_show(
+                        item,
+                        download_after=download_after,
+                        allow_auth_retry=False,
+                    ),
+                )
+            else:
+                wx.CallAfter(self.message, self.t("audiovault_show_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
         except Exception as exc:
             archive.unlink(missing_ok=True)
             wx.CallAfter(self.message, self.t("audiovault_show_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
@@ -740,11 +820,11 @@ class AudioVaultMixin:
         if item:
             self.download_audiovault_item(item)
 
-    def download_audiovault_item(self, item: dict) -> None:
+    def download_audiovault_item(self, item: dict, allow_auth_retry: bool = True) -> None:
         default = Path(self.settings.download_folder).expanduser() / "AudioVault"
         default.mkdir(parents=True, exist_ok=True)
         if item.get("kind") == "audiovault_show":
-            self.prepare_audiovault_show(item, download_after=True)
+            self.prepare_audiovault_show(item, download_after=True, allow_auth_retry=allow_auth_retry)
             self.announce_player(self.t("audiovault_show_cache_notice"))
             return
         if item.get("kind") == "audiovault_episode":
@@ -753,9 +833,13 @@ class AudioVaultMixin:
             shutil.copy2(item["url"], target)
             self.announce_player(self.t("download_complete", title=item.get("title", "")))
             return
-        threading.Thread(target=self.download_audiovault_movie_worker, args=(dict(item), default), daemon=True).start()
+        threading.Thread(
+            target=self.download_audiovault_movie_worker,
+            args=(dict(item), default, allow_auth_retry),
+            daemon=True,
+        ).start()
 
-    def download_audiovault_movie_worker(self, item: dict, folder: Path) -> None:
+    def download_audiovault_movie_worker(self, item: dict, folder: Path, allow_auth_retry: bool = True) -> None:
         try:
             response, _url, _content_type, disposition, _headers = self.resolve_audiovault_stream(item["url"])
             filename_match = re.search(r"filename\*?=(?:UTF-8''|\")?([^\";]+)", disposition, re.I)
@@ -765,6 +849,14 @@ class AudioVaultMixin:
                 shutil.copyfileobj(response, output, 1024 * 1024)
             response.close()
             wx.CallAfter(self.announce_player, self.t("download_complete", title=item.get("title", "")))
+        except AudioVaultSessionExpired as exc:
+            if allow_auth_retry:
+                wx.CallAfter(
+                    self.retry_audiovault_after_login,
+                    lambda: self.download_audiovault_item(item, allow_auth_retry=False),
+                )
+            else:
+                wx.CallAfter(self.message, self.t("download_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
         except Exception as exc:
             wx.CallAfter(self.message, self.t("download_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 

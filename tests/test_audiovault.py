@@ -3,18 +3,277 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
+import wx
+
 from apricot.network.audiovault import (
+    AudioVaultSessionExpired,
     AudioVaultMixin,
     _VaultPageParser,
     protect_audiovault_password,
     unprotect_audiovault_password,
 )
+from apricot.ui.events import EventsUI
 from apricot.ui.lists import ListsUI
 
 
+class _EnterEvent:
+    def __init__(self):
+        self.skipped = False
+
+    @staticmethod
+    def GetKeyCode():
+        return wx.WXK_RETURN
+
+    @staticmethod
+    def ControlDown():
+        return False
+
+    @staticmethod
+    def AltDown():
+        return False
+
+    @staticmethod
+    def ShiftDown():
+        return False
+
+    def Skip(self):
+        self.skipped = True
+
+
+class _AudioVaultKeyHarness:
+    def __init__(self, focus, results_focus=False):
+        self.video_details = object()
+        self.controls = {}
+        self.in_main_menu = False
+        self.in_player_screen = False
+        self.player_control_mode = False
+        self.current_video_item = {}
+        self.audiovault_screen_active = True
+        self.audiovault_menu_list = object() if results_focus else focus
+        self.menu_list = object()
+        self.results_list = focus if results_focus else object()
+        self.results_focus = results_focus
+        self.calls = []
+
+    @staticmethod
+    def is_modifier_only_event(_event):
+        return False
+
+    @staticmethod
+    def is_shortcut_capture_control(_focus):
+        return False
+
+    @staticmethod
+    def focus_accepts_text(_focus):
+        return False
+
+    @staticmethod
+    def handle_background_player_tab_navigation(_event, _focus):
+        return False
+
+    @staticmethod
+    def handle_player_tab_navigation(_event, _focus):
+        return False
+
+    def focus_in_results_control(self, _focus):
+        return self.results_focus
+
+    @staticmethod
+    def focus_in_media_list_control(_focus):
+        return False
+
+    @staticmethod
+    def handle_global_navigation_shortcut(_event, _focus):
+        return False
+
+    @staticmethod
+    def handle_active_player_global_shortcut_event(_event, _focus):
+        return False
+
+    @staticmethod
+    def results_list_owns_key(_event):
+        return False
+
+    @staticmethod
+    def result_details_key(_event):
+        return False
+
+    @staticmethod
+    def player_details_shortcut_matches(_event):
+        return False
+
+    @staticmethod
+    def handle_player_shortcut_event(_event, _focus, _details=False):
+        return False
+
+    @staticmethod
+    def shortcut_matches(_event, action):
+        return action == "open_selected"
+
+    def activate_audiovault_menu_item(self):
+        self.calls.append("menu")
+
+    def activate_audiovault_item(self):
+        self.calls.append("audiovault_item")
+
+    def play_selected(self):
+        self.calls.append("generic_result")
+
+
 class AudioVaultParserTests(unittest.TestCase):
+    def test_global_enter_opens_selected_audiovault_menu_action(self):
+        focus = object()
+        harness = _AudioVaultKeyHarness(focus)
+        event = _EnterEvent()
+
+        with mock.patch("apricot.ui.events.wx.Window.FindFocus", return_value=focus):
+            EventsUI.on_char_hook(harness, event)
+
+        self.assertEqual(harness.calls, ["menu"])
+
+    def test_global_enter_uses_audiovault_item_activation_not_generic_results(self):
+        focus = object()
+        harness = _AudioVaultKeyHarness(focus, results_focus=True)
+        event = _EnterEvent()
+
+        with mock.patch("apricot.ui.events.wx.Window.FindFocus", return_value=focus):
+            EventsUI.on_char_hook(harness, event)
+
+        self.assertEqual(harness.calls, ["audiovault_item"])
+
+    def test_expired_stream_session_requests_login_and_retry(self):
+        class Harness(AudioVaultMixin):
+            def __init__(self):
+                self.retry_callback = None
+                self.messages = []
+
+            @staticmethod
+            def resolve_audiovault_stream(_url):
+                raise AudioVaultSessionExpired("session expired")
+
+            def retry_audiovault_after_login(self, callback):
+                self.retry_callback = callback
+
+            def message(self, *args):
+                self.messages.append(args)
+
+            @staticmethod
+            def t(key, **values):
+                return key.format(**values)
+
+            @staticmethod
+            def friendly_error(exc):
+                return str(exc)
+
+        harness = Harness()
+        with mock.patch("apricot.network.audiovault.wx.CallAfter", side_effect=lambda callback, *args: callback(*args)):
+            harness.play_audiovault_remote_worker({"url": "https://direct.audiovault.net/download/1", "title": "Movie"})
+
+        self.assertIsNotNone(harness.retry_callback)
+        self.assertEqual(harness.messages, [])
+
+    def test_file_permission_error_does_not_trigger_audiovault_login(self):
+        class Harness(AudioVaultMixin):
+            def __init__(self):
+                self.retry_callback = None
+                self.messages = []
+
+            @staticmethod
+            def resolve_audiovault_stream(_url):
+                raise PermissionError("download folder is not writable")
+
+            def retry_audiovault_after_login(self, callback):
+                self.retry_callback = callback
+
+            def message(self, *args):
+                self.messages.append(args)
+
+            @staticmethod
+            def t(key, **values):
+                return key.format(**values)
+
+            @staticmethod
+            def friendly_error(exc):
+                return str(exc)
+
+        harness = Harness()
+        with mock.patch("apricot.network.audiovault.wx.CallAfter", side_effect=lambda callback, *args: callback(*args)):
+            harness.download_audiovault_movie_worker(
+                {"url": "https://direct.audiovault.net/download/1", "title": "Movie"},
+                Path("unused"),
+            )
+
+        self.assertIsNone(harness.retry_callback)
+        self.assertEqual(len(harness.messages), 1)
+
+    def test_catalog_redirect_to_login_requests_login_and_retry(self):
+        class LoginResponse:
+            headers = {"Content-Type": "text/html"}
+
+            @staticmethod
+            def geturl():
+                return "https://direct.audiovault.net/login"
+
+            @staticmethod
+            def read(_size=-1):
+                return b'<form><input name="password"></form>'
+
+            def __enter__(self):
+                return self
+
+            @staticmethod
+            def __exit__(_exc_type, _exc, _tb):
+                return False
+
+        class Harness(AudioVaultMixin):
+            def __init__(self):
+                self.retry_callback = None
+                self.shown_results = None
+
+            @staticmethod
+            def audiovault_request(_url, **_kwargs):
+                return LoginResponse()
+
+            def retry_audiovault_after_login(self, callback):
+                self.retry_callback = callback
+
+            def show_audiovault_results(self, results):
+                self.shown_results = results
+
+            @staticmethod
+            def t(key, **values):
+                return key.format(**values)
+
+            @staticmethod
+            def friendly_error(exc):
+                return str(exc)
+
+        harness = Harness()
+        with mock.patch("apricot.network.audiovault.wx.CallAfter", side_effect=lambda callback, *args: callback(*args)):
+            harness.search_audiovault_worker("movie", "movies")
+
+        self.assertIsNotNone(harness.retry_callback)
+        self.assertIsNone(harness.shown_results)
+
+    def test_missing_saved_credentials_open_login_dialog(self):
+        class Harness(AudioVaultMixin):
+            def __init__(self):
+                self.audiovault_logged_in = False
+                self.settings = SimpleNamespace(audiovault_email="", audiovault_password_protected="")
+                self.after_login = None
+
+            def show_audiovault_login(self, after_login=None):
+                self.after_login = after_login
+
+        callback = object()
+        harness = Harness()
+
+        self.assertFalse(harness.ensure_audiovault_login(callback))
+        self.assertIs(harness.after_login, callback)
+
     @unittest.skipUnless(os.name == "nt", "AudioVault credentials use Windows DPAPI")
     def test_password_protection_round_trip_is_not_plaintext(self):
         password = "not-written-in-plain-text"
