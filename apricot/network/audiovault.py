@@ -266,7 +266,6 @@ class AudioVaultMixin:
         self.audiovault_show_manifests: dict[str, list[dict]] = {}
         self.audiovault_manifest_loading: set[str] = set()
         self.audiovault_episode_loading: set[str] = set()
-        self.audiovault_progress_dialog: wx.ProgressDialog | None = None
         self.audiovault_progress_task_id = ""
         self.audiovault_progress_generation = 0
         self.audiovault_show_request_generation = 0
@@ -784,6 +783,73 @@ class AudioVaultMixin:
         filename = f"{index + 1:04d} - {safe_stem}{suffix}"
         return self.audiovault_show_cache_dir(show) / "_episodes" / filename
 
+    @staticmethod
+    def audiovault_cache_path_is_link(path: Path) -> bool:
+        try:
+            metadata = os.lstat(path)
+        except OSError:
+            return False
+        attributes = int(getattr(metadata, "st_file_attributes", 0) or 0)
+        reparse_flag = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400) or 0x400)
+        return stat.S_ISLNK(metadata.st_mode) or bool(attributes & reparse_flag)
+
+    def trim_audiovault_episode_cache(self, protected_paths=None) -> None:
+        root = Path(self.settings.cache_folder).expanduser() / "audiovault"
+        if not root.is_dir() or self.audiovault_cache_path_is_link(root):
+            return
+        protected = {
+            os.path.normcase(os.path.abspath(str(path)))
+            for path in (protected_paths or set())
+            if path
+        }
+        limit_mb = max(1, int(getattr(self.settings, "cache_size_mb", 512) or 512))
+        limit = limit_mb * 1024 * 1024
+        candidates = []
+        total = 0
+        try:
+            show_folders = list(root.iterdir())
+        except OSError:
+            return
+        for show_folder in show_folders:
+            episode_folder = show_folder / "_episodes"
+            if (
+                not show_folder.is_dir()
+                or self.audiovault_cache_path_is_link(show_folder)
+                or not episode_folder.is_dir()
+                or self.audiovault_cache_path_is_link(episode_folder)
+            ):
+                continue
+            try:
+                episode_files = list(episode_folder.iterdir())
+            except OSError:
+                continue
+            for path in episode_files:
+                if (
+                    not path.is_file()
+                    or path.suffix.lower() not in _AUDIO_EXTENSIONS
+                    or self.audiovault_cache_path_is_link(path)
+                ):
+                    continue
+                try:
+                    metadata = path.stat()
+                except OSError:
+                    continue
+                size = max(0, int(metadata.st_size))
+                total += size
+                candidates.append((float(metadata.st_mtime), str(path).casefold(), path, size))
+        if total <= limit:
+            return
+        for _modified, _name, path, size in sorted(candidates):
+            if total <= limit:
+                break
+            if os.path.normcase(os.path.abspath(str(path))) in protected:
+                continue
+            try:
+                path.unlink()
+                total -= size
+            except OSError:
+                continue
+
     def audiovault_remote_episode_items(self, show: dict) -> list[dict]:
         archive_url = str(show.get("url") or "")
         archive_size = self.audiovault_archive_size(archive_url)
@@ -823,48 +889,18 @@ class AudioVaultMixin:
         return f"audiovault-{self.audiovault_progress_generation}"
 
     def show_audiovault_progress(self, task_id: str, message: str) -> None:
-        current = getattr(self, "audiovault_progress_dialog", None)
-        if current is not None:
-            try:
-                current.Destroy()
-            except RuntimeError:
-                pass
         self.audiovault_progress_task_id = task_id
-        self.audiovault_progress_dialog = wx.ProgressDialog(
-            self.t("audiovault_progress_title"),
-            message,
-            maximum=100,
-            parent=self,
-            style=wx.PD_ELAPSED_TIME | wx.PD_REMAINING_TIME | wx.PD_SMOOTH,
-        )
-        self.audiovault_progress_dialog.SetName(self.t("audiovault_progress_title"))
-        self.audiovault_progress_dialog.Pulse(message)
+        self.set_status(message)
 
     def update_audiovault_progress(self, task_id: str, percent: int | None, message: str) -> None:
         if task_id != getattr(self, "audiovault_progress_task_id", ""):
             return
-        dialog = getattr(self, "audiovault_progress_dialog", None)
-        if dialog is None:
-            return
-        try:
-            if percent is None:
-                dialog.Pulse(message)
-            else:
-                dialog.Update(min(100, max(0, int(percent))), message)
-        except RuntimeError:
-            pass
+        self.set_status(message)
 
     def close_audiovault_progress(self, task_id: str) -> None:
         if task_id != getattr(self, "audiovault_progress_task_id", ""):
             return
-        dialog = getattr(self, "audiovault_progress_dialog", None)
-        self.audiovault_progress_dialog = None
         self.audiovault_progress_task_id = ""
-        if dialog is not None:
-            try:
-                dialog.Destroy()
-            except RuntimeError:
-                pass
 
     def resolve_audiovault_stream(self, url: str):
         response = self.audiovault_request(url, timeout=60)
@@ -1190,6 +1226,10 @@ class AudioVaultMixin:
         target = Path(str(item.get("url") or ""))
         expected_size = int(item.get("archive_file_size") or 0)
         if target.is_file() and (expected_size <= 0 or target.stat().st_size == expected_size):
+            try:
+                os.utime(target, None)
+            except OSError:
+                pass
             self.finish_audiovault_remote_episode(
                 item,
                 download_after,
@@ -1205,9 +1245,13 @@ class AudioVaultMixin:
             self.set_status(self.t("audiovault_episode_preparing", title=item.get("title", "")))
             return
         self.audiovault_episode_loading.add(loading_key)
-        task_id = self.next_audiovault_progress_task_id()
-        message = self.t("audiovault_episode_preparing", title=item.get("title", ""))
-        self.show_audiovault_progress(task_id, message)
+        task_id = ""
+        if download_after:
+            task_id = self.next_audiovault_progress_task_id()
+            message = self.t("audiovault_progress_downloading", title=item.get("title", ""), percent=0)
+            self.show_audiovault_progress(task_id, message)
+        else:
+            self.set_status(self.t("audiovault_episode_cache_notice", title=item.get("title", "")))
         threading.Thread(
             target=self.audiovault_remote_episode_worker,
             args=(
@@ -1257,6 +1301,7 @@ class AudioVaultMixin:
                 (cache_dir / ".apricot-partial").write_text("partial\n", encoding="ascii")
                 temporary.unlink(missing_ok=True)
                 completed = 0
+                last_status_percent = -1
                 with package.open(member) as source, temporary.open("wb") as output:
                     while True:
                         chunk = source.read(1024 * 1024)
@@ -1265,18 +1310,38 @@ class AudioVaultMixin:
                         output.write(chunk)
                         completed += len(chunk)
                         percent = int((completed * 100) / member.file_size) if member.file_size > 0 else None
-                        wx.CallAfter(
-                            self.update_audiovault_progress,
-                            task_id,
-                            percent,
-                            self.t(
-                                "audiovault_progress_downloading",
-                                title=item.get("title", ""),
-                                percent=percent or 0,
-                            ),
-                        )
+                        if task_id:
+                            wx.CallAfter(
+                                self.update_audiovault_progress,
+                                task_id,
+                                percent,
+                                self.t(
+                                    "audiovault_progress_downloading",
+                                    title=item.get("title", ""),
+                                    percent=percent or 0,
+                                ),
+                            )
+                        else:
+                            status_percent = min(100, max(0, int(percent or 0)))
+                            status_percent = (status_percent // 5) * 5
+                            if status_percent != last_status_percent:
+                                last_status_percent = status_percent
+                                wx.CallAfter(
+                                    self.set_status,
+                                    self.t(
+                                        "audiovault_episode_cache_progress",
+                                        title=item.get("title", ""),
+                                        percent=status_percent,
+                                    ),
+                                )
             temporary.replace(target)
-            wx.CallAfter(self.close_audiovault_progress, task_id)
+            protected = {target}
+            current_path = str((getattr(self, "current_video_item", {}) or {}).get("local_path") or "")
+            if current_path:
+                protected.add(Path(current_path))
+            self.trim_audiovault_episode_cache(protected)
+            if task_id:
+                wx.CallAfter(self.close_audiovault_progress, task_id)
             wx.CallAfter(
                 self.finish_audiovault_remote_episode,
                 item,
@@ -1288,7 +1353,8 @@ class AudioVaultMixin:
             )
         except AudioVaultSessionExpired as exc:
             temporary.unlink(missing_ok=True)
-            wx.CallAfter(self.close_audiovault_progress, task_id)
+            if task_id:
+                wx.CallAfter(self.close_audiovault_progress, task_id)
             if allow_auth_retry:
                 wx.CallAfter(
                     self.retry_audiovault_after_login,
@@ -1307,7 +1373,8 @@ class AudioVaultMixin:
                 wx.CallAfter(self.message, self.t(key, error=self.friendly_error(exc)), wx.ICON_ERROR)
         except Exception as exc:
             temporary.unlink(missing_ok=True)
-            wx.CallAfter(self.close_audiovault_progress, task_id)
+            if task_id:
+                wx.CallAfter(self.close_audiovault_progress, task_id)
             key = "download_failed" if download_after else "player_failed"
             wx.CallAfter(self.message, self.t(key, error=self.friendly_error(exc)), wx.ICON_ERROR)
         finally:
@@ -1381,7 +1448,9 @@ class AudioVaultMixin:
         )
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(str(item.get("url") or ""), target)
-        self.announce_player(self.t("download_complete", title=item.get("title", "")))
+        self.announce_player(
+            self.t("audiovault_download_complete_path", title=item.get("title", ""), path=str(target))
+        )
 
     def copy_audiovault_show_to_downloads(self, item: dict, cache_dir: Path) -> None:
         target = Path(self.settings.download_folder).expanduser() / "AudioVault" / self.safe_folder_name(str(item.get("title") or "TV Show"))
@@ -1391,7 +1460,9 @@ class AudioVaultMixin:
         shutil.copytree(cache_dir, target)
         (target / ".apricot-complete").unlink(missing_ok=True)
         (target / ".apricot-partial").unlink(missing_ok=True)
-        self.announce_player(self.t("download_complete", title=item.get("title", "")))
+        self.announce_player(
+            self.t("audiovault_download_complete_path", title=item.get("title", ""), path=str(target))
+        )
 
     def download_audiovault_selected(self) -> None:
         item = self.selected_audiovault_item()

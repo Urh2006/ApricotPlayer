@@ -561,6 +561,90 @@ class AudioVaultParserTests(unittest.TestCase):
             self.assertEqual(harness.played[0]["kind"], "audiovault_episode")
             self.assertEqual(harness.progress[-1][1], "closed")
 
+    def test_remote_episode_playback_uses_status_progress_without_top_level_dialog(self):
+        class Harness(AudioVaultMixin):
+            def __init__(self, cache_folder):
+                self.settings = SimpleNamespace(cache_folder=cache_folder)
+                self.audiovault_episode_loading = set()
+                self.audiovault_progress_generation = 0
+                self.statuses = []
+                self.dialogs = []
+
+            @staticmethod
+            def t(key, **_values):
+                return key
+
+            def set_status(self, message):
+                self.statuses.append(message)
+
+            def show_audiovault_progress(self, task_id, message):
+                self.dialogs.append((task_id, message))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            harness = Harness(temporary)
+            item = {
+                "title": "Episode 01",
+                "url": str(Path(temporary) / "audiovault" / "42" / "_episodes" / "episode.mp3"),
+                "archive_file_size": 100,
+            }
+            with mock.patch("apricot.network.audiovault.threading.Thread") as thread_class:
+                harness.prepare_audiovault_remote_episode(item, download_after=False)
+
+            self.assertEqual(harness.dialogs, [])
+            self.assertEqual(harness.statuses, ["audiovault_episode_cache_notice"])
+            self.assertEqual(thread_class.call_args.kwargs["args"][3], "")
+
+    def test_audiovault_progress_uses_main_status_without_native_progress_dialog(self):
+        class Harness(AudioVaultMixin):
+            def __init__(self):
+                self.audiovault_progress_task_id = ""
+                self.statuses = []
+
+            @staticmethod
+            def t(key, **_values):
+                return key
+
+            def set_status(self, message):
+                self.statuses.append(message)
+
+        harness = Harness()
+        with mock.patch(
+            "apricot.network.audiovault.wx.ProgressDialog",
+            side_effect=AssertionError("native progress dialog must not be created"),
+        ):
+            harness.show_audiovault_progress("task-1", "Starting")
+            harness.update_audiovault_progress("task-1", 50, "Half way")
+            harness.close_audiovault_progress("task-1")
+
+        self.assertEqual(harness.statuses, ["Starting", "Half way"])
+        self.assertEqual(harness.audiovault_progress_task_id, "")
+
+    def test_trim_episode_cache_removes_oldest_partial_episode_and_preserves_active_and_complete_show(self):
+        class Harness(AudioVaultMixin):
+            def __init__(self, cache_folder):
+                self.settings = SimpleNamespace(cache_folder=cache_folder, cache_size_mb=1)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "audiovault"
+            partial = root / "42" / "_episodes"
+            complete = root / "99" / "Complete Show"
+            partial.mkdir(parents=True)
+            complete.mkdir(parents=True)
+            old = partial / "old.mp3"
+            active = partial / "active.mp3"
+            complete_episode = complete / "episode.mp3"
+            old.write_bytes(b"o" * 700_000)
+            active.write_bytes(b"a" * 700_000)
+            complete_episode.write_bytes(b"c" * 700_000)
+            os.utime(old, (1, 1))
+            os.utime(active, (2, 2))
+
+            Harness(temporary).trim_audiovault_episode_cache({active})
+
+            self.assertFalse(old.exists())
+            self.assertTrue(active.exists())
+            self.assertTrue(complete_episode.exists())
+
     def test_show_manifest_falls_back_to_full_archive_with_progress_when_ranges_are_unavailable(self):
         class Harness(AudioVaultMixin):
             def __init__(self):

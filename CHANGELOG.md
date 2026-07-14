@@ -666,6 +666,14 @@
 
 # Changelog
 
+## 1.0.0 Beta 58
+
+- Fixed native Windows crashes after an uncached AudioVault episode finished preparing or downloading. All AudioVault preparation, download, and extraction progress now uses the existing status area instead of a separate native progress dialog.
+- AudioVault now explains that on-demand playback uses a temporary cache and that Download audio creates a permanent copy.
+- On-demand AudioVault episode files use the configured playback-cache size as an LRU limit. The active episode is protected, and complete-show caches remain intact.
+- Manual episode and show downloads now announce their exact destination path.
+- Verified the original uncached playback crash, the separate manual-download crash, and the cached control path with the installed application and Windows UI automation before applying the fix.
+
 ## 1.0.0 Beta 57
 
 - TV-show results now open their episode list from the remote ZIP directory using bounded HTTP range requests instead of downloading and extracting the complete show first.
