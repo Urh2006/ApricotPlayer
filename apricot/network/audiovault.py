@@ -1440,7 +1440,8 @@ class AudioVaultMixin:
         )
 
     def copy_audiovault_episode_to_downloads(self, item: dict) -> None:
-        target = (
+        selected_target = str(item.get("_audiovault_download_target_path") or "").strip()
+        target = Path(selected_target).expanduser() if selected_target else (
             Path(self.settings.download_folder).expanduser()
             / "AudioVault"
             / self.safe_folder_name(str(item.get("channel") or "TV Shows"))
@@ -1453,13 +1454,21 @@ class AudioVaultMixin:
         )
 
     def copy_audiovault_show_to_downloads(self, item: dict, cache_dir: Path) -> None:
-        target = Path(self.settings.download_folder).expanduser() / "AudioVault" / self.safe_folder_name(str(item.get("title") or "TV Show"))
+        selected_target = str(item.get("_audiovault_download_target_folder") or "").strip()
+        target = Path(selected_target).expanduser() if selected_target else (
+            Path(self.settings.download_folder).expanduser()
+            / "AudioVault"
+            / self.safe_folder_name(str(item.get("title") or "TV Show"))
+        )
         target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists():
+        if target.exists() and not selected_target:
             shutil.rmtree(target)
-        shutil.copytree(cache_dir, target)
-        (target / ".apricot-complete").unlink(missing_ok=True)
-        (target / ".apricot-partial").unlink(missing_ok=True)
+        shutil.copytree(
+            cache_dir,
+            target,
+            dirs_exist_ok=bool(selected_target),
+            ignore=shutil.ignore_patterns(".apricot-complete", ".apricot-partial"),
+        )
         self.announce_player(
             self.t("audiovault_download_complete_path", title=item.get("title", ""), path=str(target))
         )
@@ -1470,22 +1479,38 @@ class AudioVaultMixin:
             self.download_audiovault_item(item)
 
     def download_audiovault_item(self, item: dict, allow_auth_retry: bool = True) -> None:
-        default = Path(self.settings.download_folder).expanduser() / "AudioVault"
-        default.mkdir(parents=True, exist_ok=True)
-        if item.get("kind") == "audiovault_show":
+        item = dict(item)
+        kind = str(item.get("kind") or "")
+        ask_for_location = bool(getattr(self.settings, "ask_download_location_each_time", False))
+        if ask_for_location and kind == "audiovault_show" and not item.get("_audiovault_download_target_folder"):
+            target_folder = self.choose_download_target_folder(item, collection=True)
+            if target_folder is None:
+                self.set_status(self.t("download_cancelled"))
+                return
+            item["_audiovault_download_target_folder"] = str(target_folder)
+        elif ask_for_location and kind != "audiovault_show" and not item.get("_audiovault_download_target_path"):
+            target_path = self.choose_download_target_path(item, True)
+            if target_path is None:
+                self.set_status(self.t("download_cancelled"))
+                return
+            item["_audiovault_download_target_path"] = str(target_path)
+
+        if kind == "audiovault_show":
             self.prepare_audiovault_show(item, download_after=True, allow_auth_retry=allow_auth_retry)
             self.announce_player(self.t("audiovault_show_cache_notice"))
             return
-        if item.get("kind") == "audiovault_remote_episode":
+        if kind == "audiovault_remote_episode":
             self.prepare_audiovault_remote_episode(
                 item,
                 download_after=True,
                 allow_auth_retry=allow_auth_retry,
             )
             return
-        if item.get("kind") == "audiovault_episode":
+        if kind == "audiovault_episode":
             self.copy_audiovault_episode_to_downloads(item)
             return
+        default = Path(self.settings.download_folder).expanduser() / "AudioVault"
+        default.mkdir(parents=True, exist_ok=True)
         threading.Thread(
             target=self.download_audiovault_movie_worker,
             args=(dict(item), default, allow_auth_retry),
@@ -1497,11 +1522,16 @@ class AudioVaultMixin:
             response, _url, _content_type, disposition, _headers = self.resolve_audiovault_stream(item["url"])
             filename_match = re.search(r"filename\*?=(?:UTF-8''|\")?([^\";]+)", disposition, re.I)
             filename = urllib.parse.unquote(filename_match.group(1).strip()) if filename_match else f"{self.safe_folder_name(item.get('title', 'AudioVault'))}.mp3"
-            target = folder / Path(filename).name
+            selected_target = str(item.get("_audiovault_download_target_path") or "").strip()
+            target = Path(selected_target).expanduser() if selected_target else folder / Path(filename).name
+            target.parent.mkdir(parents=True, exist_ok=True)
             with target.open("wb") as output:
                 shutil.copyfileobj(response, output, 1024 * 1024)
             response.close()
-            wx.CallAfter(self.announce_player, self.t("download_complete", title=item.get("title", "")))
+            wx.CallAfter(
+                self.announce_player,
+                self.t("audiovault_download_complete_path", title=item.get("title", ""), path=str(target)),
+            )
         except AudioVaultSessionExpired as exc:
             if allow_auth_retry:
                 wx.CallAfter(

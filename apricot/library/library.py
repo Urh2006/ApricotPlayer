@@ -1968,11 +1968,24 @@ class LibraryMixin:
             item.setdefault("channel", title)
             item.setdefault("kind", "rss_item")
             item.setdefault("type", self.t("podcast_episode"))
+        selected_folder = None
+        if self.settings.ask_download_location_each_time:
+            selected_folder = self.choose_download_target_folder(
+                {"title": title, "channel": title, "kind": "rss_item"},
+                collection=True,
+            )
+            if selected_folder is None:
+                self.set_status(self.t("download_cancelled"))
+                return
+            for item in items:
+                item["download_folder_override"] = str(selected_folder)
         self.announce_player(self.t("download_feed_start"))
         self.set_status(self.t("download_feed_start"))
         task_id, cancel_event = self.register_download_task({"title": title, "kind": "rss_feed"}, True, "rss_feed", total=len(items))
         self.refresh_download_views()
-        finish_folder = str(self.podcasts_download_folder() / self.safe_folder_name(str(title)))
+        finish_folder = str(
+            selected_folder or self.podcasts_download_folder() / self.safe_folder_name(str(title))
+        )
         done_text = self.t("download_feed_done", title=title)
         threading.Thread(target=self.download_batch_worker, args=(items, task_id, cancel_event, done_text, finish_folder), daemon=True).start()
 

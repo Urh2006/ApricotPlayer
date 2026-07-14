@@ -207,6 +207,14 @@ class DownloaderMixin:
         if kind == "rss_item":
             feed_title = item.get("channel") or item.get("podcast_title") or self.t("rss_unknown_feed_title")
             return self.podcasts_download_folder() / self.safe_folder_name(str(feed_title))
+        if kind.startswith("audiovault_"):
+            folder = self.download_root_folder() / "AudioVault"
+            if kind == "audiovault_show" or collection:
+                return folder / self.safe_folder_name(str(item.get("title") or "TV Show"))
+            if kind in {"audiovault_episode", "audiovault_remote_episode"}:
+                show_title = item.get("channel") or item.get("audiovault_show", {}).get("title") or "TV Shows"
+                return folder / self.safe_folder_name(str(show_title))
+            return folder
         folder = self.music_download_folder()
         if collection or kind in {"playlist", "channel"}:
             title = item.get("title") or self.t("channel" if kind == "channel" else "playlist")

@@ -818,6 +818,139 @@ class AudioVaultParserTests(unittest.TestCase):
             "",
         )
 
+    def test_audiovault_episode_uses_global_download_location_prompt(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "cached-episode.mp3"
+            source.write_bytes(b"episode")
+            chosen = root / "chosen" / "episode.mp3"
+
+            class Harness(AudioVaultMixin):
+                settings = SimpleNamespace(
+                    ask_download_location_each_time=True,
+                    download_folder=str(root / "default"),
+                )
+
+                def __init__(self):
+                    self.prompted = []
+                    self.announcements = []
+
+                def choose_download_target_path(self, item, audio_only):
+                    self.prompted.append((dict(item), audio_only))
+                    return chosen
+
+                @staticmethod
+                def safe_folder_name(value):
+                    return str(value)
+
+                @staticmethod
+                def t(key, **values):
+                    return f"{key}:{values}"
+
+                def announce_player(self, text):
+                    self.announcements.append(text)
+
+            harness = Harness()
+            harness.download_audiovault_item(
+                {
+                    "kind": "audiovault_episode",
+                    "title": "Episode",
+                    "channel": "Example show",
+                    "url": str(source),
+                }
+            )
+
+            self.assertEqual(len(harness.prompted), 1)
+            self.assertTrue(harness.prompted[0][1])
+            self.assertEqual(chosen.read_bytes(), b"episode")
+            self.assertFalse((root / "default" / "AudioVault" / "Example show" / source.name).exists())
+
+    def test_audiovault_show_uses_prompted_folder_without_deleting_existing_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            cache = root / "cache"
+            cache.mkdir()
+            (cache / "Episode 01.mp3").write_bytes(b"episode")
+            (cache / ".apricot-complete").write_text("complete", encoding="utf-8")
+            chosen = root / "chosen-show"
+            chosen.mkdir()
+            sentinel = chosen / "keep-me.txt"
+            sentinel.write_text("keep", encoding="utf-8")
+
+            class Harness(AudioVaultMixin):
+                settings = SimpleNamespace(
+                    ask_download_location_each_time=True,
+                    download_folder=str(root / "default"),
+                )
+
+                def __init__(self):
+                    self.prompted = []
+                    self.announcements = []
+
+                def choose_download_target_folder(self, item, collection=False):
+                    self.prompted.append((dict(item), collection))
+                    return chosen
+
+                @staticmethod
+                def audiovault_show_cache_dir(_item):
+                    return cache
+
+                @staticmethod
+                def audiovault_episode_items(_cache_dir, _show_title):
+                    return [{"url": str(cache / "Episode 01.mp3")}]
+
+                @staticmethod
+                def safe_folder_name(value):
+                    return str(value)
+
+                @staticmethod
+                def t(key, **values):
+                    return f"{key}:{values}"
+
+                def announce_player(self, text):
+                    self.announcements.append(text)
+
+            harness = Harness()
+            harness.download_audiovault_item(
+                {"kind": "audiovault_show", "title": "Example show", "url": "https://example.test/show"}
+            )
+
+            self.assertEqual(len(harness.prompted), 1)
+            self.assertTrue(harness.prompted[0][1])
+            self.assertEqual((chosen / "Episode 01.mp3").read_bytes(), b"episode")
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+            self.assertFalse((chosen / ".apricot-complete").exists())
+
+    def test_cancelling_audiovault_location_prompt_stops_download(self):
+        class Harness(AudioVaultMixin):
+            settings = SimpleNamespace(
+                ask_download_location_each_time=True,
+                download_folder="unused",
+            )
+
+            def __init__(self):
+                self.statuses = []
+
+            @staticmethod
+            def choose_download_target_path(_item, _audio_only):
+                return None
+
+            @staticmethod
+            def t(key, **_values):
+                return key
+
+            def set_status(self, text):
+                self.statuses.append(text)
+
+        harness = Harness()
+        with mock.patch("apricot.network.audiovault.threading.Thread") as thread_class:
+            harness.download_audiovault_item(
+                {"kind": "audiovault_movie", "title": "Movie", "url": "https://example.test/movie"}
+            )
+
+        thread_class.assert_not_called()
+        self.assertEqual(harness.statuses, ["download_cancelled"])
+
 
 if __name__ == "__main__":
     unittest.main()

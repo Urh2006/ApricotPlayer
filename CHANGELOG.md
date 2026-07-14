@@ -666,6 +666,14 @@
 
 # Changelog
 
+## 1.0.0 Beta 59
+
+- Made Ask where to save each download a single global rule for YouTube, SoundCloud, individual and complete podcast downloads, and AudioVault downloads.
+- AudioVault movies and episodes now ask for an exact destination when the global option is enabled. Complete TV shows ask for a destination folder and keep downloading every episode into it.
+- Complete podcast feed downloads now ask for one destination folder and place every episode there when the global option is enabled.
+- Cancelling either destination dialog cleanly cancels the download before a background task starts.
+- AudioVault destination dialogs start in the matching AudioVault movie, show, or episode folder. Copying a complete show into an existing chosen folder no longer removes unrelated files from that folder.
+
 ## 1.0.0 Beta 58
 
 - Fixed native Windows crashes after an uncached AudioVault episode finished preparing or downloading. All AudioVault preparation, download, and extraction progress now uses the existing status area instead of a separate native progress dialog.
