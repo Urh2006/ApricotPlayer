@@ -666,6 +666,14 @@
 
 # Changelog
 
+## 1.0.0 Beta 57
+
+- TV-show results now open their episode list from the remote ZIP directory using bounded HTTP range requests instead of downloading and extracting the complete show first.
+- Selecting an uncached episode downloads and verifies only that episode; cached episodes reopen immediately and next/previous episode navigation keeps using the AudioVault sequence.
+- Full-show downloads and servers without byte-range support use a visible, screen-reader-named progress dialog for download and extraction.
+- AudioVault result navigation is isolated from YouTube dynamic loading, fixing the unrelated empty `youtube.com/results?search_query=&sp=` error at the end of AudioVault lists and after returning from playback.
+- Repeated Enter presses no longer start duplicate show-manifest or episode jobs, and leaving a loading show prevents a late result from reopening it.
+
 ## 1.0.0 Beta 56
 
 - Fixed Enter on the AudioVault submenu doing nothing for Search, recently added TV shows, and recently added movies.

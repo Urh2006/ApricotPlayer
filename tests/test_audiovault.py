@@ -1,3 +1,4 @@
+import io
 import os
 import tempfile
 import unittest
@@ -8,7 +9,9 @@ from unittest import mock
 
 import wx
 
+import apricot.network.audiovault as audiovault_module
 from apricot.network.audiovault import (
+    AudioVaultRangeUnsupported,
     AudioVaultSessionExpired,
     AudioVaultMixin,
     _VaultPageParser,
@@ -17,15 +20,16 @@ from apricot.network.audiovault import (
 )
 from apricot.ui.events import EventsUI
 from apricot.ui.lists import ListsUI
+from apricot.ui.player import PlayerUI
 
 
 class _EnterEvent:
-    def __init__(self):
+    def __init__(self, key_code=wx.WXK_RETURN):
         self.skipped = False
+        self.key_code = key_code
 
-    @staticmethod
-    def GetKeyCode():
-        return wx.WXK_RETURN
+    def GetKeyCode(self):
+        return self.key_code
 
     @staticmethod
     def ControlDown():
@@ -44,7 +48,7 @@ class _EnterEvent:
 
 
 class _AudioVaultKeyHarness:
-    def __init__(self, focus, results_focus=False):
+    def __init__(self, focus, results_focus=False, native_results_key=False):
         self.video_details = object()
         self.controls = {}
         self.in_main_menu = False
@@ -56,6 +60,7 @@ class _AudioVaultKeyHarness:
         self.menu_list = object()
         self.results_list = focus if results_focus else object()
         self.results_focus = results_focus
+        self.native_results_key = native_results_key
         self.calls = []
 
     @staticmethod
@@ -93,9 +98,8 @@ class _AudioVaultKeyHarness:
     def handle_active_player_global_shortcut_event(_event, _focus):
         return False
 
-    @staticmethod
-    def results_list_owns_key(_event):
-        return False
+    def results_list_owns_key(self, _event):
+        return self.native_results_key
 
     @staticmethod
     def result_details_key(_event):
@@ -110,8 +114,8 @@ class _AudioVaultKeyHarness:
         return False
 
     @staticmethod
-    def shortcut_matches(_event, action):
-        return action == "open_selected"
+    def shortcut_matches(event, action):
+        return action == "open_selected" and event.GetKeyCode() in {wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER}
 
     def activate_audiovault_menu_item(self):
         self.calls.append("menu")
@@ -121,6 +125,9 @@ class _AudioVaultKeyHarness:
 
     def play_selected(self):
         self.calls.append("generic_result")
+
+    def maybe_extend_results(self):
+        self.calls.append("extend_results")
 
 
 class AudioVaultParserTests(unittest.TestCase):
@@ -143,6 +150,62 @@ class AudioVaultParserTests(unittest.TestCase):
             EventsUI.on_char_hook(harness, event)
 
         self.assertEqual(harness.calls, ["audiovault_item"])
+
+    def test_audiovault_native_navigation_never_requests_generic_dynamic_results(self):
+        focus = object()
+        harness = _AudioVaultKeyHarness(focus, results_focus=True, native_results_key=True)
+        event = _EnterEvent(wx.WXK_DOWN)
+
+        with (
+            mock.patch("apricot.ui.events.wx.Window.FindFocus", return_value=focus),
+            mock.patch("apricot.ui.events.wx.CallAfter", side_effect=lambda callback, *args: callback(*args)),
+        ):
+            EventsUI.on_char_hook(harness, event)
+
+        self.assertTrue(event.skipped)
+        self.assertNotIn("extend_results", harness.calls)
+
+    def test_preparing_audiovault_screen_clears_generic_dynamic_fetch_state(self):
+        class Harness(AudioVaultMixin):
+            def __init__(self):
+                self.in_main_menu = True
+                self.in_player_screen = True
+                self.search_screen_active = True
+                self.audiovault_screen_active = False
+                self.dynamic_fetch_enabled = True
+                self.loading_more_results = True
+                self.collection_url = "https://www.youtube.com/channel/example/videos"
+                self.collection_result_type = "Video"
+                self.collection_sort_mode = "popular"
+                self.collection_channel_id = "channel"
+                self.collection_fully_loaded = False
+                self.pending_player_next_after_dynamic_load = True
+                self.pending_player_next_preserve_focus = True
+                self.pending_player_next_current_url = "https://www.youtube.com/watch?v=example"
+                self.search_generation = 7
+
+            @staticmethod
+            def clear():
+                pass
+
+            @staticmethod
+            def add_background_player_section():
+                pass
+
+        harness = Harness()
+        harness.prepare_audiovault_screen("recent_shows")
+
+        self.assertFalse(harness.dynamic_fetch_enabled)
+        self.assertFalse(harness.loading_more_results)
+        self.assertEqual(harness.collection_url, "")
+        self.assertEqual(harness.collection_result_type, "")
+        self.assertEqual(harness.collection_sort_mode, "")
+        self.assertEqual(harness.collection_channel_id, "")
+        self.assertTrue(harness.collection_fully_loaded)
+        self.assertFalse(harness.pending_player_next_after_dynamic_load)
+        self.assertFalse(harness.pending_player_next_preserve_focus)
+        self.assertEqual(harness.pending_player_next_current_url, "")
+        self.assertEqual(harness.search_generation, 8)
 
     def test_expired_stream_session_requests_login_and_retry(self):
         class Harness(AudioVaultMixin):
@@ -382,6 +445,191 @@ class AudioVaultParserTests(unittest.TestCase):
             output = root / "output"
             AudioVaultMixin.safe_extract_audiovault_zip(archive, output)
             self.assertEqual((output / "Season 1" / "Episode 01.mp3").read_bytes(), b"audio")
+
+    def test_range_reader_lists_zip_without_fetching_the_whole_archive(self):
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w", zipfile.ZIP_DEFLATED) as package:
+            package.writestr("Season 1/Episode 01.mp3", b"audio" * 2000)
+            package.writestr("Season 1/Episode 02.mp3", b"more audio" * 2000)
+        archive = payload.getvalue()
+        requests = []
+
+        def read_range(start, end):
+            requests.append((start, end))
+            return archive[start : end + 1]
+
+        reader = audiovault_module._AudioVaultRangeReader(len(archive), read_range, cache_size=128)
+        with zipfile.ZipFile(reader) as package:
+            names = package.namelist()
+
+        self.assertEqual(names, ["Season 1/Episode 01.mp3", "Season 1/Episode 02.mp3"])
+        self.assertTrue(requests)
+        self.assertNotIn((0, len(archive) - 1), requests)
+
+    def test_remote_show_manifest_creates_on_demand_episode_items(self):
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w", zipfile.ZIP_DEFLATED) as package:
+            package.writestr("Season 1/Episode 01.mp3", b"first episode")
+            package.writestr("Season 1/Episode 02.mp3", b"second episode")
+        archive = payload.getvalue()
+
+        class Harness(AudioVaultMixin):
+            def __init__(self, cache_folder):
+                self.settings = SimpleNamespace(cache_folder=cache_folder)
+
+            @staticmethod
+            def t(key, **values):
+                return key.format(**values)
+
+            @staticmethod
+            def safe_folder_name(value):
+                return str(value).replace(":", "_")
+
+            @staticmethod
+            def natural_sort_key(value):
+                return [str(value)]
+
+            @staticmethod
+            def audiovault_archive_size(_url):
+                return len(archive)
+
+            @staticmethod
+            def audiovault_read_range(_url, start, end):
+                return archive[start : end + 1]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            show = {"id": "42", "title": "Example Show", "url": "https://direct.audiovault.net/download/42"}
+            episodes = Harness(temporary).audiovault_remote_episode_items(show)
+
+            self.assertEqual([item["title"] for item in episodes], ["Episode 01", "Episode 02"])
+            self.assertTrue(all(item["kind"] == "audiovault_remote_episode" for item in episodes))
+            self.assertEqual(episodes[0]["archive_member"], "Season 1/Episode 01.mp3")
+            self.assertTrue(str(episodes[0]["url"]).endswith("0001 - Episode 01.mp3"))
+            self.assertFalse(Path(episodes[0]["url"]).exists())
+
+    def test_remote_episode_worker_extracts_only_selected_episode_before_playback(self):
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w", zipfile.ZIP_DEFLATED) as package:
+            package.writestr("Season 1/Episode 01.mp3", b"first episode")
+            package.writestr("Season 1/Episode 02.mp3", b"second episode")
+        archive = payload.getvalue()
+
+        class Harness(AudioVaultMixin):
+            def __init__(self, cache_folder):
+                self.settings = SimpleNamespace(cache_folder=cache_folder, download_folder=cache_folder)
+                self.played = []
+                self.progress = []
+
+            @staticmethod
+            def t(key, **values):
+                return key.format(**values)
+
+            @staticmethod
+            def safe_folder_name(value):
+                return str(value).replace(":", "_")
+
+            @staticmethod
+            def natural_sort_key(value):
+                return [str(value)]
+
+            @staticmethod
+            def audiovault_archive_size(_url):
+                return len(archive)
+
+            @staticmethod
+            def audiovault_read_range(_url, start, end):
+                return archive[start : end + 1]
+
+            def update_audiovault_progress(self, task_id, percent, message):
+                self.progress.append((task_id, percent, message))
+
+            def close_audiovault_progress(self, task_id):
+                self.progress.append((task_id, "closed", ""))
+
+            def play_audiovault_local_item(self, item, **_kwargs):
+                self.played.append(dict(item))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            harness = Harness(temporary)
+            show = {"id": "42", "title": "Example Show", "url": "https://direct.audiovault.net/download/42"}
+            episodes = harness.audiovault_remote_episode_items(show)
+            with mock.patch("apricot.network.audiovault.wx.CallAfter", side_effect=lambda callback, *args: callback(*args)):
+                harness.audiovault_remote_episode_worker(episodes[0], False, True, "task-1")
+
+            self.assertEqual(Path(episodes[0]["url"]).read_bytes(), b"first episode")
+            self.assertFalse(Path(episodes[1]["url"]).exists())
+            self.assertEqual(harness.played[0]["kind"], "audiovault_episode")
+            self.assertEqual(harness.progress[-1][1], "closed")
+
+    def test_show_manifest_falls_back_to_full_archive_with_progress_when_ranges_are_unavailable(self):
+        class Harness(AudioVaultMixin):
+            def __init__(self):
+                self.audiovault_manifest_loading = {"42"}
+                self.full_jobs = []
+
+            @staticmethod
+            def audiovault_remote_episode_items(_item):
+                raise AudioVaultRangeUnsupported("no ranges")
+
+            def start_audiovault_full_show_job(self, *args):
+                self.full_jobs.append(args)
+
+            @staticmethod
+            def audiovault_show_manifest_key(_item):
+                return "42"
+
+            @staticmethod
+            def t(key, **values):
+                return key.format(**values)
+
+            @staticmethod
+            def friendly_error(exc):
+                return str(exc)
+
+        harness = Harness()
+        item = {"id": "42", "title": "Show", "url": "https://direct.audiovault.net/download/42"}
+        with mock.patch("apricot.network.audiovault.wx.CallAfter", side_effect=lambda callback, *args: callback(*args)):
+            harness.load_audiovault_show_manifest_worker(item, Path("cache"), True, 9)
+
+        self.assertEqual(len(harness.full_jobs), 1)
+        self.assertEqual(harness.full_jobs[0][0], item)
+        self.assertFalse(harness.audiovault_manifest_loading)
+
+    def test_player_next_dispatches_remote_audiovault_episode_to_on_demand_loader(self):
+        class Harness:
+            def __init__(self):
+                self.player_return_data = {}
+                self.in_player_screen = True
+                self.player_panel = object()
+                self.results_list = object()
+                self.calls = []
+
+            @staticmethod
+            def player_sequence_contains_item(_item):
+                return True
+
+            @staticmethod
+            def live_window(control):
+                return control
+
+            @staticmethod
+            def background_playback_enabled():
+                return False
+
+            def prepare_audiovault_remote_episode(self, item, **kwargs):
+                self.calls.append((dict(item), kwargs))
+
+        harness = Harness()
+        item = {
+            "kind": "audiovault_remote_episode",
+            "title": "Episode 02",
+            "url": "C:/cache/Episode 02.mp3",
+        }
+        PlayerUI.open_relative_player_item(harness, item, announce_start=True, preserve_focus=False)
+
+        self.assertEqual(harness.calls[0][0], item)
+        self.assertTrue(harness.calls[0][1]["show_player"])
+        self.assertTrue(harness.calls[0][1]["announce_start"])
 
     def test_show_activation_uses_current_download_after_argument(self):
         class Harness(AudioVaultMixin):

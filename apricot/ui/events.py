@@ -505,6 +505,9 @@ class EventsUI:
             if results_focus:
                 self.activate_audiovault_item()
                 return
+        if getattr(self, "audiovault_screen_active", False) and results_focus and self.results_list_owns_key(event):
+            event.Skip()
+            return
         # Player shortcuts have priority; results-list native navigation comes after.
         # Matches pre-refactoring behaviour where player_shortcut_event was checked first.
         if results_focus and self.results_list_owns_key(event):

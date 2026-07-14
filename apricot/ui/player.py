@@ -1071,6 +1071,15 @@ class PlayerUI:
         keep_current_ui = bool(preserve_focus and self.live_window(getattr(self, "player_panel", None)) is not None)
         show_player = (self.in_player_screen or not self.background_playback_enabled()) and not keep_current_ui
         focus_target = "player" if keep_current_ui else ("results" if preserve_focus and self.live_window(getattr(self, "results_list", None)) is not None else "player")
+        if item.get("kind") == "audiovault_remote_episode":
+            self.prepare_audiovault_remote_episode(
+                item,
+                show_player=show_player,
+                announce_start=announce_start,
+                focus_target=focus_target,
+                keep_current_ui=keep_current_ui,
+            )
+            return
         if item.get("kind") == "rss_item":
             self.player_return_screen = "rss_items"
             self.player_return_data = {
