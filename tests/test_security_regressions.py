@@ -71,6 +71,44 @@ class SearchHarness(SearchMixin):
             raise AssertionError("unexpected truthy value")
 
 
+class SearchNormalizationHarness(SearchMixin):
+    @staticmethod
+    def t(key: str, **values) -> str:
+        return key.format(**values)
+
+    @staticmethod
+    def metadata_is_live_stream(_entry: dict) -> bool:
+        return False
+
+    @staticmethod
+    def metadata_live_status(_entry: dict) -> str:
+        return ""
+
+    @staticmethod
+    def format_age(_entry: dict) -> str:
+        return ""
+
+    @staticmethod
+    def format_count(value) -> str:
+        return str(value or "")
+
+    @staticmethod
+    def format_duration(value) -> str:
+        return str(value or "")
+
+    @staticmethod
+    def normalized_chapters(_chapters) -> list:
+        return []
+
+    @staticmethod
+    def with_live_stream_display_fields(item: dict, _entry: dict) -> dict:
+        return item
+
+    @staticmethod
+    def normalize_channel_url(entry: dict) -> str:
+        return str(entry.get("uploader_url") or "")
+
+
 class FakeResponse:
     def __init__(self, data: bytes, content_length: int | None = None) -> None:
         self.data = data
@@ -241,9 +279,62 @@ class SecurityRegressionTests(unittest.TestCase):
     def test_soundcloud_search_uses_the_dedicated_ytdlp_search_path(self) -> None:
         search = SearchHarness()
         with mock.patch("apricot.search.search.wx.CallAfter", side_effect=lambda callback, *args: callback(*args)):
-            search.search_worker("artist track", "Video", 5, 7, provider="soundcloud")
+            search.search_worker("artist track", "Track", 5, 7, provider="soundcloud")
         self.assertEqual(search.requested_url, "scsearch5:artist track")
         self.assertEqual(search.shown_results, [{"title": "Track"}])
+
+    def test_soundcloud_has_track_playlist_and_artist_search_types(self) -> None:
+        self.assertEqual(
+            SearchMixin.search_type_definitions(1),
+            (("Track", "track"), ("Playlist", "playlist"), ("User", "artist")),
+        )
+
+    def test_soundcloud_playlist_and_artist_normalize_as_collections(self) -> None:
+        harness = SearchNormalizationHarness()
+        playlist = harness.normalize_entry(
+            {
+                "kind": "playlist",
+                "id": 12,
+                "title": "A set",
+                "permalink_url": "https://soundcloud.com/example/sets/a-set",
+                "track_count": 9,
+                "user": {"username": "Example", "permalink_url": "https://soundcloud.com/example"},
+            },
+            "Playlist",
+            "soundcloud",
+        )
+        artist = harness.normalize_entry(
+            {
+                "kind": "user",
+                "id": 34,
+                "username": "Example",
+                "permalink_url": "https://soundcloud.com/example",
+                "track_count": 7,
+            },
+            "User",
+            "soundcloud",
+        )
+
+        self.assertEqual((playlist["kind"], playlist["type"], playlist["playlist_count"]), ("playlist", "playlist", 9))
+        self.assertEqual((artist["kind"], artist["type"], artist["provider"]), ("channel", "artist", "soundcloud"))
+
+    def test_youtube_shorts_merge_is_prefix_stable_and_deduplicated(self) -> None:
+        primary = [
+            {"id": f"video{index:06d}", "url": f"https://www.youtube.com/watch?v=video{index:06d}"}
+            for index in range(40)
+        ]
+        shorts = [
+            {"id": f"short{index:06d}", "url": f"https://www.youtube.com/shorts/short{index:06d}"}
+            for index in range(10)
+        ]
+        shorts.insert(0, dict(primary[0]))
+
+        first_page = SearchMixin.interleave_youtube_results(primary, shorts, 20)
+        second_page = SearchMixin.interleave_youtube_results(primary, shorts, 40)
+
+        self.assertEqual(second_page[:20], first_page)
+        self.assertEqual(len({item["id"] for item in second_page}), len(second_page))
+        self.assertTrue(any("/shorts/" in item["url"] for item in first_page))
 
     def test_youtube_shorts_urls_resolve_to_playable_video_ids(self) -> None:
         youtube = YoutubeMixin()
@@ -251,6 +342,25 @@ class SecurityRegressionTests(unittest.TestCase):
             youtube.extract_youtube_video_id({"url": "https://www.youtube.com/shorts/AbCdEfGhI12"}),
             "AbCdEfGhI12",
         )
+
+    def test_channel_uploads_include_videos_and_shorts(self) -> None:
+        harness = SearchNormalizationHarness()
+        requested_urls: list[str] = []
+
+        def extract(url: str, _options: dict) -> list[dict]:
+            requested_urls.append(url)
+            if url.endswith("/shorts"):
+                return [{"id": "AbCdEfGhI12", "url": "https://www.youtube.com/shorts/AbCdEfGhI12"}]
+            return [{"id": "ZyXwVuTsRq1", "url": "https://www.youtube.com/watch?v=ZyXwVuTsRq1"}]
+
+        harness.extract_flat_entries = extract
+        results = harness.youtube_channel_upload_results("https://www.youtube.com/@example/videos", 20, {})
+
+        self.assertCountEqual(
+            requested_urls,
+            ["https://www.youtube.com/@example/videos", "https://www.youtube.com/@example/shorts"],
+        )
+        self.assertEqual({item["id"] for item in results}, {"ZyXwVuTsRq1", "AbCdEfGhI12"})
 
     def test_stale_last_session_save_is_ignored(self) -> None:
         manager = DataManagerMixin()

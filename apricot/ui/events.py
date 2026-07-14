@@ -299,9 +299,12 @@ class EventsUI:
                 "skip_download": True,
                 "playlistend": limit,
             }
-            info = self.ydl_extract_info(url, options, download=False)
-            entries = list(info.get("entries") or [])[:limit]
-            normalized = [self.normalize_entry(entry, result_type) for entry in entries]
+            if sort_mode == "channel_uploads" and result_type == "Video":
+                normalized = self.youtube_channel_upload_results(url, limit, options)
+            else:
+                info = self.ydl_extract_info(url, options, download=False)
+                entries = list(info.get("entries") or [])[:limit]
+                normalized = [self.normalize_entry(entry, result_type) for entry in entries]
             if result_type == "Video" and self.youtube_data_api_key():
                 try:
                     start = min(max(0, selection), len(normalized))
@@ -601,6 +604,9 @@ class EventsUI:
                 return
             if self.search_screen_active and self.search_results_stack:
                 self.restore_previous_search_results()
+                return
+            if getattr(self, "audiovault_screen_active", False):
+                self.back_from_audiovault()
                 return
             if self.rss_items_screen_active:
                 self.show_rss_feeds()

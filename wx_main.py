@@ -182,6 +182,8 @@ class MainFrame(AudioVaultMixin, CookiesUI, DownloadsUI, EqualizerUI, EventsUI, 
         self.last_user_result_index = 0
         self.last_user_result_identity = ""
         self.current_search_type_code = "All"
+        self.last_search_provider_index = 0
+        self.current_search_provider = "youtube"
         self.collection_url = ""
         self.collection_result_type = ""
         self.collection_sort_mode = ""

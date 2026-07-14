@@ -58,7 +58,7 @@ class MenusUI:
             "search": (self.search_provider_menu_label(), self.show_search, True),
             "resume_last_session": (self.t("resume_last_session"), self.resume_last_player_session, self.last_player_session_available() and getattr(self.settings, "show_resume_in_menu", True)),
             "trending": (self.t("trending"), self.show_trending, bool(getattr(self.settings, "enable_trending", False))),
-            "audiovault": (self.menu_label_with_shortcut("search_audiovault", "open_audiovault"), self.show_audiovault_search, True),
+            "audiovault": (self.menu_label_with_shortcut("audiovault", "open_audiovault"), self.show_audiovault_menu, True),
             "play_folder": (self.menu_label_with_shortcut("play_folder", "open_play_from_folder"), self.show_play_from_folder, True),
             "play_file": (self.menu_label_with_shortcut("play_file", "open_play_file"), self.show_play_file, True),
             "direct_link": (self.menu_label_with_shortcut("direct_link", "open_direct_link"), self.show_direct_link, True),
@@ -117,7 +117,7 @@ class MenusUI:
         actions = [
             (self.menu_label_with_shortcut("main_menu", "open_main_menu"), self.show_main_menu),
             (self.search_provider_menu_label(), self.show_search),
-            (self.menu_label_with_shortcut("search_audiovault", "open_audiovault"), self.show_audiovault_search),
+            (self.menu_label_with_shortcut("audiovault", "open_audiovault"), self.show_audiovault_menu),
             (self.menu_label_with_shortcut("play_folder", "open_play_from_folder"), self.show_play_from_folder),
             (self.menu_label_with_shortcut("play_file", "open_play_file"), self.show_play_file),
             (self.menu_label_with_shortcut("direct_link", "open_direct_link"), self.show_direct_link),
@@ -382,7 +382,16 @@ class MenusUI:
         item = self.selected_result(stable=False)
         if item and item.get("kind") in {"playlist", "channel"}:
             is_channel = item.get("kind") == "channel"
-            if is_channel:
+            if is_channel and item.get("provider") == "soundcloud":
+                actions = [
+                    (self.t("open"), lambda selected=dict(item): self.open_soundcloud_artist_tracks(selected)),
+                    (None, None),
+                    (self.menu_label_with_shortcut("add_favorite", "add_favorite"), self.add_selected_favorite),
+                    (self.menu_label_with_shortcut("remove_favorite", "remove_favorite"), self.remove_selected_favorite_shortcut),
+                    (self.t("open_browser"), self.open_selected_in_browser),
+                    (self.menu_label_with_shortcut("copy_url", "copy_link"), self.copy_selected_url),
+                ]
+            elif is_channel:
                 actions = [
                     (self.t("channel_options"), lambda selected=dict(item): self.show_channel_options(selected)),
                     (self.t("channel_videos"), lambda selected=dict(item): self.open_channel_tab(selected, "videos")),
@@ -406,7 +415,7 @@ class MenusUI:
                     (self.t("open_browser"), self.open_selected_in_browser),
                     (self.menu_label_with_shortcut("copy_url", "copy_link"), self.copy_selected_url),
                 ]
-            if is_channel:
+            if is_channel and item.get("provider") != "soundcloud":
                 actions.insert(5, (self.menu_label_with_shortcut("subscribe_channel", "subscribe_channel"), self.subscribe_shortcut))
                 actions.insert(6, (self.menu_label_with_shortcut("unsubscribe_channel", "unsubscribe_channel"), self.unsubscribe_shortcut))
         else:

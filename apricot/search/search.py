@@ -14,6 +14,7 @@ import shutil
 import tempfile
 import urllib.request
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from urllib.request import Request
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
@@ -35,6 +36,18 @@ from apricot.constants import *
 from apricot.locales import TEXT
 
 class SearchMixin:
+
+    @staticmethod
+    def search_type_definitions(provider_index: int) -> tuple[tuple[str, str], ...]:
+        if provider_index == 1:
+            return (("Track", "track"), ("Playlist", "playlist"), ("User", "artist"))
+        return (("All", "all"), ("Video", "video"), ("Playlist", "playlist"), ("Channel", "channel"))
+
+    def set_search_type_choices(self, provider_index: int, selection: int = 0) -> None:
+        definitions = self.search_type_definitions(provider_index)
+        self.search_type.Set([self.t(label_key) for _code, label_key in definitions])
+        self.search_type.SetSelection(min(max(0, selection), len(definitions) - 1))
+        self.search_type.Enable()
 
     def clear_results_selection_update_suppression(self) -> None:
         self.results_selection_update_suppressed = False
@@ -107,19 +120,11 @@ class SearchMixin:
         grid.Add(self.search_provider, 1, wx.EXPAND)
 
         grid.Add(wx.StaticText(self.panel, label=self.t("type")), 0, wx.ALIGN_CENTER_VERTICAL)
-        self.search_type = wx.Choice(
-            self.panel,
-            choices=[self.t("all"), self.t("video"), self.t("playlist"), self.t("channel")],
-        )
+        self.search_type = wx.Choice(self.panel, choices=[])
         self.search_type.SetName(self.t("type"))
         restored_type_index = self.last_search_type_index if restore_search else 0
-        self.search_type.SetSelection(restored_type_index if 0 <= restored_type_index < self.search_type.GetCount() else 0)
+        self.set_search_type_choices(self.search_provider.GetSelection(), restored_type_index)
         grid.Add(self.search_type, 1, wx.EXPAND)
-
-        if self.search_provider.GetSelection() == 1:
-            self.search_type.Disable()
-        else:
-            self.search_type.Enable()
 
         self.root_sizer.Add(grid, 0, wx.EXPAND | wx.ALL, 4)
         self.add_button_row(
@@ -163,6 +168,8 @@ class SearchMixin:
             "query": self.last_search_query,
             "type_index": self.last_search_type_index,
             "search_type": self.current_search_type_code,
+            "provider_index": int(getattr(self, "last_search_provider_index", 0) or 0),
+            "provider": str(getattr(self, "current_search_provider", "youtube") or "youtube"),
             "collection_url": str(data.get("collection_url") or self.collection_url or ""),
             "collection_result_type": str(data.get("collection_result_type") or self.collection_result_type or ""),
             "collection_sort_mode": str(data.get("collection_sort_mode") or self.collection_sort_mode or ""),
@@ -188,10 +195,7 @@ class SearchMixin:
 
     def on_search_provider_change(self, event=None) -> None:
         idx = self.search_provider.GetSelection()
-        if idx == 1:
-            self.search_type.Disable()
-        else:
-            self.search_type.Enable()
+        self.set_search_type_choices(idx, 0)
 
     def back_from_search(self) -> None:
         if self.search_results_stack:
@@ -364,8 +368,115 @@ class SearchMixin:
 
     def search_type_code(self) -> str:
         index = self.search_type.GetSelection()
-        options = ("All", "Video", "Playlist", "Channel")
-        return options[index] if 0 <= index < len(options) else "All"
+        definitions = self.search_type_definitions(self.search_provider.GetSelection())
+        return definitions[index][0] if 0 <= index < len(definitions) else definitions[0][0]
+
+    @staticmethod
+    def interleave_youtube_results(primary: list[dict], shorts: list[dict], limit: int) -> list[dict]:
+        merged: list[dict] = []
+        seen: set[str] = set()
+        primary_index = 0
+        shorts_index = 0
+
+        def append_next(items: list[dict], index: int) -> int:
+            while index < len(items):
+                item = dict(items[index])
+                index += 1
+                video_id = str(item.get("id") or "").strip()
+                identity = video_id if re.fullmatch(r"[\w-]{11}", video_id) else str(item.get("url") or item.get("webpage_url") or "")
+                if not identity or identity in seen:
+                    continue
+                seen.add(identity)
+                merged.append(item)
+                break
+            return index
+
+        while len(merged) < limit and (primary_index < len(primary) or shorts_index < len(shorts)):
+            for _slot in range(4):
+                if len(merged) >= limit:
+                    break
+                previous_length = len(merged)
+                primary_index = append_next(primary, primary_index)
+                if len(merged) == previous_length:
+                    break
+            if len(merged) >= limit:
+                break
+            previous_length = len(merged)
+            shorts_index = append_next(shorts, shorts_index)
+            if len(merged) == previous_length and primary_index >= len(primary):
+                break
+        return merged
+
+    @staticmethod
+    def youtube_shorts_search_url(query: str) -> str:
+        return f"https://www.youtube.com/results?{urlencode({'search_query': query, 'sp': 'EgIQCQ=='})}"
+
+    def extract_flat_entries(self, url: str, options: dict) -> list[dict]:
+        info = self.ydl_extract_info(url, options, download=False)
+        return [entry for entry in list((info or {}).get("entries") or []) if isinstance(entry, dict)]
+
+    def youtube_search_results_with_shorts(self, query: str, search_type: str, limit: int, options: dict) -> list[dict]:
+        primary_url = f"ytsearch{limit}:{query}" if search_type == "Video" else self.youtube_search_url(query, search_type)
+        if search_type not in {"All", "Video"}:
+            entries = self.extract_flat_entries(primary_url, options)[:limit]
+            return [self.normalize_entry(entry, search_type, "youtube") for entry in entries]
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="apricot-youtube-search") as executor:
+            primary_future = executor.submit(self.extract_flat_entries, primary_url, options)
+            shorts_future = executor.submit(self.extract_flat_entries, self.youtube_shorts_search_url(query), options)
+            primary_entries = primary_future.result()
+            try:
+                shorts_entries = shorts_future.result()
+            except Exception:
+                shorts_entries = []
+        primary = [self.normalize_entry(entry, search_type, "youtube") for entry in primary_entries]
+        shorts = [self.normalize_entry(entry, "Video", "youtube") for entry in shorts_entries]
+        return self.interleave_youtube_results(primary, shorts, limit)
+
+    def soundcloud_search_entries(self, query: str, search_type: str, limit: int, options: dict) -> list[dict]:
+        if search_type == "Track":
+            return self.extract_flat_entries(f"scsearch{limit}:{query}", options)[:limit]
+        endpoint = "search/playlists_without_albums" if search_type == "Playlist" else "search/users"
+        ytdlp = get_yt_dlp()
+        if ytdlp is None:
+            raise RuntimeError(self.t("missing_ytdlp"))
+        collected: list[dict] = []
+        with ytdlp.YoutubeDL(self.ydl_options(options, use_cookies=False)) as ydl:
+            extractor = ydl.get_info_extractor("SoundcloudSearch")
+            extractor.initialize()
+            next_url = f"{extractor._API_V2_BASE}{endpoint}"
+            query_params: dict = {
+                "q": query,
+                "limit": min(200, max(1, limit)),
+                "linked_partitioning": 1,
+                "offset": 0,
+            }
+            while next_url and len(collected) < limit:
+                response = extractor._call_api(next_url, query, query=query_params, headers=extractor._HEADERS)
+                collected.extend(item for item in list((response or {}).get("collection") or []) if isinstance(item, dict))
+                next_url = str((response or {}).get("next_href") or "")
+                query_params = {}
+        return collected[:limit]
+
+    def search_results_for_provider(self, query: str, search_type: str, limit: int, provider: str, options: dict) -> list[dict]:
+        if provider == "soundcloud":
+            entries = self.soundcloud_search_entries(query, search_type, limit, options)
+            return [self.normalize_entry(entry, search_type, provider) for entry in entries]
+        return self.youtube_search_results_with_shorts(query, search_type, limit, options)
+
+    def youtube_channel_upload_results(self, videos_url: str, limit: int, options: dict) -> list[dict]:
+        base = re.sub(r"/videos/?$", "", str(videos_url or ""), flags=re.IGNORECASE)
+        shorts_url = f"{base}/shorts"
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="apricot-channel-uploads") as executor:
+            videos_future = executor.submit(self.extract_flat_entries, videos_url, options)
+            shorts_future = executor.submit(self.extract_flat_entries, shorts_url, options)
+            video_entries = videos_future.result()
+            try:
+                shorts_entries = shorts_future.result()
+            except Exception:
+                shorts_entries = []
+        videos = [self.normalize_entry(entry, "Video", "youtube") for entry in video_entries]
+        shorts = [self.normalize_entry(entry, "Video", "youtube") for entry in shorts_entries]
+        return self.interleave_youtube_results(videos, shorts, limit)
 
 
     def search(self) -> None:
@@ -411,14 +522,8 @@ class SearchMixin:
     def search_worker(self, query: str, search_type: str, limit: int, generation: int, provider: str = "youtube") -> None:
         try:
             options = {"quiet": True, "extract_flat": True, "skip_download": True, "playlistend": limit}
-            if provider == "soundcloud":
-                info = self.ydl_extract_info(f"scsearch{limit}:{query}", options, download=False)
-            elif search_type == "Video":
-                info = self.ydl_extract_info(f"ytsearch{limit}:{query}", options, download=False)
-            else:
-                info = self.ydl_extract_info(self.youtube_search_url(query, search_type), options, download=False)
-            entries = list(info.get("entries") or [])[:limit]
-            wx.CallAfter(self.show_results_if_current, generation, [self.normalize_entry(entry, search_type, provider) for entry in entries])
+            results = self.search_results_for_provider(query, search_type, limit, provider, options)
+            wx.CallAfter(self.show_results_if_current, generation, results)
         except Exception as exc:
             wx.CallAfter(self.show_search_error_if_current, generation, self.friendly_error(exc))
 
@@ -435,13 +540,16 @@ class SearchMixin:
 
 
     def normalize_entry(self, entry: dict, search_type: str, provider: str = "youtube") -> dict:
-        url = entry.get("webpage_url") or entry.get("url") or ""
+        url = entry.get("webpage_url") or entry.get("permalink_url") or entry.get("url") or ""
         ie_key = str(entry.get("ie_key") or "").lower()
         entry_type = str(entry.get("_type") or entry.get("result_type") or "").lower()
+        entry_kind = str(entry.get("kind") or "").lower()
         url_text = str(url)
         is_soundcloud = provider == "soundcloud" or "soundcloud" in ie_key or "soundcloud" in url_text
-        is_playlist = not is_soundcloud and (search_type == "Playlist" or "playlist" in ie_key or "playlist" in entry_type or "list=" in url_text)
-        is_channel = not is_soundcloud and (
+        is_playlist = (is_soundcloud and (search_type == "Playlist" or entry_kind == "playlist" or "/sets/" in url_text)) or (
+            not is_soundcloud and (search_type == "Playlist" or "playlist" in ie_key or "playlist" in entry_type or "list=" in url_text)
+        )
+        is_channel = (is_soundcloud and (search_type == "User" or entry_kind == "user")) or (not is_soundcloud and (
             search_type in {"Channel", "Kanal"}
             or "channel" in ie_key
             or "channel" in entry_type
@@ -449,16 +557,16 @@ class SearchMixin:
             or "/channel/" in url_text
             or url_text.startswith("@")
             or url_text.startswith("/@")
-        )
+        ))
         if is_channel:
             kind = "channel"
-            display_type = self.t("channel")
+            display_type = self.t("artist") if is_soundcloud else self.t("channel")
         elif is_playlist:
             kind = "playlist"
             display_type = self.t("playlist")
         else:
             kind = "video"
-            display_type = self.t("live_stream") if (not is_soundcloud and self.metadata_is_live_stream(entry)) else self.t("video")
+            display_type = self.t("track") if is_soundcloud else (self.t("live_stream") if self.metadata_is_live_stream(entry) else self.t("video"))
         if url and not url.startswith("http"):
             if is_soundcloud:
                 if "soundcloud.com" in url:
@@ -480,12 +588,13 @@ class SearchMixin:
         upload_date = entry.get("upload_date")
         is_live = kind == "video" and (not is_soundcloud and self.metadata_is_live_stream(entry))
         age = self.t("live_now") if is_live else (self.format_age({"timestamp": timestamp, "upload_date": upload_date}) if kind == "video" else "")
-        playlist_count = entry.get("playlist_count") or entry.get("n_entries") or entry.get("video_count") or entry.get("playlist_count_text")
+        user = entry.get("user") if isinstance(entry.get("user"), dict) else {}
+        playlist_count = entry.get("track_count") or entry.get("playlist_count") or entry.get("n_entries") or entry.get("video_count") or entry.get("playlist_count_text")
         item = {
-            "title": entry.get("title") or "",
+            "title": entry.get("title") or entry.get("username") or "",
             "id": entry.get("id") or "",
-            "channel": entry.get("uploader") or entry.get("channel") or "",
-            "channel_url": self.normalize_channel_url(entry),
+            "channel": entry.get("uploader") or entry.get("channel") or user.get("username") or "",
+            "channel_url": entry.get("permalink_url") if is_channel and is_soundcloud else (user.get("permalink_url") or self.normalize_channel_url(entry)),
             "channel_id": entry.get("channel_id") or entry.get("uploader_id") or "",
             "views": self.format_count(entry.get("view_count")),
             "view_count": entry.get("view_count"),
@@ -501,6 +610,7 @@ class SearchMixin:
             "chapters": self.normalized_chapters(entry.get("chapters")),
             "type": display_type,
             "kind": kind,
+            "provider": "soundcloud" if is_soundcloud else "youtube",
             "playlist_count": playlist_count if kind == "playlist" else "",
             "url": url,
             "live_status": self.metadata_live_status(entry),
@@ -551,6 +661,8 @@ class SearchMixin:
     def search_return_data(self, index: int | None = None) -> dict:
         return {
             "index": self.current_index if index is None else int(index),
+            "provider_index": int(getattr(self, "last_search_provider_index", 0) or 0),
+            "provider": str(getattr(self, "current_search_provider", "youtube") or "youtube"),
             "collection_url": str(self.collection_url or ""),
             "collection_result_type": str(self.collection_result_type or ""),
             "collection_sort_mode": str(self.collection_sort_mode or ""),
@@ -562,6 +674,8 @@ class SearchMixin:
 
     def restore_search_return_context(self, data: dict | None = None) -> None:
         data = data if isinstance(data, dict) else {}
+        self.last_search_provider_index = int(data.get("provider_index") or 0)
+        self.current_search_provider = str(data.get("provider") or ("soundcloud" if self.last_search_provider_index == 1 else "youtube"))
         self.collection_url = str(data.get("collection_url") or "")
         self.collection_result_type = str(data.get("collection_result_type") or "")
         self.collection_sort_mode = str(data.get("collection_sort_mode") or "")
@@ -569,6 +683,34 @@ class SearchMixin:
         self.collection_fully_loaded = bool(data.get("collection_fully_loaded", False))
         self.dynamic_fetch_enabled = bool(data.get("dynamic_fetch_enabled", True))
         self.loading_more_results = False
+
+    def open_soundcloud_artist_tracks(self, item: dict, push_state: bool = True) -> None:
+        url = str(item.get("url") or item.get("channel_url") or "").strip().rstrip("/")
+        if not url:
+            self.message(self.t("no_selection"))
+            return
+        if push_state:
+            self.push_search_state()
+        self.prepare_collection_results_screen(preserve_player_return_state=push_state)
+        self.trending_screen_active = False
+        title = str(item.get("title") or self.t("artist"))
+        self.set_status(self.t("loading_channel", title=title))
+        self.collection_url = f"{url}/tracks"
+        self.collection_result_type = "Track"
+        self.collection_sort_mode = ""
+        self.collection_channel_id = ""
+        self.collection_fully_loaded = False
+        self.loading_more_results = False
+        self.dynamic_fetch_enabled = True
+        self.current_search_provider = "soundcloud"
+        self.metadata_hydration_urls.clear()
+        self.search_generation += 1
+        generation = self.search_generation
+        threading.Thread(
+            target=self.load_collection_worker,
+            args=(self.collection_url, "Track", self.initial_results_limit(), 0, generation, ""),
+            daemon=True,
+        ).start()
 
 
     def maybe_extend_results(self) -> None:
@@ -632,14 +774,8 @@ class SearchMixin:
     def search_more_worker(self, query: str, search_type: str, limit: int, selection: int, generation: int, provider: str = "youtube") -> None:
         try:
             options = {"quiet": True, "extract_flat": True, "skip_download": True, "playlistend": limit}
-            if provider == "soundcloud":
-                info = self.ydl_extract_info(f"scsearch{limit}:{query}", options, download=False)
-            elif search_type == "Video":
-                info = self.ydl_extract_info(f"ytsearch{limit}:{query}", options, download=False)
-            else:
-                info = self.ydl_extract_info(self.youtube_search_url(query, search_type), options, download=False)
-            entries = list(info.get("entries") or [])[:limit]
-            wx.CallAfter(self.show_more_results_if_current, generation, [self.normalize_entry(entry, search_type, provider) for entry in entries], selection)
+            results = self.search_results_for_provider(query, search_type, limit, provider, options)
+            wx.CallAfter(self.show_more_results_if_current, generation, results, selection)
         except Exception as exc:
             wx.CallAfter(self.dynamic_fetch_failed_if_current, generation, self.friendly_error(exc))
 
@@ -737,6 +873,8 @@ class SearchMixin:
                 "query": self.last_search_query,
                 "type_index": self.last_search_type_index,
                 "search_type": self.current_search_type_code,
+                "provider_index": int(getattr(self, "last_search_provider_index", 0) or 0),
+                "provider": str(getattr(self, "current_search_provider", "youtube") or "youtube"),
                 "collection_url": self.collection_url,
                 "collection_result_type": self.collection_result_type,
                 "collection_sort_mode": self.collection_sort_mode,
@@ -779,6 +917,8 @@ class SearchMixin:
         self.last_search_query = str(state.get("query") or self.last_search_query)
         self.last_search_type_index = int(state.get("type_index") or 0)
         self.current_search_type_code = str(state.get("search_type") or "All")
+        self.last_search_provider_index = int(state.get("provider_index") or 0)
+        self.current_search_provider = str(state.get("provider") or ("soundcloud" if self.last_search_provider_index == 1 else "youtube"))
         self.collection_url = str(state.get("collection_url") or "")
         self.collection_result_type = str(state.get("collection_result_type") or "")
         self.collection_sort_mode = str(state.get("collection_sort_mode") or "")
@@ -854,13 +994,12 @@ class SearchMixin:
             self.show_rss_items(feed_index, selection=item_index)
             return
         if self.player_return_screen == "audiovault":
-            results = list(self.player_return_data.get("results") or self.audiovault_results)
+            data = dict(self.player_return_data or {})
+            results = list(data.get("results") or self.audiovault_results)
             if not keep_playing:
                 self.player_return_screen = ""
                 self.player_return_data = {}
-            self.show_audiovault_search()
-            if results:
-                self.show_audiovault_results(results)
+            self.restore_audiovault_player_results(data, results)
             return
         if self.player_return_screen == "history":
             if not keep_playing:

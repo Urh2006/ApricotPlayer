@@ -33,6 +33,76 @@ class AudioVaultParserTests(unittest.TestCase):
         self.assertEqual(parser.token, "token123")
         self.assertEqual(parser.rows, [["42", "A & B", "Download"]])
         self.assertIn("/download/42", parser.links)
+        self.assertEqual(parser.records[0]["link"], "/download/42")
+
+    def test_parser_keeps_recent_movies_and_shows_separate(self):
+        parser = _VaultPageParser()
+        parser.feed(
+            "<h5>Recent Shows:</h5>"
+            '<table><tr><td>11</td><td>A Show</td><td><a href="/download/11">Download</a></td></tr></table>'
+            "<h5>Recent Movies:</h5>"
+            '<table><tr><td>22</td><td>A Movie</td><td><a href="/download/22">Download</a></td></tr></table>'
+        )
+
+        self.assertEqual(
+            [(record["section"], record["row"][1], record["link"]) for record in parser.records],
+            [
+                ("recent shows", "A Show", "/download/11"),
+                ("recent movies", "A Movie", "/download/22"),
+            ],
+        )
+
+    def test_show_results_passes_index_and_item_to_result_line(self):
+        class Harness(AudioVaultMixin):
+            def __init__(self):
+                self.results_list = object()
+                self.rendered = []
+
+            def result_line(self, index, item):
+                self.rendered.append((index, item["title"]))
+                return item["title"]
+
+            def set_listbox_items(self, _control, labels, _selection):
+                self.labels = labels
+
+            def set_status(self, _message):
+                pass
+
+            def focus_later(self, _control):
+                pass
+
+            @staticmethod
+            def t(key, **values):
+                return key.format(**values)
+
+        harness = Harness()
+        harness.show_audiovault_results([{"title": "One"}, {"title": "Two"}])
+
+        self.assertEqual(harness.rendered, [(0, "One"), (1, "Two")])
+        self.assertEqual(harness.labels, ["One", "Two"])
+
+    def test_audiovault_search_url_uses_shows_route(self):
+        self.assertEqual(
+            AudioVaultMixin.audiovault_catalog_url("shows", "doctor who"),
+            "https://direct.audiovault.net/shows?search=doctor+who",
+        )
+
+    def test_recent_results_only_use_the_requested_section(self):
+        class Harness(AudioVaultMixin):
+            @staticmethod
+            def t(key, **values):
+                return key.format(**values)
+
+        records = [
+            {"section": "recent shows", "row": ["11", "A Show"], "link": "/download/11"},
+            {"section": "recent movies", "row": ["22", "A Movie"], "link": "/download/22"},
+        ]
+
+        shows = Harness().audiovault_results_from_records(records, "shows", section="recent shows")
+        movies = Harness().audiovault_results_from_records(records, "movies", section="recent movies")
+
+        self.assertEqual([(item["title"], item["kind"]) for item in shows], [("A Show", "audiovault_show")])
+        self.assertEqual([(item["title"], item["kind"]) for item in movies], [("A Movie", "audiovault_movie")])
 
     def test_safe_zip_extraction_rejects_parent_paths(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -143,6 +213,19 @@ class AudioVaultParserTests(unittest.TestCase):
         self.assertEqual(hydrated_ids, {"abcdefghijk"})
         self.assertEqual(hydrated[0]["url"], original_url)
         self.assertEqual(hydrated[0]["age"], "Uploaded 1 day ago")
+
+    def test_soundcloud_results_do_not_enter_youtube_api_hydration(self):
+        class Harness(ListsUI):
+            @staticmethod
+            def extract_youtube_video_id(item):
+                return str(item.get("id") or "")
+
+        self.assertEqual(
+            Harness().result_video_id(
+                {"id": "123456789012", "provider": "soundcloud", "url": "https://soundcloud.com/example/track"}
+            ),
+            "",
+        )
 
 
 if __name__ == "__main__":

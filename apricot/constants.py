@@ -603,7 +603,7 @@ MAIN_MENU_CUSTOMIZABLE_ITEMS = (
     ("search", "main_menu_search"),
     ("resume_last_session", "resume_last_session"),
     ("trending", "trending"),
-    ("audiovault", "search_audiovault"),
+    ("audiovault", "audiovault"),
     ("play_folder", "play_folder"),
     ("play_file", "play_file"),
     ("direct_link", "direct_link"),

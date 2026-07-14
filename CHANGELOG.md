@@ -666,6 +666,13 @@
 
 # Changelog
 
+## 1.0.0 Beta 55
+
+- SoundCloud search now offers Track, Playlist, and Artist types. Playlists open through the existing playlist workflow, while artists open their track list with the same accessible result navigation and dynamic loading.
+- AudioVault now opens as an `AudioVault` submenu with Search, recently added TV shows, and recently added movies. Fixed TV-show searches silently failing when results were rendered, and restored step-by-step return navigation from episodes and playback.
+- YouTube searches and channel video lists now include Shorts alongside ordinary videos. Shorts already present in playlists remain normal playable results, with no separate Shorts-only screen.
+- Added regression coverage for SoundCloud result types, AudioVault section parsing and rendering, Shorts URL playback, channel merging, provider state, and the permanent application-update menu action.
+
 ## 1.0.0 Beta 54
 
 - Application update notifications can no longer be hidden through Customize main menu.

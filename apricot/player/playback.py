@@ -187,7 +187,10 @@ class PlaybackMixin:
             self.message(self.t("no_selection"))
             return
         if item.get("kind") == "channel":
-            self.show_channel_options(item)
+            if item.get("provider") == "soundcloud":
+                self.open_soundcloud_artist_tracks(item)
+            else:
+                self.show_channel_options(item)
             return
         if item.get("kind") == "playlist":
             self.open_playlist_videos(item)

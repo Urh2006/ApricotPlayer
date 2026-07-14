@@ -330,7 +330,7 @@ class SystemUI:
         self.set_status(self.t("loading_channel", title=f"{title} - {label}"))
         self.collection_url = url
         self.collection_result_type = result_type
-        self.collection_sort_mode = "popular" if tab == "popular" else ""
+        self.collection_sort_mode = "popular" if tab == "popular" else ("channel_uploads" if tab == "videos" else "")
         self.collection_channel_id = str(item.get("channel_id") or "")
         self.collection_fully_loaded = False
         self.loading_more_results = False

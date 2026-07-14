@@ -130,24 +130,35 @@ class _VaultPageParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.rows: list[list[str]] = []
         self.links: list[str] = []
+        self.records: list[dict] = []
         self.token = ""
+        self.section = ""
         self._row: list[str] | None = None
         self._cell: list[str] | None = None
+        self._row_links: list[str] = []
+        self._heading: list[str] | None = None
 
     def handle_starttag(self, tag: str, attrs) -> None:
         values = dict(attrs)
         if tag == "tr":
             self._row = []
+            self._row_links = []
         elif tag == "td" and self._row is not None:
             self._cell = []
+        elif tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+            self._heading = []
         elif tag == "a" and values.get("href"):
             self.links.append(values["href"])
+            if self._row is not None:
+                self._row_links.append(values["href"])
         elif tag == "input" and values.get("name") == "_token":
             self.token = values.get("value", "")
 
     def handle_data(self, data: str) -> None:
         if self._cell is not None:
             self._cell.append(data)
+        if self._heading is not None:
+            self._heading.append(data)
 
     def handle_endtag(self, tag: str) -> None:
         if tag == "td" and self._row is not None and self._cell is not None:
@@ -156,7 +167,13 @@ class _VaultPageParser(HTMLParser):
         elif tag == "tr" and self._row is not None:
             if self._row:
                 self.rows.append(self._row)
+                download_link = next((link for link in self._row_links if re.search(r"/download/\d+", link)), "")
+                self.records.append({"section": self.section, "row": list(self._row), "link": download_link})
             self._row = None
+            self._row_links = []
+        elif tag in {"h1", "h2", "h3", "h4", "h5", "h6"} and self._heading is not None:
+            self.section = " ".join("".join(self._heading).split()).rstrip(":").lower()
+            self._heading = None
 
 
 class AudioVaultMixin:
@@ -170,6 +187,10 @@ class AudioVaultMixin:
         self.audiovault_mode = "movies"
         self.audiovault_results: list[dict] = []
         self.audiovault_parent_results: list[dict] = []
+        self.audiovault_view = "menu"
+        self.audiovault_results_title = ""
+        self.audiovault_parent_view = ""
+        self.audiovault_parent_title = ""
 
     def audiovault_request(self, url: str, data: dict | None = None, timeout: int = 30):
         parsed = urllib.parse.urlparse(url)
@@ -271,29 +292,73 @@ class AudioVaultMixin:
             self.show_audiovault_login(after_login)
 
     def open_audiovault_shortcut(self) -> None:
-        self.run_global_navigation_shortcut(self.show_audiovault_search)
+        self.run_global_navigation_shortcut(self.show_audiovault_menu)
 
-    def show_audiovault_search(self) -> None:
-        if not self.audiovault_logged_in:
-            email = str(getattr(self.settings, "audiovault_email", "") or "").strip()
-            password = unprotect_audiovault_password(str(getattr(self.settings, "audiovault_password_protected", "") or ""))
-            if email and password:
-                self.set_status(self.t("audiovault_logging_in"))
-                threading.Thread(
-                    target=self.audiovault_login_worker,
-                    args=(email, password, self.show_audiovault_search, False),
-                    daemon=True,
-                ).start()
-            else:
-                self.show_audiovault_login(self.show_audiovault_search)
-            return
-        self.last_activated_menu_action = self.show_audiovault_search
+    def ensure_audiovault_login(self, after_login) -> bool:
+        if self.audiovault_logged_in:
+            return True
+        email = str(getattr(self.settings, "audiovault_email", "") or "").strip()
+        password = unprotect_audiovault_password(str(getattr(self.settings, "audiovault_password_protected", "") or ""))
+        if email and password:
+            self.set_status(self.t("audiovault_logging_in"))
+            threading.Thread(
+                target=self.audiovault_login_worker,
+                args=(email, password, after_login, False),
+                daemon=True,
+            ).start()
+        else:
+            self.show_audiovault_login(after_login)
+        return False
+
+    def prepare_audiovault_screen(self, view: str) -> None:
         self.in_main_menu = False
         self.in_player_screen = False
         self.search_screen_active = False
         self.audiovault_screen_active = True
+        self.audiovault_view = view
         self.clear()
         self.add_background_player_section()
+
+    def show_audiovault_menu(self) -> None:
+        if not self.ensure_audiovault_login(self.show_audiovault_menu):
+            return
+        self.last_activated_menu_action = self.show_audiovault_menu
+        self.audiovault_parent_results = []
+        self.audiovault_parent_view = ""
+        self.audiovault_parent_title = ""
+        self.prepare_audiovault_screen("menu")
+        self.add_button_row([(self.t("back"), self.show_main_menu), (self.t("open"), self.activate_audiovault_menu_item)])
+        self.audiovault_menu_actions = [
+            (self.t("search"), self.show_audiovault_search),
+            (self.t("audiovault_recent_tv_shows"), lambda: self.show_audiovault_recent("shows")),
+            (self.t("audiovault_recent_movies"), lambda: self.show_audiovault_recent("movies")),
+        ]
+        self.audiovault_menu_list = wx.ListBox(self.panel, choices=[label for label, _handler in self.audiovault_menu_actions])
+        self.audiovault_menu_list.SetName(self.t("audiovault"))
+        self.audiovault_menu_list.SetSelection(0)
+        self.audiovault_menu_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _evt: self.activate_audiovault_menu_item())
+        self.audiovault_menu_list.Bind(wx.EVT_KEY_DOWN, self.on_audiovault_menu_key)
+        self.root_sizer.Add(self.audiovault_menu_list, 1, wx.EXPAND | wx.ALL, 4)
+        self.panel.Layout()
+        self.focus_later(self.audiovault_menu_list)
+
+    def on_audiovault_menu_key(self, event: wx.KeyEvent) -> None:
+        if self.shortcut_matches(event, "open_selected"):
+            self.activate_audiovault_menu_item()
+        else:
+            event.Skip()
+
+    def activate_audiovault_menu_item(self) -> None:
+        index = self.audiovault_menu_list.GetSelection() if hasattr(self, "audiovault_menu_list") else wx.NOT_FOUND
+        if 0 <= index < len(self.audiovault_menu_actions):
+            self.audiovault_menu_actions[index][1]()
+
+    def show_audiovault_search(self) -> None:
+        if not self.ensure_audiovault_login(self.show_audiovault_search):
+            return
+        self.last_activated_menu_action = self.show_audiovault_search
+        self.prepare_audiovault_screen("search")
+        self.audiovault_results_title = self.t("search")
         self.add_button_row([(self.t("back"), self.back_from_audiovault)])
         grid = wx.FlexGridSizer(2, 2, 6, 6)
         grid.AddGrowableCol(1, 1)
@@ -306,6 +371,7 @@ class AudioVaultMixin:
         self.audiovault_type = wx.Choice(self.panel, choices=[self.t("movies"), self.t("tv_shows")])
         self.audiovault_type.SetName(self.t("type"))
         self.audiovault_type.SetSelection(0 if self.audiovault_mode == "movies" else 1)
+        self.audiovault_type.Bind(wx.EVT_KEY_DOWN, self.on_audiovault_type_key)
         grid.Add(self.audiovault_type, 1, wx.EXPAND)
         self.root_sizer.Add(grid, 0, wx.EXPAND | wx.ALL, 4)
         self.add_button_row([
@@ -313,6 +379,21 @@ class AudioVaultMixin:
             (self.t("play"), self.activate_audiovault_item),
             (self.t("download_audio"), self.download_audiovault_selected),
         ])
+        self.add_audiovault_results_list()
+        self.panel.Layout()
+        self.focus_later(self.audiovault_query)
+
+    def on_audiovault_type_key(self, event: wx.KeyEvent) -> None:
+        if event.GetKeyCode() in {wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER}:
+            self.search_audiovault()
+        else:
+            event.Skip()
+
+    def add_audiovault_results_list(self, title: str = "") -> None:
+        if title:
+            label = wx.StaticText(self.panel, label=title)
+            label.SetName(title)
+            self.root_sizer.Add(label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 4)
         self.results_list = wx.ListBox(self.panel, choices=[self.t("search_results_empty")])
         self.results_list.SetName(self.t("results"))
         self.results_list.SetSelection(0)
@@ -320,16 +401,78 @@ class AudioVaultMixin:
         self.results_list.Bind(wx.EVT_KEY_DOWN, self.on_audiovault_results_key)
         self.results_list.Bind(wx.EVT_CONTEXT_MENU, self.open_audiovault_context_menu)
         self.root_sizer.Add(self.results_list, 1, wx.EXPAND | wx.ALL, 4)
+
+    def show_audiovault_results_screen(self, title: str, view: str) -> None:
+        self.prepare_audiovault_screen(view)
+        self.audiovault_results_title = title
+        self.add_button_row([
+            (self.t("back"), self.back_from_audiovault),
+            (self.t("play"), self.activate_audiovault_item),
+            (self.t("download_audio"), self.download_audiovault_selected),
+        ])
+        self.add_audiovault_results_list(title)
         self.panel.Layout()
-        self.focus_later(self.audiovault_query)
+
+    def show_audiovault_recent(self, mode: str) -> None:
+        if mode not in {"shows", "movies"}:
+            return
+        self.audiovault_mode = mode
+        title = self.t("audiovault_recent_tv_shows" if mode == "shows" else "audiovault_recent_movies")
+        self.show_audiovault_results_screen(title, f"recent_{mode}")
+        self.set_status(self.t("audiovault_loading_recent"))
+        threading.Thread(target=self.load_audiovault_recent_worker, args=(mode,), daemon=True).start()
+
+    def load_audiovault_recent_worker(self, mode: str) -> None:
+        try:
+            with self.audiovault_request(f"{AUDIOVAULT_BASE_URL}/") as response:
+                parser = _VaultPageParser()
+                parser.feed(self.audiovault_read_page(response))
+            section = "recent shows" if mode == "shows" else "recent movies"
+            results = self.audiovault_results_from_records(parser.records, mode, section=section)
+            wx.CallAfter(self.show_audiovault_results, results)
+        except Exception as exc:
+            wx.CallAfter(self.message, self.t("audiovault_search_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
 
     def back_from_audiovault(self) -> None:
         if self.audiovault_parent_results:
             results = list(self.audiovault_parent_results)
             self.audiovault_parent_results = []
+            view = self.audiovault_parent_view or "search"
+            title = self.audiovault_parent_title or self.t("search")
+            self.audiovault_parent_view = ""
+            self.audiovault_parent_title = ""
+            if view == "search":
+                self.show_audiovault_search()
+            else:
+                self.show_audiovault_results_screen(title, view)
             self.show_audiovault_results(results)
             return
-        self.show_main_menu()
+        if self.audiovault_view == "menu":
+            self.show_main_menu()
+        else:
+            self.show_audiovault_menu()
+
+    @staticmethod
+    def audiovault_catalog_url(mode: str, query: str) -> str:
+        catalog = "shows" if mode == "shows" else "movies"
+        return f"{AUDIOVAULT_BASE_URL}/{catalog}?{urllib.parse.urlencode({'search': query})}"
+
+    def audiovault_results_from_records(self, records: list[dict], mode: str, section: str = "") -> list[dict]:
+        results: list[dict] = []
+        for record in records:
+            row = list(record.get("row") or [])
+            link = str(record.get("link") or "")
+            if section and str(record.get("section") or "") != section:
+                continue
+            if len(row) < 2 or not re.search(r"/download/\d+", link):
+                continue
+            absolute_link = urllib.parse.urljoin(AUDIOVAULT_BASE_URL, link)
+            results.append({
+                "id": row[0], "title": html.unescape(row[1]), "url": absolute_link,
+                "webpage_url": absolute_link, "kind": "audiovault_show" if mode == "shows" else "audiovault_movie",
+                "type": self.t("tv_show") if mode == "shows" else self.t("movie"), "channel": "AudioVault",
+            })
+        return results
 
     def search_audiovault(self) -> None:
         query = self.audiovault_query.GetValue().strip()
@@ -342,18 +485,11 @@ class AudioVaultMixin:
 
     def search_audiovault_worker(self, query: str, mode: str) -> None:
         try:
-            url = f"{AUDIOVAULT_BASE_URL}/{mode}?{urllib.parse.urlencode({'search': query})}"
+            url = self.audiovault_catalog_url(mode, query)
             with self.audiovault_request(url) as response:
                 parser = _VaultPageParser()
                 parser.feed(self.audiovault_read_page(response))
-            links = [urllib.parse.urljoin(AUDIOVAULT_BASE_URL, link) for link in parser.links if re.search(r"/download/\d+", link)]
-            results = []
-            for row, link in zip((row for row in parser.rows if len(row) >= 2), links):
-                results.append({
-                    "id": row[0], "title": html.unescape(row[1]), "url": link,
-                    "webpage_url": link, "kind": "audiovault_show" if mode == "shows" else "audiovault_movie",
-                    "type": self.t("tv_show") if mode == "shows" else self.t("movie"), "channel": "AudioVault",
-                })
+            results = self.audiovault_results_from_records(parser.records, mode)
             wx.CallAfter(self.show_audiovault_results, results)
         except Exception as exc:
             wx.CallAfter(self.message, self.t("audiovault_search_failed", error=self.friendly_error(exc)), wx.ICON_ERROR)
@@ -362,7 +498,7 @@ class AudioVaultMixin:
         self.audiovault_results = list(results)
         self.results = list(results)
         self.all_results = list(results)
-        labels = [self.result_line(item) for item in results] or [self.t("no_results")]
+        labels = [self.result_line(index, item) for index, item in enumerate(results)] or [self.t("no_results")]
         self.set_listbox_items(self.results_list, labels, 0)
         self.set_status(self.t("found", count=len(results)))
         self.focus_later(self.results_list)
@@ -452,8 +588,32 @@ class AudioVaultMixin:
         self.current_video_item["_audiovault_headers"] = headers
         self.current_video_info.update(self.current_video_item)
         self.player_return_screen = "audiovault"
-        self.player_return_data = {"mode": self.audiovault_mode, "results": list(self.audiovault_results)}
+        self.player_return_data = self.audiovault_player_return_state()
         self.play_url(item["url"], item.get("title", ""))
+
+    def audiovault_player_return_state(self) -> dict:
+        return {
+            "mode": self.audiovault_mode,
+            "results": list(self.audiovault_results),
+            "view": self.audiovault_view,
+            "title": self.audiovault_results_title,
+            "parent_results": list(self.audiovault_parent_results),
+            "parent_view": self.audiovault_parent_view,
+            "parent_title": self.audiovault_parent_title,
+        }
+
+    def restore_audiovault_player_results(self, data: dict, results: list[dict]) -> None:
+        self.audiovault_mode = str(data.get("mode") or self.audiovault_mode)
+        view = str(data.get("view") or "search")
+        title = str(data.get("title") or self.t("search"))
+        if view == "search":
+            self.show_audiovault_search()
+        else:
+            self.show_audiovault_results_screen(title, view)
+        self.audiovault_parent_results = list(data.get("parent_results") or [])
+        self.audiovault_parent_view = str(data.get("parent_view") or "")
+        self.audiovault_parent_title = str(data.get("parent_title") or "")
+        self.show_audiovault_results(results)
 
     def prepare_audiovault_show(self, item: dict, download_after: bool = False) -> None:
         cache_dir = self.audiovault_show_cache_dir(item)
@@ -548,10 +708,14 @@ class AudioVaultMixin:
 
     def show_audiovault_episodes(self, show: dict, episodes: list[dict]) -> None:
         self.audiovault_parent_results = list(self.audiovault_results)
+        self.audiovault_parent_view = self.audiovault_view
+        self.audiovault_parent_title = self.audiovault_results_title
+        self.audiovault_view = "episodes"
+        self.audiovault_results_title = str(show.get("title") or self.t("tv_show"))
         self.audiovault_results = list(episodes)
         self.results = list(episodes)
         self.all_results = list(episodes)
-        self.set_listbox_items(self.results_list, [self.result_line(item) for item in episodes], 0)
+        self.set_listbox_items(self.results_list, [self.result_line(index, item) for index, item in enumerate(episodes)], 0)
         self.set_status(self.t("audiovault_episodes_loaded", count=len(episodes), title=show.get("title", "")))
         self.focus_later(self.results_list)
 
@@ -559,7 +723,7 @@ class AudioVaultMixin:
         self.current_video_item = dict(item)
         self.current_video_info = dict(item)
         self.player_return_screen = "audiovault"
-        self.player_return_data = {"mode": self.audiovault_mode, "results": list(self.audiovault_results)}
+        self.player_return_data = self.audiovault_player_return_state()
         self.play_url(item["url"], item.get("title", ""))
         self.set_player_sequence(self.audiovault_results)
 

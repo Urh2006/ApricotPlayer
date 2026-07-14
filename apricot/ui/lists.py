@@ -543,6 +543,8 @@ class ListsUI:
             wx.CallAfter(self.finish_result_metadata_hydration, generation)
 
     def result_video_id(self, item: dict) -> str:
+        if str(item.get("provider") or "").lower() == "soundcloud":
+            return ""
         extractor = getattr(self, "extract_youtube_video_id", None)
         if callable(extractor):
             return str(extractor(item) or "")
@@ -813,7 +815,10 @@ class ListsUI:
             self.current_search_type_code = "Video"
             self.show_search(restore_search=True)
             if kind == "channel":
-                self.open_channel_videos(item, push_state=False)
+                if item.get("provider") == "soundcloud":
+                    self.open_soundcloud_artist_tracks(item, push_state=False)
+                else:
+                    self.open_channel_videos(item, push_state=False)
             else:
                 self.open_playlist_videos(item, push_state=False)
             return

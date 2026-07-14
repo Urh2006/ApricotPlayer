@@ -67,7 +67,7 @@ class MainMenuCustomizationTests(unittest.TestCase):
         labels = [label for label, _handler in harness.build_main_menu_actions()]
 
         self.assertNotIn("search_youtube / soundcloud", labels)
-        self.assertNotIn("search_audiovault", labels)
+        self.assertNotIn("audiovault", labels)
         self.assertNotIn("copy_diagnostic_report", labels)
         self.assertIn("settings", labels)
         self.assertIn("exit", labels)
@@ -78,8 +78,8 @@ class MainMenuCustomizationTests(unittest.TestCase):
         main_labels = [label for label, _handler in harness.build_main_menu_actions()]
         finder_labels = [label for label, _handler in harness.action_finder_actions()]
 
-        self.assertNotIn("search_audiovault", main_labels)
-        self.assertIn("search_audiovault", finder_labels)
+        self.assertNotIn("audiovault", main_labels)
+        self.assertIn("audiovault", finder_labels)
 
     def test_dynamic_items_respect_visibility_when_available(self):
         harness = MainMenuHarness({"current_downloads", "playback_queue"})
