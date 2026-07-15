@@ -5,7 +5,11 @@ from unittest import mock
 
 import wx
 
-from apricot.constants import PITCH_MODE_MPV
+from apricot.constants import (
+    PITCH_MODE_MPV,
+    PLAYER_ADJUSTMENT_HOLD_DELAY_MS,
+    PLAYER_ADJUSTMENT_HOLD_REPEAT_MS,
+)
 from apricot.ui.misc import MiscUI
 from apricot.ui.player import PlayerUI
 from apricot.ui.shortcuts import ShortcutsUI
@@ -172,8 +176,10 @@ class PlayerKeyHoldTests(unittest.TestCase):
             repeat_timer.callback(*repeat_timer.args)
 
         self.assertEqual(harness.volume_changes, [5, 5, 5])
-        self.assertEqual(first_timer.delay, 180)
-        self.assertEqual(repeat_timer.delay, 110)
+        self.assertEqual(first_timer.delay, PLAYER_ADJUSTMENT_HOLD_DELAY_MS)
+        self.assertEqual(repeat_timer.delay, PLAYER_ADJUSTMENT_HOLD_REPEAT_MS)
+        self.assertLessEqual(first_timer.delay, 90)
+        self.assertLessEqual(repeat_timer.delay, 45)
 
     def test_native_repeat_does_not_double_custom_pitch_hold(self):
         harness = _HoldHarness()

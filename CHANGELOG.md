@@ -666,6 +666,12 @@
 
 # Changelog
 
+## 1.0.0 Beta 61
+
+- Volume and pitch still react immediately on the first key press, but held-key repetition now starts after 90 ms instead of 180 ms.
+- Continued held-key changes now run every 45 ms instead of every 110 ms for substantially smoother volume and pitch adjustment.
+- The faster cadence applies equally to Up/Down volume controls and Ctrl+Up/Ctrl+Down pitch controls. Configured one-step amounts remain unchanged.
+
 ## 1.0.0 Beta 60
 
 - Volume Up/Down and Pitch Up/Down now use the same deterministic hold controller as seek. A short press still changes exactly one configured step; holding starts repeating after 180 ms and continues every 110 ms until the key is released.

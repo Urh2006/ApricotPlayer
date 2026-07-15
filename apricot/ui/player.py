@@ -1635,7 +1635,11 @@ class PlayerUI:
         self.adjustment_hold_alt = bool(event.AltDown())
         generation = self.adjustment_hold_generation
         self.apply_player_adjustment(action, delta)
-        self.adjustment_hold_call = wx.CallLater(180, self.player_adjustment_hold_tick, generation)
+        self.adjustment_hold_call = wx.CallLater(
+            PLAYER_ADJUSTMENT_HOLD_DELAY_MS,
+            self.player_adjustment_hold_tick,
+            generation,
+        )
 
     def stop_player_adjustment_hold(self, cancel_generation: bool = True) -> None:
         self.adjustment_hold_active = False
@@ -1679,7 +1683,11 @@ class PlayerUI:
             self.stop_player_adjustment_hold()
             return
         self.apply_player_adjustment(self.adjustment_hold_action, self.adjustment_hold_delta)
-        self.adjustment_hold_call = wx.CallLater(110, self.player_adjustment_hold_tick, generation)
+        self.adjustment_hold_call = wx.CallLater(
+            PLAYER_ADJUSTMENT_HOLD_REPEAT_MS,
+            self.player_adjustment_hold_tick,
+            generation,
+        )
 
     def apply_player_adjustment(self, action: str, delta: float) -> None:
         if action == "volume":
