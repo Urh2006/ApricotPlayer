@@ -557,6 +557,9 @@ class PlaybackMixin:
         self.play_request_generation += 1
         self.playback_start_pending = False
         self.cancel_clip_preview()
+        self.stop_player_adjustment_hold()
+        self.stop_player_seek_hold()
+        self.cancel_pending_pitch_changes()
         self.player_generation += 1
         self.player_ended = False
         if not reset_session:

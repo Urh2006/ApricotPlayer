@@ -837,6 +837,9 @@ class PlayerUI:
         return False
 
     def on_player_key_up(self, event: wx.KeyEvent) -> None:
+        if self.adjustment_hold_active and self.adjustment_hold_event_matches(event):
+            self.stop_player_adjustment_hold()
+            return
         if self.seek_hold_active and self.seek_hold_event_matches(event):
             self.stop_player_seek_hold()
             return
@@ -1604,6 +1607,85 @@ class PlayerUI:
             self.mpv_send(shlex_module.split(command), timeout=0.5)
         except Exception:
             pass
+
+    def start_player_adjustment_hold(self, action: str, delta: float, event: wx.KeyEvent) -> None:
+        key_code = MiscUI.event_key_code(event)
+        raw_key_code = MiscUI.event_raw_key_code(event)
+        same_key = (
+            self.adjustment_hold_active
+            and self.adjustment_hold_action == action
+            and self.adjustment_hold_key_code == key_code
+            and self.adjustment_hold_raw_key_code == raw_key_code
+            and self.adjustment_hold_ctrl == bool(event.ControlDown())
+            and self.adjustment_hold_shift == bool(event.ShiftDown())
+            and self.adjustment_hold_alt == bool(event.AltDown())
+            and abs(float(self.adjustment_hold_delta) - float(delta)) < 0.001
+        )
+        if same_key:
+            return
+        self.stop_player_adjustment_hold(cancel_generation=False)
+        self.adjustment_hold_active = True
+        self.adjustment_hold_generation += 1
+        self.adjustment_hold_action = action
+        self.adjustment_hold_delta = float(delta)
+        self.adjustment_hold_key_code = key_code
+        self.adjustment_hold_raw_key_code = raw_key_code
+        self.adjustment_hold_ctrl = bool(event.ControlDown())
+        self.adjustment_hold_shift = bool(event.ShiftDown())
+        self.adjustment_hold_alt = bool(event.AltDown())
+        generation = self.adjustment_hold_generation
+        self.apply_player_adjustment(action, delta)
+        self.adjustment_hold_call = wx.CallLater(180, self.player_adjustment_hold_tick, generation)
+
+    def stop_player_adjustment_hold(self, cancel_generation: bool = True) -> None:
+        self.adjustment_hold_active = False
+        if cancel_generation:
+            self.adjustment_hold_generation += 1
+        call = self.adjustment_hold_call
+        self.adjustment_hold_call = None
+        if call is not None:
+            try:
+                if call.IsRunning():
+                    call.Stop()
+            except RuntimeError:
+                pass
+
+    def adjustment_hold_event_matches(self, event: wx.KeyEvent) -> bool:
+        key_code = MiscUI.event_key_code(event)
+        raw_key_code = MiscUI.event_raw_key_code(event)
+        return (
+            key_code in {self.adjustment_hold_key_code, self.adjustment_hold_raw_key_code}
+            or raw_key_code in {self.adjustment_hold_key_code, self.adjustment_hold_raw_key_code}
+        )
+
+    def adjustment_hold_keys_still_down(self) -> bool:
+        primary_down = self.key_state_down(self.adjustment_hold_key_code) or self.key_state_down(
+            self.adjustment_hold_raw_key_code
+        )
+        if not primary_down:
+            return False
+        if self.adjustment_hold_ctrl and not self.key_state_down(wx.WXK_CONTROL):
+            return False
+        if self.adjustment_hold_shift and not self.key_state_down(wx.WXK_SHIFT):
+            return False
+        if self.adjustment_hold_alt and not self.key_state_down(wx.WXK_ALT):
+            return False
+        return True
+
+    def player_adjustment_hold_tick(self, generation: int) -> None:
+        if generation != self.adjustment_hold_generation or not self.adjustment_hold_active:
+            return
+        if not self.player_is_active() or not self.adjustment_hold_keys_still_down():
+            self.stop_player_adjustment_hold()
+            return
+        self.apply_player_adjustment(self.adjustment_hold_action, self.adjustment_hold_delta)
+        self.adjustment_hold_call = wx.CallLater(110, self.player_adjustment_hold_tick, generation)
+
+    def apply_player_adjustment(self, action: str, delta: float) -> None:
+        if action == "volume":
+            self.change_volume_async(int(delta))
+        elif action == "pitch":
+            self.change_pitch_async(float(delta))
 
     def start_player_seek_hold(self, seconds: float, event: wx.KeyEvent) -> None:
         if self.player_kind != "mpv" or not self.ipc_path:

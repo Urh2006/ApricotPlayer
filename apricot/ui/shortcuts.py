@@ -681,10 +681,10 @@ class ShortcutsUI:
             self.save_current_speed_as_podcast_preset()
             return True
         if self.shortcut_matches(event, "player_pitch_up"):
-            self.change_pitch_async(self.pitch_step_value())
+            self.start_player_adjustment_hold("pitch", self.pitch_step_value(), event)
             return True
         if self.shortcut_matches(event, "player_pitch_down"):
-            self.change_pitch_async(-self.pitch_step_value())
+            self.start_player_adjustment_hold("pitch", -self.pitch_step_value(), event)
             return True
         if self.player_details_shortcut_matches(event):
             self.show_video_details()
@@ -717,10 +717,10 @@ class ShortcutsUI:
             self.start_player_seek_hold(self.seek_seconds_value(), event)
             return True
         if self.shortcut_matches(event, "player_volume_up"):
-            self.change_volume_async(self.settings.volume_step)
+            self.start_player_adjustment_hold("volume", self.settings.volume_step, event)
             return True
         if self.shortcut_matches(event, "player_volume_down"):
-            self.change_volume_async(-self.settings.volume_step)
+            self.start_player_adjustment_hold("volume", -self.settings.volume_step, event)
             return True
         return False
 

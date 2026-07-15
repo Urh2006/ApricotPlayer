@@ -666,6 +666,14 @@
 
 # Changelog
 
+## 1.0.0 Beta 60
+
+- Volume Up/Down and Pitch Up/Down now use the same deterministic hold controller as seek. A short press still changes exactly one configured step; holding starts repeating after 180 ms and continues every 110 ms until the key is released.
+- Holding no longer depends on Windows delivering every native key-repeat event, so it remains consistent even when the player UI is handling background sections, results, or screen-reader updates.
+- Native repeat events for the same held shortcut are ignored while ApricotPlayer's hold controller is active, preventing doubled steps.
+- Rapid pitch changes are accumulated and applied through one worker instead of racing in separate threads. Ten `0.01x` changes now reliably produce a `0.10x` change.
+- Pending holds and pitch work are cancelled when the player closes or switches media. Seek timing and the user's configured volume and pitch step sizes are unchanged.
+
 ## 1.0.0 Beta 59
 
 - Made Ask where to save each download a single global rule for YouTube, SoundCloud, individual and complete podcast downloads, and AudioVault downloads.
