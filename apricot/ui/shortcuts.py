@@ -668,6 +668,9 @@ class ShortcutsUI:
         if self.shortcut_matches(event, "player_time"):
             self.announce_time_async()
             return True
+        if self.shortcut_matches(event, "player_bpm"):
+            self.announce_bpm_async()
+            return True
         if self.shortcut_matches(event, "player_speed_down"):
             self.change_speed_async(-self.speed_step_value())
             return True

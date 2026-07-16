@@ -1,4 +1,5 @@
 from apricot.constants import *
+from apricot.media.tempo import estimate_tempo_from_pcm16_stereo
 import re
 import wx
 import os
@@ -2696,6 +2697,136 @@ class MiscUI:
             wx.CallAfter(self.announce_player, text)
         except Exception:
             wx.CallAfter(self.announce_player, self.t("timing_unavailable"))
+
+    def announce_bpm_async(self) -> None:
+        if not self.player_is_active():
+            self.announce_player(self.t("bpm_not_available"))
+            return
+        key = self.playback_key()
+        if not key:
+            self.announce_player(self.t("bpm_not_available"))
+            return
+        with self.bpm_analysis_lock:
+            if key in self.bpm_analysis_cache:
+                cached = self.bpm_analysis_cache[key]
+                self.announce_player(self.t("bpm_announcement", bpm=cached) if cached else self.t("bpm_not_available"))
+                return
+            if key in self.bpm_analysis_running_keys:
+                self.announce_player(self.t("bpm_analyzing"))
+                return
+            self.bpm_analysis_running_keys.add(key)
+        stream_url = str(self.current_stream_url or "")
+        headers = dict(self.current_stream_headers or {})
+        generation = self.player_generation
+        self.announce_player(self.t("bpm_analyzing"))
+        threading.Thread(
+            target=self.analyze_bpm_worker,
+            args=(key, generation, stream_url, headers),
+            daemon=True,
+        ).start()
+
+    @staticmethod
+    def bpm_analysis_window(position: float, duration: float | None, maximum_seconds: float = 72.0) -> tuple[float, float]:
+        position = max(0.0, float(position or 0.0))
+        available_duration = max(0.0, float(duration or 0.0))
+        start = max(0.0, position - 18.0)
+        if available_duration > 0.0:
+            length = min(maximum_seconds, available_duration)
+            start = min(start, max(0.0, available_duration - length))
+            return start, length
+        return 0.0, maximum_seconds
+
+    @staticmethod
+    def bpm_ffmpeg_args(
+        ffmpeg: str,
+        source: str,
+        headers: dict,
+        start: float,
+        duration: float,
+    ) -> list[str]:
+        args = [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error"]
+        if start > 0.0:
+            args.extend(["-ss", f"{start:.3f}"])
+        safe_headers = []
+        for name, value in headers.items():
+            name = str(name).strip()
+            value = str(value).strip()
+            if value and re.fullmatch(r"[A-Za-z0-9-]+", name) and "\r" not in value and "\n" not in value:
+                safe_headers.append(f"{name}: {value}\r\n")
+        header_text = "".join(safe_headers)
+        if header_text:
+            args.extend(["-headers", header_text])
+        args.extend(
+            [
+                "-i",
+                source,
+                "-t",
+                f"{duration:.3f}",
+                "-filter_complex",
+                "[0:a:0]aformat=sample_fmts=fltp:sample_rates=11025:channel_layouts=mono,"
+                "asplit=2[full][low];[low]highpass=f=35,lowpass=f=250[lowf];"
+                "[full][lowf]join=inputs=2:channel_layout=stereo[out]",
+                "-map",
+                "[out]",
+                "-ar",
+                "11025",
+                "-ac",
+                "2",
+                "-f",
+                "s16le",
+                "pipe:1",
+            ]
+        )
+        return args
+
+    def analyze_bpm_worker(self, key: str, generation: int, stream_url: str, headers: dict) -> None:
+        bpm: int | None = None
+        cacheable = False
+        try:
+            if not stream_url:
+                raise RuntimeError("stream is not ready")
+            ffmpeg = self.ffmpeg_executable()
+            if not ffmpeg:
+                raise RuntimeError("FFmpeg was not found")
+            position = float(self.mpv_get_property("time-pos", timeout=0.6) or 0.0)
+            raw_duration = self.mpv_get_property("duration", timeout=0.6)
+            duration = float(raw_duration) if raw_duration is not None else None
+            start, length = self.bpm_analysis_window(position, duration)
+            args = self.bpm_ffmpeg_args(ffmpeg, stream_url, headers, start, length)
+            creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+            process = subprocess.Popen(
+                args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                creationflags=creationflags,
+            )
+            deadline = time.monotonic() + 35.0
+            while True:
+                try:
+                    pcm, _stderr = process.communicate(timeout=0.25)
+                    break
+                except subprocess.TimeoutExpired:
+                    if generation != self.player_generation or key != self.playback_key() or time.monotonic() >= deadline:
+                        process.kill()
+                        process.communicate()
+                        raise RuntimeError("audio analysis cancelled")
+            if process.returncode != 0 or len(pcm or b"") < 11025 * 2 * 2 * 6:
+                raise RuntimeError("audio analysis failed")
+            estimate = estimate_tempo_from_pcm16_stereo(pcm, sample_rate=11025)
+            bpm = int(round(estimate.bpm)) if estimate is not None else None
+            cacheable = True
+        except Exception:
+            pass
+        finally:
+            with self.bpm_analysis_lock:
+                self.bpm_analysis_running_keys.discard(key)
+                if cacheable:
+                    self.bpm_analysis_cache[key] = bpm
+                    while len(self.bpm_analysis_cache) > 64:
+                        self.bpm_analysis_cache.pop(next(iter(self.bpm_analysis_cache)))
+            if generation == self.player_generation and key == self.playback_key() and self.player_is_active():
+                text = self.t("bpm_announcement", bpm=bpm) if bpm else self.t("bpm_not_available")
+                wx.CallAfter(self.announce_player, text)
 
     def change_speed_async(self, delta: float) -> None:
         threading.Thread(target=self.change_speed_worker, args=(delta,), daemon=True).start()

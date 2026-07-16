@@ -666,6 +666,14 @@
 
 # Changelog
 
+## 1.0.0 Beta 62
+
+- Added accessible BPM detection in the player. Press `B` to analyze the actual audio and hear the estimated tempo; the shortcut is configurable under Settings > Keyboard shortcuts.
+- BPM analysis works through the current resolved stream for YouTube, SoundCloud, podcasts, local media, and AudioVault without adding work to normal playback startup.
+- The detector uses a two-band FFmpeg extraction plus onset strength, tempo autocorrelation, harmonic resolution, and multi-segment stability checks. Unrhythmic speech, silence, and weak results announce `BPM not available` instead of inventing a tempo.
+- Analysis runs in the background, is cancelled when playback changes, and is cached per item so repeated checks answer immediately.
+- Added synthetic tempo coverage from 60 through 180 BPM, speech-like rejection, steady-tone rejection, live-stream handling, safe HTTP headers, and a real bundled-FFmpeg integration check.
+
 ## 1.0.0 Beta 61
 
 - Volume and pitch still react immediately on the first key press, but held-key repetition now starts after 90 ms instead of 180 ms.

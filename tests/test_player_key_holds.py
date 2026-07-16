@@ -65,6 +65,7 @@ class _ShortcutHarness(ShortcutsUI):
         self.player_control_mode = True
         self.settings = SimpleNamespace(volume_step=5)
         self.holds = []
+        self.bpm_requests = 0
 
     @staticmethod
     def player_shortcuts_allowed(_focus):
@@ -96,6 +97,9 @@ class _ShortcutHarness(ShortcutsUI):
 
     def start_player_adjustment_hold(self, action, delta, event):
         self.holds.append((action, delta, event))
+
+    def announce_bpm_async(self):
+        self.bpm_requests += 1
 
     @staticmethod
     def change_volume_async(_delta):
@@ -150,6 +154,15 @@ class PlayerKeyHoldTests(unittest.TestCase):
 
         self.assertEqual(harness.holds[0], ("volume", 5, volume_event))
         self.assertEqual(harness.holds[1], ("pitch", -0.05, pitch_event))
+
+    def test_bpm_shortcut_runs_only_the_bpm_analyzer(self):
+        harness = _ShortcutHarness()
+        event = _KeyEvent("player_bpm", ord("B"))
+
+        self.assertTrue(harness.handle_player_shortcut_event(event, None))
+
+        self.assertEqual(harness.bpm_requests, 1)
+        self.assertEqual(harness.holds, [])
 
     def test_short_press_changes_volume_once_and_key_up_cancels_repeat(self):
         harness = _HoldHarness()
