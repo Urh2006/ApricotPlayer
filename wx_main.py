@@ -219,10 +219,6 @@ class MainFrame(AudioVaultMixin, CookiesUI, DownloadsUI, EqualizerUI, EventsUI, 
         self.volume_change_lock = threading.Lock()
         self.volume_change_pending_target: float | None = None
         self.volume_change_timer: wx.CallLater | None = None
-        self.pitch_change_lock = threading.Lock()
-        self.pitch_change_pending_target: float | None = None
-        self.pitch_change_worker_running = False
-        self.pitch_change_generation = 0
         self.clip_start_marker: float | None = None
         self.clip_end_marker: float | None = None
         self.clip_preview_generation = 0
@@ -269,16 +265,6 @@ class MainFrame(AudioVaultMixin, CookiesUI, DownloadsUI, EqualizerUI, EventsUI, 
         self.seek_hold_shift = False
         self.seek_hold_alt = False
         self.seek_hold_call: wx.CallLater | None = None
-        self.adjustment_hold_active = False
-        self.adjustment_hold_generation = 0
-        self.adjustment_hold_action = ""
-        self.adjustment_hold_delta = 0.0
-        self.adjustment_hold_key_code = -1
-        self.adjustment_hold_raw_key_code = -1
-        self.adjustment_hold_ctrl = False
-        self.adjustment_hold_shift = False
-        self.adjustment_hold_alt = False
-        self.adjustment_hold_call: wx.CallLater | None = None
 
         self.panel = wx.Panel(self)
         self.root_sizer = wx.BoxSizer(wx.VERTICAL)

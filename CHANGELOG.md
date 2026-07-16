@@ -666,6 +666,13 @@
 
 # Changelog
 
+## 1.0.0 Beta 64
+
+- Restored pitch Up/Down to the exact pre-Beta-60 input path. Every native Windows key-repeat event now applies one configured pitch step directly.
+- Removed the custom 90/45 ms volume-and-pitch hold controller and the pitch request batching introduced after Beta 59.
+- Volume and pitch now both rely on native key repeat without an ApricotPlayer delay or accelerated repeat timer.
+- Kept the separate seek hold implementation unchanged.
+
 ## 1.0.0 Beta 63
 
 - Fixed normal YouTube searches waiting for the optional Shorts endpoint. Standard results now appear as soon as their primary request finishes, while Shorts are included only when their parallel request is already ready.
