@@ -666,6 +666,16 @@
 
 # Changelog
 
+## 1.0.0 Beta 63
+
+- Fixed normal YouTube searches waiting for the optional Shorts endpoint. Standard results now appear as soon as their primary request finishes, while Shorts are included only when their parallel request is already ready.
+- Reduced retries for the optional Shorts request so a slow or incomplete Shorts response does not keep unnecessary background work alive.
+- BPM results are now tied to the current item, speed, and pitch. Changing speed or pitch and pressing `B` starts a fresh analysis instead of replaying the original cached result.
+- Reported BPM now reflects playback speed, for example a detected 120 BPM track playing at `1.25x` announces 150 BPM.
+- Restored the pre-Beta-60 native key-repeat path for volume Up/Down, removing the newer fast volume timer. Pitch keeps its current deterministic held-key behavior.
+- BPM analysis code is loaded only when `B` is pressed and adds no import work to ordinary navigation, searching, playback, seek, or volume paths.
+- Release builds now prefer the project's dependency-complete virtual environment, preventing packaged startup failures when the system Python is missing a required runtime module.
+
 ## 1.0.0 Beta 62
 
 - Added accessible BPM detection in the player. Press `B` to analyze the actual audio and hear the estimated tempo; the shortcut is configurable under Settings > Keyboard shortcuts.

@@ -1,5 +1,5 @@
 ﻿param(
-    [string]$PythonExe = "python",
+    [string]$PythonExe = "",
     [string]$OutputDir = "",
     [string]$AppName = "ApricotPlayer",
     [ValidateSet("onefile", "onedir")]
@@ -10,6 +10,10 @@
 $ErrorActionPreference = "Stop"
 
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+if (-not $PythonExe) {
+    $projectVenvPython = Join-Path $projectRoot ".venv\Scripts\python.exe"
+    $PythonExe = if (Test-Path -LiteralPath $projectVenvPython) { $projectVenvPython } else { "python" }
+}
 $pythonCommand = Get-Command $PythonExe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $pythonCommand) {
     throw "Python executable was not found: $PythonExe"

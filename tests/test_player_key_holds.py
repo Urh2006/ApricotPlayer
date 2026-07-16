@@ -65,6 +65,7 @@ class _ShortcutHarness(ShortcutsUI):
         self.player_control_mode = True
         self.settings = SimpleNamespace(volume_step=5)
         self.holds = []
+        self.volume_changes = []
         self.bpm_requests = 0
 
     @staticmethod
@@ -101,9 +102,8 @@ class _ShortcutHarness(ShortcutsUI):
     def announce_bpm_async(self):
         self.bpm_requests += 1
 
-    @staticmethod
-    def change_volume_async(_delta):
-        raise AssertionError("Volume bypassed the hold controller")
+    def change_volume_async(self, delta):
+        self.volume_changes.append(delta)
 
     @staticmethod
     def change_pitch_async(_delta):
@@ -144,7 +144,7 @@ class PlayerKeyHoldTests(unittest.TestCase):
     def setUp(self):
         _FakeCallLater.instances = []
 
-    def test_volume_and_pitch_shortcuts_enter_hold_controller(self):
+    def test_volume_uses_native_repeat_while_pitch_uses_hold_controller(self):
         harness = _ShortcutHarness()
         volume_event = _KeyEvent("player_volume_up", wx.WXK_UP)
         pitch_event = _KeyEvent("player_pitch_down", wx.WXK_DOWN, control=True)
@@ -152,8 +152,8 @@ class PlayerKeyHoldTests(unittest.TestCase):
         self.assertTrue(harness.handle_player_shortcut_event(volume_event, None))
         self.assertTrue(harness.handle_player_shortcut_event(pitch_event, None))
 
-        self.assertEqual(harness.holds[0], ("volume", 5, volume_event))
-        self.assertEqual(harness.holds[1], ("pitch", -0.05, pitch_event))
+        self.assertEqual(harness.volume_changes, [5])
+        self.assertEqual(harness.holds, [("pitch", -0.05, pitch_event)])
 
     def test_bpm_shortcut_runs_only_the_bpm_analyzer(self):
         harness = _ShortcutHarness()

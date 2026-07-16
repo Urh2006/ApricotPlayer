@@ -720,10 +720,10 @@ class ShortcutsUI:
             self.start_player_seek_hold(self.seek_seconds_value(), event)
             return True
         if self.shortcut_matches(event, "player_volume_up"):
-            self.start_player_adjustment_hold("volume", self.settings.volume_step, event)
+            self.change_volume_async(self.settings.volume_step)
             return True
         if self.shortcut_matches(event, "player_volume_down"):
-            self.start_player_adjustment_hold("volume", -self.settings.volume_step, event)
+            self.change_volume_async(-self.settings.volume_step)
             return True
         return False
 

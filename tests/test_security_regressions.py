@@ -336,6 +336,37 @@ class SecurityRegressionTests(unittest.TestCase):
         self.assertEqual(len({item["id"] for item in second_page}), len(second_page))
         self.assertTrue(any("/shorts/" in item["url"] for item in first_page))
 
+    def test_youtube_search_does_not_wait_for_optional_shorts(self) -> None:
+        harness = SearchNormalizationHarness()
+        shorts_started = threading.Event()
+        release_shorts = threading.Event()
+        search_done = threading.Event()
+        captured: list[list[dict]] = []
+
+        def extract(url: str, _options: dict) -> list[dict]:
+            if "sp=EgIQCQ" in url:
+                shorts_started.set()
+                release_shorts.wait(1.0)
+                return [{"id": "AbCdEfGhI12", "url": "https://www.youtube.com/shorts/AbCdEfGhI12"}]
+            return [{"id": "ZyXwVuTsRq1", "url": "https://www.youtube.com/watch?v=ZyXwVuTsRq1"}]
+
+        def run_search() -> None:
+            captured.append(harness.youtube_search_results_with_shorts("test", "Video", 20, {}))
+            search_done.set()
+
+        harness.extract_flat_entries = extract
+        worker = threading.Thread(target=run_search, daemon=True)
+        worker.start()
+        try:
+            self.assertTrue(shorts_started.wait(1.0))
+            returned_before_shorts = search_done.wait(0.15)
+        finally:
+            release_shorts.set()
+            worker.join(1.0)
+
+        self.assertTrue(returned_before_shorts)
+        self.assertEqual(captured[0][0]["id"], "ZyXwVuTsRq1")
+
     def test_youtube_shorts_urls_resolve_to_playable_video_ids(self) -> None:
         youtube = YoutubeMixin()
         self.assertEqual(

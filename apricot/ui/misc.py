@@ -1,5 +1,4 @@
 from apricot.constants import *
-from apricot.media.tempo import estimate_tempo_from_pcm16_stereo
 import re
 import wx
 import os
@@ -2702,10 +2701,11 @@ class MiscUI:
         if not self.player_is_active():
             self.announce_player(self.t("bpm_not_available"))
             return
-        key = self.playback_key()
-        if not key:
+        item_key = self.playback_key()
+        if not item_key:
             self.announce_player(self.t("bpm_not_available"))
             return
+        key, playback_speed, _playback_pitch = self.current_bpm_analysis_state(item_key)
         with self.bpm_analysis_lock:
             if key in self.bpm_analysis_cache:
                 cached = self.bpm_analysis_cache[key]
@@ -2721,9 +2721,24 @@ class MiscUI:
         self.announce_player(self.t("bpm_analyzing"))
         threading.Thread(
             target=self.analyze_bpm_worker,
-            args=(key, generation, stream_url, headers),
+            args=(key, item_key, generation, stream_url, headers, playback_speed),
             daemon=True,
         ).start()
+
+    @staticmethod
+    def bpm_analysis_cache_key(item_key: str, speed: float, pitch: float) -> str:
+        return f"{item_key}\x1f{float(speed):.4f}\x1f{float(pitch):.4f}"
+
+    def current_bpm_analysis_state(self, item_key: str | None = None) -> tuple[str, float, float]:
+        item_key = str(item_key or self.playback_key() or "")
+        speed = self.current_speed_value()
+        pitch = self.current_pitch_value()
+        return self.bpm_analysis_cache_key(item_key, speed, pitch), speed, pitch
+
+    @staticmethod
+    def effective_playback_bpm(source_bpm: float, playback_speed: float) -> int:
+        speed = max(0.25, min(4.0, float(playback_speed or 1.0)))
+        return int(round(float(source_bpm) * speed))
 
     @staticmethod
     def bpm_analysis_window(position: float, duration: float | None, maximum_seconds: float = 72.0) -> tuple[float, float]:
@@ -2779,7 +2794,15 @@ class MiscUI:
         )
         return args
 
-    def analyze_bpm_worker(self, key: str, generation: int, stream_url: str, headers: dict) -> None:
+    def analyze_bpm_worker(
+        self,
+        key: str,
+        item_key: str,
+        generation: int,
+        stream_url: str,
+        headers: dict,
+        playback_speed: float,
+    ) -> None:
         bpm: int | None = None
         cacheable = False
         try:
@@ -2806,14 +2829,17 @@ class MiscUI:
                     pcm, _stderr = process.communicate(timeout=0.25)
                     break
                 except subprocess.TimeoutExpired:
-                    if generation != self.player_generation or key != self.playback_key() or time.monotonic() >= deadline:
+                    current_key, _speed, _pitch = self.current_bpm_analysis_state()
+                    if generation != self.player_generation or key != current_key or time.monotonic() >= deadline:
                         process.kill()
                         process.communicate()
                         raise RuntimeError("audio analysis cancelled")
             if process.returncode != 0 or len(pcm or b"") < 11025 * 2 * 2 * 6:
                 raise RuntimeError("audio analysis failed")
+            from apricot.media.tempo import estimate_tempo_from_pcm16_stereo
+
             estimate = estimate_tempo_from_pcm16_stereo(pcm, sample_rate=11025)
-            bpm = int(round(estimate.bpm)) if estimate is not None else None
+            bpm = self.effective_playback_bpm(estimate.bpm, playback_speed) if estimate is not None else None
             cacheable = True
         except Exception:
             pass
@@ -2824,7 +2850,8 @@ class MiscUI:
                     self.bpm_analysis_cache[key] = bpm
                     while len(self.bpm_analysis_cache) > 64:
                         self.bpm_analysis_cache.pop(next(iter(self.bpm_analysis_cache)))
-            if generation == self.player_generation and key == self.playback_key() and self.player_is_active():
+            current_key, _speed, _pitch = self.current_bpm_analysis_state()
+            if generation == self.player_generation and key == current_key and item_key == self.playback_key() and self.player_is_active():
                 text = self.t("bpm_announcement", bpm=bpm) if bpm else self.t("bpm_not_available")
                 wx.CallAfter(self.announce_player, text)
 

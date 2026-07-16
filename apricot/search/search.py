@@ -420,15 +420,31 @@ class SearchMixin:
         if search_type not in {"All", "Video"}:
             entries = self.extract_flat_entries(primary_url, options)[:limit]
             return [self.normalize_entry(entry, search_type, "youtube") for entry in entries]
-        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="apricot-youtube-search") as executor:
-            primary_future = executor.submit(self.extract_flat_entries, primary_url, options)
-            shorts_future = executor.submit(self.extract_flat_entries, self.youtube_shorts_search_url(query), options)
-            primary_entries = primary_future.result()
+
+        shorts_entries: list[dict] = []
+        shorts_done = threading.Event()
+
+        def fetch_optional_shorts() -> None:
             try:
-                shorts_entries = shorts_future.result()
+                optional_options = dict(options)
+                optional_options.setdefault("extractor_retries", 0)
+                shorts_entries.extend(
+                    self.extract_flat_entries(self.youtube_shorts_search_url(query), optional_options)
+                )
             except Exception:
-                shorts_entries = []
+                pass
+            finally:
+                shorts_done.set()
+
+        threading.Thread(
+            target=fetch_optional_shorts,
+            name="apricot-youtube-shorts",
+            daemon=True,
+        ).start()
+        primary_entries = self.extract_flat_entries(primary_url, options)
         primary = [self.normalize_entry(entry, search_type, "youtube") for entry in primary_entries]
+        if not shorts_done.is_set():
+            return primary[:limit]
         shorts = [self.normalize_entry(entry, "Video", "youtube") for entry in shorts_entries]
         return self.interleave_youtube_results(primary, shorts, limit)
 
