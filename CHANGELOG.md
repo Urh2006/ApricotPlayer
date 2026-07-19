@@ -666,6 +666,12 @@
 
 # Changelog
 
+## 1.0.0 Beta 65
+
+- Pressing `B` now always starts a fresh BPM analysis, even when the current item, speed, and pitch have not changed since the previous result.
+- Removed the BPM result cache so a previous estimate or unavailable result is never replayed as a new measurement.
+- Kept one analysis per playback state in flight at a time, preventing rapid repeated key presses from launching competing FFmpeg processes.
+
 ## 1.0.0 Beta 64
 
 - Restored pitch Up/Down to the exact pre-Beta-60 input path. Every native Windows key-repeat event now applies one configured pitch step directly.

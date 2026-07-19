@@ -2,8 +2,8 @@
 
 ## Trenutni posnetek
 
-- Datum posnetka: 16. julij 2026.
-- Trenutna verzija: `1.0.0-beta.64`.
+- Datum posnetka: 19. julij 2026.
+- Trenutna verzija: `1.0.0-beta.65`.
 - Trenutna razvojna veja: `beta`.
 - Stabilna 1.0 še ni izdana.
 - Obstoječi 1.0 roadmap je izveden, vendar je AudioVault še potrjen del obsega pred stabilno 1.0.

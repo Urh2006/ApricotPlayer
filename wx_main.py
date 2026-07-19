@@ -197,7 +197,6 @@ class MainFrame(AudioVaultMixin, CookiesUI, DownloadsUI, EqualizerUI, EventsUI, 
         self.current_stream_headers: dict = {}
         self.bpm_analysis_lock = threading.Lock()
         self.bpm_analysis_running_keys: set[str] = set()
-        self.bpm_analysis_cache: dict[str, int | None] = {}
         self.player_sequence_results: list[dict] = []
         self.stream_url_cache_lock = threading.Lock()
         self.stream_url_cache: dict[str, dict] = self.load_stream_url_cache()

@@ -103,17 +103,17 @@ class TempoEstimatorTests(unittest.TestCase):
         header_text = args[args.index("-headers") + 1]
         self.assertEqual(header_text, "User-Agent: Apricot\r\n")
 
-    def test_bpm_cache_state_changes_with_speed_and_pitch(self):
-        original = MiscUI.bpm_analysis_cache_key("video-id", 1.0, 1.0)
+    def test_bpm_analysis_state_changes_with_speed_and_pitch(self):
+        original = MiscUI.bpm_analysis_state_key("video-id", 1.0, 1.0)
 
-        self.assertNotEqual(original, MiscUI.bpm_analysis_cache_key("video-id", 1.25, 1.0))
-        self.assertNotEqual(original, MiscUI.bpm_analysis_cache_key("video-id", 1.0, 1.10))
+        self.assertNotEqual(original, MiscUI.bpm_analysis_state_key("video-id", 1.25, 1.0))
+        self.assertNotEqual(original, MiscUI.bpm_analysis_state_key("video-id", 1.0, 1.10))
 
     def test_bpm_is_scaled_to_the_current_playback_speed(self):
         self.assertEqual(MiscUI.effective_playback_bpm(120.0, 1.25), 150)
         self.assertEqual(MiscUI.effective_playback_bpm(128.0, 0.75), 96)
 
-    def test_speed_or_pitch_change_starts_a_new_bpm_analysis(self):
+    def test_repeated_bpm_request_reanalyzes_unchanged_playback(self):
         class DeferredThread:
             instances = []
 
@@ -129,14 +129,14 @@ class TempoEstimatorTests(unittest.TestCase):
         class Harness(MiscUI):
             def __init__(self):
                 self.settings = SimpleNamespace(player_speed="1.0")
-                self.current_video_info = {"speed": "1.25", "pitch": "1.10"}
+                self.current_video_info = {"speed": "1.0", "pitch": "1.0"}
                 self.current_stream_url = "https://media.example/audio"
                 self.current_stream_headers = {}
                 self.player_generation = 4
                 self.bpm_analysis_lock = threading.Lock()
                 self.bpm_analysis_running_keys = set()
-                old_key = self.bpm_analysis_cache_key("video-id", 1.0, 1.0)
-                self.bpm_analysis_cache = {old_key: 120}
+                current_key = self.bpm_analysis_state_key("video-id", 1.0, 1.0)
+                self.bpm_analysis_cache = {current_key: 120}
                 self.announcements = []
 
             @staticmethod
