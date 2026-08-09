@@ -3,9 +3,9 @@
 ## Trenutni posnetek
 
 - Datum posnetka: 9. avgust 2026.
-- Trenutna verzija: `1.0.0`.
+- Trenutna verzija: `1.0.1`.
 - Trenutna razvojna veja: `main`.
-- Stabilna 1.0 je izdana in je funkcionalno enaka zadnji predizdaji `1.0.0-beta.66`.
+- Stabilna 1.0.1 doda uporabniško nastavljivo hitrost držanja tipk za speed in pitch na osnovo iz `1.0.0-beta.66`.
 - Obstoječi 1.0 roadmap in potrjeni AudioVault obseg sta izvedena.
 
 To je informativni posnetek. Če se številke razlikujejo, imajo prednost `apricot/__init__.py`, `apricot/constants.py`, Git zgodovina, `CHANGELOG.md` in zadnje release notes.

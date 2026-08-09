@@ -159,6 +159,8 @@ class SettingsMixin:
                 "audio_output_device",
                 "speed_step",
                 "pitch_step",
+                "speed_pitch_hold_delay_ms",
+                "speed_pitch_hold_interval_ms",
                 "pitch_mode",
                 "seek_seconds",
                 "volume_step",
@@ -378,6 +380,20 @@ class SettingsMixin:
             remember(key, ctrl)
             return ctrl
 
+        def integer(key: str, value: int, minimum: int, maximum: int):
+            label = self.t(key)
+            form.Add(wx.StaticText(self.settings_scroller, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
+            ctrl = wx.SpinCtrl(
+                self.settings_scroller,
+                min=minimum,
+                max=maximum,
+                initial=min(max(int(value), minimum), maximum),
+            )
+            ctrl.SetName(label)
+            form.Add(ctrl, 1, wx.EXPAND)
+            remember(key, ctrl)
+            return ctrl
+
         def button(key: str, handler):
             form.AddSpacer(1)
             ctrl = wx.Button(self.settings_scroller, label=self.t(key))
@@ -488,6 +504,18 @@ class SettingsMixin:
             choice("pitch_mode", self.normalized_pitch_mode(), PITCH_MODE_OPTIONS, self.pitch_mode_labels())
             choice("speed_step", self.format_step_value(self.settings.speed_step), RATE_STEP_OPTIONS)
             choice("pitch_step", self.format_step_value(self.settings.pitch_step), RATE_STEP_OPTIONS)
+            integer(
+                "speed_pitch_hold_delay_ms",
+                self.speed_pitch_hold_delay_ms(),
+                SPEED_PITCH_HOLD_DELAY_MIN_MS,
+                SPEED_PITCH_HOLD_DELAY_MAX_MS,
+            )
+            integer(
+                "speed_pitch_hold_interval_ms",
+                self.speed_pitch_hold_interval_ms(),
+                SPEED_PITCH_HOLD_INTERVAL_MIN_MS,
+                SPEED_PITCH_HOLD_INTERVAL_MAX_MS,
+            )
             check("show_video_details_by_default", self.settings.show_video_details_by_default)
             check("enable_age_restricted_videos", self.settings.enable_age_restricted_videos)
             check("enable_stream_cache", self.settings.enable_stream_cache)
@@ -987,6 +1015,20 @@ class SettingsMixin:
             self.settings.speed_step = self.to_float(c["speed_step"].GetStringSelection(), 0.01, 0.01, 0.25)
         if "pitch_step" in c:
             self.settings.pitch_step = self.to_float(c["pitch_step"].GetStringSelection(), 0.01, 0.01, 0.25)
+        if "speed_pitch_hold_delay_ms" in c:
+            self.settings.speed_pitch_hold_delay_ms = self.to_int(
+                str(c["speed_pitch_hold_delay_ms"].GetValue()),
+                SPEED_PITCH_HOLD_DELAY_DEFAULT_MS,
+                SPEED_PITCH_HOLD_DELAY_MIN_MS,
+                SPEED_PITCH_HOLD_DELAY_MAX_MS,
+            )
+        if "speed_pitch_hold_interval_ms" in c:
+            self.settings.speed_pitch_hold_interval_ms = self.to_int(
+                str(c["speed_pitch_hold_interval_ms"].GetValue()),
+                SPEED_PITCH_HOLD_INTERVAL_DEFAULT_MS,
+                SPEED_PITCH_HOLD_INTERVAL_MIN_MS,
+                SPEED_PITCH_HOLD_INTERVAL_MAX_MS,
+            )
         if "auto_update" in c:
             self.settings.auto_update_ytdlp = c["auto_update"].GetValue()
         if "auto_update_app" in c:

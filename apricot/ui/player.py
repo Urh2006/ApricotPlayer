@@ -1635,7 +1635,11 @@ class PlayerUI:
         self.adjustment_hold_alt = bool(event.AltDown())
         generation = self.adjustment_hold_generation
         self.apply_player_adjustment(action, delta)
-        self.adjustment_hold_call = wx.CallLater(180, self.player_adjustment_hold_tick, generation)
+        self.adjustment_hold_call = wx.CallLater(
+            self.speed_pitch_hold_delay_ms(),
+            self.player_adjustment_hold_tick,
+            generation,
+        )
 
     def stop_player_adjustment_hold(self, cancel_generation: bool = True) -> None:
         self.adjustment_hold_active = False
@@ -1679,7 +1683,25 @@ class PlayerUI:
             self.stop_player_adjustment_hold()
             return
         self.apply_player_adjustment(self.adjustment_hold_action, self.adjustment_hold_delta)
-        self.adjustment_hold_call = wx.CallLater(110, self.player_adjustment_hold_tick, generation)
+        self.adjustment_hold_call = wx.CallLater(
+            self.speed_pitch_hold_interval_ms(),
+            self.player_adjustment_hold_tick,
+            generation,
+        )
+
+    def speed_pitch_hold_delay_ms(self) -> int:
+        try:
+            value = int(getattr(self.settings, "speed_pitch_hold_delay_ms", SPEED_PITCH_HOLD_DELAY_DEFAULT_MS))
+        except (TypeError, ValueError):
+            value = SPEED_PITCH_HOLD_DELAY_DEFAULT_MS
+        return min(max(value, SPEED_PITCH_HOLD_DELAY_MIN_MS), SPEED_PITCH_HOLD_DELAY_MAX_MS)
+
+    def speed_pitch_hold_interval_ms(self) -> int:
+        try:
+            value = int(getattr(self.settings, "speed_pitch_hold_interval_ms", SPEED_PITCH_HOLD_INTERVAL_DEFAULT_MS))
+        except (TypeError, ValueError):
+            value = SPEED_PITCH_HOLD_INTERVAL_DEFAULT_MS
+        return min(max(value, SPEED_PITCH_HOLD_INTERVAL_MIN_MS), SPEED_PITCH_HOLD_INTERVAL_MAX_MS)
 
     def apply_player_adjustment(self, action: str, delta: float) -> None:
         if action == "speed":

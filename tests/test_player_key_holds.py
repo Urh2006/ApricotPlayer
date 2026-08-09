@@ -6,8 +6,11 @@ from unittest import mock
 import wx
 
 from apricot.constants import PITCH_MODE_MPV
+from apricot.locales import TEXT
+from apricot.models import Settings
 from apricot.ui.misc import MiscUI
 from apricot.ui.player import PlayerUI
+from apricot.ui.settings import SettingsMixin
 from apricot.ui.shortcuts import ShortcutsUI
 
 
@@ -116,6 +119,7 @@ class _ShortcutHarness(ShortcutsUI):
 
 class _HoldHarness(PlayerUI):
     def __init__(self):
+        self.settings = Settings()
         self.adjustment_hold_active = False
         self.adjustment_hold_generation = 0
         self.adjustment_hold_action = ""
@@ -233,6 +237,42 @@ class PlayerKeyHoldTests(unittest.TestCase):
         self.assertEqual(first_timer.delay, 180)
         self.assertEqual(repeat_timer.delay, 110)
         self.assertEqual(len(_FakeCallLater.instances), 2)
+
+    def test_user_can_restore_beta_61_hold_timing(self):
+        harness = _HoldHarness()
+        harness.settings.speed_pitch_hold_delay_ms = 90
+        harness.settings.speed_pitch_hold_interval_ms = 45
+        harness.key_states[wx.WXK_UP] = True
+        harness.key_states[wx.WXK_CONTROL] = True
+        event = _KeyEvent("player_pitch_up", wx.WXK_UP, control=True)
+
+        with mock.patch("apricot.ui.player.wx.CallLater", _FakeCallLater):
+            harness.start_player_adjustment_hold("pitch", 0.05, event)
+            first_timer = _FakeCallLater.instances[-1]
+            first_timer.callback(*first_timer.args)
+            repeat_timer = _FakeCallLater.instances[-1]
+
+        self.assertEqual(first_timer.delay, 90)
+        self.assertEqual(repeat_timer.delay, 45)
+
+    def test_hold_timing_settings_are_bounded(self):
+        harness = _HoldHarness()
+        harness.settings.speed_pitch_hold_delay_ms = 1
+        harness.settings.speed_pitch_hold_interval_ms = 5000
+
+        self.assertEqual(harness.speed_pitch_hold_delay_ms(), 50)
+        self.assertEqual(harness.speed_pitch_hold_interval_ms(), 500)
+
+    def test_hold_timing_controls_are_part_of_playback_settings(self):
+        fields = SettingsMixin.settings_section_fields()["playback"]
+
+        self.assertEqual(Settings().speed_pitch_hold_delay_ms, 180)
+        self.assertEqual(Settings().speed_pitch_hold_interval_ms, 110)
+        self.assertIn("speed_pitch_hold_delay_ms", fields)
+        self.assertIn("speed_pitch_hold_interval_ms", fields)
+        for language in ("en", "sl"):
+            self.assertIn("speed_pitch_hold_delay_ms", TEXT[language])
+            self.assertIn("speed_pitch_hold_interval_ms", TEXT[language])
 
     def test_speed_hold_repeats_until_key_up(self):
         harness = _HoldHarness()

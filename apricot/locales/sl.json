@@ -331,6 +331,8 @@
     "volume_step": "Korak glasnosti",
     "speed_step": "Korak hitrosti predvajanja",
     "pitch_step": "Korak pitcha",
+    "speed_pitch_hold_delay_ms": "Zamik držanja hitrosti in pitcha (milisekunde)",
+    "speed_pitch_hold_interval_ms": "Interval ponavljanja hitrosti in pitcha (milisekunde)",
     "pitch_mode": "NaÄŤin nadzora viĹˇine tona",
     "pitch_mode_rubberband": "Neodvisna viĹˇina tona - najboljĹˇa kakovost (Rubberband)",
     "pitch_mode_mpv": "Neodvisna viĹˇina tona - osnovno (mpv)",

@@ -336,6 +336,8 @@
     "volume_step": "Volume step",
     "speed_step": "Playback speed key step",
     "pitch_step": "Pitch key step",
+    "speed_pitch_hold_delay_ms": "Speed and pitch hold delay (milliseconds)",
+    "speed_pitch_hold_interval_ms": "Speed and pitch hold repeat interval (milliseconds)",
     "pitch_mode": "Pitch control mode",
     "pitch_mode_rubberband": "Independent pitch - Rubberband (advanced)",
     "pitch_mode_mpv": "Independent pitch - MPV (highest quality, recommended)",

@@ -666,6 +666,15 @@
 
 # Changelog
 
+## 1.0.1
+
+- Added two native numeric controls under Settings > Playback for speed/pitch hold timing: initial hold delay and repeat interval, both expressed in milliseconds.
+- Kept the 1.0 defaults at 180 ms before repetition and 110 ms between repeats.
+- Users who prefer the faster Beta 61 behavior can set the controls to 90 ms and 45 ms.
+- Values are safely bounded to 50-1000 ms for the initial delay and 20-500 ms for the repeat interval.
+- The configured timing applies to held `S`, `D`, `Ctrl+Up`, and `Ctrl+Down` controls without changing one-step amounts, volume, seek, EQ, or playback startup.
+- Diagnostic reports now include both configured timing values.
+
 ## 1.0.0
 
 ApricotPlayer 1.0 is the stable result of the 1.0 beta cycle. Thank you to every tester who reported bugs, retested fixes, shared diagnostics, and helped turn dozens of beta iterations into this release.

@@ -38,6 +38,8 @@ class Settings:
     audio_output_device: str = "auto"
     speed_step: float = 0.01
     pitch_step: float = 0.01
+    speed_pitch_hold_delay_ms: int = SPEED_PITCH_HOLD_DELAY_DEFAULT_MS
+    speed_pitch_hold_interval_ms: int = SPEED_PITCH_HOLD_INTERVAL_DEFAULT_MS
     pitch_mode: str = PITCH_MODE_MPV
     global_equalizer_enabled: bool = False
     global_equalizer_preset: str = EQ_PRESET_FLAT

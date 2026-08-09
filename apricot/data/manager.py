@@ -125,6 +125,18 @@ class DataManagerMixin:
                     self.settings_migrated = True
                 merged["equalizer_db_range"] = self.to_int(str(merged.get("equalizer_db_range") or "12"), 12, 6, 24)
                 merged["seek_seconds"] = self.to_float(str(merged.get("seek_seconds") or "5"), 5.0, 0.1, 600.0)
+                merged["speed_pitch_hold_delay_ms"] = self.to_int(
+                    str(merged.get("speed_pitch_hold_delay_ms") or SPEED_PITCH_HOLD_DELAY_DEFAULT_MS),
+                    SPEED_PITCH_HOLD_DELAY_DEFAULT_MS,
+                    SPEED_PITCH_HOLD_DELAY_MIN_MS,
+                    SPEED_PITCH_HOLD_DELAY_MAX_MS,
+                )
+                merged["speed_pitch_hold_interval_ms"] = self.to_int(
+                    str(merged.get("speed_pitch_hold_interval_ms") or SPEED_PITCH_HOLD_INTERVAL_DEFAULT_MS),
+                    SPEED_PITCH_HOLD_INTERVAL_DEFAULT_MS,
+                    SPEED_PITCH_HOLD_INTERVAL_MIN_MS,
+                    SPEED_PITCH_HOLD_INTERVAL_MAX_MS,
+                )
                 merged["default_volume"] = self.to_int(
                     str(merged.get("default_volume") or "100"),
                     100,

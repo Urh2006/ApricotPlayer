@@ -100,6 +100,8 @@ class DiagnosticsMixin:
             self.diagnostic_line("ReplayGain mode", getattr(self.settings, "replaygain_mode", "")),
             self.diagnostic_line("Gapless playback", getattr(self.settings, "gapless_playback", False)),
             self.diagnostic_line("Speed audio mode", getattr(self.settings, "speed_audio_mode", "")),
+            self.diagnostic_line("Speed/pitch hold delay ms", getattr(self.settings, "speed_pitch_hold_delay_ms", "")),
+            self.diagnostic_line("Speed/pitch hold interval ms", getattr(self.settings, "speed_pitch_hold_interval_ms", "")),
             self.diagnostic_line("Repeat", getattr(self, "repeat_current", False)),
             self.diagnostic_line("Shuffle", getattr(self, "shuffle_current", False)),
             self.diagnostic_line("Autoplay next setting", getattr(self.settings, "autoplay_next", False)),
