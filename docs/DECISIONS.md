@@ -6,7 +6,7 @@ Vse uporabniške funkcije morajo delovati s tipkovnico in NVDA. Focus order, dos
 
 ## D-002: Beta razvoj ostane ločen od stable veje
 
-Do stabilne 1.0 se nove razvojne izdaje pripravljajo na `beta` in objavljajo kot prerelease. `main` mora ostati stabilen. Updater na stable kanalu ne sme ponujati beta izdaje.
+Predizdaje se pripravljajo na `beta` in objavljajo kot prerelease, stabilne izdaje pa na `main`. Updater na stable kanalu ne sme ponujati beta izdaje.
 
 ## D-003: Release ima dve nespremenljivi imeni artefaktov
 
@@ -31,4 +31,4 @@ Stari chati so pomembni za namen in razloge, vendar vsebujejo tudi že odpravlje
 
 ## D-007: AudioVault spada v 1.0
 
-AudioVault je potrjen pomemben feature za ApricotPlayer 1.0. Integracija bo najprej nastajala in se preverjala v beta izdajah; stabilna 1.0 ne pomeni samo zaključka starega roadmapa, ampak tudi primerno stabiliziran AudioVault.
+AudioVault je potrjen pomemben feature ApricotPlayerja 1.0. Integracija je bila razvita in stabilizirana skozi beta izdaje ter ostaja del stabilnega izdelka.

@@ -2,11 +2,11 @@
 
 ## Trenutni posnetek
 
-- Datum posnetka: 19. julij 2026.
-- Trenutna verzija: `1.0.0-beta.65`.
+- Datum posnetka: 9. avgust 2026.
+- Trenutna verzija: `1.0.0-beta.66`.
 - Trenutna razvojna veja: `beta`.
-- Stabilna 1.0 še ni izdana.
-- Obstoječi 1.0 roadmap je izveden, vendar je AudioVault še potrjen del obsega pred stabilno 1.0.
+- Beta 66 je zadnja beta za 1.0 in je funkcionalno enaka stabilni izdaji 1.0 na veji `main`.
+- Obstoječi 1.0 roadmap in potrjeni AudioVault obseg sta izvedena.
 
 To je informativni posnetek. Če se številke razlikujejo, imajo prednost `apricot/__init__.py`, `apricot/constants.py`, Git zgodovina, `CHANGELOG.md` in zadnje release notes.
 

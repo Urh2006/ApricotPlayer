@@ -2846,7 +2846,51 @@ class MiscUI:
                 wx.CallAfter(self.announce_player, text)
 
     def change_speed_async(self, delta: float) -> None:
-        threading.Thread(target=self.change_speed_worker, args=(delta,), daemon=True).start()
+        with self.speed_change_lock:
+            base = self.speed_change_pending_target
+            if base is None:
+                base = self.current_speed_value()
+            self.speed_change_pending_target = self.next_playback_speed(base, delta)
+            if self.speed_change_worker_running:
+                return
+            self.speed_change_worker_running = True
+            generation = self.speed_change_generation
+        threading.Thread(
+            target=self.apply_pending_speed_changes_worker,
+            args=(generation,),
+            daemon=True,
+        ).start()
+
+    def cancel_pending_speed_changes(self) -> None:
+        with self.speed_change_lock:
+            self.speed_change_generation += 1
+            self.speed_change_pending_target = None
+            self.speed_change_worker_running = False
+
+    def apply_pending_speed_changes_worker(self, generation: int) -> None:
+        while True:
+            with self.speed_change_lock:
+                if generation != self.speed_change_generation:
+                    return
+                target = self.speed_change_pending_target
+            if target is None:
+                with self.speed_change_lock:
+                    if generation == self.speed_change_generation:
+                        self.speed_change_worker_running = False
+                return
+            if not self.apply_speed_target_worker(target):
+                with self.speed_change_lock:
+                    if generation == self.speed_change_generation:
+                        self.speed_change_pending_target = None
+                        self.speed_change_worker_running = False
+                return
+            with self.speed_change_lock:
+                if generation != self.speed_change_generation:
+                    return
+                if self.speed_change_pending_target == target:
+                    self.speed_change_pending_target = None
+                    self.speed_change_worker_running = False
+                    return
 
     def default_speed_value(self) -> float:
         try:
@@ -2856,10 +2900,11 @@ class MiscUI:
         return self.clamp_rate(speed, 0.25, 4.0)
 
     def change_speed_worker(self, delta: float) -> None:
+        speed = self.next_playback_speed(self.current_speed_value(), delta)
+        self.apply_speed_target_worker(speed)
+
+    def apply_speed_target_worker(self, speed: float) -> bool:
         try:
-            current = self.mpv_get_property("speed")
-            speed = float(current if current is not None else 1.0)
-            speed = self.next_playback_speed(speed, delta)
             self.mpv_set_property("audio-pitch-correction", self.speed_uses_mpv_auto_pitch_correction())
             self.mpv_set_property("speed", speed)
             speed_text = self.format_playback_rate(speed)
@@ -2868,10 +2913,15 @@ class MiscUI:
             if self.is_default_rate(speed):
                 wx.CallAfter(self.play_default_sound)
             wx.CallAfter(self.update_details_text)
+            return True
         except Exception:
             wx.CallAfter(self.announce_player, self.t("timing_unavailable"))
+            return False
 
     def reset_speed_pitch_async(self) -> None:
+        self.stop_player_adjustment_hold()
+        self.cancel_pending_speed_changes()
+        self.cancel_pending_pitch_changes()
         threading.Thread(target=self.reset_speed_pitch_worker, daemon=True).start()
 
     def reset_speed_pitch_worker(self) -> None:
@@ -2897,11 +2947,63 @@ class MiscUI:
             wx.CallAfter(self.announce_player, self.t("timing_unavailable"))
 
     def change_pitch_async(self, delta: float) -> None:
-        threading.Thread(target=self.change_pitch_worker, args=(delta,), daemon=True).start()
+        with self.pitch_change_lock:
+            base = self.pitch_change_pending_target
+            if base is None:
+                base = self.current_pitch_value()
+            self.pitch_change_pending_target = self.next_pitch_value(base, delta)
+            if self.pitch_change_worker_running:
+                return
+            self.pitch_change_worker_running = True
+            generation = self.pitch_change_generation
+        threading.Thread(
+            target=self.apply_pending_pitch_changes_worker,
+            args=(generation,),
+            daemon=True,
+        ).start()
+
+    def cancel_pending_pitch_changes(self) -> None:
+        with self.pitch_change_lock:
+            self.pitch_change_generation += 1
+            self.pitch_change_pending_target = None
+            self.pitch_change_worker_running = False
+
+    def apply_pending_pitch_changes_worker(self, generation: int) -> None:
+        while True:
+            with self.pitch_change_lock:
+                if generation != self.pitch_change_generation:
+                    return
+                target = self.pitch_change_pending_target
+            if target is None:
+                with self.pitch_change_lock:
+                    if generation == self.pitch_change_generation:
+                        self.pitch_change_worker_running = False
+                return
+            if not self.apply_pitch_target_worker(target):
+                with self.pitch_change_lock:
+                    if generation == self.pitch_change_generation:
+                        self.pitch_change_pending_target = None
+                        self.pitch_change_worker_running = False
+                return
+            with self.pitch_change_lock:
+                if generation != self.pitch_change_generation:
+                    return
+                if self.pitch_change_pending_target == target:
+                    self.pitch_change_pending_target = None
+                    self.pitch_change_worker_running = False
+                    return
 
     def change_pitch_worker(self, delta: float) -> None:
         pitch = self.next_pitch_value(self.current_pitch_value(), delta)
-        speed_delta = delta if self.normalized_pitch_mode() == PITCH_MODE_LINKED_SPEED else None
+        self.apply_pitch_target_worker(pitch)
+
+    def apply_pitch_target_worker(self, pitch: float) -> bool:
+        current_pitch = self.current_pitch_value()
+        speed_delta = (
+            pitch - current_pitch
+            if self.normalized_pitch_mode() == PITCH_MODE_LINKED_SPEED
+            else None
+        )
         for _attempt in range(MPV_PITCH_RETRY_ATTEMPTS):
             try:
                 self.apply_pitch_value(pitch, speed_delta=speed_delta)
@@ -2909,11 +3011,12 @@ class MiscUI:
                 if self.is_default_rate(pitch):
                     wx.CallAfter(self.play_default_sound)
                 wx.CallAfter(self.update_details_text)
-                return
+                return True
             except Exception:
                 if not self.mpv_process_alive():
-                    return
+                    return False
                 time.sleep(MPV_PITCH_RETRY_DELAY_SECONDS)
+        return False
 
     def current_pitch_value(self) -> float:
         stored = self.current_video_info.get("pitch", "1.0")

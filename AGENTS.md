@@ -63,7 +63,7 @@ Pri UI, fokusu ali tipkovnični navigaciji dodaj pravi wxPython smoke test. Pri 
 
 ## Verzije in objave
 
-- Do stabilne izdaje 1.0 se razvojne izdaje pripravljajo na veji `beta`; `main` ostane stabilen.
+- Predizdaje se pripravljajo na veji `beta`; stabilne izdaje se pripravljajo na `main`.
 - Navadna analiza, dokumentacija ali lokalni popravek se ne objavi samodejno. Commit, push, tag, GitHub release ali lokalno namestitev naredi samo, ko uporabnik zahteva objavo oziroma novo verzijo.
 - Pri novi verziji uskladi `apricot/__init__.py`, verzijske konstante, README, `CHANGELOG.md` in `release-notes/v{verzija}.md`.
 - Beta izdaja mora biti GitHub prerelease in mora biti zgrajena iz pravega beta commita oziroma taga.
@@ -72,4 +72,4 @@ Pri UI, fokusu ali tipkovnični navigaciji dodaj pravi wxPython smoke test. Pri 
 
 ## Obseg različice 1.0
 
-Obstoječi `docs/ROADMAP_1.0.md` je izveden, vendar stabilna 1.0 še ni zaključena. AudioVault je potrjen pomemben del 1.0 in mora biti najprej razvit ter stabiliziran skozi beta izdaje. Podrobnosti so v `docs/BACKLOG.md`.
+Obstoječi `docs/ROADMAP_1.0.md` in potrjeni AudioVault obseg sta izvedena v 1.0. Podrobnosti in prihodnje delo so v `docs/BACKLOG.md`.

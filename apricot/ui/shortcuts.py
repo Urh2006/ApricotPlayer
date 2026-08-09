@@ -672,10 +672,10 @@ class ShortcutsUI:
             self.announce_bpm_async()
             return True
         if self.shortcut_matches(event, "player_speed_down"):
-            self.change_speed_async(-self.speed_step_value())
+            self.start_player_adjustment_hold("speed", -self.speed_step_value(), event)
             return True
         if self.shortcut_matches(event, "player_speed_up"):
-            self.change_speed_async(self.speed_step_value())
+            self.start_player_adjustment_hold("speed", self.speed_step_value(), event)
             return True
         if self.shortcut_matches(event, "player_reset_speed_pitch"):
             self.reset_speed_pitch_async()
@@ -684,10 +684,10 @@ class ShortcutsUI:
             self.save_current_speed_as_podcast_preset()
             return True
         if self.shortcut_matches(event, "player_pitch_up"):
-            self.change_pitch_async(self.pitch_step_value())
+            self.start_player_adjustment_hold("pitch", self.pitch_step_value(), event)
             return True
         if self.shortcut_matches(event, "player_pitch_down"):
-            self.change_pitch_async(-self.pitch_step_value())
+            self.start_player_adjustment_hold("pitch", -self.pitch_step_value(), event)
             return True
         if self.player_details_shortcut_matches(event):
             self.show_video_details()
