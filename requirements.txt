@@ -11,7 +11,7 @@ cffi==2.1.0
 charset-normalizer==3.4.9
 defusedxml==0.7.1
 idna==3.18
-numpy==2.2.6
+numpy==2.5.1
 pycparser==3.0
 pycryptodomex==3.23.0
 mutagen==1.48.1
