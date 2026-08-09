@@ -487,9 +487,11 @@ class SystemUI:
     def stream_url_remote_expiry(stream_url: str) -> int:
         try:
             parsed = urlparse(stream_url)
-            expire_values = parse_qs(parsed.query).get("expire") or []
-            if expire_values:
-                return int(expire_values[0])
+            query = parse_qs(parsed.query)
+            for key in ("expire", "expires", "exp"):
+                expire_values = query.get(key) or []
+                if expire_values:
+                    return int(expire_values[0])
             match = re.search(r"/expire/(\d+)(?:/|$)", parsed.path)
             return int(match.group(1)) if match else 0
         except (TypeError, ValueError, OverflowError):
@@ -532,6 +534,7 @@ class SystemUI:
                 "headers": dict(headers or {}),
                 "info": _slim_info_for_cache(dict(info or {})),
                 "expires_at": expires_at,
+                "restart_safe": bool(remote_expiry),
             }
         # Persist to disk in the background so the cache survives crashes and
         # force-quits, not just clean shutdowns.

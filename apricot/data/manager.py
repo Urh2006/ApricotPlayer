@@ -426,10 +426,10 @@ class DataManagerMixin:
     def load_stream_url_cache(self) -> dict:
         """Load the persisted stream-URL cache from disk.
 
-        Expired entries are filtered out at load time so stale data never
-        reaches the running session.  Any read / parse error silently returns
-        an empty dict — the cache is a pure performance optimisation and loss
-        is never fatal.
+        Expired entries and stream URLs without verified cross-session expiry
+        metadata are filtered out at load time so stale data never reaches the
+        running session. Any read / parse error silently returns an empty dict
+        because the cache is a pure performance optimisation.
         """
         try:
             if STREAM_URL_CACHE_FILE.exists():
@@ -439,7 +439,11 @@ class DataManagerMixin:
                     return {
                         k: v
                         for k, v in data.items()
-                        if isinstance(v, dict) and float(v.get("expires_at") or 0) > now
+                        if (
+                            isinstance(v, dict)
+                            and bool(v.get("restart_safe", False))
+                            and float(v.get("expires_at") or 0) > now
+                        )
                     }
         except Exception:
             pass
@@ -449,8 +453,9 @@ class DataManagerMixin:
     def save_stream_url_cache(self) -> None:
         """Persist the in-memory stream-URL cache to disk.
 
-        Takes a snapshot under the lock, filters expired entries, then writes
-        outside the lock so IO never blocks the UI thread.
+        Takes a snapshot under the lock, keeps only unexpired entries that are
+        safe across restarts, then writes outside the lock so IO never blocks
+        the UI thread.
         """
         try:
             with self.data_file_lock(STREAM_URL_CACHE_FILE):
@@ -461,7 +466,15 @@ class DataManagerMixin:
                 else:
                     snapshot = dict(getattr(self, "stream_url_cache", {}))
                 now = time.time()
-                to_save = {k: v for k, v in snapshot.items() if isinstance(v, dict) and float(v.get("expires_at") or 0) > now}
+                to_save = {
+                    k: v
+                    for k, v in snapshot.items()
+                    if (
+                        isinstance(v, dict)
+                        and bool(v.get("restart_safe", False))
+                        and float(v.get("expires_at") or 0) > now
+                    )
+                }
                 self.atomic_write_json(STREAM_URL_CACHE_FILE, to_save, indent=None)
         except Exception:
             pass

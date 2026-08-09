@@ -666,6 +666,13 @@
 
 # Changelog
 
+## 1.0.2
+
+- Fixed non-YouTube direct links from History failing after an ApricotPlayer restart because an expired HLS or signed media URL could be restored from the persistent stream cache.
+- Direct links without a verifiable remote expiry now remain cached only for the current app session. Replaying them after a restart resolves the saved source page again and obtains a fresh playable stream.
+- Stream URLs with an explicit `expire`, `expires`, `exp`, or `/expire/` timestamp remain eligible for the persistent cache, preserving fast restarts for verifiably valid YouTube, SoundCloud, and similar URLs.
+- Existing legacy cache entries without restart-safety metadata are discarded automatically. History entries, source URLs, volume, EQ, and normal YouTube playback behavior are unchanged.
+
 ## 1.0.1
 
 - Added two native numeric controls under Settings > Playback for speed/pitch hold timing: initial hold delay and repeat interval, both expressed in milliseconds.

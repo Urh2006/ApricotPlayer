@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import hashlib
+import json
 import os
 import tempfile
 import threading
@@ -45,6 +46,28 @@ class FolderCacheHarness(ListsUI):
 class ResultColumnsHarness(ListsUI):
     def t(self, key: str, **values) -> str:
         return key.format(**values)
+
+
+class StreamCacheHarness(SystemUI):
+    def __init__(self) -> None:
+        self.settings = SimpleNamespace(
+            enable_stream_url_cache=True,
+            stream_url_cache_minutes=0,
+            cookies_source_file="",
+            cookies_file="",
+            cookies_from_browser="none",
+            max_video_height=1080,
+            enable_age_restricted_videos=False,
+        )
+        self.stream_url_cache = {}
+        self.stream_url_cache_lock = threading.Lock()
+
+    @staticmethod
+    def normalized_video_format() -> str:
+        return "best"
+
+    def save_stream_url_cache(self) -> None:
+        pass
 
 
 class SearchHarness(SearchMixin):
@@ -119,6 +142,74 @@ class FakeResponse:
 
 
 class SecurityRegressionTests(unittest.TestCase):
+    def test_restart_discards_stream_urls_without_verified_remote_expiry(self) -> None:
+        future = time.time() + 365 * 24 * 60 * 60
+        cache_key = json.dumps({"url": "https://media.example/watch/42"})
+        cached = {
+            cache_key: {
+                "stream_url": "https://cdn.example/session/expired/master.m3u8",
+                "headers": {"Referer": "https://media.example/"},
+                "info": {"title": "Example"},
+                "expires_at": future,
+            }
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_file = Path(temp_dir) / "stream_url_cache.json"
+            cache_file.write_text(json.dumps(cached), encoding="utf-8")
+            with mock.patch("apricot.data.manager.STREAM_URL_CACHE_FILE", cache_file):
+                loaded = DataManagerMixin().load_stream_url_cache()
+
+        self.assertEqual(loaded, {})
+
+    def test_restart_keeps_stream_urls_with_verified_remote_expiry(self) -> None:
+        future = time.time() + 60 * 60
+        cache_key = json.dumps({"url": "https://media.example/watch/42"})
+        cached = {
+            cache_key: {
+                "stream_url": f"https://cdn.example/video.mp4?expires={int(future)}",
+                "headers": {},
+                "info": {"title": "Example"},
+                "expires_at": future - 60,
+                "restart_safe": True,
+            }
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_file = Path(temp_dir) / "stream_url_cache.json"
+            cache_file.write_text(json.dumps(cached), encoding="utf-8")
+            with mock.patch("apricot.data.manager.STREAM_URL_CACHE_FILE", cache_file):
+                loaded = DataManagerMixin().load_stream_url_cache()
+
+        self.assertEqual(loaded, cached)
+
+    def test_common_stream_expiry_query_names_are_recognized(self) -> None:
+        for key in ("expire", "expires", "exp"):
+            with self.subTest(key=key):
+                self.assertEqual(
+                    SystemUI.stream_url_remote_expiry(f"https://cdn.example/video.mp4?{key}=2000000000"),
+                    2000000000,
+                )
+
+    def test_stream_cache_marks_only_verifiably_expiring_urls_restart_safe(self) -> None:
+        harness = StreamCacheHarness()
+        harness.cache_stream_url(
+            "https://media.example/watch/42",
+            "https://cdn.example/session/master.m3u8",
+            {},
+            {},
+        )
+        unsafe = next(iter(harness.stream_url_cache.values()))
+        self.assertFalse(unsafe["restart_safe"])
+
+        future = int(time.time() + 60 * 60)
+        harness.cache_stream_url(
+            "https://media.example/watch/43",
+            f"https://cdn.example/video.mp4?expires={future}",
+            {},
+            {},
+        )
+        safe_key = harness.stream_url_cache_key("https://media.example/watch/43")
+        self.assertTrue(harness.stream_url_cache[safe_key]["restart_safe"])
+
     def test_remote_urls_reject_local_and_custom_schemes(self) -> None:
         self.assertEqual(UtilsMixin.validate_remote_http_url("https://example.com/feed"), "https://example.com/feed")
         for value in ("file:///C:/secret.txt", "javascript:alert(1)", "data:text/plain,test", "https:///missing-host"):
