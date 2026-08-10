@@ -1568,22 +1568,19 @@ class LibraryMixin:
                         refreshed["category"] = category
                     self.preserve_rss_episode_state(refreshed, existing)
                     updated_feeds[index] = refreshed
-                    if known_urls:
-                        for entry in list(refreshed.get("items") or []):
-                            url = str(entry.get("url") or "")
-                            if url and url not in known_urls:
-                                notification_message = self.t("notification_new_podcast", feed=refreshed.get("title", ""), title=entry.get("title", ""))
-                                self.ui_queue.put(
-                                    (
-                                        "app_notification",
-                                        {
-                                            "kind": "podcast",
-                                            "title": self.t("rss_feeds"),
-                                            "message": notification_message,
-                                            "item": entry,
-                                        },
-                                    )
-                                )
+                    for entry in self.new_rss_entries(list(refreshed.get("items") or []), known_urls):
+                        notification_message = self.t("notification_new_podcast", feed=refreshed.get("title", ""), title=entry.get("title", ""))
+                        self.ui_queue.put(
+                            (
+                                "app_notification",
+                                {
+                                    "kind": "podcast",
+                                    "title": self.t("rss_feeds"),
+                                    "message": notification_message,
+                                    "item": entry,
+                                },
+                            )
+                        )
                 except Exception as exc:
                     preserved = dict(existing)
                     preserved["last_error"] = self.friendly_error(exc)
@@ -1640,7 +1637,7 @@ class LibraryMixin:
             return
         self.current_rss_feed_index = feed_index
         feed = self.rss_feeds[feed_index]
-        self.rss_items = list(feed.get("items") or [])
+        self.set_visible_rss_items(list(feed.get("items") or []), selection + 1)
         self.in_main_menu = False
         self.in_queue_screen = False
         self.search_screen_active = False
@@ -1675,6 +1672,50 @@ class LibraryMixin:
         self.refresh_rss_items_list(selection)
         self.panel.Layout()
         self.focus_later(self.rss_items_list)
+        self.refresh_legacy_rss_archive_if_needed(feed_index, feed)
+
+
+    def rss_episode_batch_size(self) -> int:
+        try:
+            value = int(getattr(self.settings, "rss_max_items", 100) or 100)
+        except (TypeError, ValueError):
+            value = 100
+        return min(500, max(25, value))
+
+
+    def set_visible_rss_items(self, items: list[dict], minimum_count: int = 0) -> None:
+        self.rss_all_items = list(items)
+        batch_size = self.rss_episode_batch_size()
+        required = max(batch_size, int(minimum_count or 0))
+        if required > batch_size:
+            required = ((required + batch_size - 1) // batch_size) * batch_size
+        self.rss_visible_count = min(len(self.rss_all_items), required)
+        self.rss_items = self.rss_all_items[: self.rss_visible_count]
+
+
+    def maybe_extend_rss_items(self) -> bool:
+        if not hasattr(self, "rss_items_list") or len(self.rss_items) >= len(self.rss_all_items):
+            return False
+        try:
+            selection = self.rss_items_list.GetSelection()
+        except RuntimeError:
+            return False
+        previous_count = len(self.rss_items)
+        self.rss_visible_count = min(len(self.rss_all_items), previous_count + self.rss_episode_batch_size())
+        self.rss_items = self.rss_all_items[: self.rss_visible_count]
+        labels = [self.rss_item_line(item) for item in self.rss_items]
+        selected_index = max(0, min(selection, len(self.rss_items) - 1))
+        if not self.append_listbox_items(self.rss_items_list, labels, previous_count, selected_index):
+            self.set_listbox_items(self.rss_items_list, labels, selected_index)
+        self.set_status(self.t("podcast_more_episodes_loaded", count=len(self.rss_items)))
+        return True
+
+
+    def refresh_legacy_rss_archive_if_needed(self, feed_index: int, feed: dict) -> None:
+        if feed.get("items_complete") is True or self.rss_refresh_running:
+            return
+        self.rss_refresh_running = True
+        threading.Thread(target=self.refresh_rss_feeds_worker, args=(feed_index, True), daemon=True).start()
 
 
     def refresh_rss_items_list(self, selection: int = 0) -> None:
@@ -1789,7 +1830,8 @@ class LibraryMixin:
                 else:
                     target.pop("played_at", None)
         if feed_index == self.current_rss_feed_index:
-            self.rss_items = list(items)
+            visible_count = max(len(self.rss_items), item_index + 1)
+            self.set_visible_rss_items(list(items), visible_count)
             if refresh and self.rss_items_screen_active:
                 self.refresh_rss_items_list(item_index)
         self.save_rss_feeds()
@@ -1874,7 +1916,14 @@ class LibraryMixin:
 
 
     def on_rss_item_key(self, event: wx.KeyEvent) -> None:
-        if self.shortcut_matches(event, "open_selected"):
+        key_code = event.GetKeyCode()
+        if key_code == wx.WXK_END:
+            self.maybe_extend_rss_items()
+            event.Skip()
+        elif key_code == wx.WXK_DOWN and self.rss_items_list.GetSelection() >= self.rss_items_list.GetCount() - 1:
+            self.maybe_extend_rss_items()
+            event.Skip()
+        elif self.shortcut_matches(event, "open_selected"):
             self.play_selected_rss_item()
         elif self.shortcut_matches(event, "queue_audio"):
             self.toggle_rss_item_queue()
@@ -2013,10 +2062,32 @@ class LibraryMixin:
             "title": title or self.t("rss_unknown_feed_title"),
             "url": final_url or url,
             "site_url": site_url,
-            "items": items[: min(500, max(1, int(self.settings.rss_max_items or 100)))],
+            "items": items,
+            "items_complete": True,
             "last_checked": time.time(),
             "created_at": time.time(),
         }
+
+
+    @staticmethod
+    def new_rss_entries(refreshed_items: list[dict], known_urls: set[str]) -> list[dict]:
+        if not known_urls:
+            return []
+        first_known = next(
+            (
+                index
+                for index, item in enumerate(refreshed_items)
+                if str(item.get("url") or "") in known_urls
+            ),
+            -1,
+        )
+        if first_known < 0:
+            return []
+        return [
+            item
+            for item in refreshed_items[:first_known]
+            if str(item.get("url") or "")
+        ]
 
 
 

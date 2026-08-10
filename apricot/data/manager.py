@@ -151,6 +151,7 @@ class DataManagerMixin:
                 merged["podcast_search_provider"] = provider if provider in PODCAST_DIRECTORY_PROVIDER_OPTIONS else PODCAST_DIRECTORY_PROVIDER_APPLE
                 country = str(merged.get("podcast_search_country") or "US").upper()
                 merged["podcast_search_country"] = country if country in PODCAST_COUNTRY_OPTIONS else "US"
+                merged["rss_max_items"] = self.to_int(str(merged.get("rss_max_items") or "100"), 100, 25, 500)
                 if not str(merged.get("cookies_browser_profile") or "").strip():
                     merged["cookies_browser_profile"] = COOKIE_PROFILE_AUTO
                 shortcuts = self.normalized_keyboard_shortcuts(merged.get("keyboard_shortcuts"))

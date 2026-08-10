@@ -632,7 +632,7 @@ class SettingsMixin:
             choice("podcast_search_provider", self.normalized_podcast_search_provider(), PODCAST_DIRECTORY_PROVIDER_OPTIONS, [self.t("podcast_search_provider_apple")])
             choice("podcast_search_country", self.normalized_podcast_search_country(), PODCAST_COUNTRY_OPTIONS)
             choice("podcast_search_limit", str(self.settings.podcast_search_limit), ["10", "20", "50", "100", "150", "200"])
-            choice("rss_max_items", str(self.settings.rss_max_items), ["25", "50", "100", "200", "500"])
+            choice("rss_episode_batch_size", str(self.settings.rss_max_items), ["25", "50", "100", "200", "500"])
             check("rss_refresh_on_startup", self.settings.rss_refresh_on_startup)
             check("rss_auto_refresh_enabled", self.settings.rss_auto_refresh_enabled)
             choice(
@@ -1209,8 +1209,8 @@ class SettingsMixin:
             self.settings.podcast_search_country = c["podcast_search_country"].GetStringSelection() or "US"
         if "podcast_search_limit" in c:
             self.settings.podcast_search_limit = self.to_int(c["podcast_search_limit"].GetStringSelection(), 20, 1, 200)
-        if "rss_max_items" in c:
-            self.settings.rss_max_items = self.to_int(c["rss_max_items"].GetStringSelection(), 100, 1, 500)
+        if "rss_episode_batch_size" in c:
+            self.settings.rss_max_items = self.to_int(c["rss_episode_batch_size"].GetStringSelection(), 100, 25, 500)
         if "rss_refresh_on_startup" in c:
             self.settings.rss_refresh_on_startup = c["rss_refresh_on_startup"].GetValue()
         if "rss_auto_refresh_enabled" in c:

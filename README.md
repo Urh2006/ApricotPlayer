@@ -1,8 +1,8 @@
-# ApricotPlayer (v1.0.2)
+# ApricotPlayer (v1.0.3)
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `1.0.2`
+Current version: `1.0.3`
 
 ## Download
 
@@ -95,6 +95,7 @@ py wx_main.py
 - The player window title includes the currently playing video, podcast, or episode title for Alt+Tab
 - App update checks can run periodically in tray mode, show an Update available main-menu item, and optionally send Windows notifications
 - Podcasts and RSS feeds screen with Apple Podcasts directory search, direct RSS/Atom feed URLs, refresh, open, play, download audio, download entire feed, queue episodes, copy URL, and browser actions
+- Podcast feeds retain every episode present in their RSS or Atom archive and reveal older episodes in configurable batches when End is pressed or navigation reaches the bottom of the list
 - Direct link screen for playing or downloading any `yt-dlp` supported URL
 - Direct link Enter behavior can be configured in Settings
 - Browser cookie export can close the selected browser first, scan Brave/Chrome/Edge/Firefox profiles, use a Chromium DevTools fallback when normal extraction finds no login cookies, report profile diagnostics, export a usable `cookies.txt`, and automatically refresh cookies only after YouTube asks for sign-in or bot confirmation
@@ -202,7 +203,7 @@ Helpful scripts:
 - `scripts/build_release.ps1 -PackageMode onedir` builds the fast app folder used by both the installer and portable ZIP
 - `scripts/build_installer.ps1` builds `ApricotPlayerSetup.exe` when Inno Setup is installed
 - `scripts/build_portable_zip.ps1` builds `ApricotPlayer.zip`
-- `scripts/publish_release.ps1 -Tag v1.0.2 -NotesFile release-notes/v1.0.2.md` publishes the installer and portable ZIP to GitHub Releases
+- `scripts/publish_release.ps1 -Tag v1.0.3 -NotesFile release-notes/v1.0.3.md` publishes the installer and portable ZIP to GitHub Releases
 
 ## Security
 

@@ -2,10 +2,10 @@
 
 ## Trenutni posnetek
 
-- Datum posnetka: 9. avgust 2026.
-- Trenutna verzija: `1.0.2`.
+- Datum posnetka: 10. avgust 2026.
+- Trenutna verzija: `1.0.3`.
 - Trenutna razvojna veja: `main`.
-- Stabilna 1.0.2 popravi ponovno predvajanje neposrednih spletnih povezav iz zgodovine po ponovnem zagonu programa.
+- Stabilna 1.0.3 odstrani notranjo omejitev 500 epizod v podcast/RSS arhivih in starejše epizode prikazuje v dinamičnih paketih.
 - Obstoječi 1.0 roadmap in potrjeni AudioVault obseg sta izvedena.
 
 To je informativni posnetek. Če se številke razlikujejo, imajo prednost `apricot/__init__.py`, `apricot/constants.py`, Git zgodovina, `CHANGELOG.md` in zadnje release notes.

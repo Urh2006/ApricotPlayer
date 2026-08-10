@@ -85,6 +85,8 @@ class MainFrame(AudioVaultMixin, CookiesUI, DownloadsUI, EqualizerUI, EventsUI, 
         self.playback_queue = self.load_playback_queue()
         self.last_player_session = self.load_last_player_session()
         self.rss_items: list[dict] = []
+        self.rss_all_items: list[dict] = []
+        self.rss_visible_count = 0
         self.podcast_search_results: list[dict] = []
         self.results: list[dict] = []
         self.all_results: list[dict] = []

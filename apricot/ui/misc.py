@@ -3387,7 +3387,11 @@ class MiscUI:
                                 selection = self.rss_items_list.GetSelection()
                             except RuntimeError:
                                 selection = 0
-                        self.rss_items = list(self.rss_feeds[self.current_rss_feed_index].get("items") or [])
+                        visible_count = max(len(self.rss_items), selection + 1)
+                        self.set_visible_rss_items(
+                            list(self.rss_feeds[self.current_rss_feed_index].get("items") or []),
+                            visible_count,
+                        )
                         self.refresh_rss_items_list(selection)
                     else:
                         self.refresh_rss_feed_list()

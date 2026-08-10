@@ -1,3 +1,18 @@
+# v1.0.3 - Complete Podcast Archives
+
+## Fixed
+- Podcast and RSS feeds no longer discard episodes beyond the first 500 when the feed itself contains a larger archive.
+- Existing feeds saved by an older ApricotPlayer version are refreshed once when opened so previously truncated archives can be restored.
+- Restoring an older archive does not report its historical episodes as newly published notifications.
+
+## Changed
+- The former maximum-episode setting now controls how many podcast episodes are shown in each batch, from 25 to 500.
+- Pressing End or moving down from the last visible episode appends the next batch while preserving list focus and screen-reader navigation.
+
+## Verification
+- Added parsing, archive migration, notification, dynamic loading, and real wx list regression coverage.
+- Passed all 105 automated tests, source compilation, critical Ruff checks, and whitespace validation.
+
 # v1.0.0-beta.47 - Categorized Libraries and Accessible Media Fields
 
 ## Added
