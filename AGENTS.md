@@ -12,6 +12,11 @@ Ta datoteka je trajni repozitorijski kontekst za Codex. Velja za celoten projekt
 
 ApricotPlayer je dostopen medijski predvajalnik in downloader za Windows. Narejen je v Pythonu z wxPython, za predvajanje uporablja mpv, za spletne medije pa predvsem yt-dlp.
 
+Popoln macOS feature-parity port je potrjeno prihodnje delo. Pred vsakim macOS
+posegom preberi `docs/MACOS_PORT_PLAN.md`. macOS izdaja ne sme biti okrnjena:
+vsaka trenutna in prihodnja funkcija mora delovati na Windows in macOS, z NVDA
+oziroma VoiceOver ter s popolno tipkovnično potjo.
+
 Prioritete so po vrstnem redu:
 
 1. Dostopnost za NVDA in druge bralnike zaslona.
@@ -32,6 +37,8 @@ Vsaka nova ali spremenjena funkcija mora biti izvedljiva brez miške. Kjer obsta
 - `locales_json/` je vir lokaliziranih besedil.
 - `tests/` vsebuje regresijske teste.
 - `docs/PROJECT_CONTEXT.md`, `docs/DECISIONS.md` in `docs/BACKLOG.md` vsebujejo zgoščen kontekst, trajne odločitve in potrjeno prihodnje delo.
+- `docs/MACOS_PORT_PLAN.md` je obvezni feature-parity manifest in izvedbeni plan
+  za macOS.
 
 Za trenutno verzijo vedno preberi `apricot/__init__.py`, `apricot/constants.py`, vrh `CHANGELOG.md` in zadnje release notes. Stari chati niso vir resnice, kadar se razlikujejo od trenutne kode, Git zgodovine ali teh dokumentov.
 
@@ -68,6 +75,11 @@ Pri UI, fokusu ali tipkovnični navigaciji dodaj pravi wxPython smoke test. Pri 
 - Pri novi verziji uskladi `apricot/__init__.py`, verzijske konstante, README, `CHANGELOG.md` in `release-notes/v{verzija}.md`.
 - Beta izdaja mora biti GitHub prerelease in mora biti zgrajena iz pravega beta commita oziroma taga.
 - Vsak release mora vsebovati točno `ApricotPlayerSetup.exe` in `ApricotPlayer.zip`.
+- Ko je macOS release pipeline aktiviran, mora isti release dodatno vsebovati
+  `ApricotPlayer-macOS-arm64.dmg`; ločen macOS ZIP ni zahtevan. Dokler projekt
+  nima Apple Developer računa, je lahko DMG ad-hoc podpisan in nenotariziran,
+  vendar morajo release notes jasno opisati Gatekeeper opozorilo in varen
+  enkratni postopek odobritve.
 - Issues zapri šele, ko je popravek objavljen in so build, testi ter oba release artefakta preverjeni.
 
 ## Obseg različice 1.0

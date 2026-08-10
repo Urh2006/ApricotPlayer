@@ -32,3 +32,29 @@ Stari chati so pomembni za namen in razloge, vendar vsebujejo tudi že odpravlje
 ## D-007: AudioVault spada v 1.0
 
 AudioVault je potrjen pomemben feature ApricotPlayerja 1.0. Integracija je bila razvita in stabilizirana skozi beta izdaje ter ostaja del stabilnega izdelka.
+
+## D-008: macOS mora imeti popolno funkcijsko pariteto
+
+macOS izdaja ni okrnjena različica ApricotPlayerja. Imeti mora vse funkcije,
+nastavitve, shortcute, kontekstne menije, podatkovne operacije in dostopne
+tipkovnične poti, ki obstajajo na Windows. Windows uporablja Control, macOS pa
+Command kot primarni modifier. Razlike so dovoljene samo za native sistemske
+površine, kjer mora macOS implementacija ohraniti isto uporabniško dejanje.
+
+Port ostane v enem skupnem codebaseu s platformnimi adapterji. Po prvi macOS
+izdaji mora biti vsak nov feature implementiran in preverjen na obeh platformah
+v istem razvojnem ciklu. Celoten obseg in acceptance manifest sta v
+`docs/MACOS_PORT_PLAN.md`.
+
+## D-009: macOS javni paket je DMG
+
+Windows release ohrani nespremenljivi imeni `ApricotPlayerSetup.exe` in
+`ApricotPlayer.zip`. Ko je macOS release pipeline aktiviran, isti release doda
+`ApricotPlayer-macOS-arm64.dmg`. Ločen macOS ZIP ni del zahtevanega javnega
+releasea.
+
+Dokler ni Apple Developer računa, je lahko DMG ad-hoc podpisan in nenotariziran.
+Release mora to jasno povedati in opisati pričakovano Gatekeeper opozorilo ter
+uradno pot za enkratno odobritev v macOS System Settings. Lastna kriptografska
+preverjanja updaterja ostanejo obvezna. Developer ID podpis in notarizacija sta
+poznejša izboljšava ter ne blokirata prve zasebne ali zgodnje javne macOS izdaje.

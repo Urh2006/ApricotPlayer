@@ -7,6 +7,9 @@
 - Trenutna razvojna veja: `main`.
 - Stabilna 1.0.3 odstrani notranjo omejitev 500 epizod v podcast/RSS arhivih in starejše epizode prikazuje v dinamičnih paketih.
 - Obstoječi 1.0 roadmap in potrjeni AudioVault obseg sta izvedena.
+- Popoln macOS feature-parity port je potrjeno prihodnje delo. Implementacija se
+  še ni začela; trajni plan in acceptance manifest sta v
+  `docs/MACOS_PORT_PLAN.md`.
 
 To je informativni posnetek. Če se številke razlikujejo, imajo prednost `apricot/__init__.py`, `apricot/constants.py`, Git zgodovina, `CHANGELOG.md` in zadnje release notes.
 
@@ -58,3 +61,7 @@ Stare želje za chapters, lyrics, podcast mode, transcripts, bookmarks, comments
 3. `CHANGELOG.md` in release notes.
 4. `docs/ROADMAP_1.0.md`, `docs/DECISIONS.md` in `docs/BACKLOG.md`.
 5. Povzetki starih chatov samo kot zgodovinska razlaga.
+
+Za macOS delo je `docs/MACOS_PORT_PLAN.md` dodatni vir resnice. Beseda parity v
+tem projektu pomeni vse trenutne Windows funkcije, nastavitve, shortcute in
+dostopne tipkovnične poti, ne samo osnovno predvajanje.
