@@ -2,10 +2,10 @@
 
 ## Trenutni posnetek
 
-- Datum posnetka: 10. avgust 2026.
-- Trenutna verzija: `1.0.4`.
+- Datum posnetka: 26. avgust 2026.
+- Trenutna verzija: `1.0.5`.
 - Trenutna razvojna veja: `main`.
-- Stabilna 1.0.4 nadgradi yt-dlp na 2026.8.19, izboljša zaznavo vgrajenega Node.js izvajalnika za YouTube challenge reševanje ter omogoča neposredno predvajanje direktnih spletnih medijskih povezav (MP3/MP4/M3U8).
+- Stabilna 1.0.5 pospeši zagon predvajanja in seek z neposredno izbiro optimalnega formata toka v prvem poskusu brez nepotrebnih ponovnih zahtevkov.
 - Obstoječi 1.0 roadmap in potrjeni AudioVault obseg sta izvedena.
 - Popoln macOS feature-parity port je potrjeno prihodnje delo. Implementacija se
   še ni začela; trajni plan in acceptance manifest sta v

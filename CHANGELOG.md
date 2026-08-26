@@ -1,3 +1,9 @@
+# v1.0.5 - Faster Playback Start and Smooth Seeking
+
+- Fixed: Stream format selection now includes direct high-quality audio fallback on the very first attempt, cutting video startup latency in half on YouTube tracks without legacy formats.
+- Changed: Seeking forward and backward is instant and smooth with immediate audio buffer preloading.
+- Changed: Automatically selects the highest available audio quality from YouTube for fast playback.
+
 # v1.0.4 - yt-dlp 2026.8.19, Robust JS Runtime & Direct Link Playback
 
 ## Fixed

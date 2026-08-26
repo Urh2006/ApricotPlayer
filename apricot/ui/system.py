@@ -34,6 +34,9 @@ FAST_SEEK_STREAM_FORMAT = (
     "/best[acodec!=none][vcodec!=none][protocol=https]"
     "/best[ext=mp4]"
     "/best[acodec!=none][vcodec!=none]"
+    "/bestaudio[protocol=https]"
+    "/bestaudio"
+    "/best"
 )
 FAST_SEEK_FALLBACK_FORMAT = (
     "best[ext=mp4][vcodec!=none][acodec!=none][height<=360]"
