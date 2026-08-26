@@ -1,3 +1,10 @@
+# v1.0.7 - Smooth Seeking, Instant Resume, and Stream Preference
+
+- Fixed: Eliminated playback stalls and socket freezes when jumping forward or backward by removing force-seekable socket constraints on HTTP streams.
+- Fixed: Restored instant start when resuming playback from a saved position by prioritizing index-based M4A and MP4 streams that support direct HTTP range seeking.
+- Fixed: Prioritized fast M4A audio formats over WebM to prevent cluster search latency during rapid seeking.
+- Added: Added Playback stream format option in Settings > Playback allowing users to choose between Automatic, Prefer video format, or Prefer audio-only.
+
 # v1.0.6 - Smooth Seeking and Buffering Elimination
 
 - Fixed: Eliminated buffering stalls when seeking forward and backward on YouTube, podcasts, and direct web streams by enabling 2-minute readahead pre-buffering.

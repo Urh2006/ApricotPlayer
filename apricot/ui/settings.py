@@ -148,6 +148,7 @@ class SettingsMixin:
                 "enable_stream_cache",
                 "enable_stream_url_cache",
                 "stream_url_cache_minutes",
+                "stream_format_preference",
                 "prefetch_next_stream_url",
                 "gapless_playback",
                 "replaygain_mode",
@@ -525,6 +526,12 @@ class SettingsMixin:
                 str(self.normalized_stream_url_cache_minutes()),
                 STREAM_URL_CACHE_OPTIONS,
                 self.stream_url_cache_labels(STREAM_URL_CACHE_OPTIONS),
+            )
+            choice(
+                "stream_format_preference",
+                self.normalized_stream_format_preference(),
+                STREAM_FORMAT_PREFERENCE_OPTIONS,
+                self.stream_format_preference_labels(),
             )
             check("prefetch_next_stream_url", bool(getattr(self.settings, "prefetch_next_stream_url", True)))
             check("gapless_playback", bool(getattr(self.settings, "gapless_playback", True)))
@@ -1131,6 +1138,8 @@ class SettingsMixin:
             self.settings.enable_stream_url_cache = c["enable_stream_url_cache"].GetValue()
         if "stream_url_cache_minutes" in c:
             self.settings.stream_url_cache_minutes = self.normalized_stream_url_cache_minutes(self.selected_choice_value("stream_url_cache_minutes"))
+        if "stream_format_preference" in c:
+            self.settings.stream_format_preference = self.normalized_stream_format_preference(self.selected_choice_value("stream_format_preference"))
         if "prefetch_next_stream_url" in c:
             self.settings.prefetch_next_stream_url = c["prefetch_next_stream_url"].GetValue()
         if "gapless_playback" in c:

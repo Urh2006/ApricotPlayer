@@ -2,10 +2,10 @@
 
 ## Trenutni posnetek
 
-- Datum posnetka: 26. avgust 2026.
-- Trenutna verzija: `1.0.6`.
+- Datum posnetka: 27. avgust 2026.
+- Trenutna verzija: `1.0.7`.
 - Trenutna razvojna veja: `main`.
-- Stabilna 1.0.6 odpravlja buffering ob iskanju (seek) na spletnih in YouTube tokovih z razširjenim predpomnjenjem vnaprej in nazaj ter prioriteto neomejenih tokov.
+- Stabilna 1.0.7 popravlja predvajanje z nastavljenega položaja (resume position), omogoča nemoteno hitro navigacijo (skoke naprej/nazaj) brez zatikanja ter dodaja nastavitev prednostnega formata predvajanja.
 - Obstoječi 1.0 roadmap in potrjeni AudioVault obseg sta izvedena.
 - Popoln macOS feature-parity port je potrjeno prihodnje delo. Implementacija se
   še ni začela; trajni plan in acceptance manifest sta v

@@ -984,5 +984,9 @@
     "audiovault_show_failed": "TV-serije iz AudioVault ni bilo mogoče pripraviti: {error}",
     "audiovault_episodes_loaded": "Naloženih {count} epizod iz {title}.",
     "audiovault_show_cache_notice": "TV-serija se pripravlja. Epizode se prikažejo po končanem prenosu.",
-    "download_complete": "Prenos končan: {title}."
+    "download_complete": "Prenos končan: {title}.",
+    "stream_format_preference": "Format predvajanja toka",
+    "stream_format_preference_auto": "Samodejno (najprej progresivni video, nato hiter M4A zvok)",
+    "stream_format_preference_video": "Prednost video formatu (hitri 360p/480p MP4)",
+    "stream_format_preference_audio": "Prednost zvočnemu toku (hiter zagon)"
 }

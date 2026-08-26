@@ -1032,5 +1032,9 @@
     "audiovault_show_failed": "Could not prepare the AudioVault TV show: {error}",
     "audiovault_episodes_loaded": "Loaded {count} episodes from {title}.",
     "audiovault_show_cache_notice": "The TV show is being prepared. Its episodes will appear when the download finishes.",
-    "download_complete": "Download complete: {title}."
+    "download_complete": "Download complete: {title}.",
+    "stream_format_preference": "Playback stream format",
+    "stream_format_preference_auto": "Automatic (progressive video first, then fast M4A audio)",
+    "stream_format_preference_video": "Prefer video format (unthrottled 360p/480p MP4)",
+    "stream_format_preference_audio": "Prefer audio-only (fast start)"
 }

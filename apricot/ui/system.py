@@ -34,6 +34,24 @@ FAST_SEEK_STREAM_FORMAT = (
     "/best[acodec!=none][vcodec!=none][protocol=https]"
     "/best[ext=mp4]"
     "/best[acodec!=none][vcodec!=none]"
+    "/bestaudio[ext=m4a][protocol=https]"
+    "/bestaudio[ext=m4a]"
+    "/bestaudio[protocol=https]"
+    "/bestaudio"
+    "/best"
+)
+FAST_SEEK_VIDEO_ONLY_FORMAT = (
+    "best[ext=mp4][vcodec!=none][acodec!=none][height<=360][protocol=https]"
+    "/best[ext=mp4][vcodec!=none][acodec!=none][height<=480][protocol=https]"
+    "/best[ext=mp4][vcodec!=none][acodec!=none][protocol=https]"
+    "/best[acodec!=none][vcodec!=none][protocol=https]"
+    "/best[ext=mp4]"
+    "/best[acodec!=none][vcodec!=none]"
+    "/best"
+)
+FAST_SEEK_AUDIO_ONLY_FORMAT = (
+    "bestaudio[ext=m4a][protocol=https]"
+    "/bestaudio[ext=m4a]"
     "/bestaudio[protocol=https]"
     "/bestaudio"
     "/best"
@@ -637,6 +655,13 @@ class SystemUI:
                     [
                         item for item in formats
                         if item.get("url")
+                        and item.get("ext") == "m4a"
+                        and item.get("acodec") not in (None, "none", "")
+                        and str(item.get("protocol") or "").startswith("http")
+                    ],
+                    [
+                        item for item in formats
+                        if item.get("url")
                         and item.get("acodec") not in (None, "none", "")
                         and str(item.get("protocol") or "").startswith("http")
                     ],
@@ -720,6 +745,14 @@ class SystemUI:
             return self.recover_truncated_youtube_stream(url, info)
         return {}
 
+    def effective_youtube_stream_format(self) -> str:
+        pref = str(getattr(self.settings, "stream_format_preference", STREAM_FORMAT_PREFERENCE_AUTO) or STREAM_FORMAT_PREFERENCE_AUTO).strip().lower()
+        if pref == STREAM_FORMAT_PREFERENCE_VIDEO:
+            return FAST_SEEK_VIDEO_ONLY_FORMAT
+        if pref == STREAM_FORMAT_PREFERENCE_AUDIO:
+            return FAST_SEEK_AUDIO_ONLY_FORMAT
+        return FAST_SEEK_STREAM_FORMAT
+
     def resolve_stream_url(self, url: str) -> tuple[str, dict, dict]:
         local_path = self.local_media_path_from_input(url)
         if local_path:
@@ -735,7 +768,7 @@ class SystemUI:
         options = {
             "quiet": True,
             "skip_download": True,
-            "format": FAST_SEEK_STREAM_FORMAT if youtube_source else NON_YOUTUBE_STREAM_FORMAT,
+            "format": self.effective_youtube_stream_format() if youtube_source else NON_YOUTUBE_STREAM_FORMAT,
             "noplaylist": True,
         }
         format_fallback_options = dict(options)
@@ -1021,6 +1054,18 @@ class SystemUI:
         if minutes <= 0:
             return 0
         return min(10080, max(5, minutes))
+
+    def normalized_stream_format_preference(self, value=None) -> str:
+        raw = getattr(self.settings, "stream_format_preference", STREAM_FORMAT_PREFERENCE_AUTO) if value is None else value
+        normalized = str(raw or "").strip().lower()
+        return normalized if normalized in STREAM_FORMAT_PREFERENCE_OPTIONS else STREAM_FORMAT_PREFERENCE_AUTO
+
+    def stream_format_preference_labels(self) -> list[str]:
+        return [
+            self.t("stream_format_preference_auto"),
+            self.t("stream_format_preference_video"),
+            self.t("stream_format_preference_audio"),
+        ]
 
     @staticmethod
     def normalize_direct_link_enter_action(action: str) -> str:

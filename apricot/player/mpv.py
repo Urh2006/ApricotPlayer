@@ -133,8 +133,7 @@ class MpvMixin:
                         f"--demuxer-cache-dir={cache_folder}",
                         f"--demuxer-max-bytes={cache_size}MiB",
                         f"--demuxer-max-back-bytes={back_cache}MiB",
-                        "--demuxer-readahead-secs=120",
-                        "--force-seekable=yes",
+                        "--demuxer-readahead-secs=60",
                         "--cache-pause=no",
                         # Reconnect seekable streams after a network drop.
                         # reconnect_streamed is intentionally omitted: it causes
