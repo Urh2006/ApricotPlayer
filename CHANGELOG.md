@@ -1,3 +1,10 @@
+# v1.0.6 - Smooth Seeking and Buffering Elimination
+
+- Fixed: Eliminated buffering stalls when seeking forward and backward on YouTube, podcasts, and direct web streams by enabling 2-minute readahead pre-buffering.
+- Fixed: Prioritized unthrottled progressive streams for fast initial buffer fill.
+- Changed: Increased back-cache memory to ensure backward seeking is instant without re-requesting data from remote servers.
+- Changed: Enabled forced seekable stream handling for direct HTTP/HTTPS media connections.
+
 # v1.0.5 - Faster Playback Start and Smooth Seeking
 
 - Fixed: Stream format selection now includes direct high-quality audio fallback on the very first attempt, cutting video startup latency in half on YouTube tracks without legacy formats.

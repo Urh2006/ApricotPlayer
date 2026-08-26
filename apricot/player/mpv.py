@@ -125,7 +125,7 @@ class MpvMixin:
                 except Exception:
                     pass
                 cache_size = max(128, min(4096, int(getattr(self.settings, "cache_size_mb", 512) or 512)))
-                back_cache = max(32, min(cache_size, cache_size // 4))
+                back_cache = max(64, min(cache_size, cache_size // 2))
                 args.extend(
                     [
                         "--cache=yes",
@@ -133,6 +133,8 @@ class MpvMixin:
                         f"--demuxer-cache-dir={cache_folder}",
                         f"--demuxer-max-bytes={cache_size}MiB",
                         f"--demuxer-max-back-bytes={back_cache}MiB",
+                        "--demuxer-readahead-secs=120",
+                        "--force-seekable=yes",
                         "--cache-pause=no",
                         # Reconnect seekable streams after a network drop.
                         # reconnect_streamed is intentionally omitted: it causes
