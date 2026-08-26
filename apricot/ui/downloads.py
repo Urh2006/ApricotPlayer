@@ -61,7 +61,10 @@ class DownloadsUI:
             "logger": YTDLP_LOGGER,
             "no_warnings": True,
         }
-        if use_js_solver:
+        node = self.bundled_node_executable()
+        if node:
+            merged["js_runtimes"] = {"node": {"path": node}}
+        elif use_js_solver:
             merged["js_runtimes"] = self.ytdlp_js_runtimes()
             if not self.ytdlp_ejs_available():
                 merged["remote_components"] = ["ejs:github"]

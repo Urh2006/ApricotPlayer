@@ -3,9 +3,9 @@
 ## Trenutni posnetek
 
 - Datum posnetka: 10. avgust 2026.
-- Trenutna verzija: `1.0.3`.
+- Trenutna verzija: `1.0.4`.
 - Trenutna razvojna veja: `main`.
-- Stabilna 1.0.3 odstrani notranjo omejitev 500 epizod v podcast/RSS arhivih in starejše epizode prikazuje v dinamičnih paketih.
+- Stabilna 1.0.4 nadgradi yt-dlp na 2026.8.19, izboljša zaznavo vgrajenega Node.js izvajalnika za YouTube challenge reševanje ter omogoča neposredno predvajanje direktnih spletnih medijskih povezav (MP3/MP4/M3U8).
 - Obstoječi 1.0 roadmap in potrjeni AudioVault obseg sta izvedena.
 - Popoln macOS feature-parity port je potrjeno prihodnje delo. Implementacija se
   še ni začela; trajni plan in acceptance manifest sta v

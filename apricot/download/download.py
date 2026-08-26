@@ -465,9 +465,17 @@ class DownloaderMixin:
             if value.strip():
                 options[key] = value.strip()
         if "ffmpeg_location" not in options:
-            bundled_ffmpeg = self.bundled_path("ffmpeg", "ffmpeg.exe")
-            if bundled_ffmpeg.exists():
-                options["ffmpeg_location"] = str(bundled_ffmpeg)
+            executable_dir = Path(sys.executable).resolve().parent
+            candidates = [
+                self.bundled_path("ffmpeg", "ffmpeg.exe"),
+                executable_dir / "_internal" / "ffmpeg" / "ffmpeg.exe",
+                executable_dir / "ffmpeg" / "ffmpeg.exe",
+                Path(__file__).resolve().parents[2] / "vendor" / "ffmpeg" / "ffmpeg.exe",
+            ]
+            for candidate in candidates:
+                if candidate.exists():
+                    options["ffmpeg_location"] = str(candidate)
+                    break
             else:
                 ffmpeg = shutil.which("ffmpeg")
                 if ffmpeg:

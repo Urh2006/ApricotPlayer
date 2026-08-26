@@ -300,9 +300,12 @@ class MiscUI:
             return False
 
     def bundled_node_executable(self) -> str:
+        executable_dir = Path(sys.executable).resolve().parent
         candidates = [
             self.bundled_path("node", "node.exe"),
-            Path(__file__).resolve().parent / "vendor" / "node" / "node.exe",
+            executable_dir / "_internal" / "node" / "node.exe",
+            executable_dir / "node" / "node.exe",
+            Path(__file__).resolve().parents[2] / "vendor" / "node" / "node.exe",
         ]
         for candidate in candidates:
             if candidate.exists():
@@ -2621,9 +2624,16 @@ class MiscUI:
                     return str(candidate)
             elif configured_path.exists():
                 return configured
-        bundled = self.bundled_path("ffmpeg", "ffmpeg.exe")
-        if bundled.exists():
-            return str(bundled)
+        executable_dir = Path(sys.executable).resolve().parent
+        candidates = [
+            self.bundled_path("ffmpeg", "ffmpeg.exe"),
+            executable_dir / "_internal" / "ffmpeg" / "ffmpeg.exe",
+            executable_dir / "ffmpeg" / "ffmpeg.exe",
+            Path(__file__).resolve().parents[2] / "vendor" / "ffmpeg" / "ffmpeg.exe",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return str(candidate)
         return shutil.which("ffmpeg") or ""
 
     def clip_output_extension(self, source: str, item: dict, audio_only: bool = False) -> str:

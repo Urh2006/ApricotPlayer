@@ -43,6 +43,7 @@ FAST_SEEK_FALLBACK_FORMAT = (
     "/18"
     "/22"
     "/17"
+    "/bestaudio/best"
 )
 NON_YOUTUBE_STREAM_FORMAT = (
     "bestaudio[ext=m4a][protocol=https]"
@@ -630,6 +631,17 @@ class SystemUI:
                         if combined(item)
                         and str(item.get("protocol") or "").startswith("m3u8")
                     ],
+                    [
+                        item for item in formats
+                        if item.get("url")
+                        and item.get("acodec") not in (None, "none", "")
+                        and str(item.get("protocol") or "").startswith("http")
+                    ],
+                    [
+                        item for item in formats
+                        if item.get("url")
+                        and item.get("acodec") not in (None, "none", "")
+                    ],
                 ]
             )
         if not youtube_source:
@@ -637,6 +649,8 @@ class SystemUI:
                 [
                     [item for item in formats if item.get("url") and item.get("acodec") not in (None, "none", "") and str(item.get("protocol") or "").startswith("http")],
                     [item for item in formats if item.get("url") and item.get("acodec") not in (None, "none", "")],
+                    [item for item in formats if item.get("url") and str(item.get("protocol") or "").startswith("http")],
+                    [item for item in formats if item.get("url")],
                 ]
             )
         for group in candidates:
@@ -728,6 +742,16 @@ class SystemUI:
         try:
             info = self.ydl_extract_info(url, options, download=False, allow_cookie_retry=False)
         except Exception as exc:
+            if not youtube_source:
+                parsed = urlparse(url)
+                if parsed.scheme.lower() in {"http", "https", "rtmp", "rtsp", "mms"}:
+                    direct_info = {
+                        "url": url,
+                        "webpage_url": url,
+                        "title": Path(parsed.path).name or url,
+                        "ext": Path(parsed.path).suffix.lstrip(".").lower() or "mp4",
+                    }
+                    return url, {}, direct_info
             cookie_error = self.is_cookie_auth_error(exc)
             age_or_js_error = self.is_age_or_js_playback_error(exc)
             requested_format_error = self.is_requested_format_error(exc)
@@ -824,6 +848,16 @@ class SystemUI:
         selected_info = self.resolved_playable_stream_info(url, info, youtube_source)
         stream_url = str(selected_info.get("url") or "")
         if not stream_url:
+            if not youtube_source:
+                parsed = urlparse(url)
+                if parsed.scheme.lower() in {"http", "https", "rtmp", "rtsp", "mms"}:
+                    direct_info = {
+                        "url": url,
+                        "webpage_url": url,
+                        "title": Path(parsed.path).name or url,
+                        "ext": Path(parsed.path).suffix.lstrip(".").lower() or "mp4",
+                    }
+                    return url, {}, direct_info
             raise RuntimeError("No playable stream URL found")
         headers = selected_info.get("http_headers") or info.get("http_headers") or {}
         self.cache_stream_url(url, stream_url, headers, selected_info)

@@ -1,3 +1,19 @@
+# v1.0.4 - yt-dlp 2026.8.19, Robust JS Runtime & Direct Link Playback
+
+## Fixed
+- **Restored YouTube stream extraction & playback.** Bundled Node.js executable discovery now searches all runtime and package layouts (`_internal/node`, `vendor/node`, local paths), allowing yt-dlp to solve YouTube JS challenges and extract playable progressive and adaptive formats.
+- **Fixed playback failure on direct media links from other websites.** When yt-dlp generic webpage extraction fails or returns HTTP 403 on direct audio/video/stream URLs (MP3, MP4, M3U8, AAC), ApricotPlayer falls back directly to mpv streaming.
+- **Improved YouTube format fallback.** Added audio and adaptive stream fallback to ensure playback never fails with "Requested format is not available" when progressive streams are absent.
+
+## Changed
+- Updated the bundled and pinned yt-dlp dependency to 2026.8.19.
+- Enhanced runtime executable resolution for Node and FFmpeg across development, portable, and installed environments.
+
+## Verification
+- Added unit tests for bundled Node/FFmpeg executable resolution and direct media URL stream fallback.
+- Verified YouTube playback, SoundCloud, direct MP3, direct MP4, and direct M3U8 stream resolution.
+- Passed all 108 automated tests, source compilation, critical Ruff checks, and whitespace validation.
+
 # v1.0.3 - Complete Podcast Archives
 
 ## Fixed
