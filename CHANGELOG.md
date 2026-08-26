@@ -1,3 +1,8 @@
+# v1.0.9 - Bitrate Reporting in Format Announcement
+
+- Added: Format announcement (shortcut F) now includes the exact audio bitrate in kbps across all playback sources (local MP3, M4A, FLAC, AAC, YouTube, podcasts, and online streams).
+- Added: Integrated local file metadata inspection via mutagen with live playback stream metrics to guarantee accurate bitrate reporting.
+
 # v1.0.8 - Player Format Announcement Shortcut
 
 - Added: Added player shortcut F (Player: announce format) to speak the active container, video resolution, and audio codec to screen readers during playback.

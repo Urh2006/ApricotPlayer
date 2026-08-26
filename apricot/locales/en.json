@@ -1042,5 +1042,7 @@
     "format_status_video_only": "Format: {container} {resolution} video",
     "format_status_audio_detailed": "Format: {container} audio ({audio}, {bitrate})",
     "format_status_audio": "Format: {container} audio ({audio})",
-    "format_status_simple": "Format: {container}"
+    "format_status_simple": "Format: {container}",
+    "format_status_video_with_audio_bitrate": "Format: {container} {resolution} video, {audio} audio ({bitrate})",
+    "format_status_audio_bitrate": "Format: {container} audio ({bitrate})"
 }

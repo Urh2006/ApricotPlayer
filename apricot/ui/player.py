@@ -866,6 +866,39 @@ class PlayerUI:
         acodec = info.get("acodec")
         abr = info.get("abr") or info.get("audio_bitrate")
 
+        local_path = None
+        if hasattr(self, "current_media_path") and self.current_media_path:
+            try:
+                candidate = Path(self.current_media_path)
+                if candidate.is_file():
+                    local_path = candidate
+            except Exception:
+                local_path = None
+        if not local_path and hasattr(self, "current_stream_url") and self.current_stream_url:
+            try:
+                candidate = Path(self.current_stream_url)
+                if candidate.is_file():
+                    local_path = candidate
+            except Exception:
+                local_path = None
+
+        if local_path and not ext:
+            ext = local_path.suffix.lstrip(".").lower()
+
+        bitrate_val = 0
+        if local_path:
+            try:
+                import mutagen
+                audio_meta = mutagen.File(local_path)
+                if audio_meta and hasattr(audio_meta, "info"):
+                    mb = getattr(audio_meta.info, "bitrate", None)
+                    if mb and mb > 0:
+                        bitrate_val = round(mb / 1000)
+            except Exception:
+                pass
+
+        mpv_acodec = None
+        mpv_format = None
         try:
             mpv_acodec = self.mpv_get_property("audio-codec-name")
             if mpv_acodec and not acodec:
@@ -873,7 +906,25 @@ class PlayerUI:
         except Exception:
             pass
 
-        acodec_str = str(acodec or "").lower()
+        try:
+            mpv_format = self.mpv_get_property("file-format")
+        except Exception:
+            pass
+
+        try:
+            mpv_bitrate = self.mpv_get_property("audio-bitrate")
+            if mpv_bitrate and float(mpv_bitrate) > 0 and bitrate_val == 0:
+                bitrate_val = round(float(mpv_bitrate) / 1000)
+        except Exception:
+            pass
+
+        if bitrate_val == 0 and abr:
+            try:
+                bitrate_val = round(float(abr))
+            except (TypeError, ValueError):
+                bitrate_val = 0
+
+        acodec_str = str(acodec or mpv_acodec or "").lower()
         if "mp4a" in acodec_str or "aac" in acodec_str:
             audio_name = "AAC"
         elif "opus" in acodec_str:
@@ -884,29 +935,34 @@ class PlayerUI:
             audio_name = "FLAC"
         elif "vorbis" in acodec_str or "ogg" in acodec_str:
             audio_name = "Vorbis"
+        elif "pcm" in acodec_str or "wav" in acodec_str:
+            audio_name = "WAV"
         elif acodec:
             audio_name = str(acodec).upper()
         else:
             audio_name = ""
 
-        try:
-            bitrate_val = int(float(abr)) if abr else 0
-        except (TypeError, ValueError):
-            bitrate_val = 0
-        bitrate_str = f"{bitrate_val} kbps" if bitrate_val > 0 else ""
+        if not ext and mpv_format:
+            first_fmt = str(mpv_format).split(",")[0].strip()
+            ext = "mp4" if "mp4" in first_fmt or "mov" in first_fmt else first_fmt
+        container = ext.upper() if ext else (audio_name or "MP3")
 
-        container = ext.upper() if ext else "MP4"
+        bitrate_str = f"{bitrate_val} kbps" if bitrate_val > 0 else ""
 
         has_video = bool(vcodec and str(vcodec).lower() not in ("none", "") and height)
         if has_video:
             res_str = f"{height}p"
-            if audio_name:
+            if audio_name and bitrate_str:
+                text = self.t("format_status_video_with_audio_bitrate", container=container, resolution=res_str, audio=audio_name, bitrate=bitrate_str)
+            elif audio_name:
                 text = self.t("format_status_video_with_audio", container=container, resolution=res_str, audio=audio_name)
             else:
                 text = self.t("format_status_video_only", container=container, resolution=res_str)
         else:
             if audio_name and bitrate_str:
                 text = self.t("format_status_audio_detailed", container=container, audio=audio_name, bitrate=bitrate_str)
+            elif bitrate_str:
+                text = self.t("format_status_audio_bitrate", container=container, bitrate=bitrate_str)
             elif audio_name:
                 text = self.t("format_status_audio", container=container, audio=audio_name)
             else:
