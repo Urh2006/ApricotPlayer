@@ -1,3 +1,8 @@
+# v1.0.8 - Player Format Announcement Shortcut
+
+- Added: Added player shortcut F (Player: announce format) to speak the active container, video resolution, and audio codec to screen readers during playback.
+- Added: Configurable format announcement shortcut in Settings > Keyboard shortcuts under player actions.
+
 # v1.0.7 - Smooth Seeking, Instant Resume, and Stream Preference
 
 - Fixed: Eliminated playback stalls and socket freezes when jumping forward or backward by removing force-seekable socket constraints on HTTP streams.

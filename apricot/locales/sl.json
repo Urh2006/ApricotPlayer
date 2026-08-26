@@ -988,5 +988,11 @@
     "stream_format_preference": "Format predvajanja toka",
     "stream_format_preference_auto": "Samodejno (najprej progresivni video, nato hiter M4A zvok)",
     "stream_format_preference_video": "Prednost video formatu (hitri 360p/480p MP4)",
-    "stream_format_preference_audio": "Prednost zvočnemu toku (hiter zagon)"
+    "stream_format_preference_audio": "Prednost zvočnemu toku (hiter zagon)",
+    "shortcut_player_format_status": "Predvajalnik: povej format",
+    "format_status_video_with_audio": "Format: {container} {resolution} video, {audio} zvok",
+    "format_status_video_only": "Format: {container} {resolution} video",
+    "format_status_audio_detailed": "Format: {container} zvok ({audio}, {bitrate})",
+    "format_status_audio": "Format: {container} zvok ({audio})",
+    "format_status_simple": "Format: {container}"
 }

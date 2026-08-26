@@ -695,6 +695,9 @@ class ShortcutsUI:
         if self.shortcut_matches(event, "player_volume_status"):
             self.announce_volume_async()
             return True
+        if self.shortcut_matches(event, "player_format_status"):
+            self.announce_format_status_async()
+            return True
         if self.shortcut_matches(event, "player_seek_back_huge"):
             self.start_player_seek_hold(-600, event)
             return True
@@ -787,6 +790,8 @@ class ShortcutsUI:
             repaired["player_details"] = DEFAULT_KEYBOARD_SHORTCUTS["player_details"]
         if not repaired.get("player_volume_status") or volume_status_shortcut in {"f7", self.canonical_shortcut(repaired.get("player_details", ""))}:
             repaired["player_volume_status"] = DEFAULT_KEYBOARD_SHORTCUTS["player_volume_status"]
+        if not repaired.get("player_format_status"):
+            repaired["player_format_status"] = DEFAULT_KEYBOARD_SHORTCUTS["player_format_status"]
         if self.canonical_shortcut(repaired.get("new_subscription_videos", "")) == self.canonical_shortcut(repaired.get("player_play_pause", "")):
             replacement = self.first_available_shortcut(repaired, "new_subscription_videos", ["Ctrl+Shift+V", "Ctrl+Alt+V", "Alt+N"])
             if replacement:

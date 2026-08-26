@@ -66,6 +66,7 @@ class _ShortcutHarness(ShortcutsUI):
         self.holds = []
         self.volume_changes = []
         self.bpm_requests = 0
+        self.format_status_requests = 0
 
     @staticmethod
     def player_shortcuts_allowed(_focus):
@@ -101,6 +102,9 @@ class _ShortcutHarness(ShortcutsUI):
 
     def announce_bpm_async(self):
         self.bpm_requests += 1
+
+    def announce_format_status_async(self):
+        self.format_status_requests += 1
 
     def start_player_adjustment_hold(self, action, delta, event):
         self.holds.append((action, delta, event))
@@ -314,6 +318,16 @@ class PlayerKeyHoldTests(unittest.TestCase):
         self.assertTrue(harness.handle_player_shortcut_event(event, None))
 
         self.assertEqual(harness.bpm_requests, 1)
+        self.assertEqual(harness.volume_changes, [])
+        self.assertEqual(harness.holds, [])
+
+    def test_format_status_shortcut_triggers_format_announcement(self):
+        harness = _ShortcutHarness()
+        event = _KeyEvent("player_format_status", ord("F"))
+
+        self.assertTrue(harness.handle_player_shortcut_event(event, None))
+
+        self.assertEqual(harness.format_status_requests, 1)
         self.assertEqual(harness.volume_changes, [])
         self.assertEqual(harness.holds, [])
 

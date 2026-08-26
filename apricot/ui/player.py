@@ -852,6 +852,69 @@ class PlayerUI:
         self.set_status(text)
         self.speak_text(text)
 
+    def announce_format_status_async(self) -> None:
+        if not self.player_is_active():
+            self.announce_player(self.t("no_player"))
+            return
+        threading.Thread(target=self.announce_format_status_worker, daemon=True).start()
+
+    def announce_format_status_worker(self) -> None:
+        info = dict(self.current_video_info or self.current_video_item or {})
+        ext = str(info.get("ext") or "").strip().lower()
+        height = info.get("height")
+        vcodec = info.get("vcodec")
+        acodec = info.get("acodec")
+        abr = info.get("abr") or info.get("audio_bitrate")
+
+        try:
+            mpv_acodec = self.mpv_get_property("audio-codec-name")
+            if mpv_acodec and not acodec:
+                acodec = str(mpv_acodec)
+        except Exception:
+            pass
+
+        acodec_str = str(acodec or "").lower()
+        if "mp4a" in acodec_str or "aac" in acodec_str:
+            audio_name = "AAC"
+        elif "opus" in acodec_str:
+            audio_name = "Opus"
+        elif "mp3" in acodec_str:
+            audio_name = "MP3"
+        elif "flac" in acodec_str:
+            audio_name = "FLAC"
+        elif "vorbis" in acodec_str or "ogg" in acodec_str:
+            audio_name = "Vorbis"
+        elif acodec:
+            audio_name = str(acodec).upper()
+        else:
+            audio_name = ""
+
+        try:
+            bitrate_val = int(float(abr)) if abr else 0
+        except (TypeError, ValueError):
+            bitrate_val = 0
+        bitrate_str = f"{bitrate_val} kbps" if bitrate_val > 0 else ""
+
+        container = ext.upper() if ext else "MP4"
+
+        has_video = bool(vcodec and str(vcodec).lower() not in ("none", "") and height)
+        if has_video:
+            res_str = f"{height}p"
+            if audio_name:
+                text = self.t("format_status_video_with_audio", container=container, resolution=res_str, audio=audio_name)
+            else:
+                text = self.t("format_status_video_only", container=container, resolution=res_str)
+        else:
+            if audio_name and bitrate_str:
+                text = self.t("format_status_audio_detailed", container=container, audio=audio_name, bitrate=bitrate_str)
+            elif audio_name:
+                text = self.t("format_status_audio", container=container, audio=audio_name)
+            else:
+                text = self.t("format_status_simple", container=container)
+
+        wx.CallAfter(self.announce_player, text)
+
+
     def show_video_details(self, temporary: bool | None = None) -> None:
         if not self.in_player_screen:
             if self.player_is_active():
