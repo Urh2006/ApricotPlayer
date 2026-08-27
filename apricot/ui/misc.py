@@ -1682,7 +1682,7 @@ class MiscUI:
         position = self.bookmark_position(bookmark)
         try:
             self.cancel_clip_preview()
-            self.mpv_send(["seek", position, "absolute+exact"], timeout=0.8)
+            self.mpv_send(["seek", position, "absolute"], timeout=0.8)
             self.announce_player(self.t("bookmark_selected", name=str(bookmark.get("name") or self.t("bookmark")), time=self.format_seconds(position)))
         except Exception:
             self.announce_player(self.t("timing_unavailable"))
@@ -1773,7 +1773,7 @@ class MiscUI:
         try:
             start = max(0.0, float(chapter.get("start_time") or 0.0))
             self.cancel_clip_preview()
-            self.mpv_send(["seek", start, "absolute+exact"], timeout=0.8)
+            self.mpv_send(["seek", start, "absolute"], timeout=0.8)
             title = str(chapter.get("title") or self.t("chapters"))
             self.announce_player(self.t("chapter_selected", title=title, time=self.format_seconds(start)))
         except Exception:
@@ -1907,7 +1907,7 @@ class MiscUI:
             try:
                 start = max(0.0, float(entry.get("start") or 0.0))
                 self.cancel_clip_preview()
-                self.mpv_send(["seek", start, "absolute+exact"], timeout=0.8)
+                self.mpv_send(["seek", start, "absolute"], timeout=0.8)
                 text = str(entry.get("text") or "").strip()
                 if len(text) > 90:
                     text = text[:87].rstrip() + "..."
@@ -2600,7 +2600,7 @@ class MiscUI:
         try:
             if not self.clip_preview_is_current(player_generation, preview_generation):
                 return
-            self.mpv_send(["seek", float(start), "absolute+exact"], timeout=0.8)
+            self.mpv_send(["seek", float(start), "absolute"], timeout=0.8)
             self.mpv_set_property("pause", False, timeout=0.8)
             wx.CallAfter(self.start_clip_preview_ui, player_generation, preview_generation, start, end)
             deadline = time.monotonic() + max(1.0, end - start + 2.0)
@@ -2617,7 +2617,7 @@ class MiscUI:
             if not self.clip_preview_is_current(player_generation, preview_generation):
                 return
             try:
-                self.mpv_send(["seek", float(end), "absolute+exact"], timeout=0.6)
+                self.mpv_send(["seek", float(end), "absolute"], timeout=0.6)
             except Exception:
                 pass
             self.mpv_set_property("pause", True, timeout=0.8)

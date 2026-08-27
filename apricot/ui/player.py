@@ -1702,7 +1702,7 @@ class PlayerUI:
         self.player_paused = False
         if self.mpv_process_alive():
             try:
-                self.mpv_send(["seek", 0, "absolute+exact"], timeout=0.8)
+                self.mpv_send(["seek", 0, "absolute"], timeout=0.8)
                 self.mpv_set_property("pause", False, timeout=0.8)
                 self.start_player_monitor(self.player_generation)
                 self.update_play_pause_buttons()
@@ -1917,7 +1917,7 @@ class PlayerUI:
         self.cancel_clip_preview()
         was_ended = self.player_ended
         try:
-            self.mpv_send(["seek", float(seconds), "relative+exact"], timeout=0.08)
+            self.mpv_send(["seek", float(seconds), "relative"], timeout=0.08)
             self.after_player_seek(seconds, was_ended)
         except Exception:
             self.stop_player_seek_hold()
@@ -1929,14 +1929,14 @@ class PlayerUI:
         self.cancel_clip_preview()
         was_ended = self.player_ended
         try:
-            response = self.mpv_request(["seek", float(seconds), "relative+exact"], timeout=0.8)
+            response = self.mpv_request(["seek", float(seconds), "relative"], timeout=0.8)
             if response.get("error") == "success":
                 self.after_player_seek(seconds, was_ended)
                 return
         except Exception:
             pass
         try:
-            self.mpv_send(["seek", float(seconds), "relative+exact"], timeout=0.8)
+            self.mpv_send(["seek", float(seconds), "relative"], timeout=0.8)
             self.after_player_seek(seconds, was_ended)
         except Exception:
             pass
@@ -1948,9 +1948,9 @@ class PlayerUI:
         self.cancel_clip_preview()
         try:
             target = max(0.0, float(position))
-            response = self.mpv_request(["seek", target, "absolute+exact"], timeout=0.8)
+            response = self.mpv_request(["seek", target, "absolute"], timeout=0.8)
             if response.get("error") != "success":
-                self.mpv_send(["seek", target, "absolute+exact"], timeout=0.8)
+                self.mpv_send(["seek", target, "absolute"], timeout=0.8)
             if target <= 0.001 and self.player_ended:
                 self.player_ended = False
                 self.start_player_monitor(self.player_generation)

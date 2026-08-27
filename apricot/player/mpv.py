@@ -144,6 +144,7 @@ class MpvMixin:
                 )
             else:
                 args.append("--cache=no")
+            args.append("--hr-seek=no")
             audio_device = self.player_audio_output_device()
             if audio_device and audio_device.lower() != "auto":
                 args.append(f"--audio-device={audio_device}")

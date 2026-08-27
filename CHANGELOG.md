@@ -1,3 +1,8 @@
+# v1.0.14 - Instant Seeking & Resume Position on Long M4A/YouTube Streams
+
+- Fixed: Eliminated freezing, stalls, and playback lockups when seeking immediately after opening or starting long M4A/YouTube streams (2+ hours) by configuring fast keyframe-level seeking.
+- Fixed: Resolved issue where opening a stream with a late saved resume position (e.g. elapsed 2:23:00) failed to start by preventing linear byte-range decoding over HTTP.
+
 # v1.0.13 - Lossless MPV Native PCM Audio Capture & Studio Encoding
 
 - Fixed: Eliminated subtle amplitude fluctuation, tremolo effect, and phase beating when saving edited files by capturing MPV's exact uncompressed 32-bit floating point audio driver output (--ao=pcm) before encoding.
