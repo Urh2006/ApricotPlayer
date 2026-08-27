@@ -608,11 +608,17 @@ class SystemUI:
                 and not (youtube_source and cls.youtube_stream_looks_truncated(item, str(item.get("url") or "")))
             )
 
+        def quality_key(item: dict) -> tuple[int, float]:
+            h = int(item.get("height") or 0)
+            abr = float(item.get("abr") or item.get("tbr") or 0.0)
+            return (h, abr)
+
         def selected(group: list[dict]) -> dict:
             if not group:
                 return {}
+            sorted_group = sorted(group, key=quality_key)
             result = dict(info)
-            result.update(group[-1])
+            result.update(sorted_group[-1])
             result["formats"] = formats
             return result
 
@@ -622,7 +628,7 @@ class SystemUI:
                 if combined(item)
                 and item.get("ext") == "mp4"
                 and str(item.get("protocol") or "").startswith("http")
-                and int(item.get("height") or 9999) <= 360
+                and int(item.get("height") or 9999) <= 720
             ],
             [
                 item for item in formats

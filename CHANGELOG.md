@@ -1,3 +1,8 @@
+# v1.0.19 - Stream Quality Selection & Clear Playback Stream Preferences
+
+- Fixed: Resolved a quality selection bottleneck in `playable_stream_info` by sorting candidate streams by resolution and bitrate, guaranteeing format 22 (720p with 192 kbps AAC) is picked over 360p whenever available.
+- Added: Crystal-clear settings descriptions distinguishing between fast-seek indexed MP4 video streams and highest-quality 128-160 kbps M4A/Opus audio streams.
+
 # v1.0.18 - Stream Format Labels & Format Quality Details
 
 - Changed: Updated Playback Stream Format setting labels in English and Slovenian to clearly reflect support for 360p, 480p, and 720p progressive MP4 streams.
