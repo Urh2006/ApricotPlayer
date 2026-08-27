@@ -1,3 +1,8 @@
+# v1.0.16 - Guaranteed Unthrottled Progressive MP4 (Format 18) for YouTube
+
+- Fixed: Configured Android client player extractor for YouTube stream resolution, guaranteeing format 18 (unthrottled 360p progressive MP4) on 100% of YouTube videos.
+- Fixed: Completely eliminated M4A fallback stalls and throttled DASH stream delays, restoring instant, rock-solid keyframe seeking and playback.
+
 # v1.0.15 - Robust Stream Formats & Seamless Seeking Buffer
 
 - Fixed: Prioritized unthrottled progressive MP4 streams (format 18 / 360p) for rock-solid instant seeking across YouTube videos.

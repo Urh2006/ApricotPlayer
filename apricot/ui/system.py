@@ -765,6 +765,8 @@ class SystemUI:
             "format": self.effective_youtube_stream_format() if youtube_source else NON_YOUTUBE_STREAM_FORMAT,
             "noplaylist": True,
         }
+        if youtube_source:
+            options["extractor_args"] = {"youtube": {"player_client": ["android", "web"]}}
         format_fallback_options = dict(options)
         format_fallback_options["format"] = FAST_SEEK_FALLBACK_FORMAT if youtube_source else NON_YOUTUBE_STREAM_FORMAT
         client_recovery_options = self.youtube_web_safari_options(format_fallback_options) if youtube_source else format_fallback_options
