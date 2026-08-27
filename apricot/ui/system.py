@@ -28,31 +28,25 @@ _INFO_CACHE_STRIP_KEYS: frozenset[str] = frozenset({
 
 STREAM_FORMAT_PROFILE = "progressive-mp4-fast-seek-v5-truncated-stream-recovery"
 FAST_SEEK_STREAM_FORMAT = (
-    "best[ext=mp4][vcodec!=none][acodec!=none][height<=360][protocol=https]"
-    "/best[ext=mp4][vcodec!=none][acodec!=none][height<=480][protocol=https]"
-    "/best[ext=mp4][vcodec!=none][acodec!=none][protocol=https]"
-    "/best[acodec!=none][vcodec!=none][protocol=https]"
-    "/best[ext=mp4]"
+    "18"
+    "/best[ext=mp4][vcodec!=none][acodec!=none][height<=360]"
+    "/best[ext=mp4][vcodec!=none][acodec!=none][height<=480]"
+    "/best[ext=mp4][vcodec!=none][acodec!=none]"
     "/best[acodec!=none][vcodec!=none]"
-    "/bestaudio[ext=m4a][protocol=https]"
     "/bestaudio[ext=m4a]"
-    "/bestaudio[protocol=https]"
     "/bestaudio"
     "/best"
 )
 FAST_SEEK_VIDEO_ONLY_FORMAT = (
-    "best[ext=mp4][vcodec!=none][acodec!=none][height<=360][protocol=https]"
-    "/best[ext=mp4][vcodec!=none][acodec!=none][height<=480][protocol=https]"
-    "/best[ext=mp4][vcodec!=none][acodec!=none][protocol=https]"
-    "/best[acodec!=none][vcodec!=none][protocol=https]"
-    "/best[ext=mp4]"
+    "18"
+    "/best[ext=mp4][vcodec!=none][acodec!=none][height<=360]"
+    "/best[ext=mp4][vcodec!=none][acodec!=none][height<=480]"
+    "/best[ext=mp4][vcodec!=none][acodec!=none]"
     "/best[acodec!=none][vcodec!=none]"
     "/best"
 )
 FAST_SEEK_AUDIO_ONLY_FORMAT = (
-    "bestaudio[ext=m4a][protocol=https]"
-    "/bestaudio[ext=m4a]"
-    "/bestaudio[protocol=https]"
+    "bestaudio[ext=m4a]"
     "/bestaudio"
     "/best"
 )

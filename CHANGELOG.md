@@ -1,3 +1,8 @@
+# v1.0.15 - Robust Stream Formats & Seamless Seeking Buffer
+
+- Fixed: Prioritized unthrottled progressive MP4 streams (format 18 / 360p) for rock-solid instant seeking across YouTube videos.
+- Fixed: Resolved stream freezing and EOF lockup on M4A DASH audio streams by removing disk caching stalls and enabling smooth RAM buffering on network seeks.
+
 # v1.0.14 - Instant Seeking & Resume Position on Long M4A/YouTube Streams
 
 - Fixed: Eliminated freezing, stalls, and playback lockups when seeking immediately after opening or starting long M4A/YouTube streams (2+ hours) by configuring fast keyframe-level seeking.

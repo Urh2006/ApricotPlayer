@@ -104,41 +104,15 @@ class MpvMixin:
                 args.append("--vid=no")
             args.extend(self.speed_audio_filter_args())
             if getattr(self.settings, "enable_stream_cache", True):
-                cache_folder = self.cache_folder_path()
-                cache_folder.mkdir(parents=True, exist_ok=True)
-                # mpv is killed (not gracefully exited) when the user stops or
-                # changes a video, so it cannot clean up its own demuxer cache
-                # files.  Over multiple sessions these accumulate to several GB,
-                # eventually filling the drive and silently disabling the cache —
-                # every seek then requires a fresh network round-trip.
-                # The previous mpv is always dead by the time we reach this
-                # point (stop_player terminates+waits before play_url spawns
-                # the resolve thread), so it is safe to wipe the folder now.
-                try:
-                    if not self.cache_path_is_link(cache_folder):
-                        for _stale in cache_folder.iterdir():
-                            try:
-                                if _stale.is_file() or _stale.is_symlink():
-                                    _stale.unlink()
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
                 cache_size = max(128, min(4096, int(getattr(self.settings, "cache_size_mb", 512) or 512)))
                 back_cache = max(64, min(cache_size, cache_size // 2))
                 args.extend(
                     [
                         "--cache=yes",
-                        "--cache-on-disk=yes",
-                        f"--demuxer-cache-dir={cache_folder}",
+                        "--cache-pause=yes",
                         f"--demuxer-max-bytes={cache_size}MiB",
                         f"--demuxer-max-back-bytes={back_cache}MiB",
-                        "--demuxer-readahead-secs=60",
-                        "--cache-pause=no",
-                        # Reconnect seekable streams after a network drop.
-                        # reconnect_streamed is intentionally omitted: it causes
-                        # ffmpeg to tear down and reconnect the HTTP connection on
-                        # every seek, adding 2-5 s of stall after each seek command.
+                        "--demuxer-readahead-secs=30",
                         "--stream-lavf-o=reconnect=1,reconnect_on_network_error=1,reconnect_delay_max=5",
                     ]
                 )
