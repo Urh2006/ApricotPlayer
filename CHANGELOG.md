@@ -1,3 +1,8 @@
+# v1.0.12 - Stutter-Free, Seamless Audio Export in Edit Mode
+
+- Fixed: Eliminated periodic audio stutter, buffer underruns, and frame repetition when saving edited files by configuring laminar phase preservation, compound transient detection, and transition smoothing.
+- Fixed: Ensured perfectly continuous sample-accurate playback duration and zero dropout rate across all audio formats.
+
 # v1.0.11 - Direct MPV Native Engine File Export in Edit Mode
 
 - Changed: Switched Edit Mode file export to directly use MPV's native rendering engine (--pitch, --audio-pitch-correction=yes, --speed, and live equalizer), guaranteeing identical acoustic results between live playback and exported files.

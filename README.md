@@ -1,8 +1,8 @@
-# ApricotPlayer (v1.0.11)
+# ApricotPlayer (v1.0.12)
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current version: `1.0.11`
+Current version: `1.0.12`
 
 ## Download
 
@@ -203,7 +203,7 @@ Helpful scripts:
 - `scripts/build_release.ps1 -PackageMode onedir` builds the fast app folder used by both the installer and portable ZIP
 - `scripts/build_installer.ps1` builds `ApricotPlayerSetup.exe` when Inno Setup is installed
 - `scripts/build_portable_zip.ps1` builds `ApricotPlayer.zip`
-- `scripts/publish_release.ps1 -Tag v1.0.11 -NotesFile release-notes/v1.0.11.md` publishes the installer and portable ZIP to GitHub Releases
+- `scripts/publish_release.ps1 -Tag v1.0.12 -NotesFile release-notes/v1.0.12.md` publishes the installer and portable ZIP to GitHub Releases
 
 ## Security
 

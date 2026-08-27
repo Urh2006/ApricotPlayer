@@ -1511,9 +1511,13 @@ class PlayerUI:
         has_pitch = abs(pitch - 1.0) >= 0.001
         has_speed = abs(speed - 1.0) >= 0.001
         if has_pitch and has_speed:
-            filters.append(f"rubberband=pitch={pitch:.6f}:tempo={speed:.6f}:pitchq=quality")
+            filters.append(
+                f"rubberband=pitch={pitch:.6f}:tempo={speed:.6f}:transients=crisp:detector=compound:phase=laminar:smoothing=on:pitchq=quality"
+            )
         elif has_pitch:
-            filters.append(f"rubberband=pitch={pitch:.6f}:pitchq=quality")
+            filters.append(
+                f"rubberband=pitch={pitch:.6f}:transients=crisp:detector=compound:phase=laminar:smoothing=on:pitchq=quality"
+            )
         elif has_speed:
             filters.extend(self.ffmpeg_atempo_chain(speed))
         return filters

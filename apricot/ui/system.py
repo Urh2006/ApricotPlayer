@@ -978,43 +978,17 @@ class SystemUI:
     def save_edited_local_file_worker(self, source: Path, replace_original: bool = False) -> None:
         temp_output: Path | None = None
         try:
+            ffmpeg = self.ffmpeg_executable()
+            if not ffmpeg:
+                raise RuntimeError("FFmpeg was not found")
             output = self.edited_output_path(source, replace_original)
             temp_output = self.temporary_conversion_path(output) if replace_original else output
+            args = self.local_edit_ffmpeg_args(ffmpeg, source, temp_output)
             creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-            player_info = self.resolve_player()
-            mpv_exe = player_info[0] if (player_info and player_info[1] == "mpv") else ""
-            saved_with_mpv = False
-            if mpv_exe:
-                try:
-                    args = self.local_edit_mpv_args(mpv_exe, source, temp_output)
-                    result = subprocess.run(
-                        args,
-                        capture_output=True,
-                        text=True,
-                        encoding="utf-8",
-                        errors="replace",
-                        creationflags=creationflags,
-                    )
-                    if result.returncode == 0 and temp_output.exists() and temp_output.stat().st_size > 0:
-                        saved_with_mpv = True
-                except Exception:
-                    saved_with_mpv = False
-            if not saved_with_mpv:
-                ffmpeg = self.ffmpeg_executable()
-                if not ffmpeg:
-                    raise RuntimeError("Media encoder was not found")
-                args = self.local_edit_ffmpeg_args(ffmpeg, source, temp_output)
-                result = subprocess.run(
-                    args,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    creationflags=creationflags,
-                )
-                if result.returncode != 0:
-                    error = (result.stderr or result.stdout or "").strip() or f"Encoder exited with code {result.returncode}"
-                    raise RuntimeError(error[-600:])
+            result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=creationflags)
+            if result.returncode != 0:
+                error = (result.stderr or result.stdout or "").strip() or f"FFmpeg exited with code {result.returncode}"
+                raise RuntimeError(error[-600:])
             if replace_original:
                 os.replace(temp_output, source)
                 wx.CallAfter(self.announce_player, self.t("edit_replace_done", title=source.name))
