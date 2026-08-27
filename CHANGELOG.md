@@ -1,3 +1,7 @@
+# v1.0.18 - Stream Format Labels & Format Quality Details
+
+- Changed: Updated Playback Stream Format setting labels in English and Slovenian to clearly reflect support for 360p, 480p, and 720p progressive MP4 streams.
+
 # v1.0.17 - High Bitrate Format 22 (720p/192kbps AAC) & Stable Bitrate Status
 
 - Added: Prioritized high-bitrate progressive MP4 format 22 (720p with 192 kbps AAC studio audio) when available, while preserving instantaneous seeking.
