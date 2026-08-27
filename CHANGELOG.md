@@ -1,3 +1,8 @@
+# v1.0.17 - High Bitrate Format 22 (720p/192kbps AAC) & Stable Bitrate Status
+
+- Added: Prioritized high-bitrate progressive MP4 format 22 (720p with 192 kbps AAC studio audio) when available, while preserving instantaneous seeking.
+- Fixed: Improved audio bitrate announcement (F key) to report the true nominal stream bitrate rather than fluctuating instantaneous VBR decoding dips.
+
 # v1.0.16 - Guaranteed Unthrottled Progressive MP4 (Format 18) for YouTube
 
 - Fixed: Configured Android client player extractor for YouTube stream resolution, guaranteeing format 18 (unthrottled 360p progressive MP4) on 100% of YouTube videos.

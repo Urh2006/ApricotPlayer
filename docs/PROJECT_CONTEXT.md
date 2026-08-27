@@ -3,9 +3,9 @@
 ## Trenutni posnetek
 
 - Datum posnetka: 27. avgust 2026.
-- Trenutna verzija: `1.0.16`.
+- Trenutna verzija: `1.0.17`.
 - Trenutna razvojna veja: `main`.
-- Stabilna 1.0.16 popravlja predvajanje z nastavljenega položaja (resume position), omogoča nemoteno hitro navigacijo (skoke naprej/nazaj) brez zatikanja ter dodaja nastavitev prednostnega formata predvajanja.
+- Stabilna 1.0.17 popravlja predvajanje z nastavljenega položaja (resume position), omogoča nemoteno hitro navigacijo (skoke naprej/nazaj) brez zatikanja ter dodaja nastavitev prednostnega formata predvajanja.
 - Obstoječi 1.0 roadmap in potrjeni AudioVault obseg sta izvedena.
 - Popoln macOS feature-parity port je potrjeno prihodnje delo. Implementacija se
   še ni začela; trajni plan in acceptance manifest sta v

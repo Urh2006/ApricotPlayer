@@ -886,7 +886,13 @@ class PlayerUI:
             ext = local_path.suffix.lstrip(".").lower()
 
         bitrate_val = 0
-        if local_path:
+        if abr:
+            try:
+                bitrate_val = round(float(abr))
+            except (TypeError, ValueError):
+                bitrate_val = 0
+
+        if bitrate_val == 0 and local_path:
             try:
                 import mutagen
                 audio_meta = mutagen.File(local_path)
@@ -911,18 +917,13 @@ class PlayerUI:
         except Exception:
             pass
 
-        try:
-            mpv_bitrate = self.mpv_get_property("audio-bitrate")
-            if mpv_bitrate and float(mpv_bitrate) > 0 and bitrate_val == 0:
-                bitrate_val = round(float(mpv_bitrate) / 1000)
-        except Exception:
-            pass
-
-        if bitrate_val == 0 and abr:
+        if bitrate_val == 0:
             try:
-                bitrate_val = round(float(abr))
-            except (TypeError, ValueError):
-                bitrate_val = 0
+                mpv_bitrate = self.mpv_get_property("audio-bitrate")
+                if mpv_bitrate and float(mpv_bitrate) > 0:
+                    bitrate_val = round(float(mpv_bitrate) / 1000)
+            except Exception:
+                pass
 
         acodec_str = str(acodec or mpv_acodec or "").lower()
         if "mp4a" in acodec_str or "aac" in acodec_str:
