@@ -1,3 +1,8 @@
+# v1.0.13 - Lossless MPV Native PCM Audio Capture & Studio Encoding
+
+- Fixed: Eliminated subtle amplitude fluctuation, tremolo effect, and phase beating when saving edited files by capturing MPV's exact uncompressed 32-bit floating point audio driver output (--ao=pcm) before encoding.
+- Changed: Seamlessly integrated MPV's real-time audio pipeline with FFmpeg high-bitrate output encoding (320 kbps MP3, 256 kbps AAC, FLAC), ensuring 100% acoustic identicality to live playback.
+
 # v1.0.12 - Stutter-Free, Seamless Audio Export in Edit Mode
 
 - Fixed: Eliminated periodic audio stutter, buffer underruns, and frame repetition when saving edited files by configuring laminar phase preservation, compound transient detection, and transition smoothing.

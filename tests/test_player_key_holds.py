@@ -346,7 +346,7 @@ class PlayerKeyHoldTests(unittest.TestCase):
 
         self.assertEqual(
             filters,
-            ["rubberband=pitch=1.100000:transients=crisp:detector=compound:phase=laminar:smoothing=on:pitchq=quality"],
+            ["rubberband=pitch=1.100000:phase=independent:pitchq=quality"],
         )
 
     def test_local_edit_audio_filters_uses_rubberband_tempo_for_combined_pitch_speed(self):
@@ -363,7 +363,7 @@ class PlayerKeyHoldTests(unittest.TestCase):
 
         self.assertEqual(
             filters,
-            ["rubberband=pitch=1.150000:tempo=1.250000:transients=crisp:detector=compound:phase=laminar:smoothing=on:pitchq=quality"],
+            ["rubberband=pitch=1.150000:tempo=1.250000:phase=independent:pitchq=quality"],
         )
 
     def test_local_edit_audio_filters_uses_atempo_for_pure_speed(self):

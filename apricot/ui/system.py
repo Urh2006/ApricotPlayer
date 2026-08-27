@@ -977,18 +977,101 @@ class SystemUI:
 
     def save_edited_local_file_worker(self, source: Path, replace_original: bool = False) -> None:
         temp_output: Path | None = None
+        temp_pcm: Path | None = None
         try:
-            ffmpeg = self.ffmpeg_executable()
-            if not ffmpeg:
-                raise RuntimeError("FFmpeg was not found")
             output = self.edited_output_path(source, replace_original)
             temp_output = self.temporary_conversion_path(output) if replace_original else output
-            args = self.local_edit_ffmpeg_args(ffmpeg, source, temp_output)
             creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-            result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=creationflags)
-            if result.returncode != 0:
-                error = (result.stderr or result.stdout or "").strip() or f"FFmpeg exited with code {result.returncode}"
-                raise RuntimeError(error[-600:])
+            player_info = self.resolve_player()
+            mpv_exe = player_info[0] if (player_info and player_info[1] == "mpv") else ""
+            ffmpeg = self.ffmpeg_executable()
+            speed = max(0.25, min(4.0, self.current_speed_value()))
+            pitch = max(0.5, min(2.0, self.current_pitch_value()))
+            enabled, gains = self.effective_equalizer_state()
+            saved_with_mpv = False
+            if mpv_exe and ffmpeg:
+                temp_pcm = temp_output.with_suffix(f".render_{random.randint(1000, 9999)}.wav")
+                try:
+                    mpv_args = [
+                        mpv_exe,
+                        str(source),
+                        "--no-config",
+                        "--audio-pitch-correction=yes",
+                        f"--pitch={pitch:.6f}",
+                        f"--speed={speed:.6f}",
+                        "--video=no",
+                        "--sub=no",
+                        "--ao=pcm",
+                        f"--ao-pcm-file={temp_pcm}",
+                    ]
+                    if enabled:
+                        eq_filter = self.equalizer_filter(gains)
+                        if eq_filter:
+                            mpv_args.append(f"--af={eq_filter}")
+                    res_mpv = subprocess.run(
+                        mpv_args,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        creationflags=creationflags,
+                    )
+                    if res_mpv.returncode == 0 and temp_pcm.exists() and temp_pcm.stat().st_size > 0:
+                        codec_args = self.local_edit_audio_codec_args(temp_output.suffix)
+                        if self.is_video_file_extension(source):
+                            if abs(speed - 1.0) >= 0.001:
+                                ff_args = [
+                                    ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                                    "-i", str(source), "-i", str(temp_pcm),
+                                    "-vf", f"setpts={1.0 / speed:.8f}*PTS",
+                                    "-map", "0:v:0", "-map", "1:a:0",
+                                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                                ] + codec_args + ["-shortest", str(temp_output)]
+                            else:
+                                ff_args = [
+                                    ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                                    "-i", str(source), "-i", str(temp_pcm),
+                                    "-map", "0:v:0", "-map", "1:a:0",
+                                    "-c:v", "copy",
+                                ] + codec_args + ["-shortest", str(temp_output)]
+                        else:
+                            ff_args = [
+                                ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                                "-i", str(temp_pcm),
+                            ] + codec_args + [str(temp_output)]
+                        res_ff = subprocess.run(
+                            ff_args,
+                            capture_output=True,
+                            text=True,
+                            encoding="utf-8",
+                            errors="replace",
+                            creationflags=creationflags,
+                        )
+                        if res_ff.returncode == 0 and temp_output.exists() and temp_output.stat().st_size > 0:
+                            saved_with_mpv = True
+                except Exception:
+                    saved_with_mpv = False
+                finally:
+                    if temp_pcm is not None:
+                        try:
+                            temp_pcm.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+            if not saved_with_mpv:
+                if not ffmpeg:
+                    raise RuntimeError("Media encoder was not found")
+                args = self.local_edit_ffmpeg_args(ffmpeg, source, temp_output)
+                result = subprocess.run(
+                    args,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    creationflags=creationflags,
+                )
+                if result.returncode != 0:
+                    error = (result.stderr or result.stdout or "").strip() or f"FFmpeg exited with code {result.returncode}"
+                    raise RuntimeError(error[-600:])
             if replace_original:
                 os.replace(temp_output, source)
                 wx.CallAfter(self.announce_player, self.t("edit_replace_done", title=source.name))
