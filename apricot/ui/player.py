@@ -1508,9 +1508,14 @@ class PlayerUI:
         pitch = max(0.5, min(2.0, self.current_pitch_value()))
         enabled, gains = self.effective_equalizer_state()
         filters = self.ffmpeg_equalizer_filters(gains) if enabled else []
-        if abs(pitch - 1.0) >= 0.001:
-            filters.extend([f"asetrate=48000*{pitch:.6f}", "aresample=48000"])
-        filters.extend(self.ffmpeg_atempo_chain(speed / pitch))
+        has_pitch = abs(pitch - 1.0) >= 0.001
+        has_speed = abs(speed - 1.0) >= 0.001
+        if has_pitch and has_speed:
+            filters.append(f"rubberband=pitch={pitch:.6f}:tempo={speed:.6f}:pitchq=quality")
+        elif has_pitch:
+            filters.append(f"rubberband=pitch={pitch:.6f}:pitchq=quality")
+        elif has_speed:
+            filters.extend(self.ffmpeg_atempo_chain(speed))
         return filters
 
     def local_edit_audio_codec_args(self, suffix: str) -> list[str]:

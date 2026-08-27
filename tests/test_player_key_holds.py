@@ -331,6 +331,48 @@ class PlayerKeyHoldTests(unittest.TestCase):
         self.assertEqual(harness.volume_changes, [])
         self.assertEqual(harness.holds, [])
 
+    def test_local_edit_audio_filters_uses_high_quality_rubberband_for_pitch(self):
+        class _FilterHarness(PlayerUI, MiscUI):
+            def __init__(self):
+                self.current_video_info = {"speed": "1.0", "pitch": "1.10"}
+                self.settings = SimpleNamespace(player_speed="1.0")
+
+            def effective_equalizer_state(self):
+                return False, {}
+
+        harness = _FilterHarness()
+        filters = harness.local_edit_audio_filters()
+
+        self.assertEqual(filters, ["rubberband=pitch=1.100000:pitchq=quality"])
+
+    def test_local_edit_audio_filters_uses_rubberband_tempo_for_combined_pitch_speed(self):
+        class _FilterHarness(PlayerUI, MiscUI):
+            def __init__(self):
+                self.current_video_info = {"speed": "1.25", "pitch": "1.15"}
+                self.settings = SimpleNamespace(player_speed="1.25")
+
+            def effective_equalizer_state(self):
+                return False, {}
+
+        harness = _FilterHarness()
+        filters = harness.local_edit_audio_filters()
+
+        self.assertEqual(filters, ["rubberband=pitch=1.150000:tempo=1.250000:pitchq=quality"])
+
+    def test_local_edit_audio_filters_uses_atempo_for_pure_speed(self):
+        class _FilterHarness(PlayerUI, MiscUI):
+            def __init__(self):
+                self.current_video_info = {"speed": "1.50", "pitch": "1.0"}
+                self.settings = SimpleNamespace(player_speed="1.50")
+
+            def effective_equalizer_state(self):
+                return False, {}
+
+        harness = _FilterHarness()
+        filters = harness.local_edit_audio_filters()
+
+        self.assertEqual(filters, ["atempo=1.500000"])
+
 
 if __name__ == "__main__":
     unittest.main()

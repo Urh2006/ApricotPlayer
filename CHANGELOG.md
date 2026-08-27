@@ -1,3 +1,8 @@
+# v1.0.10 - Studio-Quality Pitch-Shifted File Export in Edit Mode
+
+- Fixed: Eliminated audio degradation, phase smearing, and metallic distortion when saving edited files with changed pitch by replacing legacy asetrate resampling with high-fidelity rubberband pitch filtering.
+- Changed: Configured FFmpeg export to use rubberband pitch processing with maximum quality mode, preserving natural harmonics and original sample rate.
+
 # v1.0.9 - Bitrate Reporting in Format Announcement
 
 - Added: Format announcement (shortcut F) now includes the exact audio bitrate in kbps across all playback sources (local MP3, M4A, FLAC, AAC, YouTube, podcasts, and online streams).
