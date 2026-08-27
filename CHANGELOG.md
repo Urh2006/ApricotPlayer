@@ -1,3 +1,8 @@
+# v1.0.11 - Direct MPV Native Engine File Export in Edit Mode
+
+- Changed: Switched Edit Mode file export to directly use MPV's native rendering engine (--pitch, --audio-pitch-correction=yes, --speed, and live equalizer), guaranteeing identical acoustic results between live playback and exported files.
+- Added: Automatic fallback to FFmpeg when MPV is unavailable.
+
 # v1.0.10 - Studio-Quality Pitch-Shifted File Export in Edit Mode
 
 - Fixed: Eliminated audio degradation, phase smearing, and metallic distortion when saving edited files with changed pitch by replacing legacy asetrate resampling with high-fidelity rubberband pitch filtering.

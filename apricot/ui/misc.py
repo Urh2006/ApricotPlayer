@@ -2415,6 +2415,45 @@ class MiscUI:
             values.append(f"atempo={factor:.6f}")
         return values
 
+    def local_edit_mpv_args(self, mpv: str, source: Path, output: Path) -> list[str]:
+        speed = max(0.25, min(4.0, self.current_speed_value()))
+        pitch = max(0.5, min(2.0, self.current_pitch_value()))
+        enabled, gains = self.effective_equalizer_state()
+        args = [
+            mpv,
+            str(source),
+            "--no-config",
+            "--audio-pitch-correction=yes",
+            f"--pitch={pitch:.6f}",
+            f"--speed={speed:.6f}",
+        ]
+        if enabled:
+            eq_filter = self.equalizer_filter(gains)
+            if eq_filter:
+                args.append(f"--af={eq_filter}")
+        suffix = output.suffix.lower()
+        if suffix == ".mp3":
+            args.extend(["--oac=libmp3lame", "--oacopts=b=320k"])
+        elif suffix in {".m4a", ".mp4", ".m4v", ".mov"}:
+            args.extend(["--oac=aac", "--oacopts=b=256k"])
+        elif suffix == ".opus":
+            args.extend(["--oac=libopus", "--oacopts=b=160k"])
+        elif suffix == ".flac":
+            args.extend(["--oac=flac"])
+        elif suffix == ".wav":
+            args.extend(["--oac=pcm_s16le"])
+        else:
+            args.extend(["--oac=aac", "--oacopts=b=256k"])
+        if self.is_video_file_extension(source):
+            if abs(speed - 1.0) >= 0.001:
+                args.extend(["--ovc=libx264", "--ovcopts=crf=18,preset=veryfast"])
+            else:
+                args.extend(["--ovc=copy"])
+        else:
+            args.extend(["--video=no"])
+        args.append(f"--o={output}")
+        return args
+
     def local_edit_ffmpeg_args(self, ffmpeg: str, source: Path, output: Path) -> list[str]:
         speed = max(0.25, min(4.0, self.current_speed_value()))
         audio_filters = self.local_edit_audio_filters()

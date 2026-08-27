@@ -1,5 +1,6 @@
 import threading
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -372,6 +373,26 @@ class PlayerKeyHoldTests(unittest.TestCase):
         filters = harness.local_edit_audio_filters()
 
         self.assertEqual(filters, ["atempo=1.500000"])
+
+    def test_local_edit_mpv_args_uses_mpv_built_in_pitch_and_speed(self):
+        class _MpvHarness(PlayerUI, MiscUI):
+            def __init__(self):
+                self.current_video_info = {"speed": "1.10", "pitch": "1.20"}
+                self.settings = SimpleNamespace(player_speed="1.10")
+
+            def effective_equalizer_state(self):
+                return False, {}
+
+        harness = _MpvHarness()
+        args = harness.local_edit_mpv_args("mpv.exe", Path("music.mp3"), Path("music_edited.mp3"))
+
+        self.assertIn("--audio-pitch-correction=yes", args)
+        self.assertIn("--pitch=1.200000", args)
+        self.assertIn("--speed=1.100000", args)
+        self.assertIn("--oac=libmp3lame", args)
+        self.assertIn("--oacopts=b=320k", args)
+        self.assertIn("--video=no", args)
+        self.assertEqual(args[-1], "--o=music_edited.mp3")
 
 
 if __name__ == "__main__":
