@@ -26,7 +26,7 @@ _INFO_CACHE_STRIP_KEYS: frozenset[str] = frozenset({
     "_formats_info",
 })
 
-STREAM_FORMAT_PROFILE = "progressive-mp4-fast-seek-v5-truncated-stream-recovery"
+STREAM_FORMAT_PROFILE = "progressive-mp4-fast-seek-v7-audio-aware"
 FAST_SEEK_STREAM_FORMAT = (
     "22"
     "/18"
@@ -490,6 +490,7 @@ class SystemUI:
                 pass
         parts = {
             "url": url,
+            "stream_format_preference": self.normalized_stream_format_preference(),
             "video_format": self.normalized_video_format(),
             "max_height": int(getattr(self.settings, "max_video_height", 1080) or 0),
             "restricted": bool(getattr(self.settings, "enable_age_restricted_videos", False)),
@@ -775,7 +776,7 @@ class SystemUI:
             "format": self.effective_youtube_stream_format() if youtube_source else NON_YOUTUBE_STREAM_FORMAT,
             "noplaylist": True,
         }
-        if youtube_source:
+        if youtube_source and self.normalized_stream_format_preference() != STREAM_FORMAT_PREFERENCE_AUDIO:
             options["extractor_args"] = {"youtube": {"player_client": ["android", "web"]}}
         format_fallback_options = dict(options)
         format_fallback_options["format"] = FAST_SEEK_FALLBACK_FORMAT if youtube_source else NON_YOUTUBE_STREAM_FORMAT

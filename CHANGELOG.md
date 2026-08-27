@@ -1,3 +1,8 @@
+# v1.0.20 - Format Preference Cache Key & Studio Audio Resolution
+
+- Fixed: Added stream format preference to the stream URL cache key and bumped stream format profile, ensuring that switching between Video and Audio preferences immediately fetches the correct stream format instead of reusing old cached URLs.
+- Fixed: Configured audio preference mode to resolve high-bitrate Format 140 (129 kbps AAC M4A) and Format 251 (Opus WebM) studio streams without Android video-only restriction.
+
 # v1.0.19 - Stream Quality Selection & Clear Playback Stream Preferences
 
 - Fixed: Resolved a quality selection bottleneck in `playable_stream_info` by sorting candidate streams by resolution and bitrate, guaranteeing format 22 (720p with 192 kbps AAC) is picked over 360p whenever available.
