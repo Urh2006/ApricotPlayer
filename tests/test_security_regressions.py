@@ -210,6 +210,40 @@ class SecurityRegressionTests(unittest.TestCase):
         safe_key = harness.stream_url_cache_key("https://media.example/watch/43")
         self.assertTrue(harness.stream_url_cache[safe_key]["restart_safe"])
 
+    def test_dual_stream_cache_expires_with_its_shorter_audio_url(self) -> None:
+        harness = StreamCacheHarness()
+        video_expiry = int(time.time() + 60 * 60)
+        audio_expiry = int(time.time() + 30 * 60)
+        harness.cache_stream_url(
+            "https://media.example/watch/dual",
+            f"https://cdn.example/video.m3u8?expire={video_expiry}",
+            {},
+            {"external_audio_url": f"https://cdn.example/audio.m3u8?expire={audio_expiry}"},
+        )
+
+        key = harness.stream_url_cache_key("https://media.example/watch/dual")
+        cached = harness.stream_url_cache[key]
+        self.assertTrue(cached["restart_safe"])
+        self.assertAlmostEqual(cached["expires_at"], audio_expiry - 60, delta=1.0)
+
+    def test_dual_stream_cache_is_not_restart_safe_without_audio_expiry(self) -> None:
+        harness = StreamCacheHarness()
+        video_expiry = int(time.time() + 60 * 60)
+        harness.cache_stream_url(
+            "https://media.example/watch/dual",
+            f"https://cdn.example/video.m3u8?expire={video_expiry}",
+            {},
+            {"external_audio_url": "https://cdn.example/audio.m3u8"},
+        )
+
+        key = harness.stream_url_cache_key("https://media.example/watch/dual")
+        self.assertFalse(harness.stream_url_cache[key]["restart_safe"])
+
+    def test_ytdlp_component_version_comparison_handles_calendar_versions(self) -> None:
+        self.assertTrue(SecurityHarness.is_component_version_newer("2026.8.19", "2026.07.04"))
+        self.assertFalse(SecurityHarness.is_component_version_newer("2026.08.19", "2026.8.19"))
+        self.assertFalse(SecurityHarness.is_component_version_newer("2026.7.4", "2026.08.19"))
+
     def test_remote_urls_reject_local_and_custom_schemes(self) -> None:
         self.assertEqual(UtilsMixin.validate_remote_http_url("https://example.com/feed"), "https://example.com/feed")
         for value in ("file:///C:/secret.txt", "javascript:alert(1)", "data:text/plain,test", "https:///missing-host"):

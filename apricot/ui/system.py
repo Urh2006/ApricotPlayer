@@ -26,10 +26,12 @@ _INFO_CACHE_STRIP_KEYS: frozenset[str] = frozenset({
     "_formats_info",
 })
 
-STREAM_FORMAT_PROFILE = "progressive-mp4-fast-seek-v7-audio-aware"
+STREAM_FORMAT_PROFILE = "seekable-hls-v8-dual-audio"
 FAST_SEEK_STREAM_FORMAT = (
-    "22"
+    "bestvideo[protocol^=m3u8][vcodec^=avc1][height<=360]+bestaudio[protocol^=m3u8]"
+    "/bestvideo[protocol^=m3u8][height<=360]+bestaudio[protocol^=m3u8]"
     "/18"
+    "/22"
     "/best[ext=mp4][vcodec!=none][acodec!=none][height<=720]"
     "/best[ext=mp4][vcodec!=none][acodec!=none][height<=480]"
     "/best[ext=mp4][vcodec!=none][acodec!=none][height<=360]"
@@ -40,7 +42,9 @@ FAST_SEEK_STREAM_FORMAT = (
     "/best"
 )
 FAST_SEEK_VIDEO_ONLY_FORMAT = (
-    "22"
+    "bestvideo[protocol^=m3u8][vcodec^=avc1][height<=720]+bestaudio[protocol^=m3u8]"
+    "/bestvideo[protocol^=m3u8][height<=720]+bestaudio[protocol^=m3u8]"
+    "/22"
     "/18"
     "/best[ext=mp4][vcodec!=none][acodec!=none][height<=720]"
     "/best[ext=mp4][vcodec!=none][acodec!=none][height<=480]"
@@ -50,19 +54,27 @@ FAST_SEEK_VIDEO_ONLY_FORMAT = (
     "/best"
 )
 FAST_SEEK_AUDIO_ONLY_FORMAT = (
-    "bestaudio[ext=m4a]"
-    "/bestaudio"
+    "234"
+    "/233"
+    "/bestaudio[protocol^=m3u8]"
+    "/18"
     "/best"
 )
 FAST_SEEK_FALLBACK_FORMAT = (
-    "best[ext=mp4][vcodec!=none][acodec!=none][height<=360]"
+    "bestvideo[protocol^=m3u8][vcodec^=avc1][height<=360]+bestaudio[protocol^=m3u8]"
+    "/bestvideo[protocol^=m3u8][height<=360]+bestaudio[protocol^=m3u8]"
+    "/best[ext=mp4][vcodec!=none][acodec!=none][height<=360]"
     "/best[ext=mp4][vcodec!=none][acodec!=none][height<=480]"
     "/best[ext=mp4][vcodec!=none][acodec!=none]"
     "/best[acodec!=none][vcodec!=none]"
     "/18"
     "/22"
     "/17"
-    "/bestaudio/best"
+    "/234"
+    "/233"
+    "/bestaudio[protocol^=m3u8]"
+    "/bestaudio"
+    "/best"
 )
 NON_YOUTUBE_STREAM_FORMAT = (
     "bestaudio[ext=m4a][protocol=https]"
@@ -518,6 +530,22 @@ class SystemUI:
         except (TypeError, ValueError, OverflowError):
             return 0
 
+    @staticmethod
+    def stream_url_audio_bitrate_kbps(stream_url: str) -> float:
+        try:
+            decoded = unquote(str(stream_url or ""))
+            size_match = re.search(r"(?:^|[?&/;])clen[=/](\d+)", decoded)
+            duration_match = re.search(r"(?:^|[?&/;])dur[=/]([0-9]+(?:\.[0-9]+)?)", decoded)
+            if not size_match or not duration_match:
+                return 0.0
+            size_bytes = int(size_match.group(1))
+            duration = float(duration_match.group(1))
+            if size_bytes <= 0 or duration <= 0:
+                return 0.0
+            return (size_bytes * 8.0) / duration / 1000.0
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+
     def cached_stream_url(self, url: str) -> tuple[str, dict, dict] | None:
         if not getattr(self.settings, "enable_stream_url_cache", True):
             return None
@@ -539,8 +567,11 @@ class SystemUI:
         ttl_seconds = (365 * 24 * 60 * 60) if minutes <= 0 else minutes * 60
         expires_at = time.time() + ttl_seconds
         remote_expiry = self.stream_url_remote_expiry(stream_url)
-        if remote_expiry:
-            expires_at = min(expires_at, float(remote_expiry - 60))
+        external_audio_url = str((info or {}).get("external_audio_url") or "")
+        external_audio_expiry = self.stream_url_remote_expiry(external_audio_url) if external_audio_url else 0
+        remote_expiries = [value for value in (remote_expiry, external_audio_expiry) if value]
+        if remote_expiries:
+            expires_at = min(expires_at, float(min(remote_expiries) - 60))
         if expires_at <= time.time() + 30:
             return
         with self.stream_url_cache_lock:
@@ -555,7 +586,7 @@ class SystemUI:
                 "headers": dict(headers or {}),
                 "info": _slim_info_for_cache(dict(info or {})),
                 "expires_at": expires_at,
-                "restart_safe": bool(remote_expiry),
+                "restart_safe": bool(remote_expiry and (not external_audio_url or external_audio_expiry)),
             }
         # Persist to disk in the background so the cache survives crashes and
         # force-quits, not just clean shutdowns.
@@ -609,6 +640,17 @@ class SystemUI:
                 and not (youtube_source and cls.youtube_stream_looks_truncated(item, str(item.get("url") or "")))
             )
 
+        def audio_only(item: dict) -> bool:
+            return (
+                bool(item.get("url"))
+                and item.get("vcodec") in (None, "none", "")
+                and (
+                    item.get("acodec") not in (None, "none", "")
+                    or str(item.get("resolution") or "").strip().lower() == "audio only"
+                    or "audio only" in str(item.get("format") or "").lower()
+                )
+            )
+
         def quality_key(item: dict) -> tuple[int, float]:
             h = int(item.get("height") or 0)
             abr = float(item.get("abr") or item.get("tbr") or 0.0)
@@ -655,6 +697,11 @@ class SystemUI:
                     [
                         item for item in formats
                         if combined(item)
+                        and str(item.get("protocol") or "").startswith("m3u8")
+                    ],
+                    [
+                        item for item in formats
+                        if audio_only(item)
                         and str(item.get("protocol") or "").startswith("m3u8")
                     ],
                     [
@@ -742,6 +789,45 @@ class SystemUI:
         return selected_info
 
     def resolved_playable_stream_info(self, url: str, info: dict, youtube_source: bool) -> dict:
+        requested_formats = [item for item in (info.get("requested_formats") or []) if isinstance(item, dict)]
+        if requested_formats:
+            video_format = next(
+                (
+                    item for item in requested_formats
+                    if item.get("url") and item.get("vcodec") not in (None, "none", "")
+                ),
+                None,
+            )
+            audio_format = next(
+                (
+                    item for item in requested_formats
+                    if item.get("url")
+                    and item.get("vcodec") in (None, "none", "")
+                    and (
+                        item.get("acodec") not in (None, "none", "")
+                        or str(item.get("resolution") or "").strip().lower() == "audio only"
+                        or "audio only" in str(item.get("format") or "").lower()
+                    )
+                ),
+                None,
+            )
+            if video_format and audio_format and video_format is not audio_format:
+                selected_info = dict(info)
+                selected_info.update(video_format)
+                selected_info["format_id"] = str(info.get("format_id") or "") or "+".join(
+                    str(item.get("format_id") or "") for item in (video_format, audio_format)
+                )
+                selected_info["external_audio_url"] = str(audio_format.get("url") or "")
+                selected_info["external_audio_headers"] = dict(audio_format.get("http_headers") or {})
+                selected_info["external_audio_format_id"] = str(audio_format.get("format_id") or "")
+                selected_info["abr"] = (
+                    audio_format.get("abr")
+                    or self.stream_url_audio_bitrate_kbps(selected_info["external_audio_url"])
+                    or None
+                )
+                audio_codec = audio_format.get("acodec")
+                selected_info["acodec"] = audio_codec if audio_codec not in (None, "none", "") else None
+                return selected_info
         selected_info = self.playable_stream_info(info, youtube_source)
         if selected_info:
             return selected_info
@@ -766,9 +852,9 @@ class SystemUI:
         cached = self.cached_stream_url(url)
         if cached and cached[0]:
             return cached
-        # For YouTube, prefer only progressive audio+video streams. The
-        # audio-only fallback caused noticeably slower starts and worse seeking
-        # for testers because mpv could no longer jump through one combined MP4.
+        # YouTube's progressive formats can now carry very low bitrate audio.
+        # HLS remains fast to start and seek while allowing a separate full
+        # quality audio rendition.
         youtube_source = self.is_youtube_url(url)
         options = {
             "quiet": True,
@@ -776,8 +862,6 @@ class SystemUI:
             "format": self.effective_youtube_stream_format() if youtube_source else NON_YOUTUBE_STREAM_FORMAT,
             "noplaylist": True,
         }
-        if youtube_source and self.normalized_stream_format_preference() != STREAM_FORMAT_PREFERENCE_AUDIO:
-            options["extractor_args"] = {"youtube": {"player_client": ["android", "web"]}}
         format_fallback_options = dict(options)
         format_fallback_options["format"] = FAST_SEEK_FALLBACK_FORMAT if youtube_source else NON_YOUTUBE_STREAM_FORMAT
         client_recovery_options = self.youtube_web_safari_options(format_fallback_options) if youtube_source else format_fallback_options
@@ -993,28 +1077,11 @@ class SystemUI:
             mpv_exe = player_info[0] if (player_info and player_info[1] == "mpv") else ""
             ffmpeg = self.ffmpeg_executable()
             speed = max(0.25, min(4.0, self.current_speed_value()))
-            pitch = max(0.5, min(2.0, self.current_pitch_value()))
-            enabled, gains = self.effective_equalizer_state()
             saved_with_mpv = False
             if mpv_exe and ffmpeg:
                 temp_pcm = temp_output.with_suffix(f".render_{random.randint(1000, 9999)}.wav")
                 try:
-                    mpv_args = [
-                        mpv_exe,
-                        str(source),
-                        "--no-config",
-                        "--audio-pitch-correction=yes",
-                        f"--pitch={pitch:.6f}",
-                        f"--speed={speed:.6f}",
-                        "--video=no",
-                        "--sub=no",
-                        "--ao=pcm",
-                        f"--ao-pcm-file={temp_pcm}",
-                    ]
-                    if enabled:
-                        eq_filter = self.equalizer_filter(gains)
-                        if eq_filter:
-                            mpv_args.append(f"--af={eq_filter}")
+                    mpv_args = self.local_edit_mpv_render_args(mpv_exe, source, temp_pcm)
                     res_mpv = subprocess.run(
                         mpv_args,
                         capture_output=True,
@@ -1023,41 +1090,43 @@ class SystemUI:
                         errors="replace",
                         creationflags=creationflags,
                     )
-                    if res_mpv.returncode == 0 and temp_pcm.exists() and temp_pcm.stat().st_size > 0:
-                        codec_args = self.local_edit_audio_codec_args(temp_output.suffix)
-                        if self.is_video_file_extension(source):
-                            if abs(speed - 1.0) >= 0.001:
-                                ff_args = [
-                                    ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
-                                    "-i", str(source), "-i", str(temp_pcm),
-                                    "-vf", f"setpts={1.0 / speed:.8f}*PTS",
-                                    "-map", "0:v:0", "-map", "1:a:0",
-                                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-                                ] + codec_args + ["-shortest", str(temp_output)]
-                            else:
-                                ff_args = [
-                                    ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
-                                    "-i", str(source), "-i", str(temp_pcm),
-                                    "-map", "0:v:0", "-map", "1:a:0",
-                                    "-c:v", "copy",
-                                ] + codec_args + ["-shortest", str(temp_output)]
+                    if res_mpv.returncode != 0 or not temp_pcm.exists() or temp_pcm.stat().st_size <= 0:
+                        error = (res_mpv.stderr or res_mpv.stdout or "").strip() or f"mpv exited with code {res_mpv.returncode}"
+                        raise RuntimeError(error[-600:])
+                    codec_args = self.local_edit_audio_codec_args(temp_output.suffix)
+                    if self.is_video_file_extension(source):
+                        if abs(speed - 1.0) >= 0.001:
+                            ff_args = [
+                                ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                                "-i", str(source), "-i", str(temp_pcm),
+                                "-vf", f"setpts={1.0 / speed:.8f}*PTS",
+                                "-map", "0:v:0", "-map", "1:a:0",
+                                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                            ] + codec_args + ["-shortest", str(temp_output)]
                         else:
                             ff_args = [
                                 ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
-                                "-i", str(temp_pcm),
-                            ] + codec_args + [str(temp_output)]
-                        res_ff = subprocess.run(
-                            ff_args,
-                            capture_output=True,
-                            text=True,
-                            encoding="utf-8",
-                            errors="replace",
-                            creationflags=creationflags,
-                        )
-                        if res_ff.returncode == 0 and temp_output.exists() and temp_output.stat().st_size > 0:
-                            saved_with_mpv = True
-                except Exception:
-                    saved_with_mpv = False
+                                "-i", str(source), "-i", str(temp_pcm),
+                                "-map", "0:v:0", "-map", "1:a:0",
+                                "-c:v", "copy",
+                            ] + codec_args + ["-shortest", str(temp_output)]
+                    else:
+                        ff_args = [
+                            ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                            "-i", str(temp_pcm),
+                        ] + codec_args + [str(temp_output)]
+                    res_ff = subprocess.run(
+                        ff_args,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        creationflags=creationflags,
+                    )
+                    if res_ff.returncode != 0 or not temp_output.exists() or temp_output.stat().st_size <= 0:
+                        error = (res_ff.stderr or res_ff.stdout or "").strip() or f"FFmpeg exited with code {res_ff.returncode}"
+                        raise RuntimeError(error[-600:])
+                    saved_with_mpv = True
                 finally:
                     if temp_pcm is not None:
                         try:

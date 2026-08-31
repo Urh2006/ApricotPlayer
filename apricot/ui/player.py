@@ -407,7 +407,16 @@ class PlayerUI:
             if not self.playback_request_is_current(request_generation):
                 return
             wx.CallAfter(self.merge_current_video_info_for_request, info, request_generation)
-            wx.CallAfter(self.start_mpv, command, stream_url, title or url, headers, announce_start, request_generation)
+            wx.CallAfter(
+                self.start_mpv,
+                command,
+                stream_url,
+                title or url,
+                headers,
+                announce_start,
+                request_generation,
+                info,
+            )
             wx.CallAfter(self.schedule_next_stream_prefetch_for_request, request_generation)
         except Exception as exc:
             if not self.playback_request_is_current(request_generation):
@@ -441,6 +450,11 @@ class PlayerUI:
                 "duration": self.format_duration(info.get("duration", self.current_video_info.get("duration_seconds"))),
                 "description": info.get("description") or self.current_video_info.get("description", ""),
                 "ext": info.get("ext") or self.current_video_info.get("ext", ""),
+                "format_id": info.get("format_id") or self.current_video_info.get("format_id", ""),
+                "height": info.get("height") or self.current_video_info.get("height"),
+                "vcodec": info.get("vcodec") or self.current_video_info.get("vcodec"),
+                "acodec": info.get("acodec") or self.current_video_info.get("acodec"),
+                "abr": info.get("abr") or self.current_video_info.get("abr"),
                 "artist": info.get("artist") or info.get("creator") or self.current_video_info.get("artist", ""),
                 "track": info.get("track") or self.current_video_info.get("track", ""),
                 "album": info.get("album") or self.current_video_info.get("album", ""),
@@ -593,6 +607,43 @@ class PlayerUI:
                 "--af=@apricot_speed:rubberband=transients=smooth:formant=preserved:pitch=quality:engine=finer",
             ]
         return ["--audio-pitch-correction=no", "--af=@apricot_speed:scaletempo2=search-interval=50:window-size=20:max-speed=8.0"]
+
+    @staticmethod
+    def external_audio_mpv_args(info: dict | None) -> list[str]:
+        audio_url = str((info or {}).get("external_audio_url") or "").strip()
+        return [f"--audio-file={audio_url}"] if audio_url else []
+
+    def local_edit_mpv_render_args(self, mpv: str, source: Path, output: Path) -> list[str]:
+        speed = max(0.25, min(4.0, self.current_speed_value()))
+        pitch = max(0.5, min(2.0, self.current_pitch_value()))
+        mode = self.normalized_pitch_mode()
+        args = [
+            mpv,
+            str(source),
+            "--no-config",
+            f"--speed={speed:.6f}",
+            "--video=no",
+            "--sub=no",
+            "--ao=pcm",
+        ]
+        args.extend(self.speed_audio_filter_args())
+        if mode == PITCH_MODE_MPV:
+            args.extend(["--audio-pitch-correction=yes", f"--pitch={pitch:.6f}"])
+        else:
+            args.extend(["--audio-pitch-correction=yes", "--pitch=1.000000"])
+            if abs(pitch - 1.0) >= 0.001:
+                args.append(f"--af-append={self.rubberband_pitch_filter(pitch)}")
+        enabled, gains = self.effective_equalizer_state()
+        if enabled:
+            eq_filter = self.equalizer_filter(
+                gains,
+                self.equalizer_clipping_protection_active(gains),
+                EQ_FILTER_LABEL,
+            )
+            if eq_filter:
+                args.append(f"--af-append={eq_filter}")
+        args.append(f"--ao-pcm-file={output}")
+        return args
 
     def show_player_page(self, title: str, focus_target: str = "player") -> None:
         fullscreen_mode = self.player_fullscreen_mode_active()
@@ -1703,7 +1754,7 @@ class PlayerUI:
         self.player_paused = False
         if self.mpv_process_alive():
             try:
-                self.mpv_send(["seek", 0, "absolute"], timeout=0.8)
+                self.mpv_send(["seek", 0, MPV_SEEK_ABSOLUTE_MODE], timeout=0.8)
                 self.mpv_set_property("pause", False, timeout=0.8)
                 self.start_player_monitor(self.player_generation)
                 self.update_play_pause_buttons()
@@ -1918,7 +1969,7 @@ class PlayerUI:
         self.cancel_clip_preview()
         was_ended = self.player_ended
         try:
-            self.mpv_send(["seek", float(seconds), "relative"], timeout=0.08)
+            self.mpv_send(["seek", float(seconds), MPV_SEEK_RELATIVE_MODE], timeout=0.08)
             self.after_player_seek(seconds, was_ended)
         except Exception:
             self.stop_player_seek_hold()
@@ -1930,14 +1981,14 @@ class PlayerUI:
         self.cancel_clip_preview()
         was_ended = self.player_ended
         try:
-            response = self.mpv_request(["seek", float(seconds), "relative"], timeout=0.8)
+            response = self.mpv_request(["seek", float(seconds), MPV_SEEK_RELATIVE_MODE], timeout=0.8)
             if response.get("error") == "success":
                 self.after_player_seek(seconds, was_ended)
                 return
         except Exception:
             pass
         try:
-            self.mpv_send(["seek", float(seconds), "relative"], timeout=0.8)
+            self.mpv_send(["seek", float(seconds), MPV_SEEK_RELATIVE_MODE], timeout=0.8)
             self.after_player_seek(seconds, was_ended)
         except Exception:
             pass
@@ -1949,9 +2000,9 @@ class PlayerUI:
         self.cancel_clip_preview()
         try:
             target = max(0.0, float(position))
-            response = self.mpv_request(["seek", target, "absolute"], timeout=0.8)
+            response = self.mpv_request(["seek", target, MPV_SEEK_ABSOLUTE_MODE], timeout=0.8)
             if response.get("error") != "success":
-                self.mpv_send(["seek", target, "absolute"], timeout=0.8)
+                self.mpv_send(["seek", target, MPV_SEEK_ABSOLUTE_MODE], timeout=0.8)
             if target <= 0.001 and self.player_ended:
                 self.player_ended = False
                 self.start_player_monitor(self.player_generation)

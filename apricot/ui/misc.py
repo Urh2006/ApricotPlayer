@@ -1682,7 +1682,7 @@ class MiscUI:
         position = self.bookmark_position(bookmark)
         try:
             self.cancel_clip_preview()
-            self.mpv_send(["seek", position, "absolute"], timeout=0.8)
+            self.mpv_send(["seek", position, MPV_SEEK_ABSOLUTE_MODE], timeout=0.8)
             self.announce_player(self.t("bookmark_selected", name=str(bookmark.get("name") or self.t("bookmark")), time=self.format_seconds(position)))
         except Exception:
             self.announce_player(self.t("timing_unavailable"))
@@ -1773,7 +1773,7 @@ class MiscUI:
         try:
             start = max(0.0, float(chapter.get("start_time") or 0.0))
             self.cancel_clip_preview()
-            self.mpv_send(["seek", start, "absolute"], timeout=0.8)
+            self.mpv_send(["seek", start, MPV_SEEK_ABSOLUTE_MODE], timeout=0.8)
             title = str(chapter.get("title") or self.t("chapters"))
             self.announce_player(self.t("chapter_selected", title=title, time=self.format_seconds(start)))
         except Exception:
@@ -1907,7 +1907,7 @@ class MiscUI:
             try:
                 start = max(0.0, float(entry.get("start") or 0.0))
                 self.cancel_clip_preview()
-                self.mpv_send(["seek", start, "absolute"], timeout=0.8)
+                self.mpv_send(["seek", start, MPV_SEEK_ABSOLUTE_MODE], timeout=0.8)
                 text = str(entry.get("text") or "").strip()
                 if len(text) > 90:
                     text = text[:87].rstrip() + "..."
@@ -2415,45 +2415,6 @@ class MiscUI:
             values.append(f"atempo={factor:.6f}")
         return values
 
-    def local_edit_mpv_args(self, mpv: str, source: Path, output: Path) -> list[str]:
-        speed = max(0.25, min(4.0, self.current_speed_value()))
-        pitch = max(0.5, min(2.0, self.current_pitch_value()))
-        enabled, gains = self.effective_equalizer_state()
-        args = [
-            mpv,
-            str(source),
-            "--no-config",
-            "--audio-pitch-correction=yes",
-            f"--pitch={pitch:.6f}",
-            f"--speed={speed:.6f}",
-        ]
-        if enabled:
-            eq_filter = self.equalizer_filter(gains)
-            if eq_filter:
-                args.append(f"--af={eq_filter}")
-        suffix = output.suffix.lower()
-        if suffix == ".mp3":
-            args.extend(["--oac=libmp3lame", "--oacopts=b=320k"])
-        elif suffix in {".m4a", ".mp4", ".m4v", ".mov"}:
-            args.extend(["--oac=aac", "--oacopts=b=256k"])
-        elif suffix == ".opus":
-            args.extend(["--oac=libopus", "--oacopts=b=160k"])
-        elif suffix == ".flac":
-            args.extend(["--oac=flac"])
-        elif suffix == ".wav":
-            args.extend(["--oac=pcm_s16le"])
-        else:
-            args.extend(["--oac=aac", "--oacopts=b=256k"])
-        if self.is_video_file_extension(source):
-            if abs(speed - 1.0) >= 0.001:
-                args.extend(["--ovc=libx264", "--ovcopts=crf=18,preset=veryfast"])
-            else:
-                args.extend(["--ovc=copy"])
-        else:
-            args.extend(["--video=no"])
-        args.append(f"--o={output}")
-        return args
-
     def local_edit_ffmpeg_args(self, ffmpeg: str, source: Path, output: Path) -> list[str]:
         speed = max(0.25, min(4.0, self.current_speed_value()))
         audio_filters = self.local_edit_audio_filters()
@@ -2600,7 +2561,7 @@ class MiscUI:
         try:
             if not self.clip_preview_is_current(player_generation, preview_generation):
                 return
-            self.mpv_send(["seek", float(start), "absolute"], timeout=0.8)
+            self.mpv_send(["seek", float(start), MPV_SEEK_ABSOLUTE_MODE], timeout=0.8)
             self.mpv_set_property("pause", False, timeout=0.8)
             wx.CallAfter(self.start_clip_preview_ui, player_generation, preview_generation, start, end)
             deadline = time.monotonic() + max(1.0, end - start + 2.0)
@@ -2617,7 +2578,7 @@ class MiscUI:
             if not self.clip_preview_is_current(player_generation, preview_generation):
                 return
             try:
-                self.mpv_send(["seek", float(end), "absolute"], timeout=0.6)
+                self.mpv_send(["seek", float(end), MPV_SEEK_ABSOLUTE_MODE], timeout=0.6)
             except Exception:
                 pass
             self.mpv_set_property("pause", True, timeout=0.8)

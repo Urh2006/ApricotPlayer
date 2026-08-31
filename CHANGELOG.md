@@ -1,3 +1,21 @@
+# v1.0.21 - Playback Recovery and Identical Pitch Export
+
+## Added
+- Added regression coverage for real dual-stream YouTube metadata, HLS fallback selection, dual-stream cache expiry, edit-mode audio rendering, and yt-dlp calendar version comparison.
+
+## Changed
+- Changed YouTube playback to use seekable HLS video with a separate full-quality HLS audio stream, while retaining safe progressive and recovery fallbacks.
+- Changed Automatic, Prefer video, and Prefer audio playback choices so each mode has a distinct and accurate purpose.
+- Changed held and ordinary scrubbing to keyframe seeking while keeping chapters, bookmarks, transcript lines, markers, and start/end jumps exact.
+- Changed edit-mode saving to render through the same mpv speed, pitch, equalizer, and clipping-protection filter chain used during live playback.
+
+## Fixed
+- Fixed long videos getting stuck during resume or rapid forward and backward seeking on direct M4A and Opus DASH streams.
+- Fixed YouTube audio falling to low-bitrate progressive audio, including cases around 44 or 95 kbps, after the Android client fallback was introduced.
+- Fixed format announcements losing the selected video resolution and audio bitrate; HLS bitrate is now derived from the audio rendition metadata when yt-dlp leaves it blank.
+- Fixed rare recovery paths selecting a direct DASH audio stream before a seekable HLS audio stream.
+- Fixed edit-mode pitch exports sounding different from the live player and silently falling back to a different processing algorithm after an mpv render failure.
+
 # v1.0.20 - Format Preference Cache Key & Studio Audio Resolution
 
 - Fixed: Added stream format preference to the stream URL cache key and bumped stream format profile, ensuring that switching between Video and Audio preferences immediately fetches the correct stream format instead of reusing old cached URLs.

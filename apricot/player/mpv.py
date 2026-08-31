@@ -49,6 +49,7 @@ class MpvMixin:
         headers: dict,
         announce_start: bool = False,
         request_generation: int = 0,
+        media_info: dict | None = None,
     ) -> None:
         if request_generation and not self.playback_request_is_current(request_generation):
             return
@@ -118,7 +119,6 @@ class MpvMixin:
                 )
             else:
                 args.append("--cache=no")
-            args.append("--hr-seek=no")
             audio_device = self.player_audio_output_device()
             if audio_device and audio_device.lower() != "auto":
                 args.append(f"--audio-device={audio_device}")
@@ -136,6 +136,7 @@ class MpvMixin:
                 args.append("--fullscreen=yes")
             if self.settings.player_start_paused:
                 args.append("--pause=yes")
+            args.extend(self.external_audio_mpv_args(media_info))
             args.append(stream_url)
             log_file = APP_DIR / "mpv.log"
             if self.player_log_handle:
