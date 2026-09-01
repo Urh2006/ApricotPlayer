@@ -11,6 +11,9 @@ members = [
     "crates/apricot-test-support",
     "crates/apricot-ui-windows",
     "crates/apricot-updater",
+    "tools/media-process-spike",
+    "tools/mpv-ipc-spike",
+    "tools/windows-accessibility-spike",
 ]
 
 [workspace.package]
@@ -35,6 +38,18 @@ thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 tracing = "0.1"
 url = { version = "2", features = ["serde"] }
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Storage_FileSystem",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Pipes",
+    "Win32_UI_Accessibility",
+    "Win32_UI_Controls",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

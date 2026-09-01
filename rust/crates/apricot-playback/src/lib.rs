@@ -4,6 +4,12 @@
 use apricot_core::MediaItem;
 use thiserror::Error;
 
+#[cfg(windows)]
+mod mpv_ipc;
+
+#[cfg(windows)]
+pub use mpv_ipc::{MpvIpcClient, make_unique_ipc_path};
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum PlaybackCommand {
     Load(Box<MediaItem>),
