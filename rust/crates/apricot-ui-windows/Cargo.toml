@@ -1,0 +1,14 @@
+[package]
+name = "apricot-ui-windows"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+apricot-app.workspace = true
+apricot-core.workspace = true
+apricot-platform.workspace = true
+
+[lints]
+workspace = true
