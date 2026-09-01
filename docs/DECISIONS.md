@@ -58,3 +58,28 @@ Release mora to jasno povedati in opisati pričakovano Gatekeeper opozorilo ter
 uradno pot za enkratno odobritev v macOS System Settings. Lastna kriptografska
 preverjanja updaterja ostanejo obvezna. Developer ID podpis in notarizacija sta
 poznejša izboljšava ter ne blokirata prve zasebne ali zgodnje javne macOS izdaje.
+
+## D-010: ApricotPlayer 2.0 je popoln Rust rewrite
+
+ApricotPlayerjeva lastna aplikacijska koda bo za 2.0 prepisana v Rust brez
+namerno izpuščenih funkcij. mpv, yt-dlp, FFmpeg, Node in Rubber Band ostanejo
+izolirani third-party enginei; njihovo ponovno pisanje ni del produkta.
+
+Windows Rust izdaja mora najprej doseči popolno funkcijsko, podatkovno,
+tipkovnično in NVDA pariteto s trenutno Python izdajo. macOS implementacija se
+začne šele po tem gateu in uporablja isti Rust core s platformnim AppKit
+adapterjem. Spotify ni del osnovnega rewrita in se obravnava pozneje.
+
+Avtoritativna izvedbena dokumenta sta `docs/RUST_REWRITE_PLAN.md` in
+`docs/RUST_PARITY_MANIFEST.md`.
+
+## D-011: Rust 2.0 alphe in bete ostanejo lokalne
+
+Razvoj poteka na lokalni `rust-2.0` veji z lokalnimi commiti in tagi. Razvojnih
+2.0 buildov se brez izrecne uporabnikove odobritve ne pusha, taga ali objavlja na
+GitHubu. Namestijo se vzporedno kot `ApricotPlayer 2 Beta`, uporabljajo ločen
+app-data direktorij in ne zamenjajo stabilne Python namestitve.
+
+Prvi javni Rust build je odobreni 2.0 release. To je ozka izjema od D-002 za čas
+rewrita; obstoječe 1.x beta/stable vedenje in končni 2.0 release se vedno ravnajo
+po pravilih kanalov.

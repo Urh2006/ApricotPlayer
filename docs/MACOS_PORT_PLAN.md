@@ -1,9 +1,17 @@
 # ApricotPlayer macOS feature-parity port plan
 
-Status: confirmed future work. No macOS implementation has started yet.
+Status: confirmed future work after the Windows Rust 2.0 parity gate. No macOS
+implementation has started yet.
 
-Baseline: the current `main` branch, version `1.0.3`, plus every feature added
-before the macOS branch is merged.
+Sequencing note: this document remains the complete macOS feature-parity and
+acceptance contract. Its Python/wxPython implementation mechanics are
+superseded by `docs/RUST_REWRITE_PLAN.md`: the shared Rust core and Windows Rust
+edition are completed first, then an AppKit platform adapter brings the same
+manifest to macOS. No feature listed here is removed by that sequencing change.
+
+Baseline: the final Windows Rust parity baseline plus every feature added before
+the macOS branch is merged. The original Python 1.x behavior remains the golden
+reference through `docs/RUST_PARITY_MANIFEST.md`.
 
 ## Non-negotiable product contract
 
@@ -250,8 +258,9 @@ prefer_browser_playback, player_fullscreen, player_start_paused,
 announce_play_pause, announce_playback_finished, enable_background_playback,
 player_speed, speed_audio_mode, show_video_details_by_default,
 direct_link_enter_action, enable_age_restricted_videos, enable_stream_cache,
-enable_stream_url_cache, stream_url_cache_minutes, prefetch_next_stream_url,
-gapless_playback, replaygain_mode, enable_online_lyrics, cache_folder,
+enable_stream_url_cache, stream_url_cache_minutes, stream_format_preference,
+prefetch_next_stream_url, gapless_playback, replaygain_mode,
+enable_online_lyrics, cache_folder,
 cache_size_mb, resume_playback, show_resume_in_menu, audio_output_device,
 speed_step, pitch_step, speed_pitch_hold_delay_ms,
 speed_pitch_hold_interval_ms, pitch_mode, global_equalizer_enabled,
@@ -313,8 +322,8 @@ open_selected, new_subscription_videos, remove_selected,
 toggle_podcast_played, clear_podcast_progress, save_podcast_speed_preset,
 player_copy_link, player_copy_timestamp_link, player_play_pause, player_time,
 player_bpm, player_speed_down, player_speed_up, player_reset_speed_pitch,
-player_pitch_up, player_pitch_down, player_volume_status, player_details,
-player_output_devices, player_equalizer, player_fullscreen,
+player_pitch_up, player_pitch_down, player_volume_status, player_format_status,
+player_details, player_output_devices, player_equalizer, player_fullscreen,
 player_replaygain, player_add_bookmark, player_bookmarks, player_chapters,
 player_transcript, player_lyrics, player_comments, player_previous_chapter,
 player_next_chapter, player_edit_mode, player_save_edit_copy,

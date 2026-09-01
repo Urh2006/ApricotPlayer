@@ -4,16 +4,24 @@ Ta datoteka je trajni repozitorijski kontekst za Codex. Velja za celoten projekt
 
 ## Komunikacija
 
-- Vsak uporabniku viden odgovor začni z naslovom prve ravni `# Codex je odgovoril`, ker uporabnik navigira z bralnikom zaslona.
+- Odgovore začni neposredno z vsebino. Ne dodajaj naslova `Codex je odgovoril`, ker aplikacija zdaj sama napove `ChatGPT said`.
 - Privzeto odgovarjaj v slovenščini. Drug jezik uporabi, če ga uporabnik zahteva ali če pripravljaš vsebino za tuje uporabnike.
 - Najprej povej rezultat oziroma trenutno ugotovitev, nato podrobnosti.
 
 ## Produkt in prioritete
 
-ApricotPlayer je dostopen medijski predvajalnik in downloader za Windows. Narejen je v Pythonu z wxPython, za predvajanje uporablja mpv, za spletne medije pa predvsem yt-dlp.
+ApricotPlayer je dostopen medijski predvajalnik in downloader za Windows.
+Trenutna stabilna 1.x izdaja je narejena v Pythonu z wxPython, za predvajanje
+uporablja mpv, za spletne medije pa predvsem yt-dlp. Potrjeni 2.0 Rust rewrite je
+opisan v `docs/RUST_REWRITE_PLAN.md`; njegova obvezna parity pogodba je
+`docs/RUST_PARITY_MANIFEST.md`.
 
-Popoln macOS feature-parity port je potrjeno prihodnje delo. Pred vsakim macOS
-posegom preberi `docs/MACOS_PORT_PLAN.md`. macOS izdaja ne sme biti okrnjena:
+Popoln Rust 2.0 rewrite je potrjeno prihodnje delo. Pred vsakim Rust posegom
+preberi `docs/RUST_REWRITE_PLAN.md` in `docs/RUST_PARITY_MANIFEST.md`. Razvojne
+2.0 alphe in bete ostanejo lokalne do uporabnikove odobritve javnega 2.0 releasa.
+
+Popoln macOS feature-parity port sledi po Windows Rust parity gateu. Pred vsakim
+macOS posegom preberi `docs/MACOS_PORT_PLAN.md`. macOS izdaja ne sme biti okrnjena:
 vsaka trenutna in prihodnja funkcija mora delovati na Windows in macOS, z NVDA
 oziroma VoiceOver ter s popolno tipkovnično potjo.
 
@@ -39,6 +47,10 @@ Vsaka nova ali spremenjena funkcija mora biti izvedljiva brez miške. Kjer obsta
 - `docs/PROJECT_CONTEXT.md`, `docs/DECISIONS.md` in `docs/BACKLOG.md` vsebujejo zgoščen kontekst, trajne odločitve in potrjeno prihodnje delo.
 - `docs/MACOS_PORT_PLAN.md` je obvezni feature-parity manifest in izvedbeni plan
   za macOS.
+- `docs/RUST_REWRITE_PLAN.md` je avtoritativni arhitekturni in fazni načrt za
+  Windows Rust 2.0 rewrite ter poznejši skupni core.
+- `docs/RUST_PARITY_MANIFEST.md` je obvezni acceptance checklist za vse funkcije,
+  nastavitve, shortcute, podatke in accessibility vedenje.
 
 Za trenutno verzijo vedno preberi `apricot/__init__.py`, `apricot/constants.py`, vrh `CHANGELOG.md` in zadnje release notes. Stari chati niso vir resnice, kadar se razlikujejo od trenutne kode, Git zgodovine ali teh dokumentov.
 
