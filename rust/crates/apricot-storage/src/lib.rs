@@ -17,5 +17,5 @@ pub use locales::{LocaleLoadError, load_translation_catalog};
 pub use settings::{SettingsDocument, SettingsLoadError};
 pub use settings_file::{
     SettingsLoadOutcome, SettingsPaths, SettingsSaveError, SettingsSource, load_settings,
-    save_settings,
+    save_loaded_settings,
 };

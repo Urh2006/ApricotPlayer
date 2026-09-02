@@ -86,20 +86,25 @@ pub fn load_settings(paths: &SettingsPaths, defaults: SettingsDocument) -> Setti
     }
 }
 
-/// Writes a backup of the current primary settings before atomically replacing it.
+/// Saves settings loaded through [`load_settings`] and advances the outcome to
+/// a valid primary source.
+///
+/// A backup is created only when the current primary file was the successfully
+/// loaded source. This prevents a recovery save from replacing a valid backup
+/// with the corrupt primary file that caused recovery.
 ///
 /// # Errors
 ///
 /// Returns [`SettingsSaveError`] when saves are blocked or either atomic write fails.
-pub fn save_settings(
+pub fn save_loaded_settings(
     paths: &SettingsPaths,
+    outcome: &mut SettingsLoadOutcome,
     settings: &SettingsDocument,
-    save_blocked: bool,
 ) -> Result<(), SettingsSaveError> {
-    if save_blocked {
+    if outcome.save_blocked {
         return Err(SettingsSaveError::Blocked);
     }
-    if paths.primary.exists() {
+    if outcome.source == SettingsSource::Primary && paths.primary.exists() {
         let bytes = fs::read(&paths.primary).map_err(|source| JsonFileError::Read {
             path: paths.primary.clone(),
             source,
@@ -107,6 +112,10 @@ pub fn save_settings(
         write_bytes_atomic(&paths.backup, &bytes)?;
     }
     write_json_atomic(&paths.primary, settings)?;
+    outcome.settings = settings.clone();
+    outcome.source = SettingsSource::Primary;
+    outcome.migrated = false;
+    outcome.errors.clear();
     Ok(())
 }
 
@@ -143,7 +152,9 @@ mod tests {
     use serde_json::{Value, json};
     use tempfile::tempdir;
 
-    use super::{SettingsPaths, SettingsSaveError, SettingsSource, load_settings, save_settings};
+    use super::{
+        SettingsPaths, SettingsSaveError, SettingsSource, load_settings, save_loaded_settings,
+    };
     use crate::SettingsDocument;
 
     fn fixture_paths(root: &Path) -> SettingsPaths {
@@ -174,11 +185,11 @@ mod tests {
         fs::create_dir_all(paths.primary.parent().expect("parent")).expect("directory");
         fs::write(&paths.primary, b"{broken").expect("primary");
         fs::write(&paths.backup, b"").expect("backup");
-        let outcome = load_settings(&paths, SettingsDocument::default());
+        let mut outcome = load_settings(&paths, SettingsDocument::default());
         assert_eq!(outcome.source, SettingsSource::Defaults);
         assert!(outcome.save_blocked);
         assert!(matches!(
-            save_settings(&paths, &outcome.settings, outcome.save_blocked),
+            save_loaded_settings(&paths, &mut outcome, &SettingsDocument::default()),
             Err(SettingsSaveError::Blocked)
         ));
         assert_eq!(fs::read(&paths.primary).expect("unchanged"), b"{broken");
@@ -197,7 +208,8 @@ mod tests {
         settings
             .preserved
             .insert("future".to_owned(), json!({"kept": true}));
-        save_settings(&paths, &settings, false).expect("save");
+        let mut outcome = load_settings(&paths, SettingsDocument::default());
+        save_loaded_settings(&paths, &mut outcome, &settings).expect("save");
         assert_eq!(
             fs::read_to_string(&paths.backup).expect("backup"),
             r#"{"language":"en"}"#
@@ -206,5 +218,33 @@ mod tests {
             serde_json::from_slice(&fs::read(&paths.primary).expect("primary")).expect("JSON");
         assert_eq!(saved["language"], "sl");
         assert_eq!(saved["future"], json!({"kept": true}));
+        assert_eq!(outcome.source, SettingsSource::Primary);
+        assert!(!outcome.migrated);
+        assert!(outcome.errors.is_empty());
+    }
+
+    #[test]
+    fn recovery_save_preserves_the_valid_backup() {
+        let root = tempdir().expect("temporary directory");
+        let paths = fixture_paths(root.path());
+        fs::create_dir_all(paths.primary.parent().expect("parent")).expect("directory");
+        fs::write(&paths.primary, b"{broken").expect("primary");
+        let backup = br#"{"language":"sl"}"#;
+        fs::write(&paths.backup, backup).expect("backup");
+        let mut outcome = load_settings(&paths, SettingsDocument::default());
+        assert_eq!(outcome.source, SettingsSource::Backup);
+
+        let mut changed = outcome.settings.clone();
+        changed.enable_history = false;
+        save_loaded_settings(&paths, &mut outcome, &changed).expect("recovery save");
+
+        assert_eq!(
+            fs::read(&paths.backup).expect("backup remains valid"),
+            backup
+        );
+        let reloaded = load_settings(&paths, SettingsDocument::default());
+        assert_eq!(reloaded.source, SettingsSource::Primary);
+        assert_eq!(reloaded.settings.language, "sl");
+        assert!(!reloaded.settings.enable_history);
     }
 }
