@@ -1,8 +1,50 @@
 # Rust 2.0 Qualification Log
 
-This file records reproducible evidence for the risky boundaries in Phase 0.
-Passing a spike does not claim product parity. The complete acceptance contract
-remains `docs/RUST_PARITY_MANIFEST.md`.
+This file records reproducible evidence for rewrite phase gates. Passing a spike
+or an intermediate gate does not claim product parity. The complete acceptance
+contract remains `docs/RUST_PARITY_MANIFEST.md`.
+
+## 2026-09-02: Phase 1 compatibility and local distribution
+
+Harnesses:
+
+- the full Cargo workspace test and Clippy suites;
+- `rust/scripts/qualify_python_settings_compat.ps1`;
+- `rust/scripts/qualify_python_data_compat.ps1`;
+- `rust/scripts/qualify_local_beta_scripts.ps1`.
+
+Verified:
+
+- exact registries for 116 settings, 91 actions, 19 customizable main-menu
+  items, 27 languages, 10 EQ bands, and the frozen preset catalog;
+- all 63 screens, 28 routes, and 17 context menus have stable typed IDs and
+  machine-checked references;
+- all 116 current Python settings load into the typed Rust schema and round-trip
+  without changing or losing existing or unknown fields;
+- all existing serialized Python profile artifacts round-trip from a private
+  temporary copy, with semantic JSON equality and byte-exact text preservation;
+- existing Windows JSON with a UTF-8 BOM is imported without weakening malformed
+  JSON or wrong-shape rejection;
+- each compatibility artifact is bounded to 64 MiB before parsing;
+- local release builds carry exact version, commit, dirty-tree, timestamp, Rust,
+  data-schema, identity, and update-channel metadata plus a SHA-256 file
+  manifest;
+- a changed package is rejected before installation;
+- side-by-side install and reinstall are transactional, remove stale package
+  files, and never touch the Python installation;
+- default uninstall preserves `%APPDATA%\ApricotPlayer2Beta`, while explicit
+  `-RemoveData` removes only that separately validated beta path.
+
+Automated results:
+
+- `PYTHON_SETTINGS_COMPAT=PASS`;
+- `PYTHON_DATA_COMPAT=PASS`;
+- `LOCAL_BETA_SCRIPTS=PASS`;
+- all workspace tests and strict Clippy checks pass.
+
+The Phase 1 machine gate is satisfied. This does not close the manual NVDA and
+real-device work still listed under Phase 0, and the current foundation binary
+does not yet claim an implemented product UI.
 
 ## 2026-09-01: frozen Python launch baseline
 
