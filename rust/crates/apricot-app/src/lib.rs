@@ -2,6 +2,7 @@
 
 pub mod main_menu;
 pub mod settings_controller;
+pub mod settings_model;
 pub mod settings_session;
 
 use apricot_core::{MediaItem, NavigationStack};
@@ -11,6 +12,10 @@ pub use main_menu::{
     english_catalog,
 };
 pub use settings_controller::{SettingsController, SettingsControllerError};
+pub use settings_model::{
+    SettingsChoiceOption, SettingsCommand, SettingsControl, SettingsScreenModel,
+    SettingsSectionItem,
+};
 pub use settings_session::{SettingsDraft, SettingsDraftError};
 
 #[derive(Debug, Default)]
