@@ -69,6 +69,8 @@ version = "2.0.0-dev.1"
 dependencies = [
  "apricot-app",
  "apricot-core",
+ "apricot-platform",
+ "apricot-storage",
  "apricot-ui-windows",
  "apricot-updater",
 ]

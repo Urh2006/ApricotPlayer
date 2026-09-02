@@ -6,7 +6,8 @@ pub mod settings_session;
 use apricot_core::{MediaItem, NavigationStack};
 
 pub use main_menu::{
-    MainMenuAvailability, MainMenuItem, MainMenuModel, MenuVisibility, english_catalog,
+    MainMenuAvailability, MainMenuItem, MainMenuModel, MenuVisibility, embedded_catalog,
+    english_catalog,
 };
 pub use settings_session::{SettingsDraft, SettingsDraftError};
 
