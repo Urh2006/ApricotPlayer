@@ -61,6 +61,13 @@ try {
 
     New-Item -ItemType Directory -Path $StagingDir -Force | Out-Null
     Copy-Item -LiteralPath $BuiltExe -Destination (Join-Path $StagingDir "ApricotPlayer2Beta.exe")
+    $NvdaSource = Join-Path (Split-Path -Parent $RustRoot) "vendor\nvda\nvdaControllerClient64.dll"
+    if (-not (Test-Path -LiteralPath $NvdaSource -PathType Leaf)) {
+        throw "Bundled NVDA Controller Client was not found at $NvdaSource"
+    }
+    $NvdaDestination = Join-Path $StagingDir "nvda"
+    New-Item -ItemType Directory -Path $NvdaDestination -Force | Out-Null
+    Copy-Item -LiteralPath $NvdaSource -Destination $NvdaDestination
     $BuildInfo = [ordered]@{
         schema_version = 1
         application_id = "ApricotPlayer.RustBeta"
@@ -74,7 +81,9 @@ try {
         data_schema_version = 1
         update_channel = "local-only"
         app_data_directory = "%APPDATA%\ApricotPlayer2Beta"
-        bundled_components = [ordered]@{}
+        bundled_components = [ordered]@{
+            nvda_controller_client = "nvda/nvdaControllerClient64.dll"
+        }
     }
     $BuildInfo | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $StagingDir "build-info.json") -Encoding utf8
 

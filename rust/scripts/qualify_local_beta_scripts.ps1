@@ -14,6 +14,14 @@ try {
     Set-Content -LiteralPath $Sentinel -Value "private beta data" -Encoding utf8
 
     & (Join-Path $PSScriptRoot "build_local_beta.ps1") -OutputDir $PackageDir -SkipChecks
+    $BundledNvda = Join-Path $PackageDir "nvda\nvdaControllerClient64.dll"
+    if (-not (Test-Path -LiteralPath $BundledNvda -PathType Leaf)) {
+        throw "Local beta package omitted the NVDA Controller Client"
+    }
+    $BuildInfo = Get-Content -LiteralPath (Join-Path $PackageDir "build-info.json") -Raw | ConvertFrom-Json
+    if ($BuildInfo.bundled_components.nvda_controller_client -ne "nvda/nvdaControllerClient64.dll") {
+        throw "Local beta build metadata omitted the NVDA Controller Client"
+    }
     Copy-Item -LiteralPath $PackageDir -Destination $TamperedPackage -Recurse
     Add-Content -LiteralPath (Join-Path $TamperedPackage "build-info.json") -Value "tampered"
     $TamperRejected = $false
@@ -30,6 +38,9 @@ try {
     & (Join-Path $PSScriptRoot "install_local_beta.ps1") -PackageDir $PackageDir -InstallRoot $InstallRoot -SkipBuild -NoShortcut
     $Executable = Join-Path $InstallRoot "ApricotPlayer2Beta.exe"
     if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) { throw "Installed executable is missing" }
+    if (-not (Test-Path -LiteralPath (Join-Path $InstallRoot "nvda\nvdaControllerClient64.dll") -PathType Leaf)) {
+        throw "Installed local beta omitted the NVDA Controller Client"
+    }
     & $Executable --qualification-smoke
     if ($LASTEXITCODE -ne 0) { throw "Installed local beta did not launch correctly" }
 

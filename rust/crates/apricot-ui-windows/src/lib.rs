@@ -7,6 +7,8 @@ mod action_finder_win32;
 #[cfg(windows)]
 mod activation_win32;
 #[cfg(windows)]
+mod announcement_win32;
+#[cfg(windows)]
 mod settings_win32;
 #[cfg(windows)]
 mod shortcut_win32;

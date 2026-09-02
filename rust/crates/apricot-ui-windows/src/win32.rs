@@ -17,9 +17,9 @@ use windows::{
         UI::{
             Input::KeyboardAndMouse::{SetFocus, VK_RETURN},
             Shell::{
-                DefSubclassProc, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
-                NIM_SETVERSION, NOTIFYICON_VERSION_4, NOTIFYICONDATAW, RemoveWindowSubclass,
-                SetWindowSubclass, Shell_NotifyIconW,
+                DefSubclassProc, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD,
+                NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NOTIFYICON_VERSION_4, NOTIFYICONDATAW,
+                RemoveWindowSubclass, SetWindowSubclass, Shell_NotifyIconW,
             },
             WindowsAndMessaging::{
                 AppendMenuW, BS_DEFPUSHBUTTON, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW,
@@ -63,6 +63,8 @@ enum WindowLifecycle {
 struct WindowState {
     list: HWND,
     open: HWND,
+    status: HWND,
+    announcer: crate::announcement_win32::WindowsAnnouncer,
     model: MainMenuModel,
     application: Application,
     settings_open: bool,
@@ -126,7 +128,7 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
     );
     layout_controls(window);
     if start_hidden {
-        hide_to_tray(window);
+        hide_to_tray(window, false);
     } else {
         let _ = ShowWindow(window, SW_SHOW);
         let _ = SetFocus(Some(initial_focus));
@@ -195,7 +197,7 @@ unsafe extern "system" fn window_proc(
                 state.lifecycle != WindowLifecycle::Exiting
                     && state.application.settings().close_to_tray
             }) {
-                hide_to_tray(window);
+                hide_to_tray(window, true);
             } else {
                 let _ = DestroyWindow(window);
             }
@@ -278,13 +280,27 @@ unsafe fn create_controls(
         WINDOW_EX_STYLE::default(),
         ID_OPEN,
     )?;
+    let catalog = apricot_app::embedded_catalog(&application.settings().language);
+    let ready = wide(catalog.text("ready"));
+    let status = create_control(
+        parent,
+        instance,
+        w!("STATIC"),
+        PCWSTR(ready.as_ptr()),
+        WS_CHILD | WS_VISIBLE,
+        WINDOW_EX_STYLE::default(),
+        0,
+    )?;
     let font = GetStockObject(DEFAULT_GUI_FONT);
     let font_param = Some(WPARAM(font.0 as usize));
     SendMessageW(list, WM_SETFONT, font_param, Some(LPARAM(1)));
     SendMessageW(open, WM_SETFONT, font_param, Some(LPARAM(1)));
+    SendMessageW(status, WM_SETFONT, font_param, Some(LPARAM(1)));
     Ok(WindowState {
         list,
         open,
+        status,
+        announcer: crate::announcement_win32::WindowsAnnouncer::new(status),
         model,
         application,
         settings_open: false,
@@ -362,12 +378,21 @@ unsafe fn layout_controls(window: HWND) {
     let height = (bounds.bottom - bounds.top).max(240);
     let margin = 12;
     let button_height = 34;
+    let status_height = 24;
     let _ = MoveWindow(
         state.list,
         margin,
         margin,
         width - margin * 2,
-        height - button_height - margin * 3,
+        height - button_height - status_height - margin * 4,
+        true,
+    );
+    let _ = MoveWindow(
+        state.status,
+        margin,
+        height - button_height - status_height - margin * 2,
+        width - margin * 2,
+        status_height,
         true,
     );
     let _ = MoveWindow(
@@ -424,7 +449,7 @@ unsafe fn remove_tray_icon(window: HWND) {
     }
 }
 
-unsafe fn hide_to_tray(window: HWND) {
+unsafe fn hide_to_tray(window: HWND, announce: bool) {
     if !add_tray_icon(window) {
         let _ = ShowWindow(window, SW_SHOW);
         if let Some(state) = state(window) {
@@ -436,6 +461,40 @@ unsafe fn hide_to_tray(window: HWND) {
         state.lifecycle = WindowLifecycle::HiddenInTray;
     }
     let _ = ShowWindow(window, SW_HIDE);
+    if announce {
+        announce_tray_state(window);
+    }
+}
+
+unsafe fn announce_tray_state(window: HWND) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let message = catalog.text("tray_still_running");
+    state.announcer.announce(message, true);
+    if state.application.settings().tray_notification
+        && state.application.settings().windows_notifications
+    {
+        show_tray_notification(window, "ApricotPlayer 2 Beta", message);
+    }
+}
+
+unsafe fn show_tray_notification(window: HWND, title: &str, message: &str) {
+    if !state(window).is_some_and(|state| state.tray_icon_added) {
+        return;
+    }
+    let mut data = NOTIFYICONDATAW {
+        cbSize: u32::try_from(size_of::<NOTIFYICONDATAW>()).expect("tray data size fits"),
+        hWnd: window,
+        uID: TRAY_ICON_ID,
+        uFlags: NIF_INFO,
+        dwInfoFlags: NIIF_INFO,
+        ..Default::default()
+    };
+    copy_wide_array(&mut data.szInfoTitle, title);
+    copy_wide_array(&mut data.szInfo, message);
+    let _ = Shell_NotifyIconW(NIM_MODIFY, &raw const data);
 }
 
 unsafe fn restore_from_tray(window: HWND) {
