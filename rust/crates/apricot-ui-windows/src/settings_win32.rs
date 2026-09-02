@@ -14,6 +14,7 @@ use windows::{
         Graphics::Gdi::{DEFAULT_GUI_FONT, GetStockObject},
         System::LibraryLoader::GetModuleHandleW,
         UI::{
+            Controls::{InitCommonControls, TBM_SETPOS, TBM_SETRANGE, TRACKBAR_CLASSW},
             Input::KeyboardAndMouse::{
                 EnableWindow, GetKeyState, SetFocus, VK_DOWN, VK_END, VK_HOME, VK_RETURN, VK_SHIFT,
                 VK_TAB, VK_UP,
@@ -51,11 +52,18 @@ const BST_CHECKED: usize = 1;
 const CB_ADDSTRING: u32 = 0x0143;
 const CB_GETCURSEL: u32 = 0x0147;
 const CB_SETCURSEL: u32 = 0x014E;
+const TBM_GETPOS: u32 = 0x0400;
 
 #[derive(Clone, Debug)]
 enum ControlBinding {
     ReadOnly,
     Text(SettingId),
+    Integer {
+        setting: SettingId,
+        minimum: i64,
+        maximum: i64,
+    },
+    IntegerSlider(SettingId),
     Choice {
         setting: SettingId,
         value_type: SettingsValueType,
@@ -84,6 +92,7 @@ struct SettingsWindowState {
 }
 
 pub unsafe fn register() -> Result<()> {
+    InitCommonControls();
     let module = GetModuleHandleW(None)?;
     let instance = HINSTANCE(module.0);
     let class = WNDCLASSW {
@@ -288,6 +297,7 @@ unsafe fn render_controls(window: HWND) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 unsafe fn create_bound_control(
     parent: HWND,
     instance: HINSTANCE,
@@ -358,6 +368,69 @@ unsafe fn create_bound_control(
         } => {
             let control = checkbox(parent, instance, &label, id, checked)?;
             (None, control, ControlBinding::Checkbox(setting))
+        }
+        SettingsControl::Integer {
+            setting,
+            label,
+            value,
+            minimum,
+            maximum,
+        } => {
+            let label = static_label(parent, instance, &label)?;
+            let control = edit(parent, instance, &value.to_string(), id, false, false)?;
+            (
+                Some(label),
+                control,
+                ControlBinding::Integer {
+                    setting,
+                    minimum,
+                    maximum,
+                },
+            )
+        }
+        SettingsControl::IntegerSlider {
+            setting,
+            label,
+            value,
+            minimum,
+            maximum,
+            unit,
+        } => {
+            let accessible_label = if unit.is_empty() {
+                format!("{label}, {value}")
+            } else {
+                format!("{label}, {value} {unit}")
+            };
+            let label_control = static_label(parent, instance, &label)?;
+            let accessible_label = wide(&accessible_label);
+            let control = create_control(
+                parent,
+                instance,
+                TRACKBAR_CLASSW,
+                PCWSTR(accessible_label.as_ptr()),
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                WINDOW_EX_STYLE::default(),
+                id,
+            )?;
+            let packed_range = i32::try_from(minimum).unwrap_or(i32::MIN).cast_unsigned()
+                | i32::try_from(maximum).unwrap_or(i32::MAX).cast_unsigned() << 16;
+            SendMessageW(
+                control,
+                TBM_SETRANGE,
+                Some(WPARAM(1)),
+                Some(LPARAM(packed_range.cast_signed() as isize)),
+            );
+            SendMessageW(
+                control,
+                TBM_SETPOS,
+                Some(WPARAM(1)),
+                Some(LPARAM(isize::try_from(value).unwrap_or_default())),
+            );
+            (
+                Some(label_control),
+                control,
+                ControlBinding::IntegerSlider(setting),
+            )
         }
         SettingsControl::MenuItemCheckbox {
             action_id,
@@ -527,6 +600,20 @@ unsafe fn sync_bound_control(
         ControlBinding::Text(setting) => {
             app.set_string_setting(*setting, window_text(bound.control))
         }
+        ControlBinding::Integer {
+            setting,
+            minimum,
+            maximum,
+        } => window_text(bound.control)
+            .parse::<i64>()
+            .map_or(Ok(()), |value| {
+                app.set_integer_setting(*setting, value.clamp(*minimum, *maximum))
+            }),
+        ControlBinding::IntegerSlider(setting) => app.set_integer_setting(
+            *setting,
+            i64::try_from(SendMessageW(bound.control, TBM_GETPOS, None, None).0)
+                .unwrap_or_default(),
+        ),
         ControlBinding::Choice {
             setting,
             value_type,
