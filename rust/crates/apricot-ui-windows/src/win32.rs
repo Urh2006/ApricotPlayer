@@ -709,26 +709,36 @@ unsafe fn show_unimplemented_action(window: HWND, action_id: &str) {
 }
 
 unsafe fn open_settings(window: HWND) {
+    let settings_result = {
+        let Some(state) = state_mut(window) else {
+            return;
+        };
+        if state.settings_open {
+            return;
+        }
+        state.settings_open = true;
+        crate::settings_win32::show(window, &mut state.application)
+    };
     let Some(state) = state_mut(window) else {
         return;
     };
-    if state.settings_open {
-        return;
-    }
-    state.settings_open = true;
-    if let Err(error) = crate::settings_win32::show(window, &mut state.application) {
-        let message = wide(&error.to_string());
-        let _ = MessageBoxW(
-            Some(window),
-            PCWSTR(message.as_ptr()),
-            w!("ApricotPlayer 2 Beta"),
-            MB_OK | MB_ICONINFORMATION,
-        );
-    }
     state.settings_open = false;
     refresh_main_menu(state);
     let _ = SetFocus(Some(state.list));
     process_pending_activations(window);
+    match settings_result {
+        Ok(Some(action_id)) => activate_action(window, action_id),
+        Ok(None) => {}
+        Err(error) => {
+            let message = wide(&error.to_string());
+            let _ = MessageBoxW(
+                Some(window),
+                PCWSTR(message.as_ptr()),
+                w!("ApricotPlayer 2 Beta"),
+                MB_OK | MB_ICONINFORMATION,
+            );
+        }
+    }
 }
 
 unsafe fn process_pending_activations(window: HWND) {

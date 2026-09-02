@@ -5,10 +5,14 @@
 use std::{ffi::c_void, mem::size_of};
 
 use apricot_app::{
-    Application, SettingsCommand, SettingsControl, SettingsScreenModel, SettingsValueType,
-    ShortcutActionItem,
+    ActionFinderContext, Application, SettingsCommand, SettingsControl, SettingsScreenModel,
+    SettingsValueType, ShortcutActionItem,
 };
-use apricot_core::{SettingId, SettingsSection};
+use apricot_core::{
+    SettingId, SettingsSection,
+    action::{ActionScope, RepeatPolicy},
+    shortcut::{ShortcutContext, action_for_shortcut},
+};
 use apricot_platform::{ApplicationIdentity, sync_startup_registration};
 use windows::{
     Win32::{
@@ -32,13 +36,13 @@ use windows::{
                 HMENU, IDC_ARROW, IsDialogMessageW, LB_ADDSTRING, LB_DELETESTRING, LB_GETCURSEL,
                 LB_INSERTSTRING, LB_SETCURSEL, LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW,
                 MB_ICONERROR, MB_ICONINFORMATION, MB_ICONQUESTION, MB_OK, MB_YESNO, MSG,
-                MessageBoxW, MoveWindow, RegisterClassW, SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS,
-                SIF_RANGE, SW_SHOW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW,
-                SetWindowTextW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE,
-                WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_DESTROY,
-                WM_HSCROLL, WM_KEYDOWN, WM_NCDESTROY, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_VSCROLL,
-                WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_TABSTOP,
-                WS_VISIBLE, WS_VSCROLL,
+                MessageBoxW, MoveWindow, PostQuitMessage, RegisterClassW, SB_VERT, SCROLLINFO,
+                SIF_PAGE, SIF_POS, SIF_RANGE, SW_SHOW, SendMessageW, SetForegroundWindow,
+                SetWindowLongPtrW, SetWindowTextW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE,
+                WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_HSCROLL,
+                WM_KEYDOWN, WM_NCDESTROY, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_VSCROLL, WNDCLASSW,
+                WS_CHILD, WS_EX_CLIENTEDGE, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
+                WS_VSCROLL,
             },
         },
     },
@@ -128,6 +132,7 @@ struct SettingsWindowState {
     controls: Vec<BoundControl>,
     scroll_offset: i32,
     content_height: i32,
+    deferred_action: Option<&'static str>,
 }
 
 pub unsafe fn register() -> Result<()> {
@@ -148,7 +153,7 @@ pub unsafe fn register() -> Result<()> {
     Ok(())
 }
 
-pub unsafe fn show(owner: HWND, application: &mut Application) -> Result<()> {
+pub unsafe fn show(owner: HWND, application: &mut Application) -> Result<Option<&'static str>> {
     let module = GetModuleHandleW(None)?;
     let instance = HINSTANCE(module.0);
     let model = application.settings_model(SettingsSection::General);
@@ -175,26 +180,34 @@ pub unsafe fn show(owner: HWND, application: &mut Application) -> Result<()> {
         }
     };
     let initial_focus = state.section_list;
-    SetWindowLongPtrW(
-        window,
-        WINDOW_LONG_PTR_INDEX(0),
-        Box::into_raw(Box::new(state)) as isize,
-    );
-    render_controls(window)?;
+    let state_pointer = Box::into_raw(Box::new(state));
+    SetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0), state_pointer as isize);
+    if let Err(error) = render_controls(window) {
+        let _ = DestroyWindow(window);
+        drop(Box::from_raw(state_pointer));
+        return Err(error);
+    }
     layout(window);
     let _ = EnableWindow(owner, false);
     let _ = ShowWindow(window, SW_SHOW);
     let _ = SetFocus(Some(initial_focus));
 
+    let mut loop_error = None;
     let mut message = MSG::default();
     while windows::Win32::UI::WindowsAndMessaging::IsWindow(Some(window)).as_bool() {
         let result = GetMessageW(&raw mut message, None, 0, 0);
         if result.0 == -1 {
-            let _ = EnableWindow(owner, true);
-            return Err(windows::core::Error::from_thread());
+            loop_error = Some(windows::core::Error::from_thread());
+            let _ = DestroyWindow(window);
+            break;
         }
         if result.0 == 0 {
+            let _ = DestroyWindow(window);
+            PostQuitMessage(0);
             break;
+        }
+        if handle_shortcut_message(window, &message) {
+            continue;
         }
         if !IsDialogMessageW(window, &raw const message).as_bool() {
             let _ = TranslateMessage(&raw const message);
@@ -203,7 +216,11 @@ pub unsafe fn show(owner: HWND, application: &mut Application) -> Result<()> {
     }
     let _ = EnableWindow(owner, true);
     let _ = SetForegroundWindow(owner);
-    Ok(())
+    let state = Box::from_raw(state_pointer);
+    if let Some(error) = loop_error {
+        return Err(error);
+    }
+    Ok(state.deferred_action)
 }
 
 unsafe extern "system" fn settings_window_proc(
@@ -233,14 +250,9 @@ unsafe extern "system" fn settings_window_proc(
             cancel_and_close(window);
             LRESULT(0)
         }
-        WM_DESTROY => {
-            let pointer =
-                GetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0)) as *mut SettingsWindowState;
-            if !pointer.is_null() {
-                drop(Box::from_raw(pointer));
-                SetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0), 0);
-            }
-            LRESULT(0)
+        WM_NCDESTROY => {
+            SetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0), 0);
+            DefWindowProcW(window, message, wparam, lparam)
         }
         _ => DefWindowProcW(window, message, wparam, lparam),
     }
@@ -307,7 +319,68 @@ unsafe fn create_base_controls(
         controls: Vec::new(),
         scroll_offset: 0,
         content_height: 0,
+        deferred_action: None,
     })
+}
+
+unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
+    let Some(chord) = crate::shortcut_win32::chord_from_message(message) else {
+        return false;
+    };
+    let Some(state) = state(window) else {
+        return false;
+    };
+    let application = &*state.application;
+    let Some(action) = action_for_shortcut(
+        &application.settings().keyboard_shortcuts,
+        chord,
+        ShortcutContext::new(ActionScope::Dialog, true),
+    ) else {
+        return false;
+    };
+    if !action.scopes.contains(&ActionScope::Global) {
+        return false;
+    }
+    if crate::shortcut_win32::is_repeat(message) && action.repeat == RepeatPolicy::None {
+        return true;
+    }
+    match action.id.as_str() {
+        "open_action_finder" => show_action_finder(window),
+        "open_settings" => {
+            let _ = SetFocus(Some(state.section_list));
+        }
+        action_id => defer_global_action(window, action_id),
+    }
+    true
+}
+
+unsafe fn show_action_finder(window: HWND) {
+    let Some(settings_state) = state(window) else {
+        return;
+    };
+    let model = (&*settings_state.application).action_finder_model(ActionFinderContext {
+        scope: Some(ActionScope::Dialog),
+        selection_available: false,
+        player_active: false,
+    });
+    match crate::action_finder_win32::show(window, model) {
+        Ok(Some("open_settings" | "open_action_finder") | None) => {
+            if let Some(state) = state(window) {
+                let _ = SetFocus(Some(state.section_list));
+            }
+        }
+        Ok(Some(action_id)) => defer_global_action(window, action_id),
+        Err(error) => show_error(window, &error.to_string()),
+    }
+}
+
+unsafe fn defer_global_action(window: HWND, action_id: &'static str) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state.deferred_action = Some(action_id);
+    (&mut *state.application).cancel_settings();
+    let _ = DestroyWindow(window);
 }
 
 unsafe fn render_controls(window: HWND) -> Result<()> {
@@ -1328,6 +1401,11 @@ unsafe fn ensure_control_visible(window: HWND, control: HWND) {
 unsafe fn state_mut(window: HWND) -> Option<&'static mut SettingsWindowState> {
     let pointer = GetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0)) as *mut SettingsWindowState;
     pointer.as_mut()
+}
+
+unsafe fn state(window: HWND) -> Option<&'static SettingsWindowState> {
+    let pointer = GetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0)) as *const SettingsWindowState;
+    pointer.as_ref()
 }
 
 unsafe fn model_text(application: &Application, key: &str) -> String {
