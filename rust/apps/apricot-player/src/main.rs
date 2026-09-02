@@ -68,6 +68,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     let mut application = Application::new(settings, MainMenuAvailability::default());
+    if !application.settings().language_prompted {
+        let selected =
+            apricot_ui_windows::choose_initial_language(&application.settings().language)?;
+        application.complete_initial_language(selected)?;
+    }
     if let Some(path) = startup_file {
         application.enqueue_activation(ActivationRequest::OpenFile(path));
     }

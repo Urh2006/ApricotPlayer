@@ -9,6 +9,8 @@ mod activation_win32;
 #[cfg(windows)]
 mod announcement_win32;
 #[cfg(windows)]
+mod first_run_language_win32;
+#[cfg(windows)]
 mod settings_win32;
 #[cfg(windows)]
 mod shortcut_win32;
@@ -41,6 +43,9 @@ pub fn run_application(
 
 #[cfg(windows)]
 pub use activation_win32::{forward_to_existing, show_already_open};
+
+#[cfg(windows)]
+pub use first_run_language_win32::show as choose_initial_language;
 
 #[cfg(not(windows))]
 /// Rejects the Windows UI on unsupported targets.

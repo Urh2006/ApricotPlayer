@@ -290,6 +290,34 @@ impl Application {
         self.settings.cancel();
     }
 
+    /// Completes the one-time language prompt and persists both values atomically.
+    ///
+    /// An absent or unknown selection keeps the currently configured language,
+    /// matching the Python application's cancel behavior.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the settings draft or atomic save fails.
+    pub fn complete_initial_language(
+        &mut self,
+        selected_language: Option<&str>,
+    ) -> Result<(), SettingsControllerError> {
+        let language = selected_language
+            .filter(|selected| {
+                apricot_core::locale::LANGUAGES
+                    .iter()
+                    .any(|language| language.code == *selected)
+            })
+            .unwrap_or(&self.settings.current().language)
+            .to_owned();
+        self.settings.set_values([
+            (SettingId::Language, serde_json::json!(language)),
+            (SettingId::LanguagePrompted, serde_json::json!(true)),
+        ])?;
+        let _ = self.settings.save()?;
+        Ok(())
+    }
+
     /// Saves the complete current settings draft atomically.
     ///
     /// # Errors
@@ -374,6 +402,36 @@ mod tests {
             .expect("reset");
         assert_eq!(app.settings().language, "en");
         assert!(!app.settings().close_to_tray);
+    }
+
+    #[test]
+    fn initial_language_completion_is_atomic_and_one_time() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        app.complete_initial_language(Some("sl"))
+            .expect("complete language prompt");
+        assert_eq!(app.settings().language, "sl");
+        assert!(app.settings().language_prompted);
+        assert!(!app.settings_are_dirty());
+
+        let paths =
+            SettingsPaths::for_app_data(&root.path().join("beta"), &root.path().join("stable"));
+        let reloaded = Application::new(
+            SettingsController::load(paths, SettingsDocument::default()),
+            MainMenuAvailability::default(),
+        );
+        assert_eq!(reloaded.settings().language, "sl");
+        assert!(reloaded.settings().language_prompted);
+    }
+
+    #[test]
+    fn cancelling_initial_language_keeps_the_configured_language() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        app.complete_initial_language(None)
+            .expect("cancel language prompt");
+        assert_eq!(app.settings().language, "en");
+        assert!(app.settings().language_prompted);
     }
 
     #[test]
