@@ -1,4 +1,6 @@
-//! Shipped language identities.
+//! Shipped language identities and platform-neutral translation lookup.
+
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LanguageDefinition {
@@ -117,16 +119,74 @@ pub const LANGUAGES: &[LanguageDefinition] = &[
     },
 ];
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TranslationCatalog {
+    selected_code: String,
+    english: BTreeMap<String, String>,
+    selected: BTreeMap<String, String>,
+}
+
+impl TranslationCatalog {
+    pub fn new(
+        selected_code: impl Into<String>,
+        english: BTreeMap<String, String>,
+        selected: BTreeMap<String, String>,
+    ) -> Self {
+        Self {
+            selected_code: selected_code.into(),
+            english,
+            selected,
+        }
+    }
+
+    pub fn selected_code(&self) -> &str {
+        &self.selected_code
+    }
+
+    pub fn text<'a>(&'a self, key: &'a str) -> &'a str {
+        self.selected
+            .get(key)
+            .or_else(|| self.english.get(key))
+            .map_or(key, String::as_str)
+    }
+
+    pub fn english_key_count(&self) -> usize {
+        self.english.len()
+    }
+
+    pub fn selected_key_count(&self) -> usize {
+        self.selected.len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{BTreeMap, HashSet};
 
-    use super::LANGUAGES;
+    use super::{LANGUAGES, TranslationCatalog};
 
     #[test]
     fn baseline_contains_27_unique_languages() {
         let codes: HashSet<_> = LANGUAGES.iter().map(|language| language.code).collect();
         assert_eq!(LANGUAGES.len(), 27);
         assert_eq!(codes.len(), LANGUAGES.len());
+    }
+
+    #[test]
+    fn translation_lookup_uses_selected_then_english_then_key() {
+        let catalog = TranslationCatalog::new(
+            "sl",
+            [("play".to_owned(), "Play".to_owned())].into(),
+            [("play".to_owned(), "Predvajaj".to_owned())].into(),
+        );
+        assert_eq!(catalog.text("play"), "Predvajaj");
+        assert_eq!(catalog.text("missing"), "missing");
+
+        let fallback = TranslationCatalog::new(
+            "sl",
+            [("pause".to_owned(), "Pause".to_owned())].into(),
+            BTreeMap::new(),
+        );
+        assert_eq!(fallback.text("pause"), "Pause");
     }
 }
