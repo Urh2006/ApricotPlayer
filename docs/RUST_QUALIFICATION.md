@@ -4,6 +4,34 @@ This file records reproducible evidence for the risky boundaries in Phase 0.
 Passing a spike does not claim product parity. The complete acceptance contract
 remains `docs/RUST_PARITY_MANIFEST.md`.
 
+## 2026-09-01: frozen Python launch baseline
+
+Harness: `rust/scripts/measure_python_baseline.ps1`. It starts Python 1.0.21 in
+an isolated temporary app-data profile, follows the virtual-environment launcher
+to the real GUI child process, and stops timing only after UI Automation can see
+the accessible `Main menu` List. It refuses to run while another ApricotPlayer
+instance is active, so the product's single-instance dialog cannot contaminate
+the sample.
+
+Five consecutive measurements on the development computer:
+
+- launch median: 1007.18 ms;
+- launch p95: 1056.81 ms;
+- working-set median after one idle second: 65.30 MiB;
+- private-memory median: 35.08 MiB;
+- idle CPU median: 0.13 percent of total logical CPU capacity.
+
+The five observed launch values were 960.26, 1056.81, 1007.18, 994.56, and
+1026.38 ms. This harness includes process-tree and UIA polling overhead, so Rust
+must be measured through the same acceptance point rather than compared with a
+bare `main()` timer.
+
+Still required:
+
+- cold-cache measurement;
+- action, route, playback-start, large-list, active playback, download, and
+  long-session resource baselines described in `docs/RUST_REWRITE_PLAN.md`.
+
 ## 2026-09-01: native Windows accessibility
 
 Harness:
