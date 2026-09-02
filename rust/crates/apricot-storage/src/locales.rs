@@ -68,7 +68,9 @@ fn read_locale(
 mod tests {
     use std::path::Path;
 
-    use apricot_core::{CUSTOMIZABLE_MAIN_MENU, SCREENS, action::ACTIONS, locale::LANGUAGES};
+    use apricot_core::{
+        CUSTOMIZABLE_MAIN_MENU, SCREENS, SETTINGS_SECTIONS, action::ACTIONS, locale::LANGUAGES,
+    };
 
     use super::{load_translation_catalog, read_locale};
 
@@ -127,6 +129,15 @@ mod tests {
         for screen in SCREENS {
             if !english.contains_key(screen.label_key) {
                 missing.push(format!("screen {} label {}", screen.id, screen.label_key));
+            }
+        }
+        for section in SETTINGS_SECTIONS {
+            if !english.contains_key(section.label_key) {
+                missing.push(format!(
+                    "settings section {} label {}",
+                    section.section.id(),
+                    section.label_key
+                ));
             }
         }
         assert!(missing.is_empty(), "{}", missing.join("\n"));

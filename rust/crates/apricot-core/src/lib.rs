@@ -11,6 +11,7 @@ pub mod menu;
 pub mod navigation;
 pub mod screen;
 pub mod setting;
+pub mod settings_layout;
 
 pub use action::{ActionDefinition, ActionId, ActionScope, RepeatPolicy};
 pub use announcement::{
@@ -25,3 +26,6 @@ pub use menu::{CUSTOMIZABLE_MAIN_MENU, MainMenuDefinition, PERMANENT_MAIN_MENU_I
 pub use navigation::{FocusId, NavigationStack, Route, RouteFrame};
 pub use screen::{PrimaryControlRole, SCREENS, ScreenDefinition, ScreenKind};
 pub use setting::SettingId;
+pub use settings_layout::{
+    INTERNAL_SETTINGS, SETTINGS_SECTIONS, SettingsSection, SettingsSectionDefinition,
+};
