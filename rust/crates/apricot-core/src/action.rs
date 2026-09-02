@@ -103,7 +103,7 @@ pub const ACTIONS: &[ActionDefinition] = &[
     action!("copy_stream_url", "Ctrl+D", LIST_PLAYER),
     action!("context_menu", "Applications", LIST_PLAYER_DIALOG),
     action!("open_selected", "Enter", LIST_PLAYER_DIALOG),
-    action!("new_subscription_videos", "Ctrl+Shift+V", LIST),
+    action!("new_subscription_videos", "Ctrl+Shift+V", GLOBAL),
     action!("remove_selected", "Delete", LIST_PLAYER_DIALOG),
     action!("toggle_podcast_played", "Ctrl+Shift+X", LIST),
     action!("clear_podcast_progress", "Ctrl+Shift+R", LIST),
@@ -222,5 +222,11 @@ mod tests {
 
         let volume = action_by_id("player_volume_up").expect("volume action");
         assert_eq!(volume.repeat, RepeatPolicy::Native);
+    }
+
+    #[test]
+    fn notification_center_shortcut_is_global_like_python() {
+        let action = action_by_id("new_subscription_videos").expect("notification action");
+        assert_eq!(action.scopes, &[ActionScope::Global]);
     }
 }

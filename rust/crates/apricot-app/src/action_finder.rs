@@ -6,7 +6,7 @@ use apricot_core::{
 };
 use apricot_storage::SettingsDocument;
 
-use crate::MainMenuAvailability;
+use crate::{MainMenuAvailability, MenuVisibility};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ActionFinderContext {
@@ -27,6 +27,8 @@ pub struct ActionFinderModel {
     pub query_label: String,
     pub results_name: String,
     pub no_results_label: String,
+    pub open_label: String,
+    pub cancel_label: String,
     pub items: Vec<ActionFinderItem>,
 }
 
@@ -37,7 +39,7 @@ impl ActionFinderModel {
         availability: MainMenuAvailability,
         context: ActionFinderContext,
     ) -> Self {
-        let items = ACTIONS
+        let mut items: Vec<_> = ACTIONS
             .iter()
             .filter(|action| action.id.as_str() != "open_action_finder")
             .filter(|action| {
@@ -65,27 +67,53 @@ impl ActionFinderModel {
                 }
             })
             .collect();
+        if availability.resume == MenuVisibility::Visible {
+            items.push(command_item(catalog, "resume_last_session"));
+        }
+        if settings.enable_trending {
+            items.push(command_item(catalog, "trending"));
+        }
+        items.push(command_item(catalog, "file_converter"));
+        items.push(command_item(catalog, "folder_converter"));
         Self {
             title: catalog.text("action_finder").to_owned(),
             query_label: catalog.text("action_finder_search").to_owned(),
             results_name: catalog.text("action_finder_results").to_owned(),
             no_results_label: catalog.text("action_finder_no_results").to_owned(),
+            open_label: catalog.text("open").to_owned(),
+            cancel_label: catalog.text("cancel").to_owned(),
             items,
         }
     }
 
     pub fn filtered_items(&self, query: &str) -> Vec<&ActionFinderItem> {
+        self.filtered_indices(query)
+            .into_iter()
+            .map(|index| &self.items[index])
+            .collect()
+    }
+
+    pub fn filtered_indices(&self, query: &str) -> Vec<usize> {
         let words: Vec<_> = query.split_whitespace().map(str::to_lowercase).collect();
         if words.is_empty() {
-            return self.items.iter().collect();
+            return (0..self.items.len()).collect();
         }
         self.items
             .iter()
-            .filter(|item| {
+            .enumerate()
+            .filter(|(_index, item)| {
                 let label = item.label.to_lowercase();
                 words.iter().all(|word| label.contains(word))
             })
+            .map(|(index, _item)| index)
             .collect()
+    }
+}
+
+fn command_item(catalog: &TranslationCatalog, action_id: &'static str) -> ActionFinderItem {
+    ActionFinderItem {
+        action_id,
+        label: catalog.text(action_id).to_owned(),
     }
 }
 
@@ -193,5 +221,18 @@ mod tests {
         let filtered = model.filtered_items("search ctrl");
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].action_id, "open_search");
+    }
+
+    #[test]
+    fn command_only_python_actions_remain_available() {
+        let model = ActionFinderModel::build(
+            &english_catalog(),
+            &SettingsDocument::default(),
+            MainMenuAvailability::default(),
+            ActionFinderContext::default(),
+        );
+        for id in ["file_converter", "folder_converter"] {
+            assert!(model.items.iter().any(|item| item.action_id == id), "{id}");
+        }
     }
 }

@@ -3,9 +3,13 @@
 #![cfg_attr(not(windows), allow(dead_code))]
 
 #[cfg(windows)]
+mod action_finder_win32;
+#[cfg(windows)]
 mod activation_win32;
 #[cfg(windows)]
 mod settings_win32;
+#[cfg(windows)]
+mod shortcut_win32;
 #[cfg(windows)]
 mod win32;
 

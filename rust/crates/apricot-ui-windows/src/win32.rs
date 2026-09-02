@@ -4,7 +4,11 @@
 
 use std::{ffi::c_void, mem::size_of};
 
-use apricot_app::{ActivationRequest, Application, MainMenuModel};
+use apricot_app::{ActionFinderContext, ActivationRequest, Application, MainMenuModel};
+use apricot_core::{
+    action::{ActionScope, RepeatPolicy},
+    shortcut::{ShortcutContext, action_for_shortcut},
+};
 use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
@@ -90,6 +94,7 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
         return Err(windows::core::Error::from_thread());
     }
     crate::settings_win32::register()?;
+    crate::action_finder_win32::register()?;
 
     let title = wide(&format!("ApricotPlayer 2 Beta {version}"));
     let window = CreateWindowExW(
@@ -136,6 +141,9 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
         }
         if result.0 == 0 {
             break;
+        }
+        if handle_shortcut_message(window, &message) {
+            continue;
         }
         if !IsDialogMessageW(window, &raw const message).as_bool() {
             let _ = TranslateMessage(&raw const message);
@@ -560,6 +568,85 @@ unsafe fn activate_selection(window: HWND) {
         MB_OK | MB_ICONINFORMATION,
     );
     let _ = SetFocus(Some(state.list));
+}
+
+unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
+    let Some(chord) = crate::shortcut_win32::chord_from_message(message) else {
+        return false;
+    };
+    let Some(state) = state(window) else {
+        return false;
+    };
+    let Some(action) = action_for_shortcut(
+        &state.application.settings().keyboard_shortcuts,
+        chord,
+        ShortcutContext::new(ActionScope::List, false),
+    ) else {
+        return false;
+    };
+    let is_global = action.scopes.contains(&ActionScope::Global);
+    if !is_global && action.id.as_str() != "open_selected" {
+        return false;
+    }
+    if crate::shortcut_win32::is_repeat(message) && action.repeat == RepeatPolicy::None {
+        return true;
+    }
+    activate_action(window, action.id.as_str());
+    true
+}
+
+unsafe fn activate_action(window: HWND, action_id: &str) {
+    match action_id {
+        "open_main_menu" => restore_from_tray(window),
+        "open_settings" => open_settings(window),
+        "open_action_finder" => show_action_finder(window),
+        "open_selected" => activate_selection(window),
+        _ => show_unimplemented_action(window, action_id),
+    }
+}
+
+unsafe fn show_action_finder(window: HWND) {
+    let Some(main_state) = state(window) else {
+        return;
+    };
+    let model = main_state
+        .application
+        .action_finder_model(ActionFinderContext::default());
+    match crate::action_finder_win32::show(window, model) {
+        Ok(Some(action_id)) => activate_action(window, action_id),
+        Ok(None) => {}
+        Err(error) => {
+            let message = wide(&error.to_string());
+            let _ = MessageBoxW(
+                Some(window),
+                PCWSTR(message.as_ptr()),
+                w!("ApricotPlayer 2 Beta"),
+                MB_OK | MB_ICONINFORMATION,
+            );
+        }
+    }
+    if let Some(state) = state(window) {
+        let _ = SetFocus(Some(state.list));
+    }
+}
+
+unsafe fn show_unimplemented_action(window: HWND, action_id: &str) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let label_key =
+        apricot_core::action::action_by_id(action_id).map_or(action_id, |action| action.label_key);
+    let message = wide(&format!(
+        "{} is registered, but its Rust route is not implemented in this internal build yet.",
+        catalog.text(label_key)
+    ));
+    let _ = MessageBoxW(
+        Some(window),
+        PCWSTR(message.as_ptr()),
+        w!("ApricotPlayer 2 Beta"),
+        MB_OK | MB_ICONINFORMATION,
+    );
 }
 
 unsafe fn open_settings(window: HWND) {
