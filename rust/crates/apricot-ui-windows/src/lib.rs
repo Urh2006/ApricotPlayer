@@ -25,8 +25,12 @@ pub enum QualificationGate {
 ///
 /// Returns a Win32 error when the window class, window, controls, or message
 /// loop cannot be created or operated.
-pub fn run_application(application: Application, version: &str) -> windows::core::Result<()> {
-    win32::run_application(application, version)
+pub fn run_application(
+    application: Application,
+    version: &str,
+    start_hidden: bool,
+) -> windows::core::Result<()> {
+    win32::run_application(application, version, start_hidden)
 }
 
 #[cfg(windows)]
@@ -38,6 +42,10 @@ pub use activation_win32::{forward_to_existing, show_already_open};
 /// # Errors
 ///
 /// Always returns an unsupported-platform error.
-pub fn run_application(_application: Application, _version: &str) -> Result<(), &'static str> {
+pub fn run_application(
+    _application: Application,
+    _version: &str,
+    _start_hidden: bool,
+) -> Result<(), &'static str> {
     Err("ApricotPlayer 2 Beta currently requires Windows")
 }

@@ -16,6 +16,9 @@ use apricot_updater::UpdateChannel;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let channel = UpdateChannel::LocalOnly;
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    let start_hidden = arguments
+        .iter()
+        .any(|argument| argument == "--start-in-tray");
     if arguments
         .iter()
         .any(|argument| argument == "--qualification-smoke")
@@ -61,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(path) = startup_file {
         application.enqueue_activation(ActivationRequest::OpenFile(path));
     }
-    apricot_ui_windows::run_application(application, env!("CARGO_PKG_VERSION"))
+    apricot_ui_windows::run_application(application, env!("CARGO_PKG_VERSION"), start_hidden)
         .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
 }
 

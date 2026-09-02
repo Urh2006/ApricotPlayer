@@ -7,22 +7,30 @@ use std::{ffi::c_void, mem::size_of};
 use apricot_app::{ActivationRequest, Application, MainMenuModel};
 use windows::{
     Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
+        Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::Gdi::{DEFAULT_GUI_FONT, GetStockObject},
         System::LibraryLoader::GetModuleHandleW,
         UI::{
             Input::KeyboardAndMouse::{SetFocus, VK_RETURN},
-            Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
+            Shell::{
+                DefSubclassProc, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
+                NIM_SETVERSION, NOTIFYICON_VERSION_4, NOTIFYICONDATAW, RemoveWindowSubclass,
+                SetWindowSubclass, Shell_NotifyIconW,
+            },
             WindowsAndMessaging::{
-                BS_DEFPUSHBUTTON, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow,
-                DispatchMessageW, GetClientRect, GetMessageW, GetWindowLongPtrW, HMENU, IDC_ARROW,
+                AppendMenuW, BS_DEFPUSHBUTTON, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW,
+                DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, GetClientRect,
+                GetCursorPos, GetMessageW, GetWindowLongPtrW, HMENU, IDC_ARROW, IDI_APPLICATION,
                 IsDialogMessageW, LB_ADDSTRING, LB_GETCURSEL, LB_SETCURSEL, LBN_DBLCLK, LBS_NOTIFY,
-                LoadCursorW, MB_ICONINFORMATION, MB_OK, MSG, MessageBoxW, MoveWindow, PostMessageW,
-                PostQuitMessage, RegisterClassW, SW_SHOW, SendMessageW, SetWindowLongPtrW,
-                ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE,
-                WM_APP, WM_COMMAND, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_NCDESTROY,
-                WM_SETFONT, WM_SIZE, WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE, WS_GROUP,
-                WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+                LoadCursorW, LoadIconW, MB_ICONINFORMATION, MB_OK, MF_STRING, MSG, MessageBoxW,
+                MoveWindow, PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW,
+                SW_HIDE, SW_SHOW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, ShowWindow,
+                TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage,
+                WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND,
+                WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDBLCLK,
+                WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_CHILD,
+                WS_EX_CLIENTEDGE, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
+                WS_VSCROLL,
             },
         },
     },
@@ -32,6 +40,21 @@ use windows::{
 const ID_MENU_LIST: usize = 1001;
 const ID_OPEN: usize = 1002;
 const WM_PROCESS_ACTIVATION: u32 = WM_APP + 1;
+const WM_TRAY_ICON: u32 = WM_APP + 2;
+const TRAY_ICON_ID: u32 = 1;
+const ID_TRAY_SHOW: usize = 1301;
+const ID_TRAY_SETTINGS: usize = 1302;
+const ID_TRAY_CHECK_SUBSCRIPTIONS: usize = 1303;
+const ID_TRAY_EXIT: usize = 1304;
+const NIN_SELECT_CODE: u32 = 1024;
+const NIN_KEYSELECT_CODE: u32 = 1025;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WindowLifecycle {
+    Visible,
+    HiddenInTray,
+    Exiting,
+}
 
 struct WindowState {
     list: HWND,
@@ -39,16 +62,19 @@ struct WindowState {
     model: MainMenuModel,
     application: Application,
     settings_open: bool,
+    tray_icon_added: bool,
+    lifecycle: WindowLifecycle,
+    taskbar_created_message: u32,
 }
 
-pub fn run_application(application: Application, version: &str) -> Result<()> {
+pub fn run_application(application: Application, version: &str, start_hidden: bool) -> Result<()> {
     // SAFETY: The window, state pointer, controls, and message loop are confined
     // to this thread. Dynamic UTF-16 buffers outlive each Win32 call that uses
     // them, and owned state is released exactly once during WM_DESTROY.
-    unsafe { run_win32(application, version) }
+    unsafe { run_win32(application, version, start_hidden) }
 }
 
-unsafe fn run_win32(application: Application, version: &str) -> Result<()> {
+unsafe fn run_win32(application: Application, version: &str, start_hidden: bool) -> Result<()> {
     let module = GetModuleHandleW(None)?;
     let instance = HINSTANCE(module.0);
     let class_name = crate::activation_win32::MAIN_WINDOW_CLASS;
@@ -94,8 +120,12 @@ unsafe fn run_win32(application: Application, version: &str) -> Result<()> {
         Box::into_raw(Box::new(state)) as isize,
     );
     layout_controls(window);
-    let _ = ShowWindow(window, SW_SHOW);
-    let _ = SetFocus(Some(initial_focus));
+    if start_hidden {
+        hide_to_tray(window);
+    } else {
+        let _ = ShowWindow(window, SW_SHOW);
+        let _ = SetFocus(Some(initial_focus));
+    }
     process_pending_activations(window);
 
     let mut message = MSG::default();
@@ -121,6 +151,15 @@ unsafe extern "system" fn window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    if let Some(state) = state_mut(window)
+        && message == state.taskbar_created_message
+    {
+        state.tray_icon_added = false;
+        if state.lifecycle == WindowLifecycle::HiddenInTray {
+            add_tray_icon(window);
+        }
+        return LRESULT(0);
+    }
     match message {
         WM_CREATE => LRESULT(0),
         WM_SIZE => {
@@ -135,7 +174,27 @@ unsafe extern "system" fn window_proc(
                     && notification == usize::try_from(LBN_DBLCLK).expect("notification fits"))
             {
                 activate_selection(window);
+            } else if matches!(
+                command,
+                ID_TRAY_SHOW | ID_TRAY_SETTINGS | ID_TRAY_CHECK_SUBSCRIPTIONS | ID_TRAY_EXIT
+            ) {
+                handle_tray_command(window, command);
             }
+            LRESULT(0)
+        }
+        WM_CLOSE => {
+            if state(window).is_some_and(|state| {
+                state.lifecycle != WindowLifecycle::Exiting
+                    && state.application.settings().close_to_tray
+            }) {
+                hide_to_tray(window);
+            } else {
+                let _ = DestroyWindow(window);
+            }
+            LRESULT(0)
+        }
+        WM_TRAY_ICON => {
+            handle_tray_message(window, lparam);
             LRESULT(0)
         }
         WM_COPYDATA => {
@@ -143,7 +202,7 @@ unsafe extern "system" fn window_proc(
                 && let Some(state) = state_mut(window)
             {
                 state.application.enqueue_activation(request);
-                crate::activation_win32::restore_window(window);
+                restore_from_tray(window);
                 let _ = PostMessageW(Some(window), WM_PROCESS_ACTIVATION, WPARAM(0), LPARAM(0));
                 return LRESULT(1);
             }
@@ -154,6 +213,7 @@ unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_DESTROY => {
+            remove_tray_icon(window);
             let pointer = GetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0)) as *mut WindowState;
             if !pointer.is_null() {
                 drop(Box::from_raw(pointer));
@@ -220,6 +280,9 @@ unsafe fn create_controls(
         model,
         application,
         settings_open: false,
+        tray_icon_added: false,
+        lifecycle: WindowLifecycle::Visible,
+        taskbar_created_message: RegisterWindowMessageW(w!("TaskbarCreated")),
     })
 }
 
@@ -309,6 +372,162 @@ unsafe fn layout_controls(window: HWND) {
     );
 }
 
+unsafe fn add_tray_icon(window: HWND) -> bool {
+    if state(window).is_some_and(|state| state.tray_icon_added) {
+        return true;
+    }
+    let Ok(icon) = LoadIconW(None, IDI_APPLICATION) else {
+        return false;
+    };
+    let mut data = NOTIFYICONDATAW {
+        cbSize: u32::try_from(size_of::<NOTIFYICONDATAW>()).expect("tray data size fits"),
+        hWnd: window,
+        uID: TRAY_ICON_ID,
+        uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
+        uCallbackMessage: WM_TRAY_ICON,
+        hIcon: icon,
+        ..Default::default()
+    };
+    copy_wide_array(&mut data.szTip, "ApricotPlayer 2 Beta");
+    if !Shell_NotifyIconW(NIM_ADD, &raw const data).as_bool() {
+        return false;
+    }
+    data.Anonymous.uVersion = NOTIFYICON_VERSION_4;
+    let _ = Shell_NotifyIconW(NIM_SETVERSION, &raw const data);
+    if let Some(state) = state_mut(window) {
+        state.tray_icon_added = true;
+    }
+    true
+}
+
+unsafe fn remove_tray_icon(window: HWND) {
+    if !state(window).is_some_and(|state| state.tray_icon_added) {
+        return;
+    }
+    let data = NOTIFYICONDATAW {
+        cbSize: u32::try_from(size_of::<NOTIFYICONDATAW>()).expect("tray data size fits"),
+        hWnd: window,
+        uID: TRAY_ICON_ID,
+        ..Default::default()
+    };
+    let _ = Shell_NotifyIconW(NIM_DELETE, &raw const data);
+    if let Some(state) = state_mut(window) {
+        state.tray_icon_added = false;
+    }
+}
+
+unsafe fn hide_to_tray(window: HWND) {
+    if !add_tray_icon(window) {
+        let _ = ShowWindow(window, SW_SHOW);
+        if let Some(state) = state(window) {
+            let _ = SetFocus(Some(state.list));
+        }
+        return;
+    }
+    if let Some(state) = state_mut(window) {
+        state.lifecycle = WindowLifecycle::HiddenInTray;
+    }
+    let _ = ShowWindow(window, SW_HIDE);
+}
+
+unsafe fn restore_from_tray(window: HWND) {
+    if let Some(state) = state_mut(window) {
+        state.lifecycle = WindowLifecycle::Visible;
+    }
+    crate::activation_win32::restore_window(window);
+    remove_tray_icon(window);
+    if let Some(state) = state(window) {
+        let _ = SetFocus(Some(state.list));
+    }
+}
+
+unsafe fn handle_tray_message(window: HWND, lparam: LPARAM) {
+    let event = u32::try_from(lparam.0 & 0xffff).unwrap_or_default();
+    if matches!(
+        event,
+        WM_LBUTTONDBLCLK | NIN_SELECT_CODE | NIN_KEYSELECT_CODE
+    ) {
+        restore_from_tray(window);
+    } else if matches!(event, WM_RBUTTONUP | WM_CONTEXTMENU) {
+        show_tray_menu(window);
+    }
+}
+
+unsafe fn show_tray_menu(window: HWND) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let Ok(menu) = CreatePopupMenu() else {
+        return;
+    };
+    for (id, key) in [
+        (ID_TRAY_SHOW, "tray_show"),
+        (ID_TRAY_SETTINGS, "tray_settings"),
+        (ID_TRAY_CHECK_SUBSCRIPTIONS, "tray_check_subscriptions"),
+        (ID_TRAY_EXIT, "tray_exit"),
+    ] {
+        let label = wide(catalog.text(key));
+        let _ = AppendMenuW(menu, MF_STRING, id, PCWSTR(label.as_ptr()));
+    }
+    let mut point = POINT::default();
+    if GetCursorPos(&raw mut point).is_ok() {
+        let _ = SetForegroundWindow(window);
+        let selected = TrackPopupMenu(
+            menu,
+            TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD,
+            point.x,
+            point.y,
+            None,
+            window,
+            None,
+        );
+        if selected.0 > 0 {
+            handle_tray_command(window, usize::try_from(selected.0).unwrap_or_default());
+        }
+    }
+    let _ = DestroyMenu(menu);
+}
+
+unsafe fn handle_tray_command(window: HWND, command: usize) {
+    match command {
+        ID_TRAY_SHOW => restore_from_tray(window),
+        ID_TRAY_SETTINGS => {
+            restore_from_tray(window);
+            open_settings(window);
+        }
+        ID_TRAY_CHECK_SUBSCRIPTIONS => {
+            let message = wide(
+                "Subscription checking is registered, but its Rust service is not implemented in this internal build yet.",
+            );
+            let _ = MessageBoxW(
+                Some(window),
+                PCWSTR(message.as_ptr()),
+                w!("ApricotPlayer 2 Beta"),
+                MB_OK | MB_ICONINFORMATION,
+            );
+        }
+        ID_TRAY_EXIT => {
+            if let Some(state) = state_mut(window) {
+                state.lifecycle = WindowLifecycle::Exiting;
+            }
+            let _ = DestroyWindow(window);
+        }
+        _ => {}
+    }
+}
+
+fn copy_wide_array<const N: usize>(target: &mut [u16; N], value: &str) {
+    target.fill(0);
+    let mut units = value.encode_utf16();
+    for slot in target.iter_mut().take(N.saturating_sub(1)) {
+        let Some(unit) = units.next() else {
+            break;
+        };
+        *slot = unit;
+    }
+}
+
 unsafe fn activate_selection(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
@@ -378,13 +597,13 @@ unsafe fn process_pending_activations(window: HWND) {
             return;
         };
         match request {
-            ActivationRequest::Show => crate::activation_win32::restore_window(window),
+            ActivationRequest::Show => restore_from_tray(window),
             ActivationRequest::OpenSettings => {
-                crate::activation_win32::restore_window(window);
+                restore_from_tray(window);
                 open_settings(window);
             }
             ActivationRequest::OpenFile(path) => {
-                crate::activation_win32::restore_window(window);
+                restore_from_tray(window);
                 let message = wide(&format!(
                     "{} is ready for the local-file route, which is not implemented in this internal build yet.",
                     path.display()
@@ -417,4 +636,19 @@ unsafe fn refresh_main_menu(state: &mut WindowState) {
 
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::copy_wide_array;
+
+    #[test]
+    fn tray_text_is_cleared_truncated_and_null_terminated() {
+        let mut target = [u16::MAX; 5];
+        copy_wide_array(&mut target, "abcdef");
+        assert_eq!(target, ['a' as u16, 'b' as u16, 'c' as u16, 'd' as u16, 0]);
+
+        copy_wide_array(&mut target, "x");
+        assert_eq!(target, ['x' as u16, 0, 0, 0, 0]);
+    }
 }
