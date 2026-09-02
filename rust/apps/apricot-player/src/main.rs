@@ -8,7 +8,7 @@ use apricot_core::{
 };
 use apricot_platform::{
     ApplicationIdentity, SingleInstanceOutcome, acquire_single_instance,
-    discover_windows_beta_paths,
+    discover_windows_beta_paths, sync_startup_registration,
 };
 use apricot_storage::{SettingsDocument, SettingsPaths};
 use apricot_updater::UpdateChannel;
@@ -60,6 +60,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
     };
+    if let Ok(executable) = std::env::current_exe() {
+        let _ = sync_startup_registration(
+            ApplicationIdentity::RustBeta,
+            &executable,
+            settings.current().start_with_windows,
+        );
+    }
     let mut application = Application::new(settings, MainMenuAvailability::default());
     if let Some(path) = startup_file {
         application.enqueue_activation(ActivationRequest::OpenFile(path));

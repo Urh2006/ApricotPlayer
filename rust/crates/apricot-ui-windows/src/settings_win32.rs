@@ -9,6 +9,7 @@ use apricot_app::{
     ShortcutActionItem,
 };
 use apricot_core::{SettingId, SettingsSection};
+use apricot_platform::{ApplicationIdentity, sync_startup_registration};
 use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
@@ -794,6 +795,24 @@ unsafe fn save_and_close(window: HWND) {
         return;
     }
     if let Err(error) = (&mut *state.application).save_settings() {
+        show_error(window, &error.to_string());
+        return;
+    }
+    let executable = match std::env::current_exe() {
+        Ok(executable) => executable,
+        Err(error) => {
+            show_error(
+                window,
+                &format!("Could not locate the running executable: {error}"),
+            );
+            return;
+        }
+    };
+    if let Err(error) = sync_startup_registration(
+        ApplicationIdentity::RustBeta,
+        &executable,
+        (&*state.application).settings().start_with_windows,
+    ) {
         show_error(window, &error.to_string());
         return;
     }
