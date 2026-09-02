@@ -1,6 +1,12 @@
 //! Application coordinator state. UI controls are projections of this state.
 
+pub mod main_menu;
+
 use apricot_core::{MediaItem, NavigationStack};
+
+pub use main_menu::{
+    MainMenuAvailability, MainMenuItem, MainMenuModel, MenuVisibility, english_catalog,
+};
 
 #[derive(Debug, Default)]
 pub struct AppState {

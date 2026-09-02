@@ -9,6 +9,7 @@ publish.workspace = true
 apricot-app.workspace = true
 apricot-core.workspace = true
 apricot-platform.workspace = true
+windows.workspace = true
 
 [lints]
 workspace = true

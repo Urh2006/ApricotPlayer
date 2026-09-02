@@ -30,8 +30,8 @@ try {
     & (Join-Path $PSScriptRoot "install_local_beta.ps1") -PackageDir $PackageDir -InstallRoot $InstallRoot -SkipBuild -NoShortcut
     $Executable = Join-Path $InstallRoot "ApricotPlayer2Beta.exe"
     if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) { throw "Installed executable is missing" }
-    $Output = (& $Executable | Out-String)
-    if ($LASTEXITCODE -ne 0 -or $Output -notmatch "foundation") { throw "Installed local beta did not launch correctly" }
+    & $Executable --qualification-smoke
+    if ($LASTEXITCODE -ne 0) { throw "Installed local beta did not launch correctly" }
 
     Set-Content -LiteralPath (Join-Path $InstallRoot "stale-file.txt") -Value "stale" -Encoding utf8
     & (Join-Path $PSScriptRoot "install_local_beta.ps1") -PackageDir $PackageDir -InstallRoot $InstallRoot -SkipBuild -NoShortcut

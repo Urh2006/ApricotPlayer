@@ -65,7 +65,9 @@ dependencies = [
 name = "apricot-player"
 version = "2.0.0-dev.1"
 dependencies = [
+ "apricot-app",
  "apricot-core",
+ "apricot-ui-windows",
  "apricot-updater",
 ]
 
@@ -94,6 +96,7 @@ dependencies = [
  "apricot-app",
  "apricot-core",
  "apricot-platform",
+ "windows",
 ]
 
 [[package]]
