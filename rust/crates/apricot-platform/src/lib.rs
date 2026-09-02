@@ -6,9 +6,11 @@ use thiserror::Error;
 
 pub mod diagnostics;
 pub mod paths;
+pub mod single_instance;
 
 pub use diagnostics::{DiagnosticLog, DiagnosticLogError, install_panic_hook};
 pub use paths::{PathDiscoveryError, discover_windows_beta_paths, discover_windows_paths};
+pub use single_instance::{SingleInstanceGuard, SingleInstanceOutcome, acquire_single_instance};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ApplicationIdentity {

@@ -4,7 +4,7 @@
 
 use std::{ffi::c_void, mem::size_of};
 
-use apricot_app::{Application, MainMenuModel};
+use apricot_app::{ActivationRequest, Application, MainMenuModel};
 use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
@@ -17,12 +17,12 @@ use windows::{
                 BS_DEFPUSHBUTTON, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow,
                 DispatchMessageW, GetClientRect, GetMessageW, GetWindowLongPtrW, HMENU, IDC_ARROW,
                 IsDialogMessageW, LB_ADDSTRING, LB_GETCURSEL, LB_SETCURSEL, LBN_DBLCLK, LBS_NOTIFY,
-                LoadCursorW, MB_ICONINFORMATION, MB_OK, MSG, MessageBoxW, MoveWindow,
+                LoadCursorW, MB_ICONINFORMATION, MB_OK, MSG, MessageBoxW, MoveWindow, PostMessageW,
                 PostQuitMessage, RegisterClassW, SW_SHOW, SendMessageW, SetWindowLongPtrW,
                 ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE,
-                WM_COMMAND, WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_NCDESTROY, WM_SETFONT, WM_SIZE,
-                WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_TABSTOP,
-                WS_VISIBLE, WS_VSCROLL,
+                WM_APP, WM_COMMAND, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_NCDESTROY,
+                WM_SETFONT, WM_SIZE, WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE, WS_GROUP,
+                WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -31,12 +31,14 @@ use windows::{
 
 const ID_MENU_LIST: usize = 1001;
 const ID_OPEN: usize = 1002;
+const WM_PROCESS_ACTIVATION: u32 = WM_APP + 1;
 
 struct WindowState {
     list: HWND,
     open: HWND,
     model: MainMenuModel,
     application: Application,
+    settings_open: bool,
 }
 
 pub fn run_application(application: Application, version: &str) -> Result<()> {
@@ -49,7 +51,7 @@ pub fn run_application(application: Application, version: &str) -> Result<()> {
 unsafe fn run_win32(application: Application, version: &str) -> Result<()> {
     let module = GetModuleHandleW(None)?;
     let instance = HINSTANCE(module.0);
-    let class_name = w!("ApricotPlayer2BetaMainWindow");
+    let class_name = crate::activation_win32::MAIN_WINDOW_CLASS;
     let class = WNDCLASSW {
         cbWndExtra: i32::try_from(size_of::<isize>()).expect("pointer size fits in i32"),
         hCursor: LoadCursorW(None, IDC_ARROW)?,
@@ -94,6 +96,7 @@ unsafe fn run_win32(application: Application, version: &str) -> Result<()> {
     layout_controls(window);
     let _ = ShowWindow(window, SW_SHOW);
     let _ = SetFocus(Some(initial_focus));
+    process_pending_activations(window);
 
     let mut message = MSG::default();
     loop {
@@ -133,6 +136,21 @@ unsafe extern "system" fn window_proc(
             {
                 activate_selection(window);
             }
+            LRESULT(0)
+        }
+        WM_COPYDATA => {
+            if let Some(request) = crate::activation_win32::decode_request(lparam)
+                && let Some(state) = state_mut(window)
+            {
+                state.application.enqueue_activation(request);
+                crate::activation_win32::restore_window(window);
+                let _ = PostMessageW(Some(window), WM_PROCESS_ACTIVATION, WPARAM(0), LPARAM(0));
+                return LRESULT(1);
+            }
+            LRESULT(0)
+        }
+        WM_PROCESS_ACTIVATION => {
+            process_pending_activations(window);
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -201,6 +219,7 @@ unsafe fn create_controls(
         open,
         model,
         application,
+        settings_open: false,
     })
 }
 
@@ -306,17 +325,7 @@ unsafe fn activate_selection(window: HWND) {
         return;
     }
     if item.id == "settings" {
-        if let Err(error) = crate::settings_win32::show(window, &mut state.application) {
-            let message = wide(&error.to_string());
-            let _ = MessageBoxW(
-                Some(window),
-                PCWSTR(message.as_ptr()),
-                w!("ApricotPlayer 2 Beta"),
-                MB_OK | MB_ICONINFORMATION,
-            );
-        }
-        refresh_main_menu(state);
-        let _ = SetFocus(Some(state.list));
+        open_settings(window);
         return;
     }
 
@@ -332,6 +341,63 @@ unsafe fn activate_selection(window: HWND) {
         MB_OK | MB_ICONINFORMATION,
     );
     let _ = SetFocus(Some(state.list));
+}
+
+unsafe fn open_settings(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    if state.settings_open {
+        return;
+    }
+    state.settings_open = true;
+    if let Err(error) = crate::settings_win32::show(window, &mut state.application) {
+        let message = wide(&error.to_string());
+        let _ = MessageBoxW(
+            Some(window),
+            PCWSTR(message.as_ptr()),
+            w!("ApricotPlayer 2 Beta"),
+            MB_OK | MB_ICONINFORMATION,
+        );
+    }
+    state.settings_open = false;
+    refresh_main_menu(state);
+    let _ = SetFocus(Some(state.list));
+    process_pending_activations(window);
+}
+
+unsafe fn process_pending_activations(window: HWND) {
+    loop {
+        let Some(state) = state_mut(window) else {
+            return;
+        };
+        if state.settings_open {
+            return;
+        }
+        let Some(request) = state.application.take_activation() else {
+            return;
+        };
+        match request {
+            ActivationRequest::Show => crate::activation_win32::restore_window(window),
+            ActivationRequest::OpenSettings => {
+                crate::activation_win32::restore_window(window);
+                open_settings(window);
+            }
+            ActivationRequest::OpenFile(path) => {
+                crate::activation_win32::restore_window(window);
+                let message = wide(&format!(
+                    "{} is ready for the local-file route, which is not implemented in this internal build yet.",
+                    path.display()
+                ));
+                let _ = MessageBoxW(
+                    Some(window),
+                    PCWSTR(message.as_ptr()),
+                    w!("ApricotPlayer 2 Beta"),
+                    MB_OK | MB_ICONINFORMATION,
+                );
+            }
+        }
+    }
 }
 
 unsafe fn refresh_main_menu(state: &mut WindowState) {

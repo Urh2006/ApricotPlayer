@@ -1,10 +1,12 @@
 //! Top-level application coordinator consumed by platform UI adapters.
 
+use std::collections::VecDeque;
+
 use apricot_core::{SettingId, SettingsSection};
 use apricot_storage::SettingsDocument;
 
 use crate::{
-    MainMenuAvailability, MainMenuModel, MenuVisibility, SettingsController,
+    ActivationRequest, MainMenuAvailability, MainMenuModel, MenuVisibility, SettingsController,
     SettingsControllerError, SettingsScreenModel, embedded_catalog,
 };
 
@@ -12,6 +14,7 @@ use crate::{
 pub struct Application {
     settings: SettingsController,
     menu_availability: MainMenuAvailability,
+    activation_requests: VecDeque<ActivationRequest>,
 }
 
 impl Application {
@@ -22,7 +25,24 @@ impl Application {
         Self {
             settings,
             menu_availability,
+            activation_requests: VecDeque::new(),
         }
+    }
+
+    pub fn enqueue_activation(&mut self, request: ActivationRequest) {
+        if request == ActivationRequest::Show
+            && self
+                .activation_requests
+                .back()
+                .is_some_and(|queued| *queued == ActivationRequest::Show)
+        {
+            return;
+        }
+        self.activation_requests.push_back(request);
+    }
+
+    pub fn take_activation(&mut self) -> Option<ActivationRequest> {
+        self.activation_requests.pop_front()
     }
 
     pub fn main_menu_model(&self) -> MainMenuModel {
@@ -280,14 +300,14 @@ const fn visibility(enabled: bool) -> MenuVisibility {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use apricot_core::{SettingId, SettingsSection};
     use apricot_storage::{SettingsDocument, SettingsPaths};
     use tempfile::tempdir;
 
     use super::Application;
-    use crate::{MainMenuAvailability, SettingsController};
+    use crate::{ActivationRequest, MainMenuAvailability, SettingsController};
 
     fn application(root: &Path) -> Application {
         let paths = SettingsPaths::for_app_data(&root.join("beta"), &root.join("stable"));
@@ -376,5 +396,20 @@ mod tests {
         app.set_keyboard_shortcut("open_search", "Ctrl+F8")
             .expect("unused shortcut");
         assert_eq!(app.settings().keyboard_shortcuts["open_search"], "Ctrl+F8");
+    }
+
+    #[test]
+    fn activation_queue_preserves_files_and_coalesces_repeated_show_requests() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        app.enqueue_activation(ActivationRequest::Show);
+        app.enqueue_activation(ActivationRequest::Show);
+        app.enqueue_activation(ActivationRequest::OpenFile(PathBuf::from("track.mp3")));
+        assert_eq!(app.take_activation(), Some(ActivationRequest::Show));
+        assert_eq!(
+            app.take_activation(),
+            Some(ActivationRequest::OpenFile(PathBuf::from("track.mp3")))
+        );
+        assert_eq!(app.take_activation(), None);
     }
 }

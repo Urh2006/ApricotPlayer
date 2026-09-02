@@ -3,6 +3,8 @@
 #![cfg_attr(not(windows), allow(dead_code))]
 
 #[cfg(windows)]
+mod activation_win32;
+#[cfg(windows)]
 mod settings_win32;
 #[cfg(windows)]
 mod win32;
@@ -26,6 +28,9 @@ pub enum QualificationGate {
 pub fn run_application(application: Application, version: &str) -> windows::core::Result<()> {
     win32::run_application(application, version)
 }
+
+#[cfg(windows)]
+pub use activation_win32::{forward_to_existing, show_already_open};
 
 #[cfg(not(windows))]
 /// Rejects the Windows UI on unsupported targets.

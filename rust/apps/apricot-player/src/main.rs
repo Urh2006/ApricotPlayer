@@ -1,16 +1,25 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
-use apricot_app::{Application, MainMenuAvailability, SettingsController};
+use std::path::PathBuf;
+
+use apricot_app::{ActivationRequest, Application, MainMenuAvailability, SettingsController};
 use apricot_core::{
     action::ACTIONS, locale::LANGUAGES, menu::CUSTOMIZABLE_MAIN_MENU, setting::SettingId,
 };
-use apricot_platform::discover_windows_beta_paths;
+use apricot_platform::{
+    ApplicationIdentity, SingleInstanceOutcome, acquire_single_instance,
+    discover_windows_beta_paths,
+};
 use apricot_storage::{SettingsDocument, SettingsPaths};
 use apricot_updater::UpdateChannel;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let channel = UpdateChannel::LocalOnly;
-    if std::env::args().any(|argument| argument == "--qualification-smoke") {
+    let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    if arguments
+        .iter()
+        .any(|argument| argument == "--qualification-smoke")
+    {
         println!(
             "ApricotPlayer {} foundation: {} settings, {} actions, {} menu items, {} languages, remote updates: {}",
             env!("CARGO_PKG_VERSION"),
@@ -31,7 +40,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let settings_paths = SettingsPaths::for_app_data(&paths.app_data, &paths.legacy_app_data);
     let settings = SettingsController::load(settings_paths, defaults);
-    let application = Application::new(settings, MainMenuAvailability::default());
+    let startup_file = startup_file_argument(&arguments);
+    let instance = acquire_single_instance(ApplicationIdentity::RustBeta)?;
+    let _instance_guard = match instance {
+        SingleInstanceOutcome::Primary(guard) => guard,
+        SingleInstanceOutcome::Secondary => {
+            if let Some(path) = startup_file {
+                apricot_ui_windows::forward_to_existing(&ActivationRequest::OpenFile(path))?;
+            } else if settings.current().close_to_tray {
+                apricot_ui_windows::forward_to_existing(&ActivationRequest::Show)?;
+            } else {
+                let catalog = apricot_app::embedded_catalog(&settings.current().language);
+                let message = catalog.text("already_open");
+                apricot_ui_windows::show_already_open(message);
+            }
+            return Ok(());
+        }
+    };
+    let mut application = Application::new(settings, MainMenuAvailability::default());
+    if let Some(path) = startup_file {
+        application.enqueue_activation(ActivationRequest::OpenFile(path));
+    }
     apricot_ui_windows::run_application(application, env!("CARGO_PKG_VERSION"))
         .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
+}
+
+fn startup_file_argument(arguments: &[std::ffi::OsString]) -> Option<PathBuf> {
+    arguments
+        .iter()
+        .find(|argument| !argument.to_string_lossy().starts_with("--"))
+        .map(PathBuf::from)
 }
