@@ -1,5 +1,6 @@
 //! Application coordinator state. UI controls are projections of this state.
 
+pub mod application;
 pub mod main_menu;
 pub mod settings_controller;
 pub mod settings_model;
@@ -7,6 +8,7 @@ pub mod settings_session;
 
 use apricot_core::{MediaItem, NavigationStack};
 
+pub use application::Application;
 pub use main_menu::{
     MainMenuAvailability, MainMenuItem, MainMenuModel, MenuVisibility, embedded_catalog,
     english_catalog,
@@ -14,7 +16,7 @@ pub use main_menu::{
 pub use settings_controller::{SettingsController, SettingsControllerError};
 pub use settings_model::{
     SettingsChoiceOption, SettingsCommand, SettingsControl, SettingsScreenModel,
-    SettingsSectionItem,
+    SettingsSectionItem, SettingsValueType,
 };
 pub use settings_session::{SettingsDraft, SettingsDraftError};
 

@@ -40,6 +40,13 @@ pub enum SettingsCommand {
     ResetSection,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SettingsValueType {
+    String,
+    Integer,
+    Float,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SettingsControl {
     ReadOnlyText {
@@ -57,6 +64,7 @@ pub enum SettingsControl {
         setting: SettingId,
         label: String,
         value: String,
+        value_type: SettingsValueType,
         options: Vec<SettingsChoiceOption>,
     },
     Checkbox {
@@ -173,6 +181,7 @@ fn general_controls(
             setting: SettingId::Language,
             label: catalog.text("language").to_owned(),
             value: settings.language.clone(),
+            value_type: SettingsValueType::String,
             options: LANGUAGES
                 .iter()
                 .map(|language| SettingsChoiceOption::labeled(language.code, language.name))
@@ -201,12 +210,14 @@ fn general_controls(
             setting: SettingId::ResultsLimit,
             label: catalog.text("results_limit").to_owned(),
             value: settings.results_limit.min(250).to_string(),
+            value_type: SettingsValueType::Integer,
             options: result_limits,
         },
         SettingsControl::Choice {
             setting: SettingId::DirectLinkEnterAction,
             label: catalog.text("direct_link_enter_action").to_owned(),
             value: settings.direct_link_enter_action.clone(),
+            value_type: SettingsValueType::String,
             options: direct_link_options,
         },
         checkbox(
@@ -231,6 +242,7 @@ fn general_controls(
             setting: SettingId::UpdateChannel,
             label: catalog.text("update_channel").to_owned(),
             value: settings.update_channel.clone(),
+            value_type: SettingsValueType::String,
             options: [
                 SettingsChoiceOption::labeled("stable", catalog.text("update_channel_stable")),
                 SettingsChoiceOption::labeled("beta", catalog.text("update_channel_beta")),
@@ -241,6 +253,7 @@ fn general_controls(
             setting: SettingId::AppUpdateIntervalHours,
             label: catalog.text("app_update_interval").to_owned(),
             value: compact_number(settings.app_update_interval_hours),
+            value_type: SettingsValueType::Float,
             options: update_intervals,
         },
         SettingsControl::Command {

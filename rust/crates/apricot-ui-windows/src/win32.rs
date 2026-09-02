@@ -4,7 +4,7 @@
 
 use std::{ffi::c_void, mem::size_of};
 
-use apricot_app::MainMenuModel;
+use apricot_app::{Application, MainMenuModel};
 use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
@@ -36,16 +36,17 @@ struct WindowState {
     list: HWND,
     open: HWND,
     model: MainMenuModel,
+    application: Application,
 }
 
-pub fn run_main_menu(model: MainMenuModel, version: &str) -> Result<()> {
+pub fn run_application(application: Application, version: &str) -> Result<()> {
     // SAFETY: The window, state pointer, controls, and message loop are confined
     // to this thread. Dynamic UTF-16 buffers outlive each Win32 call that uses
     // them, and owned state is released exactly once during WM_DESTROY.
-    unsafe { run_win32(model, version) }
+    unsafe { run_win32(application, version) }
 }
 
-unsafe fn run_win32(model: MainMenuModel, version: &str) -> Result<()> {
+unsafe fn run_win32(application: Application, version: &str) -> Result<()> {
     let module = GetModuleHandleW(None)?;
     let instance = HINSTANCE(module.0);
     let class_name = w!("ApricotPlayer2BetaMainWindow");
@@ -60,6 +61,7 @@ unsafe fn run_win32(model: MainMenuModel, version: &str) -> Result<()> {
     if RegisterClassW(&raw const class) == 0 {
         return Err(windows::core::Error::from_thread());
     }
+    crate::settings_win32::register()?;
 
     let title = wide(&format!("ApricotPlayer 2 Beta {version}"));
     let window = CreateWindowExW(
@@ -76,7 +78,7 @@ unsafe fn run_win32(model: MainMenuModel, version: &str) -> Result<()> {
         Some(instance),
         None,
     )?;
-    let state = match create_controls(window, instance, model) {
+    let state = match create_controls(window, instance, application) {
         Ok(state) => state,
         Err(error) => {
             let _ = DestroyWindow(window);
@@ -149,8 +151,9 @@ unsafe extern "system" fn window_proc(
 unsafe fn create_controls(
     parent: HWND,
     instance: HINSTANCE,
-    model: MainMenuModel,
+    application: Application,
 ) -> Result<WindowState> {
+    let model = application.main_menu_model();
     let accessible_name = wide(&model.accessible_name);
     let list = create_control(
         parent,
@@ -193,7 +196,12 @@ unsafe fn create_controls(
     let font_param = Some(WPARAM(font.0 as usize));
     SendMessageW(list, WM_SETFONT, font_param, Some(LPARAM(1)));
     SendMessageW(open, WM_SETFONT, font_param, Some(LPARAM(1)));
-    Ok(WindowState { list, open, model })
+    Ok(WindowState {
+        list,
+        open,
+        model,
+        application,
+    })
 }
 
 unsafe fn create_control(
@@ -247,6 +255,11 @@ unsafe fn state(window: HWND) -> Option<&'static WindowState> {
     pointer.as_ref()
 }
 
+unsafe fn state_mut(window: HWND) -> Option<&'static mut WindowState> {
+    let pointer = GetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0)) as *mut WindowState;
+    pointer.as_mut()
+}
+
 unsafe fn layout_controls(window: HWND) {
     let Some(state) = state(window) else {
         return;
@@ -278,7 +291,7 @@ unsafe fn layout_controls(window: HWND) {
 }
 
 unsafe fn activate_selection(window: HWND) {
-    let Some(state) = state(window) else {
+    let Some(state) = state_mut(window) else {
         return;
     };
     let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
@@ -290,6 +303,20 @@ unsafe fn activate_selection(window: HWND) {
     };
     if item.id == "exit" {
         let _ = DestroyWindow(window);
+        return;
+    }
+    if item.id == "settings" {
+        if let Err(error) = crate::settings_win32::show(window, &mut state.application) {
+            let message = wide(&error.to_string());
+            let _ = MessageBoxW(
+                Some(window),
+                PCWSTR(message.as_ptr()),
+                w!("ApricotPlayer 2 Beta"),
+                MB_OK | MB_ICONINFORMATION,
+            );
+        }
+        refresh_main_menu(state);
+        let _ = SetFocus(Some(state.list));
         return;
     }
 
@@ -305,6 +332,21 @@ unsafe fn activate_selection(window: HWND) {
         MB_OK | MB_ICONINFORMATION,
     );
     let _ = SetFocus(Some(state.list));
+}
+
+unsafe fn refresh_main_menu(state: &mut WindowState) {
+    state.model = state.application.main_menu_model();
+    SendMessageW(state.list, 0x0184, None, None);
+    for item in &state.model.items {
+        let label = wide(&item.label);
+        SendMessageW(
+            state.list,
+            LB_ADDSTRING,
+            None,
+            Some(LPARAM(label.as_ptr() as isize)),
+        );
+    }
+    SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
 }
 
 fn wide(value: &str) -> Vec<u16> {

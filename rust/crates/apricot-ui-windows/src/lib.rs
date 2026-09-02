@@ -3,9 +3,11 @@
 #![cfg_attr(not(windows), allow(dead_code))]
 
 #[cfg(windows)]
+mod settings_win32;
+#[cfg(windows)]
 mod win32;
 
-use apricot_app::MainMenuModel;
+use apricot_app::Application;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QualificationGate {
@@ -21,8 +23,8 @@ pub enum QualificationGate {
 ///
 /// Returns a Win32 error when the window class, window, controls, or message
 /// loop cannot be created or operated.
-pub fn run_main_menu(model: MainMenuModel, version: &str) -> windows::core::Result<()> {
-    win32::run_main_menu(model, version)
+pub fn run_application(application: Application, version: &str) -> windows::core::Result<()> {
+    win32::run_application(application, version)
 }
 
 #[cfg(not(windows))]
@@ -31,6 +33,6 @@ pub fn run_main_menu(model: MainMenuModel, version: &str) -> windows::core::Resu
 /// # Errors
 ///
 /// Always returns an unsupported-platform error.
-pub fn run_main_menu(_model: MainMenuModel, _version: &str) -> Result<(), &'static str> {
+pub fn run_application(_application: Application, _version: &str) -> Result<(), &'static str> {
     Err("ApricotPlayer 2 Beta currently requires Windows")
 }
