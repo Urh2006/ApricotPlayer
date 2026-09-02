@@ -16,7 +16,7 @@ pub use main_menu::{
 pub use settings_controller::{SettingsController, SettingsControllerError};
 pub use settings_model::{
     SettingsChoiceOption, SettingsCommand, SettingsControl, SettingsScreenModel,
-    SettingsSectionItem, SettingsValueType,
+    SettingsSectionItem, SettingsValueType, ShortcutActionItem,
 };
 pub use settings_session::{SettingsDraft, SettingsDraftError};
 

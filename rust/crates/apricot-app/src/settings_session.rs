@@ -48,14 +48,29 @@ impl SettingsDraft {
     /// Returns [`SettingsDraftError`] when serialization fails, the setting is
     /// missing, or the replacement has an incompatible type.
     pub fn set_value(&mut self, id: SettingId, value: Value) -> Result<(), SettingsDraftError> {
+        self.set_values([(id, value)])
+    }
+
+    /// Replaces several values as one validated draft transition.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SettingsDraftError`] without changing the draft when any
+    /// setting is missing or the resulting document is invalid.
+    pub fn set_values(
+        &mut self,
+        values: impl IntoIterator<Item = (SettingId, Value)>,
+    ) -> Result<(), SettingsDraftError> {
         let mut object = serde_json::to_value(&self.current)?
             .as_object()
             .cloned()
             .ok_or(SettingsDraftError::NotAnObject)?;
-        if !object.contains_key(id.key()) {
-            return Err(SettingsDraftError::MissingSetting(id.key()));
+        for (id, value) in values {
+            if !object.contains_key(id.key()) {
+                return Err(SettingsDraftError::MissingSetting(id.key()));
+            }
+            object.insert(id.key().to_owned(), value);
         }
-        object.insert(id.key().to_owned(), value);
         let mut next: SettingsDocument = serde_json::from_value(Value::Object(object))?;
         next.normalize();
         self.current = next;
@@ -158,6 +173,20 @@ mod tests {
         draft.discard();
         assert_eq!(draft.current().language, "en");
         assert!(!draft.is_dirty());
+    }
+
+    #[test]
+    fn multi_value_update_is_one_validated_transition() {
+        let defaults = SettingsDocument::default();
+        let mut draft = SettingsDraft::new(defaults.clone(), defaults);
+        draft
+            .set_values([
+                (SettingId::Language, json!("sl")),
+                (SettingId::AutoplayNext, json!(true)),
+            ])
+            .expect("multi-field update");
+        assert_eq!(draft.current().language, "sl");
+        assert!(draft.current().autoplay_next);
     }
 
     #[test]

@@ -6,6 +6,7 @@ use std::{ffi::c_void, mem::size_of};
 
 use apricot_app::{
     Application, SettingsCommand, SettingsControl, SettingsScreenModel, SettingsValueType,
+    ShortcutActionItem,
 };
 use apricot_core::{SettingId, SettingsSection};
 use windows::{
@@ -14,24 +15,29 @@ use windows::{
         Graphics::Gdi::{DEFAULT_GUI_FONT, GetStockObject},
         System::LibraryLoader::GetModuleHandleW,
         UI::{
-            Controls::{InitCommonControls, TBM_SETPOS, TBM_SETRANGE, TRACKBAR_CLASSW},
+            Controls::{
+                InitCommonControls, SetScrollInfo, TBM_SETPOS, TBM_SETRANGEMAX, TBM_SETRANGEMIN,
+                TRACKBAR_CLASSW,
+            },
             Input::KeyboardAndMouse::{
-                EnableWindow, GetKeyState, SetFocus, VK_DOWN, VK_END, VK_HOME, VK_RETURN, VK_SHIFT,
-                VK_TAB, VK_UP,
+                EnableWindow, GetKeyState, SetFocus, VK_CONTROL, VK_DOWN, VK_END, VK_HOME, VK_MENU,
+                VK_RETURN, VK_SHIFT, VK_TAB, VK_UP,
             },
             Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
             WindowsAndMessaging::{
                 BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, CBS_DROPDOWNLIST, CW_USEDEFAULT,
                 CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
                 GetMessageW, GetParent, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW,
-                HMENU, IDC_ARROW, IsDialogMessageW, LB_ADDSTRING, LB_GETCURSEL, LB_SETCURSEL,
-                LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW, MB_ICONERROR, MB_ICONINFORMATION,
-                MB_ICONQUESTION, MB_OK, MB_YESNO, MSG, MessageBoxW, MoveWindow, RegisterClassW,
-                SW_SHOW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, ShowWindow,
-                TranslateMessage, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CLOSE,
-                WM_COMMAND, WM_DESTROY, WM_KEYDOWN, WM_NCDESTROY, WM_SETFONT, WM_SIZE, WNDCLASSW,
-                WS_CHILD, WS_EX_CLIENTEDGE, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
-                WS_VSCROLL,
+                HMENU, IDC_ARROW, IsDialogMessageW, LB_ADDSTRING, LB_DELETESTRING, LB_GETCURSEL,
+                LB_INSERTSTRING, LB_SETCURSEL, LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW,
+                MB_ICONERROR, MB_ICONINFORMATION, MB_ICONQUESTION, MB_OK, MB_YESNO, MSG,
+                MessageBoxW, MoveWindow, RegisterClassW, SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS,
+                SIF_RANGE, SW_SHOW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW,
+                SetWindowTextW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE,
+                WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_DESTROY,
+                WM_HSCROLL, WM_KEYDOWN, WM_NCDESTROY, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_VSCROLL,
+                WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_TABSTOP,
+                WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -53,6 +59,20 @@ const CB_ADDSTRING: u32 = 0x0143;
 const CB_GETCURSEL: u32 = 0x0147;
 const CB_SETCURSEL: u32 = 0x014E;
 const TBM_GETPOS: u32 = 0x0400;
+const VK_ESCAPE_CODE: usize = 0x1B;
+const VK_SPACE_CODE: usize = 0x20;
+const VK_DELETE_CODE: usize = 0x2E;
+const VK_BACK_CODE: usize = 0x08;
+const VK_INSERT_CODE: usize = 0x2D;
+const VK_PRIOR_CODE: usize = 0x21;
+const VK_NEXT_CODE: usize = 0x22;
+const VK_LEFT_CODE: usize = 0x25;
+const VK_RIGHT_CODE: usize = 0x27;
+const VK_APPS_CODE: usize = 0x5D;
+const VK_OEM_4_CODE: usize = 0xDB;
+const VK_OEM_6_CODE: usize = 0xDD;
+const VK_F1_CODE: usize = 0x70;
+const VK_F24_CODE: usize = 0x87;
 
 #[derive(Clone, Debug)]
 enum ControlBinding {
@@ -63,7 +83,11 @@ enum ControlBinding {
         minimum: i64,
         maximum: i64,
     },
-    IntegerSlider(SettingId),
+    IntegerSlider {
+        setting: SettingId,
+        label: String,
+        unit: &'static str,
+    },
     Choice {
         setting: SettingId,
         value_type: SettingsValueType,
@@ -71,6 +95,18 @@ enum ControlBinding {
     },
     Checkbox(SettingId),
     MenuItem(&'static str),
+    EqualizerDevicePreset {
+        device_id: String,
+        values: Vec<String>,
+    },
+    EqualizerPresetName(String),
+    EqualizerBand {
+        preset_id: String,
+        band_id: &'static str,
+        label: String,
+    },
+    ShortcutActionList(Vec<ShortcutActionItem>),
+    ShortcutCapture(String),
     Command(SettingsCommand),
 }
 
@@ -89,6 +125,8 @@ struct SettingsWindowState {
     reset_all: HWND,
     selected_section: SettingsSection,
     controls: Vec<BoundControl>,
+    scroll_offset: i32,
+    content_height: i32,
 }
 
 pub unsafe fn register() -> Result<()> {
@@ -118,7 +156,7 @@ pub unsafe fn show(owner: HWND, application: &mut Application) -> Result<()> {
         WINDOW_EX_STYLE::default(),
         w!("ApricotPlayer2BetaSettingsWindow"),
         PCWSTR(title.as_ptr()),
-        WS_OVERLAPPEDWINDOW,
+        WS_OVERLAPPEDWINDOW | WS_VSCROLL,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         1_100,
@@ -180,6 +218,14 @@ unsafe extern "system" fn settings_window_proc(
         }
         WM_COMMAND => {
             handle_command(window, wparam);
+            LRESULT(0)
+        }
+        WM_HSCROLL => {
+            handle_slider_change(window, lparam);
+            LRESULT(0)
+        }
+        WM_VSCROLL => {
+            handle_vertical_scroll(window, wparam);
             LRESULT(0)
         }
         WM_CLOSE => {
@@ -258,6 +304,8 @@ unsafe fn create_base_controls(
         reset_all,
         selected_section: SettingsSection::General,
         controls: Vec::new(),
+        scroll_offset: 0,
+        content_height: 0,
     })
 }
 
@@ -279,17 +327,8 @@ unsafe fn render_controls(window: HWND) -> Result<()> {
             .controls
             .push(create_bound_control(window, instance, id, control)?);
     }
-    if let Some(first) = state.controls.first()
-        && !SetWindowSubclass(first.control, Some(settings_control_proc), 1, 0).as_bool()
-    {
-        return Err(windows::core::Error::from_thread());
-    }
     for (index, bound) in state.controls.iter().enumerate() {
-        if matches!(bound.binding, ControlBinding::MenuItem(_))
-            && index != 0
-            && !SetWindowSubclass(bound.control, Some(settings_control_proc), index + 1, 0)
-                .as_bool()
-        {
+        if !SetWindowSubclass(bound.control, Some(settings_control_proc), index + 1, 0).as_bool() {
             return Err(windows::core::Error::from_thread());
         }
     }
@@ -412,14 +451,7 @@ unsafe fn create_bound_control(
                 WINDOW_EX_STYLE::default(),
                 id,
             )?;
-            let packed_range = i32::try_from(minimum).unwrap_or(i32::MIN).cast_unsigned()
-                | i32::try_from(maximum).unwrap_or(i32::MAX).cast_unsigned() << 16;
-            SendMessageW(
-                control,
-                TBM_SETRANGE,
-                Some(WPARAM(1)),
-                Some(LPARAM(packed_range.cast_signed() as isize)),
-            );
+            set_trackbar_range(control, minimum, maximum);
             SendMessageW(
                 control,
                 TBM_SETPOS,
@@ -429,7 +461,131 @@ unsafe fn create_bound_control(
             (
                 Some(label_control),
                 control,
-                ControlBinding::IntegerSlider(setting),
+                ControlBinding::IntegerSlider {
+                    setting,
+                    label,
+                    unit,
+                },
+            )
+        }
+        SettingsControl::EqualizerDevicePresetChoice {
+            device_id,
+            label,
+            value,
+            options,
+        } => {
+            let label = static_label(parent, instance, &label)?;
+            let control = create_control(
+                parent,
+                instance,
+                w!("COMBOBOX"),
+                PCWSTR::null(),
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(CBS_DROPDOWNLIST as u32),
+                WINDOW_EX_STYLE::default(),
+                id,
+            )?;
+            let mut selected = 0;
+            let mut values = Vec::with_capacity(options.len());
+            for (index, option) in options.into_iter().enumerate() {
+                if option.value == value {
+                    selected = index;
+                }
+                add_combo_string(control, &option.label);
+                values.push(option.value);
+            }
+            SendMessageW(control, CB_SETCURSEL, Some(WPARAM(selected)), None);
+            (
+                Some(label),
+                control,
+                ControlBinding::EqualizerDevicePreset { device_id, values },
+            )
+        }
+        SettingsControl::EqualizerPresetName {
+            preset_id,
+            label,
+            value,
+        } => {
+            let label = static_label(parent, instance, &label)?;
+            let control = edit(parent, instance, &value, id, false, false)?;
+            (
+                Some(label),
+                control,
+                ControlBinding::EqualizerPresetName(preset_id),
+            )
+        }
+        SettingsControl::EqualizerBandSlider {
+            preset_id,
+            band_id,
+            label,
+            value_db,
+            minimum_db,
+            maximum_db,
+        } => {
+            let accessible_label = equalizer_slider_name(&label, value_db);
+            let label_control = static_label(parent, instance, &label)?;
+            let accessible_label = wide(&accessible_label);
+            let control = create_control(
+                parent,
+                instance,
+                TRACKBAR_CLASSW,
+                PCWSTR(accessible_label.as_ptr()),
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                WINDOW_EX_STYLE::default(),
+                id,
+            )?;
+            set_trackbar_range(control, minimum_db * 10, maximum_db * 10);
+            SendMessageW(
+                control,
+                TBM_SETPOS,
+                Some(WPARAM(1)),
+                Some(LPARAM(
+                    isize::try_from(db_to_tenths(value_db)).unwrap_or_default(),
+                )),
+            );
+            (
+                Some(label_control),
+                control,
+                ControlBinding::EqualizerBand {
+                    preset_id,
+                    band_id,
+                    label,
+                },
+            )
+        }
+        SettingsControl::ShortcutActionList { label, actions } => {
+            let label = static_label(parent, instance, &label)?;
+            let control = create_control(
+                parent,
+                instance,
+                w!("LISTBOX"),
+                PCWSTR::null(),
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | WINDOW_STYLE(LBS_NOTIFY as u32),
+                WS_EX_CLIENTEDGE,
+                id,
+            )?;
+            for action in &actions {
+                add_list_string(control, &shortcut_action_label(action));
+            }
+            if !actions.is_empty() {
+                SendMessageW(control, LB_SETCURSEL, Some(WPARAM(0)), None);
+            }
+            (
+                Some(label),
+                control,
+                ControlBinding::ShortcutActionList(actions),
+            )
+        }
+        SettingsControl::ShortcutCapture {
+            label,
+            action_id,
+            value,
+        } => {
+            let label = static_label(parent, instance, &label)?;
+            let control = edit(parent, instance, &value, id, false, false)?;
+            (
+                Some(label),
+                control,
+                ControlBinding::ShortcutCapture(action_id),
             )
         }
         SettingsControl::MenuItemCheckbox {
@@ -479,6 +635,48 @@ unsafe fn handle_command(window: HWND, wparam: WPARAM) {
     }
 }
 
+unsafe fn handle_slider_change(window: HWND, lparam: LPARAM) {
+    if lparam.0 == 0 {
+        return;
+    }
+    let control = HWND(lparam.0 as *mut c_void);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let Some(bound) = state
+        .controls
+        .iter()
+        .find(|bound| bound.control == control)
+        .cloned()
+    else {
+        return;
+    };
+    if let Err(error) = sync_bound_control(state, &bound) {
+        show_error(window, &error.to_string());
+        return;
+    }
+    update_slider_accessible_name(&bound);
+}
+
+unsafe fn update_slider_accessible_name(bound: &BoundControl) {
+    let position = SendMessageW(bound.control, TBM_GETPOS, None, None).0;
+    let name = match &bound.binding {
+        ControlBinding::IntegerSlider { label, unit, .. } => {
+            if unit.is_empty() {
+                format!("{label}, {position}")
+            } else {
+                format!("{label}, {position} {unit}")
+            }
+        }
+        ControlBinding::EqualizerBand { label, .. } => {
+            let tenths = i32::try_from(position).unwrap_or_default();
+            equalizer_slider_name(label, f64::from(tenths) / 10.0)
+        }
+        _ => return,
+    };
+    set_window_text(bound.control, &name);
+}
+
 unsafe fn activate_dynamic_control(window: HWND, id: usize) {
     let index = id - DYNAMIC_ID_START;
     let Some(state) = state_mut(window) else {
@@ -489,8 +687,57 @@ unsafe fn activate_dynamic_control(window: HWND, id: usize) {
     };
     if let ControlBinding::Command(command) = bound.binding {
         handle_settings_command(window, command);
-    } else if let Err(error) = sync_bound_control(state, &bound) {
+        return;
+    }
+    if matches!(bound.binding, ControlBinding::ShortcutActionList(_)) {
+        sync_shortcut_selection(state, &bound);
+        return;
+    }
+    if let Err(error) = sync_bound_control(state, &bound) {
         show_error(window, &error.to_string());
+        return;
+    }
+    if let Some(setting) = dependent_setting(&bound.binding) {
+        if let Err(error) = render_controls(window) {
+            show_error(window, &error.to_string());
+            return;
+        }
+        focus_setting(window, setting);
+    }
+}
+
+fn dependent_setting(binding: &ControlBinding) -> Option<SettingId> {
+    match binding {
+        ControlBinding::Checkbox(
+            setting @ (SettingId::GlobalEqualizerEnabled
+            | SettingId::ShowAdvancedNetworkSettings
+            | SettingId::VolumeBoostByDefault),
+        )
+        | ControlBinding::Choice {
+            setting: setting @ (SettingId::GlobalEqualizerPreset | SettingId::EqualizerDbRange),
+            ..
+        } => Some(*setting),
+        _ => None,
+    }
+}
+
+unsafe fn sync_shortcut_selection(state: &mut SettingsWindowState, source: &BoundControl) {
+    let ControlBinding::ShortcutActionList(actions) = &source.binding else {
+        return;
+    };
+    let selected = SendMessageW(source.control, LB_GETCURSEL, None, None).0;
+    let Ok(index) = usize::try_from(selected) else {
+        return;
+    };
+    let Some(action) = actions.get(index) else {
+        return;
+    };
+    for bound in &mut state.controls {
+        if let ControlBinding::ShortcutCapture(action_id) = &mut bound.binding {
+            action_id.clone_from(&action.action_id);
+            set_window_text(bound.control, &action.shortcut);
+            break;
+        }
     }
 }
 
@@ -531,6 +778,7 @@ unsafe fn change_section(window: HWND) {
         return;
     };
     state.selected_section = section;
+    state.scroll_offset = 0;
     if let Err(error) = render_controls(window) {
         show_error(window, &error.to_string());
     }
@@ -596,7 +844,9 @@ unsafe fn sync_bound_control(
 ) -> std::result::Result<(), apricot_app::SettingsControllerError> {
     let app = &mut *state.application;
     match &bound.binding {
-        ControlBinding::ReadOnly | ControlBinding::Command(_) => Ok(()),
+        ControlBinding::ReadOnly
+        | ControlBinding::Command(_)
+        | ControlBinding::ShortcutActionList(_) => Ok(()),
         ControlBinding::Text(setting) => {
             app.set_string_setting(*setting, window_text(bound.control))
         }
@@ -609,7 +859,7 @@ unsafe fn sync_bound_control(
             .map_or(Ok(()), |value| {
                 app.set_integer_setting(*setting, value.clamp(*minimum, *maximum))
             }),
-        ControlBinding::IntegerSlider(setting) => app.set_integer_setting(
+        ControlBinding::IntegerSlider { setting, .. } => app.set_integer_setting(
             *setting,
             i64::try_from(SendMessageW(bound.control, TBM_GETPOS, None, None).0)
                 .unwrap_or_default(),
@@ -641,6 +891,28 @@ unsafe fn sync_bound_control(
         }
         ControlBinding::MenuItem(action_id) => {
             app.set_main_menu_item_visible(action_id, checkbox_is_checked(bound.control))
+        }
+        ControlBinding::EqualizerDevicePreset { device_id, values } => {
+            let selected = SendMessageW(bound.control, CB_GETCURSEL, None, None).0;
+            let Ok(index) = usize::try_from(selected) else {
+                return Ok(());
+            };
+            values.get(index).map_or(Ok(()), |preset_id| {
+                app.set_equalizer_device_preset(device_id, preset_id)
+            })
+        }
+        ControlBinding::EqualizerPresetName(preset_id) => {
+            app.set_equalizer_preset_name(preset_id, &window_text(bound.control))
+        }
+        ControlBinding::EqualizerBand {
+            preset_id, band_id, ..
+        } => {
+            let tenths = SendMessageW(bound.control, TBM_GETPOS, None, None).0;
+            let tenths = i32::try_from(tenths).unwrap_or_default();
+            app.set_equalizer_band_gain(preset_id, band_id, f64::from(tenths) / 10.0)
+        }
+        ControlBinding::ShortcutCapture(action_id) => {
+            app.set_keyboard_shortcut(action_id, &window_text(bound.control))
         }
     }
 }
@@ -676,6 +948,29 @@ unsafe extern "system" fn settings_control_proc(
     subclass_id: usize,
     _reference_data: usize,
 ) -> LRESULT {
+    if message == WM_SETFOCUS
+        && let Ok(parent) = GetParent(window)
+    {
+        ensure_control_visible(parent, window);
+    }
+    if (message == WM_KEYDOWN || message == WM_CHAR)
+        && let Ok(parent) = GetParent(window)
+        && let Some(state) = state_mut(parent)
+        && let Some(action_id) = state.controls.iter().find_map(|bound| {
+            (bound.control == window).then(|| match &bound.binding {
+                ControlBinding::ShortcutCapture(action_id) => Some(action_id.clone()),
+                _ => None,
+            })?
+        })
+    {
+        if message == WM_CHAR {
+            return LRESULT(0);
+        }
+        if wparam.0 != usize::from(VK_TAB.0) {
+            capture_shortcut(parent, state, window, &action_id, wparam.0);
+            return LRESULT(0);
+        }
+    }
     if message == WM_KEYDOWN
         && let Ok(parent) = GetParent(window)
         && let Some(state) = state_mut(parent)
@@ -705,6 +1000,120 @@ unsafe extern "system" fn settings_control_proc(
         let _ = RemoveWindowSubclass(window, Some(settings_control_proc), subclass_id);
     }
     DefSubclassProc(window, message, wparam, lparam)
+}
+
+unsafe fn capture_shortcut(
+    parent: HWND,
+    state: &mut SettingsWindowState,
+    capture: HWND,
+    action_id: &str,
+    key: usize,
+) {
+    if matches!(
+        key,
+        value if value == usize::from(VK_CONTROL.0)
+            || value == usize::from(VK_SHIFT.0)
+            || value == usize::from(VK_MENU.0)
+    ) {
+        return;
+    }
+    if key == VK_SPACE_CODE
+        && !key_is_down(VK_CONTROL)
+        && !key_is_down(VK_SHIFT)
+        && !key_is_down(VK_MENU)
+        && action_id != "player_play_pause"
+    {
+        return;
+    }
+    let Some(shortcut) = shortcut_from_virtual_key(key) else {
+        return;
+    };
+    if let Err(error) = (&mut *state.application).set_keyboard_shortcut(action_id, &shortcut) {
+        show_error(parent, &error.to_string());
+        let _ = SetFocus(Some(capture));
+        return;
+    }
+    set_window_text(capture, &shortcut);
+    update_shortcut_action_list(state, action_id, &shortcut);
+    let _ = SetFocus(Some(capture));
+}
+
+unsafe fn update_shortcut_action_list(
+    state: &mut SettingsWindowState,
+    action_id: &str,
+    shortcut: &str,
+) {
+    for bound in &mut state.controls {
+        let ControlBinding::ShortcutActionList(actions) = &mut bound.binding else {
+            continue;
+        };
+        let Some(index) = actions
+            .iter()
+            .position(|action| action.action_id == action_id)
+        else {
+            continue;
+        };
+        shortcut.clone_into(&mut actions[index].shortcut);
+        let label = shortcut_action_label(&actions[index]);
+        SendMessageW(bound.control, LB_DELETESTRING, Some(WPARAM(index)), None);
+        let label = wide(&label);
+        SendMessageW(
+            bound.control,
+            LB_INSERTSTRING,
+            Some(WPARAM(index)),
+            Some(LPARAM(label.as_ptr() as isize)),
+        );
+        SendMessageW(bound.control, LB_SETCURSEL, Some(WPARAM(index)), None);
+        break;
+    }
+}
+
+fn shortcut_from_virtual_key(key: usize) -> Option<String> {
+    let key_name = shortcut_key_name(key)?;
+    let mut parts = Vec::with_capacity(4);
+    if key_is_down(VK_CONTROL) {
+        parts.push("Ctrl".to_owned());
+    }
+    if key_is_down(VK_SHIFT) {
+        parts.push("Shift".to_owned());
+    }
+    if key_is_down(VK_MENU) {
+        parts.push("Alt".to_owned());
+    }
+    parts.push(key_name);
+    Some(parts.join("+"))
+}
+
+fn key_is_down(key: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY) -> bool {
+    unsafe { GetKeyState(i32::from(key.0)).is_negative() }
+}
+
+fn shortcut_key_name(key: usize) -> Option<String> {
+    let name = match key {
+        value if value == usize::from(VK_RETURN.0) => "Enter",
+        VK_SPACE_CODE => "Space",
+        VK_ESCAPE_CODE => "Escape",
+        VK_DELETE_CODE => "Delete",
+        VK_BACK_CODE => "Backspace",
+        VK_INSERT_CODE => "Insert",
+        value if value == usize::from(VK_HOME.0) => "Home",
+        value if value == usize::from(VK_END.0) => "End",
+        VK_PRIOR_CODE => "PageUp",
+        VK_NEXT_CODE => "PageDown",
+        VK_LEFT_CODE => "Left",
+        VK_RIGHT_CODE => "Right",
+        value if value == usize::from(VK_UP.0) => "Up",
+        value if value == usize::from(VK_DOWN.0) => "Down",
+        VK_APPS_CODE => "Applications",
+        VK_OEM_4_CODE => "LeftBracket",
+        VK_OEM_6_CODE => "RightBracket",
+        VK_F1_CODE..=VK_F24_CODE => return Some(format!("F{}", key - VK_F1_CODE + 1)),
+        0x30..=0x39 | 0x41..=0x5A => {
+            return char::from_u32(u32::try_from(key).ok()?).map(|value| value.to_string());
+        }
+        _ => return None,
+    };
+    Some(name.to_owned())
 }
 
 unsafe fn focus_adjacent_menu_checkbox(
@@ -742,6 +1151,28 @@ unsafe fn focus_first_control(window: HWND) {
     }
 }
 
+unsafe fn focus_setting(window: HWND, setting: SettingId) {
+    if let Some(state) = state_mut(window)
+        && let Some(bound) = state
+            .controls
+            .iter()
+            .find(|bound| binding_setting(&bound.binding) == Some(setting))
+    {
+        let _ = SetFocus(Some(bound.control));
+    }
+}
+
+fn binding_setting(binding: &ControlBinding) -> Option<SettingId> {
+    match binding {
+        ControlBinding::Text(setting)
+        | ControlBinding::Checkbox(setting)
+        | ControlBinding::Integer { setting, .. }
+        | ControlBinding::IntegerSlider { setting, .. }
+        | ControlBinding::Choice { setting, .. } => Some(*setting),
+        _ => None,
+    }
+}
+
 unsafe fn layout(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
@@ -770,9 +1201,25 @@ unsafe fn layout(window: HWND) {
     let control_x = margin * 2 + section_width;
     let control_width = width - control_x - margin;
     let label_width = (control_width / 2).min(330);
-    let row_height = 34;
-    for (index, bound) in state.controls.iter().enumerate() {
-        let y = top + i32::try_from(index).unwrap_or(i32::MAX / row_height) * row_height;
+    let viewport_height = (height - top - margin).max(1);
+    state.content_height = state.controls.iter().map(control_row_height).sum();
+    let maximum_offset = (state.content_height - viewport_height).max(0);
+    state.scroll_offset = state.scroll_offset.clamp(0, maximum_offset);
+    let scroll_info = SCROLLINFO {
+        cbSize: u32::try_from(size_of::<SCROLLINFO>()).expect("scroll info size fits"),
+        fMask: SIF_RANGE | SIF_PAGE | SIF_POS,
+        nMin: 0,
+        nMax: state.content_height.saturating_sub(1),
+        nPage: u32::try_from(viewport_height).unwrap_or(u32::MAX),
+        nPos: state.scroll_offset,
+        nTrackPos: 0,
+    };
+    SetScrollInfo(window, SB_VERT, &raw const scroll_info, true);
+
+    let mut logical_y = 0;
+    for bound in &state.controls {
+        let y = top + logical_y - state.scroll_offset;
+        let height = control_window_height(&bound.binding);
         if let Some(label) = bound.label {
             let _ = MoveWindow(label, control_x, y + 5, label_width, 24, true);
             let _ = MoveWindow(
@@ -780,13 +1227,83 @@ unsafe fn layout(window: HWND) {
                 control_x + label_width + 8,
                 y,
                 control_width - label_width - 8,
-                420,
+                height,
                 true,
             );
         } else {
-            let _ = MoveWindow(bound.control, control_x, y, control_width, 30, true);
+            let _ = MoveWindow(bound.control, control_x, y, control_width, height, true);
         }
+        logical_y += control_row_height(bound);
     }
+}
+
+fn control_window_height(binding: &ControlBinding) -> i32 {
+    match binding {
+        ControlBinding::Choice { .. } | ControlBinding::EqualizerDevicePreset { .. } => 420,
+        ControlBinding::ShortcutActionList(_) => 260,
+        _ => 30,
+    }
+}
+
+fn control_row_height(bound: &BoundControl) -> i32 {
+    match bound.binding {
+        ControlBinding::ShortcutActionList(_) => 268,
+        _ => 34,
+    }
+}
+
+unsafe fn handle_vertical_scroll(window: HWND, wparam: WPARAM) {
+    let mut bounds = RECT::default();
+    if GetClientRect(window, &raw mut bounds).is_err() {
+        return;
+    }
+    let viewport_height = (bounds.bottom - bounds.top - 68).max(1);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let maximum = (state.content_height - viewport_height).max(0);
+    let command = wparam.0 & 0xffff;
+    let thumb = i32::try_from((wparam.0 >> 16) & 0xffff).unwrap_or_default();
+    let next = match command {
+        0 => state.scroll_offset - 34,
+        1 => state.scroll_offset + 34,
+        2 => state.scroll_offset - viewport_height,
+        3 => state.scroll_offset + viewport_height,
+        4 | 5 => thumb,
+        6 => 0,
+        7 => maximum,
+        _ => state.scroll_offset,
+    };
+    state.scroll_offset = next.clamp(0, maximum);
+    layout(window);
+}
+
+unsafe fn ensure_control_visible(window: HWND, control: HWND) {
+    let mut bounds = RECT::default();
+    if GetClientRect(window, &raw mut bounds).is_err() {
+        return;
+    }
+    let viewport_height = (bounds.bottom - bounds.top - 68).max(1);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let Some(index) = state
+        .controls
+        .iter()
+        .position(|bound| bound.control == control)
+    else {
+        return;
+    };
+    let control_top: i32 = state.controls[..index].iter().map(control_row_height).sum();
+    let control_bottom = control_top + control_row_height(&state.controls[index]);
+    if control_top < state.scroll_offset {
+        state.scroll_offset = control_top;
+    } else if control_bottom > state.scroll_offset + viewport_height {
+        state.scroll_offset = control_bottom - viewport_height;
+    } else {
+        return;
+    }
+    layout(window);
 }
 
 unsafe fn state_mut(window: HWND) -> Option<&'static mut SettingsWindowState> {
@@ -943,6 +1460,39 @@ unsafe fn add_combo_string(control: HWND, value: &str) {
         None,
         Some(LPARAM(value.as_ptr() as isize)),
     );
+}
+
+unsafe fn set_trackbar_range(control: HWND, minimum: i64, maximum: i64) {
+    SendMessageW(
+        control,
+        TBM_SETRANGEMIN,
+        Some(WPARAM(1)),
+        Some(LPARAM(isize::try_from(minimum).unwrap_or(isize::MIN))),
+    );
+    SendMessageW(
+        control,
+        TBM_SETRANGEMAX,
+        Some(WPARAM(1)),
+        Some(LPARAM(isize::try_from(maximum).unwrap_or(isize::MAX))),
+    );
+}
+
+fn equalizer_slider_name(label: &str, value_db: f64) -> String {
+    format!("{label}, {value_db:.1} dB")
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn db_to_tenths(value_db: f64) -> i32 {
+    (value_db.clamp(-24.0, 24.0) * 10.0).round() as i32
+}
+
+fn shortcut_action_label(action: &ShortcutActionItem) -> String {
+    format!("{}: {}", action.label, action.shortcut)
+}
+
+unsafe fn set_window_text(control: HWND, value: &str) {
+    let value = wide(value);
+    let _ = SetWindowTextW(control, PCWSTR(value.as_ptr()));
 }
 
 unsafe fn checkbox_is_checked(control: HWND) -> bool {

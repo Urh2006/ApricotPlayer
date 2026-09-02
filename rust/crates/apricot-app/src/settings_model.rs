@@ -4,6 +4,8 @@ use std::path::Path;
 
 use apricot_core::{
     CUSTOMIZABLE_MAIN_MENU, SETTINGS_SECTIONS, SettingId, SettingsSection, TranslationCatalog,
+    action::ACTIONS,
+    audio::{CUSTOM_EQUALIZER_PRESET_IDS, EQUALIZER_BANDS, FACTORY_EQUALIZER_PRESETS},
     locale::LANGUAGES,
 };
 use apricot_storage::SettingsDocument;
@@ -46,6 +48,11 @@ pub enum SettingsCommand {
     AudiovaultLogin,
     AudiovaultLogout,
     AudiovaultRegister,
+    ResetEqualizerPreset,
+    AddEqualizerProfile,
+    ImportEqualizerProfile,
+    ExportEqualizerProfile,
+    DeleteEqualizerProfile,
     ResetSection,
 }
 
@@ -56,7 +63,7 @@ pub enum SettingsValueType {
     Float,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SettingsControl {
     ReadOnlyText {
         id: &'static str,
@@ -96,6 +103,34 @@ pub enum SettingsControl {
         maximum: i64,
         unit: &'static str,
     },
+    EqualizerDevicePresetChoice {
+        device_id: String,
+        label: String,
+        value: String,
+        options: Vec<SettingsChoiceOption>,
+    },
+    EqualizerPresetName {
+        preset_id: String,
+        label: String,
+        value: String,
+    },
+    EqualizerBandSlider {
+        preset_id: String,
+        band_id: &'static str,
+        label: String,
+        value_db: f64,
+        minimum_db: i64,
+        maximum_db: i64,
+    },
+    ShortcutActionList {
+        label: String,
+        actions: Vec<ShortcutActionItem>,
+    },
+    ShortcutCapture {
+        label: String,
+        action_id: String,
+        value: String,
+    },
     MenuItemCheckbox {
         action_id: &'static str,
         label: String,
@@ -114,6 +149,13 @@ pub struct SettingsSectionItem {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ShortcutActionItem {
+    pub action_id: String,
+    pub label: String,
+    pub shortcut: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct SettingsScreenModel {
     pub title: String,
     pub section_list_name: String,
@@ -147,7 +189,7 @@ impl SettingsScreenModel {
             SettingsSection::Notifications => notification_controls(catalog, settings),
             SettingsSection::Cookies => cookie_controls(catalog, settings),
             SettingsSection::Audiovault => audiovault_controls(catalog, settings),
-            SettingsSection::Shortcuts => Vec::new(),
+            SettingsSection::Shortcuts => shortcut_controls(catalog, settings),
         };
         let section_label = SETTINGS_SECTIONS
             .iter()
@@ -646,7 +688,7 @@ fn equalizer_controls(
     catalog: &TranslationCatalog,
     settings: &SettingsDocument,
 ) -> Vec<SettingsControl> {
-    vec![
+    let mut controls = vec![
         checkbox(
             SettingId::GlobalEqualizerEnabled,
             "global_equalizer",
@@ -659,7 +701,165 @@ fn equalizer_controls(
             settings.equalizer_clipping_protection,
             catalog,
         ),
-    ]
+    ];
+    if !settings.global_equalizer_enabled {
+        return controls;
+    }
+
+    controls.extend(enabled_equalizer_controls(catalog, settings));
+    controls
+}
+
+fn enabled_equalizer_controls(
+    catalog: &TranslationCatalog,
+    settings: &SettingsDocument,
+) -> Vec<SettingsControl> {
+    let mut controls = Vec::new();
+    let preset = settings.global_equalizer_preset.clone();
+    let preset_options = equalizer_preset_options(catalog, settings);
+    controls.push(SettingsControl::Choice {
+        setting: SettingId::GlobalEqualizerPreset,
+        label: catalog.text("equalizer_preset").to_owned(),
+        value: preset.clone(),
+        value_type: SettingsValueType::String,
+        options: preset_options.clone(),
+    });
+    let device_id = if settings.audio_output_device.trim().is_empty() {
+        "auto".to_owned()
+    } else {
+        settings.audio_output_device.clone()
+    };
+    let device_value = settings
+        .equalizer_device_presets
+        .get(&device_id)
+        .cloned()
+        .unwrap_or_default();
+    let mut device_options = vec![SettingsChoiceOption::labeled(
+        "",
+        catalog.text("equalizer_use_global_preset"),
+    )];
+    device_options.extend(preset_options);
+    controls.push(SettingsControl::EqualizerDevicePresetChoice {
+        device_id,
+        label: catalog.text("equalizer_device_preset").to_owned(),
+        value: device_value,
+        options: device_options,
+    });
+    if !FACTORY_EQUALIZER_PRESETS
+        .iter()
+        .any(|factory| factory.id == preset)
+    {
+        controls.push(SettingsControl::EqualizerPresetName {
+            preset_id: preset.clone(),
+            label: catalog.text("equalizer_preset_name").to_owned(),
+            value: settings
+                .equalizer_custom_names
+                .get(&preset)
+                .cloned()
+                .unwrap_or_else(|| preset.clone()),
+        });
+    }
+    controls.push(choice_raw(
+        SettingId::EqualizerDbRange,
+        "equalizer_db_range",
+        &settings.equalizer_db_range.to_string(),
+        &["6", "12", "18", "24"],
+        SettingsValueType::Integer,
+        catalog,
+    ));
+    let gains = settings
+        .equalizer_preset_gains
+        .get(&preset)
+        .unwrap_or(&settings.global_equalizer_gains);
+    for band in EQUALIZER_BANDS {
+        let frequency = band.frequency_hz.to_string();
+        let label = catalog
+            .text("equalizer_band_gain")
+            .replace("{band}", &format!("{frequency} Hz"));
+        controls.push(SettingsControl::EqualizerBandSlider {
+            preset_id: preset.clone(),
+            band_id: band.id,
+            label,
+            value_db: gains.get(band.id).copied().unwrap_or(0.0),
+            minimum_db: -settings.equalizer_db_range,
+            maximum_db: settings.equalizer_db_range,
+        });
+    }
+    controls.extend([
+        SettingsControl::Command {
+            command: SettingsCommand::ResetEqualizerPreset,
+            label: catalog.text("reset_equalizer").to_owned(),
+        },
+        SettingsControl::Command {
+            command: SettingsCommand::AddEqualizerProfile,
+            label: catalog.text("add_equalizer_profile").to_owned(),
+        },
+        SettingsControl::Command {
+            command: SettingsCommand::ImportEqualizerProfile,
+            label: catalog.text("import_equalizer_profile").to_owned(),
+        },
+        SettingsControl::Command {
+            command: SettingsCommand::ExportEqualizerProfile,
+            label: catalog.text("export_equalizer_profile").to_owned(),
+        },
+    ]);
+    if !FACTORY_EQUALIZER_PRESETS
+        .iter()
+        .any(|factory| factory.id == preset)
+    {
+        controls.push(SettingsControl::Command {
+            command: SettingsCommand::DeleteEqualizerProfile,
+            label: catalog.text("delete_equalizer_profile").to_owned(),
+        });
+    }
+    controls
+}
+
+fn equalizer_preset_options(
+    catalog: &TranslationCatalog,
+    settings: &SettingsDocument,
+) -> Vec<SettingsChoiceOption> {
+    let mut options: Vec<_> = FACTORY_EQUALIZER_PRESETS
+        .iter()
+        .map(|preset| {
+            SettingsChoiceOption::labeled(
+                preset.id,
+                catalog.text(&format!("eq_preset_{}", preset.id)),
+            )
+        })
+        .collect();
+    let mut custom_ids: Vec<_> = settings
+        .equalizer_preset_gains
+        .keys()
+        .filter(|id| {
+            !FACTORY_EQUALIZER_PRESETS
+                .iter()
+                .any(|factory| factory.id == id.as_str())
+        })
+        .cloned()
+        .collect();
+    for id in CUSTOM_EQUALIZER_PRESET_IDS {
+        if !custom_ids.iter().any(|existing| existing == id) {
+            custom_ids.push((*id).to_owned());
+        }
+    }
+    custom_ids.sort_by_key(|id| {
+        CUSTOM_EQUALIZER_PRESET_IDS
+            .iter()
+            .position(|default| *default == id)
+            .map_or((1, usize::MAX, id.clone()), |index| {
+                (0, index, String::new())
+            })
+    });
+    options.extend(custom_ids.into_iter().map(|id| {
+        let label = settings
+            .equalizer_custom_names
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| id.clone());
+        SettingsChoiceOption::labeled(id, label)
+    }));
+    options
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1119,6 +1319,45 @@ fn audiovault_controls(
     ]
 }
 
+fn shortcut_controls(
+    catalog: &TranslationCatalog,
+    settings: &SettingsDocument,
+) -> Vec<SettingsControl> {
+    let actions: Vec<_> = ACTIONS
+        .iter()
+        .map(|action| {
+            let action_id = action.id.as_str();
+            let shortcut = settings
+                .keyboard_shortcuts
+                .get(action_id)
+                .cloned()
+                .unwrap_or_else(|| action.default_windows_shortcut.to_owned());
+            ShortcutActionItem {
+                action_id: action_id.to_owned(),
+                label: catalog.text(action.label_key).to_owned(),
+                shortcut,
+            }
+        })
+        .collect();
+    let first = actions.first().cloned();
+    let mut controls = vec![SettingsControl::ShortcutActionList {
+        label: catalog.text("shortcut_actions").to_owned(),
+        actions,
+    }];
+    if let Some(first) = first {
+        controls.push(SettingsControl::ShortcutCapture {
+            label: format!(
+                "{}. {}",
+                catalog.text("shortcut_value"),
+                catalog.text("shortcut_capture_hint")
+            ),
+            action_id: first.action_id,
+            value: first.shortcut,
+        });
+    }
+    controls
+}
+
 fn text(
     setting: SettingId,
     label_key: &str,
@@ -1355,7 +1594,7 @@ mod tests {
             (SettingsSection::Notifications, 5),
             (SettingsSection::Cookies, 13),
             (SettingsSection::Audiovault, 5),
-            (SettingsSection::Shortcuts, 1),
+            (SettingsSection::Shortcuts, 3),
         ];
         for (section, count) in expected {
             let model = SettingsScreenModel::build(
@@ -1390,5 +1629,53 @@ mod tests {
                 ..
             } if value == "8"
         )));
+    }
+
+    #[test]
+    fn enabled_equalizer_exposes_ten_independent_band_sliders() {
+        let settings = SettingsDocument {
+            global_equalizer_enabled: true,
+            ..SettingsDocument::default()
+        };
+        let model = SettingsScreenModel::build(
+            &english_catalog(),
+            &settings,
+            Path::new("settings.json"),
+            SettingsSection::Equalizer,
+        );
+        assert_eq!(model.controls.len(), 20);
+        let bands: Vec<_> = model
+            .controls
+            .iter()
+            .filter_map(|control| match control {
+                SettingsControl::EqualizerBandSlider { band_id, .. } => Some(*band_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            bands,
+            [
+                "31", "62", "125", "250", "500", "1000", "2000", "4000", "8000", "16000"
+            ]
+        );
+    }
+
+    #[test]
+    fn shortcut_editor_projects_all_actions_into_one_accessible_list() {
+        let model = SettingsScreenModel::build(
+            &english_catalog(),
+            &SettingsDocument::default(),
+            Path::new("settings.json"),
+            SettingsSection::Shortcuts,
+        );
+        assert!(matches!(
+            &model.controls[0],
+            SettingsControl::ShortcutActionList { actions, .. } if actions.len() == 91
+        ));
+        assert!(matches!(
+            &model.controls[1],
+            SettingsControl::ShortcutCapture { action_id, value, .. }
+                if action_id == "open_main_menu" && value == "Ctrl+Alt+M"
+        ));
     }
 }

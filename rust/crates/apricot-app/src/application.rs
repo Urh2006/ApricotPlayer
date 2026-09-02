@@ -130,6 +130,115 @@ impl Application {
             .set_value(SettingId::MainMenuHiddenActions, serde_json::json!(hidden))
     }
 
+    /// Updates one equalizer band without changing any other band.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a typed equalizer map cannot be persisted to the draft.
+    pub fn set_equalizer_band_gain(
+        &mut self,
+        preset_id: &str,
+        band_id: &str,
+        gain_db: f64,
+    ) -> Result<(), SettingsControllerError> {
+        if !apricot_core::audio::EQUALIZER_BANDS
+            .iter()
+            .any(|band| band.id == band_id)
+        {
+            return Ok(());
+        }
+        let range = f64::from(
+            i32::try_from(self.settings.current().equalizer_db_range).unwrap_or(i32::MAX),
+        );
+        let gain = ((gain_db.clamp(-range, range) * 10.0).round()) / 10.0;
+        let mut current_gains = self.settings.current().global_equalizer_gains.clone();
+        current_gains.insert(band_id.to_owned(), gain);
+        let is_custom = !apricot_core::audio::FACTORY_EQUALIZER_PRESETS
+            .iter()
+            .any(|preset| preset.id == preset_id);
+        if is_custom {
+            let mut presets = self.settings.current().equalizer_preset_gains.clone();
+            let gains = presets.entry(preset_id.to_owned()).or_default();
+            gains.insert(band_id.to_owned(), gain);
+            self.settings.set_values([
+                (
+                    SettingId::GlobalEqualizerGains,
+                    serde_json::json!(current_gains),
+                ),
+                (SettingId::EqualizerPresetGains, serde_json::json!(presets)),
+            ])?;
+        } else {
+            self.settings.set_value(
+                SettingId::GlobalEqualizerGains,
+                serde_json::json!(current_gains),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Updates the custom name for one equalizer preset.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the complete custom-name map cannot be updated.
+    pub fn set_equalizer_preset_name(
+        &mut self,
+        preset_id: &str,
+        name: &str,
+    ) -> Result<(), SettingsControllerError> {
+        let mut names = self.settings.current().equalizer_custom_names.clone();
+        let fallback = names
+            .get(preset_id)
+            .cloned()
+            .unwrap_or_else(|| preset_id.to_owned());
+        let trimmed = name.trim();
+        names.insert(
+            preset_id.to_owned(),
+            if trimmed.is_empty() {
+                fallback
+            } else {
+                trimmed.chars().take(80).collect()
+            },
+        );
+        self.settings
+            .set_value(SettingId::EqualizerCustomNames, serde_json::json!(names))
+    }
+
+    /// Sets or clears the equalizer preset associated with one output device.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the device-preset map cannot be updated.
+    pub fn set_equalizer_device_preset(
+        &mut self,
+        device_id: &str,
+        preset_id: &str,
+    ) -> Result<(), SettingsControllerError> {
+        let mut presets = self.settings.current().equalizer_device_presets.clone();
+        if preset_id.trim().is_empty() {
+            presets.remove(device_id);
+        } else {
+            presets.insert(device_id.to_owned(), preset_id.to_owned());
+        }
+        self.settings.set_value(
+            SettingId::EqualizerDevicePresets,
+            serde_json::json!(presets),
+        )
+    }
+
+    /// Assigns a shortcut through the central conflict validator.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for unknown actions or shortcut conflicts.
+    pub fn set_keyboard_shortcut(
+        &mut self,
+        action_id: &str,
+        shortcut: &str,
+    ) -> Result<(), SettingsControllerError> {
+        self.settings.set_shortcut(action_id, shortcut)
+    }
+
     /// Resets one settings section in the current draft.
     ///
     /// # Errors
@@ -234,5 +343,38 @@ mod tests {
             .expect("reset");
         assert_eq!(app.settings().language, "en");
         assert!(!app.settings().close_to_tray);
+    }
+
+    #[test]
+    fn equalizer_band_updates_are_strictly_independent() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        let before = app.settings().global_equalizer_gains.clone();
+        app.set_equalizer_band_gain("flat", "31", 7.5)
+            .expect("gain");
+        assert!((app.settings().global_equalizer_gains["31"] - 7.5).abs() < f64::EPSILON);
+        for (band, gain) in before {
+            if band != "31" {
+                assert!(
+                    (app.settings().global_equalizer_gains[&band] - gain).abs() < f64::EPSILON,
+                    "{band}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn shortcut_conflicts_do_not_modify_the_draft() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        let before = app.settings().keyboard_shortcuts.clone();
+        assert!(
+            app.set_keyboard_shortcut("open_search", "Ctrl+Alt+M")
+                .is_err()
+        );
+        assert_eq!(app.settings().keyboard_shortcuts, before);
+        app.set_keyboard_shortcut("open_search", "Ctrl+F8")
+            .expect("unused shortcut");
+        assert_eq!(app.settings().keyboard_shortcuts["open_search"], "Ctrl+F8");
     }
 }

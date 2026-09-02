@@ -18,6 +18,10 @@ pub enum SettingsControllerError {
     Draft(#[from] SettingsDraftError),
     #[error(transparent)]
     Save(#[from] SettingsSaveError),
+    #[error("shortcut {shortcut} is already assigned to {action}")]
+    ShortcutConflict { shortcut: String, action: String },
+    #[error("unknown shortcut action {0}")]
+    UnknownShortcutAction(String),
 }
 
 #[derive(Debug)]
@@ -76,6 +80,19 @@ impl SettingsController {
         Ok(())
     }
 
+    /// Updates several typed settings as one validated draft transition.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error without changing the draft when any value is invalid.
+    pub fn set_values(
+        &mut self,
+        values: impl IntoIterator<Item = (SettingId, Value)>,
+    ) -> Result<(), SettingsControllerError> {
+        self.draft.set_values(values)?;
+        Ok(())
+    }
+
     /// Resets the selected section in the unsaved draft.
     ///
     /// # Errors
@@ -95,6 +112,45 @@ impl SettingsController {
 
     pub fn cancel(&mut self) {
         self.draft.discard();
+    }
+
+    /// Assigns one non-empty shortcut while rejecting case-insensitive conflicts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unknown action or a shortcut already in use.
+    pub fn set_shortcut(
+        &mut self,
+        action_id: &str,
+        shortcut: &str,
+    ) -> Result<(), SettingsControllerError> {
+        let action = apricot_core::action::action_by_id(action_id)
+            .ok_or_else(|| SettingsControllerError::UnknownShortcutAction(action_id.to_owned()))?;
+        let shortcut = shortcut.trim();
+        let shortcut = if shortcut.is_empty() {
+            action.default_windows_shortcut
+        } else {
+            shortcut
+        };
+        if let Some((conflicting_action, _)) =
+            self.draft
+                .current()
+                .keyboard_shortcuts
+                .iter()
+                .find(|(other_id, other)| {
+                    other_id.as_str() != action_id && other.trim().eq_ignore_ascii_case(shortcut)
+                })
+        {
+            return Err(SettingsControllerError::ShortcutConflict {
+                shortcut: shortcut.to_owned(),
+                action: conflicting_action.clone(),
+            });
+        }
+        let mut shortcuts = self.draft.current().keyboard_shortcuts.clone();
+        shortcuts.insert(action_id.to_owned(), shortcut.to_owned());
+        self.draft
+            .set_value(SettingId::KeyboardShortcuts, serde_json::json!(shortcuts))?;
+        Ok(())
     }
 
     /// Atomically saves the current draft, then marks it committed in memory.
