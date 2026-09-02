@@ -4,13 +4,34 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+pub mod diagnostics;
+pub mod paths;
+
+pub use diagnostics::{DiagnosticLog, DiagnosticLogError, install_panic_hook};
+pub use paths::{PathDiscoveryError, discover_windows_paths};
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlatformPaths {
     pub app_data: PathBuf,
+    pub legacy_app_data: PathBuf,
     pub cache: PathBuf,
     pub logs: PathBuf,
     pub downloads: PathBuf,
     pub runtime: PathBuf,
+}
+
+impl PlatformPaths {
+    pub fn from_windows_roots(roaming_app_data: &Path, user_home: &Path, runtime: &Path) -> Self {
+        let app_data = roaming_app_data.join("ApricotPlayer");
+        Self {
+            legacy_app_data: roaming_app_data.join("UrhasaurusYouTubePlayer"),
+            cache: app_data.join("cache"),
+            logs: app_data.clone(),
+            downloads: user_home.join("Downloads").join("ApricotPlayer"),
+            runtime: runtime.to_owned(),
+            app_data,
+        }
+    }
 }
 
 #[derive(Debug, Error)]
