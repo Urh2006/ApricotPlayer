@@ -2,7 +2,7 @@ use std::{env, io, path::PathBuf};
 
 use thiserror::Error;
 
-use crate::PlatformPaths;
+use crate::{ApplicationIdentity, PlatformPaths};
 
 #[derive(Debug, Error)]
 pub enum PathDiscoveryError {
@@ -21,6 +21,22 @@ pub enum PathDiscoveryError {
 /// Returns [`PathDiscoveryError`] when required environment values or the
 /// executable directory are unavailable.
 pub fn discover_windows_paths() -> Result<PlatformPaths, PathDiscoveryError> {
+    discover_windows_paths_for_identity(ApplicationIdentity::Stable)
+}
+
+/// Discovers side-by-side Rust beta paths without changing the stable profile.
+///
+/// # Errors
+///
+/// Returns [`PathDiscoveryError`] when required environment values or the
+/// executable directory are unavailable.
+pub fn discover_windows_beta_paths() -> Result<PlatformPaths, PathDiscoveryError> {
+    discover_windows_paths_for_identity(ApplicationIdentity::RustBeta)
+}
+
+fn discover_windows_paths_for_identity(
+    identity: ApplicationIdentity,
+) -> Result<PlatformPaths, PathDiscoveryError> {
     let roaming = env::var_os("APPDATA")
         .map(PathBuf::from)
         .ok_or(PathDiscoveryError::MissingEnvironment("APPDATA"))?;
@@ -31,8 +47,8 @@ pub fn discover_windows_paths() -> Result<PlatformPaths, PathDiscoveryError> {
     let runtime = executable
         .parent()
         .ok_or_else(|| PathDiscoveryError::MissingRuntimeParent(executable.clone()))?;
-    Ok(PlatformPaths::from_windows_roots(
-        &roaming, &user_home, runtime,
+    Ok(PlatformPaths::from_windows_roots_for_identity(
+        &roaming, &user_home, runtime, identity,
     ))
 }
 
@@ -40,7 +56,7 @@ pub fn discover_windows_paths() -> Result<PlatformPaths, PathDiscoveryError> {
 mod tests {
     use std::path::Path;
 
-    use crate::PlatformPaths;
+    use crate::{ApplicationIdentity, PlatformPaths};
 
     #[test]
     fn windows_paths_match_the_python_layout() {
@@ -63,5 +79,25 @@ mod tests {
             paths.downloads,
             Path::new(r"C:\Users\tester\Downloads\ApricotPlayer")
         );
+    }
+
+    #[test]
+    fn rust_beta_is_side_by_side_and_reads_stable_only_as_migration_source() {
+        let paths = PlatformPaths::from_windows_roots_for_identity(
+            Path::new(r"C:\Users\tester\AppData\Roaming"),
+            Path::new(r"C:\Users\tester"),
+            Path::new(r"C:\Users\tester\AppData\Local\Programs\ApricotPlayer2Beta"),
+            ApplicationIdentity::RustBeta,
+        );
+        assert_eq!(
+            paths.app_data,
+            Path::new(r"C:\Users\tester\AppData\Roaming\ApricotPlayer2Beta")
+        );
+        assert_eq!(
+            paths.legacy_app_data,
+            Path::new(r"C:\Users\tester\AppData\Roaming\ApricotPlayer")
+        );
+        assert_eq!(paths.cache, paths.app_data.join("cache"));
+        assert_eq!(paths.logs, paths.app_data);
     }
 }

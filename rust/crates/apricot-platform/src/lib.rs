@@ -8,7 +8,13 @@ pub mod diagnostics;
 pub mod paths;
 
 pub use diagnostics::{DiagnosticLog, DiagnosticLogError, install_panic_hook};
-pub use paths::{PathDiscoveryError, discover_windows_paths};
+pub use paths::{PathDiscoveryError, discover_windows_beta_paths, discover_windows_paths};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ApplicationIdentity {
+    Stable,
+    RustBeta,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlatformPaths {
@@ -22,9 +28,27 @@ pub struct PlatformPaths {
 
 impl PlatformPaths {
     pub fn from_windows_roots(roaming_app_data: &Path, user_home: &Path, runtime: &Path) -> Self {
-        let app_data = roaming_app_data.join("ApricotPlayer");
+        Self::from_windows_roots_for_identity(
+            roaming_app_data,
+            user_home,
+            runtime,
+            ApplicationIdentity::Stable,
+        )
+    }
+
+    pub fn from_windows_roots_for_identity(
+        roaming_app_data: &Path,
+        user_home: &Path,
+        runtime: &Path,
+        identity: ApplicationIdentity,
+    ) -> Self {
+        let (app_name, legacy_name) = match identity {
+            ApplicationIdentity::Stable => ("ApricotPlayer", "UrhasaurusYouTubePlayer"),
+            ApplicationIdentity::RustBeta => ("ApricotPlayer2Beta", "ApricotPlayer"),
+        };
+        let app_data = roaming_app_data.join(app_name);
         Self {
-            legacy_app_data: roaming_app_data.join("UrhasaurusYouTubePlayer"),
+            legacy_app_data: roaming_app_data.join(legacy_name),
             cache: app_data.join("cache"),
             logs: app_data.clone(),
             downloads: user_home.join("Downloads").join("ApricotPlayer"),

@@ -7,7 +7,9 @@ name = "apricot-app"
 version = "2.0.0-dev.1"
 dependencies = [
  "apricot-core",
+ "apricot-storage",
  "serde_json",
+ "thiserror",
 ]
 
 [[package]]
