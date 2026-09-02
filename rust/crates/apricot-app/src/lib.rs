@@ -1,5 +1,6 @@
 //! Application coordinator state. UI controls are projections of this state.
 
+pub mod action_finder;
 pub mod activation;
 pub mod application;
 pub mod main_menu;
@@ -9,6 +10,7 @@ pub mod settings_session;
 
 use apricot_core::{MediaItem, NavigationStack};
 
+pub use action_finder::{ActionFinderContext, ActionFinderItem, ActionFinderModel};
 pub use activation::ActivationRequest;
 pub use application::Application;
 pub use main_menu::{

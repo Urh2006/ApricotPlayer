@@ -6,8 +6,9 @@ use apricot_core::{SettingId, SettingsSection};
 use apricot_storage::SettingsDocument;
 
 use crate::{
-    ActivationRequest, MainMenuAvailability, MainMenuModel, MenuVisibility, SettingsController,
-    SettingsControllerError, SettingsScreenModel, embedded_catalog,
+    ActionFinderContext, ActionFinderModel, ActivationRequest, MainMenuAvailability, MainMenuModel,
+    MenuVisibility, SettingsController, SettingsControllerError, SettingsScreenModel,
+    embedded_catalog,
 };
 
 #[derive(Debug)]
@@ -57,6 +58,16 @@ impl Application {
             &settings.main_menu_hidden_actions,
             settings.show_shortcuts_in_labels,
             &settings.keyboard_shortcuts,
+        )
+    }
+
+    pub fn action_finder_model(&self, context: ActionFinderContext) -> ActionFinderModel {
+        let settings = self.settings.current();
+        ActionFinderModel::build(
+            &embedded_catalog(&settings.language),
+            settings,
+            self.menu_availability,
+            context,
         )
     }
 

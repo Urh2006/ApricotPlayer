@@ -12,6 +12,7 @@ pub mod navigation;
 pub mod screen;
 pub mod setting;
 pub mod settings_layout;
+pub mod shortcut;
 
 pub use action::{ActionDefinition, ActionId, ActionScope, RepeatPolicy};
 pub use announcement::{
