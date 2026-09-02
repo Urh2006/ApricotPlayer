@@ -54,6 +54,10 @@ impl DataEntry {
     pub fn is_durable(&self) -> bool {
         matches!(self.class, DataClass::DurableUserData | DataClass::Secret)
     }
+
+    pub fn is_compatibility_snapshot_candidate(&self) -> bool {
+        self.is_durable() || self.id == "stream_url_cache"
+    }
 }
 
 pub const DATA_ENTRIES: &[DataEntry] = &[
@@ -262,6 +266,26 @@ mod tests {
             .expect("components");
         assert_eq!(components.class, DataClass::RuntimeComponent);
         assert_eq!(components.shape, DataShape::Directory);
+    }
+
+    #[test]
+    fn compatibility_snapshot_has_only_serialized_user_state() {
+        let candidates: Vec<_> = DATA_ENTRIES
+            .iter()
+            .filter(|entry| entry.is_compatibility_snapshot_candidate())
+            .collect();
+        assert_eq!(candidates.len(), 14);
+        assert!(
+            candidates
+                .iter()
+                .all(|entry| entry.shape != DataShape::Directory)
+        );
+        assert!(candidates.iter().all(|entry| {
+            !matches!(
+                entry.class,
+                DataClass::Diagnostic | DataClass::EphemeralSignal | DataClass::RuntimeComponent
+            )
+        }));
     }
 
     #[test]
