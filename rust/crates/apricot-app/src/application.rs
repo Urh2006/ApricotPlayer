@@ -1,14 +1,16 @@
 //! Top-level application coordinator consumed by platform UI adapters.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 
-use apricot_core::{SettingId, SettingsSection};
+use apricot_core::{MediaItem, SettingId, SettingsSection};
+use apricot_playback::PlaybackEvent;
 use apricot_storage::SettingsDocument;
 
 use crate::{
-    ActionFinderContext, ActionFinderModel, ActivationRequest, MainMenuAvailability, MainMenuModel,
-    MenuVisibility, SettingsController, SettingsControllerError, SettingsScreenModel,
-    embedded_catalog,
+    ActionFinderContext, ActionFinderModel, ActivationRequest, AppState, AudioSession,
+    EqualizerSession, MainMenuAvailability, MainMenuModel, MenuVisibility, PlayerSession,
+    PlayerSessionDefaults, SessionToggle, SettingsController, SettingsControllerError,
+    SettingsScreenModel, embedded_catalog,
 };
 
 #[derive(Debug)]
@@ -16,18 +18,58 @@ pub struct Application {
     settings: SettingsController,
     menu_availability: MainMenuAvailability,
     activation_requests: VecDeque<ActivationRequest>,
+    state: AppState,
 }
 
 impl Application {
-    pub const fn new(
-        settings: SettingsController,
-        menu_availability: MainMenuAvailability,
-    ) -> Self {
+    pub fn new(settings: SettingsController, menu_availability: MainMenuAvailability) -> Self {
         Self {
             settings,
             menu_availability,
             activation_requests: VecDeque::new(),
+            state: AppState::default(),
         }
+    }
+
+    pub const fn player_session(&self) -> &PlayerSession {
+        &self.state.player
+    }
+
+    pub fn start_player_item(&mut self, item: MediaItem) -> u64 {
+        let settings = self.settings.current();
+        let mut toggles = BTreeSet::new();
+        if settings.autoplay_next {
+            toggles.insert(SessionToggle::AutoplayNext);
+        }
+        if settings.volume_boost_by_default {
+            toggles.insert(SessionToggle::VolumeBoost);
+        }
+        if settings.player_fullscreen {
+            toggles.insert(SessionToggle::Fullscreen);
+        }
+        let defaults = PlayerSessionDefaults {
+            audio: AudioSession {
+                volume: f64::from(i32::try_from(settings.default_volume).unwrap_or(100)),
+                output_device: settings.audio_output_device.clone(),
+                speed: settings.player_speed.parse().unwrap_or(1.0),
+                pitch: 1.0,
+                equalizer: EqualizerSession {
+                    enabled: settings.global_equalizer_enabled,
+                    gains: settings.global_equalizer_gains.clone(),
+                },
+            },
+            enabled_toggles: toggles,
+            starts_paused: settings.player_start_paused,
+        };
+        self.state.player.start_item(item, defaults)
+    }
+
+    pub fn apply_playback_event(&mut self, generation: u64, event: PlaybackEvent) -> bool {
+        self.state.player.apply_event(generation, event)
+    }
+
+    pub fn close_player_session(&mut self) {
+        self.state.player.close();
     }
 
     pub fn enqueue_activation(&mut self, request: ActivationRequest) {
@@ -339,9 +381,13 @@ const fn visibility(enabled: bool) -> MenuVisibility {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::{
+        collections::BTreeMap,
+        path::{Path, PathBuf},
+    };
 
-    use apricot_core::{SettingId, SettingsSection};
+    use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource, SettingId, SettingsSection};
+    use apricot_playback::PlaybackEvent;
     use apricot_storage::{SettingsDocument, SettingsPaths};
     use tempfile::tempdir;
 
@@ -354,6 +400,20 @@ mod tests {
             SettingsController::load(paths, SettingsDocument::default()),
             MainMenuAvailability::default(),
         )
+    }
+
+    fn media_item(id: &str) -> MediaItem {
+        MediaItem {
+            id: MediaId(id.to_owned()),
+            source: MediaSource::Local,
+            kind: MediaKind::Audio,
+            title: id.to_owned(),
+            url: None,
+            local_path: Some(format!(r"C:\Music\{id}.mp3")),
+            channel: String::new(),
+            duration_seconds: None,
+            metadata: BTreeMap::new(),
+        }
     }
 
     #[test]
@@ -480,5 +540,33 @@ mod tests {
             Some(ActivationRequest::OpenFile(PathBuf::from("track.mp3")))
         );
         assert_eq!(app.take_activation(), None);
+    }
+
+    #[test]
+    fn application_owns_session_defaults_and_rejects_stale_playback_events() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        app.set_integer_setting(SettingId::DefaultVolume, 80)
+            .expect("volume");
+        app.set_string_setting(SettingId::AudioOutputDevice, "speakers")
+            .expect("device");
+        let first = app.start_player_item(media_item("first"));
+        assert!(
+            (app.player_session().audio().expect("audio session").volume - 80.0).abs()
+                < f64::EPSILON
+        );
+
+        let second = app.start_player_item(media_item("second"));
+        assert!(!app.apply_playback_event(first, PlaybackEvent::Ended));
+        assert!(app.apply_playback_event(second, PlaybackEvent::Started));
+        assert_eq!(
+            app.player_session()
+                .current_item()
+                .map(|item| item.id.0.as_str()),
+            Some("second")
+        );
+
+        app.close_player_session();
+        assert!(app.player_session().audio().is_none());
     }
 }
