@@ -22,6 +22,7 @@ try {
     $BundledLibMpv = Join-Path $PackageDir "mpv\libmpv-2.dll"
     $BundledMpvD3dCompiler = Join-Path $PackageDir "mpv\d3dcompiler_43.dll"
     $BundledYoutubeHelper = Join-Path $PackageDir "components\apricot-youtube-helper.exe"
+    $BundledYtDlp = Join-Path $PackageDir "components\yt-dlp.exe"
     if (-not (Test-Path -LiteralPath $BundledMpv -PathType Leaf)) {
         throw "Local beta package omitted mpv.exe"
     }
@@ -33,6 +34,9 @@ try {
     }
     if (-not (Test-Path -LiteralPath $BundledYoutubeHelper -PathType Leaf)) {
         throw "Local beta package omitted the Rust YouTube helper"
+    }
+    if (-not (Test-Path -LiteralPath $BundledYtDlp -PathType Leaf)) {
+        throw "Local beta package omitted standalone yt-dlp"
     }
     $BuildInfo = Get-Content -LiteralPath (Join-Path $PackageDir "build-info.json") -Raw | ConvertFrom-Json
     if ($BuildInfo.bundled_components.nvda_controller_client -ne "nvda/nvdaControllerClient64.dll") {
@@ -52,6 +56,10 @@ try {
     }
     if ($BuildInfo.bundled_components.rusty_ytdl_revision -ne "b1c6eb7c83f0d6189f256ed5df50019a5803c734") {
         throw "Local beta build metadata has the wrong Rust YouTube backend revision"
+    }
+    if ($BuildInfo.bundled_components.yt_dlp -ne "components/yt-dlp.exe" -or
+        $BuildInfo.bundled_components.yt_dlp_version -ne "2026.08.19") {
+        throw "Local beta build metadata omitted the standalone yt-dlp component"
     }
     Copy-Item -LiteralPath $PackageDir -Destination $TamperedPackage -Recurse
     Add-Content -LiteralPath (Join-Path $TamperedPackage "build-info.json") -Value "tampered"
@@ -82,8 +90,16 @@ try {
         throw "Installed local beta omitted the mpv D3D compiler"
     }
     $InstalledYoutubeHelper = Join-Path $InstallRoot "components\apricot-youtube-helper.exe"
+    $InstalledYtDlp = Join-Path $InstallRoot "components\yt-dlp.exe"
     if (-not (Test-Path -LiteralPath $InstalledYoutubeHelper -PathType Leaf)) {
         throw "Installed local beta omitted the Rust YouTube helper"
+    }
+    if (-not (Test-Path -LiteralPath $InstalledYtDlp -PathType Leaf)) {
+        throw "Installed local beta omitted standalone yt-dlp"
+    }
+    $InstalledYtDlpVersion = (& $InstalledYtDlp --version | Select-Object -First 1).Trim()
+    if ($LASTEXITCODE -ne 0 -or $InstalledYtDlpVersion -ne "2026.08.19") {
+        throw "Installed standalone yt-dlp failed its version check"
     }
     $HelloRequest = '{"protocol_version":1,"request_id":1,"command":{"type":"hello"}}'
     $ShutdownRequest = '{"protocol_version":1,"request_id":2,"command":{"type":"shutdown"}}'
@@ -98,6 +114,10 @@ try {
     $ProductionHelperCheck = Start-Process -FilePath $Executable -ArgumentList "--qualification-youtube-helper" -WindowStyle Hidden -Wait -PassThru
     if ($ProductionHelperCheck.ExitCode -ne 0) {
         throw "Installed app could not use the Rust YouTube helper through its production process client"
+    }
+    $ProductionYtDlpCheck = Start-Process -FilePath $Executable -ArgumentList "--qualification-ytdlp" -WindowStyle Hidden -Wait -PassThru
+    if ($ProductionYtDlpCheck.ExitCode -ne 0) {
+        throw "Installed app could not use standalone yt-dlp through its production adapter"
     }
     $ProcessExitDeadline = [DateTime]::UtcNow.AddSeconds(2)
     do {

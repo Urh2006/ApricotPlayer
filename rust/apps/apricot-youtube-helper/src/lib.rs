@@ -18,6 +18,7 @@ const MAX_SEARCH_QUERY_BYTES: usize = 1_024;
 const MAX_SEARCH_RESULTS: u32 = 200;
 const MAX_MEDIA_URL_BYTES: usize = 16_384;
 const MAX_COOKIE_HEADER_BYTES: usize = 131_072;
+const MAX_COOKIE_FILE_BYTES: usize = 32_768;
 const MAX_PROXY_URL_BYTES: usize = 2_048;
 const NETWORK_OPERATION_TIMEOUT: Duration = Duration::from_secs(45);
 
@@ -223,6 +224,10 @@ fn validate_config(config: &YoutubeSessionConfig) -> Result<(), YoutubeHelperErr
         .cookies_header
         .as_ref()
         .is_some_and(|cookies| cookies.len() > MAX_COOKIE_HEADER_BYTES)
+        || config
+            .cookies_file
+            .as_ref()
+            .is_some_and(|path| path.len() > MAX_COOKIE_FILE_BYTES)
         || config
             .proxy_url
             .as_ref()
@@ -440,6 +445,7 @@ mod tests {
                 YoutubeCommand::Configure {
                     config: YoutubeSessionConfig {
                         cookies_header: Some("PREF=test".to_owned()),
+                        cookies_file: None,
                         proxy_url: None,
                     },
                 },

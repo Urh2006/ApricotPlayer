@@ -7,7 +7,7 @@ use std::{
 
 use thiserror::Error;
 
-use crate::{YoutubeCommand, YoutubeResponsePayload};
+use crate::{YoutubeCommand, YoutubeErrorCode, YoutubeResponsePayload};
 
 const REQUEST_CAPACITY: usize = 16;
 const UPDATE_CAPACITY: usize = 32;
@@ -17,6 +17,7 @@ const UPDATE_CAPACITY: usize = 32;
 pub struct YoutubeEngineError {
     pub message: String,
     pub restart_required: bool,
+    pub code: Option<YoutubeErrorCode>,
 }
 
 impl YoutubeEngineError {
@@ -24,6 +25,19 @@ impl YoutubeEngineError {
         Self {
             message: message.into(),
             restart_required,
+            code: None,
+        }
+    }
+
+    pub fn backend(
+        code: YoutubeErrorCode,
+        message: impl Into<String>,
+        restart_required: bool,
+    ) -> Self {
+        Self {
+            message: message.into(),
+            restart_required,
+            code: Some(code),
         }
     }
 }
@@ -275,6 +289,7 @@ mod tests {
         let config = YoutubeCommand::Configure {
             config: YoutubeSessionConfig {
                 cookies_header: Some("PREF=test".to_owned()),
+                cookies_file: None,
                 proxy_url: None,
             },
         };

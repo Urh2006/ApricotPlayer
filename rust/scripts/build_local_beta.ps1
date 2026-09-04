@@ -93,6 +93,12 @@ try {
     $ComponentsDestination = Join-Path $StagingDir "components"
     New-Item -ItemType Directory -Path $ComponentsDestination -Force | Out-Null
     Copy-Item -LiteralPath $BuiltYoutubeHelper -Destination $ComponentsDestination
+    $YtDlpSource = Join-Path $RustRoot ".cargo-local\yt-dlp\yt-dlp.exe"
+    if (-not (Test-Path -LiteralPath $YtDlpSource -PathType Leaf)) {
+        & (Join-Path $PSScriptRoot "prepare_ytdlp.ps1")
+        if ($LASTEXITCODE -ne 0) { throw "yt-dlp preparation failed with exit code $LASTEXITCODE" }
+    }
+    Copy-Item -LiteralPath $YtDlpSource -Destination $ComponentsDestination
     $BuildInfo = [ordered]@{
         schema_version = 1
         application_id = "ApricotPlayer.RustBeta"
@@ -113,6 +119,8 @@ try {
             mpv_d3d_compiler = "mpv/d3dcompiler_43.dll"
             rusty_ytdl_helper = "components/apricot-youtube-helper.exe"
             rusty_ytdl_revision = "b1c6eb7c83f0d6189f256ed5df50019a5803c734"
+            yt_dlp = "components/yt-dlp.exe"
+            yt_dlp_version = "2026.08.19"
         }
     }
     $BuildInfo | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $StagingDir "build-info.json") -Encoding utf8

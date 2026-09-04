@@ -186,7 +186,15 @@ impl YoutubeEngine for YoutubeHelperProcess {
     ) -> Result<YoutubeResponsePayload, YoutubeEngineError> {
         self.request(command).map_err(|error| {
             let restart_required = !matches!(error, YoutubeProcessError::Helper(_));
-            YoutubeEngineError::new(error.to_string(), restart_required)
+            if let YoutubeProcessError::Helper(helper_error) = &error {
+                YoutubeEngineError::backend(
+                    helper_error.code,
+                    helper_error.message.clone(),
+                    restart_required,
+                )
+            } else {
+                YoutubeEngineError::new(error.to_string(), restart_required)
+            }
         })
     }
 }

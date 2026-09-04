@@ -6,9 +6,10 @@ use apricot_app::{ActivationRequest, Application, MainMenuAvailability, Settings
 use apricot_core::{
     action::ACTIONS, locale::LANGUAGES, menu::CUSTOMIZABLE_MAIN_MENU, setting::SettingId,
 };
+use apricot_media::{YoutubeCommand, YoutubeEngine, YoutubeResponsePayload};
 use apricot_platform::{
-    ApplicationIdentity, SingleInstanceOutcome, YoutubeHelperProcess, acquire_single_instance,
-    discover_windows_beta_paths, sync_startup_registration,
+    ApplicationIdentity, SingleInstanceOutcome, YoutubeHelperProcess, YtDlpYoutubeEngine,
+    acquire_single_instance, discover_windows_beta_paths, sync_startup_registration,
 };
 use apricot_storage::{SettingsDocument, SettingsPaths};
 use apricot_updater::UpdateChannel;
@@ -43,6 +44,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let helper = YoutubeHelperProcess::start(&helper_path)?;
         assert!(!helper.helper_version().is_empty());
         assert!(!helper.backend_revision().is_empty());
+        return Ok(());
+    }
+    if arguments
+        .iter()
+        .any(|argument| argument == "--qualification-ytdlp")
+    {
+        let executable = std::env::current_exe()?;
+        let ytdlp_path = executable
+            .parent()
+            .ok_or("application executable has no parent directory")?
+            .join("components")
+            .join("yt-dlp.exe");
+        let mut engine = YtDlpYoutubeEngine::new(&ytdlp_path)?;
+        let response = engine.execute(YoutubeCommand::Hello)?;
+        assert!(matches!(
+            response,
+            YoutubeResponsePayload::Hello {
+                helper_version,
+                backend_revision,
+                ..
+            } if !helper_version.is_empty() && helper_version == backend_revision
+        ));
         return Ok(());
     }
 

@@ -65,6 +65,8 @@ pub struct YoutubeSessionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cookies_header: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cookies_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy_url: Option<String>,
 }
 
@@ -239,6 +241,7 @@ mod tests {
         );
         let json = serde_json::to_string(&request).expect("serialize request");
         assert!(!json.contains("cookies_header"));
+        assert!(!json.contains("cookies_file"));
         assert!(!json.contains("proxy_url"));
 
         let decoded: YoutubeRequest = serde_json::from_str(&json).expect("deserialize request");

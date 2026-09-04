@@ -241,3 +241,32 @@ Verified:
 The Rust backend remains experimental and yt-dlp remains the compatibility
 default until search, pagination, cookies, playback, downloads, live streams,
 and recovery behavior pass the full Phase 5 matrix.
+
+## 2026-09-04: default standalone yt-dlp backend
+
+Implementation: `rust/crates/apricot-platform/src/ytdlp_youtube.rs`, using the
+official standalone `yt-dlp.exe` release `2026.08.19`. The preparation script
+pins SHA-256
+`66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a`.
+
+Verified:
+
+- the executable is downloaded only from the exact official GitHub release URL,
+  hash-verified, staged atomically, and recorded in package metadata;
+- every invocation uses structured arguments without a shell, disables user
+  configuration and external plugin directories, and starts hidden on Windows;
+- stdout and stderr are drained concurrently with independent hard limits, a
+  45-second timeout, and forced process termination on timeout;
+- search JSON preserves mixed video, live-stream, channel, and playlist types,
+  while resolved formats preserve audio/video tracks, transport, dimensions,
+  frame rate, bitrate, and preference ordering;
+- cookie-file and proxy configuration is validated and error text redacts their
+  values; the cookie file is reread by each new invocation;
+- a live anonymous search returned results and a live resolve of
+  `jNQXAC9IVRw` returned the expected title and playable formats;
+- the local package and installed copy contain the pinned executable, and the
+  app exercises it through the production adapter during qualification.
+
+Deterministic parser, bounds, backend-selection, and redaction tests pass. The
+live test is ignored by the normal workspace suite and is run explicitly with
+`APRICOT_YTDLP`, so offline builds remain reproducible.

@@ -110,10 +110,12 @@ dependencies = [
 name = "apricot-platform"
 version = "2.0.0-dev.1"
 dependencies = [
+ "apricot-core",
  "apricot-media",
  "serde_json",
  "tempfile",
  "thiserror",
+ "url",
  "windows",
 ]
 
@@ -135,6 +137,7 @@ version = "2.0.0-dev.1"
 dependencies = [
  "apricot-app",
  "apricot-core",
+ "apricot-media",
  "apricot-platform",
  "apricot-storage",
  "apricot-ui-windows",

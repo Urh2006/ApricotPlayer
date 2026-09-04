@@ -9,12 +9,14 @@ pub mod paths;
 pub mod single_instance;
 pub mod windows_registration;
 pub mod youtube_helper_process;
+pub mod ytdlp_youtube;
 
 pub use diagnostics::{DiagnosticLog, DiagnosticLogError, install_panic_hook};
 pub use paths::{PathDiscoveryError, discover_windows_beta_paths, discover_windows_paths};
 pub use single_instance::{SingleInstanceGuard, SingleInstanceOutcome, acquire_single_instance};
 pub use windows_registration::{startup_command, startup_value_name, sync_startup_registration};
 pub use youtube_helper_process::{YoutubeHelperProcess, YoutubeProcessError};
+pub use ytdlp_youtube::{YtDlpYoutubeEngine, spawn_youtube_runtime};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ApplicationIdentity {
