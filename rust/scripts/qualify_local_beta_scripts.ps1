@@ -18,9 +18,23 @@ try {
     if (-not (Test-Path -LiteralPath $BundledNvda -PathType Leaf)) {
         throw "Local beta package omitted the NVDA Controller Client"
     }
+    $BundledMpv = Join-Path $PackageDir "mpv\mpv.exe"
+    $BundledMpvD3dCompiler = Join-Path $PackageDir "mpv\d3dcompiler_43.dll"
+    if (-not (Test-Path -LiteralPath $BundledMpv -PathType Leaf)) {
+        throw "Local beta package omitted mpv.exe"
+    }
+    if (-not (Test-Path -LiteralPath $BundledMpvD3dCompiler -PathType Leaf)) {
+        throw "Local beta package omitted the mpv D3D compiler"
+    }
     $BuildInfo = Get-Content -LiteralPath (Join-Path $PackageDir "build-info.json") -Raw | ConvertFrom-Json
     if ($BuildInfo.bundled_components.nvda_controller_client -ne "nvda/nvdaControllerClient64.dll") {
         throw "Local beta build metadata omitted the NVDA Controller Client"
+    }
+    if ($BuildInfo.bundled_components.mpv -ne "mpv/mpv.exe") {
+        throw "Local beta build metadata omitted mpv"
+    }
+    if ($BuildInfo.bundled_components.mpv_d3d_compiler -ne "mpv/d3dcompiler_43.dll") {
+        throw "Local beta build metadata omitted the mpv D3D compiler"
     }
     Copy-Item -LiteralPath $PackageDir -Destination $TamperedPackage -Recurse
     Add-Content -LiteralPath (Join-Path $TamperedPackage "build-info.json") -Value "tampered"
@@ -40,6 +54,12 @@ try {
     if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) { throw "Installed executable is missing" }
     if (-not (Test-Path -LiteralPath (Join-Path $InstallRoot "nvda\nvdaControllerClient64.dll") -PathType Leaf)) {
         throw "Installed local beta omitted the NVDA Controller Client"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $InstallRoot "mpv\mpv.exe") -PathType Leaf)) {
+        throw "Installed local beta omitted mpv.exe"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $InstallRoot "mpv\d3dcompiler_43.dll") -PathType Leaf)) {
+        throw "Installed local beta omitted the mpv D3D compiler"
     }
     & $Executable --qualification-smoke
     if ($LASTEXITCODE -ne 0) { throw "Installed local beta did not launch correctly" }

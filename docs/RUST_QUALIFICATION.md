@@ -29,6 +29,8 @@ Verified:
 - local release builds carry exact version, commit, dirty-tree, timestamp, Rust,
   data-schema, identity, and update-channel metadata plus a SHA-256 file
   manifest;
+- every local beta package and installation includes the exact bundled mpv
+  executable, its required D3D compiler, and the NVDA Controller Client;
 - a changed package is rejected before installation;
 - side-by-side install and reinstall are transactional, remove stale package
   files, and never touch the Python installation;

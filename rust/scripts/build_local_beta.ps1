@@ -68,6 +68,18 @@ try {
     $NvdaDestination = Join-Path $StagingDir "nvda"
     New-Item -ItemType Directory -Path $NvdaDestination -Force | Out-Null
     Copy-Item -LiteralPath $NvdaSource -Destination $NvdaDestination
+    $MpvSource = Join-Path (Split-Path -Parent $RustRoot) "vendor\mpv"
+    $MpvExecutable = Join-Path $MpvSource "mpv.exe"
+    $MpvD3dCompiler = Join-Path $MpvSource "d3dcompiler_43.dll"
+    foreach ($RequiredMpvFile in @($MpvExecutable, $MpvD3dCompiler)) {
+        if (-not (Test-Path -LiteralPath $RequiredMpvFile -PathType Leaf)) {
+            throw "Bundled mpv runtime file was not found at $RequiredMpvFile"
+        }
+    }
+    $MpvDestination = Join-Path $StagingDir "mpv"
+    New-Item -ItemType Directory -Path $MpvDestination -Force | Out-Null
+    Copy-Item -LiteralPath $MpvExecutable -Destination $MpvDestination
+    Copy-Item -LiteralPath $MpvD3dCompiler -Destination $MpvDestination
     $BuildInfo = [ordered]@{
         schema_version = 1
         application_id = "ApricotPlayer.RustBeta"
@@ -83,6 +95,8 @@ try {
         app_data_directory = "%APPDATA%\ApricotPlayer2Beta"
         bundled_components = [ordered]@{
             nvda_controller_client = "nvda/nvdaControllerClient64.dll"
+            mpv = "mpv/mpv.exe"
+            mpv_d3d_compiler = "mpv/d3dcompiler_43.dll"
         }
     }
     $BuildInfo | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $StagingDir "build-info.json") -Encoding utf8
