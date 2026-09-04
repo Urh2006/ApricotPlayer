@@ -33,7 +33,6 @@ const POLL_INTERVAL: Duration = Duration::from_millis(10);
 const MAX_STDOUT_BYTES: usize = 32 * 1_024 * 1_024;
 const MAX_STDERR_BYTES: usize = 1_024 * 1_024;
 const MAX_SEARCH_QUERY_BYTES: usize = 1_024;
-const MAX_SEARCH_RESULTS: u32 = 200;
 const MAX_MEDIA_URL_BYTES: usize = 16_384;
 const MAX_COOKIE_HEADER_BYTES: usize = 131_072;
 const MAX_COOKIE_FILE_BYTES: usize = 32_768;
@@ -112,17 +111,19 @@ impl YtDlpYoutubeEngine {
                 "search query is empty or too long".to_owned(),
             ));
         }
-        if !(1..=MAX_SEARCH_RESULTS).contains(&limit) {
-            return Err(YtDlpError::InvalidConfiguration(format!(
-                "search limit must be between 1 and {MAX_SEARCH_RESULTS}"
-            )));
+        if limit == 0 {
+            return Err(YtDlpError::InvalidConfiguration(
+                "search limit must be greater than zero".to_owned(),
+            ));
         }
 
-        let target = format!("ytsearch{limit}:{query}");
+        let target = search_target(query, kind, limit);
         let mut arguments = self.base_arguments();
         arguments.extend([
             OsString::from("--flat-playlist"),
             OsString::from("--skip-download"),
+            OsString::from("--playlist-end"),
+            OsString::from(limit.to_string()),
             OsString::from("--dump-single-json"),
             OsString::from("--"),
             OsString::from(target),
@@ -215,6 +216,23 @@ impl YtDlpYoutubeEngine {
             .map_err(|error| YtDlpError::Launch(error.to_string()))?;
         collect_process_output(&mut child, OPERATION_TIMEOUT)
     }
+}
+
+fn search_target(query: &str, kind: YoutubeSearchKind, limit: u32) -> String {
+    if kind == YoutubeSearchKind::Video {
+        return format!("ytsearch{limit}:{query}");
+    }
+    let filter = match kind {
+        YoutubeSearchKind::Playlist => Some("EgIQAw=="),
+        YoutubeSearchKind::Channel => Some("EgIQAg=="),
+        YoutubeSearchKind::All | YoutubeSearchKind::Film | YoutubeSearchKind::Video => None,
+    };
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    serializer.append_pair("search_query", query);
+    if let Some(filter) = filter {
+        serializer.append_pair("sp", filter);
+    }
+    format!("https://www.youtube.com/results?{}", serializer.finish())
 }
 
 impl YoutubeEngine for YtDlpYoutubeEngine {
@@ -739,7 +757,8 @@ fn sanitize_error(message: &str, config: &YoutubeSessionConfig) -> String {
 mod tests {
     use super::{
         BoundedBytes, YtDlpYoutubeEngine, component_executable, media_item_from_value,
-        read_bounded, sanitize_error, search_kind_accepts, sort_formats, youtube_format,
+        read_bounded, sanitize_error, search_kind_accepts, search_target, sort_formats,
+        youtube_format,
     };
     use apricot_core::MediaKind;
     use apricot_media::{
@@ -781,6 +800,26 @@ mod tests {
         assert_eq!(playlist.kind, MediaKind::Playlist);
         assert!(search_kind_accepts(YoutubeSearchKind::Video, video.kind));
         assert!(!search_kind_accepts(YoutubeSearchKind::Video, channel.kind));
+    }
+
+    #[test]
+    fn search_targets_match_python_type_semantics() {
+        assert_eq!(
+            search_target("open ai", YoutubeSearchKind::Video, 20),
+            "ytsearch20:open ai"
+        );
+        assert_eq!(
+            search_target("open ai", YoutubeSearchKind::All, 20),
+            "https://www.youtube.com/results?search_query=open+ai"
+        );
+        assert_eq!(
+            search_target("open ai", YoutubeSearchKind::Playlist, 20),
+            "https://www.youtube.com/results?search_query=open+ai&sp=EgIQAw%3D%3D"
+        );
+        assert_eq!(
+            search_target("open ai", YoutubeSearchKind::Channel, 20),
+            "https://www.youtube.com/results?search_query=open+ai&sp=EgIQAg%3D%3D"
+        );
     }
 
     #[test]

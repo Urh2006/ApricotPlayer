@@ -9,8 +9,9 @@ use apricot_storage::SettingsDocument;
 use crate::{
     ActionFinderContext, ActionFinderModel, ActivationRequest, AppState, AudioSession,
     EqualizerSession, MainMenuAvailability, MainMenuModel, MenuVisibility, PlayerScreenModel,
-    PlayerSession, PlayerSessionDefaults, PlayerViewState, SessionToggle, SettingsController,
-    SettingsControllerError, SettingsScreenModel, embedded_catalog,
+    PlayerSession, PlayerSessionDefaults, PlayerViewState, SearchApplyOutcome, SearchSession,
+    SearchSessionError, SearchWork, SessionToggle, SettingsController, SettingsControllerError,
+    SettingsScreenModel, YoutubeSearchKind, embedded_catalog,
 };
 
 #[derive(Debug)]
@@ -33,6 +34,48 @@ impl Application {
 
     pub const fn player_session(&self) -> &PlayerSession {
         &self.state.player
+    }
+
+    pub const fn search_session(&self) -> &SearchSession {
+        &self.state.search
+    }
+
+    /// Starts a `YouTube` search using the current result-limit setting.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the normalized query is empty.
+    pub fn begin_youtube_search(
+        &mut self,
+        query: &str,
+        kind: YoutubeSearchKind,
+    ) -> Result<SearchWork, SearchSessionError> {
+        self.state
+            .search
+            .begin(query, kind, self.settings.current().results_limit)
+    }
+
+    pub fn request_more_search_results(&mut self) -> Option<SearchWork> {
+        self.state.search.request_more()
+    }
+
+    pub fn apply_search_results(
+        &mut self,
+        generation: u64,
+        items: Vec<MediaItem>,
+        continuation: Option<String>,
+    ) -> SearchApplyOutcome {
+        self.state
+            .search
+            .apply_results(generation, items, continuation)
+    }
+
+    pub fn fail_search(&mut self, generation: u64, message: impl Into<String>) -> bool {
+        self.state.search.fail(generation, message)
+    }
+
+    pub fn select_search_result(&mut self, index: usize) -> bool {
+        self.state.search.select(index)
     }
 
     pub fn player_screen_model(&self) -> Option<PlayerScreenModel> {

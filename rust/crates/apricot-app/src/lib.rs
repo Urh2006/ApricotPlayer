@@ -6,11 +6,13 @@ pub mod application;
 pub mod main_menu;
 pub mod player_model;
 pub mod player_session;
+pub mod search_session;
 pub mod settings_controller;
 pub mod settings_model;
 pub mod settings_session;
 
 use apricot_core::NavigationStack;
+pub use apricot_media::YoutubeSearchKind;
 
 pub use action_finder::{ActionFinderContext, ActionFinderItem, ActionFinderModel};
 pub use activation::ActivationRequest;
@@ -27,6 +29,10 @@ pub use player_session::{
     AudioSession, EqualizerSession, PlaybackPhase, PlayerSession, PlayerSessionDefaults,
     SessionToggle,
 };
+pub use search_session::{
+    DYNAMIC_SEARCH_PAGE_SIZE, SearchApplyOutcome, SearchPhase, SearchSession, SearchSessionError,
+    SearchWork, SearchWorkKind,
+};
 pub use settings_controller::{SettingsController, SettingsControllerError};
 pub use settings_model::{
     SettingsChoiceOption, SettingsCommand, SettingsControl, SettingsScreenModel,
@@ -38,4 +44,5 @@ pub use settings_session::{SettingsDraft, SettingsDraftError};
 pub struct AppState {
     pub navigation: NavigationStack,
     pub player: PlayerSession,
+    pub search: SearchSession,
 }

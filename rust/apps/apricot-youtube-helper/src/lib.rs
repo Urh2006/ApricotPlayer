@@ -15,7 +15,6 @@ use serde_json::Value;
 use url::Url;
 
 const MAX_SEARCH_QUERY_BYTES: usize = 1_024;
-const MAX_SEARCH_RESULTS: u32 = 200;
 const MAX_MEDIA_URL_BYTES: usize = 16_384;
 const MAX_COOKIE_HEADER_BYTES: usize = 131_072;
 const MAX_COOKIE_FILE_BYTES: usize = 32_768;
@@ -134,10 +133,10 @@ impl YoutubeHelper {
                 false,
             ));
         }
-        if limit == 0 || limit > MAX_SEARCH_RESULTS {
+        if limit == 0 {
             return Err(YoutubeHelperError::new(
                 YoutubeErrorCode::InvalidRequest,
-                format!("Search limit must be between 1 and {MAX_SEARCH_RESULTS}"),
+                "Search limit must be greater than zero",
                 false,
             ));
         }
