@@ -5,6 +5,7 @@ use apricot_core::{MediaItem, MediaSource};
 use thiserror::Error;
 
 pub mod youtube_protocol;
+pub mod youtube_runtime;
 
 pub use youtube_protocol::{
     MAX_YOUTUBE_MESSAGE_BYTES, RUSTY_YTDL_REVISION, YOUTUBE_HELPER_PROTOCOL_VERSION,
@@ -12,6 +13,9 @@ pub use youtube_protocol::{
     YoutubeFormatTracks, YoutubeFormatTransport, YoutubeHelperError, YoutubeRequest,
     YoutubeResponse, YoutubeResponsePayload, YoutubeSearchKind, YoutubeSessionConfig,
     YoutubeStreamPreference,
+};
+pub use youtube_runtime::{
+    YoutubeEngine, YoutubeEngineError, YoutubeRuntime, YoutubeRuntimeError, YoutubeUpdate,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]

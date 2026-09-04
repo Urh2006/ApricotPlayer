@@ -1,4 +1,4 @@
-use std::{cmp::Reverse, collections::BTreeMap};
+use std::{cmp::Reverse, collections::BTreeMap, time::Duration};
 
 use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
 use apricot_media::{
@@ -19,6 +19,7 @@ const MAX_SEARCH_RESULTS: u32 = 200;
 const MAX_MEDIA_URL_BYTES: usize = 16_384;
 const MAX_COOKIE_HEADER_BYTES: usize = 131_072;
 const MAX_PROXY_URL_BYTES: usize = 2_048;
+const NETWORK_OPERATION_TIMEOUT: Duration = Duration::from_secs(45);
 
 pub struct YoutubeHelper {
     config: YoutubeSessionConfig,
@@ -54,7 +55,28 @@ impl YoutubeHelper {
             );
         }
 
-        match self.handle_command(request.command).await {
+        let is_network_operation = matches!(
+            &request.command,
+            YoutubeCommand::Search { .. } | YoutubeCommand::Resolve { .. }
+        );
+        let result = if is_network_operation {
+            match tokio::time::timeout(
+                NETWORK_OPERATION_TIMEOUT,
+                self.handle_command(request.command),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(YoutubeHelperError::new(
+                    YoutubeErrorCode::Unavailable,
+                    "YouTube operation timed out",
+                    true,
+                )),
+            }
+        } else {
+            self.handle_command(request.command).await
+        };
+        match result {
             Ok(payload) => YoutubeResponse::success(request_id, payload),
             Err(error) => YoutubeResponse::failure(request_id, error),
         }

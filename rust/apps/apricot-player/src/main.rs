@@ -7,7 +7,7 @@ use apricot_core::{
     action::ACTIONS, locale::LANGUAGES, menu::CUSTOMIZABLE_MAIN_MENU, setting::SettingId,
 };
 use apricot_platform::{
-    ApplicationIdentity, SingleInstanceOutcome, acquire_single_instance,
+    ApplicationIdentity, SingleInstanceOutcome, YoutubeHelperProcess, acquire_single_instance,
     discover_windows_beta_paths, sync_startup_registration,
 };
 use apricot_storage::{SettingsDocument, SettingsPaths};
@@ -23,15 +23,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .any(|argument| argument == "--qualification-smoke")
     {
-        println!(
-            "ApricotPlayer {} foundation: {} settings, {} actions, {} menu items, {} languages, remote updates: {}",
-            env!("CARGO_PKG_VERSION"),
-            SettingId::ALL.len(),
-            ACTIONS.len(),
-            CUSTOMIZABLE_MAIN_MENU.len(),
-            LANGUAGES.len(),
-            channel.allows_remote_install()
-        );
+        assert_eq!(SettingId::ALL.len(), 117);
+        assert_eq!(ACTIONS.len(), 91);
+        assert_eq!(CUSTOMIZABLE_MAIN_MENU.len(), 19);
+        assert_eq!(LANGUAGES.len(), 27);
+        assert!(!channel.allows_remote_install());
+        return Ok(());
+    }
+    if arguments
+        .iter()
+        .any(|argument| argument == "--qualification-youtube-helper")
+    {
+        let executable = std::env::current_exe()?;
+        let helper_path = executable
+            .parent()
+            .ok_or("application executable has no parent directory")?
+            .join("components")
+            .join("apricot-youtube-helper.exe");
+        let helper = YoutubeHelperProcess::start(&helper_path)?;
+        assert!(!helper.helper_version().is_empty());
+        assert!(!helper.backend_revision().is_empty());
         return Ok(());
     }
 

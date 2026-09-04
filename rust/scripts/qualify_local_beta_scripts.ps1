@@ -93,8 +93,23 @@ try {
     if ($HelloResponse.status -ne "hello" -or $HelloResponse.request_id -ne 1) {
         throw "Installed Rust YouTube helper failed its protocol handshake"
     }
-    & $Executable --qualification-smoke
-    if ($LASTEXITCODE -ne 0) { throw "Installed local beta did not launch correctly" }
+    $FoundationSmoke = Start-Process -FilePath $Executable -ArgumentList "--qualification-smoke" -WindowStyle Hidden -Wait -PassThru
+    if ($FoundationSmoke.ExitCode -ne 0) { throw "Installed local beta did not launch correctly" }
+    $ProductionHelperCheck = Start-Process -FilePath $Executable -ArgumentList "--qualification-youtube-helper" -WindowStyle Hidden -Wait -PassThru
+    if ($ProductionHelperCheck.ExitCode -ne 0) {
+        throw "Installed app could not use the Rust YouTube helper through its production process client"
+    }
+    $ProcessExitDeadline = [DateTime]::UtcNow.AddSeconds(2)
+    do {
+        $QualificationProcesses = @(Get-CimInstance Win32_Process -Filter "Name = 'ApricotPlayer2Beta.exe'" | Where-Object {
+            $_.ExecutablePath -eq $Executable
+        })
+        if ($QualificationProcesses.Count -eq 0) { break }
+        Start-Sleep -Milliseconds 25
+    } while ([DateTime]::UtcNow -lt $ProcessExitDeadline)
+    if ($QualificationProcesses.Count -ne 0) {
+        throw "Qualification app process did not exit after the YouTube helper smoke test"
+    }
 
     Set-Content -LiteralPath (Join-Path $InstallRoot "stale-file.txt") -Value "stale" -Encoding utf8
     & (Join-Path $PSScriptRoot "install_local_beta.ps1") -PackageDir $PackageDir -InstallRoot $InstallRoot -SkipBuild -NoShortcut

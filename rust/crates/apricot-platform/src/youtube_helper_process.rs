@@ -10,8 +10,9 @@ use std::{
 };
 
 use apricot_media::{
-    MAX_YOUTUBE_MESSAGE_BYTES, YOUTUBE_HELPER_PROTOCOL_VERSION, YoutubeCommand, YoutubeHelperError,
-    YoutubeRequest, YoutubeResponse, YoutubeResponsePayload,
+    MAX_YOUTUBE_MESSAGE_BYTES, YOUTUBE_HELPER_PROTOCOL_VERSION, YoutubeCommand, YoutubeEngine,
+    YoutubeEngineError, YoutubeHelperError, YoutubeRequest, YoutubeResponse,
+    YoutubeResponsePayload,
 };
 use thiserror::Error;
 
@@ -39,6 +40,9 @@ pub struct YoutubeHelperProcess {
     input: ChildStdin,
     output: BufReader<ChildStdout>,
     next_request_id: u64,
+    helper_version: String,
+    backend_revision: String,
+    closed: bool,
 }
 
 impl YoutubeHelperProcess {
@@ -71,14 +75,32 @@ impl YoutubeHelperProcess {
             input,
             output: BufReader::new(output),
             next_request_id: 1,
+            helper_version: String::new(),
+            backend_revision: String::new(),
+            closed: false,
         };
         let response = process.request(YoutubeCommand::Hello)?;
-        if !matches!(response, YoutubeResponsePayload::Hello { .. }) {
+        let YoutubeResponsePayload::Hello {
+            helper_version,
+            backend_revision,
+            ..
+        } = response
+        else {
             return Err(YoutubeProcessError::Protocol(
                 "helper did not return a hello response".to_owned(),
             ));
-        }
+        };
+        process.helper_version = helper_version;
+        process.backend_revision = backend_revision;
         Ok(process)
+    }
+
+    pub fn helper_version(&self) -> &str {
+        &self.helper_version
+    }
+
+    pub fn backend_revision(&self) -> &str {
+        &self.backend_revision
     }
 
     /// Sends one request over the existing helper process.
@@ -119,11 +141,24 @@ impl YoutubeHelperProcess {
 
     /// Requests an orderly shutdown, then terminates an unresponsive helper.
     pub fn close(&mut self) {
+        if self.closed {
+            return;
+        }
+        self.closed = true;
+        if self.child.try_wait().is_ok_and(|status| status.is_some()) {
+            return;
+        }
         let request = YoutubeRequest::new(self.next_request_id, YoutubeCommand::Shutdown);
         if let Ok(encoded) = serde_json::to_vec(&request) {
-            let _ = self.input.write_all(&encoded);
-            let _ = self.input.write_all(b"\n");
-            let _ = self.input.flush();
+            let sent = self
+                .input
+                .write_all(&encoded)
+                .and_then(|()| self.input.write_all(b"\n"))
+                .and_then(|()| self.input.flush())
+                .is_ok();
+            if sent {
+                let _ = read_bounded_line(&mut self.output);
+            }
         }
         let deadline = Instant::now() + CLOSE_GRACE_PERIOD;
         while Instant::now() < deadline {
@@ -141,6 +176,18 @@ impl YoutubeHelperProcess {
 impl Drop for YoutubeHelperProcess {
     fn drop(&mut self) {
         self.close();
+    }
+}
+
+impl YoutubeEngine for YoutubeHelperProcess {
+    fn execute(
+        &mut self,
+        command: YoutubeCommand,
+    ) -> Result<YoutubeResponsePayload, YoutubeEngineError> {
+        self.request(command).map_err(|error| {
+            let restart_required = !matches!(error, YoutubeProcessError::Helper(_));
+            YoutubeEngineError::new(error.to_string(), restart_required)
+        })
     }
 }
 

@@ -224,11 +224,17 @@ Verified:
   limits, correlated request IDs, explicit errors, and no secret echo;
 - one helper process handles handshake, configuration, search, resolve, and
   shutdown commands across a persistent session;
+- a bounded background runtime keeps all helper I/O off the UI thread, tags
+  responses with generation IDs, replays the latest session configuration only
+  after a transport restart, and applies a 45-second network-operation limit;
 - anonymous live YouTube search returned three requested results;
 - a live resolve of `jNQXAC9IVRw` returned the expected title and 15 available
   formats, including typed track and transport information;
 - the local package includes the helper, records its exact backend revision,
-  and runs a protocol handshake after installation;
+  and runs a protocol handshake through the production process client after
+  installation;
+- GUI-subsystem qualification uses a hidden, waited process and exit codes, so
+  it cannot close stdout early or race the following reinstall step;
 - the combined updater policy checks yt-dlp and the Rust helper independently,
   while local-only builds still forbid remote installation.
 
