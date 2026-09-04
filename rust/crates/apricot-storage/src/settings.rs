@@ -139,6 +139,7 @@ pub struct SettingsDocument {
     pub enable_history: bool,
     pub enable_podcasts_rss: bool,
     pub show_shortcuts_in_labels: bool,
+    pub youtube_backend: String,
     pub main_menu_hidden_actions: Vec<String>,
     pub podcast_search_provider: String,
     pub podcast_search_country: String,
@@ -263,6 +264,7 @@ impl Default for SettingsDocument {
             enable_history: true,
             enable_podcasts_rss: true,
             show_shortcuts_in_labels: true,
+            youtube_backend: "yt-dlp".to_owned(),
             main_menu_hidden_actions: Vec::new(),
             podcast_search_provider: "apple".to_owned(),
             podcast_search_country: "US".to_owned(),
@@ -380,6 +382,11 @@ impl SettingsDocument {
             100
         };
         self.default_volume = self.default_volume.clamp(0, volume_max);
+        self.youtube_backend = normalized_member(
+            &self.youtube_backend.to_lowercase(),
+            &["yt-dlp", "rusty_ytdl"],
+            "yt-dlp",
+        );
         self.main_menu_hidden_actions = normalize_hidden_menu(&self.main_menu_hidden_actions);
         "apple".clone_into(&mut self.podcast_search_provider);
         self.podcast_search_country = self.podcast_search_country.trim().to_uppercase();
@@ -603,7 +610,7 @@ mod tests {
     use super::{SettingsDocument, SettingsLoadError};
 
     #[test]
-    fn typed_schema_serializes_exactly_all_116_known_settings() {
+    fn typed_schema_serializes_exactly_all_117_known_settings() {
         let object = serde_json::to_value(SettingsDocument::default())
             .expect("serialize")
             .as_object()

@@ -39,12 +39,16 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "cargo clippy failed with exit code $LASTEXITCODE" }
     }
 
-    cargo build --release -p apricot-player
+    cargo build --release -p apricot-player -p apricot-youtube-helper
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed with exit code $LASTEXITCODE" }
 
     $BuiltExe = Join-Path $RustRoot "target\release\apricot-player.exe"
+    $BuiltYoutubeHelper = Join-Path $RustRoot "target\release\apricot-youtube-helper.exe"
     if (-not (Test-Path -LiteralPath $BuiltExe -PathType Leaf)) {
         throw "Rust executable was not produced at $BuiltExe"
+    }
+    if (-not (Test-Path -LiteralPath $BuiltYoutubeHelper -PathType Leaf)) {
+        throw "Rust YouTube helper was not produced at $BuiltYoutubeHelper"
     }
 
     $Metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
@@ -86,6 +90,9 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "libmpv preparation failed with exit code $LASTEXITCODE" }
     }
     Copy-Item -LiteralPath $LibMpvSource -Destination $MpvDestination
+    $ComponentsDestination = Join-Path $StagingDir "components"
+    New-Item -ItemType Directory -Path $ComponentsDestination -Force | Out-Null
+    Copy-Item -LiteralPath $BuiltYoutubeHelper -Destination $ComponentsDestination
     $BuildInfo = [ordered]@{
         schema_version = 1
         application_id = "ApricotPlayer.RustBeta"
@@ -104,6 +111,8 @@ try {
             mpv = "mpv/mpv.exe"
             libmpv = "mpv/libmpv-2.dll"
             mpv_d3d_compiler = "mpv/d3dcompiler_43.dll"
+            rusty_ytdl_helper = "components/apricot-youtube-helper.exe"
+            rusty_ytdl_revision = "b1c6eb7c83f0d6189f256ed5df50019a5803c734"
         }
     }
     $BuildInfo | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $StagingDir "build-info.json") -Encoding utf8

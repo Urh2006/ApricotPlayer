@@ -16,6 +16,8 @@ Spotify is intentionally not part of this manifest.
 ## Baseline cardinalities
 
 - [ ] 116 `Settings` fields represented, migrated, resettable, and tested.
+- [ ] Rust-only `youtube_backend` setting is typed, normalized, resettable, and
+  forward-compatible with the Python baseline.
 - [ ] 91 shortcut actions represented, editable, scoped, displayed, and tested.
 - [ ] 19 customizable main-menu actions represented in exact order.
 - [ ] Update Available, Settings, and Exit remain permanent menu items.
@@ -92,6 +94,10 @@ Permanent items:
 ## Search, discovery, and online sources
 
 - [ ] Provider selection for YouTube and SoundCloud.
+- [ ] YouTube backend combobox selects yt-dlp or the Apricot-owned Rust helper;
+  yt-dlp remains the default and shortcuts continue to work with either choice.
+- [ ] Rust helper uses one bounded, versioned, persistent process session and
+  reports its exact `rusty_ytdl` revision in diagnostics.
 - [ ] Search edit Enter starts search and focuses the complete result list.
 - [ ] Stale-search generations cannot replace a newer search.
 - [ ] Results preserve title, type, channel/author, duration, upload time, views,
@@ -627,7 +633,9 @@ Player seek and volume actions:
 - [ ] `cookies.txt`, configured source path, and source signature behavior.
 - [ ] `download-archive.txt`.
 - [ ] cache folder and size/cleanup behavior.
-- [ ] `components` state for yt-dlp updates.
+- [ ] `components` state for yt-dlp and Rust YouTube helper updates.
+- [ ] Manual and startup YouTube-component checks attempt both components even
+  if either individual check fails.
 - [ ] updater/error/mpv logs with rotation/size limits.
 - [ ] legacy `UrhasaurusYouTubePlayer` settings/favorites import.
 - [ ] atomic writes, generation guards, corrupt-file preservation, backups, and

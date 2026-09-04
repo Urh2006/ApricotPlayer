@@ -6,6 +6,8 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+apricot-media.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 windows.workspace = true
 

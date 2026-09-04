@@ -21,6 +21,7 @@ try {
     $BundledMpv = Join-Path $PackageDir "mpv\mpv.exe"
     $BundledLibMpv = Join-Path $PackageDir "mpv\libmpv-2.dll"
     $BundledMpvD3dCompiler = Join-Path $PackageDir "mpv\d3dcompiler_43.dll"
+    $BundledYoutubeHelper = Join-Path $PackageDir "components\apricot-youtube-helper.exe"
     if (-not (Test-Path -LiteralPath $BundledMpv -PathType Leaf)) {
         throw "Local beta package omitted mpv.exe"
     }
@@ -29,6 +30,9 @@ try {
     }
     if (-not (Test-Path -LiteralPath $BundledMpvD3dCompiler -PathType Leaf)) {
         throw "Local beta package omitted the mpv D3D compiler"
+    }
+    if (-not (Test-Path -LiteralPath $BundledYoutubeHelper -PathType Leaf)) {
+        throw "Local beta package omitted the Rust YouTube helper"
     }
     $BuildInfo = Get-Content -LiteralPath (Join-Path $PackageDir "build-info.json") -Raw | ConvertFrom-Json
     if ($BuildInfo.bundled_components.nvda_controller_client -ne "nvda/nvdaControllerClient64.dll") {
@@ -42,6 +46,12 @@ try {
     }
     if ($BuildInfo.bundled_components.mpv_d3d_compiler -ne "mpv/d3dcompiler_43.dll") {
         throw "Local beta build metadata omitted the mpv D3D compiler"
+    }
+    if ($BuildInfo.bundled_components.rusty_ytdl_helper -ne "components/apricot-youtube-helper.exe") {
+        throw "Local beta build metadata omitted the Rust YouTube helper"
+    }
+    if ($BuildInfo.bundled_components.rusty_ytdl_revision -ne "b1c6eb7c83f0d6189f256ed5df50019a5803c734") {
+        throw "Local beta build metadata has the wrong Rust YouTube backend revision"
     }
     Copy-Item -LiteralPath $PackageDir -Destination $TamperedPackage -Recurse
     Add-Content -LiteralPath (Join-Path $TamperedPackage "build-info.json") -Value "tampered"
@@ -70,6 +80,18 @@ try {
     }
     if (-not (Test-Path -LiteralPath (Join-Path $InstallRoot "mpv\d3dcompiler_43.dll") -PathType Leaf)) {
         throw "Installed local beta omitted the mpv D3D compiler"
+    }
+    $InstalledYoutubeHelper = Join-Path $InstallRoot "components\apricot-youtube-helper.exe"
+    if (-not (Test-Path -LiteralPath $InstalledYoutubeHelper -PathType Leaf)) {
+        throw "Installed local beta omitted the Rust YouTube helper"
+    }
+    $HelloRequest = '{"protocol_version":1,"request_id":1,"command":{"type":"hello"}}'
+    $ShutdownRequest = '{"protocol_version":1,"request_id":2,"command":{"type":"shutdown"}}'
+    $HelperResponses = @($HelloRequest, $ShutdownRequest) | & $InstalledYoutubeHelper
+    if ($LASTEXITCODE -ne 0) { throw "Installed Rust YouTube helper did not run" }
+    $HelloResponse = $HelperResponses[0] | ConvertFrom-Json
+    if ($HelloResponse.status -ne "hello" -or $HelloResponse.request_id -ne 1) {
+        throw "Installed Rust YouTube helper failed its protocol handshake"
     }
     & $Executable --qualification-smoke
     if ($LASTEXITCODE -ne 0) { throw "Installed local beta did not launch correctly" }

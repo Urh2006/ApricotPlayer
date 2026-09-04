@@ -38,7 +38,7 @@ pub enum SettingsCommand {
     BrowseDownloadFolder,
     BrowseCacheFolder,
     SetDefaultPlayer,
-    CheckYtDlpUpdates,
+    CheckYoutubeComponentUpdates,
     CheckAppUpdates,
     CheckSubscriptions,
     ChooseCookiesFile,
@@ -300,9 +300,23 @@ fn general_controls(
             settings.show_shortcuts_in_labels,
             catalog,
         ),
+        SettingsControl::Choice {
+            setting: SettingId::YoutubeBackend,
+            label: catalog.text("youtube_backend").to_owned(),
+            value: settings.youtube_backend.clone(),
+            value_type: SettingsValueType::String,
+            options: [
+                SettingsChoiceOption::labeled("yt-dlp", catalog.text("youtube_backend_ytdlp")),
+                SettingsChoiceOption::labeled(
+                    "rusty_ytdl",
+                    catalog.text("youtube_backend_rusty_ytdl"),
+                ),
+            ]
+            .into(),
+        },
         checkbox(
             SettingId::AutoUpdateYtdlp,
-            "auto_update",
+            "auto_update_youtube_components",
             settings.auto_update_ytdlp,
             catalog,
         ),
@@ -331,8 +345,10 @@ fn general_controls(
             options: update_intervals,
         },
         SettingsControl::Command {
-            command: SettingsCommand::CheckYtDlpUpdates,
-            label: catalog.text("check_ytdlp_updates_now").to_owned(),
+            command: SettingsCommand::CheckYoutubeComponentUpdates,
+            label: catalog
+                .text("check_youtube_component_updates_now")
+                .to_owned(),
         },
         SettingsControl::Command {
             command: SettingsCommand::CheckAppUpdates,
@@ -1522,7 +1538,7 @@ mod tests {
             Path::new(r"C:\Profile\settings.json"),
             SettingsSection::General,
         );
-        assert_eq!(model.controls.len(), 18);
+        assert_eq!(model.controls.len(), 19);
         assert!(matches!(
             &model.controls[0],
             SettingsControl::Choice {
@@ -1539,6 +1555,15 @@ mod tests {
                 value,
                 ..
             } if value == "50"
+        ));
+        assert!(matches!(
+            &model.controls[8],
+            SettingsControl::Choice {
+                setting: SettingId::YoutubeBackend,
+                value,
+                options,
+                ..
+            } if value == "yt-dlp" && options.len() == 2
         ));
     }
 
@@ -1584,7 +1609,7 @@ mod tests {
     fn implemented_sections_preserve_complete_control_counts() {
         let settings = SettingsDocument::default();
         let expected = [
-            (SettingsSection::General, 18),
+            (SettingsSection::General, 19),
             (SettingsSection::MainMenu, 20),
             (SettingsSection::Playback, 36),
             (SettingsSection::Equalizer, 3),

@@ -234,9 +234,11 @@ This is deliberately a small set of deep crates, not one crate per Python file.
 
 `apricot-updater`:
 
-- app and yt-dlp update checks, channels, skip-version behavior, verified
-  metadata, hashes, trusted redirects, package validation, install transaction,
-  restart, and rollback;
+- app, yt-dlp, and Apricot-owned Rust YouTube helper update checks, channels,
+  skip-version behavior, verified metadata, hashes, trusted redirects, package
+  validation, install transaction, restart, and rollback;
+- a combined YouTube-component check always checks both yt-dlp and the Rust
+  helper independently; failure of one cannot suppress the other result;
 - local beta mode refuses network publication/update operations.
 
 `apricot-test-support`:
@@ -280,8 +282,9 @@ Every setting has one typed descriptor containing:
 - migration aliases and platform applicability;
 - secret/redaction policy.
 
-Tests compare this registry with the 116-field baseline. UI controls, defaults,
-serialization, validation, diagnostics, and resets derive from the same schema.
+Tests require all 116 Python baseline fields plus the Rust-only
+`youtube_backend` extension. UI controls, defaults, serialization, validation,
+diagnostics, and resets derive from the same schema.
 
 ### 5.3 Main-menu registry
 
@@ -424,10 +427,19 @@ All HTTP uses one bounded client layer with:
 - no remote URL allowed to become a local file path or arbitrary process
   argument without validation.
 
-YouTube and SoundCloud extraction use sanitized yt-dlp JSON. Normal, requested-
-format, web-safari, cookie, direct-media, HLS, truncated-stream, and EJS paths
-remain ordered exactly by the proven recovery policy. Current stream-format
-preference and cache-key semantics are preserved.
+YouTube has two explicit, user-selectable backends. yt-dlp remains the default
+compatibility path and uses sanitized JSON. The experimental Rust backend runs
+as an Apricot-owned, independently replaceable helper executable that pins an
+exact `rusty_ytdl` commit and speaks a versioned, bounded newline-delimited JSON
+protocol. It is a persistent helper session, not one process per request. There
+is no silent backend mixing: a selected backend either succeeds or returns an
+actionable error, while any approved fallback remains explicit.
+
+Normal, requested-format, web-safari, cookie, direct-media, HLS,
+truncated-stream, and EJS paths remain ordered exactly by the proven yt-dlp
+recovery policy. Current stream-format preference and cache-key semantics are
+preserved by both backends. SoundCloud extraction continues to use sanitized
+yt-dlp JSON.
 
 RSS/Atom, OPML, chapters, transcript, lyrics, comments, AudioVault pages and
 manifests all retain hard byte limits. XML parsing does not resolve DTDs,
@@ -554,7 +566,7 @@ faster.
 - UI Automation tests for every screen, control role/name/state, focus path,
   Enter, Space, Escape, context menu, Tab, Shift+Tab, arrows, Home/End, and
   letter navigation;
-- parity tests that count and validate all 116 settings, 91 shortcuts, 19
+- parity tests that count and validate all 117 settings, 91 shortcuts, 19
   customizable menu actions, 27 languages, 10 EQ bands, and current presets;
 - security/property tests for malformed JSON/XML, archive names, URLs, paths,
   redirects, huge responses, update packages, and diagnostics redaction;
@@ -646,6 +658,8 @@ Gate: no skipped/random items, shortcut leakage, stale focus, or data loss.
 
 ### Phase 5: YouTube, SoundCloud, and direct links
 
+- user-selectable yt-dlp or Rust YouTube backend, with yt-dlp as the initial
+  compatibility default and exact diagnostics for the active component;
 - search, trending, channels, tabs, playlists, Shorts, popular sorting, dynamic
   loading, metadata hydration, subscriptions, notification center, and browser
   actions;
@@ -682,7 +696,8 @@ Gate: real-account AudioVault and large-feed podcast acceptance passes.
 - file/folder conversion, clip export, edit export, collisions, replacement, and
   progress;
 - associations, Open With, startup, notifications, diagnostics, app updater,
-  yt-dlp updater, install transaction, and rollback.
+  combined YouTube-component updater for yt-dlp and the Rust helper, install
+  transaction, and rollback.
 
 Gate: all jobs and platform operations pass security and interruption tests.
 
@@ -741,7 +756,7 @@ Windows Rust 2.0 is ready only when:
 
 1. every item in `docs/RUST_PARITY_MANIFEST.md` is checked by implementation and
    evidence, with no silent omissions;
-2. all 116 settings, 91 shortcuts, 19 customizable main-menu items, 27
+2. all 117 settings, 91 shortcuts, 19 customizable main-menu items, 27
    languages, 10 EQ bands, and current presets are accounted for automatically;
 3. real Python user data migrates transactionally and rollback is proven;
 4. the full NVDA and keyboard acceptance run passes;

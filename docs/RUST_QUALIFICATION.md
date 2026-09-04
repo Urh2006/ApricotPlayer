@@ -15,7 +15,7 @@ Harnesses:
 
 Verified:
 
-- exact registries for 116 settings, 91 actions, 19 customizable main-menu
+- exact registries for 117 settings, 91 actions, 19 customizable main-menu
   items, 27 languages, 10 EQ bands, and the frozen preset catalog;
 - all 63 screens, 28 routes, and 17 context menus have stable typed IDs and
   machine-checked references;
@@ -212,3 +212,26 @@ These are single-run qualification observations, not release performance claims.
 Cold/warm repetitions and Python differential measurements remain required.
 
 Automated result: `MEDIA_PROCESS_SPIKE=PASS`.
+
+## 2026-09-04: optional Rust YouTube component
+
+Implementation: `rust/apps/apricot-youtube-helper`, using `rusty_ytdl` pinned
+to commit `b1c6eb7c83f0d6189f256ed5df50019a5803c734`.
+
+Verified:
+
+- a versioned newline-delimited JSON protocol with one MiB request and response
+  limits, correlated request IDs, explicit errors, and no secret echo;
+- one helper process handles handshake, configuration, search, resolve, and
+  shutdown commands across a persistent session;
+- anonymous live YouTube search returned three requested results;
+- a live resolve of `jNQXAC9IVRw` returned the expected title and 15 available
+  formats, including typed track and transport information;
+- the local package includes the helper, records its exact backend revision,
+  and runs a protocol handshake after installation;
+- the combined updater policy checks yt-dlp and the Rust helper independently,
+  while local-only builds still forbid remote installation.
+
+The Rust backend remains experimental and yt-dlp remains the compatibility
+default until search, pagination, cookies, playback, downloads, live streams,
+and recovery behavior pass the full Phase 5 matrix.
