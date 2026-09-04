@@ -5,6 +5,8 @@ use std::collections::BTreeSet;
 use apricot_core::{MediaItem, MediaKind, MediaSource, TranslationCatalog, action::action_by_id};
 use apricot_storage::SettingsDocument;
 
+use crate::{PlaybackPhase, PlayerSession, SessionToggle};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PlayerControlRole {
     VideoHost,
@@ -40,6 +42,33 @@ pub enum PlayerToggle {
 pub struct PlayerViewState {
     pub transport: TransportState,
     pub enabled_toggles: BTreeSet<PlayerToggle>,
+}
+
+impl From<&PlayerSession> for PlayerViewState {
+    fn from(session: &PlayerSession) -> Self {
+        let mut enabled_toggles = BTreeSet::new();
+        for (source, target) in [
+            (SessionToggle::Fullscreen, PlayerToggle::Fullscreen),
+            (SessionToggle::Repeat, PlayerToggle::Repeat),
+            (
+                SessionToggle::AutoplayNext,
+                PlayerToggle::SessionAutoplayNext,
+            ),
+            (SessionToggle::BassBoost, PlayerToggle::BassBoost),
+        ] {
+            if session.enabled_toggles().contains(&source) {
+                enabled_toggles.insert(target);
+            }
+        }
+        Self {
+            transport: if session.phase() == PlaybackPhase::Paused {
+                TransportState::Paused
+            } else {
+                TransportState::Playing
+            },
+            enabled_toggles,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -8,9 +8,9 @@ use apricot_storage::SettingsDocument;
 
 use crate::{
     ActionFinderContext, ActionFinderModel, ActivationRequest, AppState, AudioSession,
-    EqualizerSession, MainMenuAvailability, MainMenuModel, MenuVisibility, PlayerSession,
-    PlayerSessionDefaults, SessionToggle, SettingsController, SettingsControllerError,
-    SettingsScreenModel, embedded_catalog,
+    EqualizerSession, MainMenuAvailability, MainMenuModel, MenuVisibility, PlayerScreenModel,
+    PlayerSession, PlayerSessionDefaults, PlayerViewState, SessionToggle, SettingsController,
+    SettingsControllerError, SettingsScreenModel, embedded_catalog,
 };
 
 #[derive(Debug)]
@@ -33,6 +33,16 @@ impl Application {
 
     pub const fn player_session(&self) -> &PlayerSession {
         &self.state.player
+    }
+
+    pub fn player_screen_model(&self) -> Option<PlayerScreenModel> {
+        let item = self.state.player.current_item()?;
+        Some(PlayerScreenModel::build(
+            &embedded_catalog(&self.settings.current().language),
+            self.settings.current(),
+            item,
+            &PlayerViewState::from(&self.state.player),
+        ))
     }
 
     pub fn start_player_item(&mut self, item: MediaItem) -> u64 {
