@@ -68,6 +68,7 @@ pub enum RepeatMode {
 #[derive(Clone, Debug, PartialEq)]
 pub struct MpvLaunchOptions {
     pub executable: PathBuf,
+    pub library: Option<PathBuf>,
     pub working_directory: PathBuf,
     pub log_file: Option<PathBuf>,
     pub video_mode: MpvVideoMode,
@@ -93,6 +94,7 @@ impl MpvLaunchOptions {
             .map_or_else(PathBuf::new, Path::to_path_buf);
         Self {
             executable,
+            library: None,
             working_directory,
             log_file: None,
             video_mode: MpvVideoMode::Detached,

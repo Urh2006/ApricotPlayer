@@ -52,7 +52,12 @@ fn qualify_process_engine(mpv: &Path, fixture: &Path) -> Result<(), Box<dyn std:
     options.audio_driver = Some("null".to_owned());
     options.cache = None;
     options.initial_volume = 37.0;
+    let spawn_started = Instant::now();
     let mut engine = MpvProcessEngine::spawn(&options)?;
+    println!(
+        "MPV_PROCESS_INITIALIZE_MS={:.3}",
+        spawn_started.elapsed().as_secs_f64() * 1_000.0
+    );
     let item = MediaItem {
         id: MediaId("qualification-fixture".to_owned()),
         source: MediaSource::Local,
@@ -64,10 +69,15 @@ fn qualify_process_engine(mpv: &Path, fixture: &Path) -> Result<(), Box<dyn std:
         duration_seconds: Some(2.0),
         metadata: BTreeMap::default(),
     };
-    engine.execute(PlaybackCommand::Load(Box::new(item)))?;
+    let first_load_started = Instant::now();
+    engine.execute(PlaybackCommand::Load(Box::new(item.clone())))?;
     wait_for_engine_event(&mut engine, Duration::from_secs(3), |event| {
         matches!(event, PlaybackEvent::Started)
     })?;
+    println!(
+        "MPV_PROCESS_FIRST_LOAD_MS={:.3}",
+        first_load_started.elapsed().as_secs_f64() * 1_000.0
+    );
     engine.execute(PlaybackCommand::SetVolume(42.0))?;
     engine.execute(PlaybackCommand::SetSpeed(1.25))?;
     engine.execute(PlaybackCommand::SetPitch(1.1))?;
@@ -84,6 +94,16 @@ fn qualify_process_engine(mpv: &Path, fixture: &Path) -> Result<(), Box<dyn std:
             } if *duration >= 1.9
         )
     })?;
+
+    let second_load_started = Instant::now();
+    engine.execute(PlaybackCommand::Load(Box::new(item)))?;
+    wait_for_engine_event(&mut engine, Duration::from_secs(3), |event| {
+        matches!(event, PlaybackEvent::Started)
+    })?;
+    println!(
+        "MPV_PROCESS_SECOND_LOAD_MS={:.3}",
+        second_load_started.elapsed().as_secs_f64() * 1_000.0
+    );
     engine.execute(PlaybackCommand::Stop)?;
     println!("MPV_PROCESS_ENGINE=PASS");
     Ok(())

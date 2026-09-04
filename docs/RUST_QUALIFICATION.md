@@ -143,6 +143,43 @@ Still required before the Phase 0 gate can close:
   all speed modes, held seek, and real shutdown/crash/restart checks;
 - latency comparison with the frozen Python implementation.
 
+## 2026-09-04: libmpv backend selection
+
+Harness: `rust/tools/libmpv-spike`, using a dynamically loaded shinchiro
+Windows libmpv development build and generated local audio/video fixtures.
+`rust/scripts/prepare_libmpv.ps1` pins the 2026-09-03 x86-64 development
+archive and verifies both archive and extracted-DLL SHA-256 before use.
+
+Verified through both the raw C ABI and the production `LibMpvEngine` adapter:
+
+- lazy DLL load, client creation, initialization, and clean destruction;
+- repeated `loadfile replace` on one client instance;
+- exact seek, volume, speed, pitch, and the labelled EQ plus limiter chain;
+- native child-HWND video output after `video-reconfig`;
+- audio playback does not force eager GPU-window initialization;
+- production event projection for file-loaded, pause, position, duration,
+  end-of-file, errors, shutdown, and event-queue overflow;
+- runtime generation filtering and one engine per genuinely open player
+  session, including replacement and close/reopen tests.
+
+Across ten warm debug runs, median observations were:
+
+- libmpv initialization: 18.306 ms;
+- libmpv first load: 30.659 ms;
+- libmpv second load on the same instance: 29.024 ms;
+- external mpv initialization: 44.283 ms;
+- external mpv first load: 42.752 ms;
+- external mpv second load on the same process: 34.668 ms.
+
+Automated results: `LIBMPV_SINGLE_HANDLE=PASS`,
+`LIBMPV_EMBEDDED_HWND=PASS`, and `LIBMPV_PRODUCTION_ENGINE=PASS`.
+
+The default Rust runtime now selects libmpv. The process/JSON-IPC adapter stays
+available as a qualification and emergency fallback because in-process native
+media code has a larger crash blast radius. Audible device switching, network
+streaming, malformed-media recovery, fullscreen transitions, and long soak
+tests remain required before release.
+
 ## 2026-09-01: media helper processes
 
 Harness: `rust/tools/media-process-spike`. The yt-dlp extraction fixture is

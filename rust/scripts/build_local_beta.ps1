@@ -80,6 +80,12 @@ try {
     New-Item -ItemType Directory -Path $MpvDestination -Force | Out-Null
     Copy-Item -LiteralPath $MpvExecutable -Destination $MpvDestination
     Copy-Item -LiteralPath $MpvD3dCompiler -Destination $MpvDestination
+    $LibMpvSource = Join-Path $RustRoot ".cargo-local\libmpv\libmpv-2.dll"
+    if (-not (Test-Path -LiteralPath $LibMpvSource -PathType Leaf)) {
+        & (Join-Path $PSScriptRoot "prepare_libmpv.ps1")
+        if ($LASTEXITCODE -ne 0) { throw "libmpv preparation failed with exit code $LASTEXITCODE" }
+    }
+    Copy-Item -LiteralPath $LibMpvSource -Destination $MpvDestination
     $BuildInfo = [ordered]@{
         schema_version = 1
         application_id = "ApricotPlayer.RustBeta"
@@ -96,6 +102,7 @@ try {
         bundled_components = [ordered]@{
             nvda_controller_client = "nvda/nvdaControllerClient64.dll"
             mpv = "mpv/mpv.exe"
+            libmpv = "mpv/libmpv-2.dll"
             mpv_d3d_compiler = "mpv/d3dcompiler_43.dll"
         }
     }

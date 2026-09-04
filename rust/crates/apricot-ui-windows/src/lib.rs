@@ -9,6 +9,8 @@ mod activation_win32;
 #[cfg(windows)]
 mod announcement_win32;
 #[cfg(windows)]
+mod file_dialog_win32;
+#[cfg(windows)]
 mod first_run_language_win32;
 #[cfg(windows)]
 mod settings_win32;

@@ -12,6 +12,7 @@ members = [
     "crates/apricot-ui-windows",
     "crates/apricot-updater",
     "tools/media-process-spike",
+    "tools/libmpv-spike",
     "tools/mpv-ipc-spike",
     "tools/windows-accessibility-spike",
 ]
@@ -32,6 +33,7 @@ apricot-storage = { path = "crates/apricot-storage" }
 apricot-test-support = { path = "crates/apricot-test-support" }
 apricot-ui-windows = { path = "crates/apricot-ui-windows" }
 apricot-updater = { path = "crates/apricot-updater" }
+libloading = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -50,6 +52,7 @@ windows = { version = "0.62.2", features = [
     "Win32_System_Threading",
     "Win32_UI_Accessibility",
     "Win32_UI_Controls",
+    "Win32_UI_Controls_Dialogs",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",

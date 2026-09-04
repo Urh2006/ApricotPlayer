@@ -111,21 +111,33 @@ The UI boundary is not a generic home-grown widget toolkit. Shared code owns
 routes, actions, view data, validation, and state transitions. Each platform UI
 uses its native controls to render those states and sends typed actions back.
 
-### 4.2 Retain external mpv for the first Rust release
+### 4.2 Use one libmpv instance per open player session
 
-The first Rust release keeps the proven mpv process plus JSON IPC design:
+The Rust player uses libmpv behind the typed `PlaybackEngine` interface:
 
-- Windows named pipe transport;
-- structured JSON commands, never command-string concatenation;
-- bounded response size and timeout;
-- observed properties and explicit request IDs;
-- child-process lifetime ownership and crash recovery;
-- standard child HWND embedding for video and a separate audio-only path;
-- the exact current cache, HLS, seek, audio-filter, and startup policy.
+- the DLL is loaded lazily on the playback worker, never during normal app
+  startup;
+- one client instance survives every next, previous, queue, search-result, and
+  other media replacement until the user genuinely closes the player;
+- all C ABI access remains inside one audited unsafe module;
+- commands and event polling stay off the UI thread and use bounded channels;
+- observed properties carry player-generation IDs before they reach app state;
+- a native child HWND hosts video while audio-only media avoids eager GPU
+  initialization;
+- the current cache, HLS, seek, audio-filter, and startup policy is preserved.
 
-This preserves codec coverage, filter behavior, and crash isolation. `libmpv`
-can be evaluated later behind the same `PlaybackEngine` interface, but it is not
-allowed to become an unproven dependency of the parity rewrite.
+The decision follows a real Windows qualification rather than an assumption:
+libmpv passed repeated load, exact seek, volume, speed, pitch, EQ plus limiter,
+clean destruction, and child-HWND video checks. Across ten warm debug runs its
+median initialization/first/second-load times were 18.3/30.7/29.0 ms, compared
+with 44.3/42.8/34.7 ms for one persistent external mpv process. The gain is
+modest after initialization but consistent.
+
+An external mpv JSON-IPC adapter remains as a qualification and emergency
+fallback implementation. libmpv has weaker crash isolation because a native
+decoder or dependency failure can terminate ApricotPlayer itself; crash
+recovery, soak testing, and malformed-media testing therefore remain release
+gates.
 
 ### 4.3 Cargo workspace
 
@@ -187,7 +199,8 @@ This is deliberately a small set of deep crates, not one crate per Python file.
 
 `apricot-playback`:
 
-- `PlaybackEngine` interface and mpv process/IPC implementation;
+- `PlaybackEngine` interface, libmpv implementation, and retained mpv
+  process/IPC qualification fallback;
 - player state machine and event translation;
 - seek/scrub scheduler, queue progression, gapless/prefetch policy, resume, and
   end detection;
@@ -585,8 +598,8 @@ Differences require an explicit approved compatibility note.
 - build a native Win32 accessibility spike with list, checkbox, combobox,
   slider, read-only text, modal, context menu, progress, focus restoration,
   announcements, tray, and video-host HWND;
-- prove mpv JSON IPC, embedded video, fullscreen, output devices, EQ, speed,
-  pitch, seek hold, and shutdown from Rust;
+- prove libmpv and fallback JSON IPC, embedded video, fullscreen, output
+  devices, EQ, speed, pitch, seek hold, and shutdown from Rust;
 - prove yt-dlp JSON extraction/download and FFmpeg invocation latency.
 
 Gate: NVDA behavior and normal-path latency are acceptable before broad coding.

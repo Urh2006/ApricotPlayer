@@ -19,9 +19,13 @@ try {
         throw "Local beta package omitted the NVDA Controller Client"
     }
     $BundledMpv = Join-Path $PackageDir "mpv\mpv.exe"
+    $BundledLibMpv = Join-Path $PackageDir "mpv\libmpv-2.dll"
     $BundledMpvD3dCompiler = Join-Path $PackageDir "mpv\d3dcompiler_43.dll"
     if (-not (Test-Path -LiteralPath $BundledMpv -PathType Leaf)) {
         throw "Local beta package omitted mpv.exe"
+    }
+    if (-not (Test-Path -LiteralPath $BundledLibMpv -PathType Leaf)) {
+        throw "Local beta package omitted libmpv-2.dll"
     }
     if (-not (Test-Path -LiteralPath $BundledMpvD3dCompiler -PathType Leaf)) {
         throw "Local beta package omitted the mpv D3D compiler"
@@ -32,6 +36,9 @@ try {
     }
     if ($BuildInfo.bundled_components.mpv -ne "mpv/mpv.exe") {
         throw "Local beta build metadata omitted mpv"
+    }
+    if ($BuildInfo.bundled_components.libmpv -ne "mpv/libmpv-2.dll") {
+        throw "Local beta build metadata omitted libmpv"
     }
     if ($BuildInfo.bundled_components.mpv_d3d_compiler -ne "mpv/d3dcompiler_43.dll") {
         throw "Local beta build metadata omitted the mpv D3D compiler"
@@ -57,6 +64,9 @@ try {
     }
     if (-not (Test-Path -LiteralPath (Join-Path $InstallRoot "mpv\mpv.exe") -PathType Leaf)) {
         throw "Installed local beta omitted mpv.exe"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $InstallRoot "mpv\libmpv-2.dll") -PathType Leaf)) {
+        throw "Installed local beta omitted libmpv-2.dll"
     }
     if (-not (Test-Path -LiteralPath (Join-Path $InstallRoot "mpv\d3dcompiler_43.dll") -PathType Leaf)) {
         throw "Installed local beta omitted the mpv D3D compiler"

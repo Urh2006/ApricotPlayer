@@ -596,28 +596,25 @@ fn copy_wide_array<const N: usize>(target: &mut [u16; N], value: &str) {
 }
 
 unsafe fn activate_selection(window: HWND) {
-    let Some(state) = state_mut(window) else {
+    let Some((item_id, item_label)) = selected_main_menu_item(window) else {
         return;
     };
-    let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
-    let Ok(index) = usize::try_from(selected) else {
-        return;
-    };
-    let Some(item) = state.model.items.get(index) else {
-        return;
-    };
-    if item.id == "exit" {
+    if item_id == "exit" {
         let _ = DestroyWindow(window);
         return;
     }
-    if item.id == "settings" {
+    if item_id == "settings" {
         open_settings(window);
+        return;
+    }
+    if item_id == "play_file" {
+        open_media_file(window);
         return;
     }
 
     let message = wide(&format!(
         "{} is registered, but its Rust screen is not implemented in this internal build yet.",
-        item.label.split('\t').next().unwrap_or(&item.label)
+        item_label.split('\t').next().unwrap_or(&item_label)
     ));
     let title = wide("ApricotPlayer 2 Beta");
     let _ = MessageBoxW(
@@ -626,7 +623,17 @@ unsafe fn activate_selection(window: HWND) {
         PCWSTR(title.as_ptr()),
         MB_OK | MB_ICONINFORMATION,
     );
-    let _ = SetFocus(Some(state.list));
+    if let Some(state) = state(window) {
+        let _ = SetFocus(Some(state.list));
+    }
+}
+
+unsafe fn selected_main_menu_item(window: HWND) -> Option<(&'static str, String)> {
+    let state = state(window)?;
+    let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
+    let index = usize::try_from(selected).ok()?;
+    let item = state.model.items.get(index)?;
+    Some((item.id, item.label.clone()))
 }
 
 unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
@@ -659,8 +666,43 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "open_main_menu" => restore_from_tray(window),
         "open_settings" => open_settings(window),
         "open_action_finder" => show_action_finder(window),
+        "open_play_file" => open_media_file(window),
         "open_selected" => activate_selection(window),
         _ => show_unimplemented_action(window, action_id),
+    }
+}
+
+unsafe fn open_media_file(window: HWND) {
+    let title = state(window).map_or_else(
+        || "Play file".to_owned(),
+        |state| {
+            apricot_app::embedded_catalog(&state.application.settings().language)
+                .text("play_file")
+                .to_owned()
+        },
+    );
+    match crate::file_dialog_win32::choose_media_file(window, &title) {
+        Ok(Some(path)) => {
+            if let Some(state) = state_mut(window) {
+                state
+                    .application
+                    .enqueue_activation(ActivationRequest::OpenFile(path));
+            }
+            process_pending_activations(window);
+        }
+        Ok(None) => {}
+        Err(error) => {
+            let message = wide(&error);
+            let _ = MessageBoxW(
+                Some(window),
+                PCWSTR(message.as_ptr()),
+                w!("ApricotPlayer 2 Beta"),
+                MB_OK | MB_ICONINFORMATION,
+            );
+        }
+    }
+    if let Some(state) = state(window) {
+        let _ = SetFocus(Some(state.list));
     }
 }
 

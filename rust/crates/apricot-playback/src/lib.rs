@@ -5,12 +5,16 @@ use apricot_core::MediaItem;
 use thiserror::Error;
 
 #[cfg(windows)]
+mod libmpv;
+#[cfg(windows)]
 mod mpv_ipc;
 #[cfg(windows)]
 mod mpv_process;
 #[cfg(windows)]
 mod runtime;
 
+#[cfg(windows)]
+pub use libmpv::LibMpvEngine;
 #[cfg(windows)]
 pub use mpv_ipc::{MpvIpcClient, make_unique_ipc_path};
 #[cfg(windows)]

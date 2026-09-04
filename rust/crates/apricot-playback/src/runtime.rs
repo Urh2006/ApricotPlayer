@@ -12,8 +12,7 @@ use apricot_core::MediaItem;
 use thiserror::Error;
 
 use crate::{
-    MpvLaunchOptions, MpvProcessEngine, PlaybackCommand, PlaybackEngine, PlaybackError,
-    PlaybackEvent,
+    LibMpvEngine, MpvLaunchOptions, PlaybackCommand, PlaybackEngine, PlaybackError, PlaybackEvent,
 };
 
 const REQUEST_CAPACITY: usize = 32;
@@ -47,6 +46,9 @@ enum RuntimeRequest {
         generation: u64,
         command: PlaybackCommand,
     },
+    Close {
+        generation: u64,
+    },
     Shutdown,
 }
 
@@ -61,16 +63,15 @@ pub struct PlaybackRuntime {
 }
 
 impl PlaybackRuntime {
-    /// Creates the worker thread without starting mpv. The first media request
-    /// lazily creates the process, keeping normal application launch fast.
+    /// Creates the worker thread without loading libmpv. The first media request
+    /// lazily creates one in-process player, keeping application launch fast.
     ///
     /// # Errors
     ///
     /// Returns an error only when the operating system cannot create the worker.
     pub fn spawn() -> Result<Self, PlaybackRuntimeError> {
         Self::spawn_with(Box::new(|options| {
-            MpvProcessEngine::spawn(options)
-                .map(|engine| Box::new(engine) as Box<dyn PlaybackEngine>)
+            LibMpvEngine::load(options).map(|engine| Box::new(engine) as Box<dyn PlaybackEngine>)
         }))
     }
 
@@ -108,6 +109,16 @@ impl PlaybackRuntime {
             generation,
             command,
         })
+    }
+
+    /// Closes only the currently matching player generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlaybackRuntimeError::Busy`] when the bounded request queue is
+    /// full, or [`PlaybackRuntimeError::Stopped`] after worker shutdown.
+    pub fn close(&self, generation: u64) -> Result<(), PlaybackRuntimeError> {
+        self.send(RuntimeRequest::Close { generation })
     }
 
     /// Returns the next currently buffered playback update.
@@ -183,12 +194,27 @@ fn playback_worker(
                     options,
                     item,
                 } => {
-                    active = start_engine(generation, &options, item, updates, &mut factory);
+                    active = start_or_replace_engine(
+                        active,
+                        generation,
+                        &options,
+                        item,
+                        updates,
+                        &mut factory,
+                    );
                 }
                 RuntimeRequest::Execute {
                     generation,
                     command,
                 } => execute_if_current(&mut active, generation, command, updates),
+                RuntimeRequest::Close { generation } => {
+                    if active
+                        .as_ref()
+                        .is_some_and(|(active_generation, _)| *active_generation == generation)
+                    {
+                        active = None;
+                    }
+                }
                 RuntimeRequest::Shutdown => break,
             }
         }
@@ -196,13 +222,23 @@ fn playback_worker(
     }
 }
 
-fn start_engine(
+fn start_or_replace_engine(
+    active: Option<(u64, Box<dyn PlaybackEngine>)>,
     generation: u64,
     options: &MpvLaunchOptions,
     item: Box<MediaItem>,
     updates: &SyncSender<PlaybackUpdate>,
     factory: &mut EngineFactory,
 ) -> Option<(u64, Box<dyn PlaybackEngine>)> {
+    if let Some((_, mut engine)) = active {
+        return match engine.execute(PlaybackCommand::Load(item)) {
+            Ok(()) => Some((generation, engine)),
+            Err(error) => {
+                emit_failure(updates, generation, &error);
+                None
+            }
+        };
+    }
     match factory(options) {
         Ok(mut engine) => match engine.execute(PlaybackCommand::Load(item)) {
             Ok(()) => Some((generation, engine)),
@@ -270,7 +306,10 @@ fn emit_failure(updates: &SyncSender<PlaybackUpdate>, generation: u64, error: &P
 mod tests {
     use std::{
         collections::BTreeMap,
-        sync::{Arc, Mutex},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
         time::{Duration, Instant},
     };
 
@@ -353,5 +392,52 @@ mod tests {
         assert_eq!(commands.len(), 2);
         assert!(matches!(commands[0], PlaybackCommand::Load(_)));
         assert_eq!(commands[1], PlaybackCommand::SetPaused(true));
+    }
+
+    #[test]
+    fn media_replacement_reuses_one_engine_until_close() {
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let factory_calls = Arc::new(AtomicUsize::new(0));
+        let fake_commands = Arc::clone(&commands);
+        let calls = Arc::clone(&factory_calls);
+        let runtime = PlaybackRuntime::spawn_with(Box::new(move |_| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Ok(Box::new(FakeEngine {
+                events: Vec::new(),
+                commands: Arc::clone(&fake_commands),
+            }))
+        }))
+        .expect("runtime");
+
+        runtime
+            .start(1, MpvLaunchOptions::new("mpv.exe"), item("first"))
+            .expect("first start");
+        runtime
+            .start(2, MpvLaunchOptions::new("mpv.exe"), item("second"))
+            .expect("replacement start");
+        std::thread::sleep(Duration::from_millis(30));
+
+        assert_eq!(factory_calls.load(Ordering::Relaxed), 1);
+        runtime.close(2).expect("close session");
+        runtime
+            .start(3, MpvLaunchOptions::new("mpv.exe"), item("third"))
+            .expect("new session start");
+        std::thread::sleep(Duration::from_millis(30));
+
+        assert_eq!(factory_calls.load(Ordering::Relaxed), 2);
+        let commands = commands.lock().expect("commands");
+        assert_eq!(commands.len(), 3);
+        assert!(matches!(
+            &commands[0],
+            PlaybackCommand::Load(item) if item.id.0 == "first"
+        ));
+        assert!(matches!(
+            &commands[1],
+            PlaybackCommand::Load(item) if item.id.0 == "second"
+        ));
+        assert!(matches!(
+            &commands[2],
+            PlaybackCommand::Load(item) if item.id.0 == "third"
+        ));
     }
 }
