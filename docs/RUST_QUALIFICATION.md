@@ -119,9 +119,21 @@ Verified:
 - audio-device enumeration;
 - clean quit.
 
+The same harness now also exercises the production `MpvProcessEngine` boundary:
+
+- mpv starts idle with the target volume and volume maximum already present in
+  its process arguments, before any media can produce audio;
+- a bounded asynchronous event connection receives file-loaded, pause,
+  position, duration, and end-of-file events without polling from the UI;
+- the command connection concurrently accepts load, volume, speed, pitch, and
+  exact-seek operations;
+- command requests are serialized and shutdown has a bounded graceful-to-kill
+  fallback.
+
 Observed mpv: `mpv v0.41.0-744-g304426c39`.
 
 Automated result: `MPV_IPC_SPIKE=PASS`.
+Production engine result: `MPV_PROCESS_ENGINE=PASS`.
 
 Still required before the Phase 0 gate can close:
 

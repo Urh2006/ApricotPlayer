@@ -6,9 +6,16 @@ use thiserror::Error;
 
 #[cfg(windows)]
 mod mpv_ipc;
+#[cfg(windows)]
+mod mpv_process;
 
 #[cfg(windows)]
 pub use mpv_ipc::{MpvIpcClient, make_unique_ipc_path};
+#[cfg(windows)]
+pub use mpv_process::{
+    InitialPlaybackState, MpvCacheConfig, MpvLaunchOptions, MpvProcessEngine, MpvVideoMode,
+    RepeatMode,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PlaybackCommand {

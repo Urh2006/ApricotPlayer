@@ -2,6 +2,7 @@
 
 #[cfg(windows)]
 use std::{
+    collections::BTreeMap,
     fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
@@ -10,7 +11,12 @@ use std::{
 };
 
 #[cfg(windows)]
-use apricot_playback::{MpvIpcClient, make_unique_ipc_path};
+use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
+#[cfg(windows)]
+use apricot_playback::{
+    MpvIpcClient, MpvLaunchOptions, MpvProcessEngine, PlaybackCommand, PlaybackEngine,
+    PlaybackEvent, make_unique_ipc_path,
+};
 #[cfg(windows)]
 use serde_json::{Value, json};
 
@@ -33,8 +39,76 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result = qualify(&client);
     let _ = client.request(json!(["quit"]), Duration::from_secs(1));
     let _ = process.wait();
+    if result.is_ok() {
+        qualify_process_engine(&mpv, &fixture)?;
+    }
     let _ = fs::remove_file(&fixture);
     result
+}
+
+#[cfg(windows)]
+fn qualify_process_engine(mpv: &Path, fixture: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut options = MpvLaunchOptions::new(mpv);
+    options.audio_driver = Some("null".to_owned());
+    options.cache = None;
+    options.initial_volume = 37.0;
+    let mut engine = MpvProcessEngine::spawn(&options)?;
+    let item = MediaItem {
+        id: MediaId("qualification-fixture".to_owned()),
+        source: MediaSource::Local,
+        kind: MediaKind::Audio,
+        title: "Qualification fixture".to_owned(),
+        url: None,
+        local_path: Some(fixture.to_string_lossy().into_owned()),
+        channel: String::new(),
+        duration_seconds: Some(2.0),
+        metadata: BTreeMap::default(),
+    };
+    engine.execute(PlaybackCommand::Load(Box::new(item)))?;
+    wait_for_engine_event(&mut engine, Duration::from_secs(3), |event| {
+        matches!(event, PlaybackEvent::Started)
+    })?;
+    engine.execute(PlaybackCommand::SetVolume(42.0))?;
+    engine.execute(PlaybackCommand::SetSpeed(1.25))?;
+    engine.execute(PlaybackCommand::SetPitch(1.1))?;
+    engine.execute(PlaybackCommand::SeekAbsolute {
+        seconds: 0.5,
+        exact: true,
+    })?;
+    wait_for_engine_event(&mut engine, Duration::from_secs(3), |event| {
+        matches!(
+            event,
+            PlaybackEvent::Position {
+                duration: Some(duration),
+                ..
+            } if *duration >= 1.9
+        )
+    })?;
+    engine.execute(PlaybackCommand::Stop)?;
+    println!("MPV_PROCESS_ENGINE=PASS");
+    Ok(())
+}
+
+#[cfg(windows)]
+fn wait_for_engine_event(
+    engine: &mut MpvProcessEngine,
+    timeout: Duration,
+    predicate: impl Fn(&PlaybackEvent) -> bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if let Some(event) = engine.poll_event()? {
+            if let PlaybackEvent::Failed(error) = &event {
+                return Err(error.clone().into());
+            }
+            if predicate(&event) {
+                return Ok(());
+            }
+        } else {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    Err("expected mpv engine event was not received".into())
 }
 
 #[cfg(windows)]

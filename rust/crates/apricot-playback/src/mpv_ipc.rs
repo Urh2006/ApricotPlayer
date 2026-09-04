@@ -6,7 +6,10 @@ use std::{
     fs::{File, OpenOptions},
     io::{Read, Write},
     os::windows::io::AsRawHandle,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -16,21 +19,23 @@ use windows::Win32::{Foundation::HANDLE, System::Pipes::PeekNamedPipe};
 
 use crate::PlaybackError;
 
-const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
-const MAX_READ_CHUNK_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+pub(crate) const MAX_READ_CHUNK_BYTES: usize = 64 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
 static PIPE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct MpvIpcClient {
     pipe_path: String,
+    request_lock: Arc<Mutex<()>>,
 }
 
 impl MpvIpcClient {
     pub fn new(pipe_path: impl Into<String>) -> Self {
         Self {
             pipe_path: pipe_path.into(),
+            request_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -48,6 +53,9 @@ impl MpvIpcClient {
     /// deadline, I/O fails, the response is too large or malformed, or mpv does
     /// not return a matching response in time.
     pub fn request(&self, command: Value, timeout: Duration) -> Result<Value, PlaybackError> {
+        let _request_guard = self.request_lock.lock().map_err(|_| {
+            PlaybackError::Operation("mpv IPC request lock was poisoned".to_owned())
+        })?;
         let deadline = Instant::now() + timeout;
         let mut pipe = self.open_before(deadline)?;
         let request_id = REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
@@ -108,6 +116,14 @@ impl MpvIpcClient {
     }
 }
 
+impl PartialEq for MpvIpcClient {
+    fn eq(&self, other: &Self) -> bool {
+        self.pipe_path == other.pipe_path
+    }
+}
+
+impl Eq for MpvIpcClient {}
+
 pub fn make_unique_ipc_path() -> String {
     let sequence = PIPE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let timestamp = SystemTime::now()
@@ -119,7 +135,7 @@ pub fn make_unique_ipc_path() -> String {
     )
 }
 
-fn available_bytes(pipe: &File) -> Result<usize, PlaybackError> {
+pub(crate) fn available_bytes(pipe: &File) -> Result<usize, PlaybackError> {
     let mut available = 0_u32;
     // SAFETY: `pipe` owns a live Windows file handle for this call. The only
     // output pointer references `available`, which remains valid and writable.

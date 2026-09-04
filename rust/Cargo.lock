@@ -41,6 +41,7 @@ dependencies = [
 name = "apricot-mpv-ipc-spike"
 version = "2.0.0-dev.1"
 dependencies = [
+ "apricot-core",
  "apricot-playback",
  "serde_json",
 ]
