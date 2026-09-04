@@ -140,6 +140,11 @@ impl NavigationStack {
     pub fn depth(&self) -> usize {
         self.frames.len() + 1
     }
+
+    pub fn reset(&mut self) {
+        self.root = RouteFrame::new(Route::MainMenu);
+        self.frames.clear();
+    }
 }
 
 #[cfg(test)]
@@ -156,6 +161,17 @@ mod tests {
         assert_eq!(stack.back().expect("channel").route, Route::ChannelResults);
         assert_eq!(stack.back().expect("results").route, Route::Results);
         assert_eq!(stack.back().expect("main menu").route, Route::MainMenu);
+        assert_eq!(stack.back(), None);
+    }
+
+    #[test]
+    fn reset_returns_to_one_canonical_main_menu_frame() {
+        let mut stack = NavigationStack::default();
+        stack.push(RouteFrame::new(Route::Search));
+        stack.push(RouteFrame::new(Route::Results));
+        stack.reset();
+        assert_eq!(stack.current().route, Route::MainMenu);
+        assert_eq!(stack.depth(), 1);
         assert_eq!(stack.back(), None);
     }
 }

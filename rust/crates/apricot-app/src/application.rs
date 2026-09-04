@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
-use apricot_core::{MediaItem, SettingId, SettingsSection};
+use apricot_core::{MediaItem, Route, RouteFrame, SettingId, SettingsSection};
 use apricot_playback::PlaybackEvent;
 use apricot_storage::SettingsDocument;
 
@@ -40,6 +40,22 @@ impl Application {
         &self.state.search
     }
 
+    pub fn current_route(&self) -> Route {
+        self.state.navigation.current().route
+    }
+
+    pub fn navigate_to(&mut self, frame: RouteFrame) {
+        self.state.navigation.push(frame);
+    }
+
+    pub fn navigate_back(&mut self) -> Option<RouteFrame> {
+        self.state.navigation.back()
+    }
+
+    pub fn navigate_main_menu(&mut self) {
+        self.state.navigation.reset();
+    }
+
     /// Starts a `YouTube` search using the current result-limit setting.
     ///
     /// # Errors
@@ -57,6 +73,10 @@ impl Application {
 
     pub fn request_more_search_results(&mut self) -> Option<SearchWork> {
         self.state.search.request_more()
+    }
+
+    pub fn cancel_pending_search(&mut self) -> bool {
+        self.state.search.cancel_pending()
     }
 
     pub fn apply_search_results(

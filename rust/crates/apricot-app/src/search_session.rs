@@ -185,6 +185,29 @@ impl SearchSession {
         Some(self.work(SearchWorkKind::More))
     }
 
+    /// Invalidates an outstanding response while retaining completed results.
+    pub fn cancel_pending(&mut self) -> bool {
+        match self.phase {
+            SearchPhase::LoadingInitial => {
+                self.phase = SearchPhase::Idle;
+                self.items.clear();
+                self.selected_identity = None;
+                self.selected_index = 0;
+            }
+            SearchPhase::LoadingMore => {
+                self.phase = SearchPhase::Ready;
+                self.requested_limit = self
+                    .requested_limit
+                    .saturating_sub(DYNAMIC_SEARCH_PAGE_SIZE)
+                    .max(DYNAMIC_SEARCH_PAGE_SIZE);
+            }
+            SearchPhase::Idle | SearchPhase::Ready | SearchPhase::Failed => return false,
+        }
+        self.generation = self.generation.wrapping_add(1).max(1);
+        self.last_error = None;
+        true
+    }
+
     /// Applies a response only when it belongs to the current logical search
     /// and an initial or append operation is awaiting that response.
     pub fn apply_results(
@@ -237,7 +260,13 @@ impl SearchSession {
         }
         match self.phase {
             SearchPhase::LoadingInitial => self.phase = SearchPhase::Failed,
-            SearchPhase::LoadingMore => self.phase = SearchPhase::Ready,
+            SearchPhase::LoadingMore => {
+                self.phase = SearchPhase::Ready;
+                self.requested_limit = self
+                    .requested_limit
+                    .saturating_sub(DYNAMIC_SEARCH_PAGE_SIZE)
+                    .max(DYNAMIC_SEARCH_PAGE_SIZE);
+            }
             SearchPhase::Idle | SearchPhase::Ready | SearchPhase::Failed => return false,
         }
         self.last_error = Some(message.into());
@@ -438,7 +467,7 @@ mod tests {
         assert_eq!(session.phase(), SearchPhase::Ready);
         assert_eq!(session.items().len(), 20);
         assert_eq!(session.last_error(), Some("temporary failure"));
-        assert!(session.request_more().is_some());
+        assert_eq!(session.request_more().expect("retry").limit, 40);
     }
 
     #[test]
@@ -467,5 +496,30 @@ mod tests {
         assert!(session.begin("  ", YoutubeSearchKind::All, 0).is_err());
         assert_eq!(session.generation(), active.generation);
         assert_eq!(session.query(), "query");
+    }
+
+    #[test]
+    fn cancelling_invalidates_late_results_and_retains_completed_pages() {
+        let mut session = SearchSession::default();
+        let initial = session
+            .begin("query", YoutubeSearchKind::Video, 0)
+            .expect("search");
+        session.apply_results(
+            initial.generation,
+            (0..20).map(|index| item(&index.to_string())).collect(),
+            None,
+        );
+        let more = session.request_more().expect("more");
+        assert!(session.cancel_pending());
+        assert_eq!(session.phase(), SearchPhase::Ready);
+        assert_eq!(session.items().len(), 20);
+        assert_eq!(
+            session.apply_results(more.generation, vec![item("late")], None),
+            SearchApplyOutcome::IgnoredStale
+        );
+        assert_eq!(
+            session.request_more().expect("retry after return").limit,
+            40
+        );
     }
 }
