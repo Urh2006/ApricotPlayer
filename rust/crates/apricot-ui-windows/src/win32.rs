@@ -30,7 +30,10 @@ use windows::{
         Graphics::Gdi::{DEFAULT_GUI_FONT, GetStockObject},
         System::LibraryLoader::GetModuleHandleW,
         UI::{
-            Input::KeyboardAndMouse::{EnableWindow, GetFocus, SetFocus, VK_RETURN},
+            Input::KeyboardAndMouse::{
+                EnableWindow, GetAsyncKeyState, GetFocus, SetFocus, VK_CONTROL, VK_MENU, VK_RETURN,
+                VK_SHIFT,
+            },
             Shell::{
                 DefSubclassProc, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD,
                 NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NOTIFYICON_VERSION_4, NOTIFYICONDATAW,
@@ -49,9 +52,9 @@ use windows::{
                 ShowWindow, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
                 TranslateMessage, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_APP,
                 WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE, WM_DESTROY,
-                WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT, WM_SIZE,
-                WM_TIMER, WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE, WS_GROUP, WS_OVERLAPPEDWINDOW,
-                WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+                WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT,
+                WM_SIZE, WM_SYSKEYUP, WM_TIMER, WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE, WS_GROUP,
+                WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -70,6 +73,9 @@ const YOUTUBE_TIMER_ID: usize = 1;
 const YOUTUBE_TIMER_INTERVAL_MS: u32 = 25;
 const PLAYBACK_TIMER_ID: usize = 2;
 const PLAYBACK_TIMER_INTERVAL_MS: u32 = 25;
+const CONTROLLED_REPEAT_TIMER_ID: usize = 3;
+const SEEK_HOLD_DELAY_MS: u32 = 180;
+const SEEK_HOLD_INTERVAL_MS: u32 = 110;
 const CB_ADDSTRING: u32 = 0x0143;
 const CB_GETCURSEL: u32 = 0x0147;
 const CB_SETCURSEL: u32 = 0x014E;
@@ -107,6 +113,13 @@ struct PendingQueuedStart {
     mode: QueueStartMode,
 }
 
+#[derive(Clone, Copy)]
+struct ControlledRepeatState {
+    action_id: &'static str,
+    virtual_key: usize,
+    chord: apricot_core::shortcut::ShortcutChord,
+}
+
 struct WindowState {
     list: HWND,
     open: HWND,
@@ -134,6 +147,7 @@ struct WindowState {
     pending_queued_start: Option<PendingQueuedStart>,
     next_youtube_resolve_token: u64,
     playback: Option<PlaybackRuntime>,
+    controlled_repeat: Option<ControlledRepeatState>,
 }
 
 pub fn run_application(application: Application, version: &str, start_hidden: bool) -> Result<()> {
@@ -208,6 +222,7 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
         if result.0 == 0 {
             break;
         }
+        handle_controlled_repeat_release(window, &message);
         if handle_shortcut_message(window, &message) {
             continue;
         }
@@ -307,6 +322,10 @@ unsafe extern "system" fn window_proc(
         }
         WM_TIMER if wparam.0 == PLAYBACK_TIMER_ID => {
             poll_playback_runtime(window);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == CONTROLLED_REPEAT_TIMER_ID => {
+            tick_controlled_repeat(window);
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -492,6 +511,7 @@ unsafe fn create_controls(
         pending_queued_start: None,
         next_youtube_resolve_token: 0,
         playback: None,
+        controlled_repeat: None,
     })
 }
 
@@ -721,6 +741,7 @@ unsafe fn remove_tray_icon(window: HWND) {
 }
 
 unsafe fn hide_to_tray(window: HWND, announce: bool) {
+    stop_controlled_repeat(window);
     if !add_tray_icon(window) {
         let _ = ShowWindow(window, SW_SHOW);
         if let Some(state) = state(window) {
@@ -1168,6 +1189,7 @@ unsafe fn selected_main_menu_item(window: HWND) -> Option<(&'static str, String)
 
 unsafe fn show_main_menu(window: HWND) {
     restore_from_tray(window);
+    stop_controlled_repeat(window);
     let Some(state) = state_mut(window) else {
         return;
     };
@@ -1182,6 +1204,7 @@ unsafe fn show_main_menu(window: HWND) {
 
 unsafe fn show_search(window: HWND) {
     restore_from_tray(window);
+    stop_controlled_repeat(window);
     let Some(state) = state_mut(window) else {
         return;
     };
@@ -1199,6 +1222,7 @@ unsafe fn show_search(window: HWND) {
 }
 
 unsafe fn navigate_back(window: HWND) {
+    stop_controlled_repeat(window);
     let Some(state) = state_mut(window) else {
         return;
     };
@@ -1857,8 +1881,130 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
     if crate::shortcut_win32::is_repeat(message) && action.repeat == RepeatPolicy::None {
         return true;
     }
+    if action.repeat == RepeatPolicy::Controlled {
+        if !crate::shortcut_win32::is_repeat(message) {
+            start_controlled_repeat(window, action.id.as_str(), chord, message.wParam.0);
+        }
+        return true;
+    }
     activate_action(window, action.id.as_str());
     true
+}
+
+unsafe fn start_controlled_repeat(
+    window: HWND,
+    action_id: &'static str,
+    chord: apricot_core::shortcut::ShortcutChord,
+    virtual_key: usize,
+) {
+    stop_controlled_repeat(window);
+    let delay = {
+        let Some(state) = state_mut(window) else {
+            return;
+        };
+        state.controlled_repeat = Some(ControlledRepeatState {
+            action_id,
+            virtual_key,
+            chord,
+        });
+        let settings = state.application.settings();
+        controlled_repeat_timing(
+            action_id,
+            settings.speed_pitch_hold_delay_ms,
+            settings.speed_pitch_hold_interval_ms,
+        )
+        .0
+    };
+    activate_action(window, action_id);
+    if state(window).is_some_and(|state| state.controlled_repeat.is_some()) {
+        let _ = SetTimer(Some(window), CONTROLLED_REPEAT_TIMER_ID, delay.max(1), None);
+    }
+}
+
+unsafe fn tick_controlled_repeat(window: HWND) {
+    let repeat = {
+        let Some(state) = state(window) else {
+            return;
+        };
+        let Some(repeat) = state.controlled_repeat else {
+            stop_controlled_repeat(window);
+            return;
+        };
+        if state.view != MainView::Player
+            || !state.application.player_session().is_open()
+            || !controlled_repeat_keys_still_down(repeat)
+        {
+            stop_controlled_repeat(window);
+            return;
+        }
+        let settings = state.application.settings();
+        let interval = controlled_repeat_timing(
+            repeat.action_id,
+            settings.speed_pitch_hold_delay_ms,
+            settings.speed_pitch_hold_interval_ms,
+        )
+        .1;
+        (repeat, interval)
+    };
+    let _ = SetTimer(
+        Some(window),
+        CONTROLLED_REPEAT_TIMER_ID,
+        repeat.1.max(1),
+        None,
+    );
+    activate_action(window, repeat.0.action_id);
+}
+
+unsafe fn handle_controlled_repeat_release(window: HWND, message: &MSG) {
+    if !matches!(message.message, WM_KEYUP | WM_SYSKEYUP) {
+        return;
+    }
+    let Some(repeat) = state(window).and_then(|state| state.controlled_repeat) else {
+        return;
+    };
+    let released = message.wParam.0;
+    let required_modifier_released = (repeat.chord.control
+        && released == usize::from(VK_CONTROL.0))
+        || (repeat.chord.shift && released == usize::from(VK_SHIFT.0))
+        || (repeat.chord.alt && released == usize::from(VK_MENU.0));
+    if released == repeat.virtual_key || required_modifier_released {
+        stop_controlled_repeat(window);
+    }
+}
+
+unsafe fn stop_controlled_repeat(window: HWND) {
+    let _ = KillTimer(Some(window), CONTROLLED_REPEAT_TIMER_ID);
+    if let Some(state) = state_mut(window) {
+        state.controlled_repeat = None;
+    }
+}
+
+fn controlled_repeat_timing(
+    action_id: &str,
+    configured_delay: i64,
+    configured_interval: i64,
+) -> (u32, u32) {
+    if matches!(
+        action_id,
+        "player_speed_up" | "player_speed_down" | "player_pitch_up" | "player_pitch_down"
+    ) {
+        return (
+            u32::try_from(configured_delay.clamp(50, 1_000)).unwrap_or(180),
+            u32::try_from(configured_interval.clamp(20, 500)).unwrap_or(110),
+        );
+    }
+    (SEEK_HOLD_DELAY_MS, SEEK_HOLD_INTERVAL_MS)
+}
+
+unsafe fn controlled_repeat_keys_still_down(repeat: ControlledRepeatState) -> bool {
+    virtual_key_is_down(repeat.virtual_key)
+        && virtual_key_is_down(usize::from(VK_CONTROL.0)) == repeat.chord.control
+        && virtual_key_is_down(usize::from(VK_SHIFT.0)) == repeat.chord.shift
+        && virtual_key_is_down(usize::from(VK_MENU.0)) == repeat.chord.alt
+}
+
+unsafe fn virtual_key_is_down(key: usize) -> bool {
+    i32::try_from(key).is_ok_and(|key| GetAsyncKeyState(key).is_negative())
 }
 
 unsafe fn activate_action(window: HWND, action_id: &str) {
@@ -2300,6 +2446,8 @@ unsafe fn configured_pitch_step(window: HWND) -> f64 {
 }
 
 unsafe fn close_player_runtime(window: HWND, state: &mut WindowState) {
+    let _ = KillTimer(Some(window), CONTROLLED_REPEAT_TIMER_ID);
+    state.controlled_repeat = None;
     let generation = state.application.player_session().generation();
     if let Some(runtime) = state.playback.as_ref() {
         let _ = runtime.close(generation);
@@ -2389,6 +2537,7 @@ unsafe fn open_media_file(window: HWND) {
 }
 
 unsafe fn show_action_finder(window: HWND) {
+    stop_controlled_repeat(window);
     let Some(main_state) = state(window) else {
         return;
     };
@@ -2414,6 +2563,7 @@ unsafe fn show_action_finder(window: HWND) {
 }
 
 unsafe fn show_playback_queue(window: HWND) {
+    stop_controlled_repeat(window);
     let Some(main_state) = state(window) else {
         return;
     };
@@ -2503,6 +2653,7 @@ unsafe fn show_unimplemented_action(window: HWND, action_id: &str) {
 }
 
 unsafe fn open_settings(window: HWND) {
+    stop_controlled_repeat(window);
     let settings_result = {
         let Some(state) = state_mut(window) else {
             return;
@@ -2597,7 +2748,9 @@ fn wide(value: &str) -> Vec<u16> {
 
 #[cfg(test)]
 mod tests {
-    use super::copy_wide_array;
+    use super::{
+        SEEK_HOLD_DELAY_MS, SEEK_HOLD_INTERVAL_MS, controlled_repeat_timing, copy_wide_array,
+    };
 
     #[test]
     fn tray_text_is_cleared_truncated_and_null_terminated() {
@@ -2607,5 +2760,21 @@ mod tests {
 
         copy_wide_array(&mut target, "x");
         assert_eq!(target, ['x' as u16, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn controlled_repeat_keeps_seek_fixed_and_speed_pitch_configurable() {
+        assert_eq!(
+            controlled_repeat_timing("player_seek_forward", 50, 20),
+            (SEEK_HOLD_DELAY_MS, SEEK_HOLD_INTERVAL_MS)
+        );
+        assert_eq!(
+            controlled_repeat_timing("player_speed_up", 240, 75),
+            (240, 75)
+        );
+        assert_eq!(
+            controlled_repeat_timing("player_pitch_down", 5, 2_000),
+            (50, 500)
+        );
     }
 }
