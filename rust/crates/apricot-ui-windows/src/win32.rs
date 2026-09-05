@@ -96,6 +96,17 @@ enum MainView {
     Player,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum QueueStartMode {
+    Front,
+    Matching,
+}
+
+struct PendingQueuedStart {
+    item: apricot_core::MediaItem,
+    mode: QueueStartMode,
+}
+
 struct WindowState {
     list: HWND,
     open: HWND,
@@ -120,6 +131,7 @@ struct WindowState {
     pending_youtube_work: Option<SearchWork>,
     pending_youtube_resolve: Option<u64>,
     pending_player_navigation: Option<i32>,
+    pending_queued_start: Option<PendingQueuedStart>,
     next_youtube_resolve_token: u64,
     playback: Option<PlaybackRuntime>,
 }
@@ -148,6 +160,7 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
     }
     crate::settings_win32::register()?;
     crate::action_finder_win32::register()?;
+    crate::playback_queue_win32::register()?;
 
     let title = wide(&format!("ApricotPlayer 2 Beta {version}"));
     let window = CreateWindowExW(
@@ -476,6 +489,7 @@ unsafe fn create_controls(
         pending_youtube_work: None,
         pending_youtube_resolve: None,
         pending_player_navigation: None,
+        pending_queued_start: None,
         next_youtube_resolve_token: 0,
         playback: None,
     })
@@ -880,6 +894,10 @@ unsafe fn activate_main_menu_selection(window: HWND) {
         show_search(window);
         return;
     }
+    if item_id == "playback_queue" {
+        show_playback_queue(window);
+        return;
+    }
 
     let message = wide(&format!(
         "{} is registered, but its Rust screen is not implemented in this internal build yet.",
@@ -925,10 +943,22 @@ unsafe fn activate_result_selection(window: HWND) {
         let _ = SetFocus(Some(state.list));
         return;
     }
-    start_media_item(window, item);
+    start_media_item(window, item, None);
 }
 
-unsafe fn start_media_item(window: HWND, item: apricot_core::MediaItem) {
+unsafe fn start_media_item(
+    window: HWND,
+    item: apricot_core::MediaItem,
+    queue_mode: Option<QueueStartMode>,
+) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    cancel_youtube_work(window, state);
+    state.pending_queued_start = queue_mode.map(|mode| PendingQueuedStart {
+        item: item.clone(),
+        mode,
+    });
     if item.source != apricot_core::MediaSource::Youtube {
         start_player(window, item);
         return;
@@ -942,7 +972,6 @@ unsafe fn start_media_item(window: HWND, item: apricot_core::MediaItem) {
     let Some(state) = state_mut(window) else {
         return;
     };
-    cancel_youtube_work(window, state);
     state.next_youtube_resolve_token = state.next_youtube_resolve_token.wrapping_add(1).max(1);
     let token = state.next_youtube_resolve_token;
     let backend = YoutubeBackend::from_setting_value(&state.application.settings().youtube_backend);
@@ -1032,7 +1061,12 @@ unsafe fn finish_youtube_resolve(
     start_player(window, item);
 }
 
-unsafe fn finish_youtube_resolve_selection_error(window: HWND, state: &WindowState, message: &str) {
+unsafe fn finish_youtube_resolve_selection_error(
+    window: HWND,
+    state: &mut WindowState,
+    message: &str,
+) {
+    state.pending_queued_start = None;
     set_status(state, message, true);
     show_error_message(window, message);
     let _ = SetFocus(Some(active_primary_control(state)));
@@ -1046,6 +1080,7 @@ unsafe fn start_player(window: HWND, item: apricot_core::MediaItem) {
         match PlaybackRuntime::spawn() {
             Ok(runtime) => state.playback = Some(runtime),
             Err(error) => {
+                state.pending_queued_start = None;
                 show_error_message(window, &format!("Player did not start: {error}"));
                 return;
             }
@@ -1057,6 +1092,7 @@ unsafe fn start_player(window: HWND, item: apricot_core::MediaItem) {
         let _ = state
             .application
             .apply_playback_event(generation, PlaybackEvent::Failed(message.to_owned()));
+        state.pending_queued_start = None;
         show_error_message(window, message);
         return;
     };
@@ -1079,6 +1115,7 @@ unsafe fn start_player(window: HWND, item: apricot_core::MediaItem) {
         let _ = state
             .application
             .apply_playback_event(generation, PlaybackEvent::Failed(message.clone()));
+        state.pending_queued_start = None;
         show_error_message(window, &message);
         return;
     }
@@ -1325,6 +1362,7 @@ unsafe fn poll_playback_runtime(window: HWND) {
                 stop_playback_timer(window);
                 if let Some(state) = state_mut(window) {
                     state.playback = None;
+                    state.pending_queued_start = None;
                 }
                 show_error_message(window, &format!("Player stopped: {error}"));
                 return;
@@ -1341,6 +1379,7 @@ unsafe fn poll_playback_runtime(window: HWND) {
         }
         match update.event {
             PlaybackEvent::Started => {
+                confirm_pending_queued_start(window, state);
                 let title = state
                     .application
                     .player_session()
@@ -1384,6 +1423,7 @@ unsafe fn poll_playback_runtime(window: HWND) {
                 );
             }
             PlaybackEvent::Failed(error) => {
+                state.pending_queued_start = None;
                 let message =
                     catalog_text(&state.application, "player_failed").replace("{error}", &error);
                 set_status(state, &message, true);
@@ -1438,6 +1478,7 @@ unsafe fn finish_youtube_error(window: HWND, generation: u64, message: &str) {
     };
     if state.pending_youtube_resolve == Some(generation) {
         state.pending_youtube_resolve = None;
+        state.pending_queued_start = None;
         stop_youtube_timer(window);
         set_status(state, message, true);
         show_error_message(window, message);
@@ -1453,6 +1494,7 @@ unsafe fn finish_youtube_error_state(
     generation: u64,
     message: &str,
 ) {
+    state.pending_queued_start = None;
     let was_initial = state
         .pending_youtube_work
         .as_ref()
@@ -1493,6 +1535,7 @@ unsafe fn cancel_youtube_work(window: HWND, state: &mut WindowState) {
     state.pending_youtube_work = None;
     state.pending_youtube_resolve = None;
     state.pending_player_navigation = None;
+    state.pending_queued_start = None;
     let _ = state.youtube_search.cancel();
     let _ = EnableWindow(state.search, true);
     stop_youtube_timer(window);
@@ -1805,7 +1848,10 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
         return false;
     };
     let is_global = action.scopes.contains(&ActionScope::Global);
-    if !is_global && action.id.as_str() != "open_selected" && state.view != MainView::Player {
+    if !is_global && state.view == MainView::Search {
+        return false;
+    }
+    if !is_global && state.view == MainView::MainMenu && action.id.as_str() != "open_selected" {
         return false;
     }
     if crate::shortcut_win32::is_repeat(message) && action.repeat == RepeatPolicy::None {
@@ -1847,6 +1893,9 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "player_repeat" => toggle_player_session_setting(window, SessionToggle::Repeat),
         "player_bass_boost" => toggle_player_session_setting(window, SessionToggle::BassBoost),
         "player_volume_boost" => toggle_player_session_setting(window, SessionToggle::VolumeBoost),
+        "add_to_playback_queue" => add_active_item_to_playback_queue(window),
+        "remove_from_playback_queue" => remove_active_item_from_playback_queue(window),
+        "open_playback_queue" => show_playback_queue(window),
         _ => show_unimplemented_action(window, action_id),
     }
 }
@@ -1862,7 +1911,14 @@ unsafe fn navigate_player_relative(window: HWND, delta: i32) {
         state.application.request_relative_player_item(delta)
     };
     match outcome {
-        PlayerNavigationOutcome::Item(item) => start_media_item(window, *item),
+        PlayerNavigationOutcome::Item { item, origin } => {
+            start_media_item(
+                window,
+                *item,
+                (origin == apricot_app::PlayerNavigationOrigin::Queue)
+                    .then_some(QueueStartMode::Front),
+            );
+        }
         PlayerNavigationOutcome::LoadingMore(work) => {
             let Some(state) = state_mut(window) else {
                 return;
@@ -1882,6 +1938,97 @@ unsafe fn navigate_player_relative(window: HWND, delta: i32) {
                 "no_next_item"
             };
             set_status(state, &catalog_text(&state.application, key), true);
+        }
+    }
+}
+
+unsafe fn confirm_pending_queued_start(window: HWND, state: &mut WindowState) {
+    let Some(pending) = state.pending_queued_start.take() else {
+        return;
+    };
+    let result = match pending.mode {
+        QueueStartMode::Front => state.application.confirm_queued_item_started(&pending.item),
+        QueueStartMode::Matching => state.application.remove_from_playback_queue(&pending.item),
+    };
+    if let Err(error) = result {
+        let message = format!("Playback queue was not updated: {error}");
+        set_status(state, &message, true);
+        show_error_message(window, &message);
+    }
+}
+
+unsafe fn active_media_item(window: HWND) -> Option<apricot_core::MediaItem> {
+    let state = state(window)?;
+    match state.view {
+        MainView::Results => {
+            let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
+            let index = usize::try_from(selected).ok()?;
+            state
+                .application
+                .search_session()
+                .items()
+                .get(index)
+                .cloned()
+        }
+        MainView::Player => state.application.player_session().current_item().cloned(),
+        MainView::MainMenu | MainView::Search => None,
+    }
+}
+
+unsafe fn add_active_item_to_playback_queue(window: HWND) {
+    let Some(item) = active_media_item(window) else {
+        return;
+    };
+    let title = item.title.clone();
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    match state.application.add_to_playback_queue(item) {
+        Ok(apricot_app::QueueAddOutcome::Added) => {
+            let message =
+                catalog_text(&state.application, "playback_queue_added").replace("{title}", &title);
+            set_status(state, &message, true);
+        }
+        Ok(apricot_app::QueueAddOutcome::AlreadyPresent) => {
+            let message = catalog_text(&state.application, "playback_queue_already_added")
+                .replace("{title}", &title);
+            set_status(state, &message, true);
+        }
+        Ok(apricot_app::QueueAddOutcome::Unplayable) => {
+            let message = format!("{title} cannot be added to the playback queue");
+            set_status(state, &message, true);
+        }
+        Err(error) => {
+            let message = format!("Playback queue was not updated: {error}");
+            set_status(state, &message, true);
+            show_error_message(window, &message);
+        }
+    }
+}
+
+unsafe fn remove_active_item_from_playback_queue(window: HWND) {
+    let Some(item) = active_media_item(window) else {
+        return;
+    };
+    let title = item.title.clone();
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    match state.application.remove_from_playback_queue(&item) {
+        Ok(true) => {
+            let message = catalog_text(&state.application, "playback_queue_removed")
+                .replace("{title}", &title);
+            set_status(state, &message, true);
+        }
+        Ok(false) => set_status(
+            state,
+            &catalog_text(&state.application, "playback_queue_not_found"),
+            true,
+        ),
+        Err(error) => {
+            let message = format!("Playback queue was not updated: {error}");
+            set_status(state, &message, true);
+            show_error_message(window, &message);
         }
     }
 }
@@ -2158,6 +2305,7 @@ unsafe fn close_player_runtime(window: HWND, state: &mut WindowState) {
         let _ = runtime.close(generation);
     }
     state.application.close_player_session();
+    state.pending_queued_start = None;
     stop_playback_timer(window);
     let title = wide("ApricotPlayer 2 Beta");
     let _ = SetWindowTextW(window, PCWSTR(title.as_ptr()));
@@ -2187,7 +2335,7 @@ unsafe fn play_local_file(window: HWND, path: &std::path::Path) {
         apricot_core::MediaKind::Audio
     };
     let path_text = path.to_string_lossy().into_owned();
-    start_player(
+    start_media_item(
         window,
         apricot_core::MediaItem {
             id: apricot_core::MediaId(path_text.clone()),
@@ -2202,6 +2350,7 @@ unsafe fn play_local_file(window: HWND, path: &std::path::Path) {
             duration_seconds: None,
             metadata: std::collections::BTreeMap::new(),
         },
+        None,
     );
 }
 
@@ -2257,6 +2406,76 @@ unsafe fn show_action_finder(window: HWND) {
                 w!("ApricotPlayer 2 Beta"),
                 MB_OK | MB_ICONINFORMATION,
             );
+        }
+    }
+    if let Some(state) = state(window) {
+        let _ = SetFocus(Some(active_primary_control(state)));
+    }
+}
+
+unsafe fn show_playback_queue(window: HWND) {
+    let Some(main_state) = state(window) else {
+        return;
+    };
+    if main_state.application.playback_queue().is_empty() {
+        set_status(
+            main_state,
+            &catalog_text(&main_state.application, "playback_queue_empty"),
+            true,
+        );
+        return;
+    }
+    let catalog = apricot_app::embedded_catalog(&main_state.application.settings().language);
+    let labels = crate::playback_queue_win32::PlaybackQueueDialogLabels {
+        title: catalog.text("playback_queue").to_owned(),
+        instructions: catalog.text("playback_queue_instructions").to_owned(),
+        empty: catalog.text("playback_queue_empty").to_owned(),
+        play: catalog.text("play").to_owned(),
+        move_up: catalog.text("move_up").to_owned(),
+        move_down: catalog.text("move_down").to_owned(),
+        remove: catalog.text("remove_from_playback_queue").to_owned(),
+        clear: catalog.text("clear_playback_queue").to_owned(),
+        back: catalog.text("back").to_owned(),
+        channel: catalog.text("channel").to_owned(),
+        audio: catalog.text("download_audio_mode").to_owned(),
+        video: catalog.text("video").to_owned(),
+        live_stream: catalog.text("live_stream").to_owned(),
+        playlist: catalog.text("playlist").to_owned(),
+        channel_kind: catalog.text("channel").to_owned(),
+        podcast_feed: catalog.text("rss_feeds").to_owned(),
+        podcast_episode: catalog.text("podcast_episode").to_owned(),
+        movie: catalog.text("movie").to_owned(),
+        tv_show: catalog.text("tv_show").to_owned(),
+        tv_episode: catalog.text("episode").to_owned(),
+        unknown: catalog.text("unknown").to_owned(),
+    };
+    let items = main_state.application.playback_queue().items().to_vec();
+    let outcome = crate::playback_queue_win32::show(window, items, labels);
+    let Some(main_state) = state_mut(window) else {
+        return;
+    };
+    match outcome {
+        Ok(outcome) => {
+            if outcome.changed
+                && let Err(error) = main_state.application.replace_playback_queue(outcome.items)
+            {
+                let message = format!("Playback queue was not updated: {error}");
+                set_status(main_state, &message, true);
+                show_error_message(window, &message);
+                let _ = SetFocus(Some(active_primary_control(main_state)));
+                return;
+            }
+            if main_state.view == MainView::MainMenu {
+                refresh_main_menu(main_state);
+            }
+            if let Some(item) = outcome.play {
+                start_media_item(window, item, Some(QueueStartMode::Matching));
+                return;
+            }
+        }
+        Err(error) => {
+            let message = format!("Playback queue did not open: {error}");
+            show_error_message(window, &message);
         }
     }
     if let Some(state) = state(window) {

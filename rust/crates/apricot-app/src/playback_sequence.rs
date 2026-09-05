@@ -24,6 +24,10 @@ impl PlaybackSequence {
         &self.items
     }
 
+    pub fn is_active(&self) -> bool {
+        self.current_index().is_some()
+    }
+
     pub fn set(
         &mut self,
         source: PlaybackSequenceSource,

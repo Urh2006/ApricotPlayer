@@ -4,19 +4,30 @@ use std::collections::{BTreeSet, VecDeque};
 
 use apricot_core::{MediaItem, Route, RouteFrame, SettingId, SettingsSection};
 use apricot_playback::PlaybackEvent;
-use apricot_storage::SettingsDocument;
+use apricot_storage::{PlaybackQueueFile, SettingsDocument};
 
 use crate::{
     ActionFinderContext, ActionFinderModel, ActivationRequest, AppState, AudioSession,
-    EqualizerSession, MainMenuAvailability, MainMenuModel, MenuVisibility, PlaybackSequenceSource,
-    PlayerScreenModel, PlayerSession, PlayerSessionDefaults, PlayerViewState, SearchApplyOutcome,
-    SearchSession, SearchSessionError, SearchWork, SessionToggle, SettingsController,
-    SettingsControllerError, SettingsScreenModel, YoutubeSearchKind, embedded_catalog,
+    EqualizerSession, MainMenuAvailability, MainMenuModel, MenuVisibility, PlaybackQueue,
+    PlaybackQueueController, PlaybackQueueControllerError, PlaybackSequenceSource,
+    PlayerScreenModel, PlayerSession, PlayerSessionDefaults, PlayerViewState, QueueAddOutcome,
+    SearchApplyOutcome, SearchSession, SearchSessionError, SearchWork, SessionToggle,
+    SettingsController, SettingsControllerError, SettingsScreenModel, YoutubeSearchKind,
+    embedded_catalog,
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlayerNavigationOrigin {
+    Sequence,
+    Queue,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PlayerNavigationOutcome {
-    Item(Box<MediaItem>),
+    Item {
+        item: Box<MediaItem>,
+        origin: PlayerNavigationOrigin,
+    },
     LoadingMore(SearchWork),
     Unavailable,
 }
@@ -135,8 +146,21 @@ impl Application {
     }
 
     pub fn request_relative_player_item(&mut self, delta: i32) -> PlayerNavigationOutcome {
+        let sequence_active = self.state.player_sequence.is_active();
+        if delta > 0
+            && !sequence_active
+            && let Some(item) = self.state.playback_queue.queue().front()
+        {
+            return PlayerNavigationOutcome::Item {
+                item: Box::new(item.clone()),
+                origin: PlayerNavigationOrigin::Queue,
+            };
+        }
         if let Some(item) = self.state.player_sequence.relative(delta) {
-            return PlayerNavigationOutcome::Item(Box::new(item));
+            return PlayerNavigationOutcome::Item {
+                item: Box::new(item),
+                origin: PlayerNavigationOrigin::Sequence,
+            };
         }
         if delta > 0
             && self.state.player_sequence.source()
@@ -147,7 +171,113 @@ impl Application {
         {
             return PlayerNavigationOutcome::LoadingMore(work);
         }
+        if delta > 0
+            && let Some(item) = self.state.playback_queue.queue().front()
+        {
+            return PlayerNavigationOutcome::Item {
+                item: Box::new(item.clone()),
+                origin: PlayerNavigationOrigin::Queue,
+            };
+        }
         PlayerNavigationOutcome::Unavailable
+    }
+
+    pub const fn playback_queue(&self) -> &PlaybackQueue {
+        self.state.playback_queue.queue()
+    }
+
+    pub fn configure_playback_queue(
+        &mut self,
+        current: PlaybackQueueFile,
+        legacy: &PlaybackQueueFile,
+    ) {
+        self.state.playback_queue = PlaybackQueueController::load(current, legacy);
+    }
+
+    pub fn playback_queue_load_error(&self) -> Option<&str> {
+        self.state.playback_queue.load_error()
+    }
+
+    /// Replaces and atomically persists the complete playback queue.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when queue persistence is blocked or fails.
+    pub fn replace_playback_queue(
+        &mut self,
+        items: Vec<MediaItem>,
+    ) -> Result<(), PlaybackQueueControllerError> {
+        self.state.playback_queue.replace(items)
+    }
+
+    /// Adds and atomically persists one playable queue item.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a changed queue cannot be persisted.
+    pub fn add_to_playback_queue(
+        &mut self,
+        item: MediaItem,
+    ) -> Result<QueueAddOutcome, PlaybackQueueControllerError> {
+        self.state.playback_queue.add(item)
+    }
+
+    /// Removes and atomically persists the matching queue item.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a changed queue cannot be persisted.
+    pub fn remove_from_playback_queue(
+        &mut self,
+        item: &MediaItem,
+    ) -> Result<bool, PlaybackQueueControllerError> {
+        Ok(self.state.playback_queue.remove_item(item)?.is_some())
+    }
+
+    /// Removes and atomically persists one queue position.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a changed queue cannot be persisted.
+    pub fn remove_playback_queue_index(
+        &mut self,
+        index: usize,
+    ) -> Result<Option<MediaItem>, PlaybackQueueControllerError> {
+        self.state.playback_queue.remove(index)
+    }
+
+    /// Reorders and atomically persists one queue position.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a changed queue cannot be persisted.
+    pub fn move_playback_queue_item(
+        &mut self,
+        index: usize,
+        delta: i32,
+    ) -> Result<Option<usize>, PlaybackQueueControllerError> {
+        self.state.playback_queue.move_by(index, delta)
+    }
+
+    /// Clears and atomically persists the playback queue.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a changed queue cannot be persisted.
+    pub fn clear_playback_queue(&mut self) -> Result<bool, PlaybackQueueControllerError> {
+        self.state.playback_queue.clear()
+    }
+
+    /// Consumes the front item after its player start has been confirmed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the changed queue cannot be persisted.
+    pub fn confirm_queued_item_started(
+        &mut self,
+        item: &MediaItem,
+    ) -> Result<bool, PlaybackQueueControllerError> {
+        self.state.playback_queue.consume_front_if(item)
     }
 
     pub fn player_screen_model(&self) -> Option<PlayerScreenModel> {
@@ -233,10 +363,7 @@ impl Application {
 
     pub fn main_menu_model(&self) -> MainMenuModel {
         let settings = self.settings.current();
-        let mut availability = self.menu_availability;
-        availability.trending = visibility(settings.enable_trending);
-        availability.history = visibility(settings.enable_history);
-        availability.podcasts = visibility(settings.enable_podcasts_rss);
+        let availability = self.current_menu_availability();
         MainMenuModel::build(
             &embedded_catalog(&settings.language),
             availability,
@@ -251,9 +378,19 @@ impl Application {
         ActionFinderModel::build(
             &embedded_catalog(&settings.language),
             settings,
-            self.menu_availability,
+            self.current_menu_availability(),
             context,
         )
+    }
+
+    fn current_menu_availability(&self) -> MainMenuAvailability {
+        let settings = self.settings.current();
+        let mut availability = self.menu_availability;
+        availability.trending = visibility(settings.enable_trending);
+        availability.history = visibility(settings.enable_history);
+        availability.podcasts = visibility(settings.enable_podcasts_rss);
+        availability.playback_queue_count = self.state.playback_queue.queue().len();
+        availability
     }
 
     pub fn settings_model(&self, section: SettingsSection) -> SettingsScreenModel {
@@ -534,7 +671,7 @@ mod tests {
     use apricot_storage::{SettingsDocument, SettingsPaths};
     use tempfile::tempdir;
 
-    use super::{Application, PlayerNavigationOutcome};
+    use super::{Application, PlayerNavigationOrigin, PlayerNavigationOutcome};
     use crate::{ActivationRequest, MainMenuAvailability, SettingsController, YoutubeSearchKind};
 
     fn application(root: &Path) -> Application {
@@ -753,10 +890,13 @@ mod tests {
         assert!(app.select_search_result(2));
         assert_eq!(
             app.request_relative_player_item(-1),
-            PlayerNavigationOutcome::Item(Box::new(youtube_item(17, MediaKind::Video)))
+            PlayerNavigationOutcome::Item {
+                item: Box::new(youtube_item(17, MediaKind::Video)),
+                origin: PlayerNavigationOrigin::Sequence,
+            }
         );
         let last = match app.request_relative_player_item(1) {
-            PlayerNavigationOutcome::Item(item) => item,
+            PlayerNavigationOutcome::Item { item, .. } => item,
             other => panic!("expected last item, got {other:?}"),
         };
         assert_eq!(last.id.0, "19");
@@ -771,7 +911,10 @@ mod tests {
         app.apply_search_results(more.generation, cumulative, None);
         assert_eq!(
             app.request_relative_player_item(1),
-            PlayerNavigationOutcome::Item(Box::new(youtube_item(20, MediaKind::Video)))
+            PlayerNavigationOutcome::Item {
+                item: Box::new(youtube_item(20, MediaKind::Video)),
+                origin: PlayerNavigationOrigin::Sequence,
+            }
         );
     }
 
@@ -794,5 +937,98 @@ mod tests {
             app.request_relative_player_item(1),
             PlayerNavigationOutcome::Unavailable
         );
+    }
+
+    #[test]
+    fn sequence_precedes_queue_until_its_real_end() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        let queued = youtube_item(99, MediaKind::Video);
+        assert_eq!(
+            app.add_to_playback_queue(queued.clone())
+                .expect("queue add"),
+            crate::QueueAddOutcome::Added
+        );
+        let work = app
+            .begin_youtube_search("query", YoutubeSearchKind::Video)
+            .expect("search");
+        let items = vec![
+            youtube_item(0, MediaKind::Video),
+            youtube_item(1, MediaKind::Video),
+        ];
+        app.apply_search_results(work.generation, items, None);
+        let current = app.prepare_search_playback(0).expect("selected item");
+        app.start_player_item(current);
+
+        let next = match app.request_relative_player_item(1) {
+            PlayerNavigationOutcome::Item { item, origin } => {
+                assert_eq!(origin, PlayerNavigationOrigin::Sequence);
+                *item
+            }
+            other => panic!("expected sequence item, got {other:?}"),
+        };
+        assert_eq!(next.id.0, "1");
+        app.start_player_item(next);
+        assert_eq!(
+            app.request_relative_player_item(1),
+            PlayerNavigationOutcome::Item {
+                item: Box::new(queued),
+                origin: PlayerNavigationOrigin::Queue,
+            }
+        );
+        assert_eq!(app.playback_queue().len(), 1);
+    }
+
+    #[test]
+    fn queue_is_consumed_only_after_explicit_start_confirmation() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        let queued = youtube_item(7, MediaKind::Video);
+        app.add_to_playback_queue(queued.clone())
+            .expect("queue add");
+        app.start_player_item(media_item("unrelated"));
+
+        assert_eq!(
+            app.request_relative_player_item(-1),
+            PlayerNavigationOutcome::Unavailable
+        );
+        let candidate = match app.request_relative_player_item(1) {
+            PlayerNavigationOutcome::Item { item, origin } => {
+                assert_eq!(origin, PlayerNavigationOrigin::Queue);
+                *item
+            }
+            other => panic!("expected queued item, got {other:?}"),
+        };
+        assert_eq!(app.playback_queue().len(), 1);
+        assert!(
+            app.confirm_queued_item_started(&candidate)
+                .expect("queue consume")
+        );
+        assert!(app.playback_queue().is_empty());
+        assert!(
+            !app.confirm_queued_item_started(&candidate)
+                .expect("second queue consume")
+        );
+    }
+
+    #[test]
+    fn queue_count_is_projected_into_main_menu() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        assert!(
+            app.main_menu_model()
+                .items
+                .iter()
+                .all(|item| item.id != "playback_queue")
+        );
+        app.add_to_playback_queue(youtube_item(3, MediaKind::Video))
+            .expect("queue add");
+        let queue = app
+            .main_menu_model()
+            .items
+            .into_iter()
+            .find(|item| item.id == "playback_queue")
+            .expect("queue menu item");
+        assert!(queue.label.contains("(1)"));
     }
 }
