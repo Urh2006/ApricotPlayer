@@ -4,6 +4,7 @@ pub mod action_finder;
 pub mod activation;
 pub mod application;
 pub mod main_menu;
+pub mod playback_sequence;
 pub mod player_model;
 pub mod player_session;
 pub mod search_session;
@@ -16,11 +17,12 @@ pub use apricot_media::YoutubeSearchKind;
 
 pub use action_finder::{ActionFinderContext, ActionFinderItem, ActionFinderModel};
 pub use activation::ActivationRequest;
-pub use application::Application;
+pub use application::{Application, PlayerNavigationOutcome};
 pub use main_menu::{
     MainMenuAvailability, MainMenuItem, MainMenuModel, MenuVisibility, embedded_catalog,
     english_catalog,
 };
+pub use playback_sequence::{PlaybackSequence, PlaybackSequenceSource};
 pub use player_model::{
     PlayerControlModel, PlayerControlRole, PlayerScreenModel, PlayerToggle, PlayerViewState,
     TransportState,
@@ -44,5 +46,6 @@ pub use settings_session::{SettingsDraft, SettingsDraftError};
 pub struct AppState {
     pub navigation: NavigationStack,
     pub player: PlayerSession,
+    pub player_sequence: PlaybackSequence,
     pub search: SearchSession,
 }

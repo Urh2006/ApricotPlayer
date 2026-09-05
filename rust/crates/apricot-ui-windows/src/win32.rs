@@ -7,7 +7,8 @@ use std::{ffi::c_void, mem::size_of};
 use crate::player_controls_win32::{PlayerControlActivation, PlayerControls};
 use apricot_app::{
     ActionFinderContext, ActivationRequest, Application, MainMenuModel, PlaybackPhase,
-    SearchApplyOutcome, SearchWork, SearchWorkKind, SessionToggle, YoutubeSearchKind,
+    PlayerNavigationOutcome, SearchApplyOutcome, SearchWork, SearchWorkKind, SessionToggle,
+    YoutubeSearchKind,
 };
 use apricot_core::{
     Route, RouteFrame,
@@ -118,6 +119,7 @@ struct WindowState {
     youtube_search: YoutubeSearchService,
     pending_youtube_work: Option<SearchWork>,
     pending_youtube_resolve: Option<u64>,
+    pending_player_navigation: Option<i32>,
     next_youtube_resolve_token: u64,
     playback: Option<PlaybackRuntime>,
 }
@@ -473,6 +475,7 @@ unsafe fn create_controls(
         youtube_search: YoutubeSearchService::default(),
         pending_youtube_work: None,
         pending_youtube_resolve: None,
+        pending_player_navigation: None,
         next_youtube_resolve_token: 0,
         playback: None,
     })
@@ -902,10 +905,7 @@ unsafe fn activate_result_selection(window: HWND) {
     let Ok(index) = usize::try_from(selected) else {
         return;
     };
-    if !state.application.select_search_result(index) {
-        return;
-    }
-    let Some(item) = state.application.search_session().selected_item().cloned() else {
+    let Some(item) = state.application.prepare_search_playback(index) else {
         return;
     };
     if matches!(
@@ -925,8 +925,21 @@ unsafe fn activate_result_selection(window: HWND) {
         let _ = SetFocus(Some(state.list));
         return;
     }
+    start_media_item(window, item);
+}
+
+unsafe fn start_media_item(window: HWND, item: apricot_core::MediaItem) {
+    if item.source != apricot_core::MediaSource::Youtube {
+        start_player(window, item);
+        return;
+    }
     let Some(url) = item.url.as_ref().map(ToString::to_string) else {
-        finish_youtube_error_state(window, state, 0, "The selected item has no media URL");
+        if let Some(state) = state_mut(window) {
+            finish_youtube_error_state(window, state, 0, "The selected item has no media URL");
+        }
+        return;
+    };
+    let Some(state) = state_mut(window) else {
         return;
     };
     cancel_youtube_work(window, state);
@@ -1022,7 +1035,7 @@ unsafe fn finish_youtube_resolve(
 unsafe fn finish_youtube_resolve_selection_error(window: HWND, state: &WindowState, message: &str) {
     set_status(state, message, true);
     show_error_message(window, message);
-    let _ = SetFocus(Some(state.list));
+    let _ = SetFocus(Some(active_primary_control(state)));
 }
 
 unsafe fn start_player(window: HWND, item: apricot_core::MediaItem) {
@@ -1355,10 +1368,19 @@ unsafe fn poll_playback_runtime(window: HWND) {
             }
             PlaybackEvent::Position { .. } => {}
             PlaybackEvent::Ended => {
+                let autoplay_next = state
+                    .application
+                    .player_session()
+                    .enabled_toggles()
+                    .contains(&SessionToggle::AutoplayNext);
+                if autoplay_next {
+                    navigate_player_relative(window, 1);
+                    return;
+                }
                 set_status(
                     state,
                     &catalog_text(&state.application, "playback_finished"),
-                    true,
+                    state.application.settings().announce_playback_finished,
                 );
             }
             PlaybackEvent::Failed(error) => {
@@ -1404,6 +1426,10 @@ unsafe fn finish_youtube_search(
         }
         _ => {}
     }
+    let continue_navigation = state.pending_player_navigation.take();
+    if let Some(delta) = continue_navigation {
+        navigate_player_relative(window, delta);
+    }
 }
 
 unsafe fn finish_youtube_error(window: HWND, generation: u64, message: &str) {
@@ -1415,7 +1441,7 @@ unsafe fn finish_youtube_error(window: HWND, generation: u64, message: &str) {
         stop_youtube_timer(window);
         set_status(state, message, true);
         show_error_message(window, message);
-        let _ = SetFocus(Some(state.list));
+        let _ = SetFocus(Some(active_primary_control(state)));
         return;
     }
     finish_youtube_error_state(window, state, generation, message);
@@ -1433,6 +1459,7 @@ unsafe fn finish_youtube_error_state(
         .is_none_or(|work| work.work_kind == SearchWorkKind::Initial);
     let _ = state.application.fail_search(generation, message);
     state.pending_youtube_work = None;
+    state.pending_player_navigation = None;
     stop_youtube_timer(window);
     let _ = EnableWindow(state.search, true);
     set_status(state, message, true);
@@ -1465,6 +1492,7 @@ unsafe fn cancel_youtube_work(window: HWND, state: &mut WindowState) {
     }
     state.pending_youtube_work = None;
     state.pending_youtube_resolve = None;
+    state.pending_player_navigation = None;
     let _ = state.youtube_search.cancel();
     let _ = EnableWindow(state.search, true);
     stop_youtube_timer(window);
@@ -1797,6 +1825,8 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "open_selected" => activate_selection(window),
         "background_play_pause" | "player_play_pause" => toggle_player_pause(window),
         "player_back" => navigate_back(window),
+        "player_previous" => navigate_player_relative(window, -1),
+        "player_next" => navigate_player_relative(window, 1),
         "player_time" => announce_player_time(window),
         "player_volume_status" => announce_player_volume(window),
         "player_seek_back" => seek_player(window, -configured_seek_seconds(window)),
@@ -1818,6 +1848,41 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "player_bass_boost" => toggle_player_session_setting(window, SessionToggle::BassBoost),
         "player_volume_boost" => toggle_player_session_setting(window, SessionToggle::VolumeBoost),
         _ => show_unimplemented_action(window, action_id),
+    }
+}
+
+unsafe fn navigate_player_relative(window: HWND, delta: i32) {
+    let outcome = {
+        let Some(state) = state_mut(window) else {
+            return;
+        };
+        if state.pending_player_navigation.is_some() || state.pending_youtube_resolve.is_some() {
+            return;
+        }
+        state.application.request_relative_player_item(delta)
+    };
+    match outcome {
+        PlayerNavigationOutcome::Item(item) => start_media_item(window, *item),
+        PlayerNavigationOutcome::LoadingMore(work) => {
+            let Some(state) = state_mut(window) else {
+                return;
+            };
+            state.pending_player_navigation = Some(delta);
+            let message = catalog_text(&state.application, "loading_more_results");
+            set_status(state, &message, true);
+            start_youtube_work(window, work);
+        }
+        PlayerNavigationOutcome::Unavailable => {
+            let Some(state) = state(window) else {
+                return;
+            };
+            let key = if delta < 0 {
+                "no_previous_item"
+            } else {
+                "no_next_item"
+            };
+            set_status(state, &catalog_text(&state.application, key), true);
+        }
     }
 }
 

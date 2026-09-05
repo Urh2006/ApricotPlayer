@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use apricot_core::{MediaItem, MediaSource};
+use apricot_core::MediaItem;
 use apricot_media::YoutubeSearchKind;
 use thiserror::Error;
 
@@ -329,24 +329,7 @@ fn merge_unique(existing: &mut Vec<MediaItem>, fetched: Vec<MediaItem>) {
 }
 
 fn item_identity(item: &MediaItem) -> Option<String> {
-    let source = match item.source {
-        MediaSource::Youtube => "youtube",
-        MediaSource::Soundcloud => "soundcloud",
-        MediaSource::Direct => "direct",
-        MediaSource::Local => "local",
-        MediaSource::Podcast => "podcast",
-        MediaSource::Audiovault => "audiovault",
-    };
-    if !item.id.0.trim().is_empty() {
-        return Some(format!("{source}:id:{}", item.id.0));
-    }
-    if let Some(url) = &item.url {
-        return Some(format!("{source}:url:{url}"));
-    }
-    item.local_path
-        .as_ref()
-        .filter(|path| !path.trim().is_empty())
-        .map(|path| format!("{source}:path:{path}"))
+    item.stable_identity()
 }
 
 #[cfg(test)]

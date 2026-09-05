@@ -8,11 +8,18 @@ use apricot_storage::SettingsDocument;
 
 use crate::{
     ActionFinderContext, ActionFinderModel, ActivationRequest, AppState, AudioSession,
-    EqualizerSession, MainMenuAvailability, MainMenuModel, MenuVisibility, PlayerScreenModel,
-    PlayerSession, PlayerSessionDefaults, PlayerViewState, SearchApplyOutcome, SearchSession,
-    SearchSessionError, SearchWork, SessionToggle, SettingsController, SettingsControllerError,
-    SettingsScreenModel, YoutubeSearchKind, embedded_catalog,
+    EqualizerSession, MainMenuAvailability, MainMenuModel, MenuVisibility, PlaybackSequenceSource,
+    PlayerScreenModel, PlayerSession, PlayerSessionDefaults, PlayerViewState, SearchApplyOutcome,
+    SearchSession, SearchSessionError, SearchWork, SessionToggle, SettingsController,
+    SettingsControllerError, SettingsScreenModel, YoutubeSearchKind, embedded_catalog,
 };
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PlayerNavigationOutcome {
+    Item(Box<MediaItem>),
+    LoadingMore(SearchWork),
+    Unavailable,
+}
 
 #[derive(Debug)]
 pub struct Application {
@@ -85,9 +92,21 @@ impl Application {
         items: Vec<MediaItem>,
         continuation: Option<String>,
     ) -> SearchApplyOutcome {
-        self.state
+        let outcome = self
+            .state
             .search
-            .apply_results(generation, items, continuation)
+            .apply_results(generation, items, continuation);
+        if matches!(
+            outcome,
+            SearchApplyOutcome::Replaced | SearchApplyOutcome::Appended { .. }
+        ) {
+            let source = PlaybackSequenceSource::Search { generation };
+            let _ = self
+                .state
+                .player_sequence
+                .sync(source, self.state.search.items());
+        }
+        outcome
     }
 
     pub fn fail_search(&mut self, generation: u64, message: impl Into<String>) -> bool {
@@ -96,6 +115,39 @@ impl Application {
 
     pub fn select_search_result(&mut self, index: usize) -> bool {
         self.state.search.select(index)
+    }
+
+    pub fn prepare_search_playback(&mut self, index: usize) -> Option<MediaItem> {
+        if !self.state.search.select(index) {
+            return None;
+        }
+        let item = self.state.search.selected_item()?.clone();
+        if item.is_playable() {
+            let source = PlaybackSequenceSource::Search {
+                generation: self.state.search.generation(),
+            };
+            let _ = self
+                .state
+                .player_sequence
+                .set(source, self.state.search.items(), &item);
+        }
+        Some(item)
+    }
+
+    pub fn request_relative_player_item(&mut self, delta: i32) -> PlayerNavigationOutcome {
+        if let Some(item) = self.state.player_sequence.relative(delta) {
+            return PlayerNavigationOutcome::Item(Box::new(item));
+        }
+        if delta > 0
+            && self.state.player_sequence.source()
+                == Some(PlaybackSequenceSource::Search {
+                    generation: self.state.search.generation(),
+                })
+            && let Some(work) = self.state.search.request_more()
+        {
+            return PlayerNavigationOutcome::LoadingMore(work);
+        }
+        PlayerNavigationOutcome::Unavailable
     }
 
     pub fn player_screen_model(&self) -> Option<PlayerScreenModel> {
@@ -109,6 +161,7 @@ impl Application {
     }
 
     pub fn start_player_item(&mut self, item: MediaItem) -> u64 {
+        let _ = self.state.player_sequence.activate(&item);
         let settings = self.settings.current();
         let mut toggles = BTreeSet::new();
         if settings.autoplay_next {
@@ -159,6 +212,7 @@ impl Application {
 
     pub fn close_player_session(&mut self) {
         self.state.player.close();
+        self.state.player_sequence.clear();
     }
 
     pub fn enqueue_activation(&mut self, request: ActivationRequest) {
@@ -480,8 +534,8 @@ mod tests {
     use apricot_storage::{SettingsDocument, SettingsPaths};
     use tempfile::tempdir;
 
-    use super::Application;
-    use crate::{ActivationRequest, MainMenuAvailability, SettingsController};
+    use super::{Application, PlayerNavigationOutcome};
+    use crate::{ActivationRequest, MainMenuAvailability, SettingsController, YoutubeSearchKind};
 
     fn application(root: &Path) -> Application {
         let paths = SettingsPaths::for_app_data(&root.join("beta"), &root.join("stable"));
@@ -501,6 +555,26 @@ mod tests {
             stream_url: None,
             external_audio_url: None,
             local_path: Some(format!(r"C:\Music\{id}.mp3")),
+            channel: String::new(),
+            duration_seconds: None,
+            metadata: BTreeMap::new(),
+        }
+    }
+
+    fn youtube_item(index: usize, kind: MediaKind) -> MediaItem {
+        MediaItem {
+            id: MediaId(index.to_string()),
+            source: MediaSource::Youtube,
+            kind,
+            title: format!("Item {index}"),
+            url: Some(
+                format!("https://www.youtube.com/watch?v=item{index}")
+                    .parse()
+                    .expect("URL"),
+            ),
+            stream_url: None,
+            external_audio_url: None,
+            local_path: None,
             channel: String::new(),
             duration_seconds: None,
             metadata: BTreeMap::new(),
@@ -659,5 +733,66 @@ mod tests {
 
         app.close_player_session();
         assert!(app.player_session().audio().is_none());
+    }
+
+    #[test]
+    fn result_sequence_is_independent_from_focus_and_extends_without_skipping() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        let work = app
+            .begin_youtube_search("query", YoutubeSearchKind::All)
+            .expect("search");
+        let mut first_page: Vec<_> = (0..20)
+            .map(|index| youtube_item(index, MediaKind::Video))
+            .collect();
+        first_page[5].kind = MediaKind::Playlist;
+        app.apply_search_results(work.generation, first_page.clone(), None);
+
+        let current = app.prepare_search_playback(18).expect("selected item");
+        app.start_player_item(current);
+        assert!(app.select_search_result(2));
+        assert_eq!(
+            app.request_relative_player_item(-1),
+            PlayerNavigationOutcome::Item(Box::new(youtube_item(17, MediaKind::Video)))
+        );
+        let last = match app.request_relative_player_item(1) {
+            PlayerNavigationOutcome::Item(item) => item,
+            other => panic!("expected last item, got {other:?}"),
+        };
+        assert_eq!(last.id.0, "19");
+        app.start_player_item(*last);
+
+        let more = match app.request_relative_player_item(1) {
+            PlayerNavigationOutcome::LoadingMore(work) => work,
+            other => panic!("expected dynamic page, got {other:?}"),
+        };
+        let mut cumulative = first_page;
+        cumulative.extend((20..40).map(|index| youtube_item(index, MediaKind::Video)));
+        app.apply_search_results(more.generation, cumulative, None);
+        assert_eq!(
+            app.request_relative_player_item(1),
+            PlayerNavigationOutcome::Item(Box::new(youtube_item(20, MediaKind::Video)))
+        );
+    }
+
+    #[test]
+    fn closing_player_invalidates_its_source_sequence() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        let work = app
+            .begin_youtube_search("query", YoutubeSearchKind::Video)
+            .expect("search");
+        let items = vec![
+            youtube_item(0, MediaKind::Video),
+            youtube_item(1, MediaKind::Video),
+        ];
+        app.apply_search_results(work.generation, items, None);
+        let current = app.prepare_search_playback(0).expect("selected item");
+        app.start_player_item(current);
+        app.close_player_session();
+        assert_eq!(
+            app.request_relative_player_item(1),
+            PlayerNavigationOutcome::Unavailable
+        );
     }
 }
