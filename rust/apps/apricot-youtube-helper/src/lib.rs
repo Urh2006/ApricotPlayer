@@ -209,12 +209,17 @@ impl YoutubeHelper {
             url: Url::parse(&details.video_url)
                 .or_else(|_| Url::parse(&media_url))
                 .ok(),
+            stream_url: None,
+            external_audio_url: None,
             local_path: None,
             channel: details.owner_channel_name,
             duration_seconds,
             metadata,
         };
-        Ok(YoutubeResponsePayload::Resolved { item, formats })
+        Ok(YoutubeResponsePayload::Resolved {
+            item: Box::new(item),
+            formats,
+        })
     }
 }
 
@@ -286,6 +291,8 @@ fn search_item(result: SearchResult) -> MediaItem {
                 kind: MediaKind::Video,
                 title: video.title,
                 url: Url::parse(&video.url).ok(),
+                stream_url: None,
+                external_audio_url: None,
                 local_path: None,
                 channel: video.channel.name,
                 duration_seconds: video.duration.to_string().parse::<f64>().ok(),
@@ -305,6 +312,8 @@ fn search_item(result: SearchResult) -> MediaItem {
                 kind: MediaKind::Playlist,
                 title: playlist.name,
                 url: Url::parse(&playlist.url).ok(),
+                stream_url: None,
+                external_audio_url: None,
                 local_path: None,
                 channel: playlist.channel.name,
                 duration_seconds: None,
@@ -321,6 +330,8 @@ fn search_item(result: SearchResult) -> MediaItem {
                 kind: MediaKind::Channel,
                 title: channel.name,
                 url: Url::parse(&channel.url).ok(),
+                stream_url: None,
+                external_audio_url: None,
                 local_path: None,
                 channel: String::new(),
                 duration_seconds: None,

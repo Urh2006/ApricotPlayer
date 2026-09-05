@@ -185,7 +185,18 @@ impl MpvProcessEngine {
 impl PlaybackEngine for MpvProcessEngine {
     fn execute(&mut self, command: PlaybackCommand) -> Result<(), PlaybackError> {
         let command = match command {
-            PlaybackCommand::Load(item) => json!(["loadfile", media_target(&item)?, "replace"]),
+            PlaybackCommand::Load(item) => {
+                let options =
+                    item.external_audio_url
+                        .as_ref()
+                        .map_or_else(serde_json::Map::new, |url| {
+                            serde_json::Map::from_iter([(
+                                "audio-file".to_owned(),
+                                Value::String(url.to_string()),
+                            )])
+                        });
+                json!(["loadfile", media_target(&item)?, "replace", -1, options])
+            }
             PlaybackCommand::SetPaused(paused) => json!(["set_property", "pause", paused]),
             PlaybackCommand::SeekRelative { seconds, exact } => json!([
                 "seek",
@@ -200,11 +211,24 @@ impl PlaybackEngine for MpvProcessEngine {
             PlaybackCommand::SetVolume(volume) => {
                 json!(["set_property", "volume", volume.max(0.0)])
             }
+            PlaybackCommand::SetVolumeMax(volume_max) => {
+                json!(["set_property", "volume-max", volume_max.clamp(1, 300)])
+            }
             PlaybackCommand::SetSpeed(speed) => {
                 json!(["set_property", "speed", speed.clamp(0.01, 100.0)])
             }
             PlaybackCommand::SetPitch(pitch) => {
                 json!(["set_property", "pitch", pitch.clamp(0.01, 100.0)])
+            }
+            PlaybackCommand::SetRepeat(enabled) => {
+                json!([
+                    "set_property",
+                    "loop-file",
+                    if enabled { "inf" } else { "no" }
+                ])
+            }
+            PlaybackCommand::SetAudioFilter(filter) => {
+                json!(["set_property", "af", filter.unwrap_or_default()])
             }
             PlaybackCommand::Stop => json!(["stop"]),
         };
@@ -440,6 +464,7 @@ fn media_target(item: &MediaItem) -> Result<String, PlaybackError> {
         .as_deref()
         .filter(|path| !path.trim().is_empty())
         .map(ToOwned::to_owned)
+        .or_else(|| item.stream_url.as_ref().map(ToString::to_string))
         .or_else(|| item.url.as_ref().map(ToString::to_string))
         .ok_or_else(|| PlaybackError::Operation("media item has no playable target".to_owned()))
 }
@@ -605,12 +630,35 @@ mod tests {
             kind: MediaKind::Audio,
             title: "Track".to_owned(),
             url: Some("https://example.invalid/wrong".parse().expect("URL")),
+            stream_url: None,
+            external_audio_url: None,
             local_path: Some(r"C:\Music\Track.mp3".to_owned()),
             channel: String::new(),
             duration_seconds: None,
             metadata: BTreeMap::default(),
         };
         assert_eq!(media_target(&item).expect("target"), r"C:\Music\Track.mp3");
+    }
+
+    #[test]
+    fn resolved_stream_wins_over_the_durable_public_url() {
+        let item = apricot_core::MediaItem {
+            id: MediaId("remote".to_owned()),
+            source: MediaSource::Youtube,
+            kind: MediaKind::Video,
+            title: "Video".to_owned(),
+            url: Some("https://youtube.test/watch?v=remote".parse().expect("URL")),
+            stream_url: Some("https://media.test/stream".parse().expect("URL")),
+            external_audio_url: None,
+            local_path: None,
+            channel: String::new(),
+            duration_seconds: None,
+            metadata: BTreeMap::default(),
+        };
+        assert_eq!(
+            media_target(&item).expect("target"),
+            "https://media.test/stream"
+        );
     }
 
     #[test]

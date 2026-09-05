@@ -45,6 +45,13 @@ pub struct MediaItem {
     pub title: String,
     #[serde(default)]
     pub url: Option<Url>,
+    /// Ephemeral resolved playback URL. Durable features must keep using
+    /// `url`, because component-provided stream URLs can expire.
+    #[serde(default)]
+    pub stream_url: Option<Url>,
+    /// Optional audio rendition paired with a video-only `stream_url`.
+    #[serde(default)]
+    pub external_audio_url: Option<Url>,
     #[serde(default)]
     pub local_path: Option<String>,
     #[serde(default)]

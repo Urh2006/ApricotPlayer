@@ -119,6 +119,10 @@ try {
     if ($ProductionYtDlpCheck.ExitCode -ne 0) {
         throw "Installed app could not use standalone yt-dlp through its production adapter"
     }
+    $ProductionPlaybackCheck = Start-Process -FilePath $Executable -ArgumentList "--qualification-playback" -WindowStyle Hidden -Wait -PassThru
+    if ($ProductionPlaybackCheck.ExitCode -ne 0) {
+        throw "Installed app could not play media through its packaged libmpv runtime"
+    }
     $ProcessExitDeadline = [DateTime]::UtcNow.AddSeconds(2)
     do {
         $QualificationProcesses = @(Get-CimInstance Win32_Process -Filter "Name = 'ApricotPlayer2Beta.exe'" | Where-Object {

@@ -4,6 +4,7 @@
 use apricot_core::MediaItem;
 use thiserror::Error;
 
+mod equalizer;
 #[cfg(windows)]
 mod libmpv;
 #[cfg(windows)]
@@ -13,6 +14,7 @@ mod mpv_process;
 #[cfg(windows)]
 mod runtime;
 
+pub use equalizer::{EqualizerFilterConfig, build_equalizer_filter};
 #[cfg(windows)]
 pub use libmpv::LibMpvEngine;
 #[cfg(windows)]
@@ -32,8 +34,11 @@ pub enum PlaybackCommand {
     SeekRelative { seconds: f64, exact: bool },
     SeekAbsolute { seconds: f64, exact: bool },
     SetVolume(f64),
+    SetVolumeMax(u16),
     SetSpeed(f64),
     SetPitch(f64),
+    SetRepeat(bool),
+    SetAudioFilter(Option<String>),
     Stop,
 }
 

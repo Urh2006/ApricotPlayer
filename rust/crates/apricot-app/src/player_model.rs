@@ -344,6 +344,8 @@ mod tests {
             kind: MediaKind::Audio,
             title: "Track".to_owned(),
             url: None,
+            stream_url: None,
+            external_audio_url: None,
             local_path: Some(r"C:\Music\Track.mp3".to_owned()),
             channel: String::new(),
             duration_seconds: None,

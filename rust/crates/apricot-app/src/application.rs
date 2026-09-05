@@ -141,6 +141,22 @@ impl Application {
         self.state.player.apply_event(generation, event)
     }
 
+    pub fn set_player_volume(&mut self, volume: f64) {
+        self.state.player.set_volume(volume);
+    }
+
+    pub fn set_player_speed(&mut self, speed: f64) {
+        self.state.player.set_speed(speed);
+    }
+
+    pub fn set_player_pitch(&mut self, pitch: f64) {
+        self.state.player.set_pitch(pitch);
+    }
+
+    pub fn set_player_toggle(&mut self, toggle: SessionToggle, enabled: bool) {
+        self.state.player.set_toggle(toggle, enabled);
+    }
+
     pub fn close_player_session(&mut self) {
         self.state.player.close();
     }
@@ -482,6 +498,8 @@ mod tests {
             kind: MediaKind::Audio,
             title: id.to_owned(),
             url: None,
+            stream_url: None,
+            external_audio_url: None,
             local_path: Some(format!(r"C:\Music\{id}.mp3")),
             channel: String::new(),
             duration_seconds: None,

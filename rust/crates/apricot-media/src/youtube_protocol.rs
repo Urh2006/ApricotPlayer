@@ -143,7 +143,7 @@ pub enum YoutubeResponsePayload {
         continuation: Option<String>,
     },
     Resolved {
-        item: MediaItem,
+        item: Box<MediaItem>,
         formats: Vec<YoutubeFormat>,
     },
     ShuttingDown,
@@ -180,6 +180,99 @@ pub enum YoutubeFormatTransport {
     Dash,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct YoutubePlaybackSelection {
+    pub primary_index: usize,
+    pub external_audio_index: Option<usize>,
+}
+
+/// Selects the same broad playback shapes as the Python player: seek-friendly
+/// HLS with separate audio when available, progressive A/V as the next choice,
+/// and an audio-only fallback. The component's ordering remains the tie-breaker.
+pub fn select_youtube_playback_formats(
+    formats: &[YoutubeFormat],
+    preference: YoutubeStreamPreference,
+) -> Option<YoutubePlaybackSelection> {
+    let audio_only = |format: &YoutubeFormat| format.tracks.audio && !format.tracks.video;
+    let video_only = |format: &YoutubeFormat| format.tracks.video && !format.tracks.audio;
+    let combined = |format: &YoutubeFormat| format.tracks.video && format.tracks.audio;
+    let hls_audio = formats
+        .iter()
+        .position(|format| audio_only(format) && format.transport == YoutubeFormatTransport::Hls);
+
+    if preference == YoutubeStreamPreference::PreferAudio {
+        let primary_index = hls_audio
+            .or_else(|| formats.iter().position(audio_only))
+            .or_else(|| formats.iter().position(|format| format.tracks.audio))?;
+        return Some(YoutubePlaybackSelection {
+            primary_index,
+            external_audio_index: None,
+        });
+    }
+
+    let height_limit = if preference == YoutubeStreamPreference::PreferVideo {
+        720
+    } else {
+        360
+    };
+    if let (Some(primary_index), Some(external_audio_index)) = (
+        formats.iter().position(|format| {
+            video_only(format)
+                && format.transport == YoutubeFormatTransport::Hls
+                && format.height.is_some_and(|height| height <= height_limit)
+        }),
+        hls_audio,
+    ) {
+        return Some(YoutubePlaybackSelection {
+            primary_index,
+            external_audio_index: Some(external_audio_index),
+        });
+    }
+
+    for itag in if preference == YoutubeStreamPreference::PreferVideo {
+        [22, 18]
+    } else {
+        [18, 22]
+    } {
+        if let Some(primary_index) = formats
+            .iter()
+            .position(|format| format.itag == itag && combined(format))
+        {
+            return Some(YoutubePlaybackSelection {
+                primary_index,
+                external_audio_index: None,
+            });
+        }
+    }
+
+    if let Some(primary_index) = formats.iter().position(|format| {
+        combined(format)
+            && (preference != YoutubeStreamPreference::PreferVideo
+                || format.height.is_none_or(|height| height <= height_limit))
+    }) {
+        return Some(YoutubePlaybackSelection {
+            primary_index,
+            external_audio_index: None,
+        });
+    }
+
+    if let Some(primary_index) = formats.iter().position(video_only) {
+        let external_audio_index = hls_audio.or_else(|| formats.iter().position(audio_only));
+        return Some(YoutubePlaybackSelection {
+            primary_index,
+            external_audio_index,
+        });
+    }
+
+    formats
+        .iter()
+        .position(|format| format.tracks.audio)
+        .map(|primary_index| YoutubePlaybackSelection {
+            primary_index,
+            external_audio_index: None,
+        })
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum YoutubeErrorCode {
@@ -213,8 +306,10 @@ impl YoutubeHelperError {
 #[cfg(test)]
 mod tests {
     use super::{
-        YOUTUBE_HELPER_PROTOCOL_VERSION, YoutubeBackend, YoutubeCommand, YoutubeRequest,
-        YoutubeResponse, YoutubeResponsePayload, YoutubeSessionConfig,
+        YOUTUBE_HELPER_PROTOCOL_VERSION, YoutubeBackend, YoutubeCommand, YoutubeFormat,
+        YoutubeFormatTracks, YoutubeFormatTransport, YoutubeRequest, YoutubeResponse,
+        YoutubeResponsePayload, YoutubeSessionConfig, YoutubeStreamPreference,
+        select_youtube_playback_formats,
     };
 
     #[test]
@@ -255,5 +350,67 @@ mod tests {
         let json = serde_json::to_string(&response).expect("serialize response");
         let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
         assert_eq!(value["status"], "configured");
+    }
+
+    fn format(
+        itag: u64,
+        video: bool,
+        audio: bool,
+        height: Option<u64>,
+        transport: YoutubeFormatTransport,
+    ) -> YoutubeFormat {
+        YoutubeFormat {
+            itag,
+            url: format!("https://media.test/{itag}"),
+            mime_type: String::new(),
+            bitrate: itag,
+            width: None,
+            height,
+            fps: None,
+            tracks: YoutubeFormatTracks { video, audio },
+            is_live: false,
+            transport,
+        }
+    }
+
+    #[test]
+    fn automatic_playback_prefers_seekable_low_video_with_separate_audio() {
+        let formats = vec![
+            format(137, true, false, Some(1080), YoutubeFormatTransport::Dash),
+            format(95, true, false, Some(720), YoutubeFormatTransport::Hls),
+            format(93, true, false, Some(360), YoutubeFormatTransport::Hls),
+            format(234, false, true, None, YoutubeFormatTransport::Hls),
+            format(18, true, true, Some(360), YoutubeFormatTransport::Direct),
+        ];
+        assert_eq!(
+            select_youtube_playback_formats(&formats, YoutubeStreamPreference::Automatic),
+            Some(super::YoutubePlaybackSelection {
+                primary_index: 2,
+                external_audio_index: Some(3),
+            })
+        );
+    }
+
+    #[test]
+    fn playback_preferences_choose_video_or_audio_shapes() {
+        let formats = vec![
+            format(95, true, false, Some(720), YoutubeFormatTransport::Hls),
+            format(234, false, true, None, YoutubeFormatTransport::Hls),
+            format(18, true, true, Some(360), YoutubeFormatTransport::Direct),
+        ];
+        assert_eq!(
+            select_youtube_playback_formats(&formats, YoutubeStreamPreference::PreferVideo),
+            Some(super::YoutubePlaybackSelection {
+                primary_index: 0,
+                external_audio_index: Some(1),
+            })
+        );
+        assert_eq!(
+            select_youtube_playback_formats(&formats, YoutubeStreamPreference::PreferAudio),
+            Some(super::YoutubePlaybackSelection {
+                primary_index: 1,
+                external_audio_index: None,
+            })
+        );
     }
 }

@@ -177,7 +177,10 @@ impl YtDlpYoutubeEngine {
                 "no playable formats were returned".to_owned(),
             ));
         }
-        Ok(YoutubeResponsePayload::Resolved { item, formats })
+        Ok(YoutubeResponsePayload::Resolved {
+            item: Box::new(item),
+            formats,
+        })
     }
 
     fn base_arguments(&self) -> Vec<OsString> {
@@ -523,6 +526,8 @@ fn media_item_from_value(value: &Value) -> Option<MediaItem> {
         kind,
         title,
         url,
+        stream_url: None,
+        external_audio_url: None,
         local_path: None,
         channel: first_string(object, &["channel", "uploader", "channel_name"])
             .unwrap_or_default()

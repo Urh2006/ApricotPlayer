@@ -365,6 +365,8 @@ mod tests {
             kind: MediaKind::Video,
             title: id.to_owned(),
             url: None,
+            stream_url: None,
+            external_audio_url: None,
             local_path: None,
             channel: String::new(),
             duration_seconds: None,

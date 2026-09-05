@@ -501,11 +501,21 @@ fn yes_no(value: bool) -> &'static str {
 
 fn command_arguments(command: PlaybackCommand) -> Result<Vec<String>, PlaybackError> {
     let arguments = match command {
-        PlaybackCommand::Load(item) => vec![
-            "loadfile".to_owned(),
-            media_target(&item)?,
-            "replace".to_owned(),
-        ],
+        PlaybackCommand::Load(item) => {
+            let mut arguments = vec![
+                "loadfile".to_owned(),
+                media_target(&item)?,
+                "replace".to_owned(),
+            ];
+            if let Some(audio_url) = &item.external_audio_url {
+                let audio_url = audio_url.to_string();
+                arguments.extend([
+                    "-1".to_owned(),
+                    format!("audio-file=%{}%{audio_url}", audio_url.len()),
+                ]);
+            }
+            arguments
+        }
         PlaybackCommand::SetPaused(paused) => {
             vec![
                 "set".to_owned(),
@@ -528,6 +538,11 @@ fn command_arguments(command: PlaybackCommand) -> Result<Vec<String>, PlaybackEr
             "volume".to_owned(),
             volume.max(0.0).to_string(),
         ],
+        PlaybackCommand::SetVolumeMax(volume_max) => vec![
+            "set".to_owned(),
+            "volume-max".to_owned(),
+            volume_max.clamp(1, 300).to_string(),
+        ],
         PlaybackCommand::SetSpeed(speed) => vec![
             "set".to_owned(),
             "speed".to_owned(),
@@ -537,6 +552,16 @@ fn command_arguments(command: PlaybackCommand) -> Result<Vec<String>, PlaybackEr
             "set".to_owned(),
             "pitch".to_owned(),
             pitch.clamp(0.01, 100.0).to_string(),
+        ],
+        PlaybackCommand::SetRepeat(enabled) => vec![
+            "set".to_owned(),
+            "loop-file".to_owned(),
+            if enabled { "inf" } else { "no" }.to_owned(),
+        ],
+        PlaybackCommand::SetAudioFilter(filter) => vec![
+            "set".to_owned(),
+            "af".to_owned(),
+            filter.unwrap_or_default(),
         ],
         PlaybackCommand::Stop => vec!["stop".to_owned()],
     };
@@ -548,6 +573,7 @@ fn media_target(item: &apricot_core::MediaItem) -> Result<String, PlaybackError>
         .as_deref()
         .filter(|path| !path.trim().is_empty())
         .map(ToOwned::to_owned)
+        .or_else(|| item.stream_url.as_ref().map(ToString::to_string))
         .or_else(|| item.url.as_ref().map(ToString::to_string))
         .ok_or_else(|| PlaybackError::Operation("media item has no playable target".to_owned()))
 }
@@ -578,6 +604,8 @@ mod tests {
             kind: MediaKind::Audio,
             title: "Track".to_owned(),
             url: Some("https://example.invalid/wrong".parse().expect("URL")),
+            stream_url: None,
+            external_audio_url: None,
             local_path: Some(r"C:\Music\Track.mp3".to_owned()),
             channel: String::new(),
             duration_seconds: None,
@@ -586,6 +614,33 @@ mod tests {
         assert_eq!(
             command_arguments(PlaybackCommand::Load(Box::new(item))).expect("command"),
             ["loadfile", r"C:\Music\Track.mp3", "replace"]
+        );
+    }
+
+    #[test]
+    fn command_mapping_keeps_public_link_separate_from_resolved_video_and_audio() {
+        let item = MediaItem {
+            id: MediaId("video".to_owned()),
+            source: MediaSource::Youtube,
+            kind: MediaKind::Video,
+            title: "Video".to_owned(),
+            url: Some("https://youtube.test/watch?v=video".parse().expect("URL")),
+            stream_url: Some("https://media.test/video".parse().expect("URL")),
+            external_audio_url: Some("https://media.test/audio".parse().expect("URL")),
+            local_path: None,
+            channel: String::new(),
+            duration_seconds: None,
+            metadata: BTreeMap::new(),
+        };
+        assert_eq!(
+            command_arguments(PlaybackCommand::Load(Box::new(item))).expect("command"),
+            [
+                "loadfile",
+                "https://media.test/video",
+                "replace",
+                "-1",
+                "audio-file=%24%https://media.test/audio",
+            ]
         );
     }
 }

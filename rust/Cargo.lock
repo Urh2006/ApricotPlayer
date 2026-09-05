@@ -140,6 +140,7 @@ dependencies = [
  "apricot-core",
  "apricot-media",
  "apricot-platform",
+ "apricot-playback",
  "apricot-storage",
  "apricot-ui-windows",
  "apricot-updater",
@@ -171,6 +172,7 @@ dependencies = [
  "apricot-core",
  "apricot-media",
  "apricot-platform",
+ "apricot-playback",
  "windows",
 ]
 

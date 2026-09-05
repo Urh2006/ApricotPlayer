@@ -157,6 +157,22 @@ impl PlayerSession {
         }
     }
 
+    pub fn set_speed(&mut self, speed: f64) {
+        if let Some(audio) = &mut self.audio
+            && speed.is_finite()
+        {
+            audio.speed = speed.clamp(0.01, 100.0);
+        }
+    }
+
+    pub fn set_pitch(&mut self, pitch: f64) {
+        if let Some(audio) = &mut self.audio
+            && pitch.is_finite()
+        {
+            audio.pitch = pitch.clamp(0.01, 100.0);
+        }
+    }
+
     pub fn set_toggle(&mut self, toggle: SessionToggle, enabled: bool) {
         if enabled {
             self.enabled_toggles.insert(toggle);
@@ -200,6 +216,8 @@ mod tests {
             kind: MediaKind::Audio,
             title: id.to_owned(),
             url: None,
+            stream_url: None,
+            external_audio_url: None,
             local_path: Some(format!(r"C:\Music\{id}.mp3")),
             channel: String::new(),
             duration_seconds: None,

@@ -12,7 +12,7 @@ pub use youtube_protocol::{
     YoutubeBackend, YoutubeCapability, YoutubeCommand, YoutubeErrorCode, YoutubeFormat,
     YoutubeFormatTracks, YoutubeFormatTransport, YoutubeHelperError, YoutubeRequest,
     YoutubeResponse, YoutubeResponsePayload, YoutubeSearchKind, YoutubeSessionConfig,
-    YoutubeStreamPreference,
+    YoutubeStreamPreference, select_youtube_playback_formats,
 };
 pub use youtube_runtime::{
     YoutubeEngine, YoutubeEngineError, YoutubeRuntime, YoutubeRuntimeError, YoutubeUpdate,

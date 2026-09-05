@@ -64,6 +64,8 @@ fn qualify_process_engine(mpv: &Path, fixture: &Path) -> Result<(), Box<dyn std:
         kind: MediaKind::Audio,
         title: "Qualification fixture".to_owned(),
         url: None,
+        stream_url: None,
+        external_audio_url: None,
         local_path: Some(fixture.to_string_lossy().into_owned()),
         channel: String::new(),
         duration_seconds: Some(2.0),

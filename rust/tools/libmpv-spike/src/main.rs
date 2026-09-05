@@ -221,11 +221,14 @@ mod windows_spike {
             first_started.elapsed().as_secs_f64() * 1_000.0
         );
 
-        engine.execute(PlaybackCommand::Load(Box::new(media_item(
-            "video",
-            MediaKind::Video,
-            video_fixture,
-        ))))?;
+        let mut video = media_item("video", MediaKind::Video, video_fixture);
+        video.external_audio_url = format!(
+            "file:///{}",
+            audio_fixture.to_string_lossy().replace('\\', "/")
+        )
+        .parse()
+        .ok();
+        engine.execute(PlaybackCommand::Load(Box::new(video)))?;
         wait_for_engine_event(&mut engine, Duration::from_secs(3), |event| {
             matches!(event, PlaybackEvent::Started)
         })?;
@@ -240,6 +243,8 @@ mod windows_spike {
             kind,
             title: id.to_owned(),
             url: None,
+            stream_url: None,
+            external_audio_url: None,
             local_path: Some(path.to_string_lossy().into_owned()),
             channel: String::new(),
             duration_seconds: None,
