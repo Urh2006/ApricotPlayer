@@ -173,6 +173,7 @@ dependencies = [
  "apricot-media",
  "apricot-platform",
  "apricot-playback",
+ "apricot-storage",
  "windows",
 ]
 

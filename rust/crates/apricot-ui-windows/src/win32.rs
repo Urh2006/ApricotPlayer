@@ -4,6 +4,7 @@
 
 use std::{ffi::c_void, mem::size_of};
 
+use crate::player_controls_win32::{PlayerControlActivation, PlayerControls};
 use apricot_app::{
     ActionFinderContext, ActivationRequest, Application, MainMenuModel, PlaybackPhase,
     SearchApplyOutcome, SearchWork, SearchWorkKind, SessionToggle, YoutubeSearchKind,
@@ -28,7 +29,7 @@ use windows::{
         Graphics::Gdi::{DEFAULT_GUI_FONT, GetStockObject},
         System::LibraryLoader::GetModuleHandleW,
         UI::{
-            Input::KeyboardAndMouse::{EnableWindow, SetFocus, VK_RETURN},
+            Input::KeyboardAndMouse::{EnableWindow, GetFocus, SetFocus, VK_RETURN},
             Shell::{
                 DefSubclassProc, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD,
                 NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NOTIFYICON_VERSION_4, NOTIFYICONDATAW,
@@ -104,6 +105,7 @@ struct WindowState {
     search: HWND,
     back: HWND,
     video_host: HWND,
+    player_controls: PlayerControls,
     status: HWND,
     announcer: crate::announcement_win32::WindowsAnnouncer,
     model: MainMenuModel,
@@ -226,7 +228,14 @@ unsafe extern "system" fn window_proc(
         WM_COMMAND => {
             let command = wparam.0 & 0xffff;
             let notification = (wparam.0 >> 16) & 0xffff;
-            if command == ID_OPEN
+            let player_activation = state(window).and_then(|state| {
+                (state.view == MainView::Player)
+                    .then(|| state.player_controls.activation_for_command(command))
+                    .flatten()
+            });
+            if let Some(activation) = player_activation {
+                activate_player_control(window, activation);
+            } else if command == ID_OPEN
                 || (command == ID_MENU_LIST
                     && notification == usize::try_from(LBN_DBLCLK).expect("notification fits"))
             {
@@ -424,16 +433,8 @@ unsafe fn create_controls(
         WINDOW_EX_STYLE::default(),
         ID_BACK,
     )?;
-    let video_host_name = wide(catalog.text("player"));
-    let video_host = create_control(
-        parent,
-        instance,
-        w!("STATIC"),
-        PCWSTR(video_host_name.as_ptr()),
-        WS_CHILD | WS_TABSTOP | WS_GROUP,
-        WS_EX_CLIENTEDGE,
-        0,
-    )?;
+    let player_controls = PlayerControls::create(parent, instance)?;
+    let video_host = player_controls.video_host();
     let font = GetStockObject(DEFAULT_GUI_FONT);
     let font_param = Some(WPARAM(font.0 as usize));
     for control in [
@@ -445,7 +446,6 @@ unsafe fn create_controls(
         kind,
         search,
         back,
-        video_host,
         status,
     ] {
         SendMessageW(control, WM_SETFONT, font_param, Some(LPARAM(1)));
@@ -460,6 +460,7 @@ unsafe fn create_controls(
         search,
         back,
         video_host,
+        player_controls,
         status,
         announcer: crate::announcement_win32::WindowsAnnouncer::new(status),
         model,
@@ -535,9 +536,13 @@ unsafe fn state_mut(window: HWND) -> Option<&'static mut WindowState> {
 
 #[allow(clippy::too_many_lines)]
 unsafe fn layout_controls(window: HWND) {
-    let Some(state) = state(window) else {
+    let Some(state) = state_mut(window) else {
         return;
     };
+    layout_controls_state(window, state);
+}
+
+unsafe fn layout_controls_state(window: HWND, state: &mut WindowState) {
     let mut bounds = RECT::default();
     if GetClientRect(window, &raw mut bounds).is_err() {
         return;
@@ -585,16 +590,9 @@ unsafe fn layout_controls(window: HWND) {
             true,
         );
     } else if state.view == MainView::Player {
-        let video_height = ((height - button_height - status_height - margin * 5) / 2).max(80);
-        layout_player_controls(
-            state,
-            width,
-            height,
-            margin,
-            button_height,
-            status_height,
-            video_height,
-        );
+        state
+            .player_controls
+            .layout(width, height, margin, status_height);
     } else {
         let _ = MoveWindow(
             state.list,
@@ -639,52 +637,26 @@ unsafe fn layout_controls(window: HWND) {
     );
 }
 
-#[allow(clippy::too_many_arguments)]
-unsafe fn layout_player_controls(
-    state: &WindowState,
-    width: i32,
-    height: i32,
-    margin: i32,
-    button_height: i32,
-    status_height: i32,
-    video_height: i32,
-) {
-    let _ = MoveWindow(
-        state.video_host,
-        margin,
-        margin,
-        width - margin * 2,
-        video_height,
-        true,
-    );
-    let _ = MoveWindow(
-        state.list,
-        margin,
-        margin * 2 + video_height,
-        width - margin * 2,
-        height - video_height - button_height - status_height - margin * 5,
-        true,
-    );
-}
-
-unsafe fn set_view_visibility(state: &WindowState) {
-    let list_visible = state.view != MainView::Search;
+unsafe fn set_view_visibility(state: &mut WindowState) {
+    let list_visible = matches!(state.view, MainView::MainMenu | MainView::Results);
     let search_visible = state.view == MainView::Search;
-    let back_visible = state.view != MainView::MainMenu;
-    let video_visible = state.view == MainView::Player;
+    let back_visible = matches!(state.view, MainView::Search | MainView::Results);
+    let open_visible = list_visible;
     for (control, visible) in [
         (state.list, list_visible),
-        (state.open, list_visible),
+        (state.open, open_visible),
         (state.search_label, search_visible),
         (state.search_edit, search_visible),
         (state.kind_label, search_visible),
         (state.kind, search_visible),
         (state.search, search_visible),
         (state.back, back_visible),
-        (state.video_host, video_visible),
     ] {
         let _ = ShowWindow(control, if visible { SW_SHOW } else { SW_HIDE });
     }
+    state
+        .player_controls
+        .set_visible(state.view == MainView::Player);
 }
 
 unsafe fn add_tray_icon(window: HWND) -> bool {
@@ -881,8 +853,7 @@ unsafe fn activate_selection(window: HWND) {
     match state(window).map(|state| state.view) {
         Some(MainView::MainMenu) => activate_main_menu_selection(window),
         Some(MainView::Results) => activate_result_selection(window),
-        Some(MainView::Player) => activate_player_selection(window),
-        Some(MainView::Search) | None => {}
+        Some(MainView::Search | MainView::Player) | None => {}
     }
 }
 
@@ -991,24 +962,12 @@ unsafe fn activate_result_selection(window: HWND) {
     }
 }
 
-unsafe fn activate_player_selection(window: HWND) {
-    let Some(state) = state(window) else {
-        return;
-    };
-    let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
-    let Ok(index) = usize::try_from(selected) else {
-        return;
-    };
-    let Some(model) = state.application.player_screen_model() else {
-        return;
-    };
-    let Some(control) = model.controls.get(index) else {
-        return;
-    };
-    if let Some(action_id) = control.action_id {
-        activate_action(window, action_id);
-    } else if control.id == "session_autoplay_next" {
-        toggle_player_session_setting(window, SessionToggle::AutoplayNext);
+unsafe fn activate_player_control(window: HWND, activation: PlayerControlActivation) {
+    match activation {
+        PlayerControlActivation::Action(action_id) => activate_action(window, action_id),
+        PlayerControlActivation::SessionAutoplayNext => {
+            toggle_player_session_setting(window, SessionToggle::AutoplayNext);
+        }
     }
 }
 
@@ -1131,34 +1090,21 @@ unsafe fn refresh_player(
     focus: bool,
     preserve_selection: bool,
 ) {
-    let previous_selection = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
+    let previous_focus = preserve_selection
+        .then(|| GetFocus())
+        .and_then(|focused| state.player_controls.control_id_for_window(focused));
     let Some(model) = state.application.player_screen_model() else {
         return;
     };
-    SendMessageW(state.list, LB_RESETCONTENT, None, None);
-    let accessible_name = wide(&model.heading);
-    let _ = SetWindowTextW(state.list, PCWSTR(accessible_name.as_ptr()));
-    for control in &model.controls {
-        add_list_string(state.list, &control.label);
-    }
-    let selected = if preserve_selection {
-        usize::try_from(previous_selection)
-            .ok()
-            .filter(|index| *index < model.controls.len())
-            .unwrap_or_default()
-    } else {
-        model
-            .controls
-            .iter()
-            .position(|control| control.id == model.initial_focus_id)
-            .unwrap_or_default()
-    };
-    SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selected)), None);
+    state.player_controls.sync(&model);
     let title = wide(&model.window_title);
     let _ = SetWindowTextW(window, PCWSTR(title.as_ptr()));
-    layout_controls(window);
+    layout_controls_state(window, state);
     if focus {
-        let _ = SetFocus(Some(state.list));
+        let target = previous_focus
+            .and_then(|id| state.player_controls.window_for_id(id))
+            .unwrap_or_else(|| state.player_controls.initial_focus());
+        let _ = SetFocus(Some(target));
     }
 }
 
@@ -1180,7 +1126,7 @@ unsafe fn show_main_menu(window: HWND) {
     state.view = MainView::MainMenu;
     refresh_main_menu(state);
     set_status(state, &catalog_text(&state.application, "ready"), false);
-    layout_controls(window);
+    layout_controls_state(window, state);
     let _ = SetFocus(Some(state.list));
 }
 
@@ -1198,7 +1144,7 @@ unsafe fn show_search(window: HWND) {
     }
     state.view = MainView::Search;
     set_status(state, &catalog_text(&state.application, "ready"), false);
-    layout_controls(window);
+    layout_controls_state(window, state);
     let _ = SetFocus(Some(state.search_edit));
 }
 
@@ -1217,13 +1163,13 @@ unsafe fn navigate_back(window: HWND) {
     match route {
         Route::Search => {
             state.view = MainView::Search;
-            layout_controls(window);
+            layout_controls_state(window, state);
             let _ = SetFocus(Some(state.search_edit));
         }
         Route::Results => {
             state.view = MainView::Results;
             refresh_results(state, true);
-            layout_controls(window);
+            layout_controls_state(window, state);
         }
         Route::Player => {
             state.view = MainView::Player;
@@ -1233,7 +1179,7 @@ unsafe fn navigate_back(window: HWND) {
             state.application.navigate_main_menu();
             state.view = MainView::MainMenu;
             refresh_main_menu(state);
-            layout_controls(window);
+            layout_controls_state(window, state);
             let _ = SetFocus(Some(state.list));
         }
     }
@@ -1396,11 +1342,16 @@ unsafe fn poll_playback_runtime(window: HWND) {
                 } else {
                     "playback_playing"
                 };
+                let focused_play_pause = state
+                    .player_controls
+                    .control_id_for_window(GetFocus())
+                    .is_some_and(|id| id == "play_pause");
                 set_status(
                     state,
                     &catalog_text(&state.application, key),
-                    state.application.settings().announce_play_pause,
+                    state.application.settings().announce_play_pause && !focused_play_pause,
                 );
+                refresh_player(window, state, false, true);
             }
             PlaybackEvent::Position { .. } => {}
             PlaybackEvent::Ended => {
@@ -1446,7 +1397,7 @@ unsafe fn finish_youtube_search(
                 .navigate_to(RouteFrame::new(Route::Results));
             state.view = MainView::Results;
             refresh_results(state, true);
-            layout_controls(window);
+            layout_controls_state(window, state);
         }
         (Some(SearchWorkKind::More), SearchApplyOutcome::Appended { added }) => {
             append_results(state, added);
@@ -1804,6 +1755,15 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
     let Some(state) = state(window) else {
         return false;
     };
+    if state.view == MainView::Player
+        && !chord.control
+        && !chord.shift
+        && !chord.alt
+        && chord.key == ShortcutKey::Space
+        && state.player_controls.is_native_action_control(GetFocus())
+    {
+        return false;
+    }
     let (scope, accepts_text) = match state.view {
         MainView::Search => (ActionScope::Dialog, true),
         MainView::MainMenu | MainView::Results => (ActionScope::List, false),
@@ -2279,7 +2239,7 @@ unsafe fn open_settings(window: HWND) {
         MainView::Search => {}
         MainView::Player => refresh_player(window, state, false, true),
     }
-    layout_controls(window);
+    layout_controls_state(window, state);
     let _ = SetFocus(Some(active_primary_control(state)));
     process_pending_activations(window);
     match settings_result {
@@ -2339,10 +2299,11 @@ unsafe fn refresh_main_menu(state: &mut WindowState) {
     SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
 }
 
-const fn active_primary_control(state: &WindowState) -> HWND {
+fn active_primary_control(state: &WindowState) -> HWND {
     match state.view {
         MainView::Search => state.search_edit,
-        MainView::MainMenu | MainView::Results | MainView::Player => state.list,
+        MainView::MainMenu | MainView::Results => state.list,
+        MainView::Player => state.player_controls.initial_focus(),
     }
 }
 

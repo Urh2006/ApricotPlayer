@@ -13,5 +13,8 @@ apricot-platform.workspace = true
 apricot-playback.workspace = true
 windows.workspace = true
 
+[dev-dependencies]
+apricot-storage.workspace = true
+
 [lints]
 workspace = true

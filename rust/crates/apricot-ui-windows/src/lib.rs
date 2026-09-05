@@ -13,6 +13,8 @@ mod file_dialog_win32;
 #[cfg(windows)]
 mod first_run_language_win32;
 #[cfg(windows)]
+mod player_controls_win32;
+#[cfg(windows)]
 mod settings_win32;
 #[cfg(windows)]
 mod shortcut_win32;
