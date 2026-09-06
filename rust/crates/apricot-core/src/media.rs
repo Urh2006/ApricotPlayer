@@ -63,6 +63,27 @@ pub struct MediaItem {
 }
 
 impl MediaItem {
+    pub fn from_direct_link(value: &str) -> Option<Self> {
+        let url = Url::parse(value.trim()).ok()?;
+        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+            return None;
+        }
+        let durable_url = url.to_string();
+        Some(Self {
+            id: MediaId(durable_url.clone()),
+            source: MediaSource::Direct,
+            kind: MediaKind::Unknown,
+            title: durable_url,
+            url: Some(url),
+            stream_url: None,
+            external_audio_url: None,
+            local_path: None,
+            channel: String::new(),
+            duration_seconds: None,
+            metadata: BTreeMap::new(),
+        })
+    }
+
     pub fn is_local_media(&self) -> bool {
         self.source == MediaSource::Local
             || self
@@ -282,5 +303,19 @@ mod tests {
                 .expect("lookalike URL"),
         );
         assert!(media.youtube_url_at_timestamp(2.0).is_none());
+    }
+
+    #[test]
+    fn direct_links_accept_only_absolute_http_media_locations() {
+        let item = MediaItem::from_direct_link(" https://media.example/track.mp3 ")
+            .expect("valid direct link");
+        assert_eq!(item.source, MediaSource::Direct);
+        assert_eq!(
+            item.copy_location().as_deref(),
+            Some("https://media.example/track.mp3")
+        );
+        assert!(MediaItem::from_direct_link("file:///C:/private.mp3").is_none());
+        assert!(MediaItem::from_direct_link("javascript:alert(1)").is_none());
+        assert!(MediaItem::from_direct_link("media.example/track.mp3").is_none());
     }
 }

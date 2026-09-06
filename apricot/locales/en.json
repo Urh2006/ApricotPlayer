@@ -500,6 +500,8 @@
     "missing_ytdlp": "yt-dlp is missing.",
     "direct_link": "Direct link",
     "direct_link_url": "URL to play or download",
+    "direct_link_invalid": "Enter a valid HTTP or HTTPS media URL.",
+    "direct_link_fallback": "The YouTube component could not extract this link. Trying the media URL directly.",
     "play_direct_link": "Play link",
     "download_direct_audio": "Download link audio",
     "download_direct_video": "Download link video",

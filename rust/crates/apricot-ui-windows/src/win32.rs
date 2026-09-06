@@ -53,13 +53,13 @@ use windows::{
             WindowsAndMessaging::{
                 AppendMenuW, BS_DEFPUSHBUTTON, CBS_DROPDOWNLIST, CW_USEDEFAULT, CreatePopupMenu,
                 CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW,
-                ES_AUTOHSCROLL, GetClientRect, GetCursorPos, GetMessageW, GetWindowLongPtrW,
-                GetWindowRect, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW,
-                IDI_APPLICATION, IsDialogMessageW, KillTimer, LB_ADDSTRING, LB_GETCURSEL,
-                LB_RESETCONTENT, LB_SETCURSEL, LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW,
-                LoadIconW, MB_ICONINFORMATION, MB_OK, MF_STRING, MSG, MessageBoxW, MoveWindow,
-                PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SW_HIDE,
-                SW_SHOW, SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW,
+                ES_AUTOHSCROLL, GetClientRect, GetCursorPos, GetMessageW, GetParent,
+                GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, HMENU,
+                IDC_ARROW, IDI_APPLICATION, IsDialogMessageW, KillTimer, LB_ADDSTRING,
+                LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL, LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY,
+                LoadCursorW, LoadIconW, MB_ICONINFORMATION, MB_OK, MF_STRING, MSG, MessageBoxW,
+                MoveWindow, PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW,
+                SW_HIDE, SW_SHOW, SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW,
                 SetWindowTextW, ShowWindow, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON,
                 TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX,
                 WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE,
@@ -82,6 +82,11 @@ const ID_PLAY_FOLDER: usize = 1007;
 const ID_SHUFFLE_FOLDER: usize = 1008;
 const ID_ADD_FOLDER_TO_QUEUE: usize = 1009;
 const ID_FOLDER_PLAYBACK_QUEUE: usize = 1010;
+const ID_DIRECT_PLAY: usize = 1011;
+const ID_DIRECT_DOWNLOAD_AUDIO: usize = 1012;
+const ID_DIRECT_DOWNLOAD_VIDEO: usize = 1013;
+const ID_DIRECT_COPY_STREAM: usize = 1014;
+const ID_DIRECT_ENTER: usize = 1015;
 const ID_CONTEXT_PLAY: usize = 1101;
 const ID_CONTEXT_PLAY_FOLDER: usize = 1102;
 const ID_CONTEXT_SHUFFLE_FOLDER: usize = 1103;
@@ -126,6 +131,7 @@ enum WindowLifecycle {
 enum MainView {
     MainMenu,
     Search,
+    DirectLink,
     Results,
     LocalFolder,
     Player,
@@ -148,10 +154,11 @@ enum YoutubeResolvePurpose {
     CopyStreamUrl,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct PendingYoutubeResolve {
     token: u64,
     purpose: YoutubeResolvePurpose,
+    original_item: apricot_core::MediaItem,
 }
 
 #[derive(Clone, Copy)]
@@ -181,6 +188,10 @@ struct WindowState {
     shuffle_folder: HWND,
     add_folder_to_queue: HWND,
     folder_playback_queue: HWND,
+    direct_play: HWND,
+    direct_download_audio: HWND,
+    direct_download_video: HWND,
+    direct_copy_stream: HWND,
     video_host: HWND,
     player_controls: PlayerControls,
     status: HWND,
@@ -396,6 +407,8 @@ unsafe fn handle_window_command(window: HWND, wparam: WPARAM) {
         result_selection_changed(window);
     } else if command == ID_SEARCH {
         submit_search(window);
+    } else if command == ID_DIRECT_ENTER {
+        submit_primary_text(window);
     } else if command == ID_BACK {
         navigate_back(window);
     } else if command == ID_PLAY_FOLDER {
@@ -406,6 +419,14 @@ unsafe fn handle_window_command(window: HWND, wparam: WPARAM) {
         add_current_local_folder_to_queue(window);
     } else if command == ID_FOLDER_PLAYBACK_QUEUE {
         show_playback_queue(window);
+    } else if command == ID_DIRECT_PLAY {
+        activate_direct_link(window, "play");
+    } else if command == ID_DIRECT_DOWNLOAD_AUDIO {
+        activate_direct_link(window, "download_audio");
+    } else if command == ID_DIRECT_DOWNLOAD_VIDEO {
+        activate_direct_link(window, "download_video");
+    } else if command == ID_DIRECT_COPY_STREAM {
+        activate_direct_link(window, "copy_stream_url");
     } else if matches!(
         command,
         ID_TRAY_SHOW | ID_TRAY_SETTINGS | ID_TRAY_CHECK_SUBSCRIPTIONS | ID_TRAY_EXIT
@@ -490,6 +511,9 @@ unsafe fn create_controls(
         WS_EX_CLIENTEDGE,
         ID_SEARCH_EDIT,
     )?;
+    if !SetWindowSubclass(search_edit, Some(text_entry_proc), 1, 0).as_bool() {
+        return Err(windows::core::Error::from_thread());
+    }
     let kind_label_text = wide(catalog.text("type"));
     let kind_label = create_control(
         parent,
@@ -579,6 +603,46 @@ unsafe fn create_controls(
         WINDOW_EX_STYLE::default(),
         ID_FOLDER_PLAYBACK_QUEUE,
     )?;
+    let direct_play_text = wide(catalog.text("play_direct_link"));
+    let direct_play = create_control(
+        parent,
+        instance,
+        w!("BUTTON"),
+        PCWSTR(direct_play_text.as_ptr()),
+        WS_CHILD | WS_TABSTOP,
+        WINDOW_EX_STYLE::default(),
+        ID_DIRECT_PLAY,
+    )?;
+    let direct_audio_text = wide(catalog.text("download_direct_audio"));
+    let direct_download_audio = create_control(
+        parent,
+        instance,
+        w!("BUTTON"),
+        PCWSTR(direct_audio_text.as_ptr()),
+        WS_CHILD | WS_TABSTOP,
+        WINDOW_EX_STYLE::default(),
+        ID_DIRECT_DOWNLOAD_AUDIO,
+    )?;
+    let direct_video_text = wide(catalog.text("download_direct_video"));
+    let direct_download_video = create_control(
+        parent,
+        instance,
+        w!("BUTTON"),
+        PCWSTR(direct_video_text.as_ptr()),
+        WS_CHILD | WS_TABSTOP,
+        WINDOW_EX_STYLE::default(),
+        ID_DIRECT_DOWNLOAD_VIDEO,
+    )?;
+    let direct_stream_text = wide(catalog.text("copy_stream_url"));
+    let direct_copy_stream = create_control(
+        parent,
+        instance,
+        w!("BUTTON"),
+        PCWSTR(direct_stream_text.as_ptr()),
+        WS_CHILD | WS_TABSTOP,
+        WINDOW_EX_STYLE::default(),
+        ID_DIRECT_COPY_STREAM,
+    )?;
     let player_controls = PlayerControls::create(parent, instance)?;
     let video_host = player_controls.video_host();
     let font = GetStockObject(DEFAULT_GUI_FONT);
@@ -596,6 +660,10 @@ unsafe fn create_controls(
         shuffle_folder,
         add_folder_to_queue,
         folder_playback_queue,
+        direct_play,
+        direct_download_audio,
+        direct_download_video,
+        direct_copy_stream,
         status,
     ] {
         SendMessageW(control, WM_SETFONT, font_param, Some(LPARAM(1)));
@@ -613,6 +681,10 @@ unsafe fn create_controls(
         shuffle_folder,
         add_folder_to_queue,
         folder_playback_queue,
+        direct_play,
+        direct_download_audio,
+        direct_download_video,
+        direct_copy_stream,
         video_host,
         player_controls,
         status,
@@ -686,6 +758,27 @@ unsafe extern "system" fn menu_list_proc(
     }
     if message == WM_NCDESTROY {
         let _ = RemoveWindowSubclass(window, Some(menu_list_proc), subclass_id);
+    }
+    DefSubclassProc(window, message, wparam, lparam)
+}
+
+unsafe extern "system" fn text_entry_proc(
+    window: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    subclass_id: usize,
+    _reference_data: usize,
+) -> LRESULT {
+    if message == WM_KEYDOWN
+        && wparam.0 == usize::from(VK_RETURN.0)
+        && let Ok(parent) = GetParent(window)
+    {
+        SendMessageW(parent, WM_COMMAND, Some(WPARAM(ID_DIRECT_ENTER)), None);
+        return LRESULT(0);
+    }
+    if message == WM_NCDESTROY {
+        let _ = RemoveWindowSubclass(window, Some(text_entry_proc), subclass_id);
     }
     DefSubclassProc(window, message, wparam, lparam)
 }
@@ -912,7 +1005,7 @@ unsafe fn layout_controls_state(window: HWND, state: &mut WindowState) {
     let label_height = 22;
     let field_height = 30;
     set_view_visibility(state);
-    if state.view == MainView::Search {
+    if matches!(state.view, MainView::Search | MainView::DirectLink) {
         let _ = MoveWindow(
             state.search_label,
             margin,
@@ -929,23 +1022,25 @@ unsafe fn layout_controls_state(window: HWND, state: &mut WindowState) {
             field_height,
             true,
         );
-        let kind_y = margin + label_height + field_height + margin;
-        let _ = MoveWindow(
-            state.kind_label,
-            margin,
-            kind_y,
-            width - margin * 2,
-            label_height,
-            true,
-        );
-        let _ = MoveWindow(
-            state.kind,
-            margin,
-            kind_y + label_height,
-            width - margin * 2,
-            240,
-            true,
-        );
+        if state.view == MainView::Search {
+            let kind_y = margin + label_height + field_height + margin;
+            let _ = MoveWindow(
+                state.kind_label,
+                margin,
+                kind_y,
+                width - margin * 2,
+                label_height,
+                true,
+            );
+            let _ = MoveWindow(
+                state.kind,
+                margin,
+                kind_y + label_height,
+                width - margin * 2,
+                240,
+                true,
+            );
+        }
     } else if state.view == MainView::Player {
         state
             .player_controls
@@ -977,6 +1072,7 @@ unsafe fn layout_bottom_controls(
     status_height: i32,
 ) {
     let local_folder = state.view == MainView::LocalFolder;
+    let direct_link = state.view == MainView::DirectLink;
     let first_button_y = if local_folder {
         height - button_height * 2 - margin * 2
     } else {
@@ -1049,6 +1145,26 @@ unsafe fn layout_bottom_controls(
             let x = margin + i32::try_from(index).unwrap_or_default() * (button_width + margin);
             let _ = MoveWindow(control, x, row_two_y, button_width, button_height, true);
         }
+    } else if direct_link {
+        let controls = [
+            state.back,
+            state.direct_play,
+            state.direct_download_audio,
+            state.direct_download_video,
+            state.direct_copy_stream,
+        ];
+        let button_width = (width - margin * 6) / 5;
+        for (index, control) in controls.into_iter().enumerate() {
+            let x = margin + i32::try_from(index).unwrap_or_default() * (button_width + margin);
+            let _ = MoveWindow(
+                control,
+                x,
+                first_button_y,
+                button_width,
+                button_height,
+                true,
+            );
+        }
     }
 }
 
@@ -1057,18 +1173,20 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
         state.view,
         MainView::MainMenu | MainView::Results | MainView::LocalFolder
     );
+    let text_entry_visible = matches!(state.view, MainView::Search | MainView::DirectLink);
     let search_visible = state.view == MainView::Search;
+    let direct_link_visible = state.view == MainView::DirectLink;
     let back_visible = matches!(
         state.view,
-        MainView::Search | MainView::Results | MainView::LocalFolder
+        MainView::Search | MainView::DirectLink | MainView::Results | MainView::LocalFolder
     );
     let open_visible = list_visible;
     let folder_visible = state.view == MainView::LocalFolder;
     for (control, visible) in [
         (state.list, list_visible),
         (state.open, open_visible),
-        (state.search_label, search_visible),
-        (state.search_edit, search_visible),
+        (state.search_label, text_entry_visible),
+        (state.search_edit, text_entry_visible),
         (state.kind_label, search_visible),
         (state.kind, search_visible),
         (state.search, search_visible),
@@ -1077,6 +1195,10 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
         (state.shuffle_folder, folder_visible),
         (state.add_folder_to_queue, folder_visible),
         (state.folder_playback_queue, folder_visible),
+        (state.direct_play, direct_link_visible),
+        (state.direct_download_audio, direct_link_visible),
+        (state.direct_download_video, direct_link_visible),
+        (state.direct_copy_stream, direct_link_visible),
     ] {
         let _ = ShowWindow(control, if visible { SW_SHOW } else { SW_HIDE });
     }
@@ -1281,7 +1403,7 @@ unsafe fn activate_selection(window: HWND) {
         Some(MainView::MainMenu) => activate_main_menu_selection(window),
         Some(MainView::Results) => activate_result_selection(window),
         Some(MainView::LocalFolder) => activate_local_folder_selection(window),
-        Some(MainView::Search | MainView::Player) | None => {}
+        Some(MainView::Search | MainView::DirectLink | MainView::Player) | None => {}
     }
 }
 
@@ -1307,6 +1429,10 @@ unsafe fn activate_main_menu_selection(window: HWND) {
     }
     if item_id == "search" {
         show_search(window);
+        return;
+    }
+    if item_id == "direct_link" {
+        show_direct_link(window);
         return;
     }
     if item_id == "playback_queue" {
@@ -1468,7 +1594,7 @@ unsafe fn start_youtube_resolve(
     };
     state.next_youtube_resolve_token = state.next_youtube_resolve_token.wrapping_add(1).max(1);
     let token = state.next_youtube_resolve_token;
-    let backend = YoutubeBackend::from_setting_value(&state.application.settings().youtube_backend);
+    let backend = media_resolve_backend(item, &state.application.settings().youtube_backend);
     let Some(components) = application_directory().map(|path| path.join("components")) else {
         report_youtube_resolve_start_error(
             window,
@@ -1486,7 +1612,11 @@ unsafe fn start_youtube_resolve(
         .start_resolve(backend, &components, config, token, url, preference)
     {
         Ok(()) => {
-            state.pending_youtube_resolve = Some(PendingYoutubeResolve { token, purpose });
+            state.pending_youtube_resolve = Some(PendingYoutubeResolve {
+                token,
+                purpose,
+                original_item: item.clone(),
+            });
             set_status(
                 state,
                 &catalog_text(&state.application, "resolving_stream_url"),
@@ -1502,6 +1632,19 @@ unsafe fn start_youtube_resolve(
         Err(error) => {
             report_youtube_resolve_start_error(window, state, purpose, &error.to_string());
         }
+    }
+}
+
+fn media_resolve_backend(
+    item: &apricot_core::MediaItem,
+    configured_backend: &str,
+) -> YoutubeBackend {
+    if item.source == apricot_core::MediaSource::Direct
+        && item.youtube_url_at_timestamp(0.0).is_none()
+    {
+        YoutubeBackend::YtDlp
+    } else {
+        YoutubeBackend::from_setting_value(configured_backend)
     }
 }
 
@@ -1546,7 +1689,9 @@ unsafe fn finish_youtube_resolve(
     };
     let Some(pending) = state
         .pending_youtube_resolve
+        .as_ref()
         .filter(|pending| pending.token == token)
+        .cloned()
     else {
         return;
     };
@@ -1575,6 +1720,12 @@ unsafe fn finish_youtube_resolve(
     if pending.purpose == YoutubeResolvePurpose::CopyStreamUrl {
         copy_text_and_announce(window, &primary.url, "stream_url_copied");
         return;
+    }
+    if pending.original_item.source == apricot_core::MediaSource::Direct {
+        item.source = apricot_core::MediaSource::Direct;
+        item.id = pending.original_item.id;
+        item.url = pending.original_item.url;
+        state.application.prepare_standalone_playback();
     }
     let Ok(stream_url) = primary.url.parse() else {
         report_youtube_resolve_start_error(
@@ -1718,6 +1869,30 @@ unsafe fn show_search(window: HWND) {
             .navigate_to(RouteFrame::new(Route::Search));
     }
     state.view = MainView::Search;
+    set_control_text(state, state.search_label, "search_query");
+    set_control_text(state, state.search, "search");
+    set_status(state, &catalog_text(&state.application, "ready"), false);
+    layout_controls_state(window, state);
+    let _ = SetFocus(Some(state.search_edit));
+}
+
+unsafe fn show_direct_link(window: HWND) {
+    restore_from_tray(window);
+    stop_controlled_repeat(window);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    cancel_youtube_work(window, state);
+    cancel_local_folder_scan(window, state);
+    if state.application.current_route() != Route::DirectLink {
+        state.application.navigate_main_menu();
+        state
+            .application
+            .navigate_to(RouteFrame::new(Route::DirectLink));
+    }
+    state.view = MainView::DirectLink;
+    set_control_text(state, state.search_label, "direct_link_url");
+    let _ = SetWindowTextW(state.search_edit, w!(""));
     set_status(state, &catalog_text(&state.application, "ready"), false);
     layout_controls_state(window, state);
     let _ = SetFocus(Some(state.search_edit));
@@ -1740,6 +1915,12 @@ unsafe fn navigate_back(window: HWND) {
     match route {
         Route::Search => {
             state.view = MainView::Search;
+            layout_controls_state(window, state);
+            let _ = SetFocus(Some(state.search_edit));
+        }
+        Route::DirectLink => {
+            state.view = MainView::DirectLink;
+            set_control_text(state, state.search_label, "direct_link_url");
             layout_controls_state(window, state);
             let _ = SetFocus(Some(state.search_edit));
         }
@@ -1786,6 +1967,54 @@ unsafe fn submit_search(window: HWND) {
     set_status(state, &message, true);
     let _ = EnableWindow(state.search, false);
     start_youtube_work(window, work);
+}
+
+unsafe fn submit_primary_text(window: HWND) {
+    match state(window).map(|state| state.view) {
+        Some(MainView::Search) => submit_search(window),
+        Some(MainView::DirectLink) => {
+            let action = state(window).map_or_else(
+                || "play".to_owned(),
+                |state| {
+                    state
+                        .application
+                        .settings()
+                        .direct_link_enter_action
+                        .clone()
+                },
+            );
+            activate_direct_link(window, &action);
+        }
+        _ => {}
+    }
+}
+
+unsafe fn activate_direct_link(window: HWND, action: &str) {
+    let item = state(window)
+        .map(|state| window_text(state.search_edit))
+        .and_then(|value| apricot_core::MediaItem::from_direct_link(&value));
+    let Some(item) = item else {
+        if let Some(state) = state(window) {
+            let message = catalog_text(&state.application, "direct_link_invalid");
+            set_status(state, &message, true);
+            let _ = SetFocus(Some(state.search_edit));
+        }
+        return;
+    };
+    match action {
+        "copy_stream_url" => {
+            start_youtube_resolve(window, &item, YoutubeResolvePurpose::CopyStreamUrl);
+        }
+        "download_audio" | "download_video" => {
+            if let Some(state) = state(window) {
+                let message =
+                    "Direct-link downloads are not implemented in this internal Rust build yet.";
+                set_status(state, message, true);
+                let _ = SetFocus(Some(state.search_edit));
+            }
+        }
+        _ => start_youtube_resolve(window, &item, YoutubeResolvePurpose::Playback),
+    }
 }
 
 unsafe fn start_youtube_work(window: HWND, work: SearchWork) {
@@ -1846,6 +2075,7 @@ unsafe fn poll_youtube_runtime(window: HWND) {
                     .and_then(|state| {
                         state
                             .pending_youtube_resolve
+                            .as_ref()
                             .map(|pending| pending.token)
                             .or_else(|| {
                                 state
@@ -2008,34 +2238,56 @@ unsafe fn finish_youtube_search(
 }
 
 unsafe fn finish_youtube_error(window: HWND, generation: u64, message: &str) {
-    let Some(state) = state_mut(window) else {
-        return;
-    };
-    if state
-        .pending_youtube_resolve
-        .is_some_and(|pending| pending.token == generation)
-    {
-        let purpose = state
-            .pending_youtube_resolve
-            .take()
-            .map_or(YoutubeResolvePurpose::Playback, |pending| pending.purpose);
-        if purpose == YoutubeResolvePurpose::Playback {
-            state.pending_queued_start = None;
-        }
-        stop_youtube_timer(window);
-        let visible_message = if purpose == YoutubeResolvePurpose::CopyStreamUrl {
-            catalog_text(&state.application, "stream_url_failed").replace("{error}", message)
-        } else {
-            message.to_owned()
+    let direct_fallback = {
+        let Some(state) = state_mut(window) else {
+            return;
         };
-        set_status(state, &visible_message, true);
-        if purpose == YoutubeResolvePurpose::Playback {
-            show_error_message(window, &visible_message);
+        if state
+            .pending_youtube_resolve
+            .as_ref()
+            .is_some_and(|pending| pending.token == generation)
+        {
+            let pending = state
+                .pending_youtube_resolve
+                .take()
+                .expect("matching pending resolve exists");
+            if pending.purpose == YoutubeResolvePurpose::Playback {
+                state.pending_queued_start = None;
+            }
+            stop_youtube_timer(window);
+            if pending.purpose == YoutubeResolvePurpose::Playback
+                && pending.original_item.source == apricot_core::MediaSource::Direct
+                && pending
+                    .original_item
+                    .youtube_url_at_timestamp(0.0)
+                    .is_none()
+            {
+                state.application.prepare_standalone_playback();
+                let fallback_message = catalog_text(&state.application, "direct_link_fallback");
+                set_status(state, &fallback_message, true);
+                Some(pending.original_item)
+            } else {
+                let visible_message = if pending.purpose == YoutubeResolvePurpose::CopyStreamUrl {
+                    catalog_text(&state.application, "stream_url_failed")
+                        .replace("{error}", message)
+                } else {
+                    message.to_owned()
+                };
+                set_status(state, &visible_message, true);
+                if pending.purpose == YoutubeResolvePurpose::Playback {
+                    show_error_message(window, &visible_message);
+                }
+                let _ = SetFocus(Some(active_primary_control(state)));
+                None
+            }
+        } else {
+            finish_youtube_error_state(window, state, generation, message);
+            None
         }
-        let _ = SetFocus(Some(active_primary_control(state)));
-        return;
+    };
+    if let Some(item) = direct_fallback {
+        start_player(window, item);
     }
-    finish_youtube_error_state(window, state, generation, message);
 }
 
 unsafe fn finish_youtube_error_state(
@@ -2263,6 +2515,12 @@ unsafe fn set_open_button_label(state: &WindowState, key: &str) {
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
     let label = wide(catalog.text(key));
     let _ = SetWindowTextW(state.open, PCWSTR(label.as_ptr()));
+}
+
+unsafe fn set_control_text(state: &WindowState, control: HWND, key: &str) {
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let label = wide(catalog.text(key));
+    let _ = SetWindowTextW(control, PCWSTR(label.as_ptr()));
 }
 
 unsafe fn append_results(state: &mut WindowState, added: usize) {
@@ -2500,7 +2758,7 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
         return false;
     }
     let (scope, accepts_text) = match state.view {
-        MainView::Search => (ActionScope::Dialog, true),
+        MainView::Search | MainView::DirectLink => (ActionScope::Dialog, true),
         MainView::MainMenu | MainView::Results | MainView::LocalFolder => {
             (ActionScope::List, false)
         }
@@ -2514,7 +2772,7 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
         return false;
     };
     let is_global = action.scopes.contains(&ActionScope::Global);
-    if !is_global && state.view == MainView::Search {
+    if !is_global && matches!(state.view, MainView::Search | MainView::DirectLink) {
         return false;
     }
     if !is_global && state.view == MainView::MainMenu && action.id.as_str() != "open_selected" {
@@ -2653,6 +2911,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
     match action_id {
         "open_main_menu" => show_main_menu(window),
         "open_search" => show_search(window),
+        "open_direct_link" => show_direct_link(window),
         "open_settings" => open_settings(window),
         "open_action_finder" => show_action_finder(window),
         "open_play_file" => open_media_file(window),
@@ -2776,7 +3035,7 @@ unsafe fn active_media_item(window: HWND) -> Option<apricot_core::MediaItem> {
                 .cloned()
         }
         MainView::Player => state.application.player_session().current_item().cloned(),
-        MainView::MainMenu | MainView::Search => None,
+        MainView::MainMenu | MainView::Search | MainView::DirectLink => None,
     }
 }
 
@@ -3615,7 +3874,7 @@ unsafe fn open_settings(window: HWND) {
         MainView::MainMenu => refresh_main_menu(state),
         MainView::Results => refresh_results(state, false),
         MainView::LocalFolder => refresh_local_folder(state, false, false),
-        MainView::Search => {}
+        MainView::Search | MainView::DirectLink => {}
         MainView::Player => refresh_player(window, state, false, true),
     }
     layout_controls_state(window, state);
@@ -3681,7 +3940,7 @@ unsafe fn refresh_main_menu(state: &mut WindowState) {
 
 fn active_primary_control(state: &WindowState) -> HWND {
     match state.view {
-        MainView::Search => state.search_edit,
+        MainView::Search | MainView::DirectLink => state.search_edit,
         MainView::MainMenu | MainView::Results | MainView::LocalFolder => state.list,
         MainView::Player => state.player_controls.initial_focus(),
     }
@@ -3695,7 +3954,10 @@ fn wide(value: &str) -> Vec<u16> {
 mod tests {
     use super::{
         SEEK_HOLD_DELAY_MS, SEEK_HOLD_INTERVAL_MS, controlled_repeat_timing, copy_wide_array,
+        media_resolve_backend,
     };
+    use apricot_core::{MediaItem, MediaSource};
+    use apricot_media::YoutubeBackend;
 
     #[test]
     fn tray_text_is_cleared_truncated_and_null_terminated() {
@@ -3720,6 +3982,28 @@ mod tests {
         assert_eq!(
             controlled_repeat_timing("player_pitch_down", 5, 2_000),
             (50, 500)
+        );
+    }
+
+    #[test]
+    fn generic_direct_links_use_ytdlp_but_youtube_links_honor_the_setting() {
+        let generic = MediaItem::from_direct_link("https://media.example/song.mp3")
+            .expect("generic direct link");
+        assert_eq!(generic.source, MediaSource::Direct);
+        assert_eq!(
+            media_resolve_backend(&generic, "rusty_ytdl"),
+            YoutubeBackend::YtDlp
+        );
+
+        let youtube = MediaItem::from_direct_link("https://youtu.be/dQw4w9WgXcQ")
+            .expect("YouTube direct link");
+        assert_eq!(
+            media_resolve_backend(&youtube, "rusty_ytdl"),
+            YoutubeBackend::RustyYtdl
+        );
+        assert_eq!(
+            media_resolve_backend(&youtube, "yt_dlp"),
+            YoutubeBackend::YtDlp
         );
     }
 }

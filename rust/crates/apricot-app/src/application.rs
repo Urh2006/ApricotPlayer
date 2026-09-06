@@ -466,6 +466,10 @@ impl Application {
         self.state.player.set_toggle(toggle, enabled);
     }
 
+    pub fn prepare_standalone_playback(&mut self) {
+        self.state.player_sequence.clear();
+    }
+
     pub fn close_player_session(&mut self) {
         self.state.player.close();
         self.state.player_sequence.clear();
@@ -1060,6 +1064,35 @@ mod tests {
         let current = app.prepare_search_playback(0).expect("selected item");
         app.start_player_item(current);
         app.close_player_session();
+        assert_eq!(
+            app.request_relative_player_item(1),
+            PlayerNavigationOutcome::Unavailable
+        );
+    }
+
+    #[test]
+    fn standalone_playback_does_not_inherit_a_previous_search_sequence() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        let work = app
+            .begin_youtube_search("query", YoutubeSearchKind::Video)
+            .expect("search");
+        app.apply_search_results(
+            work.generation,
+            vec![
+                youtube_item(0, MediaKind::Video),
+                youtube_item(1, MediaKind::Video),
+            ],
+            None,
+        );
+        let current = app.prepare_search_playback(0).expect("selected item");
+        app.start_player_item(current);
+
+        app.prepare_standalone_playback();
+        let direct =
+            MediaItem::from_direct_link("https://media.example/song.mp3").expect("direct link");
+        app.start_player_item(direct);
+
         assert_eq!(
             app.request_relative_player_item(1),
             PlayerNavigationOutcome::Unavailable
