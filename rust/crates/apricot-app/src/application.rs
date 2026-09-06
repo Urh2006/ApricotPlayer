@@ -1,19 +1,23 @@
 //! Top-level application coordinator consumed by platform UI adapters.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::{
+    collections::{BTreeSet, VecDeque},
+    path::PathBuf,
+};
 
 use apricot_core::{MediaItem, Route, RouteFrame, SettingId, SettingsSection};
 use apricot_playback::PlaybackEvent;
 use apricot_storage::{PlaybackQueueFile, SettingsDocument};
+use rand::seq::SliceRandom;
 
 use crate::{
     ActionFinderContext, ActionFinderModel, ActivationRequest, AppState, AudioSession,
     EqualizerSession, MainMenuAvailability, MainMenuModel, MenuVisibility, PlaybackQueue,
     PlaybackQueueController, PlaybackQueueControllerError, PlaybackSequenceSource,
     PlayerScreenModel, PlayerSession, PlayerSessionDefaults, PlayerViewState, QueueAddOutcome,
-    SearchApplyOutcome, SearchSession, SearchSessionError, SearchWork, SessionToggle,
-    SettingsController, SettingsControllerError, SettingsScreenModel, YoutubeSearchKind,
-    embedded_catalog,
+    QueueBatchAddOutcome, SearchApplyOutcome, SearchSession, SearchSessionError, SearchWork,
+    SessionToggle, SettingsController, SettingsControllerError, SettingsScreenModel,
+    YoutubeSearchKind, embedded_catalog,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,6 +60,10 @@ impl Application {
 
     pub const fn search_session(&self) -> &SearchSession {
         &self.state.search
+    }
+
+    pub const fn local_folder_session(&self) -> &crate::LocalFolderSession {
+        &self.state.local_folder
     }
 
     pub fn current_route(&self) -> Route {
@@ -143,6 +151,63 @@ impl Application {
                 .set(source, self.state.search.items(), &item);
         }
         Some(item)
+    }
+
+    pub fn load_local_folder(&mut self, path: PathBuf, items: Vec<MediaItem>) {
+        let batch_size = usize::try_from(self.settings.current().results_limit.max(0))
+            .unwrap_or(crate::DEFAULT_FOLDER_BATCH_SIZE);
+        self.state.local_folder.load(path, items, batch_size);
+    }
+
+    pub fn select_local_folder_item(&mut self, index: usize) -> bool {
+        self.state.local_folder.select(index)
+    }
+
+    pub fn append_local_folder_batch(&mut self) -> usize {
+        self.state.local_folder.append_visible_batch()
+    }
+
+    pub fn prepare_local_folder_playback(
+        &mut self,
+        index: usize,
+        shuffle: bool,
+    ) -> Option<MediaItem> {
+        if !self.state.local_folder.select(index) {
+            return None;
+        }
+        let mut items = self.state.local_folder.items().to_vec();
+        let mut current = self.state.local_folder.selected_item()?.clone();
+        if shuffle {
+            items.shuffle(&mut rand::rng());
+            current = items.first()?.clone();
+            if let Some(source_index) = self
+                .state
+                .local_folder
+                .items()
+                .iter()
+                .position(|item| item.stable_identity() == current.stable_identity())
+            {
+                let _ = self.state.local_folder.reveal_and_select(source_index);
+            }
+        }
+        let source = PlaybackSequenceSource::LocalFolder {
+            generation: self.state.local_folder.generation(),
+        };
+        let _ = self.state.player_sequence.set(source, &items, &current);
+        Some(current)
+    }
+
+    /// Adds every item in the current local folder with one durable write.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the changed queue cannot be persisted.
+    pub fn add_local_folder_to_playback_queue(
+        &mut self,
+    ) -> Result<QueueBatchAddOutcome, PlaybackQueueControllerError> {
+        self.state
+            .playback_queue
+            .add_many(self.state.local_folder.items().iter().cloned())
     }
 
     pub fn request_relative_player_item(&mut self, delta: i32) -> PlayerNavigationOutcome {
@@ -291,7 +356,10 @@ impl Application {
     }
 
     pub fn start_player_item(&mut self, item: MediaItem) -> u64 {
-        let _ = self.state.player_sequence.activate(&item);
+        let sequence_source = self.state.player_sequence.source();
+        if self.state.player_sequence.activate(&item) {
+            self.sync_sequence_source_selection(sequence_source, &item);
+        }
         let settings = self.settings.current();
         let mut toggles = BTreeSet::new();
         if settings.autoplay_next {
@@ -318,6 +386,43 @@ impl Application {
             starts_paused: settings.player_start_paused,
         };
         self.state.player.start_item(item, defaults)
+    }
+
+    fn sync_sequence_source_selection(
+        &mut self,
+        source: Option<PlaybackSequenceSource>,
+        item: &MediaItem,
+    ) {
+        let Some(identity) = item.stable_identity() else {
+            return;
+        };
+        match source {
+            Some(PlaybackSequenceSource::Search { generation })
+                if generation == self.state.search.generation() =>
+            {
+                if let Some(index) =
+                    self.state.search.items().iter().position(|candidate| {
+                        candidate.stable_identity().as_deref() == Some(&identity)
+                    })
+                {
+                    let _ = self.state.search.select(index);
+                }
+            }
+            Some(PlaybackSequenceSource::LocalFolder { generation })
+                if generation == self.state.local_folder.generation() =>
+            {
+                if let Some(index) = self
+                    .state
+                    .local_folder
+                    .items()
+                    .iter()
+                    .position(|candidate| candidate.stable_identity().as_deref() == Some(&identity))
+                {
+                    let _ = self.state.local_folder.reveal_and_select(index);
+                }
+            }
+            _ => {}
+        }
     }
 
     pub fn apply_playback_event(&mut self, generation: u64, event: PlaybackEvent) -> bool {
@@ -901,6 +1006,7 @@ mod tests {
         };
         assert_eq!(last.id.0, "19");
         app.start_player_item(*last);
+        assert_eq!(app.search_session().selected_index(), 19);
 
         let more = match app.request_relative_player_item(1) {
             PlayerNavigationOutcome::LoadingMore(work) => work,
@@ -937,6 +1043,56 @@ mod tests {
             app.request_relative_player_item(1),
             PlayerNavigationOutcome::Unavailable
         );
+    }
+
+    #[test]
+    fn local_folder_builds_a_sequence_only_when_playback_starts() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        let items: Vec<_> = (0..45)
+            .map(|index| media_item(&format!("track{index}")))
+            .collect();
+        app.load_local_folder(PathBuf::from(r"C:\Music"), items);
+
+        assert_eq!(app.local_folder_session().visible_items().len(), 20);
+        assert!(app.playback_queue().is_empty());
+        assert_eq!(
+            app.request_relative_player_item(1),
+            PlayerNavigationOutcome::Unavailable
+        );
+
+        let current = app
+            .prepare_local_folder_playback(0, false)
+            .expect("selected track");
+        app.start_player_item(current);
+        let next = app.request_relative_player_item(1);
+        assert_eq!(
+            next,
+            PlayerNavigationOutcome::Item {
+                item: Box::new(media_item("track1")),
+                origin: PlayerNavigationOrigin::Sequence,
+            }
+        );
+        let PlayerNavigationOutcome::Item { item, .. } = next else {
+            unreachable!("asserted item outcome")
+        };
+        app.start_player_item(*item);
+        for expected in 2..=25 {
+            let PlayerNavigationOutcome::Item { item, .. } = app.request_relative_player_item(1)
+            else {
+                panic!("expected track {expected}")
+            };
+            app.start_player_item(*item);
+        }
+        assert_eq!(app.local_folder_session().selected_index(), 25);
+        assert_eq!(app.local_folder_session().visible_items().len(), 26);
+        assert!(app.playback_queue().is_empty());
+
+        let outcome = app
+            .add_local_folder_to_playback_queue()
+            .expect("folder queue");
+        assert_eq!(outcome.added, 45);
+        assert_eq!(app.playback_queue().len(), 45);
     }
 
     #[test]

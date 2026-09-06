@@ -2,7 +2,16 @@
 
 #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
-use std::{ffi::c_void, mem::size_of};
+use std::{
+    ffi::c_void,
+    mem::size_of,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering as AtomicOrdering},
+        mpsc::{self, Receiver, TryRecvError},
+    },
+};
 
 use crate::player_controls_win32::{PlayerControlActivation, PlayerControls};
 use apricot_app::{
@@ -19,7 +28,9 @@ use apricot_media::{
     YoutubeBackend, YoutubeFormat, YoutubeSessionConfig, YoutubeStreamPreference,
     select_youtube_playback_formats,
 };
-use apricot_platform::{YoutubeSearchService, YoutubeSearchServiceUpdate};
+use apricot_platform::{
+    YoutubeSearchService, YoutubeSearchServiceUpdate, scan_local_media_folder_with_cancel,
+};
 use apricot_playback::{
     InitialPlaybackState, MpvCacheConfig, MpvLaunchOptions, MpvVideoMode, PlaybackCommand,
     PlaybackEvent, PlaybackRuntime, RepeatMode,
@@ -43,18 +54,18 @@ use windows::{
                 AppendMenuW, BS_DEFPUSHBUTTON, CBS_DROPDOWNLIST, CW_USEDEFAULT, CreatePopupMenu,
                 CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW,
                 ES_AUTOHSCROLL, GetClientRect, GetCursorPos, GetMessageW, GetWindowLongPtrW,
-                GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW, IDI_APPLICATION,
-                IsDialogMessageW, KillTimer, LB_ADDSTRING, LB_GETCURSEL, LB_RESETCONTENT,
-                LB_SETCURSEL, LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW, LoadIconW,
-                MB_ICONINFORMATION, MB_OK, MF_STRING, MSG, MessageBoxW, MoveWindow, PostMessageW,
-                PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SW_HIDE, SW_SHOW,
-                SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowTextW,
-                ShowWindow, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
-                TranslateMessage, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_APP,
-                WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE, WM_DESTROY,
-                WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT,
-                WM_SIZE, WM_SYSKEYUP, WM_TIMER, WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE, WS_GROUP,
-                WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+                GetWindowRect, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW,
+                IDI_APPLICATION, IsDialogMessageW, KillTimer, LB_ADDSTRING, LB_GETCURSEL,
+                LB_RESETCONTENT, LB_SETCURSEL, LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW,
+                LoadIconW, MB_ICONINFORMATION, MB_OK, MF_STRING, MSG, MessageBoxW, MoveWindow,
+                PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SW_HIDE,
+                SW_SHOW, SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW,
+                SetWindowTextW, ShowWindow, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON,
+                TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX,
+                WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE,
+                WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_NCDESTROY, WM_RBUTTONUP,
+                WM_SETFONT, WM_SIZE, WM_SYSKEYUP, WM_TIMER, WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE,
+                WS_GROUP, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -67,6 +78,17 @@ const ID_SEARCH_EDIT: usize = 1003;
 const ID_SEARCH_KIND: usize = 1004;
 const ID_SEARCH: usize = 1005;
 const ID_BACK: usize = 1006;
+const ID_PLAY_FOLDER: usize = 1007;
+const ID_SHUFFLE_FOLDER: usize = 1008;
+const ID_ADD_FOLDER_TO_QUEUE: usize = 1009;
+const ID_FOLDER_PLAYBACK_QUEUE: usize = 1010;
+const ID_CONTEXT_PLAY: usize = 1101;
+const ID_CONTEXT_PLAY_FOLDER: usize = 1102;
+const ID_CONTEXT_SHUFFLE_FOLDER: usize = 1103;
+const ID_CONTEXT_ADD_TO_QUEUE: usize = 1104;
+const ID_CONTEXT_REMOVE_FROM_QUEUE: usize = 1105;
+const ID_CONTEXT_ADD_FOLDER_TO_QUEUE: usize = 1106;
+const ID_CONTEXT_PLAYBACK_QUEUE: usize = 1107;
 const WM_PROCESS_ACTIVATION: u32 = WM_APP + 1;
 const WM_TRAY_ICON: u32 = WM_APP + 2;
 const YOUTUBE_TIMER_ID: usize = 1;
@@ -74,6 +96,7 @@ const YOUTUBE_TIMER_INTERVAL_MS: u32 = 25;
 const PLAYBACK_TIMER_ID: usize = 2;
 const PLAYBACK_TIMER_INTERVAL_MS: u32 = 25;
 const CONTROLLED_REPEAT_TIMER_ID: usize = 3;
+const LOCAL_FOLDER_TIMER_ID: usize = 4;
 const SEEK_HOLD_DELAY_MS: u32 = 180;
 const SEEK_HOLD_INTERVAL_MS: u32 = 110;
 const CB_ADDSTRING: u32 = 0x0143;
@@ -99,6 +122,7 @@ enum MainView {
     MainMenu,
     Search,
     Results,
+    LocalFolder,
     Player,
 }
 
@@ -120,6 +144,13 @@ struct ControlledRepeatState {
     chord: apricot_core::shortcut::ShortcutChord,
 }
 
+struct PendingLocalFolderScan {
+    generation: u64,
+    path: PathBuf,
+    cancelled: Arc<AtomicBool>,
+    receiver: Receiver<std::result::Result<Vec<apricot_core::MediaItem>, String>>,
+}
+
 struct WindowState {
     list: HWND,
     open: HWND,
@@ -129,6 +160,10 @@ struct WindowState {
     kind: HWND,
     search: HWND,
     back: HWND,
+    play_folder: HWND,
+    shuffle_folder: HWND,
+    add_folder_to_queue: HWND,
+    folder_playback_queue: HWND,
     video_host: HWND,
     player_controls: PlayerControls,
     status: HWND,
@@ -136,6 +171,7 @@ struct WindowState {
     model: MainMenuModel,
     application: Application,
     settings_open: bool,
+    modal_open: bool,
     tray_icon_added: bool,
     lifecycle: WindowLifecycle,
     taskbar_created_message: u32,
@@ -148,6 +184,8 @@ struct WindowState {
     next_youtube_resolve_token: u64,
     playback: Option<PlaybackRuntime>,
     controlled_repeat: Option<ControlledRepeatState>,
+    pending_local_folder_scan: Option<PendingLocalFolderScan>,
+    next_local_folder_generation: u64,
 }
 
 pub fn run_application(application: Application, version: &str, start_hidden: bool) -> Result<()> {
@@ -256,34 +294,7 @@ unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_COMMAND => {
-            let command = wparam.0 & 0xffff;
-            let notification = (wparam.0 >> 16) & 0xffff;
-            let player_activation = state(window).and_then(|state| {
-                (state.view == MainView::Player)
-                    .then(|| state.player_controls.activation_for_command(command))
-                    .flatten()
-            });
-            if let Some(activation) = player_activation {
-                activate_player_control(window, activation);
-            } else if command == ID_OPEN
-                || (command == ID_MENU_LIST
-                    && notification == usize::try_from(LBN_DBLCLK).expect("notification fits"))
-            {
-                activate_selection(window);
-            } else if command == ID_MENU_LIST
-                && notification == usize::try_from(LBN_SELCHANGE).expect("notification fits")
-            {
-                result_selection_changed(window);
-            } else if command == ID_SEARCH {
-                submit_search(window);
-            } else if command == ID_BACK {
-                navigate_back(window);
-            } else if matches!(
-                command,
-                ID_TRAY_SHOW | ID_TRAY_SETTINGS | ID_TRAY_CHECK_SUBSCRIPTIONS | ID_TRAY_EXIT
-            ) {
-                handle_tray_command(window, command);
-            }
+            handle_window_command(window, wparam);
             LRESULT(0)
         }
         WM_CLOSE => {
@@ -328,6 +339,10 @@ unsafe extern "system" fn window_proc(
             tick_controlled_repeat(window);
             LRESULT(0)
         }
+        WM_TIMER if wparam.0 == LOCAL_FOLDER_TIMER_ID => {
+            poll_local_folder_scan(window);
+            LRESULT(0)
+        }
         WM_DESTROY => {
             remove_tray_icon(window);
             let pointer = GetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0)) as *mut WindowState;
@@ -339,6 +354,45 @@ unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         _ => DefWindowProcW(window, message, wparam, lparam),
+    }
+}
+
+unsafe fn handle_window_command(window: HWND, wparam: WPARAM) {
+    let command = wparam.0 & 0xffff;
+    let notification = (wparam.0 >> 16) & 0xffff;
+    let player_activation = state(window).and_then(|state| {
+        (state.view == MainView::Player)
+            .then(|| state.player_controls.activation_for_command(command))
+            .flatten()
+    });
+    if let Some(activation) = player_activation {
+        activate_player_control(window, activation);
+    } else if command == ID_OPEN
+        || (command == ID_MENU_LIST
+            && notification == usize::try_from(LBN_DBLCLK).expect("notification fits"))
+    {
+        activate_selection(window);
+    } else if command == ID_MENU_LIST
+        && notification == usize::try_from(LBN_SELCHANGE).expect("notification fits")
+    {
+        result_selection_changed(window);
+    } else if command == ID_SEARCH {
+        submit_search(window);
+    } else if command == ID_BACK {
+        navigate_back(window);
+    } else if command == ID_PLAY_FOLDER {
+        play_current_local_folder(window, false);
+    } else if command == ID_SHUFFLE_FOLDER {
+        play_current_local_folder(window, true);
+    } else if command == ID_ADD_FOLDER_TO_QUEUE {
+        add_current_local_folder_to_queue(window);
+    } else if command == ID_FOLDER_PLAYBACK_QUEUE {
+        show_playback_queue(window);
+    } else if matches!(
+        command,
+        ID_TRAY_SHOW | ID_TRAY_SETTINGS | ID_TRAY_CHECK_SUBSCRIPTIONS | ID_TRAY_EXIT
+    ) {
+        handle_tray_command(window, command);
     }
 }
 
@@ -467,6 +521,46 @@ unsafe fn create_controls(
         WINDOW_EX_STYLE::default(),
         ID_BACK,
     )?;
+    let play_folder_text = wide(catalog.text("play_folder"));
+    let play_folder = create_control(
+        parent,
+        instance,
+        w!("BUTTON"),
+        PCWSTR(play_folder_text.as_ptr()),
+        WS_CHILD | WS_TABSTOP,
+        WINDOW_EX_STYLE::default(),
+        ID_PLAY_FOLDER,
+    )?;
+    let shuffle_folder_text = wide(catalog.text("shuffle_folder"));
+    let shuffle_folder = create_control(
+        parent,
+        instance,
+        w!("BUTTON"),
+        PCWSTR(shuffle_folder_text.as_ptr()),
+        WS_CHILD | WS_TABSTOP,
+        WINDOW_EX_STYLE::default(),
+        ID_SHUFFLE_FOLDER,
+    )?;
+    let add_folder_to_queue_text = wide(catalog.text("add_folder_to_queue"));
+    let add_folder_to_queue = create_control(
+        parent,
+        instance,
+        w!("BUTTON"),
+        PCWSTR(add_folder_to_queue_text.as_ptr()),
+        WS_CHILD | WS_TABSTOP,
+        WINDOW_EX_STYLE::default(),
+        ID_ADD_FOLDER_TO_QUEUE,
+    )?;
+    let playback_queue_text = wide(catalog.text("playback_queue"));
+    let folder_playback_queue = create_control(
+        parent,
+        instance,
+        w!("BUTTON"),
+        PCWSTR(playback_queue_text.as_ptr()),
+        WS_CHILD | WS_TABSTOP,
+        WINDOW_EX_STYLE::default(),
+        ID_FOLDER_PLAYBACK_QUEUE,
+    )?;
     let player_controls = PlayerControls::create(parent, instance)?;
     let video_host = player_controls.video_host();
     let font = GetStockObject(DEFAULT_GUI_FONT);
@@ -480,6 +574,10 @@ unsafe fn create_controls(
         kind,
         search,
         back,
+        play_folder,
+        shuffle_folder,
+        add_folder_to_queue,
+        folder_playback_queue,
         status,
     ] {
         SendMessageW(control, WM_SETFONT, font_param, Some(LPARAM(1)));
@@ -493,6 +591,10 @@ unsafe fn create_controls(
         kind,
         search,
         back,
+        play_folder,
+        shuffle_folder,
+        add_folder_to_queue,
+        folder_playback_queue,
         video_host,
         player_controls,
         status,
@@ -500,6 +602,7 @@ unsafe fn create_controls(
         model,
         application,
         settings_open: false,
+        modal_open: false,
         tray_icon_added: false,
         lifecycle: WindowLifecycle::Visible,
         taskbar_created_message: RegisterWindowMessageW(w!("TaskbarCreated")),
@@ -512,6 +615,8 @@ unsafe fn create_controls(
         next_youtube_resolve_token: 0,
         playback: None,
         controlled_repeat: None,
+        pending_local_folder_scan: None,
+        next_local_folder_generation: 0,
     })
 }
 
@@ -555,10 +660,109 @@ unsafe extern "system" fn menu_list_proc(
         SendMessageW(parent, WM_COMMAND, Some(WPARAM(ID_OPEN)), None);
         return LRESULT(0);
     }
+    if message == WM_CONTEXTMENU
+        && let Ok(parent) = windows::Win32::UI::WindowsAndMessaging::GetParent(window)
+    {
+        show_list_context_menu(parent, lparam);
+        return LRESULT(0);
+    }
     if message == WM_NCDESTROY {
         let _ = RemoveWindowSubclass(window, Some(menu_list_proc), subclass_id);
     }
     DefSubclassProc(window, message, wparam, lparam)
+}
+
+unsafe fn show_list_context_menu(window: HWND, location: LPARAM) {
+    let Some((view, language, list)) = state(window).map(|main_state| {
+        (
+            main_state.view,
+            main_state.application.settings().language.clone(),
+            main_state.list,
+        )
+    }) else {
+        return;
+    };
+    if !matches!(view, MainView::Results | MainView::LocalFolder) {
+        return;
+    }
+    let catalog = apricot_app::embedded_catalog(&language);
+    let Ok(menu) = CreatePopupMenu() else {
+        return;
+    };
+    let entries: &[(usize, &str)] = if view == MainView::LocalFolder {
+        &[
+            (ID_CONTEXT_PLAY, "play"),
+            (ID_CONTEXT_PLAY_FOLDER, "play_folder"),
+            (ID_CONTEXT_SHUFFLE_FOLDER, "shuffle_folder"),
+            (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
+            (ID_CONTEXT_ADD_FOLDER_TO_QUEUE, "add_folder_to_queue"),
+            (ID_CONTEXT_PLAYBACK_QUEUE, "playback_queue"),
+        ]
+    } else {
+        &[
+            (ID_CONTEXT_PLAY, "play"),
+            (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
+            (ID_CONTEXT_REMOVE_FROM_QUEUE, "remove_from_playback_queue"),
+            (ID_CONTEXT_PLAYBACK_QUEUE, "playback_queue"),
+        ]
+    };
+    for (id, key) in entries {
+        let label = wide(catalog.text(key));
+        let _ = AppendMenuW(menu, MF_STRING, *id, PCWSTR(label.as_ptr()));
+    }
+    let mut fallback_point = POINT::default();
+    let point = context_menu_point(location, list).or_else(|| {
+        GetCursorPos(&raw mut fallback_point)
+            .is_ok()
+            .then_some(fallback_point)
+    });
+    if let Some(point) = point {
+        if let Some(state) = state_mut(window) {
+            state.modal_open = true;
+        }
+        let selected = TrackPopupMenu(
+            menu,
+            TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD,
+            point.x,
+            point.y,
+            None,
+            window,
+            None,
+        );
+        if let Some(state) = state_mut(window) {
+            state.modal_open = false;
+        }
+        match usize::try_from(selected.0).unwrap_or_default() {
+            ID_CONTEXT_PLAY => activate_selection(window),
+            ID_CONTEXT_PLAY_FOLDER => play_current_local_folder(window, false),
+            ID_CONTEXT_SHUFFLE_FOLDER => play_current_local_folder(window, true),
+            ID_CONTEXT_ADD_TO_QUEUE => add_active_item_to_playback_queue(window),
+            ID_CONTEXT_REMOVE_FROM_QUEUE => remove_active_item_from_playback_queue(window),
+            ID_CONTEXT_ADD_FOLDER_TO_QUEUE => add_current_local_folder_to_queue(window),
+            ID_CONTEXT_PLAYBACK_QUEUE => show_playback_queue(window),
+            _ => {}
+        }
+    }
+    let _ = DestroyMenu(menu);
+    if let Some(state) = state(window) {
+        let _ = SetFocus(Some(active_primary_control(state)));
+    }
+}
+
+unsafe fn context_menu_point(location: LPARAM, list: HWND) -> Option<POINT> {
+    if location.0 != -1 {
+        let packed = location.0.to_le_bytes();
+        return Some(POINT {
+            x: i32::from(i16::from_le_bytes([packed[0], packed[1]])),
+            y: i32::from(i16::from_le_bytes([packed[2], packed[3]])),
+        });
+    }
+    let mut bounds = RECT::default();
+    GetWindowRect(list, &raw mut bounds).ok()?;
+    Some(POINT {
+        x: bounds.left.saturating_add(24),
+        y: bounds.top.saturating_add(24),
+    })
 }
 
 unsafe fn state(window: HWND) -> Option<&'static WindowState> {
@@ -631,19 +835,42 @@ unsafe fn layout_controls_state(window: HWND, state: &mut WindowState) {
             .player_controls
             .layout(width, height, margin, status_height);
     } else {
+        let action_rows = if state.view == MainView::LocalFolder {
+            2
+        } else {
+            1
+        };
         let _ = MoveWindow(
             state.list,
             margin,
             margin,
             width - margin * 2,
-            height - button_height - status_height - margin * 4,
+            height - button_height * action_rows - status_height - margin * (action_rows + 3),
             true,
         );
     }
+    layout_bottom_controls(state, width, height, margin, button_height, status_height);
+}
+
+unsafe fn layout_bottom_controls(
+    state: &WindowState,
+    width: i32,
+    height: i32,
+    margin: i32,
+    button_height: i32,
+    status_height: i32,
+) {
+    let local_folder = state.view == MainView::LocalFolder;
+    let first_button_y = if local_folder {
+        height - button_height * 2 - margin * 2
+    } else {
+        height - button_height - margin
+    };
+    let status_y = first_button_y - status_height - margin;
     let _ = MoveWindow(
         state.status,
         margin,
-        height - button_height - status_height - margin * 2,
+        status_y,
         width - margin * 2,
         status_height,
         true,
@@ -651,8 +878,12 @@ unsafe fn layout_controls_state(window: HWND, state: &mut WindowState) {
     let _ = MoveWindow(
         state.open,
         margin,
-        height - button_height - margin,
-        120,
+        first_button_y,
+        if local_folder {
+            (width - margin * 4) / 3
+        } else {
+            120
+        },
         button_height,
         true,
     );
@@ -666,19 +897,57 @@ unsafe fn layout_controls_state(window: HWND, state: &mut WindowState) {
     );
     let _ = MoveWindow(
         state.back,
-        margin + 132,
-        height - button_height - margin,
-        180,
+        if local_folder {
+            margin * 2 + (width - margin * 4) / 3
+        } else {
+            margin + 132
+        },
+        first_button_y,
+        if local_folder {
+            (width - margin * 4) / 3
+        } else {
+            180
+        },
         button_height,
         true,
     );
+    if local_folder {
+        let button_width = (width - margin * 4) / 3;
+        let row_two_y = height - button_height - margin;
+        let _ = MoveWindow(
+            state.play_folder,
+            margin * 3 + button_width * 2,
+            first_button_y,
+            button_width,
+            button_height,
+            true,
+        );
+        for (index, control) in [
+            state.shuffle_folder,
+            state.add_folder_to_queue,
+            state.folder_playback_queue,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let x = margin + i32::try_from(index).unwrap_or_default() * (button_width + margin);
+            let _ = MoveWindow(control, x, row_two_y, button_width, button_height, true);
+        }
+    }
 }
 
 unsafe fn set_view_visibility(state: &mut WindowState) {
-    let list_visible = matches!(state.view, MainView::MainMenu | MainView::Results);
+    let list_visible = matches!(
+        state.view,
+        MainView::MainMenu | MainView::Results | MainView::LocalFolder
+    );
     let search_visible = state.view == MainView::Search;
-    let back_visible = matches!(state.view, MainView::Search | MainView::Results);
+    let back_visible = matches!(
+        state.view,
+        MainView::Search | MainView::Results | MainView::LocalFolder
+    );
     let open_visible = list_visible;
+    let folder_visible = state.view == MainView::LocalFolder;
     for (control, visible) in [
         (state.list, list_visible),
         (state.open, open_visible),
@@ -688,6 +957,10 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
         (state.kind, search_visible),
         (state.search, search_visible),
         (state.back, back_visible),
+        (state.play_folder, folder_visible),
+        (state.shuffle_folder, folder_visible),
+        (state.add_folder_to_queue, folder_visible),
+        (state.folder_playback_queue, folder_visible),
     ] {
         let _ = ShowWindow(control, if visible { SW_SHOW } else { SW_HIDE });
     }
@@ -891,6 +1164,7 @@ unsafe fn activate_selection(window: HWND) {
     match state(window).map(|state| state.view) {
         Some(MainView::MainMenu) => activate_main_menu_selection(window),
         Some(MainView::Results) => activate_result_selection(window),
+        Some(MainView::LocalFolder) => activate_local_folder_selection(window),
         Some(MainView::Search | MainView::Player) | None => {}
     }
 }
@@ -909,6 +1183,10 @@ unsafe fn activate_main_menu_selection(window: HWND) {
     }
     if item_id == "play_file" {
         open_media_file(window);
+        return;
+    }
+    if item_id == "play_folder" {
+        open_media_folder(window);
         return;
     }
     if item_id == "search" {
@@ -965,6 +1243,72 @@ unsafe fn activate_result_selection(window: HWND) {
         return;
     }
     start_media_item(window, item, None);
+}
+
+unsafe fn activate_local_folder_selection(window: HWND) {
+    let selected = state(window).map(|state| SendMessageW(state.list, LB_GETCURSEL, None, None).0);
+    let Some(Ok(index)) = selected.map(usize::try_from) else {
+        return;
+    };
+    let item = state_mut(window).and_then(|state| {
+        state
+            .application
+            .prepare_local_folder_playback(index, false)
+    });
+    if let Some(item) = item {
+        start_media_item(window, item, None);
+    }
+}
+
+unsafe fn play_current_local_folder(window: HWND, shuffle: bool) {
+    let selected = state(window).map_or(0, |state| {
+        usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).unwrap_or_default()
+    });
+    let item = state_mut(window).and_then(|state| {
+        state
+            .application
+            .prepare_local_folder_playback(selected, shuffle)
+    });
+    let Some(item) = item else {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "folder_no_media"),
+                true,
+            );
+        }
+        return;
+    };
+    start_media_item(window, item, None);
+    if shuffle && let Some(state) = state_mut(window) {
+        state
+            .application
+            .set_player_toggle(SessionToggle::Shuffle, true);
+        refresh_player(window, state, false, true);
+    }
+}
+
+unsafe fn add_current_local_folder_to_queue(window: HWND) {
+    let result =
+        state_mut(window).map(|state| state.application.add_local_folder_to_playback_queue());
+    let Some(result) = result else {
+        return;
+    };
+    let Some(state) = state(window) else {
+        return;
+    };
+    match result {
+        Ok(outcome) => {
+            let message = catalog_text(&state.application, "folder_queue_added")
+                .replace("{count}", &outcome.added.to_string());
+            set_status(state, &message, true);
+        }
+        Err(error) => {
+            let message = format!("Playback queue was not updated: {error}");
+            set_status(state, &message, true);
+            show_error_message(window, &message);
+        }
+    }
 }
 
 unsafe fn start_media_item(
@@ -1194,6 +1538,7 @@ unsafe fn show_main_menu(window: HWND) {
         return;
     };
     cancel_youtube_work(window, state);
+    cancel_local_folder_scan(window, state);
     state.application.navigate_main_menu();
     state.view = MainView::MainMenu;
     refresh_main_menu(state);
@@ -1209,6 +1554,7 @@ unsafe fn show_search(window: HWND) {
         return;
     };
     cancel_youtube_work(window, state);
+    cancel_local_folder_scan(window, state);
     if state.application.current_route() != Route::Search {
         state.application.navigate_main_menu();
         state
@@ -1227,6 +1573,7 @@ unsafe fn navigate_back(window: HWND) {
         return;
     };
     cancel_youtube_work(window, state);
+    cancel_local_folder_scan(window, state);
     if state.view == MainView::Player {
         close_player_runtime(window, state);
     }
@@ -1243,6 +1590,11 @@ unsafe fn navigate_back(window: HWND) {
         Route::Results => {
             state.view = MainView::Results;
             refresh_results(state, true);
+            layout_controls_state(window, state);
+        }
+        Route::LocalFolder => {
+            state.view = MainView::LocalFolder;
+            refresh_local_folder(state, true, false);
             layout_controls_state(window, state);
         }
         Route::Player => {
@@ -1566,6 +1918,10 @@ unsafe fn cancel_youtube_work(window: HWND, state: &mut WindowState) {
 }
 
 unsafe fn result_selection_changed(window: HWND) {
+    if state(window).is_some_and(|state| state.view == MainView::LocalFolder) {
+        local_folder_selection_changed(window);
+        return;
+    }
     let work = {
         let Some(state) = state_mut(window) else {
             return;
@@ -1595,7 +1951,56 @@ unsafe fn result_selection_changed(window: HWND) {
     }
 }
 
+unsafe fn local_folder_selection_changed(window: HWND) {
+    let (before, added) = {
+        let Some(state) = state_mut(window) else {
+            return;
+        };
+        let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
+        let Ok(index) = usize::try_from(selected) else {
+            return;
+        };
+        if !state.application.select_local_folder_item(index) {
+            return;
+        }
+        let before = state
+            .application
+            .local_folder_session()
+            .visible_items()
+            .len();
+        let added = if index + 1 == before && state.application.local_folder_session().has_more() {
+            state.application.append_local_folder_batch()
+        } else {
+            0
+        };
+        (before, added)
+    };
+    if added == 0 {
+        return;
+    }
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    for item in &state.application.local_folder_session().visible_items()[before..] {
+        add_list_string(state.list, &local_folder_result_label(item, &catalog));
+    }
+    let selected = state.application.local_folder_session().selected_index();
+    SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selected)), None);
+    let loaded = format!(
+        "{} of {} files loaded",
+        state
+            .application
+            .local_folder_session()
+            .visible_items()
+            .len(),
+        state.application.local_folder_session().items().len()
+    );
+    set_status(state, &loaded, true);
+}
+
 unsafe fn refresh_results(state: &mut WindowState, focus: bool) {
+    set_open_button_label(state, "open");
     SendMessageW(state.list, LB_RESETCONTENT, None, None);
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
     let accessible_name = wide(catalog.text("result_list"));
@@ -1623,6 +2028,67 @@ unsafe fn refresh_results(state: &mut WindowState, focus: bool) {
     if focus {
         let _ = SetFocus(Some(state.list));
     }
+}
+
+unsafe fn refresh_local_folder(state: &mut WindowState, focus: bool, announce_status: bool) {
+    SendMessageW(state.list, LB_RESETCONTENT, None, None);
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let accessible_name = wide(catalog.text("play_from_folder"));
+    let _ = SetWindowTextW(state.list, PCWSTR(accessible_name.as_ptr()));
+    set_open_button_label(state, "play");
+    let session = state.application.local_folder_session();
+    if session.is_empty() {
+        add_list_string(state.list, catalog.text("folder_no_media"));
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
+        set_status(state, catalog.text("folder_no_media"), announce_status);
+    } else {
+        for item in session.visible_items() {
+            add_list_string(state.list, &local_folder_result_label(item, &catalog));
+        }
+        let selected = session
+            .selected_index()
+            .min(session.visible_items().len() - 1);
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selected)), None);
+        let message = catalog
+            .text("folder_loaded")
+            .replace("{count}", &session.items().len().to_string());
+        set_status(state, &message, announce_status);
+    }
+    if focus {
+        let _ = SetFocus(Some(state.list));
+    }
+}
+
+fn local_folder_result_label(
+    item: &apricot_core::MediaItem,
+    catalog: &apricot_core::TranslationCatalog,
+) -> String {
+    let relative = item
+        .metadata
+        .get("relative_path")
+        .and_then(|value| value.as_str())
+        .unwrap_or(&item.title);
+    let format = item
+        .metadata
+        .get("extension")
+        .and_then(|value| value.as_str())
+        .unwrap_or_else(|| catalog.text("file_format_unknown"));
+    let folder = item
+        .metadata
+        .get("folder")
+        .and_then(|value| value.as_str())
+        .unwrap_or(&item.channel);
+    catalog
+        .text("local_file_result_line")
+        .replace("{title}", relative)
+        .replace("{format}", format)
+        .replace("{folder}", folder)
+}
+
+unsafe fn set_open_button_label(state: &WindowState, key: &str) {
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let label = wide(catalog.text(key));
+    let _ = SetWindowTextW(state.open, PCWSTR(label.as_ptr()));
 }
 
 unsafe fn append_results(state: &mut WindowState, added: usize) {
@@ -1861,7 +2327,9 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
     }
     let (scope, accepts_text) = match state.view {
         MainView::Search => (ActionScope::Dialog, true),
-        MainView::MainMenu | MainView::Results => (ActionScope::List, false),
+        MainView::MainMenu | MainView::Results | MainView::LocalFolder => {
+            (ActionScope::List, false)
+        }
         MainView::Player => (ActionScope::Player, false),
     };
     let Some(action) = action_for_shortcut(
@@ -2014,6 +2482,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "open_settings" => open_settings(window),
         "open_action_finder" => show_action_finder(window),
         "open_play_file" => open_media_file(window),
+        "open_play_from_folder" => open_media_folder(window),
         "open_selected" => activate_selection(window),
         "background_play_pause" | "player_play_pause" => toggle_player_pause(window),
         "player_back" => navigate_back(window),
@@ -2113,6 +2582,16 @@ unsafe fn active_media_item(window: HWND) -> Option<apricot_core::MediaItem> {
                 .application
                 .search_session()
                 .items()
+                .get(index)
+                .cloned()
+        }
+        MainView::LocalFolder => {
+            let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
+            let index = usize::try_from(selected).ok()?;
+            state
+                .application
+                .local_folder_session()
+                .visible_items()
                 .get(index)
                 .cloned()
         }
@@ -2536,15 +3015,146 @@ unsafe fn open_media_file(window: HWND) {
     }
 }
 
+unsafe fn open_media_folder(window: HWND) {
+    stop_controlled_repeat(window);
+    let title = state(window).map_or_else(
+        || "Choose a folder with audio or video files".to_owned(),
+        |state| {
+            apricot_app::embedded_catalog(&state.application.settings().language)
+                .text("select_media_folder")
+                .to_owned()
+        },
+    );
+    if let Some(state) = state_mut(window) {
+        state.modal_open = true;
+    }
+    let selection = crate::folder_dialog_win32::choose_media_folder(window, &title);
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
+    let Some(path) = selection else {
+        if let Some(state) = state(window) {
+            let _ = SetFocus(Some(active_primary_control(state)));
+        }
+        return;
+    };
+    start_local_folder_scan(window, path);
+}
+
+unsafe fn start_local_folder_scan(window: HWND, path: PathBuf) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    cancel_local_folder_scan(window, state);
+    state.next_local_folder_generation = state.next_local_folder_generation.wrapping_add(1).max(1);
+    let generation = state.next_local_folder_generation;
+    let worker_path = path.clone();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let worker_cancelled = Arc::clone(&cancelled);
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = scan_local_media_folder_with_cancel(&worker_path, &worker_cancelled)
+            .map_err(|error| error.to_string());
+        let _ = sender.send(result);
+    });
+    state.pending_local_folder_scan = Some(PendingLocalFolderScan {
+        generation,
+        path,
+        cancelled,
+        receiver,
+    });
+    set_status(state, "Loading folder...", true);
+    let _ = SetTimer(
+        Some(window),
+        LOCAL_FOLDER_TIMER_ID,
+        YOUTUBE_TIMER_INTERVAL_MS,
+        None,
+    );
+}
+
+unsafe fn poll_local_folder_scan(window: HWND) {
+    let update = {
+        let Some(state) = state(window) else {
+            return;
+        };
+        if state.modal_open {
+            return;
+        }
+        let Some(pending) = state.pending_local_folder_scan.as_ref() else {
+            let _ = KillTimer(Some(window), LOCAL_FOLDER_TIMER_ID);
+            return;
+        };
+        match pending.receiver.try_recv() {
+            Ok(result) => Some((pending.generation, pending.path.clone(), result)),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => Some((
+                pending.generation,
+                pending.path.clone(),
+                Err("Local folder scan stopped unexpectedly".to_owned()),
+            )),
+        }
+    };
+    let Some((generation, path, result)) = update else {
+        return;
+    };
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    if state
+        .pending_local_folder_scan
+        .as_ref()
+        .is_none_or(|pending| pending.generation != generation)
+    {
+        return;
+    }
+    state.pending_local_folder_scan = None;
+    let _ = KillTimer(Some(window), LOCAL_FOLDER_TIMER_ID);
+    match result {
+        Ok(items) if !items.is_empty() => {
+            state.application.load_local_folder(path, items);
+            state.application.navigate_main_menu();
+            state
+                .application
+                .navigate_to(RouteFrame::new(Route::LocalFolder));
+            state.view = MainView::LocalFolder;
+            refresh_local_folder(state, true, true);
+            layout_controls_state(window, state);
+        }
+        Ok(_) => {
+            let message = catalog_text(&state.application, "folder_no_media");
+            set_status(state, &message, true);
+            show_error_message(window, &message);
+            let _ = SetFocus(Some(active_primary_control(state)));
+        }
+        Err(error) => {
+            set_status(state, &error, true);
+            show_error_message(window, &error);
+            let _ = SetFocus(Some(active_primary_control(state)));
+        }
+    }
+}
+
+unsafe fn cancel_local_folder_scan(window: HWND, state: &mut WindowState) {
+    if let Some(pending) = state.pending_local_folder_scan.take() {
+        pending.cancelled.store(true, AtomicOrdering::Relaxed);
+        let _ = KillTimer(Some(window), LOCAL_FOLDER_TIMER_ID);
+    }
+}
+
 unsafe fn show_action_finder(window: HWND) {
     stop_controlled_repeat(window);
-    let Some(main_state) = state(window) else {
+    let Some(main_state) = state_mut(window) else {
         return;
     };
     let model = main_state
         .application
         .action_finder_model(ActionFinderContext::default());
-    match crate::action_finder_win32::show(window, model) {
+    main_state.modal_open = true;
+    let outcome = crate::action_finder_win32::show(window, model);
+    if let Some(main_state) = state_mut(window) {
+        main_state.modal_open = false;
+    }
+    match outcome {
         Ok(Some(action_id)) => activate_action(window, action_id),
         Ok(None) => {}
         Err(error) => {
@@ -2564,7 +3174,7 @@ unsafe fn show_action_finder(window: HWND) {
 
 unsafe fn show_playback_queue(window: HWND) {
     stop_controlled_repeat(window);
-    let Some(main_state) = state(window) else {
+    let Some(main_state) = state_mut(window) else {
         return;
     };
     if main_state.application.playback_queue().is_empty() {
@@ -2600,10 +3210,12 @@ unsafe fn show_playback_queue(window: HWND) {
         unknown: catalog.text("unknown").to_owned(),
     };
     let items = main_state.application.playback_queue().items().to_vec();
+    main_state.modal_open = true;
     let outcome = crate::playback_queue_win32::show(window, items, labels);
     let Some(main_state) = state_mut(window) else {
         return;
     };
+    main_state.modal_open = false;
     match outcome {
         Ok(outcome) => {
             if outcome.changed
@@ -2662,15 +3274,18 @@ unsafe fn open_settings(window: HWND) {
             return;
         }
         state.settings_open = true;
+        state.modal_open = true;
         crate::settings_win32::show(window, &mut state.application)
     };
     let Some(state) = state_mut(window) else {
         return;
     };
     state.settings_open = false;
+    state.modal_open = false;
     match state.view {
         MainView::MainMenu => refresh_main_menu(state),
         MainView::Results => refresh_results(state, false),
+        MainView::LocalFolder => refresh_local_folder(state, false, false),
         MainView::Search => {}
         MainView::Player => refresh_player(window, state, false, true),
     }
@@ -2718,6 +3333,7 @@ unsafe fn process_pending_activations(window: HWND) {
 }
 
 unsafe fn refresh_main_menu(state: &mut WindowState) {
+    set_open_button_label(state, "open");
     state.model = state.application.main_menu_model();
     SendMessageW(state.list, LB_RESETCONTENT, None, None);
     let accessible_name = wide(&state.model.accessible_name);
@@ -2737,7 +3353,7 @@ unsafe fn refresh_main_menu(state: &mut WindowState) {
 fn active_primary_control(state: &WindowState) -> HWND {
     match state.view {
         MainView::Search => state.search_edit,
-        MainView::MainMenu | MainView::Results => state.list,
+        MainView::MainMenu | MainView::Results | MainView::LocalFolder => state.list,
         MainView::Player => state.player_controls.initial_focus(),
     }
 }

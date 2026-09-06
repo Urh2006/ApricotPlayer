@@ -3,6 +3,7 @@
 pub mod action_finder;
 pub mod activation;
 pub mod application;
+pub mod local_folder;
 pub mod main_menu;
 pub mod playback_queue;
 pub mod playback_queue_controller;
@@ -20,11 +21,12 @@ pub use apricot_media::YoutubeSearchKind;
 pub use action_finder::{ActionFinderContext, ActionFinderItem, ActionFinderModel};
 pub use activation::ActivationRequest;
 pub use application::{Application, PlayerNavigationOrigin, PlayerNavigationOutcome};
+pub use local_folder::{DEFAULT_FOLDER_BATCH_SIZE, LocalFolderSession};
 pub use main_menu::{
     MainMenuAvailability, MainMenuItem, MainMenuModel, MenuVisibility, embedded_catalog,
     english_catalog,
 };
-pub use playback_queue::{PlaybackQueue, QueueAddOutcome};
+pub use playback_queue::{PlaybackQueue, QueueAddOutcome, QueueBatchAddOutcome};
 pub use playback_queue_controller::{PlaybackQueueController, PlaybackQueueControllerError};
 pub use playback_sequence::{PlaybackSequence, PlaybackSequenceSource};
 pub use player_model::{
@@ -49,6 +51,7 @@ pub use settings_session::{SettingsDraft, SettingsDraftError};
 #[derive(Debug, Default)]
 pub struct AppState {
     pub navigation: NavigationStack,
+    pub local_folder: LocalFolderSession,
     pub playback_queue: PlaybackQueueController,
     pub player: PlayerSession,
     pub player_sequence: PlaybackSequence,

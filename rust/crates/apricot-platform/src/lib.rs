@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 pub mod diagnostics;
+pub mod local_media;
 pub mod paths;
 pub mod single_instance;
 pub mod windows_registration;
@@ -13,6 +14,9 @@ pub mod youtube_search_service;
 pub mod ytdlp_youtube;
 
 pub use diagnostics::{DiagnosticLog, DiagnosticLogError, install_panic_hook};
+pub use local_media::{
+    LocalMediaError, scan_local_media_folder, scan_local_media_folder_with_cancel,
+};
 pub use paths::{PathDiscoveryError, discover_windows_beta_paths, discover_windows_paths};
 pub use single_instance::{SingleInstanceGuard, SingleInstanceOutcome, acquire_single_instance};
 pub use windows_registration::{startup_command, startup_value_name, sync_startup_registration};

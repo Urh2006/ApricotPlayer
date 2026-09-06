@@ -9,6 +9,13 @@ pub enum QueueAddOutcome {
     Unplayable,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct QueueBatchAddOutcome {
+    pub added: usize,
+    pub already_present: usize,
+    pub unplayable: usize,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct PlaybackQueue {
     items: Vec<MediaItem>,
@@ -50,6 +57,18 @@ impl PlaybackQueue {
         }
         self.items.push(item);
         QueueAddOutcome::Added
+    }
+
+    pub fn add_many(&mut self, items: impl IntoIterator<Item = MediaItem>) -> QueueBatchAddOutcome {
+        let mut outcome = QueueBatchAddOutcome::default();
+        for item in items {
+            match self.add(item) {
+                QueueAddOutcome::Added => outcome.added += 1,
+                QueueAddOutcome::AlreadyPresent => outcome.already_present += 1,
+                QueueAddOutcome::Unplayable => outcome.unplayable += 1,
+            }
+        }
+        outcome
     }
 
     pub fn front(&self) -> Option<&MediaItem> {
@@ -182,5 +201,28 @@ mod tests {
         assert_eq!(queue.remove(1).expect("removed").id.0, "three");
         assert!(queue.clear());
         assert!(!queue.clear());
+    }
+
+    #[test]
+    fn batch_add_preserves_order_and_reports_every_disposition() {
+        let mut queue = PlaybackQueue::default();
+        queue.add(item("one", MediaKind::Audio));
+        let outcome = queue.add_many([
+            item("two", MediaKind::Audio),
+            item("one", MediaKind::Audio),
+            item("collection", MediaKind::Playlist),
+            item("three", MediaKind::Audio),
+        ]);
+        assert_eq!(outcome.added, 2);
+        assert_eq!(outcome.already_present, 1);
+        assert_eq!(outcome.unplayable, 1);
+        assert_eq!(
+            queue
+                .items()
+                .iter()
+                .map(|item| item.id.0.as_str())
+                .collect::<Vec<_>>(),
+            ["one", "two", "three"]
+        );
     }
 }

@@ -6,7 +6,7 @@ use apricot_core::MediaItem;
 use apricot_storage::{PlaybackQueueFile, PlaybackQueueFileError};
 use thiserror::Error;
 
-use crate::{PlaybackQueue, QueueAddOutcome};
+use crate::{PlaybackQueue, QueueAddOutcome, QueueBatchAddOutcome};
 
 #[derive(Debug, Error)]
 pub enum PlaybackQueueControllerError {
@@ -97,6 +97,23 @@ impl PlaybackQueueController {
         let mut candidate = self.queue.clone();
         let outcome = candidate.add(item);
         if outcome == QueueAddOutcome::Added {
+            self.commit(candidate)?;
+        }
+        Ok(outcome)
+    }
+
+    /// Adds a batch with one durable write while retaining existing order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any newly added items cannot be persisted.
+    pub fn add_many(
+        &mut self,
+        items: impl IntoIterator<Item = MediaItem>,
+    ) -> Result<QueueBatchAddOutcome, PlaybackQueueControllerError> {
+        let mut candidate = self.queue.clone();
+        let outcome = candidate.add_many(items);
+        if outcome.added > 0 {
             self.commit(candidate)?;
         }
         Ok(outcome)
@@ -288,6 +305,19 @@ mod tests {
             ..PlaybackQueueController::default()
         };
         assert!(controller.add(item("one")).is_err());
+        assert!(controller.queue().is_empty());
+    }
+
+    #[test]
+    fn batch_add_is_one_transaction_and_keeps_memory_on_failure() {
+        let root = tempdir().expect("temporary directory");
+        let destination_is_directory = root.path().join("playback_queue.json");
+        fs::create_dir(&destination_is_directory).expect("directory fixture");
+        let mut controller = PlaybackQueueController {
+            file: Some(PlaybackQueueFile::new(destination_is_directory)),
+            ..PlaybackQueueController::default()
+        };
+        assert!(controller.add_many([item("one"), item("two")]).is_err());
         assert!(controller.queue().is_empty());
     }
 }

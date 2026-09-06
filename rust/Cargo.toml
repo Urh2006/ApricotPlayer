@@ -35,6 +35,7 @@ apricot-test-support = { path = "crates/apricot-test-support" }
 apricot-ui-windows = { path = "crates/apricot-ui-windows" }
 apricot-updater = { path = "crates/apricot-updater" }
 libloading = "0.8"
+rand = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -48,6 +49,7 @@ windows = { version = "0.62.2", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_LibraryLoader",
     "Win32_System_DataExchange",
+    "Win32_System_Com",
     "Win32_System_Pipes",
     "Win32_System_Registry",
     "Win32_System_Threading",
@@ -56,6 +58,7 @@ windows = { version = "0.62.2", features = [
     "Win32_UI_Controls_Dialogs",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
 ] }
 
