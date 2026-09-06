@@ -5,6 +5,7 @@ pub mod activation;
 pub mod application;
 pub mod local_folder;
 pub mod main_menu;
+pub mod media_collection_controller;
 pub mod playback_queue;
 pub mod playback_queue_controller;
 pub mod playback_sequence;
@@ -26,6 +27,9 @@ pub use local_folder::{DEFAULT_FOLDER_BATCH_SIZE, LocalFolderSession};
 pub use main_menu::{
     MainMenuAvailability, MainMenuItem, MainMenuModel, MenuVisibility, embedded_catalog,
     english_catalog,
+};
+pub use media_collection_controller::{
+    CollectionAddOutcome, MediaCollectionController, MediaCollectionControllerError,
 };
 pub use playback_queue::{PlaybackQueue, QueueAddOutcome, QueueBatchAddOutcome};
 pub use playback_queue_controller::{PlaybackQueueController, PlaybackQueueControllerError};
@@ -51,6 +55,8 @@ pub use settings_session::{SettingsDraft, SettingsDraftError};
 
 #[derive(Debug, Default)]
 pub struct AppState {
+    pub favorites: MediaCollectionController,
+    pub history: MediaCollectionController,
     pub navigation: NavigationStack,
     pub local_folder: LocalFolderSession,
     pub playback_queue: PlaybackQueueController,

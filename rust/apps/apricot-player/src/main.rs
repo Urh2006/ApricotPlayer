@@ -11,7 +11,7 @@ use apricot_platform::{
     ApplicationIdentity, SingleInstanceOutcome, YoutubeHelperProcess, YtDlpYoutubeEngine,
     acquire_single_instance, discover_windows_beta_paths, sync_startup_registration,
 };
-use apricot_storage::{PlaybackQueueFile, SettingsDocument, SettingsPaths};
+use apricot_storage::{MediaListFile, PlaybackQueueFile, SettingsDocument, SettingsPaths};
 use apricot_updater::UpdateChannel;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -60,6 +60,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     application.configure_playback_queue(
         PlaybackQueueFile::new(paths.app_data.join("playback_queue.json")),
         &legacy_queue,
+    );
+    application.configure_media_collections(
+        MediaListFile::new(paths.app_data.join("favorites.json")),
+        &MediaListFile::new(paths.legacy_app_data.join("favorites.json")),
+        MediaListFile::new(paths.app_data.join("history.json")),
+        &MediaListFile::new(paths.legacy_app_data.join("history.json")),
     );
     if !application.settings().language_prompted {
         let selected =

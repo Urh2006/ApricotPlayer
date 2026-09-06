@@ -87,6 +87,8 @@ const ID_DIRECT_DOWNLOAD_AUDIO: usize = 1012;
 const ID_DIRECT_DOWNLOAD_VIDEO: usize = 1013;
 const ID_DIRECT_COPY_STREAM: usize = 1014;
 const ID_DIRECT_ENTER: usize = 1015;
+const ID_COLLECTION_REMOVE: usize = 1016;
+const ID_HISTORY_CLEAR: usize = 1017;
 const ID_CONTEXT_PLAY: usize = 1101;
 const ID_CONTEXT_PLAY_FOLDER: usize = 1102;
 const ID_CONTEXT_SHUFFLE_FOLDER: usize = 1103;
@@ -99,6 +101,9 @@ const ID_CONTEXT_COPY_STREAM_URL: usize = 1109;
 const ID_CONTEXT_COPY_TIMESTAMP: usize = 1110;
 const ID_CONTEXT_CLOSE_PLAYER: usize = 1111;
 const ID_CONTEXT_DETAILS: usize = 1112;
+const ID_CONTEXT_ADD_FAVORITE: usize = 1113;
+const ID_CONTEXT_COLLECTION_REMOVE: usize = 1114;
+const ID_CONTEXT_HISTORY_CLEAR: usize = 1115;
 const WM_PROCESS_ACTIVATION: u32 = WM_APP + 1;
 const WM_TRAY_ICON: u32 = WM_APP + 2;
 const YOUTUBE_TIMER_ID: usize = 1;
@@ -134,6 +139,8 @@ enum MainView {
     DirectLink,
     Results,
     LocalFolder,
+    Favorites,
+    History,
     Player,
 }
 
@@ -192,6 +199,8 @@ struct WindowState {
     direct_download_audio: HWND,
     direct_download_video: HWND,
     direct_copy_stream: HWND,
+    collection_remove: HWND,
+    history_clear: HWND,
     video_host: HWND,
     player_controls: PlayerControls,
     status: HWND,
@@ -427,6 +436,10 @@ unsafe fn handle_window_command(window: HWND, wparam: WPARAM) {
         activate_direct_link(window, "download_video");
     } else if command == ID_DIRECT_COPY_STREAM {
         activate_direct_link(window, "copy_stream_url");
+    } else if command == ID_COLLECTION_REMOVE {
+        remove_selected_collection_item(window);
+    } else if command == ID_HISTORY_CLEAR {
+        clear_history(window);
     } else if matches!(
         command,
         ID_TRAY_SHOW | ID_TRAY_SETTINGS | ID_TRAY_CHECK_SUBSCRIPTIONS | ID_TRAY_EXIT
@@ -643,6 +656,26 @@ unsafe fn create_controls(
         WINDOW_EX_STYLE::default(),
         ID_DIRECT_COPY_STREAM,
     )?;
+    let collection_remove_text = wide(catalog.text("remove"));
+    let collection_remove = create_control(
+        parent,
+        instance,
+        w!("BUTTON"),
+        PCWSTR(collection_remove_text.as_ptr()),
+        WS_CHILD | WS_TABSTOP,
+        WINDOW_EX_STYLE::default(),
+        ID_COLLECTION_REMOVE,
+    )?;
+    let history_clear_text = wide(catalog.text("clear_history"));
+    let history_clear = create_control(
+        parent,
+        instance,
+        w!("BUTTON"),
+        PCWSTR(history_clear_text.as_ptr()),
+        WS_CHILD | WS_TABSTOP,
+        WINDOW_EX_STYLE::default(),
+        ID_HISTORY_CLEAR,
+    )?;
     let player_controls = PlayerControls::create(parent, instance)?;
     let video_host = player_controls.video_host();
     let font = GetStockObject(DEFAULT_GUI_FONT);
@@ -664,6 +697,8 @@ unsafe fn create_controls(
         direct_download_audio,
         direct_download_video,
         direct_copy_stream,
+        collection_remove,
+        history_clear,
         status,
     ] {
         SendMessageW(control, WM_SETFONT, font_param, Some(LPARAM(1)));
@@ -685,6 +720,8 @@ unsafe fn create_controls(
         direct_download_audio,
         direct_download_video,
         direct_copy_stream,
+        collection_remove,
+        history_clear,
         video_host,
         player_controls,
         status,
@@ -793,34 +830,21 @@ unsafe fn show_list_context_menu(window: HWND, location: LPARAM) {
     }) else {
         return;
     };
-    if !matches!(view, MainView::Results | MainView::LocalFolder) {
+    let Some(entries) = list_context_entries(view) else {
         return;
-    }
+    };
     let catalog = apricot_app::embedded_catalog(&language);
     let Ok(menu) = CreatePopupMenu() else {
         return;
     };
-    let entries: &[(usize, &str)] = if view == MainView::LocalFolder {
-        &[
-            (ID_CONTEXT_PLAY, "play"),
-            (ID_CONTEXT_PLAY_FOLDER, "play_folder"),
-            (ID_CONTEXT_SHUFFLE_FOLDER, "shuffle_folder"),
-            (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
-            (ID_CONTEXT_ADD_FOLDER_TO_QUEUE, "add_folder_to_queue"),
-            (ID_CONTEXT_PLAYBACK_QUEUE, "playback_queue"),
-            (ID_CONTEXT_COPY_LOCATION, "copy_path"),
-        ]
-    } else {
-        &[
-            (ID_CONTEXT_PLAY, "play"),
-            (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
-            (ID_CONTEXT_REMOVE_FROM_QUEUE, "remove_from_playback_queue"),
-            (ID_CONTEXT_PLAYBACK_QUEUE, "playback_queue"),
-            (ID_CONTEXT_COPY_LOCATION, "copy_link"),
-            (ID_CONTEXT_COPY_STREAM_URL, "copy_stream_url"),
-        ]
-    };
     for (id, key) in entries {
+        let key = if *id == ID_CONTEXT_COPY_LOCATION
+            && active_media_item(window).is_some_and(|item| item.is_local_media())
+        {
+            "copy_path"
+        } else {
+            key
+        };
         let label = wide(catalog.text(key));
         let _ = AppendMenuW(menu, MF_STRING, *id, PCWSTR(label.as_ptr()));
     }
@@ -856,6 +880,9 @@ unsafe fn show_list_context_menu(window: HWND, location: LPARAM) {
             ID_CONTEXT_PLAYBACK_QUEUE => show_playback_queue(window),
             ID_CONTEXT_COPY_LOCATION => copy_active_location(window),
             ID_CONTEXT_COPY_STREAM_URL => copy_active_stream_url(window),
+            ID_CONTEXT_ADD_FAVORITE => add_active_favorite(window),
+            ID_CONTEXT_COLLECTION_REMOVE => remove_selected_collection_item(window),
+            ID_CONTEXT_HISTORY_CLEAR => clear_history(window),
             _ => {}
         }
     }
@@ -865,9 +892,48 @@ unsafe fn show_list_context_menu(window: HWND, location: LPARAM) {
     }
 }
 
+fn list_context_entries(view: MainView) -> Option<&'static [(usize, &'static str)]> {
+    match view {
+        MainView::LocalFolder => Some(&[
+            (ID_CONTEXT_PLAY, "play"),
+            (ID_CONTEXT_PLAY_FOLDER, "play_folder"),
+            (ID_CONTEXT_SHUFFLE_FOLDER, "shuffle_folder"),
+            (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
+            (ID_CONTEXT_ADD_FOLDER_TO_QUEUE, "add_folder_to_queue"),
+            (ID_CONTEXT_PLAYBACK_QUEUE, "playback_queue"),
+            (ID_CONTEXT_COPY_LOCATION, "copy_path"),
+        ]),
+        MainView::Favorites => Some(&[
+            (ID_CONTEXT_PLAY, "play"),
+            (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
+            (ID_CONTEXT_COPY_LOCATION, "copy_link"),
+            (ID_CONTEXT_COLLECTION_REMOVE, "remove_favorite"),
+        ]),
+        MainView::History => Some(&[
+            (ID_CONTEXT_PLAY, "play"),
+            (ID_CONTEXT_ADD_FAVORITE, "add_favorite"),
+            (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
+            (ID_CONTEXT_COPY_LOCATION, "copy_link"),
+            (ID_CONTEXT_COLLECTION_REMOVE, "remove_history_item"),
+            (ID_CONTEXT_HISTORY_CLEAR, "clear_history"),
+        ]),
+        MainView::Results => Some(&[
+            (ID_CONTEXT_PLAY, "play"),
+            (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
+            (ID_CONTEXT_REMOVE_FROM_QUEUE, "remove_from_playback_queue"),
+            (ID_CONTEXT_PLAYBACK_QUEUE, "playback_queue"),
+            (ID_CONTEXT_COPY_LOCATION, "copy_link"),
+            (ID_CONTEXT_COPY_STREAM_URL, "copy_stream_url"),
+        ]),
+        _ => None,
+    }
+}
+
 unsafe fn show_context_menu_for_active_view(window: HWND) {
     match state(window).map(|state| state.view) {
-        Some(MainView::Results | MainView::LocalFolder) => {
+        Some(
+            MainView::Results | MainView::LocalFolder | MainView::Favorites | MainView::History,
+        ) => {
             show_list_context_menu(window, LPARAM(-1));
         }
         Some(MainView::Player) => show_player_context_menu(window, LPARAM(-1)),
@@ -903,6 +969,14 @@ unsafe fn show_player_context_menu(window: HWND, location: LPARAM) {
         (ID_CONTEXT_REMOVE_FROM_QUEUE, "remove_from_playback_queue"),
         (ID_CONTEXT_PLAYBACK_QUEUE, "playback_queue"),
     ];
+    entries.insert(
+        1,
+        if state(window).is_some_and(|state| state.application.is_favorite(&item)) {
+            (ID_CONTEXT_COLLECTION_REMOVE, "remove_favorite")
+        } else {
+            (ID_CONTEXT_ADD_FAVORITE, "add_favorite")
+        },
+    );
     if !item.is_local_media() {
         entries.insert(1, (ID_CONTEXT_COPY_STREAM_URL, "copy_stream_url"));
     }
@@ -944,6 +1018,8 @@ unsafe fn show_player_context_menu(window: HWND, location: LPARAM) {
             ID_CONTEXT_ADD_TO_QUEUE => add_active_item_to_playback_queue(window),
             ID_CONTEXT_REMOVE_FROM_QUEUE => remove_active_item_from_playback_queue(window),
             ID_CONTEXT_PLAYBACK_QUEUE => show_playback_queue(window),
+            ID_CONTEXT_ADD_FAVORITE => add_active_favorite(window),
+            ID_CONTEXT_COLLECTION_REMOVE => remove_active_favorite(window),
             ID_CONTEXT_CLOSE_PLAYER => navigate_back(window),
             _ => {}
         }
@@ -1073,6 +1149,8 @@ unsafe fn layout_bottom_controls(
 ) {
     let local_folder = state.view == MainView::LocalFolder;
     let direct_link = state.view == MainView::DirectLink;
+    let favorites = state.view == MainView::Favorites;
+    let history = state.view == MainView::History;
     let first_button_y = if local_folder {
         height - button_height * 2 - margin * 2
     } else {
@@ -1124,61 +1202,97 @@ unsafe fn layout_bottom_controls(
         true,
     );
     if local_folder {
-        let button_width = (width - margin * 4) / 3;
-        let row_two_y = height - button_height - margin;
-        let _ = MoveWindow(
-            state.play_folder,
-            margin * 3 + button_width * 2,
-            first_button_y,
-            button_width,
-            button_height,
-            true,
-        );
-        for (index, control) in [
-            state.shuffle_folder,
-            state.add_folder_to_queue,
-            state.folder_playback_queue,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let x = margin + i32::try_from(index).unwrap_or_default() * (button_width + margin);
-            let _ = MoveWindow(control, x, row_two_y, button_width, button_height, true);
-        }
+        layout_local_folder_buttons(state, width, height, first_button_y, margin, button_height);
     } else if direct_link {
-        let controls = [
-            state.back,
-            state.direct_play,
-            state.direct_download_audio,
-            state.direct_download_video,
-            state.direct_copy_stream,
-        ];
-        let button_width = (width - margin * 6) / 5;
-        for (index, control) in controls.into_iter().enumerate() {
-            let x = margin + i32::try_from(index).unwrap_or_default() * (button_width + margin);
-            let _ = MoveWindow(
-                control,
-                x,
-                first_button_y,
-                button_width,
-                button_height,
-                true,
-            );
-        }
+        layout_button_row(
+            &[
+                state.back,
+                state.direct_play,
+                state.direct_download_audio,
+                state.direct_download_video,
+                state.direct_copy_stream,
+            ],
+            width,
+            first_button_y,
+            margin,
+            button_height,
+        );
+    } else if favorites || history {
+        let controls = if history {
+            vec![
+                state.back,
+                state.open,
+                state.collection_remove,
+                state.history_clear,
+            ]
+        } else {
+            vec![state.back, state.open, state.collection_remove]
+        };
+        layout_button_row(&controls, width, first_button_y, margin, button_height);
+    }
+}
+
+unsafe fn layout_local_folder_buttons(
+    state: &WindowState,
+    width: i32,
+    height: i32,
+    first_button_y: i32,
+    margin: i32,
+    button_height: i32,
+) {
+    let button_width = (width - margin * 4) / 3;
+    let row_two_y = height - button_height - margin;
+    let _ = MoveWindow(
+        state.play_folder,
+        margin * 3 + button_width * 2,
+        first_button_y,
+        button_width,
+        button_height,
+        true,
+    );
+    for (index, control) in [
+        state.shuffle_folder,
+        state.add_folder_to_queue,
+        state.folder_playback_queue,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let x = margin + i32::try_from(index).unwrap_or_default() * (button_width + margin);
+        let _ = MoveWindow(control, x, row_two_y, button_width, button_height, true);
+    }
+}
+
+unsafe fn layout_button_row(controls: &[HWND], width: i32, y: i32, margin: i32, height: i32) {
+    let count = i32::try_from(controls.len()).unwrap_or(1).max(1);
+    let button_width = (width - margin * (count + 1)) / count;
+    for (index, control) in controls.iter().copied().enumerate() {
+        let x = margin + i32::try_from(index).unwrap_or_default() * (button_width + margin);
+        let _ = MoveWindow(control, x, y, button_width, height, true);
     }
 }
 
 unsafe fn set_view_visibility(state: &mut WindowState) {
     let list_visible = matches!(
         state.view,
-        MainView::MainMenu | MainView::Results | MainView::LocalFolder
+        MainView::MainMenu
+            | MainView::Results
+            | MainView::LocalFolder
+            | MainView::Favorites
+            | MainView::History
     );
     let text_entry_visible = matches!(state.view, MainView::Search | MainView::DirectLink);
     let search_visible = state.view == MainView::Search;
     let direct_link_visible = state.view == MainView::DirectLink;
+    let collection_visible = matches!(state.view, MainView::Favorites | MainView::History);
     let back_visible = matches!(
         state.view,
-        MainView::Search | MainView::DirectLink | MainView::Results | MainView::LocalFolder
+        MainView::Search
+            | MainView::DirectLink
+            | MainView::Results
+            | MainView::LocalFolder
+            | MainView::Favorites
+            | MainView::History
     );
     let open_visible = list_visible;
     let folder_visible = state.view == MainView::LocalFolder;
@@ -1199,6 +1313,8 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
         (state.direct_download_audio, direct_link_visible),
         (state.direct_download_video, direct_link_visible),
         (state.direct_copy_stream, direct_link_visible),
+        (state.collection_remove, collection_visible),
+        (state.history_clear, state.view == MainView::History),
     ] {
         let _ = ShowWindow(control, if visible { SW_SHOW } else { SW_HIDE });
     }
@@ -1403,6 +1519,7 @@ unsafe fn activate_selection(window: HWND) {
         Some(MainView::MainMenu) => activate_main_menu_selection(window),
         Some(MainView::Results) => activate_result_selection(window),
         Some(MainView::LocalFolder) => activate_local_folder_selection(window),
+        Some(MainView::Favorites | MainView::History) => activate_collection_selection(window),
         Some(MainView::Search | MainView::DirectLink | MainView::Player) | None => {}
     }
 }
@@ -1433,6 +1550,14 @@ unsafe fn activate_main_menu_selection(window: HWND) {
     }
     if item_id == "direct_link" {
         show_direct_link(window);
+        return;
+    }
+    if item_id == "favorites" {
+        show_media_collection(window, MainView::Favorites);
+        return;
+    }
+    if item_id == "history" {
+        show_media_collection(window, MainView::History);
         return;
     }
     if item_id == "playback_queue" {
@@ -1502,6 +1627,37 @@ unsafe fn activate_local_folder_selection(window: HWND) {
     }
 }
 
+unsafe fn activate_collection_selection(window: HWND) {
+    let selection = state(window).and_then(|state| {
+        let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
+        usize::try_from(selected)
+            .ok()
+            .map(|index| (state.view, index))
+    });
+    let Some((view, index)) = selection else {
+        return;
+    };
+    let item = state_mut(window).and_then(|state| match view {
+        MainView::Favorites => state.application.prepare_favorite_playback(index),
+        MainView::History => state.application.prepare_history_playback(index),
+        _ => None,
+    });
+    if let Some(item) = item {
+        if matches!(
+            item.kind,
+            apricot_core::MediaKind::Playlist | apricot_core::MediaKind::Channel
+        ) {
+            let message = format!(
+                "{} is preserved in favorites, but collection navigation is not implemented in this internal build yet.",
+                item.title
+            );
+            show_error_message(window, &message);
+            return;
+        }
+        start_media_item(window, item, None);
+    }
+}
+
 unsafe fn play_current_local_folder(window: HWND, shuffle: bool) {
     let selected = state(window).map_or(0, |state| {
         usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).unwrap_or_default()
@@ -1566,7 +1722,10 @@ unsafe fn start_media_item(
         item: item.clone(),
         mode,
     });
-    if item.source != apricot_core::MediaSource::Youtube {
+    if !matches!(
+        item.source,
+        apricot_core::MediaSource::Youtube | apricot_core::MediaSource::Direct
+    ) {
         start_player(window, item);
         return;
     }
@@ -1898,6 +2057,34 @@ unsafe fn show_direct_link(window: HWND) {
     let _ = SetFocus(Some(state.search_edit));
 }
 
+unsafe fn show_media_collection(window: HWND, view: MainView) {
+    if view == MainView::History
+        && state(window).is_some_and(|state| !state.application.settings().enable_history)
+    {
+        show_main_menu(window);
+        return;
+    }
+    let route = match view {
+        MainView::Favorites => Route::Favorites,
+        MainView::History => Route::History,
+        _ => return,
+    };
+    restore_from_tray(window);
+    stop_controlled_repeat(window);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    cancel_youtube_work(window, state);
+    cancel_local_folder_scan(window, state);
+    if state.application.current_route() != route {
+        state.application.navigate_main_menu();
+        state.application.navigate_to(RouteFrame::new(route));
+    }
+    state.view = view;
+    refresh_media_collection(state, true, true);
+    layout_controls_state(window, state);
+}
+
 unsafe fn navigate_back(window: HWND) {
     stop_controlled_repeat(window);
     let Some(state) = state_mut(window) else {
@@ -1932,6 +2119,16 @@ unsafe fn navigate_back(window: HWND) {
         Route::LocalFolder => {
             state.view = MainView::LocalFolder;
             refresh_local_folder(state, true, false);
+            layout_controls_state(window, state);
+        }
+        Route::Favorites => {
+            state.view = MainView::Favorites;
+            refresh_media_collection(state, true, false);
+            layout_controls_state(window, state);
+        }
+        Route::History => {
+            state.view = MainView::History;
+            refresh_media_collection(state, true, false);
             layout_controls_state(window, state);
         }
         Route::Player => {
@@ -2145,13 +2342,20 @@ unsafe fn poll_playback_runtime(window: HWND) {
         match update.event {
             PlaybackEvent::Started => {
                 confirm_pending_queued_start(window, state);
-                let title = state
-                    .application
-                    .player_session()
-                    .current_item()
-                    .map_or("", |item| item.title.as_str());
+                let current_item = state.application.player_session().current_item().cloned();
+                let title = current_item.as_ref().map_or("", |item| item.title.as_str());
                 let message = catalog_text(&state.application, "playing").replace("{title}", title);
                 set_status(state, &message, true);
+                if let Some(item) = current_item {
+                    let timestamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0.0, |duration| duration.as_secs_f64());
+                    if let Err(error) = state.application.record_history(item, "played", timestamp)
+                    {
+                        let message = format!("History was not saved: {error}");
+                        set_status(state, &message, true);
+                    }
+                }
             }
             PlaybackEvent::Paused(paused) => {
                 let key = if paused {
@@ -2485,6 +2689,88 @@ unsafe fn refresh_local_folder(state: &mut WindowState, focus: bool, announce_st
     }
 }
 
+unsafe fn refresh_media_collection(state: &mut WindowState, focus: bool, announce_status: bool) {
+    SendMessageW(state.list, LB_RESETCONTENT, None, None);
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let (name_key, empty_key, items) = match state.view {
+        MainView::Favorites => (
+            "favorites",
+            "favorites_empty",
+            state.application.favorites(),
+        ),
+        MainView::History => ("history", "history_empty", state.application.history()),
+        _ => return,
+    };
+    let accessible_name = wide(catalog.text(name_key));
+    let _ = SetWindowTextW(state.list, PCWSTR(accessible_name.as_ptr()));
+    set_open_button_label(state, "play");
+    set_control_text(
+        state,
+        state.collection_remove,
+        if state.view == MainView::Favorites {
+            "remove_favorite"
+        } else {
+            "remove_history_item"
+        },
+    );
+    if items.is_empty() {
+        add_list_string(state.list, catalog.text(empty_key));
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
+        set_status(state, catalog.text(empty_key), announce_status);
+    } else {
+        for item in items {
+            add_list_string(
+                state.list,
+                &media_collection_label(item, state.view, &catalog),
+            );
+        }
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
+        set_status(
+            state,
+            &format!("{}: {}", catalog.text(name_key), items.len()),
+            announce_status,
+        );
+    }
+    if focus {
+        let _ = SetFocus(Some(state.list));
+    }
+}
+
+fn media_collection_label(
+    item: &apricot_core::MediaItem,
+    view: MainView,
+    catalog: &apricot_core::TranslationCatalog,
+) -> String {
+    let mut parts = Vec::new();
+    if view == MainView::History {
+        if let Some(timestamp) = item
+            .metadata
+            .get("timestamp")
+            .and_then(serde_json::Value::as_f64)
+            .and_then(|seconds| std::time::Duration::try_from_secs_f64(seconds).ok())
+            .and_then(|duration| i64::try_from(duration.as_secs()).ok())
+            .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
+        {
+            parts.push(
+                timestamp
+                    .with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d %H:%M")
+                    .to_string(),
+            );
+        }
+        if let Some(action) = item.metadata.get("action").and_then(|value| value.as_str())
+            && !action.trim().is_empty()
+        {
+            parts.push(action.to_owned());
+        }
+    }
+    parts.push(item.title.clone());
+    if !item.channel.is_empty() {
+        parts.push(format!("{}: {}", catalog.text("channel"), item.channel));
+    }
+    parts.join(" | ")
+}
+
 fn local_folder_result_label(
     item: &apricot_core::MediaItem,
     catalog: &apricot_core::TranslationCatalog,
@@ -2759,9 +3045,11 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
     }
     let (scope, accepts_text) = match state.view {
         MainView::Search | MainView::DirectLink => (ActionScope::Dialog, true),
-        MainView::MainMenu | MainView::Results | MainView::LocalFolder => {
-            (ActionScope::List, false)
-        }
+        MainView::MainMenu
+        | MainView::Results
+        | MainView::LocalFolder
+        | MainView::Favorites
+        | MainView::History => (ActionScope::List, false),
         MainView::Player => (ActionScope::Player, false),
     };
     let Some(action) = action_for_shortcut(
@@ -2912,6 +3200,8 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "open_main_menu" => show_main_menu(window),
         "open_search" => show_search(window),
         "open_direct_link" => show_direct_link(window),
+        "open_favorites" => show_media_collection(window, MainView::Favorites),
+        "open_history" => show_media_collection(window, MainView::History),
         "open_settings" => open_settings(window),
         "open_action_finder" => show_action_finder(window),
         "open_play_file" => open_media_file(window),
@@ -2946,6 +3236,8 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "copy_link" | "player_copy_link" => copy_active_location(window),
         "player_copy_timestamp_link" => copy_current_timestamp_link(window),
         "copy_stream_url" => copy_active_stream_url(window),
+        "add_favorite" => add_active_favorite(window),
+        "remove_favorite" => remove_active_favorite(window),
         "context_menu" => show_context_menu_for_active_view(window),
         "add_to_playback_queue" => add_active_item_to_playback_queue(window),
         "remove_from_playback_queue" => remove_active_item_from_playback_queue(window),
@@ -3034,8 +3326,180 @@ unsafe fn active_media_item(window: HWND) -> Option<apricot_core::MediaItem> {
                 .get(index)
                 .cloned()
         }
+        MainView::Favorites => {
+            let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
+            let index = usize::try_from(selected).ok()?;
+            state.application.favorites().get(index).cloned()
+        }
+        MainView::History => {
+            let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
+            let index = usize::try_from(selected).ok()?;
+            state.application.history().get(index).cloned()
+        }
         MainView::Player => state.application.player_session().current_item().cloned(),
         MainView::MainMenu | MainView::Search | MainView::DirectLink => None,
+    }
+}
+
+unsafe fn add_active_favorite(window: HWND) {
+    let Some(item) = active_media_item(window) else {
+        return;
+    };
+    let result = state_mut(window).map(|state| state.application.add_favorite(item));
+    let Some(result) = result else {
+        return;
+    };
+    let Some(state) = state(window) else {
+        return;
+    };
+    match result {
+        Ok(apricot_app::CollectionAddOutcome::Added) => {
+            set_status(
+                state,
+                &catalog_text(&state.application, "favorite_added"),
+                true,
+            );
+        }
+        Ok(apricot_app::CollectionAddOutcome::AlreadyPresent) => {
+            set_status(
+                state,
+                &catalog_text(&state.application, "favorite_exists"),
+                true,
+            );
+        }
+        Ok(apricot_app::CollectionAddOutcome::Unplayable) => {
+            set_status(
+                state,
+                &catalog_text(&state.application, "no_selection"),
+                true,
+            );
+        }
+        Err(error) => {
+            let message = format!("Favorites were not updated: {error}");
+            set_status(state, &message, true);
+            show_error_message(window, &message);
+        }
+    }
+}
+
+unsafe fn remove_active_favorite(window: HWND) {
+    let Some(item) = active_media_item(window) else {
+        return;
+    };
+    let result = state_mut(window).map(|state| state.application.remove_favorite_item(&item));
+    match result {
+        Some(Ok(Some(_))) => {
+            if let Some(state) = state_mut(window) {
+                if state.view == MainView::Favorites {
+                    refresh_media_collection(state, true, false);
+                }
+                set_status(
+                    state,
+                    &catalog_text(&state.application, "favorite_removed"),
+                    true,
+                );
+            }
+        }
+        Some(Ok(None)) => {
+            if let Some(state) = state(window) {
+                set_status(
+                    state,
+                    &catalog_text(&state.application, "not_in_favorites"),
+                    true,
+                );
+            }
+        }
+        Some(Err(error)) => {
+            let message = format!("Favorites were not updated: {error}");
+            if let Some(state) = state(window) {
+                set_status(state, &message, true);
+            }
+            show_error_message(window, &message);
+        }
+        None => {}
+    }
+}
+
+unsafe fn remove_selected_collection_item(window: HWND) {
+    let selection = state(window).and_then(|state| {
+        let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
+        usize::try_from(selected)
+            .ok()
+            .map(|index| (state.view, index))
+    });
+    let Some((view, index)) = selection else {
+        return;
+    };
+    match view {
+        MainView::Favorites => remove_favorite_at(window, index),
+        MainView::History => {
+            let result =
+                state_mut(window).map(|state| state.application.remove_history_item(index));
+            finish_collection_removal(window, result, "history_removed");
+        }
+        _ => {}
+    }
+}
+
+unsafe fn remove_favorite_at(window: HWND, index: usize) {
+    let result = state_mut(window).map(|state| state.application.remove_favorite(index));
+    finish_collection_removal(window, result, "favorite_removed");
+}
+
+unsafe fn finish_collection_removal(
+    window: HWND,
+    result: Option<
+        std::result::Result<
+            Option<apricot_core::MediaItem>,
+            apricot_app::MediaCollectionControllerError,
+        >,
+    >,
+    success_key: &str,
+) {
+    let Some(result) = result else {
+        return;
+    };
+    match result {
+        Ok(Some(_)) => {
+            if let Some(state) = state_mut(window) {
+                refresh_media_collection(state, true, false);
+                set_status(state, &catalog_text(&state.application, success_key), true);
+            }
+        }
+        Ok(None) => {}
+        Err(error) => {
+            let message = format!("Media collection was not updated: {error}");
+            if let Some(state) = state(window) {
+                set_status(state, &message, true);
+            }
+            show_error_message(window, &message);
+        }
+    }
+}
+
+unsafe fn clear_history(window: HWND) {
+    let result = state_mut(window).map(|state| state.application.clear_history());
+    let Some(result) = result else {
+        return;
+    };
+    match result {
+        Ok(_) => {
+            if let Some(state) = state_mut(window) {
+                refresh_media_collection(state, true, false);
+                set_status(
+                    state,
+                    &catalog_text(&state.application, "history_cleared"),
+                    true,
+                );
+            }
+        }
+        Err(error) => {
+            let message = format!("History was not cleared: {error}");
+            if let Some(state) = state(window) {
+                set_status(state, &message, true);
+            }
+            show_error_message(window, &message);
+        }
     }
 }
 
@@ -3874,6 +4338,9 @@ unsafe fn open_settings(window: HWND) {
         MainView::MainMenu => refresh_main_menu(state),
         MainView::Results => refresh_results(state, false),
         MainView::LocalFolder => refresh_local_folder(state, false, false),
+        MainView::Favorites | MainView::History => {
+            refresh_media_collection(state, false, false);
+        }
         MainView::Search | MainView::DirectLink => {}
         MainView::Player => refresh_player(window, state, false, true),
     }
@@ -3941,7 +4408,11 @@ unsafe fn refresh_main_menu(state: &mut WindowState) {
 fn active_primary_control(state: &WindowState) -> HWND {
     match state.view {
         MainView::Search | MainView::DirectLink => state.search_edit,
-        MainView::MainMenu | MainView::Results | MainView::LocalFolder => state.list,
+        MainView::MainMenu
+        | MainView::Results
+        | MainView::LocalFolder
+        | MainView::Favorites
+        | MainView::History => state.list,
         MainView::Player => state.player_controls.initial_focus(),
     }
 }

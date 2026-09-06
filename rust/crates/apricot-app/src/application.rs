@@ -7,12 +7,13 @@ use std::{
 
 use apricot_core::{MediaItem, Route, RouteFrame, SettingId, SettingsSection};
 use apricot_playback::PlaybackEvent;
-use apricot_storage::{PlaybackQueueFile, SettingsDocument};
+use apricot_storage::{MediaListFile, PlaybackQueueFile, SettingsDocument};
 use rand::seq::SliceRandom;
 
 use crate::{
     ActionFinderContext, ActionFinderModel, ActivationRequest, AppState, AudioSession,
-    EqualizerSession, MainMenuAvailability, MainMenuModel, MenuVisibility, PlaybackQueue,
+    CollectionAddOutcome, EqualizerSession, MainMenuAvailability, MainMenuModel,
+    MediaCollectionController, MediaCollectionControllerError, MenuVisibility, PlaybackQueue,
     PlaybackQueueController, PlaybackQueueControllerError, PlaybackSequenceSource,
     PlayerScreenModel, PlayerSession, PlayerSessionDefaults, PlayerViewState, QueueAddOutcome,
     QueueBatchAddOutcome, SearchApplyOutcome, SearchSession, SearchSessionError, SearchWork,
@@ -60,6 +61,133 @@ impl Application {
 
     pub const fn search_session(&self) -> &SearchSession {
         &self.state.search
+    }
+
+    pub fn favorites(&self) -> &[MediaItem] {
+        self.state.favorites.items()
+    }
+
+    pub fn is_favorite(&self, item: &MediaItem) -> bool {
+        self.state.favorites.contains(item)
+    }
+
+    pub fn history(&self) -> &[MediaItem] {
+        self.state.history.items()
+    }
+
+    pub fn configure_media_collections(
+        &mut self,
+        favorites: MediaListFile,
+        legacy_favorites: &MediaListFile,
+        history: MediaListFile,
+        legacy_history: &MediaListFile,
+    ) {
+        self.state.favorites = MediaCollectionController::load(favorites, legacy_favorites);
+        self.state.history = MediaCollectionController::load(history, legacy_history);
+    }
+
+    /// Adds one playable item to favorites unless it is already present.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the changed favorites file cannot be persisted.
+    pub fn add_favorite(
+        &mut self,
+        item: MediaItem,
+    ) -> Result<CollectionAddOutcome, MediaCollectionControllerError> {
+        self.state.favorites.add_unique(item)
+    }
+
+    /// Removes one favorite by its displayed position.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the changed favorites file cannot be persisted.
+    pub fn remove_favorite(
+        &mut self,
+        index: usize,
+    ) -> Result<Option<MediaItem>, MediaCollectionControllerError> {
+        self.state.favorites.remove(index)
+    }
+
+    /// Removes a matching favorite by its durable URL or local path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the changed favorites file cannot be persisted.
+    pub fn remove_favorite_item(
+        &mut self,
+        item: &MediaItem,
+    ) -> Result<Option<MediaItem>, MediaCollectionControllerError> {
+        self.state.favorites.remove_item(item)
+    }
+
+    pub fn prepare_favorite_playback(&mut self, index: usize) -> Option<MediaItem> {
+        let item = self.state.favorites.items().get(index)?.clone();
+        let _ = self.state.player_sequence.set(
+            PlaybackSequenceSource::Collection,
+            self.state.favorites.items(),
+            &item,
+        );
+        Some(item)
+    }
+
+    /// Records a played or downloaded item at the front of history.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the changed history file cannot be persisted.
+    pub fn record_history(
+        &mut self,
+        mut item: MediaItem,
+        action: &str,
+        timestamp: f64,
+    ) -> Result<(), MediaCollectionControllerError> {
+        if !self.settings.current().enable_history {
+            return Ok(());
+        }
+        item.metadata.insert(
+            "action".to_owned(),
+            serde_json::Value::String(action.to_owned()),
+        );
+        if let Some(timestamp) = serde_json::Number::from_f64(timestamp) {
+            item.metadata
+                .insert("timestamp".to_owned(), serde_json::Value::Number(timestamp));
+        }
+        let limit =
+            usize::try_from(self.settings.current().history_limit.max(10)).unwrap_or(usize::MAX);
+        self.state.history.upsert_front(item, limit)
+    }
+
+    /// Removes one history entry by its displayed position.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the changed history file cannot be persisted.
+    pub fn remove_history_item(
+        &mut self,
+        index: usize,
+    ) -> Result<Option<MediaItem>, MediaCollectionControllerError> {
+        self.state.history.remove(index)
+    }
+
+    pub fn prepare_history_playback(&mut self, index: usize) -> Option<MediaItem> {
+        let item = self.state.history.items().get(index)?.clone();
+        let _ = self.state.player_sequence.set(
+            PlaybackSequenceSource::Collection,
+            self.state.history.items(),
+            &item,
+        );
+        Some(item)
+    }
+
+    /// Clears all history entries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the empty history file cannot be persisted.
+    pub fn clear_history(&mut self) -> Result<bool, MediaCollectionControllerError> {
+        self.state.history.clear()
     }
 
     pub const fn local_folder_session(&self) -> &crate::LocalFolderSession {
@@ -798,7 +926,7 @@ mod tests {
 
     use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource, SettingId, SettingsSection};
     use apricot_playback::PlaybackEvent;
-    use apricot_storage::{SettingsDocument, SettingsPaths};
+    use apricot_storage::{MediaListFile, SettingsDocument, SettingsPaths};
     use tempfile::tempdir;
 
     use super::{Application, PlayerNavigationOrigin, PlayerNavigationOutcome};
@@ -1097,6 +1225,51 @@ mod tests {
             app.request_relative_player_item(1),
             PlayerNavigationOutcome::Unavailable
         );
+    }
+
+    #[test]
+    fn history_is_durable_deduplicated_and_builds_its_own_sequence() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        let favorites = MediaListFile::new(root.path().join("beta/favorites.json"));
+        let history_path = root.path().join("beta/history.json");
+        app.configure_media_collections(
+            favorites,
+            &MediaListFile::new(root.path().join("stable/favorites.json")),
+            MediaListFile::new(&history_path),
+            &MediaListFile::new(root.path().join("stable/history.json")),
+        );
+        app.record_history(media_item("first"), "played", 1.0)
+            .expect("first history item");
+        app.record_history(media_item("second"), "played", 2.0)
+            .expect("second history item");
+        app.record_history(media_item("first"), "played", 3.0)
+            .expect("refresh first item");
+
+        assert_eq!(
+            app.history()
+                .iter()
+                .map(|item| item.id.0.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "second"]
+        );
+        assert_eq!(app.history()[0].metadata["timestamp"], 3.0);
+        assert_eq!(
+            MediaListFile::new(history_path)
+                .load()
+                .expect("persisted history")
+                .len(),
+            2
+        );
+
+        let current = app.prepare_history_playback(0).expect("history playback");
+        app.start_player_item(current);
+        let PlayerNavigationOutcome::Item { item, origin } = app.request_relative_player_item(1)
+        else {
+            panic!("expected the next history item");
+        };
+        assert_eq!(origin, PlayerNavigationOrigin::Sequence);
+        assert_eq!(item.id.0, "second");
     }
 
     #[test]

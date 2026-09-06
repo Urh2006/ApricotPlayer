@@ -34,7 +34,7 @@ apricot-storage = { path = "crates/apricot-storage" }
 apricot-test-support = { path = "crates/apricot-test-support" }
 apricot-ui-windows = { path = "crates/apricot-ui-windows" }
 apricot-updater = { path = "crates/apricot-updater" }
-chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 libloading = "0.8"
 rand = "0.9"
 serde = { version = "1", features = ["derive"] }
