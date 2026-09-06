@@ -10,6 +10,7 @@ apricot-core.workspace = true
 apricot-media.workspace = true
 apricot-playback.workspace = true
 apricot-storage.workspace = true
+chrono.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 rand.workspace = true

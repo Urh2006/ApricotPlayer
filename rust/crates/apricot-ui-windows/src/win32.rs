@@ -93,6 +93,7 @@ const ID_CONTEXT_COPY_LOCATION: usize = 1108;
 const ID_CONTEXT_COPY_STREAM_URL: usize = 1109;
 const ID_CONTEXT_COPY_TIMESTAMP: usize = 1110;
 const ID_CONTEXT_CLOSE_PLAYER: usize = 1111;
+const ID_CONTEXT_DETAILS: usize = 1112;
 const WM_PROCESS_ACTIVATION: u32 = WM_APP + 1;
 const WM_TRAY_ICON: u32 = WM_APP + 2;
 const YOUTUBE_TIMER_ID: usize = 1;
@@ -229,6 +230,7 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
     crate::settings_win32::register()?;
     crate::action_finder_win32::register()?;
     crate::playback_queue_win32::register()?;
+    crate::details_win32::register()?;
 
     let title = wide(&format!("ApricotPlayer 2 Beta {version}"));
     let window = CreateWindowExW(
@@ -795,6 +797,7 @@ unsafe fn show_player_context_menu(window: HWND, location: LPARAM) {
         return;
     };
     let mut entries = vec![
+        (ID_CONTEXT_DETAILS, "show_video_details"),
         (
             ID_CONTEXT_COPY_LOCATION,
             if item.is_local_media() {
@@ -841,6 +844,7 @@ unsafe fn show_player_context_menu(window: HWND, location: LPARAM) {
             state.modal_open = false;
         }
         match usize::try_from(selected.0).unwrap_or_default() {
+            ID_CONTEXT_DETAILS => show_player_details(window),
             ID_CONTEXT_COPY_LOCATION => copy_active_location(window),
             ID_CONTEXT_COPY_STREAM_URL => copy_active_stream_url(window),
             ID_CONTEXT_COPY_TIMESTAMP => copy_current_timestamp_link(window),
@@ -1936,7 +1940,7 @@ unsafe fn poll_playback_runtime(window: HWND) {
                 );
                 refresh_player(window, state, false, true);
             }
-            PlaybackEvent::Position { .. } => {}
+            PlaybackEvent::Position { .. } | PlaybackEvent::MediaInfo(_) => {}
             PlaybackEvent::Ended => {
                 let autoplay_next = state
                     .application
@@ -2660,6 +2664,8 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "player_next" => navigate_player_relative(window, 1),
         "player_time" => announce_player_time(window),
         "player_volume_status" => announce_player_volume(window),
+        "player_format_status" => announce_player_format(window),
+        "player_details" => show_player_details(window),
         "player_seek_back" => seek_player(window, -configured_seek_seconds(window)),
         "player_seek_forward" => seek_player(window, configured_seek_seconds(window)),
         "player_seek_back_large" => seek_player(window, -60.0),
@@ -3030,6 +3036,44 @@ unsafe fn announce_player_volume(window: HWND) {
         return;
     };
     set_status(state, &format!("Volume {:.0}", audio.volume), true);
+}
+
+unsafe fn announce_player_format(window: HWND) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    let message = state
+        .application
+        .player_format_status()
+        .unwrap_or_else(|| catalog_text(&state.application, "no_player"));
+    set_status(state, &message, true);
+}
+
+unsafe fn show_player_details(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let Some(details) = state.application.player_details_text() else {
+        let message = catalog_text(&state.application, "details_unavailable");
+        set_status(state, &message, true);
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let labels = crate::details_win32::DetailsDialogLabels {
+        title: catalog.text("video_details").to_owned(),
+        copy: catalog.text("copy_details").to_owned(),
+        copied: catalog.text("details_copied").to_owned(),
+        back: catalog.text("back").to_owned(),
+    };
+    state.modal_open = true;
+    let _ = crate::details_win32::show(window, details, &labels);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state.modal_open = false;
+    let message = catalog_text(&state.application, "details_closed");
+    set_status(state, &message, false);
+    let _ = SetFocus(Some(state.player_controls.initial_focus()));
 }
 
 unsafe fn adjust_player_volume(window: HWND, delta: f64) {

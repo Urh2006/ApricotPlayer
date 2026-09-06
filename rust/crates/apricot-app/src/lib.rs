@@ -8,6 +8,7 @@ pub mod main_menu;
 pub mod playback_queue;
 pub mod playback_queue_controller;
 pub mod playback_sequence;
+pub mod player_information;
 pub mod player_model;
 pub mod player_session;
 pub mod search_session;

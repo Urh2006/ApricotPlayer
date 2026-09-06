@@ -355,6 +355,27 @@ impl Application {
         ))
     }
 
+    pub fn player_format_status(&self) -> Option<String> {
+        let item = self.state.player.current_item()?;
+        Some(crate::player_information::format_status(
+            &embedded_catalog(&self.settings.current().language),
+            item,
+            self.state.player.media_info(),
+        ))
+    }
+
+    pub fn player_details_text(&self) -> Option<String> {
+        let session = &self.state.player;
+        let item = session.current_item()?;
+        let audio = session.audio()?;
+        Some(crate::player_information::details_text(
+            &embedded_catalog(&self.settings.current().language),
+            item,
+            audio.speed,
+            audio.pitch,
+        ))
+    }
+
     pub fn start_player_item(&mut self, item: MediaItem) -> u64 {
         let sequence_source = self.state.player_sequence.source();
         if self.state.player_sequence.activate(&item) {

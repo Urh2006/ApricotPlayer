@@ -57,6 +57,7 @@ dependencies = [
  "apricot-media",
  "apricot-playback",
  "apricot-storage",
+ "chrono",
  "rand 0.9.5",
  "serde_json",
  "tempfile",

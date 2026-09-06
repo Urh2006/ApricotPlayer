@@ -22,7 +22,7 @@ use apricot_core::MediaItem;
 use serde_json::{Value, json};
 
 use crate::{
-    MpvIpcClient, PlaybackCommand, PlaybackEngine, PlaybackError, PlaybackEvent,
+    MpvIpcClient, PlaybackCommand, PlaybackEngine, PlaybackError, PlaybackEvent, PlaybackMediaInfo,
     mpv_ipc::{MAX_READ_CHUNK_BYTES, MAX_RESPONSE_BYTES, available_bytes},
 };
 
@@ -487,6 +487,15 @@ fn event_monitor_inner(
         (2, "time-pos"),
         (3, "duration"),
         (4, "idle-active"),
+        (5, "file-format"),
+        (6, "video-codec"),
+        (7, "video-params/w"),
+        (8, "video-params/h"),
+        (9, "audio-codec-name"),
+        (10, "audio-bitrate"),
+        (11, "audio-params/samplerate"),
+        (12, "audio-params/channel-count"),
+        (13, "audio-params/hr-channels"),
     ] {
         let mut payload = serde_json::to_vec(&json!({
             "command": ["observe_property", observer_id, property]
@@ -503,6 +512,7 @@ fn event_monitor_inner(
     let mut buffer = Vec::new();
     let mut elapsed = 0.0;
     let mut duration = None;
+    let mut media_info = PlaybackMediaInfo::default();
     while !stop.load(Ordering::Acquire) {
         let available = available_bytes(&pipe)?;
         if available == 0 {
@@ -531,7 +541,7 @@ fn event_monitor_inner(
             }
             let event: Value = serde_json::from_slice(line)
                 .map_err(|error| PlaybackError::InvalidData(error.to_string()))?;
-            project_event(&event, sender, &mut elapsed, &mut duration);
+            project_event(&event, sender, &mut elapsed, &mut duration, &mut media_info);
         }
     }
     Ok(())
@@ -556,8 +566,14 @@ fn project_event(
     sender: &SyncSender<PlaybackEvent>,
     elapsed: &mut f64,
     duration: &mut Option<f64>,
+    media_info: &mut PlaybackMediaInfo,
 ) {
     match event.get("event").and_then(Value::as_str) {
+        Some("start-file") => {
+            *elapsed = 0.0;
+            *duration = None;
+            *media_info = PlaybackMediaInfo::default();
+        }
         Some("file-loaded") => {
             let _ = sender.try_send(PlaybackEvent::Started);
         }
@@ -586,10 +602,70 @@ fn project_event(
                     duration: *duration,
                 });
             }
+            Some("file-format") => {
+                media_info.container = event_string(event);
+                emit_media_info(sender, media_info);
+            }
+            Some("video-codec") => {
+                media_info.video_codec = event_string(event);
+                emit_media_info(sender, media_info);
+            }
+            Some("video-params/w") => {
+                media_info.width = event_u32(event);
+                emit_media_info(sender, media_info);
+            }
+            Some("video-params/h") => {
+                media_info.height = event_u32(event);
+                emit_media_info(sender, media_info);
+            }
+            Some("audio-codec-name") => {
+                media_info.audio_codec = event_string(event);
+                emit_media_info(sender, media_info);
+            }
+            Some("audio-bitrate") => {
+                media_info.audio_bitrate_bits_per_second = event
+                    .get("data")
+                    .and_then(Value::as_f64)
+                    .filter(|value| value.is_finite() && *value > 0.0);
+                emit_media_info(sender, media_info);
+            }
+            Some("audio-params/samplerate") => {
+                media_info.sample_rate_hz = event_u32(event);
+                emit_media_info(sender, media_info);
+            }
+            Some("audio-params/channel-count") => {
+                media_info.channel_count = event_u32(event);
+                emit_media_info(sender, media_info);
+            }
+            Some("audio-params/hr-channels") => {
+                media_info.channel_layout = event_string(event);
+                emit_media_info(sender, media_info);
+            }
             _ => {}
         },
         _ => {}
     }
+}
+
+fn event_string(event: &Value) -> Option<String> {
+    event
+        .get("data")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(128).collect())
+}
+
+fn event_u32(event: &Value) -> Option<u32> {
+    event
+        .get("data")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| *value > 0)
+}
+
+fn emit_media_info(sender: &SyncSender<PlaybackEvent>, media_info: &PlaybackMediaInfo) {
+    let _ = sender.try_send(PlaybackEvent::MediaInfo(media_info.clone()));
 }
 
 #[cfg(test)]
@@ -599,7 +675,7 @@ mod tests {
     use apricot_core::{MediaId, MediaKind, MediaSource};
 
     use super::{MpvCacheConfig, MpvLaunchOptions, launch_arguments, media_target, project_event};
-    use crate::PlaybackEvent;
+    use crate::{PlaybackEvent, PlaybackMediaInfo};
 
     #[test]
     fn launch_arguments_apply_volume_before_any_media_is_loaded() {
@@ -666,17 +742,20 @@ mod tests {
         let (sender, receiver) = std::sync::mpsc::sync_channel(4);
         let mut elapsed = 0.0;
         let mut duration = None;
+        let mut media_info = PlaybackMediaInfo::default();
         project_event(
             &serde_json::json!({"event":"property-change","name":"duration","data":90.0}),
             &sender,
             &mut elapsed,
             &mut duration,
+            &mut media_info,
         );
         project_event(
             &serde_json::json!({"event":"property-change","name":"time-pos","data":12.5}),
             &sender,
             &mut elapsed,
             &mut duration,
+            &mut media_info,
         );
         assert_eq!(
             receiver.try_iter().last(),
@@ -684,6 +763,36 @@ mod tests {
                 elapsed: 12.5,
                 duration: Some(90.0),
             })
+        );
+    }
+
+    #[test]
+    fn event_projection_accumulates_typed_media_information() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        let mut elapsed = 0.0;
+        let mut duration = None;
+        let mut media_info = PlaybackMediaInfo::default();
+        for event in [
+            serde_json::json!({"event":"property-change","name":"file-format","data":"matroska"}),
+            serde_json::json!({"event":"property-change","name":"audio-codec-name","data":"opus"}),
+            serde_json::json!({"event":"property-change","name":"video-params/h","data":1080}),
+        ] {
+            project_event(
+                &event,
+                &sender,
+                &mut elapsed,
+                &mut duration,
+                &mut media_info,
+            );
+        }
+        assert_eq!(
+            receiver.try_iter().last(),
+            Some(PlaybackEvent::MediaInfo(PlaybackMediaInfo {
+                container: Some("matroska".to_owned()),
+                audio_codec: Some("opus".to_owned()),
+                height: Some(1080),
+                ..PlaybackMediaInfo::default()
+            }))
         );
     }
 }

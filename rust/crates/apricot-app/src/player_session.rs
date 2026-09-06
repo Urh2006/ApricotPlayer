@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use apricot_core::MediaItem;
-use apricot_playback::PlaybackEvent;
+use apricot_playback::{PlaybackEvent, PlaybackMediaInfo};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum PlaybackPhase {
@@ -57,6 +57,7 @@ pub struct PlayerSession {
     enabled_toggles: BTreeSet<SessionToggle>,
     position_seconds: f64,
     duration_seconds: Option<f64>,
+    media_info: PlaybackMediaInfo,
     last_error: Option<String>,
 }
 
@@ -93,6 +94,10 @@ impl PlayerSession {
         self.duration_seconds
     }
 
+    pub const fn media_info(&self) -> &PlaybackMediaInfo {
+        &self.media_info
+    }
+
     pub fn last_error(&self) -> Option<&str> {
         self.last_error.as_deref()
     }
@@ -113,6 +118,7 @@ impl PlayerSession {
         self.current_item = Some(item);
         self.position_seconds = 0.0;
         self.duration_seconds = None;
+        self.media_info = PlaybackMediaInfo::default();
         self.last_error = None;
         self.generation
     }
@@ -134,6 +140,7 @@ impl PlayerSession {
                 self.position_seconds = elapsed.max(0.0);
                 self.duration_seconds = duration.filter(|value| value.is_finite() && *value >= 0.0);
             }
+            PlaybackEvent::MediaInfo(info) => self.media_info = info,
             PlaybackEvent::Ended => self.phase = PlaybackPhase::Ended,
             PlaybackEvent::Failed(error) => {
                 self.phase = PlaybackPhase::Failed;
@@ -189,6 +196,7 @@ impl PlayerSession {
         self.enabled_toggles.clear();
         self.position_seconds = 0.0;
         self.duration_seconds = None;
+        self.media_info = PlaybackMediaInfo::default();
         self.last_error = None;
     }
 
@@ -202,7 +210,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use apricot_core::{MediaId, MediaKind, MediaSource};
-    use apricot_playback::PlaybackEvent;
+    use apricot_playback::{PlaybackEvent, PlaybackMediaInfo};
 
     use super::{
         AudioSession, EqualizerSession, PlaybackPhase, PlayerSession, PlayerSessionDefaults,
@@ -302,5 +310,31 @@ mod tests {
         assert_eq!(session.duration_seconds(), Some(90.0));
         assert!(session.apply_event(generation, PlaybackEvent::Paused(true)));
         assert_eq!(session.phase(), PlaybackPhase::Paused);
+    }
+
+    #[test]
+    fn media_information_is_generation_bound_and_cleared_on_replacement() {
+        let mut session = PlayerSession::default();
+        let first = session.start_item(item("first"), defaults());
+        assert!(session.apply_event(
+            first,
+            PlaybackEvent::MediaInfo(PlaybackMediaInfo {
+                audio_codec: Some("flac".to_owned()),
+                ..PlaybackMediaInfo::default()
+            })
+        ));
+        assert_eq!(session.media_info().audio_codec.as_deref(), Some("flac"));
+
+        let second = session.start_item(item("second"), defaults());
+        assert_eq!(session.media_info(), &PlaybackMediaInfo::default());
+        assert!(!session.apply_event(
+            first,
+            PlaybackEvent::MediaInfo(PlaybackMediaInfo {
+                audio_codec: Some("stale".to_owned()),
+                ..PlaybackMediaInfo::default()
+            })
+        ));
+        assert!(session.media_info().audio_codec.is_none());
+        assert!(session.apply_event(second, PlaybackEvent::Started));
     }
 }

@@ -42,11 +42,25 @@ pub enum PlaybackCommand {
     Stop,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PlaybackMediaInfo {
+    pub container: Option<String>,
+    pub video_codec: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub audio_codec: Option<String>,
+    pub audio_bitrate_bits_per_second: Option<f64>,
+    pub sample_rate_hz: Option<u32>,
+    pub channel_count: Option<u32>,
+    pub channel_layout: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum PlaybackEvent {
     Started,
     Paused(bool),
     Position { elapsed: f64, duration: Option<f64> },
+    MediaInfo(PlaybackMediaInfo),
     Ended,
     Failed(String),
 }

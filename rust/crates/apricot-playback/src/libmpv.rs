@@ -12,11 +12,13 @@ use libloading::Library;
 
 use crate::{
     InitialPlaybackState, MpvLaunchOptions, MpvVideoMode, PlaybackCommand, PlaybackEngine,
-    PlaybackError, PlaybackEvent, RepeatMode,
+    PlaybackError, PlaybackEvent, PlaybackMediaInfo, RepeatMode,
 };
 
 const MPV_FORMAT_NONE: c_int = 0;
+const MPV_FORMAT_STRING: c_int = 1;
 const MPV_FORMAT_FLAG: c_int = 3;
+const MPV_FORMAT_INT64: c_int = 4;
 const MPV_FORMAT_DOUBLE: c_int = 5;
 const MPV_EVENT_SHUTDOWN: c_int = 1;
 const MPV_EVENT_END_FILE: c_int = 7;
@@ -200,6 +202,7 @@ pub struct LibMpvEngine {
     handle: usize,
     elapsed: f64,
     duration: Option<f64>,
+    media_info: PlaybackMediaInfo,
     shutdown_reported: bool,
 }
 
@@ -246,6 +249,7 @@ impl LibMpvEngine {
             handle: handle as usize,
             elapsed: 0.0,
             duration: None,
+            media_info: PlaybackMediaInfo::default(),
             shutdown_reported: false,
         })
     }
@@ -325,6 +329,44 @@ impl LibMpvEngine {
                 self.duration = Some((*property.data.cast::<f64>()).max(0.0));
                 Ok(Some(self.position_event()))
             }
+            b"file-format" if property.format == MPV_FORMAT_STRING => {
+                self.media_info.container = property_string(property.data);
+                Ok(Some(self.media_info_event()))
+            }
+            b"video-codec" if property.format == MPV_FORMAT_STRING => {
+                self.media_info.video_codec = property_string(property.data);
+                Ok(Some(self.media_info_event()))
+            }
+            b"video-params/w" if property.format == MPV_FORMAT_INT64 => {
+                self.media_info.width = property_u32(property.data);
+                Ok(Some(self.media_info_event()))
+            }
+            b"video-params/h" if property.format == MPV_FORMAT_INT64 => {
+                self.media_info.height = property_u32(property.data);
+                Ok(Some(self.media_info_event()))
+            }
+            b"audio-codec-name" if property.format == MPV_FORMAT_STRING => {
+                self.media_info.audio_codec = property_string(property.data);
+                Ok(Some(self.media_info_event()))
+            }
+            b"audio-bitrate" if property.format == MPV_FORMAT_DOUBLE => {
+                let bitrate = *property.data.cast::<f64>();
+                self.media_info.audio_bitrate_bits_per_second =
+                    (bitrate.is_finite() && bitrate > 0.0).then_some(bitrate);
+                Ok(Some(self.media_info_event()))
+            }
+            b"audio-params/samplerate" if property.format == MPV_FORMAT_INT64 => {
+                self.media_info.sample_rate_hz = property_u32(property.data);
+                Ok(Some(self.media_info_event()))
+            }
+            b"audio-params/channel-count" if property.format == MPV_FORMAT_INT64 => {
+                self.media_info.channel_count = property_u32(property.data);
+                Ok(Some(self.media_info_event()))
+            }
+            b"audio-params/hr-channels" if property.format == MPV_FORMAT_STRING => {
+                self.media_info.channel_layout = property_string(property.data);
+                Ok(Some(self.media_info_event()))
+            }
             _ => Ok(None),
         }
     }
@@ -335,10 +377,19 @@ impl LibMpvEngine {
             duration: self.duration,
         }
     }
+
+    fn media_info_event(&self) -> PlaybackEvent {
+        PlaybackEvent::MediaInfo(self.media_info.clone())
+    }
 }
 
 impl PlaybackEngine for LibMpvEngine {
     fn execute(&mut self, command: PlaybackCommand) -> Result<(), PlaybackError> {
+        if matches!(&command, PlaybackCommand::Load(_)) {
+            self.elapsed = 0.0;
+            self.duration = None;
+            self.media_info = PlaybackMediaInfo::default();
+        }
         let arguments = command_arguments(command)?;
         unsafe { self.api.run_command(self.handle(), &arguments) }
     }
@@ -489,10 +540,35 @@ unsafe fn subscribe(api: &MpvApi, handle: *mut MpvHandle) -> Result<(), Playback
         (1, "pause", MPV_FORMAT_FLAG),
         (2, "time-pos", MPV_FORMAT_DOUBLE),
         (3, "duration", MPV_FORMAT_DOUBLE),
+        (4, "file-format", MPV_FORMAT_STRING),
+        (5, "video-codec", MPV_FORMAT_STRING),
+        (6, "video-params/w", MPV_FORMAT_INT64),
+        (7, "video-params/h", MPV_FORMAT_INT64),
+        (8, "audio-codec-name", MPV_FORMAT_STRING),
+        (9, "audio-bitrate", MPV_FORMAT_DOUBLE),
+        (10, "audio-params/samplerate", MPV_FORMAT_INT64),
+        (11, "audio-params/channel-count", MPV_FORMAT_INT64),
+        (12, "audio-params/hr-channels", MPV_FORMAT_STRING),
     ] {
         api.observe(handle, id, name, format)?;
     }
     Ok(())
+}
+
+unsafe fn property_string(data: *mut c_void) -> Option<String> {
+    let value = *data.cast::<*const c_char>();
+    if value.is_null() {
+        return None;
+    }
+    let value = CStr::from_ptr(value).to_string_lossy();
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.chars().take(128).collect())
+}
+
+unsafe fn property_u32(data: *mut c_void) -> Option<u32> {
+    u32::try_from(*data.cast::<i64>())
+        .ok()
+        .filter(|value| *value > 0)
 }
 
 fn yes_no(value: bool) -> &'static str {
