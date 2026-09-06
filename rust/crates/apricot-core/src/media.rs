@@ -63,6 +63,63 @@ pub struct MediaItem {
 }
 
 impl MediaItem {
+    pub fn is_local_media(&self) -> bool {
+        self.source == MediaSource::Local
+            || self
+                .local_path
+                .as_ref()
+                .is_some_and(|path| !path.trim().is_empty())
+    }
+
+    /// Returns the durable location users expect from Copy link/Copy path.
+    /// Ephemeral component stream URLs are intentionally excluded.
+    pub fn copy_location(&self) -> Option<String> {
+        if self.is_local_media() {
+            return self
+                .local_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|path| !path.is_empty())
+                .map(str::to_owned);
+        }
+        self.url.as_ref().map(ToString::to_string)
+    }
+
+    /// Builds a canonical `YouTube` watch URL at the current whole second.
+    /// Existing non-time query parameters, such as a playlist identity, are
+    /// preserved when the durable source URL is a `YouTube` URL.
+    pub fn youtube_url_at_timestamp(&self, seconds: f64) -> Option<Url> {
+        let source_url = self
+            .url
+            .as_ref()
+            .filter(|url| youtube_video_id_from_url(url).is_some());
+        let video_id = if self.source == MediaSource::Youtube && valid_youtube_video_id(&self.id.0)
+        {
+            self.id.0.clone()
+        } else {
+            youtube_video_id_from_url(source_url?)?
+        };
+        let mut result = Url::parse("https://www.youtube.com/watch").ok()?;
+        let timestamp = std::time::Duration::try_from_secs_f64(seconds.max(0.0))
+            .map_or(0, |duration| duration.as_secs());
+        {
+            let mut query = result.query_pairs_mut();
+            query.append_pair("v", &video_id);
+            if let Some(source_url) = source_url {
+                for (key, value) in source_url.query_pairs() {
+                    if !matches!(
+                        key.to_ascii_lowercase().as_str(),
+                        "v" | "t" | "start" | "time_continue"
+                    ) {
+                        query.append_pair(&key, &value);
+                    }
+                }
+            }
+            query.append_pair("t", &format!("{timestamp}s"));
+        }
+        Some(result)
+    }
+
     pub fn stable_identity(&self) -> Option<String> {
         let source = match self.source {
             MediaSource::Youtube => "youtube",
@@ -94,6 +151,42 @@ impl MediaItem {
                 .as_ref()
                 .is_some_and(|path| !path.trim().is_empty()))
     }
+}
+
+fn valid_youtube_video_id(value: &str) -> bool {
+    value.len() >= 8
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+fn youtube_video_id_from_url(url: &Url) -> Option<String> {
+    let host = url.host_str()?.trim_end_matches('.').to_ascii_lowercase();
+    if host == "youtu.be" || host.ends_with(".youtu.be") {
+        return url
+            .path_segments()?
+            .find(|segment| !segment.is_empty())
+            .filter(|id| valid_youtube_video_id(id))
+            .map(str::to_owned);
+    }
+    if host != "youtube.com" && !host.ends_with(".youtube.com") {
+        return None;
+    }
+    if let Some((_, id)) = url
+        .query_pairs()
+        .find(|(key, _)| key.eq_ignore_ascii_case("v"))
+    {
+        return valid_youtube_video_id(&id).then(|| id.into_owned());
+    }
+    let mut segments = url.path_segments()?;
+    let kind = segments.next()?;
+    if !matches!(kind, "shorts" | "embed" | "live") {
+        return None;
+    }
+    segments
+        .next()
+        .filter(|id| valid_youtube_video_id(id))
+        .map(str::to_owned)
 }
 
 #[cfg(test)]
@@ -133,5 +226,61 @@ mod tests {
         assert!(!item(MediaKind::Channel).is_playable());
         assert!(!item(MediaKind::PodcastFeed).is_playable());
         assert!(!item(MediaKind::TvShow).is_playable());
+    }
+
+    #[test]
+    fn copy_location_never_exposes_an_ephemeral_stream() {
+        let mut media = item(MediaKind::Video);
+        media.stream_url = Some("https://cdn.example/temporary".parse().expect("stream URL"));
+        assert_eq!(
+            media.copy_location().as_deref(),
+            Some("https://www.youtube.com/watch?v=same")
+        );
+
+        media.source = MediaSource::Local;
+        media.url = None;
+        media.local_path = Some(r"C:\Music\Track.mp3".to_owned());
+        assert_eq!(
+            media.copy_location().as_deref(),
+            Some(r"C:\Music\Track.mp3")
+        );
+    }
+
+    #[test]
+    fn timestamp_url_preserves_collection_context_and_replaces_old_time() {
+        let mut media = item(MediaKind::Video);
+        media.id = MediaId("dQw4w9WgXcQ".to_owned());
+        media.url = Some(
+            "https://youtu.be/dQw4w9WgXcQ?list=PL123&t=3&index=4"
+                .parse()
+                .expect("YouTube URL"),
+        );
+        assert_eq!(
+            media
+                .youtube_url_at_timestamp(65.9)
+                .map(|url| url.to_string())
+                .as_deref(),
+            Some("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL123&index=4&t=65s")
+        );
+    }
+
+    #[test]
+    fn timestamp_url_supports_direct_youtube_links_but_rejects_lookalike_hosts() {
+        let mut media = item(MediaKind::Video);
+        media.source = MediaSource::Direct;
+        media.id = MediaId(String::new());
+        media.url = Some(
+            "https://www.youtube.com/shorts/dQw4w9WgXcQ"
+                .parse()
+                .expect("YouTube URL"),
+        );
+        assert!(media.youtube_url_at_timestamp(2.0).is_some());
+
+        media.url = Some(
+            "https://notyoutube.com/watch?v=dQw4w9WgXcQ"
+                .parse()
+                .expect("lookalike URL"),
+        );
+        assert!(media.youtube_url_at_timestamp(2.0).is_none());
     }
 }

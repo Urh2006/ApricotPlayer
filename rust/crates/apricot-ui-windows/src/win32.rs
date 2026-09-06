@@ -89,6 +89,10 @@ const ID_CONTEXT_ADD_TO_QUEUE: usize = 1104;
 const ID_CONTEXT_REMOVE_FROM_QUEUE: usize = 1105;
 const ID_CONTEXT_ADD_FOLDER_TO_QUEUE: usize = 1106;
 const ID_CONTEXT_PLAYBACK_QUEUE: usize = 1107;
+const ID_CONTEXT_COPY_LOCATION: usize = 1108;
+const ID_CONTEXT_COPY_STREAM_URL: usize = 1109;
+const ID_CONTEXT_COPY_TIMESTAMP: usize = 1110;
+const ID_CONTEXT_CLOSE_PLAYER: usize = 1111;
 const WM_PROCESS_ACTIVATION: u32 = WM_APP + 1;
 const WM_TRAY_ICON: u32 = WM_APP + 2;
 const YOUTUBE_TIMER_ID: usize = 1;
@@ -137,6 +141,18 @@ struct PendingQueuedStart {
     mode: QueueStartMode,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum YoutubeResolvePurpose {
+    Playback,
+    CopyStreamUrl,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PendingYoutubeResolve {
+    token: u64,
+    purpose: YoutubeResolvePurpose,
+}
+
 #[derive(Clone, Copy)]
 struct ControlledRepeatState {
     action_id: &'static str,
@@ -178,7 +194,7 @@ struct WindowState {
     view: MainView,
     youtube_search: YoutubeSearchService,
     pending_youtube_work: Option<SearchWork>,
-    pending_youtube_resolve: Option<u64>,
+    pending_youtube_resolve: Option<PendingYoutubeResolve>,
     pending_player_navigation: Option<i32>,
     pending_queued_start: Option<PendingQueuedStart>,
     next_youtube_resolve_token: u64,
@@ -697,6 +713,7 @@ unsafe fn show_list_context_menu(window: HWND, location: LPARAM) {
             (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
             (ID_CONTEXT_ADD_FOLDER_TO_QUEUE, "add_folder_to_queue"),
             (ID_CONTEXT_PLAYBACK_QUEUE, "playback_queue"),
+            (ID_CONTEXT_COPY_LOCATION, "copy_path"),
         ]
     } else {
         &[
@@ -704,6 +721,8 @@ unsafe fn show_list_context_menu(window: HWND, location: LPARAM) {
             (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
             (ID_CONTEXT_REMOVE_FROM_QUEUE, "remove_from_playback_queue"),
             (ID_CONTEXT_PLAYBACK_QUEUE, "playback_queue"),
+            (ID_CONTEXT_COPY_LOCATION, "copy_link"),
+            (ID_CONTEXT_COPY_STREAM_URL, "copy_stream_url"),
         ]
     };
     for (id, key) in entries {
@@ -740,12 +759,105 @@ unsafe fn show_list_context_menu(window: HWND, location: LPARAM) {
             ID_CONTEXT_REMOVE_FROM_QUEUE => remove_active_item_from_playback_queue(window),
             ID_CONTEXT_ADD_FOLDER_TO_QUEUE => add_current_local_folder_to_queue(window),
             ID_CONTEXT_PLAYBACK_QUEUE => show_playback_queue(window),
+            ID_CONTEXT_COPY_LOCATION => copy_active_location(window),
+            ID_CONTEXT_COPY_STREAM_URL => copy_active_stream_url(window),
             _ => {}
         }
     }
     let _ = DestroyMenu(menu);
     if let Some(state) = state(window) {
         let _ = SetFocus(Some(active_primary_control(state)));
+    }
+}
+
+unsafe fn show_context_menu_for_active_view(window: HWND) {
+    match state(window).map(|state| state.view) {
+        Some(MainView::Results | MainView::LocalFolder) => {
+            show_list_context_menu(window, LPARAM(-1));
+        }
+        Some(MainView::Player) => show_player_context_menu(window, LPARAM(-1)),
+        _ => {}
+    }
+}
+
+unsafe fn show_player_context_menu(window: HWND, location: LPARAM) {
+    let Some((language, item, focused)) = state(window).and_then(|state| {
+        Some((
+            state.application.settings().language.clone(),
+            state.application.player_session().current_item()?.clone(),
+            GetFocus(),
+        ))
+    }) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&language);
+    let Ok(menu) = CreatePopupMenu() else {
+        return;
+    };
+    let mut entries = vec![
+        (
+            ID_CONTEXT_COPY_LOCATION,
+            if item.is_local_media() {
+                "copy_path"
+            } else {
+                "copy_link"
+            },
+        ),
+        (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
+        (ID_CONTEXT_REMOVE_FROM_QUEUE, "remove_from_playback_queue"),
+        (ID_CONTEXT_PLAYBACK_QUEUE, "playback_queue"),
+    ];
+    if !item.is_local_media() {
+        entries.insert(1, (ID_CONTEXT_COPY_STREAM_URL, "copy_stream_url"));
+    }
+    if item.youtube_url_at_timestamp(0.0).is_some() {
+        entries.insert(1, (ID_CONTEXT_COPY_TIMESTAMP, "copy_timestamp_link"));
+    }
+    entries.push((ID_CONTEXT_CLOSE_PLAYER, "close_player"));
+    for (id, key) in entries {
+        let label = wide(catalog.text(key));
+        let _ = AppendMenuW(menu, MF_STRING, id, PCWSTR(label.as_ptr()));
+    }
+    let mut fallback_point = POINT::default();
+    let point = context_menu_point(location, focused).or_else(|| {
+        GetCursorPos(&raw mut fallback_point)
+            .is_ok()
+            .then_some(fallback_point)
+    });
+    if let Some(point) = point {
+        if let Some(state) = state_mut(window) {
+            state.modal_open = true;
+        }
+        let selected = TrackPopupMenu(
+            menu,
+            TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD,
+            point.x,
+            point.y,
+            None,
+            window,
+            None,
+        );
+        if let Some(state) = state_mut(window) {
+            state.modal_open = false;
+        }
+        match usize::try_from(selected.0).unwrap_or_default() {
+            ID_CONTEXT_COPY_LOCATION => copy_active_location(window),
+            ID_CONTEXT_COPY_STREAM_URL => copy_active_stream_url(window),
+            ID_CONTEXT_COPY_TIMESTAMP => copy_current_timestamp_link(window),
+            ID_CONTEXT_ADD_TO_QUEUE => add_active_item_to_playback_queue(window),
+            ID_CONTEXT_REMOVE_FROM_QUEUE => remove_active_item_from_playback_queue(window),
+            ID_CONTEXT_PLAYBACK_QUEUE => show_playback_queue(window),
+            ID_CONTEXT_CLOSE_PLAYER => navigate_back(window),
+            _ => {}
+        }
+    }
+    let _ = DestroyMenu(menu);
+    if focused.0.is_null() {
+        if let Some(state) = state(window) {
+            let _ = SetFocus(Some(active_primary_control(state)));
+        }
+    } else {
+        let _ = SetFocus(Some(focused));
     }
 }
 
@@ -1328,9 +1440,22 @@ unsafe fn start_media_item(
         start_player(window, item);
         return;
     }
+    start_youtube_resolve(window, &item, YoutubeResolvePurpose::Playback);
+}
+
+unsafe fn start_youtube_resolve(
+    window: HWND,
+    item: &apricot_core::MediaItem,
+    purpose: YoutubeResolvePurpose,
+) {
     let Some(url) = item.url.as_ref().map(ToString::to_string) else {
         if let Some(state) = state_mut(window) {
-            finish_youtube_error_state(window, state, 0, "The selected item has no media URL");
+            report_youtube_resolve_start_error(
+                window,
+                state,
+                purpose,
+                "The selected item has no media URL",
+            );
         }
         return;
     };
@@ -1341,7 +1466,12 @@ unsafe fn start_media_item(
     let token = state.next_youtube_resolve_token;
     let backend = YoutubeBackend::from_setting_value(&state.application.settings().youtube_backend);
     let Some(components) = application_directory().map(|path| path.join("components")) else {
-        finish_youtube_error_state(window, state, token, "Application path is unavailable");
+        report_youtube_resolve_start_error(
+            window,
+            state,
+            purpose,
+            "Application path is unavailable",
+        );
         return;
     };
     let preference =
@@ -1352,7 +1482,7 @@ unsafe fn start_media_item(
         .start_resolve(backend, &components, config, token, url, preference)
     {
         Ok(()) => {
-            state.pending_youtube_resolve = Some(token);
+            state.pending_youtube_resolve = Some(PendingYoutubeResolve { token, purpose });
             set_status(
                 state,
                 &catalog_text(&state.application, "resolving_stream_url"),
@@ -1365,8 +1495,31 @@ unsafe fn start_media_item(
                 None,
             );
         }
-        Err(error) => finish_youtube_error_state(window, state, token, &error.to_string()),
+        Err(error) => {
+            report_youtube_resolve_start_error(window, state, purpose, &error.to_string());
+        }
     }
+}
+
+unsafe fn report_youtube_resolve_start_error(
+    window: HWND,
+    state: &mut WindowState,
+    purpose: YoutubeResolvePurpose,
+    message: &str,
+) {
+    if purpose == YoutubeResolvePurpose::Playback {
+        state.pending_queued_start = None;
+    }
+    let visible_message = if purpose == YoutubeResolvePurpose::CopyStreamUrl {
+        catalog_text(&state.application, "stream_url_failed").replace("{error}", message)
+    } else {
+        message.to_owned()
+    };
+    set_status(state, &visible_message, true);
+    if purpose == YoutubeResolvePurpose::Playback {
+        show_error_message(window, &visible_message);
+    }
+    let _ = SetFocus(Some(active_primary_control(state)));
 }
 
 unsafe fn activate_player_control(window: HWND, activation: PlayerControlActivation) {
@@ -1387,33 +1540,43 @@ unsafe fn finish_youtube_resolve(
     let Some(state) = state_mut(window) else {
         return;
     };
-    if state.pending_youtube_resolve != Some(token) {
+    let Some(pending) = state
+        .pending_youtube_resolve
+        .filter(|pending| pending.token == token)
+    else {
         return;
-    }
+    };
     state.pending_youtube_resolve = None;
     stop_youtube_timer(window);
     let preference =
         youtube_stream_preference(&state.application.settings().stream_format_preference);
     let Some(selection) = select_youtube_playback_formats(formats, preference) else {
-        finish_youtube_resolve_selection_error(
+        report_youtube_resolve_start_error(
             window,
             state,
+            pending.purpose,
             "No playable YouTube stream was returned",
         );
         return;
     };
     let Some(primary) = formats.get(selection.primary_index) else {
-        finish_youtube_resolve_selection_error(
+        report_youtube_resolve_start_error(
             window,
             state,
+            pending.purpose,
             "The selected YouTube stream was invalid",
         );
         return;
     };
+    if pending.purpose == YoutubeResolvePurpose::CopyStreamUrl {
+        copy_text_and_announce(window, &primary.url, "stream_url_copied");
+        return;
+    }
     let Ok(stream_url) = primary.url.parse() else {
-        finish_youtube_resolve_selection_error(
+        report_youtube_resolve_start_error(
             window,
             state,
+            pending.purpose,
             "The selected YouTube stream URL was invalid",
         );
         return;
@@ -1424,17 +1587,6 @@ unsafe fn finish_youtube_resolve(
         .and_then(|index| formats.get(index))
         .and_then(|format| format.url.parse().ok());
     start_player(window, item);
-}
-
-unsafe fn finish_youtube_resolve_selection_error(
-    window: HWND,
-    state: &mut WindowState,
-    message: &str,
-) {
-    state.pending_queued_start = None;
-    set_status(state, message, true);
-    show_error_message(window, message);
-    let _ = SetFocus(Some(active_primary_control(state)));
 }
 
 unsafe fn start_player(window: HWND, item: apricot_core::MediaItem) {
@@ -1688,12 +1840,15 @@ unsafe fn poll_youtube_runtime(window: HWND) {
             Err(error) => {
                 let generation = state(window)
                     .and_then(|state| {
-                        state.pending_youtube_resolve.or_else(|| {
-                            state
-                                .pending_youtube_work
-                                .as_ref()
-                                .map(|work| work.generation)
-                        })
+                        state
+                            .pending_youtube_resolve
+                            .map(|pending| pending.token)
+                            .or_else(|| {
+                                state
+                                    .pending_youtube_work
+                                    .as_ref()
+                                    .map(|work| work.generation)
+                            })
                     })
                     .unwrap_or_default();
                 finish_youtube_error(window, generation, &error.to_string());
@@ -1852,12 +2007,27 @@ unsafe fn finish_youtube_error(window: HWND, generation: u64, message: &str) {
     let Some(state) = state_mut(window) else {
         return;
     };
-    if state.pending_youtube_resolve == Some(generation) {
-        state.pending_youtube_resolve = None;
-        state.pending_queued_start = None;
+    if state
+        .pending_youtube_resolve
+        .is_some_and(|pending| pending.token == generation)
+    {
+        let purpose = state
+            .pending_youtube_resolve
+            .take()
+            .map_or(YoutubeResolvePurpose::Playback, |pending| pending.purpose);
+        if purpose == YoutubeResolvePurpose::Playback {
+            state.pending_queued_start = None;
+        }
         stop_youtube_timer(window);
-        set_status(state, message, true);
-        show_error_message(window, message);
+        let visible_message = if purpose == YoutubeResolvePurpose::CopyStreamUrl {
+            catalog_text(&state.application, "stream_url_failed").replace("{error}", message)
+        } else {
+            message.to_owned()
+        };
+        set_status(state, &visible_message, true);
+        if purpose == YoutubeResolvePurpose::Playback {
+            show_error_message(window, &visible_message);
+        }
         let _ = SetFocus(Some(active_primary_control(state)));
         return;
     }
@@ -2508,6 +2678,10 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "player_repeat" => toggle_player_session_setting(window, SessionToggle::Repeat),
         "player_bass_boost" => toggle_player_session_setting(window, SessionToggle::BassBoost),
         "player_volume_boost" => toggle_player_session_setting(window, SessionToggle::VolumeBoost),
+        "copy_link" | "player_copy_link" => copy_active_location(window),
+        "player_copy_timestamp_link" => copy_current_timestamp_link(window),
+        "copy_stream_url" => copy_active_stream_url(window),
+        "context_menu" => show_context_menu_for_active_view(window),
         "add_to_playback_queue" => add_active_item_to_playback_queue(window),
         "remove_from_playback_queue" => remove_active_item_from_playback_queue(window),
         "open_playback_queue" => show_playback_queue(window),
@@ -2597,6 +2771,117 @@ unsafe fn active_media_item(window: HWND) -> Option<apricot_core::MediaItem> {
         }
         MainView::Player => state.application.player_session().current_item().cloned(),
         MainView::MainMenu | MainView::Search => None,
+    }
+}
+
+unsafe fn copy_active_location(window: HWND) {
+    let Some(item) = active_media_item(window) else {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "no_selection"),
+                true,
+            );
+        }
+        return;
+    };
+    let local_media = item.is_local_media();
+    let Some(location) = item.copy_location() else {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "no_selection"),
+                true,
+            );
+        }
+        return;
+    };
+    copy_text_and_announce(
+        window,
+        &location,
+        if local_media {
+            "path_copied"
+        } else {
+            "url_copied"
+        },
+    );
+}
+
+unsafe fn copy_current_timestamp_link(window: HWND) {
+    let Some((url, message_key)) = state(window).and_then(|state| {
+        let session = state.application.player_session();
+        session
+            .current_item()?
+            .youtube_url_at_timestamp(session.position_seconds())
+            .map(|url| (url.to_string(), "timestamp_url_copied"))
+    }) else {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "timestamp_url_unavailable"),
+                true,
+            );
+        }
+        return;
+    };
+    copy_text_and_announce(window, &url, message_key);
+}
+
+unsafe fn copy_active_stream_url(window: HWND) {
+    let Some(item) = active_media_item(window) else {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "no_selection"),
+                true,
+            );
+        }
+        return;
+    };
+    if item.is_local_media() {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "direct_media_link_unavailable_local"),
+                true,
+            );
+        }
+        return;
+    }
+    if let Some(stream_url) = item.stream_url.as_ref() {
+        copy_text_and_announce(window, stream_url.as_str(), "stream_url_copied");
+        return;
+    }
+    if item.source == apricot_core::MediaSource::Youtube {
+        start_youtube_resolve(window, &item, YoutubeResolvePurpose::CopyStreamUrl);
+        return;
+    }
+    if item.source == apricot_core::MediaSource::Direct
+        && let Some(url) = item.url.as_ref()
+    {
+        copy_text_and_announce(window, url.as_str(), "stream_url_copied");
+        return;
+    }
+    if let Some(state) = state(window) {
+        let message = catalog_text(&state.application, "stream_url_failed").replace(
+            "{error}",
+            "this source has not exposed a direct media URL yet",
+        );
+        set_status(state, &message, true);
+    }
+}
+
+unsafe fn copy_text_and_announce(window: HWND, text: &str, success_key: &str) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    match crate::clipboard_win32::copy_text(window, text) {
+        Ok(()) => set_status(state, &catalog_text(&state.application, success_key), true),
+        Err(error) => {
+            let message = format!("Could not copy to the clipboard: {error}");
+            set_status(state, &message, true);
+            show_error_message(window, &message);
+        }
     }
 }
 
