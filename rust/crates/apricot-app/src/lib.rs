@@ -3,6 +3,7 @@
 pub mod action_finder;
 pub mod activation;
 pub mod application;
+pub mod bookmark_controller;
 pub mod local_folder;
 pub mod main_menu;
 pub mod media_collection_controller;
@@ -59,6 +60,7 @@ pub use user_playlist_controller::{
 
 #[derive(Debug, Default)]
 pub struct AppState {
+    pub bookmarks: BookmarkController,
     pub favorites: MediaCollectionController,
     pub history: MediaCollectionController,
     pub navigation: NavigationStack,
@@ -69,3 +71,4 @@ pub struct AppState {
     pub search: SearchSession,
     pub user_playlists: UserPlaylistController,
 }
+pub use bookmark_controller::{BookmarkController, BookmarkControllerError};

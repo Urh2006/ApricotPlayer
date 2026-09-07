@@ -303,3 +303,39 @@ workspace Clippy with warnings denied, and `PYTHON_DATA_COMPAT=PASS`.
 Still required for complete playlist parity: per-item and whole-playlist
 downloads, source-specific channel actions, and manual NVDA/Narrator dialog and
 navigation checks.
+
+## 2026-09-07: Python-compatible playback bookmarks
+
+Implementation: `BookmarkFile`, `BookmarkController`, application-owned
+bookmark state, exact initial-position playback, and the native Win32 bookmark
+dialog.
+
+Verified:
+
+- `bookmarks.json` loads from the isolated Rust beta data directory with a
+  read-only fallback to the stable Python file; migration never writes to the
+  stable installation;
+- old top-level and current nested Python bookmark shapes normalize into one
+  typed model, while unknown fields survive a load/save round trip;
+- malformed individual entries are skipped like Python normalization, while a
+  malformed current file blocks mutation instead of being silently replaced;
+- add, rename, and delete persist atomically by durable bookmark id, and current
+  item filtering keeps bookmarks independent by durable media identity;
+- all-item and current-item lists match Python ordering and expose native list,
+  button, Enter, double-click, Delete, Escape, and context-menu interaction;
+- playing a bookmark for the current item uses an exact absolute seek; playing
+  another local, direct, or YouTube item passes the initial position in the same
+  load operation, including split video/audio streams;
+- a persistent libmpv instance receives the bookmark start position only for
+  the intended item; its next ordinary replacement explicitly receives no
+  position, preventing timestamp leakage between files;
+- closing the player opened from the global bookmark list returns to the
+  bookmark dialog, and closing that dialog unwinds one further route.
+
+Automated results: app 86 tests, playback 16 tests, storage 38 tests, Windows UI
+12 tests, and full workspace Clippy with warnings denied.
+
+Still required for complete bookmark parity: manual NVDA/Narrator dialog,
+announcement, focus-return, context-menu, same-item seek, and cross-item resume
+checks in the packaged build. General automatic resume and last-session restore
+remain separate unfinished parity items.

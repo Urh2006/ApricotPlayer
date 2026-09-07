@@ -201,11 +201,10 @@ mod windows_spike {
         options.initial_volume = 37.0;
         let mut engine = LibMpvEngine::load(&options)?;
         let first_started = Instant::now();
-        engine.execute(PlaybackCommand::Load(Box::new(media_item(
-            "audio",
-            MediaKind::Audio,
-            audio_fixture,
-        ))))?;
+        engine.execute(PlaybackCommand::Load {
+            item: Box::new(media_item("audio", MediaKind::Audio, audio_fixture)),
+            start_position_seconds: None,
+        })?;
         wait_for_engine_event(&mut engine, Duration::from_secs(3), |event| {
             matches!(event, PlaybackEvent::Started)
         })?;
@@ -228,7 +227,10 @@ mod windows_spike {
         )
         .parse()
         .ok();
-        engine.execute(PlaybackCommand::Load(Box::new(video)))?;
+        engine.execute(PlaybackCommand::Load {
+            item: Box::new(video),
+            start_position_seconds: None,
+        })?;
         wait_for_engine_event(&mut engine, Duration::from_secs(3), |event| {
             matches!(event, PlaybackEvent::Started)
         })?;

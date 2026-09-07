@@ -231,7 +231,10 @@ fn start_or_replace_engine(
     factory: &mut EngineFactory,
 ) -> Option<(u64, Box<dyn PlaybackEngine>)> {
     if let Some((_, mut engine)) = active {
-        return match engine.execute(PlaybackCommand::Load(item)) {
+        return match engine.execute(PlaybackCommand::Load {
+            item,
+            start_position_seconds: options.initial_position_seconds,
+        }) {
             Ok(()) => Some((generation, engine)),
             Err(error) => {
                 emit_failure(updates, generation, &error);
@@ -240,7 +243,10 @@ fn start_or_replace_engine(
         };
     }
     match factory(options) {
-        Ok(mut engine) => match engine.execute(PlaybackCommand::Load(item)) {
+        Ok(mut engine) => match engine.execute(PlaybackCommand::Load {
+            item,
+            start_position_seconds: options.initial_position_seconds,
+        }) {
             Ok(()) => Some((generation, engine)),
             Err(error) => {
                 emit_failure(updates, generation, &error);
@@ -392,7 +398,7 @@ mod tests {
 
         let commands = commands.lock().expect("commands");
         assert_eq!(commands.len(), 2);
-        assert!(matches!(commands[0], PlaybackCommand::Load(_)));
+        assert!(matches!(commands[0], PlaybackCommand::Load { .. }));
         assert_eq!(commands[1], PlaybackCommand::SetPaused(true));
     }
 
@@ -411,8 +417,10 @@ mod tests {
         }))
         .expect("runtime");
 
+        let mut bookmark_options = MpvLaunchOptions::new("mpv.exe");
+        bookmark_options.initial_position_seconds = Some(12.3);
         runtime
-            .start(1, MpvLaunchOptions::new("mpv.exe"), item("first"))
+            .start(1, bookmark_options, item("first"))
             .expect("first start");
         runtime
             .start(2, MpvLaunchOptions::new("mpv.exe"), item("second"))
@@ -431,15 +439,21 @@ mod tests {
         assert_eq!(commands.len(), 3);
         assert!(matches!(
             &commands[0],
-            PlaybackCommand::Load(item) if item.id.0 == "first"
+            PlaybackCommand::Load {
+                item,
+                start_position_seconds: Some(position),
+            } if item.id.0 == "first" && (*position - 12.3).abs() < f64::EPSILON
         ));
         assert!(matches!(
             &commands[1],
-            PlaybackCommand::Load(item) if item.id.0 == "second"
+            PlaybackCommand::Load {
+                item,
+                start_position_seconds: None,
+            } if item.id.0 == "second"
         ));
         assert!(matches!(
             &commands[2],
-            PlaybackCommand::Load(item) if item.id.0 == "third"
+            PlaybackCommand::Load { item, .. } if item.id.0 == "third"
         ));
     }
 }

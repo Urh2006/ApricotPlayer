@@ -72,7 +72,10 @@ fn qualify_process_engine(mpv: &Path, fixture: &Path) -> Result<(), Box<dyn std:
         metadata: BTreeMap::default(),
     };
     let first_load_started = Instant::now();
-    engine.execute(PlaybackCommand::Load(Box::new(item.clone())))?;
+    engine.execute(PlaybackCommand::Load {
+        item: Box::new(item.clone()),
+        start_position_seconds: None,
+    })?;
     wait_for_engine_event(&mut engine, Duration::from_secs(3), |event| {
         matches!(event, PlaybackEvent::Started)
     })?;
@@ -98,7 +101,10 @@ fn qualify_process_engine(mpv: &Path, fixture: &Path) -> Result<(), Box<dyn std:
     })?;
 
     let second_load_started = Instant::now();
-    engine.execute(PlaybackCommand::Load(Box::new(item)))?;
+    engine.execute(PlaybackCommand::Load {
+        item: Box::new(item),
+        start_position_seconds: None,
+    })?;
     wait_for_engine_event(&mut engine, Duration::from_secs(3), |event| {
         matches!(event, PlaybackEvent::Started)
     })?;

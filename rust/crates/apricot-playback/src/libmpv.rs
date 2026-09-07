@@ -385,7 +385,7 @@ impl LibMpvEngine {
 
 impl PlaybackEngine for LibMpvEngine {
     fn execute(&mut self, command: PlaybackCommand) -> Result<(), PlaybackError> {
-        if matches!(&command, PlaybackCommand::Load(_)) {
+        if matches!(&command, PlaybackCommand::Load { .. }) {
             self.elapsed = 0.0;
             self.duration = None;
             self.media_info = PlaybackMediaInfo::default();
@@ -577,18 +577,27 @@ fn yes_no(value: bool) -> &'static str {
 
 fn command_arguments(command: PlaybackCommand) -> Result<Vec<String>, PlaybackError> {
     let arguments = match command {
-        PlaybackCommand::Load(item) => {
+        PlaybackCommand::Load {
+            item,
+            start_position_seconds,
+        } => {
             let mut arguments = vec![
                 "loadfile".to_owned(),
                 media_target(&item)?,
                 "replace".to_owned(),
             ];
+            let mut options = Vec::new();
             if let Some(audio_url) = &item.external_audio_url {
                 let audio_url = audio_url.to_string();
-                arguments.extend([
-                    "-1".to_owned(),
-                    format!("audio-file=%{}%{audio_url}", audio_url.len()),
-                ]);
+                options.push(format!("audio-file=%{}%{audio_url}", audio_url.len()));
+            }
+            if let Some(position) =
+                start_position_seconds.filter(|value| value.is_finite() && *value >= 0.0)
+            {
+                options.push(format!("start={position}"));
+            }
+            if !options.is_empty() {
+                arguments.extend(["-1".to_owned(), options.join(",")]);
             }
             arguments
         }
@@ -688,7 +697,11 @@ mod tests {
             metadata: BTreeMap::new(),
         };
         assert_eq!(
-            command_arguments(PlaybackCommand::Load(Box::new(item))).expect("command"),
+            command_arguments(PlaybackCommand::Load {
+                item: Box::new(item),
+                start_position_seconds: None,
+            })
+            .expect("command"),
             ["loadfile", r"C:\Music\Track.mp3", "replace"]
         );
     }
@@ -709,13 +722,48 @@ mod tests {
             metadata: BTreeMap::new(),
         };
         assert_eq!(
-            command_arguments(PlaybackCommand::Load(Box::new(item))).expect("command"),
+            command_arguments(PlaybackCommand::Load {
+                item: Box::new(item),
+                start_position_seconds: None,
+            })
+            .expect("command"),
             [
                 "loadfile",
                 "https://media.test/video",
                 "replace",
                 "-1",
                 "audio-file=%24%https://media.test/audio",
+            ]
+        );
+    }
+
+    #[test]
+    fn load_command_applies_exact_initial_position_with_other_file_options() {
+        let item = MediaItem {
+            id: MediaId("video".to_owned()),
+            source: MediaSource::Youtube,
+            kind: MediaKind::Video,
+            title: "Video".to_owned(),
+            url: Some("https://youtube.test/watch?v=video".parse().expect("URL")),
+            stream_url: Some("https://media.test/video".parse().expect("URL")),
+            external_audio_url: Some("https://media.test/audio".parse().expect("URL")),
+            local_path: None,
+            channel: String::new(),
+            duration_seconds: None,
+            metadata: BTreeMap::new(),
+        };
+        assert_eq!(
+            command_arguments(PlaybackCommand::Load {
+                item: Box::new(item),
+                start_position_seconds: Some(12.3),
+            })
+            .expect("command"),
+            [
+                "loadfile",
+                "https://media.test/video",
+                "replace",
+                "-1",
+                "audio-file=%24%https://media.test/audio,start=12.3",
             ]
         );
     }

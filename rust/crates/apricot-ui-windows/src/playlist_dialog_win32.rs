@@ -70,9 +70,25 @@ pub fn prompt_name(
     ok_label: &str,
     cancel_label: &str,
 ) -> Result<Option<String>> {
+    prompt_name_with_initial(owner, title, prompt, "", ok_label, cancel_label)
+}
+
+/// Prompts for a name with a caller-provided initial edit value.
+///
+/// # Errors
+///
+/// Returns a Win32 error when the modal window or a child control cannot be created.
+pub fn prompt_name_with_initial(
+    owner: HWND,
+    title: &str,
+    prompt: &str,
+    initial_value: &str,
+    ok_label: &str,
+    cancel_label: &str,
+) -> Result<Option<String>> {
     // SAFETY: The nested modal loop owns its state and disables its owner until
     // the state allocation has been recovered.
-    unsafe { prompt_name_win32(owner, title, prompt, ok_label, cancel_label) }
+    unsafe { prompt_name_win32(owner, title, prompt, initial_value, ok_label, cancel_label) }
 }
 
 /// Lets the user choose one playlist with the list focused first.
@@ -116,6 +132,7 @@ unsafe fn prompt_name_win32(
     owner: HWND,
     title: &str,
     prompt: &str,
+    initial_value: &str,
     ok_label: &str,
     cancel_label: &str,
 ) -> Result<Option<String>> {
@@ -149,6 +166,11 @@ unsafe fn prompt_name_win32(
         let _ = DestroyWindow(window);
         return Err(windows::core::Error::from_thread());
     }
+    let initial_value = wide(initial_value);
+    let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowTextW(
+        state.base.value,
+        PCWSTR(initial_value.as_ptr()),
+    );
     run_modal(window, owner, state, |state| state.result)
 }
 

@@ -29,10 +29,19 @@ pub use runtime::{PlaybackRuntime, PlaybackRuntimeError, PlaybackUpdate};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PlaybackCommand {
-    Load(Box<MediaItem>),
+    Load {
+        item: Box<MediaItem>,
+        start_position_seconds: Option<f64>,
+    },
     SetPaused(bool),
-    SeekRelative { seconds: f64, exact: bool },
-    SeekAbsolute { seconds: f64, exact: bool },
+    SeekRelative {
+        seconds: f64,
+        exact: bool,
+    },
+    SeekAbsolute {
+        seconds: f64,
+        exact: bool,
+    },
     SetVolume(f64),
     SetVolumeMax(u16),
     SetSpeed(f64),

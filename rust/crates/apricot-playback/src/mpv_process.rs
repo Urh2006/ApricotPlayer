@@ -77,6 +77,7 @@ pub struct MpvLaunchOptions {
     pub initial_speed: f64,
     pub initial_pitch: f64,
     pub initial_playback_state: InitialPlaybackState,
+    pub initial_position_seconds: Option<f64>,
     pub repeat_mode: RepeatMode,
     pub gapless: bool,
     pub replay_gain: String,
@@ -103,6 +104,7 @@ impl MpvLaunchOptions {
             initial_speed: 1.0,
             initial_pitch: 1.0,
             initial_playback_state: InitialPlaybackState::Playing,
+            initial_position_seconds: None,
             repeat_mode: RepeatMode::Off,
             gapless: true,
             replay_gain: "no".to_owned(),
@@ -185,16 +187,17 @@ impl MpvProcessEngine {
 impl PlaybackEngine for MpvProcessEngine {
     fn execute(&mut self, command: PlaybackCommand) -> Result<(), PlaybackError> {
         let command = match command {
-            PlaybackCommand::Load(item) => {
-                let options =
-                    item.external_audio_url
-                        .as_ref()
-                        .map_or_else(serde_json::Map::new, |url| {
-                            serde_json::Map::from_iter([(
-                                "audio-file".to_owned(),
-                                Value::String(url.to_string()),
-                            )])
-                        });
+            PlaybackCommand::Load {
+                item,
+                start_position_seconds,
+            } => {
+                let mut options = serde_json::Map::new();
+                if let Some(url) = &item.external_audio_url {
+                    options.insert("audio-file".to_owned(), Value::String(url.to_string()));
+                }
+                if let Some(position) = valid_start_position(start_position_seconds) {
+                    options.insert("start".to_owned(), Value::String(position.to_string()));
+                }
                 json!(["loadfile", media_target(&item)?, "replace", -1, options])
             }
             PlaybackCommand::SetPaused(paused) => json!(["set_property", "pause", paused]),
@@ -259,6 +262,10 @@ impl PlaybackEngine for MpvProcessEngine {
         }
         Ok(None)
     }
+}
+
+fn valid_start_position(position: Option<f64>) -> Option<f64> {
+    position.filter(|value| value.is_finite() && *value >= 0.0)
 }
 
 impl Drop for MpvProcessEngine {

@@ -13,7 +13,12 @@ use std::{
     },
 };
 
-use crate::player_controls_win32::{PlayerControlActivation, PlayerControls};
+use crate::{
+    bookmark_dialog_win32::{
+        BookmarkDialogEntry, BookmarkDialogLabels, BookmarkDialogRequest, BookmarkDialogResponse,
+    },
+    player_controls_win32::{PlayerControlActivation, PlayerControls},
+};
 use apricot_app::{
     ActionFinderContext, ActivationRequest, Application, MainMenuModel, PlaybackPhase,
     PlayerNavigationOutcome, SearchApplyOutcome, SearchWork, SearchWorkKind, SessionToggle,
@@ -182,6 +187,7 @@ struct PendingYoutubeResolve {
     original_item: apricot_core::MediaItem,
     session_shuffle: Option<bool>,
     preserve_sequence: bool,
+    start_position_seconds: Option<f64>,
 }
 
 #[derive(Clone, Copy)]
@@ -273,6 +279,7 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
     crate::action_finder_win32::register()?;
     crate::playback_queue_win32::register()?;
     crate::playlist_dialog_win32::register()?;
+    crate::bookmark_dialog_win32::register()?;
     crate::details_win32::register()?;
 
     let title = wide(&format!("ApricotPlayer 2 Beta {version}"));
@@ -1755,6 +1762,10 @@ unsafe fn activate_main_menu_selection(window: HWND) {
         show_media_collection(window, MainView::History);
         return;
     }
+    if item_id == "bookmarks" {
+        show_bookmarks_dialog(window, false, false);
+        return;
+    }
     if item_id == "playlists" {
         show_user_playlists(window);
         return;
@@ -1907,7 +1918,7 @@ unsafe fn start_media_item(
     item: apricot_core::MediaItem,
     queue_mode: Option<QueueStartMode>,
 ) {
-    start_media_item_with_options(window, item, queue_mode, None, false);
+    start_media_item_with_options(window, item, queue_mode, None, false, None);
 }
 
 unsafe fn start_sequence_media_item(
@@ -1915,7 +1926,7 @@ unsafe fn start_sequence_media_item(
     item: apricot_core::MediaItem,
     queue_mode: Option<QueueStartMode>,
 ) {
-    start_media_item_with_options(window, item, queue_mode, None, true);
+    start_media_item_with_options(window, item, queue_mode, None, true, None);
 }
 
 unsafe fn start_media_item_with_shuffle(
@@ -1924,7 +1935,22 @@ unsafe fn start_media_item_with_shuffle(
     queue_mode: Option<QueueStartMode>,
     shuffle: bool,
 ) {
-    start_media_item_with_options(window, item, queue_mode, Some(shuffle), true);
+    start_media_item_with_options(window, item, queue_mode, Some(shuffle), true, None);
+}
+
+unsafe fn start_media_item_at(
+    window: HWND,
+    item: apricot_core::MediaItem,
+    start_position_seconds: f64,
+) {
+    start_media_item_with_options(
+        window,
+        item,
+        None,
+        None,
+        false,
+        Some(start_position_seconds.max(0.0)),
+    );
 }
 
 unsafe fn start_media_item_with_options(
@@ -1933,6 +1959,7 @@ unsafe fn start_media_item_with_options(
     queue_mode: Option<QueueStartMode>,
     session_shuffle: Option<bool>,
     preserve_sequence: bool,
+    start_position_seconds: Option<f64>,
 ) {
     let Some(state) = state_mut(window) else {
         return;
@@ -1949,7 +1976,7 @@ unsafe fn start_media_item_with_options(
         item.source,
         apricot_core::MediaSource::Youtube | apricot_core::MediaSource::Direct
     ) {
-        start_player(window, item, session_shuffle);
+        start_player_at(window, item, session_shuffle, start_position_seconds);
         return;
     }
     start_youtube_resolve_with_options(
@@ -1958,6 +1985,7 @@ unsafe fn start_media_item_with_options(
         YoutubeResolvePurpose::Playback,
         session_shuffle,
         preserve_sequence,
+        start_position_seconds,
     );
 }
 
@@ -1971,7 +1999,7 @@ unsafe fn start_youtube_resolve(
     {
         state.application.prepare_standalone_playback();
     }
-    start_youtube_resolve_with_options(window, item, purpose, None, false);
+    start_youtube_resolve_with_options(window, item, purpose, None, false, None);
 }
 
 unsafe fn start_youtube_resolve_with_options(
@@ -1980,6 +2008,7 @@ unsafe fn start_youtube_resolve_with_options(
     purpose: YoutubeResolvePurpose,
     session_shuffle: Option<bool>,
     preserve_sequence: bool,
+    start_position_seconds: Option<f64>,
 ) {
     let Some(url) = item.url.as_ref().map(ToString::to_string) else {
         if let Some(state) = state_mut(window) {
@@ -2021,6 +2050,7 @@ unsafe fn start_youtube_resolve_with_options(
                 original_item: item.clone(),
                 session_shuffle,
                 preserve_sequence,
+                start_position_seconds,
             });
             set_status(
                 state,
@@ -2154,10 +2184,20 @@ unsafe fn finish_youtube_resolve(
         .external_audio_index
         .and_then(|index| formats.get(index))
         .and_then(|format| format.url.parse().ok());
-    start_player(window, item, pending.session_shuffle);
+    start_player_at(
+        window,
+        item,
+        pending.session_shuffle,
+        pending.start_position_seconds,
+    );
 }
 
-unsafe fn start_player(window: HWND, item: apricot_core::MediaItem, session_shuffle: Option<bool>) {
+unsafe fn start_player_at(
+    window: HWND,
+    item: apricot_core::MediaItem,
+    session_shuffle: Option<bool>,
+    start_position_seconds: Option<f64>,
+) {
     let Some(state) = state_mut(window) else {
         return;
     };
@@ -2174,7 +2214,7 @@ unsafe fn start_player(window: HWND, item: apricot_core::MediaItem, session_shuf
     let generation = state
         .application
         .start_player_item_with_shuffle(item, session_shuffle);
-    let Some(options) = playback_launch_options(state) else {
+    let Some(options) = playback_launch_options(state, start_position_seconds) else {
         let message = "Internal mpv player was not found";
         let _ = state
             .application
@@ -2474,6 +2514,12 @@ unsafe fn navigate_back(window: HWND) {
             state.view = MainView::History;
             refresh_media_collection(state, true, false);
             layout_controls_state(window, state);
+        }
+        Route::Bookmarks => {
+            state.view = MainView::MainMenu;
+            refresh_main_menu(state);
+            layout_controls_state(window, state);
+            show_bookmarks_dialog(window, false, true);
         }
         Route::UserPlaylists => {
             state.view = MainView::UserPlaylists;
@@ -2828,7 +2874,11 @@ unsafe fn finish_youtube_error(window: HWND, generation: u64, message: &str) {
             {
                 let fallback_message = catalog_text(&state.application, "direct_link_fallback");
                 set_status(state, &fallback_message, true);
-                Some((pending.original_item, pending.session_shuffle))
+                Some((
+                    pending.original_item,
+                    pending.session_shuffle,
+                    pending.start_position_seconds,
+                ))
             } else {
                 let visible_message = if pending.purpose == YoutubeResolvePurpose::CopyStreamUrl {
                     catalog_text(&state.application, "stream_url_failed")
@@ -2848,8 +2898,8 @@ unsafe fn finish_youtube_error(window: HWND, generation: u64, message: &str) {
             None
         }
     };
-    if let Some((item, session_shuffle)) = direct_fallback {
-        start_player(window, item, session_shuffle);
+    if let Some((item, session_shuffle, start_position_seconds)) = direct_fallback {
+        start_player_at(window, item, session_shuffle, start_position_seconds);
     }
 }
 
@@ -3385,7 +3435,10 @@ fn application_directory() -> Option<std::path::PathBuf> {
         .and_then(|path| path.parent().map(std::path::Path::to_path_buf))
 }
 
-fn playback_launch_options(state: &WindowState) -> Option<MpvLaunchOptions> {
+fn playback_launch_options(
+    state: &WindowState,
+    start_position_seconds: Option<f64>,
+) -> Option<MpvLaunchOptions> {
     let directory = application_directory()?;
     let executable = directory.join("mpv").join("mpv.exe");
     let library = directory.join("mpv").join("libmpv-2.dll");
@@ -3411,6 +3464,7 @@ fn playback_launch_options(state: &WindowState) -> Option<MpvLaunchOptions> {
     } else {
         InitialPlaybackState::Playing
     };
+    options.initial_position_seconds = start_position_seconds;
     options.repeat_mode = if session.enabled_toggles().contains(&SessionToggle::Repeat) {
         RepeatMode::One
     } else {
@@ -3678,6 +3732,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "open_direct_link" => show_direct_link(window),
         "open_favorites" => show_media_collection(window, MainView::Favorites),
         "open_history" => show_media_collection(window, MainView::History),
+        "open_bookmarks" => show_bookmarks_dialog(window, false, false),
         "open_playlists" => show_user_playlists(window),
         "open_settings" => open_settings(window),
         "open_action_finder" => show_action_finder(window),
@@ -3692,6 +3747,8 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "player_volume_status" => announce_player_volume(window),
         "player_format_status" => announce_player_format(window),
         "player_details" => show_player_details(window),
+        "player_add_bookmark" => show_add_current_bookmark_prompt(window),
+        "player_bookmarks" => show_bookmarks_dialog(window, true, false),
         "player_seek_back" => seek_player(window, -configured_seek_seconds(window)),
         "player_seek_forward" => seek_player(window, configured_seek_seconds(window)),
         "player_seek_back_large" => seek_player(window, -60.0),
@@ -4031,6 +4088,396 @@ unsafe fn clear_history(window: HWND) {
             show_error_message(window, &message);
         }
     }
+}
+
+unsafe fn show_bookmarks_dialog(window: HWND, current_only: bool, return_on_close: bool) {
+    let Some((labels, entries, can_add)) = state_mut(window).map(|state| {
+        state.modal_open = true;
+        let labels = BookmarkDialogOwnedLabels {
+            title: catalog_text(&state.application, "bookmarks"),
+            list_name: catalog_text(&state.application, "bookmarks"),
+            empty: catalog_text(&state.application, "bookmarks_empty"),
+            add: catalog_text(&state.application, "add_bookmark"),
+            play: catalog_text(&state.application, "play"),
+            rename: catalog_text(&state.application, "rename_bookmark"),
+            delete: catalog_text(&state.application, "delete_bookmark"),
+            copy: catalog_text(&state.application, "copy_timestamp_link"),
+            close: catalog_text(&state.application, "back"),
+        };
+        let entries = bookmark_dialog_entries(&state.application, current_only);
+        let can_add = state.application.player_session().is_open()
+            && state
+                .application
+                .player_session()
+                .current_item()
+                .is_some_and(apricot_core::MediaItem::is_playable);
+        (labels, entries, can_add)
+    }) else {
+        return;
+    };
+    let result = crate::bookmark_dialog_win32::show(
+        window,
+        labels.as_borrowed(),
+        entries,
+        can_add,
+        Box::new(move |dialog, request| {
+            handle_bookmark_dialog_request(window, dialog, current_only, request)
+        }),
+    );
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state.modal_open = false;
+    resume_deferred_window_work(window);
+    if let Err(error) = result {
+        let message = format!("Bookmarks dialog failed: {error}");
+        set_status(state, &message, true);
+        show_error_message(window, &message);
+        return;
+    }
+    if return_on_close && state.application.current_route() == Route::Bookmarks {
+        navigate_back(window);
+    }
+}
+
+struct BookmarkDialogOwnedLabels {
+    title: String,
+    list_name: String,
+    empty: String,
+    add: String,
+    play: String,
+    rename: String,
+    delete: String,
+    copy: String,
+    close: String,
+}
+
+impl BookmarkDialogOwnedLabels {
+    fn as_borrowed(&self) -> BookmarkDialogLabels<'_> {
+        BookmarkDialogLabels {
+            title: &self.title,
+            list_name: &self.list_name,
+            empty: &self.empty,
+            add: &self.add,
+            play: &self.play,
+            rename: &self.rename,
+            delete: &self.delete,
+            copy: &self.copy,
+            close: &self.close,
+        }
+    }
+}
+
+fn bookmark_dialog_entries(
+    application: &Application,
+    current_only: bool,
+) -> Vec<BookmarkDialogEntry> {
+    let catalog = apricot_app::embedded_catalog(&application.settings().language);
+    let bookmarks = if current_only {
+        application
+            .player_session()
+            .current_item()
+            .map_or_else(Vec::new, |item| application.bookmarks_for_item(item))
+    } else {
+        application.sorted_bookmarks()
+    };
+    bookmarks
+        .into_iter()
+        .enumerate()
+        .map(|(index, bookmark)| {
+            let name = if bookmark.name.trim().is_empty() {
+                catalog.text("bookmark")
+            } else {
+                bookmark.name.trim()
+            };
+            let mut parts = vec![
+                format!("{}. {}", index + 1, format_duration(bookmark.position)),
+                name.to_owned(),
+            ];
+            if !current_only && !bookmark.media_title.trim().is_empty() {
+                parts.push(bookmark.media_title.trim().to_owned());
+            }
+            BookmarkDialogEntry {
+                id: bookmark.id.clone(),
+                label: parts.join(" | "),
+            }
+        })
+        .collect()
+}
+
+unsafe fn handle_bookmark_dialog_request(
+    window: HWND,
+    dialog: HWND,
+    current_only: bool,
+    request: BookmarkDialogRequest,
+) -> BookmarkDialogResponse {
+    match request {
+        BookmarkDialogRequest::Add => {
+            let selected_id = prompt_add_current_bookmark(window, dialog);
+            bookmark_refresh_response(window, current_only, selected_id)
+        }
+        BookmarkDialogRequest::Rename(id) => {
+            let selected_id = prompt_rename_bookmark(window, dialog, &id).then_some(id);
+            bookmark_refresh_response(window, current_only, selected_id)
+        }
+        BookmarkDialogRequest::Delete(id) => {
+            let result = state_mut(window).map(|state| state.application.delete_bookmark(&id));
+            match result {
+                Some(Ok(true)) => {
+                    if let Some(state) = state(window) {
+                        set_status(
+                            state,
+                            &catalog_text(&state.application, "bookmark_deleted"),
+                            true,
+                        );
+                    }
+                    bookmark_refresh_response(window, current_only, None)
+                }
+                Some(Ok(false)) | None => BookmarkDialogResponse::KeepOpen,
+                Some(Err(error)) => {
+                    report_bookmark_error(window, &error.to_string());
+                    BookmarkDialogResponse::KeepOpen
+                }
+            }
+        }
+        BookmarkDialogRequest::Copy(id) => {
+            copy_bookmark_timestamp(window, &id);
+            BookmarkDialogResponse::KeepOpen
+        }
+        BookmarkDialogRequest::Play(id) => {
+            play_bookmark(window, &id);
+            BookmarkDialogResponse::Close
+        }
+    }
+}
+
+unsafe fn bookmark_refresh_response(
+    window: HWND,
+    current_only: bool,
+    selected_id: Option<String>,
+) -> BookmarkDialogResponse {
+    let Some(state) = state(window) else {
+        return BookmarkDialogResponse::KeepOpen;
+    };
+    BookmarkDialogResponse::Refresh {
+        entries: bookmark_dialog_entries(&state.application, current_only),
+        selected_id,
+    }
+}
+
+unsafe fn show_add_current_bookmark_prompt(window: HWND) {
+    if let Some(state) = state_mut(window) {
+        state.modal_open = true;
+    }
+    let _ = prompt_add_current_bookmark(window, window);
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
+    resume_deferred_window_work(window);
+}
+
+unsafe fn prompt_add_current_bookmark(window: HWND, owner: HWND) -> Option<String> {
+    let Some((item, position, title, prompt, default_name, ok, cancel)) =
+        state(window).and_then(|state| {
+            let session = state.application.player_session();
+            let item = session.current_item()?.clone();
+            let position = session.position_seconds().max(0.0);
+            let default_name = catalog_text(&state.application, "bookmark_default_name")
+                .replace("{time}", &format_duration(position));
+            Some((
+                item,
+                position,
+                catalog_text(&state.application, "add_bookmark"),
+                catalog_text(&state.application, "bookmark_name_prompt"),
+                default_name,
+                catalog_text(&state.application, "ok"),
+                catalog_text(&state.application, "cancel"),
+            ))
+        })
+    else {
+        if let Some(state) = state(window) {
+            set_status(state, &catalog_text(&state.application, "no_player"), true);
+        }
+        return None;
+    };
+    let name = match crate::playlist_dialog_win32::prompt_name_with_initial(
+        owner,
+        &title,
+        &prompt,
+        &default_name,
+        &ok,
+        &cancel,
+    ) {
+        Ok(Some(name)) => {
+            let name = name.trim();
+            if name.is_empty() {
+                default_name
+            } else {
+                name.to_owned()
+            }
+        }
+        Ok(None) => return None,
+        Err(error) => {
+            report_bookmark_error(window, &error.to_string());
+            return None;
+        }
+    };
+    let result = state_mut(window).map(|state| {
+        state
+            .application
+            .add_bookmark(&name, position, item, unix_timestamp())
+    });
+    match result {
+        Some(Ok(Some(bookmark))) => {
+            if let Some(state) = state(window) {
+                let message = catalog_text(&state.application, "bookmark_added")
+                    .replace("{name}", &bookmark.name)
+                    .replace("{time}", &format_duration(bookmark.position));
+                set_status(state, &message, true);
+            }
+            Some(bookmark.id)
+        }
+        Some(Ok(None)) | None => None,
+        Some(Err(error)) => {
+            report_bookmark_error(window, &error.to_string());
+            None
+        }
+    }
+}
+
+unsafe fn prompt_rename_bookmark(window: HWND, owner: HWND, id: &str) -> bool {
+    let Some((current_name, title, prompt, ok, cancel)) = state(window).and_then(|state| {
+        let bookmark = state.application.bookmark(id)?;
+        Some((
+            bookmark.name.clone(),
+            catalog_text(&state.application, "rename_bookmark"),
+            catalog_text(&state.application, "bookmark_name_prompt"),
+            catalog_text(&state.application, "ok"),
+            catalog_text(&state.application, "cancel"),
+        ))
+    }) else {
+        return false;
+    };
+    let name = match crate::playlist_dialog_win32::prompt_name_with_initial(
+        owner,
+        &title,
+        &prompt,
+        &current_name,
+        &ok,
+        &cancel,
+    ) {
+        Ok(Some(name)) if !name.trim().is_empty() => name,
+        Ok(_) => return false,
+        Err(error) => {
+            report_bookmark_error(window, &error.to_string());
+            return false;
+        }
+    };
+    match state_mut(window).map(|state| {
+        state
+            .application
+            .rename_bookmark(id, &name, unix_timestamp())
+    }) {
+        Some(Ok(true)) => {
+            if let Some(state) = state(window) {
+                let message = catalog_text(&state.application, "bookmark_renamed")
+                    .replace("{name}", name.trim());
+                set_status(state, &message, true);
+            }
+            true
+        }
+        Some(Ok(false)) | None => false,
+        Some(Err(error)) => {
+            report_bookmark_error(window, &error.to_string());
+            false
+        }
+    }
+}
+
+unsafe fn copy_bookmark_timestamp(window: HWND, id: &str) {
+    let url = state(window).and_then(|state| {
+        let bookmark = state.application.bookmark(id)?;
+        bookmark
+            .media
+            .youtube_url_at_timestamp(bookmark.position)
+            .map(|url| url.to_string())
+    });
+    if let Some(url) = url {
+        copy_text_and_announce(window, &url, "timestamp_url_copied");
+    } else if let Some(state) = state(window) {
+        set_status(
+            state,
+            &catalog_text(&state.application, "timestamp_url_unavailable"),
+            true,
+        );
+    }
+}
+
+unsafe fn play_bookmark(window: HWND, id: &str) {
+    let Some((bookmark, same_item)) = state(window).and_then(|state| {
+        let bookmark = state.application.bookmark(id)?.clone();
+        let same_item = state
+            .application
+            .player_session()
+            .current_item()
+            .is_some_and(|item| {
+                state
+                    .application
+                    .bookmarks_for_item(item)
+                    .iter()
+                    .any(|candidate| candidate.id == bookmark.id)
+            });
+        Some((bookmark, same_item))
+    }) else {
+        return;
+    };
+    if same_item
+        && execute_player_command(
+            window,
+            PlaybackCommand::SeekAbsolute {
+                seconds: bookmark.position,
+                exact: true,
+            },
+        )
+    {
+        if let Some(state) = state(window) {
+            announce_selected_bookmark(state, &bookmark.name, bookmark.position);
+        }
+        return;
+    }
+    if let Some(state) = state_mut(window) {
+        if state.application.current_route() == Route::Player {
+            let _ = state.application.navigate_back();
+        }
+        if state.application.current_route() != Route::Bookmarks {
+            state
+                .application
+                .navigate_to(RouteFrame::new(Route::Bookmarks));
+        }
+    }
+    start_media_item_at(window, bookmark.media, bookmark.position);
+}
+
+unsafe fn announce_selected_bookmark(state: &WindowState, bookmark_name: &str, position: f64) {
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let name = if bookmark_name.trim().is_empty() {
+        catalog.text("bookmark")
+    } else {
+        bookmark_name.trim()
+    };
+    let message = catalog
+        .text("bookmark_selected")
+        .replace("{name}", name)
+        .replace("{time}", &format_duration(position));
+    set_status(state, &message, true);
+}
+
+unsafe fn report_bookmark_error(window: HWND, detail: &str) {
+    let message = format!("Bookmarks were not updated: {detail}");
+    if let Some(state) = state(window) {
+        set_status(state, &message, true);
+    }
+    show_error_message(window, &message);
 }
 
 unsafe fn create_user_playlist(window: HWND, initial_item: Option<apricot_core::MediaItem>) {

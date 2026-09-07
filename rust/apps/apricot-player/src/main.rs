@@ -12,7 +12,8 @@ use apricot_platform::{
     acquire_single_instance, discover_windows_beta_paths, sync_startup_registration,
 };
 use apricot_storage::{
-    MediaListFile, PlaybackQueueFile, SettingsDocument, SettingsPaths, UserPlaylistFile,
+    BookmarkFile, MediaListFile, PlaybackQueueFile, SettingsDocument, SettingsPaths,
+    UserPlaylistFile,
 };
 use apricot_updater::UpdateChannel;
 
@@ -73,6 +74,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         UserPlaylistFile::new(paths.app_data.join("playlists.json")),
         &UserPlaylistFile::new(paths.legacy_app_data.join("playlists.json")),
     );
+    application.configure_bookmarks(
+        BookmarkFile::new(paths.app_data.join("bookmarks.json")),
+        &BookmarkFile::new(paths.legacy_app_data.join("bookmarks.json")),
+        unix_timestamp(),
+    );
     if !application.settings().language_prompted {
         let selected =
             apricot_ui_windows::choose_initial_language(&application.settings().language)?;
@@ -83,6 +89,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     apricot_ui_windows::run_application(application, env!("CARGO_PKG_VERSION"), start_hidden)
         .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
+}
+
+fn unix_timestamp() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |duration| duration.as_secs_f64())
 }
 
 fn run_qualification(arguments: &[std::ffi::OsString]) -> Result<bool, Box<dyn std::error::Error>> {

@@ -1,5 +1,6 @@
 //! Compatible and atomic user-data storage.
 
+pub mod bookmark_file;
 pub mod compat_snapshot;
 pub mod data_manifest;
 pub mod json_file;
@@ -11,6 +12,7 @@ pub mod settings;
 pub mod settings_file;
 pub mod user_playlist_file;
 
+pub use bookmark_file::{Bookmark, BookmarkFile, BookmarkFileError, bookmark_media_key};
 pub use compat_snapshot::{
     ArtifactSnapshot, ArtifactSource, CompatibilitySnapshot, CompatibilitySnapshotError,
     DEFAULT_MAX_ARTIFACT_BYTES, SnapshotValue,

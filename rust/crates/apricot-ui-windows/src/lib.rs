@@ -9,6 +9,8 @@ mod activation_win32;
 #[cfg(windows)]
 mod announcement_win32;
 #[cfg(windows)]
+mod bookmark_dialog_win32;
+#[cfg(windows)]
 mod clipboard_win32;
 #[cfg(windows)]
 mod details_win32;

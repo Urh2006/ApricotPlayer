@@ -8,20 +8,21 @@ use std::{
 use apricot_core::{MediaItem, Route, RouteFrame, SettingId, SettingsSection};
 use apricot_playback::PlaybackEvent;
 use apricot_storage::{
-    MediaListFile, PlaybackQueueFile, SettingsDocument, UserPlaylist, UserPlaylistFile,
+    Bookmark, BookmarkFile, MediaListFile, PlaybackQueueFile, SettingsDocument, UserPlaylist,
+    UserPlaylistFile,
 };
 use rand::seq::SliceRandom;
 
 use crate::{
     ActionFinderContext, ActionFinderModel, ActivationRequest, AppState, AudioSession,
-    CollectionAddOutcome, EqualizerSession, MainMenuAvailability, MainMenuModel,
-    MediaCollectionController, MediaCollectionControllerError, MenuVisibility, PlaybackQueue,
-    PlaybackQueueController, PlaybackQueueControllerError, PlaybackSequenceSource,
-    PlayerScreenModel, PlayerSession, PlayerSessionDefaults, PlayerViewState, PlaylistAddOutcome,
-    PlaylistCreateOutcome, QueueAddOutcome, QueueBatchAddOutcome, SearchApplyOutcome,
-    SearchSession, SearchSessionError, SearchWork, SessionToggle, SettingsController,
-    SettingsControllerError, SettingsScreenModel, UserPlaylistController,
-    UserPlaylistControllerError, YoutubeSearchKind, embedded_catalog,
+    BookmarkController, BookmarkControllerError, CollectionAddOutcome, EqualizerSession,
+    MainMenuAvailability, MainMenuModel, MediaCollectionController, MediaCollectionControllerError,
+    MenuVisibility, PlaybackQueue, PlaybackQueueController, PlaybackQueueControllerError,
+    PlaybackSequenceSource, PlayerScreenModel, PlayerSession, PlayerSessionDefaults,
+    PlayerViewState, PlaylistAddOutcome, PlaylistCreateOutcome, QueueAddOutcome,
+    QueueBatchAddOutcome, SearchApplyOutcome, SearchSession, SearchSessionError, SearchWork,
+    SessionToggle, SettingsController, SettingsControllerError, SettingsScreenModel,
+    UserPlaylistController, UserPlaylistControllerError, YoutubeSearchKind, embedded_catalog,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -76,6 +77,73 @@ impl Application {
 
     pub fn history(&self) -> &[MediaItem] {
         self.state.history.items()
+    }
+
+    pub fn bookmarks(&self) -> &[Bookmark] {
+        self.state.bookmarks.bookmarks()
+    }
+
+    pub fn sorted_bookmarks(&self) -> Vec<&Bookmark> {
+        self.state.bookmarks.sorted()
+    }
+
+    pub fn bookmark(&self, id: &str) -> Option<&Bookmark> {
+        self.state
+            .bookmarks
+            .bookmarks()
+            .iter()
+            .find(|bookmark| bookmark.id == id)
+    }
+
+    pub fn bookmarks_for_item(&self, item: &MediaItem) -> Vec<&Bookmark> {
+        self.state.bookmarks.for_item(item)
+    }
+
+    pub fn configure_bookmarks(
+        &mut self,
+        current: BookmarkFile,
+        legacy: &BookmarkFile,
+        timestamp: f64,
+    ) {
+        self.state.bookmarks = BookmarkController::load(current, legacy, timestamp);
+    }
+
+    /// Adds a Python-compatible bookmark for one playable media item.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the bookmark file cannot be updated.
+    pub fn add_bookmark(
+        &mut self,
+        name: &str,
+        position: f64,
+        media: MediaItem,
+        timestamp: f64,
+    ) -> Result<Option<Bookmark>, BookmarkControllerError> {
+        self.state.bookmarks.add(name, position, media, timestamp)
+    }
+
+    /// Renames one bookmark by its durable bookmark id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the bookmark file cannot be updated.
+    pub fn rename_bookmark(
+        &mut self,
+        id: &str,
+        name: &str,
+        timestamp: f64,
+    ) -> Result<bool, BookmarkControllerError> {
+        self.state.bookmarks.rename(id, name, timestamp)
+    }
+
+    /// Deletes one bookmark by its durable bookmark id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the bookmark file cannot be updated.
+    pub fn delete_bookmark(&mut self, id: &str) -> Result<bool, BookmarkControllerError> {
+        self.state.bookmarks.delete(id)
     }
 
     pub fn configure_media_collections(
