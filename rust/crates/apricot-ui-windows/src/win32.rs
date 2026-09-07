@@ -1965,6 +1965,8 @@ unsafe fn start_media_item_with_options(
         return;
     };
     cancel_youtube_work(window, state);
+    let start_position_seconds =
+        start_position_seconds.or_else(|| state.application.playback_resume_position(&item));
     if !preserve_sequence {
         state.application.prepare_standalone_playback();
     }
@@ -2211,9 +2213,12 @@ unsafe fn start_player_at(
             }
         }
     }
-    let generation = state
-        .application
-        .start_player_item_with_shuffle(item, session_shuffle);
+    persist_current_playback_position(state);
+    let generation = state.application.start_player_item_with_shuffle_at(
+        item,
+        session_shuffle,
+        start_position_seconds,
+    );
     let Some(options) = playback_launch_options(state, start_position_seconds) else {
         let message = "Internal mpv player was not found";
         let _ = state
@@ -5443,11 +5448,22 @@ unsafe fn close_player_runtime(window: HWND, state: &mut WindowState) {
     if let Some(runtime) = state.playback.as_ref() {
         let _ = runtime.close(generation);
     }
+    persist_current_playback_position(state);
     state.application.close_player_session();
     state.pending_queued_start = None;
     stop_playback_timer(window);
     let title = wide("ApricotPlayer 2 Beta");
     let _ = SetWindowTextW(window, PCWSTR(title.as_ptr()));
+}
+
+unsafe fn persist_current_playback_position(state: &mut WindowState) {
+    if let Err(error) = state.application.save_current_playback_position() {
+        set_status(
+            state,
+            &format!("Playback position was not saved: {error}"),
+            false,
+        );
+    }
 }
 
 unsafe fn play_local_file(window: HWND, path: &std::path::Path) {

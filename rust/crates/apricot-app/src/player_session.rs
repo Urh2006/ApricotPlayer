@@ -105,6 +105,16 @@ impl PlayerSession {
     /// Starts or replaces media. Existing open sessions retain their audio and
     /// toggle state; a genuinely new session receives current defaults.
     pub fn start_item(&mut self, item: MediaItem, defaults: PlayerSessionDefaults) -> u64 {
+        self.start_item_at(item, defaults, None)
+    }
+
+    /// Starts or replaces media with an item-specific initial position.
+    pub fn start_item_at(
+        &mut self,
+        item: MediaItem,
+        defaults: PlayerSessionDefaults,
+        initial_position_seconds: Option<f64>,
+    ) -> u64 {
         if !self.is_open() {
             self.audio = Some(defaults.audio);
             self.enabled_toggles = defaults.enabled_toggles;
@@ -116,7 +126,10 @@ impl PlayerSession {
             PlaybackPhase::Starting
         };
         self.current_item = Some(item);
-        self.position_seconds = 0.0;
+        self.position_seconds = initial_position_seconds
+            .filter(|position| position.is_finite())
+            .unwrap_or_default()
+            .max(0.0);
         self.duration_seconds = None;
         self.media_info = PlaybackMediaInfo::default();
         self.last_error = None;
@@ -310,6 +323,15 @@ mod tests {
         assert_eq!(session.duration_seconds(), Some(90.0));
         assert!(session.apply_event(generation, PlaybackEvent::Paused(true)));
         assert_eq!(session.phase(), PlaybackPhase::Paused);
+    }
+
+    #[test]
+    fn item_specific_initial_position_never_leaks_to_the_next_item() {
+        let mut session = PlayerSession::default();
+        session.start_item_at(item("first"), defaults(), Some(42.5));
+        assert!((session.position_seconds() - 42.5).abs() < f64::EPSILON);
+        session.start_item(item("second"), defaults());
+        assert!(session.position_seconds().abs() < f64::EPSILON);
     }
 
     #[test]

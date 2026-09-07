@@ -339,3 +339,38 @@ Still required for complete bookmark parity: manual NVDA/Narrator dialog,
 announcement, focus-return, context-menu, same-item seek, and cross-item resume
 checks in the packaged build. General automatic resume and last-session restore
 remain separate unfinished parity items.
+
+## 2026-09-07: item-bound automatic playback resume
+
+Implementation: `PlaybackPositionFile`, `PlaybackPositionController`,
+application-owned position state, and Win32 replacement/close persistence.
+
+Verified:
+
+- `playback_positions.json` loads from the isolated Rust beta data directory
+  with a read-only fallback to the stable Python file, and writes only to the
+  beta directory;
+- malformed current JSON or a non-object root blocks mutation without replacing
+  the user's file, while valid objects preserve unrelated legacy, invalid, and
+  future values losslessly when one known position changes;
+- numeric JSON values and Python-compatible numeric strings are accepted only
+  for the media item that owns the durable path or URL identity;
+- positions below five seconds, positions within the final eight seconds, and
+  live-stream positions are cleared according to the Python thresholds;
+- disabling Resume playback prevents both restoration and persistence;
+- the outgoing item's projected position is persisted before replacement and
+  on a real player-session close, while navigating elsewhere with the same open
+  player session does not reset it;
+- automatic resume and explicit bookmark starts are applied in the same libmpv
+  load operation, with an explicit bookmark position taking precedence;
+- the projected and runtime initial position is attached to exactly one item,
+  and the next ordinary local, direct, or YouTube item starts without inheriting
+  it.
+
+Automated results: app 92 tests, playback 16 tests, storage 40 tests, Windows UI
+12 tests, full workspace Clippy with warnings denied, and
+`PYTHON_DATA_COMPAT=PASS`.
+
+Still required: packaged manual checks with NVDA/Narrator for close, replace,
+near-end clearing, and stable-data migration. Last-player-session restoration
+remains a separate unfinished parity item.

@@ -8,8 +8,8 @@ use std::{
 use apricot_core::{MediaItem, Route, RouteFrame, SettingId, SettingsSection};
 use apricot_playback::PlaybackEvent;
 use apricot_storage::{
-    Bookmark, BookmarkFile, MediaListFile, PlaybackQueueFile, SettingsDocument, UserPlaylist,
-    UserPlaylistFile,
+    Bookmark, BookmarkFile, MediaListFile, PlaybackPositionFile, PlaybackQueueFile,
+    SettingsDocument, UserPlaylist, UserPlaylistFile,
 };
 use rand::seq::SliceRandom;
 
@@ -17,7 +17,8 @@ use crate::{
     ActionFinderContext, ActionFinderModel, ActivationRequest, AppState, AudioSession,
     BookmarkController, BookmarkControllerError, CollectionAddOutcome, EqualizerSession,
     MainMenuAvailability, MainMenuModel, MediaCollectionController, MediaCollectionControllerError,
-    MenuVisibility, PlaybackQueue, PlaybackQueueController, PlaybackQueueControllerError,
+    MenuVisibility, PlaybackPositionController, PlaybackPositionControllerError,
+    PlaybackPositionUpdate, PlaybackQueue, PlaybackQueueController, PlaybackQueueControllerError,
     PlaybackSequenceSource, PlayerScreenModel, PlayerSession, PlayerSessionDefaults,
     PlayerViewState, PlaylistAddOutcome, PlaylistCreateOutcome, QueueAddOutcome,
     QueueBatchAddOutcome, SearchApplyOutcome, SearchSession, SearchSessionError, SearchWork,
@@ -106,6 +107,43 @@ impl Application {
         timestamp: f64,
     ) {
         self.state.bookmarks = BookmarkController::load(current, legacy, timestamp);
+    }
+
+    pub fn configure_playback_positions(
+        &mut self,
+        current: PlaybackPositionFile,
+        legacy: &PlaybackPositionFile,
+    ) {
+        self.state.playback_positions = PlaybackPositionController::load(current, legacy);
+    }
+
+    pub fn playback_resume_position(&self, item: &MediaItem) -> Option<f64> {
+        self.state
+            .playback_positions
+            .resume_position(item, self.settings.current().resume_playback)
+    }
+
+    /// Persists the current item's projected position before replacement or a
+    /// real player-session close.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a changed position map cannot be persisted.
+    pub fn save_current_playback_position(
+        &mut self,
+    ) -> Result<PlaybackPositionUpdate, PlaybackPositionControllerError> {
+        let session = &self.state.player;
+        let Some(item) = session.current_item().cloned() else {
+            return Ok(PlaybackPositionUpdate::Unchanged);
+        };
+        let position = session.position_seconds();
+        let duration = session.duration_seconds().or(item.duration_seconds);
+        self.state.playback_positions.update(
+            &item,
+            position,
+            duration,
+            self.settings.current().resume_playback,
+        )
     }
 
     /// Adds a Python-compatible bookmark for one playable media item.
@@ -732,6 +770,14 @@ impl Application {
     }
 
     pub fn start_player_item(&mut self, item: MediaItem) -> u64 {
+        self.start_player_item_at(item, None)
+    }
+
+    pub fn start_player_item_at(
+        &mut self,
+        item: MediaItem,
+        initial_position_seconds: Option<f64>,
+    ) -> u64 {
         let sequence_source = self.state.player_sequence.source();
         if self.state.player_sequence.activate(&item) {
             self.sync_sequence_source_selection(sequence_source, &item);
@@ -761,7 +807,9 @@ impl Application {
             enabled_toggles: toggles,
             starts_paused: settings.player_start_paused,
         };
-        self.state.player.start_item(item, defaults)
+        self.state
+            .player
+            .start_item_at(item, defaults, initial_position_seconds)
     }
 
     pub fn start_player_item_with_shuffle(
@@ -769,7 +817,16 @@ impl Application {
         item: MediaItem,
         shuffle: Option<bool>,
     ) -> u64 {
-        let generation = self.start_player_item(item);
+        self.start_player_item_with_shuffle_at(item, shuffle, None)
+    }
+
+    pub fn start_player_item_with_shuffle_at(
+        &mut self,
+        item: MediaItem,
+        shuffle: Option<bool>,
+        initial_position_seconds: Option<f64>,
+    ) -> u64 {
+        let generation = self.start_player_item_at(item, initial_position_seconds);
         if let Some(enabled) = shuffle {
             self.state
                 .player
@@ -1167,7 +1224,9 @@ mod tests {
 
     use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource, SettingId, SettingsSection};
     use apricot_playback::PlaybackEvent;
-    use apricot_storage::{MediaListFile, SettingsDocument, SettingsPaths, UserPlaylistFile};
+    use apricot_storage::{
+        MediaListFile, PlaybackPositionFile, SettingsDocument, SettingsPaths, UserPlaylistFile,
+    };
     use tempfile::tempdir;
 
     use super::{Application, PlayerNavigationOrigin, PlayerNavigationOutcome};
@@ -1372,6 +1431,38 @@ mod tests {
 
         app.close_player_session();
         assert!(app.player_session().audio().is_none());
+    }
+
+    #[test]
+    fn resume_position_is_saved_and_restored_only_for_the_matching_item() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        app.configure_playback_positions(
+            PlaybackPositionFile::new(root.path().join("beta/playback_positions.json")),
+            &PlaybackPositionFile::new(root.path().join("stable/playback_positions.json")),
+        );
+        let first = media_item("first");
+        let second = media_item("second");
+        let generation = app.start_player_item(first.clone());
+        assert!(app.apply_playback_event(
+            generation,
+            PlaybackEvent::Position {
+                elapsed: 25.0,
+                duration: Some(100.0),
+            },
+        ));
+        app.save_current_playback_position().expect("save position");
+        app.close_player_session();
+
+        assert!(
+            app.playback_resume_position(&first)
+                .is_some_and(|position| (position - 25.0).abs() < f64::EPSILON)
+        );
+        assert_eq!(app.playback_resume_position(&second), None);
+        let resume_position = app.playback_resume_position(&first);
+        let resumed = app.start_player_item_at(first, resume_position);
+        assert_eq!(app.player_session().generation(), resumed);
+        assert!((app.player_session().position_seconds() - 25.0).abs() < f64::EPSILON);
     }
 
     #[test]

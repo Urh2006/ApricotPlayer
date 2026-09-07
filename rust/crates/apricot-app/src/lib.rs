@@ -7,6 +7,7 @@ pub mod bookmark_controller;
 pub mod local_folder;
 pub mod main_menu;
 pub mod media_collection_controller;
+pub mod playback_position_controller;
 pub mod playback_queue;
 pub mod playback_queue_controller;
 pub mod playback_sequence;
@@ -32,6 +33,9 @@ pub use main_menu::{
 };
 pub use media_collection_controller::{
     CollectionAddOutcome, MediaCollectionController, MediaCollectionControllerError,
+};
+pub use playback_position_controller::{
+    PlaybackPositionController, PlaybackPositionControllerError, PlaybackPositionUpdate,
 };
 pub use playback_queue::{PlaybackQueue, QueueAddOutcome, QueueBatchAddOutcome};
 pub use playback_queue_controller::{PlaybackQueueController, PlaybackQueueControllerError};
@@ -66,6 +70,7 @@ pub struct AppState {
     pub navigation: NavigationStack,
     pub local_folder: LocalFolderSession,
     pub playback_queue: PlaybackQueueController,
+    pub playback_positions: PlaybackPositionController,
     pub player: PlayerSession,
     pub player_sequence: PlaybackSequence,
     pub search: SearchSession,
