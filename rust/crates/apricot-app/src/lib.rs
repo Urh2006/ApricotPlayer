@@ -4,6 +4,7 @@ pub mod action_finder;
 pub mod activation;
 pub mod application;
 pub mod bookmark_controller;
+pub mod last_player_session_controller;
 pub mod local_folder;
 pub mod main_menu;
 pub mod media_collection_controller;
@@ -25,7 +26,12 @@ pub use apricot_media::YoutubeSearchKind;
 
 pub use action_finder::{ActionFinderContext, ActionFinderItem, ActionFinderModel};
 pub use activation::ActivationRequest;
-pub use application::{Application, PlayerNavigationOrigin, PlayerNavigationOutcome};
+pub use application::{
+    Application, LastSessionResume, PlayerNavigationOrigin, PlayerNavigationOutcome,
+};
+pub use last_player_session_controller::{
+    LastPlayerSessionController, LastPlayerSessionControllerError,
+};
 pub use local_folder::{DEFAULT_FOLDER_BATCH_SIZE, LocalFolderSession};
 pub use main_menu::{
     MainMenuAvailability, MainMenuItem, MainMenuModel, MenuVisibility, embedded_catalog,
@@ -69,6 +75,7 @@ pub struct AppState {
     pub history: MediaCollectionController,
     pub navigation: NavigationStack,
     pub local_folder: LocalFolderSession,
+    pub last_player_session: LastPlayerSessionController,
     pub playback_queue: PlaybackQueueController,
     pub playback_positions: PlaybackPositionController,
     pub player: PlayerSession,

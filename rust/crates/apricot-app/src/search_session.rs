@@ -133,6 +133,34 @@ impl SearchSession {
         self.last_error.as_deref()
     }
 
+    pub fn restore_snapshot(
+        &mut self,
+        query: impl Into<String>,
+        kind: YoutubeSearchKind,
+        items: Vec<MediaItem>,
+        selected_index: usize,
+    ) -> bool {
+        if items.is_empty() {
+            return false;
+        }
+        self.generation = self.generation.wrapping_add(1).max(1);
+        self.query = query.into();
+        self.kind = kind;
+        self.phase = SearchPhase::Ready;
+        self.items = dedupe(items);
+        if self.items.is_empty() {
+            return false;
+        }
+        self.continuation = None;
+        self.selected_index = selected_index.min(self.items.len() - 1);
+        self.selected_identity = item_identity(&self.items[self.selected_index]);
+        self.dynamic = false;
+        self.requested_limit = u32::try_from(self.items.len()).unwrap_or(u32::MAX);
+        self.source_exhausted = true;
+        self.last_error = None;
+        true
+    }
+
     /// Starts a new logical search and invalidates every older response.
     ///
     /// A configured limit of zero enables Python-compatible dynamic loading in
@@ -405,6 +433,24 @@ mod tests {
                 .enumerate()
                 .all(|(index, item)| item.id.0 == index.to_string())
         );
+    }
+
+    #[test]
+    fn restored_snapshot_is_stable_and_cannot_request_an_unknown_next_page() {
+        let mut session = SearchSession::default();
+        assert!(session.restore_snapshot(
+            "remembered query",
+            YoutubeSearchKind::Video,
+            vec![item("one"), item("two"), item("three")],
+            1,
+        ));
+        assert_eq!(session.phase(), SearchPhase::Ready);
+        assert_eq!(session.query(), "remembered query");
+        assert_eq!(session.kind(), YoutubeSearchKind::Video);
+        assert_eq!(session.selected_item().expect("selected").id.0, "two");
+        assert!(!session.is_dynamic());
+        assert!(!session.can_load_more());
+        assert!(session.request_more().is_none());
     }
 
     #[test]

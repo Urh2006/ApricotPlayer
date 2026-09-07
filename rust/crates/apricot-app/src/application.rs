@@ -3,27 +3,30 @@
 use std::{
     collections::{BTreeSet, VecDeque},
     path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use apricot_core::{MediaItem, Route, RouteFrame, SettingId, SettingsSection};
 use apricot_playback::PlaybackEvent;
 use apricot_storage::{
-    Bookmark, BookmarkFile, MediaListFile, PlaybackPositionFile, PlaybackQueueFile,
-    SettingsDocument, UserPlaylist, UserPlaylistFile,
+    Bookmark, BookmarkFile, LastPlayerSession, LastPlayerSessionFile, MediaListFile,
+    PlaybackPositionFile, PlaybackQueueFile, SettingsDocument, UserPlaylist, UserPlaylistFile,
 };
 use rand::seq::SliceRandom;
+use serde_json::{Map, Value};
 
 use crate::{
     ActionFinderContext, ActionFinderModel, ActivationRequest, AppState, AudioSession,
-    BookmarkController, BookmarkControllerError, CollectionAddOutcome, EqualizerSession,
-    MainMenuAvailability, MainMenuModel, MediaCollectionController, MediaCollectionControllerError,
-    MenuVisibility, PlaybackPositionController, PlaybackPositionControllerError,
-    PlaybackPositionUpdate, PlaybackQueue, PlaybackQueueController, PlaybackQueueControllerError,
-    PlaybackSequenceSource, PlayerScreenModel, PlayerSession, PlayerSessionDefaults,
-    PlayerViewState, PlaylistAddOutcome, PlaylistCreateOutcome, QueueAddOutcome,
-    QueueBatchAddOutcome, SearchApplyOutcome, SearchSession, SearchSessionError, SearchWork,
-    SessionToggle, SettingsController, SettingsControllerError, SettingsScreenModel,
-    UserPlaylistController, UserPlaylistControllerError, YoutubeSearchKind, embedded_catalog,
+    BookmarkController, BookmarkControllerError, CollectionAddOutcome, DEFAULT_FOLDER_BATCH_SIZE,
+    EqualizerSession, LastPlayerSessionController, MainMenuAvailability, MainMenuModel,
+    MediaCollectionController, MediaCollectionControllerError, MenuVisibility,
+    PlaybackPositionController, PlaybackPositionControllerError, PlaybackPositionUpdate,
+    PlaybackQueue, PlaybackQueueController, PlaybackQueueControllerError, PlaybackSequenceSource,
+    PlayerScreenModel, PlayerSession, PlayerSessionDefaults, PlayerViewState, PlaylistAddOutcome,
+    PlaylistCreateOutcome, QueueAddOutcome, QueueBatchAddOutcome, SearchApplyOutcome,
+    SearchSession, SearchSessionError, SearchWork, SessionToggle, SettingsController,
+    SettingsControllerError, SettingsScreenModel, UserPlaylistController,
+    UserPlaylistControllerError, YoutubeSearchKind, embedded_catalog,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,6 +43,14 @@ pub enum PlayerNavigationOutcome {
     },
     LoadingMore(SearchWork),
     Unavailable,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LastSessionResume {
+    pub item: MediaItem,
+    pub sequence_active: bool,
+    pub return_screen: String,
+    pub return_data: Map<String, Value>,
 }
 
 #[derive(Debug)]
@@ -115,6 +126,26 @@ impl Application {
         legacy: &PlaybackPositionFile,
     ) {
         self.state.playback_positions = PlaybackPositionController::load(current, legacy);
+    }
+
+    pub fn configure_last_player_session(
+        &mut self,
+        current: LastPlayerSessionFile,
+        legacy: &LastPlayerSessionFile,
+    ) {
+        self.state.last_player_session = LastPlayerSessionController::load(current, legacy);
+    }
+
+    pub fn last_player_session(&self) -> Option<&LastPlayerSession> {
+        self.state.last_player_session.session()
+    }
+
+    pub fn last_player_session_load_error(&self) -> Option<&str> {
+        self.state.last_player_session.load_error()
+    }
+
+    pub fn last_player_session_write_error(&self) -> Option<String> {
+        self.state.last_player_session.write_error()
     }
 
     pub fn playback_resume_position(&self, item: &MediaItem) -> Option<f64> {
@@ -769,6 +800,133 @@ impl Application {
         ))
     }
 
+    pub fn prepare_last_player_session_resume(&mut self) -> Option<LastSessionResume> {
+        let session = self.state.last_player_session.session()?.clone();
+        let item = session.item.clone();
+        let current_identity = item.stable_identity()?;
+        let sequence: Vec<_> = session
+            .sequence
+            .iter()
+            .filter(|candidate| candidate.is_playable())
+            .cloned()
+            .collect();
+        let sequence = if sequence
+            .iter()
+            .any(|candidate| candidate.stable_identity().as_deref() == Some(&current_identity))
+        {
+            sequence
+        } else {
+            Vec::new()
+        };
+
+        self.state.player_sequence.clear();
+        self.state.navigation.reset();
+        let return_route = self.restore_last_session_context(&session, &sequence, &item);
+        if return_route != Route::MainMenu {
+            let mut frame = RouteFrame::new(return_route);
+            frame.parameters.clone_from(&session.return_data);
+            self.state.navigation.push(frame);
+        }
+        let sequence_active = self.restore_last_session_sequence(&session, &sequence, &item);
+        Some(LastSessionResume {
+            item,
+            sequence_active,
+            return_screen: session.return_screen,
+            return_data: session.return_data,
+        })
+    }
+
+    fn restore_last_session_context(
+        &mut self,
+        session: &LastPlayerSession,
+        sequence: &[MediaItem],
+        current: &MediaItem,
+    ) -> Route {
+        match session.return_screen.as_str() {
+            "search" if !sequence.is_empty() => {
+                let selected_index = sequence
+                    .iter()
+                    .position(|candidate| candidate.stable_identity() == current.stable_identity())
+                    .unwrap_or_else(|| json_usize(&session.return_data, "index"));
+                let query = json_text(&session.return_data, "query");
+                let kind = session
+                    .return_data
+                    .get("search_kind")
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok())
+                    .unwrap_or(YoutubeSearchKind::All);
+                if self.state.search.restore_snapshot(
+                    query,
+                    kind,
+                    sequence.to_vec(),
+                    selected_index,
+                ) {
+                    Route::Results
+                } else {
+                    Route::MainMenu
+                }
+            }
+            "folder" if !sequence.is_empty() => {
+                let folder = PathBuf::from(json_text(&session.return_data, "folder"));
+                if folder.as_os_str().is_empty()
+                    || sequence
+                        .iter()
+                        .any(|candidate| candidate.local_path.is_none())
+                {
+                    return Route::MainMenu;
+                }
+                self.state.local_folder.load(
+                    folder,
+                    sequence.to_vec(),
+                    usize::try_from(self.settings.current().results_limit.max(0))
+                        .unwrap_or(DEFAULT_FOLDER_BATCH_SIZE),
+                );
+                if let Some(index) = sequence
+                    .iter()
+                    .position(|candidate| candidate.stable_identity() == current.stable_identity())
+                {
+                    let _ = self.state.local_folder.reveal_and_select(index);
+                }
+                Route::LocalFolder
+            }
+            "favorites" => Route::Favorites,
+            "history" => Route::History,
+            "direct_link" => Route::DirectLink,
+            "bookmarks" => Route::Bookmarks,
+            "user_playlist_items"
+                if json_usize(&session.return_data, "playlist_index")
+                    < self.state.user_playlists.playlists().len() =>
+            {
+                Route::UserPlaylistItems
+            }
+            _ => Route::MainMenu,
+        }
+    }
+
+    fn restore_last_session_sequence(
+        &mut self,
+        session: &LastPlayerSession,
+        sequence: &[MediaItem],
+        current: &MediaItem,
+    ) -> bool {
+        if sequence.is_empty() {
+            return false;
+        }
+        let source = match session.return_screen.as_str() {
+            "search" => PlaybackSequenceSource::Search {
+                generation: self.state.search.generation(),
+            },
+            "folder" => PlaybackSequenceSource::LocalFolder {
+                generation: self.state.local_folder.generation(),
+            },
+            "user_playlist_items" => PlaybackSequenceSource::UserPlaylist {
+                playlist_index: json_usize(&session.return_data, "playlist_index"),
+            },
+            _ => PlaybackSequenceSource::Collection,
+        };
+        self.state.player_sequence.set(source, sequence, current)
+    }
+
     pub fn start_player_item(&mut self, item: MediaItem) -> u64 {
         self.start_player_item_at(item, None)
     }
@@ -807,9 +965,12 @@ impl Application {
             enabled_toggles: toggles,
             starts_paused: settings.player_start_paused,
         };
-        self.state
+        let generation = self
+            .state
             .player
-            .start_item_at(item, defaults, initial_position_seconds)
+            .start_item_at(item, defaults, initial_position_seconds);
+        self.save_last_player_session_snapshot();
+        generation
     }
 
     pub fn start_player_item_with_shuffle(
@@ -872,6 +1033,107 @@ impl Application {
         }
     }
 
+    fn save_last_player_session_snapshot(&mut self) {
+        let Some(item) = self.state.player.current_item().cloned() else {
+            return;
+        };
+        let frame = self.state.navigation.player_return_frame().clone();
+        let (return_screen, mut return_data) = self.last_session_return_context(&frame, &item);
+        for (key, value) in frame.parameters {
+            return_data.entry(key).or_insert(value);
+        }
+        let sequence = if self.state.player_sequence.contains(&item) {
+            self.state
+                .player_sequence
+                .items()
+                .iter()
+                .take(200)
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let snapshot =
+            LastPlayerSession::new(unix_timestamp(), item, return_screen, return_data, sequence);
+        let _ = self.state.last_player_session.replace(snapshot);
+    }
+
+    fn last_session_return_context(
+        &self,
+        frame: &RouteFrame,
+        item: &MediaItem,
+    ) -> (&'static str, Map<String, Value>) {
+        let mut data = Map::new();
+        match frame.route {
+            Route::Results => {
+                data.insert(
+                    "index".to_owned(),
+                    Value::from(self.state.search.selected_index()),
+                );
+                data.insert(
+                    "query".to_owned(),
+                    Value::String(self.state.search.query().to_owned()),
+                );
+                data.insert(
+                    "search_kind".to_owned(),
+                    serde_json::to_value(self.state.search.kind()).unwrap_or(Value::Null),
+                );
+                ("search", data)
+            }
+            Route::LocalFolder => {
+                data.insert(
+                    "index".to_owned(),
+                    Value::from(self.state.local_folder.selected_index()),
+                );
+                data.insert(
+                    "folder".to_owned(),
+                    Value::String(
+                        self.state
+                            .local_folder
+                            .path()
+                            .to_string_lossy()
+                            .into_owned(),
+                    ),
+                );
+                ("folder", data)
+            }
+            Route::Favorites => {
+                insert_matching_index(&mut data, self.state.favorites.items(), item);
+                ("favorites", data)
+            }
+            Route::History => {
+                insert_matching_index(&mut data, self.state.history.items(), item);
+                ("history", data)
+            }
+            Route::DirectLink => ("direct_link", data),
+            Route::Bookmarks => ("bookmarks", data),
+            Route::UserPlaylistItems => {
+                if let Some(PlaybackSequenceSource::UserPlaylist { playlist_index }) =
+                    self.state.player_sequence.source()
+                {
+                    data.insert("playlist_index".to_owned(), Value::from(playlist_index));
+                    if let Some(playlist) =
+                        self.state.user_playlists.playlists().get(playlist_index)
+                    {
+                        insert_matching_index_as(&mut data, "item_index", &playlist.items, item);
+                    }
+                }
+                ("user_playlist_items", data)
+            }
+            Route::PlaybackQueue => ("playback_queue", data),
+            Route::RssItems => ("rss_items", data),
+            Route::NotificationCenter => ("notification_center", data),
+            Route::Subscriptions => ("subscriptions", data),
+            Route::Trending => ("trending", data),
+            Route::AudiovaultMenu
+            | Route::AudiovaultSearch
+            | Route::AudiovaultResults
+            | Route::AudiovaultEpisodes => ("audiovault", data),
+            _ if item.local_path.is_some() => ("local_file", data),
+            _ => ("main_menu", data),
+        }
+    }
+
     pub fn apply_playback_event(&mut self, generation: u64, event: PlaybackEvent) -> bool {
         self.state.player.apply_event(generation, event)
     }
@@ -931,10 +1193,12 @@ impl Application {
 
     pub fn action_finder_model(&self, context: ActionFinderContext) -> ActionFinderModel {
         let settings = self.settings.current();
+        let mut availability = self.current_menu_availability();
+        availability.resume = visibility(self.state.last_player_session.is_available());
         ActionFinderModel::build(
             &embedded_catalog(&settings.language),
             settings,
-            self.current_menu_availability(),
+            availability,
             context,
         )
     }
@@ -946,6 +1210,9 @@ impl Application {
         availability.history = visibility(settings.enable_history);
         availability.podcasts = visibility(settings.enable_podcasts_rss);
         availability.playback_queue_count = self.state.playback_queue.queue().len();
+        availability.resume = visibility(
+            settings.show_resume_in_menu && self.state.last_player_session.is_available(),
+        );
         availability
     }
 
@@ -1215,6 +1482,51 @@ const fn visibility(enabled: bool) -> MenuVisibility {
     }
 }
 
+fn json_text(object: &Map<String, Value>, key: &str) -> String {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_owned()
+}
+
+fn json_usize(object: &Map<String, Value>, key: &str) -> usize {
+    object
+        .get(key)
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or_default()
+}
+
+fn insert_matching_index(
+    object: &mut Map<String, Value>,
+    items: &[MediaItem],
+    current: &MediaItem,
+) {
+    insert_matching_index_as(object, "index", items, current);
+}
+
+fn insert_matching_index_as(
+    object: &mut Map<String, Value>,
+    key: &str,
+    items: &[MediaItem],
+    current: &MediaItem,
+) {
+    if let Some(index) = items
+        .iter()
+        .position(|candidate| candidate.stable_identity() == current.stable_identity())
+    {
+        object.insert(key.to_owned(), Value::from(index));
+    }
+}
+
+fn unix_timestamp() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0.0, |duration| duration.as_secs_f64())
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -1222,17 +1534,20 @@ mod tests {
         path::{Path, PathBuf},
     };
 
-    use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource, SettingId, SettingsSection};
+    use apricot_core::{
+        MediaId, MediaItem, MediaKind, MediaSource, Route, RouteFrame, SettingId, SettingsSection,
+    };
     use apricot_playback::PlaybackEvent;
     use apricot_storage::{
-        MediaListFile, PlaybackPositionFile, SettingsDocument, SettingsPaths, UserPlaylistFile,
+        LastPlayerSessionFile, MediaListFile, PlaybackPositionFile, SettingsDocument,
+        SettingsPaths, UserPlaylistFile,
     };
     use tempfile::tempdir;
 
     use super::{Application, PlayerNavigationOrigin, PlayerNavigationOutcome};
     use crate::{
-        ActivationRequest, MainMenuAvailability, PlaylistAddOutcome, PlaylistCreateOutcome,
-        SessionToggle, SettingsController, YoutubeSearchKind,
+        ActionFinderContext, ActivationRequest, MainMenuAvailability, PlaylistAddOutcome,
+        PlaylistCreateOutcome, SessionToggle, SettingsController, YoutubeSearchKind,
     };
 
     fn application(root: &Path) -> Application {
@@ -1463,6 +1778,130 @@ mod tests {
         let resumed = app.start_player_item_at(first, resume_position);
         assert_eq!(app.player_session().generation(), resumed);
         assert!((app.player_session().position_seconds() - 25.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn last_session_restores_result_selection_and_exact_next_item() {
+        let root = tempdir().expect("temporary directory");
+        let current = root.path().join("beta/last_player_session.json");
+        let legacy = root.path().join("stable/last_player_session.json");
+        let mut original = application(root.path());
+        original.configure_last_player_session(
+            LastPlayerSessionFile::new(&current),
+            &LastPlayerSessionFile::new(&legacy),
+        );
+        let work = original
+            .begin_youtube_search("remembered query", YoutubeSearchKind::Video)
+            .expect("search");
+        original.apply_search_results(
+            work.generation,
+            (0..3)
+                .map(|index| youtube_item(index, MediaKind::Video))
+                .collect(),
+            None,
+        );
+        original.navigate_to(RouteFrame::new(Route::Results));
+        let current_item = original.prepare_search_playback(1).expect("current result");
+        original.start_player_item(current_item);
+        drop(original);
+
+        let mut restored = application(root.path());
+        restored.configure_last_player_session(
+            LastPlayerSessionFile::new(&current),
+            &LastPlayerSessionFile::new(&legacy),
+        );
+        assert!(
+            restored
+                .main_menu_model()
+                .items
+                .iter()
+                .any(|item| item.id == "resume_last_session")
+        );
+        let resume = restored
+            .prepare_last_player_session_resume()
+            .expect("resume plan");
+        assert!(resume.sequence_active);
+        assert_eq!(resume.item.id.0, "1");
+        assert_eq!(restored.current_route(), Route::Results);
+        assert_eq!(restored.search_session().query(), "remembered query");
+        assert_eq!(restored.search_session().selected_index(), 1);
+        restored.start_player_item(resume.item);
+        let PlayerNavigationOutcome::Item { item, origin } =
+            restored.request_relative_player_item(1)
+        else {
+            panic!("next restored item");
+        };
+        assert_eq!(origin, PlayerNavigationOrigin::Sequence);
+        assert_eq!(item.id.0, "2");
+    }
+
+    #[test]
+    fn hiding_resume_menu_does_not_hide_it_from_action_finder() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        app.configure_last_player_session(
+            LastPlayerSessionFile::new(root.path().join("beta/last_player_session.json")),
+            &LastPlayerSessionFile::new(root.path().join("stable/last_player_session.json")),
+        );
+        app.start_player_item(media_item("remembered"));
+        app.set_boolean_setting(SettingId::ShowResumeInMenu, false)
+            .expect("hide resume menu");
+        assert!(
+            app.main_menu_model()
+                .items
+                .iter()
+                .all(|item| item.id != "resume_last_session")
+        );
+        assert!(
+            app.action_finder_model(ActionFinderContext::default())
+                .items
+                .iter()
+                .any(|item| item.action_id == "resume_last_session")
+        );
+    }
+
+    #[test]
+    fn last_session_restores_local_folder_context_without_rescanning() {
+        let root = tempdir().expect("temporary directory");
+        let current = root.path().join("beta/last_player_session.json");
+        let legacy = root.path().join("stable/last_player_session.json");
+        let folder = PathBuf::from(r"C:\Music\Album");
+        let folder_items: Vec<_> = (0..3)
+            .map(|index| media_item(&format!("track-{index}")))
+            .collect();
+        let mut original = application(root.path());
+        original.configure_last_player_session(
+            LastPlayerSessionFile::new(&current),
+            &LastPlayerSessionFile::new(&legacy),
+        );
+        original.load_local_folder(folder.clone(), folder_items);
+        original.navigate_to(RouteFrame::new(Route::LocalFolder));
+        let current_item = original
+            .prepare_local_folder_playback(1, false)
+            .expect("folder item");
+        original.start_player_item(current_item);
+        drop(original);
+
+        let mut restored = application(root.path());
+        restored.configure_last_player_session(
+            LastPlayerSessionFile::new(&current),
+            &LastPlayerSessionFile::new(&legacy),
+        );
+        let resume = restored
+            .prepare_last_player_session_resume()
+            .expect("resume plan");
+        assert!(resume.sequence_active);
+        assert_eq!(restored.current_route(), Route::LocalFolder);
+        assert_eq!(restored.local_folder_session().path(), folder);
+        assert_eq!(restored.local_folder_session().selected_index(), 1);
+        restored.start_player_item(resume.item);
+        let PlayerNavigationOutcome::Item { item, origin } =
+            restored.request_relative_player_item(1)
+        else {
+            panic!("next restored folder item");
+        };
+        assert_eq!(origin, PlayerNavigationOrigin::Sequence);
+        assert_eq!(item.title, "track-2");
     }
 
     #[test]

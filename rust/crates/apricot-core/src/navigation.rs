@@ -117,6 +117,17 @@ impl NavigationStack {
         self.frames.last().unwrap_or(&self.root)
     }
 
+    pub fn player_return_frame(&self) -> &RouteFrame {
+        if self.current().route != Route::Player {
+            return self.current();
+        }
+        self.frames
+            .len()
+            .checked_sub(2)
+            .and_then(|index| self.frames.get(index))
+            .unwrap_or(&self.root)
+    }
+
     pub fn push(&mut self, frame: RouteFrame) {
         self.frames.push(frame);
     }
@@ -173,5 +184,16 @@ mod tests {
         assert_eq!(stack.current().route, Route::MainMenu);
         assert_eq!(stack.depth(), 1);
         assert_eq!(stack.back(), None);
+    }
+
+    #[test]
+    fn player_return_frame_is_stable_during_media_replacement() {
+        let mut stack = NavigationStack::default();
+        stack.push(RouteFrame::new(Route::Results));
+        assert_eq!(stack.player_return_frame().route, Route::Results);
+        stack.push(RouteFrame::new(Route::Player));
+        assert_eq!(stack.player_return_frame().route, Route::Results);
+        stack.replace(RouteFrame::new(Route::Player));
+        assert_eq!(stack.player_return_frame().route, Route::Results);
     }
 }

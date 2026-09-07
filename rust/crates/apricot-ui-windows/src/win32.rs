@@ -60,7 +60,7 @@ use windows::{
                 CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW,
                 ES_AUTOHSCROLL, GetClientRect, GetCursorPos, GetMessageW, GetParent,
                 GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, HMENU,
-                IDC_ARROW, IDI_APPLICATION, IsDialogMessageW, KillTimer, LB_ADDSTRING,
+                IDC_ARROW, IDI_APPLICATION, IsDialogMessageW, KillTimer, LB_ADDSTRING, LB_GETCOUNT,
                 LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL, LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY,
                 LoadCursorW, LoadIconW, MB_ICONINFORMATION, MB_OK, MF_GRAYED, MF_STRING, MSG,
                 MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassW,
@@ -1750,6 +1750,10 @@ unsafe fn activate_main_menu_selection(window: HWND) {
         show_search(window);
         return;
     }
+    if item_id == "resume_last_session" {
+        resume_last_player_session(window);
+        return;
+    }
     if item_id == "direct_link" {
         show_direct_link(window);
         return;
@@ -2336,6 +2340,43 @@ unsafe fn show_search(window: HWND) {
     let _ = SetFocus(Some(state.search_edit));
 }
 
+unsafe fn resume_last_player_session(window: HWND) {
+    restore_from_tray(window);
+    stop_controlled_repeat(window);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    cancel_youtube_work(window, state);
+    cancel_local_folder_scan(window, state);
+    let Some(resume) = state.application.prepare_last_player_session_resume() else {
+        set_status(
+            state,
+            &catalog_text(&state.application, "resume_last_session_unavailable"),
+            true,
+        );
+        return;
+    };
+    if resume.return_screen == "user_playlist_items" {
+        state.current_user_playlist_index = resume
+            .return_data
+            .get("playlist_index")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or_default();
+        state.current_user_playlist_item_index = resume
+            .return_data
+            .get("item_index")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or_default();
+    }
+    if resume.sequence_active {
+        start_sequence_media_item(window, resume.item, None);
+    } else {
+        start_media_item(window, resume.item, None);
+    }
+}
+
 unsafe fn show_direct_link(window: HWND) {
     restore_from_tray(window);
     stop_controlled_repeat(window);
@@ -2484,10 +2525,16 @@ unsafe fn navigate_back(window: HWND) {
     if state.view == MainView::Player {
         close_player_runtime(window, state);
     }
-    let route = state
+    let frame = state
         .application
         .navigate_back()
-        .map_or(Route::MainMenu, |frame| frame.route);
+        .unwrap_or_else(|| RouteFrame::new(Route::MainMenu));
+    let route = frame.route;
+    let saved_index = frame
+        .parameters
+        .get("index")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok());
     match route {
         Route::Search => {
             state.view = MainView::Search;
@@ -2513,11 +2560,13 @@ unsafe fn navigate_back(window: HWND) {
         Route::Favorites => {
             state.view = MainView::Favorites;
             refresh_media_collection(state, true, false);
+            select_list_index(state.list, saved_index);
             layout_controls_state(window, state);
         }
         Route::History => {
             state.view = MainView::History;
             refresh_media_collection(state, true, false);
+            select_list_index(state.list, saved_index);
             layout_controls_state(window, state);
         }
         Route::Bookmarks => {
@@ -3544,6 +3593,23 @@ unsafe fn add_list_string(control: HWND, value: &str) {
     );
 }
 
+unsafe fn select_list_index(control: HWND, requested: Option<usize>) {
+    let Some(requested) = requested else {
+        return;
+    };
+    let count =
+        usize::try_from(SendMessageW(control, LB_GETCOUNT, None, None).0).unwrap_or_default();
+    if count == 0 {
+        return;
+    }
+    SendMessageW(
+        control,
+        LB_SETCURSEL,
+        Some(WPARAM(requested.min(count - 1))),
+        None,
+    );
+}
+
 unsafe fn window_text(control: HWND) -> String {
     let length = GetWindowTextLengthW(control);
     let mut value = vec![0_u16; usize::try_from(length).unwrap_or_default() + 1];
@@ -3734,6 +3800,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
     match action_id {
         "open_main_menu" => show_main_menu(window),
         "open_search" => show_search(window),
+        "resume_last_session" => resume_last_player_session(window),
         "open_direct_link" => show_direct_link(window),
         "open_favorites" => show_media_collection(window, MainView::Favorites),
         "open_history" => show_media_collection(window, MainView::History),

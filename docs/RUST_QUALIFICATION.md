@@ -374,3 +374,44 @@ Automated results: app 92 tests, playback 16 tests, storage 40 tests, Windows UI
 Still required: packaged manual checks with NVDA/Narrator for close, replace,
 near-end clearing, and stable-data migration. Last-player-session restoration
 remains a separate unfinished parity item.
+
+## 2026-09-07: Python-compatible last-player-session restoration
+
+Implementation: `LastPlayerSessionFile`, an application-owned controller with
+an ordered background writer, restored result/folder projections, and native
+main-menu and Action finder activation.
+
+Verified:
+
+- `last_player_session.json` loads from the isolated Rust beta data directory
+  with a read-only fallback to the stable Python snapshot, while all new writes
+  target only the beta directory;
+- current item, title, timestamp, Python return screen/data, unknown fields,
+  and a maximum of 200 slim sequence items survive the typed boundary;
+- large transient resolver fields such as formats, captions, thumbnails,
+  entries, heatmaps, and comments are omitted from Rust snapshots like Python;
+- a Python sequence whose rows omit `id` still binds to the current item by its
+  durable URL or path, avoiding silent sequence loss after migration;
+- corrupt current data is preserved and blocks replacement rather than being
+  overwritten with an empty snapshot;
+- writes run off the UI thread, retain program order, coalesce a burst to the
+  newest pending snapshot, and drain before application state is destroyed;
+- Resume last playback session appears only when a valid snapshot exists and
+  the Playback visibility setting permits it; hiding the main-menu row does not
+  hide the same command from Action finder;
+- restored search results retain their query, search kind, exact selection,
+  item order, and deterministic Next/Previous behavior without pretending that
+  an unavailable continuation token can fetch more;
+- restored local folders retain the folder path, exact selection, and complete
+  saved sequence without rescanning the disk;
+- real Python app-data compatibility still passes recursive value comparison.
+
+Automated results: app 99 tests, core 33 tests, storage 44 tests, Windows UI 12
+tests, full workspace Clippy with warnings denied, and
+`PYTHON_DATA_COMPAT=PASS`.
+
+Still required: packaged NVDA/Narrator checks for menu availability, activation,
+focus, Escape return, and same-position resume. Return-screen restoration for
+RSS, AudioVault, subscriptions, notifications, and trending will become active
+with those still-unimplemented Rust screens; their Python identifiers and data
+are already preserved in the snapshot.

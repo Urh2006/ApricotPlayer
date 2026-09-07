@@ -12,8 +12,8 @@ use apricot_platform::{
     acquire_single_instance, discover_windows_beta_paths, sync_startup_registration,
 };
 use apricot_storage::{
-    BookmarkFile, MediaListFile, PlaybackPositionFile, PlaybackQueueFile, SettingsDocument,
-    SettingsPaths, UserPlaylistFile,
+    BookmarkFile, LastPlayerSessionFile, MediaListFile, PlaybackPositionFile, PlaybackQueueFile,
+    SettingsDocument, SettingsPaths, UserPlaylistFile,
 };
 use apricot_updater::UpdateChannel;
 
@@ -82,6 +82,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     application.configure_playback_positions(
         PlaybackPositionFile::new(paths.app_data.join("playback_positions.json")),
         &PlaybackPositionFile::new(paths.legacy_app_data.join("playback_positions.json")),
+    );
+    application.configure_last_player_session(
+        LastPlayerSessionFile::new(paths.app_data.join("last_player_session.json")),
+        &LastPlayerSessionFile::new(paths.legacy_app_data.join("last_player_session.json")),
     );
     if !application.settings().language_prompted {
         let selected =
