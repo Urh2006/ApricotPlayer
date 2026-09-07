@@ -9,6 +9,7 @@ pub mod media_list_file;
 pub mod playback_queue_file;
 pub mod settings;
 pub mod settings_file;
+pub mod user_playlist_file;
 
 pub use compat_snapshot::{
     ArtifactSnapshot, ArtifactSource, CompatibilitySnapshot, CompatibilitySnapshotError,
@@ -25,3 +26,4 @@ pub use settings_file::{
     SettingsLoadOutcome, SettingsPaths, SettingsSaveError, SettingsSource, load_settings,
     save_loaded_settings,
 };
+pub use user_playlist_file::{UserPlaylist, UserPlaylistFile, UserPlaylistFileError};

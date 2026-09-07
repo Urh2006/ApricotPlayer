@@ -16,6 +16,7 @@ pub mod search_session;
 pub mod settings_controller;
 pub mod settings_model;
 pub mod settings_session;
+pub mod user_playlist_controller;
 
 use apricot_core::NavigationStack;
 pub use apricot_media::YoutubeSearchKind;
@@ -52,6 +53,9 @@ pub use settings_model::{
     SettingsSectionItem, SettingsValueType, ShortcutActionItem,
 };
 pub use settings_session::{SettingsDraft, SettingsDraftError};
+pub use user_playlist_controller::{
+    PlaylistAddOutcome, PlaylistCreateOutcome, UserPlaylistController, UserPlaylistControllerError,
+};
 
 #[derive(Debug, Default)]
 pub struct AppState {
@@ -63,4 +67,5 @@ pub struct AppState {
     pub player: PlayerSession,
     pub player_sequence: PlaybackSequence,
     pub search: SearchSession,
+    pub user_playlists: UserPlaylistController,
 }

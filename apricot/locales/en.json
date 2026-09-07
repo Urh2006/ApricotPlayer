@@ -332,6 +332,8 @@
     "download_folder": "Download folder",
     "browse": "Browse",
     "save": "Save",
+    "ok": "OK",
+    "cancel": "Cancel",
     "language": "Language",
     "results_limit": "Number of results",
     "seek_seconds": "Seek seconds",

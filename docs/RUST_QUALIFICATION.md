@@ -270,3 +270,36 @@ Verified:
 Deterministic parser, bounds, backend-selection, and redaction tests pass. The
 live test is ignored by the normal workspace suite and is run explicitly with
 `APRICOT_YTDLP`, so offline builds remain reproducible.
+
+## 2026-09-06: Python-compatible user playlists
+
+Implementation: `UserPlaylistFile`, `UserPlaylistController`, application-owned
+playlist state, and native Win32 playlist/list-item views and dialogs.
+
+Verified:
+
+- `playlists.json` is loaded from the isolated Rust beta data directory with a
+  read-only fallback to the stable Python file, and the first change writes only
+  to the beta directory;
+- playlist and item metadata unknown to Rust survive typed load/save, including
+  the original Python AudioVault kind aliases;
+- malformed current data blocks mutation instead of being silently replaced;
+- create-with-current-item, add, remove, and whole-playlist queue operations are
+  atomic, while duplicate durable locations are rejected;
+- an individually selected playlist item is standalone, matching Python, while
+  Play playlist and Shuffle playlist create an exact deterministic sequence;
+- asynchronous direct-link resolution preserves a valid playlist sequence, and
+  an explicit shuffle choice survives both fresh and continuing player sessions;
+- the name edit starts blank and focused, the chooser starts on its list, Enter
+  accepts, Escape closes from every control, and focus returns to the owner;
+- list controls expose source-appropriate Copy link/Copy path behavior, and local
+  items never expose Copy stream URL;
+- a typed round trip of a private temporary copy of the real Python data passed
+  recursive JSON value comparison.
+
+Automated results: app 83 tests, storage 35 tests, Windows UI 12 tests, full
+workspace Clippy with warnings denied, and `PYTHON_DATA_COMPAT=PASS`.
+
+Still required for complete playlist parity: per-item and whole-playlist
+downloads, source-specific channel actions, and manual NVDA/Narrator dialog and
+navigation checks.

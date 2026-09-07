@@ -7,7 +7,9 @@ use std::{
 
 use apricot_core::{MediaItem, Route, RouteFrame, SettingId, SettingsSection};
 use apricot_playback::PlaybackEvent;
-use apricot_storage::{MediaListFile, PlaybackQueueFile, SettingsDocument};
+use apricot_storage::{
+    MediaListFile, PlaybackQueueFile, SettingsDocument, UserPlaylist, UserPlaylistFile,
+};
 use rand::seq::SliceRandom;
 
 use crate::{
@@ -15,10 +17,11 @@ use crate::{
     CollectionAddOutcome, EqualizerSession, MainMenuAvailability, MainMenuModel,
     MediaCollectionController, MediaCollectionControllerError, MenuVisibility, PlaybackQueue,
     PlaybackQueueController, PlaybackQueueControllerError, PlaybackSequenceSource,
-    PlayerScreenModel, PlayerSession, PlayerSessionDefaults, PlayerViewState, QueueAddOutcome,
-    QueueBatchAddOutcome, SearchApplyOutcome, SearchSession, SearchSessionError, SearchWork,
-    SessionToggle, SettingsController, SettingsControllerError, SettingsScreenModel,
-    YoutubeSearchKind, embedded_catalog,
+    PlayerScreenModel, PlayerSession, PlayerSessionDefaults, PlayerViewState, PlaylistAddOutcome,
+    PlaylistCreateOutcome, QueueAddOutcome, QueueBatchAddOutcome, SearchApplyOutcome,
+    SearchSession, SearchSessionError, SearchWork, SessionToggle, SettingsController,
+    SettingsControllerError, SettingsScreenModel, UserPlaylistController,
+    UserPlaylistControllerError, YoutubeSearchKind, embedded_catalog,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -188,6 +191,154 @@ impl Application {
     /// Returns an error when the empty history file cannot be persisted.
     pub fn clear_history(&mut self) -> Result<bool, MediaCollectionControllerError> {
         self.state.history.clear()
+    }
+
+    pub fn user_playlists(&self) -> &[UserPlaylist] {
+        self.state.user_playlists.playlists()
+    }
+
+    pub fn configure_user_playlists(
+        &mut self,
+        current: UserPlaylistFile,
+        legacy: &UserPlaylistFile,
+    ) {
+        self.state.user_playlists = UserPlaylistController::load(current, legacy);
+    }
+
+    /// Creates one user playlist with Python-compatible timestamps.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the changed playlist collection cannot be persisted.
+    pub fn create_user_playlist(
+        &mut self,
+        title: &str,
+        timestamp: f64,
+    ) -> Result<PlaylistCreateOutcome, UserPlaylistControllerError> {
+        self.state.user_playlists.create(title, timestamp)
+    }
+
+    /// Creates one user playlist containing an initial item in one transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the complete playlist cannot be persisted.
+    pub fn create_user_playlist_with_item(
+        &mut self,
+        title: &str,
+        item: MediaItem,
+        timestamp: f64,
+    ) -> Result<PlaylistCreateOutcome, UserPlaylistControllerError> {
+        self.state
+            .user_playlists
+            .create_with_item(title, item, timestamp)
+    }
+
+    /// Removes one complete user playlist.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the changed playlist collection cannot be persisted.
+    pub fn remove_user_playlist(
+        &mut self,
+        index: usize,
+    ) -> Result<Option<UserPlaylist>, UserPlaylistControllerError> {
+        self.state.user_playlists.remove_playlist(index)
+    }
+
+    /// Adds one item to a user playlist using durable identity deduplication.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the changed playlist cannot be persisted.
+    pub fn add_item_to_user_playlist(
+        &mut self,
+        playlist_index: usize,
+        item: MediaItem,
+        timestamp: f64,
+    ) -> Result<PlaylistAddOutcome, UserPlaylistControllerError> {
+        self.state
+            .user_playlists
+            .add_item(playlist_index, item, timestamp)
+    }
+
+    /// Removes one item from a user playlist.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the changed playlist cannot be persisted.
+    pub fn remove_user_playlist_item(
+        &mut self,
+        playlist_index: usize,
+        item_index: usize,
+        timestamp: f64,
+    ) -> Result<Option<MediaItem>, UserPlaylistControllerError> {
+        self.state
+            .user_playlists
+            .remove_item(playlist_index, item_index, timestamp)
+    }
+
+    pub fn user_playlist_matches(&self, item: &MediaItem) -> Vec<usize> {
+        self.state.user_playlists.matching_playlist_indices(item)
+    }
+
+    pub fn prepare_user_playlist_item_playback(
+        &mut self,
+        playlist_index: usize,
+        item_index: usize,
+    ) -> Option<MediaItem> {
+        let playlist = self.state.user_playlists.playlists().get(playlist_index)?;
+        let item = playlist.items.get(item_index)?.clone();
+        self.state.player_sequence.clear();
+        Some(item)
+    }
+
+    pub fn prepare_user_playlist_playback(
+        &mut self,
+        playlist_index: usize,
+        shuffle: bool,
+    ) -> Option<MediaItem> {
+        let playlist = self.state.user_playlists.playlists().get(playlist_index)?;
+        let mut items: Vec<_> = playlist
+            .items
+            .iter()
+            .filter(|item| item.is_playable())
+            .cloned()
+            .collect();
+        if shuffle {
+            items.shuffle(&mut rand::rng());
+        }
+        let current = items.first()?.clone();
+        let _ = self.state.player_sequence.set(
+            PlaybackSequenceSource::UserPlaylist { playlist_index },
+            &items,
+            &current,
+        );
+        Some(current)
+    }
+
+    /// Adds every playable item from one user playlist with one durable queue write.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the changed playback queue cannot be persisted.
+    pub fn add_user_playlist_to_playback_queue(
+        &mut self,
+        playlist_index: usize,
+    ) -> Result<Option<QueueBatchAddOutcome>, PlaybackQueueControllerError> {
+        let Some(playlist) = self.state.user_playlists.playlists().get(playlist_index) else {
+            return Ok(None);
+        };
+        self.state
+            .playback_queue
+            .add_many(
+                playlist
+                    .items
+                    .iter()
+                    .filter(|item| item.is_playable())
+                    .cloned(),
+            )
+            .map(Some)
     }
 
     pub const fn local_folder_session(&self) -> &crate::LocalFolderSession {
@@ -375,6 +526,14 @@ impl Application {
         PlayerNavigationOutcome::Unavailable
     }
 
+    pub const fn player_sequence_source(&self) -> Option<PlaybackSequenceSource> {
+        self.state.player_sequence.source()
+    }
+
+    pub fn player_sequence_contains(&self, item: &MediaItem) -> bool {
+        self.state.player_sequence.contains(item)
+    }
+
     pub const fn playback_queue(&self) -> &PlaybackQueue {
         self.state.playback_queue.queue()
     }
@@ -535,6 +694,20 @@ impl Application {
             starts_paused: settings.player_start_paused,
         };
         self.state.player.start_item(item, defaults)
+    }
+
+    pub fn start_player_item_with_shuffle(
+        &mut self,
+        item: MediaItem,
+        shuffle: Option<bool>,
+    ) -> u64 {
+        let generation = self.start_player_item(item);
+        if let Some(enabled) = shuffle {
+            self.state
+                .player
+                .set_toggle(SessionToggle::Shuffle, enabled);
+        }
+        generation
     }
 
     fn sync_sequence_source_selection(
@@ -926,11 +1099,14 @@ mod tests {
 
     use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource, SettingId, SettingsSection};
     use apricot_playback::PlaybackEvent;
-    use apricot_storage::{MediaListFile, SettingsDocument, SettingsPaths};
+    use apricot_storage::{MediaListFile, SettingsDocument, SettingsPaths, UserPlaylistFile};
     use tempfile::tempdir;
 
     use super::{Application, PlayerNavigationOrigin, PlayerNavigationOutcome};
-    use crate::{ActivationRequest, MainMenuAvailability, SettingsController, YoutubeSearchKind};
+    use crate::{
+        ActivationRequest, MainMenuAvailability, PlaylistAddOutcome, PlaylistCreateOutcome,
+        SessionToggle, SettingsController, YoutubeSearchKind,
+    };
 
     fn application(root: &Path) -> Application {
         let paths = SettingsPaths::for_app_data(&root.join("beta"), &root.join("stable"));
@@ -1270,6 +1446,125 @@ mod tests {
         };
         assert_eq!(origin, PlayerNavigationOrigin::Sequence);
         assert_eq!(item.id.0, "second");
+    }
+
+    #[test]
+    fn selected_user_playlist_item_is_standalone_and_durable() {
+        let root = tempfile::tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        let playlist_path = root.path().join("beta/playlists.json");
+        app.configure_user_playlists(
+            UserPlaylistFile::new(&playlist_path),
+            &UserPlaylistFile::new(root.path().join("stable/playlists.json")),
+        );
+        assert_eq!(
+            app.create_user_playlist("Road trip", 1.0)
+                .expect("create playlist"),
+            PlaylistCreateOutcome::Created(0)
+        );
+        for id in ["first", "second", "third"] {
+            assert!(matches!(
+                app.add_item_to_user_playlist(0, media_item(id), 2.0)
+                    .expect("add item"),
+                PlaylistAddOutcome::Added(_)
+            ));
+        }
+        let second = app
+            .prepare_user_playlist_item_playback(0, 1)
+            .expect("second item");
+        assert_eq!(second.id.0, "second");
+        assert_eq!(
+            app.request_relative_player_item(-1),
+            PlayerNavigationOutcome::Unavailable
+        );
+        assert_eq!(
+            app.request_relative_player_item(1),
+            PlayerNavigationOutcome::Unavailable
+        );
+        assert_eq!(
+            UserPlaylistFile::new(playlist_path)
+                .load()
+                .expect("persisted playlists")[0]
+                .items
+                .len(),
+            3
+        );
+    }
+
+    #[test]
+    fn whole_user_playlist_drives_exact_previous_next_order() {
+        let root = tempfile::tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        app.configure_user_playlists(
+            UserPlaylistFile::new(root.path().join("playlists.json")),
+            &UserPlaylistFile::new(root.path().join("legacy.json")),
+        );
+        app.create_user_playlist("Road trip", 1.0)
+            .expect("create playlist");
+        for id in ["first", "second", "third"] {
+            app.add_item_to_user_playlist(0, media_item(id), 2.0)
+                .expect("add item");
+        }
+
+        let first = app
+            .prepare_user_playlist_playback(0, false)
+            .expect("playlist start");
+        assert!(app.player_sequence_contains(&first));
+        assert!(matches!(
+            app.request_relative_player_item(1),
+            PlayerNavigationOutcome::Item { item, .. } if item.id.0 == "second"
+        ));
+    }
+
+    #[test]
+    fn shuffled_user_playlist_contains_each_item_once() {
+        let root = tempfile::tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        app.configure_user_playlists(
+            UserPlaylistFile::new(root.path().join("playlists.json")),
+            &UserPlaylistFile::new(root.path().join("legacy.json")),
+        );
+        app.create_user_playlist("Shuffle", 1.0)
+            .expect("create playlist");
+        for id in ["one", "two", "three", "four"] {
+            app.add_item_to_user_playlist(0, media_item(id), 2.0)
+                .expect("add item");
+        }
+        let current = app
+            .prepare_user_playlist_playback(0, true)
+            .expect("shuffle start");
+        assert!(app.state.player_sequence.activate(&current));
+        let identities: std::collections::BTreeSet<_> = app
+            .state
+            .player_sequence
+            .items()
+            .iter()
+            .map(|item| item.id.0.as_str())
+            .collect();
+        assert_eq!(
+            identities,
+            std::collections::BTreeSet::from(["four", "one", "three", "two"])
+        );
+    }
+
+    #[test]
+    fn explicit_shuffle_choice_survives_a_fresh_or_continuing_session_start() {
+        let root = tempfile::tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+
+        app.start_player_item_with_shuffle(media_item("first"), Some(true));
+        assert!(
+            app.player_session()
+                .enabled_toggles()
+                .contains(&SessionToggle::Shuffle)
+        );
+
+        app.start_player_item_with_shuffle(media_item("second"), Some(false));
+        assert!(
+            !app.player_session()
+                .enabled_toggles()
+                .contains(&SessionToggle::Shuffle)
+        );
     }
 
     #[test]

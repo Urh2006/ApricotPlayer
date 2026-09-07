@@ -57,15 +57,16 @@ use windows::{
                 GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, HMENU,
                 IDC_ARROW, IDI_APPLICATION, IsDialogMessageW, KillTimer, LB_ADDSTRING,
                 LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL, LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY,
-                LoadCursorW, LoadIconW, MB_ICONINFORMATION, MB_OK, MF_STRING, MSG, MessageBoxW,
-                MoveWindow, PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW,
-                SW_HIDE, SW_SHOW, SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW,
-                SetWindowTextW, ShowWindow, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON,
-                TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX,
-                WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE,
-                WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_NCDESTROY, WM_RBUTTONUP,
-                WM_SETFONT, WM_SIZE, WM_SYSKEYUP, WM_TIMER, WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE,
-                WS_GROUP, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+                LoadCursorW, LoadIconW, MB_ICONINFORMATION, MB_OK, MF_GRAYED, MF_STRING, MSG,
+                MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassW,
+                RegisterWindowMessageW, SW_HIDE, SW_SHOW, SendMessageW, SetForegroundWindow,
+                SetTimer, SetWindowLongPtrW, SetWindowTextW, ShowWindow, TPM_LEFTALIGN,
+                TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE,
+                WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU,
+                WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK,
+                WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WM_SYSKEYUP, WM_TIMER, WNDCLASSW,
+                WS_CHILD, WS_EX_CLIENTEDGE, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
+                WS_VSCROLL,
             },
         },
     },
@@ -89,6 +90,10 @@ const ID_DIRECT_COPY_STREAM: usize = 1014;
 const ID_DIRECT_ENTER: usize = 1015;
 const ID_COLLECTION_REMOVE: usize = 1016;
 const ID_HISTORY_CLEAR: usize = 1017;
+const ID_PLAYLIST_CREATE: usize = 1018;
+const ID_PLAYLIST_PLAY_ALL: usize = 1019;
+const ID_PLAYLIST_SHUFFLE: usize = 1020;
+const ID_PLAYLIST_ADD_ALL_TO_QUEUE: usize = 1021;
 const ID_CONTEXT_PLAY: usize = 1101;
 const ID_CONTEXT_PLAY_FOLDER: usize = 1102;
 const ID_CONTEXT_SHUFFLE_FOLDER: usize = 1103;
@@ -104,6 +109,13 @@ const ID_CONTEXT_DETAILS: usize = 1112;
 const ID_CONTEXT_ADD_FAVORITE: usize = 1113;
 const ID_CONTEXT_COLLECTION_REMOVE: usize = 1114;
 const ID_CONTEXT_HISTORY_CLEAR: usize = 1115;
+const ID_CONTEXT_CREATE_PLAYLIST: usize = 1116;
+const ID_CONTEXT_PLAY_PLAYLIST: usize = 1117;
+const ID_CONTEXT_SHUFFLE_PLAYLIST: usize = 1118;
+const ID_CONTEXT_ADD_TO_PLAYLIST: usize = 1119;
+const ID_CONTEXT_REMOVE_FROM_PLAYLIST: usize = 1120;
+const ID_CONTEXT_REMOVE_PLAYLIST: usize = 1121;
+const ID_CONTEXT_ADD_PLAYLIST_TO_QUEUE: usize = 1122;
 const WM_PROCESS_ACTIVATION: u32 = WM_APP + 1;
 const WM_TRAY_ICON: u32 = WM_APP + 2;
 const YOUTUBE_TIMER_ID: usize = 1;
@@ -141,6 +153,8 @@ enum MainView {
     LocalFolder,
     Favorites,
     History,
+    UserPlaylists,
+    UserPlaylistItems,
     Player,
 }
 
@@ -166,6 +180,8 @@ struct PendingYoutubeResolve {
     token: u64,
     purpose: YoutubeResolvePurpose,
     original_item: apricot_core::MediaItem,
+    session_shuffle: Option<bool>,
+    preserve_sequence: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -201,6 +217,10 @@ struct WindowState {
     direct_copy_stream: HWND,
     collection_remove: HWND,
     history_clear: HWND,
+    playlist_create: HWND,
+    playlist_play_all: HWND,
+    playlist_shuffle: HWND,
+    playlist_add_all_to_queue: HWND,
     video_host: HWND,
     player_controls: PlayerControls,
     status: HWND,
@@ -223,6 +243,8 @@ struct WindowState {
     controlled_repeat: Option<ControlledRepeatState>,
     pending_local_folder_scan: Option<PendingLocalFolderScan>,
     next_local_folder_generation: u64,
+    current_user_playlist_index: usize,
+    current_user_playlist_item_index: usize,
 }
 
 pub fn run_application(application: Application, version: &str, start_hidden: bool) -> Result<()> {
@@ -250,6 +272,7 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
     crate::settings_win32::register()?;
     crate::action_finder_win32::register()?;
     crate::playback_queue_win32::register()?;
+    crate::playlist_dialog_win32::register()?;
     crate::details_win32::register()?;
 
     let title = wide(&format!("ApricotPlayer 2 Beta {version}"));
@@ -355,7 +378,9 @@ unsafe extern "system" fn window_proc(
                 && let Some(state) = state_mut(window)
             {
                 state.application.enqueue_activation(request);
-                restore_from_tray(window);
+                if !state.modal_open {
+                    restore_from_tray(window);
+                }
                 let _ = PostMessageW(Some(window), WM_PROCESS_ACTIVATION, WPARAM(0), LPARAM(0));
                 return LRESULT(1);
             }
@@ -440,6 +465,14 @@ unsafe fn handle_window_command(window: HWND, wparam: WPARAM) {
         remove_selected_collection_item(window);
     } else if command == ID_HISTORY_CLEAR {
         clear_history(window);
+    } else if command == ID_PLAYLIST_CREATE {
+        create_user_playlist(window, None);
+    } else if command == ID_PLAYLIST_PLAY_ALL {
+        play_current_user_playlist(window, false);
+    } else if command == ID_PLAYLIST_SHUFFLE {
+        play_current_user_playlist(window, true);
+    } else if command == ID_PLAYLIST_ADD_ALL_TO_QUEUE {
+        add_current_user_playlist_to_queue(window);
     } else if matches!(
         command,
         ID_TRAY_SHOW | ID_TRAY_SETTINGS | ID_TRAY_CHECK_SUBSCRIPTIONS | ID_TRAY_EXIT
@@ -676,6 +709,46 @@ unsafe fn create_controls(
         WINDOW_EX_STYLE::default(),
         ID_HISTORY_CLEAR,
     )?;
+    let playlist_create_text = wide(catalog.text("create_playlist"));
+    let playlist_create = create_control(
+        parent,
+        instance,
+        w!("BUTTON"),
+        PCWSTR(playlist_create_text.as_ptr()),
+        WS_CHILD | WS_TABSTOP,
+        WINDOW_EX_STYLE::default(),
+        ID_PLAYLIST_CREATE,
+    )?;
+    let playlist_play_all_text = wide(catalog.text("play_playlist"));
+    let playlist_play_all = create_control(
+        parent,
+        instance,
+        w!("BUTTON"),
+        PCWSTR(playlist_play_all_text.as_ptr()),
+        WS_CHILD | WS_TABSTOP,
+        WINDOW_EX_STYLE::default(),
+        ID_PLAYLIST_PLAY_ALL,
+    )?;
+    let playlist_shuffle_text = wide(catalog.text("shuffle_playlist"));
+    let playlist_shuffle = create_control(
+        parent,
+        instance,
+        w!("BUTTON"),
+        PCWSTR(playlist_shuffle_text.as_ptr()),
+        WS_CHILD | WS_TABSTOP,
+        WINDOW_EX_STYLE::default(),
+        ID_PLAYLIST_SHUFFLE,
+    )?;
+    let playlist_queue_text = wide(catalog.text("add_to_playback_queue"));
+    let playlist_add_all_to_queue = create_control(
+        parent,
+        instance,
+        w!("BUTTON"),
+        PCWSTR(playlist_queue_text.as_ptr()),
+        WS_CHILD | WS_TABSTOP,
+        WINDOW_EX_STYLE::default(),
+        ID_PLAYLIST_ADD_ALL_TO_QUEUE,
+    )?;
     let player_controls = PlayerControls::create(parent, instance)?;
     let video_host = player_controls.video_host();
     let font = GetStockObject(DEFAULT_GUI_FONT);
@@ -699,6 +772,10 @@ unsafe fn create_controls(
         direct_copy_stream,
         collection_remove,
         history_clear,
+        playlist_create,
+        playlist_play_all,
+        playlist_shuffle,
+        playlist_add_all_to_queue,
         status,
     ] {
         SendMessageW(control, WM_SETFONT, font_param, Some(LPARAM(1)));
@@ -722,6 +799,10 @@ unsafe fn create_controls(
         direct_copy_stream,
         collection_remove,
         history_clear,
+        playlist_create,
+        playlist_play_all,
+        playlist_shuffle,
+        playlist_add_all_to_queue,
         video_host,
         player_controls,
         status,
@@ -744,6 +825,8 @@ unsafe fn create_controls(
         controlled_repeat: None,
         pending_local_folder_scan: None,
         next_local_folder_generation: 0,
+        current_user_playlist_index: 0,
+        current_user_playlist_item_index: 0,
     })
 }
 
@@ -833,20 +916,30 @@ unsafe fn show_list_context_menu(window: HWND, location: LPARAM) {
     let Some(entries) = list_context_entries(view) else {
         return;
     };
+    let active_item = active_media_item(window);
+    let active_is_local = active_item
+        .as_ref()
+        .is_some_and(apricot_core::MediaItem::is_local_media);
     let catalog = apricot_app::embedded_catalog(&language);
     let Ok(menu) = CreatePopupMenu() else {
         return;
     };
-    for (id, key) in entries {
-        let key = if *id == ID_CONTEXT_COPY_LOCATION
-            && active_media_item(window).is_some_and(|item| item.is_local_media())
-        {
-            "copy_path"
-        } else {
-            key
-        };
-        let label = wide(catalog.text(key));
-        let _ = AppendMenuW(menu, MF_STRING, *id, PCWSTR(label.as_ptr()));
+    if view == MainView::UserPlaylistItems && active_item.is_none() {
+        let label = wide(catalog.text("playlist_empty"));
+        let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, PCWSTR(label.as_ptr()));
+    } else {
+        for (id, key) in entries {
+            if *id == ID_CONTEXT_COPY_STREAM_URL && active_is_local {
+                continue;
+            }
+            let key = if *id == ID_CONTEXT_COPY_LOCATION && active_is_local {
+                "copy_path"
+            } else {
+                key
+            };
+            let label = wide(catalog.text(key));
+            let _ = AppendMenuW(menu, MF_STRING, *id, PCWSTR(label.as_ptr()));
+        }
     }
     let mut fallback_point = POINT::default();
     let point = context_menu_point(location, list).or_else(|| {
@@ -870,6 +963,7 @@ unsafe fn show_list_context_menu(window: HWND, location: LPARAM) {
         if let Some(state) = state_mut(window) {
             state.modal_open = false;
         }
+        resume_deferred_window_work(window);
         match usize::try_from(selected.0).unwrap_or_default() {
             ID_CONTEXT_PLAY => activate_selection(window),
             ID_CONTEXT_PLAY_FOLDER => play_current_local_folder(window, false),
@@ -883,6 +977,13 @@ unsafe fn show_list_context_menu(window: HWND, location: LPARAM) {
             ID_CONTEXT_ADD_FAVORITE => add_active_favorite(window),
             ID_CONTEXT_COLLECTION_REMOVE => remove_selected_collection_item(window),
             ID_CONTEXT_HISTORY_CLEAR => clear_history(window),
+            ID_CONTEXT_CREATE_PLAYLIST => create_user_playlist(window, None),
+            ID_CONTEXT_PLAY_PLAYLIST => play_current_user_playlist(window, false),
+            ID_CONTEXT_SHUFFLE_PLAYLIST => play_current_user_playlist(window, true),
+            ID_CONTEXT_ADD_TO_PLAYLIST => add_active_item_to_user_playlist(window),
+            ID_CONTEXT_REMOVE_FROM_PLAYLIST => remove_active_item_from_user_playlist(window),
+            ID_CONTEXT_REMOVE_PLAYLIST => remove_selected_user_playlist(window),
+            ID_CONTEXT_ADD_PLAYLIST_TO_QUEUE => add_current_user_playlist_to_queue(window),
             _ => {}
         }
     }
@@ -902,12 +1003,14 @@ fn list_context_entries(view: MainView) -> Option<&'static [(usize, &'static str
             (ID_CONTEXT_ADD_FOLDER_TO_QUEUE, "add_folder_to_queue"),
             (ID_CONTEXT_PLAYBACK_QUEUE, "playback_queue"),
             (ID_CONTEXT_COPY_LOCATION, "copy_path"),
+            (ID_CONTEXT_ADD_TO_PLAYLIST, "add_to_playlist"),
         ]),
         MainView::Favorites => Some(&[
             (ID_CONTEXT_PLAY, "play"),
             (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
             (ID_CONTEXT_COPY_LOCATION, "copy_link"),
             (ID_CONTEXT_COLLECTION_REMOVE, "remove_favorite"),
+            (ID_CONTEXT_ADD_TO_PLAYLIST, "add_to_playlist"),
         ]),
         MainView::History => Some(&[
             (ID_CONTEXT_PLAY, "play"),
@@ -916,12 +1019,32 @@ fn list_context_entries(view: MainView) -> Option<&'static [(usize, &'static str
             (ID_CONTEXT_COPY_LOCATION, "copy_link"),
             (ID_CONTEXT_COLLECTION_REMOVE, "remove_history_item"),
             (ID_CONTEXT_HISTORY_CLEAR, "clear_history"),
+            (ID_CONTEXT_ADD_TO_PLAYLIST, "add_to_playlist"),
         ]),
         MainView::Results => Some(&[
             (ID_CONTEXT_PLAY, "play"),
             (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
             (ID_CONTEXT_REMOVE_FROM_QUEUE, "remove_from_playback_queue"),
             (ID_CONTEXT_PLAYBACK_QUEUE, "playback_queue"),
+            (ID_CONTEXT_COPY_LOCATION, "copy_link"),
+            (ID_CONTEXT_COPY_STREAM_URL, "copy_stream_url"),
+            (ID_CONTEXT_ADD_TO_PLAYLIST, "add_to_playlist"),
+        ]),
+        MainView::UserPlaylists => Some(&[
+            (ID_CONTEXT_PLAY, "open_playlist"),
+            (ID_CONTEXT_CREATE_PLAYLIST, "create_playlist"),
+            (ID_CONTEXT_PLAY_PLAYLIST, "play_playlist"),
+            (ID_CONTEXT_SHUFFLE_PLAYLIST, "shuffle_playlist"),
+            (ID_CONTEXT_ADD_PLAYLIST_TO_QUEUE, "add_to_playback_queue"),
+            (ID_CONTEXT_REMOVE_PLAYLIST, "remove_playlist"),
+        ]),
+        MainView::UserPlaylistItems => Some(&[
+            (ID_CONTEXT_PLAY, "play"),
+            (ID_CONTEXT_PLAY_PLAYLIST, "play_playlist"),
+            (ID_CONTEXT_SHUFFLE_PLAYLIST, "shuffle_playlist"),
+            (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
+            (ID_CONTEXT_REMOVE_FROM_QUEUE, "remove_from_playback_queue"),
+            (ID_CONTEXT_REMOVE_FROM_PLAYLIST, "remove_from_playlist"),
             (ID_CONTEXT_COPY_LOCATION, "copy_link"),
             (ID_CONTEXT_COPY_STREAM_URL, "copy_stream_url"),
         ]),
@@ -932,7 +1055,12 @@ fn list_context_entries(view: MainView) -> Option<&'static [(usize, &'static str
 unsafe fn show_context_menu_for_active_view(window: HWND) {
     match state(window).map(|state| state.view) {
         Some(
-            MainView::Results | MainView::LocalFolder | MainView::Favorites | MainView::History,
+            MainView::Results
+            | MainView::LocalFolder
+            | MainView::Favorites
+            | MainView::History
+            | MainView::UserPlaylists
+            | MainView::UserPlaylistItems,
         ) => {
             show_list_context_menu(window, LPARAM(-1));
         }
@@ -968,6 +1096,8 @@ unsafe fn show_player_context_menu(window: HWND, location: LPARAM) {
         (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
         (ID_CONTEXT_REMOVE_FROM_QUEUE, "remove_from_playback_queue"),
         (ID_CONTEXT_PLAYBACK_QUEUE, "playback_queue"),
+        (ID_CONTEXT_ADD_TO_PLAYLIST, "add_to_playlist"),
+        (ID_CONTEXT_REMOVE_FROM_PLAYLIST, "remove_from_playlist"),
     ];
     entries.insert(
         1,
@@ -1010,6 +1140,7 @@ unsafe fn show_player_context_menu(window: HWND, location: LPARAM) {
         if let Some(state) = state_mut(window) {
             state.modal_open = false;
         }
+        resume_deferred_window_work(window);
         match usize::try_from(selected.0).unwrap_or_default() {
             ID_CONTEXT_DETAILS => show_player_details(window),
             ID_CONTEXT_COPY_LOCATION => copy_active_location(window),
@@ -1020,6 +1151,8 @@ unsafe fn show_player_context_menu(window: HWND, location: LPARAM) {
             ID_CONTEXT_PLAYBACK_QUEUE => show_playback_queue(window),
             ID_CONTEXT_ADD_FAVORITE => add_active_favorite(window),
             ID_CONTEXT_COLLECTION_REMOVE => remove_active_favorite(window),
+            ID_CONTEXT_ADD_TO_PLAYLIST => add_active_item_to_user_playlist(window),
+            ID_CONTEXT_REMOVE_FROM_PLAYLIST => remove_active_item_from_user_playlist(window),
             ID_CONTEXT_CLOSE_PLAYER => navigate_back(window),
             _ => {}
         }
@@ -1139,6 +1272,7 @@ unsafe fn layout_controls_state(window: HWND, state: &mut WindowState) {
     layout_bottom_controls(state, width, height, margin, button_height, status_height);
 }
 
+#[allow(clippy::too_many_lines)]
 unsafe fn layout_bottom_controls(
     state: &WindowState,
     width: i32,
@@ -1151,6 +1285,8 @@ unsafe fn layout_bottom_controls(
     let direct_link = state.view == MainView::DirectLink;
     let favorites = state.view == MainView::Favorites;
     let history = state.view == MainView::History;
+    let user_playlists = state.view == MainView::UserPlaylists;
+    let user_playlist_items = state.view == MainView::UserPlaylistItems;
     let first_button_y = if local_folder {
         height - button_height * 2 - margin * 2
     } else {
@@ -1229,6 +1365,34 @@ unsafe fn layout_bottom_controls(
             vec![state.back, state.open, state.collection_remove]
         };
         layout_button_row(&controls, width, first_button_y, margin, button_height);
+    } else if user_playlists {
+        layout_button_row(
+            &[
+                state.back,
+                state.playlist_create,
+                state.open,
+                state.collection_remove,
+            ],
+            width,
+            first_button_y,
+            margin,
+            button_height,
+        );
+    } else if user_playlist_items {
+        layout_button_row(
+            &[
+                state.back,
+                state.open,
+                state.playlist_play_all,
+                state.playlist_shuffle,
+                state.collection_remove,
+                state.playlist_add_all_to_queue,
+            ],
+            width,
+            first_button_y,
+            margin,
+            button_height,
+        );
     }
 }
 
@@ -1280,11 +1444,25 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
             | MainView::LocalFolder
             | MainView::Favorites
             | MainView::History
+            | MainView::UserPlaylists
+            | MainView::UserPlaylistItems
     );
     let text_entry_visible = matches!(state.view, MainView::Search | MainView::DirectLink);
     let search_visible = state.view == MainView::Search;
     let direct_link_visible = state.view == MainView::DirectLink;
-    let collection_visible = matches!(state.view, MainView::Favorites | MainView::History);
+    let playlist_items_available = state.view != MainView::UserPlaylistItems
+        || state
+            .application
+            .user_playlists()
+            .get(state.current_user_playlist_index)
+            .is_some_and(|playlist| !playlist.items.is_empty());
+    let collection_visible = matches!(
+        state.view,
+        MainView::Favorites
+            | MainView::History
+            | MainView::UserPlaylists
+            | MainView::UserPlaylistItems
+    ) && playlist_items_available;
     let back_visible = matches!(
         state.view,
         MainView::Search
@@ -1293,8 +1471,10 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
             | MainView::LocalFolder
             | MainView::Favorites
             | MainView::History
+            | MainView::UserPlaylists
+            | MainView::UserPlaylistItems
     );
-    let open_visible = list_visible;
+    let open_visible = list_visible && playlist_items_available;
     let folder_visible = state.view == MainView::LocalFolder;
     for (control, visible) in [
         (state.list, list_visible),
@@ -1315,6 +1495,19 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
         (state.direct_copy_stream, direct_link_visible),
         (state.collection_remove, collection_visible),
         (state.history_clear, state.view == MainView::History),
+        (state.playlist_create, state.view == MainView::UserPlaylists),
+        (
+            state.playlist_play_all,
+            state.view == MainView::UserPlaylistItems && playlist_items_available,
+        ),
+        (
+            state.playlist_shuffle,
+            state.view == MainView::UserPlaylistItems && playlist_items_available,
+        ),
+        (
+            state.playlist_add_all_to_queue,
+            state.view == MainView::UserPlaylistItems && playlist_items_available,
+        ),
     ] {
         let _ = ShowWindow(control, if visible { SW_SHOW } else { SW_HIDE });
     }
@@ -1520,6 +1713,8 @@ unsafe fn activate_selection(window: HWND) {
         Some(MainView::Results) => activate_result_selection(window),
         Some(MainView::LocalFolder) => activate_local_folder_selection(window),
         Some(MainView::Favorites | MainView::History) => activate_collection_selection(window),
+        Some(MainView::UserPlaylists) => open_selected_user_playlist(window),
+        Some(MainView::UserPlaylistItems) => activate_user_playlist_item(window),
         Some(MainView::Search | MainView::DirectLink | MainView::Player) | None => {}
     }
 }
@@ -1558,6 +1753,10 @@ unsafe fn activate_main_menu_selection(window: HWND) {
     }
     if item_id == "history" {
         show_media_collection(window, MainView::History);
+        return;
+    }
+    if item_id == "playlists" {
+        show_user_playlists(window);
         return;
     }
     if item_id == "playback_queue" {
@@ -1609,7 +1808,7 @@ unsafe fn activate_result_selection(window: HWND) {
         let _ = SetFocus(Some(state.list));
         return;
     }
-    start_media_item(window, item, None);
+    start_sequence_media_item(window, item, None);
 }
 
 unsafe fn activate_local_folder_selection(window: HWND) {
@@ -1623,7 +1822,7 @@ unsafe fn activate_local_folder_selection(window: HWND) {
             .prepare_local_folder_playback(index, false)
     });
     if let Some(item) = item {
-        start_media_item(window, item, None);
+        start_sequence_media_item(window, item, None);
     }
 }
 
@@ -1654,7 +1853,7 @@ unsafe fn activate_collection_selection(window: HWND) {
             show_error_message(window, &message);
             return;
         }
-        start_media_item(window, item, None);
+        start_sequence_media_item(window, item, None);
     }
 }
 
@@ -1677,13 +1876,7 @@ unsafe fn play_current_local_folder(window: HWND, shuffle: bool) {
         }
         return;
     };
-    start_media_item(window, item, None);
-    if shuffle && let Some(state) = state_mut(window) {
-        state
-            .application
-            .set_player_toggle(SessionToggle::Shuffle, true);
-        refresh_player(window, state, false, true);
-    }
+    start_media_item_with_shuffle(window, item, None, shuffle);
 }
 
 unsafe fn add_current_local_folder_to_queue(window: HWND) {
@@ -1714,10 +1907,40 @@ unsafe fn start_media_item(
     item: apricot_core::MediaItem,
     queue_mode: Option<QueueStartMode>,
 ) {
+    start_media_item_with_options(window, item, queue_mode, None, false);
+}
+
+unsafe fn start_sequence_media_item(
+    window: HWND,
+    item: apricot_core::MediaItem,
+    queue_mode: Option<QueueStartMode>,
+) {
+    start_media_item_with_options(window, item, queue_mode, None, true);
+}
+
+unsafe fn start_media_item_with_shuffle(
+    window: HWND,
+    item: apricot_core::MediaItem,
+    queue_mode: Option<QueueStartMode>,
+    shuffle: bool,
+) {
+    start_media_item_with_options(window, item, queue_mode, Some(shuffle), true);
+}
+
+unsafe fn start_media_item_with_options(
+    window: HWND,
+    item: apricot_core::MediaItem,
+    queue_mode: Option<QueueStartMode>,
+    session_shuffle: Option<bool>,
+    preserve_sequence: bool,
+) {
     let Some(state) = state_mut(window) else {
         return;
     };
     cancel_youtube_work(window, state);
+    if !preserve_sequence {
+        state.application.prepare_standalone_playback();
+    }
     state.pending_queued_start = queue_mode.map(|mode| PendingQueuedStart {
         item: item.clone(),
         mode,
@@ -1726,16 +1949,37 @@ unsafe fn start_media_item(
         item.source,
         apricot_core::MediaSource::Youtube | apricot_core::MediaSource::Direct
     ) {
-        start_player(window, item);
+        start_player(window, item, session_shuffle);
         return;
     }
-    start_youtube_resolve(window, &item, YoutubeResolvePurpose::Playback);
+    start_youtube_resolve_with_options(
+        window,
+        &item,
+        YoutubeResolvePurpose::Playback,
+        session_shuffle,
+        preserve_sequence,
+    );
 }
 
 unsafe fn start_youtube_resolve(
     window: HWND,
     item: &apricot_core::MediaItem,
     purpose: YoutubeResolvePurpose,
+) {
+    if purpose == YoutubeResolvePurpose::Playback
+        && let Some(state) = state_mut(window)
+    {
+        state.application.prepare_standalone_playback();
+    }
+    start_youtube_resolve_with_options(window, item, purpose, None, false);
+}
+
+unsafe fn start_youtube_resolve_with_options(
+    window: HWND,
+    item: &apricot_core::MediaItem,
+    purpose: YoutubeResolvePurpose,
+    session_shuffle: Option<bool>,
+    preserve_sequence: bool,
 ) {
     let Some(url) = item.url.as_ref().map(ToString::to_string) else {
         if let Some(state) = state_mut(window) {
@@ -1775,6 +2019,8 @@ unsafe fn start_youtube_resolve(
                 token,
                 purpose,
                 original_item: item.clone(),
+                session_shuffle,
+                preserve_sequence,
             });
             set_status(
                 state,
@@ -1805,6 +2051,19 @@ fn media_resolve_backend(
     } else {
         YoutubeBackend::from_setting_value(configured_backend)
     }
+}
+
+fn resolved_playback_item(
+    mut resolved: apricot_core::MediaItem,
+    original: &apricot_core::MediaItem,
+    preserve_sequence: bool,
+) -> apricot_core::MediaItem {
+    if preserve_sequence || original.source == apricot_core::MediaSource::Direct {
+        resolved.source = original.source;
+        resolved.id = original.id.clone();
+        resolved.url.clone_from(&original.url);
+    }
+    resolved
 }
 
 unsafe fn report_youtube_resolve_start_error(
@@ -1880,12 +2139,7 @@ unsafe fn finish_youtube_resolve(
         copy_text_and_announce(window, &primary.url, "stream_url_copied");
         return;
     }
-    if pending.original_item.source == apricot_core::MediaSource::Direct {
-        item.source = apricot_core::MediaSource::Direct;
-        item.id = pending.original_item.id;
-        item.url = pending.original_item.url;
-        state.application.prepare_standalone_playback();
-    }
+    item = resolved_playback_item(item, &pending.original_item, pending.preserve_sequence);
     let Ok(stream_url) = primary.url.parse() else {
         report_youtube_resolve_start_error(
             window,
@@ -1900,10 +2154,10 @@ unsafe fn finish_youtube_resolve(
         .external_audio_index
         .and_then(|index| formats.get(index))
         .and_then(|format| format.url.parse().ok());
-    start_player(window, item);
+    start_player(window, item, pending.session_shuffle);
 }
 
-unsafe fn start_player(window: HWND, item: apricot_core::MediaItem) {
+unsafe fn start_player(window: HWND, item: apricot_core::MediaItem, session_shuffle: Option<bool>) {
     let Some(state) = state_mut(window) else {
         return;
     };
@@ -1917,7 +2171,9 @@ unsafe fn start_player(window: HWND, item: apricot_core::MediaItem) {
             }
         }
     }
-    let generation = state.application.start_player_item(item);
+    let generation = state
+        .application
+        .start_player_item_with_shuffle(item, session_shuffle);
     let Some(options) = playback_launch_options(state) else {
         let message = "Internal mpv player was not found";
         let _ = state
@@ -2085,6 +2341,94 @@ unsafe fn show_media_collection(window: HWND, view: MainView) {
     layout_controls_state(window, state);
 }
 
+unsafe fn show_user_playlists(window: HWND) {
+    restore_from_tray(window);
+    stop_controlled_repeat(window);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    cancel_youtube_work(window, state);
+    cancel_local_folder_scan(window, state);
+    if state.application.current_route() != Route::UserPlaylists {
+        state.application.navigate_main_menu();
+        state
+            .application
+            .navigate_to(RouteFrame::new(Route::UserPlaylists));
+    }
+    state.view = MainView::UserPlaylists;
+    refresh_user_playlists(state, true, true);
+    layout_controls_state(window, state);
+}
+
+unsafe fn open_selected_user_playlist(window: HWND) {
+    let selected = state(window).map(|state| SendMessageW(state.list, LB_GETCURSEL, None, None).0);
+    let Some(Ok(index)) = selected.map(usize::try_from) else {
+        return;
+    };
+    if state(window).is_none_or(|state| index >= state.application.user_playlists().len()) {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "no_playlists"),
+                true,
+            );
+        }
+        return;
+    }
+    show_user_playlist_items(window, index, true);
+}
+
+unsafe fn show_user_playlist_items(window: HWND, playlist_index: usize, push_route: bool) {
+    restore_from_tray(window);
+    stop_controlled_repeat(window);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    if playlist_index >= state.application.user_playlists().len() {
+        show_user_playlists(window);
+        return;
+    }
+    state.current_user_playlist_index = playlist_index;
+    state.current_user_playlist_item_index = 0;
+    if push_route && state.application.current_route() != Route::UserPlaylistItems {
+        let mut frame = RouteFrame::new(Route::UserPlaylistItems);
+        frame
+            .parameters
+            .insert("playlist_index".to_string(), playlist_index.into());
+        state.application.navigate_to(frame);
+    }
+    state.view = MainView::UserPlaylistItems;
+    refresh_user_playlist_items(state, true, true);
+    layout_controls_state(window, state);
+}
+
+unsafe fn activate_user_playlist_item(window: HWND) {
+    let Some((playlist_index, item_index)) = state(window).and_then(|state| {
+        let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
+        usize::try_from(selected)
+            .ok()
+            .map(|item_index| (state.current_user_playlist_index, item_index))
+    }) else {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "playlist_empty"),
+                true,
+            );
+        }
+        return;
+    };
+    let item = state_mut(window).and_then(|state| {
+        state.current_user_playlist_item_index = item_index;
+        state
+            .application
+            .prepare_user_playlist_item_playback(playlist_index, item_index)
+    });
+    if let Some(item) = item {
+        start_media_item(window, item, None);
+    }
+}
+
 unsafe fn navigate_back(window: HWND) {
     stop_controlled_repeat(window);
     let Some(state) = state_mut(window) else {
@@ -2129,6 +2473,16 @@ unsafe fn navigate_back(window: HWND) {
         Route::History => {
             state.view = MainView::History;
             refresh_media_collection(state, true, false);
+            layout_controls_state(window, state);
+        }
+        Route::UserPlaylists => {
+            state.view = MainView::UserPlaylists;
+            refresh_user_playlists(state, true, false);
+            layout_controls_state(window, state);
+        }
+        Route::UserPlaylistItems => {
+            state.view = MainView::UserPlaylistItems;
+            refresh_user_playlist_items(state, true, false);
             layout_controls_state(window, state);
         }
         Route::Player => {
@@ -2257,6 +2611,9 @@ unsafe fn start_youtube_work(window: HWND, work: SearchWork) {
 }
 
 unsafe fn poll_youtube_runtime(window: HWND) {
+    if state(window).is_some_and(|state| state.modal_open) {
+        return;
+    }
     loop {
         let update = {
             let Some(state) = state_mut(window) else {
@@ -2306,6 +2663,9 @@ unsafe fn poll_youtube_runtime(window: HWND) {
 }
 
 unsafe fn poll_playback_runtime(window: HWND) {
+    if state(window).is_some_and(|state| state.modal_open) {
+        return;
+    }
     loop {
         let update = {
             let Some(state) = state(window) else {
@@ -2466,10 +2826,9 @@ unsafe fn finish_youtube_error(window: HWND, generation: u64, message: &str) {
                     .youtube_url_at_timestamp(0.0)
                     .is_none()
             {
-                state.application.prepare_standalone_playback();
                 let fallback_message = catalog_text(&state.application, "direct_link_fallback");
                 set_status(state, &fallback_message, true);
-                Some(pending.original_item)
+                Some((pending.original_item, pending.session_shuffle))
             } else {
                 let visible_message = if pending.purpose == YoutubeResolvePurpose::CopyStreamUrl {
                     catalog_text(&state.application, "stream_url_failed")
@@ -2489,8 +2848,8 @@ unsafe fn finish_youtube_error(window: HWND, generation: u64, message: &str) {
             None
         }
     };
-    if let Some(item) = direct_fallback {
-        start_player(window, item);
+    if let Some((item, session_shuffle)) = direct_fallback {
+        start_player(window, item, session_shuffle);
     }
 }
 
@@ -2550,6 +2909,32 @@ unsafe fn cancel_youtube_work(window: HWND, state: &mut WindowState) {
 unsafe fn result_selection_changed(window: HWND) {
     if state(window).is_some_and(|state| state.view == MainView::LocalFolder) {
         local_folder_selection_changed(window);
+        return;
+    }
+    if let Some(state) = state_mut(window)
+        && state.view == MainView::UserPlaylists
+    {
+        let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
+        if let Ok(index) = usize::try_from(selected)
+            && index < state.application.user_playlists().len()
+        {
+            state.current_user_playlist_index = index;
+        }
+        return;
+    }
+    if let Some(state) = state_mut(window)
+        && state.view == MainView::UserPlaylistItems
+    {
+        let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
+        if let Ok(index) = usize::try_from(selected)
+            && state
+                .application
+                .user_playlists()
+                .get(state.current_user_playlist_index)
+                .is_some_and(|playlist| index < playlist.items.len())
+        {
+            state.current_user_playlist_item_index = index;
+        }
         return;
     }
     let work = {
@@ -2728,6 +3113,95 @@ unsafe fn refresh_media_collection(state: &mut WindowState, focus: bool, announc
         set_status(
             state,
             &format!("{}: {}", catalog.text(name_key), items.len()),
+            announce_status,
+        );
+    }
+    if focus {
+        let _ = SetFocus(Some(state.list));
+    }
+}
+
+unsafe fn refresh_user_playlists(state: &mut WindowState, focus: bool, announce_status: bool) {
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    SendMessageW(state.list, LB_RESETCONTENT, None, None);
+    let accessible_name = wide(catalog.text("playlists"));
+    let _ = SetWindowTextW(state.list, PCWSTR(accessible_name.as_ptr()));
+    set_open_button_label(state, "open_playlist");
+    set_control_text(state, state.collection_remove, "remove_playlist");
+    let playlists = state.application.user_playlists();
+    if playlists.is_empty() {
+        add_list_string(state.list, catalog.text("no_playlists"));
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
+        set_status(state, catalog.text("no_playlists"), announce_status);
+    } else {
+        for playlist in playlists {
+            add_list_string(
+                state.list,
+                &format!(
+                    "{} | {} {}",
+                    playlist.title,
+                    playlist.items.len(),
+                    catalog.text("video")
+                ),
+            );
+        }
+        let selected = state
+            .current_user_playlist_index
+            .min(playlists.len().saturating_sub(1));
+        state.current_user_playlist_index = selected;
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selected)), None);
+        set_status(
+            state,
+            &format!("{}: {}", catalog.text("playlists"), playlists.len()),
+            announce_status,
+        );
+    }
+    if focus {
+        let _ = SetFocus(Some(state.list));
+    }
+}
+
+unsafe fn refresh_user_playlist_items(state: &mut WindowState, focus: bool, announce_status: bool) {
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    SendMessageW(state.list, LB_RESETCONTENT, None, None);
+    let accessible_name = wide(catalog.text("playlist_items"));
+    let _ = SetWindowTextW(state.list, PCWSTR(accessible_name.as_ptr()));
+    set_open_button_label(state, "play");
+    set_control_text(state, state.collection_remove, "remove_from_playlist");
+    let Some(playlist) = state
+        .application
+        .user_playlists()
+        .get(state.current_user_playlist_index)
+    else {
+        add_list_string(state.list, catalog.text("playlist_empty"));
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
+        set_status(state, catalog.text("playlist_empty"), announce_status);
+        return;
+    };
+    if playlist.items.is_empty() {
+        add_list_string(state.list, catalog.text("playlist_empty"));
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
+        set_status(state, catalog.text("playlist_empty"), announce_status);
+    } else {
+        for item in &playlist.items {
+            add_list_string(
+                state.list,
+                &media_collection_label(item, MainView::UserPlaylistItems, &catalog),
+            );
+        }
+        let selected = state
+            .current_user_playlist_item_index
+            .min(playlist.items.len().saturating_sub(1));
+        state.current_user_playlist_item_index = selected;
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selected)), None);
+        set_status(
+            state,
+            &format!(
+                "{}: {} | {}",
+                catalog.text("playlist_items"),
+                playlist.title,
+                playlist.items.len()
+            ),
             announce_status,
         );
     }
@@ -3049,7 +3523,9 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
         | MainView::Results
         | MainView::LocalFolder
         | MainView::Favorites
-        | MainView::History => (ActionScope::List, false),
+        | MainView::History
+        | MainView::UserPlaylists
+        | MainView::UserPlaylistItems => (ActionScope::List, false),
         MainView::Player => (ActionScope::Player, false),
     };
     let Some(action) = action_for_shortcut(
@@ -3202,6 +3678,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "open_direct_link" => show_direct_link(window),
         "open_favorites" => show_media_collection(window, MainView::Favorites),
         "open_history" => show_media_collection(window, MainView::History),
+        "open_playlists" => show_user_playlists(window),
         "open_settings" => open_settings(window),
         "open_action_finder" => show_action_finder(window),
         "open_play_file" => open_media_file(window),
@@ -3238,6 +3715,10 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "copy_stream_url" => copy_active_stream_url(window),
         "add_favorite" => add_active_favorite(window),
         "remove_favorite" => remove_active_favorite(window),
+        "create_playlist" => create_user_playlist(window, None),
+        "add_to_playlist" => add_active_item_to_user_playlist(window),
+        "remove_from_playlist" => remove_active_item_from_user_playlist(window),
+        "remove_selected" => remove_selected_collection_item(window),
         "context_menu" => show_context_menu_for_active_view(window),
         "add_to_playback_queue" => add_active_item_to_playback_queue(window),
         "remove_from_playback_queue" => remove_active_item_from_playback_queue(window),
@@ -3258,12 +3739,20 @@ unsafe fn navigate_player_relative(window: HWND, delta: i32) {
     };
     match outcome {
         PlayerNavigationOutcome::Item { item, origin } => {
-            start_media_item(
-                window,
-                *item,
-                (origin == apricot_app::PlayerNavigationOrigin::Queue)
-                    .then_some(QueueStartMode::Front),
-            );
+            if let Some(state) = state_mut(window) {
+                sync_user_playlist_item_selection(state, &item);
+            }
+            let preserve_sequence = origin == apricot_app::PlayerNavigationOrigin::Sequence;
+            if preserve_sequence {
+                start_sequence_media_item(window, *item, None);
+            } else {
+                start_media_item(
+                    window,
+                    *item,
+                    (origin == apricot_app::PlayerNavigationOrigin::Queue)
+                        .then_some(QueueStartMode::Front),
+                );
+            }
         }
         PlayerNavigationOutcome::LoadingMore(work) => {
             let Some(state) = state_mut(window) else {
@@ -3286,6 +3775,32 @@ unsafe fn navigate_player_relative(window: HWND, delta: i32) {
             set_status(state, &catalog_text(&state.application, key), true);
         }
     }
+}
+
+fn sync_user_playlist_item_selection(state: &mut WindowState, item: &apricot_core::MediaItem) {
+    let Some(apricot_app::PlaybackSequenceSource::UserPlaylist { playlist_index }) =
+        state.application.player_sequence_source()
+    else {
+        return;
+    };
+    let Some(identity) = item.stable_identity() else {
+        return;
+    };
+    let Some(item_index) = state
+        .application
+        .user_playlists()
+        .get(playlist_index)
+        .and_then(|playlist| {
+            playlist
+                .items
+                .iter()
+                .position(|candidate| candidate.stable_identity().as_deref() == Some(&identity))
+        })
+    else {
+        return;
+    };
+    state.current_user_playlist_index = playlist_index;
+    state.current_user_playlist_item_index = item_index;
 }
 
 unsafe fn confirm_pending_queued_start(window: HWND, state: &mut WindowState) {
@@ -3336,8 +3851,21 @@ unsafe fn active_media_item(window: HWND) -> Option<apricot_core::MediaItem> {
             let index = usize::try_from(selected).ok()?;
             state.application.history().get(index).cloned()
         }
+        MainView::UserPlaylistItems => {
+            let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
+            let index = usize::try_from(selected).ok()?;
+            state
+                .application
+                .user_playlists()
+                .get(state.current_user_playlist_index)?
+                .items
+                .get(index)
+                .cloned()
+        }
         MainView::Player => state.application.player_session().current_item().cloned(),
-        MainView::MainMenu | MainView::Search | MainView::DirectLink => None,
+        MainView::MainMenu | MainView::Search | MainView::DirectLink | MainView::UserPlaylists => {
+            None
+        }
     }
 }
 
@@ -3437,6 +3965,8 @@ unsafe fn remove_selected_collection_item(window: HWND) {
                 state_mut(window).map(|state| state.application.remove_history_item(index));
             finish_collection_removal(window, result, "history_removed");
         }
+        MainView::UserPlaylists => remove_selected_user_playlist(window),
+        MainView::UserPlaylistItems => remove_selected_user_playlist_item(window),
         _ => {}
     }
 }
@@ -3501,6 +4031,488 @@ unsafe fn clear_history(window: HWND) {
             show_error_message(window, &message);
         }
     }
+}
+
+unsafe fn create_user_playlist(window: HWND, initial_item: Option<apricot_core::MediaItem>) {
+    let Some((title, prompt, ok_label, cancel_label)) = state_mut(window).map(|state| {
+        state.modal_open = true;
+        (
+            catalog_text(&state.application, "create_playlist"),
+            catalog_text(&state.application, "playlist_name"),
+            catalog_text(&state.application, "ok"),
+            catalog_text(&state.application, "cancel"),
+        )
+    }) else {
+        return;
+    };
+    let result = crate::playlist_dialog_win32::prompt_name(
+        window,
+        &title,
+        &prompt,
+        &ok_label,
+        &cancel_label,
+    );
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state.modal_open = false;
+    resume_deferred_window_work(window);
+    let name = match result {
+        Ok(Some(name)) => name,
+        Ok(None) => return,
+        Err(error) => {
+            let message = format!("Playlist name dialog failed: {error}");
+            set_status(state, &message, true);
+            show_error_message(window, &message);
+            return;
+        }
+    };
+    let timestamp = unix_timestamp();
+    let outcome = if let Some(item) = initial_item {
+        state
+            .application
+            .create_user_playlist_with_item(&name, item, timestamp)
+    } else {
+        state.application.create_user_playlist(&name, timestamp)
+    };
+    match outcome {
+        Ok(apricot_app::PlaylistCreateOutcome::Created(index)) => {
+            state.current_user_playlist_index = index;
+            if state.view == MainView::UserPlaylists {
+                refresh_user_playlists(state, true, false);
+            } else if state.view == MainView::UserPlaylistItems {
+                refresh_user_playlist_items(state, true, false);
+            }
+            let message = catalog_text(&state.application, "playlist_created")
+                .replace("{title}", name.trim());
+            set_status(state, &message, true);
+        }
+        Ok(apricot_app::PlaylistCreateOutcome::AlreadyExists) => {
+            set_status(
+                state,
+                &catalog_text(&state.application, "playlist_exists"),
+                true,
+            );
+        }
+        Ok(apricot_app::PlaylistCreateOutcome::EmptyName) => {}
+        Ok(apricot_app::PlaylistCreateOutcome::UnsupportedItem) => {
+            set_status(
+                state,
+                &catalog_text(&state.application, "no_selection"),
+                true,
+            );
+        }
+        Err(error) => {
+            let message = format!("Playlist was not created: {error}");
+            set_status(state, &message, true);
+            show_error_message(window, &message);
+        }
+    }
+}
+
+unsafe fn choose_user_playlist(window: HWND, title_key: &str) -> Option<usize> {
+    let (title, prompt, choices, ok_label, cancel_label) = state_mut(window).map(|state| {
+        state.modal_open = true;
+        (
+            catalog_text(&state.application, title_key),
+            catalog_text(&state.application, "select_playlist"),
+            state
+                .application
+                .user_playlists()
+                .iter()
+                .map(|playlist| playlist.title.clone())
+                .collect::<Vec<_>>(),
+            catalog_text(&state.application, "ok"),
+            catalog_text(&state.application, "cancel"),
+        )
+    })?;
+    let result = crate::playlist_dialog_win32::choose(
+        window,
+        &title,
+        &prompt,
+        &choices,
+        &ok_label,
+        &cancel_label,
+    );
+    let state = state_mut(window)?;
+    state.modal_open = false;
+    resume_deferred_window_work(window);
+    match result {
+        Ok(selection) => selection.filter(|index| *index < choices.len()),
+        Err(error) => {
+            let message = format!("Playlist chooser failed: {error}");
+            set_status(state, &message, true);
+            show_error_message(window, &message);
+            None
+        }
+    }
+}
+
+unsafe fn add_active_item_to_user_playlist(window: HWND) {
+    let Some(item) = active_media_item(window).filter(apricot_core::MediaItem::is_playable) else {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "no_selection"),
+                true,
+            );
+        }
+        return;
+    };
+    let count = state(window).map_or(0, |state| state.application.user_playlists().len());
+    if count == 0 {
+        create_user_playlist(window, Some(item));
+        return;
+    }
+    let playlist_index = if count == 1 {
+        0
+    } else {
+        let Some(index) = choose_user_playlist(window, "add_to_playlist") else {
+            return;
+        };
+        index
+    };
+    add_item_to_user_playlist(window, playlist_index, item);
+}
+
+unsafe fn add_item_to_user_playlist(
+    window: HWND,
+    playlist_index: usize,
+    item: apricot_core::MediaItem,
+) {
+    let title = item.title.clone();
+    let result = state_mut(window).map(|state| {
+        state
+            .application
+            .add_item_to_user_playlist(playlist_index, item, unix_timestamp())
+    });
+    let Some(result) = result else {
+        return;
+    };
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    match result {
+        Ok(apricot_app::PlaylistAddOutcome::Added(_)) => {
+            if state.view == MainView::UserPlaylistItems
+                && state.current_user_playlist_index == playlist_index
+            {
+                refresh_user_playlist_items(state, false, false);
+            }
+            let playlist = state
+                .application
+                .user_playlists()
+                .get(playlist_index)
+                .map_or("", |playlist| playlist.title.as_str());
+            let message = catalog_text(&state.application, "added_to_playlist")
+                .replace("{playlist}", playlist)
+                .replace("{title}", &title);
+            set_status(state, &message, true);
+        }
+        Ok(apricot_app::PlaylistAddOutcome::AlreadyPresent) => {
+            set_status(
+                state,
+                &catalog_text(&state.application, "playlist_exists"),
+                true,
+            );
+        }
+        Ok(
+            apricot_app::PlaylistAddOutcome::MissingPlaylist
+            | apricot_app::PlaylistAddOutcome::Unsupported,
+        ) => {
+            set_status(
+                state,
+                &catalog_text(&state.application, "no_selection"),
+                true,
+            );
+        }
+        Err(error) => {
+            let message = format!("Playlist was not updated: {error}");
+            set_status(state, &message, true);
+            show_error_message(window, &message);
+        }
+    }
+}
+
+unsafe fn remove_selected_user_playlist(window: HWND) {
+    let Some(index) = state(window).and_then(|state| {
+        usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok()
+    }) else {
+        return;
+    };
+    let result = state_mut(window).map(|state| state.application.remove_user_playlist(index));
+    match result {
+        Some(Ok(Some(_))) => {
+            if let Some(state) = state_mut(window) {
+                state.current_user_playlist_index =
+                    index.min(state.application.user_playlists().len().saturating_sub(1));
+                refresh_user_playlists(state, true, false);
+                set_status(
+                    state,
+                    &catalog_text(&state.application, "playlist_removed"),
+                    true,
+                );
+            }
+        }
+        Some(Ok(None)) | None => {
+            if let Some(state) = state(window) {
+                set_status(
+                    state,
+                    &catalog_text(&state.application, "no_playlists"),
+                    true,
+                );
+            }
+        }
+        Some(Err(error)) => {
+            let message = format!("Playlist was not removed: {error}");
+            if let Some(state) = state(window) {
+                set_status(state, &message, true);
+            }
+            show_error_message(window, &message);
+        }
+    }
+}
+
+unsafe fn remove_selected_user_playlist_item(window: HWND) {
+    let Some((playlist_index, item_index)) = state(window).and_then(|state| {
+        usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0)
+            .ok()
+            .map(|item_index| (state.current_user_playlist_index, item_index))
+    }) else {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "playlist_empty"),
+                true,
+            );
+        }
+        return;
+    };
+    let result = state_mut(window).map(|state| {
+        state
+            .application
+            .remove_user_playlist_item(playlist_index, item_index, unix_timestamp())
+    });
+    finish_user_playlist_item_removal(window, result);
+}
+
+unsafe fn remove_active_item_from_user_playlist(window: HWND) {
+    if state(window).is_some_and(|state| state.view == MainView::UserPlaylistItems) {
+        remove_selected_user_playlist_item(window);
+        return;
+    }
+    let Some(item) = active_media_item(window) else {
+        return;
+    };
+    let matches = state(window).map_or_else(Vec::new, |state| {
+        state.application.user_playlist_matches(&item)
+    });
+    let Some(playlist_index) = (match matches.as_slice() {
+        [] => {
+            if let Some(state) = state(window) {
+                set_status(
+                    state,
+                    &catalog_text(&state.application, "not_in_playlist"),
+                    true,
+                );
+            }
+            None
+        }
+        [index] => Some(*index),
+        _ => choose_user_playlist_from_indices(window, "remove_from_playlist", &matches),
+    }) else {
+        return;
+    };
+    let Some(item_index) = state(window).and_then(|state| {
+        let identity = item.copy_location().or_else(|| item.stable_identity())?;
+        state
+            .application
+            .user_playlists()
+            .get(playlist_index)?
+            .items
+            .iter()
+            .position(|candidate| {
+                candidate
+                    .copy_location()
+                    .or_else(|| candidate.stable_identity())
+                    .as_deref()
+                    == Some(&identity)
+            })
+    }) else {
+        return;
+    };
+    let result = state_mut(window).map(|state| {
+        state
+            .application
+            .remove_user_playlist_item(playlist_index, item_index, unix_timestamp())
+    });
+    finish_user_playlist_item_removal(window, result);
+}
+
+unsafe fn choose_user_playlist_from_indices(
+    window: HWND,
+    title_key: &str,
+    indices: &[usize],
+) -> Option<usize> {
+    let (title, prompt, choices, ok_label, cancel_label) = state_mut(window).map(|state| {
+        state.modal_open = true;
+        let choices = indices
+            .iter()
+            .filter_map(|index| state.application.user_playlists().get(*index))
+            .map(|playlist| playlist.title.clone())
+            .collect::<Vec<_>>();
+        (
+            catalog_text(&state.application, title_key),
+            catalog_text(&state.application, "select_playlist"),
+            choices,
+            catalog_text(&state.application, "ok"),
+            catalog_text(&state.application, "cancel"),
+        )
+    })?;
+    let result = crate::playlist_dialog_win32::choose(
+        window,
+        &title,
+        &prompt,
+        &choices,
+        &ok_label,
+        &cancel_label,
+    );
+    let state = state_mut(window)?;
+    state.modal_open = false;
+    resume_deferred_window_work(window);
+    match result {
+        Ok(Some(choice)) => indices.get(choice).copied(),
+        Ok(None) => None,
+        Err(error) => {
+            let message = format!("Playlist chooser failed: {error}");
+            set_status(state, &message, true);
+            show_error_message(window, &message);
+            None
+        }
+    }
+}
+
+unsafe fn finish_user_playlist_item_removal(
+    window: HWND,
+    result: Option<
+        std::result::Result<
+            Option<apricot_core::MediaItem>,
+            apricot_app::UserPlaylistControllerError,
+        >,
+    >,
+) {
+    match result {
+        Some(Ok(Some(_))) => {
+            if let Some(state) = state_mut(window) {
+                if state.view == MainView::UserPlaylistItems {
+                    refresh_user_playlist_items(state, true, false);
+                }
+                set_status(
+                    state,
+                    &catalog_text(&state.application, "removed_from_playlist"),
+                    true,
+                );
+            }
+        }
+        Some(Ok(None)) | None => {}
+        Some(Err(error)) => {
+            let message = format!("Playlist was not updated: {error}");
+            if let Some(state) = state(window) {
+                set_status(state, &message, true);
+            }
+            show_error_message(window, &message);
+        }
+    }
+}
+
+unsafe fn play_current_user_playlist(window: HWND, shuffle: bool) {
+    let item = state_mut(window).and_then(|state| {
+        let item = state
+            .application
+            .prepare_user_playlist_playback(state.current_user_playlist_index, shuffle)?;
+        if let Some(index) = state
+            .application
+            .user_playlists()
+            .get(state.current_user_playlist_index)
+            .and_then(|playlist| {
+                let identity = item.stable_identity()?;
+                playlist
+                    .items
+                    .iter()
+                    .position(|candidate| candidate.stable_identity().as_deref() == Some(&identity))
+            })
+        {
+            state.current_user_playlist_item_index = index;
+        }
+        Some(item)
+    });
+    let Some(item) = item else {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "playlist_empty"),
+                true,
+            );
+        }
+        return;
+    };
+    start_media_item_with_shuffle(window, item, None, shuffle);
+}
+
+unsafe fn add_current_user_playlist_to_queue(window: HWND) {
+    if state(window).is_none_or(|state| {
+        state
+            .application
+            .user_playlists()
+            .get(state.current_user_playlist_index)
+            .is_none_or(|playlist| playlist.items.is_empty())
+    }) {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "playlist_empty"),
+                true,
+            );
+        }
+        return;
+    }
+    let result = state_mut(window).map(|state| {
+        state
+            .application
+            .add_user_playlist_to_playback_queue(state.current_user_playlist_index)
+    });
+    let Some(result) = result else {
+        return;
+    };
+    let Some(state) = state(window) else {
+        return;
+    };
+    match result {
+        Ok(Some(outcome)) if outcome.added > 0 => {
+            let message = catalog_text(&state.application, "playback_queue_added_count")
+                .replace("{count}", &outcome.added.to_string());
+            set_status(state, &message, true);
+        }
+        Ok(Some(_)) => {
+            set_status(
+                state,
+                &catalog_text(&state.application, "playback_queue_exists"),
+                true,
+            );
+        }
+        Ok(None) => {}
+        Err(error) => {
+            let message = format!("Playback queue was not updated: {error}");
+            set_status(state, &message, true);
+            show_error_message(window, &message);
+        }
+    }
+}
+
+fn unix_timestamp() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |duration| duration.as_secs_f64())
 }
 
 unsafe fn copy_active_location(window: HWND) {
@@ -3794,6 +4806,7 @@ unsafe fn show_player_details(window: HWND) {
         return;
     };
     state.modal_open = false;
+    resume_deferred_window_work(window);
     let message = catalog_text(&state.application, "details_closed");
     set_status(state, &message, false);
     let _ = SetFocus(Some(state.player_controls.initial_focus()));
@@ -4084,6 +5097,7 @@ unsafe fn open_media_folder(window: HWND) {
     if let Some(state) = state_mut(window) {
         state.modal_open = false;
     }
+    resume_deferred_window_work(window);
     let Some(path) = selection else {
         if let Some(state) = state(window) {
             let _ = SetFocus(Some(active_primary_control(state)));
@@ -4206,6 +5220,7 @@ unsafe fn show_action_finder(window: HWND) {
     if let Some(main_state) = state_mut(window) {
         main_state.modal_open = false;
     }
+    resume_deferred_window_work(window);
     match outcome {
         Ok(Some(action_id)) => activate_action(window, action_id),
         Ok(None) => {}
@@ -4268,6 +5283,7 @@ unsafe fn show_playback_queue(window: HWND) {
         return;
     };
     main_state.modal_open = false;
+    resume_deferred_window_work(window);
     match outcome {
         Ok(outcome) => {
             if outcome.changed
@@ -4334,6 +5350,7 @@ unsafe fn open_settings(window: HWND) {
     };
     state.settings_open = false;
     state.modal_open = false;
+    resume_deferred_window_work(window);
     match state.view {
         MainView::MainMenu => refresh_main_menu(state),
         MainView::Results => refresh_results(state, false),
@@ -4341,6 +5358,8 @@ unsafe fn open_settings(window: HWND) {
         MainView::Favorites | MainView::History => {
             refresh_media_collection(state, false, false);
         }
+        MainView::UserPlaylists => refresh_user_playlists(state, false, false),
+        MainView::UserPlaylistItems => refresh_user_playlist_items(state, false, false),
         MainView::Search | MainView::DirectLink => {}
         MainView::Player => refresh_player(window, state, false, true),
     }
@@ -4367,7 +5386,7 @@ unsafe fn process_pending_activations(window: HWND) {
         let Some(state) = state_mut(window) else {
             return;
         };
-        if state.settings_open {
+        if state.settings_open || state.modal_open {
             return;
         }
         let Some(request) = state.application.take_activation() else {
@@ -4385,6 +5404,10 @@ unsafe fn process_pending_activations(window: HWND) {
             }
         }
     }
+}
+
+unsafe fn resume_deferred_window_work(window: HWND) {
+    let _ = PostMessageW(Some(window), WM_PROCESS_ACTIVATION, WPARAM(0), LPARAM(0));
 }
 
 unsafe fn refresh_main_menu(state: &mut WindowState) {
@@ -4412,7 +5435,9 @@ fn active_primary_control(state: &WindowState) -> HWND {
         | MainView::Results
         | MainView::LocalFolder
         | MainView::Favorites
-        | MainView::History => state.list,
+        | MainView::History
+        | MainView::UserPlaylists
+        | MainView::UserPlaylistItems => state.list,
         MainView::Player => state.player_controls.initial_focus(),
     }
 }
@@ -4425,9 +5450,9 @@ fn wide(value: &str) -> Vec<u16> {
 mod tests {
     use super::{
         SEEK_HOLD_DELAY_MS, SEEK_HOLD_INTERVAL_MS, controlled_repeat_timing, copy_wide_array,
-        media_resolve_backend,
+        media_resolve_backend, resolved_playback_item,
     };
-    use apricot_core::{MediaItem, MediaSource};
+    use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
     use apricot_media::YoutubeBackend;
 
     #[test]
@@ -4476,5 +5501,48 @@ mod tests {
             media_resolve_backend(&youtube, "yt_dlp"),
             YoutubeBackend::YtDlp
         );
+    }
+
+    #[test]
+    fn resolved_sequence_item_keeps_legacy_python_identity() {
+        let original = youtube_item("https://www.youtube.com/watch?v=abcdefghijk");
+        let mut resolved = original.clone();
+        resolved.id = MediaId("abcdefghijk".to_owned());
+        resolved.stream_url = Some("https://cdn.example/video".parse().expect("stream URL"));
+
+        let merged = resolved_playback_item(resolved, &original, true);
+        assert_eq!(merged.id, original.id);
+        assert_eq!(merged.url, original.url);
+        assert!(merged.stream_url.is_some());
+    }
+
+    #[test]
+    fn standalone_youtube_resolution_keeps_the_resolved_identity() {
+        let original = youtube_item("old-url-identity");
+        let mut resolved = original.clone();
+        resolved.id = MediaId("abcdefghijk".to_owned());
+
+        let merged = resolved_playback_item(resolved, &original, false);
+        assert_eq!(merged.id.0, "abcdefghijk");
+    }
+
+    fn youtube_item(id: &str) -> MediaItem {
+        MediaItem {
+            id: MediaId(id.to_owned()),
+            source: MediaSource::Youtube,
+            kind: MediaKind::Video,
+            title: "Video".to_owned(),
+            url: Some(
+                "https://www.youtube.com/watch?v=abcdefghijk"
+                    .parse()
+                    .expect("URL"),
+            ),
+            stream_url: None,
+            external_audio_url: None,
+            local_path: None,
+            channel: String::new(),
+            duration_seconds: None,
+            metadata: std::collections::BTreeMap::new(),
+        }
     }
 }

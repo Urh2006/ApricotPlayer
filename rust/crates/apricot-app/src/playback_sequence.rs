@@ -6,6 +6,7 @@ use apricot_core::MediaItem;
 pub enum PlaybackSequenceSource {
     Search { generation: u64 },
     LocalFolder { generation: u64 },
+    UserPlaylist { playlist_index: usize },
     Collection,
 }
 
@@ -27,6 +28,15 @@ impl PlaybackSequence {
 
     pub fn is_active(&self) -> bool {
         self.current_index().is_some()
+    }
+
+    pub fn contains(&self, item: &MediaItem) -> bool {
+        let Some(identity) = item.stable_identity() else {
+            return false;
+        };
+        self.items
+            .iter()
+            .any(|candidate| candidate.stable_identity().as_deref() == Some(&identity))
     }
 
     pub fn set(
@@ -198,5 +208,21 @@ mod tests {
             &[current, item("next", MediaKind::Video)],
         ));
         assert_eq!(sequence.relative(1).expect("next").id.0, "next");
+    }
+
+    #[test]
+    fn membership_uses_the_durable_identity() {
+        let current = item("one", MediaKind::Video);
+        let mut sequence = PlaybackSequence::default();
+        assert!(sequence.set(
+            PlaybackSequenceSource::Collection,
+            std::slice::from_ref(&current),
+            &current,
+        ));
+
+        let mut resolved = current;
+        resolved.stream_url = Some("https://cdn.example/temporary".parse().expect("stream URL"));
+        assert!(sequence.contains(&resolved));
+        assert!(!sequence.contains(&item("two", MediaKind::Video)));
     }
 }

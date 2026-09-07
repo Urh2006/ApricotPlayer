@@ -60,10 +60,7 @@ pub fn media_item_to_python_value(item: &MediaItem) -> Value {
         .collect();
     object.insert("title".to_owned(), Value::String(item.title.clone()));
     object.insert("channel".to_owned(), Value::String(item.channel.clone()));
-    object.insert(
-        "kind".to_owned(),
-        Value::String(python_kind(item).to_owned()),
-    );
+    object.insert("kind".to_owned(), Value::String(python_kind(item)));
     if let Some(path) = &item.local_path {
         object.insert("url".to_owned(), Value::String(path.clone()));
         object.insert("local_path".to_owned(), Value::String(path.clone()));
@@ -112,15 +109,15 @@ fn media_source(
     local_path: Option<&str>,
     location: &str,
 ) -> MediaSource {
-    if local_path.is_some() || kind == "local_file" {
-        return MediaSource::Local;
-    }
     let explicit = first_text(object, &["source", "provider"]).to_ascii_lowercase();
     if explicit.contains("soundcloud") {
         return MediaSource::Soundcloud;
     }
     if explicit.contains("audiovault") || kind.starts_with("audiovault") {
         return MediaSource::Audiovault;
+    }
+    if local_path.is_some() || kind == "local_file" {
+        return MediaSource::Local;
     }
     if explicit.contains("podcast") || kind.starts_with("rss") {
         return MediaSource::Podcast;
@@ -144,8 +141,8 @@ fn media_kind(kind: &str, local_path: Option<&str>, object: &Map<String, Value>)
         "rss_feed" | "podcast_feed" => MediaKind::PodcastFeed,
         "rss_item" | "podcast_episode" => MediaKind::PodcastEpisode,
         "audiovault_movie" | "movie" => MediaKind::Movie,
-        "audiovault_tv_show" | "tv_show" => MediaKind::TvShow,
-        "audiovault_remote_episode" | "tv_episode" => MediaKind::TvEpisode,
+        "audiovault_show" | "audiovault_tv_show" | "tv_show" => MediaKind::TvShow,
+        "audiovault_episode" | "audiovault_remote_episode" | "tv_episode" => MediaKind::TvEpisode,
         "local_file" => local_media_kind(local_path.unwrap_or_default()),
         _ if object.get("is_live").and_then(Value::as_bool) == Some(true) => MediaKind::LiveStream,
         _ if local_path.is_some() => local_media_kind(local_path.unwrap_or_default()),
@@ -168,7 +165,16 @@ fn local_media_kind(path: &str) -> MediaKind {
     }
 }
 
-fn python_kind(item: &MediaItem) -> &'static str {
+fn python_kind(item: &MediaItem) -> String {
+    if let Some(kind) = item
+        .metadata
+        .get("kind")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|kind| !kind.is_empty())
+    {
+        return kind.to_owned();
+    }
     match item.kind {
         MediaKind::Audio | MediaKind::Video if item.source == MediaSource::Local => "local_file",
         MediaKind::Audio => "audio",
@@ -183,6 +189,7 @@ fn python_kind(item: &MediaItem) -> &'static str {
         MediaKind::TvEpisode => "audiovault_remote_episode",
         MediaKind::Unknown => "unknown",
     }
+    .to_owned()
 }
 
 #[cfg(test)]
@@ -224,5 +231,33 @@ mod tests {
         assert_eq!(item.local_path.as_deref(), Some(r"C:\Music\Track.mp3"));
         assert!(item.url.is_none());
         assert_eq!(media_item_to_python_value(&item)["url"], source["url"]);
+    }
+
+    #[test]
+    fn audiovault_python_kind_aliases_round_trip_without_becoming_local() {
+        for source in [
+            json!({
+                "title": "Series",
+                "kind": "audiovault_show",
+                "webpage_url": "https://audiovault.example/show/series"
+            }),
+            json!({
+                "title": "Remote episode",
+                "kind": "audiovault_remote_episode",
+                "url": "C:\\Cache\\episode.mp3",
+                "local_path": "C:\\Cache\\episode.mp3",
+                "archive_url": "https://audiovault.example/archive.zip"
+            }),
+            json!({
+                "title": "Cached episode",
+                "kind": "audiovault_episode",
+                "url": "C:\\Cache\\cached.mp3",
+                "local_path": "C:\\Cache\\cached.mp3"
+            }),
+        ] {
+            let item = media_item_from_python_value(&source).expect("AudioVault item");
+            assert_eq!(item.source, MediaSource::Audiovault);
+            assert_eq!(media_item_to_python_value(&item)["kind"], source["kind"]);
+        }
     }
 }

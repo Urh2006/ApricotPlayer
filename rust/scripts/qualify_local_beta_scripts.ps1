@@ -97,9 +97,11 @@ try {
     if (-not (Test-Path -LiteralPath $InstalledYtDlp -PathType Leaf)) {
         throw "Installed local beta omitted standalone yt-dlp"
     }
-    $InstalledYtDlpVersion = (& $InstalledYtDlp --version | Select-Object -First 1).Trim()
-    if ($LASTEXITCODE -ne 0 -or $InstalledYtDlpVersion -ne "2026.08.19") {
-        throw "Installed standalone yt-dlp failed its version check"
+    $InstalledYtDlpOutput = @(& $InstalledYtDlp --version)
+    $InstalledYtDlpExitCode = $LASTEXITCODE
+    $InstalledYtDlpVersion = ($InstalledYtDlpOutput | Select-Object -First 1).Trim()
+    if ($InstalledYtDlpExitCode -ne 0 -or $InstalledYtDlpVersion -ne "2026.08.19") {
+        throw "Installed standalone yt-dlp failed its version check (exit=$InstalledYtDlpExitCode, version='$InstalledYtDlpVersion')"
     }
     $HelloRequest = '{"protocol_version":1,"request_id":1,"command":{"type":"hello"}}'
     $ShutdownRequest = '{"protocol_version":1,"request_id":2,"command":{"type":"shutdown"}}'
