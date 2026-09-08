@@ -4,7 +4,7 @@
 use apricot_core::MediaItem;
 use serde::{Deserialize, Serialize};
 
-pub const YOUTUBE_HELPER_PROTOCOL_VERSION: u32 = 2;
+pub const YOUTUBE_HELPER_PROTOCOL_VERSION: u32 = 3;
 pub const MAX_YOUTUBE_MESSAGE_BYTES: usize = 1_048_576;
 pub const RUSTY_YTDL_REVISION: &str = "b1c6eb7c83f0d6189f256ed5df50019a5803c734";
 
@@ -116,6 +116,10 @@ pub enum YoutubeCommand {
         url: String,
         kind: YoutubeCollectionKind,
         limit: u32,
+    },
+    CollectionAll {
+        url: String,
+        kind: YoutubeCollectionKind,
     },
     Resolve {
         url: String,
@@ -384,7 +388,24 @@ mod tests {
             serde_json::from_str(&encoded).expect("deserialize collection");
         assert_eq!(decoded, request);
         assert!(encoded.contains("playlist_videos"));
-        assert_eq!(decoded.protocol_version, 2);
+        assert_eq!(decoded.protocol_version, 3);
+    }
+
+    #[test]
+    fn complete_collection_command_has_no_fake_numeric_limit() {
+        let request = YoutubeRequest::new(
+            9,
+            YoutubeCommand::CollectionAll {
+                url: "https://www.youtube.com/playlist?list=PL123".to_owned(),
+                kind: YoutubeCollectionKind::PlaylistVideos,
+            },
+        );
+        let encoded = serde_json::to_string(&request).expect("serialize complete collection");
+        let decoded: YoutubeRequest =
+            serde_json::from_str(&encoded).expect("deserialize complete collection");
+        assert_eq!(decoded, request);
+        assert!(encoded.contains("collection_all"));
+        assert!(!encoded.contains("limit"));
     }
 
     fn format(

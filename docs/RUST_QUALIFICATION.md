@@ -273,7 +273,7 @@ live test is ignored by the normal workspace suite and is run explicitly with
 
 ## 2026-09-08: typed YouTube collection backend
 
-Implementation: protocol version 2 collection commands shared by the yt-dlp
+Implementation: protocol version 3 collection commands shared by the yt-dlp
 adapter, the optional Rust helper, and `YoutubeSearchService`.
 
 Verified:
@@ -291,6 +291,8 @@ Verified:
   playlist search appear empty;
 - configuration always completes before a collection request, and client tokens
   survive the service's separate internal request generations;
+- bounded UI requests and explicit complete-collection requests are separate
+  protocol operations, so whole-playlist playback has no invented numeric cap;
 - an explicit live test searched YouTube, resolved `jNQXAC9IVRw`, discovered a
   current public playlist from a typed playlist search, and read three playlist
   entries through the new collection command.
@@ -329,18 +331,38 @@ Verified:
   exact next playable item;
 - selecting the optional Rust backend still routes unsupported channel tabs to
   yt-dlp explicitly, while playlist collections remain available through the
-  Rust helper.
+  Rust helper;
+- playlist rows expose Play playlist, Shuffle playlist, Open playlist videos,
+  the correct favorite toggle, and Copy link in Python order; channel rows
+  expose Channel options plus direct Videos, Popular videos, Channel playlists,
+  Live streams, favorite, and Copy link actions;
+- Play playlist loads the complete collection before creating its exact
+  Previous/Next sequence, while Shuffle playlist contains every playable item
+  once and only changes the initial order;
+- packaged Play playlist advanced from OpenAI Agent Builder Course item 1 to
+  item 2 and back exactly, then closing the player restored the original
+  19-item result list at selection zero; packaged Shuffle playlist started a
+  different valid member;
+- YouTube was confirmed to ignore the legacy `sort=p` URL in current yt-dlp.
+  Popular videos now scans the complete flat channel once, sorts globally by
+  numeric view count, and caches that result for cumulative 20/40/60 display;
+- an explicit live OpenAI-channel test verified descending all-time view counts
+  and that a ten-item request preserves the exact five-item prefix from the
+  preceding request;
+- the installed package displayed OpenAI's first four Popular rows at 37, 15,
+  14, and 11 million views in descending order; moving from the twentieth row
+  to a 40-row cumulative projection used the cached scan in about 79 ms and
+  retained selection 19.
 
-Automated results: app 106 tests, core 33 tests, media 8 tests, platform 24
-tests plus one ignored live test, playback 16 tests, storage 47 tests, Windows
-UI 15 tests, updater 2 tests, YouTube helper 6 tests, and full workspace Clippy
+Automated results: app 108 tests, core 33 tests, media 9 tests, platform 26
+tests plus two ignored live tests, playback 16 tests, storage 47 tests, Windows
+UI 17 tests, updater 2 tests, YouTube helper 6 tests, and full workspace Clippy
 with warnings denied.
 
 The packaged controls were inspected through Win32 and Windows UI Automation
 because native-app computer use was unavailable in this task. Still required:
-physical Escape/Enter, NVDA and Narrator announcement checks; collection-aware
-context menus and whole-playlist Play/Shuffle actions; full-channel Popular
-ordering; and production metadata hydration for upload times.
+physical Escape/Enter plus NVDA and Narrator announcement checks, and production
+metadata hydration for upload times.
 
 ## 2026-09-06: Python-compatible user playlists
 

@@ -142,6 +142,29 @@ impl YoutubeSearchService {
         )
     }
 
+    /// Starts one complete playlist or channel collection request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error under the same conditions as [`Self::start`].
+    pub fn start_collection_all(
+        &mut self,
+        backend: YoutubeBackend,
+        components_directory: &Path,
+        config: YoutubeSessionConfig,
+        token: u64,
+        url: String,
+        kind: YoutubeCollectionKind,
+    ) -> Result<(), YoutubeSearchServiceError> {
+        self.start_operation(
+            backend,
+            components_directory,
+            config,
+            token,
+            YoutubeCommand::CollectionAll { url, kind },
+        )
+    }
+
     fn start_operation(
         &mut self,
         backend: YoutubeBackend,
@@ -311,7 +334,8 @@ mod tests {
                     }],
                     continuation: None,
                 }),
-                YoutubeCommand::Collection { url, .. } => {
+                YoutubeCommand::Collection { url, .. }
+                | YoutubeCommand::CollectionAll { url, .. } => {
                     Ok(YoutubeResponsePayload::SearchResults {
                         items: vec![MediaItem {
                             id: MediaId("collection-item".to_owned()),
@@ -445,6 +469,45 @@ mod tests {
             YoutubeCommand::Collection {
                 kind: YoutubeCollectionKind::PlaylistVideos,
                 limit: 20,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn complete_collection_request_remains_distinct_from_bounded_ui_loading() {
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&commands);
+        let runtime = YoutubeRuntime::spawn(Box::new(move || {
+            Ok(Box::new(FakeEngine {
+                commands: Arc::clone(&captured),
+            }))
+        }))
+        .expect("runtime");
+        let mut service = YoutubeSearchService::with_runtime(YoutubeBackend::YtDlp, runtime);
+        service
+            .start_collection_all(
+                YoutubeBackend::YtDlp,
+                Path::new("unused"),
+                YoutubeSessionConfig::default(),
+                18,
+                "https://www.youtube.com/playlist?list=PL123".to_owned(),
+                YoutubeCollectionKind::PlaylistVideos,
+            )
+            .expect("start complete collection");
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            if service.poll().expect("poll").is_some() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "service timed out");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let commands = commands.lock().expect("commands");
+        assert!(matches!(
+            commands[1],
+            YoutubeCommand::CollectionAll {
+                kind: YoutubeCollectionKind::PlaylistVideos,
                 ..
             }
         ));

@@ -59,6 +59,7 @@ impl YoutubeHelper {
             &request.command,
             YoutubeCommand::Search { .. }
                 | YoutubeCommand::Collection { .. }
+                | YoutubeCommand::CollectionAll { .. }
                 | YoutubeCommand::Resolve { .. }
         );
         let result = if is_network_operation {
@@ -117,8 +118,9 @@ impl YoutubeHelper {
                 safe_search,
             } => self.search(query, kind, limit, safe_search).await,
             YoutubeCommand::Collection { url, kind, limit } => {
-                self.collection(url, kind, limit).await
+                self.collection(url, kind, Some(limit)).await
             }
+            YoutubeCommand::CollectionAll { url, kind } => self.collection(url, kind, None).await,
             YoutubeCommand::Resolve { url, preference } => self.resolve(url, preference).await,
             YoutubeCommand::Shutdown => Ok(YoutubeResponsePayload::ShuttingDown),
         }
@@ -232,9 +234,9 @@ impl YoutubeHelper {
         &self,
         url: String,
         kind: YoutubeCollectionKind,
-        limit: u32,
+        limit: Option<u32>,
     ) -> Result<YoutubeResponsePayload, YoutubeHelperError> {
-        if url.trim().is_empty() || url.len() > MAX_MEDIA_URL_BYTES || limit == 0 {
+        if url.trim().is_empty() || url.len() > MAX_MEDIA_URL_BYTES || matches!(limit, Some(0)) {
             return Err(YoutubeHelperError::new(
                 YoutubeErrorCode::InvalidRequest,
                 "Collection URL is empty, too long, or has an invalid limit",
@@ -249,9 +251,9 @@ impl YoutubeHelper {
             ));
         }
         let options = PlaylistSearchOptions {
-            limit: u64::from(limit),
+            limit: limit.map_or(100, u64::from),
             request_options: Some(request_options(&self.config)?),
-            fetch_all: false,
+            fetch_all: limit.is_none(),
         };
         let playlist = Playlist::get(url, Some(&options))
             .await

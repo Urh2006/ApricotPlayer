@@ -727,6 +727,25 @@ impl Application {
         Some(item)
     }
 
+    pub fn prepare_youtube_playlist_playback(
+        &mut self,
+        token: u64,
+        items: Vec<MediaItem>,
+        shuffle: bool,
+    ) -> Option<MediaItem> {
+        let mut playable: Vec<_> = items.into_iter().filter(MediaItem::is_playable).collect();
+        if shuffle {
+            playable.shuffle(&mut rand::rng());
+        }
+        let current = playable.first()?.clone();
+        let _ = self.state.player_sequence.set(
+            PlaybackSequenceSource::YoutubePlaylist { token },
+            &playable,
+            &current,
+        );
+        Some(current)
+    }
+
     pub fn pop_youtube_collection(&mut self) -> bool {
         self.state.youtube_collections.pop().is_some()
     }
@@ -1724,9 +1743,9 @@ mod tests {
 
     use super::{Application, PlayerNavigationOrigin, PlayerNavigationOutcome};
     use crate::{
-        ActionFinderContext, ActivationRequest, MainMenuAvailability, PlaylistAddOutcome,
-        PlaylistCreateOutcome, SessionToggle, SettingsController, YoutubeCollectionKind,
-        YoutubeSearchKind,
+        ActionFinderContext, ActivationRequest, MainMenuAvailability, PlaybackSequenceSource,
+        PlaylistAddOutcome, PlaylistCreateOutcome, SessionToggle, SettingsController,
+        YoutubeCollectionKind, YoutubeSearchKind,
     };
 
     fn application(root: &Path) -> Application {
@@ -2179,6 +2198,62 @@ mod tests {
             std::slice::from_ref(&playlist)
         );
         assert_eq!(app.search_session().selected_index(), 0);
+    }
+
+    #[test]
+    fn complete_youtube_playlist_creates_an_exact_sequence_only_when_played() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        let items = vec![
+            youtube_item(0, MediaKind::Video),
+            youtube_item(99, MediaKind::Playlist),
+            youtube_item(1, MediaKind::Video),
+            youtube_item(2, MediaKind::LiveStream),
+        ];
+
+        assert_eq!(app.player_sequence_source(), None);
+        let current = app
+            .prepare_youtube_playlist_playback(41, items, false)
+            .expect("first playlist item");
+        assert_eq!(current.id.0, "0");
+        assert_eq!(
+            app.player_sequence_source(),
+            Some(PlaybackSequenceSource::YoutubePlaylist { token: 41 })
+        );
+        app.start_player_item(current);
+        assert_eq!(
+            app.request_relative_player_item(1),
+            PlayerNavigationOutcome::Item {
+                item: Box::new(youtube_item(1, MediaKind::Video)),
+                origin: PlayerNavigationOrigin::Sequence,
+            }
+        );
+    }
+
+    #[test]
+    fn shuffled_youtube_playlist_contains_each_playable_item_once() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        let items: Vec<_> = (0..12)
+            .map(|index| youtube_item(index, MediaKind::Video))
+            .collect();
+
+        let current = app
+            .prepare_youtube_playlist_playback(42, items, true)
+            .expect("shuffled playlist item");
+        let mut identities: Vec<_> = app
+            .state
+            .player_sequence
+            .items()
+            .iter()
+            .map(|item| item.id.0.clone())
+            .collect();
+        identities.sort();
+        assert_eq!(identities.len(), 12);
+        let mut expected = (0..12).map(|index| index.to_string()).collect::<Vec<_>>();
+        expected.sort();
+        assert_eq!(identities, expected);
+        assert!(app.state.player_sequence.contains(&current));
     }
 
     #[test]

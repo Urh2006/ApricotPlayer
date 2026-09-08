@@ -57,6 +57,13 @@ pub enum YtDlpError {
 pub struct YtDlpYoutubeEngine {
     executable: PathBuf,
     config: YoutubeSessionConfig,
+    popular_cache: Option<PopularCollectionCache>,
+}
+
+#[derive(Clone, Debug)]
+struct PopularCollectionCache {
+    target: String,
+    items: Vec<MediaItem>,
 }
 
 impl YtDlpYoutubeEngine {
@@ -74,6 +81,7 @@ impl YtDlpYoutubeEngine {
         Ok(Self {
             executable: executable.to_owned(),
             config: YoutubeSessionConfig::default(),
+            popular_cache: None,
         })
     }
 
@@ -95,6 +103,9 @@ impl YtDlpYoutubeEngine {
 
     fn configure(&mut self, config: YoutubeSessionConfig) -> Result<(), YtDlpError> {
         validate_config(&config)?;
+        if self.config != config {
+            self.popular_cache = None;
+        }
         self.config = config;
         Ok(())
     }
@@ -185,26 +196,45 @@ impl YtDlpYoutubeEngine {
     }
 
     fn collection(
-        &self,
+        &mut self,
         collection_url: &str,
         kind: YoutubeCollectionKind,
-        limit: u32,
+        limit: Option<u32>,
     ) -> Result<YoutubeResponsePayload, YtDlpError> {
-        if limit == 0 {
+        if matches!(limit, Some(0)) {
             return Err(YtDlpError::InvalidConfiguration(
                 "collection limit must be greater than zero".to_owned(),
             ));
         }
         let target = collection_target(collection_url, kind)?;
+        if kind == YoutubeCollectionKind::ChannelPopular
+            && let Some(cache) = self
+                .popular_cache
+                .as_ref()
+                .filter(|cache| cache.target == target)
+        {
+            return Ok(collection_response(&cache.items, limit));
+        }
         let mut arguments = self.base_arguments();
         arguments.extend([
             OsString::from("--flat-playlist"),
             OsString::from("--skip-download"),
-            OsString::from("--playlist-end"),
-            OsString::from(limit.to_string()),
+        ]);
+        // YouTube currently ignores the legacy channel `sort=p` query in
+        // yt-dlp. Popular therefore needs one complete flat scan before it can
+        // be sorted correctly; the cache keeps later 20/40/60 loads cheap.
+        if kind != YoutubeCollectionKind::ChannelPopular
+            && let Some(limit) = limit
+        {
+            arguments.extend([
+                OsString::from("--playlist-end"),
+                OsString::from(limit.to_string()),
+            ]);
+        }
+        arguments.extend([
             OsString::from("--dump-single-json"),
             OsString::from("--"),
-            OsString::from(target),
+            OsString::from(target.clone()),
         ]);
         let root = parse_json(self.run(arguments)?)?;
         let entries = root
@@ -213,16 +243,19 @@ impl YtDlpYoutubeEngine {
             .ok_or_else(|| {
                 YtDlpError::InvalidOutput("collection entries were missing".to_owned())
             })?;
-        let items = entries
+        let mut items = entries
             .iter()
             .filter_map(media_item_from_value)
             .filter(|item| collection_kind_accepts(kind, item.kind))
-            .take(usize::try_from(limit).unwrap_or(usize::MAX))
-            .collect();
-        Ok(YoutubeResponsePayload::SearchResults {
-            items,
-            continuation: None,
-        })
+            .collect::<Vec<_>>();
+        if kind == YoutubeCollectionKind::ChannelPopular {
+            sort_popular_items(&mut items);
+            self.popular_cache = Some(PopularCollectionCache {
+                target,
+                items: items.clone(),
+            });
+        }
+        Ok(collection_response(&items, limit))
     }
 
     fn base_arguments(&self) -> Vec<OsString> {
@@ -320,7 +353,10 @@ impl YoutubeEngine for YtDlpYoutubeEngine {
                 limit,
                 safe_search: _,
             } => self.search(&query, kind, limit),
-            YoutubeCommand::Collection { url, kind, limit } => self.collection(&url, kind, limit),
+            YoutubeCommand::Collection { url, kind, limit } => {
+                self.collection(&url, kind, Some(limit))
+            }
+            YoutubeCommand::CollectionAll { url, kind } => self.collection(&url, kind, None),
             YoutubeCommand::Resolve { url, preference } => self.resolve(&url, preference),
             YoutubeCommand::Shutdown => Ok(YoutubeResponsePayload::ShuttingDown),
         };
@@ -351,13 +387,57 @@ fn collection_target(value: &str, kind: YoutubeCollectionKind) -> Result<String,
     url.set_path(&format!("{path}{suffix}"));
     url.set_query(None);
     url.set_fragment(None);
-    if kind == YoutubeCollectionKind::ChannelPopular {
-        url.query_pairs_mut()
-            .append_pair("view", "0")
-            .append_pair("sort", "p")
-            .append_pair("flow", "grid");
-    }
     Ok(url.into())
+}
+
+fn collection_response(items: &[MediaItem], limit: Option<u32>) -> YoutubeResponsePayload {
+    let limit = limit
+        .and_then(|limit| usize::try_from(limit).ok())
+        .unwrap_or(usize::MAX);
+    YoutubeResponsePayload::SearchResults {
+        items: items.iter().take(limit).cloned().collect(),
+        continuation: None,
+    }
+}
+
+fn sort_popular_items(items: &mut [MediaItem]) {
+    items.sort_by(|left, right| {
+        popular_numeric_value(right, "view_count")
+            .cmp(&popular_numeric_value(left, "view_count"))
+            .then_with(|| popular_recency_value(right).cmp(&popular_recency_value(left)))
+            .then_with(|| {
+                right
+                    .title
+                    .to_ascii_lowercase()
+                    .cmp(&left.title.to_ascii_lowercase())
+            })
+    });
+}
+
+fn popular_recency_value(item: &MediaItem) -> u64 {
+    ["timestamp", "release_timestamp", "upload_date"]
+        .iter()
+        .find_map(|key| {
+            let value = popular_numeric_value(item, key);
+            (value > 0).then_some(value)
+        })
+        .unwrap_or(0)
+}
+
+fn popular_numeric_value(item: &MediaItem, key: &str) -> u64 {
+    let Some(value) = item.metadata.get(key) else {
+        return 0;
+    };
+    value
+        .as_u64()
+        .or_else(|| value.as_i64().and_then(|value| u64::try_from(value).ok()))
+        .or_else(|| {
+            value
+                .as_str()
+                .map(|value| value.replace([',', ' '], ""))
+                .and_then(|value| value.parse().ok())
+        })
+        .unwrap_or(0)
 }
 
 fn collection_kind_accepts(kind: YoutubeCollectionKind, item: MediaKind) -> bool {
@@ -862,9 +942,10 @@ fn sanitize_error(message: &str, config: &YoutubeSessionConfig) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        BoundedBytes, YtDlpYoutubeEngine, collection_kind_accepts, collection_target,
-        component_executable, media_item_from_value, read_bounded, sanitize_error,
-        search_fetch_limit, search_kind_accepts, search_target, sort_formats, youtube_format,
+        BoundedBytes, YtDlpYoutubeEngine, collection_kind_accepts, collection_response,
+        collection_target, component_executable, media_item_from_value, popular_numeric_value,
+        read_bounded, sanitize_error, search_fetch_limit, search_kind_accepts, search_target,
+        sort_formats, sort_popular_items, youtube_format,
     };
     use apricot_core::MediaKind;
     use apricot_media::{
@@ -954,7 +1035,7 @@ mod tests {
                 YoutubeCollectionKind::ChannelPopular,
             )
             .expect("popular tab"),
-            "https://www.youtube.com/channel/UC123/videos?view=0&sort=p&flow=grid"
+            "https://www.youtube.com/channel/UC123/videos"
         );
         assert!(
             collection_target(
@@ -971,6 +1052,40 @@ mod tests {
             YoutubeCollectionKind::ChannelPlaylists,
             MediaKind::Video
         ));
+    }
+
+    #[test]
+    fn popular_channel_items_are_globally_sorted_before_limiting() {
+        let mut items = vec![
+            media_item_from_value(&json!({
+                "id": "new", "title": "Newest", "view_count": 998,
+                "timestamp": 300
+            }))
+            .expect("newest"),
+            media_item_from_value(&json!({
+                "id": "top", "title": "All-time top", "view_count": 37_000_000,
+                "timestamp": 100
+            }))
+            .expect("top"),
+            media_item_from_value(&json!({
+                "id": "middle", "title": "Middle", "view_count": "3,300",
+                "timestamp": 200
+            }))
+            .expect("middle"),
+        ];
+        sort_popular_items(&mut items);
+        let YoutubeResponsePayload::SearchResults { items, .. } =
+            collection_response(&items, Some(2))
+        else {
+            panic!("collection results");
+        };
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.id.0.as_str())
+                .collect::<Vec<_>>(),
+            ["top", "middle"]
+        );
     }
 
     #[test]
@@ -1082,5 +1197,48 @@ mod tests {
                 if !items.is_empty()
                     && items.iter().all(|item| matches!(item.kind, MediaKind::Video | MediaKind::LiveStream))
         ));
+    }
+
+    #[test]
+    #[ignore = "requires live YouTube and APRICOT_YTDLP"]
+    fn live_popular_channel_is_global_and_cumulative() {
+        let executable = std::env::var_os("APRICOT_YTDLP").expect("APRICOT_YTDLP");
+        let mut engine =
+            YtDlpYoutubeEngine::new(std::path::Path::new(&executable)).expect("standalone yt-dlp");
+        let url = "https://www.youtube.com/@OpenAI".to_owned();
+        let first = engine
+            .execute(YoutubeCommand::Collection {
+                url: url.clone(),
+                kind: YoutubeCollectionKind::ChannelPopular,
+                limit: 5,
+            })
+            .expect("first popular page");
+        let second = engine
+            .execute(YoutubeCommand::Collection {
+                url,
+                kind: YoutubeCollectionKind::ChannelPopular,
+                limit: 10,
+            })
+            .expect("second popular page");
+        let YoutubeResponsePayload::SearchResults {
+            items: first_items, ..
+        } = first
+        else {
+            panic!("first collection results");
+        };
+        let YoutubeResponsePayload::SearchResults {
+            items: second_items,
+            ..
+        } = second
+        else {
+            panic!("second collection results");
+        };
+        assert_eq!(first_items.len(), 5);
+        assert_eq!(second_items.len(), 10);
+        assert_eq!(first_items, second_items[..5]);
+        assert!(second_items.windows(2).all(|pair| {
+            popular_numeric_value(&pair[0], "view_count")
+                >= popular_numeric_value(&pair[1], "view_count")
+        }));
     }
 }

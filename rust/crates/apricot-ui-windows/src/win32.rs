@@ -124,6 +124,12 @@ const ID_CONTEXT_REMOVE_FROM_PLAYLIST: usize = 1120;
 const ID_CONTEXT_REMOVE_PLAYLIST: usize = 1121;
 const ID_CONTEXT_ADD_PLAYLIST_TO_QUEUE: usize = 1122;
 const ID_CONTEXT_CLEAR_NOTIFICATIONS: usize = 1123;
+const ID_CONTEXT_OPEN_PLAYLIST_VIDEOS: usize = 1124;
+const ID_CONTEXT_CHANNEL_OPTIONS: usize = 1125;
+const ID_CONTEXT_CHANNEL_VIDEOS: usize = 1126;
+const ID_CONTEXT_CHANNEL_POPULAR: usize = 1127;
+const ID_CONTEXT_CHANNEL_PLAYLISTS: usize = 1128;
+const ID_CONTEXT_CHANNEL_STREAMS: usize = 1129;
 const WM_PROCESS_ACTIVATION: u32 = WM_APP + 1;
 const WM_TRAY_ICON: u32 = WM_APP + 2;
 const YOUTUBE_TIMER_ID: usize = 1;
@@ -196,9 +202,16 @@ struct PendingYoutubeResolve {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+struct PendingYoutubePlaylistPlayback {
+    token: u64,
+    shuffle: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 enum PendingYoutubeListWork {
     Search(SearchWork),
     Collection(YoutubeCollectionWork),
+    PlaylistPlayback(PendingYoutubePlaylistPlayback),
 }
 
 impl PendingYoutubeListWork {
@@ -206,6 +219,7 @@ impl PendingYoutubeListWork {
         match self {
             Self::Search(work) => work.generation,
             Self::Collection(work) => work.generation,
+            Self::PlaylistPlayback(work) => work.token,
         }
     }
 }
@@ -265,7 +279,7 @@ struct WindowState {
     pending_youtube_resolve: Option<PendingYoutubeResolve>,
     pending_player_navigation: Option<i32>,
     pending_queued_start: Option<PendingQueuedStart>,
-    next_youtube_resolve_token: u64,
+    next_youtube_operation_token: u64,
     playback: Option<PlaybackRuntime>,
     controlled_repeat: Option<ControlledRepeatState>,
     pending_local_folder_scan: Option<PendingLocalFolderScan>,
@@ -862,7 +876,7 @@ unsafe fn create_controls(
         pending_youtube_resolve: None,
         pending_player_navigation: None,
         pending_queued_start: None,
-        next_youtube_resolve_token: 0,
+        next_youtube_operation_token: 0,
         playback: None,
         controlled_repeat: None,
         pending_local_folder_scan: None,
@@ -955,13 +969,16 @@ unsafe fn show_list_context_menu(window: HWND, location: LPARAM) {
     }) else {
         return;
     };
-    let Some(entries) = list_context_entries(view) else {
-        return;
-    };
     let active_item = active_media_item(window);
     let active_is_local = active_item
         .as_ref()
         .is_some_and(apricot_core::MediaItem::is_local_media);
+    let active_is_favorite = active_item
+        .as_ref()
+        .is_some_and(|item| state(window).is_some_and(|state| state.application.is_favorite(item)));
+    let Some(entries) = list_context_entries(view, active_item.as_ref(), active_is_favorite) else {
+        return;
+    };
     let catalog = apricot_app::embedded_catalog(&language);
     let Ok(menu) = CreatePopupMenu() else {
         return;
@@ -970,7 +987,7 @@ unsafe fn show_list_context_menu(window: HWND, location: LPARAM) {
         let label = wide(catalog.text("playlist_empty"));
         let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, PCWSTR(label.as_ptr()));
     } else {
-        for (id, key) in entries {
+        for (id, key) in &entries {
             if *id == ID_CONTEXT_COPY_STREAM_URL && active_is_local {
                 continue;
             }
@@ -1006,29 +1023,12 @@ unsafe fn show_list_context_menu(window: HWND, location: LPARAM) {
             state.modal_open = false;
         }
         resume_deferred_window_work(window);
-        match usize::try_from(selected.0).unwrap_or_default() {
-            ID_CONTEXT_PLAY => activate_selection(window),
-            ID_CONTEXT_PLAY_FOLDER => play_current_local_folder(window, false),
-            ID_CONTEXT_SHUFFLE_FOLDER => play_current_local_folder(window, true),
-            ID_CONTEXT_ADD_TO_QUEUE => add_active_item_to_playback_queue(window),
-            ID_CONTEXT_REMOVE_FROM_QUEUE => remove_active_item_from_playback_queue(window),
-            ID_CONTEXT_ADD_FOLDER_TO_QUEUE => add_current_local_folder_to_queue(window),
-            ID_CONTEXT_PLAYBACK_QUEUE => show_playback_queue(window),
-            ID_CONTEXT_COPY_LOCATION => copy_active_location(window),
-            ID_CONTEXT_COPY_STREAM_URL => copy_active_stream_url(window),
-            ID_CONTEXT_ADD_FAVORITE => add_active_favorite(window),
-            ID_CONTEXT_COLLECTION_REMOVE => remove_selected_collection_item(window),
-            ID_CONTEXT_HISTORY_CLEAR => clear_history(window),
-            ID_CONTEXT_CREATE_PLAYLIST => create_user_playlist(window, None),
-            ID_CONTEXT_PLAY_PLAYLIST => play_current_user_playlist(window, false),
-            ID_CONTEXT_SHUFFLE_PLAYLIST => play_current_user_playlist(window, true),
-            ID_CONTEXT_ADD_TO_PLAYLIST => add_active_item_to_user_playlist(window),
-            ID_CONTEXT_REMOVE_FROM_PLAYLIST => remove_active_item_from_user_playlist(window),
-            ID_CONTEXT_REMOVE_PLAYLIST => remove_selected_user_playlist(window),
-            ID_CONTEXT_ADD_PLAYLIST_TO_QUEUE => add_current_user_playlist_to_queue(window),
-            ID_CONTEXT_CLEAR_NOTIFICATIONS => clear_notifications(window),
-            _ => {}
-        }
+        execute_list_context_command(
+            window,
+            usize::try_from(selected.0).unwrap_or_default(),
+            view,
+            active_item,
+        );
     }
     let _ = DestroyMenu(menu);
     if let Some(state) = state(window) {
@@ -1036,9 +1036,118 @@ unsafe fn show_list_context_menu(window: HWND, location: LPARAM) {
     }
 }
 
-fn list_context_entries(view: MainView) -> Option<&'static [(usize, &'static str)]> {
+unsafe fn execute_list_context_command(
+    window: HWND,
+    command: usize,
+    view: MainView,
+    active_item: Option<apricot_core::MediaItem>,
+) {
+    match command {
+        ID_CONTEXT_PLAY => activate_selection(window),
+        ID_CONTEXT_PLAY_FOLDER => play_current_local_folder(window, false),
+        ID_CONTEXT_SHUFFLE_FOLDER => play_current_local_folder(window, true),
+        ID_CONTEXT_ADD_TO_QUEUE => add_active_item_to_playback_queue(window),
+        ID_CONTEXT_REMOVE_FROM_QUEUE => remove_active_item_from_playback_queue(window),
+        ID_CONTEXT_ADD_FOLDER_TO_QUEUE => add_current_local_folder_to_queue(window),
+        ID_CONTEXT_PLAYBACK_QUEUE => show_playback_queue(window),
+        ID_CONTEXT_COPY_LOCATION => copy_active_location(window),
+        ID_CONTEXT_COPY_STREAM_URL => copy_active_stream_url(window),
+        ID_CONTEXT_ADD_FAVORITE => add_active_favorite(window),
+        ID_CONTEXT_COLLECTION_REMOVE => {
+            if matches!(view, MainView::Results | MainView::YoutubeCollection) {
+                remove_active_favorite(window);
+            } else {
+                remove_selected_collection_item(window);
+            }
+        }
+        ID_CONTEXT_HISTORY_CLEAR => clear_history(window),
+        ID_CONTEXT_CREATE_PLAYLIST => create_user_playlist(window, None),
+        ID_CONTEXT_PLAY_PLAYLIST | ID_CONTEXT_SHUFFLE_PLAYLIST => {
+            let shuffle = command == ID_CONTEXT_SHUFFLE_PLAYLIST;
+            if matches!(view, MainView::Results | MainView::YoutubeCollection) {
+                if let Some(item) = active_item.as_ref() {
+                    play_youtube_playlist(window, item, shuffle);
+                }
+            } else {
+                play_current_user_playlist(window, shuffle);
+            }
+        }
+        ID_CONTEXT_ADD_TO_PLAYLIST => add_active_item_to_user_playlist(window),
+        ID_CONTEXT_REMOVE_FROM_PLAYLIST => remove_active_item_from_user_playlist(window),
+        ID_CONTEXT_REMOVE_PLAYLIST => remove_selected_user_playlist(window),
+        ID_CONTEXT_ADD_PLAYLIST_TO_QUEUE => add_current_user_playlist_to_queue(window),
+        ID_CONTEXT_CLEAR_NOTIFICATIONS => clear_notifications(window),
+        ID_CONTEXT_OPEN_PLAYLIST_VIDEOS => {
+            if let Some(item) = active_item {
+                open_youtube_collection(window, item, YoutubeCollectionKind::PlaylistVideos);
+            }
+        }
+        ID_CONTEXT_CHANNEL_OPTIONS => {
+            if let Some(item) = active_item {
+                show_channel_options(window, item);
+            }
+        }
+        ID_CONTEXT_CHANNEL_VIDEOS
+        | ID_CONTEXT_CHANNEL_POPULAR
+        | ID_CONTEXT_CHANNEL_PLAYLISTS
+        | ID_CONTEXT_CHANNEL_STREAMS => {
+            if let Some(item) = active_item {
+                let kind = match command {
+                    ID_CONTEXT_CHANNEL_VIDEOS => YoutubeCollectionKind::ChannelVideos,
+                    ID_CONTEXT_CHANNEL_POPULAR => YoutubeCollectionKind::ChannelPopular,
+                    ID_CONTEXT_CHANNEL_PLAYLISTS => YoutubeCollectionKind::ChannelPlaylists,
+                    _ => YoutubeCollectionKind::ChannelStreams,
+                };
+                open_youtube_collection(window, item, kind);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn list_context_entries(
+    view: MainView,
+    active_item: Option<&apricot_core::MediaItem>,
+    active_is_favorite: bool,
+) -> Option<Vec<(usize, &'static str)>> {
+    if matches!(view, MainView::Results | MainView::YoutubeCollection) {
+        let favorite = if active_is_favorite {
+            (ID_CONTEXT_COLLECTION_REMOVE, "remove_favorite")
+        } else {
+            (ID_CONTEXT_ADD_FAVORITE, "add_favorite")
+        };
+        return match active_item.map(|item| item.kind) {
+            Some(apricot_core::MediaKind::Playlist) => Some(vec![
+                (ID_CONTEXT_PLAY_PLAYLIST, "play_playlist"),
+                (ID_CONTEXT_SHUFFLE_PLAYLIST, "shuffle_playlist"),
+                (ID_CONTEXT_OPEN_PLAYLIST_VIDEOS, "open_playlist_videos"),
+                favorite,
+                (ID_CONTEXT_COPY_LOCATION, "copy_link"),
+            ]),
+            Some(apricot_core::MediaKind::Channel) => Some(vec![
+                (ID_CONTEXT_CHANNEL_OPTIONS, "channel_options"),
+                (ID_CONTEXT_CHANNEL_VIDEOS, "channel_videos"),
+                (ID_CONTEXT_CHANNEL_POPULAR, "channel_popular"),
+                (ID_CONTEXT_CHANNEL_PLAYLISTS, "channel_playlists"),
+                (ID_CONTEXT_CHANNEL_STREAMS, "channel_live_streams"),
+                favorite,
+                (ID_CONTEXT_COPY_LOCATION, "copy_link"),
+            ]),
+            Some(_) => Some(vec![
+                (ID_CONTEXT_PLAY, "play"),
+                favorite,
+                (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
+                (ID_CONTEXT_REMOVE_FROM_QUEUE, "remove_from_playback_queue"),
+                (ID_CONTEXT_PLAYBACK_QUEUE, "playback_queue"),
+                (ID_CONTEXT_COPY_LOCATION, "copy_link"),
+                (ID_CONTEXT_COPY_STREAM_URL, "copy_stream_url"),
+                (ID_CONTEXT_ADD_TO_PLAYLIST, "add_to_playlist"),
+            ]),
+            None => None,
+        };
+    }
     match view {
-        MainView::LocalFolder => Some(&[
+        MainView::LocalFolder => Some(vec![
             (ID_CONTEXT_PLAY, "play"),
             (ID_CONTEXT_PLAY_FOLDER, "play_folder"),
             (ID_CONTEXT_SHUFFLE_FOLDER, "shuffle_folder"),
@@ -1048,14 +1157,14 @@ fn list_context_entries(view: MainView) -> Option<&'static [(usize, &'static str
             (ID_CONTEXT_COPY_LOCATION, "copy_path"),
             (ID_CONTEXT_ADD_TO_PLAYLIST, "add_to_playlist"),
         ]),
-        MainView::Favorites => Some(&[
+        MainView::Favorites => Some(vec![
             (ID_CONTEXT_PLAY, "play"),
             (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
             (ID_CONTEXT_COPY_LOCATION, "copy_link"),
             (ID_CONTEXT_COLLECTION_REMOVE, "remove_favorite"),
             (ID_CONTEXT_ADD_TO_PLAYLIST, "add_to_playlist"),
         ]),
-        MainView::History => Some(&[
+        MainView::History => Some(vec![
             (ID_CONTEXT_PLAY, "play"),
             (ID_CONTEXT_ADD_FAVORITE, "add_favorite"),
             (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
@@ -1064,21 +1173,13 @@ fn list_context_entries(view: MainView) -> Option<&'static [(usize, &'static str
             (ID_CONTEXT_HISTORY_CLEAR, "clear_history"),
             (ID_CONTEXT_ADD_TO_PLAYLIST, "add_to_playlist"),
         ]),
-        MainView::NotificationCenter => Some(&[
+        MainView::NotificationCenter => Some(vec![
             (ID_CONTEXT_PLAY, "play"),
             (ID_CONTEXT_COPY_LOCATION, "copy_url"),
             (ID_CONTEXT_CLEAR_NOTIFICATIONS, "clear_notifications"),
         ]),
-        MainView::Results | MainView::YoutubeCollection => Some(&[
-            (ID_CONTEXT_PLAY, "play"),
-            (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
-            (ID_CONTEXT_REMOVE_FROM_QUEUE, "remove_from_playback_queue"),
-            (ID_CONTEXT_PLAYBACK_QUEUE, "playback_queue"),
-            (ID_CONTEXT_COPY_LOCATION, "copy_link"),
-            (ID_CONTEXT_COPY_STREAM_URL, "copy_stream_url"),
-            (ID_CONTEXT_ADD_TO_PLAYLIST, "add_to_playlist"),
-        ]),
-        MainView::UserPlaylists => Some(&[
+        MainView::Results | MainView::YoutubeCollection => unreachable!(),
+        MainView::UserPlaylists => Some(vec![
             (ID_CONTEXT_PLAY, "open_playlist"),
             (ID_CONTEXT_CREATE_PLAYLIST, "create_playlist"),
             (ID_CONTEXT_PLAY_PLAYLIST, "play_playlist"),
@@ -1086,7 +1187,7 @@ fn list_context_entries(view: MainView) -> Option<&'static [(usize, &'static str
             (ID_CONTEXT_ADD_PLAYLIST_TO_QUEUE, "add_to_playback_queue"),
             (ID_CONTEXT_REMOVE_PLAYLIST, "remove_playlist"),
         ]),
-        MainView::UserPlaylistItems => Some(&[
+        MainView::UserPlaylistItems => Some(vec![
             (ID_CONTEXT_PLAY, "play"),
             (ID_CONTEXT_PLAY_PLAYLIST, "play_playlist"),
             (ID_CONTEXT_SHUFFLE_PLAYLIST, "shuffle_playlist"),
@@ -2005,6 +2106,61 @@ unsafe fn open_youtube_collection(
     start_youtube_collection_work(window, work);
 }
 
+unsafe fn play_youtube_playlist(window: HWND, item: &apricot_core::MediaItem, shuffle: bool) {
+    let Some(url) = item.url.as_ref().map(ToString::to_string) else {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "no_selection"),
+                true,
+            );
+        }
+        return;
+    };
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state.next_youtube_operation_token = state.next_youtube_operation_token.wrapping_add(1).max(1);
+    let token = state.next_youtube_operation_token;
+    let selected_backend =
+        YoutubeBackend::from_setting_value(&state.application.settings().youtube_backend);
+    let backend = collection_backend(selected_backend, YoutubeCollectionKind::PlaylistVideos);
+    let Some(components) = application_directory().map(|path| path.join("components")) else {
+        show_error_message(window, "Application path is unavailable");
+        return;
+    };
+    let config = youtube_session_config(state);
+    match state.youtube_search.start_collection_all(
+        backend,
+        &components,
+        config,
+        token,
+        url,
+        YoutubeCollectionKind::PlaylistVideos,
+    ) {
+        Ok(()) => {
+            state.pending_youtube_work = Some(PendingYoutubeListWork::PlaylistPlayback(
+                PendingYoutubePlaylistPlayback { token, shuffle },
+            ));
+            let message = catalog_text(&state.application, "loading_playlist")
+                .replace("{title}", &item.title);
+            set_status(state, &message, true);
+            let _ = SetTimer(
+                Some(window),
+                YOUTUBE_TIMER_ID,
+                YOUTUBE_TIMER_INTERVAL_MS,
+                None,
+            );
+        }
+        Err(error) => {
+            let message = error.to_string();
+            set_status(state, &message, true);
+            show_error_message(window, &message);
+            let _ = SetFocus(Some(state.list));
+        }
+    }
+}
+
 unsafe fn activate_local_folder_selection(window: HWND) {
     let selected = state(window).map(|state| SendMessageW(state.list, LB_GETCURSEL, None, None).0);
     let Some(Ok(index)) = selected.map(usize::try_from) else {
@@ -2227,8 +2383,8 @@ unsafe fn start_youtube_resolve_with_options(
     let Some(state) = state_mut(window) else {
         return;
     };
-    state.next_youtube_resolve_token = state.next_youtube_resolve_token.wrapping_add(1).max(1);
-    let token = state.next_youtube_resolve_token;
+    state.next_youtube_operation_token = state.next_youtube_operation_token.wrapping_add(1).max(1);
+    let token = state.next_youtube_operation_token;
     let backend = media_resolve_backend(item, &state.application.settings().youtube_backend);
     let Some(components) = application_directory().map(|path| path.join("components")) else {
         report_youtube_resolve_start_error(
@@ -3187,7 +3343,49 @@ unsafe fn finish_youtube_list(
         Some(PendingYoutubeListWork::Collection(_)) => {
             finish_youtube_collection(window, generation, items);
         }
+        Some(PendingYoutubeListWork::PlaylistPlayback(_)) => {
+            finish_youtube_playlist_playback(window, generation, items);
+        }
         None => {}
+    }
+}
+
+unsafe fn finish_youtube_playlist_playback(
+    window: HWND,
+    token: u64,
+    items: Vec<apricot_core::MediaItem>,
+) {
+    let item = {
+        let Some(state) = state_mut(window) else {
+            return;
+        };
+        let shuffle = state
+            .pending_youtube_work
+            .as_ref()
+            .and_then(|work| match work {
+                PendingYoutubeListWork::PlaylistPlayback(work) if work.token == token => {
+                    Some(work.shuffle)
+                }
+                _ => None,
+            });
+        let Some(shuffle) = shuffle else {
+            return;
+        };
+        state.pending_youtube_work = None;
+        stop_youtube_timer(window);
+        state
+            .application
+            .prepare_youtube_playlist_playback(token, items, shuffle)
+    };
+    if let Some(item) = item {
+        start_sequence_media_item(window, item, None);
+    } else if let Some(state) = state(window) {
+        set_status(
+            state,
+            &catalog_text(&state.application, "playlist_no_videos"),
+            true,
+        );
+        let _ = SetFocus(Some(state.list));
     }
 }
 
@@ -3205,7 +3403,9 @@ unsafe fn finish_youtube_search(
         .as_ref()
         .and_then(|work| match work {
             PendingYoutubeListWork::Search(work) => Some(work.work_kind),
-            PendingYoutubeListWork::Collection(_) => None,
+            PendingYoutubeListWork::Collection(_) | PendingYoutubeListWork::PlaylistPlayback(_) => {
+                None
+            }
         });
     let outcome = state
         .application
@@ -3246,7 +3446,7 @@ unsafe fn finish_youtube_collection(
         .as_ref()
         .and_then(|work| match work {
             PendingYoutubeListWork::Collection(work) => Some(work.clone()),
-            PendingYoutubeListWork::Search(_) => None,
+            PendingYoutubeListWork::Search(_) | PendingYoutubeListWork::PlaylistPlayback(_) => None,
         });
     let outcome = state
         .application
@@ -3368,7 +3568,7 @@ unsafe fn finish_youtube_error_state(
                 .fail_youtube_collection(generation, message);
             (work.work_kind == YoutubeCollectionWorkKind::Initial, false)
         }
-        None => (true, false),
+        Some(PendingYoutubeListWork::PlaylistPlayback(_)) | None => (true, false),
     };
     state.pending_youtube_work = None;
     state.pending_player_navigation = None;
@@ -3411,6 +3611,7 @@ unsafe fn cancel_youtube_work(window: HWND, state: &mut WindowState) {
             PendingYoutubeListWork::Collection(_) => {
                 let _ = state.application.cancel_pending_youtube_collection();
             }
+            PendingYoutubeListWork::PlaylistPlayback(_) => {}
         }
     }
     state.pending_youtube_work = None;
@@ -3504,6 +3705,7 @@ unsafe fn result_selection_changed(window: HWND) {
             PendingYoutubeListWork::Collection(work) => {
                 start_youtube_collection_work(window, work);
             }
+            PendingYoutubeListWork::PlaylistPlayback(_) => {}
         }
     }
 }
@@ -6650,8 +6852,9 @@ fn wide(value: &str) -> Vec<u16> {
 mod tests {
     use super::{
         MainView, SEEK_HOLD_DELAY_MS, SEEK_HOLD_INTERVAL_MS, collection_backend,
-        controlled_repeat_timing, copy_wide_array, media_resolve_backend, notification_label,
-        resolved_playback_item, view_has_back_button, view_has_collection_remove,
+        controlled_repeat_timing, copy_wide_array, list_context_entries, media_resolve_backend,
+        notification_label, resolved_playback_item, view_has_back_button,
+        view_has_collection_remove,
     };
     use apricot_app::AppNotification;
     use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
@@ -6710,6 +6913,58 @@ mod tests {
                 YoutubeCollectionKind::ChannelVideos
             ),
             YoutubeBackend::YtDlp
+        );
+    }
+
+    #[test]
+    fn youtube_playlist_context_menu_exposes_collection_actions_in_python_order() {
+        let mut playlist = youtube_item("playlist");
+        playlist.kind = MediaKind::Playlist;
+        let labels = list_context_entries(MainView::Results, Some(&playlist), false)
+            .expect("playlist menu")
+            .into_iter()
+            .map(|(_, label)| label)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            labels,
+            [
+                "play_playlist",
+                "shuffle_playlist",
+                "open_playlist_videos",
+                "add_favorite",
+                "copy_link",
+            ]
+        );
+        let favorite_labels =
+            list_context_entries(MainView::YoutubeCollection, Some(&playlist), true)
+                .expect("favorite playlist menu")
+                .into_iter()
+                .map(|(_, label)| label)
+                .collect::<Vec<_>>();
+        assert!(favorite_labels.contains(&"remove_favorite"));
+        assert!(!favorite_labels.contains(&"add_favorite"));
+    }
+
+    #[test]
+    fn youtube_channel_context_menu_exposes_each_collection_tab() {
+        let mut channel = youtube_item("channel");
+        channel.kind = MediaKind::Channel;
+        let labels = list_context_entries(MainView::Results, Some(&channel), false)
+            .expect("channel menu")
+            .into_iter()
+            .map(|(_, label)| label)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            &labels[..5],
+            [
+                "channel_options",
+                "channel_videos",
+                "channel_popular",
+                "channel_playlists",
+                "channel_live_streams",
+            ]
         );
     }
 
