@@ -103,12 +103,23 @@ try {
     if ($InstalledYtDlpExitCode -ne 0 -or $InstalledYtDlpVersion -ne "2026.08.19") {
         throw "Installed standalone yt-dlp failed its version check (exit=$InstalledYtDlpExitCode, version='$InstalledYtDlpVersion')"
     }
-    $HelloRequest = '{"protocol_version":1,"request_id":1,"command":{"type":"hello"}}'
-    $ShutdownRequest = '{"protocol_version":1,"request_id":2,"command":{"type":"shutdown"}}'
+    $YoutubeProtocolVersion = 2
+    $HelloRequest = [ordered]@{
+        protocol_version = $YoutubeProtocolVersion
+        request_id = 1
+        command = [ordered]@{ type = "hello" }
+    } | ConvertTo-Json -Compress
+    $ShutdownRequest = [ordered]@{
+        protocol_version = $YoutubeProtocolVersion
+        request_id = 2
+        command = [ordered]@{ type = "shutdown" }
+    } | ConvertTo-Json -Compress
     $HelperResponses = @($HelloRequest, $ShutdownRequest) | & $InstalledYoutubeHelper
     if ($LASTEXITCODE -ne 0) { throw "Installed Rust YouTube helper did not run" }
     $HelloResponse = $HelperResponses[0] | ConvertFrom-Json
-    if ($HelloResponse.status -ne "hello" -or $HelloResponse.request_id -ne 1) {
+    if ($HelloResponse.status -ne "hello" -or
+        $HelloResponse.request_id -ne 1 -or
+        "playlist_collections" -notin @($HelloResponse.capabilities)) {
         throw "Installed Rust YouTube helper failed its protocol handshake"
     }
     $FoundationSmoke = Start-Process -FilePath $Executable -ArgumentList "--qualification-smoke" -WindowStyle Hidden -Wait -PassThru

@@ -4,8 +4,9 @@ use std::path::Path;
 
 use apricot_core::MediaItem;
 use apricot_media::{
-    YoutubeBackend, YoutubeCommand, YoutubeFormat, YoutubeResponsePayload, YoutubeRuntime,
-    YoutubeRuntimeError, YoutubeSearchKind, YoutubeSessionConfig, YoutubeStreamPreference,
+    YoutubeBackend, YoutubeCollectionKind, YoutubeCommand, YoutubeFormat, YoutubeResponsePayload,
+    YoutubeRuntime, YoutubeRuntimeError, YoutubeSearchKind, YoutubeSessionConfig,
+    YoutubeStreamPreference,
 };
 use thiserror::Error;
 
@@ -113,6 +114,31 @@ impl YoutubeSearchService {
             config,
             token,
             YoutubeCommand::Resolve { url, preference },
+        )
+    }
+
+    /// Starts one bounded playlist or channel collection request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error under the same conditions as [`Self::start`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_collection(
+        &mut self,
+        backend: YoutubeBackend,
+        components_directory: &Path,
+        config: YoutubeSessionConfig,
+        token: u64,
+        url: String,
+        kind: YoutubeCollectionKind,
+        limit: u32,
+    ) -> Result<(), YoutubeSearchServiceError> {
+        self.start_operation(
+            backend,
+            components_directory,
+            config,
+            token,
+            YoutubeCommand::Collection { url, kind, limit },
         )
     }
 
@@ -248,8 +274,8 @@ mod tests {
 
     use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
     use apricot_media::{
-        YoutubeBackend, YoutubeCommand, YoutubeEngine, YoutubeEngineError, YoutubeResponsePayload,
-        YoutubeRuntime, YoutubeSessionConfig,
+        YoutubeBackend, YoutubeCollectionKind, YoutubeCommand, YoutubeEngine, YoutubeEngineError,
+        YoutubeResponsePayload, YoutubeRuntime, YoutubeSessionConfig,
     };
 
     use super::{YoutubeSearchService, YoutubeSearchServiceUpdate};
@@ -285,6 +311,24 @@ mod tests {
                     }],
                     continuation: None,
                 }),
+                YoutubeCommand::Collection { url, .. } => {
+                    Ok(YoutubeResponsePayload::SearchResults {
+                        items: vec![MediaItem {
+                            id: MediaId("collection-item".to_owned()),
+                            source: MediaSource::Youtube,
+                            kind: MediaKind::Video,
+                            title: url,
+                            url: None,
+                            stream_url: None,
+                            external_audio_url: None,
+                            local_path: None,
+                            channel: String::new(),
+                            duration_seconds: None,
+                            metadata: std::collections::BTreeMap::default(),
+                        }],
+                        continuation: None,
+                    })
+                }
                 _ => Err(YoutubeEngineError::new("unexpected command", false)),
             }
         }
@@ -357,6 +401,53 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(!service.is_pending());
+    }
+
+    #[test]
+    fn collection_configuration_precedes_the_typed_collection_request() {
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&commands);
+        let runtime = YoutubeRuntime::spawn(Box::new(move || {
+            Ok(Box::new(FakeEngine {
+                commands: Arc::clone(&captured),
+            }))
+        }))
+        .expect("runtime");
+        let mut service = YoutubeSearchService::with_runtime(YoutubeBackend::YtDlp, runtime);
+        service
+            .start_collection(
+                YoutubeBackend::YtDlp,
+                Path::new("unused"),
+                YoutubeSessionConfig::default(),
+                17,
+                "https://www.youtube.com/playlist?list=PL123".to_owned(),
+                YoutubeCollectionKind::PlaylistVideos,
+                20,
+            )
+            .expect("start collection");
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let update = loop {
+            if let Some(update) = service.poll().expect("poll") {
+                break update;
+            }
+            assert!(Instant::now() < deadline, "service timed out");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert!(matches!(
+            update,
+            YoutubeSearchServiceUpdate::Results { token: 17, items, .. }
+                if items[0].title.contains("playlist?list=PL123")
+        ));
+        let commands = commands.lock().expect("commands");
+        assert!(matches!(commands[0], YoutubeCommand::Configure { .. }));
+        assert!(matches!(
+            commands[1],
+            YoutubeCommand::Collection {
+                kind: YoutubeCollectionKind::PlaylistVideos,
+                limit: 20,
+                ..
+            }
+        ));
     }
 
     #[test]

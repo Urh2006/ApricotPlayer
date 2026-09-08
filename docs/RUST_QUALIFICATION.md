@@ -271,6 +271,33 @@ Deterministic parser, bounds, backend-selection, and redaction tests pass. The
 live test is ignored by the normal workspace suite and is run explicitly with
 `APRICOT_YTDLP`, so offline builds remain reproducible.
 
+## 2026-09-08: typed YouTube collection backend
+
+Implementation: protocol version 2 collection commands shared by the yt-dlp
+adapter, the optional Rust helper, and `YoutubeSearchService`.
+
+Verified:
+
+- playlist videos, channel videos, channel playlists, channel live streams, and
+  channel popular videos have distinct typed requests instead of URL-shape
+  guesses in the UI;
+- channel tab URLs are normalized without retaining an old tab, query, or
+  fragment, while playlist URLs retain their collection identity;
+- the yt-dlp backend advertises playlist and channel collection capabilities;
+  the optional Rust backend advertises only its implemented playlist capability
+  and returns an explicit non-retryable error for unsupported channel requests;
+- filtered searches fetch a bounded internal cushion before applying the
+  caller's visible limit, preventing a pinned channel from making a one-result
+  playlist search appear empty;
+- configuration always completes before a collection request, and client tokens
+  survive the service's separate internal request generations;
+- an explicit live test searched YouTube, resolved `jNQXAC9IVRw`, discovered a
+  current public playlist from a typed playlist search, and read three playlist
+  entries through the new collection command.
+
+The normal workspace suite remains network-independent. The live collection
+test is ignored unless run explicitly with `APRICOT_YTDLP`.
+
 ## 2026-09-06: Python-compatible user playlists
 
 Implementation: `UserPlaylistFile`, `UserPlaylistController`, application-owned

@@ -2,14 +2,14 @@ use std::{cmp::Reverse, collections::BTreeMap, time::Duration};
 
 use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
 use apricot_media::{
-    RUSTY_YTDL_REVISION, YOUTUBE_HELPER_PROTOCOL_VERSION, YoutubeCapability, YoutubeCommand,
-    YoutubeErrorCode, YoutubeFormat, YoutubeFormatTracks, YoutubeFormatTransport,
+    RUSTY_YTDL_REVISION, YOUTUBE_HELPER_PROTOCOL_VERSION, YoutubeCapability, YoutubeCollectionKind,
+    YoutubeCommand, YoutubeErrorCode, YoutubeFormat, YoutubeFormatTracks, YoutubeFormatTransport,
     YoutubeHelperError, YoutubeRequest, YoutubeResponse, YoutubeResponsePayload, YoutubeSearchKind,
     YoutubeSessionConfig, YoutubeStreamPreference,
 };
 use rusty_ytdl::{
     RequestOptions, Video as ResolvableVideo, VideoError, VideoOptions,
-    search::{SearchOptions, SearchResult, SearchType, YouTube},
+    search::{Playlist, PlaylistSearchOptions, SearchOptions, SearchResult, SearchType, YouTube},
 };
 use serde_json::Value;
 use url::Url;
@@ -57,7 +57,9 @@ impl YoutubeHelper {
 
         let is_network_operation = matches!(
             &request.command,
-            YoutubeCommand::Search { .. } | YoutubeCommand::Resolve { .. }
+            YoutubeCommand::Search { .. }
+                | YoutubeCommand::Collection { .. }
+                | YoutubeCommand::Resolve { .. }
         );
         let result = if is_network_operation {
             match tokio::time::timeout(
@@ -92,6 +94,7 @@ impl YoutubeHelper {
                 backend_revision: RUSTY_YTDL_REVISION.to_owned(),
                 capabilities: vec![
                     YoutubeCapability::Search,
+                    YoutubeCapability::PlaylistCollections,
                     YoutubeCapability::Resolve,
                     YoutubeCapability::Cookies,
                     YoutubeCapability::Proxy,
@@ -113,6 +116,9 @@ impl YoutubeHelper {
                 limit,
                 safe_search,
             } => self.search(query, kind, limit, safe_search).await,
+            YoutubeCommand::Collection { url, kind, limit } => {
+                self.collection(url, kind, limit).await
+            }
             YoutubeCommand::Resolve { url, preference } => self.resolve(url, preference).await,
             YoutubeCommand::Shutdown => Ok(YoutubeResponsePayload::ShuttingDown),
         }
@@ -219,6 +225,44 @@ impl YoutubeHelper {
         Ok(YoutubeResponsePayload::Resolved {
             item: Box::new(item),
             formats,
+        })
+    }
+
+    async fn collection(
+        &self,
+        url: String,
+        kind: YoutubeCollectionKind,
+        limit: u32,
+    ) -> Result<YoutubeResponsePayload, YoutubeHelperError> {
+        if url.trim().is_empty() || url.len() > MAX_MEDIA_URL_BYTES || limit == 0 {
+            return Err(YoutubeHelperError::new(
+                YoutubeErrorCode::InvalidRequest,
+                "Collection URL is empty, too long, or has an invalid limit",
+                false,
+            ));
+        }
+        if kind != YoutubeCollectionKind::PlaylistVideos {
+            return Err(YoutubeHelperError::new(
+                YoutubeErrorCode::Unavailable,
+                "This Rust YouTube component does not yet support channel collections",
+                false,
+            ));
+        }
+        let options = PlaylistSearchOptions {
+            limit: u64::from(limit),
+            request_options: Some(request_options(&self.config)?),
+            fetch_all: false,
+        };
+        let playlist = Playlist::get(url, Some(&options))
+            .await
+            .map_err(|error| map_backend_error(&error))?;
+        Ok(YoutubeResponsePayload::SearchResults {
+            items: playlist
+                .videos
+                .into_iter()
+                .map(|video| search_item(SearchResult::Video(video)))
+                .collect(),
+            continuation: None,
         })
     }
 }
@@ -410,8 +454,9 @@ fn map_backend_error(error: &VideoError) -> YoutubeHelperError {
 mod tests {
     use super::{YoutubeHelper, sort_formats};
     use apricot_media::{
-        YoutubeCommand, YoutubeFormat, YoutubeFormatTracks, YoutubeFormatTransport, YoutubeRequest,
-        YoutubeResponsePayload, YoutubeSessionConfig, YoutubeStreamPreference,
+        YoutubeCapability, YoutubeCollectionKind, YoutubeCommand, YoutubeFormat,
+        YoutubeFormatTracks, YoutubeFormatTransport, YoutubeRequest, YoutubeResponsePayload,
+        YoutubeSessionConfig, YoutubeStreamPreference,
     };
 
     fn format(has_video: bool, has_audio: bool, bitrate: u64) -> YoutubeFormat {
@@ -441,8 +486,31 @@ mod tests {
         assert_eq!(response.request_id, 9);
         assert!(matches!(
             response.payload,
-            YoutubeResponsePayload::Hello { backend_revision, .. }
+            YoutubeResponsePayload::Hello { backend_revision, capabilities, .. }
                 if backend_revision == apricot_media::RUSTY_YTDL_REVISION
+                    && capabilities.contains(&YoutubeCapability::PlaylistCollections)
+                    && !capabilities.contains(&YoutubeCapability::ChannelCollections)
+        ));
+    }
+
+    #[tokio::test]
+    async fn unsupported_channel_collection_is_explicit_and_does_not_touch_the_network() {
+        let mut helper = YoutubeHelper::new().expect("helper");
+        let response = helper
+            .handle(YoutubeRequest::new(
+                11,
+                YoutubeCommand::Collection {
+                    url: "https://www.youtube.com/@creator/videos".to_owned(),
+                    kind: YoutubeCollectionKind::ChannelVideos,
+                    limit: 20,
+                },
+            ))
+            .await;
+        assert!(matches!(
+            response.payload,
+            YoutubeResponsePayload::Error { error }
+                if error.code == apricot_media::YoutubeErrorCode::Unavailable
+                    && !error.retryable
         ));
     }
 

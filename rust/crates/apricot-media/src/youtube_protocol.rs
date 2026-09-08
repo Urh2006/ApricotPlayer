@@ -4,7 +4,7 @@
 use apricot_core::MediaItem;
 use serde::{Deserialize, Serialize};
 
-pub const YOUTUBE_HELPER_PROTOCOL_VERSION: u32 = 1;
+pub const YOUTUBE_HELPER_PROTOCOL_VERSION: u32 = 2;
 pub const MAX_YOUTUBE_MESSAGE_BYTES: usize = 1_048_576;
 pub const RUSTY_YTDL_REVISION: &str = "b1c6eb7c83f0d6189f256ed5df50019a5803c734";
 
@@ -54,10 +54,22 @@ pub enum YoutubeStreamPreference {
 #[serde(rename_all = "snake_case")]
 pub enum YoutubeCapability {
     Search,
+    PlaylistCollections,
+    ChannelCollections,
     Resolve,
     Cookies,
     Proxy,
     LiveStreams,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum YoutubeCollectionKind {
+    PlaylistVideos,
+    ChannelVideos,
+    ChannelPlaylists,
+    ChannelStreams,
+    ChannelPopular,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -99,6 +111,11 @@ pub enum YoutubeCommand {
         kind: YoutubeSearchKind,
         limit: u32,
         safe_search: bool,
+    },
+    Collection {
+        url: String,
+        kind: YoutubeCollectionKind,
+        limit: u32,
     },
     Resolve {
         url: String,
@@ -306,9 +323,9 @@ impl YoutubeHelperError {
 #[cfg(test)]
 mod tests {
     use super::{
-        YOUTUBE_HELPER_PROTOCOL_VERSION, YoutubeBackend, YoutubeCommand, YoutubeFormat,
-        YoutubeFormatTracks, YoutubeFormatTransport, YoutubeRequest, YoutubeResponse,
-        YoutubeResponsePayload, YoutubeSessionConfig, YoutubeStreamPreference,
+        YOUTUBE_HELPER_PROTOCOL_VERSION, YoutubeBackend, YoutubeCollectionKind, YoutubeCommand,
+        YoutubeFormat, YoutubeFormatTracks, YoutubeFormatTransport, YoutubeRequest,
+        YoutubeResponse, YoutubeResponsePayload, YoutubeSessionConfig, YoutubeStreamPreference,
         select_youtube_playback_formats,
     };
 
@@ -350,6 +367,24 @@ mod tests {
         let json = serde_json::to_string(&response).expect("serialize response");
         let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
         assert_eq!(value["status"], "configured");
+    }
+
+    #[test]
+    fn collection_command_round_trips_with_an_explicit_kind_and_bound() {
+        let request = YoutubeRequest::new(
+            8,
+            YoutubeCommand::Collection {
+                url: "https://www.youtube.com/playlist?list=PL123".to_owned(),
+                kind: YoutubeCollectionKind::PlaylistVideos,
+                limit: 20,
+            },
+        );
+        let encoded = serde_json::to_string(&request).expect("serialize collection");
+        let decoded: YoutubeRequest =
+            serde_json::from_str(&encoded).expect("deserialize collection");
+        assert_eq!(decoded, request);
+        assert!(encoded.contains("playlist_videos"));
+        assert_eq!(decoded.protocol_version, 2);
     }
 
     fn format(

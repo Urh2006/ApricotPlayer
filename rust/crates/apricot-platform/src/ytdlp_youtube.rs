@@ -14,10 +14,10 @@ use std::{
 
 use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
 use apricot_media::{
-    YoutubeBackend, YoutubeCapability, YoutubeCommand, YoutubeEngine, YoutubeEngineError,
-    YoutubeErrorCode, YoutubeFormat, YoutubeFormatTracks, YoutubeFormatTransport,
-    YoutubeResponsePayload, YoutubeRuntime, YoutubeRuntimeError, YoutubeSearchKind,
-    YoutubeSessionConfig, YoutubeStreamPreference,
+    YoutubeBackend, YoutubeCapability, YoutubeCollectionKind, YoutubeCommand, YoutubeEngine,
+    YoutubeEngineError, YoutubeErrorCode, YoutubeFormat, YoutubeFormatTracks,
+    YoutubeFormatTransport, YoutubeResponsePayload, YoutubeRuntime, YoutubeRuntimeError,
+    YoutubeSearchKind, YoutubeSessionConfig, YoutubeStreamPreference,
 };
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -117,13 +117,14 @@ impl YtDlpYoutubeEngine {
             ));
         }
 
-        let target = search_target(query, kind, limit);
+        let fetch_limit = search_fetch_limit(kind, limit);
+        let target = search_target(query, kind, fetch_limit);
         let mut arguments = self.base_arguments();
         arguments.extend([
             OsString::from("--flat-playlist"),
             OsString::from("--skip-download"),
             OsString::from("--playlist-end"),
-            OsString::from(limit.to_string()),
+            OsString::from(fetch_limit.to_string()),
             OsString::from("--dump-single-json"),
             OsString::from("--"),
             OsString::from(target),
@@ -183,6 +184,47 @@ impl YtDlpYoutubeEngine {
         })
     }
 
+    fn collection(
+        &self,
+        collection_url: &str,
+        kind: YoutubeCollectionKind,
+        limit: u32,
+    ) -> Result<YoutubeResponsePayload, YtDlpError> {
+        if limit == 0 {
+            return Err(YtDlpError::InvalidConfiguration(
+                "collection limit must be greater than zero".to_owned(),
+            ));
+        }
+        let target = collection_target(collection_url, kind)?;
+        let mut arguments = self.base_arguments();
+        arguments.extend([
+            OsString::from("--flat-playlist"),
+            OsString::from("--skip-download"),
+            OsString::from("--playlist-end"),
+            OsString::from(limit.to_string()),
+            OsString::from("--dump-single-json"),
+            OsString::from("--"),
+            OsString::from(target),
+        ]);
+        let root = parse_json(self.run(arguments)?)?;
+        let entries = root
+            .get("entries")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                YtDlpError::InvalidOutput("collection entries were missing".to_owned())
+            })?;
+        let items = entries
+            .iter()
+            .filter_map(media_item_from_value)
+            .filter(|item| collection_kind_accepts(kind, item.kind))
+            .take(usize::try_from(limit).unwrap_or(usize::MAX))
+            .collect();
+        Ok(YoutubeResponsePayload::SearchResults {
+            items,
+            continuation: None,
+        })
+    }
+
     fn base_arguments(&self) -> Vec<OsString> {
         let mut arguments = vec![
             OsString::from("--ignore-config"),
@@ -238,6 +280,18 @@ fn search_target(query: &str, kind: YoutubeSearchKind, limit: u32) -> String {
     format!("https://www.youtube.com/results?{}", serializer.finish())
 }
 
+fn search_fetch_limit(kind: YoutubeSearchKind, requested: u32) -> u32 {
+    match kind {
+        YoutubeSearchKind::All | YoutubeSearchKind::Video => requested,
+        // Filtered YouTube result pages can contain pinned entries of another
+        // kind. Fetch a bounded cushion, then preserve the caller's visible
+        // limit after typed filtering.
+        YoutubeSearchKind::Playlist | YoutubeSearchKind::Channel | YoutubeSearchKind::Film => {
+            requested.saturating_mul(2).clamp(20, 500)
+        }
+    }
+}
+
 impl YoutubeEngine for YtDlpYoutubeEngine {
     fn execute(
         &mut self,
@@ -249,6 +303,8 @@ impl YoutubeEngine for YtDlpYoutubeEngine {
                 backend_revision: version,
                 capabilities: vec![
                     YoutubeCapability::Search,
+                    YoutubeCapability::PlaylistCollections,
+                    YoutubeCapability::ChannelCollections,
                     YoutubeCapability::Resolve,
                     YoutubeCapability::Cookies,
                     YoutubeCapability::Proxy,
@@ -264,10 +320,55 @@ impl YoutubeEngine for YtDlpYoutubeEngine {
                 limit,
                 safe_search: _,
             } => self.search(&query, kind, limit),
+            YoutubeCommand::Collection { url, kind, limit } => self.collection(&url, kind, limit),
             YoutubeCommand::Resolve { url, preference } => self.resolve(&url, preference),
             YoutubeCommand::Shutdown => Ok(YoutubeResponsePayload::ShuttingDown),
         };
         result.map_err(|error| map_engine_error(&error, &self.config))
+    }
+}
+
+fn collection_target(value: &str, kind: YoutubeCollectionKind) -> Result<String, YtDlpError> {
+    validate_youtube_url(value)?;
+    if kind == YoutubeCollectionKind::PlaylistVideos {
+        return Ok(value.to_owned());
+    }
+    let mut url = Url::parse(value)
+        .map_err(|_| YtDlpError::InvalidConfiguration("collection URL is invalid".to_owned()))?;
+    let mut path = url.path().trim_end_matches('/').to_owned();
+    for suffix in ["/videos", "/playlists", "/streams", "/shorts", "/featured"] {
+        if path.to_ascii_lowercase().ends_with(suffix) {
+            path.truncate(path.len() - suffix.len());
+            break;
+        }
+    }
+    let suffix = match kind {
+        YoutubeCollectionKind::PlaylistVideos => unreachable!("handled above"),
+        YoutubeCollectionKind::ChannelVideos | YoutubeCollectionKind::ChannelPopular => "/videos",
+        YoutubeCollectionKind::ChannelPlaylists => "/playlists",
+        YoutubeCollectionKind::ChannelStreams => "/streams",
+    };
+    url.set_path(&format!("{path}{suffix}"));
+    url.set_query(None);
+    url.set_fragment(None);
+    if kind == YoutubeCollectionKind::ChannelPopular {
+        url.query_pairs_mut()
+            .append_pair("view", "0")
+            .append_pair("sort", "p")
+            .append_pair("flow", "grid");
+    }
+    Ok(url.into())
+}
+
+fn collection_kind_accepts(kind: YoutubeCollectionKind, item: MediaKind) -> bool {
+    match kind {
+        YoutubeCollectionKind::ChannelPlaylists => item == MediaKind::Playlist,
+        YoutubeCollectionKind::PlaylistVideos
+        | YoutubeCollectionKind::ChannelVideos
+        | YoutubeCollectionKind::ChannelStreams
+        | YoutubeCollectionKind::ChannelPopular => {
+            matches!(item, MediaKind::Video | MediaKind::LiveStream)
+        }
     }
 }
 
@@ -761,14 +862,14 @@ fn sanitize_error(message: &str, config: &YoutubeSessionConfig) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        BoundedBytes, YtDlpYoutubeEngine, component_executable, media_item_from_value,
-        read_bounded, sanitize_error, search_kind_accepts, search_target, sort_formats,
-        youtube_format,
+        BoundedBytes, YtDlpYoutubeEngine, collection_kind_accepts, collection_target,
+        component_executable, media_item_from_value, read_bounded, sanitize_error,
+        search_fetch_limit, search_kind_accepts, search_target, sort_formats, youtube_format,
     };
     use apricot_core::MediaKind;
     use apricot_media::{
-        YoutubeBackend, YoutubeCommand, YoutubeEngine, YoutubeResponsePayload, YoutubeSearchKind,
-        YoutubeSessionConfig, YoutubeStreamPreference,
+        YoutubeBackend, YoutubeCollectionKind, YoutubeCommand, YoutubeEngine,
+        YoutubeResponsePayload, YoutubeSearchKind, YoutubeSessionConfig, YoutubeStreamPreference,
     };
     use serde_json::json;
     use std::io::Cursor;
@@ -825,6 +926,51 @@ mod tests {
             search_target("open ai", YoutubeSearchKind::Channel, 20),
             "https://www.youtube.com/results?search_query=open+ai&sp=EgIQAg%3D%3D"
         );
+        assert_eq!(search_fetch_limit(YoutubeSearchKind::Playlist, 1), 20);
+        assert_eq!(search_fetch_limit(YoutubeSearchKind::Channel, 20), 40);
+        assert_eq!(search_fetch_limit(YoutubeSearchKind::Film, 250), 500);
+        assert_eq!(search_fetch_limit(YoutubeSearchKind::All, 20), 20);
+    }
+
+    #[test]
+    fn collection_targets_preserve_playlists_and_normalize_channel_tabs() {
+        let playlist = "https://www.youtube.com/playlist?list=PL123";
+        assert_eq!(
+            collection_target(playlist, YoutubeCollectionKind::PlaylistVideos)
+                .expect("playlist target"),
+            playlist
+        );
+        assert_eq!(
+            collection_target(
+                "https://www.youtube.com/@creator/playlists?view=1",
+                YoutubeCollectionKind::ChannelVideos,
+            )
+            .expect("video tab"),
+            "https://www.youtube.com/@creator/videos"
+        );
+        assert_eq!(
+            collection_target(
+                "https://www.youtube.com/channel/UC123/streams",
+                YoutubeCollectionKind::ChannelPopular,
+            )
+            .expect("popular tab"),
+            "https://www.youtube.com/channel/UC123/videos?view=0&sort=p&flow=grid"
+        );
+        assert!(
+            collection_target(
+                "https://example.com/channel/UC123",
+                YoutubeCollectionKind::ChannelVideos,
+            )
+            .is_err()
+        );
+        assert!(collection_kind_accepts(
+            YoutubeCollectionKind::ChannelPlaylists,
+            MediaKind::Playlist
+        ));
+        assert!(!collection_kind_accepts(
+            YoutubeCollectionKind::ChannelPlaylists,
+            MediaKind::Video
+        ));
     }
 
     #[test]
@@ -879,7 +1025,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires live YouTube and APRICOT_YTDLP"]
-    fn live_standalone_backend_searches_and_resolves() {
+    fn live_standalone_backend_searches_resolves_and_reads_a_playlist() {
         let executable = std::env::var_os("APRICOT_YTDLP").expect("APRICOT_YTDLP");
         let mut engine =
             YtDlpYoutubeEngine::new(std::path::Path::new(&executable)).expect("standalone yt-dlp");
@@ -905,6 +1051,36 @@ mod tests {
             resolve,
             YoutubeResponsePayload::Resolved { item, formats }
                 if item.title == "Me at the zoo" && !formats.is_empty()
+        ));
+
+        let playlist_search = engine
+            .execute(YoutubeCommand::Search {
+                query: "OpenAI".to_owned(),
+                kind: YoutubeSearchKind::Playlist,
+                limit: 1,
+                safe_search: false,
+            })
+            .expect("live playlist search");
+        let playlist_url = match playlist_search {
+            YoutubeResponsePayload::SearchResults { items, .. } => items
+                .into_iter()
+                .next()
+                .and_then(|item| item.url)
+                .expect("playlist result URL"),
+            payload => panic!("unexpected playlist search payload: {payload:?}"),
+        };
+        let collection = engine
+            .execute(YoutubeCommand::Collection {
+                url: playlist_url.to_string(),
+                kind: YoutubeCollectionKind::PlaylistVideos,
+                limit: 3,
+            })
+            .expect("live playlist collection");
+        assert!(matches!(
+            collection,
+            YoutubeResponsePayload::SearchResults { items, .. }
+                if !items.is_empty()
+                    && items.iter().all(|item| matches!(item.kind, MediaKind::Video | MediaKind::LiveStream))
         ));
     }
 }

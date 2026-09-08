@@ -9,8 +9,8 @@ pub mod youtube_runtime;
 
 pub use youtube_protocol::{
     MAX_YOUTUBE_MESSAGE_BYTES, RUSTY_YTDL_REVISION, YOUTUBE_HELPER_PROTOCOL_VERSION,
-    YoutubeBackend, YoutubeCapability, YoutubeCommand, YoutubeErrorCode, YoutubeFormat,
-    YoutubeFormatTracks, YoutubeFormatTransport, YoutubeHelperError, YoutubeRequest,
+    YoutubeBackend, YoutubeCapability, YoutubeCollectionKind, YoutubeCommand, YoutubeErrorCode,
+    YoutubeFormat, YoutubeFormatTracks, YoutubeFormatTransport, YoutubeHelperError, YoutubeRequest,
     YoutubeResponse, YoutubeResponsePayload, YoutubeSearchKind, YoutubeSessionConfig,
     YoutubeStreamPreference, select_youtube_playback_formats,
 };
