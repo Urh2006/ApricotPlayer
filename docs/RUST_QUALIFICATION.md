@@ -298,6 +298,50 @@ Verified:
 The normal workspace suite remains network-independent. The live collection
 test is ignored unless run explicitly with `APRICOT_YTDLP`.
 
+## 2026-09-08: nested YouTube collection navigation
+
+Implementation: `YoutubeCollectionController`, collection-owned playback
+sequences, and the native Win32 playlist/channel result views.
+
+Verified:
+
+- playlist and channel collections are pushed onto an independent navigation
+  stack, so opening a nested playlist does not replace its parent collection or
+  the original search session;
+- Enter on a playlist opens its videos, while Enter on a channel opens one
+  accessible choice dialog ordered Videos, Channel playlists, Live streams,
+  and Popular videos;
+- the channel dialog initially focuses its four-item list, not the Open or
+  Cancel button;
+- a packaged live search for `OpenAI` opened a 19-item playlist search, entered
+  The OpenAI Podcast, displayed 19 videos, and returned to the original
+  playlist at selection zero;
+- the same packaged build opened the official OpenAI channel's video tab with
+  20 video rows, opened its channel-playlist tab, entered the nested ChatGPT
+  Images playlist, and returned one level at a time without losing the parent
+  selection;
+- closing the player after opening the third nested playlist video restored the
+  same collection with selection two and the same selected title;
+- selecting the final row of a 20-item channel-playlist page loaded 20 more
+  rows cumulatively while retaining selection 19;
+- playback sequences bind to the active collection generation, and a Next at
+  the loaded boundary requests another cumulative page before selecting the
+  exact next playable item;
+- selecting the optional Rust backend still routes unsupported channel tabs to
+  yt-dlp explicitly, while playlist collections remain available through the
+  Rust helper.
+
+Automated results: app 106 tests, core 33 tests, media 8 tests, platform 24
+tests plus one ignored live test, playback 16 tests, storage 47 tests, Windows
+UI 15 tests, updater 2 tests, YouTube helper 6 tests, and full workspace Clippy
+with warnings denied.
+
+The packaged controls were inspected through Win32 and Windows UI Automation
+because native-app computer use was unavailable in this task. Still required:
+physical Escape/Enter, NVDA and Narrator announcement checks; collection-aware
+context menus and whole-playlist Play/Shuffle actions; full-channel Popular
+ordering; and production metadata hydration for upload times.
+
 ## 2026-09-06: Python-compatible user playlists
 
 Implementation: `UserPlaylistFile`, `UserPlaylistController`, application-owned

@@ -28,7 +28,9 @@ use crate::{
     PlaylistCreateOutcome, QueueAddOutcome, QueueBatchAddOutcome, SearchApplyOutcome,
     SearchSession, SearchSessionError, SearchWork, SessionToggle, SettingsController,
     SettingsControllerError, SettingsScreenModel, UserPlaylistController,
-    UserPlaylistControllerError, YoutubeSearchKind, embedded_catalog,
+    UserPlaylistControllerError, YoutubeCollectionApplyOutcome, YoutubeCollectionError,
+    YoutubeCollectionKind, YoutubeCollectionSession, YoutubeCollectionWork, YoutubeSearchKind,
+    embedded_catalog,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -44,6 +46,7 @@ pub enum PlayerNavigationOutcome {
         origin: PlayerNavigationOrigin,
     },
     LoadingMore(SearchWork),
+    LoadingMoreCollection(YoutubeCollectionWork),
     Unavailable,
 }
 
@@ -569,6 +572,7 @@ impl Application {
 
     pub fn navigate_main_menu(&mut self) {
         self.state.navigation.reset();
+        self.state.youtube_collections.clear();
     }
 
     /// Starts a `YouTube` search using the current result-limit setting.
@@ -581,6 +585,7 @@ impl Application {
         query: &str,
         kind: YoutubeSearchKind,
     ) -> Result<SearchWork, SearchSessionError> {
+        self.state.youtube_collections.clear();
         self.state
             .search
             .begin(query, kind, self.settings.current().results_limit)
@@ -640,6 +645,90 @@ impl Application {
                 .set(source, self.state.search.items(), &item);
         }
         Some(item)
+    }
+
+    pub fn youtube_collection(&self) -> Option<&YoutubeCollectionSession> {
+        self.state.youtube_collections.current()
+    }
+
+    /// Pushes a nested `YouTube` collection without modifying its parent search
+    /// or collection session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the collection URL is empty.
+    pub fn begin_youtube_collection(
+        &mut self,
+        title: impl Into<String>,
+        url: impl Into<String>,
+        kind: YoutubeCollectionKind,
+    ) -> Result<YoutubeCollectionWork, YoutubeCollectionError> {
+        self.state.youtube_collections.begin(
+            title,
+            url,
+            kind,
+            self.settings.current().results_limit,
+        )
+    }
+
+    pub fn request_more_youtube_collection_results(&mut self) -> Option<YoutubeCollectionWork> {
+        self.state.youtube_collections.request_more()
+    }
+
+    pub fn cancel_pending_youtube_collection(&mut self) -> bool {
+        self.state.youtube_collections.cancel_pending()
+    }
+
+    pub fn apply_youtube_collection_results(
+        &mut self,
+        generation: u64,
+        items: Vec<MediaItem>,
+    ) -> YoutubeCollectionApplyOutcome {
+        let outcome = self
+            .state
+            .youtube_collections
+            .apply_results(generation, items);
+        if matches!(
+            outcome,
+            YoutubeCollectionApplyOutcome::Replaced
+                | YoutubeCollectionApplyOutcome::Appended { .. }
+        ) {
+            let source = PlaybackSequenceSource::YoutubeCollection { generation };
+            if let Some(collection) = self.state.youtube_collections.current() {
+                let _ = self.state.player_sequence.sync(source, collection.items());
+            }
+        }
+        outcome
+    }
+
+    pub fn fail_youtube_collection(&mut self, generation: u64, message: impl Into<String>) -> bool {
+        self.state.youtube_collections.fail(generation, message)
+    }
+
+    pub fn select_youtube_collection_result(&mut self, index: usize) -> bool {
+        self.state.youtube_collections.select(index)
+    }
+
+    pub fn prepare_youtube_collection_playback(&mut self, index: usize) -> Option<MediaItem> {
+        if !self.state.youtube_collections.select(index) {
+            return None;
+        }
+        let collection = self.state.youtube_collections.current()?;
+        let item = collection.selected_item()?.clone();
+        if item.is_playable() {
+            let source = PlaybackSequenceSource::YoutubeCollection {
+                generation: collection.generation(),
+            };
+            let _ = self
+                .state
+                .player_sequence
+                .set(source, collection.items(), &item);
+        }
+        Some(item)
+    }
+
+    pub fn pop_youtube_collection(&mut self) -> bool {
+        self.state.youtube_collections.pop().is_some()
     }
 
     pub fn load_local_folder(&mut self, path: PathBuf, items: Vec<MediaItem>) {
@@ -724,6 +813,21 @@ impl Application {
             && let Some(work) = self.state.search.request_more()
         {
             return PlayerNavigationOutcome::LoadingMore(work);
+        }
+        if delta > 0
+            && self
+                .state
+                .youtube_collections
+                .current()
+                .is_some_and(|collection| {
+                    self.state.player_sequence.source()
+                        == Some(PlaybackSequenceSource::YoutubeCollection {
+                            generation: collection.generation(),
+                        })
+                })
+            && let Some(work) = self.state.youtube_collections.request_more()
+        {
+            return PlayerNavigationOutcome::LoadingMoreCollection(work);
         }
         if delta > 0
             && let Some(item) = self.state.playback_queue.queue().front()
@@ -1621,7 +1725,8 @@ mod tests {
     use super::{Application, PlayerNavigationOrigin, PlayerNavigationOutcome};
     use crate::{
         ActionFinderContext, ActivationRequest, MainMenuAvailability, PlaylistAddOutcome,
-        PlaylistCreateOutcome, SessionToggle, SettingsController, YoutubeSearchKind,
+        PlaylistCreateOutcome, SessionToggle, SettingsController, YoutubeCollectionKind,
+        YoutubeSearchKind,
     };
 
     fn application(root: &Path) -> Application {
@@ -2023,6 +2128,57 @@ mod tests {
                 origin: PlayerNavigationOrigin::Sequence,
             }
         );
+    }
+
+    #[test]
+    fn youtube_collection_sequence_extends_without_losing_its_parent_search() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        let search = app
+            .begin_youtube_search("query", YoutubeSearchKind::Playlist)
+            .expect("search");
+        let playlist = youtube_item(7, MediaKind::Playlist);
+        app.apply_search_results(search.generation, vec![playlist.clone()], None);
+        assert!(app.select_search_result(0));
+
+        let initial = app
+            .begin_youtube_collection(
+                playlist.title.clone(),
+                playlist.url.as_ref().expect("playlist URL").to_string(),
+                YoutubeCollectionKind::PlaylistVideos,
+            )
+            .expect("collection");
+        let first_page: Vec<_> = (0..20)
+            .map(|index| youtube_item(index, MediaKind::Video))
+            .collect();
+        app.apply_youtube_collection_results(initial.generation, first_page.clone());
+        let current = app
+            .prepare_youtube_collection_playback(19)
+            .expect("last visible video");
+        app.start_player_item(current);
+
+        let more = match app.request_relative_player_item(1) {
+            PlayerNavigationOutcome::LoadingMoreCollection(work) => work,
+            other => panic!("expected collection page, got {other:?}"),
+        };
+        assert_eq!(more.limit, 40);
+        let mut cumulative = first_page;
+        cumulative.extend((20..40).map(|index| youtube_item(index, MediaKind::Video)));
+        app.apply_youtube_collection_results(more.generation, cumulative);
+        assert_eq!(
+            app.request_relative_player_item(1),
+            PlayerNavigationOutcome::Item {
+                item: Box::new(youtube_item(20, MediaKind::Video)),
+                origin: PlayerNavigationOrigin::Sequence,
+            }
+        );
+
+        assert!(app.pop_youtube_collection());
+        assert_eq!(
+            app.search_session().items(),
+            std::slice::from_ref(&playlist)
+        );
+        assert_eq!(app.search_session().selected_index(), 0);
     }
 
     #[test]

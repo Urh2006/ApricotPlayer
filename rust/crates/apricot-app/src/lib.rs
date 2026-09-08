@@ -21,9 +21,10 @@ pub mod settings_controller;
 pub mod settings_model;
 pub mod settings_session;
 pub mod user_playlist_controller;
+pub mod youtube_collection;
 
 use apricot_core::NavigationStack;
-pub use apricot_media::YoutubeSearchKind;
+pub use apricot_media::{YoutubeCollectionKind, YoutubeSearchKind};
 pub use apricot_storage::AppNotification;
 
 pub use action_finder::{ActionFinderContext, ActionFinderItem, ActionFinderModel};
@@ -70,6 +71,11 @@ pub use settings_session::{SettingsDraft, SettingsDraftError};
 pub use user_playlist_controller::{
     PlaylistAddOutcome, PlaylistCreateOutcome, UserPlaylistController, UserPlaylistControllerError,
 };
+pub use youtube_collection::{
+    YoutubeCollectionApplyOutcome, YoutubeCollectionController, YoutubeCollectionError,
+    YoutubeCollectionPhase, YoutubeCollectionSession, YoutubeCollectionWork,
+    YoutubeCollectionWorkKind,
+};
 
 #[derive(Debug, Default)]
 pub struct AppState {
@@ -86,5 +92,6 @@ pub struct AppState {
     pub player_sequence: PlaybackSequence,
     pub search: SearchSession,
     pub user_playlists: UserPlaylistController,
+    pub youtube_collections: YoutubeCollectionController,
 }
 pub use bookmark_controller::{BookmarkController, BookmarkControllerError};

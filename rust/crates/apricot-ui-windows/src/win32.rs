@@ -22,7 +22,8 @@ use crate::{
 use apricot_app::{
     ActionFinderContext, ActivationRequest, Application, MainMenuModel, PlaybackPhase,
     PlayerNavigationOutcome, SearchApplyOutcome, SearchWork, SearchWorkKind, SessionToggle,
-    YoutubeSearchKind,
+    YoutubeCollectionApplyOutcome, YoutubeCollectionKind, YoutubeCollectionPhase,
+    YoutubeCollectionWork, YoutubeCollectionWorkKind, YoutubeSearchKind,
 };
 use apricot_core::{
     Route, RouteFrame,
@@ -157,6 +158,7 @@ enum MainView {
     Search,
     DirectLink,
     Results,
+    YoutubeCollection,
     LocalFolder,
     Favorites,
     History,
@@ -191,6 +193,21 @@ struct PendingYoutubeResolve {
     session_shuffle: Option<bool>,
     preserve_sequence: bool,
     start_position_seconds: Option<f64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum PendingYoutubeListWork {
+    Search(SearchWork),
+    Collection(YoutubeCollectionWork),
+}
+
+impl PendingYoutubeListWork {
+    const fn token(&self) -> u64 {
+        match self {
+            Self::Search(work) => work.generation,
+            Self::Collection(work) => work.generation,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -244,7 +261,7 @@ struct WindowState {
     taskbar_created_message: u32,
     view: MainView,
     youtube_search: YoutubeSearchService,
-    pending_youtube_work: Option<SearchWork>,
+    pending_youtube_work: Option<PendingYoutubeListWork>,
     pending_youtube_resolve: Option<PendingYoutubeResolve>,
     pending_player_navigation: Option<i32>,
     pending_queued_start: Option<PendingQueuedStart>,
@@ -1052,7 +1069,7 @@ fn list_context_entries(view: MainView) -> Option<&'static [(usize, &'static str
             (ID_CONTEXT_COPY_LOCATION, "copy_url"),
             (ID_CONTEXT_CLEAR_NOTIFICATIONS, "clear_notifications"),
         ]),
-        MainView::Results => Some(&[
+        MainView::Results | MainView::YoutubeCollection => Some(&[
             (ID_CONTEXT_PLAY, "play"),
             (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
             (ID_CONTEXT_REMOVE_FROM_QUEUE, "remove_from_playback_queue"),
@@ -1087,6 +1104,7 @@ unsafe fn show_context_menu_for_active_view(window: HWND) {
     match state(window).map(|state| state.view) {
         Some(
             MainView::Results
+            | MainView::YoutubeCollection
             | MainView::LocalFolder
             | MainView::Favorites
             | MainView::History
@@ -1482,6 +1500,7 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
         state.view,
         MainView::MainMenu
             | MainView::Results
+            | MainView::YoutubeCollection
             | MainView::LocalFolder
             | MainView::Favorites
             | MainView::History
@@ -1552,6 +1571,7 @@ const fn view_has_back_button(view: MainView) -> bool {
         MainView::Search
             | MainView::DirectLink
             | MainView::Results
+            | MainView::YoutubeCollection
             | MainView::LocalFolder
             | MainView::Favorites
             | MainView::History
@@ -1766,6 +1786,7 @@ unsafe fn activate_selection(window: HWND) {
     match state(window).map(|state| state.view) {
         Some(MainView::MainMenu) => activate_main_menu_selection(window),
         Some(MainView::Results) => activate_result_selection(window),
+        Some(MainView::YoutubeCollection) => activate_youtube_collection_selection(window),
         Some(MainView::LocalFolder) => activate_local_folder_selection(window),
         Some(MainView::Favorites | MainView::History) => activate_collection_selection(window),
         Some(MainView::NotificationCenter) => activate_notification_selection(window),
@@ -1859,24 +1880,129 @@ unsafe fn activate_result_selection(window: HWND) {
     let Some(item) = state.application.prepare_search_playback(index) else {
         return;
     };
-    if matches!(
-        item.kind,
-        apricot_core::MediaKind::Playlist | apricot_core::MediaKind::Channel
-    ) {
-        let message = wide(&format!(
-            "{} is ready, but collection navigation is not implemented in this internal build yet.",
-            item.title
-        ));
-        let _ = MessageBoxW(
-            Some(window),
-            PCWSTR(message.as_ptr()),
-            w!("ApricotPlayer 2 Beta"),
-            MB_OK | MB_ICONINFORMATION,
-        );
-        let _ = SetFocus(Some(state.list));
+    activate_youtube_item(window, item);
+}
+
+unsafe fn activate_youtube_collection_selection(window: HWND) {
+    let Some(state) = state_mut(window) else {
         return;
+    };
+    let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
+    let Ok(index) = usize::try_from(selected) else {
+        return;
+    };
+    let Some(item) = state.application.prepare_youtube_collection_playback(index) else {
+        return;
+    };
+    activate_youtube_item(window, item);
+}
+
+unsafe fn activate_youtube_item(window: HWND, item: apricot_core::MediaItem) {
+    match item.kind {
+        apricot_core::MediaKind::Channel => show_channel_options(window, item),
+        apricot_core::MediaKind::Playlist => {
+            open_youtube_collection(window, item, YoutubeCollectionKind::PlaylistVideos);
+        }
+        _ => start_sequence_media_item(window, item, None),
     }
-    start_sequence_media_item(window, item, None);
+}
+
+unsafe fn show_channel_options(window: HWND, item: apricot_core::MediaItem) {
+    let Some((title, prompt, choices, ok, cancel)) = state_mut(window).map(|state| {
+        state.modal_open = true;
+        let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+        (
+            catalog.text("channel_options").to_owned(),
+            item.title.clone(),
+            [
+                "channel_videos",
+                "channel_playlists",
+                "channel_live_streams",
+                "channel_popular",
+            ]
+            .map(|key| catalog.text(key).to_owned()),
+            catalog.text("open").to_owned(),
+            catalog.text("cancel").to_owned(),
+        )
+    }) else {
+        return;
+    };
+    let selection =
+        crate::playlist_dialog_win32::choose(window, &title, &prompt, &choices, &ok, &cancel);
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
+    resume_deferred_window_work(window);
+    let kind = match selection {
+        Ok(Some(0)) => YoutubeCollectionKind::ChannelVideos,
+        Ok(Some(1)) => YoutubeCollectionKind::ChannelPlaylists,
+        Ok(Some(2)) => YoutubeCollectionKind::ChannelStreams,
+        Ok(Some(3)) => YoutubeCollectionKind::ChannelPopular,
+        Ok(Some(_) | None) => {
+            if let Some(state) = state(window) {
+                let _ = SetFocus(Some(state.list));
+            }
+            return;
+        }
+        Err(error) => {
+            show_error_message(window, &format!("Channel options did not open: {error}"));
+            return;
+        }
+    };
+    open_youtube_collection(window, item, kind);
+}
+
+unsafe fn open_youtube_collection(
+    window: HWND,
+    item: apricot_core::MediaItem,
+    kind: YoutubeCollectionKind,
+) {
+    let Some(url) = item.url.as_ref().map(ToString::to_string) else {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "no_selection"),
+                true,
+            );
+        }
+        return;
+    };
+    let work = {
+        let Some(state) = state_mut(window) else {
+            return;
+        };
+        let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+        let title = match kind {
+            YoutubeCollectionKind::PlaylistVideos => item.title,
+            YoutubeCollectionKind::ChannelVideos => {
+                format!("{} - {}", item.title, catalog.text("channel_videos"))
+            }
+            YoutubeCollectionKind::ChannelPlaylists => {
+                format!("{} - {}", item.title, catalog.text("channel_playlists"))
+            }
+            YoutubeCollectionKind::ChannelStreams => {
+                format!("{} - {}", item.title, catalog.text("channel_live_streams"))
+            }
+            YoutubeCollectionKind::ChannelPopular => {
+                format!("{} - {}", item.title, catalog.text("channel_popular"))
+            }
+        };
+        match state
+            .application
+            .begin_youtube_collection(title.clone(), url, kind)
+        {
+            Ok(work) => {
+                let message = catalog.text("loading_playlist").replace("{title}", &title);
+                set_status(state, &message, true);
+                work
+            }
+            Err(error) => {
+                set_status(state, &error.to_string(), true);
+                return;
+            }
+        }
+    };
+    start_youtube_collection_work(window, work);
 }
 
 unsafe fn activate_local_folder_selection(window: HWND) {
@@ -2612,8 +2738,12 @@ unsafe fn navigate_back(window: HWND) {
     };
     cancel_youtube_work(window, state);
     cancel_local_folder_scan(window, state);
+    let leaving_youtube_collection = state.view == MainView::YoutubeCollection;
     if state.view == MainView::Player {
         close_player_runtime(window, state);
+    }
+    if leaving_youtube_collection {
+        let _ = state.application.pop_youtube_collection();
     }
     let frame = state
         .application
@@ -2640,6 +2770,11 @@ unsafe fn navigate_back(window: HWND) {
         Route::Results => {
             state.view = MainView::Results;
             refresh_results(state, true);
+            layout_controls_state(window, state);
+        }
+        Route::ChannelResults | Route::PlaylistResults => {
+            state.view = MainView::YoutubeCollection;
+            refresh_youtube_collection(state, true);
             layout_controls_state(window, state);
         }
         Route::LocalFolder => {
@@ -2768,30 +2903,24 @@ unsafe fn start_youtube_work(window: HWND, work: SearchWork) {
         return;
     };
     let backend = YoutubeBackend::from_setting_value(&state.application.settings().youtube_backend);
+    let generation = work.generation;
+    let query = work.query.clone();
+    let kind = work.kind;
+    let limit = work.limit;
+    state.pending_youtube_work = Some(PendingYoutubeListWork::Search(work));
     let Some(components) = std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(|parent| parent.join("components")))
     else {
-        finish_youtube_error_state(
-            window,
-            state,
-            work.generation,
-            "Application path is unavailable",
-        );
+        finish_youtube_error_state(window, state, generation, "Application path is unavailable");
         return;
     };
     let config = youtube_session_config(state);
-    match state.youtube_search.start(
-        backend,
-        &components,
-        config,
-        work.generation,
-        work.query.clone(),
-        work.kind,
-        work.limit,
-    ) {
+    match state
+        .youtube_search
+        .start(backend, &components, config, generation, query, kind, limit)
+    {
         Ok(()) => {
-            state.pending_youtube_work = Some(work);
             let _ = SetTimer(
                 Some(window),
                 YOUTUBE_TIMER_ID,
@@ -2800,8 +2929,89 @@ unsafe fn start_youtube_work(window: HWND, work: SearchWork) {
             );
         }
         Err(error) => {
-            finish_youtube_error_state(window, state, work.generation, &error.to_string());
+            finish_youtube_error_state(window, state, generation, &error.to_string());
         }
+    }
+}
+
+unsafe fn start_youtube_collection_work(window: HWND, work: YoutubeCollectionWork) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let selected_backend =
+        YoutubeBackend::from_setting_value(&state.application.settings().youtube_backend);
+    let backend = collection_backend(selected_backend, work.kind);
+    let Some(components) = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.join("components")))
+    else {
+        report_youtube_collection_start_error(
+            window,
+            state,
+            &work,
+            "Application path is unavailable",
+        );
+        return;
+    };
+    let config = youtube_session_config(state);
+    match state.youtube_search.start_collection(
+        backend,
+        &components,
+        config,
+        work.generation,
+        work.url.clone(),
+        work.kind,
+        work.limit,
+    ) {
+        Ok(()) => {
+            state.pending_youtube_work = Some(PendingYoutubeListWork::Collection(work));
+            let route = if state
+                .application
+                .youtube_collection()
+                .is_some_and(|collection| {
+                    collection.kind() == YoutubeCollectionKind::PlaylistVideos
+                }) {
+                Route::PlaylistResults
+            } else {
+                Route::ChannelResults
+            };
+            state.application.navigate_to(RouteFrame::new(route));
+            state.view = MainView::YoutubeCollection;
+            refresh_youtube_collection(state, true);
+            layout_controls_state(window, state);
+            let _ = SetTimer(
+                Some(window),
+                YOUTUBE_TIMER_ID,
+                YOUTUBE_TIMER_INTERVAL_MS,
+                None,
+            );
+        }
+        Err(error) => {
+            report_youtube_collection_start_error(window, state, &work, &error.to_string());
+        }
+    }
+}
+
+unsafe fn report_youtube_collection_start_error(
+    window: HWND,
+    state: &mut WindowState,
+    work: &YoutubeCollectionWork,
+    message: &str,
+) {
+    let _ = state
+        .application
+        .fail_youtube_collection(work.generation, message);
+    let _ = state.application.pop_youtube_collection();
+    set_status(state, message, true);
+    show_error_message(window, message);
+    let _ = SetFocus(Some(active_primary_control(state)));
+}
+
+fn collection_backend(selected: YoutubeBackend, kind: YoutubeCollectionKind) -> YoutubeBackend {
+    if selected == YoutubeBackend::RustyYtdl && kind != YoutubeCollectionKind::PlaylistVideos {
+        YoutubeBackend::YtDlp
+    } else {
+        selected
     }
 }
 
@@ -2830,7 +3040,7 @@ unsafe fn poll_youtube_runtime(window: HWND) {
                                 state
                                     .pending_youtube_work
                                     .as_ref()
-                                    .map(|work| work.generation)
+                                    .map(PendingYoutubeListWork::token)
                             })
                     })
                     .unwrap_or_default();
@@ -2843,7 +3053,7 @@ unsafe fn poll_youtube_runtime(window: HWND) {
                 token: generation,
                 items,
                 continuation,
-            } => finish_youtube_search(window, generation, items, continuation),
+            } => finish_youtube_list(window, generation, items, continuation),
             YoutubeSearchServiceUpdate::Resolved {
                 token,
                 item,
@@ -2957,6 +3167,30 @@ unsafe fn poll_playback_runtime(window: HWND) {
     }
 }
 
+unsafe fn finish_youtube_list(
+    window: HWND,
+    generation: u64,
+    items: Vec<apricot_core::MediaItem>,
+    continuation: Option<String>,
+) {
+    let pending = state(window).and_then(|state| {
+        state
+            .pending_youtube_work
+            .as_ref()
+            .filter(|work| work.token() == generation)
+            .cloned()
+    });
+    match pending {
+        Some(PendingYoutubeListWork::Search(_)) => {
+            finish_youtube_search(window, generation, items, continuation);
+        }
+        Some(PendingYoutubeListWork::Collection(_)) => {
+            finish_youtube_collection(window, generation, items);
+        }
+        None => {}
+    }
+}
+
 unsafe fn finish_youtube_search(
     window: HWND,
     generation: u64,
@@ -2969,7 +3203,10 @@ unsafe fn finish_youtube_search(
     let work_kind = state
         .pending_youtube_work
         .as_ref()
-        .map(|work| work.work_kind);
+        .and_then(|work| match work {
+            PendingYoutubeListWork::Search(work) => Some(work.work_kind),
+            PendingYoutubeListWork::Collection(_) => None,
+        });
     let outcome = state
         .application
         .apply_search_results(generation, items, continuation);
@@ -2996,7 +3233,63 @@ unsafe fn finish_youtube_search(
     }
 }
 
+unsafe fn finish_youtube_collection(
+    window: HWND,
+    generation: u64,
+    items: Vec<apricot_core::MediaItem>,
+) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let work = state
+        .pending_youtube_work
+        .as_ref()
+        .and_then(|work| match work {
+            PendingYoutubeListWork::Collection(work) => Some(work.clone()),
+            PendingYoutubeListWork::Search(_) => None,
+        });
+    let outcome = state
+        .application
+        .apply_youtube_collection_results(generation, items);
+    state.pending_youtube_work = None;
+    stop_youtube_timer(window);
+    match (work, outcome) {
+        (
+            Some(YoutubeCollectionWork {
+                work_kind: YoutubeCollectionWorkKind::Initial,
+                ..
+            }),
+            YoutubeCollectionApplyOutcome::Replaced,
+        ) => {
+            state.view = MainView::YoutubeCollection;
+            refresh_youtube_collection(state, true);
+            layout_controls_state(window, state);
+        }
+        (
+            Some(YoutubeCollectionWork {
+                work_kind: YoutubeCollectionWorkKind::More,
+                ..
+            }),
+            YoutubeCollectionApplyOutcome::Appended { added },
+        ) => append_youtube_collection_results(state, added),
+        _ => {}
+    }
+    let continue_navigation = state.pending_player_navigation.take();
+    if let Some(delta) = continue_navigation {
+        navigate_player_relative(window, delta);
+    }
+}
+
 unsafe fn finish_youtube_error(window: HWND, generation: u64, message: &str) {
+    let return_from_collection = state(window).is_some_and(|state| {
+        matches!(
+            state.pending_youtube_work.as_ref(),
+            Some(PendingYoutubeListWork::Collection(YoutubeCollectionWork {
+                work_kind: YoutubeCollectionWorkKind::Initial,
+                ..
+            }))
+        )
+    });
     let direct_fallback = {
         let Some(state) = state_mut(window) else {
             return;
@@ -3047,6 +3340,10 @@ unsafe fn finish_youtube_error(window: HWND, generation: u64, message: &str) {
             None
         }
     };
+    if return_from_collection {
+        navigate_back(window);
+        return;
+    }
     if let Some((item, session_shuffle, start_position_seconds)) = direct_fallback {
         start_player_at(window, item, session_shuffle, start_position_seconds);
     }
@@ -3059,11 +3356,20 @@ unsafe fn finish_youtube_error_state(
     message: &str,
 ) {
     state.pending_queued_start = None;
-    let was_initial = state
-        .pending_youtube_work
-        .as_ref()
-        .is_none_or(|work| work.work_kind == SearchWorkKind::Initial);
-    let _ = state.application.fail_search(generation, message);
+    let pending = state.pending_youtube_work.clone();
+    let (was_initial, restore_search_focus) = match pending.as_ref() {
+        Some(PendingYoutubeListWork::Search(work)) => {
+            let _ = state.application.fail_search(generation, message);
+            (work.work_kind == SearchWorkKind::Initial, true)
+        }
+        Some(PendingYoutubeListWork::Collection(work)) => {
+            let _ = state
+                .application
+                .fail_youtube_collection(generation, message);
+            (work.work_kind == YoutubeCollectionWorkKind::Initial, false)
+        }
+        None => (true, false),
+    };
     state.pending_youtube_work = None;
     state.pending_player_navigation = None;
     stop_youtube_timer(window);
@@ -3077,7 +3383,11 @@ unsafe fn finish_youtube_error_state(
             w!("ApricotPlayer 2 Beta"),
             MB_OK | MB_ICONINFORMATION,
         );
-        let _ = SetFocus(Some(state.search_edit));
+        let _ = SetFocus(Some(if restore_search_focus {
+            state.search_edit
+        } else {
+            active_primary_control(state)
+        }));
     }
 }
 
@@ -3093,8 +3403,15 @@ unsafe fn cancel_youtube_work(window: HWND, state: &mut WindowState) {
     if state.pending_youtube_work.is_none() && state.pending_youtube_resolve.is_none() {
         return;
     }
-    if state.pending_youtube_work.is_some() {
-        let _ = state.application.cancel_pending_search();
+    if let Some(work) = state.pending_youtube_work.as_ref() {
+        match work {
+            PendingYoutubeListWork::Search(_) => {
+                let _ = state.application.cancel_pending_search();
+            }
+            PendingYoutubeListWork::Collection(_) => {
+                let _ = state.application.cancel_pending_youtube_collection();
+            }
+        }
     }
     state.pending_youtube_work = None;
     state.pending_youtube_resolve = None;
@@ -3140,20 +3457,41 @@ unsafe fn result_selection_changed(window: HWND) {
         let Some(state) = state_mut(window) else {
             return;
         };
-        if state.view != MainView::Results {
+        if !matches!(state.view, MainView::Results | MainView::YoutubeCollection) {
             return;
         }
         let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
         let Ok(index) = usize::try_from(selected) else {
             return;
         };
-        if !state.application.select_search_result(index) {
-            return;
-        }
-        if index + 1 == state.application.search_session().items().len() {
-            state.application.request_more_search_results()
+        if state.view == MainView::Results {
+            if !state.application.select_search_result(index) {
+                return;
+            }
+            if index + 1 == state.application.search_session().items().len() {
+                state
+                    .application
+                    .request_more_search_results()
+                    .map(PendingYoutubeListWork::Search)
+            } else {
+                None
+            }
         } else {
-            None
+            if !state.application.select_youtube_collection_result(index) {
+                return;
+            }
+            if state
+                .application
+                .youtube_collection()
+                .is_some_and(|collection| index + 1 == collection.items().len())
+            {
+                state
+                    .application
+                    .request_more_youtube_collection_results()
+                    .map(PendingYoutubeListWork::Collection)
+            } else {
+                None
+            }
         }
     };
     if let Some(work) = work {
@@ -3161,7 +3499,12 @@ unsafe fn result_selection_changed(window: HWND) {
             let message = catalog_text(&state.application, "loading_more_results");
             set_status(state, &message, true);
         }
-        start_youtube_work(window, work);
+        match work {
+            PendingYoutubeListWork::Search(work) => start_youtube_work(window, work),
+            PendingYoutubeListWork::Collection(work) => {
+                start_youtube_collection_work(window, work);
+            }
+        }
     }
 }
 
@@ -3237,6 +3580,49 @@ unsafe fn refresh_results(state: &mut WindowState, focus: bool) {
         let found = catalog
             .text("found")
             .replace("{count}", &items.len().to_string());
+        set_status(state, &found, true);
+    }
+    if focus {
+        let _ = SetFocus(Some(state.list));
+    }
+}
+
+unsafe fn refresh_youtube_collection(state: &mut WindowState, focus: bool) {
+    set_open_button_label(state, "open");
+    SendMessageW(state.list, LB_RESETCONTENT, None, None);
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let Some(collection) = state.application.youtube_collection() else {
+        return;
+    };
+    let accessible_name = wide(collection.title());
+    let _ = SetWindowTextW(state.list, PCWSTR(accessible_name.as_ptr()));
+    if collection.phase() == YoutubeCollectionPhase::LoadingInitial {
+        let loading = catalog
+            .text("loading_playlist")
+            .replace("{title}", collection.title());
+        add_list_string(state.list, &loading);
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
+        set_status(state, &loading, false);
+        if focus {
+            let _ = SetFocus(Some(state.list));
+        }
+        return;
+    }
+    if collection.items().is_empty() {
+        add_list_string(state.list, catalog.text("no_results"));
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
+        set_status(state, catalog.text("no_results"), true);
+    } else {
+        for item in collection.items() {
+            add_list_string(state.list, &result_label(item, &catalog));
+        }
+        let selected = collection
+            .selected_index()
+            .min(collection.items().len() - 1);
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selected)), None);
+        let found = catalog
+            .text("found")
+            .replace("{count}", &collection.items().len().to_string());
         set_status(state, &found, true);
     }
     if focus {
@@ -3585,6 +3971,29 @@ unsafe fn append_results(state: &mut WindowState, added: usize) {
     set_status(state, &loaded, true);
 }
 
+unsafe fn append_youtube_collection_results(state: &mut WindowState, added: usize) {
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let Some(collection) = state.application.youtube_collection() else {
+        return;
+    };
+    if added == 0 {
+        set_status(state, catalog.text("no_more_results"), true);
+        return;
+    }
+    let first_new = collection.items().len().saturating_sub(added);
+    for item in &collection.items()[first_new..] {
+        add_list_string(state.list, &result_label(item, &catalog));
+    }
+    let selected = collection
+        .selected_index()
+        .min(collection.items().len() - 1);
+    SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selected)), None);
+    let loaded = catalog
+        .text("search_more_loaded")
+        .replace("{count}", &collection.items().len().to_string());
+    set_status(state, &loaded, true);
+}
+
 fn result_label(
     item: &apricot_core::MediaItem,
     catalog: &apricot_core::TranslationCatalog,
@@ -3821,6 +4230,7 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
         MainView::Search | MainView::DirectLink => (ActionScope::Dialog, true),
         MainView::MainMenu
         | MainView::Results
+        | MainView::YoutubeCollection
         | MainView::LocalFolder
         | MainView::Favorites
         | MainView::History
@@ -4069,6 +4479,15 @@ unsafe fn navigate_player_relative(window: HWND, delta: i32) {
             set_status(state, &message, true);
             start_youtube_work(window, work);
         }
+        PlayerNavigationOutcome::LoadingMoreCollection(work) => {
+            let Some(state) = state_mut(window) else {
+                return;
+            };
+            state.pending_player_navigation = Some(delta);
+            let message = catalog_text(&state.application, "loading_more_results");
+            set_status(state, &message, true);
+            start_youtube_collection_work(window, work);
+        }
         PlayerNavigationOutcome::Unavailable => {
             let Some(state) = state(window) else {
                 return;
@@ -4133,6 +4552,16 @@ unsafe fn active_media_item(window: HWND) -> Option<apricot_core::MediaItem> {
             state
                 .application
                 .search_session()
+                .items()
+                .get(index)
+                .cloned()
+        }
+        MainView::YoutubeCollection => {
+            let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
+            let index = usize::try_from(selected).ok()?;
+            state
+                .application
+                .youtube_collection()?
                 .items()
                 .get(index)
                 .cloned()
@@ -6119,6 +6548,7 @@ unsafe fn open_settings(window: HWND) {
     match state.view {
         MainView::MainMenu => refresh_main_menu(state),
         MainView::Results => refresh_results(state, false),
+        MainView::YoutubeCollection => refresh_youtube_collection(state, false),
         MainView::LocalFolder => refresh_local_folder(state, false, false),
         MainView::Favorites | MainView::History => {
             refresh_media_collection(state, false, false);
@@ -6201,6 +6631,7 @@ fn active_primary_control(state: &WindowState) -> HWND {
         MainView::Search | MainView::DirectLink => state.search_edit,
         MainView::MainMenu
         | MainView::Results
+        | MainView::YoutubeCollection
         | MainView::LocalFolder
         | MainView::Favorites
         | MainView::History
@@ -6218,13 +6649,13 @@ fn wide(value: &str) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::{
-        MainView, SEEK_HOLD_DELAY_MS, SEEK_HOLD_INTERVAL_MS, controlled_repeat_timing,
-        copy_wide_array, media_resolve_backend, notification_label, resolved_playback_item,
-        view_has_back_button, view_has_collection_remove,
+        MainView, SEEK_HOLD_DELAY_MS, SEEK_HOLD_INTERVAL_MS, collection_backend,
+        controlled_repeat_timing, copy_wide_array, media_resolve_backend, notification_label,
+        resolved_playback_item, view_has_back_button, view_has_collection_remove,
     };
     use apricot_app::AppNotification;
     use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
-    use apricot_media::YoutubeBackend;
+    use apricot_media::{YoutubeBackend, YoutubeCollectionKind};
 
     #[test]
     fn tray_text_is_cleared_truncated_and_null_terminated() {
@@ -6260,6 +6691,26 @@ mod tests {
     fn notification_center_shows_back_without_a_python_incompatible_remove_button() {
         assert!(view_has_back_button(MainView::NotificationCenter));
         assert!(!view_has_collection_remove(MainView::NotificationCenter));
+    }
+
+    #[test]
+    fn youtube_collections_show_back_and_use_an_honest_backend_fallback() {
+        assert!(view_has_back_button(MainView::YoutubeCollection));
+        assert!(!view_has_collection_remove(MainView::YoutubeCollection));
+        assert_eq!(
+            collection_backend(
+                YoutubeBackend::RustyYtdl,
+                YoutubeCollectionKind::PlaylistVideos
+            ),
+            YoutubeBackend::RustyYtdl
+        );
+        assert_eq!(
+            collection_backend(
+                YoutubeBackend::RustyYtdl,
+                YoutubeCollectionKind::ChannelVideos
+            ),
+            YoutubeBackend::YtDlp
+        );
     }
 
     #[test]
