@@ -9,8 +9,9 @@ use std::{
 use apricot_core::{MediaItem, Route, RouteFrame, SettingId, SettingsSection};
 use apricot_playback::PlaybackEvent;
 use apricot_storage::{
-    Bookmark, BookmarkFile, LastPlayerSession, LastPlayerSessionFile, MediaListFile,
-    PlaybackPositionFile, PlaybackQueueFile, SettingsDocument, UserPlaylist, UserPlaylistFile,
+    AppNotification, Bookmark, BookmarkFile, LastPlayerSession, LastPlayerSessionFile,
+    MediaListFile, NotificationFile, PlaybackPositionFile, PlaybackQueueFile, SettingsDocument,
+    UserPlaylist, UserPlaylistFile,
 };
 use rand::seq::SliceRandom;
 use serde_json::{Map, Value};
@@ -20,8 +21,9 @@ use crate::{
     BookmarkController, BookmarkControllerError, CollectionAddOutcome, DEFAULT_FOLDER_BATCH_SIZE,
     EqualizerSession, LastPlayerSessionController, MainMenuAvailability, MainMenuModel,
     MediaCollectionController, MediaCollectionControllerError, MenuVisibility,
-    PlaybackPositionController, PlaybackPositionControllerError, PlaybackPositionUpdate,
-    PlaybackQueue, PlaybackQueueController, PlaybackQueueControllerError, PlaybackSequenceSource,
+    NotificationController, NotificationControllerError, PlaybackPositionController,
+    PlaybackPositionControllerError, PlaybackPositionUpdate, PlaybackQueue,
+    PlaybackQueueController, PlaybackQueueControllerError, PlaybackSequenceSource,
     PlayerScreenModel, PlayerSession, PlayerSessionDefaults, PlayerViewState, PlaylistAddOutcome,
     PlaylistCreateOutcome, QueueAddOutcome, QueueBatchAddOutcome, SearchApplyOutcome,
     SearchSession, SearchSessionError, SearchWork, SessionToggle, SettingsController,
@@ -224,6 +226,77 @@ impl Application {
     ) {
         self.state.favorites = MediaCollectionController::load(favorites, legacy_favorites);
         self.state.history = MediaCollectionController::load(history, legacy_history);
+    }
+
+    pub fn configure_notifications(
+        &mut self,
+        current: NotificationFile,
+        legacy: &NotificationFile,
+    ) {
+        self.state.notifications = NotificationController::load(current, legacy);
+    }
+
+    pub fn notifications(&self) -> &[AppNotification] {
+        self.state.notifications.notifications()
+    }
+
+    pub fn notification_load_error(&self) -> Option<&str> {
+        self.state.notifications.load_error()
+    }
+
+    /// Adds one newest-first notification and applies Python's durable bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the notification file cannot be updated.
+    pub fn add_notification(
+        &mut self,
+        notification: AppNotification,
+    ) -> Result<(), NotificationControllerError> {
+        self.state.notifications.add(notification)
+    }
+
+    /// Removes one displayed notification.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the notification file cannot be updated.
+    pub fn remove_notification(
+        &mut self,
+        index: usize,
+    ) -> Result<Option<AppNotification>, NotificationControllerError> {
+        self.state.notifications.remove(index)
+    }
+
+    /// Clears all notifications.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the notification file cannot be updated.
+    pub fn clear_notifications(&mut self) -> Result<bool, NotificationControllerError> {
+        self.state.notifications.clear()
+    }
+
+    pub fn prepare_notification_playback(&mut self, index: usize) -> Option<MediaItem> {
+        let item = self
+            .state
+            .notifications
+            .notifications()
+            .get(index)?
+            .item
+            .as_ref()?
+            .clone();
+        if !item.is_playable() {
+            return None;
+        }
+        let mut frame = self.state.navigation.current().clone();
+        frame.selected_index = index;
+        frame
+            .parameters
+            .insert("index".to_owned(), Value::from(index));
+        self.state.navigation.replace(frame);
+        self.state.player_sequence.clear();
+        Some(item)
     }
 
     /// Adds one playable item to favorites unless it is already present.
@@ -891,6 +964,7 @@ impl Application {
             }
             "favorites" => Route::Favorites,
             "history" => Route::History,
+            "notification_center" => Route::NotificationCenter,
             "direct_link" => Route::DirectLink,
             "bookmarks" => Route::Bookmarks,
             "user_playlist_items"
@@ -1539,8 +1613,8 @@ mod tests {
     };
     use apricot_playback::PlaybackEvent;
     use apricot_storage::{
-        LastPlayerSessionFile, MediaListFile, PlaybackPositionFile, SettingsDocument,
-        SettingsPaths, UserPlaylistFile,
+        AppNotification, LastPlayerSessionFile, MediaListFile, NotificationFile,
+        PlaybackPositionFile, SettingsDocument, SettingsPaths, UserPlaylistFile,
     };
     use tempfile::tempdir;
 
@@ -2044,6 +2118,51 @@ mod tests {
         };
         assert_eq!(origin, PlayerNavigationOrigin::Sequence);
         assert_eq!(item.id.0, "second");
+    }
+
+    #[test]
+    fn notification_playback_preserves_selection_and_stays_standalone() {
+        let root = tempdir().expect("temporary directory");
+        let notification_path = root.path().join("beta/notifications.json");
+        let mut app = application(root.path());
+        app.configure_notifications(
+            NotificationFile::new(&notification_path),
+            &NotificationFile::new(root.path().join("stable/notifications.json")),
+        );
+        app.add_notification(AppNotification::new(
+            "subscription_video",
+            "First",
+            "Message",
+            Some(youtube_item(1, MediaKind::Video)),
+            1.0,
+        ))
+        .expect("first notification");
+        app.add_notification(AppNotification::new(
+            "subscription_video",
+            "Second",
+            "Message",
+            Some(youtube_item(2, MediaKind::Video)),
+            2.0,
+        ))
+        .expect("second notification");
+        app.navigate_to(RouteFrame::new(Route::NotificationCenter));
+
+        let item = app
+            .prepare_notification_playback(1)
+            .expect("playable notification");
+
+        assert_eq!(item.id.0, "1");
+        assert_eq!(app.current_route(), Route::NotificationCenter);
+        assert_eq!(app.state.navigation.current().selected_index, 1);
+        assert_eq!(app.state.navigation.current().parameters["index"], 1);
+        assert_eq!(app.player_sequence_source(), None);
+        assert_eq!(
+            NotificationFile::new(notification_path)
+                .load()
+                .expect("persisted notifications")
+                .len(),
+            2
+        );
     }
 
     #[test]

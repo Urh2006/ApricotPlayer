@@ -12,8 +12,8 @@ use apricot_platform::{
     acquire_single_instance, discover_windows_beta_paths, sync_startup_registration,
 };
 use apricot_storage::{
-    BookmarkFile, LastPlayerSessionFile, MediaListFile, PlaybackPositionFile, PlaybackQueueFile,
-    SettingsDocument, SettingsPaths, UserPlaylistFile,
+    BookmarkFile, LastPlayerSessionFile, MediaListFile, NotificationFile, PlaybackPositionFile,
+    PlaybackQueueFile, SettingsDocument, SettingsPaths, UserPlaylistFile,
 };
 use apricot_updater::UpdateChannel;
 
@@ -69,6 +69,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &MediaListFile::new(paths.legacy_app_data.join("favorites.json")),
         MediaListFile::new(paths.app_data.join("history.json")),
         &MediaListFile::new(paths.legacy_app_data.join("history.json")),
+    );
+    application.configure_notifications(
+        NotificationFile::new(paths.app_data.join("notifications.json")),
+        &NotificationFile::new(paths.legacy_app_data.join("notifications.json")),
     );
     application.configure_user_playlists(
         UserPlaylistFile::new(paths.app_data.join("playlists.json")),

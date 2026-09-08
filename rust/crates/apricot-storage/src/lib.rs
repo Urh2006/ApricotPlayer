@@ -8,6 +8,7 @@ pub mod last_player_session_file;
 pub mod legacy_media;
 pub mod locales;
 pub mod media_list_file;
+pub mod notification_file;
 pub mod playback_position_file;
 pub mod playback_queue_file;
 pub mod settings;
@@ -27,6 +28,7 @@ pub use last_player_session_file::{
 pub use legacy_media::{media_item_from_python_value, media_item_to_python_value};
 pub use locales::{LocaleLoadError, load_translation_catalog};
 pub use media_list_file::{MediaListFile, MediaListFileError};
+pub use notification_file::{AppNotification, NotificationFile, NotificationFileError};
 pub use playback_position_file::{PlaybackPositionFile, PlaybackPositionFileError};
 pub use playback_queue_file::{PlaybackQueueFile, PlaybackQueueFileError};
 pub use settings::{SettingsDocument, SettingsLoadError};

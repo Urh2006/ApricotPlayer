@@ -99,6 +99,7 @@ const ID_PLAYLIST_CREATE: usize = 1018;
 const ID_PLAYLIST_PLAY_ALL: usize = 1019;
 const ID_PLAYLIST_SHUFFLE: usize = 1020;
 const ID_PLAYLIST_ADD_ALL_TO_QUEUE: usize = 1021;
+const ID_NOTIFICATION_CLEAR: usize = 1022;
 const ID_CONTEXT_PLAY: usize = 1101;
 const ID_CONTEXT_PLAY_FOLDER: usize = 1102;
 const ID_CONTEXT_SHUFFLE_FOLDER: usize = 1103;
@@ -121,6 +122,7 @@ const ID_CONTEXT_ADD_TO_PLAYLIST: usize = 1119;
 const ID_CONTEXT_REMOVE_FROM_PLAYLIST: usize = 1120;
 const ID_CONTEXT_REMOVE_PLAYLIST: usize = 1121;
 const ID_CONTEXT_ADD_PLAYLIST_TO_QUEUE: usize = 1122;
+const ID_CONTEXT_CLEAR_NOTIFICATIONS: usize = 1123;
 const WM_PROCESS_ACTIVATION: u32 = WM_APP + 1;
 const WM_TRAY_ICON: u32 = WM_APP + 2;
 const YOUTUBE_TIMER_ID: usize = 1;
@@ -158,6 +160,7 @@ enum MainView {
     LocalFolder,
     Favorites,
     History,
+    NotificationCenter,
     UserPlaylists,
     UserPlaylistItems,
     Player,
@@ -223,6 +226,7 @@ struct WindowState {
     direct_copy_stream: HWND,
     collection_remove: HWND,
     history_clear: HWND,
+    notification_clear: HWND,
     playlist_create: HWND,
     playlist_play_all: HWND,
     playlist_shuffle: HWND,
@@ -472,6 +476,8 @@ unsafe fn handle_window_command(window: HWND, wparam: WPARAM) {
         remove_selected_collection_item(window);
     } else if command == ID_HISTORY_CLEAR {
         clear_history(window);
+    } else if command == ID_NOTIFICATION_CLEAR {
+        clear_notifications(window);
     } else if command == ID_PLAYLIST_CREATE {
         create_user_playlist(window, None);
     } else if command == ID_PLAYLIST_PLAY_ALL {
@@ -716,6 +722,16 @@ unsafe fn create_controls(
         WINDOW_EX_STYLE::default(),
         ID_HISTORY_CLEAR,
     )?;
+    let notification_clear_text = wide(catalog.text("clear_notifications"));
+    let notification_clear = create_control(
+        parent,
+        instance,
+        w!("BUTTON"),
+        PCWSTR(notification_clear_text.as_ptr()),
+        WS_CHILD | WS_TABSTOP,
+        WINDOW_EX_STYLE::default(),
+        ID_NOTIFICATION_CLEAR,
+    )?;
     let playlist_create_text = wide(catalog.text("create_playlist"));
     let playlist_create = create_control(
         parent,
@@ -779,6 +795,7 @@ unsafe fn create_controls(
         direct_copy_stream,
         collection_remove,
         history_clear,
+        notification_clear,
         playlist_create,
         playlist_play_all,
         playlist_shuffle,
@@ -806,6 +823,7 @@ unsafe fn create_controls(
         direct_copy_stream,
         collection_remove,
         history_clear,
+        notification_clear,
         playlist_create,
         playlist_play_all,
         playlist_shuffle,
@@ -991,6 +1009,7 @@ unsafe fn show_list_context_menu(window: HWND, location: LPARAM) {
             ID_CONTEXT_REMOVE_FROM_PLAYLIST => remove_active_item_from_user_playlist(window),
             ID_CONTEXT_REMOVE_PLAYLIST => remove_selected_user_playlist(window),
             ID_CONTEXT_ADD_PLAYLIST_TO_QUEUE => add_current_user_playlist_to_queue(window),
+            ID_CONTEXT_CLEAR_NOTIFICATIONS => clear_notifications(window),
             _ => {}
         }
     }
@@ -1027,6 +1046,11 @@ fn list_context_entries(view: MainView) -> Option<&'static [(usize, &'static str
             (ID_CONTEXT_COLLECTION_REMOVE, "remove_history_item"),
             (ID_CONTEXT_HISTORY_CLEAR, "clear_history"),
             (ID_CONTEXT_ADD_TO_PLAYLIST, "add_to_playlist"),
+        ]),
+        MainView::NotificationCenter => Some(&[
+            (ID_CONTEXT_PLAY, "play"),
+            (ID_CONTEXT_COPY_LOCATION, "copy_url"),
+            (ID_CONTEXT_CLEAR_NOTIFICATIONS, "clear_notifications"),
         ]),
         MainView::Results => Some(&[
             (ID_CONTEXT_PLAY, "play"),
@@ -1066,6 +1090,7 @@ unsafe fn show_context_menu_for_active_view(window: HWND) {
             | MainView::LocalFolder
             | MainView::Favorites
             | MainView::History
+            | MainView::NotificationCenter
             | MainView::UserPlaylists
             | MainView::UserPlaylistItems,
         ) => {
@@ -1292,6 +1317,7 @@ unsafe fn layout_bottom_controls(
     let direct_link = state.view == MainView::DirectLink;
     let favorites = state.view == MainView::Favorites;
     let history = state.view == MainView::History;
+    let notification_center = state.view == MainView::NotificationCenter;
     let user_playlists = state.view == MainView::UserPlaylists;
     let user_playlist_items = state.view == MainView::UserPlaylistItems;
     let first_button_y = if local_folder {
@@ -1372,6 +1398,14 @@ unsafe fn layout_bottom_controls(
             vec![state.back, state.open, state.collection_remove]
         };
         layout_button_row(&controls, width, first_button_y, margin, button_height);
+    } else if notification_center {
+        layout_button_row(
+            &[state.back, state.open, state.notification_clear],
+            width,
+            first_button_y,
+            margin,
+            button_height,
+        );
     } else if user_playlists {
         layout_button_row(
             &[
@@ -1451,6 +1485,7 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
             | MainView::LocalFolder
             | MainView::Favorites
             | MainView::History
+            | MainView::NotificationCenter
             | MainView::UserPlaylists
             | MainView::UserPlaylistItems
     );
@@ -1463,24 +1498,8 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
             .user_playlists()
             .get(state.current_user_playlist_index)
             .is_some_and(|playlist| !playlist.items.is_empty());
-    let collection_visible = matches!(
-        state.view,
-        MainView::Favorites
-            | MainView::History
-            | MainView::UserPlaylists
-            | MainView::UserPlaylistItems
-    ) && playlist_items_available;
-    let back_visible = matches!(
-        state.view,
-        MainView::Search
-            | MainView::DirectLink
-            | MainView::Results
-            | MainView::LocalFolder
-            | MainView::Favorites
-            | MainView::History
-            | MainView::UserPlaylists
-            | MainView::UserPlaylistItems
-    );
+    let collection_visible = view_has_collection_remove(state.view) && playlist_items_available;
+    let back_visible = view_has_back_button(state.view);
     let open_visible = list_visible && playlist_items_available;
     let folder_visible = state.view == MainView::LocalFolder;
     for (control, visible) in [
@@ -1502,6 +1521,10 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
         (state.direct_copy_stream, direct_link_visible),
         (state.collection_remove, collection_visible),
         (state.history_clear, state.view == MainView::History),
+        (
+            state.notification_clear,
+            state.view == MainView::NotificationCenter,
+        ),
         (state.playlist_create, state.view == MainView::UserPlaylists),
         (
             state.playlist_play_all,
@@ -1521,6 +1544,31 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
     state
         .player_controls
         .set_visible(state.view == MainView::Player);
+}
+
+const fn view_has_back_button(view: MainView) -> bool {
+    matches!(
+        view,
+        MainView::Search
+            | MainView::DirectLink
+            | MainView::Results
+            | MainView::LocalFolder
+            | MainView::Favorites
+            | MainView::History
+            | MainView::NotificationCenter
+            | MainView::UserPlaylists
+            | MainView::UserPlaylistItems
+    )
+}
+
+const fn view_has_collection_remove(view: MainView) -> bool {
+    matches!(
+        view,
+        MainView::Favorites
+            | MainView::History
+            | MainView::UserPlaylists
+            | MainView::UserPlaylistItems
+    )
 }
 
 unsafe fn add_tray_icon(window: HWND) -> bool {
@@ -1720,6 +1768,7 @@ unsafe fn activate_selection(window: HWND) {
         Some(MainView::Results) => activate_result_selection(window),
         Some(MainView::LocalFolder) => activate_local_folder_selection(window),
         Some(MainView::Favorites | MainView::History) => activate_collection_selection(window),
+        Some(MainView::NotificationCenter) => activate_notification_selection(window),
         Some(MainView::UserPlaylists) => open_selected_user_playlist(window),
         Some(MainView::UserPlaylistItems) => activate_user_playlist_item(window),
         Some(MainView::Search | MainView::DirectLink | MainView::Player) | None => {}
@@ -1764,6 +1813,10 @@ unsafe fn activate_main_menu_selection(window: HWND) {
     }
     if item_id == "history" {
         show_media_collection(window, MainView::History);
+        return;
+    }
+    if item_id == "notification_center" {
+        show_notification_center(window);
         return;
     }
     if item_id == "bookmarks" {
@@ -1869,6 +1922,24 @@ unsafe fn activate_collection_selection(window: HWND) {
             return;
         }
         start_sequence_media_item(window, item, None);
+    }
+}
+
+unsafe fn activate_notification_selection(window: HWND) {
+    let selected = state(window).map(|state| SendMessageW(state.list, LB_GETCURSEL, None, None).0);
+    let Some(Ok(index)) = selected.map(usize::try_from) else {
+        return;
+    };
+    let item =
+        state_mut(window).and_then(|state| state.application.prepare_notification_playback(index));
+    if let Some(item) = item {
+        start_media_item(window, item, None);
+    } else if let Some(state) = state(window) {
+        set_status(
+            state,
+            &catalog_text(&state.application, "notification_center_empty"),
+            true,
+        );
     }
 }
 
@@ -2427,6 +2498,25 @@ unsafe fn show_media_collection(window: HWND, view: MainView) {
     layout_controls_state(window, state);
 }
 
+unsafe fn show_notification_center(window: HWND) {
+    restore_from_tray(window);
+    stop_controlled_repeat(window);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    cancel_youtube_work(window, state);
+    cancel_local_folder_scan(window, state);
+    if state.application.current_route() != Route::NotificationCenter {
+        state.application.navigate_main_menu();
+        state
+            .application
+            .navigate_to(RouteFrame::new(Route::NotificationCenter));
+    }
+    state.view = MainView::NotificationCenter;
+    refresh_notification_center(state, true, true, None);
+    layout_controls_state(window, state);
+}
+
 unsafe fn show_user_playlists(window: HWND) {
     restore_from_tray(window);
     stop_controlled_repeat(window);
@@ -2567,6 +2657,11 @@ unsafe fn navigate_back(window: HWND) {
             state.view = MainView::History;
             refresh_media_collection(state, true, false);
             select_list_index(state.list, saved_index);
+            layout_controls_state(window, state);
+        }
+        Route::NotificationCenter => {
+            state.view = MainView::NotificationCenter;
+            refresh_notification_center(state, true, false, saved_index);
             layout_controls_state(window, state);
         }
         Route::Bookmarks => {
@@ -3225,6 +3320,86 @@ unsafe fn refresh_media_collection(state: &mut WindowState, focus: bool, announc
     }
 }
 
+unsafe fn refresh_notification_center(
+    state: &mut WindowState,
+    focus: bool,
+    announce_status: bool,
+    selected_index: Option<usize>,
+) {
+    let previous = usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok();
+    SendMessageW(state.list, LB_RESETCONTENT, None, None);
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let accessible_name = wide(catalog.text("notification_center"));
+    let _ = SetWindowTextW(state.list, PCWSTR(accessible_name.as_ptr()));
+    set_open_button_label(state, "play");
+    let notifications = state.application.notifications();
+    if notifications.is_empty() {
+        add_list_string(state.list, catalog.text("notification_center_empty"));
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
+        set_status(
+            state,
+            catalog.text("notification_center_empty"),
+            announce_status,
+        );
+    } else {
+        for notification in notifications {
+            add_list_string(state.list, &notification_label(notification, &catalog));
+        }
+        let selected = selected_index
+            .or(previous)
+            .unwrap_or_default()
+            .min(notifications.len() - 1);
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selected)), None);
+        set_status(
+            state,
+            &format!(
+                "{}: {}",
+                catalog.text("notification_center"),
+                notifications.len()
+            ),
+            announce_status,
+        );
+    }
+    if focus {
+        let _ = SetFocus(Some(state.list));
+    }
+}
+
+fn notification_label(
+    notification: &apricot_app::AppNotification,
+    catalog: &apricot_core::TranslationCatalog,
+) -> String {
+    let mut parts = Vec::new();
+    if !notification.title.trim().is_empty() {
+        parts.push(notification.title.clone());
+    }
+    if !notification.message.trim().is_empty() {
+        parts.push(notification.message.clone());
+    }
+    if let Some(item) = &notification.item {
+        if !item.title.trim().is_empty() {
+            parts.push(item.title.clone());
+        }
+        if !item.channel.trim().is_empty() {
+            parts.push(format!("{}: {}", catalog.text("channel"), item.channel));
+        }
+    }
+    if notification.timestamp > 0.0
+        && let Some(timestamp) = std::time::Duration::try_from_secs_f64(notification.timestamp)
+            .ok()
+            .and_then(|duration| i64::try_from(duration.as_secs()).ok())
+            .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
+    {
+        parts.push(
+            timestamp
+                .with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string(),
+        );
+    }
+    parts.join(" | ")
+}
+
 unsafe fn refresh_user_playlists(state: &mut WindowState, focus: bool, announce_status: bool) {
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
     SendMessageW(state.list, LB_RESETCONTENT, None, None);
@@ -3649,6 +3824,7 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
         | MainView::LocalFolder
         | MainView::Favorites
         | MainView::History
+        | MainView::NotificationCenter
         | MainView::UserPlaylists
         | MainView::UserPlaylistItems => (ActionScope::List, false),
         MainView::Player => (ActionScope::Player, false),
@@ -3804,6 +3980,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "open_direct_link" => show_direct_link(window),
         "open_favorites" => show_media_collection(window, MainView::Favorites),
         "open_history" => show_media_collection(window, MainView::History),
+        "new_subscription_videos" => show_notification_center(window),
         "open_bookmarks" => show_bookmarks_dialog(window, false, false),
         "open_playlists" => show_user_playlists(window),
         "open_settings" => open_settings(window),
@@ -3980,6 +4157,15 @@ unsafe fn active_media_item(window: HWND) -> Option<apricot_core::MediaItem> {
             let index = usize::try_from(selected).ok()?;
             state.application.history().get(index).cloned()
         }
+        MainView::NotificationCenter => {
+            let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
+            let index = usize::try_from(selected).ok()?;
+            state
+                .application
+                .notifications()
+                .get(index)
+                .and_then(|notification| notification.item.clone())
+        }
         MainView::UserPlaylistItems => {
             let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
             let index = usize::try_from(selected).ok()?;
@@ -4094,9 +4280,32 @@ unsafe fn remove_selected_collection_item(window: HWND) {
                 state_mut(window).map(|state| state.application.remove_history_item(index));
             finish_collection_removal(window, result, "history_removed");
         }
+        MainView::NotificationCenter => remove_notification_at(window, index),
         MainView::UserPlaylists => remove_selected_user_playlist(window),
         MainView::UserPlaylistItems => remove_selected_user_playlist_item(window),
         _ => {}
+    }
+}
+
+unsafe fn remove_notification_at(window: HWND, index: usize) {
+    let result = state_mut(window).map(|state| state.application.remove_notification(index));
+    let Some(result) = result else {
+        return;
+    };
+    match result {
+        Ok(Some(_)) => {
+            if let Some(state) = state_mut(window) {
+                refresh_notification_center(state, true, false, Some(index.saturating_sub(1)));
+            }
+        }
+        Ok(None) => {}
+        Err(error) => {
+            let message = format!("Notification was not removed: {error}");
+            if let Some(state) = state(window) {
+                set_status(state, &message, true);
+            }
+            show_error_message(window, &message);
+        }
     }
 }
 
@@ -4154,6 +4363,32 @@ unsafe fn clear_history(window: HWND) {
         }
         Err(error) => {
             let message = format!("History was not cleared: {error}");
+            if let Some(state) = state(window) {
+                set_status(state, &message, true);
+            }
+            show_error_message(window, &message);
+        }
+    }
+}
+
+unsafe fn clear_notifications(window: HWND) {
+    let result = state_mut(window).map(|state| state.application.clear_notifications());
+    let Some(result) = result else {
+        return;
+    };
+    match result {
+        Ok(_) => {
+            if let Some(state) = state_mut(window) {
+                refresh_notification_center(state, true, false, None);
+                set_status(
+                    state,
+                    &catalog_text(&state.application, "notifications_cleared"),
+                    true,
+                );
+            }
+        }
+        Err(error) => {
+            let message = format!("Notifications were not cleared: {error}");
             if let Some(state) = state(window) {
                 set_status(state, &message, true);
             }
@@ -5888,6 +6123,9 @@ unsafe fn open_settings(window: HWND) {
         MainView::Favorites | MainView::History => {
             refresh_media_collection(state, false, false);
         }
+        MainView::NotificationCenter => {
+            refresh_notification_center(state, false, false, None);
+        }
         MainView::UserPlaylists => refresh_user_playlists(state, false, false),
         MainView::UserPlaylistItems => refresh_user_playlist_items(state, false, false),
         MainView::Search | MainView::DirectLink => {}
@@ -5966,6 +6204,7 @@ fn active_primary_control(state: &WindowState) -> HWND {
         | MainView::LocalFolder
         | MainView::Favorites
         | MainView::History
+        | MainView::NotificationCenter
         | MainView::UserPlaylists
         | MainView::UserPlaylistItems => state.list,
         MainView::Player => state.player_controls.initial_focus(),
@@ -5979,9 +6218,11 @@ fn wide(value: &str) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::{
-        SEEK_HOLD_DELAY_MS, SEEK_HOLD_INTERVAL_MS, controlled_repeat_timing, copy_wide_array,
-        media_resolve_backend, resolved_playback_item,
+        MainView, SEEK_HOLD_DELAY_MS, SEEK_HOLD_INTERVAL_MS, controlled_repeat_timing,
+        copy_wide_array, media_resolve_backend, notification_label, resolved_playback_item,
+        view_has_back_button, view_has_collection_remove,
     };
+    use apricot_app::AppNotification;
     use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
     use apricot_media::YoutubeBackend;
 
@@ -5993,6 +6234,32 @@ mod tests {
 
         copy_wide_array(&mut target, "x");
         assert_eq!(target, ['x' as u16, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn notification_label_matches_the_python_accessible_field_order() {
+        let mut item = youtube_item("video");
+        item.title = "Track title".to_owned();
+        item.channel = "Channel name".to_owned();
+        let notification = AppNotification::new(
+            "subscription_video",
+            "New video",
+            "A subscribed channel published a video.",
+            Some(item),
+            0.0,
+        );
+        let catalog = apricot_app::embedded_catalog("en");
+
+        assert_eq!(
+            notification_label(&notification, &catalog),
+            "New video | A subscribed channel published a video. | Track title | Channel: Channel name"
+        );
+    }
+
+    #[test]
+    fn notification_center_shows_back_without_a_python_incompatible_remove_button() {
+        assert!(view_has_back_button(MainView::NotificationCenter));
+        assert!(!view_has_collection_remove(MainView::NotificationCenter));
     }
 
     #[test]

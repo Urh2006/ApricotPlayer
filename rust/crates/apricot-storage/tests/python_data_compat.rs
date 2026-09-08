@@ -1,6 +1,8 @@
 use std::{collections::BTreeMap, env, path::PathBuf};
 
-use apricot_storage::{CompatibilitySnapshot, DEFAULT_MAX_ARTIFACT_BYTES, UserPlaylistFile};
+use apricot_storage::{
+    CompatibilitySnapshot, DEFAULT_MAX_ARTIFACT_BYTES, NotificationFile, UserPlaylistFile,
+};
 use tempfile::tempdir;
 
 #[test]
@@ -48,6 +50,26 @@ fn real_python_data_round_trips_without_value_loss() {
             serde_json::from_slice(&std::fs::read(playlist_target).expect("read typed playlists"))
                 .expect("parse typed playlists");
         assert_json_equivalent(&original, &restored, "playlists");
+    }
+
+    let source_notifications = source.join("notifications.json");
+    if source_notifications.is_file() {
+        let original: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&source_notifications).expect("read Python notifications"),
+        )
+        .expect("parse Python notifications");
+        let notifications = NotificationFile::new(&source_notifications)
+            .load()
+            .expect("load Python notifications through typed adapter");
+        let notification_target = target.path().join("typed-notifications.json");
+        NotificationFile::new(&notification_target)
+            .save(&notifications)
+            .expect("write typed notifications");
+        let restored: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(notification_target).expect("read typed notifications"),
+        )
+        .expect("parse typed notifications");
+        assert_json_equivalent(&original, &restored, "notifications");
     }
 }
 

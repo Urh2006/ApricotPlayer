@@ -8,6 +8,7 @@ pub mod last_player_session_controller;
 pub mod local_folder;
 pub mod main_menu;
 pub mod media_collection_controller;
+pub mod notification_controller;
 pub mod playback_position_controller;
 pub mod playback_queue;
 pub mod playback_queue_controller;
@@ -23,6 +24,7 @@ pub mod user_playlist_controller;
 
 use apricot_core::NavigationStack;
 pub use apricot_media::YoutubeSearchKind;
+pub use apricot_storage::AppNotification;
 
 pub use action_finder::{ActionFinderContext, ActionFinderItem, ActionFinderModel};
 pub use activation::ActivationRequest;
@@ -40,6 +42,7 @@ pub use main_menu::{
 pub use media_collection_controller::{
     CollectionAddOutcome, MediaCollectionController, MediaCollectionControllerError,
 };
+pub use notification_controller::{NotificationController, NotificationControllerError};
 pub use playback_position_controller::{
     PlaybackPositionController, PlaybackPositionControllerError, PlaybackPositionUpdate,
 };
@@ -74,6 +77,7 @@ pub struct AppState {
     pub favorites: MediaCollectionController,
     pub history: MediaCollectionController,
     pub navigation: NavigationStack,
+    pub notifications: NotificationController,
     pub local_folder: LocalFolderSession,
     pub last_player_session: LastPlayerSessionController,
     pub playback_queue: PlaybackQueueController,

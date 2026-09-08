@@ -415,3 +415,41 @@ focus, Escape return, and same-position resume. Return-screen restoration for
 RSS, AudioVault, subscriptions, notifications, and trending will become active
 with those still-unimplemented Rust screens; their Python identifiers and data
 are already preserved in the snapshot.
+
+## 2026-09-08: Python-compatible notification center
+
+Implementation: `NotificationFile`, `NotificationController`, application-owned
+notification state, and the native Win32 Notification center view.
+
+Verified:
+
+- `notifications.json` loads from the isolated Rust beta data directory with a
+  read-only fallback to the stable Python file, while the first mutation writes
+  only to the beta directory;
+- Python notification fields, playable media items, informational empty items,
+  and unknown future fields survive typed load/save without value loss;
+- malformed current data blocks add, remove, and clear operations and remains
+  byte-for-byte untouched instead of being silently replaced;
+- additions are newest-first and retain Python's 200-entry limit;
+- the native list uses Python's accessible field order for title, message,
+  media title, channel, and local timestamp;
+- Enter and double-click play the selected notification, the remove-selected
+  shortcut deletes one row, and the Clear notifications button and context item
+  clear the complete list;
+- notification playback stores the exact selected index for Escape return and
+  clears unrelated player sequences, preventing previous/next from inheriting
+  a stale search, folder, or playlist;
+- the main menu and global `Ctrl+Shift+V` action open the same screen, and last
+  session restoration recognizes the Python `notification_center` identifier;
+- a typed round trip of a private temporary copy of real Python notification
+  data passed recursive JSON value comparison.
+
+Automated results: app 103 tests, core 33 tests, platform 22 tests plus one
+ignored live test, playback 16 tests, storage 47 tests, Windows UI 14 tests,
+full workspace Clippy with warnings denied, and `PYTHON_DATA_COMPAT=PASS`.
+
+Still required: packaged manual NVDA/Narrator checks for initial focus, row
+announcements, Enter, double-click, context menu, individual removal, clear,
+playback, and exact Escape focus return. Automatic production of subscription,
+download, and updater notifications remains coupled to those unfinished Rust
+features.
