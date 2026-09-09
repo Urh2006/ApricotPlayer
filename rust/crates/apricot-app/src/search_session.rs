@@ -176,6 +176,31 @@ impl SearchSession {
         kind: YoutubeSearchKind,
         configured_limit: i64,
     ) -> Result<SearchWork, SearchSessionError> {
+        self.begin_with_mode(query, kind, configured_limit, configured_limit == 0)
+    }
+
+    /// Starts a fixed-size result session which can never request another page.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error without changing the active search when the query is
+    /// empty after trimming.
+    pub fn begin_fixed(
+        &mut self,
+        query: &str,
+        kind: YoutubeSearchKind,
+        requested_limit: u32,
+    ) -> Result<SearchWork, SearchSessionError> {
+        self.begin_with_mode(query, kind, i64::from(requested_limit.max(1)), false)
+    }
+
+    fn begin_with_mode(
+        &mut self,
+        query: &str,
+        kind: YoutubeSearchKind,
+        configured_limit: i64,
+        dynamic: bool,
+    ) -> Result<SearchWork, SearchSessionError> {
         let query = query.trim();
         if query.is_empty() {
             return Err(SearchSessionError::EmptyQuery);
@@ -188,7 +213,7 @@ impl SearchSession {
         self.continuation = None;
         self.selected_identity = None;
         self.selected_index = 0;
-        self.dynamic = configured_limit == 0;
+        self.dynamic = dynamic;
         self.requested_limit = if self.dynamic {
             DYNAMIC_SEARCH_PAGE_SIZE
         } else {
@@ -529,6 +554,22 @@ mod tests {
         assert!(!session.is_dynamic());
         assert!(!session.can_load_more());
         assert!(session.request_more().is_none());
+    }
+
+    #[test]
+    fn fixed_session_stays_bounded_when_global_results_are_dynamic() {
+        let mut session = SearchSession::default();
+        let work = session
+            .begin_fixed("official trending US music", YoutubeSearchKind::Video, 50)
+            .expect("fixed search");
+        assert_eq!(work.limit, 50);
+        session.apply_results(
+            work.generation,
+            (0..50).map(|index| item(&index.to_string())).collect(),
+            None,
+        );
+        assert!(!session.is_dynamic());
+        assert!(!session.can_load_more());
     }
 
     #[test]

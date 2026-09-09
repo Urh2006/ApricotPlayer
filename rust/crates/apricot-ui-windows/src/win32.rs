@@ -23,8 +23,10 @@ use crate::{
 use apricot_app::{
     ActionFinderContext, ActivationRequest, Application, MainMenuModel, PlaybackPhase,
     PlayerNavigationOutcome, SearchApplyOutcome, SearchWork, SearchWorkKind, SessionToggle,
-    YoutubeCollectionApplyOutcome, YoutubeCollectionKind, YoutubeCollectionPhase,
-    YoutubeCollectionWork, YoutubeCollectionWorkKind, YoutubeSearchKind,
+    YOUTUBE_TRENDING_CATEGORIES, YOUTUBE_TRENDING_COUNTRIES, YoutubeCollectionApplyOutcome,
+    YoutubeCollectionKind, YoutubeCollectionPhase, YoutubeCollectionWork,
+    YoutubeCollectionWorkKind, YoutubeSearchKind, YoutubeTrendingWork,
+    youtube_trending_category_id, youtube_trending_public_url,
 };
 use apricot_core::{
     Route, RouteFrame,
@@ -49,9 +51,10 @@ use windows::{
         Graphics::Gdi::{DEFAULT_GUI_FONT, GetStockObject},
         System::LibraryLoader::GetModuleHandleW,
         UI::{
+            Controls::InitCommonControls,
             Input::KeyboardAndMouse::{
                 EnableWindow, GetAsyncKeyState, GetFocus, SetFocus, VK_CONTROL, VK_MENU, VK_RETURN,
-                VK_SHIFT,
+                VK_SHIFT, VK_TAB,
             },
             Shell::{
                 DefSubclassProc, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD,
@@ -59,11 +62,11 @@ use windows::{
                 RemoveWindowSubclass, SetWindowSubclass, Shell_NotifyIconW,
             },
             WindowsAndMessaging::{
-                AppendMenuW, BS_DEFPUSHBUTTON, CBS_DROPDOWNLIST, CW_USEDEFAULT, CreatePopupMenu,
-                CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW,
-                ES_AUTOHSCROLL, GetClientRect, GetCursorPos, GetMessageW, GetParent,
-                GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, HMENU,
-                IDC_ARROW, IDI_APPLICATION, IsDialogMessageW, KillTimer, LB_ADDSTRING,
+                AppendMenuW, BS_DEFPUSHBUTTON, CBN_SELCHANGE, CBS_DROPDOWNLIST, CW_USEDEFAULT,
+                CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
+                DispatchMessageW, ES_AUTOHSCROLL, GetClientRect, GetCursorPos, GetMessageW,
+                GetParent, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
+                HMENU, IDC_ARROW, IDI_APPLICATION, IsDialogMessageW, KillTimer, LB_ADDSTRING,
                 LB_DELETESTRING, LB_GETCOUNT, LB_GETCURSEL, LB_INSERTSTRING, LB_RESETCONTENT,
                 LB_SETCURSEL, LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW, LoadIconW,
                 MB_ICONINFORMATION, MB_OK, MF_GRAYED, MF_STRING, MSG, MessageBoxW, MoveWindow,
@@ -103,6 +106,9 @@ const ID_PLAYLIST_PLAY_ALL: usize = 1019;
 const ID_PLAYLIST_SHUFFLE: usize = 1020;
 const ID_PLAYLIST_ADD_ALL_TO_QUEUE: usize = 1021;
 const ID_NOTIFICATION_CLEAR: usize = 1022;
+const ID_TRENDING_COUNTRY: usize = 1023;
+const ID_TRENDING_CATEGORY: usize = 1024;
+const ID_LOAD_TRENDING: usize = 1025;
 const ID_CONTEXT_PLAY: usize = 1101;
 const ID_CONTEXT_PLAY_FOLDER: usize = 1102;
 const ID_CONTEXT_SHUFFLE_FOLDER: usize = 1103;
@@ -146,6 +152,7 @@ const SEEK_HOLD_DELAY_MS: u32 = 180;
 const SEEK_HOLD_INTERVAL_MS: u32 = 110;
 const CB_ADDSTRING: u32 = 0x0143;
 const CB_GETCURSEL: u32 = 0x0147;
+const CB_RESETCONTENT: u32 = 0x014B;
 const CB_SETCURSEL: u32 = 0x014E;
 const TRAY_ICON_ID: u32 = 1;
 const ID_TRAY_SHOW: usize = 1301;
@@ -166,6 +173,7 @@ enum WindowLifecycle {
 enum MainView {
     MainMenu,
     Search,
+    Trending,
     DirectLink,
     Results,
     YoutubeCollection,
@@ -212,8 +220,15 @@ struct PendingYoutubePlaylistPlayback {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+struct PendingYoutubeTrending {
+    work: YoutubeTrendingWork,
+    api_error: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 enum PendingYoutubeListWork {
     Search(SearchWork),
+    Trending(PendingYoutubeTrending),
     Collection(YoutubeCollectionWork),
     PlaylistPlayback(PendingYoutubePlaylistPlayback),
 }
@@ -236,10 +251,16 @@ struct PendingYoutubeApiMetadata {
     receiver: Receiver<std::result::Result<Vec<apricot_core::MediaItem>, String>>,
 }
 
+struct PendingYoutubeTrendingApi {
+    generation: u64,
+    receiver: Receiver<std::result::Result<Vec<apricot_core::MediaItem>, String>>,
+}
+
 impl PendingYoutubeListWork {
     const fn token(&self) -> u64 {
         match self {
             Self::Search(work) => work.generation,
+            Self::Trending(pending) => pending.work.generation,
             Self::Collection(work) => work.generation,
             Self::PlaylistPlayback(work) => work.token,
         }
@@ -269,6 +290,11 @@ struct WindowState {
     kind: HWND,
     search: HWND,
     back: HWND,
+    trending_country_label: HWND,
+    trending_country: HWND,
+    trending_category_label: HWND,
+    trending_category: HWND,
+    load_trending: HWND,
     play_folder: HWND,
     shuffle_folder: HWND,
     add_folder_to_queue: HWND,
@@ -302,6 +328,7 @@ struct WindowState {
     pending_youtube_resolve: Option<PendingYoutubeResolve>,
     pending_youtube_metadata: Option<PendingYoutubeMetadata>,
     pending_youtube_api_metadata: Option<PendingYoutubeApiMetadata>,
+    pending_youtube_trending_api: Option<PendingYoutubeTrendingApi>,
     hydrated_youtube_urls: HashSet<String>,
     youtube_api_metadata_disabled_scopes: HashSet<YoutubeMetadataScope>,
     deferred_youtube_metadata_rows: HashSet<usize>,
@@ -324,6 +351,7 @@ pub fn run_application(application: Application, version: &str, start_hidden: bo
 }
 
 unsafe fn run_win32(application: Application, version: &str, start_hidden: bool) -> Result<()> {
+    InitCommonControls();
     let module = GetModuleHandleW(None)?;
     let instance = HINSTANCE(module.0);
     let class_name = crate::activation_win32::MAIN_WINDOW_CLASS;
@@ -392,6 +420,9 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
             break;
         }
         handle_controlled_repeat_release(window, &message);
+        if handle_view_tab_message(window, &message) {
+            continue;
+        }
         if handle_shortcut_message(window, &message) {
             continue;
         }
@@ -401,6 +432,40 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
         }
     }
     Ok(())
+}
+
+unsafe fn handle_view_tab_message(window: HWND, message: &MSG) -> bool {
+    if message.wParam.0 != usize::from(VK_TAB.0)
+        || !matches!(message.message, WM_KEYDOWN | WM_KEYUP)
+    {
+        return false;
+    }
+    let Some(state) = state(window) else {
+        return false;
+    };
+    if state.view != MainView::Trending {
+        return false;
+    }
+    let controls = [
+        state.trending_country,
+        state.trending_category,
+        state.list,
+        state.back,
+        state.load_trending,
+    ];
+    let Some(current) = controls.iter().position(|control| *control == GetFocus()) else {
+        return false;
+    };
+    if message.message == WM_KEYUP {
+        return true;
+    }
+    let next = if virtual_key_is_down(usize::from(VK_SHIFT.0)) {
+        (current + controls.len() - 1) % controls.len()
+    } else {
+        (current + 1) % controls.len()
+    };
+    let _ = SetFocus(Some(controls[next]));
+    true
 }
 
 unsafe extern "system" fn window_proc(
@@ -511,6 +576,11 @@ unsafe fn handle_window_command(window: HWND, wparam: WPARAM) {
         result_selection_changed(window);
     } else if command == ID_SEARCH {
         submit_search(window);
+    } else if command == ID_LOAD_TRENDING
+        || (matches!(command, ID_TRENDING_COUNTRY | ID_TRENDING_CATEGORY)
+            && notification == usize::try_from(CBN_SELCHANGE).expect("notification fits"))
+    {
+        load_trending_results(window);
     } else if command == ID_DIRECT_ENTER {
         submit_primary_text(window);
     } else if command == ID_BACK {
@@ -681,6 +751,74 @@ unsafe fn create_controls(
         WINDOW_EX_STYLE::default(),
         ID_BACK,
     )?;
+    let trending_country_label_text = wide(catalog.text("trending_country"));
+    let trending_country_label = create_control(
+        parent,
+        instance,
+        w!("STATIC"),
+        PCWSTR(trending_country_label_text.as_ptr()),
+        WS_CHILD | WS_GROUP,
+        WINDOW_EX_STYLE::default(),
+        0,
+    )?;
+    let trending_country = create_control(
+        parent,
+        instance,
+        w!("COMBOBOX"),
+        PCWSTR(trending_country_label_text.as_ptr()),
+        WS_CHILD | WS_TABSTOP | WS_GROUP | WINDOW_STYLE(CBS_DROPDOWNLIST as u32) | WS_VSCROLL,
+        WINDOW_EX_STYLE::default(),
+        ID_TRENDING_COUNTRY,
+    )?;
+    for choice in YOUTUBE_TRENDING_COUNTRIES {
+        let label = wide(choice.label_key);
+        SendMessageW(
+            trending_country,
+            CB_ADDSTRING,
+            None,
+            Some(LPARAM(label.as_ptr() as isize)),
+        );
+    }
+    SendMessageW(trending_country, CB_SETCURSEL, Some(WPARAM(0)), None);
+    let trending_category_label_text = wide(catalog.text("trending_category"));
+    let trending_category_label = create_control(
+        parent,
+        instance,
+        w!("STATIC"),
+        PCWSTR(trending_category_label_text.as_ptr()),
+        WS_CHILD,
+        WINDOW_EX_STYLE::default(),
+        0,
+    )?;
+    let trending_category = create_control(
+        parent,
+        instance,
+        w!("COMBOBOX"),
+        PCWSTR(trending_category_label_text.as_ptr()),
+        WS_CHILD | WS_TABSTOP | WINDOW_STYLE(CBS_DROPDOWNLIST as u32) | WS_VSCROLL,
+        WINDOW_EX_STYLE::default(),
+        ID_TRENDING_CATEGORY,
+    )?;
+    for choice in YOUTUBE_TRENDING_CATEGORIES {
+        let label = wide(catalog.text(choice.label_key));
+        SendMessageW(
+            trending_category,
+            CB_ADDSTRING,
+            None,
+            Some(LPARAM(label.as_ptr() as isize)),
+        );
+    }
+    SendMessageW(trending_category, CB_SETCURSEL, Some(WPARAM(0)), None);
+    let load_trending_text = wide(catalog.text("load_trending"));
+    let load_trending = create_control(
+        parent,
+        instance,
+        w!("BUTTON"),
+        PCWSTR(load_trending_text.as_ptr()),
+        WS_CHILD | WS_TABSTOP | WINDOW_STYLE(BS_DEFPUSHBUTTON as u32),
+        WINDOW_EX_STYLE::default(),
+        ID_LOAD_TRENDING,
+    )?;
     let play_folder_text = wide(catalog.text("play_folder"));
     let play_folder = create_control(
         parent,
@@ -844,6 +982,11 @@ unsafe fn create_controls(
         kind,
         search,
         back,
+        trending_country_label,
+        trending_country,
+        trending_category_label,
+        trending_category,
+        load_trending,
         play_folder,
         shuffle_folder,
         add_folder_to_queue,
@@ -872,6 +1015,11 @@ unsafe fn create_controls(
         kind,
         search,
         back,
+        trending_country_label,
+        trending_country,
+        trending_category_label,
+        trending_category,
+        load_trending,
         play_folder,
         shuffle_folder,
         add_folder_to_queue,
@@ -905,6 +1053,7 @@ unsafe fn create_controls(
         pending_youtube_resolve: None,
         pending_youtube_metadata: None,
         pending_youtube_api_metadata: None,
+        pending_youtube_trending_api: None,
         hydrated_youtube_urls: HashSet::new(),
         youtube_api_metadata_disabled_scopes: HashSet::new(),
         deferred_youtube_metadata_rows: HashSet::new(),
@@ -1088,7 +1237,10 @@ unsafe fn execute_list_context_command(
         ID_CONTEXT_COPY_STREAM_URL => copy_active_stream_url(window),
         ID_CONTEXT_ADD_FAVORITE => add_active_favorite(window),
         ID_CONTEXT_COLLECTION_REMOVE => {
-            if matches!(view, MainView::Results | MainView::YoutubeCollection) {
+            if matches!(
+                view,
+                MainView::Results | MainView::Trending | MainView::YoutubeCollection
+            ) {
                 remove_active_favorite(window);
             } else {
                 remove_selected_collection_item(window);
@@ -1098,7 +1250,10 @@ unsafe fn execute_list_context_command(
         ID_CONTEXT_CREATE_PLAYLIST => create_user_playlist(window, None),
         ID_CONTEXT_PLAY_PLAYLIST | ID_CONTEXT_SHUFFLE_PLAYLIST => {
             let shuffle = command == ID_CONTEXT_SHUFFLE_PLAYLIST;
-            if matches!(view, MainView::Results | MainView::YoutubeCollection) {
+            if matches!(
+                view,
+                MainView::Results | MainView::Trending | MainView::YoutubeCollection
+            ) {
                 if let Some(item) = active_item.as_ref() {
                     play_youtube_playlist(window, item, shuffle);
                 }
@@ -1144,7 +1299,10 @@ fn list_context_entries(
     active_item: Option<&apricot_core::MediaItem>,
     active_is_favorite: bool,
 ) -> Option<Vec<(usize, &'static str)>> {
-    if matches!(view, MainView::Results | MainView::YoutubeCollection) {
+    if matches!(
+        view,
+        MainView::Results | MainView::Trending | MainView::YoutubeCollection
+    ) {
         let favorite = if active_is_favorite {
             (ID_CONTEXT_COLLECTION_REMOVE, "remove_favorite")
         } else {
@@ -1212,7 +1370,7 @@ fn list_context_entries(
             (ID_CONTEXT_COPY_LOCATION, "copy_url"),
             (ID_CONTEXT_CLEAR_NOTIFICATIONS, "clear_notifications"),
         ]),
-        MainView::Results | MainView::YoutubeCollection => unreachable!(),
+        MainView::Results | MainView::Trending | MainView::YoutubeCollection => unreachable!(),
         MainView::UserPlaylists => Some(vec![
             (ID_CONTEXT_PLAY, "open_playlist"),
             (ID_CONTEXT_CREATE_PLAYLIST, "create_playlist"),
@@ -1239,6 +1397,7 @@ unsafe fn show_context_menu_for_active_view(window: HWND) {
     match state(window).map(|state| state.view) {
         Some(
             MainView::Results
+            | MainView::Trending
             | MainView::YoutubeCollection
             | MainView::LocalFolder
             | MainView::Favorites
@@ -1435,6 +1594,16 @@ unsafe fn layout_controls_state(window: HWND, state: &mut WindowState) {
                 true,
             );
         }
+    } else if state.view == MainView::Trending {
+        layout_trending_controls(
+            state,
+            width,
+            height,
+            margin,
+            label_height,
+            field_height,
+            button_height + status_height,
+        );
     } else if state.view == MainView::Player {
         state
             .player_controls
@@ -1457,6 +1626,30 @@ unsafe fn layout_controls_state(window: HWND, state: &mut WindowState) {
     layout_bottom_controls(state, width, height, margin, button_height, status_height);
 }
 
+unsafe fn layout_trending_controls(
+    state: &WindowState,
+    width: i32,
+    height: i32,
+    margin: i32,
+    label_height: i32,
+    field_height: i32,
+    bottom_reserved_height: i32,
+) {
+    let country_y = margin;
+    let category_y = country_y + label_height + field_height + margin;
+    let list_y = category_y + label_height + field_height + margin;
+    let list_height = height - list_y - bottom_reserved_height - margin * 3;
+    for (control, y, control_height) in [
+        (state.trending_country_label, country_y, label_height),
+        (state.trending_country, country_y + label_height, 240),
+        (state.trending_category_label, category_y, label_height),
+        (state.trending_category, category_y + label_height, 240),
+        (state.list, list_y, list_height.max(40)),
+    ] {
+        let _ = MoveWindow(control, margin, y, width - margin * 2, control_height, true);
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 unsafe fn layout_bottom_controls(
     state: &WindowState,
@@ -1471,6 +1664,7 @@ unsafe fn layout_bottom_controls(
     let favorites = state.view == MainView::Favorites;
     let history = state.view == MainView::History;
     let notification_center = state.view == MainView::NotificationCenter;
+    let trending = state.view == MainView::Trending;
     let user_playlists = state.view == MainView::UserPlaylists;
     let user_playlist_items = state.view == MainView::UserPlaylistItems;
     let first_button_y = if local_folder {
@@ -1523,7 +1717,15 @@ unsafe fn layout_bottom_controls(
         button_height,
         true,
     );
-    if local_folder {
+    if trending {
+        layout_button_row(
+            &[state.back, state.load_trending],
+            width,
+            first_button_y,
+            margin,
+            button_height,
+        );
+    } else if local_folder {
         layout_local_folder_buttons(state, width, height, first_button_y, margin, button_height);
     } else if direct_link {
         layout_button_row(
@@ -1635,6 +1837,7 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
         state.view,
         MainView::MainMenu
             | MainView::Results
+            | MainView::Trending
             | MainView::YoutubeCollection
             | MainView::LocalFolder
             | MainView::Favorites
@@ -1654,8 +1857,9 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
             .is_some_and(|playlist| !playlist.items.is_empty());
     let collection_visible = view_has_collection_remove(state.view) && playlist_items_available;
     let back_visible = view_has_back_button(state.view);
-    let open_visible = list_visible && playlist_items_available;
+    let open_visible = list_visible && playlist_items_available && state.view != MainView::Trending;
     let folder_visible = state.view == MainView::LocalFolder;
+    let trending_visible = state.view == MainView::Trending;
     for (control, visible) in [
         (state.list, list_visible),
         (state.open, open_visible),
@@ -1665,6 +1869,11 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
         (state.kind, search_visible),
         (state.search, search_visible),
         (state.back, back_visible),
+        (state.trending_country_label, trending_visible),
+        (state.trending_country, trending_visible),
+        (state.trending_category_label, trending_visible),
+        (state.trending_category, trending_visible),
+        (state.load_trending, trending_visible),
         (state.play_folder, folder_visible),
         (state.shuffle_folder, folder_visible),
         (state.add_folder_to_queue, folder_visible),
@@ -1704,6 +1913,7 @@ const fn view_has_back_button(view: MainView) -> bool {
     matches!(
         view,
         MainView::Search
+            | MainView::Trending
             | MainView::DirectLink
             | MainView::Results
             | MainView::YoutubeCollection
@@ -1920,7 +2130,7 @@ fn copy_wide_array<const N: usize>(target: &mut [u16; N], value: &str) {
 unsafe fn activate_selection(window: HWND) {
     match state(window).map(|state| state.view) {
         Some(MainView::MainMenu) => activate_main_menu_selection(window),
-        Some(MainView::Results) => activate_result_selection(window),
+        Some(MainView::Results | MainView::Trending) => activate_result_selection(window),
         Some(MainView::YoutubeCollection) => activate_youtube_collection_selection(window),
         Some(MainView::LocalFolder) => activate_local_folder_selection(window),
         Some(MainView::Favorites | MainView::History) => activate_collection_selection(window),
@@ -1953,6 +2163,10 @@ unsafe fn activate_main_menu_selection(window: HWND) {
     }
     if item_id == "search" {
         show_search(window);
+        return;
+    }
+    if item_id == "trending" {
+        show_trending(window);
         return;
     }
     if item_id == "resume_last_session" {
@@ -2727,6 +2941,94 @@ unsafe fn show_search(window: HWND) {
     let _ = SetFocus(Some(state.search_edit));
 }
 
+unsafe fn show_trending(window: HWND) {
+    restore_from_tray(window);
+    stop_controlled_repeat(window);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    cancel_youtube_work(window, state);
+    cancel_local_folder_scan(window, state);
+    if !state.application.settings().enable_trending {
+        let message = catalog_text(&state.application, "trending_disabled");
+        set_status(state, &message, true);
+        show_main_menu(window);
+        return;
+    }
+    if state.application.current_route() != Route::Trending {
+        state.application.navigate_main_menu();
+        state
+            .application
+            .navigate_to(RouteFrame::new(Route::Trending));
+    }
+    state.view = MainView::Trending;
+    set_control_text(state, state.trending_country_label, "trending_country");
+    set_control_text(state, state.trending_category_label, "trending_category");
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    crate::accessibility_win32::set_control_name(
+        state.trending_country,
+        catalog.text("trending_country"),
+    );
+    crate::accessibility_win32::set_control_name(
+        state.trending_category,
+        catalog.text("trending_category"),
+    );
+    refresh_trending_category_choices(state);
+    set_control_text(state, state.load_trending, "load_trending");
+    crate::accessibility_win32::set_control_name(state.list, catalog.text("trending"));
+    SendMessageW(state.list, LB_RESETCONTENT, None, None);
+    add_list_string(state.list, catalog.text("search_results_empty"));
+    SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
+    set_status(state, &catalog_text(&state.application, "ready"), false);
+    layout_controls_state(window, state);
+    let _ = SetFocus(Some(state.trending_country));
+    load_trending_results(window);
+}
+
+unsafe fn load_trending_results(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    if state.view != MainView::Trending {
+        return;
+    }
+    cancel_youtube_work(window, state);
+    let country_index = selected_combo_index(state.trending_country)
+        .unwrap_or_default()
+        .min(YOUTUBE_TRENDING_COUNTRIES.len().saturating_sub(1));
+    let category_index = selected_combo_index(state.trending_category)
+        .unwrap_or_default()
+        .min(YOUTUBE_TRENDING_CATEGORIES.len().saturating_sub(1));
+    let country = YOUTUBE_TRENDING_COUNTRIES[country_index];
+    let category = YOUTUBE_TRENDING_CATEGORIES[category_index];
+    state.application.update_trending_route_context(
+        country_index,
+        category_index,
+        country.code,
+        category.code,
+    );
+    let work = match state
+        .application
+        .begin_youtube_trending(country.code, category.code)
+    {
+        Ok(work) => work,
+        Err(error) => {
+            set_status(state, &error.to_string(), true);
+            return;
+        }
+    };
+    state.hydrated_youtube_urls.clear();
+    state.youtube_api_metadata_disabled_scopes.clear();
+    state.deferred_youtube_metadata_rows.clear();
+    let country_label = country.label_key;
+    let category_label = catalog_text(&state.application, category.label_key);
+    let message = catalog_text(&state.application, "trending_loading_official")
+        .replace("{country}", country_label)
+        .replace("{category}", &category_label);
+    set_status(state, &message, true);
+    start_youtube_trending_work(window, work);
+}
+
 unsafe fn resume_last_player_session(window: HWND) {
     restore_from_tray(window);
     stop_controlled_repeat(window);
@@ -2951,6 +3253,9 @@ unsafe fn navigate_back(window: HWND) {
             layout_controls_state(window, state);
             let _ = SetFocus(Some(state.search_edit));
         }
+        Route::Trending => {
+            restore_trending_view(window, state, &frame);
+        }
         Route::DirectLink => {
             state.view = MainView::DirectLink;
             set_control_text(state, state.search_label, "direct_link_url");
@@ -3017,6 +3322,65 @@ unsafe fn navigate_back(window: HWND) {
             let _ = SetFocus(Some(state.list));
         }
     }
+}
+
+unsafe fn restore_trending_view(window: HWND, state: &mut WindowState, frame: &RouteFrame) {
+    state.view = MainView::Trending;
+    restore_trending_controls(state, frame);
+    refresh_results(state, true);
+    layout_controls_state(window, state);
+}
+
+unsafe fn restore_trending_controls(state: &WindowState, frame: &RouteFrame) {
+    let country_index = frame
+        .parameters
+        .get("country_index")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or_default()
+        .min(YOUTUBE_TRENDING_COUNTRIES.len().saturating_sub(1));
+    let category_index = frame
+        .parameters
+        .get("category_index")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or_default()
+        .min(YOUTUBE_TRENDING_CATEGORIES.len().saturating_sub(1));
+    SendMessageW(
+        state.trending_country,
+        CB_SETCURSEL,
+        Some(WPARAM(country_index)),
+        None,
+    );
+    SendMessageW(
+        state.trending_category,
+        CB_SETCURSEL,
+        Some(WPARAM(category_index)),
+        None,
+    );
+}
+
+unsafe fn refresh_trending_category_choices(state: &WindowState) {
+    let selected = selected_combo_index(state.trending_category).unwrap_or_default();
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    SendMessageW(state.trending_category, CB_RESETCONTENT, None, None);
+    for choice in YOUTUBE_TRENDING_CATEGORIES {
+        let label = wide(catalog.text(choice.label_key));
+        SendMessageW(
+            state.trending_category,
+            CB_ADDSTRING,
+            None,
+            Some(LPARAM(label.as_ptr() as isize)),
+        );
+    }
+    SendMessageW(
+        state.trending_category,
+        CB_SETCURSEL,
+        Some(WPARAM(
+            selected.min(YOUTUBE_TRENDING_CATEGORIES.len().saturating_sub(1)),
+        )),
+        None,
+    );
 }
 
 unsafe fn submit_search(window: HWND) {
@@ -3124,6 +3488,115 @@ unsafe fn start_youtube_work(window: HWND, work: SearchWork) {
     }
 }
 
+unsafe fn start_youtube_trending_work(window: HWND, work: YoutubeTrendingWork) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let api_key = state
+        .application
+        .settings()
+        .youtube_data_api_key
+        .trim()
+        .to_owned();
+    let generation = work.generation;
+    let country_code = work.country_code;
+    let category_code = work.category_code;
+    let limit = work.limit;
+    state.pending_youtube_work = Some(PendingYoutubeListWork::Trending(PendingYoutubeTrending {
+        work,
+        api_error: None,
+    }));
+    if api_key.is_empty() {
+        start_public_trending_work(window);
+        return;
+    }
+    let proxy = nonempty(&state.application.settings().proxy);
+    let region = (country_code != "global").then_some(country_code);
+    let category = youtube_trending_category_id(category_code);
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = YoutubeDataApiClient::new(proxy.as_deref())
+            .and_then(|client| client.fetch_trending(&api_key, region, category, limit))
+            .map_err(|error| error.to_string());
+        let _ = sender.send(result);
+    });
+    state.pending_youtube_trending_api = Some(PendingYoutubeTrendingApi {
+        generation,
+        receiver,
+    });
+    let _ = SetTimer(
+        Some(window),
+        YOUTUBE_TIMER_ID,
+        YOUTUBE_TIMER_INTERVAL_MS,
+        None,
+    );
+}
+
+unsafe fn start_public_trending_work(window: HWND) {
+    let pending = state(window).and_then(|state| match state.pending_youtube_work.as_ref() {
+        Some(PendingYoutubeListWork::Trending(pending)) => Some(pending.clone()),
+        _ => None,
+    });
+    let Some(pending) = pending else {
+        return;
+    };
+    let Some(url) =
+        youtube_trending_public_url(pending.work.country_code, pending.work.category_code)
+    else {
+        let mut message = pending.api_error.unwrap_or_default();
+        if !message.is_empty() {
+            message.push_str("\n\n");
+        }
+        if let Some(state) = state(window) {
+            message.push_str(&catalog_text(
+                &state.application,
+                "trending_api_key_required",
+            ));
+        }
+        finish_youtube_trending_error(window, pending.work.generation, &message);
+        return;
+    };
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let Some(components) = application_directory().map(|path| path.join("components")) else {
+        finish_youtube_trending_error(
+            window,
+            pending.work.generation,
+            "Application path is unavailable",
+        );
+        return;
+    };
+    let config = youtube_session_config(state);
+    let start_result = state.youtube_search.start_collection(
+        YoutubeBackend::YtDlp,
+        &components,
+        config,
+        pending.work.generation,
+        url,
+        YoutubeCollectionKind::PlaylistVideos,
+        pending.work.limit,
+    );
+    match start_result {
+        Ok(()) => {
+            let _ = SetTimer(
+                Some(window),
+                YOUTUBE_TIMER_ID,
+                YOUTUBE_TIMER_INTERVAL_MS,
+                None,
+            );
+        }
+        Err(error) => {
+            let mut message = pending.api_error.unwrap_or_default();
+            if !message.is_empty() {
+                message.push_str("\n\n");
+            }
+            message.push_str(&error.to_string());
+            finish_youtube_trending_error(window, pending.work.generation, &message);
+        }
+    }
+}
+
 unsafe fn start_youtube_collection_work(window: HWND, work: YoutubeCollectionWork) {
     let Some(state) = state_mut(window) else {
         return;
@@ -3209,6 +3682,7 @@ unsafe fn poll_youtube_runtime(window: HWND) {
     if state(window).is_some_and(|state| state.modal_open) {
         return;
     }
+    poll_youtube_trending_api(window);
     loop {
         let update = {
             let Some(state) = state_mut(window) else {
@@ -3257,6 +3731,67 @@ unsafe fn poll_youtube_runtime(window: HWND) {
         }
     }
     poll_youtube_metadata_runtime(window);
+}
+
+unsafe fn poll_youtube_trending_api(window: HWND) {
+    let outcome = {
+        let Some(state) = state(window) else {
+            return;
+        };
+        let Some(pending) = state.pending_youtube_trending_api.as_ref() else {
+            return;
+        };
+        match pending.receiver.try_recv() {
+            Ok(result) => Some((pending.generation, result)),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => Some((
+                pending.generation,
+                Err("YouTube Data API worker stopped unexpectedly".to_owned()),
+            )),
+        }
+    };
+    let Some((generation, outcome)) = outcome else {
+        return;
+    };
+    let active = state_mut(window)
+        .and_then(|state| state.pending_youtube_trending_api.take())
+        .is_some_and(|pending| pending.generation == generation);
+    if !active
+        || state(window).is_none_or(|state| {
+            !matches!(
+                state.pending_youtube_work.as_ref(),
+                Some(PendingYoutubeListWork::Trending(pending))
+                    if pending.work.generation == generation
+            )
+        })
+    {
+        stop_youtube_timer(window);
+        return;
+    }
+    match outcome {
+        Ok(items) if !items.is_empty() => {
+            finish_youtube_trending(window, generation, items, true);
+        }
+        Ok(_) => {
+            if let Some(state) = state_mut(window)
+                && let Some(PendingYoutubeListWork::Trending(pending)) =
+                    state.pending_youtube_work.as_mut()
+            {
+                pending.api_error =
+                    Some("Official YouTube trending returned no videos.".to_owned());
+            }
+            start_public_trending_work(window);
+        }
+        Err(error) => {
+            if let Some(state) = state_mut(window)
+                && let Some(PendingYoutubeListWork::Trending(pending)) =
+                    state.pending_youtube_work.as_mut()
+            {
+                pending.api_error = Some(error);
+            }
+            start_public_trending_work(window);
+        }
+    }
 }
 
 unsafe fn poll_youtube_metadata_runtime(window: HWND) {
@@ -3461,6 +3996,9 @@ unsafe fn finish_youtube_list(
         Some(PendingYoutubeListWork::Search(_)) => {
             finish_youtube_search(window, generation, items, continuation);
         }
+        Some(PendingYoutubeListWork::Trending(_)) => {
+            finish_youtube_trending(window, generation, items, false);
+        }
         Some(PendingYoutubeListWork::Collection(_)) => {
             finish_youtube_collection(window, generation, items);
         }
@@ -3468,6 +4006,60 @@ unsafe fn finish_youtube_list(
             finish_youtube_playlist_playback(window, generation, items);
         }
         None => {}
+    }
+}
+
+unsafe fn finish_youtube_trending(
+    window: HWND,
+    generation: u64,
+    items: Vec<apricot_core::MediaItem>,
+    used_api: bool,
+) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let active = matches!(
+        state.pending_youtube_work.as_ref(),
+        Some(PendingYoutubeListWork::Trending(pending))
+            if pending.work.generation == generation
+    );
+    if !active {
+        return;
+    }
+    if !used_api && items.is_empty() {
+        let mut message = state
+            .pending_youtube_work
+            .as_ref()
+            .and_then(|pending| match pending {
+                PendingYoutubeListWork::Trending(pending) => pending.api_error.clone(),
+                _ => None,
+            })
+            .unwrap_or_default();
+        if !message.is_empty() {
+            message.push_str("\n\n");
+        }
+        message.push_str("The public YouTube chart returned no videos.");
+        finish_youtube_trending_error(window, generation, &message);
+        return;
+    }
+    let outcome = state
+        .application
+        .apply_search_results(generation, items, None);
+    state.pending_youtube_work = None;
+    state.pending_youtube_trending_api = None;
+    let _ = EnableWindow(state.load_trending, true);
+    stop_youtube_timer(window);
+    if outcome == SearchApplyOutcome::Replaced {
+        state.view = MainView::Trending;
+        refresh_results(state, true);
+        let source_key = if used_api {
+            "trending_source_api"
+        } else {
+            "trending_source_public"
+        };
+        set_status(state, &catalog_text(&state.application, source_key), false);
+        layout_controls_state(window, state);
+        start_result_metadata_hydration(window);
     }
 }
 
@@ -3524,9 +4116,9 @@ unsafe fn finish_youtube_search(
         .as_ref()
         .and_then(|work| match work {
             PendingYoutubeListWork::Search(work) => Some(work.work_kind),
-            PendingYoutubeListWork::Collection(_) | PendingYoutubeListWork::PlaylistPlayback(_) => {
-                None
-            }
+            PendingYoutubeListWork::Trending(_)
+            | PendingYoutubeListWork::Collection(_)
+            | PendingYoutubeListWork::PlaylistPlayback(_) => None,
         });
     let outcome = state
         .application
@@ -3571,7 +4163,9 @@ unsafe fn finish_youtube_collection(
         .as_ref()
         .and_then(|work| match work {
             PendingYoutubeListWork::Collection(work) => Some(work.clone()),
-            PendingYoutubeListWork::Search(_) | PendingYoutubeListWork::PlaylistPlayback(_) => None,
+            PendingYoutubeListWork::Search(_)
+            | PendingYoutubeListWork::Trending(_)
+            | PendingYoutubeListWork::PlaylistPlayback(_) => None,
         });
     let outcome = state
         .application
@@ -3610,6 +4204,16 @@ unsafe fn finish_youtube_collection(
 }
 
 unsafe fn finish_youtube_error(window: HWND, generation: u64, message: &str) {
+    if state(window).is_some_and(|state| {
+        matches!(
+            state.pending_youtube_work.as_ref(),
+            Some(PendingYoutubeListWork::Trending(pending))
+                if pending.work.generation == generation
+        )
+    }) {
+        finish_youtube_trending_error(window, generation, message);
+        return;
+    }
     let return_from_collection = state(window).is_some_and(|state| {
         matches!(
             state.pending_youtube_work.as_ref(),
@@ -3678,6 +4282,33 @@ unsafe fn finish_youtube_error(window: HWND, generation: u64, message: &str) {
     }
 }
 
+unsafe fn finish_youtube_trending_error(window: HWND, generation: u64, error: &str) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let active = matches!(
+        state.pending_youtube_work.as_ref(),
+        Some(PendingYoutubeListWork::Trending(pending))
+            if pending.work.generation == generation
+    );
+    if !active {
+        return;
+    }
+    let _ = state.application.fail_search(generation, error);
+    state.pending_youtube_work = None;
+    state.pending_youtube_trending_api = None;
+    state.pending_player_navigation = None;
+    let _ = EnableWindow(state.load_trending, true);
+    stop_youtube_timer(window);
+    let visible =
+        catalog_text(&state.application, "trending_official_unavailable").replace("{error}", error);
+    set_status(state, &visible, true);
+    show_error_message(window, &visible);
+    let returning = catalog_text(&state.application, "trending_unavailable_returning");
+    set_status(state, &returning, true);
+    show_main_menu(window);
+}
+
 unsafe fn finish_youtube_error_state(
     window: HWND,
     state: &mut WindowState,
@@ -3690,6 +4321,10 @@ unsafe fn finish_youtube_error_state(
         Some(PendingYoutubeListWork::Search(work)) => {
             let _ = state.application.fail_search(generation, message);
             (work.work_kind == SearchWorkKind::Initial, true)
+        }
+        Some(PendingYoutubeListWork::Trending(_)) => {
+            let _ = state.application.fail_search(generation, message);
+            (true, false)
         }
         Some(PendingYoutubeListWork::Collection(work)) => {
             let _ = state
@@ -3725,6 +4360,7 @@ unsafe fn stop_youtube_timer(window: HWND) {
         !state.youtube_search.is_pending()
             && !state.youtube_metadata.is_pending()
             && state.pending_youtube_api_metadata.is_none()
+            && state.pending_youtube_trending_api.is_none()
     }) {
         let _ = KillTimer(Some(window), YOUTUBE_TIMER_ID);
     }
@@ -3739,6 +4375,7 @@ unsafe fn cancel_youtube_work(window: HWND, state: &mut WindowState) {
         && state.pending_youtube_resolve.is_none()
         && state.pending_youtube_metadata.is_none()
         && state.pending_youtube_api_metadata.is_none()
+        && state.pending_youtube_trending_api.is_none()
         && !state.youtube_search.is_pending()
         && !state.youtube_metadata.is_pending()
     {
@@ -3746,7 +4383,7 @@ unsafe fn cancel_youtube_work(window: HWND, state: &mut WindowState) {
     }
     if let Some(work) = state.pending_youtube_work.as_ref() {
         match work {
-            PendingYoutubeListWork::Search(_) => {
+            PendingYoutubeListWork::Search(_) | PendingYoutubeListWork::Trending(_) => {
                 let _ = state.application.cancel_pending_search();
             }
             PendingYoutubeListWork::Collection(_) => {
@@ -3759,6 +4396,7 @@ unsafe fn cancel_youtube_work(window: HWND, state: &mut WindowState) {
     state.pending_youtube_resolve = None;
     state.pending_youtube_metadata = None;
     state.pending_youtube_api_metadata = None;
+    state.pending_youtube_trending_api = None;
     state.hydrated_youtube_urls.clear();
     state.youtube_api_metadata_disabled_scopes.clear();
     state.deferred_youtube_metadata_rows.clear();
@@ -3767,6 +4405,7 @@ unsafe fn cancel_youtube_work(window: HWND, state: &mut WindowState) {
     let _ = state.youtube_search.cancel();
     let _ = state.youtube_metadata.cancel();
     let _ = EnableWindow(state.search, true);
+    let _ = EnableWindow(state.load_trending, true);
     stop_youtube_timer(window);
 }
 
@@ -3784,7 +4423,7 @@ unsafe fn start_result_metadata_hydration(window: HWND) {
         state.hydrated_youtube_urls.clear();
     }
     let (scope, items) = match state.view {
-        MainView::Results => (
+        MainView::Results | MainView::Trending => (
             YoutubeMetadataScope::Search(state.application.search_session().generation()),
             state.application.search_session().items(),
         ),
@@ -3912,7 +4551,7 @@ unsafe fn apply_youtube_metadata_results(
     }
     let visible = match scope {
         YoutubeMetadataScope::Search(generation) => {
-            state.view == MainView::Results
+            matches!(state.view, MainView::Results | MainView::Trending)
                 && state.application.search_session().generation() == generation
         }
         YoutubeMetadataScope::Collection(generation) => {
@@ -4000,7 +4639,7 @@ fn youtube_metadata_item_index(
 unsafe fn refresh_youtube_result_line(state: &WindowState, index: usize) {
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
     let (item, selected) = match state.view {
-        MainView::Results => (
+        MainView::Results | MainView::Trending => (
             state.application.search_session().items().get(index),
             state.application.search_session().selected_index(),
         ),
@@ -4072,14 +4711,17 @@ unsafe fn result_selection_changed(window: HWND) {
         let Some(state) = state_mut(window) else {
             return;
         };
-        if !matches!(state.view, MainView::Results | MainView::YoutubeCollection) {
+        if !matches!(
+            state.view,
+            MainView::Results | MainView::Trending | MainView::YoutubeCollection
+        ) {
             return;
         }
         let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
         let Ok(index) = usize::try_from(selected) else {
             return;
         };
-        if state.view == MainView::Results {
+        if matches!(state.view, MainView::Results | MainView::Trending) {
             if !state.application.select_search_result(index) {
                 return;
             }
@@ -4120,10 +4762,10 @@ unsafe fn result_selection_changed(window: HWND) {
         }
         match work {
             PendingYoutubeListWork::Search(work) => start_youtube_work(window, work),
+            PendingYoutubeListWork::Trending(_) | PendingYoutubeListWork::PlaylistPlayback(_) => {}
             PendingYoutubeListWork::Collection(work) => {
                 start_youtube_collection_work(window, work);
             }
-            PendingYoutubeListWork::PlaylistPlayback(_) => {}
         }
     }
 }
@@ -4181,8 +4823,12 @@ unsafe fn refresh_results(state: &mut WindowState, focus: bool) {
     set_open_button_label(state, "open");
     SendMessageW(state.list, LB_RESETCONTENT, None, None);
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
-    let accessible_name = wide(catalog.text("result_list"));
-    let _ = SetWindowTextW(state.list, PCWSTR(accessible_name.as_ptr()));
+    let accessible_name = if state.view == MainView::Trending {
+        catalog.text("trending")
+    } else {
+        catalog.text("result_list")
+    };
+    crate::accessibility_win32::set_control_name(state.list, accessible_name);
     let items = state.application.search_session().items();
     if items.is_empty() {
         add_list_string(state.list, catalog.text("no_results"));
@@ -4216,8 +4862,7 @@ unsafe fn refresh_youtube_collection(state: &mut WindowState, focus: bool) {
     let Some(collection) = state.application.youtube_collection() else {
         return;
     };
-    let accessible_name = wide(collection.title());
-    let _ = SetWindowTextW(state.list, PCWSTR(accessible_name.as_ptr()));
+    crate::accessibility_win32::set_control_name(state.list, collection.title());
     if collection.phase() == YoutubeCollectionPhase::LoadingInitial {
         let loading = catalog
             .text("loading_playlist")
@@ -4255,8 +4900,7 @@ unsafe fn refresh_youtube_collection(state: &mut WindowState, focus: bool) {
 unsafe fn refresh_local_folder(state: &mut WindowState, focus: bool, announce_status: bool) {
     SendMessageW(state.list, LB_RESETCONTENT, None, None);
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
-    let accessible_name = wide(catalog.text("play_from_folder"));
-    let _ = SetWindowTextW(state.list, PCWSTR(accessible_name.as_ptr()));
+    crate::accessibility_win32::set_control_name(state.list, catalog.text("play_from_folder"));
     set_open_button_label(state, "play");
     let session = state.application.local_folder_session();
     if session.is_empty() {
@@ -4293,8 +4937,7 @@ unsafe fn refresh_media_collection(state: &mut WindowState, focus: bool, announc
         MainView::History => ("history", "history_empty", state.application.history()),
         _ => return,
     };
-    let accessible_name = wide(catalog.text(name_key));
-    let _ = SetWindowTextW(state.list, PCWSTR(accessible_name.as_ptr()));
+    crate::accessibility_win32::set_control_name(state.list, catalog.text(name_key));
     set_open_button_label(state, "play");
     set_control_text(
         state,
@@ -4337,8 +4980,7 @@ unsafe fn refresh_notification_center(
     let previous = usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok();
     SendMessageW(state.list, LB_RESETCONTENT, None, None);
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
-    let accessible_name = wide(catalog.text("notification_center"));
-    let _ = SetWindowTextW(state.list, PCWSTR(accessible_name.as_ptr()));
+    crate::accessibility_win32::set_control_name(state.list, catalog.text("notification_center"));
     set_open_button_label(state, "play");
     let notifications = state.application.notifications();
     if notifications.is_empty() {
@@ -4411,8 +5053,7 @@ fn notification_label(
 unsafe fn refresh_user_playlists(state: &mut WindowState, focus: bool, announce_status: bool) {
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
     SendMessageW(state.list, LB_RESETCONTENT, None, None);
-    let accessible_name = wide(catalog.text("playlists"));
-    let _ = SetWindowTextW(state.list, PCWSTR(accessible_name.as_ptr()));
+    crate::accessibility_win32::set_control_name(state.list, catalog.text("playlists"));
     set_open_button_label(state, "open_playlist");
     set_control_text(state, state.collection_remove, "remove_playlist");
     let playlists = state.application.user_playlists();
@@ -4451,8 +5092,7 @@ unsafe fn refresh_user_playlists(state: &mut WindowState, focus: bool, announce_
 unsafe fn refresh_user_playlist_items(state: &mut WindowState, focus: bool, announce_status: bool) {
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
     SendMessageW(state.list, LB_RESETCONTENT, None, None);
-    let accessible_name = wide(catalog.text("playlist_items"));
-    let _ = SetWindowTextW(state.list, PCWSTR(accessible_name.as_ptr()));
+    crate::accessibility_win32::set_control_name(state.list, catalog.text("playlist_items"));
     set_open_button_label(state, "play");
     set_control_text(state, state.collection_remove, "remove_from_playlist");
     let Some(playlist) = state
@@ -4676,6 +5316,11 @@ fn selected_search_kind(control: HWND) -> YoutubeSearchKind {
     }
 }
 
+fn selected_combo_index(control: HWND) -> Option<usize> {
+    let selected = unsafe { SendMessageW(control, CB_GETCURSEL, None, None).0 };
+    usize::try_from(selected).ok()
+}
+
 fn youtube_session_config(state: &WindowState) -> YoutubeSessionConfig {
     let settings = state.application.settings();
     YoutubeSessionConfig {
@@ -4856,6 +5501,7 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
         MainView::Search | MainView::DirectLink => (ActionScope::Dialog, true),
         MainView::MainMenu
         | MainView::Results
+        | MainView::Trending
         | MainView::YoutubeCollection
         | MainView::LocalFolder
         | MainView::Favorites
@@ -5012,6 +5658,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
     match action_id {
         "open_main_menu" => show_main_menu(window),
         "open_search" => show_search(window),
+        "trending" | "open_trending" => show_trending(window),
         "resume_last_session" => resume_last_player_session(window),
         "open_direct_link" => show_direct_link(window),
         "open_favorites" => show_media_collection(window, MainView::Favorites),
@@ -5172,7 +5819,7 @@ unsafe fn confirm_pending_queued_start(window: HWND, state: &mut WindowState) {
 unsafe fn active_media_item(window: HWND) -> Option<apricot_core::MediaItem> {
     let state = state(window)?;
     match state.view {
-        MainView::Results => {
+        MainView::Results | MainView::Trending => {
             let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
             let index = usize::try_from(selected).ok()?;
             state
@@ -7174,6 +7821,10 @@ unsafe fn open_settings(window: HWND) {
     match state.view {
         MainView::MainMenu => refresh_main_menu(state),
         MainView::Results => refresh_results(state, false),
+        MainView::Trending => {
+            refresh_trending_category_choices(state);
+            refresh_results(state, false);
+        }
         MainView::YoutubeCollection => refresh_youtube_collection(state, false),
         MainView::LocalFolder => refresh_local_folder(state, false, false),
         MainView::Favorites | MainView::History => {
@@ -7238,8 +7889,7 @@ unsafe fn refresh_main_menu(state: &mut WindowState) {
     set_open_button_label(state, "open");
     state.model = state.application.main_menu_model();
     SendMessageW(state.list, LB_RESETCONTENT, None, None);
-    let accessible_name = wide(&state.model.accessible_name);
-    let _ = SetWindowTextW(state.list, PCWSTR(accessible_name.as_ptr()));
+    crate::accessibility_win32::set_control_name(state.list, &state.model.accessible_name);
     for item in &state.model.items {
         let label = wide(&item.label);
         SendMessageW(
@@ -7257,6 +7907,7 @@ fn active_primary_control(state: &WindowState) -> HWND {
         MainView::Search | MainView::DirectLink => state.search_edit,
         MainView::MainMenu
         | MainView::Results
+        | MainView::Trending
         | MainView::YoutubeCollection
         | MainView::LocalFolder
         | MainView::Favorites
@@ -7370,6 +8021,17 @@ mod tests {
                 YoutubeCollectionKind::ChannelVideos
             ),
             YoutubeBackend::YtDlp
+        );
+    }
+
+    #[test]
+    fn trending_is_a_result_list_with_python_compatible_navigation_and_actions() {
+        assert!(view_has_back_button(MainView::Trending));
+        assert!(!view_has_collection_remove(MainView::Trending));
+        let item = youtube_item("video");
+        assert_eq!(
+            list_context_entries(MainView::Trending, Some(&item), false),
+            list_context_entries(MainView::Results, Some(&item), false)
         );
     }
 

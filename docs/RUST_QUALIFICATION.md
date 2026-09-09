@@ -605,3 +605,65 @@ duration/date/live conversion, malformed responses, and secret redaction.
 Still required: a real NVDA and Narrator listening pass and a live packaged
 50-item request with a user-configured YouTube Data API key. No test key is
 bundled or written to settings.
+
+## 2026-09-09: native official YouTube Trending
+
+Implementation: a fixed-size Trending search session, the official YouTube
+Data API `videos.list` `chart=mostPopular` path, a generation-scoped worker,
+and a native Win32 country/category screen matching the Python inventory.
+
+Verified in automated tests:
+
+- all 56 Python country choices and all nine category choices are represented
+  in their original order, with category labels read from the active locale;
+- the two filters are native named comboboxes, selection changes reload the
+  feed, Enter/double-click on a result use the ordinary exact-result playback
+  path, and Escape unwinds one route back;
+- a zero result-limit setting requests one fixed API page of 50 items, while a
+  configured result limit is honored up to the API maximum of 50; Trending can
+  never accidentally request a dynamic search continuation;
+- `videos.list` requests use the documented `mostPopular` chart, optional ISO
+  region and numeric category filters, the configured proxy, bounded response
+  reads, fixed timeouts, disabled redirects, and redacted errors;
+- each API worker and public component fallback is tied to the active search
+  generation, so changing a filter or leaving the screen rejects late data;
+- failed or empty API responses may try only a real public YouTube chart or
+  Explore destination. They never substitute a `#trending` search;
+- YouTube removed its former all-purpose Trending page in July 2025. The live
+  packaged yt-dlp check confirmed that `/feed/trending` now redirects home, so
+  `All` and categories without a current public destination fail honestly with
+  the existing API-key guidance when no Data API key is configured;
+- empty public chart responses are errors rather than successful empty feeds;
+- result actions, favorites, queue actions, copying, playlists, background
+  metadata hydration, player sequence order, and last-session restoration use
+  the same application-owned result state as ordinary YouTube search;
+- last-session data retains the exact country/category codes, combobox indexes,
+  selected result, and deterministic Previous/Next sequence.
+
+Automated results at this checkpoint: app 116 tests, core 34 tests, media 10
+tests, platform 34 tests plus two ignored live tests, playback 16 tests, storage
+47 tests, Windows UI 20 tests, updater 2 tests, YouTube helper library 5 tests
+plus 2 process tests, and full workspace Clippy with warnings denied.
+
+The release package also passed the existing build, manifest-tamper,
+libmpv/yt-dlp/helper, install, reinstall, uninstall, and app-data preservation
+gates. `qualify_youtube_trending_ui.ps1` ran the installed executable with an
+isolated temporary `%APPDATA%` and verified through native Win32 and MSAA that:
+
+- country and category are named comboboxes with 56 and nine choices;
+- the results list exposes the explicit accessible name `Trending`;
+- the exact forward Tab path is country, category, results, Back, then Load;
+- loading remains asynchronous and the Load button remains available like the
+  Python UI; and
+- a missing API key produces the recovery dialog and returns to the main menu.
+
+This qualification also exposed and fixed a shared native-list issue: changing
+a Win32 list window title did not provide an MSAA name. Current result,
+collection, folder, history, favorites, notification, playlist, and main-menu
+lists now use dynamic MSAA name annotation whenever their semantic screen name
+changes.
+
+Still required: a real NVDA and Narrator listening pass and a live packaged API
+result request with a user-provided key, including Enter, context-menu,
+playback, and successful-result Escape return. No secret is bundled, logged, or
+written for testing.

@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, io::Read, time::Duration};
 
-use apricot_core::{MediaItem, MediaKind, MediaSource};
+use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
 use chrono::DateTime;
 use reqwest::{Proxy, blocking::Client, redirect::Policy};
 use serde_json::{Map, Value};
@@ -10,6 +10,7 @@ use thiserror::Error;
 
 const VIDEOS_ENDPOINT: &str = "https://www.googleapis.com/youtube/v3/videos";
 const MAX_VIDEO_IDS: usize = 50;
+const MAX_VIDEO_RESULTS: u32 = 50;
 const MAX_RESPONSE_BYTES: u64 = 10_000_000;
 
 #[derive(Debug, Error, Eq, PartialEq)]
@@ -18,6 +19,8 @@ pub enum YoutubeDataApiError {
     MissingApiKey,
     #[error("YouTube Data API metadata requires between one and 50 YouTube videos")]
     InvalidBatch,
+    #[error("YouTube Data API Trending parameters are invalid")]
+    InvalidTrending,
     #[error("The configured proxy could not be used for YouTube Data API requests")]
     InvalidProxy,
     #[error("YouTube Data API request failed")]
@@ -86,15 +89,74 @@ impl YoutubeDataApiClient {
             .collect::<Vec<_>>()
             .join(",");
         let max_results = items.len().to_string();
-        let mut response = self
-            .client
-            .get(VIDEOS_ENDPOINT)
-            .query(&[
+        let payload = self.request(
+            api_key,
+            &[
                 ("part", "snippet,contentDetails,statistics"),
                 ("id", ids.as_str()),
                 ("key", api_key),
                 ("maxResults", max_results.as_str()),
-            ])
+            ],
+        )?;
+        normalize_metadata(items, &payload)
+    }
+
+    /// Fetches the official most-popular chart for one region and category.
+    ///
+    /// An absent region means the API's global/default chart, and an absent
+    /// category means all categories.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for missing credentials, invalid parameters, transport
+    /// failures, oversized or malformed JSON, and API-reported failures.
+    pub fn fetch_trending(
+        &self,
+        api_key: &str,
+        region_code: Option<&str>,
+        category_id: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<MediaItem>, YoutubeDataApiError> {
+        let api_key = api_key.trim();
+        if api_key.is_empty() {
+            return Err(YoutubeDataApiError::MissingApiKey);
+        }
+        if !(1..=MAX_VIDEO_RESULTS).contains(&limit)
+            || region_code.is_some_and(|region| {
+                region.len() != 2 || !region.bytes().all(|byte| byte.is_ascii_uppercase())
+            })
+            || category_id.is_some_and(|category| {
+                category.is_empty() || !category.bytes().all(|byte| byte.is_ascii_digit())
+            })
+        {
+            return Err(YoutubeDataApiError::InvalidTrending);
+        }
+        let limit = limit.to_string();
+        let mut parameters = vec![
+            ("part", "snippet,contentDetails,statistics"),
+            ("chart", "mostPopular"),
+            ("key", api_key),
+            ("maxResults", limit.as_str()),
+        ];
+        if let Some(region) = region_code {
+            parameters.push(("regionCode", region));
+        }
+        if let Some(category) = category_id {
+            parameters.push(("videoCategoryId", category));
+        }
+        let payload = self.request(api_key, &parameters)?;
+        normalize_trending(&payload)
+    }
+
+    fn request(
+        &self,
+        api_key: &str,
+        parameters: &[(&str, &str)],
+    ) -> Result<Value, YoutubeDataApiError> {
+        let mut response = self
+            .client
+            .get(VIDEOS_ENDPOINT)
+            .query(parameters)
             .send()
             .map_err(|_| YoutubeDataApiError::Request)?;
         let status = response.status();
@@ -118,8 +180,42 @@ impl YoutubeDataApiClient {
                 .unwrap_or("request was rejected");
             return Err(YoutubeDataApiError::Api(redact(message, api_key)));
         }
-        normalize_metadata(items, &payload)
+        Ok(payload)
     }
+}
+
+fn normalize_trending(payload: &Value) -> Result<Vec<MediaItem>, YoutubeDataApiError> {
+    let entries = payload
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or(YoutubeDataApiError::InvalidResponse)?;
+    Ok(entries
+        .iter()
+        .filter_map(Value::as_object)
+        .filter_map(|entry| {
+            let id = string(Some(entry), "id")?;
+            if !valid_video_id(id) {
+                return None;
+            }
+            let url = format!("https://www.youtube.com/watch?v={id}")
+                .parse()
+                .ok()?;
+            let original = MediaItem {
+                id: MediaId(id.to_owned()),
+                source: MediaSource::Youtube,
+                kind: MediaKind::Video,
+                title: id.to_owned(),
+                url: Some(url),
+                stream_url: None,
+                external_audio_url: None,
+                local_path: None,
+                channel: String::new(),
+                duration_seconds: None,
+                metadata: std::collections::BTreeMap::new(),
+            };
+            Some(normalize_item(&original, entry))
+        })
+        .collect())
 }
 
 fn normalize_metadata(
@@ -267,7 +363,7 @@ mod tests {
 
     use super::{
         YoutubeDataApiClient, YoutubeDataApiError, iso8601_duration_seconds, normalize_metadata,
-        redact,
+        normalize_trending, redact,
     };
 
     fn item(id: &str) -> MediaItem {
@@ -351,6 +447,45 @@ mod tests {
     }
 
     #[test]
+    fn trending_payload_creates_playable_ordered_youtube_items() {
+        let payload = json!({
+            "items": [
+                {
+                    "id": "abcdefghijk",
+                    "snippet": {
+                        "title": "Popular one",
+                        "channelTitle": "Channel",
+                        "publishedAt": "2026-09-08T00:00:00Z",
+                        "liveBroadcastContent": "none"
+                    },
+                    "contentDetails": { "duration": "PT2M3S" },
+                    "statistics": { "viewCount": "9000" }
+                },
+                {
+                    "id": "zyxwvutsrqp",
+                    "snippet": {
+                        "title": "Live now",
+                        "channelTitle": "Live channel",
+                        "liveBroadcastContent": "live"
+                    },
+                    "contentDetails": { "duration": "PT0S" },
+                    "statistics": { "viewCount": "12" }
+                }
+            ]
+        });
+        let items = normalize_trending(&payload).expect("trending");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].title, "Popular one");
+        assert_eq!(items[0].duration_seconds, Some(123.0));
+        assert_eq!(items[0].metadata["view_count"], 9_000_u64);
+        assert_eq!(items[1].kind, MediaKind::LiveStream);
+        assert_eq!(
+            items[1].url.as_ref().map(url::Url::as_str),
+            Some("https://www.youtube.com/watch?v=zyxwvutsrqp")
+        );
+    }
+
+    #[test]
     fn invalid_batch_bounds_are_rejected_before_network_access() {
         let client = YoutubeDataApiClient::new(None).expect("client");
         assert_eq!(
@@ -364,6 +499,18 @@ mod tests {
         assert_eq!(
             client.fetch_metadata("", &[item("abcdefghijk")]),
             Err(YoutubeDataApiError::MissingApiKey)
+        );
+        assert_eq!(
+            client.fetch_trending("key", Some("sl"), None, 20),
+            Err(YoutubeDataApiError::InvalidTrending)
+        );
+        assert_eq!(
+            client.fetch_trending("key", Some("SI"), Some("music"), 20),
+            Err(YoutubeDataApiError::InvalidTrending)
+        );
+        assert_eq!(
+            client.fetch_trending("key", None, None, 51),
+            Err(YoutubeDataApiError::InvalidTrending)
         );
     }
 }

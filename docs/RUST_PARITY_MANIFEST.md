@@ -69,7 +69,7 @@ Customizable items in exact order:
 - [ ] `playback_queue`: Playback queue.
 - [ ] `search`: Search YouTube / SoundCloud.
 - [ ] `resume_last_session`: Resume last session, only when available/enabled.
-- [ ] `trending`: Trending, according to feature setting.
+- [x] `trending`: Trending, according to feature setting.
 - [ ] `audiovault`: AudioVault.
 - [ ] `play_folder`: Play folder.
 - [ ] `play_file`: Play file.
@@ -109,7 +109,7 @@ Permanent items:
   podcast, and other paged collections.
 - [ ] Next can request the next result page without skipping, random selection,
   or losing the focused result.
-- [ ] YouTube trending with country and category filters.
+- [x] YouTube trending with country and category filters.
 - [ ] Trending behavior with and without YouTube Data API key.
 - [ ] YouTube videos, live streams, Shorts, playlists, and channels.
 - [ ] Channel tabs: videos, playlists, and all-time popular videos.

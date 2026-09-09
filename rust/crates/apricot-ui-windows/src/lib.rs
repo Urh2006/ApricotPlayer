@@ -3,6 +3,8 @@
 #![cfg_attr(not(windows), allow(dead_code))]
 
 #[cfg(windows)]
+mod accessibility_win32;
+#[cfg(windows)]
 mod action_finder_win32;
 #[cfg(windows)]
 mod activation_win32;

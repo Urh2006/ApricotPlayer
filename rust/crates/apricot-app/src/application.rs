@@ -30,7 +30,7 @@ use crate::{
     SettingsControllerError, SettingsScreenModel, UserPlaylistController,
     UserPlaylistControllerError, YoutubeCollectionApplyOutcome, YoutubeCollectionError,
     YoutubeCollectionKind, YoutubeCollectionSession, YoutubeCollectionWork, YoutubeSearchKind,
-    embedded_catalog,
+    YoutubeTrendingWork, embedded_catalog,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -575,6 +575,34 @@ impl Application {
         self.state.youtube_collections.clear();
     }
 
+    pub fn update_trending_route_context(
+        &mut self,
+        country_index: usize,
+        category_index: usize,
+        country_code: &str,
+        category_code: &str,
+    ) {
+        if self.state.navigation.current().route != Route::Trending {
+            return;
+        }
+        let mut frame = self.state.navigation.current().clone();
+        frame
+            .parameters
+            .insert("country_index".to_owned(), Value::from(country_index));
+        frame
+            .parameters
+            .insert("category_index".to_owned(), Value::from(category_index));
+        frame.parameters.insert(
+            "country_code".to_owned(),
+            Value::String(country_code.to_owned()),
+        );
+        frame.parameters.insert(
+            "category_code".to_owned(),
+            Value::String(category_code.to_owned()),
+        );
+        self.state.navigation.replace(frame);
+    }
+
     /// Starts a `YouTube` search using the current result-limit setting.
     ///
     /// # Errors
@@ -589,6 +617,36 @@ impl Application {
         self.state
             .search
             .begin(query, kind, self.settings.current().results_limit)
+    }
+
+    /// Starts one fixed-size official Trending result session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only if the generated session identity is invalid.
+    pub fn begin_youtube_trending(
+        &mut self,
+        country_code: &'static str,
+        category_code: &'static str,
+    ) -> Result<YoutubeTrendingWork, SearchSessionError> {
+        self.state.youtube_collections.clear();
+        let configured = self.settings.current().results_limit;
+        let limit = if configured == 0 {
+            50
+        } else {
+            u32::try_from(configured.clamp(1, 50)).unwrap_or(50)
+        };
+        let query = format!("official trending {country_code} {category_code}");
+        let search = self
+            .state
+            .search
+            .begin_fixed(&query, YoutubeSearchKind::Video, limit)?;
+        Ok(YoutubeTrendingWork {
+            generation: search.generation,
+            country_code,
+            category_code,
+            limit,
+        })
     }
 
     pub fn request_more_search_results(&mut self) -> Option<SearchWork> {
@@ -1070,7 +1128,7 @@ impl Application {
         current: &MediaItem,
     ) -> Route {
         match session.return_screen.as_str() {
-            "search" if !sequence.is_empty() => {
+            "search" | "trending" if !sequence.is_empty() => {
                 let selected_index = sequence
                     .iter()
                     .position(|candidate| candidate.stable_identity() == current.stable_identity())
@@ -1088,7 +1146,11 @@ impl Application {
                     sequence.to_vec(),
                     selected_index,
                 ) {
-                    Route::Results
+                    if session.return_screen == "trending" {
+                        Route::Trending
+                    } else {
+                        Route::Results
+                    }
                 } else {
                     Route::MainMenu
                 }
@@ -1141,7 +1203,7 @@ impl Application {
             return false;
         }
         let source = match session.return_screen.as_str() {
-            "search" => PlaybackSequenceSource::Search {
+            "search" | "trending" => PlaybackSequenceSource::Search {
                 generation: self.state.search.generation(),
             },
             "folder" => PlaybackSequenceSource::LocalFolder {
@@ -1352,7 +1414,21 @@ impl Application {
             Route::RssItems => ("rss_items", data),
             Route::NotificationCenter => ("notification_center", data),
             Route::Subscriptions => ("subscriptions", data),
-            Route::Trending => ("trending", data),
+            Route::Trending => {
+                data.insert(
+                    "index".to_owned(),
+                    Value::from(self.state.search.selected_index()),
+                );
+                data.insert(
+                    "query".to_owned(),
+                    Value::String(self.state.search.query().to_owned()),
+                );
+                data.insert(
+                    "search_kind".to_owned(),
+                    serde_json::to_value(self.state.search.kind()).unwrap_or(Value::Null),
+                );
+                ("trending", data)
+            }
             Route::AudiovaultMenu
             | Route::AudiovaultSearch
             | Route::AudiovaultResults
@@ -1975,6 +2051,77 @@ mod tests {
 
         app.close_player_session();
         assert!(app.player_session().audio().is_none());
+    }
+
+    #[test]
+    fn trending_uses_one_fixed_page_and_honors_the_configured_result_limit() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        app.set_integer_setting(SettingId::ResultsLimit, 0)
+            .expect("dynamic result limit");
+        let work = app
+            .begin_youtube_trending("SI", "music")
+            .expect("trending work");
+        assert_eq!(work.limit, 50);
+        app.apply_search_results(
+            work.generation,
+            (0..50)
+                .map(|index| youtube_item(index, MediaKind::Video))
+                .collect(),
+            Some("ignored-continuation".to_owned()),
+        );
+        assert!(app.request_more_search_results().is_none());
+
+        app.set_integer_setting(SettingId::ResultsLimit, 12)
+            .expect("fixed result limit");
+        let work = app
+            .begin_youtube_trending("US", "all")
+            .expect("bounded trending work");
+        assert_eq!(work.limit, 12);
+    }
+
+    #[test]
+    fn trending_player_session_restores_filters_and_selection() {
+        let root = tempdir().expect("temporary directory");
+        let current = root.path().join("beta/last_player_session.json");
+        let legacy = root.path().join("stable/last_player_session.json");
+        let mut original = application(root.path());
+        original.configure_last_player_session(
+            LastPlayerSessionFile::new(&current),
+            &LastPlayerSessionFile::new(&legacy),
+        );
+        original.navigate_to(RouteFrame::new(Route::Trending));
+        original.update_trending_route_context(42, 1, "SI", "music");
+        let work = original
+            .begin_youtube_trending("SI", "music")
+            .expect("trending work");
+        original.apply_search_results(
+            work.generation,
+            (0..5)
+                .map(|index| youtube_item(index, MediaKind::Video))
+                .collect(),
+            None,
+        );
+        let item = original
+            .prepare_search_playback(3)
+            .expect("trending result");
+        original.start_player_item(item);
+        drop(original);
+
+        let mut restored = application(root.path());
+        restored.configure_last_player_session(
+            LastPlayerSessionFile::new(&current),
+            &LastPlayerSessionFile::new(&legacy),
+        );
+        let resume = restored
+            .prepare_last_player_session_resume()
+            .expect("resume plan");
+        assert_eq!(restored.current_route(), Route::Trending);
+        assert_eq!(restored.search_session().selected_index(), 3);
+        assert_eq!(resume.return_data["country_index"], 42);
+        assert_eq!(resume.return_data["category_index"], 1);
+        assert_eq!(resume.return_data["country_code"], "SI");
+        assert_eq!(resume.return_data["category_code"], "music");
     }
 
     #[test]

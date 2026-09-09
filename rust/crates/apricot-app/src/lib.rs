@@ -22,6 +22,7 @@ pub mod settings_model;
 pub mod settings_session;
 pub mod user_playlist_controller;
 pub mod youtube_collection;
+pub mod youtube_trending;
 
 use apricot_core::NavigationStack;
 pub use apricot_media::{YoutubeCollectionKind, YoutubeSearchKind};
@@ -75,6 +76,11 @@ pub use youtube_collection::{
     YoutubeCollectionApplyOutcome, YoutubeCollectionController, YoutubeCollectionError,
     YoutubeCollectionPhase, YoutubeCollectionSession, YoutubeCollectionWork,
     YoutubeCollectionWorkKind,
+};
+pub use youtube_trending::{
+    YOUTUBE_TRENDING_CATEGORIES, YOUTUBE_TRENDING_COUNTRIES, YoutubeTrendingChoice,
+    YoutubeTrendingWork, category_id as youtube_trending_category_id,
+    public_url as youtube_trending_public_url,
 };
 
 #[derive(Debug, Default)]
