@@ -14,10 +14,10 @@ use std::{
 
 use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
 use apricot_media::{
-    YoutubeBackend, YoutubeCapability, YoutubeCollectionKind, YoutubeCommand, YoutubeEngine,
-    YoutubeEngineError, YoutubeErrorCode, YoutubeFormat, YoutubeFormatTracks,
-    YoutubeFormatTransport, YoutubeResponsePayload, YoutubeRuntime, YoutubeRuntimeError,
-    YoutubeSearchKind, YoutubeSessionConfig, YoutubeStreamPreference,
+    MAX_YOUTUBE_METADATA_ITEMS, YoutubeBackend, YoutubeCapability, YoutubeCollectionKind,
+    YoutubeCommand, YoutubeEngine, YoutubeEngineError, YoutubeErrorCode, YoutubeFormat,
+    YoutubeFormatTracks, YoutubeFormatTransport, YoutubeResponsePayload, YoutubeRuntime,
+    YoutubeRuntimeError, YoutubeSearchKind, YoutubeSessionConfig, YoutubeStreamPreference,
 };
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -195,6 +195,36 @@ impl YtDlpYoutubeEngine {
         })
     }
 
+    fn metadata(&self, urls: &[String]) -> Result<YoutubeResponsePayload, YtDlpError> {
+        if urls.is_empty() || urls.len() > MAX_YOUTUBE_METADATA_ITEMS {
+            return Err(YtDlpError::InvalidConfiguration(
+                "metadata requires one bounded batch of media URLs".to_owned(),
+            ));
+        }
+        for url in urls {
+            validate_youtube_url(url)?;
+        }
+        let mut arguments = self.base_arguments();
+        arguments.extend([
+            OsString::from("--no-playlist"),
+            OsString::from("--skip-download"),
+            OsString::from("--ignore-errors"),
+            OsString::from("--dump-json"),
+            OsString::from("--"),
+        ]);
+        arguments.extend(urls.iter().map(OsString::from));
+        let items = parse_json_lines(self.run(arguments)?)?
+            .iter()
+            .filter_map(media_item_from_value)
+            .collect::<Vec<_>>();
+        if items.is_empty() {
+            return Err(YtDlpError::InvalidOutput(
+                "metadata results were missing".to_owned(),
+            ));
+        }
+        Ok(YoutubeResponsePayload::Hydrated { items })
+    }
+
     fn collection(
         &mut self,
         collection_url: &str,
@@ -338,6 +368,7 @@ impl YoutubeEngine for YtDlpYoutubeEngine {
                     YoutubeCapability::Search,
                     YoutubeCapability::PlaylistCollections,
                     YoutubeCapability::ChannelCollections,
+                    YoutubeCapability::Metadata,
                     YoutubeCapability::Resolve,
                     YoutubeCapability::Cookies,
                     YoutubeCapability::Proxy,
@@ -357,6 +388,7 @@ impl YoutubeEngine for YtDlpYoutubeEngine {
                 self.collection(&url, kind, Some(limit))
             }
             YoutubeCommand::CollectionAll { url, kind } => self.collection(&url, kind, None),
+            YoutubeCommand::Metadata { urls } => self.metadata(&urls),
             YoutubeCommand::Resolve { url, preference } => self.resolve(&url, preference),
             YoutubeCommand::Shutdown => Ok(YoutubeResponsePayload::ShuttingDown),
         };
@@ -650,6 +682,21 @@ fn checked_stdout(output: ProcessOutput) -> Result<Vec<u8>, YtDlpError> {
 fn parse_json(output: ProcessOutput) -> Result<Value, YtDlpError> {
     let bytes = checked_stdout(output)?;
     serde_json::from_slice(&bytes).map_err(|error| YtDlpError::InvalidOutput(error.to_string()))
+}
+
+fn parse_json_lines(output: ProcessOutput) -> Result<Vec<Value>, YtDlpError> {
+    let bytes = checked_stdout(output)?;
+    let mut values = Vec::new();
+    for line in bytes.split(|byte| *byte == b'\n') {
+        if line.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        values.push(
+            serde_json::from_slice(line)
+                .map_err(|error| YtDlpError::InvalidOutput(error.to_string()))?,
+        );
+    }
+    Ok(values)
 }
 
 fn media_item_from_value(value: &Value) -> Option<MediaItem> {
@@ -1166,6 +1213,23 @@ mod tests {
             resolve,
             YoutubeResponsePayload::Resolved { item, formats }
                 if item.title == "Me at the zoo" && !formats.is_empty()
+        ));
+        let metadata = engine
+            .execute(YoutubeCommand::Metadata {
+                urls: vec![
+                    "https://www.youtube.com/watch?v=jNQXAC9IVRw".to_owned(),
+                    "https://www.youtube.com/watch?v=aqz-KE-bpKQ".to_owned(),
+                ],
+            })
+            .expect("live metadata");
+        assert!(matches!(
+            metadata,
+            YoutubeResponsePayload::Hydrated { items }
+                if items.len() == 2
+                    && items.iter().all(|item| {
+                        item.metadata.contains_key("view_count")
+                            && item.metadata.contains_key("upload_date")
+                    })
         ));
 
         let playlist_search = engine

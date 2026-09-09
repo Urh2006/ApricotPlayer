@@ -310,6 +310,19 @@ impl SearchSession {
         true
     }
 
+    pub fn apply_metadata(&mut self, generation: u64, hydrated: &MediaItem) -> bool {
+        if generation != self.generation {
+            return false;
+        }
+        let Some(identity) = item_identity(hydrated) else {
+            return false;
+        };
+        self.items
+            .iter_mut()
+            .find(|item| item_identity(item).as_deref() == Some(identity.as_str()))
+            .is_some_and(|item| item.merge_descriptive_metadata(hydrated))
+    }
+
     fn work(&self, work_kind: SearchWorkKind) -> SearchWork {
         SearchWork {
             generation: self.generation,
@@ -552,5 +565,37 @@ mod tests {
             session.request_more().expect("retry after return").limit,
             40
         );
+    }
+
+    #[test]
+    fn metadata_hydration_is_generation_scoped_and_preserves_selection_and_urls() {
+        let mut session = SearchSession::default();
+        let work = session
+            .begin("query", YoutubeSearchKind::Video, 0)
+            .expect("search");
+        let mut first = item("first");
+        first.url = Some(
+            "https://www.youtube.com/watch?v=first"
+                .parse()
+                .expect("URL"),
+        );
+        first.stream_url = Some("https://media.example/first".parse().expect("stream URL"));
+        let second = item("second");
+        session.apply_results(work.generation, vec![first.clone(), second], None);
+        assert!(session.select(1));
+
+        let mut hydrated = first.clone();
+        hydrated.title = "Hydrated first".to_owned();
+        hydrated
+            .metadata
+            .insert("view_count".to_owned(), 42_u64.into());
+        hydrated.stream_url = Some("https://media.example/replacement".parse().expect("stream"));
+        assert!(!session.apply_metadata(work.generation + 1, &hydrated));
+        assert!(session.apply_metadata(work.generation, &hydrated));
+
+        assert_eq!(session.selected_index(), 1);
+        assert_eq!(session.items()[0].title, "Hydrated first");
+        assert_eq!(session.items()[0].url, first.url);
+        assert_eq!(session.items()[0].stream_url, first.stream_url);
     }
 }

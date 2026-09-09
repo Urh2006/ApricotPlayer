@@ -2,13 +2,14 @@ use std::{cmp::Reverse, collections::BTreeMap, time::Duration};
 
 use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
 use apricot_media::{
-    RUSTY_YTDL_REVISION, YOUTUBE_HELPER_PROTOCOL_VERSION, YoutubeCapability, YoutubeCollectionKind,
-    YoutubeCommand, YoutubeErrorCode, YoutubeFormat, YoutubeFormatTracks, YoutubeFormatTransport,
-    YoutubeHelperError, YoutubeRequest, YoutubeResponse, YoutubeResponsePayload, YoutubeSearchKind,
-    YoutubeSessionConfig, YoutubeStreamPreference,
+    MAX_YOUTUBE_METADATA_ITEMS, RUSTY_YTDL_REVISION, YOUTUBE_HELPER_PROTOCOL_VERSION,
+    YoutubeCapability, YoutubeCollectionKind, YoutubeCommand, YoutubeErrorCode, YoutubeFormat,
+    YoutubeFormatTracks, YoutubeFormatTransport, YoutubeHelperError, YoutubeRequest,
+    YoutubeResponse, YoutubeResponsePayload, YoutubeSearchKind, YoutubeSessionConfig,
+    YoutubeStreamPreference,
 };
 use rusty_ytdl::{
-    RequestOptions, Video as ResolvableVideo, VideoError, VideoOptions,
+    RequestOptions, Video as ResolvableVideo, VideoDetails, VideoError, VideoOptions,
     search::{Playlist, PlaylistSearchOptions, SearchOptions, SearchResult, SearchType, YouTube},
 };
 use serde_json::Value;
@@ -60,6 +61,7 @@ impl YoutubeHelper {
             YoutubeCommand::Search { .. }
                 | YoutubeCommand::Collection { .. }
                 | YoutubeCommand::CollectionAll { .. }
+                | YoutubeCommand::Metadata { .. }
                 | YoutubeCommand::Resolve { .. }
         );
         let result = if is_network_operation {
@@ -96,6 +98,7 @@ impl YoutubeHelper {
                 capabilities: vec![
                     YoutubeCapability::Search,
                     YoutubeCapability::PlaylistCollections,
+                    YoutubeCapability::Metadata,
                     YoutubeCapability::Resolve,
                     YoutubeCapability::Cookies,
                     YoutubeCapability::Proxy,
@@ -121,6 +124,7 @@ impl YoutubeHelper {
                 self.collection(url, kind, Some(limit)).await
             }
             YoutubeCommand::CollectionAll { url, kind } => self.collection(url, kind, None).await,
+            YoutubeCommand::Metadata { urls } => self.metadata(urls).await,
             YoutubeCommand::Resolve { url, preference } => self.resolve(url, preference).await,
             YoutubeCommand::Shutdown => Ok(YoutubeResponsePayload::ShuttingDown),
         }
@@ -190,44 +194,50 @@ impl YoutubeHelper {
         let details = info.video_details;
         let mut formats: Vec<_> = info.formats.into_iter().map(format_item).collect();
         sort_formats(&mut formats, preference);
-
-        let mut metadata = BTreeMap::new();
-        metadata.insert("description".to_owned(), Value::String(details.description));
-        metadata.insert("views".to_owned(), Value::String(details.view_count));
-        metadata.insert("upload_date".to_owned(), Value::String(details.upload_date));
-        metadata.insert(
-            "publish_date".to_owned(),
-            Value::String(details.publish_date),
-        );
-        metadata.insert(
-            "chapters".to_owned(),
-            serde_json::to_value(details.chapters).unwrap_or(Value::Array(Vec::new())),
-        );
-
-        let duration_seconds = details.length_seconds.parse::<f64>().ok();
-        let item = MediaItem {
-            id: MediaId(details.video_id),
-            source: MediaSource::Youtube,
-            kind: if details.is_live_content {
-                MediaKind::LiveStream
-            } else {
-                MediaKind::Video
-            },
-            title: details.title,
-            url: Url::parse(&details.video_url)
-                .or_else(|_| Url::parse(&media_url))
-                .ok(),
-            stream_url: None,
-            external_audio_url: None,
-            local_path: None,
-            channel: details.owner_channel_name,
-            duration_seconds,
-            metadata,
-        };
+        let item = media_item_from_details(details, &media_url);
         Ok(YoutubeResponsePayload::Resolved {
             item: Box::new(item),
             formats,
         })
+    }
+
+    async fn metadata(
+        &self,
+        urls: Vec<String>,
+    ) -> Result<YoutubeResponsePayload, YoutubeHelperError> {
+        validate_metadata_urls(&urls)?;
+        let options = VideoOptions {
+            request_options: request_options(&self.config)?,
+            ..VideoOptions::default()
+        };
+        let mut items = Vec::with_capacity(urls.len());
+        let mut last_error = None;
+        for url in urls {
+            let result = async {
+                let video = ResolvableVideo::new_with_options(&url, options.clone())
+                    .map_err(|error| map_backend_error(&error))?;
+                let info = video
+                    .get_info()
+                    .await
+                    .map_err(|error| map_backend_error(&error))?;
+                Ok::<_, YoutubeHelperError>(media_item_from_details(info.video_details, &url))
+            }
+            .await;
+            match result {
+                Ok(item) => items.push(item),
+                Err(error) => last_error = Some(error),
+            }
+        }
+        if items.is_empty() {
+            return Err(last_error.unwrap_or_else(|| {
+                YoutubeHelperError::new(
+                    YoutubeErrorCode::Unavailable,
+                    "No YouTube metadata was returned",
+                    true,
+                )
+            }));
+        }
+        Ok(YoutubeResponsePayload::Hydrated { items })
     }
 
     async fn collection(
@@ -266,6 +276,63 @@ impl YoutubeHelper {
                 .collect(),
             continuation: None,
         })
+    }
+}
+
+fn validate_metadata_urls(urls: &[String]) -> Result<(), YoutubeHelperError> {
+    if urls.is_empty()
+        || urls.len() > MAX_YOUTUBE_METADATA_ITEMS
+        || urls
+            .iter()
+            .any(|url| url.trim().is_empty() || url.len() > MAX_MEDIA_URL_BYTES)
+    {
+        return Err(YoutubeHelperError::new(
+            YoutubeErrorCode::InvalidRequest,
+            "Metadata requires one bounded batch of valid media URLs",
+            false,
+        ));
+    }
+    Ok(())
+}
+
+fn media_item_from_details(details: VideoDetails, fallback_url: &str) -> MediaItem {
+    let mut metadata = BTreeMap::new();
+    metadata.insert("description".to_owned(), Value::String(details.description));
+    metadata.insert(
+        "views".to_owned(),
+        Value::String(details.view_count.clone()),
+    );
+    metadata.insert("view_count".to_owned(), Value::String(details.view_count));
+    metadata.insert("upload_date".to_owned(), Value::String(details.upload_date));
+    metadata.insert(
+        "publish_date".to_owned(),
+        Value::String(details.publish_date),
+    );
+    metadata.insert("channel_id".to_owned(), Value::String(details.channel_id));
+    metadata.insert(
+        "chapters".to_owned(),
+        serde_json::to_value(details.chapters).unwrap_or(Value::Array(Vec::new())),
+    );
+
+    let duration_seconds = details.length_seconds.parse::<f64>().ok();
+    MediaItem {
+        id: MediaId(details.video_id),
+        source: MediaSource::Youtube,
+        kind: if details.is_live_content {
+            MediaKind::LiveStream
+        } else {
+            MediaKind::Video
+        },
+        title: details.title,
+        url: Url::parse(&details.video_url)
+            .or_else(|_| Url::parse(fallback_url))
+            .ok(),
+        stream_url: None,
+        external_audio_url: None,
+        local_path: None,
+        channel: details.owner_channel_name,
+        duration_seconds,
+        metadata,
     }
 }
 
@@ -514,6 +581,28 @@ mod tests {
                 if error.code == apricot_media::YoutubeErrorCode::Unavailable
                     && !error.retryable
         ));
+    }
+
+    #[tokio::test]
+    async fn invalid_metadata_batches_are_rejected_before_network_access() {
+        let mut helper = YoutubeHelper::new().expect("helper");
+        for urls in [
+            Vec::new(),
+            vec![
+                "https://www.youtube.com/watch?v=abcdefghijk".to_owned();
+                apricot_media::MAX_YOUTUBE_METADATA_ITEMS + 1
+            ],
+        ] {
+            let response = helper
+                .handle(YoutubeRequest::new(12, YoutubeCommand::Metadata { urls }))
+                .await;
+            assert!(matches!(
+                response.payload,
+                YoutubeResponsePayload::Error { error }
+                    if error.code == apricot_media::YoutubeErrorCode::InvalidRequest
+                        && !error.retryable
+            ));
+        }
     }
 
     #[tokio::test]

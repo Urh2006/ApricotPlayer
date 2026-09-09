@@ -3,6 +3,7 @@
 #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
 use std::{
+    collections::HashSet,
     ffi::c_void,
     mem::size_of,
     path::PathBuf,
@@ -61,18 +62,18 @@ use windows::{
                 CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW,
                 ES_AUTOHSCROLL, GetClientRect, GetCursorPos, GetMessageW, GetParent,
                 GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, HMENU,
-                IDC_ARROW, IDI_APPLICATION, IsDialogMessageW, KillTimer, LB_ADDSTRING, LB_GETCOUNT,
-                LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL, LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY,
-                LoadCursorW, LoadIconW, MB_ICONINFORMATION, MB_OK, MF_GRAYED, MF_STRING, MSG,
-                MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassW,
-                RegisterWindowMessageW, SW_HIDE, SW_SHOW, SendMessageW, SetForegroundWindow,
-                SetTimer, SetWindowLongPtrW, SetWindowTextW, ShowWindow, TPM_LEFTALIGN,
-                TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE,
-                WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU,
-                WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK,
-                WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WM_SYSKEYUP, WM_TIMER, WNDCLASSW,
-                WS_CHILD, WS_EX_CLIENTEDGE, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
-                WS_VSCROLL,
+                IDC_ARROW, IDI_APPLICATION, IsDialogMessageW, KillTimer, LB_ADDSTRING,
+                LB_DELETESTRING, LB_GETCOUNT, LB_GETCURSEL, LB_INSERTSTRING, LB_RESETCONTENT,
+                LB_SETCURSEL, LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW, LoadIconW,
+                MB_ICONINFORMATION, MB_OK, MF_GRAYED, MF_STRING, MSG, MessageBoxW, MoveWindow,
+                PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SW_HIDE,
+                SW_SHOW, SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW,
+                SetWindowTextW, ShowWindow, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON,
+                TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX,
+                WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE,
+                WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_NCDESTROY, WM_RBUTTONUP,
+                WM_SETFONT, WM_SIZE, WM_SYSKEYUP, WM_TIMER, WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE,
+                WS_GROUP, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -134,6 +135,7 @@ const WM_PROCESS_ACTIVATION: u32 = WM_APP + 1;
 const WM_TRAY_ICON: u32 = WM_APP + 2;
 const YOUTUBE_TIMER_ID: usize = 1;
 const YOUTUBE_TIMER_INTERVAL_MS: u32 = 25;
+const YOUTUBE_METADATA_BATCH_SIZE: usize = 5;
 const PLAYBACK_TIMER_ID: usize = 2;
 const PLAYBACK_TIMER_INTERVAL_MS: u32 = 25;
 const CONTROLLED_REPEAT_TIMER_ID: usize = 3;
@@ -214,6 +216,18 @@ enum PendingYoutubeListWork {
     PlaylistPlayback(PendingYoutubePlaylistPlayback),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum YoutubeMetadataScope {
+    Search(u64),
+    Collection(u64),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PendingYoutubeMetadata {
+    token: u64,
+    scope: YoutubeMetadataScope,
+}
+
 impl PendingYoutubeListWork {
     const fn token(&self) -> u64 {
         match self {
@@ -275,8 +289,12 @@ struct WindowState {
     taskbar_created_message: u32,
     view: MainView,
     youtube_search: YoutubeSearchService,
+    youtube_metadata: YoutubeSearchService,
     pending_youtube_work: Option<PendingYoutubeListWork>,
     pending_youtube_resolve: Option<PendingYoutubeResolve>,
+    pending_youtube_metadata: Option<PendingYoutubeMetadata>,
+    hydrated_youtube_urls: HashSet<String>,
+    deferred_youtube_metadata_rows: HashSet<usize>,
     pending_player_navigation: Option<i32>,
     pending_queued_start: Option<PendingQueuedStart>,
     next_youtube_operation_token: u64,
@@ -872,8 +890,12 @@ unsafe fn create_controls(
         taskbar_created_message: RegisterWindowMessageW(w!("TaskbarCreated")),
         view: MainView::MainMenu,
         youtube_search: YoutubeSearchService::default(),
+        youtube_metadata: YoutubeSearchService::default(),
         pending_youtube_work: None,
         pending_youtube_resolve: None,
+        pending_youtube_metadata: None,
+        hydrated_youtube_urls: HashSet::new(),
+        deferred_youtube_metadata_rows: HashSet::new(),
         pending_player_navigation: None,
         pending_queued_start: None,
         next_youtube_operation_token: 0,
@@ -3184,7 +3206,7 @@ unsafe fn poll_youtube_runtime(window: HWND) {
         };
         let update = match update {
             Ok(Some(update)) => update,
-            Ok(None) => return,
+            Ok(None) => break,
             Err(error) => {
                 let generation = state(window)
                     .and_then(|state| {
@@ -3215,10 +3237,45 @@ unsafe fn poll_youtube_runtime(window: HWND) {
                 item,
                 formats,
             } => finish_youtube_resolve(window, token, *item, &formats),
+            YoutubeSearchServiceUpdate::Hydrated { .. } => {}
             YoutubeSearchServiceUpdate::Failed {
                 token: generation,
                 message,
             } => finish_youtube_error(window, generation, &message),
+        }
+    }
+    poll_youtube_metadata_runtime(window);
+}
+
+unsafe fn poll_youtube_metadata_runtime(window: HWND) {
+    loop {
+        let update = {
+            let Some(state) = state_mut(window) else {
+                return;
+            };
+            state.youtube_metadata.poll()
+        };
+        let update = match update {
+            Ok(Some(update)) => update,
+            Ok(None) => return,
+            Err(_) => {
+                if let Some(state) = state_mut(window) {
+                    state.pending_youtube_metadata = None;
+                }
+                stop_youtube_timer(window);
+                start_result_metadata_hydration(window);
+                return;
+            }
+        };
+        match update {
+            YoutubeSearchServiceUpdate::Hydrated { token, items } => {
+                finish_youtube_metadata(window, token, &items);
+            }
+            YoutubeSearchServiceUpdate::Failed { token, .. } => {
+                finish_youtube_metadata(window, token, &[]);
+            }
+            YoutubeSearchServiceUpdate::Results { .. }
+            | YoutubeSearchServiceUpdate::Resolved { .. } => {}
         }
     }
 }
@@ -3415,6 +3472,8 @@ unsafe fn finish_youtube_search(
     let _ = EnableWindow(state.search, true);
     match (work_kind, outcome) {
         (Some(SearchWorkKind::Initial), SearchApplyOutcome::Replaced) => {
+            state.hydrated_youtube_urls.clear();
+            state.deferred_youtube_metadata_rows.clear();
             state
                 .application
                 .navigate_to(RouteFrame::new(Route::Results));
@@ -3431,6 +3490,7 @@ unsafe fn finish_youtube_search(
     if let Some(delta) = continue_navigation {
         navigate_player_relative(window, delta);
     }
+    start_result_metadata_hydration(window);
 }
 
 unsafe fn finish_youtube_collection(
@@ -3461,6 +3521,8 @@ unsafe fn finish_youtube_collection(
             }),
             YoutubeCollectionApplyOutcome::Replaced,
         ) => {
+            state.hydrated_youtube_urls.clear();
+            state.deferred_youtube_metadata_rows.clear();
             state.view = MainView::YoutubeCollection;
             refresh_youtube_collection(state, true);
             layout_controls_state(window, state);
@@ -3478,6 +3540,7 @@ unsafe fn finish_youtube_collection(
     if let Some(delta) = continue_navigation {
         navigate_player_relative(window, delta);
     }
+    start_result_metadata_hydration(window);
 }
 
 unsafe fn finish_youtube_error(window: HWND, generation: u64, message: &str) {
@@ -3592,7 +3655,11 @@ unsafe fn finish_youtube_error_state(
 }
 
 unsafe fn stop_youtube_timer(window: HWND) {
-    let _ = KillTimer(Some(window), YOUTUBE_TIMER_ID);
+    if state(window).is_none_or(|state| {
+        !state.youtube_search.is_pending() && !state.youtube_metadata.is_pending()
+    }) {
+        let _ = KillTimer(Some(window), YOUTUBE_TIMER_ID);
+    }
 }
 
 unsafe fn stop_playback_timer(window: HWND) {
@@ -3600,7 +3667,11 @@ unsafe fn stop_playback_timer(window: HWND) {
 }
 
 unsafe fn cancel_youtube_work(window: HWND, state: &mut WindowState) {
-    if state.pending_youtube_work.is_none() && state.pending_youtube_resolve.is_none() {
+    if state.pending_youtube_work.is_none()
+        && state.pending_youtube_resolve.is_none()
+        && state.pending_youtube_metadata.is_none()
+        && !state.youtube_metadata.is_pending()
+    {
         return;
     }
     if let Some(work) = state.pending_youtube_work.as_ref() {
@@ -3616,11 +3687,228 @@ unsafe fn cancel_youtube_work(window: HWND, state: &mut WindowState) {
     }
     state.pending_youtube_work = None;
     state.pending_youtube_resolve = None;
+    state.pending_youtube_metadata = None;
+    state.hydrated_youtube_urls.clear();
+    state.deferred_youtube_metadata_rows.clear();
     state.pending_player_navigation = None;
     state.pending_queued_start = None;
     let _ = state.youtube_search.cancel();
+    let _ = state.youtube_metadata.cancel();
     let _ = EnableWindow(state.search, true);
     stop_youtube_timer(window);
+}
+
+unsafe fn start_result_metadata_hydration(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    if state.pending_youtube_metadata.is_some() || state.youtube_metadata.is_pending() {
+        return;
+    }
+    if state.hydrated_youtube_urls.len() > 1_000 {
+        state.hydrated_youtube_urls.clear();
+    }
+    let (scope, items) = match state.view {
+        MainView::Results => (
+            YoutubeMetadataScope::Search(state.application.search_session().generation()),
+            state.application.search_session().items(),
+        ),
+        MainView::YoutubeCollection => {
+            let Some(collection) = state.application.youtube_collection() else {
+                return;
+            };
+            (
+                YoutubeMetadataScope::Collection(collection.generation()),
+                collection.items(),
+            )
+        }
+        _ => return,
+    };
+    let urls: Vec<String> = items
+        .iter()
+        .filter(|item| item_needs_youtube_metadata(item))
+        .filter_map(|item| item.url.as_ref().map(ToString::to_string))
+        .filter(|url| !state.hydrated_youtube_urls.contains(url))
+        .take(YOUTUBE_METADATA_BATCH_SIZE)
+        .collect();
+    if urls.is_empty() {
+        stop_youtube_timer(window);
+        return;
+    }
+    let Some(components) = application_directory().map(|path| path.join("components")) else {
+        return;
+    };
+    state.next_youtube_operation_token = state.next_youtube_operation_token.wrapping_add(1).max(1);
+    let token = state.next_youtube_operation_token;
+    let backend = YoutubeBackend::from_setting_value(&state.application.settings().youtube_backend);
+    let config = youtube_session_config(state);
+    if state
+        .youtube_metadata
+        .start_metadata(backend, &components, config, token, urls.clone())
+        .is_ok()
+    {
+        state.hydrated_youtube_urls.extend(urls);
+        state.pending_youtube_metadata = Some(PendingYoutubeMetadata { token, scope });
+        let _ = SetTimer(
+            Some(window),
+            YOUTUBE_TIMER_ID,
+            YOUTUBE_TIMER_INTERVAL_MS,
+            None,
+        );
+    }
+}
+
+unsafe fn finish_youtube_metadata(window: HWND, token: u64, items: &[apricot_core::MediaItem]) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let Some(pending) = state.pending_youtube_metadata else {
+        return;
+    };
+    if pending.token != token {
+        return;
+    }
+    state.pending_youtube_metadata = None;
+    let mut changed_rows = Vec::new();
+    for item in items {
+        let index = youtube_metadata_item_index(state, pending.scope, item);
+        let changed = match pending.scope {
+            YoutubeMetadataScope::Search(generation) => {
+                state.application.apply_search_metadata(generation, item)
+            }
+            YoutubeMetadataScope::Collection(generation) => state
+                .application
+                .apply_youtube_collection_metadata(generation, item),
+        };
+        if changed && let Some(index) = index {
+            changed_rows.push(index);
+        }
+    }
+    let visible = match pending.scope {
+        YoutubeMetadataScope::Search(generation) => {
+            state.view == MainView::Results
+                && state.application.search_session().generation() == generation
+        }
+        YoutubeMetadataScope::Collection(generation) => {
+            state.view == MainView::YoutubeCollection
+                && state
+                    .application
+                    .youtube_collection()
+                    .is_some_and(|collection| collection.generation() == generation)
+        }
+    };
+    if visible {
+        let focused_index = (GetFocus() == state.list)
+            .then(|| usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok())
+            .flatten();
+        for index in changed_rows {
+            if focused_index == Some(index) {
+                state.deferred_youtube_metadata_rows.insert(index);
+            } else {
+                refresh_youtube_result_line(state, index);
+            }
+        }
+    }
+    stop_youtube_timer(window);
+    start_result_metadata_hydration(window);
+}
+
+fn item_needs_youtube_metadata(item: &apricot_core::MediaItem) -> bool {
+    if item.source != apricot_core::MediaSource::Youtube
+        || !matches!(
+            item.kind,
+            apricot_core::MediaKind::Video | apricot_core::MediaKind::LiveStream
+        )
+        || item.url.is_none()
+    {
+        return false;
+    }
+    let has_views = ["views", "view_count"]
+        .iter()
+        .any(|key| metadata_value_present(item.metadata.get(*key)));
+    let has_upload_time = [
+        "age",
+        "timestamp",
+        "release_timestamp",
+        "upload_date",
+        "uploaded_at",
+        "publish_date",
+    ]
+    .iter()
+    .any(|key| metadata_value_present(item.metadata.get(*key)));
+    !has_views || !has_upload_time
+}
+
+fn metadata_value_present(value: Option<&serde_json::Value>) -> bool {
+    value.is_some_and(|value| {
+        !value.is_null() && value.as_str().is_none_or(|value| !value.trim().is_empty())
+    })
+}
+
+fn youtube_metadata_item_index(
+    state: &WindowState,
+    scope: YoutubeMetadataScope,
+    hydrated: &apricot_core::MediaItem,
+) -> Option<usize> {
+    let identity = hydrated.stable_identity()?;
+    let items = match scope {
+        YoutubeMetadataScope::Search(generation)
+            if state.application.search_session().generation() == generation =>
+        {
+            state.application.search_session().items()
+        }
+        YoutubeMetadataScope::Collection(generation) => {
+            let collection = state.application.youtube_collection()?;
+            if collection.generation() != generation {
+                return None;
+            }
+            collection.items()
+        }
+        YoutubeMetadataScope::Search(_) => return None,
+    };
+    items
+        .iter()
+        .position(|item| item.stable_identity().as_deref() == Some(identity.as_str()))
+}
+
+unsafe fn refresh_youtube_result_line(state: &WindowState, index: usize) {
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let (item, selected) = match state.view {
+        MainView::Results => (
+            state.application.search_session().items().get(index),
+            state.application.search_session().selected_index(),
+        ),
+        MainView::YoutubeCollection => state
+            .application
+            .youtube_collection()
+            .map_or((None, 0), |collection| {
+                (collection.items().get(index), collection.selected_index())
+            }),
+        _ => return,
+    };
+    let Some(item) = item else {
+        return;
+    };
+    let label = wide(&result_label(item, &catalog));
+    SendMessageW(state.list, LB_DELETESTRING, Some(WPARAM(index)), None);
+    SendMessageW(
+        state.list,
+        LB_INSERTSTRING,
+        Some(WPARAM(index)),
+        Some(LPARAM(label.as_ptr() as isize)),
+    );
+    SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selected)), None);
+}
+
+unsafe fn apply_deferred_youtube_metadata_rows(state: &mut WindowState, exclude: Option<usize>) {
+    let pending = std::mem::take(&mut state.deferred_youtube_metadata_rows);
+    for index in pending {
+        if Some(index) == exclude {
+            state.deferred_youtube_metadata_rows.insert(index);
+        } else {
+            refresh_youtube_result_line(state, index);
+        }
+    }
 }
 
 unsafe fn result_selection_changed(window: HWND) {
@@ -3695,6 +3983,10 @@ unsafe fn result_selection_changed(window: HWND) {
             }
         }
     };
+    if let Some(state) = state_mut(window) {
+        let selected = usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok();
+        apply_deferred_youtube_metadata_rows(state, selected);
+    }
     if let Some(work) = work {
         if let Some(state) = state_mut(window) {
             let message = catalog_text(&state.application, "loading_more_results");
@@ -3759,6 +4051,7 @@ unsafe fn local_folder_selection_changed(window: HWND) {
 }
 
 unsafe fn refresh_results(state: &mut WindowState, focus: bool) {
+    state.deferred_youtube_metadata_rows.clear();
     set_open_button_label(state, "open");
     SendMessageW(state.list, LB_RESETCONTENT, None, None);
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
@@ -3790,6 +4083,7 @@ unsafe fn refresh_results(state: &mut WindowState, focus: bool) {
 }
 
 unsafe fn refresh_youtube_collection(state: &mut WindowState, focus: bool) {
+    state.deferred_youtube_metadata_rows.clear();
     set_open_button_label(state, "open");
     SendMessageW(state.list, LB_RESETCONTENT, None, None);
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
@@ -4212,16 +4506,20 @@ fn result_label(
     ) {
         return format!("{} | {kind}", item.title);
     }
-    let mut parts = vec![item.title.clone()];
-    if !item.channel.is_empty() {
-        parts.push(format!("{}: {}", catalog.text("channel"), item.channel));
-    }
-    if let Some(views) = item.metadata.get("views") {
-        let views = views
-            .as_str()
-            .map_or_else(|| views.to_string(), ToOwned::to_owned);
-        parts.push(format!("{}: {views}", catalog.text("views")));
-    }
+    let mut parts = vec![
+        item.title.clone(),
+        format!("{}: {}", catalog.text("channel"), item.channel),
+    ];
+    let views = apricot_app::player_information::display_count(&item.metadata, "views")
+        .or_else(|| apricot_app::player_information::display_count(&item.metadata, "view_count"))
+        .unwrap_or_default();
+    parts.push(format!("{}: {views}", catalog.text("views")));
+    let uploaded = apricot_app::player_information::display_upload_age(catalog, item);
+    parts.push(if uploaded.is_empty() {
+        catalog.text("uploaded_unknown").to_owned()
+    } else {
+        uploaded
+    });
     if let Some(duration) = item.duration_seconds {
         parts.push(format_duration(duration));
     }
@@ -6852,9 +7150,9 @@ fn wide(value: &str) -> Vec<u16> {
 mod tests {
     use super::{
         MainView, SEEK_HOLD_DELAY_MS, SEEK_HOLD_INTERVAL_MS, collection_backend,
-        controlled_repeat_timing, copy_wide_array, list_context_entries, media_resolve_backend,
-        notification_label, resolved_playback_item, view_has_back_button,
-        view_has_collection_remove,
+        controlled_repeat_timing, copy_wide_array, item_needs_youtube_metadata,
+        list_context_entries, media_resolve_backend, notification_label, resolved_playback_item,
+        result_label, view_has_back_button, view_has_collection_remove,
     };
     use apricot_app::AppNotification;
     use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
@@ -6891,9 +7189,42 @@ mod tests {
     }
 
     #[test]
+    fn youtube_metadata_hydration_only_targets_incomplete_playable_rows() {
+        let mut item = youtube_item("video");
+        assert!(item_needs_youtube_metadata(&item));
+        item.metadata.insert("view_count".to_owned(), 0_u64.into());
+        item.metadata
+            .insert("upload_date".to_owned(), "20260101".into());
+        assert!(!item_needs_youtube_metadata(&item));
+
+        item.kind = MediaKind::Playlist;
+        item.metadata.clear();
+        assert!(!item_needs_youtube_metadata(&item));
+        item.kind = MediaKind::Video;
+        item.source = MediaSource::Soundcloud;
+        assert!(!item_needs_youtube_metadata(&item));
+    }
+
+    #[test]
     fn notification_center_shows_back_without_a_python_incompatible_remove_button() {
         assert!(view_has_back_button(MainView::NotificationCenter));
         assert!(!view_has_collection_remove(MainView::NotificationCenter));
+    }
+
+    #[test]
+    fn youtube_result_label_matches_python_field_order_and_formatting() {
+        let mut item = youtube_item("video");
+        item.channel = "OpenAI".to_owned();
+        item.duration_seconds = Some(65.0);
+        item.metadata.insert("views".to_owned(), 37_000_000.into());
+        item.metadata
+            .insert("age".to_owned(), "Uploaded 2 days ago".into());
+        let catalog = apricot_app::embedded_catalog("en");
+
+        assert_eq!(
+            result_label(&item, &catalog),
+            "Video | Channel: OpenAI | Views: 37.0M | Uploaded 2 days ago | 1:05 | Video"
+        );
     }
 
     #[test]

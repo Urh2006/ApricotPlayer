@@ -117,10 +117,10 @@ Permanent items:
   not only the newest page.
 - [ ] Playlist open, play, shuffle, queue, download, and return behavior.
 - [ ] SoundCloud tracks, playlists/sets, users/artists, and artist tracks.
-- [ ] Exact selected item starts even while metadata or another page is loading.
-- [ ] Result metadata hydration runs in bounded batches and updates every loaded
+- [x] Exact selected item starts even while metadata or another page is loading.
+- [x] Result metadata hydration runs in bounded batches and updates every loaded
   page, including channel and playlist results.
-- [ ] Upload-time `unknown` is replaced when metadata arrives without blocking
+- [x] Upload-time `unknown` is replaced when metadata arrives without blocking
   initial list display.
 - [ ] Open channel, subscribe/unsubscribe, favorite, user playlist, queue,
   download, copy, browser, and source-specific context actions.

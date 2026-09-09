@@ -622,6 +622,18 @@ impl Application {
         outcome
     }
 
+    pub fn apply_search_metadata(&mut self, generation: u64, hydrated: &MediaItem) -> bool {
+        if !self.state.search.apply_metadata(generation, hydrated) {
+            return false;
+        }
+        let source = PlaybackSequenceSource::Search { generation };
+        let _ = self
+            .state
+            .player_sequence
+            .sync(source, self.state.search.items());
+        true
+    }
+
     pub fn fail_search(&mut self, generation: u64, message: impl Into<String>) -> bool {
         self.state.search.fail(generation, message)
     }
@@ -699,6 +711,25 @@ impl Application {
             }
         }
         outcome
+    }
+
+    pub fn apply_youtube_collection_metadata(
+        &mut self,
+        generation: u64,
+        hydrated: &MediaItem,
+    ) -> bool {
+        if !self
+            .state
+            .youtube_collections
+            .apply_metadata(generation, hydrated)
+        {
+            return false;
+        }
+        let source = PlaybackSequenceSource::YoutubeCollection { generation };
+        if let Some(collection) = self.state.youtube_collections.current() {
+            let _ = self.state.player_sequence.sync(source, collection.items());
+        }
+        true
     }
 
     pub fn fail_youtube_collection(&mut self, generation: u64, message: impl Into<String>) -> bool {

@@ -103,7 +103,7 @@ try {
     if ($InstalledYtDlpExitCode -ne 0 -or $InstalledYtDlpVersion -ne "2026.08.19") {
         throw "Installed standalone yt-dlp failed its version check (exit=$InstalledYtDlpExitCode, version='$InstalledYtDlpVersion')"
     }
-    $YoutubeProtocolVersion = 3
+    $YoutubeProtocolVersion = 4
     $HelloRequest = [ordered]@{
         protocol_version = $YoutubeProtocolVersion
         request_id = 1

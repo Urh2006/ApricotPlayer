@@ -162,6 +162,36 @@ impl MediaItem {
             .map(|path| format!("{source}:path:{path}"))
     }
 
+    /// Merges source metadata without changing the durable identity or any
+    /// ephemeral playback URL.
+    pub fn merge_descriptive_metadata(&mut self, hydrated: &Self) -> bool {
+        if self.stable_identity().is_none() || self.stable_identity() != hydrated.stable_identity()
+        {
+            return false;
+        }
+        let before = self.clone();
+        if !hydrated.title.trim().is_empty() {
+            self.title.clone_from(&hydrated.title);
+        }
+        if !hydrated.channel.trim().is_empty() {
+            self.channel.clone_from(&hydrated.channel);
+        }
+        if hydrated.duration_seconds.is_some() {
+            self.duration_seconds = hydrated.duration_seconds;
+        }
+        if matches!(hydrated.kind, MediaKind::Video | MediaKind::LiveStream) {
+            self.kind = hydrated.kind;
+        }
+        for (key, value) in &hydrated.metadata {
+            let meaningful =
+                !value.is_null() && value.as_str().is_none_or(|value| !value.trim().is_empty());
+            if meaningful {
+                self.metadata.insert(key.clone(), value.clone());
+            }
+        }
+        *self != before
+    }
+
     pub fn is_playable(&self) -> bool {
         !matches!(
             self.kind,
@@ -238,6 +268,31 @@ mod tests {
         media.stream_url = Some("https://cdn.example/video".parse().expect("stream URL"));
         media.external_audio_url = Some("https://cdn.example/audio".parse().expect("audio URL"));
         assert_eq!(media.stable_identity(), before);
+    }
+
+    #[test]
+    fn descriptive_metadata_merge_preserves_durable_and_ephemeral_locations() {
+        let mut original = item(MediaKind::Video);
+        let original_url = original.url.clone();
+        original.stream_url = Some("https://media.example/old".parse().expect("stream"));
+        let mut hydrated = original.clone();
+        hydrated.title = "Hydrated title".to_owned();
+        hydrated.channel = "Hydrated channel".to_owned();
+        hydrated.duration_seconds = Some(42.0);
+        hydrated.url = Some("https://youtube.com/watch?v=replaced".parse().expect("URL"));
+        hydrated.stream_url = Some("https://media.example/new".parse().expect("stream"));
+        hydrated.metadata.insert("view_count".to_owned(), 12.into());
+
+        assert!(original.merge_descriptive_metadata(&hydrated));
+        assert_eq!(original.title, "Hydrated title");
+        assert_eq!(original.channel, "Hydrated channel");
+        assert_eq!(original.duration_seconds, Some(42.0));
+        assert_eq!(original.metadata["view_count"], 12);
+        assert_eq!(original.url, original_url);
+        assert_eq!(
+            original.stream_url.as_ref().map(url::Url::as_str),
+            Some("https://media.example/old")
+        );
     }
 
     #[test]

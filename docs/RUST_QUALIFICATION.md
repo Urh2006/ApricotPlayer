@@ -273,7 +273,7 @@ live test is ignored by the normal workspace suite and is run explicitly with
 
 ## 2026-09-08: typed YouTube collection backend
 
-Implementation: protocol version 3 collection commands shared by the yt-dlp
+Implementation: protocol version 4 collection commands shared by the yt-dlp
 adapter, the optional Rust helper, and `YoutubeSearchService`.
 
 Verified:
@@ -546,3 +546,46 @@ announcements, Enter, double-click, context menu, individual removal, clear,
 playback, and exact Escape focus return. Automatic production of subscription,
 download, and updater notifications remains coupled to those unfinished Rust
 features.
+
+## 2026-09-09: non-blocking YouTube result metadata
+
+Implementation: protocol version 4 metadata batches, a dedicated component
+runtime, generation-scoped application merges, and per-row native list updates.
+
+Verified:
+
+- search, channel, and playlist rows preserve Python's field order: title,
+  channel, compact views, upload age or `Uploaded unknown`, duration, and type;
+- metadata hydration uses a separate `YoutubeSearchService`, so it cannot make
+  initial search display, exact-item activation, or stream resolution wait;
+- both yt-dlp and the optional Rust backend accept the typed metadata command,
+  while requests are bounded to ten URLs by the protocol and scheduled in
+  Python-compatible batches of five by the Windows shell;
+- one yt-dlp process handles each batch and tolerates individual unavailable
+  videos when at least one batch item succeeds;
+- hydrated values merge only into an exact durable identity and cannot replace
+  the public URL, resolved stream URL, separate audio URL, local path, selected
+  index, result order, or playback-sequence order;
+- stale search and nested-collection generations are ignored;
+- upload dates from yt-dlp (`YYYYMMDD`) and the Rust backend (`YYYY-MM-DD`) are
+  both converted to relative ages;
+- native rows update individually. The currently focused result is deferred
+  while a screen reader may be speaking it, then refreshed after selection
+  moves; all other changed rows update immediately without recreating the list;
+- the explicit live yt-dlp test hydrated two public videos with view counts and
+  upload dates in the same run that searches, resolves, and reads a playlist;
+- the packaged UI qualification searched for videos, observed the focused
+  first row remain `Uploaded unknown`, observed another row update in the
+  background, moved to row two, then confirmed row one updated and selection
+  remained exactly on row two;
+- the package manifest, hash verification, tamper rejection, staged install,
+  launch, uninstall, and both data-preserving and data-removing paths passed.
+
+Automated results: app 111 tests, core 34 tests, media 10 tests, platform 27
+tests plus two ignored live tests, playback 16 tests, storage 47 tests, Windows
+UI 19 tests, updater 2 tests, YouTube helper library 5 tests plus 2 process tests,
+and full workspace Clippy with warnings denied.
+
+Still required: a real NVDA and Narrator listening pass. The Python optimization
+that hydrates up to 50 IDs through a configured YouTube Data API key remains a
+later parity slice; the completed five-item backend path is the no-key default.

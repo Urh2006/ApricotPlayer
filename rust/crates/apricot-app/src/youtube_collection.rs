@@ -248,6 +248,19 @@ impl YoutubeCollectionSession {
         true
     }
 
+    fn apply_metadata(&mut self, generation: u64, hydrated: &MediaItem) -> bool {
+        if generation != self.generation {
+            return false;
+        }
+        let Some(identity) = item_identity(hydrated) else {
+            return false;
+        };
+        self.items
+            .iter_mut()
+            .find(|item| item_identity(item).as_deref() == Some(identity.as_str()))
+            .is_some_and(|item| item.merge_descriptive_metadata(hydrated))
+    }
+
     fn restore_selection(&mut self, identity: Option<&str>, fallback_index: usize) {
         if self.items.is_empty() {
             self.selected_identity = None;
@@ -329,6 +342,12 @@ impl YoutubeCollectionController {
             .map_or(YoutubeCollectionApplyOutcome::IgnoredStale, |session| {
                 session.apply_results(generation, items)
             })
+    }
+
+    pub fn apply_metadata(&mut self, generation: u64, hydrated: &MediaItem) -> bool {
+        self.sessions
+            .last_mut()
+            .is_some_and(|session| session.apply_metadata(generation, hydrated))
     }
 
     pub fn fail(&mut self, generation: u64, message: impl Into<String>) -> bool {
@@ -479,5 +498,35 @@ mod tests {
         let current = controller.current().expect("current");
         assert_eq!(current.items().len(), 40);
         assert_eq!(current.selected_index(), 12);
+    }
+
+    #[test]
+    fn collection_metadata_hydration_preserves_focus_and_rejects_stale_generations() {
+        let mut controller = YoutubeCollectionController::default();
+        let work = controller
+            .begin(
+                "Playlist",
+                "https://www.youtube.com/playlist?list=PL123",
+                YoutubeCollectionKind::PlaylistVideos,
+                0,
+            )
+            .expect("collection");
+        let first = item("first", MediaKind::Video);
+        controller.apply_results(
+            work.generation,
+            vec![first.clone(), item("second", MediaKind::Video)],
+        );
+        assert!(controller.select(1));
+        let mut hydrated = first;
+        hydrated.channel = "Hydrated channel".to_owned();
+        hydrated
+            .metadata
+            .insert("upload_date".to_owned(), "20260101".into());
+
+        assert!(!controller.apply_metadata(work.generation + 1, &hydrated));
+        assert!(controller.apply_metadata(work.generation, &hydrated));
+        let current = controller.current().expect("current");
+        assert_eq!(current.selected_index(), 1);
+        assert_eq!(current.items()[0].channel, "Hydrated channel");
     }
 }

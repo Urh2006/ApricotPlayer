@@ -172,7 +172,7 @@ fn compact_count(value: u64, unit: u64, suffix: char) -> String {
     format!("{whole}.{decimal}{suffix}")
 }
 
-fn display_count(
+pub fn display_count(
     metadata: &std::collections::BTreeMap<String, serde_json::Value>,
     key: &str,
 ) -> Option<String> {
@@ -181,7 +181,7 @@ fn display_count(
         .or_else(|| metadata_string(metadata, key))
 }
 
-fn display_upload_age(catalog: &TranslationCatalog, item: &MediaItem) -> String {
+pub fn display_upload_age(catalog: &TranslationCatalog, item: &MediaItem) -> String {
     if let Some(age) = metadata_string(&item.metadata, "age") {
         return age;
     }
@@ -190,6 +190,7 @@ fn display_upload_age(catalog: &TranslationCatalog, item: &MediaItem) -> String 
         .or_else(|| {
             metadata_string(&item.metadata, "upload_date")
                 .or_else(|| metadata_string(&item.metadata, "uploaded_at"))
+                .or_else(|| metadata_string(&item.metadata, "publish_date"))
                 .and_then(|date| upload_date_timestamp(&date))
         });
     if let Some(timestamp) = timestamp {
@@ -199,8 +200,10 @@ fn display_upload_age(catalog: &TranslationCatalog, item: &MediaItem) -> String 
 }
 
 fn upload_date_timestamp(value: &str) -> Option<i64> {
-    NaiveDate::parse_from_str(value.trim(), "%Y%m%d")
-        .ok()?
+    let value = value.trim();
+    ["%Y%m%d", "%Y-%m-%d"]
+        .into_iter()
+        .find_map(|format| NaiveDate::parse_from_str(value, format).ok())?
         .and_hms_opt(0, 0, 0)
         .map(|date| date.and_utc().timestamp())
 }
@@ -326,7 +329,7 @@ mod tests {
     use apricot_core::{MediaId, MediaKind, MediaSource};
     use apricot_playback::PlaybackMediaInfo;
 
-    use super::{details_text, format_status};
+    use super::{details_text, format_status, upload_date_timestamp};
     use crate::english_catalog;
 
     fn item() -> apricot_core::MediaItem {
@@ -413,5 +416,11 @@ mod tests {
         let details = details_text(&english_catalog(), &media, 1.0, 1.0);
         assert!(details.contains(r"URL: C:\Music\song.flac"));
         assert!(details.contains("Type: Audio"));
+    }
+
+    #[test]
+    fn upload_dates_accept_both_ytdlp_and_rust_backend_shapes() {
+        assert_eq!(upload_date_timestamp("20260101"), Some(1_767_225_600));
+        assert_eq!(upload_date_timestamp("2026-01-01"), Some(1_767_225_600));
     }
 }

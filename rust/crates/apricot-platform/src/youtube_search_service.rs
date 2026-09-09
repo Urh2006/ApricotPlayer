@@ -24,6 +24,10 @@ pub enum YoutubeSearchServiceUpdate {
         item: Box<MediaItem>,
         formats: Vec<YoutubeFormat>,
     },
+    Hydrated {
+        token: u64,
+        items: Vec<MediaItem>,
+    },
     Failed {
         token: u64,
         message: String,
@@ -165,6 +169,28 @@ impl YoutubeSearchService {
         )
     }
 
+    /// Starts one bounded metadata-hydration batch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error under the same conditions as [`Self::start`].
+    pub fn start_metadata(
+        &mut self,
+        backend: YoutubeBackend,
+        components_directory: &Path,
+        config: YoutubeSessionConfig,
+        token: u64,
+        urls: Vec<String>,
+    ) -> Result<(), YoutubeSearchServiceError> {
+        self.start_operation(
+            backend,
+            components_directory,
+            config,
+            token,
+            YoutubeCommand::Metadata { urls },
+        )
+    }
+
     fn start_operation(
         &mut self,
         backend: YoutubeBackend,
@@ -252,6 +278,13 @@ impl YoutubeSearchService {
                         item,
                         formats,
                     }));
+                }
+                Ok(YoutubeResponsePayload::Hydrated { items })
+                    if pending.stage == OperationStage::Executing =>
+                {
+                    let token = pending.token;
+                    self.pending = None;
+                    return Ok(Some(YoutubeSearchServiceUpdate::Hydrated { token, items }));
                 }
                 Ok(_) => {
                     return Ok(Some(self.fail_pending(
@@ -353,6 +386,25 @@ mod tests {
                         continuation: None,
                     })
                 }
+                YoutubeCommand::Metadata { urls } => Ok(YoutubeResponsePayload::Hydrated {
+                    items: urls
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, url)| MediaItem {
+                            id: MediaId(format!("metadata-{index}")),
+                            source: MediaSource::Youtube,
+                            kind: MediaKind::Video,
+                            title: url,
+                            url: None,
+                            stream_url: None,
+                            external_audio_url: None,
+                            local_path: None,
+                            channel: String::new(),
+                            duration_seconds: None,
+                            metadata: std::collections::BTreeMap::default(),
+                        })
+                        .collect(),
+                }),
                 _ => Err(YoutubeEngineError::new("unexpected command", false)),
             }
         }
@@ -510,6 +562,45 @@ mod tests {
                 kind: YoutubeCollectionKind::PlaylistVideos,
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn metadata_batch_has_its_own_typed_result() {
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&commands);
+        let runtime = YoutubeRuntime::spawn(Box::new(move || {
+            Ok(Box::new(FakeEngine {
+                commands: Arc::clone(&captured),
+            }))
+        }))
+        .expect("runtime");
+        let mut service = YoutubeSearchService::with_runtime(YoutubeBackend::YtDlp, runtime);
+        service
+            .start_metadata(
+                YoutubeBackend::YtDlp,
+                Path::new("unused"),
+                YoutubeSessionConfig::default(),
+                19,
+                vec!["https://www.youtube.com/watch?v=abcdefghijk".to_owned()],
+            )
+            .expect("start metadata");
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            if let Some(update) = service.poll().expect("poll") {
+                assert!(matches!(
+                    update,
+                    YoutubeSearchServiceUpdate::Hydrated { token: 19, items }
+                        if items.len() == 1 && items[0].title.contains("abcdefghijk")
+                ));
+                break;
+            }
+            assert!(Instant::now() < deadline, "service timed out");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(matches!(
+            commands.lock().expect("commands")[1],
+            YoutubeCommand::Metadata { .. }
         ));
     }
 
