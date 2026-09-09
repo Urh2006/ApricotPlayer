@@ -124,6 +124,8 @@ version = "2.0.0-dev.1"
 dependencies = [
  "apricot-core",
  "apricot-media",
+ "chrono",
+ "reqwest",
  "serde_json",
  "tempfile",
  "thiserror",
@@ -2120,7 +2122,9 @@ dependencies = [
  "bytes",
  "cookie",
  "cookie_store",
+ "futures-channel",
  "futures-core",
+ "futures-util",
  "http",
  "http-body",
  "http-body-util",

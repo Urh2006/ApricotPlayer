@@ -36,7 +36,8 @@ use apricot_media::{
     select_youtube_playback_formats,
 };
 use apricot_platform::{
-    YoutubeSearchService, YoutubeSearchServiceUpdate, scan_local_media_folder_with_cancel,
+    YoutubeDataApiClient, YoutubeSearchService, YoutubeSearchServiceUpdate,
+    scan_local_media_folder_with_cancel,
 };
 use apricot_playback::{
     InitialPlaybackState, MpvCacheConfig, MpvLaunchOptions, MpvVideoMode, PlaybackCommand,
@@ -136,6 +137,7 @@ const WM_TRAY_ICON: u32 = WM_APP + 2;
 const YOUTUBE_TIMER_ID: usize = 1;
 const YOUTUBE_TIMER_INTERVAL_MS: u32 = 25;
 const YOUTUBE_METADATA_BATCH_SIZE: usize = 5;
+const YOUTUBE_API_METADATA_BATCH_SIZE: usize = 50;
 const PLAYBACK_TIMER_ID: usize = 2;
 const PLAYBACK_TIMER_INTERVAL_MS: u32 = 25;
 const CONTROLLED_REPEAT_TIMER_ID: usize = 3;
@@ -216,7 +218,7 @@ enum PendingYoutubeListWork {
     PlaylistPlayback(PendingYoutubePlaylistPlayback),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum YoutubeMetadataScope {
     Search(u64),
     Collection(u64),
@@ -226,6 +228,12 @@ enum YoutubeMetadataScope {
 struct PendingYoutubeMetadata {
     token: u64,
     scope: YoutubeMetadataScope,
+}
+
+struct PendingYoutubeApiMetadata {
+    scope: YoutubeMetadataScope,
+    urls: Vec<String>,
+    receiver: Receiver<std::result::Result<Vec<apricot_core::MediaItem>, String>>,
 }
 
 impl PendingYoutubeListWork {
@@ -293,7 +301,9 @@ struct WindowState {
     pending_youtube_work: Option<PendingYoutubeListWork>,
     pending_youtube_resolve: Option<PendingYoutubeResolve>,
     pending_youtube_metadata: Option<PendingYoutubeMetadata>,
+    pending_youtube_api_metadata: Option<PendingYoutubeApiMetadata>,
     hydrated_youtube_urls: HashSet<String>,
+    youtube_api_metadata_disabled_scopes: HashSet<YoutubeMetadataScope>,
     deferred_youtube_metadata_rows: HashSet<usize>,
     pending_player_navigation: Option<i32>,
     pending_queued_start: Option<PendingQueuedStart>,
@@ -894,7 +904,9 @@ unsafe fn create_controls(
         pending_youtube_work: None,
         pending_youtube_resolve: None,
         pending_youtube_metadata: None,
+        pending_youtube_api_metadata: None,
         hydrated_youtube_urls: HashSet::new(),
+        youtube_api_metadata_disabled_scopes: HashSet::new(),
         deferred_youtube_metadata_rows: HashSet::new(),
         pending_player_navigation: None,
         pending_queued_start: None,
@@ -3248,6 +3260,7 @@ unsafe fn poll_youtube_runtime(window: HWND) {
 }
 
 unsafe fn poll_youtube_metadata_runtime(window: HWND) {
+    poll_youtube_api_metadata(window);
     loop {
         let update = {
             let Some(state) = state_mut(window) else {
@@ -3277,6 +3290,57 @@ unsafe fn poll_youtube_metadata_runtime(window: HWND) {
             YoutubeSearchServiceUpdate::Results { .. }
             | YoutubeSearchServiceUpdate::Resolved { .. } => {}
         }
+    }
+}
+
+unsafe fn poll_youtube_api_metadata(window: HWND) {
+    let outcome = {
+        let Some(state) = state(window) else {
+            return;
+        };
+        let Some(pending) = state.pending_youtube_api_metadata.as_ref() else {
+            return;
+        };
+        match pending.receiver.try_recv() {
+            Ok(result) => Some(result),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => Some(Err(
+                "YouTube Data API worker stopped unexpectedly".to_owned(),
+            )),
+        }
+    };
+    let Some(outcome) = outcome else {
+        return;
+    };
+    let Some(pending) =
+        state_mut(window).and_then(|state| state.pending_youtube_api_metadata.take())
+    else {
+        return;
+    };
+    if let Ok(items) = outcome {
+        if items.len() != pending.urls.len()
+            && let Some(state) = state_mut(window)
+        {
+            state
+                .youtube_api_metadata_disabled_scopes
+                .insert(pending.scope);
+            for url in &pending.urls {
+                state.hydrated_youtube_urls.remove(url);
+            }
+        }
+        apply_youtube_metadata_results(window, pending.scope, &items);
+    } else {
+        let Some(state) = state_mut(window) else {
+            return;
+        };
+        state
+            .youtube_api_metadata_disabled_scopes
+            .insert(pending.scope);
+        for url in pending.urls {
+            state.hydrated_youtube_urls.remove(&url);
+        }
+        stop_youtube_timer(window);
+        start_result_metadata_hydration(window);
     }
 }
 
@@ -3473,6 +3537,7 @@ unsafe fn finish_youtube_search(
     match (work_kind, outcome) {
         (Some(SearchWorkKind::Initial), SearchApplyOutcome::Replaced) => {
             state.hydrated_youtube_urls.clear();
+            state.youtube_api_metadata_disabled_scopes.clear();
             state.deferred_youtube_metadata_rows.clear();
             state
                 .application
@@ -3522,6 +3587,7 @@ unsafe fn finish_youtube_collection(
             YoutubeCollectionApplyOutcome::Replaced,
         ) => {
             state.hydrated_youtube_urls.clear();
+            state.youtube_api_metadata_disabled_scopes.clear();
             state.deferred_youtube_metadata_rows.clear();
             state.view = MainView::YoutubeCollection;
             refresh_youtube_collection(state, true);
@@ -3656,7 +3722,9 @@ unsafe fn finish_youtube_error_state(
 
 unsafe fn stop_youtube_timer(window: HWND) {
     if state(window).is_none_or(|state| {
-        !state.youtube_search.is_pending() && !state.youtube_metadata.is_pending()
+        !state.youtube_search.is_pending()
+            && !state.youtube_metadata.is_pending()
+            && state.pending_youtube_api_metadata.is_none()
     }) {
         let _ = KillTimer(Some(window), YOUTUBE_TIMER_ID);
     }
@@ -3670,6 +3738,8 @@ unsafe fn cancel_youtube_work(window: HWND, state: &mut WindowState) {
     if state.pending_youtube_work.is_none()
         && state.pending_youtube_resolve.is_none()
         && state.pending_youtube_metadata.is_none()
+        && state.pending_youtube_api_metadata.is_none()
+        && !state.youtube_search.is_pending()
         && !state.youtube_metadata.is_pending()
     {
         return;
@@ -3688,7 +3758,9 @@ unsafe fn cancel_youtube_work(window: HWND, state: &mut WindowState) {
     state.pending_youtube_work = None;
     state.pending_youtube_resolve = None;
     state.pending_youtube_metadata = None;
+    state.pending_youtube_api_metadata = None;
     state.hydrated_youtube_urls.clear();
+    state.youtube_api_metadata_disabled_scopes.clear();
     state.deferred_youtube_metadata_rows.clear();
     state.pending_player_navigation = None;
     state.pending_queued_start = None;
@@ -3702,7 +3774,10 @@ unsafe fn start_result_metadata_hydration(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
     };
-    if state.pending_youtube_metadata.is_some() || state.youtube_metadata.is_pending() {
+    if state.pending_youtube_metadata.is_some()
+        || state.pending_youtube_api_metadata.is_some()
+        || state.youtube_metadata.is_pending()
+    {
         return;
     }
     if state.hydrated_youtube_urls.len() > 1_000 {
@@ -3724,22 +3799,62 @@ unsafe fn start_result_metadata_hydration(window: HWND) {
         }
         _ => return,
     };
-    let urls: Vec<String> = items
+    let api_key = state.application.settings().youtube_data_api_key.trim();
+    let use_api =
+        !api_key.is_empty() && !state.youtube_api_metadata_disabled_scopes.contains(&scope);
+    let batch_size = if use_api {
+        YOUTUBE_API_METADATA_BATCH_SIZE
+    } else {
+        YOUTUBE_METADATA_BATCH_SIZE
+    };
+    let candidates: Vec<apricot_core::MediaItem> = items
         .iter()
         .filter(|item| item_needs_youtube_metadata(item))
-        .filter_map(|item| item.url.as_ref().map(ToString::to_string))
-        .filter(|url| !state.hydrated_youtube_urls.contains(url))
-        .take(YOUTUBE_METADATA_BATCH_SIZE)
+        .filter(|item| {
+            item.url
+                .as_ref()
+                .is_some_and(|url| !state.hydrated_youtube_urls.contains(url.as_str()))
+        })
+        .take(batch_size)
+        .cloned()
         .collect();
-    if urls.is_empty() {
+    if candidates.is_empty() {
         stop_youtube_timer(window);
         return;
     }
+    let urls: Vec<String> = candidates
+        .iter()
+        .filter_map(|item| item.url.as_ref().map(ToString::to_string))
+        .collect();
+    if use_api {
+        let api_key = api_key.to_owned();
+        let proxy = nonempty(&state.application.settings().proxy);
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = YoutubeDataApiClient::new(proxy.as_deref())
+                .and_then(|client| client.fetch_metadata(&api_key, &candidates))
+                .map_err(|error| error.to_string());
+            let _ = sender.send(result);
+        });
+        state.hydrated_youtube_urls.extend(urls.clone());
+        state.pending_youtube_api_metadata = Some(PendingYoutubeApiMetadata {
+            scope,
+            urls,
+            receiver,
+        });
+        let _ = SetTimer(
+            Some(window),
+            YOUTUBE_TIMER_ID,
+            YOUTUBE_TIMER_INTERVAL_MS,
+            None,
+        );
+        return;
+    }
+    state.next_youtube_operation_token = state.next_youtube_operation_token.wrapping_add(1).max(1);
+    let token = state.next_youtube_operation_token;
     let Some(components) = application_directory().map(|path| path.join("components")) else {
         return;
     };
-    state.next_youtube_operation_token = state.next_youtube_operation_token.wrapping_add(1).max(1);
-    let token = state.next_youtube_operation_token;
     let backend = YoutubeBackend::from_setting_value(&state.application.settings().youtube_backend);
     let config = youtube_session_config(state);
     if state
@@ -3769,10 +3884,21 @@ unsafe fn finish_youtube_metadata(window: HWND, token: u64, items: &[apricot_cor
         return;
     }
     state.pending_youtube_metadata = None;
+    apply_youtube_metadata_results(window, pending.scope, items);
+}
+
+unsafe fn apply_youtube_metadata_results(
+    window: HWND,
+    scope: YoutubeMetadataScope,
+    items: &[apricot_core::MediaItem],
+) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
     let mut changed_rows = Vec::new();
     for item in items {
-        let index = youtube_metadata_item_index(state, pending.scope, item);
-        let changed = match pending.scope {
+        let index = youtube_metadata_item_index(state, scope, item);
+        let changed = match scope {
             YoutubeMetadataScope::Search(generation) => {
                 state.application.apply_search_metadata(generation, item)
             }
@@ -3784,7 +3910,7 @@ unsafe fn finish_youtube_metadata(window: HWND, token: u64, items: &[apricot_cor
             changed_rows.push(index);
         }
     }
-    let visible = match pending.scope {
+    let visible = match scope {
         YoutubeMetadataScope::Search(generation) => {
             state.view == MainView::Results
                 && state.application.search_session().generation() == generation

@@ -550,7 +550,8 @@ features.
 ## 2026-09-09: non-blocking YouTube result metadata
 
 Implementation: protocol version 4 metadata batches, a dedicated component
-runtime, generation-scoped application merges, and per-row native list updates.
+runtime, an official YouTube Data API batch client, generation-scoped
+application merges, and per-row native list updates.
 
 Verified:
 
@@ -561,6 +562,14 @@ Verified:
 - both yt-dlp and the optional Rust backend accept the typed metadata command,
   while requests are bounded to ten URLs by the protocol and scheduled in
   Python-compatible batches of five by the Windows shell;
+- when a YouTube Data API key is configured, the Windows shell instead sends
+  up to 50 video IDs to the fixed official `videos.list` endpoint. The client
+  has bounded response size, request/connect timeouts, disabled redirects,
+  optional proxy support, secret-redacted errors, and preserves result order
+  and all durable or resolved locations;
+- rejected, malformed, disconnected, or partial API responses disable the API
+  optimization only for that result generation and continue through the
+  existing five-item component path; no API error blocks search or playback;
 - one yt-dlp process handles each batch and tolerates individual unavailable
   videos when at least one batch item succeeds;
 - hydrated values merge only into an exact durable identity and cannot replace
@@ -581,11 +590,18 @@ Verified:
 - the package manifest, hash verification, tamper rejection, staged install,
   launch, uninstall, and both data-preserving and data-removing paths passed.
 
-Automated results: app 111 tests, core 34 tests, media 10 tests, platform 27
+Automated results: app 111 tests, core 34 tests, media 10 tests, platform 31
 tests plus two ignored live tests, playback 16 tests, storage 47 tests, Windows
 UI 19 tests, updater 2 tests, YouTube helper library 5 tests plus 2 process tests,
 and full workspace Clippy with warnings denied.
 
-Still required: a real NVDA and Narrator listening pass. The Python optimization
-that hydrates up to 50 IDs through a configured YouTube Data API key remains a
-later parity slice; the completed five-item backend path is the no-key default.
+The installed package was requalified with no API key configured: initial
+results remained immediate, a nonfocused row hydrated through the five-item
+fallback, the focused row remained stable until selection moved, and the
+selection stayed on the exact requested row. Deterministic API tests cover the
+50-item bound, response ordering, metadata normalization, URL preservation,
+duration/date/live conversion, malformed responses, and secret redaction.
+
+Still required: a real NVDA and Narrator listening pass and a live packaged
+50-item request with a user-configured YouTube Data API key. No test key is
+bundled or written to settings.

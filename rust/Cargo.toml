@@ -37,6 +37,7 @@ apricot-updater = { path = "crates/apricot-updater" }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 libloading = "0.8"
 rand = "0.9"
+reqwest = { version = "=0.13.4", default-features = false, features = ["blocking", "query", "rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
