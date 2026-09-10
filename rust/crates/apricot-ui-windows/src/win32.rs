@@ -3,7 +3,7 @@
 #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
 use std::{
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     ffi::c_void,
     mem::size_of,
     path::PathBuf,
@@ -23,6 +23,7 @@ use crate::{
 use apricot_app::{
     ActionFinderContext, ActivationRequest, Application, MainMenuModel, PlaybackPhase,
     PlayerNavigationOutcome, SearchApplyOutcome, SearchWork, SearchWorkKind, SessionToggle,
+    SubscriptionAddOutcome, SubscriptionCheckResult, SubscriptionRemoveOutcome,
     YOUTUBE_TRENDING_CATEGORIES, YOUTUBE_TRENDING_COUNTRIES, YoutubeCollectionApplyOutcome,
     YoutubeCollectionKind, YoutubeCollectionPhase, YoutubeCollectionWork,
     YoutubeCollectionWorkKind, YoutubeSearchKind, YoutubeTrendingWork,
@@ -109,6 +110,10 @@ const ID_NOTIFICATION_CLEAR: usize = 1022;
 const ID_TRENDING_COUNTRY: usize = 1023;
 const ID_TRENDING_CATEGORY: usize = 1024;
 const ID_LOAD_TRENDING: usize = 1025;
+const ID_SUBSCRIPTION_CHECK: usize = 1026;
+const ID_SUBSCRIPTION_NEW: usize = 1027;
+const ID_SUBSCRIPTION_FILTER: usize = 1028;
+const ID_SUBSCRIPTION_SET_CATEGORY: usize = 1029;
 const ID_CONTEXT_PLAY: usize = 1101;
 const ID_CONTEXT_PLAY_FOLDER: usize = 1102;
 const ID_CONTEXT_SHUFFLE_FOLDER: usize = 1103;
@@ -138,6 +143,13 @@ const ID_CONTEXT_CHANNEL_VIDEOS: usize = 1126;
 const ID_CONTEXT_CHANNEL_POPULAR: usize = 1127;
 const ID_CONTEXT_CHANNEL_PLAYLISTS: usize = 1128;
 const ID_CONTEXT_CHANNEL_STREAMS: usize = 1129;
+const ID_CONTEXT_SUBSCRIPTION_OPEN: usize = 1130;
+const ID_CONTEXT_SUBSCRIPTION_NEW: usize = 1131;
+const ID_CONTEXT_SUBSCRIPTION_CHECK: usize = 1132;
+const ID_CONTEXT_SUBSCRIPTION_SET_CATEGORY: usize = 1133;
+const ID_CONTEXT_SUBSCRIPTION_FILTER: usize = 1134;
+const ID_CONTEXT_UNSUBSCRIBE: usize = 1135;
+const ID_CONTEXT_SUBSCRIBE: usize = 1136;
 const WM_PROCESS_ACTIVATION: u32 = WM_APP + 1;
 const WM_TRAY_ICON: u32 = WM_APP + 2;
 const YOUTUBE_TIMER_ID: usize = 1;
@@ -148,6 +160,7 @@ const PLAYBACK_TIMER_ID: usize = 2;
 const PLAYBACK_TIMER_INTERVAL_MS: u32 = 25;
 const CONTROLLED_REPEAT_TIMER_ID: usize = 3;
 const LOCAL_FOLDER_TIMER_ID: usize = 4;
+const SUBSCRIPTION_TIMER_ID: usize = 5;
 const SEEK_HOLD_DELAY_MS: u32 = 180;
 const SEEK_HOLD_INTERVAL_MS: u32 = 110;
 const CB_ADDSTRING: u32 = 0x0143;
@@ -181,6 +194,7 @@ enum MainView {
     Favorites,
     History,
     NotificationCenter,
+    Subscriptions,
     UserPlaylists,
     UserPlaylistItems,
     Player,
@@ -256,6 +270,14 @@ struct PendingYoutubeTrendingApi {
     receiver: Receiver<std::result::Result<Vec<apricot_core::MediaItem>, String>>,
 }
 
+struct PendingSubscriptionCheck {
+    manual: bool,
+    queue: VecDeque<(String, String)>,
+    current: Option<(u64, String, String)>,
+    results: Vec<SubscriptionCheckResult>,
+    errors: Vec<String>,
+}
+
 impl PendingYoutubeListWork {
     const fn token(&self) -> u64 {
         match self {
@@ -306,6 +328,10 @@ struct WindowState {
     collection_remove: HWND,
     history_clear: HWND,
     notification_clear: HWND,
+    subscription_check: HWND,
+    subscription_new: HWND,
+    subscription_filter: HWND,
+    subscription_set_category: HWND,
     playlist_create: HWND,
     playlist_play_all: HWND,
     playlist_shuffle: HWND,
@@ -324,11 +350,13 @@ struct WindowState {
     view: MainView,
     youtube_search: YoutubeSearchService,
     youtube_metadata: YoutubeSearchService,
+    youtube_subscriptions: YoutubeSearchService,
     pending_youtube_work: Option<PendingYoutubeListWork>,
     pending_youtube_resolve: Option<PendingYoutubeResolve>,
     pending_youtube_metadata: Option<PendingYoutubeMetadata>,
     pending_youtube_api_metadata: Option<PendingYoutubeApiMetadata>,
     pending_youtube_trending_api: Option<PendingYoutubeTrendingApi>,
+    pending_subscription_check: Option<PendingSubscriptionCheck>,
     hydrated_youtube_urls: HashSet<String>,
     youtube_api_metadata_disabled_scopes: HashSet<YoutubeMetadataScope>,
     deferred_youtube_metadata_rows: HashSet<usize>,
@@ -409,6 +437,8 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
         let _ = SetFocus(Some(initial_focus));
     }
     process_pending_activations(window);
+    configure_subscription_timer(window);
+    check_subscriptions_if_due(window);
 
     let mut message = MSG::default();
     loop {
@@ -443,16 +473,26 @@ unsafe fn handle_view_tab_message(window: HWND, message: &MSG) -> bool {
     let Some(state) = state(window) else {
         return false;
     };
-    if state.view != MainView::Trending {
-        return false;
-    }
-    let controls = [
-        state.trending_country,
-        state.trending_category,
-        state.list,
-        state.back,
-        state.load_trending,
-    ];
+    let controls = match state.view {
+        MainView::Trending => vec![
+            state.trending_country,
+            state.trending_category,
+            state.list,
+            state.back,
+            state.load_trending,
+        ],
+        MainView::Subscriptions => vec![
+            state.back,
+            state.subscription_check,
+            state.open,
+            state.subscription_new,
+            state.collection_remove,
+            state.subscription_filter,
+            state.subscription_set_category,
+            state.list,
+        ],
+        _ => return false,
+    };
     let Some(current) = controls.iter().position(|control| *control == GetFocus()) else {
         return false;
     };
@@ -541,6 +581,10 @@ unsafe extern "system" fn window_proc(
             poll_local_folder_scan(window);
             LRESULT(0)
         }
+        WM_TIMER if wparam.0 == SUBSCRIPTION_TIMER_ID => {
+            check_subscriptions_if_due(window);
+            LRESULT(0)
+        }
         WM_DESTROY => {
             remove_tray_icon(window);
             let pointer = GetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0)) as *mut WindowState;
@@ -607,6 +651,14 @@ unsafe fn handle_window_command(window: HWND, wparam: WPARAM) {
         clear_history(window);
     } else if command == ID_NOTIFICATION_CLEAR {
         clear_notifications(window);
+    } else if command == ID_SUBSCRIPTION_CHECK {
+        check_subscriptions(window, true);
+    } else if command == ID_SUBSCRIPTION_NEW {
+        open_selected_subscription_new_videos(window);
+    } else if command == ID_SUBSCRIPTION_FILTER {
+        choose_subscription_category_filter(window);
+    } else if command == ID_SUBSCRIPTION_SET_CATEGORY {
+        set_selected_subscription_category(window);
     } else if command == ID_PLAYLIST_CREATE {
         create_user_playlist(window, None);
     } else if command == ID_PLAYLIST_PLAY_ALL {
@@ -929,6 +981,46 @@ unsafe fn create_controls(
         WINDOW_EX_STYLE::default(),
         ID_NOTIFICATION_CLEAR,
     )?;
+    let subscription_check_text = wide(catalog.text("subscription_check_now"));
+    let subscription_check = create_control(
+        parent,
+        instance,
+        w!("BUTTON"),
+        PCWSTR(subscription_check_text.as_ptr()),
+        WS_CHILD | WS_TABSTOP,
+        WINDOW_EX_STYLE::default(),
+        ID_SUBSCRIPTION_CHECK,
+    )?;
+    let subscription_new_text = wide(catalog.text("subscription_new_videos_button"));
+    let subscription_new = create_control(
+        parent,
+        instance,
+        w!("BUTTON"),
+        PCWSTR(subscription_new_text.as_ptr()),
+        WS_CHILD | WS_TABSTOP,
+        WINDOW_EX_STYLE::default(),
+        ID_SUBSCRIPTION_NEW,
+    )?;
+    let subscription_filter_text = wide(catalog.text("filter_category"));
+    let subscription_filter = create_control(
+        parent,
+        instance,
+        w!("BUTTON"),
+        PCWSTR(subscription_filter_text.as_ptr()),
+        WS_CHILD | WS_TABSTOP,
+        WINDOW_EX_STYLE::default(),
+        ID_SUBSCRIPTION_FILTER,
+    )?;
+    let subscription_set_category_text = wide(catalog.text("set_category"));
+    let subscription_set_category = create_control(
+        parent,
+        instance,
+        w!("BUTTON"),
+        PCWSTR(subscription_set_category_text.as_ptr()),
+        WS_CHILD | WS_TABSTOP,
+        WINDOW_EX_STYLE::default(),
+        ID_SUBSCRIPTION_SET_CATEGORY,
+    )?;
     let playlist_create_text = wide(catalog.text("create_playlist"));
     let playlist_create = create_control(
         parent,
@@ -998,6 +1090,10 @@ unsafe fn create_controls(
         collection_remove,
         history_clear,
         notification_clear,
+        subscription_check,
+        subscription_new,
+        subscription_filter,
+        subscription_set_category,
         playlist_create,
         playlist_play_all,
         playlist_shuffle,
@@ -1031,6 +1127,10 @@ unsafe fn create_controls(
         collection_remove,
         history_clear,
         notification_clear,
+        subscription_check,
+        subscription_new,
+        subscription_filter,
+        subscription_set_category,
         playlist_create,
         playlist_play_all,
         playlist_shuffle,
@@ -1049,11 +1149,13 @@ unsafe fn create_controls(
         view: MainView::MainMenu,
         youtube_search: YoutubeSearchService::default(),
         youtube_metadata: YoutubeSearchService::default(),
+        youtube_subscriptions: YoutubeSearchService::default(),
         pending_youtube_work: None,
         pending_youtube_resolve: None,
         pending_youtube_metadata: None,
         pending_youtube_api_metadata: None,
         pending_youtube_trending_api: None,
+        pending_subscription_check: None,
         hydrated_youtube_urls: HashSet::new(),
         youtube_api_metadata_disabled_scopes: HashSet::new(),
         deferred_youtube_metadata_rows: HashSet::new(),
@@ -1242,6 +1344,8 @@ unsafe fn execute_list_context_command(
                 MainView::Results | MainView::Trending | MainView::YoutubeCollection
             ) {
                 remove_active_favorite(window);
+            } else if view == MainView::Subscriptions {
+                remove_selected_subscription(window);
             } else {
                 remove_selected_collection_item(window);
             }
@@ -1266,6 +1370,19 @@ unsafe fn execute_list_context_command(
         ID_CONTEXT_REMOVE_PLAYLIST => remove_selected_user_playlist(window),
         ID_CONTEXT_ADD_PLAYLIST_TO_QUEUE => add_current_user_playlist_to_queue(window),
         ID_CONTEXT_CLEAR_NOTIFICATIONS => clear_notifications(window),
+        ID_CONTEXT_SUBSCRIPTION_OPEN => open_selected_subscription_videos(window),
+        ID_CONTEXT_SUBSCRIPTION_NEW => open_selected_subscription_new_videos(window),
+        ID_CONTEXT_SUBSCRIPTION_CHECK => check_subscriptions(window, true),
+        ID_CONTEXT_SUBSCRIPTION_SET_CATEGORY => set_selected_subscription_category(window),
+        ID_CONTEXT_SUBSCRIPTION_FILTER => choose_subscription_category_filter(window),
+        ID_CONTEXT_UNSUBSCRIBE => {
+            if view == MainView::Subscriptions {
+                remove_selected_subscription(window);
+            } else {
+                unsubscribe_active_channel(window);
+            }
+        }
+        ID_CONTEXT_SUBSCRIBE => subscribe_active_channel(window),
         ID_CONTEXT_OPEN_PLAYLIST_VIDEOS => {
             if let Some(item) = active_item {
                 open_youtube_collection(window, item, YoutubeCollectionKind::PlaylistVideos);
@@ -1294,6 +1411,7 @@ unsafe fn execute_list_context_command(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn list_context_entries(
     view: MainView,
     active_item: Option<&apricot_core::MediaItem>,
@@ -1308,6 +1426,16 @@ fn list_context_entries(
         } else {
             (ID_CONTEXT_ADD_FAVORITE, "add_favorite")
         };
+        let subscription_actions = active_item
+            .filter(|item| Application::can_subscribe_to_item(item))
+            .map(|_| {
+                [
+                    (ID_CONTEXT_SUBSCRIBE, "subscribe_channel"),
+                    (ID_CONTEXT_UNSUBSCRIBE, "unsubscribe_channel"),
+                ]
+            })
+            .into_iter()
+            .flatten();
         return match active_item.map(|item| item.kind) {
             Some(apricot_core::MediaKind::Playlist) => Some(vec![
                 (ID_CONTEXT_PLAY_PLAYLIST, "play_playlist"),
@@ -1316,25 +1444,31 @@ fn list_context_entries(
                 favorite,
                 (ID_CONTEXT_COPY_LOCATION, "copy_link"),
             ]),
-            Some(apricot_core::MediaKind::Channel) => Some(vec![
-                (ID_CONTEXT_CHANNEL_OPTIONS, "channel_options"),
-                (ID_CONTEXT_CHANNEL_VIDEOS, "channel_videos"),
-                (ID_CONTEXT_CHANNEL_POPULAR, "channel_popular"),
-                (ID_CONTEXT_CHANNEL_PLAYLISTS, "channel_playlists"),
-                (ID_CONTEXT_CHANNEL_STREAMS, "channel_live_streams"),
-                favorite,
-                (ID_CONTEXT_COPY_LOCATION, "copy_link"),
-            ]),
-            Some(_) => Some(vec![
-                (ID_CONTEXT_PLAY, "play"),
-                favorite,
-                (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
-                (ID_CONTEXT_REMOVE_FROM_QUEUE, "remove_from_playback_queue"),
-                (ID_CONTEXT_PLAYBACK_QUEUE, "playback_queue"),
-                (ID_CONTEXT_COPY_LOCATION, "copy_link"),
-                (ID_CONTEXT_COPY_STREAM_URL, "copy_stream_url"),
-                (ID_CONTEXT_ADD_TO_PLAYLIST, "add_to_playlist"),
-            ]),
+            Some(apricot_core::MediaKind::Channel) => {
+                let mut entries = vec![
+                    (ID_CONTEXT_CHANNEL_OPTIONS, "channel_options"),
+                    (ID_CONTEXT_CHANNEL_VIDEOS, "channel_videos"),
+                    (ID_CONTEXT_CHANNEL_POPULAR, "channel_popular"),
+                    (ID_CONTEXT_CHANNEL_PLAYLISTS, "channel_playlists"),
+                    (ID_CONTEXT_CHANNEL_STREAMS, "channel_live_streams"),
+                ];
+                entries.extend(subscription_actions);
+                entries.extend([favorite, (ID_CONTEXT_COPY_LOCATION, "copy_link")]);
+                Some(entries)
+            }
+            Some(_) => {
+                let mut entries = vec![(ID_CONTEXT_PLAY, "play"), favorite];
+                entries.extend(subscription_actions);
+                entries.extend([
+                    (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
+                    (ID_CONTEXT_REMOVE_FROM_QUEUE, "remove_from_playback_queue"),
+                    (ID_CONTEXT_PLAYBACK_QUEUE, "playback_queue"),
+                    (ID_CONTEXT_COPY_LOCATION, "copy_link"),
+                    (ID_CONTEXT_COPY_STREAM_URL, "copy_stream_url"),
+                    (ID_CONTEXT_ADD_TO_PLAYLIST, "add_to_playlist"),
+                ]);
+                Some(entries)
+            }
             None => None,
         };
     }
@@ -1354,6 +1488,8 @@ fn list_context_entries(
             (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
             (ID_CONTEXT_COPY_LOCATION, "copy_link"),
             (ID_CONTEXT_COLLECTION_REMOVE, "remove_favorite"),
+            (ID_CONTEXT_SUBSCRIBE, "subscribe_channel"),
+            (ID_CONTEXT_UNSUBSCRIBE, "unsubscribe_channel"),
             (ID_CONTEXT_ADD_TO_PLAYLIST, "add_to_playlist"),
         ]),
         MainView::History => Some(vec![
@@ -1363,12 +1499,27 @@ fn list_context_entries(
             (ID_CONTEXT_COPY_LOCATION, "copy_link"),
             (ID_CONTEXT_COLLECTION_REMOVE, "remove_history_item"),
             (ID_CONTEXT_HISTORY_CLEAR, "clear_history"),
+            (ID_CONTEXT_SUBSCRIBE, "subscribe_channel"),
+            (ID_CONTEXT_UNSUBSCRIBE, "unsubscribe_channel"),
             (ID_CONTEXT_ADD_TO_PLAYLIST, "add_to_playlist"),
         ]),
         MainView::NotificationCenter => Some(vec![
             (ID_CONTEXT_PLAY, "play"),
             (ID_CONTEXT_COPY_LOCATION, "copy_url"),
             (ID_CONTEXT_CLEAR_NOTIFICATIONS, "clear_notifications"),
+        ]),
+        MainView::Subscriptions => Some(vec![
+            (ID_CONTEXT_SUBSCRIPTION_OPEN, "subscription_open_videos"),
+            (
+                ID_CONTEXT_SUBSCRIPTION_NEW,
+                "subscription_new_videos_button",
+            ),
+            (ID_CONTEXT_SUBSCRIPTION_CHECK, "subscription_check_now"),
+            (ID_CONTEXT_SUBSCRIPTION_SET_CATEGORY, "set_category"),
+            (ID_CONTEXT_SUBSCRIPTION_FILTER, "filter_category"),
+            (ID_CONTEXT_COPY_LOCATION, "copy_url"),
+            (ID_CONTEXT_UNSUBSCRIBE, "unsubscribe_channel"),
+            (ID_CONTEXT_COLLECTION_REMOVE, "remove"),
         ]),
         MainView::Results | MainView::Trending | MainView::YoutubeCollection => unreachable!(),
         MainView::UserPlaylists => Some(vec![
@@ -1403,6 +1554,7 @@ unsafe fn show_context_menu_for_active_view(window: HWND) {
             | MainView::Favorites
             | MainView::History
             | MainView::NotificationCenter
+            | MainView::Subscriptions
             | MainView::UserPlaylists
             | MainView::UserPlaylistItems,
         ) => {
@@ -1413,6 +1565,7 @@ unsafe fn show_context_menu_for_active_view(window: HWND) {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 unsafe fn show_player_context_menu(window: HWND, location: LPARAM) {
     let Some((language, item, focused)) = state(window).and_then(|state| {
         Some((
@@ -1451,6 +1604,10 @@ unsafe fn show_player_context_menu(window: HWND, location: LPARAM) {
             (ID_CONTEXT_ADD_FAVORITE, "add_favorite")
         },
     );
+    if Application::can_subscribe_to_item(&item) {
+        entries.insert(2, (ID_CONTEXT_UNSUBSCRIBE, "unsubscribe_channel"));
+        entries.insert(2, (ID_CONTEXT_SUBSCRIBE, "subscribe_channel"));
+    }
     if !item.is_local_media() {
         entries.insert(1, (ID_CONTEXT_COPY_STREAM_URL, "copy_stream_url"));
     }
@@ -1495,6 +1652,8 @@ unsafe fn show_player_context_menu(window: HWND, location: LPARAM) {
             ID_CONTEXT_PLAYBACK_QUEUE => show_playback_queue(window),
             ID_CONTEXT_ADD_FAVORITE => add_active_favorite(window),
             ID_CONTEXT_COLLECTION_REMOVE => remove_active_favorite(window),
+            ID_CONTEXT_SUBSCRIBE => subscribe_active_channel(window),
+            ID_CONTEXT_UNSUBSCRIBE => unsubscribe_active_channel(window),
             ID_CONTEXT_ADD_TO_PLAYLIST => add_active_item_to_user_playlist(window),
             ID_CONTEXT_REMOVE_FROM_PLAYLIST => remove_active_item_from_user_playlist(window),
             ID_CONTEXT_CLOSE_PLAYER => navigate_back(window),
@@ -1609,7 +1768,7 @@ unsafe fn layout_controls_state(window: HWND, state: &mut WindowState) {
             .player_controls
             .layout(width, height, margin, status_height);
     } else {
-        let action_rows = if state.view == MainView::LocalFolder {
+        let action_rows = if matches!(state.view, MainView::LocalFolder | MainView::Subscriptions) {
             2
         } else {
             1
@@ -1664,10 +1823,11 @@ unsafe fn layout_bottom_controls(
     let favorites = state.view == MainView::Favorites;
     let history = state.view == MainView::History;
     let notification_center = state.view == MainView::NotificationCenter;
+    let subscriptions = state.view == MainView::Subscriptions;
     let trending = state.view == MainView::Trending;
     let user_playlists = state.view == MainView::UserPlaylists;
     let user_playlist_items = state.view == MainView::UserPlaylistItems;
-    let first_button_y = if local_folder {
+    let first_button_y = if local_folder || subscriptions {
         height - button_height * 2 - margin * 2
     } else {
         height - button_height - margin
@@ -1727,6 +1887,27 @@ unsafe fn layout_bottom_controls(
         );
     } else if local_folder {
         layout_local_folder_buttons(state, width, height, first_button_y, margin, button_height);
+    } else if subscriptions {
+        layout_button_row(
+            &[
+                state.back,
+                state.subscription_check,
+                state.open,
+                state.subscription_new,
+                state.collection_remove,
+            ],
+            width,
+            first_button_y,
+            margin,
+            button_height,
+        );
+        layout_button_row(
+            &[state.subscription_filter, state.subscription_set_category],
+            width,
+            height - button_height - margin,
+            margin,
+            button_height,
+        );
     } else if direct_link {
         layout_button_row(
             &[
@@ -1843,6 +2024,7 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
             | MainView::Favorites
             | MainView::History
             | MainView::NotificationCenter
+            | MainView::Subscriptions
             | MainView::UserPlaylists
             | MainView::UserPlaylistItems
     );
@@ -1860,6 +2042,7 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
     let open_visible = list_visible && playlist_items_available && state.view != MainView::Trending;
     let folder_visible = state.view == MainView::LocalFolder;
     let trending_visible = state.view == MainView::Trending;
+    let subscriptions_visible = state.view == MainView::Subscriptions;
     for (control, visible) in [
         (state.list, list_visible),
         (state.open, open_visible),
@@ -1888,6 +2071,10 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
             state.notification_clear,
             state.view == MainView::NotificationCenter,
         ),
+        (state.subscription_check, subscriptions_visible),
+        (state.subscription_new, subscriptions_visible),
+        (state.subscription_filter, subscriptions_visible),
+        (state.subscription_set_category, subscriptions_visible),
         (state.playlist_create, state.view == MainView::UserPlaylists),
         (
             state.playlist_play_all,
@@ -1921,6 +2108,7 @@ const fn view_has_back_button(view: MainView) -> bool {
             | MainView::Favorites
             | MainView::History
             | MainView::NotificationCenter
+            | MainView::Subscriptions
             | MainView::UserPlaylists
             | MainView::UserPlaylistItems
     )
@@ -1931,6 +2119,7 @@ const fn view_has_collection_remove(view: MainView) -> bool {
         view,
         MainView::Favorites
             | MainView::History
+            | MainView::Subscriptions
             | MainView::UserPlaylists
             | MainView::UserPlaylistItems
     )
@@ -2096,15 +2285,7 @@ unsafe fn handle_tray_command(window: HWND, command: usize) {
             open_settings(window);
         }
         ID_TRAY_CHECK_SUBSCRIPTIONS => {
-            let message = wide(
-                "Subscription checking is registered, but its Rust service is not implemented in this internal build yet.",
-            );
-            let _ = MessageBoxW(
-                Some(window),
-                PCWSTR(message.as_ptr()),
-                w!("ApricotPlayer 2 Beta"),
-                MB_OK | MB_ICONINFORMATION,
-            );
+            check_subscriptions(window, true);
         }
         ID_TRAY_EXIT => {
             if let Some(state) = state_mut(window) {
@@ -2135,6 +2316,7 @@ unsafe fn activate_selection(window: HWND) {
         Some(MainView::LocalFolder) => activate_local_folder_selection(window),
         Some(MainView::Favorites | MainView::History) => activate_collection_selection(window),
         Some(MainView::NotificationCenter) => activate_notification_selection(window),
+        Some(MainView::Subscriptions) => open_selected_subscription_videos(window),
         Some(MainView::UserPlaylists) => open_selected_user_playlist(window),
         Some(MainView::UserPlaylistItems) => activate_user_playlist_item(window),
         Some(MainView::Search | MainView::DirectLink | MainView::Player) | None => {}
@@ -2187,6 +2369,10 @@ unsafe fn activate_main_menu_selection(window: HWND) {
     }
     if item_id == "notification_center" {
         show_notification_center(window);
+        return;
+    }
+    if item_id == "subscriptions" {
+        show_subscriptions(window);
         return;
     }
     if item_id == "bookmarks" {
@@ -3135,6 +3321,618 @@ unsafe fn show_notification_center(window: HWND) {
     layout_controls_state(window, state);
 }
 
+unsafe fn show_subscriptions(window: HWND) {
+    restore_from_tray(window);
+    stop_controlled_repeat(window);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    cancel_youtube_work(window, state);
+    cancel_local_folder_scan(window, state);
+    if state.application.current_route() != Route::Subscriptions {
+        state.application.navigate_main_menu();
+        state
+            .application
+            .navigate_to(RouteFrame::new(Route::Subscriptions));
+    }
+    state.view = MainView::Subscriptions;
+    set_open_button_label(state, "subscription_open_videos");
+    set_control_text(state, state.collection_remove, "remove");
+    set_control_text(state, state.subscription_check, "subscription_check_now");
+    set_control_text(
+        state,
+        state.subscription_new,
+        "subscription_new_videos_button",
+    );
+    set_control_text(state, state.subscription_filter, "filter_category");
+    set_control_text(state, state.subscription_set_category, "set_category");
+    refresh_subscriptions(state, true, true, None);
+    layout_controls_state(window, state);
+}
+
+unsafe fn selected_subscription_index(state: &WindowState) -> Option<usize> {
+    let selected = usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok()?;
+    state
+        .application
+        .visible_subscription_indices()
+        .get(selected)
+        .copied()
+}
+
+unsafe fn selected_subscription(state: &WindowState) -> Option<apricot_app::Subscription> {
+    let index = selected_subscription_index(state)?;
+    state.application.subscriptions().get(index).cloned()
+}
+
+fn subscription_media_item(
+    subscription: &apricot_app::Subscription,
+) -> Option<apricot_core::MediaItem> {
+    let url = subscription.url.parse().ok()?;
+    Some(apricot_core::MediaItem {
+        id: apricot_core::MediaId(subscription.url.clone()),
+        source: apricot_core::MediaSource::Youtube,
+        kind: apricot_core::MediaKind::Channel,
+        title: subscription.title.clone(),
+        url: Some(url),
+        stream_url: None,
+        external_audio_url: None,
+        local_path: None,
+        channel: subscription.title.clone(),
+        duration_seconds: None,
+        metadata: std::collections::BTreeMap::new(),
+    })
+}
+
+unsafe fn open_selected_subscription_videos(window: HWND) {
+    let Some(subscription) = state(window).and_then(|state| selected_subscription(state)) else {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "no_selection"),
+                true,
+            );
+        }
+        return;
+    };
+    let Some(item) = subscription_media_item(&subscription) else {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "no_selection"),
+                true,
+            );
+        }
+        return;
+    };
+    open_youtube_collection(window, item, YoutubeCollectionKind::ChannelVideos);
+}
+
+unsafe fn open_selected_subscription_new_videos(window: HWND) {
+    let Some(subscription) = state(window).and_then(|state| selected_subscription(state)) else {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "no_selection"),
+                true,
+            );
+        }
+        return;
+    };
+    if subscription.last_new_items.is_empty() {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "subscription_no_saved_new_videos"),
+                true,
+            );
+        }
+        return;
+    }
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let query = catalog_text(&state.application, "subscription_new_videos_title")
+        .replace("{title}", &subscription.title);
+    if !state
+        .application
+        .show_saved_subscription_results(query, subscription.last_new_items)
+    {
+        set_status(
+            state,
+            &catalog_text(&state.application, "subscription_no_saved_new_videos"),
+            true,
+        );
+        return;
+    }
+    state
+        .application
+        .navigate_to(RouteFrame::new(Route::Results));
+    state.view = MainView::Results;
+    refresh_results(state, true);
+    layout_controls_state(window, state);
+}
+
+unsafe fn remove_selected_subscription(window: HWND) {
+    let Some((index, title)) = state(window).and_then(|state| {
+        let index = selected_subscription_index(state)?;
+        let title = state.application.subscriptions().get(index)?.title.clone();
+        Some((index, title))
+    }) else {
+        return;
+    };
+    let result = state_mut(window).map(|state| state.application.remove_subscription(index));
+    match result {
+        Some(Ok(Some(_))) => {
+            if let Some(state) = state_mut(window) {
+                refresh_subscriptions(state, true, false, None);
+                let message = catalog_text(&state.application, "subscription_removed")
+                    .replace("{title}", &title);
+                set_status(state, &message, true);
+                layout_controls_state(window, state);
+            }
+        }
+        Some(Err(error)) => show_error_message(window, &error.to_string()),
+        Some(Ok(None)) | None => {}
+    }
+}
+
+unsafe fn choose_subscription_category_filter(window: HWND) {
+    let Some((title, prompt, choices, current, ok, cancel)) = state_mut(window).map(|state| {
+        state.modal_open = true;
+        let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+        let categories = state.application.subscription_categories();
+        let mut choices = vec![catalog.text("all_categories").to_owned()];
+        choices.extend(categories);
+        (
+            catalog.text("filter_category").to_owned(),
+            catalog.text("category_filter_prompt").to_owned(),
+            choices,
+            state.application.subscription_category_filter().to_owned(),
+            catalog.text("ok").to_owned(),
+            catalog.text("cancel").to_owned(),
+        )
+    }) else {
+        return;
+    };
+    let initial_selection = choices
+        .iter()
+        .position(|choice| !current.is_empty() && choice.eq_ignore_ascii_case(&current))
+        .unwrap_or_default();
+    let selected = crate::playlist_dialog_win32::choose_with_initial(
+        window,
+        &title,
+        &prompt,
+        &choices,
+        initial_selection,
+        &ok,
+        &cancel,
+    );
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
+    resume_deferred_window_work(window);
+    match selected {
+        Ok(Some(index)) => {
+            let category = choices
+                .get(index)
+                .filter(|_| index > 0)
+                .cloned()
+                .unwrap_or_default();
+            if let Some(state) = state_mut(window) {
+                state
+                    .application
+                    .set_subscription_category_filter(&category);
+                refresh_subscriptions(state, true, false, None);
+                let message = if category.is_empty() {
+                    catalog_text(&state.application, "category_filter_all")
+                } else {
+                    catalog_text(&state.application, "category_filter_applied")
+                        .replace("{category}", &category)
+                };
+                set_status(state, &message, true);
+                layout_controls_state(window, state);
+            }
+        }
+        Ok(None) => {
+            if let Some(state) = state(window) {
+                let _ = SetFocus(Some(state.list));
+            }
+        }
+        Err(error) => show_error_message(window, &format!("Category filter did not open: {error}")),
+    }
+}
+
+unsafe fn set_selected_subscription_category(window: HWND) {
+    let Some((index, subscription, title, prompt, ok, cancel)) =
+        state_mut(window).and_then(|state| {
+            let index = selected_subscription_index(state)?;
+            let subscription = state.application.subscriptions().get(index)?.clone();
+            state.modal_open = true;
+            let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+            let prompt = catalog
+                .text("category_prompt")
+                .replace("{title}", &subscription.title);
+            Some((
+                index,
+                subscription,
+                catalog.text("set_category").to_owned(),
+                prompt,
+                catalog.text("ok").to_owned(),
+                catalog.text("cancel").to_owned(),
+            ))
+        })
+    else {
+        return;
+    };
+    let response = crate::playlist_dialog_win32::prompt_name_with_initial(
+        window,
+        &title,
+        &prompt,
+        &subscription.category,
+        &ok,
+        &cancel,
+    );
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
+    resume_deferred_window_work(window);
+    match response {
+        Ok(Some(category)) => {
+            let category = apricot_app::normalize_category(&category);
+            let result = state_mut(window).map(|state| {
+                state
+                    .application
+                    .set_subscription_category(index, &category)
+            });
+            match result {
+                Some(Ok(_)) => {
+                    if let Some(state) = state_mut(window) {
+                        refresh_subscriptions(state, true, false, Some(&subscription.url));
+                        let message = if category.is_empty() {
+                            catalog_text(&state.application, "category_cleared")
+                                .replace("{title}", &subscription.title)
+                        } else {
+                            catalog_text(&state.application, "category_assigned")
+                                .replace("{title}", &subscription.title)
+                                .replace("{category}", &category)
+                        };
+                        set_status(state, &message, true);
+                    }
+                }
+                Some(Err(error)) => show_error_message(window, &error.to_string()),
+                None => {}
+            }
+        }
+        Ok(None) => {
+            if let Some(state) = state(window) {
+                let _ = SetFocus(Some(state.list));
+            }
+        }
+        Err(error) => show_error_message(window, &format!("Category editor did not open: {error}")),
+    }
+}
+
+unsafe fn check_subscriptions(window: HWND, manual: bool) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    if state.pending_subscription_check.is_some() {
+        return;
+    }
+    let queue = state
+        .application
+        .subscriptions()
+        .iter()
+        .map(|subscription| (subscription.url.clone(), subscription.title.clone()))
+        .collect::<VecDeque<_>>();
+    if queue.is_empty() {
+        if manual {
+            set_status(
+                state,
+                &catalog_text(&state.application, "subscription_empty"),
+                true,
+            );
+        }
+        return;
+    }
+    state.pending_subscription_check = Some(PendingSubscriptionCheck {
+        manual,
+        queue,
+        current: None,
+        results: Vec::new(),
+        errors: Vec::new(),
+    });
+    if manual {
+        set_status(
+            state,
+            &catalog_text(&state.application, "subscription_checking"),
+            true,
+        );
+    }
+    let _ = SetTimer(
+        Some(window),
+        YOUTUBE_TIMER_ID,
+        YOUTUBE_TIMER_INTERVAL_MS,
+        None,
+    );
+    start_next_subscription_check(window);
+}
+
+unsafe fn configure_subscription_timer(window: HWND) {
+    let _ = KillTimer(Some(window), SUBSCRIPTION_TIMER_ID);
+    let Some(state) = state(window) else {
+        return;
+    };
+    if !state.application.settings().subscription_check_enabled {
+        return;
+    }
+    let hours = state
+        .application
+        .settings()
+        .subscription_check_interval_hours;
+    let seconds = if hours.is_finite() {
+        hours.clamp(0.5, 168.0) * 60.0 * 60.0
+    } else {
+        6.0 * 60.0 * 60.0
+    };
+    let interval_ms = std::time::Duration::try_from_secs_f64(seconds)
+        .ok()
+        .and_then(|duration| u32::try_from(duration.as_millis()).ok())
+        .unwrap_or(21_600_000);
+    let _ = SetTimer(Some(window), SUBSCRIPTION_TIMER_ID, interval_ms, None);
+}
+
+unsafe fn check_subscriptions_if_due(window: HWND) {
+    let due = state(window).is_some_and(|state| {
+        if state.modal_open
+            || !state.application.settings().subscription_check_enabled
+            || state.application.subscriptions().is_empty()
+        {
+            return false;
+        }
+        let hours = state
+            .application
+            .settings()
+            .subscription_check_interval_hours;
+        let interval = if hours.is_finite() {
+            hours.clamp(0.5, 168.0) * 60.0 * 60.0
+        } else {
+            6.0 * 60.0 * 60.0
+        };
+        let last = state.application.settings().last_subscription_check;
+        !last.is_finite() || unix_timestamp() - last.max(0.0) >= interval
+    });
+    if due {
+        check_subscriptions(window, false);
+    }
+}
+
+unsafe fn start_next_subscription_check(window: HWND) {
+    loop {
+        let next = state_mut(window).and_then(|state| {
+            state
+                .pending_subscription_check
+                .as_mut()
+                .and_then(|pending| pending.queue.pop_front())
+        });
+        let Some((url, title)) = next else {
+            finish_subscription_check(window);
+            return;
+        };
+        let start: std::result::Result<(), String> = {
+            let Some(state) = state_mut(window) else {
+                return;
+            };
+            state.next_youtube_operation_token =
+                state.next_youtube_operation_token.wrapping_add(1).max(1);
+            let token = state.next_youtube_operation_token;
+            if let Some(pending) = state.pending_subscription_check.as_mut() {
+                pending.current = Some((token, url.clone(), title));
+            }
+            let backend = collection_backend(
+                YoutubeBackend::from_setting_value(&state.application.settings().youtube_backend),
+                YoutubeCollectionKind::ChannelVideos,
+            );
+            match application_directory().map(|path| path.join("components")) {
+                Some(components) => {
+                    let config = youtube_session_config(state);
+                    state
+                        .youtube_subscriptions
+                        .start_collection(
+                            backend,
+                            &components,
+                            config,
+                            token,
+                            url.clone(),
+                            YoutubeCollectionKind::ChannelVideos,
+                            5,
+                        )
+                        .map_err(|error| error.to_string())
+                }
+                None => Err("Application path is unavailable".to_owned()),
+            }
+        };
+        match start {
+            Ok(()) => return,
+            Err(message) => {
+                if let Some(state) = state_mut(window)
+                    && let Some(pending) = state.pending_subscription_check.as_mut()
+                {
+                    pending.current = None;
+                    pending.errors.push(message.clone());
+                    pending.results.push(SubscriptionCheckResult {
+                        url,
+                        result: Err(message),
+                    });
+                }
+            }
+        }
+    }
+}
+
+unsafe fn poll_subscription_runtime(window: HWND) {
+    let update = {
+        let Some(state) = state_mut(window) else {
+            return;
+        };
+        state.youtube_subscriptions.poll()
+    };
+    let update = match update {
+        Ok(Some(update)) => update,
+        Ok(None) => return,
+        Err(error) => {
+            finish_subscription_item(window, 0, Err(error.to_string()));
+            return;
+        }
+    };
+    match update {
+        YoutubeSearchServiceUpdate::Results { token, items, .. } => {
+            finish_subscription_item(window, token, Ok(items));
+        }
+        YoutubeSearchServiceUpdate::Failed { token, message } => {
+            finish_subscription_item(window, token, Err(message));
+        }
+        YoutubeSearchServiceUpdate::Resolved { token, .. }
+        | YoutubeSearchServiceUpdate::Hydrated { token, .. } => finish_subscription_item(
+            window,
+            token,
+            Err("YouTube component returned an unexpected subscription response".to_owned()),
+        ),
+    }
+}
+
+unsafe fn finish_subscription_item(
+    window: HWND,
+    token: u64,
+    result: std::result::Result<Vec<apricot_core::MediaItem>, String>,
+) {
+    let matched = state_mut(window).is_some_and(|state| {
+        let Some(pending) = state.pending_subscription_check.as_mut() else {
+            return false;
+        };
+        let Some((current_token, url, title)) = pending.current.take() else {
+            return false;
+        };
+        if token != 0 && current_token != token {
+            pending.current = Some((current_token, url, title));
+            return false;
+        }
+        if let Err(error) = &result {
+            pending.errors.push(error.clone());
+        }
+        pending
+            .results
+            .push(SubscriptionCheckResult { url, result });
+        true
+    });
+    if matched {
+        start_next_subscription_check(window);
+    }
+}
+
+unsafe fn finish_subscription_check(window: HWND) {
+    let Some(pending) = state_mut(window).and_then(|state| state.pending_subscription_check.take())
+    else {
+        stop_youtube_timer(window);
+        return;
+    };
+    let timestamp = unix_timestamp();
+    let outcome = state_mut(window).map(|state| {
+        state
+            .application
+            .apply_subscription_checks(pending.results, timestamp)
+    });
+    let Some(outcome) = outcome else {
+        return;
+    };
+    let summary = match outcome {
+        Ok(summary) => summary,
+        Err(error) => {
+            show_error_message(window, &error.to_string());
+            stop_youtube_timer(window);
+            return;
+        }
+    };
+    if let Some(state) = state_mut(window) {
+        if summary.successes > 0
+            && let Err(error) = state.application.record_subscription_check(timestamp)
+        {
+            set_status(
+                state,
+                &format!("Subscription check time was not saved: {error}"),
+                true,
+            );
+        }
+        let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+        let notification_title = catalog.text("notification_subscription_title").to_owned();
+        let mut channel_counts: Vec<(String, usize)> = Vec::new();
+        for (channel, item) in summary.new_items {
+            if let Some((_, count)) = channel_counts
+                .iter_mut()
+                .find(|(known, _)| known == &channel)
+            {
+                *count += 1;
+            } else {
+                channel_counts.push((channel.clone(), 1));
+            }
+            let notification_message = catalog
+                .text("notification_new_video")
+                .replace("{channel}", &channel)
+                .replace("{title}", &item.title);
+            if let Err(error) =
+                state
+                    .application
+                    .add_notification(apricot_app::AppNotification::new(
+                        "subscription",
+                        &notification_title,
+                        &notification_message,
+                        Some(item),
+                        timestamp,
+                    ))
+            {
+                set_status(
+                    state,
+                    &format!("Subscription notification was not saved: {error}"),
+                    true,
+                );
+            }
+            if state.application.settings().windows_notifications
+                && state.application.settings().subscription_notifications
+            {
+                show_tray_notification(window, &notification_title, &notification_message);
+            }
+        }
+        for (channel, count) in channel_counts {
+            let message = catalog
+                .text("subscription_new_videos")
+                .replace("{count}", &count.to_string())
+                .replace("{title}", &channel);
+            set_status(state, &message, true);
+        }
+        if state.view == MainView::Subscriptions {
+            refresh_subscriptions(state, true, false, None);
+            layout_controls_state(window, state);
+        }
+        if pending.manual {
+            let final_message = if summary.successes == 0 && summary.failures > 0 {
+                catalog.text("subscription_check_failed").replace(
+                    "{error}",
+                    pending
+                        .errors
+                        .last()
+                        .map_or("Unknown error", String::as_str),
+                )
+            } else if summary.total_new > 0 || summary.failures > 0 {
+                catalog.text("subscription_check_complete").to_owned()
+            } else {
+                catalog.text("subscription_no_new").to_owned()
+            };
+            set_status(state, &final_message, true);
+        }
+    }
+    stop_youtube_timer(window);
+}
+
 unsafe fn show_user_playlists(window: HWND) {
     restore_from_tray(window);
     stop_controlled_repeat(window);
@@ -3223,6 +4021,7 @@ unsafe fn activate_user_playlist_item(window: HWND) {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 unsafe fn navigate_back(window: HWND) {
     stop_controlled_repeat(window);
     let Some(state) = state_mut(window) else {
@@ -3292,6 +4091,11 @@ unsafe fn navigate_back(window: HWND) {
         Route::NotificationCenter => {
             state.view = MainView::NotificationCenter;
             refresh_notification_center(state, true, false, saved_index);
+            layout_controls_state(window, state);
+        }
+        Route::Subscriptions => {
+            state.view = MainView::Subscriptions;
+            refresh_subscriptions(state, true, false, None);
             layout_controls_state(window, state);
         }
         Route::Bookmarks => {
@@ -3731,6 +4535,7 @@ unsafe fn poll_youtube_runtime(window: HWND) {
         }
     }
     poll_youtube_metadata_runtime(window);
+    poll_subscription_runtime(window);
 }
 
 unsafe fn poll_youtube_trending_api(window: HWND) {
@@ -4359,8 +5164,10 @@ unsafe fn stop_youtube_timer(window: HWND) {
     if state(window).is_none_or(|state| {
         !state.youtube_search.is_pending()
             && !state.youtube_metadata.is_pending()
+            && !state.youtube_subscriptions.is_pending()
             && state.pending_youtube_api_metadata.is_none()
             && state.pending_youtube_trending_api.is_none()
+            && state.pending_subscription_check.is_none()
     }) {
         let _ = KillTimer(Some(window), YOUTUBE_TIMER_ID);
     }
@@ -5015,6 +5822,119 @@ unsafe fn refresh_notification_center(
     }
 }
 
+unsafe fn refresh_subscriptions(
+    state: &mut WindowState,
+    focus: bool,
+    announce_status: bool,
+    preferred_url: Option<&str>,
+) {
+    let previous_url = preferred_url
+        .map(str::to_owned)
+        .or_else(|| selected_subscription(state).map(|subscription| subscription.url));
+    SendMessageW(state.list, LB_RESETCONTENT, None, None);
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    crate::accessibility_win32::set_control_name(state.list, catalog.text("subscriptions"));
+    set_open_button_label(state, "subscription_open_videos");
+    set_control_text(state, state.collection_remove, "remove");
+    let visible = state.application.visible_subscription_indices();
+    if state.application.subscriptions().is_empty() {
+        add_list_string(state.list, catalog.text("subscription_empty"));
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
+        set_status(state, catalog.text("subscription_empty"), announce_status);
+    } else if visible.is_empty() {
+        add_list_string(state.list, catalog.text("category_filter_empty"));
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
+        set_status(
+            state,
+            catalog.text("category_filter_empty"),
+            announce_status,
+        );
+    } else {
+        for index in &visible {
+            if let Some(subscription) = state.application.subscriptions().get(*index) {
+                add_list_string(state.list, &subscription_label(subscription, &catalog));
+            }
+        }
+        let selected = previous_url
+            .as_deref()
+            .and_then(|url| {
+                visible.iter().position(|index| {
+                    state
+                        .application
+                        .subscriptions()
+                        .get(*index)
+                        .is_some_and(|subscription| subscription.url == url)
+                })
+            })
+            .unwrap_or_default();
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selected)), None);
+        set_status(
+            state,
+            &format!("{}: {}", catalog.text("subscriptions"), visible.len()),
+            announce_status,
+        );
+    }
+    if let Some(error) = state.application.subscription_load_error() {
+        set_status(
+            state,
+            &format!("Subscriptions could not be loaded: {error}"),
+            true,
+        );
+    }
+    if focus {
+        let _ = SetFocus(Some(state.list));
+    }
+}
+
+fn subscription_label(
+    subscription: &apricot_app::Subscription,
+    catalog: &apricot_core::TranslationCatalog,
+) -> String {
+    let mut parts = vec![subscription.title.clone()];
+    if !subscription.category.trim().is_empty() {
+        parts.push(
+            catalog
+                .text("category_value")
+                .replace("{category}", &subscription.category),
+        );
+    }
+    let checked = subscription
+        .last_checked
+        .filter(|timestamp| *timestamp > 0.0)
+        .and_then(format_timestamp)
+        .map_or_else(
+            || catalog.text("subscription_never_checked").to_owned(),
+            |time| {
+                catalog
+                    .text("subscription_last_checked")
+                    .replace("{time}", &time)
+            },
+        );
+    parts.push(checked);
+    if subscription.last_new_count > 0 {
+        parts.push(
+            catalog
+                .text("subscription_new_videos")
+                .replace("{count}", &subscription.last_new_count.to_string())
+                .replace("{title}", &subscription.title),
+        );
+    }
+    parts.join(" | ")
+}
+
+fn format_timestamp(timestamp: f64) -> Option<String> {
+    std::time::Duration::try_from_secs_f64(timestamp)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_secs()).ok())
+        .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
+        .map(|timestamp| {
+            timestamp
+                .with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+}
+
 fn notification_label(
     notification: &apricot_app::AppNotification,
     catalog: &apricot_core::TranslationCatalog,
@@ -5507,6 +6427,7 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
         | MainView::Favorites
         | MainView::History
         | MainView::NotificationCenter
+        | MainView::Subscriptions
         | MainView::UserPlaylists
         | MainView::UserPlaylistItems => (ActionScope::List, false),
         MainView::Player => (ActionScope::Player, false),
@@ -5663,6 +6584,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "open_direct_link" => show_direct_link(window),
         "open_favorites" => show_media_collection(window, MainView::Favorites),
         "open_history" => show_media_collection(window, MainView::History),
+        "open_subscriptions" => show_subscriptions(window),
         "new_subscription_videos" => show_notification_center(window),
         "open_bookmarks" => show_bookmarks_dialog(window, false, false),
         "open_playlists" => show_user_playlists(window),
@@ -5708,6 +6630,8 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "add_to_playlist" => add_active_item_to_user_playlist(window),
         "remove_from_playlist" => remove_active_item_from_user_playlist(window),
         "remove_selected" => remove_selected_collection_item(window),
+        "subscribe_channel" => subscribe_active_channel(window),
+        "unsubscribe_channel" => unsubscribe_active_channel(window),
         "context_menu" => show_context_menu_for_active_view(window),
         "add_to_playback_queue" => add_active_item_to_playback_queue(window),
         "remove_from_playback_queue" => remove_active_item_from_playback_queue(window),
@@ -5868,6 +6792,9 @@ unsafe fn active_media_item(window: HWND) -> Option<apricot_core::MediaItem> {
                 .get(index)
                 .and_then(|notification| notification.item.clone())
         }
+        MainView::Subscriptions => selected_subscription(state)
+            .as_ref()
+            .and_then(subscription_media_item),
         MainView::UserPlaylistItems => {
             let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
             let index = usize::try_from(selected).ok()?;
@@ -5883,6 +6810,75 @@ unsafe fn active_media_item(window: HWND) -> Option<apricot_core::MediaItem> {
         MainView::MainMenu | MainView::Search | MainView::DirectLink | MainView::UserPlaylists => {
             None
         }
+    }
+}
+
+unsafe fn subscribe_active_channel(window: HWND) {
+    let Some(item) = active_media_item(window) else {
+        return;
+    };
+    let title = if item.channel.trim().is_empty() {
+        item.title.clone()
+    } else {
+        item.channel.clone()
+    };
+    let result =
+        state_mut(window).map(|state| state.application.subscribe_to_item(&item, unix_timestamp()));
+    let Some(state) = state(window) else {
+        return;
+    };
+    match result {
+        Some(Ok(SubscriptionAddOutcome::Added(_))) => {
+            let message =
+                catalog_text(&state.application, "subscription_added").replace("{title}", &title);
+            set_status(state, &message, true);
+        }
+        Some(Ok(SubscriptionAddOutcome::AlreadyPresent)) => {
+            let message =
+                catalog_text(&state.application, "subscription_exists").replace("{title}", &title);
+            set_status(state, &message, true);
+        }
+        Some(Ok(SubscriptionAddOutcome::Unsupported)) => set_status(
+            state,
+            &catalog_text(&state.application, "no_selection"),
+            true,
+        ),
+        Some(Err(error)) => show_error_message(window, &error.to_string()),
+        None => {}
+    }
+}
+
+unsafe fn unsubscribe_active_channel(window: HWND) {
+    let Some(item) = active_media_item(window) else {
+        return;
+    };
+    let title = if item.channel.trim().is_empty() {
+        item.title.clone()
+    } else {
+        item.channel.clone()
+    };
+    let result = state_mut(window).map(|state| state.application.unsubscribe_from_item(&item));
+    let Some(state) = state(window) else {
+        return;
+    };
+    match result {
+        Some(Ok(SubscriptionRemoveOutcome::Removed)) => {
+            let message =
+                catalog_text(&state.application, "subscription_removed").replace("{title}", &title);
+            set_status(state, &message, true);
+        }
+        Some(Ok(SubscriptionRemoveOutcome::NotFound)) => {
+            let message = catalog_text(&state.application, "subscription_not_found")
+                .replace("{title}", &title);
+            set_status(state, &message, true);
+        }
+        Some(Ok(SubscriptionRemoveOutcome::Unsupported)) => set_status(
+            state,
+            &catalog_text(&state.application, "no_selection"),
+            true,
+        ),
+        Some(Err(error)) => show_error_message(window, &error.to_string()),
+        None => {}
     }
 }
 
@@ -5983,6 +6979,7 @@ unsafe fn remove_selected_collection_item(window: HWND) {
             finish_collection_removal(window, result, "history_removed");
         }
         MainView::NotificationCenter => remove_notification_at(window, index),
+        MainView::Subscriptions => remove_selected_subscription(window),
         MainView::UserPlaylists => remove_selected_user_playlist(window),
         MainView::UserPlaylistItems => remove_selected_user_playlist_item(window),
         _ => {}
@@ -7833,6 +8830,7 @@ unsafe fn open_settings(window: HWND) {
         MainView::NotificationCenter => {
             refresh_notification_center(state, false, false, None);
         }
+        MainView::Subscriptions => refresh_subscriptions(state, false, false, None),
         MainView::UserPlaylists => refresh_user_playlists(state, false, false),
         MainView::UserPlaylistItems => refresh_user_playlist_items(state, false, false),
         MainView::Search | MainView::DirectLink => {}
@@ -7840,6 +8838,8 @@ unsafe fn open_settings(window: HWND) {
     }
     layout_controls_state(window, state);
     let _ = SetFocus(Some(active_primary_control(state)));
+    configure_subscription_timer(window);
+    check_subscriptions_if_due(window);
     process_pending_activations(window);
     match settings_result {
         Ok(Some(action_id)) => activate_action(window, action_id),
@@ -7913,6 +8913,7 @@ fn active_primary_control(state: &WindowState) -> HWND {
         | MainView::Favorites
         | MainView::History
         | MainView::NotificationCenter
+        | MainView::Subscriptions
         | MainView::UserPlaylists
         | MainView::UserPlaylistItems => state.list,
         MainView::Player => state.player_controls.initial_focus(),
@@ -7929,7 +8930,7 @@ mod tests {
         MainView, SEEK_HOLD_DELAY_MS, SEEK_HOLD_INTERVAL_MS, collection_backend,
         controlled_repeat_timing, copy_wide_array, item_needs_youtube_metadata,
         list_context_entries, media_resolve_backend, notification_label, resolved_playback_item,
-        result_label, view_has_back_button, view_has_collection_remove,
+        result_label, subscription_label, view_has_back_button, view_has_collection_remove,
     };
     use apricot_app::AppNotification;
     use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
@@ -7986,6 +8987,44 @@ mod tests {
     fn notification_center_shows_back_without_a_python_incompatible_remove_button() {
         assert!(view_has_back_button(MainView::NotificationCenter));
         assert!(!view_has_collection_remove(MainView::NotificationCenter));
+    }
+
+    #[test]
+    fn subscriptions_use_python_list_semantics_and_context_order() {
+        assert!(view_has_back_button(MainView::Subscriptions));
+        assert!(view_has_collection_remove(MainView::Subscriptions));
+        let labels = list_context_entries(MainView::Subscriptions, None, false)
+            .expect("subscription menu")
+            .into_iter()
+            .map(|(_, label)| label)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            labels,
+            [
+                "subscription_open_videos",
+                "subscription_new_videos_button",
+                "subscription_check_now",
+                "set_category",
+                "filter_category",
+                "copy_url",
+                "unsubscribe_channel",
+                "remove",
+            ]
+        );
+    }
+
+    #[test]
+    fn subscription_label_matches_python_field_order() {
+        let mut subscription =
+            apricot_app::Subscription::new("Channel", "https://www.youtube.com/@channel", 1.0);
+        subscription.last_checked = None;
+        subscription.category = "Music".to_owned();
+        subscription.last_new_count = 2;
+        let catalog = apricot_app::embedded_catalog("en");
+        assert_eq!(
+            subscription_label(&subscription, &catalog),
+            "Channel | Category: Music | never checked | 2 new videos from Channel."
+        );
     }
 
     #[test]

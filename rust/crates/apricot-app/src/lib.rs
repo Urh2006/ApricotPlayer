@@ -20,13 +20,14 @@ pub mod search_session;
 pub mod settings_controller;
 pub mod settings_model;
 pub mod settings_session;
+pub mod subscription_controller;
 pub mod user_playlist_controller;
 pub mod youtube_collection;
 pub mod youtube_trending;
 
 use apricot_core::NavigationStack;
 pub use apricot_media::{YoutubeCollectionKind, YoutubeSearchKind};
-pub use apricot_storage::AppNotification;
+pub use apricot_storage::{AppNotification, Subscription};
 
 pub use action_finder::{ActionFinderContext, ActionFinderItem, ActionFinderModel};
 pub use activation::ActivationRequest;
@@ -69,6 +70,11 @@ pub use settings_model::{
     SettingsSectionItem, SettingsValueType, ShortcutActionItem,
 };
 pub use settings_session::{SettingsDraft, SettingsDraftError};
+pub use subscription_controller::{
+    SubscriptionAddOutcome, SubscriptionCheckResult, SubscriptionCheckSummary,
+    SubscriptionController, SubscriptionControllerError, SubscriptionRemoveOutcome,
+    canonical_channel_url, normalize_category,
+};
 pub use user_playlist_controller::{
     PlaylistAddOutcome, PlaylistCreateOutcome, UserPlaylistController, UserPlaylistControllerError,
 };
@@ -97,6 +103,7 @@ pub struct AppState {
     pub player: PlayerSession,
     pub player_sequence: PlaybackSequence,
     pub search: SearchSession,
+    pub subscriptions: SubscriptionController,
     pub user_playlists: UserPlaylistController,
     pub youtube_collections: YoutubeCollectionController,
 }

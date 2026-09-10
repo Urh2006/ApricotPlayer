@@ -106,7 +106,36 @@ pub fn choose(
 ) -> Result<Option<usize>> {
     // SAFETY: The nested modal loop owns its state and disables its owner until
     // the state allocation has been recovered.
-    unsafe { choose_win32(owner, title, prompt, choices, ok_label, cancel_label) }
+    unsafe { choose_win32(owner, title, prompt, choices, 0, ok_label, cancel_label) }
+}
+
+/// Lets the user choose one item with a caller-provided initial selection.
+///
+/// # Errors
+///
+/// Returns a Win32 error when the modal window or a child control cannot be created.
+pub fn choose_with_initial(
+    owner: HWND,
+    title: &str,
+    prompt: &str,
+    choices: &[String],
+    initial_selection: usize,
+    ok_label: &str,
+    cancel_label: &str,
+) -> Result<Option<usize>> {
+    // SAFETY: The nested modal loop owns its state and disables its owner until
+    // the state allocation has been recovered.
+    unsafe {
+        choose_win32(
+            owner,
+            title,
+            prompt,
+            choices,
+            initial_selection,
+            ok_label,
+            cancel_label,
+        )
+    }
 }
 
 unsafe fn register_class(
@@ -179,6 +208,7 @@ unsafe fn choose_win32(
     title: &str,
     prompt: &str,
     choices: &[String],
+    initial_selection: usize,
     ok_label: &str,
     cancel_label: &str,
 ) -> Result<Option<usize>> {
@@ -218,7 +248,12 @@ unsafe fn choose_win32(
         );
     }
     if !choices.is_empty() {
-        SendMessageW(state.base.value, LB_SETCURSEL, Some(WPARAM(0)), None);
+        SendMessageW(
+            state.base.value,
+            LB_SETCURSEL,
+            Some(WPARAM(initial_selection.min(choices.len() - 1))),
+            None,
+        );
     }
     if !SetWindowSubclass(state.base.value, Some(picker_value_proc), 1, 0).as_bool() {
         let _ = DestroyWindow(window);

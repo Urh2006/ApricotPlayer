@@ -11,7 +11,7 @@ use apricot_playback::PlaybackEvent;
 use apricot_storage::{
     AppNotification, Bookmark, BookmarkFile, LastPlayerSession, LastPlayerSessionFile,
     MediaListFile, NotificationFile, PlaybackPositionFile, PlaybackQueueFile, SettingsDocument,
-    UserPlaylist, UserPlaylistFile,
+    Subscription, SubscriptionFile, UserPlaylist, UserPlaylistFile,
 };
 use rand::seq::SliceRandom;
 use serde_json::{Map, Value};
@@ -27,10 +27,12 @@ use crate::{
     PlayerScreenModel, PlayerSession, PlayerSessionDefaults, PlayerViewState, PlaylistAddOutcome,
     PlaylistCreateOutcome, QueueAddOutcome, QueueBatchAddOutcome, SearchApplyOutcome,
     SearchSession, SearchSessionError, SearchWork, SessionToggle, SettingsController,
-    SettingsControllerError, SettingsScreenModel, UserPlaylistController,
-    UserPlaylistControllerError, YoutubeCollectionApplyOutcome, YoutubeCollectionError,
-    YoutubeCollectionKind, YoutubeCollectionSession, YoutubeCollectionWork, YoutubeSearchKind,
-    YoutubeTrendingWork, embedded_catalog,
+    SettingsControllerError, SettingsScreenModel, SubscriptionAddOutcome, SubscriptionCheckResult,
+    SubscriptionCheckSummary, SubscriptionController, SubscriptionControllerError,
+    SubscriptionRemoveOutcome, UserPlaylistController, UserPlaylistControllerError,
+    YoutubeCollectionApplyOutcome, YoutubeCollectionError, YoutubeCollectionKind,
+    YoutubeCollectionSession, YoutubeCollectionWork, YoutubeSearchKind, YoutubeTrendingWork,
+    embedded_catalog,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -237,6 +239,153 @@ impl Application {
         legacy: &NotificationFile,
     ) {
         self.state.notifications = NotificationController::load(current, legacy);
+    }
+
+    pub fn configure_subscriptions(
+        &mut self,
+        current: SubscriptionFile,
+        legacy: &SubscriptionFile,
+    ) {
+        self.state.subscriptions = SubscriptionController::load(current, legacy);
+    }
+
+    pub fn subscriptions(&self) -> &[Subscription] {
+        self.state.subscriptions.subscriptions()
+    }
+
+    pub fn subscription_load_error(&self) -> Option<&str> {
+        self.state.subscriptions.load_error()
+    }
+
+    pub fn subscription_category_filter(&self) -> &str {
+        self.state.subscriptions.category_filter()
+    }
+
+    pub fn set_subscription_category_filter(&mut self, category: &str) {
+        self.state.subscriptions.set_category_filter(category);
+    }
+
+    pub fn subscription_categories(&self) -> Vec<String> {
+        self.state.subscriptions.categories()
+    }
+
+    pub fn visible_subscription_indices(&self) -> Vec<usize> {
+        self.state.subscriptions.visible_indices()
+    }
+
+    pub fn is_subscribed(&self, item: &MediaItem) -> bool {
+        self.state.subscriptions.contains_item(item)
+    }
+
+    pub fn can_subscribe_to_item(item: &MediaItem) -> bool {
+        SubscriptionController::supports_item(item)
+    }
+
+    /// Adds the channel represented by a selected media row.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the subscription collection cannot be persisted.
+    pub fn subscribe_to_item(
+        &mut self,
+        item: &MediaItem,
+        timestamp: f64,
+    ) -> Result<SubscriptionAddOutcome, SubscriptionControllerError> {
+        self.state.subscriptions.add_from_item(item, timestamp)
+    }
+
+    /// Removes the channel represented by a selected media row.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the subscription collection cannot be persisted.
+    pub fn unsubscribe_from_item(
+        &mut self,
+        item: &MediaItem,
+    ) -> Result<SubscriptionRemoveOutcome, SubscriptionControllerError> {
+        self.state.subscriptions.remove_from_item(item)
+    }
+
+    /// Removes one subscription by its unfiltered durable index.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the subscription collection cannot be persisted.
+    pub fn remove_subscription(
+        &mut self,
+        index: usize,
+    ) -> Result<Option<Subscription>, SubscriptionControllerError> {
+        self.state.subscriptions.remove(index)
+    }
+
+    /// Assigns or clears one subscription category.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the subscription collection cannot be persisted.
+    pub fn set_subscription_category(
+        &mut self,
+        index: usize,
+        category: &str,
+    ) -> Result<bool, SubscriptionControllerError> {
+        self.state.subscriptions.set_category(index, category)
+    }
+
+    /// Applies a complete subscription check with one durable replacement.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the refreshed subscription collection cannot be persisted.
+    pub fn apply_subscription_checks(
+        &mut self,
+        results: Vec<SubscriptionCheckResult>,
+        timestamp: f64,
+    ) -> Result<SubscriptionCheckSummary, SubscriptionControllerError> {
+        self.state.subscriptions.apply_checks(results, timestamp)
+    }
+
+    pub fn show_saved_subscription_results(
+        &mut self,
+        query: impl Into<String>,
+        items: Vec<MediaItem>,
+    ) -> bool {
+        self.state.youtube_collections.clear();
+        let restored =
+            self.state
+                .search
+                .restore_snapshot(query, YoutubeSearchKind::Video, items, 0);
+        if restored {
+            let source = PlaybackSequenceSource::Search {
+                generation: self.state.search.generation(),
+            };
+            let _ = self
+                .state
+                .player_sequence
+                .sync(source, self.state.search.items());
+        }
+        restored
+    }
+
+    /// Records a successful subscription check in the persisted settings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the timestamp is invalid or settings cannot be saved.
+    pub fn record_subscription_check(
+        &mut self,
+        timestamp: f64,
+    ) -> Result<(), SettingsControllerError> {
+        let timestamp = if timestamp.is_finite() {
+            timestamp.max(0.0)
+        } else {
+            0.0
+        };
+        self.settings.set_value(
+            SettingId::LastSubscriptionCheck,
+            serde_json::json!(timestamp),
+        )?;
+        let _ = self.settings.save()?;
+        Ok(())
     }
 
     pub fn notifications(&self) -> &[AppNotification] {

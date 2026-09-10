@@ -77,7 +77,7 @@ Customizable items in exact order:
 - [ ] `favorites`: Favorites.
 - [ ] `bookmarks`: Bookmarks.
 - [ ] `playlists`: User playlists.
-- [ ] `subscriptions`: YouTube subscriptions.
+- [x] `subscriptions`: YouTube subscriptions.
 - [ ] `notification_center`: Notification center.
 - [ ] `history`: History, according to feature setting.
 - [ ] `rss_feeds`: Podcasts and RSS, according to feature setting.
@@ -262,7 +262,7 @@ Permanent items:
 - [ ] Named bookmarks and resume positions remain independent per item.
 - [ ] Last player session restores item, sequence, return route, index, player
   options, and resume position safely.
-- [ ] YouTube subscriptions add/remove/category/sort/manual refresh/automatic
+- [x] YouTube subscriptions add/remove/category/sort/manual refresh/automatic
   refresh/new-video view/notifications/playback/context actions.
 - [ ] Notification center list, open, mark/read behavior where applicable,
   remove/clear, and source return.
@@ -484,13 +484,13 @@ Windows shell and notifications:
 - [ ] `tray_notification`
 - [ ] `windows_notifications`
 - [ ] `download_notifications`
-- [ ] `subscription_notifications`
+- [x] `subscription_notifications`
 
 Library, subscriptions, and podcasts:
 
-- [ ] `subscription_check_enabled`
-- [ ] `subscription_check_interval_hours`
-- [ ] `last_subscription_check`
+- [x] `subscription_check_enabled`
+- [x] `subscription_check_interval_hours`
+- [x] `last_subscription_check`
 - [ ] `enable_trending`
 - [ ] `enable_history`
 - [ ] `enable_podcasts_rss`
@@ -524,7 +524,7 @@ Global and navigation actions:
 - [ ] `open_favorites` = `Ctrl+Alt+F`
 - [ ] `open_bookmarks` = `Ctrl+Alt+K`
 - [ ] `open_playlists` = `Ctrl+Alt+P`
-- [ ] `open_subscriptions` = `Ctrl+Alt+B`
+- [x] `open_subscriptions` = `Ctrl+Alt+B`
 - [ ] `open_current_downloads` = `Ctrl+Alt+D`
 - [ ] `open_history` = `Ctrl+Alt+H`
 - [ ] `open_podcasts_rss` = `Ctrl+Alt+R`
@@ -537,8 +537,8 @@ List, result, collection, and download actions:
 
 - [ ] `download_audio` = `Ctrl+Shift+A`
 - [ ] `download_video` = `Ctrl+Shift+D`
-- [ ] `subscribe_channel` = `Ctrl+Shift+S`
-- [ ] `unsubscribe_channel` = `Ctrl+Shift+U`
+- [x] `subscribe_channel` = `Ctrl+Shift+S`
+- [x] `unsubscribe_channel` = `Ctrl+Shift+U`
 - [ ] `open_channel` = `Ctrl+Shift+O`
 - [ ] `queue_audio` = `Shift+A`
 - [ ] `result_column_previous` = `Ctrl+Alt+Left`
@@ -555,7 +555,7 @@ List, result, collection, and download actions:
 - [ ] `copy_stream_url` = `Ctrl+D`
 - [ ] `context_menu` = `Applications`
 - [ ] `open_selected` = `Enter`
-- [ ] `new_subscription_videos` = `Ctrl+Shift+V`
+- [x] `new_subscription_videos` = `Ctrl+Shift+V`
 - [ ] `remove_selected` = `Delete`
 - [ ] `toggle_podcast_played` = `Ctrl+Shift+X`
 - [ ] `clear_podcast_progress` = `Ctrl+Shift+R`
@@ -622,7 +622,7 @@ Player seek and volume actions:
 - [ ] `favorites.json` plus legacy favorites migration.
 - [ ] `bookmarks.json`.
 - [ ] `history.json`.
-- [ ] `subscriptions.json`.
+- [x] `subscriptions.json`.
 - [ ] `rss_feeds.json`.
 - [ ] `playlists.json`.
 - [ ] `notifications.json`.

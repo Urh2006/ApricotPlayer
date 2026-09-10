@@ -13,6 +13,7 @@ pub mod playback_position_file;
 pub mod playback_queue_file;
 pub mod settings;
 pub mod settings_file;
+pub mod subscription_file;
 pub mod user_playlist_file;
 
 pub use bookmark_file::{Bookmark, BookmarkFile, BookmarkFileError, bookmark_media_key};
@@ -36,4 +37,5 @@ pub use settings_file::{
     SettingsLoadOutcome, SettingsPaths, SettingsSaveError, SettingsSource, load_settings,
     save_loaded_settings,
 };
+pub use subscription_file::{Subscription, SubscriptionFile, SubscriptionFileError};
 pub use user_playlist_file::{UserPlaylist, UserPlaylistFile, UserPlaylistFileError};

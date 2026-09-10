@@ -1,7 +1,8 @@
 use std::{collections::BTreeMap, env, path::PathBuf};
 
 use apricot_storage::{
-    CompatibilitySnapshot, DEFAULT_MAX_ARTIFACT_BYTES, NotificationFile, UserPlaylistFile,
+    CompatibilitySnapshot, DEFAULT_MAX_ARTIFACT_BYTES, NotificationFile, SubscriptionFile,
+    UserPlaylistFile,
 };
 use tempfile::tempdir;
 
@@ -70,6 +71,26 @@ fn real_python_data_round_trips_without_value_loss() {
         )
         .expect("parse typed notifications");
         assert_json_equivalent(&original, &restored, "notifications");
+    }
+
+    let source_subscriptions = source.join("subscriptions.json");
+    if source_subscriptions.is_file() {
+        let original: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&source_subscriptions).expect("read Python subscriptions"),
+        )
+        .expect("parse Python subscriptions");
+        let subscriptions = SubscriptionFile::new(&source_subscriptions)
+            .load()
+            .expect("load Python subscriptions through typed adapter");
+        let subscription_target = target.path().join("typed-subscriptions.json");
+        SubscriptionFile::new(&subscription_target)
+            .save(&subscriptions)
+            .expect("write typed subscriptions");
+        let restored: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(subscription_target).expect("read typed subscriptions"),
+        )
+        .expect("parse typed subscriptions");
+        assert_json_equivalent(&original, &restored, "subscriptions");
     }
 }
 

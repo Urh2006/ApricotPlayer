@@ -667,3 +667,50 @@ Still required: a real NVDA and Narrator listening pass and a live packaged API
 result request with a user-provided key, including Enter, context-menu,
 playback, and successful-result Escape return. No secret is bundled, logged, or
 written for testing.
+
+## 2026-09-10: native YouTube subscriptions
+
+Implementation: a Python-compatible typed subscription store, transactional
+application controller, a dedicated generation-scoped YouTube worker, and a
+native Win32 Subscriptions screen matching the Python navigation and actions.
+
+Verified in automated tests:
+
+- current beta data takes precedence over legacy stable data, while a missing
+  beta file imports stable subscriptions without modifying the stable file;
+- malformed current data blocks writes instead of replacing recoverable user
+  data, and every successful mutation uses the atomic JSON writer;
+- channel URLs are canonicalized before add, remove, and refresh operations, so
+  equivalent video/channel routes cannot create duplicate subscriptions;
+- first refresh establishes a baseline without reporting every existing upload
+  as new, later refreshes retain the latest 20 URLs/items, and one failed
+  channel does not prevent results from other channels being merged;
+- manual and automatic checks use a third YouTube service independent of search
+  and metadata hydration, preventing a subscription refresh from taking over an
+  active result screen;
+- automatic checking honors the configured enabled flag and 0.5-to-168-hour
+  interval, while manual checking remains available from the screen and tray;
+- saved new-video rows restore an application-owned result sequence for exact
+  playback, Previous/Next, queue, favorites, playlist, and context actions;
+- category filtering and editing preserve the current selection, and
+  subscription events use the durable notification center plus the configured
+  announcement and Windows tray-notification preferences;
+- the real stable Python `subscriptions.json` was read from a private temporary
+  copy through the typed adapter and round-tripped with semantic value equality.
+
+`qualify_youtube_subscriptions_ui.ps1` ran the installed side-by-side beta with
+isolated temporary settings and verified through Win32 and MSAA that:
+
+- the list exposes the accessible name `Subscriptions` and Python-compatible
+  row field order;
+- every control has the expected native role, class, and accessible name;
+- the exact forward Tab order is Subscriptions, Back to main menu, Check
+  subscriptions now, Open channel videos, New videos, Remove, Filter by
+  category, and Set category; and
+- Escape returns to the main menu without leaving the beta process or temporary
+  data behind.
+
+Network-dependent subscription refreshes are deliberately excluded from this
+deterministic UI script. Worker/controller tests cover success, independent
+failures, stale generations, and transactional persistence; a real account and
+network listening pass remains a pre-release qualification item.
