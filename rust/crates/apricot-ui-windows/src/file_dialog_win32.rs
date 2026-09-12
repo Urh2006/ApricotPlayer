@@ -6,8 +6,8 @@ use std::{ffi::OsString, mem::size_of, os::windows::ffi::OsStringExt, path::Path
 
 use windows::{
     Win32::UI::Controls::Dialogs::{
-        CommDlgExtendedError, GetOpenFileNameW, OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_NOCHANGEDIR,
-        OFN_PATHMUSTEXIST, OPENFILENAMEW,
+        CommDlgExtendedError, GetOpenFileNameW, GetSaveFileNameW, OFN_EXPLORER, OFN_FILEMUSTEXIST,
+        OFN_NOCHANGEDIR, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST, OPENFILENAMEW,
     },
     core::{PCWSTR, PWSTR},
 };
@@ -28,6 +28,50 @@ pub fn choose_media_file(owner: HWND, title: &str) -> Result<Option<PathBuf>, St
     unsafe { choose_media_file_win32(owner, title) }
 }
 
+/// Shows the native OPML import picker.
+///
+/// # Errors
+///
+/// Returns a diagnostic string if the Windows common dialog reports a failure.
+pub fn choose_opml_file(
+    owner: HWND,
+    title: &str,
+    type_label: &str,
+) -> Result<Option<PathBuf>, String> {
+    // SAFETY: The synchronous dialog only borrows the owned UTF-16 buffers.
+    unsafe {
+        choose_file_win32(
+            owner,
+            title,
+            &format!("{type_label} (*.opml)\0*.opml\0All files (*.*)\0*.*\0\0"),
+            "",
+            false,
+        )
+    }
+}
+
+/// Shows the native OPML export picker with overwrite confirmation.
+///
+/// # Errors
+///
+/// Returns a diagnostic string if the Windows common dialog reports a failure.
+pub fn save_opml_file(
+    owner: HWND,
+    title: &str,
+    type_label: &str,
+) -> Result<Option<PathBuf>, String> {
+    // SAFETY: The synchronous dialog only borrows the owned UTF-16 buffers.
+    unsafe {
+        choose_file_win32(
+            owner,
+            title,
+            &format!("{type_label} (*.opml)\0*.opml\0All files (*.*)\0*.*\0\0"),
+            "apricot_feeds.opml",
+            true,
+        )
+    }
+}
+
 unsafe fn choose_media_file_win32(owner: HWND, title: &str) -> Result<Option<PathBuf>, String> {
     let mut file = vec![0_u16; FILE_BUFFER_UNITS];
     let title = wide(title);
@@ -44,6 +88,59 @@ unsafe fn choose_media_file_win32(owner: HWND, title: &str) -> Result<Option<Pat
         ..Default::default()
     };
     if GetOpenFileNameW(&raw mut dialog).as_bool() {
+        let length = file
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(file.len());
+        return Ok(Some(PathBuf::from(OsString::from_wide(&file[..length]))));
+    }
+    let error = CommDlgExtendedError();
+    if error.0 == 0 {
+        Ok(None)
+    } else {
+        Err(format!("Windows file dialog failed with code {}", error.0))
+    }
+}
+
+unsafe fn choose_file_win32(
+    owner: HWND,
+    title: &str,
+    filter: &str,
+    default_file: &str,
+    save: bool,
+) -> Result<Option<PathBuf>, String> {
+    let mut file = vec![0_u16; FILE_BUFFER_UNITS];
+    let default = default_file.encode_utf16().collect::<Vec<_>>();
+    file[..default.len()].copy_from_slice(&default);
+    let title = wide(title);
+    let filter = filter.encode_utf16().collect::<Vec<_>>();
+    let extension = wide("opml");
+    let flags = OFN_EXPLORER
+        | OFN_PATHMUSTEXIST
+        | OFN_NOCHANGEDIR
+        | if save {
+            OFN_OVERWRITEPROMPT
+        } else {
+            OFN_FILEMUSTEXIST
+        };
+    let mut dialog = OPENFILENAMEW {
+        lStructSize: u32::try_from(size_of::<OPENFILENAMEW>())
+            .expect("OPENFILENAMEW size fits in u32"),
+        hwndOwner: owner,
+        lpstrFilter: PCWSTR(filter.as_ptr()),
+        lpstrFile: PWSTR(file.as_mut_ptr()),
+        nMaxFile: u32::try_from(file.len()).expect("file buffer size fits in u32"),
+        lpstrTitle: PCWSTR(title.as_ptr()),
+        lpstrDefExt: PCWSTR(extension.as_ptr()),
+        Flags: flags,
+        ..Default::default()
+    };
+    let accepted = if save {
+        GetSaveFileNameW(&raw mut dialog)
+    } else {
+        GetOpenFileNameW(&raw mut dialog)
+    };
+    if accepted.as_bool() {
         let length = file
             .iter()
             .position(|unit| *unit == 0)

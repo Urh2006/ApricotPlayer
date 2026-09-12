@@ -5,6 +5,8 @@
 use std::{
     collections::{HashSet, VecDeque},
     ffi::c_void,
+    fs,
+    io::Read,
     mem::size_of,
     path::PathBuf,
     sync::{
@@ -19,11 +21,12 @@ use crate::{
         BookmarkDialogEntry, BookmarkDialogLabels, BookmarkDialogRequest, BookmarkDialogResponse,
     },
     player_controls_win32::{PlayerControlActivation, PlayerControls},
+    podcast_win32::{PendingPodcastWork, PodcastWorkResult},
 };
 use apricot_app::{
     ActionFinderContext, ActivationRequest, Application, MainMenuModel, PlaybackPhase,
-    PlayerNavigationOutcome, SearchApplyOutcome, SearchWork, SearchWorkKind, SessionToggle,
-    SubscriptionAddOutcome, SubscriptionCheckResult, SubscriptionRemoveOutcome,
+    PlayerNavigationOutcome, RssFeedAddOutcome, SearchApplyOutcome, SearchWork, SearchWorkKind,
+    SessionToggle, SubscriptionAddOutcome, SubscriptionCheckResult, SubscriptionRemoveOutcome,
     YOUTUBE_TRENDING_CATEGORIES, YOUTUBE_TRENDING_COUNTRIES, YoutubeCollectionApplyOutcome,
     YoutubeCollectionKind, YoutubeCollectionPhase, YoutubeCollectionWork,
     YoutubeCollectionWorkKind, YoutubeSearchKind, YoutubeTrendingWork,
@@ -35,8 +38,8 @@ use apricot_core::{
     shortcut::{ShortcutContext, ShortcutKey, action_for_shortcut},
 };
 use apricot_media::{
-    YoutubeBackend, YoutubeFormat, YoutubeSessionConfig, YoutubeStreamPreference,
-    select_youtube_playback_formats,
+    PodcastDirectoryItem, YoutubeBackend, YoutubeFormat, YoutubeSessionConfig,
+    YoutubeStreamPreference, select_youtube_playback_formats,
 };
 use apricot_platform::{
     YoutubeDataApiClient, YoutubeSearchService, YoutubeSearchServiceUpdate,
@@ -54,8 +57,8 @@ use windows::{
         UI::{
             Controls::InitCommonControls,
             Input::KeyboardAndMouse::{
-                EnableWindow, GetAsyncKeyState, GetFocus, SetFocus, VK_CONTROL, VK_MENU, VK_RETURN,
-                VK_SHIFT, VK_TAB,
+                EnableWindow, GetAsyncKeyState, GetFocus, SetFocus, VK_CONTROL, VK_DOWN, VK_END,
+                VK_MENU, VK_RETURN, VK_SHIFT, VK_TAB,
             },
             Shell::{
                 DefSubclassProc, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD,
@@ -114,6 +117,21 @@ const ID_SUBSCRIPTION_CHECK: usize = 1026;
 const ID_SUBSCRIPTION_NEW: usize = 1027;
 const ID_SUBSCRIPTION_FILTER: usize = 1028;
 const ID_SUBSCRIPTION_SET_CATEGORY: usize = 1029;
+const ID_RSS_SEARCH: usize = 1030;
+const ID_RSS_CATEGORIES: usize = 1031;
+const ID_RSS_ADD: usize = 1032;
+const ID_RSS_REFRESH: usize = 1033;
+const ID_RSS_FILTER: usize = 1034;
+const ID_RSS_SET_CATEGORY: usize = 1035;
+const ID_RSS_IMPORT: usize = 1036;
+const ID_RSS_EXPORT: usize = 1037;
+const ID_RSS_DOWNLOAD_FEED: usize = 1038;
+const ID_RSS_SPEED: usize = 1039;
+const ID_RSS_TOGGLE_PLAYED: usize = 1040;
+const ID_RSS_CLEAR_PROGRESS: usize = 1041;
+const ID_PODCAST_ADD: usize = 1042;
+const ID_OPEN_BROWSER: usize = 1043;
+const ID_RSS_DOWNLOAD_EPISODE: usize = 1044;
 const ID_CONTEXT_PLAY: usize = 1101;
 const ID_CONTEXT_PLAY_FOLDER: usize = 1102;
 const ID_CONTEXT_SHUFFLE_FOLDER: usize = 1103;
@@ -150,6 +168,19 @@ const ID_CONTEXT_SUBSCRIPTION_SET_CATEGORY: usize = 1133;
 const ID_CONTEXT_SUBSCRIPTION_FILTER: usize = 1134;
 const ID_CONTEXT_UNSUBSCRIBE: usize = 1135;
 const ID_CONTEXT_SUBSCRIBE: usize = 1136;
+const ID_CONTEXT_RSS_OPEN: usize = 1137;
+const ID_CONTEXT_RSS_REFRESH: usize = 1138;
+const ID_CONTEXT_RSS_SPEED: usize = 1139;
+const ID_CONTEXT_RSS_SET_CATEGORY: usize = 1140;
+const ID_CONTEXT_RSS_FILTER: usize = 1141;
+const ID_CONTEXT_RSS_REMOVE: usize = 1142;
+const ID_CONTEXT_RSS_TOGGLE_PLAYED: usize = 1143;
+const ID_CONTEXT_RSS_CLEAR_PROGRESS: usize = 1144;
+const ID_CONTEXT_RSS_DOWNLOAD_FEED: usize = 1145;
+const ID_CONTEXT_RSS_DOWNLOAD_EPISODE: usize = 1146;
+const ID_CONTEXT_OPEN_BROWSER: usize = 1147;
+const ID_CONTEXT_PODCAST_ADD: usize = 1148;
+const ID_CONTEXT_RSS_QUEUE_EPISODE: usize = 1149;
 const WM_PROCESS_ACTIVATION: u32 = WM_APP + 1;
 const WM_TRAY_ICON: u32 = WM_APP + 2;
 const YOUTUBE_TIMER_ID: usize = 1;
@@ -161,8 +192,25 @@ const PLAYBACK_TIMER_INTERVAL_MS: u32 = 25;
 const CONTROLLED_REPEAT_TIMER_ID: usize = 3;
 const LOCAL_FOLDER_TIMER_ID: usize = 4;
 const SUBSCRIPTION_TIMER_ID: usize = 5;
+const RSS_TIMER_ID: usize = 6;
 const SEEK_HOLD_DELAY_MS: u32 = 180;
 const SEEK_HOLD_INTERVAL_MS: u32 = 110;
+const PODCAST_GENRES: [(&str, u32); 10] = [
+    ("genre_arts", 1301),
+    ("genre_business", 1304),
+    ("genre_comedy", 1303),
+    ("genre_education", 1307),
+    ("genre_music", 1310),
+    ("genre_news", 1311),
+    ("genre_science", 1315),
+    ("genre_sports", 1316),
+    ("genre_technology", 1318),
+    ("genre_true_crime", 1324),
+];
+const PODCAST_SPEED_STEPS: [f64; 19] = [
+    0.25, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1.0, 1.1, 1.2, 1.25, 1.3, 1.4, 1.5, 1.75, 2.0, 2.5, 3.0,
+    4.0,
+];
 const CB_ADDSTRING: u32 = 0x0143;
 const CB_GETCURSEL: u32 = 0x0147;
 const CB_RESETCONTENT: u32 = 0x014B;
@@ -195,6 +243,10 @@ enum MainView {
     History,
     NotificationCenter,
     Subscriptions,
+    RssFeeds,
+    RssItems,
+    PodcastSearchResults,
+    PodcastCategories,
     UserPlaylists,
     UserPlaylistItems,
     Player,
@@ -332,6 +384,21 @@ struct WindowState {
     subscription_new: HWND,
     subscription_filter: HWND,
     subscription_set_category: HWND,
+    rss_search: HWND,
+    rss_categories: HWND,
+    rss_add: HWND,
+    rss_refresh: HWND,
+    rss_filter: HWND,
+    rss_set_category: HWND,
+    rss_import: HWND,
+    rss_export: HWND,
+    rss_download_feed: HWND,
+    rss_speed: HWND,
+    rss_toggle_played: HWND,
+    rss_clear_progress: HWND,
+    podcast_add: HWND,
+    open_browser: HWND,
+    rss_download_episode: HWND,
     playlist_create: HWND,
     playlist_play_all: HWND,
     playlist_shuffle: HWND,
@@ -357,6 +424,12 @@ struct WindowState {
     pending_youtube_api_metadata: Option<PendingYoutubeApiMetadata>,
     pending_youtube_trending_api: Option<PendingYoutubeTrendingApi>,
     pending_subscription_check: Option<PendingSubscriptionCheck>,
+    pending_podcast_work: Option<PendingPodcastWork>,
+    podcast_search_results: Vec<PodcastDirectoryItem>,
+    podcast_search_query: String,
+    current_rss_feed_index: usize,
+    current_rss_item_index: usize,
+    rss_visible_item_count: usize,
     hydrated_youtube_urls: HashSet<String>,
     youtube_api_metadata_disabled_scopes: HashSet<YoutubeMetadataScope>,
     deferred_youtube_metadata_rows: HashSet<usize>,
@@ -439,6 +512,8 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
     process_pending_activations(window);
     configure_subscription_timer(window);
     check_subscriptions_if_due(window);
+    configure_rss_timer(window);
+    refresh_rss_feeds_on_startup(window);
 
     let mut message = MSG::default();
     loop {
@@ -491,6 +566,35 @@ unsafe fn handle_view_tab_message(window: HWND, message: &MSG) -> bool {
             state.subscription_set_category,
             state.list,
         ],
+        MainView::RssFeeds => vec![
+            state.back,
+            state.rss_search,
+            state.rss_categories,
+            state.rss_add,
+            state.rss_refresh,
+            state.open,
+            state.collection_remove,
+            state.rss_filter,
+            state.rss_set_category,
+            state.rss_import,
+            state.rss_export,
+            state.list,
+        ],
+        MainView::RssItems => vec![
+            state.back,
+            state.rss_refresh,
+            state.open,
+            state.rss_download_episode,
+            state.rss_download_feed,
+            state.list,
+        ],
+        MainView::PodcastSearchResults => vec![
+            state.back,
+            state.podcast_add,
+            state.open_browser,
+            state.list,
+        ],
+        MainView::PodcastCategories => vec![state.back, state.open, state.list],
         _ => return false,
     };
     let Some(current) = controls.iter().position(|control| *control == GetFocus()) else {
@@ -585,6 +689,10 @@ unsafe extern "system" fn window_proc(
             check_subscriptions_if_due(window);
             LRESULT(0)
         }
+        WM_TIMER if wparam.0 == RSS_TIMER_ID => {
+            refresh_all_rss_feeds_background(window);
+            LRESULT(0)
+        }
         WM_DESTROY => {
             remove_tray_icon(window);
             let pointer = GetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0)) as *mut WindowState;
@@ -599,6 +707,7 @@ unsafe extern "system" fn window_proc(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 unsafe fn handle_window_command(window: HWND, wparam: WPARAM) {
     let command = wparam.0 & 0xffff;
     let notification = (wparam.0 >> 16) & 0xffff;
@@ -659,6 +768,36 @@ unsafe fn handle_window_command(window: HWND, wparam: WPARAM) {
         choose_subscription_category_filter(window);
     } else if command == ID_SUBSCRIPTION_SET_CATEGORY {
         set_selected_subscription_category(window);
+    } else if command == ID_RSS_SEARCH {
+        prompt_podcast_search(window);
+    } else if command == ID_RSS_CATEGORIES {
+        show_podcast_categories(window);
+    } else if command == ID_RSS_ADD {
+        prompt_add_rss_feed(window);
+    } else if command == ID_RSS_REFRESH {
+        refresh_rss_from_active_view(window);
+    } else if command == ID_RSS_FILTER {
+        choose_rss_category_filter(window);
+    } else if command == ID_RSS_SET_CATEGORY {
+        set_selected_rss_category(window);
+    } else if command == ID_RSS_IMPORT {
+        import_rss_opml(window);
+    } else if command == ID_RSS_EXPORT {
+        export_rss_opml(window);
+    } else if command == ID_RSS_DOWNLOAD_FEED {
+        download_current_rss_feed(window);
+    } else if command == ID_RSS_SPEED {
+        choose_rss_speed_preset(window);
+    } else if command == ID_RSS_TOGGLE_PLAYED {
+        toggle_selected_rss_played(window);
+    } else if command == ID_RSS_CLEAR_PROGRESS {
+        clear_selected_rss_progress(window);
+    } else if command == ID_RSS_DOWNLOAD_EPISODE {
+        download_selected_rss_episode(window);
+    } else if command == ID_PODCAST_ADD {
+        add_selected_podcast_result(window);
+    } else if command == ID_OPEN_BROWSER {
+        open_selected_podcast_in_browser(window);
     } else if command == ID_PLAYLIST_CREATE {
         create_user_playlist(window, None);
     } else if command == ID_PLAYLIST_PLAY_ALL {
@@ -1021,6 +1160,63 @@ unsafe fn create_controls(
         WINDOW_EX_STYLE::default(),
         ID_SUBSCRIPTION_SET_CATEGORY,
     )?;
+    let rss_search = create_button(parent, instance, &catalog, "search_podcasts", ID_RSS_SEARCH)?;
+    let rss_categories = create_button(
+        parent,
+        instance,
+        &catalog,
+        "podcast_categories",
+        ID_RSS_CATEGORIES,
+    )?;
+    let rss_add = create_button(parent, instance, &catalog, "add_rss_feed", ID_RSS_ADD)?;
+    let rss_refresh = create_button(parent, instance, &catalog, "refresh_feeds", ID_RSS_REFRESH)?;
+    let rss_filter = create_button(parent, instance, &catalog, "filter_category", ID_RSS_FILTER)?;
+    let rss_set_category = create_button(
+        parent,
+        instance,
+        &catalog,
+        "set_category",
+        ID_RSS_SET_CATEGORY,
+    )?;
+    let rss_import = create_button(parent, instance, &catalog, "import_opml", ID_RSS_IMPORT)?;
+    let rss_export = create_button(parent, instance, &catalog, "export_opml", ID_RSS_EXPORT)?;
+    let rss_download_feed = create_button(
+        parent,
+        instance,
+        &catalog,
+        "download_feed",
+        ID_RSS_DOWNLOAD_FEED,
+    )?;
+    let rss_speed = create_button(
+        parent,
+        instance,
+        &catalog,
+        "podcast_speed_preset",
+        ID_RSS_SPEED,
+    )?;
+    let rss_toggle_played = create_button(
+        parent,
+        instance,
+        &catalog,
+        "mark_episode_played",
+        ID_RSS_TOGGLE_PLAYED,
+    )?;
+    let rss_clear_progress = create_button(
+        parent,
+        instance,
+        &catalog,
+        "clear_episode_progress",
+        ID_RSS_CLEAR_PROGRESS,
+    )?;
+    let podcast_add = create_button(parent, instance, &catalog, "add_podcast", ID_PODCAST_ADD)?;
+    let open_browser = create_button(parent, instance, &catalog, "open_browser", ID_OPEN_BROWSER)?;
+    let rss_download_episode = create_button(
+        parent,
+        instance,
+        &catalog,
+        "download_episode_audio",
+        ID_RSS_DOWNLOAD_EPISODE,
+    )?;
     let playlist_create_text = wide(catalog.text("create_playlist"));
     let playlist_create = create_control(
         parent,
@@ -1094,6 +1290,21 @@ unsafe fn create_controls(
         subscription_new,
         subscription_filter,
         subscription_set_category,
+        rss_search,
+        rss_categories,
+        rss_add,
+        rss_refresh,
+        rss_filter,
+        rss_set_category,
+        rss_import,
+        rss_export,
+        rss_download_feed,
+        rss_speed,
+        rss_toggle_played,
+        rss_clear_progress,
+        podcast_add,
+        open_browser,
+        rss_download_episode,
         playlist_create,
         playlist_play_all,
         playlist_shuffle,
@@ -1131,6 +1342,21 @@ unsafe fn create_controls(
         subscription_new,
         subscription_filter,
         subscription_set_category,
+        rss_search,
+        rss_categories,
+        rss_add,
+        rss_refresh,
+        rss_filter,
+        rss_set_category,
+        rss_import,
+        rss_export,
+        rss_download_feed,
+        rss_speed,
+        rss_toggle_played,
+        rss_clear_progress,
+        podcast_add,
+        open_browser,
+        rss_download_episode,
         playlist_create,
         playlist_play_all,
         playlist_shuffle,
@@ -1156,6 +1382,12 @@ unsafe fn create_controls(
         pending_youtube_api_metadata: None,
         pending_youtube_trending_api: None,
         pending_subscription_check: None,
+        pending_podcast_work: None,
+        podcast_search_results: Vec::new(),
+        podcast_search_query: String::new(),
+        current_rss_feed_index: 0,
+        current_rss_item_index: 0,
+        rss_visible_item_count: 0,
         hydrated_youtube_urls: HashSet::new(),
         youtube_api_metadata_disabled_scopes: HashSet::new(),
         deferred_youtube_metadata_rows: HashSet::new(),
@@ -1196,6 +1428,25 @@ unsafe fn create_control(
     )
 }
 
+unsafe fn create_button(
+    parent: HWND,
+    instance: HINSTANCE,
+    catalog: &apricot_core::TranslationCatalog,
+    label_key: &str,
+    id: usize,
+) -> Result<HWND> {
+    let label = wide(catalog.text(label_key));
+    create_control(
+        parent,
+        instance,
+        w!("BUTTON"),
+        PCWSTR(label.as_ptr()),
+        WS_CHILD | WS_TABSTOP,
+        WINDOW_EX_STYLE::default(),
+        id,
+    )
+}
+
 unsafe extern "system" fn menu_list_proc(
     window: HWND,
     message: u32,
@@ -1204,6 +1455,19 @@ unsafe extern "system" fn menu_list_proc(
     subclass_id: usize,
     _reference_data: usize,
 ) -> LRESULT {
+    if message == WM_KEYDOWN
+        && matches!(wparam.0, key if key == usize::from(VK_END.0) || key == usize::from(VK_DOWN.0))
+        && let Ok(parent) = windows::Win32::UI::WindowsAndMessaging::GetParent(window)
+        && state(parent).is_some_and(|state| {
+            let count = SendMessageW(window, LB_GETCOUNT, None, None).0;
+            state.view == MainView::RssItems
+                && count > 0
+                && (wparam.0 == usize::from(VK_END.0)
+                    || SendMessageW(window, LB_GETCURSEL, None, None).0 >= count - 1)
+        })
+    {
+        maybe_extend_rss_items(parent);
+    }
     if message == WM_KEYDOWN
         && wparam.0 == usize::from(VK_RETURN.0)
         && let Ok(parent) = windows::Win32::UI::WindowsAndMessaging::GetParent(window)
@@ -1278,6 +1542,12 @@ unsafe fn show_list_context_menu(window: HWND, location: LPARAM) {
             }
             let key = if *id == ID_CONTEXT_COPY_LOCATION && active_is_local {
                 "copy_path"
+            } else if *id == ID_CONTEXT_RSS_TOGGLE_PLAYED
+                && active_item
+                    .as_ref()
+                    .is_some_and(|item| metadata_bool(item, "played"))
+            {
+                "mark_episode_unplayed"
             } else {
                 key
             };
@@ -1328,14 +1598,14 @@ unsafe fn execute_list_context_command(
     active_item: Option<apricot_core::MediaItem>,
 ) {
     match command {
-        ID_CONTEXT_PLAY => activate_selection(window),
+        ID_CONTEXT_PLAY | ID_CONTEXT_RSS_OPEN => activate_selection(window),
         ID_CONTEXT_PLAY_FOLDER => play_current_local_folder(window, false),
         ID_CONTEXT_SHUFFLE_FOLDER => play_current_local_folder(window, true),
         ID_CONTEXT_ADD_TO_QUEUE => add_active_item_to_playback_queue(window),
         ID_CONTEXT_REMOVE_FROM_QUEUE => remove_active_item_from_playback_queue(window),
         ID_CONTEXT_ADD_FOLDER_TO_QUEUE => add_current_local_folder_to_queue(window),
         ID_CONTEXT_PLAYBACK_QUEUE => show_playback_queue(window),
-        ID_CONTEXT_COPY_LOCATION => copy_active_location(window),
+        ID_CONTEXT_COPY_LOCATION => copy_context_location(window),
         ID_CONTEXT_COPY_STREAM_URL => copy_active_stream_url(window),
         ID_CONTEXT_ADD_FAVORITE => add_active_favorite(window),
         ID_CONTEXT_COLLECTION_REMOVE => {
@@ -1383,6 +1653,18 @@ unsafe fn execute_list_context_command(
             }
         }
         ID_CONTEXT_SUBSCRIBE => subscribe_active_channel(window),
+        ID_CONTEXT_RSS_REFRESH => refresh_selected_rss_feed(window),
+        ID_CONTEXT_RSS_SPEED => choose_rss_speed_preset(window),
+        ID_CONTEXT_RSS_SET_CATEGORY => set_selected_rss_category(window),
+        ID_CONTEXT_RSS_FILTER => choose_rss_category_filter(window),
+        ID_CONTEXT_RSS_REMOVE => remove_selected_rss_feed(window),
+        ID_CONTEXT_RSS_TOGGLE_PLAYED => toggle_selected_rss_played(window),
+        ID_CONTEXT_RSS_CLEAR_PROGRESS => clear_selected_rss_progress(window),
+        ID_CONTEXT_RSS_DOWNLOAD_FEED => download_current_rss_feed(window),
+        ID_CONTEXT_RSS_DOWNLOAD_EPISODE => download_selected_rss_episode(window),
+        ID_CONTEXT_RSS_QUEUE_EPISODE => queue_selected_rss_episode_download(window),
+        ID_CONTEXT_OPEN_BROWSER => open_selected_podcast_in_browser(window),
+        ID_CONTEXT_PODCAST_ADD => add_selected_podcast_result(window),
         ID_CONTEXT_OPEN_PLAYLIST_VIDEOS => {
             if let Some(item) = active_item {
                 open_youtube_collection(window, item, YoutubeCollectionKind::PlaylistVideos);
@@ -1521,6 +1803,34 @@ fn list_context_entries(
             (ID_CONTEXT_UNSUBSCRIBE, "unsubscribe_channel"),
             (ID_CONTEXT_COLLECTION_REMOVE, "remove"),
         ]),
+        MainView::RssFeeds => Some(vec![
+            (ID_CONTEXT_RSS_OPEN, "open_feed"),
+            (ID_CONTEXT_RSS_DOWNLOAD_FEED, "download_feed"),
+            (ID_CONTEXT_RSS_SPEED, "podcast_speed_preset"),
+            (ID_CONTEXT_RSS_REFRESH, "refresh_feed"),
+            (ID_CONTEXT_RSS_SET_CATEGORY, "set_category"),
+            (ID_CONTEXT_RSS_FILTER, "filter_category"),
+            (ID_CONTEXT_COPY_LOCATION, "copy_url"),
+            (ID_CONTEXT_RSS_REMOVE, "remove_feed"),
+        ]),
+        MainView::RssItems => Some(vec![
+            (ID_CONTEXT_PLAY, "play_episode"),
+            (ID_CONTEXT_RSS_TOGGLE_PLAYED, "mark_episode_played"),
+            (ID_CONTEXT_RSS_CLEAR_PROGRESS, "clear_episode_progress"),
+            (ID_CONTEXT_RSS_DOWNLOAD_EPISODE, "download_episode_audio"),
+            (ID_CONTEXT_RSS_QUEUE_EPISODE, "queue_episode_audio"),
+            (ID_CONTEXT_ADD_TO_PLAYLIST, "add_to_playlist"),
+            (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
+            (ID_CONTEXT_REMOVE_FROM_QUEUE, "remove_from_playback_queue"),
+            (ID_CONTEXT_RSS_DOWNLOAD_FEED, "download_feed"),
+            (ID_CONTEXT_OPEN_BROWSER, "open_episode_page"),
+            (ID_CONTEXT_COPY_LOCATION, "copy_url"),
+        ]),
+        MainView::PodcastSearchResults => Some(vec![
+            (ID_CONTEXT_PODCAST_ADD, "add_podcast"),
+            (ID_CONTEXT_OPEN_BROWSER, "open_browser"),
+            (ID_CONTEXT_COPY_LOCATION, "copy_url"),
+        ]),
         MainView::Results | MainView::Trending | MainView::YoutubeCollection => unreachable!(),
         MainView::UserPlaylists => Some(vec![
             (ID_CONTEXT_PLAY, "open_playlist"),
@@ -1555,6 +1865,10 @@ unsafe fn show_context_menu_for_active_view(window: HWND) {
             | MainView::History
             | MainView::NotificationCenter
             | MainView::Subscriptions
+            | MainView::RssFeeds
+            | MainView::RssItems
+            | MainView::PodcastSearchResults
+            | MainView::PodcastCategories
             | MainView::UserPlaylists
             | MainView::UserPlaylistItems,
         ) => {
@@ -1768,7 +2082,10 @@ unsafe fn layout_controls_state(window: HWND, state: &mut WindowState) {
             .player_controls
             .layout(width, height, margin, status_height);
     } else {
-        let action_rows = if matches!(state.view, MainView::LocalFolder | MainView::Subscriptions) {
+        let action_rows = if matches!(
+            state.view,
+            MainView::LocalFolder | MainView::Subscriptions | MainView::RssFeeds
+        ) {
             2
         } else {
             1
@@ -1824,10 +2141,12 @@ unsafe fn layout_bottom_controls(
     let history = state.view == MainView::History;
     let notification_center = state.view == MainView::NotificationCenter;
     let subscriptions = state.view == MainView::Subscriptions;
+    let rss_feeds = state.view == MainView::RssFeeds;
+    let rss_items = state.view == MainView::RssItems;
     let trending = state.view == MainView::Trending;
     let user_playlists = state.view == MainView::UserPlaylists;
     let user_playlist_items = state.view == MainView::UserPlaylistItems;
-    let first_button_y = if local_folder || subscriptions {
+    let first_button_y = if local_folder || subscriptions || rss_feeds {
         height - button_height * 2 - margin * 2
     } else {
         height - button_height - margin
@@ -1901,10 +2220,61 @@ unsafe fn layout_bottom_controls(
             margin,
             button_height,
         );
+    } else if rss_feeds {
         layout_button_row(
-            &[state.subscription_filter, state.subscription_set_category],
+            &[
+                state.back,
+                state.rss_search,
+                state.rss_categories,
+                state.rss_add,
+                state.rss_refresh,
+            ],
+            width,
+            first_button_y,
+            margin,
+            button_height,
+        );
+        layout_button_row(
+            &[
+                state.open,
+                state.collection_remove,
+                state.rss_filter,
+                state.rss_set_category,
+                state.rss_import,
+                state.rss_export,
+            ],
             width,
             height - button_height - margin,
+            margin,
+            button_height,
+        );
+    } else if rss_items {
+        layout_button_row(
+            &[
+                state.back,
+                state.rss_refresh,
+                state.open,
+                state.rss_download_episode,
+                state.rss_download_feed,
+            ],
+            width,
+            first_button_y,
+            margin,
+            button_height,
+        );
+    } else if state.view == MainView::PodcastSearchResults {
+        layout_button_row(
+            &[state.back, state.podcast_add, state.open_browser],
+            width,
+            first_button_y,
+            margin,
+            button_height,
+        );
+    } else if state.view == MainView::PodcastCategories {
+        layout_button_row(
+            &[state.back, state.open],
+            width,
+            first_button_y,
             margin,
             button_height,
         );
@@ -2013,6 +2383,7 @@ unsafe fn layout_button_row(controls: &[HWND], width: i32, y: i32, margin: i32, 
     }
 }
 
+#[allow(clippy::too_many_lines)]
 unsafe fn set_view_visibility(state: &mut WindowState) {
     let list_visible = matches!(
         state.view,
@@ -2025,6 +2396,10 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
             | MainView::History
             | MainView::NotificationCenter
             | MainView::Subscriptions
+            | MainView::RssFeeds
+            | MainView::RssItems
+            | MainView::PodcastSearchResults
+            | MainView::PodcastCategories
             | MainView::UserPlaylists
             | MainView::UserPlaylistItems
     );
@@ -2043,6 +2418,9 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
     let folder_visible = state.view == MainView::LocalFolder;
     let trending_visible = state.view == MainView::Trending;
     let subscriptions_visible = state.view == MainView::Subscriptions;
+    let rss_feeds_visible = state.view == MainView::RssFeeds;
+    let rss_items_visible = state.view == MainView::RssItems;
+    let podcast_directory_visible = state.view == MainView::PodcastSearchResults;
     for (control, visible) in [
         (state.list, list_visible),
         (state.open, open_visible),
@@ -2075,6 +2453,21 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
         (state.subscription_new, subscriptions_visible),
         (state.subscription_filter, subscriptions_visible),
         (state.subscription_set_category, subscriptions_visible),
+        (state.rss_search, rss_feeds_visible),
+        (state.rss_categories, rss_feeds_visible),
+        (state.rss_add, rss_feeds_visible),
+        (state.rss_refresh, rss_feeds_visible || rss_items_visible),
+        (state.rss_filter, rss_feeds_visible),
+        (state.rss_set_category, rss_feeds_visible),
+        (state.rss_import, rss_feeds_visible),
+        (state.rss_export, rss_feeds_visible),
+        (state.rss_download_feed, rss_items_visible),
+        (state.rss_speed, false),
+        (state.rss_toggle_played, false),
+        (state.rss_clear_progress, false),
+        (state.podcast_add, podcast_directory_visible),
+        (state.open_browser, podcast_directory_visible),
+        (state.rss_download_episode, rss_items_visible),
         (state.playlist_create, state.view == MainView::UserPlaylists),
         (
             state.playlist_play_all,
@@ -2109,6 +2502,10 @@ const fn view_has_back_button(view: MainView) -> bool {
             | MainView::History
             | MainView::NotificationCenter
             | MainView::Subscriptions
+            | MainView::RssFeeds
+            | MainView::RssItems
+            | MainView::PodcastSearchResults
+            | MainView::PodcastCategories
             | MainView::UserPlaylists
             | MainView::UserPlaylistItems
     )
@@ -2120,6 +2517,7 @@ const fn view_has_collection_remove(view: MainView) -> bool {
         MainView::Favorites
             | MainView::History
             | MainView::Subscriptions
+            | MainView::RssFeeds
             | MainView::UserPlaylists
             | MainView::UserPlaylistItems
     )
@@ -2317,6 +2715,10 @@ unsafe fn activate_selection(window: HWND) {
         Some(MainView::Favorites | MainView::History) => activate_collection_selection(window),
         Some(MainView::NotificationCenter) => activate_notification_selection(window),
         Some(MainView::Subscriptions) => open_selected_subscription_videos(window),
+        Some(MainView::RssFeeds) => open_selected_rss_feed(window),
+        Some(MainView::RssItems) => play_selected_rss_episode(window),
+        Some(MainView::PodcastSearchResults) => add_selected_podcast_result(window),
+        Some(MainView::PodcastCategories) => open_selected_podcast_category(window),
         Some(MainView::UserPlaylists) => open_selected_user_playlist(window),
         Some(MainView::UserPlaylistItems) => activate_user_playlist_item(window),
         Some(MainView::Search | MainView::DirectLink | MainView::Player) | None => {}
@@ -2373,6 +2775,10 @@ unsafe fn activate_main_menu_selection(window: HWND) {
     }
     if item_id == "subscriptions" {
         show_subscriptions(window);
+        return;
+    }
+    if item_id == "rss_feeds" {
+        show_rss_feeds(window);
         return;
     }
     if item_id == "bookmarks" {
@@ -3005,11 +3411,16 @@ unsafe fn start_player_at(
         }
     }
     persist_current_playback_position(state);
+    let podcast_speed =
+        metadata_number(&item, "podcast_speed_preset").filter(|speed| (0.25..=4.0).contains(speed));
     let generation = state.application.start_player_item_with_shuffle_at(
         item,
         session_shuffle,
         start_position_seconds,
     );
+    if let Some(speed) = podcast_speed {
+        state.application.set_player_speed(speed);
+    }
     let Some(options) = playback_launch_options(state, start_position_seconds) else {
         let message = "Internal mpv player was not found";
         let _ = state
@@ -3244,6 +3655,20 @@ unsafe fn resume_last_player_session(window: HWND) {
             .and_then(serde_json::Value::as_u64)
             .and_then(|value| usize::try_from(value).ok())
             .unwrap_or_default();
+    } else if resume.return_screen == "rss_items" {
+        state.current_rss_feed_index = resume
+            .return_data
+            .get("feed_index")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or_default();
+        state.current_rss_item_index = resume
+            .return_data
+            .get("item_index")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or_default();
+        state.rss_visible_item_count = state.current_rss_item_index.saturating_add(1);
     }
     if resume.sequence_active {
         start_sequence_media_item(window, resume.item, None);
@@ -3348,6 +3773,1552 @@ unsafe fn show_subscriptions(window: HWND) {
     set_control_text(state, state.subscription_set_category, "set_category");
     refresh_subscriptions(state, true, true, None);
     layout_controls_state(window, state);
+}
+
+unsafe fn show_rss_feeds(window: HWND) {
+    restore_from_tray(window);
+    stop_controlled_repeat(window);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    cancel_youtube_work(window, state);
+    cancel_local_folder_scan(window, state);
+    if !state.application.settings().enable_podcasts_rss {
+        show_main_menu(window);
+        return;
+    }
+    if state.application.current_route() != Route::RssFeeds {
+        state.application.navigate_main_menu();
+        state
+            .application
+            .navigate_to(RouteFrame::new(Route::RssFeeds));
+    }
+    state.view = MainView::RssFeeds;
+    set_open_button_label(state, "open_feed");
+    set_control_text(state, state.collection_remove, "remove_feed");
+    set_control_text(state, state.rss_refresh, "refresh_feeds");
+    refresh_rss_feeds(state, true, true, None);
+    layout_controls_state(window, state);
+}
+
+unsafe fn refresh_rss_feeds(
+    state: &mut WindowState,
+    focus: bool,
+    announce_status: bool,
+    preferred_url: Option<&str>,
+) {
+    let previous_url = preferred_url
+        .map(str::to_owned)
+        .or_else(|| selected_rss_feed(state).map(|feed| feed.url.clone()));
+    SendMessageW(state.list, LB_RESETCONTENT, None, None);
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    crate::accessibility_win32::set_control_name(state.list, catalog.text("rss_feeds"));
+    let visible = state.application.visible_rss_feed_indices();
+    if state.application.rss_feeds().is_empty() {
+        add_list_string(state.list, catalog.text("rss_feeds_empty"));
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
+        set_status(state, catalog.text("rss_feeds_empty"), announce_status);
+    } else if visible.is_empty() {
+        add_list_string(state.list, catalog.text("category_filter_empty"));
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
+        set_status(
+            state,
+            catalog.text("category_filter_empty"),
+            announce_status,
+        );
+    } else {
+        for index in &visible {
+            if let Some(feed) = state.application.rss_feeds().get(*index) {
+                add_list_string(state.list, &rss_feed_label(feed, &catalog));
+            }
+        }
+        let selected = previous_url
+            .as_deref()
+            .and_then(|url| {
+                visible.iter().position(|index| {
+                    state
+                        .application
+                        .rss_feeds()
+                        .get(*index)
+                        .is_some_and(|feed| feed.url.eq_ignore_ascii_case(url))
+                })
+            })
+            .or_else(|| {
+                visible
+                    .iter()
+                    .position(|index| *index == state.current_rss_feed_index)
+            })
+            .unwrap_or_default();
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selected)), None);
+        state.current_rss_feed_index = visible[selected];
+        set_status(
+            state,
+            &format!("{}: {}", catalog.text("rss_feeds"), visible.len()),
+            announce_status,
+        );
+    }
+    if let Some(error) = state.application.rss_feed_load_error() {
+        show_error_message(
+            GetParent(state.list).unwrap_or_default(),
+            &format!("Podcast feeds could not be loaded: {error}"),
+        );
+    }
+    if focus {
+        let _ = SetFocus(Some(state.list));
+    }
+}
+
+fn rss_feed_label(
+    feed: &apricot_app::RssFeed,
+    catalog: &apricot_core::TranslationCatalog,
+) -> String {
+    let checked = feed
+        .last_checked
+        .and_then(format_timestamp)
+        .unwrap_or_else(|| catalog.text("rss_feed_never_checked").to_owned());
+    let played_count = feed
+        .items
+        .iter()
+        .filter(|item| metadata_bool(item, "played"))
+        .count();
+    let mut parts = vec![if feed.title.trim().is_empty() {
+        catalog.text("rss_unknown_feed_title").to_owned()
+    } else {
+        feed.title.clone()
+    }];
+    if !feed.category.trim().is_empty() {
+        parts.push(
+            catalog
+                .text("category_value")
+                .replace("{category}", &feed.category),
+        );
+    }
+    parts.push(
+        catalog
+            .text("rss_feed_item_count")
+            .replace("{count}", &feed.items.len().to_string()),
+    );
+    if played_count > 0 {
+        parts.push(
+            catalog
+                .text("rss_feed_played_count")
+                .replace("{count}", &played_count.to_string()),
+        );
+    }
+    if let Some(speed) = feed.speed_preset {
+        parts.push(
+            catalog
+                .text("podcast_speed_preset_marker")
+                .replace("{speed}", &format_rate(speed)),
+        );
+    }
+    parts.push(if feed.last_checked.is_some() {
+        catalog
+            .text("rss_feed_last_checked")
+            .replace("{time}", &checked)
+    } else {
+        checked
+    });
+    parts.join(" | ")
+}
+
+unsafe fn selected_rss_feed_index(state: &WindowState) -> Option<usize> {
+    let selected = usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok()?;
+    state
+        .application
+        .visible_rss_feed_indices()
+        .get(selected)
+        .copied()
+}
+
+unsafe fn selected_rss_feed(state: &WindowState) -> Option<&apricot_app::RssFeed> {
+    let index = selected_rss_feed_index(state)?;
+    state.application.rss_feeds().get(index)
+}
+
+unsafe fn open_selected_rss_feed(window: HWND) {
+    let Some((index, refresh_legacy)) = state(window).and_then(|state| {
+        let index = selected_rss_feed_index(state)?;
+        let refresh_legacy = state
+            .application
+            .rss_feeds()
+            .get(index)
+            .is_some_and(|feed| feed.items_complete != Some(true));
+        Some((index, refresh_legacy))
+    }) else {
+        return;
+    };
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state.current_rss_feed_index = index;
+    state.current_rss_item_index = 0;
+    state.rss_visible_item_count = 0;
+    let mut frame = RouteFrame::new(Route::RssItems);
+    frame
+        .parameters
+        .insert("feed_index".to_owned(), serde_json::Value::from(index));
+    state.application.navigate_to(frame);
+    state.view = MainView::RssItems;
+    set_open_button_label(state, "play_episode");
+    set_control_text(state, state.rss_refresh, "refresh_feed");
+    refresh_rss_items(state, true, true);
+    layout_controls_state(window, state);
+    if refresh_legacy {
+        refresh_rss_feed_background(window, index);
+    }
+}
+
+unsafe fn refresh_rss_items(state: &mut WindowState, focus: bool, announce_status: bool) {
+    SendMessageW(state.list, LB_RESETCONTENT, None, None);
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    crate::accessibility_win32::set_control_name(state.list, catalog.text("rss_feed_items"));
+    let Some(feed) = state
+        .application
+        .rss_feeds()
+        .get(state.current_rss_feed_index)
+    else {
+        add_list_string(state.list, catalog.text("rss_items_empty"));
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
+        set_status(state, catalog.text("rss_items_empty"), announce_status);
+        return;
+    };
+    if feed.items.is_empty() {
+        state.rss_visible_item_count = 0;
+        add_list_string(state.list, catalog.text("rss_items_empty"));
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
+        set_status(state, catalog.text("rss_items_empty"), announce_status);
+    } else {
+        let batch_size = usize::try_from(state.application.settings().rss_max_items.clamp(25, 500))
+            .unwrap_or(100);
+        state.rss_visible_item_count = state
+            .rss_visible_item_count
+            .max(batch_size)
+            .min(feed.items.len());
+        for item in &feed.items[..state.rss_visible_item_count] {
+            add_list_string(
+                state.list,
+                &rss_episode_label(
+                    item,
+                    &catalog,
+                    (!metadata_bool(item, "played"))
+                        .then(|| state.application.playback_resume_position(item))
+                        .flatten(),
+                ),
+            );
+        }
+        state.current_rss_item_index = state
+            .current_rss_item_index
+            .min(state.rss_visible_item_count.saturating_sub(1));
+        SendMessageW(
+            state.list,
+            LB_SETCURSEL,
+            Some(WPARAM(state.current_rss_item_index)),
+            None,
+        );
+        set_status(
+            state,
+            &format!(
+                "{}: {} of {}",
+                feed.title,
+                state.rss_visible_item_count,
+                feed.items.len()
+            ),
+            announce_status,
+        );
+    }
+    if focus {
+        let _ = SetFocus(Some(state.list));
+    }
+}
+
+unsafe fn maybe_extend_rss_items(window: HWND) {
+    let Some((selected, loaded)) = state(window).and_then(|state| {
+        let total = state
+            .application
+            .rss_feeds()
+            .get(state.current_rss_feed_index)?
+            .items
+            .len();
+        (state.rss_visible_item_count < total).then(|| {
+            (
+                usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0)
+                    .unwrap_or_default(),
+                state
+                    .application
+                    .settings()
+                    .rss_max_items
+                    .clamp(25, 500)
+                    .try_into()
+                    .unwrap_or(100),
+            )
+        })
+    }) else {
+        return;
+    };
+    if let Some(state) = state_mut(window) {
+        let before = state.rss_visible_item_count;
+        state.rss_visible_item_count = state.rss_visible_item_count.saturating_add(loaded);
+        state.current_rss_item_index = selected;
+        refresh_rss_items(state, false, false);
+        let added = state.rss_visible_item_count.saturating_sub(before);
+        let message = catalog_text(&state.application, "podcast_more_episodes_loaded")
+            .replace("{count}", &added.to_string());
+        set_status(state, &message, true);
+    }
+}
+
+fn rss_episode_label(
+    item: &apricot_core::MediaItem,
+    catalog: &apricot_core::TranslationCatalog,
+    resume_position: Option<f64>,
+) -> String {
+    let mut parts = vec![item.title.clone()];
+    if metadata_bool(item, "played") {
+        parts.push(catalog.text("played_marker").to_owned());
+    }
+    if let Some(position) = resume_position {
+        parts.push(
+            catalog
+                .text("episode_resume_marker")
+                .replace("{time}", &format_duration(position)),
+        );
+    }
+    if let Some(timestamp) = metadata_number(item, "timestamp").and_then(format_timestamp) {
+        parts.push(format!("{}: {timestamp}", catalog.text("published")));
+    }
+    if let Some(duration) = metadata_text(item, "duration")
+        .filter(|duration| !duration.is_empty())
+        .or_else(|| item.duration_seconds.map(format_duration))
+    {
+        parts.push(duration);
+    }
+    parts.push(catalog.text("podcast_episode").to_owned());
+    parts.join(" | ")
+}
+
+unsafe fn selected_rss_episode(state: &WindowState) -> Option<&apricot_core::MediaItem> {
+    let selected = usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok()?;
+    if selected >= state.rss_visible_item_count {
+        return None;
+    }
+    state
+        .application
+        .rss_feeds()
+        .get(state.current_rss_feed_index)?
+        .items
+        .get(selected)
+}
+
+unsafe fn play_selected_rss_episode(window: HWND) {
+    let Some((feed_index, item_index)) = state(window).and_then(|state| {
+        let selected =
+            usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok()?;
+        (selected < state.rss_visible_item_count)
+            .then_some((state.current_rss_feed_index, selected))
+    }) else {
+        return;
+    };
+    let item = state_mut(window).and_then(|state| {
+        state.current_rss_item_index = item_index;
+        state
+            .application
+            .prepare_rss_episode_playback(feed_index, item_index)
+    });
+    if let Some(item) = item {
+        start_sequence_media_item(window, item, None);
+    } else if let Some(state) = state_mut(window) {
+        set_status(
+            state,
+            &catalog_text(&state.application, "no_selection"),
+            true,
+        );
+    }
+}
+
+fn metadata_bool(item: &apricot_core::MediaItem, key: &str) -> bool {
+    item.metadata
+        .get(key)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn metadata_number(item: &apricot_core::MediaItem, key: &str) -> Option<f64> {
+    item.metadata.get(key).and_then(serde_json::Value::as_f64)
+}
+
+fn metadata_text(item: &apricot_core::MediaItem, key: &str) -> Option<String> {
+    item.metadata
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn format_rate(rate: f64) -> String {
+    let value = format!("{rate:.2}");
+    value.trim_end_matches('0').trim_end_matches('.').to_owned()
+}
+
+unsafe fn prompt_add_rss_feed(window: HWND) {
+    let Some((title, prompt, ok, cancel, proxy, unknown_title)) = state_mut(window).map(|state| {
+        state.modal_open = true;
+        let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+        (
+            catalog.text("add_rss_feed").to_owned(),
+            catalog.text("rss_feed_url").to_owned(),
+            catalog.text("ok").to_owned(),
+            catalog.text("cancel").to_owned(),
+            state.application.settings().proxy.clone(),
+            catalog.text("rss_unknown_feed_title").to_owned(),
+        )
+    }) else {
+        return;
+    };
+    let response = crate::playlist_dialog_win32::prompt_name(window, &title, &prompt, &ok, &cancel);
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
+    resume_deferred_window_work(window);
+    match response {
+        Ok(Some(url)) if !url.trim().is_empty() => {
+            let url = if url.trim().to_ascii_lowercase().starts_with("http://")
+                || url.trim().to_ascii_lowercase().starts_with("https://")
+            {
+                url.trim().to_owned()
+            } else {
+                format!("https://{}", url.trim())
+            };
+            let work = crate::podcast_win32::add_feed(url, proxy, unknown_title, unix_timestamp());
+            start_podcast_work(window, work, "rss_refresh_started");
+        }
+        Ok(_) => {}
+        Err(error) => show_error_message(window, &format!("Add feed dialog did not open: {error}")),
+    }
+}
+
+unsafe fn prompt_podcast_search(window: HWND) {
+    let Some((title, prompt, ok, cancel, country, limit, proxy)) = state_mut(window).map(|state| {
+        state.modal_open = true;
+        let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+        (
+            catalog.text("search_podcasts").to_owned(),
+            catalog.text("podcast_search_query").to_owned(),
+            catalog.text("search").to_owned(),
+            catalog.text("cancel").to_owned(),
+            state.application.settings().podcast_search_country.clone(),
+            u32::try_from(
+                state
+                    .application
+                    .settings()
+                    .podcast_search_limit
+                    .clamp(1, 200),
+            )
+            .unwrap_or(20),
+            state.application.settings().proxy.clone(),
+        )
+    }) else {
+        return;
+    };
+    let response = crate::playlist_dialog_win32::prompt_name(window, &title, &prompt, &ok, &cancel);
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
+    resume_deferred_window_work(window);
+    match response {
+        Ok(Some(query)) if !query.trim().is_empty() => {
+            let query = query.trim().to_owned();
+            let message = state(window)
+                .map(|state| {
+                    catalog_text(&state.application, "podcast_searching").replace("{query}", &query)
+                })
+                .unwrap_or_default();
+            let work = crate::podcast_win32::search_directory(query, country, limit, proxy);
+            start_podcast_work_with_message(window, work, &message);
+        }
+        Ok(_) => {}
+        Err(error) => {
+            show_error_message(
+                window,
+                &format!("Podcast search dialog did not open: {error}"),
+            );
+        }
+    }
+}
+
+unsafe fn start_podcast_work(window: HWND, work: PendingPodcastWork, status_key: &str) {
+    let message = state(window)
+        .map(|state| catalog_text(&state.application, status_key))
+        .unwrap_or_default();
+    start_podcast_work_with_message(window, work, &message);
+}
+
+unsafe fn start_podcast_work_with_message(window: HWND, work: PendingPodcastWork, message: &str) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    if state.pending_podcast_work.is_some() {
+        set_status(state, "A podcast operation is already in progress.", true);
+        return;
+    }
+    state.pending_podcast_work = Some(work);
+    set_status(state, message, true);
+    let _ = SetTimer(
+        Some(window),
+        YOUTUBE_TIMER_ID,
+        YOUTUBE_TIMER_INTERVAL_MS,
+        None,
+    );
+}
+
+unsafe fn refresh_rss_from_active_view(window: HWND) {
+    let Some((view, feeds, proxy, unknown_title)) = state(window).map(|state| {
+        let feeds = match state.view {
+            MainView::RssItems => state
+                .application
+                .rss_feeds()
+                .get(state.current_rss_feed_index)
+                .map(|feed| vec![(feed.url.clone(), feed.url.clone())])
+                .unwrap_or_default(),
+            MainView::RssFeeds => state
+                .application
+                .rss_feeds()
+                .iter()
+                .map(|feed| (feed.url.clone(), feed.url.clone()))
+                .collect(),
+            _ => Vec::new(),
+        };
+        let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+        (
+            state.view,
+            feeds,
+            state.application.settings().proxy.clone(),
+            catalog.text("rss_unknown_feed_title").to_owned(),
+        )
+    }) else {
+        return;
+    };
+    if feeds.is_empty() {
+        if let Some(state) = state_mut(window) {
+            let key = if view == MainView::RssFeeds {
+                "rss_feeds_empty"
+            } else {
+                "rss_items_empty"
+            };
+            set_status(state, &catalog_text(&state.application, key), true);
+        }
+        return;
+    }
+    let work =
+        crate::podcast_win32::refresh_feeds(feeds, proxy, unknown_title, unix_timestamp(), false);
+    start_podcast_work(window, work, "rss_refresh_started");
+}
+
+unsafe fn refresh_selected_rss_feed(window: HWND) {
+    let Some((url, proxy, unknown_title)) = state(window).and_then(|state| {
+        let feed = selected_rss_feed(state)?;
+        let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+        Some((
+            feed.url.clone(),
+            state.application.settings().proxy.clone(),
+            catalog.text("rss_unknown_feed_title").to_owned(),
+        ))
+    }) else {
+        return;
+    };
+    let work = crate::podcast_win32::refresh_feeds(
+        vec![(url.clone(), url)],
+        proxy,
+        unknown_title,
+        unix_timestamp(),
+        false,
+    );
+    start_podcast_work(window, work, "rss_refresh_started");
+}
+
+unsafe fn refresh_all_rss_feeds_background(window: HWND) {
+    let Some((feeds, proxy, unknown_title)) = state(window).and_then(|state| {
+        if state.modal_open
+            || state.pending_podcast_work.is_some()
+            || !state.application.settings().enable_podcasts_rss
+            || state.application.rss_feeds().is_empty()
+        {
+            return None;
+        }
+        let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+        Some((
+            state
+                .application
+                .rss_feeds()
+                .iter()
+                .map(|feed| (feed.url.clone(), feed.url.clone()))
+                .collect(),
+            state.application.settings().proxy.clone(),
+            catalog.text("rss_unknown_feed_title").to_owned(),
+        ))
+    }) else {
+        return;
+    };
+    let work =
+        crate::podcast_win32::refresh_feeds(feeds, proxy, unknown_title, unix_timestamp(), true);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state.pending_podcast_work = Some(work);
+    let _ = SetTimer(
+        Some(window),
+        YOUTUBE_TIMER_ID,
+        YOUTUBE_TIMER_INTERVAL_MS,
+        None,
+    );
+}
+
+unsafe fn refresh_rss_feed_background(window: HWND, feed_index: usize) {
+    let Some((url, proxy, unknown_title)) = state(window).and_then(|state| {
+        if state.modal_open || state.pending_podcast_work.is_some() {
+            return None;
+        }
+        let feed = state.application.rss_feeds().get(feed_index)?;
+        let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+        Some((
+            feed.url.clone(),
+            state.application.settings().proxy.clone(),
+            catalog.text("rss_unknown_feed_title").to_owned(),
+        ))
+    }) else {
+        return;
+    };
+    let work = crate::podcast_win32::refresh_feeds(
+        vec![(url.clone(), url)],
+        proxy,
+        unknown_title,
+        unix_timestamp(),
+        true,
+    );
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state.pending_podcast_work = Some(work);
+    let _ = SetTimer(
+        Some(window),
+        YOUTUBE_TIMER_ID,
+        YOUTUBE_TIMER_INTERVAL_MS,
+        None,
+    );
+}
+
+#[allow(clippy::too_many_lines)]
+unsafe fn poll_podcast_work(window: HWND) {
+    let outcome = {
+        let Some(state) = state(window) else {
+            return;
+        };
+        let Some(pending) = state.pending_podcast_work.as_ref() else {
+            return;
+        };
+        match pending.try_recv() {
+            Ok(result) => Some(result),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => Some(PodcastWorkResult::FeedAdded(Err(
+                "Podcast worker stopped unexpectedly".to_owned(),
+            ))),
+        }
+    };
+    let Some(outcome) = outcome else {
+        return;
+    };
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state.pending_podcast_work = None;
+    match outcome {
+        PodcastWorkResult::FeedAdded(Ok(feed)) => {
+            let title = feed.title.clone();
+            match state.application.add_rss_feed(feed) {
+                Ok(RssFeedAddOutcome::Added(_)) => {
+                    let message = catalog_text(&state.application, "rss_feed_added")
+                        .replace("{title}", &title);
+                    set_status(state, &message, true);
+                    if state.view == MainView::RssFeeds {
+                        refresh_rss_feeds(state, false, false, None);
+                    }
+                }
+                Ok(RssFeedAddOutcome::AlreadyPresent) => {
+                    set_status(
+                        state,
+                        &catalog_text(&state.application, "rss_feed_exists"),
+                        true,
+                    );
+                }
+                Err(error) => show_error_message(window, &error.to_string()),
+            }
+        }
+        PodcastWorkResult::FeedAdded(Err(error)) => {
+            let message =
+                catalog_text(&state.application, "rss_refresh_failed").replace("{error}", &error);
+            set_status(state, &message, true);
+            show_error_message(window, &message);
+        }
+        PodcastWorkResult::FeedsRefreshed { results, silent } => {
+            match state
+                .application
+                .apply_rss_refreshes(results, unix_timestamp())
+            {
+                Ok(summary) => {
+                    let timestamp = unix_timestamp();
+                    let catalog =
+                        apricot_app::embedded_catalog(&state.application.settings().language);
+                    for (feed, item) in &summary.new_items {
+                        let notification_message = catalog
+                            .text("notification_new_podcast")
+                            .replace("{feed}", feed)
+                            .replace("{title}", &item.title);
+                        let _ =
+                            state
+                                .application
+                                .add_notification(apricot_app::AppNotification::new(
+                                    "podcast",
+                                    catalog.text("rss_feeds"),
+                                    &notification_message,
+                                    Some(item.clone()),
+                                    timestamp,
+                                ));
+                        if state.application.settings().windows_notifications {
+                            show_tray_notification(
+                                window,
+                                catalog.text("rss_feeds"),
+                                &notification_message,
+                            );
+                        }
+                    }
+                    if !silent {
+                        let message = if summary.failures == 0 {
+                            catalog_text(&state.application, "rss_refresh_done")
+                        } else {
+                            format!(
+                                "{} {} succeeded, {} failed.",
+                                catalog_text(&state.application, "rss_refresh_done"),
+                                summary.successes,
+                                summary.failures
+                            )
+                        };
+                        set_status(state, &message, true);
+                    }
+                    if state.view == MainView::RssFeeds {
+                        refresh_rss_feeds(state, false, false, None);
+                    } else if state.view == MainView::RssItems {
+                        refresh_rss_items(state, false, false);
+                    }
+                }
+                Err(error) => show_error_message(window, &error.to_string()),
+            }
+        }
+        PodcastWorkResult::DirectorySearched { query, result } => match result {
+            Ok(results) => {
+                state.podcast_search_query = query;
+                state.podcast_search_results = results;
+                state
+                    .application
+                    .navigate_to(RouteFrame::new(Route::PodcastSearchResults));
+                state.view = MainView::PodcastSearchResults;
+                refresh_podcast_directory_results(state, true, true);
+                layout_controls_state(window, state);
+            }
+            Err(error) => {
+                let message = catalog_text(&state.application, "podcast_search_failed")
+                    .replace("{error}", &error);
+                set_status(state, &message, true);
+                show_error_message(window, &message);
+            }
+        },
+        PodcastWorkResult::CategoryLoaded { category, result } => match result {
+            Ok(results) => {
+                state.podcast_search_query = category;
+                state.podcast_search_results = results;
+                let _ = state.application.navigate_back();
+                state
+                    .application
+                    .navigate_to(RouteFrame::new(Route::PodcastSearchResults));
+                state.view = MainView::PodcastSearchResults;
+                set_open_button_label(state, "open");
+                refresh_podcast_directory_results(state, true, true);
+                layout_controls_state(window, state);
+            }
+            Err(error) => {
+                let message = catalog_text(&state.application, "podcast_search_failed")
+                    .replace("{error}", &error);
+                set_status(state, &message, true);
+                show_error_message(window, &message);
+            }
+        },
+        PodcastWorkResult::FeedsImported { feeds, failures } => {
+            match state.application.import_rss_feeds(feeds) {
+                Ok(summary) => {
+                    refresh_rss_feeds(state, false, false, None);
+                    let key = if failures == 0 {
+                        "opml_import_done"
+                    } else {
+                        "opml_import_done_with_errors"
+                    };
+                    let message = catalog_text(&state.application, key)
+                        .replace("{count}", &summary.added.to_string())
+                        .replace("{imported}", &summary.added.to_string())
+                        .replace("{failed}", &failures.to_string());
+                    set_status(state, &message, true);
+                }
+                Err(error) => show_error_message(window, &error.to_string()),
+            }
+        }
+    }
+    stop_youtube_timer(window);
+}
+
+unsafe fn refresh_podcast_directory_results(
+    state: &mut WindowState,
+    focus: bool,
+    announce_status: bool,
+) {
+    SendMessageW(state.list, LB_RESETCONTENT, None, None);
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let name = if state.view == MainView::PodcastCategories {
+        catalog.text("podcast_categories_title")
+    } else {
+        catalog.text("podcast_search_results")
+    };
+    crate::accessibility_win32::set_control_name(state.list, name);
+    if state.podcast_search_results.is_empty() {
+        add_list_string(state.list, catalog.text("podcast_search_empty"));
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
+        set_status(state, catalog.text("podcast_search_empty"), announce_status);
+    } else {
+        for item in &state.podcast_search_results {
+            add_list_string(state.list, &podcast_directory_label(item, &catalog));
+        }
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
+        set_status(
+            state,
+            &catalog
+                .text("podcast_search_done")
+                .replace("{count}", &state.podcast_search_results.len().to_string()),
+            announce_status,
+        );
+    }
+    if focus {
+        let _ = SetFocus(Some(state.list));
+    }
+}
+
+fn podcast_directory_label(
+    item: &PodcastDirectoryItem,
+    catalog: &apricot_core::TranslationCatalog,
+) -> String {
+    let mut parts = vec![item.title.clone()];
+    if !item.author.is_empty() {
+        parts.push(format!(
+            "{}: {}",
+            catalog.text("podcast_author"),
+            item.author
+        ));
+    }
+    if !item.genre.is_empty() {
+        parts.push(format!("{}: {}", catalog.text("podcast_genre"), item.genre));
+    }
+    if item.episode_count > 0 {
+        parts.push(
+            catalog
+                .text("podcast_episode_count")
+                .replace("{count}", &item.episode_count.to_string()),
+        );
+    }
+    parts.join(" | ")
+}
+
+unsafe fn selected_podcast_result(state: &WindowState) -> Option<&PodcastDirectoryItem> {
+    let selected = usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok()?;
+    state.podcast_search_results.get(selected)
+}
+
+unsafe fn add_selected_podcast_result(window: HWND) {
+    let Some((url, proxy, unknown_title)) = state(window).and_then(|state| {
+        let item = selected_podcast_result(state)?;
+        let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+        Some((
+            item.feed_url.to_string(),
+            state.application.settings().proxy.clone(),
+            catalog.text("rss_unknown_feed_title").to_owned(),
+        ))
+    }) else {
+        return;
+    };
+    let work = crate::podcast_win32::add_feed(url, proxy, unknown_title, unix_timestamp());
+    start_podcast_work(window, work, "rss_refresh_started");
+}
+
+unsafe fn choose_rss_category_filter(window: HWND) {
+    let Some((title, prompt, choices, current, ok, cancel)) = state_mut(window).map(|state| {
+        state.modal_open = true;
+        let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+        let mut choices = vec![catalog.text("all_categories").to_owned()];
+        choices.extend(state.application.rss_categories());
+        (
+            catalog.text("filter_category").to_owned(),
+            catalog.text("category_filter_prompt").to_owned(),
+            choices,
+            state.application.rss_category_filter().to_owned(),
+            catalog.text("ok").to_owned(),
+            catalog.text("cancel").to_owned(),
+        )
+    }) else {
+        return;
+    };
+    let initial = choices
+        .iter()
+        .position(|choice| !current.is_empty() && choice.eq_ignore_ascii_case(&current))
+        .unwrap_or_default();
+    let selected = crate::playlist_dialog_win32::choose_with_initial(
+        window, &title, &prompt, &choices, initial, &ok, &cancel,
+    );
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
+    resume_deferred_window_work(window);
+    match selected {
+        Ok(Some(index)) => {
+            let category = choices
+                .get(index)
+                .filter(|_| index > 0)
+                .cloned()
+                .unwrap_or_default();
+            if let Some(state) = state_mut(window) {
+                state.application.set_rss_category_filter(&category);
+                refresh_rss_feeds(state, true, false, None);
+                let message = if category.is_empty() {
+                    catalog_text(&state.application, "category_filter_all")
+                } else {
+                    catalog_text(&state.application, "category_filter_applied")
+                        .replace("{category}", &category)
+                };
+                set_status(state, &message, true);
+            }
+        }
+        Ok(None) => {
+            if let Some(state) = state(window) {
+                let _ = SetFocus(Some(state.list));
+            }
+        }
+        Err(error) => show_error_message(window, &format!("Category filter did not open: {error}")),
+    }
+}
+
+unsafe fn set_selected_rss_category(window: HWND) {
+    let Some((index, feed, title, prompt, ok, cancel)) = state_mut(window).and_then(|state| {
+        let index = selected_rss_feed_index(state)?;
+        let feed = state.application.rss_feeds().get(index)?.clone();
+        state.modal_open = true;
+        let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+        Some((
+            index,
+            feed.clone(),
+            catalog.text("set_category").to_owned(),
+            catalog
+                .text("category_prompt")
+                .replace("{title}", &feed.title),
+            catalog.text("ok").to_owned(),
+            catalog.text("cancel").to_owned(),
+        ))
+    }) else {
+        return;
+    };
+    let response = crate::playlist_dialog_win32::prompt_name_with_initial(
+        window,
+        &title,
+        &prompt,
+        &feed.category,
+        &ok,
+        &cancel,
+    );
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
+    resume_deferred_window_work(window);
+    match response {
+        Ok(Some(category)) => {
+            let category = apricot_app::normalize_category(&category);
+            let result = state_mut(window)
+                .map(|state| state.application.set_rss_feed_category(index, &category));
+            match result {
+                Some(Ok(_)) => {
+                    if let Some(state) = state_mut(window) {
+                        refresh_rss_feeds(state, true, false, Some(&feed.url));
+                        let message = if category.is_empty() {
+                            catalog_text(&state.application, "category_cleared")
+                                .replace("{title}", &feed.title)
+                        } else {
+                            catalog_text(&state.application, "category_assigned")
+                                .replace("{title}", &feed.title)
+                                .replace("{category}", &category)
+                        };
+                        set_status(state, &message, true);
+                    }
+                }
+                Some(Err(error)) => show_error_message(window, &error.to_string()),
+                None => {}
+            }
+        }
+        Ok(None) => {
+            if let Some(state) = state(window) {
+                let _ = SetFocus(Some(state.list));
+            }
+        }
+        Err(error) => show_error_message(window, &format!("Category editor did not open: {error}")),
+    }
+}
+
+unsafe fn remove_selected_rss_feed(window: HWND) {
+    let Some((index, preferred_url)) = state(window).and_then(|state| {
+        let index = selected_rss_feed_index(state)?;
+        let visible = state.application.visible_rss_feed_indices();
+        let selected = visible.iter().position(|candidate| *candidate == index)?;
+        let preferred = visible
+            .get(selected + 1)
+            .or_else(|| {
+                selected
+                    .checked_sub(1)
+                    .and_then(|previous| visible.get(previous))
+            })
+            .and_then(|candidate| state.application.rss_feeds().get(*candidate))
+            .map(|feed| feed.url.clone());
+        Some((index, preferred))
+    }) else {
+        return;
+    };
+    let result = state_mut(window).map(|state| state.application.remove_rss_feed(index));
+    match result {
+        Some(Ok(Some(_))) => {
+            if let Some(state) = state_mut(window) {
+                refresh_rss_feeds(state, true, false, preferred_url.as_deref());
+                set_status(
+                    state,
+                    &catalog_text(&state.application, "rss_feed_removed"),
+                    true,
+                );
+            }
+        }
+        Some(Err(error)) => show_error_message(window, &error.to_string()),
+        Some(Ok(None)) | None => {}
+    }
+}
+
+unsafe fn choose_rss_speed_preset(window: HWND) {
+    let Some((index, feed, title, prompt, choices, initial, ok, cancel)) = state_mut(window)
+        .and_then(|state| {
+            let index = if state.view == MainView::RssItems {
+                state.current_rss_feed_index
+            } else {
+                selected_rss_feed_index(state)?
+            };
+            let feed = state.application.rss_feeds().get(index)?.clone();
+            state.modal_open = true;
+            let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+            let mut choices = vec![catalog.text("podcast_speed_use_global").to_owned()];
+            choices.extend(PODCAST_SPEED_STEPS.iter().map(|speed| {
+                catalog
+                    .text("playback_rate_x")
+                    .replace("{speed}", &format_rate(*speed))
+            }));
+            let initial = feed
+                .speed_preset
+                .and_then(|current| {
+                    PODCAST_SPEED_STEPS
+                        .iter()
+                        .position(|speed| (*speed - current).abs() < 0.001)
+                })
+                .map_or(0, |position| position + 1);
+            Some((
+                index,
+                feed.clone(),
+                catalog.text("podcast_speed_preset").to_owned(),
+                catalog
+                    .text("podcast_speed_preset_prompt")
+                    .replace("{title}", &feed.title),
+                choices,
+                initial,
+                catalog.text("ok").to_owned(),
+                catalog.text("cancel").to_owned(),
+            ))
+        })
+    else {
+        return;
+    };
+    let selected = crate::playlist_dialog_win32::choose_with_initial(
+        window, &title, &prompt, &choices, initial, &ok, &cancel,
+    );
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
+    resume_deferred_window_work(window);
+    match selected {
+        Ok(Some(choice)) => {
+            let speed = choice
+                .checked_sub(1)
+                .and_then(|position| PODCAST_SPEED_STEPS.get(position))
+                .copied();
+            let result =
+                state_mut(window).map(|state| state.application.set_rss_feed_speed(index, speed));
+            match result {
+                Some(Ok(_)) => {
+                    if let Some(state) = state_mut(window) {
+                        if state.view == MainView::RssFeeds {
+                            refresh_rss_feeds(state, true, false, Some(&feed.url));
+                        } else {
+                            refresh_rss_items(state, true, false);
+                        }
+                        let message = speed.map_or_else(
+                            || {
+                                catalog_text(&state.application, "podcast_speed_preset_cleared")
+                                    .replace("{title}", &feed.title)
+                            },
+                            |speed| {
+                                catalog_text(&state.application, "podcast_speed_preset_saved")
+                                    .replace("{title}", &feed.title)
+                                    .replace("{speed}", &format_rate(speed))
+                            },
+                        );
+                        set_status(state, &message, true);
+                    }
+                }
+                Some(Err(error)) => show_error_message(window, &error.to_string()),
+                None => {}
+            }
+        }
+        Ok(None) => {
+            if let Some(state) = state(window) {
+                let _ = SetFocus(Some(state.list));
+            }
+        }
+        Err(error) => show_error_message(window, &format!("Speed preset did not open: {error}")),
+    }
+}
+
+unsafe fn toggle_selected_rss_played(window: HWND) {
+    let Some((feed_index, item_index, item, played)) = state(window).and_then(|state| {
+        let (feed_index, item_index, item) = active_rss_episode(state)?;
+        Some((
+            feed_index,
+            item_index,
+            item.clone(),
+            !metadata_bool(&item, "played"),
+        ))
+    }) else {
+        return;
+    };
+    let result = state_mut(window).map(|state| {
+        state
+            .application
+            .set_rss_episode_played(feed_index, item_index, played, unix_timestamp())
+    });
+    match result {
+        Some(Ok(Some(_))) => {
+            if let Some(state) = state_mut(window) {
+                if played {
+                    let _ = state.application.clear_playback_position(&item);
+                }
+                if state.view == MainView::RssItems {
+                    state.current_rss_item_index = item_index;
+                    refresh_rss_items(state, true, false);
+                }
+                let key = if played {
+                    "episode_marked_played"
+                } else {
+                    "episode_marked_unplayed"
+                };
+                let message = catalog_text(&state.application, key).replace("{title}", &item.title);
+                set_status(state, &message, true);
+            }
+        }
+        Some(Err(error)) => show_error_message(window, &error.to_string()),
+        Some(Ok(None)) | None => {}
+    }
+}
+
+unsafe fn clear_selected_rss_progress(window: HWND) {
+    let Some((_, item_index, item)) = state(window).and_then(|state| active_rss_episode(state))
+    else {
+        return;
+    };
+    let result = state_mut(window).map(|state| state.application.clear_playback_position(&item));
+    match result {
+        Some(Ok(apricot_app::PlaybackPositionUpdate::Cleared)) => {
+            if let Some(state) = state_mut(window) {
+                if state.view == MainView::RssItems {
+                    state.current_rss_item_index = item_index;
+                    refresh_rss_items(state, true, false);
+                }
+                let message = catalog_text(&state.application, "episode_progress_cleared")
+                    .replace("{title}", &item.title);
+                set_status(state, &message, true);
+            }
+        }
+        Some(Ok(_)) => {
+            if let Some(state) = state(window) {
+                set_status(
+                    state,
+                    &catalog_text(&state.application, "episode_progress_not_found"),
+                    true,
+                );
+            }
+        }
+        Some(Err(error)) => show_error_message(window, &error.to_string()),
+        None => {}
+    }
+}
+
+unsafe fn active_rss_episode(
+    state: &WindowState,
+) -> Option<(usize, usize, apricot_core::MediaItem)> {
+    if state.view == MainView::RssItems {
+        let item_index =
+            usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok()?;
+        return selected_rss_episode(state)
+            .cloned()
+            .map(|item| (state.current_rss_feed_index, item_index, item));
+    }
+    current_podcast_episode(state)
+}
+
+fn current_podcast_episode(state: &WindowState) -> Option<(usize, usize, apricot_core::MediaItem)> {
+    let item = state.application.player_session().current_item()?.clone();
+    if item.kind != apricot_core::MediaKind::PodcastEpisode {
+        return None;
+    }
+    let (feed_index, item_index) = state.application.rss_episode_location(&item)?;
+    Some((feed_index, item_index, item))
+}
+
+unsafe fn mark_current_podcast_episode_played(state: &mut WindowState) {
+    let Some((feed_index, item_index, item)) = current_podcast_episode(state) else {
+        return;
+    };
+    if metadata_bool(&item, "played") {
+        return;
+    }
+    match state
+        .application
+        .set_rss_episode_played(feed_index, item_index, true, unix_timestamp())
+    {
+        Ok(Some(_)) => {
+            let _ = state.application.clear_playback_position(&item);
+        }
+        Ok(None) => {}
+        Err(error) => {
+            set_status(
+                state,
+                &format!("Podcast played state was not saved: {error}"),
+                false,
+            );
+        }
+    }
+}
+
+unsafe fn save_current_podcast_speed_preset(window: HWND) {
+    let Some((feed_index, title, speed)) = state(window).and_then(|state| {
+        let item = state.application.player_session().current_item()?;
+        if item.kind != apricot_core::MediaKind::PodcastEpisode {
+            return None;
+        }
+        let (feed_index, _) = state.application.rss_episode_location(item)?;
+        let title = state.application.rss_feeds().get(feed_index)?.title.clone();
+        let speed = state.application.player_session().audio()?.speed;
+        Some((feed_index, title, speed))
+    }) else {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "podcast_speed_preset_no_episode"),
+                true,
+            );
+        }
+        return;
+    };
+    let result = state_mut(window).map(|state| {
+        state
+            .application
+            .set_rss_feed_speed(feed_index, Some(speed))
+    });
+    match result {
+        Some(Ok(_)) => {
+            if let Some(state) = state(window) {
+                let message = catalog_text(&state.application, "podcast_speed_preset_saved")
+                    .replace("{title}", &title)
+                    .replace("{speed}", &format_rate(speed));
+                set_status(state, &message, true);
+            }
+        }
+        Some(Err(error)) => show_error_message(window, &error.to_string()),
+        None => {}
+    }
+}
+
+unsafe fn import_rss_opml(window: HWND) {
+    let Some((title, type_label, proxy, unknown_title)) = state_mut(window).map(|state| {
+        state.modal_open = true;
+        let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+        (
+            catalog.text("import_opml").to_owned(),
+            catalog.text("opml_files").to_owned(),
+            state.application.settings().proxy.clone(),
+            catalog.text("rss_unknown_feed_title").to_owned(),
+        )
+    }) else {
+        return;
+    };
+    let selected = crate::file_dialog_win32::choose_opml_file(window, &title, &type_label);
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
+    resume_deferred_window_work(window);
+    let path = match selected {
+        Ok(Some(path)) => path,
+        Ok(None) => return,
+        Err(error) => {
+            show_error_message(window, &error);
+            return;
+        }
+    };
+    let parsed = (|| {
+        let file = fs::File::open(&path).map_err(|error| error.to_string())?;
+        let mut bytes = Vec::new();
+        file.take((apricot_media::MAX_OPML_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|error| error.to_string())?;
+        apricot_media::parse_opml(&bytes).map_err(|error| error.to_string())
+    })();
+    let feeds = match parsed {
+        Ok(feeds) => feeds,
+        Err(error) => {
+            let message = state(window).map_or_else(
+                || error.clone(),
+                |state| {
+                    catalog_text(&state.application, "opml_import_failed_msg")
+                        .replace("{error}", &error)
+                },
+            );
+            show_error_message(window, &message);
+            return;
+        }
+    };
+    let Some(entries) = state(window).map(|state| {
+        let existing = state
+            .application
+            .rss_feeds()
+            .iter()
+            .filter_map(|feed| apricot_app::canonical_feed_url(&feed.url))
+            .map(|url| url.to_ascii_lowercase())
+            .collect::<HashSet<_>>();
+        feeds
+            .into_iter()
+            .filter(|feed| {
+                let identity = apricot_app::canonical_feed_url(feed.url.as_str())
+                    .unwrap_or_else(|| feed.url.to_string())
+                    .to_ascii_lowercase();
+                !existing.contains(&identity)
+            })
+            .map(|feed| (feed.url.to_string(), feed.title))
+            .collect::<Vec<_>>()
+    }) else {
+        return;
+    };
+    if entries.is_empty() {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "opml_all_feeds_exist"),
+                true,
+            );
+        }
+        return;
+    }
+    let count = entries.len();
+    let work = crate::podcast_win32::import_feeds(entries, proxy, unknown_title, unix_timestamp());
+    let message = state(window)
+        .map(|state| {
+            catalog_text(&state.application, "opml_import_started")
+                .replace("{count}", &count.to_string())
+        })
+        .unwrap_or_default();
+    start_podcast_work_with_message(window, work, &message);
+}
+
+unsafe fn export_rss_opml(window: HWND) {
+    let Some((title, type_label, feeds)) = state_mut(window).map(|state| {
+        state.modal_open = true;
+        let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+        (
+            catalog.text("export_opml").to_owned(),
+            catalog.text("opml_files").to_owned(),
+            state
+                .application
+                .rss_feeds()
+                .iter()
+                .filter_map(|feed| {
+                    Some(apricot_media::OpmlFeed {
+                        title: feed.title.clone(),
+                        url: feed.url.parse().ok()?,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )
+    }) else {
+        return;
+    };
+    if feeds.is_empty() {
+        if let Some(state) = state_mut(window) {
+            state.modal_open = false;
+            set_status(
+                state,
+                &catalog_text(&state.application, "opml_no_feeds"),
+                true,
+            );
+        }
+        return;
+    }
+    let selected = crate::file_dialog_win32::save_opml_file(window, &title, &type_label);
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
+    resume_deferred_window_work(window);
+    let result = selected.and_then(|path| {
+        path.map_or(Ok(None), |path| {
+            let bytes = apricot_media::write_opml(&feeds).map_err(|error| error.to_string())?;
+            fs::write(path, bytes)
+                .map(|()| Some(()))
+                .map_err(|error| error.to_string())
+        })
+    });
+    match result {
+        Ok(Some(())) => {
+            if let Some(state) = state(window) {
+                set_status(
+                    state,
+                    &catalog_text(&state.application, "opml_export_success"),
+                    true,
+                );
+            }
+        }
+        Ok(None) => {}
+        Err(error) => {
+            let message = state(window).map_or_else(
+                || error.clone(),
+                |state| {
+                    catalog_text(&state.application, "opml_export_failed")
+                        .replace("{error}", &error)
+                },
+            );
+            show_error_message(window, &message);
+        }
+    }
+}
+
+unsafe fn download_selected_rss_episode(window: HWND) {
+    podcast_download_not_ready(window);
+}
+
+unsafe fn download_current_rss_feed(window: HWND) {
+    podcast_download_not_ready(window);
+}
+
+unsafe fn queue_selected_rss_episode_download(window: HWND) {
+    podcast_download_not_ready(window);
+}
+
+unsafe fn podcast_download_not_ready(window: HWND) {
+    if let Some(state) = state(window) {
+        set_status(
+            state,
+            "Podcast downloads are not implemented in this internal Rust build yet.",
+            true,
+        );
+    }
+}
+
+unsafe fn open_selected_podcast_in_browser(window: HWND) {
+    let url = state(window).and_then(|state| match state.view {
+        MainView::RssFeeds => selected_rss_feed(state).map(|feed| {
+            if feed.site_url.trim().is_empty() {
+                feed.url.clone()
+            } else {
+                feed.site_url.clone()
+            }
+        }),
+        MainView::RssItems => selected_rss_episode(state).and_then(|item| {
+            metadata_text(item, "webpage_url")
+                .or_else(|| item.url.as_ref().map(ToString::to_string))
+        }),
+        MainView::PodcastSearchResults => {
+            selected_podcast_result(state).map(|item| item.webpage_url.to_string())
+        }
+        _ => None,
+    });
+    let Some(url) = url else {
+        return;
+    };
+    if let Err(error) = std::process::Command::new("explorer.exe").arg(&url).spawn() {
+        show_error_message(window, &format!("Could not open the browser: {error}"));
+    }
+}
+
+unsafe fn show_podcast_categories(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    cancel_youtube_work(window, state);
+    cancel_local_folder_scan(window, state);
+    if state.application.current_route() != Route::PodcastCategories {
+        state
+            .application
+            .navigate_to(RouteFrame::new(Route::PodcastCategories));
+    }
+    state.view = MainView::PodcastCategories;
+    set_open_button_label(state, "open");
+    refresh_podcast_categories(state, true);
+    layout_controls_state(window, state);
+}
+
+unsafe fn refresh_podcast_categories(state: &WindowState, focus: bool) {
+    SendMessageW(state.list, LB_RESETCONTENT, None, None);
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    crate::accessibility_win32::set_control_name(
+        state.list,
+        catalog.text("podcast_categories_title"),
+    );
+    for (key, _) in PODCAST_GENRES {
+        add_list_string(state.list, catalog.text(key));
+    }
+    SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
+    set_status(state, catalog.text("podcast_categories_title"), false);
+    if focus {
+        let _ = SetFocus(Some(state.list));
+    }
+}
+
+unsafe fn open_selected_podcast_category(window: HWND) {
+    let Some((category, genre_id, proxy, message)) = state(window).and_then(|state| {
+        let selected =
+            usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok()?;
+        let (key, genre_id) = PODCAST_GENRES.get(selected).copied()?;
+        let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+        Some((
+            catalog.text(key).to_owned(),
+            genre_id,
+            state.application.settings().proxy.clone(),
+            catalog.text("fetching_category_podcasts").to_owned(),
+        ))
+    }) else {
+        return;
+    };
+    let work = crate::podcast_win32::load_category(category, genre_id, proxy);
+    start_podcast_work_with_message(window, work, &message);
 }
 
 unsafe fn selected_subscription_index(state: &WindowState) -> Option<usize> {
@@ -3680,6 +5651,37 @@ unsafe fn configure_subscription_timer(window: HWND) {
         .and_then(|duration| u32::try_from(duration.as_millis()).ok())
         .unwrap_or(21_600_000);
     let _ = SetTimer(Some(window), SUBSCRIPTION_TIMER_ID, interval_ms, None);
+}
+
+unsafe fn configure_rss_timer(window: HWND) {
+    let _ = KillTimer(Some(window), RSS_TIMER_ID);
+    let Some(state) = state(window) else {
+        return;
+    };
+    let settings = state.application.settings();
+    if !settings.enable_podcasts_rss || !settings.rss_auto_refresh_enabled {
+        return;
+    }
+    let hours = settings.rss_refresh_interval_hours;
+    let seconds = if hours.is_finite() {
+        hours.clamp(0.5, 168.0) * 60.0 * 60.0
+    } else {
+        12.0 * 60.0 * 60.0
+    };
+    let interval_ms = std::time::Duration::try_from_secs_f64(seconds)
+        .ok()
+        .and_then(|duration| u32::try_from(duration.as_millis()).ok())
+        .unwrap_or(43_200_000);
+    let _ = SetTimer(Some(window), RSS_TIMER_ID, interval_ms, None);
+}
+
+unsafe fn refresh_rss_feeds_on_startup(window: HWND) {
+    if state(window).is_some_and(|state| {
+        state.application.settings().enable_podcasts_rss
+            && state.application.settings().rss_refresh_on_startup
+    }) {
+        refresh_all_rss_feeds_background(window);
+    }
 }
 
 unsafe fn check_subscriptions_if_due(window: HWND) {
@@ -4098,6 +6100,30 @@ unsafe fn navigate_back(window: HWND) {
             refresh_subscriptions(state, true, false, None);
             layout_controls_state(window, state);
         }
+        Route::RssFeeds => {
+            state.view = MainView::RssFeeds;
+            refresh_rss_feeds(state, true, false, None);
+            layout_controls_state(window, state);
+        }
+        Route::RssItems => {
+            state.view = MainView::RssItems;
+            refresh_rss_items(state, true, false);
+            select_list_index(state.list, saved_index);
+            layout_controls_state(window, state);
+        }
+        Route::PodcastSearchResults => {
+            state.view = MainView::PodcastSearchResults;
+            refresh_podcast_directory_results(state, true, false);
+            select_list_index(state.list, saved_index);
+            layout_controls_state(window, state);
+        }
+        Route::PodcastCategories => {
+            state.view = MainView::PodcastCategories;
+            set_open_button_label(state, "open");
+            refresh_podcast_categories(state, true);
+            select_list_index(state.list, saved_index);
+            layout_controls_state(window, state);
+        }
         Route::Bookmarks => {
             state.view = MainView::MainMenu;
             refresh_main_menu(state);
@@ -4487,6 +6513,7 @@ unsafe fn poll_youtube_runtime(window: HWND) {
         return;
     }
     poll_youtube_trending_api(window);
+    poll_podcast_work(window);
     loop {
         let update = {
             let Some(state) = state_mut(window) else {
@@ -4758,6 +6785,7 @@ unsafe fn poll_playback_runtime(window: HWND) {
             }
             PlaybackEvent::Position { .. } | PlaybackEvent::MediaInfo(_) => {}
             PlaybackEvent::Ended => {
+                mark_current_podcast_episode_played(state);
                 let autoplay_next = state
                     .application
                     .player_session()
@@ -5168,6 +7196,7 @@ unsafe fn stop_youtube_timer(window: HWND) {
             && state.pending_youtube_api_metadata.is_none()
             && state.pending_youtube_trending_api.is_none()
             && state.pending_subscription_check.is_none()
+            && state.pending_podcast_work.is_none()
     }) {
         let _ = KillTimer(Some(window), YOUTUBE_TIMER_ID);
     }
@@ -6428,6 +8457,10 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
         | MainView::History
         | MainView::NotificationCenter
         | MainView::Subscriptions
+        | MainView::RssFeeds
+        | MainView::RssItems
+        | MainView::PodcastSearchResults
+        | MainView::PodcastCategories
         | MainView::UserPlaylists
         | MainView::UserPlaylistItems => (ActionScope::List, false),
         MainView::Player => (ActionScope::Player, false),
@@ -6585,6 +8618,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "open_favorites" => show_media_collection(window, MainView::Favorites),
         "open_history" => show_media_collection(window, MainView::History),
         "open_subscriptions" => show_subscriptions(window),
+        "open_podcasts_rss" => show_rss_feeds(window),
         "new_subscription_videos" => show_notification_center(window),
         "open_bookmarks" => show_bookmarks_dialog(window, false, false),
         "open_playlists" => show_user_playlists(window),
@@ -6636,6 +8670,9 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "add_to_playback_queue" => add_active_item_to_playback_queue(window),
         "remove_from_playback_queue" => remove_active_item_from_playback_queue(window),
         "open_playback_queue" => show_playback_queue(window),
+        "toggle_podcast_played" => toggle_selected_rss_played(window),
+        "clear_podcast_progress" => clear_selected_rss_progress(window),
+        "save_podcast_speed_preset" => save_current_podcast_speed_preset(window),
         _ => show_unimplemented_action(window, action_id),
     }
 }
@@ -6795,6 +8832,7 @@ unsafe fn active_media_item(window: HWND) -> Option<apricot_core::MediaItem> {
         MainView::Subscriptions => selected_subscription(state)
             .as_ref()
             .and_then(subscription_media_item),
+        MainView::RssItems => selected_rss_episode(state).cloned(),
         MainView::UserPlaylistItems => {
             let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
             let index = usize::try_from(selected).ok()?;
@@ -6807,9 +8845,13 @@ unsafe fn active_media_item(window: HWND) -> Option<apricot_core::MediaItem> {
                 .cloned()
         }
         MainView::Player => state.application.player_session().current_item().cloned(),
-        MainView::MainMenu | MainView::Search | MainView::DirectLink | MainView::UserPlaylists => {
-            None
-        }
+        MainView::MainMenu
+        | MainView::Search
+        | MainView::DirectLink
+        | MainView::RssFeeds
+        | MainView::PodcastSearchResults
+        | MainView::PodcastCategories
+        | MainView::UserPlaylists => None,
     }
 }
 
@@ -8001,6 +10043,21 @@ unsafe fn copy_active_location(window: HWND) {
     );
 }
 
+unsafe fn copy_context_location(window: HWND) {
+    let special = state(window).and_then(|state| match state.view {
+        MainView::RssFeeds => selected_rss_feed(state).map(|feed| feed.url.clone()),
+        MainView::PodcastSearchResults => {
+            selected_podcast_result(state).map(|item| item.feed_url.to_string())
+        }
+        _ => None,
+    });
+    if let Some(url) = special {
+        copy_text_and_announce(window, &url, "url_copied");
+    } else {
+        copy_active_location(window);
+    }
+}
+
 unsafe fn copy_current_timestamp_link(window: HWND) {
     let Some((url, message_key)) = state(window).and_then(|state| {
         let session = state.application.player_session();
@@ -8465,6 +10522,13 @@ unsafe fn persist_current_playback_position(state: &mut WindowState) {
             false,
         );
     }
+    let session = state.application.player_session();
+    let near_end = session.duration_seconds().is_some_and(|duration| {
+        duration > 0.0 && session.position_seconds() >= (duration - 8.0).max(5.0)
+    });
+    if near_end {
+        mark_current_podcast_episode_played(state);
+    }
 }
 
 unsafe fn play_local_file(window: HWND, path: &std::path::Path) {
@@ -8831,6 +10895,12 @@ unsafe fn open_settings(window: HWND) {
             refresh_notification_center(state, false, false, None);
         }
         MainView::Subscriptions => refresh_subscriptions(state, false, false, None),
+        MainView::RssFeeds => refresh_rss_feeds(state, false, false, None),
+        MainView::RssItems => refresh_rss_items(state, false, false),
+        MainView::PodcastSearchResults => {
+            refresh_podcast_directory_results(state, false, false);
+        }
+        MainView::PodcastCategories => refresh_podcast_categories(state, false),
         MainView::UserPlaylists => refresh_user_playlists(state, false, false),
         MainView::UserPlaylistItems => refresh_user_playlist_items(state, false, false),
         MainView::Search | MainView::DirectLink => {}
@@ -8840,6 +10910,7 @@ unsafe fn open_settings(window: HWND) {
     let _ = SetFocus(Some(active_primary_control(state)));
     configure_subscription_timer(window);
     check_subscriptions_if_due(window);
+    configure_rss_timer(window);
     process_pending_activations(window);
     match settings_result {
         Ok(Some(action_id)) => activate_action(window, action_id),
@@ -8914,6 +10985,10 @@ fn active_primary_control(state: &WindowState) -> HWND {
         | MainView::History
         | MainView::NotificationCenter
         | MainView::Subscriptions
+        | MainView::RssFeeds
+        | MainView::RssItems
+        | MainView::PodcastSearchResults
+        | MainView::PodcastCategories
         | MainView::UserPlaylists
         | MainView::UserPlaylistItems => state.list,
         MainView::Player => state.player_controls.initial_focus(),

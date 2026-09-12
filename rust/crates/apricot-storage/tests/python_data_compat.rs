@@ -1,8 +1,8 @@
 use std::{collections::BTreeMap, env, path::PathBuf};
 
 use apricot_storage::{
-    CompatibilitySnapshot, DEFAULT_MAX_ARTIFACT_BYTES, NotificationFile, SubscriptionFile,
-    UserPlaylistFile,
+    CompatibilitySnapshot, DEFAULT_MAX_ARTIFACT_BYTES, NotificationFile, RssFeedFile,
+    SubscriptionFile, UserPlaylistFile,
 };
 use tempfile::tempdir;
 
@@ -91,6 +91,25 @@ fn real_python_data_round_trips_without_value_loss() {
         )
         .expect("parse typed subscriptions");
         assert_json_equivalent(&original, &restored, "subscriptions");
+    }
+
+    let source_rss_feeds = source.join("rss_feeds.json");
+    if source_rss_feeds.is_file() {
+        let original: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&source_rss_feeds).expect("read Python RSS feeds"),
+        )
+        .expect("parse Python RSS feeds");
+        let feeds = RssFeedFile::new(&source_rss_feeds)
+            .load()
+            .expect("load Python RSS feeds through typed adapter");
+        let rss_target = target.path().join("typed-rss-feeds.json");
+        RssFeedFile::new(&rss_target)
+            .save(&feeds)
+            .expect("write typed RSS feeds");
+        let restored: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(rss_target).expect("read typed RSS feeds"))
+                .expect("parse typed RSS feeds");
+        assert_json_equivalent(&original, &restored, "rss_feeds");
     }
 }
 

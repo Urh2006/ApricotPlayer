@@ -13,7 +13,8 @@ use apricot_platform::{
 };
 use apricot_storage::{
     BookmarkFile, LastPlayerSessionFile, MediaListFile, NotificationFile, PlaybackPositionFile,
-    PlaybackQueueFile, SettingsDocument, SettingsPaths, SubscriptionFile, UserPlaylistFile,
+    PlaybackQueueFile, RssFeedFile, SettingsDocument, SettingsPaths, SubscriptionFile,
+    UserPlaylistFile,
 };
 use apricot_updater::UpdateChannel;
 
@@ -77,6 +78,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     application.configure_subscriptions(
         SubscriptionFile::new(paths.app_data.join("subscriptions.json")),
         &SubscriptionFile::new(paths.legacy_app_data.join("subscriptions.json")),
+    );
+    application.configure_rss_feeds(
+        RssFeedFile::new(paths.app_data.join("rss_feeds.json")),
+        &RssFeedFile::new(paths.legacy_app_data.join("rss_feeds.json")),
     );
     application.configure_user_playlists(
         UserPlaylistFile::new(paths.app_data.join("playlists.json")),

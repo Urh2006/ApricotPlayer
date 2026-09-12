@@ -16,6 +16,7 @@ pub mod playback_sequence;
 pub mod player_information;
 pub mod player_model;
 pub mod player_session;
+pub mod rss_feed_controller;
 pub mod search_session;
 pub mod settings_controller;
 pub mod settings_model;
@@ -27,7 +28,7 @@ pub mod youtube_trending;
 
 use apricot_core::NavigationStack;
 pub use apricot_media::{YoutubeCollectionKind, YoutubeSearchKind};
-pub use apricot_storage::{AppNotification, Subscription};
+pub use apricot_storage::{AppNotification, RssFeed, Subscription};
 
 pub use action_finder::{ActionFinderContext, ActionFinderItem, ActionFinderModel};
 pub use activation::ActivationRequest;
@@ -59,6 +60,10 @@ pub use player_model::{
 pub use player_session::{
     AudioSession, EqualizerSession, PlaybackPhase, PlayerSession, PlayerSessionDefaults,
     SessionToggle,
+};
+pub use rss_feed_controller::{
+    RssFeedAddOutcome, RssFeedController, RssFeedControllerError, RssFeedImportSummary,
+    RssRefreshResult, RssRefreshSummary, canonical_feed_url, rss_episode_identity,
 };
 pub use search_session::{
     DYNAMIC_SEARCH_PAGE_SIZE, SearchApplyOutcome, SearchPhase, SearchSession, SearchSessionError,
@@ -102,6 +107,7 @@ pub struct AppState {
     pub playback_positions: PlaybackPositionController,
     pub player: PlayerSession,
     pub player_sequence: PlaybackSequence,
+    pub rss_feeds: RssFeedController,
     pub search: SearchSession,
     pub subscriptions: SubscriptionController,
     pub user_playlists: UserPlaylistController,

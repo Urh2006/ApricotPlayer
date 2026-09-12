@@ -9,6 +9,7 @@ pub enum PlaybackSequenceSource {
     YoutubePlaylist { token: u64 },
     LocalFolder { generation: u64 },
     UserPlaylist { playlist_index: usize },
+    RssFeed { feed_index: usize },
     Collection,
 }
 

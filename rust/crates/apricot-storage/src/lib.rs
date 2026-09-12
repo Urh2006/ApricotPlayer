@@ -11,6 +11,7 @@ pub mod media_list_file;
 pub mod notification_file;
 pub mod playback_position_file;
 pub mod playback_queue_file;
+pub mod rss_feed_file;
 pub mod settings;
 pub mod settings_file;
 pub mod subscription_file;
@@ -32,6 +33,7 @@ pub use media_list_file::{MediaListFile, MediaListFileError};
 pub use notification_file::{AppNotification, NotificationFile, NotificationFileError};
 pub use playback_position_file::{PlaybackPositionFile, PlaybackPositionFileError};
 pub use playback_queue_file::{PlaybackQueueFile, PlaybackQueueFileError};
+pub use rss_feed_file::{MAX_RSS_LIBRARY_BYTES, RssFeed, RssFeedFile, RssFeedFileError};
 pub use settings::{SettingsDocument, SettingsLoadError};
 pub use settings_file::{
     SettingsLoadOutcome, SettingsPaths, SettingsSaveError, SettingsSource, load_settings,

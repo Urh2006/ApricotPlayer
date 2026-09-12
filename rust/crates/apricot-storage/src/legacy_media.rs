@@ -14,7 +14,10 @@ pub fn media_item_from_python_value(value: &Value) -> Option<MediaItem> {
     } else {
         location.parse().ok()
     };
-    if url.is_none() && local_path.is_none() {
+    if url.is_none()
+        && local_path.is_none()
+        && !matches!(kind_text.as_str(), "rss_item" | "podcast_episode")
+    {
         return None;
     }
     let kind = media_kind(&kind_text, local_path.as_deref(), object);

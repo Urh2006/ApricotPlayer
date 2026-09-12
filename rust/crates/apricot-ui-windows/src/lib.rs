@@ -29,6 +29,8 @@ mod player_controls_win32;
 #[cfg(windows)]
 mod playlist_dialog_win32;
 #[cfg(windows)]
+mod podcast_win32;
+#[cfg(windows)]
 mod settings_win32;
 #[cfg(windows)]
 mod shortcut_win32;

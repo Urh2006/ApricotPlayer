@@ -4,8 +4,17 @@
 use apricot_core::{MediaItem, MediaSource};
 use thiserror::Error;
 
+pub mod podcast_directory;
+pub mod podcast_feed;
+pub mod podcast_opml;
+pub mod xml_text;
 pub mod youtube_protocol;
 pub mod youtube_runtime;
+
+pub use podcast_directory::PodcastDirectoryItem;
+pub use podcast_feed::{PodcastFeedDocument, PodcastFeedParseError, parse_podcast_feed};
+pub use podcast_opml::{MAX_OPML_BYTES, OpmlFeed, OpmlParseError, parse_opml, write_opml};
+pub use xml_text::{XmlTextError, decode_xml};
 
 pub use youtube_protocol::{
     MAX_YOUTUBE_MESSAGE_BYTES, MAX_YOUTUBE_METADATA_ITEMS, RUSTY_YTDL_REVISION,

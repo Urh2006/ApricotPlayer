@@ -10,8 +10,8 @@ use apricot_core::{MediaItem, Route, RouteFrame, SettingId, SettingsSection};
 use apricot_playback::PlaybackEvent;
 use apricot_storage::{
     AppNotification, Bookmark, BookmarkFile, LastPlayerSession, LastPlayerSessionFile,
-    MediaListFile, NotificationFile, PlaybackPositionFile, PlaybackQueueFile, SettingsDocument,
-    Subscription, SubscriptionFile, UserPlaylist, UserPlaylistFile,
+    MediaListFile, NotificationFile, PlaybackPositionFile, PlaybackQueueFile, RssFeed, RssFeedFile,
+    SettingsDocument, Subscription, SubscriptionFile, UserPlaylist, UserPlaylistFile,
 };
 use rand::seq::SliceRandom;
 use serde_json::{Map, Value};
@@ -25,14 +25,15 @@ use crate::{
     PlaybackPositionControllerError, PlaybackPositionUpdate, PlaybackQueue,
     PlaybackQueueController, PlaybackQueueControllerError, PlaybackSequenceSource,
     PlayerScreenModel, PlayerSession, PlayerSessionDefaults, PlayerViewState, PlaylistAddOutcome,
-    PlaylistCreateOutcome, QueueAddOutcome, QueueBatchAddOutcome, SearchApplyOutcome,
-    SearchSession, SearchSessionError, SearchWork, SessionToggle, SettingsController,
-    SettingsControllerError, SettingsScreenModel, SubscriptionAddOutcome, SubscriptionCheckResult,
-    SubscriptionCheckSummary, SubscriptionController, SubscriptionControllerError,
-    SubscriptionRemoveOutcome, UserPlaylistController, UserPlaylistControllerError,
-    YoutubeCollectionApplyOutcome, YoutubeCollectionError, YoutubeCollectionKind,
-    YoutubeCollectionSession, YoutubeCollectionWork, YoutubeSearchKind, YoutubeTrendingWork,
-    embedded_catalog,
+    PlaylistCreateOutcome, QueueAddOutcome, QueueBatchAddOutcome, RssFeedAddOutcome,
+    RssFeedController, RssFeedControllerError, RssRefreshResult, RssRefreshSummary,
+    SearchApplyOutcome, SearchSession, SearchSessionError, SearchWork, SessionToggle,
+    SettingsController, SettingsControllerError, SettingsScreenModel, SubscriptionAddOutcome,
+    SubscriptionCheckResult, SubscriptionCheckSummary, SubscriptionController,
+    SubscriptionControllerError, SubscriptionRemoveOutcome, UserPlaylistController,
+    UserPlaylistControllerError, YoutubeCollectionApplyOutcome, YoutubeCollectionError,
+    YoutubeCollectionKind, YoutubeCollectionSession, YoutubeCollectionWork, YoutubeSearchKind,
+    YoutubeTrendingWork, embedded_catalog,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -161,6 +162,18 @@ impl Application {
             .resume_position(item, self.settings.current().resume_playback)
     }
 
+    /// Clears one item's durable resume position without affecting other media.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the changed position map cannot be persisted.
+    pub fn clear_playback_position(
+        &mut self,
+        item: &MediaItem,
+    ) -> Result<PlaybackPositionUpdate, PlaybackPositionControllerError> {
+        self.state.playback_positions.update(item, 0.0, None, true)
+    }
+
     /// Persists the current item's projected position before replacement or a
     /// real player-session close.
     ///
@@ -247,6 +260,203 @@ impl Application {
         legacy: &SubscriptionFile,
     ) {
         self.state.subscriptions = SubscriptionController::load(current, legacy);
+    }
+
+    pub fn configure_rss_feeds(&mut self, current: RssFeedFile, legacy: &RssFeedFile) {
+        self.state.rss_feeds = RssFeedController::load(current, legacy);
+    }
+
+    pub fn rss_feeds(&self) -> &[RssFeed] {
+        self.state.rss_feeds.feeds()
+    }
+
+    pub fn rss_feed_load_error(&self) -> Option<&str> {
+        self.state.rss_feeds.load_error()
+    }
+
+    pub fn rss_category_filter(&self) -> &str {
+        self.state.rss_feeds.category_filter()
+    }
+
+    pub fn set_rss_category_filter(&mut self, category: &str) {
+        self.state.rss_feeds.set_category_filter(category);
+    }
+
+    pub fn rss_categories(&self) -> Vec<String> {
+        self.state.rss_feeds.categories()
+    }
+
+    pub fn visible_rss_feed_indices(&self) -> Vec<usize> {
+        self.state.rss_feeds.visible_indices()
+    }
+
+    pub fn rss_episode_location(&self, item: &MediaItem) -> Option<(usize, usize)> {
+        let identity = item.stable_identity()?;
+        let indexed = item
+            .metadata
+            .get("rss_feed_index")
+            .and_then(Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .zip(
+                item.metadata
+                    .get("rss_item_index")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok()),
+            );
+        if let Some((feed_index, item_index)) = indexed
+            && self
+                .state
+                .rss_feeds
+                .feeds()
+                .get(feed_index)
+                .and_then(|feed| feed.items.get(item_index))
+                .and_then(MediaItem::stable_identity)
+                .as_deref()
+                == Some(identity.as_str())
+        {
+            return Some((feed_index, item_index));
+        }
+        self.state
+            .rss_feeds
+            .feeds()
+            .iter()
+            .enumerate()
+            .find_map(|(feed_index, feed)| {
+                feed.items
+                    .iter()
+                    .position(|candidate| {
+                        candidate.stable_identity().as_deref() == Some(identity.as_str())
+                    })
+                    .map(|item_index| (feed_index, item_index))
+            })
+    }
+
+    /// Adds one fully fetched feed to the durable RSS archive.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the archive cannot be persisted.
+    pub fn add_rss_feed(
+        &mut self,
+        feed: RssFeed,
+    ) -> Result<RssFeedAddOutcome, RssFeedControllerError> {
+        self.state.rss_feeds.add(feed)
+    }
+
+    /// Adds a fetched OPML batch with one durable archive update.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the RSS archive cannot be persisted.
+    pub fn import_rss_feeds(
+        &mut self,
+        feeds: Vec<RssFeed>,
+    ) -> Result<crate::RssFeedImportSummary, RssFeedControllerError> {
+        self.state.rss_feeds.add_many(feeds)
+    }
+
+    /// Removes one feed by its unfiltered durable index.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the archive cannot be persisted.
+    pub fn remove_rss_feed(
+        &mut self,
+        index: usize,
+    ) -> Result<Option<RssFeed>, RssFeedControllerError> {
+        self.state.rss_feeds.remove(index)
+    }
+
+    /// Assigns or clears one feed category.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the archive cannot be persisted.
+    pub fn set_rss_feed_category(
+        &mut self,
+        index: usize,
+        category: &str,
+    ) -> Result<bool, RssFeedControllerError> {
+        self.state.rss_feeds.set_category(index, category)
+    }
+
+    /// Saves a per-feed podcast speed or clears the override.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the archive cannot be persisted.
+    pub fn set_rss_feed_speed(
+        &mut self,
+        index: usize,
+        speed: Option<f64>,
+    ) -> Result<bool, RssFeedControllerError> {
+        self.state.rss_feeds.set_speed_preset(index, speed)
+    }
+
+    /// Marks one podcast episode as played or unplayed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the archive cannot be persisted.
+    pub fn set_rss_episode_played(
+        &mut self,
+        feed_index: usize,
+        item_index: usize,
+        played: bool,
+        timestamp: f64,
+    ) -> Result<Option<MediaItem>, RssFeedControllerError> {
+        self.state
+            .rss_feeds
+            .set_played(feed_index, item_index, played, timestamp)
+    }
+
+    /// Applies a complete feed refresh batch with one durable archive write.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the archive cannot be persisted.
+    pub fn apply_rss_refreshes(
+        &mut self,
+        results: Vec<RssRefreshResult>,
+        timestamp: f64,
+    ) -> Result<RssRefreshSummary, RssFeedControllerError> {
+        self.state.rss_feeds.apply_refreshes(results, timestamp)
+    }
+
+    pub fn prepare_rss_episode_playback(
+        &mut self,
+        feed_index: usize,
+        item_index: usize,
+    ) -> Option<MediaItem> {
+        let feed = self.state.rss_feeds.feeds().get(feed_index)?;
+        let speed_preset = feed.speed_preset;
+        let items = feed
+            .items
+            .iter()
+            .enumerate()
+            .map(|(index, source)| {
+                let mut item = source.clone();
+                item.metadata
+                    .insert("rss_feed_index".to_owned(), feed_index.into());
+                item.metadata
+                    .insert("rss_item_index".to_owned(), index.into());
+                if let Some(speed) = speed_preset {
+                    item.metadata
+                        .insert("podcast_speed_preset".to_owned(), speed.into());
+                }
+                item
+            })
+            .collect::<Vec<_>>();
+        let item = items.get(item_index)?.clone();
+        if !item.is_playable() {
+            return None;
+        }
+        let _ = self.state.player_sequence.set(
+            PlaybackSequenceSource::RssFeed { feed_index },
+            &items,
+            &item,
+        );
+        Some(item)
     }
 
     pub fn subscriptions(&self) -> &[Subscription] {
@@ -1235,9 +1445,19 @@ impl Application {
     }
 
     pub fn prepare_last_player_session_resume(&mut self) -> Option<LastSessionResume> {
-        let session = self.state.last_player_session.session()?.clone();
+        let mut session = self.state.last_player_session.session()?.clone();
         let item = session.item.clone();
         let current_identity = item.stable_identity()?;
+        if session.return_screen == "rss_items"
+            && let Some((feed_index, item_index)) = self.rss_episode_location(&item)
+        {
+            session
+                .return_data
+                .insert("feed_index".to_owned(), Value::from(feed_index));
+            session
+                .return_data
+                .insert("item_index".to_owned(), Value::from(item_index));
+        }
         let sequence: Vec<_> = session
             .sequence
             .iter()
@@ -1338,6 +1558,22 @@ impl Application {
             {
                 Route::UserPlaylistItems
             }
+            "rss_items" => {
+                let feed_index = json_usize(&session.return_data, "feed_index");
+                let item_index = json_usize(&session.return_data, "item_index");
+                if self
+                    .state
+                    .rss_feeds
+                    .feeds()
+                    .get(feed_index)
+                    .and_then(|feed| feed.items.get(item_index))
+                    .is_some()
+                {
+                    Route::RssItems
+                } else {
+                    Route::MainMenu
+                }
+            }
             _ => Route::MainMenu,
         }
     }
@@ -1360,6 +1596,9 @@ impl Application {
             },
             "user_playlist_items" => PlaybackSequenceSource::UserPlaylist {
                 playlist_index: json_usize(&session.return_data, "playlist_index"),
+            },
+            "rss_items" => PlaybackSequenceSource::RssFeed {
+                feed_index: json_usize(&session.return_data, "feed_index"),
             },
             _ => PlaybackSequenceSource::Collection,
         };
@@ -1560,7 +1799,13 @@ impl Application {
                 ("user_playlist_items", data)
             }
             Route::PlaybackQueue => ("playback_queue", data),
-            Route::RssItems => ("rss_items", data),
+            Route::RssItems => {
+                if let Some((feed_index, item_index)) = self.rss_episode_location(item) {
+                    data.insert("feed_index".to_owned(), Value::from(feed_index));
+                    data.insert("item_index".to_owned(), Value::from(item_index));
+                }
+                ("rss_items", data)
+            }
             Route::NotificationCenter => ("notification_center", data),
             Route::Subscriptions => ("subscriptions", data),
             Route::Trending => {
@@ -1993,7 +2238,8 @@ mod tests {
     use apricot_playback::PlaybackEvent;
     use apricot_storage::{
         AppNotification, LastPlayerSessionFile, MediaListFile, NotificationFile,
-        PlaybackPositionFile, SettingsDocument, SettingsPaths, UserPlaylistFile,
+        PlaybackPositionFile, RssFeed, RssFeedFile, SettingsDocument, SettingsPaths,
+        UserPlaylistFile,
     };
     use tempfile::tempdir;
 
@@ -2044,6 +2290,26 @@ mod tests {
             local_path: None,
             channel: String::new(),
             duration_seconds: None,
+            metadata: BTreeMap::new(),
+        }
+    }
+
+    fn podcast_item(index: usize) -> MediaItem {
+        MediaItem {
+            id: MediaId(format!("episode-{index}")),
+            source: MediaSource::Podcast,
+            kind: MediaKind::PodcastEpisode,
+            title: format!("Episode {index}"),
+            url: Some(
+                format!("https://media.example/episode-{index}.mp3")
+                    .parse()
+                    .expect("URL"),
+            ),
+            stream_url: None,
+            external_audio_url: None,
+            local_path: None,
+            channel: "Podcast".to_owned(),
+            duration_seconds: Some(1_800.0),
             metadata: BTreeMap::new(),
         }
     }
@@ -2358,6 +2624,58 @@ mod tests {
         };
         assert_eq!(origin, PlayerNavigationOrigin::Sequence);
         assert_eq!(item.id.0, "2");
+    }
+
+    #[test]
+    fn last_session_restores_rss_feed_episode_and_sequence() {
+        let root = tempdir().expect("temporary directory");
+        let session = root.path().join("beta/last_player_session.json");
+        let legacy_session = root.path().join("stable/last_player_session.json");
+        let feeds = root.path().join("beta/rss_feeds.json");
+        let legacy_feeds = root.path().join("stable/rss_feeds.json");
+        let mut original = application(root.path());
+        original.configure_last_player_session(
+            LastPlayerSessionFile::new(&session),
+            &LastPlayerSessionFile::new(&legacy_session),
+        );
+        original.configure_rss_feeds(RssFeedFile::new(&feeds), &RssFeedFile::new(&legacy_feeds));
+        original
+            .add_rss_feed(RssFeed::new(
+                "Podcast",
+                "https://feeds.example/podcast.xml",
+                "https://podcast.example",
+                (0..3).map(podcast_item).collect(),
+                10.0,
+            ))
+            .expect("feed");
+        original.navigate_to(RouteFrame::new(Route::RssFeeds));
+        let mut frame = RouteFrame::new(Route::RssItems);
+        frame.parameters.insert("feed_index".to_owned(), 0.into());
+        original.navigate_to(frame);
+        let item = original
+            .prepare_rss_episode_playback(0, 1)
+            .expect("episode");
+        original.start_player_item(item);
+        drop(original);
+
+        let mut restored = application(root.path());
+        restored.configure_last_player_session(
+            LastPlayerSessionFile::new(&session),
+            &LastPlayerSessionFile::new(&legacy_session),
+        );
+        restored.configure_rss_feeds(RssFeedFile::new(&feeds), &RssFeedFile::new(&legacy_feeds));
+        let resume = restored
+            .prepare_last_player_session_resume()
+            .expect("resume plan");
+        assert_eq!(restored.current_route(), Route::RssItems);
+        assert_eq!(resume.return_data["feed_index"], 0);
+        assert_eq!(resume.return_data["item_index"], 1);
+        assert!(resume.sequence_active);
+        assert_eq!(
+            restored.state.player_sequence.source(),
+            Some(PlaybackSequenceSource::RssFeed { feed_index: 0 })
+        );
+        assert_eq!(resume.item.title, "Episode 1");
     }
 
     #[test]

@@ -714,3 +714,71 @@ Network-dependent subscription refreshes are deliberately excluded from this
 deterministic UI script. Worker/controller tests cover success, independent
 failures, stale generations, and transactional persistence; a real account and
 network listening pass remains a pre-release qualification item.
+
+## 2026-09-12: native podcasts and RSS library
+
+Implementation: bounded RSS/Atom and OPML parsers, the Python-compatible
+`rss_feeds.json` store, an application-owned feed controller, Apple Podcasts
+directory client, generation-scoped workers, refresh scheduling, and native
+Win32 feed, episode, search-result, and category screens.
+
+Verified in automated tests:
+
+- current beta data takes precedence over a read-only stable Python fallback;
+  unknown feed and episode fields survive atomic writes, while malformed or
+  over-64-MiB archives are rejected without replacement;
+- RSS 2.0 and Atom feeds normalize titles, durable episode URLs, publication
+  times, durations, descriptions, and chapter metadata through bounded XML
+  parsing rather than ad hoc text extraction;
+- refresh merges retain played state and playback progress by stable episode
+  identity, preserve complete archives beyond the visible batch, and report
+  only genuinely new episodes after a baseline has been established;
+- direct feed add/remove, category filtering and assignment, per-feed speed,
+  played state, progress clearing, and OPML import/export use transactional
+  application operations;
+- an individual refresh failure does not prevent other feeds from updating,
+  and startup plus interval refreshes run off the UI thread without stealing an
+  active search, result, or player screen;
+- opening a feed projects only the configured 25-to-500-item batch, while End
+  or Down at the visible boundary appends the next batch without truncating the
+  durable archive or losing selection;
+- podcast playback creates a feed-owned sequence for exact Previous/Next,
+  applies its feed speed preset, persists item-specific resume state, marks an
+  ended or near-ended episode played, and restores the same feed, item, and
+  sequence from a last-session snapshot;
+- Apple directory requests use fixed official endpoints, bounded responses,
+  explicit country/provider/limit settings, optional proxy support, and
+  secret-free errors; normal workspace tests remain network-independent;
+- OPML import parses the whole file before one atomic library mutation, so a
+  partial parse or write cannot leave a half-imported collection.
+
+`qualify_podcasts_ui.ps1` ran the installed side-by-side beta with isolated
+temporary settings and a deterministic Python-shaped feed archive. Native
+Win32 and MSAA inspection verified:
+
+- the main-menu Podcasts and RSS command opens from the selected row;
+- feed, episode, and category lists expose the exact semantic accessible names,
+  native ListBox role, and Python-compatible row field order;
+- every visible command exposes a native Button role and exact accessible name;
+- the feed Tab path is list, Back, Search podcasts, Browse categories, Add,
+  Refresh, Open, Remove, Filter, Set category, Import OPML, Export OPML, then
+  wraps to the list;
+- Enter on the selected feed opens its episode list;
+- the episode Tab path is list, Back, Refresh, Play, Download episode audio,
+  Download entire feed, then wraps to the list;
+- the category Tab path is list, Back, Open, then wraps to the list; and
+- Escape returns from categories or episodes to feeds, then from feeds to the
+  main menu one route at a time.
+
+Automated results at this checkpoint: app 130 tests, core 34 tests, media 19
+tests, platform 37 tests plus two ignored live tests, playback 16 tests, storage
+54 tests, Windows UI 23 tests, updater 2 tests, YouTube helper library 5 tests
+plus 2 process tests, and full workspace Clippy with warnings denied.
+
+Podcast download commands intentionally still report that they are unavailable
+in this internal build. Before podcast parity can close, the shared download
+engine, podcast chapters/details/transcripts, successful live Apple directory
+flows, and real NVDA/Narrator listening checks still need implementation or
+qualification. Native-app computer use was unavailable in this task, so the
+installed process was exercised through the repository's Win32/MSAA harness;
+this is not represented as a screen-reader listening pass.
