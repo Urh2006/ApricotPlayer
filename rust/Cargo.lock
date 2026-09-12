@@ -112,6 +112,7 @@ dependencies = [
 name = "apricot-media-process-spike"
 version = "2.0.0-dev.1"
 dependencies = [
+ "apricot-platform",
  "serde_json",
 ]
 

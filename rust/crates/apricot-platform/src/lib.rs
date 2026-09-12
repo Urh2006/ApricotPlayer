@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 pub mod diagnostics;
+pub mod download;
 pub mod local_media;
 pub mod paths;
 pub mod podcast_directory;
@@ -17,6 +18,10 @@ pub mod youtube_search_service;
 pub mod ytdlp_youtube;
 
 pub use diagnostics::{DiagnosticLog, DiagnosticLogError, install_panic_hook};
+pub use download::{
+    DownloadError, DownloadEvent, DownloadMode, DownloadOptions, DownloadPhase, DownloadRequest,
+    DownloadSummary, VideoDownloadFormat, YtDlpDownloader,
+};
 pub use local_media::{
     LocalMediaError, scan_local_media_folder, scan_local_media_folder_with_cancel,
 };

@@ -16,6 +16,10 @@ use std::{
 
 use serde_json::Value;
 
+use apricot_platform::{
+    DownloadEvent, DownloadMode, DownloadOptions, DownloadPhase, DownloadRequest, YtDlpDownloader,
+};
+
 const MAX_PROCESS_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -23,15 +27,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .join("..")
         .join("..")
         .join("..");
-    let yt_dlp = repository.join(".venv").join("Scripts").join("yt-dlp.exe");
+    let yt_dlp = repository
+        .join("rust")
+        .join(".cargo-local")
+        .join("yt-dlp")
+        .join("yt-dlp.exe");
     let ffmpeg = repository.join("vendor").join("ffmpeg").join("ffmpeg.exe");
-    let ffprobe = repository
-        .join("release-dist")
-        .join("_internal")
-        .join("ffmpeg")
-        .join("ffprobe.exe");
+    let ffprobe = [
+        repository.join("vendor").join("ffmpeg").join("ffprobe.exe"),
+        repository
+            .join("release-dist")
+            .join("_internal")
+            .join("ffmpeg")
+            .join("ffprobe.exe"),
+        repository
+            .join("dist")
+            .join("ApricotPlayer")
+            .join("_internal")
+            .join("ffmpeg")
+            .join("ffprobe.exe"),
+    ]
+    .into_iter()
+    .find(|candidate| candidate.is_file())
+    .unwrap_or_else(|| PathBuf::from("ffprobe.exe"));
     let node = repository.join("vendor").join("node").join("node.exe");
-    for executable in [&yt_dlp, &ffmpeg, &ffprobe, &node] {
+    for executable in [&yt_dlp, &ffmpeg, &node] {
         if !executable.is_file() {
             return Err(format!("required tool was not found: {}", executable.display()).into());
         }
@@ -51,10 +71,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let fixture = TemporaryFixture::create(wav.as_slice())?;
     let server = FixtureServer::start(wav)?;
     let media_url = server.url();
+    qualify_extraction(&yt_dlp, &media_url)?;
+    qualify_download(&yt_dlp, &ffmpeg, &media_url)?;
+    qualify_probe_and_decode(&ffprobe, &ffmpeg, fixture.path())?;
 
-    let extraction_start = Instant::now();
+    drop(server);
+    println!("MEDIA_PROCESS_SPIKE=PASS");
+    Ok(())
+}
+
+fn qualify_extraction(yt_dlp: &Path, media_url: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let started = Instant::now();
     let extraction = run(
-        &yt_dlp,
+        yt_dlp,
         &[
             "--ignore-config",
             "--no-plugin-dirs",
@@ -62,22 +91,108 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--no-playlist",
             "--skip-download",
             "--dump-single-json",
-            &media_url,
+            media_url,
         ],
     )?;
-    let extraction_json: Value = serde_json::from_slice(&checked_output(extraction)?.stdout)?;
-    if extraction_json.get("ext").and_then(Value::as_str) != Some("wav") {
-        return Err(format!("yt-dlp returned unexpected metadata: {extraction_json}").into());
+    let metadata: Value = serde_json::from_slice(&checked_output(extraction)?.stdout)?;
+    if metadata.get("ext").and_then(Value::as_str) != Some("wav") {
+        return Err(format!("yt-dlp returned unexpected metadata: {metadata}").into());
     }
     println!(
         "YT_DLP_DIRECT_EXTRACTION=PASS;ELAPSED_MS={}",
-        extraction_start.elapsed().as_millis()
+        started.elapsed().as_millis()
     );
+    Ok(())
+}
 
+fn qualify_download(
+    yt_dlp: &Path,
+    ffmpeg: &Path,
+    media_url: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let directory = TemporaryDirectory::create("download")?;
+    let request = DownloadRequest {
+        url: media_url.to_owned(),
+        title: "Offline fixture".to_owned(),
+        mode: DownloadMode::Audio,
+        output_directory: directory.path().to_owned(),
+        target_path: None,
+        allow_playlist: false,
+        options: DownloadOptions {
+            audio_format: "wav".to_owned(),
+            ffmpeg_location: ffmpeg.parent().map(Path::to_owned),
+            ..DownloadOptions::default()
+        },
+    };
+    let mut events = Vec::new();
+    let started = Instant::now();
+    let summary = YtDlpDownloader::new(yt_dlp)?.download(
+        &request,
+        &Arc::new(AtomicBool::new(false)),
+        |event| events.push(event),
+    )?;
+    let downloaded = summary
+        .files
+        .first()
+        .filter(|path| path.is_file())
+        .ok_or("production downloader did not report its completed file")?;
+    if downloaded.extension().and_then(|value| value.to_str()) != Some("wav") {
+        return Err(format!(
+            "production downloader produced an unexpected path: {}",
+            downloaded.display()
+        )
+        .into());
+    }
+    require_download_event(&events, "completion", |event| {
+        matches!(event, DownloadEvent::FileFinished { .. })
+    })?;
+    require_download_event(&events, "download progress", |event| {
+        matches!(
+            event,
+            DownloadEvent::Progress {
+                phase: DownloadPhase::Downloading,
+                ..
+            }
+        )
+    })?;
+    require_download_event(&events, "processing progress", |event| {
+        matches!(
+            event,
+            DownloadEvent::Progress {
+                phase: DownloadPhase::Processing,
+                ..
+            }
+        )
+    })?;
+    println!(
+        "YT_DLP_PRODUCTION_DOWNLOAD=PASS;EVENTS={};ELAPSED_MS={}",
+        events.len(),
+        started.elapsed().as_millis()
+    );
+    Ok(())
+}
+
+fn require_download_event(
+    events: &[DownloadEvent],
+    label: &str,
+    predicate: impl Fn(&DownloadEvent) -> bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if events.iter().any(predicate) {
+        Ok(())
+    } else {
+        Err(format!("production downloader did not emit {label}").into())
+    }
+}
+
+fn qualify_probe_and_decode(
+    ffprobe: &Path,
+    ffmpeg: &Path,
+    fixture: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let fixture_text = fixture.to_string_lossy().into_owned();
     let probe_start = Instant::now();
-    let fixture_text = fixture.path().to_string_lossy().into_owned();
     let probe = run(
-        &ffprobe,
+        ffprobe,
         &[
             "-v",
             "error",
@@ -88,8 +203,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &fixture_text,
         ],
     )?;
-    let probe_json: Value = serde_json::from_slice(&checked_output(probe)?.stdout)?;
-    let duration = probe_json["format"]["duration"]
+    let metadata: Value = serde_json::from_slice(&checked_output(probe)?.stdout)?;
+    let duration = metadata["format"]["duration"]
         .as_str()
         .ok_or("ffprobe did not return a duration")?
         .parse::<f64>()?;
@@ -103,7 +218,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let decode_start = Instant::now();
     checked_output(run(
-        &ffmpeg,
+        ffmpeg,
         &[
             "-hide_banner",
             "-loglevel",
@@ -119,9 +234,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "FFMPEG_DECODE=PASS;ELAPSED_MS={}",
         decode_start.elapsed().as_millis()
     );
-
-    drop(server);
-    println!("MEDIA_PROCESS_SPIKE=PASS");
     Ok(())
 }
 
@@ -224,6 +336,34 @@ fn temporary_wav_path() -> PathBuf {
 
 struct TemporaryFixture {
     path: PathBuf,
+}
+
+struct TemporaryDirectory {
+    path: PathBuf,
+}
+
+impl TemporaryDirectory {
+    fn create(label: &str) -> std::io::Result<Self> {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
+        let path = std::env::temp_dir().join(format!(
+            "apricot-rust-{label}-{}-{timestamp:x}",
+            std::process::id()
+        ));
+        fs::create_dir(&path)?;
+        Ok(Self { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TemporaryDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
 }
 
 impl TemporaryFixture {

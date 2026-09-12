@@ -19,8 +19,8 @@ use serde_json::{Map, Value};
 use crate::{
     ActionFinderContext, ActionFinderModel, ActivationRequest, AppState, AudioSession,
     BookmarkController, BookmarkControllerError, CollectionAddOutcome, DEFAULT_FOLDER_BATCH_SIZE,
-    EqualizerSession, LastPlayerSessionController, MainMenuAvailability, MainMenuModel,
-    MediaCollectionController, MediaCollectionControllerError, MenuVisibility,
+    DownloadController, EqualizerSession, LastPlayerSessionController, MainMenuAvailability,
+    MainMenuModel, MediaCollectionController, MediaCollectionControllerError, MenuVisibility,
     NotificationController, NotificationControllerError, PlaybackPositionController,
     PlaybackPositionControllerError, PlaybackPositionUpdate, PlaybackQueue,
     PlaybackQueueController, PlaybackQueueControllerError, PlaybackSequenceSource,
@@ -101,6 +101,14 @@ impl Application {
 
     pub fn bookmarks(&self) -> &[Bookmark] {
         self.state.bookmarks.bookmarks()
+    }
+
+    pub const fn downloads(&self) -> &DownloadController {
+        &self.state.downloads
+    }
+
+    pub const fn downloads_mut(&mut self) -> &mut DownloadController {
+        &mut self.state.downloads
     }
 
     pub fn sorted_bookmarks(&self) -> Vec<&Bookmark> {
@@ -1907,6 +1915,7 @@ impl Application {
         availability.trending = visibility(settings.enable_trending);
         availability.history = visibility(settings.enable_history);
         availability.podcasts = visibility(settings.enable_podcasts_rss);
+        availability.download_count = self.state.downloads.count();
         availability.playback_queue_count = self.state.playback_queue.queue().len();
         availability.resume = visibility(
             settings.show_resume_in_menu && self.state.last_player_session.is_available(),

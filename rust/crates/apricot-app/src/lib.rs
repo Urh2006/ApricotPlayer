@@ -4,6 +4,7 @@ pub mod action_finder;
 pub mod activation;
 pub mod application;
 pub mod bookmark_controller;
+pub mod download_controller;
 pub mod last_player_session_controller;
 pub mod local_folder;
 pub mod main_menu;
@@ -34,6 +35,11 @@ pub use action_finder::{ActionFinderContext, ActionFinderItem, ActionFinderModel
 pub use activation::ActivationRequest;
 pub use application::{
     Application, LastSessionResume, PlayerNavigationOrigin, PlayerNavigationOutcome,
+};
+pub use bookmark_controller::{BookmarkController, BookmarkControllerError};
+pub use download_controller::{
+    ActiveDownload, DownloadChoice, DownloadController, DownloadTaskKind, DownloadTaskStatus,
+    QueueToggleOutcome, QueuedDownload,
 };
 pub use last_player_session_controller::{
     LastPlayerSessionController, LastPlayerSessionControllerError,
@@ -97,6 +103,7 @@ pub use youtube_trending::{
 #[derive(Debug, Default)]
 pub struct AppState {
     pub bookmarks: BookmarkController,
+    pub downloads: DownloadController,
     pub favorites: MediaCollectionController,
     pub history: MediaCollectionController,
     pub navigation: NavigationStack,
@@ -113,4 +120,3 @@ pub struct AppState {
     pub user_playlists: UserPlaylistController,
     pub youtube_collections: YoutubeCollectionController,
 }
-pub use bookmark_controller::{BookmarkController, BookmarkControllerError};
