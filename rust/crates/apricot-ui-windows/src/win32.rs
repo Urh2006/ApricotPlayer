@@ -142,6 +142,7 @@ const ID_DOWNLOAD_ALL_AUDIO: usize = 1045;
 const ID_DOWNLOAD_ALL_VIDEO: usize = 1046;
 const ID_DOWNLOAD_CANCEL: usize = 1047;
 const ID_DOWNLOAD_CANCEL_ALL: usize = 1048;
+const ID_PLAYLIST_DOWNLOAD: usize = 1049;
 const ID_CONTEXT_PLAY: usize = 1101;
 const ID_CONTEXT_PLAY_FOLDER: usize = 1102;
 const ID_CONTEXT_SHUFFLE_FOLDER: usize = 1103;
@@ -199,6 +200,7 @@ const ID_CONTEXT_DOWNLOAD_ALL_VIDEO: usize = 1154;
 const ID_CONTEXT_DOWNLOAD_CANCEL: usize = 1155;
 const ID_CONTEXT_DOWNLOAD_CANCEL_ALL: usize = 1156;
 const ID_CONTEXT_DOWNLOAD_REMOVE_QUEUED: usize = 1157;
+const ID_CONTEXT_DOWNLOAD_USER_PLAYLIST: usize = 1158;
 const WM_PROCESS_ACTIVATION: u32 = WM_APP + 1;
 const WM_TRAY_ICON: u32 = WM_APP + 2;
 const WM_SHOW_DOWNLOAD_DETAILS: u32 = WM_APP + 3;
@@ -425,6 +427,7 @@ struct WindowState {
     playlist_play_all: HWND,
     playlist_shuffle: HWND,
     playlist_add_all_to_queue: HWND,
+    playlist_download: HWND,
     download_all_audio: HWND,
     download_all_video: HWND,
     download_cancel: HWND,
@@ -649,6 +652,7 @@ unsafe fn handle_view_tab_message(window: HWND, message: &MSG) -> bool {
             controls.push(state.list);
             controls
         }
+        MainView::UserPlaylists | MainView::UserPlaylistItems => user_playlist_tab_controls(state),
         _ => return false,
     };
     let Some(current) = controls.iter().position(|control| *control == GetFocus()) else {
@@ -664,6 +668,37 @@ unsafe fn handle_view_tab_message(window: HWND, message: &MSG) -> bool {
     };
     let _ = SetFocus(Some(controls[next]));
     true
+}
+
+fn user_playlist_tab_controls(state: &WindowState) -> Vec<HWND> {
+    if state.view == MainView::UserPlaylists {
+        return vec![
+            state.back,
+            state.playlist_create,
+            state.open,
+            state.playlist_download,
+            state.collection_remove,
+            state.list,
+        ];
+    }
+    let mut controls = vec![state.back];
+    if state
+        .application
+        .user_playlists()
+        .get(state.current_user_playlist_index)
+        .is_some_and(|playlist| !playlist.items.is_empty())
+    {
+        controls.extend([
+            state.open,
+            state.playlist_download,
+            state.collection_remove,
+            state.playlist_play_all,
+            state.playlist_shuffle,
+            state.playlist_add_all_to_queue,
+        ]);
+    }
+    controls.push(state.list);
+    controls
 }
 
 unsafe extern "system" fn window_proc(
@@ -873,6 +908,8 @@ unsafe fn handle_window_command(window: HWND, wparam: WPARAM) {
         play_current_user_playlist(window, true);
     } else if command == ID_PLAYLIST_ADD_ALL_TO_QUEUE {
         add_current_user_playlist_to_queue(window);
+    } else if command == ID_PLAYLIST_DOWNLOAD {
+        download_current_user_playlist(window);
     } else if command == ID_DOWNLOAD_ALL_AUDIO {
         start_all_queued_downloads(window, DownloadChoice::Audio);
     } else if command == ID_DOWNLOAD_ALL_VIDEO {
@@ -1332,6 +1369,13 @@ unsafe fn create_controls(
         WINDOW_EX_STYLE::default(),
         ID_PLAYLIST_ADD_ALL_TO_QUEUE,
     )?;
+    let playlist_download = create_button(
+        parent,
+        instance,
+        &catalog,
+        "download_user_playlist",
+        ID_PLAYLIST_DOWNLOAD,
+    )?;
     let download_all_audio = create_button(
         parent,
         instance,
@@ -1412,6 +1456,7 @@ unsafe fn create_controls(
         playlist_play_all,
         playlist_shuffle,
         playlist_add_all_to_queue,
+        playlist_download,
         download_all_audio,
         download_all_video,
         download_cancel,
@@ -1469,6 +1514,7 @@ unsafe fn create_controls(
         playlist_play_all,
         playlist_shuffle,
         playlist_add_all_to_queue,
+        playlist_download,
         download_all_audio,
         download_all_video,
         download_cancel,
@@ -1823,6 +1869,7 @@ unsafe fn execute_list_context_command(
         ID_CONTEXT_REMOVE_FROM_PLAYLIST => remove_active_item_from_user_playlist(window),
         ID_CONTEXT_REMOVE_PLAYLIST => remove_selected_user_playlist(window),
         ID_CONTEXT_ADD_PLAYLIST_TO_QUEUE => add_current_user_playlist_to_queue(window),
+        ID_CONTEXT_DOWNLOAD_USER_PLAYLIST => download_current_user_playlist(window),
         ID_CONTEXT_CLEAR_NOTIFICATIONS => clear_notifications(window),
         ID_CONTEXT_SUBSCRIPTION_OPEN => open_selected_subscription_videos(window),
         ID_CONTEXT_SUBSCRIPTION_NEW => open_selected_subscription_new_videos(window),
@@ -2044,12 +2091,14 @@ fn list_context_entries(
             (ID_CONTEXT_PLAY_PLAYLIST, "play_playlist"),
             (ID_CONTEXT_SHUFFLE_PLAYLIST, "shuffle_playlist"),
             (ID_CONTEXT_ADD_PLAYLIST_TO_QUEUE, "add_to_playback_queue"),
+            (ID_CONTEXT_DOWNLOAD_USER_PLAYLIST, "download_user_playlist"),
             (ID_CONTEXT_REMOVE_PLAYLIST, "remove_playlist"),
         ]),
         MainView::UserPlaylistItems => Some(vec![
             (ID_CONTEXT_PLAY, "play"),
             (ID_CONTEXT_DOWNLOAD_AUDIO, "download_audio"),
             (ID_CONTEXT_DOWNLOAD_VIDEO, "download_video"),
+            (ID_CONTEXT_DOWNLOAD_USER_PLAYLIST, "download_user_playlist"),
             (ID_CONTEXT_PLAY_PLAYLIST, "play_playlist"),
             (ID_CONTEXT_SHUFFLE_PLAYLIST, "shuffle_playlist"),
             (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
@@ -2554,6 +2603,7 @@ unsafe fn layout_bottom_controls(
                 state.back,
                 state.playlist_create,
                 state.open,
+                state.playlist_download,
                 state.collection_remove,
             ],
             width,
@@ -2566,6 +2616,7 @@ unsafe fn layout_bottom_controls(
             &[
                 state.back,
                 state.open,
+                state.playlist_download,
                 state.playlist_play_all,
                 state.playlist_shuffle,
                 state.collection_remove,
@@ -2739,6 +2790,14 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
         (
             state.playlist_add_all_to_queue,
             state.view == MainView::UserPlaylistItems && playlist_items_available,
+        ),
+        (
+            state.playlist_download,
+            matches!(
+                state.view,
+                MainView::UserPlaylists | MainView::UserPlaylistItems
+            ) && playlist_items_available
+                && !state.application.user_playlists().is_empty(),
         ),
         (state.download_all_audio, queued_downloads_visible),
         (state.download_all_video, queued_downloads_visible),
@@ -6900,6 +6959,185 @@ unsafe fn start_active_download(window: HWND, requested_choice: DownloadChoice) 
     start_download_item(window, &item, requested_choice, false);
 }
 
+struct UserPlaylistDownloadPlan {
+    playlist_index: usize,
+    title: String,
+    items: Vec<apricot_core::MediaItem>,
+    settings: apricot_storage::SettingsDocument,
+}
+
+unsafe fn selected_user_playlist_download_plan(window: HWND) -> Option<UserPlaylistDownloadPlan> {
+    let playlist_index = state(window).and_then(|state| match state.view {
+        MainView::UserPlaylists => {
+            usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok()
+        }
+        MainView::UserPlaylistItems => Some(state.current_user_playlist_index),
+        _ => None,
+    })?;
+    let state = state(window)?;
+    let playlist = state.application.user_playlists().get(playlist_index)?;
+    Some(UserPlaylistDownloadPlan {
+        playlist_index,
+        title: playlist.title.clone(),
+        items: playlist
+            .items
+            .iter()
+            .filter(|item| !item.is_local_media() && item.url.is_some())
+            .cloned()
+            .collect(),
+        settings: state.application.settings().clone(),
+    })
+}
+
+unsafe fn choose_user_playlist_download_folder(
+    window: HWND,
+    plan: &UserPlaylistDownloadPlan,
+) -> std::result::Result<Option<PathBuf>, String> {
+    let default_folder = user_playlist_download_folder(&plan.settings, &plan.title)?;
+    if !plan.settings.ask_download_location_each_time {
+        return Ok(Some(default_folder));
+    }
+    let catalog = apricot_app::embedded_catalog(&plan.settings.language);
+    let initial = default_folder
+        .parent()
+        .filter(|path| path.is_dir())
+        .unwrap_or(&default_folder);
+    Ok(crate::folder_dialog_win32::choose_download_folder(
+        window,
+        catalog.text("choose_save_folder"),
+        initial,
+    ))
+}
+
+unsafe fn build_user_playlist_download_requests(
+    window: HWND,
+    plan: &UserPlaylistDownloadPlan,
+    output_folder: &std::path::Path,
+) -> std::result::Result<Vec<DownloadRequest>, String> {
+    let mut requests = Vec::with_capacity(plan.items.len());
+    for item in &plan.items {
+        let Some(mut request) =
+            build_download_request(window, item, DownloadChoice::Video, Some(output_folder))?
+        else {
+            return Ok(Vec::new());
+        };
+        if matches!(
+            item.kind,
+            apricot_core::MediaKind::Playlist | apricot_core::MediaKind::Channel
+        ) {
+            request.output_directory = output_folder.join(safe_path_component(&item.title));
+            fs::create_dir_all(&request.output_directory)
+                .map_err(|error| format!("Could not create the download folder: {error}"))?;
+        }
+        requests.push(request);
+    }
+    Ok(requests)
+}
+
+unsafe fn spawn_user_playlist_download(
+    window: HWND,
+    plan: &UserPlaylistDownloadPlan,
+    requests: Vec<DownloadRequest>,
+    output_folder: PathBuf,
+) -> std::result::Result<(), String> {
+    let executable = application_directory()
+        .map(|directory| directory.join("components").join("yt-dlp.exe"))
+        .ok_or_else(|| "Application path is unavailable.".to_owned())?;
+    let (task_id, cancellation, sender) = {
+        let state =
+            state_mut(window).ok_or_else(|| "Application state is unavailable.".to_owned())?;
+        state.current_user_playlist_index = plan.playlist_index;
+        let mut batch_item = plan.items[0].clone();
+        batch_item.title.clone_from(&plan.title);
+        let task_id = state.application.downloads_mut().begin(
+            batch_item,
+            DownloadChoice::Video,
+            DownloadTaskKind::UserPlaylist,
+            requests.len(),
+        );
+        let cancellation = Arc::new(AtomicBool::new(false));
+        state
+            .download_cancellations
+            .insert(task_id, Arc::clone(&cancellation));
+        (task_id, cancellation, state.download_sender.clone())
+    };
+    spawn_batch_download(
+        task_id,
+        executable,
+        requests,
+        output_folder,
+        cancellation,
+        sender,
+    );
+    let _ = SetTimer(
+        Some(window),
+        DOWNLOAD_TIMER_ID,
+        DOWNLOAD_TIMER_INTERVAL_MS,
+        None,
+    );
+    show_download_progress_window(window, task_id);
+    Ok(())
+}
+
+unsafe fn download_current_user_playlist(window: HWND) {
+    let Some(plan) = selected_user_playlist_download_plan(window) else {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "no_playlists"),
+                true,
+            );
+        }
+        return;
+    };
+    if plan.items.is_empty() {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "playlist_empty"),
+                true,
+            );
+        }
+        return;
+    }
+    let output_folder = match choose_user_playlist_download_folder(window, &plan) {
+        Ok(Some(folder)) => folder,
+        Ok(None) => {
+            if let Some(state) = state(window) {
+                set_status(
+                    state,
+                    &catalog_text(&state.application, "download_cancelled"),
+                    true,
+                );
+            }
+            return;
+        }
+        Err(error) => {
+            show_error_message(window, &error);
+            return;
+        }
+    };
+    let requests = match build_user_playlist_download_requests(window, &plan, &output_folder) {
+        Ok(requests) if !requests.is_empty() => requests,
+        Ok(_) => return,
+        Err(error) => {
+            show_error_message(window, &error);
+            return;
+        }
+    };
+    let count = requests.len();
+    if let Err(error) = spawn_user_playlist_download(window, &plan, requests, output_folder) {
+        show_error_message(window, &error);
+        return;
+    }
+    if let Some(state) = state_mut(window) {
+        let message = catalog_text(&state.application, "batch_download_start")
+            .replace("{count}", &count.to_string());
+        set_status(state, &message, true);
+        refresh_download_projection(window, state, false);
+    }
+}
+
 unsafe fn start_download_item(
     window: HWND,
     item: &apricot_core::MediaItem,
@@ -7380,6 +7618,27 @@ fn download_folder_for_item(
     Ok(folder)
 }
 
+fn user_playlist_download_folder(
+    settings: &apricot_storage::SettingsDocument,
+    title: &str,
+) -> std::result::Result<PathBuf, String> {
+    let root = PathBuf::from(settings.download_folder.trim());
+    if !root.is_absolute() {
+        return Err("The configured download folder must be an absolute path.".to_owned());
+    }
+    let root_name = root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let music = if root_name == "music" {
+        root
+    } else {
+        root.join("music")
+    };
+    Ok(music.join(safe_path_component(title)))
+}
+
 fn normalized_audio_format(value: &str) -> String {
     match value.trim().to_ascii_lowercase().as_str() {
         "m4a" | "opus" | "wav" | "flac" => value.trim().to_ascii_lowercase(),
@@ -7456,7 +7715,7 @@ unsafe fn track_collection_download_progress(
 ) {
     if matches!(
         task_kind,
-        DownloadTaskKind::Playlist | DownloadTaskKind::Channel
+        DownloadTaskKind::Playlist | DownloadTaskKind::Channel | DownloadTaskKind::UserPlaylist
     ) {
         show_download_progress_window(window, task_id);
     }
@@ -7696,7 +7955,9 @@ unsafe fn apply_download_update(window: HWND, update: DownloadWorkerUpdate) {
                     let key = match task.kind {
                         DownloadTaskKind::Batch => "batch_download_done",
                         DownloadTaskKind::PodcastFeed => "download_feed_done",
-                        DownloadTaskKind::Playlist => "download_playlist_done",
+                        DownloadTaskKind::Playlist | DownloadTaskKind::UserPlaylist => {
+                            "download_playlist_done"
+                        }
                         DownloadTaskKind::Channel => "download_channel_done",
                         DownloadTaskKind::Single if task.choice == DownloadChoice::Audio => {
                             "download_audio_done"
@@ -7719,7 +7980,9 @@ unsafe fn apply_download_update(window: HWND, update: DownloadWorkerUpdate) {
                     DownloadTaskKind::Single => Some("downloaded video"),
                     DownloadTaskKind::Playlist => Some("downloaded playlist"),
                     DownloadTaskKind::Channel => Some("downloaded channel"),
-                    DownloadTaskKind::PodcastFeed | DownloadTaskKind::Batch => None,
+                    DownloadTaskKind::PodcastFeed
+                    | DownloadTaskKind::UserPlaylist
+                    | DownloadTaskKind::Batch => None,
                 };
                 if let Some(action) = history_action
                     && let Err(error) = state.application.record_history(
@@ -12655,8 +12918,8 @@ mod tests {
         copy_wide_array, download_folder_for_item, download_progress_presentation,
         item_needs_youtube_metadata, list_context_entries, media_resolve_backend,
         normalized_audio_format, notification_label, queued_download_label, resolved_playback_item,
-        result_label, safe_path_component, subscription_label, view_has_back_button,
-        view_has_collection_remove,
+        result_label, safe_path_component, subscription_label, user_playlist_download_folder,
+        view_has_back_button, view_has_collection_remove,
     };
     use apricot_app::{
         ActiveDownload, AppNotification, DownloadChoice, DownloadTaskKind, DownloadTaskStatus,
@@ -12956,6 +13219,24 @@ mod tests {
             presentation.message,
             "Track three\nCompleted: 3 of 10\nRemaining: 7"
         );
+    }
+
+    #[test]
+    fn user_playlist_download_uses_one_safe_music_subfolder_and_exposes_the_action() {
+        let settings = SettingsDocument {
+            download_folder: r"C:\Downloads".to_owned(),
+            ..SettingsDocument::default()
+        };
+        assert_eq!(
+            user_playlist_download_folder(&settings, "Road: trip"),
+            Ok(std::path::PathBuf::from(r"C:\Downloads\music\Road_ trip"))
+        );
+        let labels = list_context_entries(MainView::UserPlaylists, None, false)
+            .expect("user playlist context menu")
+            .into_iter()
+            .map(|(_, label)| label)
+            .collect::<Vec<_>>();
+        assert!(labels.contains(&"download_user_playlist"));
     }
 
     #[test]

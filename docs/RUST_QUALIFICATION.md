@@ -393,9 +393,12 @@ Verified:
 Automated results: app 83 tests, storage 35 tests, Windows UI 12 tests, full
 workspace Clippy with warnings denied, and `PYTHON_DATA_COMPAT=PASS`.
 
-Still required for complete playlist parity: per-item and whole-playlist
-downloads, source-specific channel actions, and manual NVDA/Narrator dialog and
-navigation checks.
+Per-item audio/video and whole-user-playlist video downloads now use the shared
+download engine. Whole-playlist download excludes local files, keeps one safe
+playlist folder, honors Ask every time, continues after child failures, and is
+available from both playlist views and their context menus. Still required for
+complete playlist parity: source-specific channel actions and manual
+NVDA/Narrator dialog and navigation checks.
 
 ## 2026-09-07: Python-compatible playback bookmarks
 
@@ -829,11 +832,11 @@ Verified in automated tests and the offline production-process fixture:
 
 Automated results at this checkpoint: app 135 tests, core 34 tests, media 19
 tests, platform 46 tests plus two ignored live tests, playback 16 tests, storage
-54 tests, Windows UI 31 tests, updater 2 tests, YouTube helper library 5 tests
+54 tests, Windows UI 32 tests, updater 2 tests, YouTube helper library 5 tests
 plus 2 process tests, full workspace Clippy with warnings denied,
 `MEDIA_PROCESS_SPIKE=PASS`, and `LOCAL_BETA_SCRIPTS=PASS`.
 
-User-playlist whole-collection download, AudioVault download paths, marked-clip
-export, converters, network throughput comparison, and a real NVDA/Narrator
-listening pass remain open. Native-app computer use was unavailable, so no
-automated harness result is represented as a screen-reader listening test.
+AudioVault download paths, marked-clip export, converters, network throughput
+comparison, and a real NVDA/Narrator listening pass remain open. Native-app
+computer use was unavailable, so no automated harness result is represented as
+a screen-reader listening test.

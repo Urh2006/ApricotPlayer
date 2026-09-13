@@ -15,6 +15,7 @@ pub enum DownloadTaskKind {
     Playlist,
     Channel,
     PodcastFeed,
+    UserPlaylist,
     Batch,
 }
 
