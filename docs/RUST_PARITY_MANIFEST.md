@@ -316,8 +316,8 @@ Permanent items:
   downloads.
 - [x] One child failure is announced/recorded and remaining batch items continue.
 - [x] Final batch success/failure/cancel summary.
-- [ ] Current downloads list and independent progress window.
-- [ ] Item progress, aggregate progress, processing state, hide, details,
+- [x] Current downloads list and independent progress window.
+- [x] Item progress, aggregate progress, processing state, hide, details,
   cancellation, completion, and continued app/player use.
 - [ ] Default download folder and Ask every time for every source and export.
 - [x] Quiet downloads and confirmation-before-download behavior.

@@ -808,6 +808,12 @@ Verified in automated tests and the offline production-process fixture:
 - active tasks expose downloading, processing, aggregate position, percent,
   cancel-selected, and cancel-all state; queued tasks can be started, removed,
   or downloaded together as audio or video;
+- playlist/channel and large or collection-bearing queued batches open a
+  separate modeless progress window with aggregate progress, Hide, and See
+  details controls; Tab is routed through that window independently, closing
+  only hides it, and See details restores the main window on Current downloads;
+- playlist and channel result menus expose Audio and Video under one native
+  Download playlist or Download channel submenu at Python's separator position;
 - direct links, search/results, YouTube collections, favorites, history, user
   playlist items, podcast episodes, RSS feeds, and the player expose their
   applicable download or queue commands without making local files downloadable;
@@ -823,12 +829,11 @@ Verified in automated tests and the offline production-process fixture:
 
 Automated results at this checkpoint: app 135 tests, core 34 tests, media 19
 tests, platform 46 tests plus two ignored live tests, playback 16 tests, storage
-54 tests, Windows UI 30 tests, updater 2 tests, YouTube helper library 5 tests
+54 tests, Windows UI 31 tests, updater 2 tests, YouTube helper library 5 tests
 plus 2 process tests, full workspace Clippy with warnings denied,
 `MEDIA_PROCESS_SPIKE=PASS`, and `LOCAL_BETA_SCRIPTS=PASS`.
 
-The independent progress popup, user-playlist whole-collection download,
-AudioVault download paths, marked-clip export, converters, network throughput
-comparison, and real NVDA/Narrator listening pass remain open. Native-app
-computer use was unavailable, so no automated harness result is represented as
-a screen-reader listening test.
+User-playlist whole-collection download, AudioVault download paths, marked-clip
+export, converters, network throughput comparison, and a real NVDA/Narrator
+listening pass remain open. Native-app computer use was unavailable, so no
+automated harness result is represented as a screen-reader listening test.

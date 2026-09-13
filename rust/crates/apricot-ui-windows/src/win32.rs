@@ -20,18 +20,20 @@ use crate::{
     bookmark_dialog_win32::{
         BookmarkDialogEntry, BookmarkDialogLabels, BookmarkDialogRequest, BookmarkDialogResponse,
     },
+    download_progress_win32::DownloadProgressWindow,
     download_win32::{DownloadWorkerUpdate, spawn_batch_download, spawn_download},
     player_controls_win32::{PlayerControlActivation, PlayerControls},
     podcast_win32::{PendingPodcastWork, PodcastWorkResult},
 };
 use apricot_app::{
-    ActionFinderContext, ActivationRequest, Application, DownloadChoice, DownloadTaskKind,
-    DownloadTaskStatus, MainMenuModel, PlaybackPhase, PlayerNavigationOutcome, RssFeedAddOutcome,
-    SearchApplyOutcome, SearchWork, SearchWorkKind, SessionToggle, SubscriptionAddOutcome,
-    SubscriptionCheckResult, SubscriptionRemoveOutcome, YOUTUBE_TRENDING_CATEGORIES,
-    YOUTUBE_TRENDING_COUNTRIES, YoutubeCollectionApplyOutcome, YoutubeCollectionKind,
-    YoutubeCollectionPhase, YoutubeCollectionWork, YoutubeCollectionWorkKind, YoutubeSearchKind,
-    YoutubeTrendingWork, youtube_trending_category_id, youtube_trending_public_url,
+    ActionFinderContext, ActivationRequest, ActiveDownload, Application, DownloadChoice,
+    DownloadTaskKind, DownloadTaskStatus, MainMenuModel, PlaybackPhase, PlayerNavigationOutcome,
+    RssFeedAddOutcome, SearchApplyOutcome, SearchWork, SearchWorkKind, SessionToggle,
+    SubscriptionAddOutcome, SubscriptionCheckResult, SubscriptionRemoveOutcome,
+    YOUTUBE_TRENDING_CATEGORIES, YOUTUBE_TRENDING_COUNTRIES, YoutubeCollectionApplyOutcome,
+    YoutubeCollectionKind, YoutubeCollectionPhase, YoutubeCollectionWork,
+    YoutubeCollectionWorkKind, YoutubeSearchKind, YoutubeTrendingWork,
+    youtube_trending_category_id, youtube_trending_public_url,
 };
 use apricot_core::{
     Route, RouteFrame,
@@ -76,15 +78,16 @@ use windows::{
                 IDI_APPLICATION, IDYES, IsChild, IsDialogMessageW, KillTimer, LB_ADDSTRING,
                 LB_DELETESTRING, LB_GETCOUNT, LB_GETCURSEL, LB_INSERTSTRING, LB_RESETCONTENT,
                 LB_SETCURSEL, LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW, LoadIconW,
-                MB_ICONINFORMATION, MB_OK, MB_YESNO, MF_GRAYED, MF_STRING, MSG, MessageBoxW,
-                MoveWindow, PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW,
-                SW_HIDE, SW_SHOW, SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW,
-                SetWindowTextW, ShowWindow, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON,
-                TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX,
-                WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE,
-                WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK, WM_NCDESTROY, WM_RBUTTONUP,
-                WM_SETFONT, WM_SIZE, WM_SYSKEYUP, WM_TIMER, WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE,
-                WS_GROUP, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+                MB_ICONINFORMATION, MB_OK, MB_YESNO, MF_GRAYED, MF_POPUP, MF_STRING, MSG,
+                MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassW,
+                RegisterWindowMessageW, SW_HIDE, SW_SHOW, SendMessageW, SetForegroundWindow,
+                SetTimer, SetWindowLongPtrW, SetWindowTextW, ShowWindow, TPM_LEFTALIGN,
+                TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE,
+                WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU,
+                WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK,
+                WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WM_SYSKEYUP, WM_TIMER, WNDCLASSW,
+                WS_CHILD, WS_EX_CLIENTEDGE, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
+                WS_VSCROLL,
             },
         },
     },
@@ -198,6 +201,7 @@ const ID_CONTEXT_DOWNLOAD_CANCEL_ALL: usize = 1156;
 const ID_CONTEXT_DOWNLOAD_REMOVE_QUEUED: usize = 1157;
 const WM_PROCESS_ACTIVATION: u32 = WM_APP + 1;
 const WM_TRAY_ICON: u32 = WM_APP + 2;
+const WM_SHOW_DOWNLOAD_DETAILS: u32 = WM_APP + 3;
 const YOUTUBE_TIMER_ID: usize = 1;
 const YOUTUBE_TIMER_INTERVAL_MS: u32 = 25;
 const YOUTUBE_METADATA_BATCH_SIZE: usize = 5;
@@ -467,6 +471,9 @@ struct WindowState {
     download_sender: SyncSender<DownloadWorkerUpdate>,
     download_receiver: Receiver<DownloadWorkerUpdate>,
     download_cancellations: HashMap<u64, Arc<AtomicBool>>,
+    download_progress_window: Option<DownloadProgressWindow>,
+    download_progress_task_ids: HashSet<u64>,
+    download_progress_task_id: Option<u64>,
 }
 
 pub fn run_application(application: Application, version: &str, start_hidden: bool) -> Result<()> {
@@ -498,6 +505,7 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
     crate::playlist_dialog_win32::register()?;
     crate::bookmark_dialog_win32::register()?;
     crate::details_win32::register()?;
+    crate::download_progress_win32::register()?;
 
     let title = wide(&format!("ApricotPlayer 2 Beta {version}"));
     let window = CreateWindowExW(
@@ -514,18 +522,18 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
         Some(instance),
         None,
     )?;
-    let state = match create_controls(window, instance, application) {
+    let initial_state = match create_controls(window, instance, application) {
         Ok(state) => state,
         Err(error) => {
             let _ = DestroyWindow(window);
             return Err(error);
         }
     };
-    let initial_focus = state.list;
+    let initial_focus = initial_state.list;
     SetWindowLongPtrW(
         window,
         WINDOW_LONG_PTR_INDEX(0),
-        Box::into_raw(Box::new(state)) as isize,
+        Box::into_raw(Box::new(initial_state)) as isize,
     );
     layout_controls(window);
     if start_hidden {
@@ -550,6 +558,12 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
             break;
         }
         handle_controlled_repeat_release(window, &message);
+        if state(window)
+            .and_then(|state| state.download_progress_window)
+            .is_some_and(|progress_window| progress_window.handles_dialog_message(&message))
+        {
+            continue;
+        }
         if handle_view_tab_message(window, &message) {
             continue;
         }
@@ -709,6 +723,7 @@ unsafe extern "system" fn window_proc(
             process_pending_activations(window);
             LRESULT(0)
         }
+        WM_SHOW_DOWNLOAD_DETAILS => show_download_progress_details(window),
         WM_TIMER if wparam.0 == YOUTUBE_TIMER_ID => {
             poll_youtube_runtime(window);
             LRESULT(0)
@@ -746,6 +761,9 @@ unsafe extern "system" fn window_proc(
                     cancellation.store(true, AtomicOrdering::Release);
                 }
                 state.download_cancellations.clear();
+                if let Some(progress_window) = state.download_progress_window.take() {
+                    progress_window.destroy();
+                }
                 drop(state);
                 SetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0), 0);
             }
@@ -1497,6 +1515,9 @@ unsafe fn create_controls(
         download_sender,
         download_receiver,
         download_cancellations: HashMap::new(),
+        download_progress_window: None,
+        download_progress_task_ids: HashSet::new(),
+        download_progress_task_id: None,
     })
 }
 
@@ -1638,24 +1659,13 @@ unsafe fn show_list_context_menu(window: HWND, location: LPARAM) {
         let label = wide(catalog.text("playlist_empty"));
         let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, PCWSTR(label.as_ptr()));
     } else {
-        for (id, key) in &entries {
-            if *id == ID_CONTEXT_COPY_STREAM_URL && active_is_local {
-                continue;
-            }
-            let key = if *id == ID_CONTEXT_COPY_LOCATION && active_is_local {
-                "copy_path"
-            } else if *id == ID_CONTEXT_RSS_TOGGLE_PLAYED
-                && active_item
-                    .as_ref()
-                    .is_some_and(|item| metadata_bool(item, "played"))
-            {
-                "mark_episode_unplayed"
-            } else {
-                key
-            };
-            let label = wide(catalog.text(key));
-            let _ = AppendMenuW(menu, MF_STRING, *id, PCWSTR(label.as_ptr()));
-        }
+        append_list_context_entries(
+            menu,
+            &catalog,
+            &entries,
+            active_item.as_ref(),
+            active_is_local,
+        );
     }
     let mut fallback_point = POINT::default();
     let point = context_menu_point(location, list).or_else(|| {
@@ -1691,6 +1701,77 @@ unsafe fn show_list_context_menu(window: HWND, location: LPARAM) {
     if let Some(state) = state(window) {
         let _ = SetFocus(Some(active_primary_control(state)));
     }
+}
+
+unsafe fn append_list_context_entries(
+    menu: HMENU,
+    catalog: &apricot_core::TranslationCatalog,
+    entries: &[(usize, &'static str)],
+    active_item: Option<&apricot_core::MediaItem>,
+    active_is_local: bool,
+) {
+    let collection_download_key = active_item.and_then(collection_download_submenu_key);
+    let mut collection_download_attempted = false;
+    let mut collection_download_added = false;
+    for (id, key) in entries {
+        if *id == ID_CONTEXT_COPY_STREAM_URL && active_is_local {
+            continue;
+        }
+        if let Some(submenu_key) = collection_download_key
+            && matches!(*id, ID_CONTEXT_DOWNLOAD_AUDIO | ID_CONTEXT_DOWNLOAD_VIDEO)
+        {
+            if !collection_download_attempted {
+                collection_download_attempted = true;
+                collection_download_added =
+                    append_collection_download_submenu(menu, catalog, submenu_key);
+            }
+            if collection_download_added {
+                continue;
+            }
+        }
+        let key = if *id == ID_CONTEXT_COPY_LOCATION && active_is_local {
+            "copy_path"
+        } else if *id == ID_CONTEXT_RSS_TOGGLE_PLAYED
+            && active_item.is_some_and(|item| metadata_bool(item, "played"))
+        {
+            "mark_episode_unplayed"
+        } else {
+            key
+        };
+        let label = wide(catalog.text(key));
+        let _ = AppendMenuW(menu, MF_STRING, *id, PCWSTR(label.as_ptr()));
+    }
+}
+
+fn collection_download_submenu_key(item: &apricot_core::MediaItem) -> Option<&'static str> {
+    match item.kind {
+        apricot_core::MediaKind::Playlist => Some("download_playlist"),
+        apricot_core::MediaKind::Channel => Some("download_channel"),
+        _ => None,
+    }
+}
+
+unsafe fn append_collection_download_submenu(
+    menu: HMENU,
+    catalog: &apricot_core::TranslationCatalog,
+    label_key: &str,
+) -> bool {
+    let Ok(submenu) = CreatePopupMenu() else {
+        return false;
+    };
+    for (id, key) in [
+        (ID_CONTEXT_DOWNLOAD_AUDIO, "download_audio"),
+        (ID_CONTEXT_DOWNLOAD_VIDEO, "download_video"),
+    ] {
+        let label = wide(catalog.text(key));
+        let _ = AppendMenuW(submenu, MF_STRING, id, PCWSTR(label.as_ptr()));
+    }
+    let label = wide(catalog.text(label_key));
+    if AppendMenuW(menu, MF_POPUP, submenu.0 as usize, PCWSTR(label.as_ptr())).is_err() {
+        let _ = DestroyMenu(submenu);
+        return false;
+    }
+    true
 }
 
 #[allow(clippy::too_many_lines)]
@@ -6922,6 +7003,7 @@ unsafe fn start_download_item(
         set_status(state, &catalog_text(&state.application, key), false);
         refresh_download_projection(window, state, false);
     }
+    track_collection_download_progress(window, task_kind, task_id);
 }
 
 unsafe fn confirm_download(
@@ -7188,6 +7270,16 @@ unsafe fn start_all_queued_downloads(window: HWND, requested_choice: DownloadCho
         }
         refresh_download_projection(window, state, false);
     }
+    if queued.len() > 5
+        || queued.iter().any(|queued| {
+            matches!(
+                queued.item.kind,
+                apricot_core::MediaKind::Playlist | apricot_core::MediaKind::Channel
+            )
+        })
+    {
+        show_download_progress_window(window, task_id);
+    }
 }
 
 fn download_options_from_settings(
@@ -7346,6 +7438,158 @@ fn safe_path_component(value: &str) -> String {
     result
 }
 
+struct DownloadProgressPresentation {
+    percent: u32,
+    message: String,
+}
+
+unsafe fn show_download_progress_details(window: HWND) -> LRESULT {
+    restore_from_tray(window);
+    show_download_queue(window);
+    LRESULT(0)
+}
+
+unsafe fn track_collection_download_progress(
+    window: HWND,
+    task_kind: DownloadTaskKind,
+    task_id: u64,
+) {
+    if matches!(
+        task_kind,
+        DownloadTaskKind::Playlist | DownloadTaskKind::Channel
+    ) {
+        show_download_progress_window(window, task_id);
+    }
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn rounded_percent(percent: f64) -> u32 {
+    percent.round().clamp(0.0, 100.0) as u32
+}
+
+fn download_progress_presentation(
+    task: &ActiveDownload,
+    catalog: &apricot_core::TranslationCatalog,
+) -> DownloadProgressPresentation {
+    let total = task.total;
+    let completed = task.completed.min(total);
+    let remaining = total.saturating_sub(completed);
+    let percent = completed
+        .saturating_mul(100)
+        .saturating_add(total / 2)
+        .checked_div(total)
+        .map_or_else(
+            || rounded_percent(task.percent.unwrap_or_default()),
+            |rounded| u32::try_from(rounded.min(100)).unwrap_or(100),
+        );
+    let title = if task.current_title.trim().is_empty() {
+        &task.title
+    } else {
+        &task.current_title
+    };
+    let message = catalog
+        .text("download_progress_message")
+        .replace("{title}", title)
+        .replace("{completed}", &completed.to_string())
+        .replace("{total}", &total.to_string())
+        .replace("{remaining}", &remaining.to_string());
+    DownloadProgressPresentation { percent, message }
+}
+
+unsafe fn show_download_progress_window(window: HWND, task_id: u64) {
+    let Some((language, task, existing)) = state(window).and_then(|state| {
+        Some((
+            state.application.settings().language.clone(),
+            state.application.downloads().active_task(task_id)?.clone(),
+            state.download_progress_window,
+        ))
+    }) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&language);
+    let presentation = download_progress_presentation(&task, &catalog);
+    if let Some(state) = state_mut(window) {
+        state.download_progress_task_ids.insert(task_id);
+        state.download_progress_task_id = Some(task_id);
+    }
+    if let Some(progress_window) = existing.filter(|progress_window| progress_window.is_open()) {
+        progress_window.set_progress(presentation.percent, &presentation.message);
+        progress_window.show();
+        return;
+    }
+    let created = DownloadProgressWindow::create(
+        window,
+        catalog.text("download_progress_title"),
+        &presentation.message,
+        catalog.text("download_progress_hide"),
+        catalog.text("download_progress_details"),
+        WM_SHOW_DOWNLOAD_DETAILS,
+    );
+    match created {
+        Ok(progress_window) => {
+            progress_window.set_progress(presentation.percent, &presentation.message);
+            if let Some(state) = state_mut(window) {
+                state.download_progress_window = Some(progress_window);
+            } else {
+                progress_window.destroy();
+            }
+        }
+        Err(error) => {
+            if let Some(state) = state_mut(window) {
+                state.download_progress_task_ids.remove(&task_id);
+                state.download_progress_task_id = None;
+                set_status(
+                    state,
+                    &format!("Download progress window could not open: {error}"),
+                    true,
+                );
+            }
+        }
+    }
+}
+
+unsafe fn update_download_progress_window(state: &WindowState) {
+    let Some(task_id) = state.download_progress_task_id else {
+        return;
+    };
+    let Some(progress_window) = state
+        .download_progress_window
+        .filter(|progress_window| progress_window.is_open())
+    else {
+        return;
+    };
+    let Some(task) = state.application.downloads().active_task(task_id) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let presentation = download_progress_presentation(task, &catalog);
+    progress_window.set_progress(presentation.percent, &presentation.message);
+}
+
+unsafe fn close_download_progress_window(state: &mut WindowState, task_id: u64) {
+    state.download_progress_task_ids.remove(&task_id);
+    if state.download_progress_task_id != Some(task_id) {
+        return;
+    }
+    let next_task_id = state
+        .application
+        .downloads()
+        .active()
+        .iter()
+        .map(|task| task.id)
+        .find(|candidate| state.download_progress_task_ids.contains(candidate));
+    if let Some(next_task_id) = next_task_id {
+        state.download_progress_task_id = Some(next_task_id);
+        update_download_progress_window(state);
+        return;
+    }
+    state.download_progress_task_id = None;
+    state.download_progress_task_ids.clear();
+    if let Some(progress_window) = state.download_progress_window.take() {
+        progress_window.destroy();
+    }
+}
+
 unsafe fn poll_download_updates(window: HWND) {
     loop {
         let update = state(window).map(|state| state.download_receiver.try_recv());
@@ -7423,6 +7667,7 @@ unsafe fn apply_download_update(window: HWND, update: DownloadWorkerUpdate) {
                 }
             }
             refresh_download_projection(window, state, false);
+            update_download_progress_window(state);
         }
         DownloadWorkerUpdate::Finished {
             task_id,
@@ -7436,6 +7681,7 @@ unsafe fn apply_download_update(window: HWND, update: DownloadWorkerUpdate) {
             let Some(task) = state.application.downloads_mut().finish(task_id) else {
                 return;
             };
+            close_download_progress_window(state, task_id);
             let cancelled = result
                 .as_ref()
                 .err()
@@ -12405,13 +12651,17 @@ fn wide(value: &str) -> Vec<u16> {
 mod tests {
     use super::{
         MainView, SEEK_HOLD_DELAY_MS, SEEK_HOLD_INTERVAL_MS, collection_backend,
-        collection_download_url, controlled_repeat_timing, copy_wide_array,
-        download_folder_for_item, item_needs_youtube_metadata, list_context_entries,
-        media_resolve_backend, normalized_audio_format, notification_label, queued_download_label,
-        resolved_playback_item, result_label, safe_path_component, subscription_label,
-        view_has_back_button, view_has_collection_remove,
+        collection_download_submenu_key, collection_download_url, controlled_repeat_timing,
+        copy_wide_array, download_folder_for_item, download_progress_presentation,
+        item_needs_youtube_metadata, list_context_entries, media_resolve_backend,
+        normalized_audio_format, notification_label, queued_download_label, resolved_playback_item,
+        result_label, safe_path_component, subscription_label, view_has_back_button,
+        view_has_collection_remove,
     };
-    use apricot_app::{AppNotification, DownloadChoice, QueuedDownload};
+    use apricot_app::{
+        ActiveDownload, AppNotification, DownloadChoice, DownloadTaskKind, DownloadTaskStatus,
+        QueuedDownload,
+    };
     use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
     use apricot_media::{YoutubeBackend, YoutubeCollectionKind};
     use apricot_storage::SettingsDocument;
@@ -12643,6 +12893,10 @@ mod tests {
                 "copy_link",
             ]
         );
+        assert_eq!(
+            collection_download_submenu_key(&playlist),
+            Some("download_playlist")
+        );
         let favorite_labels =
             list_context_entries(MainView::YoutubeCollection, Some(&playlist), true)
                 .expect("favorite playlist menu")
@@ -12672,6 +12926,35 @@ mod tests {
                 "channel_playlists",
                 "channel_live_streams",
             ]
+        );
+        assert_eq!(
+            collection_download_submenu_key(&channel),
+            Some("download_channel")
+        );
+    }
+
+    #[test]
+    fn download_progress_uses_aggregate_collection_progress_and_current_title() {
+        let task = ActiveDownload {
+            id: 7,
+            item: youtube_item("video"),
+            choice: DownloadChoice::Audio,
+            kind: DownloadTaskKind::Batch,
+            status: DownloadTaskStatus::Downloading,
+            title: "Batch".to_owned(),
+            current_title: "Track three".to_owned(),
+            percent: Some(91.0),
+            total: 10,
+            completed: 3,
+            item_failures: Vec::new(),
+        };
+        let catalog = apricot_app::embedded_catalog("en");
+        let presentation = download_progress_presentation(&task, &catalog);
+
+        assert_eq!(presentation.percent, 30);
+        assert_eq!(
+            presentation.message,
+            "Track three\nCompleted: 3 of 10\nRemaining: 7"
         );
     }
 
