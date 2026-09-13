@@ -2,7 +2,12 @@
 
 #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
-use std::{ffi::OsString, mem::size_of, os::windows::ffi::OsStringExt, path::PathBuf};
+use std::{
+    ffi::OsString,
+    mem::size_of,
+    os::windows::ffi::OsStringExt,
+    path::{Path, PathBuf},
+};
 
 use windows::{
     Win32::UI::Controls::Dialogs::{
@@ -45,6 +50,8 @@ pub fn choose_opml_file(
             title,
             &format!("{type_label} (*.opml)\0*.opml\0All files (*.*)\0*.*\0\0"),
             "",
+            None,
+            "",
             false,
         )
     }
@@ -67,6 +74,42 @@ pub fn save_opml_file(
             title,
             &format!("{type_label} (*.opml)\0*.opml\0All files (*.*)\0*.*\0\0"),
             "apricot_feeds.opml",
+            None,
+            "opml",
+            true,
+        )
+    }
+}
+
+/// Shows a native Save As dialog for one media download.
+///
+/// # Errors
+///
+/// Returns a diagnostic string if the Windows common dialog reports a failure.
+pub fn save_download_file(
+    owner: HWND,
+    title: &str,
+    initial_directory: &Path,
+    default_file: &str,
+    extension: &str,
+    type_label: &str,
+    all_files_label: &str,
+) -> Result<Option<PathBuf>, String> {
+    let extension = extension.trim().trim_start_matches('.');
+    if extension.is_empty() || !extension.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+        return Err("download extension is invalid".to_owned());
+    }
+    let filter =
+        format!("{type_label} (*.{extension})\0*.{extension}\0{all_files_label} (*.*)\0*.*\0\0");
+    // SAFETY: The synchronous dialog only borrows the owned UTF-16 buffers.
+    unsafe {
+        choose_file_win32(
+            owner,
+            title,
+            &filter,
+            default_file,
+            Some(initial_directory),
+            extension,
             true,
         )
     }
@@ -107,6 +150,8 @@ unsafe fn choose_file_win32(
     title: &str,
     filter: &str,
     default_file: &str,
+    initial_directory: Option<&Path>,
+    default_extension: &str,
     save: bool,
 ) -> Result<Option<PathBuf>, String> {
     let mut file = vec![0_u16; FILE_BUFFER_UNITS];
@@ -114,7 +159,8 @@ unsafe fn choose_file_win32(
     file[..default.len()].copy_from_slice(&default);
     let title = wide(title);
     let filter = filter.encode_utf16().collect::<Vec<_>>();
-    let extension = wide("opml");
+    let initial_directory = initial_directory.map(|path| wide(&path.to_string_lossy()));
+    let extension = wide(default_extension);
     let flags = OFN_EXPLORER
         | OFN_PATHMUSTEXIST
         | OFN_NOCHANGEDIR
@@ -128,6 +174,9 @@ unsafe fn choose_file_win32(
             .expect("OPENFILENAMEW size fits in u32"),
         hwndOwner: owner,
         lpstrFilter: PCWSTR(filter.as_ptr()),
+        lpstrInitialDir: initial_directory
+            .as_ref()
+            .map_or(PCWSTR::null(), |value| PCWSTR(value.as_ptr())),
         lpstrFile: PWSTR(file.as_mut_ptr()),
         nMaxFile: u32::try_from(file.len()).expect("file buffer size fits in u32"),
         lpstrTitle: PCWSTR(title.as_ptr()),
@@ -167,7 +216,11 @@ fn wide(value: &str) -> Vec<u16> {
 
 #[cfg(test)]
 mod tests {
-    use super::media_filter;
+    use std::path::Path;
+
+    use windows::Win32::Foundation::HWND;
+
+    use super::{media_filter, save_download_file};
 
     #[test]
     fn media_filter_is_double_null_terminated_and_includes_audio_and_video() {
@@ -178,5 +231,19 @@ mod tests {
         assert!(text.contains("*.mp3"));
         assert!(text.contains("*.mkv"));
         assert!(text.contains("*.*"));
+    }
+
+    #[test]
+    fn download_extension_must_be_a_plain_file_suffix() {
+        let result = save_download_file(
+            HWND::default(),
+            "Save",
+            Path::new(r"C:\Downloads"),
+            "track.mp3",
+            "../mp3",
+            "MP3",
+            "All files",
+        );
+        assert_eq!(result, Err("download extension is invalid".to_owned()));
     }
 }

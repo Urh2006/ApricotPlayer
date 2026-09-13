@@ -1937,6 +1937,10 @@ impl Application {
         self.settings.current()
     }
 
+    pub fn settings_file(&self) -> PathBuf {
+        self.settings.settings_file()
+    }
+
     pub fn settings_are_dirty(&self) -> bool {
         self.settings.is_dirty()
     }

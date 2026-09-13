@@ -7,7 +7,7 @@ use std::{
     collections::HashSet,
     ffi::OsString,
     fs,
-    io::{BufRead, BufReader, Read},
+    io::{self, BufRead, BufReader, Read},
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
     sync::{
@@ -232,6 +232,8 @@ impl YtDlpDownloader {
         let mut child = command
             .spawn()
             .map_err(|error| DownloadError::Launch(error.to_string()))?;
+        #[cfg(windows)]
+        let _kill_on_close_job = process_job::KillOnCloseJob::attach(&child);
         collect_download(&mut child, request, cancelled, &mut emit)
     }
 }
@@ -548,6 +550,13 @@ enum ProcessLine {
     Done,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BoundedLineRead {
+    Line,
+    Overflow,
+    End,
+}
+
 fn collect_download<F>(
     child: &mut Child,
     request: &DownloadRequest,
@@ -573,18 +582,22 @@ where
     let mut seen_failures = HashSet::new();
     let mut status: Option<ExitStatus> = None;
     let mut readers_done = 0;
-    let mut overflowed = false;
+    let mut terminal_error = None;
     while status.is_none() || readers_done < 2 {
         if cancelled.load(Ordering::Acquire) {
             stop_process_tree(child);
-            let _ = stdout_reader.join();
-            let _ = stderr_reader.join();
-            return Err(DownloadError::Cancelled);
+            terminal_error = Some(DownloadError::Cancelled);
+            break;
         }
         if status.is_none() {
-            status = child
-                .try_wait()
-                .map_err(|error| DownloadError::Request(error.to_string()))?;
+            match child.try_wait() {
+                Ok(next_status) => status = next_status,
+                Err(error) => {
+                    stop_process_tree(child);
+                    terminal_error = Some(DownloadError::Request(error.to_string()));
+                    break;
+                }
+            }
         }
         match receiver.recv_timeout(POLL_INTERVAL) {
             Ok(ProcessLine::Text { stderr, value }) => {
@@ -598,16 +611,21 @@ where
                     emit,
                 );
             }
-            Ok(ProcessLine::Overflow) => overflowed = true,
+            Ok(ProcessLine::Overflow) => {
+                stop_process_tree(child);
+                terminal_error = Some(DownloadError::OutputLimit);
+                break;
+            }
             Ok(ProcessLine::Done) => readers_done += 1,
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => readers_done = 2,
         }
     }
+    drop(receiver);
     let _ = stdout_reader.join();
     let _ = stderr_reader.join();
-    if overflowed {
-        return Err(DownloadError::OutputLimit);
+    if let Some(error) = terminal_error {
+        return Err(error);
     }
     if status.is_some_and(|status| status.success()) {
         return Ok(summary);
@@ -633,15 +651,14 @@ fn spawn_line_reader<R: Read + Send + 'static>(
         let mut reader = BufReader::new(reader);
         let mut bytes = Vec::new();
         loop {
-            bytes.clear();
-            match reader.read_until(b'\n', &mut bytes) {
-                Ok(0) => break,
-                Ok(_) if bytes.len() > MAX_OUTPUT_LINE_BYTES => {
+            match read_bounded_line(&mut reader, &mut bytes, MAX_OUTPUT_LINE_BYTES) {
+                Ok(BoundedLineRead::End) => break,
+                Ok(BoundedLineRead::Overflow) => {
                     if sender.send(ProcessLine::Overflow).is_err() {
                         return;
                     }
                 }
-                Ok(_) => {
+                Ok(BoundedLineRead::Line) => {
                     let value = String::from_utf8_lossy(&bytes)
                         .trim_end_matches(['\r', '\n'])
                         .to_owned();
@@ -660,6 +677,45 @@ fn spawn_line_reader<R: Read + Send + 'static>(
         }
         let _ = sender.send(ProcessLine::Done);
     })
+}
+
+fn read_bounded_line<R: BufRead>(
+    reader: &mut R,
+    output: &mut Vec<u8>,
+    maximum_bytes: usize,
+) -> io::Result<BoundedLineRead> {
+    output.clear();
+    let mut overflowed = false;
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            return Ok(if overflowed {
+                BoundedLineRead::Overflow
+            } else if output.is_empty() {
+                BoundedLineRead::End
+            } else {
+                BoundedLineRead::Line
+            });
+        }
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let consumed = newline.map_or(available.len(), |index| index + 1);
+        if !overflowed {
+            if output.len().saturating_add(consumed) <= maximum_bytes {
+                output.extend_from_slice(&available[..consumed]);
+            } else {
+                output.clear();
+                overflowed = true;
+            }
+        }
+        reader.consume(consumed);
+        if newline.is_some() {
+            return Ok(if overflowed {
+                BoundedLineRead::Overflow
+            } else {
+                BoundedLineRead::Line
+            });
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -796,6 +852,62 @@ fn redact_diagnostic(value: &str, cookies: Option<&Path>, proxy: Option<&str>) -
 }
 
 #[cfg(windows)]
+mod process_job {
+    #![allow(unsafe_code)]
+
+    use std::{ffi::c_void, mem::size_of, os::windows::io::AsRawHandle, process::Child};
+
+    use windows::{
+        Win32::{
+            Foundation::{CloseHandle, HANDLE},
+            System::JobObjects::{
+                AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+                SetInformationJobObject,
+            },
+        },
+        core::PCWSTR,
+    };
+
+    pub struct KillOnCloseJob(HANDLE);
+
+    impl KillOnCloseJob {
+        pub fn attach(child: &Child) -> Option<Self> {
+            // SAFETY: The unnamed job handle is process-owned, the information
+            // buffer has the exact documented layout, and the child handle stays
+            // valid for the duration of this call.
+            unsafe {
+                let job = CreateJobObjectW(None, PCWSTR::null()).ok()?;
+                let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                if SetInformationJobObject(
+                    job,
+                    JobObjectExtendedLimitInformation,
+                    (&raw const limits).cast::<c_void>(),
+                    u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
+                        .expect("job limit structure size fits in u32"),
+                )
+                .is_err()
+                    || AssignProcessToJobObject(job, HANDLE(child.as_raw_handle())).is_err()
+                {
+                    let _ = CloseHandle(job);
+                    return None;
+                }
+                Some(Self(job))
+            }
+        }
+    }
+
+    impl Drop for KillOnCloseJob {
+        fn drop(&mut self) {
+            // SAFETY: This type uniquely owns the valid handle returned by
+            // CreateJobObjectW and closes it exactly once.
+            let _ = unsafe { CloseHandle(self.0) };
+        }
+    }
+}
+
+#[cfg(windows)]
 fn stop_process_tree(child: &mut Child) {
     let mut command = Command::new("taskkill.exe");
     command
@@ -817,12 +929,12 @@ fn stop_process_tree(child: &mut Child) {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{io::Cursor, path::PathBuf};
 
     use super::{
-        DownloadEvent, DownloadMode, DownloadOptions, DownloadPhase, DownloadRequest,
-        VideoDownloadFormat, build_arguments, output_template, parse_progress_line,
-        safe_filename_template, video_format_selector,
+        BoundedLineRead, DownloadEvent, DownloadMode, DownloadOptions, DownloadPhase,
+        DownloadRequest, VideoDownloadFormat, build_arguments, output_template,
+        parse_progress_line, read_bounded_line, safe_filename_template, video_format_selector,
     };
 
     fn request(mode: DownloadMode) -> DownloadRequest {
@@ -957,6 +1069,26 @@ mod tests {
                 title: "Episode".to_owned(),
                 path: PathBuf::from(r"C:\Music\Episode.mp3"),
             })
+        );
+    }
+
+    #[test]
+    fn process_lines_are_rejected_without_unbounded_buffering() {
+        let mut reader = Cursor::new(b"123456789\nnext\n");
+        let mut line = Vec::new();
+        assert_eq!(
+            read_bounded_line(&mut reader, &mut line, 8).expect("overflow result"),
+            BoundedLineRead::Overflow
+        );
+        assert!(line.is_empty());
+        assert_eq!(
+            read_bounded_line(&mut reader, &mut line, 8).expect("next line"),
+            BoundedLineRead::Line
+        );
+        assert_eq!(line, b"next\n");
+        assert_eq!(
+            read_bounded_line(&mut reader, &mut line, 8).expect("end"),
+            BoundedLineRead::End
         );
     }
 }

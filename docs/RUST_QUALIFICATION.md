@@ -782,3 +782,53 @@ flows, and real NVDA/Narrator listening checks still need implementation or
 qualification. Native-app computer use was unavailable in this task, so the
 installed process was exercised through the repository's Win32/MSAA harness;
 this is not represented as a screen-reader listening pass.
+
+## 2026-09-13: native downloads and current-downloads route
+
+Implementation: the typed `YtDlpDownloader`, an application-owned transient
+download controller, bounded background workers, native Save As/folder dialogs,
+and the Win32 Current downloads route.
+
+Verified in automated tests and the offline production-process fixture:
+
+- single audio and video requests use the Python-compatible format, quality,
+  height, filename, metadata, subtitle, archive, retry, fragment, timeout,
+  proxy, cookie, and FFmpeg settings;
+- ordinary downloads start anonymously and report progress immediately;
+  configured cookies are retried only for authentication or age-gate failures
+  before media transfer starts, avoiding both the normal-path cookie penalty and
+  an unsafe restart after a partial download;
+- process output is read with a per-line memory bound, cancellation cannot
+  deadlock behind a full reader channel, and Windows download children are
+  attached to a kill-on-close job so application exit cannot orphan `yt-dlp` or
+  FFmpeg;
+- podcast episodes always use audio mode, whole RSS feeds and queued batches run
+  sequentially, and one failed child is retained in the final summary without
+  stopping the remaining items;
+- active tasks expose downloading, processing, aggregate position, percent,
+  cancel-selected, and cancel-all state; queued tasks can be started, removed,
+  or downloaded together as audio or video;
+- direct links, search/results, YouTube collections, favorites, history, user
+  playlist items, podcast episodes, RSS feeds, and the player expose their
+  applicable download or queue commands without making local files downloadable;
+- single-file Save As and collection/batch folder selection honor Ask every
+  time, while generated Windows path components reject invalid characters,
+  trailing dot/space cases, and reserved device names;
+- the package now contains its static FFmpeg executable and records it in
+  `build-info.json`; isolated install qualification executed both bundled
+  `yt-dlp --version` and `ffmpeg -version` successfully;
+- the localhost fixture completed a real production `yt-dlp` audio download,
+  emitted download and processing progress plus a final file event, probed the
+  result with ffprobe, and decoded it through FFmpeg.
+
+Automated results at this checkpoint: app 135 tests, core 34 tests, media 19
+tests, platform 46 tests plus two ignored live tests, playback 16 tests, storage
+54 tests, Windows UI 30 tests, updater 2 tests, YouTube helper library 5 tests
+plus 2 process tests, full workspace Clippy with warnings denied,
+`MEDIA_PROCESS_SPIKE=PASS`, and `LOCAL_BETA_SCRIPTS=PASS`.
+
+The independent progress popup, user-playlist whole-collection download,
+AudioVault download paths, marked-clip export, converters, network throughput
+comparison, and real NVDA/Narrator listening pass remain open. Native-app
+computer use was unavailable, so no automated harness result is represented as
+a screen-reader listening test.

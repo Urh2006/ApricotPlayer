@@ -309,25 +309,26 @@ Permanent items:
 
 ## Downloads and conversion
 
-- [ ] Single audio download in MP3, M4A, Opus, WAV, and FLAC modes.
-- [ ] Audio quality setting and honest source-quality/transcode behavior.
-- [ ] Single video download in every current video-format and height mode.
+- [x] Single audio download in MP3, M4A, Opus, WAV, and FLAC modes.
+- [x] Audio quality setting and honest source-quality/transcode behavior.
+- [x] Single video download in every current video-format and height mode.
 - [ ] Playlist, channel, selected results, podcast feed, and AudioVault show batch
   downloads.
-- [ ] One child failure is announced/recorded and remaining batch items continue.
-- [ ] Final batch success/failure/cancel summary.
+- [x] One child failure is announced/recorded and remaining batch items continue.
+- [x] Final batch success/failure/cancel summary.
 - [ ] Current downloads list and independent progress window.
 - [ ] Item progress, aggregate progress, processing state, hide, details,
   cancellation, completion, and continued app/player use.
 - [ ] Default download folder and Ask every time for every source and export.
-- [ ] Quiet downloads and confirmation-before-download behavior.
+- [x] Quiet downloads and confirmation-before-download behavior.
 - [ ] Keep playlist order and safe collision numbering.
 - [ ] Filename template validation and restricted filenames.
-- [ ] Thumbnail, description, info JSON, subtitles, automatic subtitles,
+- [x] Thumbnail, description, info JSON, subtitles, automatic subtitles,
   subtitle languages, metadata, embedded thumbnail, and download archive.
-- [ ] Open folder after completion and download/conversion completion popups.
+- [x] Open folder after download completion and download completion popups.
+- [ ] Conversion completion popups.
 - [ ] Fast path and fallback path preserve current download throughput.
-- [ ] Requested-format unavailable fallback only when needed.
+- [x] Requested-format unavailable fallback only when needed.
 - [ ] File converter detects input and offers valid output formats.
 - [ ] Folder converter, recursion/current behavior, progress, cancellation, safe
   replacement/new destination, collisions, and partial failures.
@@ -423,28 +424,28 @@ Equalizer:
 
 Downloads and conversion:
 
-- [ ] `audio_format`
-- [ ] `video_format`
-- [ ] `max_video_height`
-- [ ] `ask_download_location_each_time`
-- [ ] `quiet_downloads`
-- [ ] `keep_playlist_order`
-- [ ] `filename_template`
-- [ ] `audio_quality`
-- [ ] `write_thumbnail`
-- [ ] `write_description`
-- [ ] `write_info_json`
-- [ ] `write_subtitles`
-- [ ] `auto_subtitles`
-- [ ] `subtitle_languages`
-- [ ] `embed_metadata`
-- [ ] `embed_thumbnail`
-- [ ] `restrict_filenames`
-- [ ] `open_folder_after_download`
-- [ ] `popup_when_download_complete`
+- [x] `audio_format`
+- [x] `video_format`
+- [x] `max_video_height`
+- [x] `ask_download_location_each_time`
+- [x] `quiet_downloads`
+- [x] `keep_playlist_order`
+- [x] `filename_template`
+- [x] `audio_quality`
+- [x] `write_thumbnail`
+- [x] `write_description`
+- [x] `write_info_json`
+- [x] `write_subtitles`
+- [x] `auto_subtitles`
+- [x] `subtitle_languages`
+- [x] `embed_metadata`
+- [x] `embed_thumbnail`
+- [x] `restrict_filenames`
+- [x] `open_folder_after_download`
+- [x] `popup_when_download_complete`
 - [ ] `popup_when_conversion_complete`
-- [ ] `confirm_before_download`
-- [ ] `download_archive`
+- [x] `confirm_before_download`
+- [x] `download_archive`
 
 Updates:
 
@@ -525,7 +526,7 @@ Global and navigation actions:
 - [ ] `open_bookmarks` = `Ctrl+Alt+K`
 - [ ] `open_playlists` = `Ctrl+Alt+P`
 - [x] `open_subscriptions` = `Ctrl+Alt+B`
-- [ ] `open_current_downloads` = `Ctrl+Alt+D`
+- [x] `open_current_downloads` = `Ctrl+Alt+D`
 - [ ] `open_history` = `Ctrl+Alt+H`
 - [ ] `open_podcasts_rss` = `Ctrl+Alt+R`
 - [ ] `open_settings` = `Ctrl+Alt+S`
@@ -535,12 +536,12 @@ Global and navigation actions:
 
 List, result, collection, and download actions:
 
-- [ ] `download_audio` = `Ctrl+Shift+A`
-- [ ] `download_video` = `Ctrl+Shift+D`
+- [x] `download_audio` = `Ctrl+Shift+A`
+- [x] `download_video` = `Ctrl+Shift+D`
 - [x] `subscribe_channel` = `Ctrl+Shift+S`
 - [x] `unsubscribe_channel` = `Ctrl+Shift+U`
 - [ ] `open_channel` = `Ctrl+Shift+O`
-- [ ] `queue_audio` = `Shift+A`
+- [x] `queue_audio` = `Shift+A`
 - [ ] `result_column_previous` = `Ctrl+Alt+Left`
 - [ ] `result_column_next` = `Ctrl+Alt+Right`
 - [ ] `add_to_playback_queue` = `Ctrl+Shift+Q`

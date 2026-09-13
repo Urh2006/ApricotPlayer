@@ -3,7 +3,7 @@
 #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     ffi::c_void,
     fs,
     io::Read,
@@ -12,7 +12,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering as AtomicOrdering},
-        mpsc::{self, Receiver, TryRecvError},
+        mpsc::{self, Receiver, SyncSender, TryRecvError},
     },
 };
 
@@ -20,17 +20,18 @@ use crate::{
     bookmark_dialog_win32::{
         BookmarkDialogEntry, BookmarkDialogLabels, BookmarkDialogRequest, BookmarkDialogResponse,
     },
+    download_win32::{DownloadWorkerUpdate, spawn_batch_download, spawn_download},
     player_controls_win32::{PlayerControlActivation, PlayerControls},
     podcast_win32::{PendingPodcastWork, PodcastWorkResult},
 };
 use apricot_app::{
-    ActionFinderContext, ActivationRequest, Application, MainMenuModel, PlaybackPhase,
-    PlayerNavigationOutcome, RssFeedAddOutcome, SearchApplyOutcome, SearchWork, SearchWorkKind,
-    SessionToggle, SubscriptionAddOutcome, SubscriptionCheckResult, SubscriptionRemoveOutcome,
-    YOUTUBE_TRENDING_CATEGORIES, YOUTUBE_TRENDING_COUNTRIES, YoutubeCollectionApplyOutcome,
-    YoutubeCollectionKind, YoutubeCollectionPhase, YoutubeCollectionWork,
-    YoutubeCollectionWorkKind, YoutubeSearchKind, YoutubeTrendingWork,
-    youtube_trending_category_id, youtube_trending_public_url,
+    ActionFinderContext, ActivationRequest, Application, DownloadChoice, DownloadTaskKind,
+    DownloadTaskStatus, MainMenuModel, PlaybackPhase, PlayerNavigationOutcome, RssFeedAddOutcome,
+    SearchApplyOutcome, SearchWork, SearchWorkKind, SessionToggle, SubscriptionAddOutcome,
+    SubscriptionCheckResult, SubscriptionRemoveOutcome, YOUTUBE_TRENDING_CATEGORIES,
+    YOUTUBE_TRENDING_COUNTRIES, YoutubeCollectionApplyOutcome, YoutubeCollectionKind,
+    YoutubeCollectionPhase, YoutubeCollectionWork, YoutubeCollectionWorkKind, YoutubeSearchKind,
+    YoutubeTrendingWork, youtube_trending_category_id, youtube_trending_public_url,
 };
 use apricot_core::{
     Route, RouteFrame,
@@ -42,7 +43,8 @@ use apricot_media::{
     YoutubeStreamPreference, select_youtube_playback_formats,
 };
 use apricot_platform::{
-    YoutubeDataApiClient, YoutubeSearchService, YoutubeSearchServiceUpdate,
+    DownloadEvent, DownloadMode, DownloadOptions, DownloadPhase, DownloadRequest,
+    VideoDownloadFormat, YoutubeDataApiClient, YoutubeSearchService, YoutubeSearchServiceUpdate,
     scan_local_media_folder_with_cancel,
 };
 use apricot_playback::{
@@ -68,14 +70,15 @@ use windows::{
             WindowsAndMessaging::{
                 AppendMenuW, BS_DEFPUSHBUTTON, CBN_SELCHANGE, CBS_DROPDOWNLIST, CW_USEDEFAULT,
                 CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-                DispatchMessageW, ES_AUTOHSCROLL, GetClientRect, GetCursorPos, GetMessageW,
-                GetParent, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-                HMENU, IDC_ARROW, IDI_APPLICATION, IsDialogMessageW, KillTimer, LB_ADDSTRING,
+                DispatchMessageW, ES_AUTOHSCROLL, GA_ROOTOWNER, GetAncestor, GetClientRect,
+                GetCursorPos, GetForegroundWindow, GetMessageW, GetParent, GetWindowLongPtrW,
+                GetWindowRect, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW,
+                IDI_APPLICATION, IDYES, IsChild, IsDialogMessageW, KillTimer, LB_ADDSTRING,
                 LB_DELETESTRING, LB_GETCOUNT, LB_GETCURSEL, LB_INSERTSTRING, LB_RESETCONTENT,
                 LB_SETCURSEL, LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW, LoadIconW,
-                MB_ICONINFORMATION, MB_OK, MF_GRAYED, MF_STRING, MSG, MessageBoxW, MoveWindow,
-                PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SW_HIDE,
-                SW_SHOW, SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW,
+                MB_ICONINFORMATION, MB_OK, MB_YESNO, MF_GRAYED, MF_STRING, MSG, MessageBoxW,
+                MoveWindow, PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW,
+                SW_HIDE, SW_SHOW, SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW,
                 SetWindowTextW, ShowWindow, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON,
                 TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX,
                 WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE,
@@ -132,6 +135,10 @@ const ID_RSS_CLEAR_PROGRESS: usize = 1041;
 const ID_PODCAST_ADD: usize = 1042;
 const ID_OPEN_BROWSER: usize = 1043;
 const ID_RSS_DOWNLOAD_EPISODE: usize = 1044;
+const ID_DOWNLOAD_ALL_AUDIO: usize = 1045;
+const ID_DOWNLOAD_ALL_VIDEO: usize = 1046;
+const ID_DOWNLOAD_CANCEL: usize = 1047;
+const ID_DOWNLOAD_CANCEL_ALL: usize = 1048;
 const ID_CONTEXT_PLAY: usize = 1101;
 const ID_CONTEXT_PLAY_FOLDER: usize = 1102;
 const ID_CONTEXT_SHUFFLE_FOLDER: usize = 1103;
@@ -181,6 +188,14 @@ const ID_CONTEXT_RSS_DOWNLOAD_EPISODE: usize = 1146;
 const ID_CONTEXT_OPEN_BROWSER: usize = 1147;
 const ID_CONTEXT_PODCAST_ADD: usize = 1148;
 const ID_CONTEXT_RSS_QUEUE_EPISODE: usize = 1149;
+const ID_CONTEXT_DOWNLOAD_AUDIO: usize = 1150;
+const ID_CONTEXT_DOWNLOAD_VIDEO: usize = 1151;
+const ID_CONTEXT_DOWNLOAD_SELECTED: usize = 1152;
+const ID_CONTEXT_DOWNLOAD_ALL_AUDIO: usize = 1153;
+const ID_CONTEXT_DOWNLOAD_ALL_VIDEO: usize = 1154;
+const ID_CONTEXT_DOWNLOAD_CANCEL: usize = 1155;
+const ID_CONTEXT_DOWNLOAD_CANCEL_ALL: usize = 1156;
+const ID_CONTEXT_DOWNLOAD_REMOVE_QUEUED: usize = 1157;
 const WM_PROCESS_ACTIVATION: u32 = WM_APP + 1;
 const WM_TRAY_ICON: u32 = WM_APP + 2;
 const YOUTUBE_TIMER_ID: usize = 1;
@@ -193,6 +208,8 @@ const CONTROLLED_REPEAT_TIMER_ID: usize = 3;
 const LOCAL_FOLDER_TIMER_ID: usize = 4;
 const SUBSCRIPTION_TIMER_ID: usize = 5;
 const RSS_TIMER_ID: usize = 6;
+const DOWNLOAD_TIMER_ID: usize = 7;
+const DOWNLOAD_TIMER_INTERVAL_MS: u32 = 50;
 const SEEK_HOLD_DELAY_MS: u32 = 180;
 const SEEK_HOLD_INTERVAL_MS: u32 = 110;
 const PODCAST_GENRES: [(&str, u32); 10] = [
@@ -249,6 +266,7 @@ enum MainView {
     PodcastCategories,
     UserPlaylists,
     UserPlaylistItems,
+    DownloadQueue,
     Player,
 }
 
@@ -403,6 +421,10 @@ struct WindowState {
     playlist_play_all: HWND,
     playlist_shuffle: HWND,
     playlist_add_all_to_queue: HWND,
+    download_all_audio: HWND,
+    download_all_video: HWND,
+    download_cancel: HWND,
+    download_cancel_all: HWND,
     video_host: HWND,
     player_controls: PlayerControls,
     status: HWND,
@@ -442,6 +464,9 @@ struct WindowState {
     next_local_folder_generation: u64,
     current_user_playlist_index: usize,
     current_user_playlist_item_index: usize,
+    download_sender: SyncSender<DownloadWorkerUpdate>,
+    download_receiver: Receiver<DownloadWorkerUpdate>,
+    download_cancellations: HashMap<u64, Arc<AtomicBool>>,
 }
 
 pub fn run_application(application: Application, version: &str, start_hidden: bool) -> Result<()> {
@@ -595,6 +620,21 @@ unsafe fn handle_view_tab_message(window: HWND, message: &MSG) -> bool {
             state.list,
         ],
         MainView::PodcastCategories => vec![state.back, state.open, state.list],
+        MainView::DownloadQueue => {
+            let mut controls = vec![state.back];
+            if !state.application.downloads().queued().is_empty() {
+                controls.extend([
+                    state.open,
+                    state.download_all_audio,
+                    state.download_all_video,
+                ]);
+            }
+            if !state.application.downloads().active().is_empty() {
+                controls.extend([state.download_cancel, state.download_cancel_all]);
+            }
+            controls.push(state.list);
+            controls
+        }
         _ => return false,
     };
     let Some(current) = controls.iter().position(|control| *control == GetFocus()) else {
@@ -693,11 +733,20 @@ unsafe extern "system" fn window_proc(
             refresh_all_rss_feeds_background(window);
             LRESULT(0)
         }
+        WM_TIMER if wparam.0 == DOWNLOAD_TIMER_ID => {
+            poll_download_updates(window);
+            LRESULT(0)
+        }
         WM_DESTROY => {
             remove_tray_icon(window);
             let pointer = GetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0)) as *mut WindowState;
             if !pointer.is_null() {
-                drop(Box::from_raw(pointer));
+                let mut state = Box::from_raw(pointer);
+                for cancellation in state.download_cancellations.values() {
+                    cancellation.store(true, AtomicOrdering::Release);
+                }
+                state.download_cancellations.clear();
+                drop(state);
                 SetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0), 0);
             }
             PostQuitMessage(0);
@@ -806,6 +855,14 @@ unsafe fn handle_window_command(window: HWND, wparam: WPARAM) {
         play_current_user_playlist(window, true);
     } else if command == ID_PLAYLIST_ADD_ALL_TO_QUEUE {
         add_current_user_playlist_to_queue(window);
+    } else if command == ID_DOWNLOAD_ALL_AUDIO {
+        start_all_queued_downloads(window, DownloadChoice::Audio);
+    } else if command == ID_DOWNLOAD_ALL_VIDEO {
+        start_all_queued_downloads(window, DownloadChoice::Video);
+    } else if command == ID_DOWNLOAD_CANCEL {
+        cancel_selected_download(window);
+    } else if command == ID_DOWNLOAD_CANCEL_ALL {
+        cancel_all_downloads(window);
     } else if matches!(
         command,
         ID_TRAY_SHOW | ID_TRAY_SETTINGS | ID_TRAY_CHECK_SUBSCRIPTIONS | ID_TRAY_EXIT
@@ -1257,6 +1314,34 @@ unsafe fn create_controls(
         WINDOW_EX_STYLE::default(),
         ID_PLAYLIST_ADD_ALL_TO_QUEUE,
     )?;
+    let download_all_audio = create_button(
+        parent,
+        instance,
+        &catalog,
+        "download_all_as_audio",
+        ID_DOWNLOAD_ALL_AUDIO,
+    )?;
+    let download_all_video = create_button(
+        parent,
+        instance,
+        &catalog,
+        "download_all_as_video",
+        ID_DOWNLOAD_ALL_VIDEO,
+    )?;
+    let download_cancel = create_button(
+        parent,
+        instance,
+        &catalog,
+        "cancel_download",
+        ID_DOWNLOAD_CANCEL,
+    )?;
+    let download_cancel_all = create_button(
+        parent,
+        instance,
+        &catalog,
+        "cancel_all_downloads",
+        ID_DOWNLOAD_CANCEL_ALL,
+    )?;
     let player_controls = PlayerControls::create(parent, instance)?;
     let video_host = player_controls.video_host();
     let font = GetStockObject(DEFAULT_GUI_FONT);
@@ -1309,10 +1394,15 @@ unsafe fn create_controls(
         playlist_play_all,
         playlist_shuffle,
         playlist_add_all_to_queue,
+        download_all_audio,
+        download_all_video,
+        download_cancel,
+        download_cancel_all,
         status,
     ] {
         SendMessageW(control, WM_SETFONT, font_param, Some(LPARAM(1)));
     }
+    let (download_sender, download_receiver) = mpsc::sync_channel(256);
     Ok(WindowState {
         list,
         open,
@@ -1361,6 +1451,10 @@ unsafe fn create_controls(
         playlist_play_all,
         playlist_shuffle,
         playlist_add_all_to_queue,
+        download_all_audio,
+        download_all_video,
+        download_cancel,
+        download_cancel_all,
         video_host,
         player_controls,
         status,
@@ -1400,6 +1494,9 @@ unsafe fn create_controls(
         next_local_folder_generation: 0,
         current_user_playlist_index: 0,
         current_user_playlist_item_index: 0,
+        download_sender,
+        download_receiver,
+        download_cancellations: HashMap::new(),
     })
 }
 
@@ -1525,7 +1622,12 @@ unsafe fn show_list_context_menu(window: HWND, location: LPARAM) {
     let active_is_favorite = active_item
         .as_ref()
         .is_some_and(|item| state(window).is_some_and(|state| state.application.is_favorite(item)));
-    let Some(entries) = list_context_entries(view, active_item.as_ref(), active_is_favorite) else {
+    let entries = if view == MainView::DownloadQueue {
+        download_queue_context_entries(window)
+    } else {
+        list_context_entries(view, active_item.as_ref(), active_is_favorite)
+    };
+    let Some(entries) = entries else {
         return;
     };
     let catalog = apricot_app::embedded_catalog(&language);
@@ -1591,6 +1693,7 @@ unsafe fn show_list_context_menu(window: HWND, location: LPARAM) {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 unsafe fn execute_list_context_command(
     window: HWND,
     command: usize,
@@ -1663,6 +1766,18 @@ unsafe fn execute_list_context_command(
         ID_CONTEXT_RSS_DOWNLOAD_FEED => download_current_rss_feed(window),
         ID_CONTEXT_RSS_DOWNLOAD_EPISODE => download_selected_rss_episode(window),
         ID_CONTEXT_RSS_QUEUE_EPISODE => queue_selected_rss_episode_download(window),
+        ID_CONTEXT_DOWNLOAD_AUDIO => start_active_download(window, DownloadChoice::Audio),
+        ID_CONTEXT_DOWNLOAD_VIDEO => start_active_download(window, DownloadChoice::Video),
+        ID_CONTEXT_DOWNLOAD_SELECTED => activate_selected_download(window),
+        ID_CONTEXT_DOWNLOAD_ALL_AUDIO => {
+            start_all_queued_downloads(window, DownloadChoice::Audio);
+        }
+        ID_CONTEXT_DOWNLOAD_ALL_VIDEO => {
+            start_all_queued_downloads(window, DownloadChoice::Video);
+        }
+        ID_CONTEXT_DOWNLOAD_CANCEL => cancel_selected_download(window),
+        ID_CONTEXT_DOWNLOAD_CANCEL_ALL => cancel_all_downloads(window),
+        ID_CONTEXT_DOWNLOAD_REMOVE_QUEUED => remove_selected_queued_download(window),
         ID_CONTEXT_OPEN_BROWSER => open_selected_podcast_in_browser(window),
         ID_CONTEXT_PODCAST_ADD => add_selected_podcast_result(window),
         ID_CONTEXT_OPEN_PLAYLIST_VIDEOS => {
@@ -1723,6 +1838,8 @@ fn list_context_entries(
                 (ID_CONTEXT_PLAY_PLAYLIST, "play_playlist"),
                 (ID_CONTEXT_SHUFFLE_PLAYLIST, "shuffle_playlist"),
                 (ID_CONTEXT_OPEN_PLAYLIST_VIDEOS, "open_playlist_videos"),
+                (ID_CONTEXT_DOWNLOAD_AUDIO, "download_audio"),
+                (ID_CONTEXT_DOWNLOAD_VIDEO, "download_video"),
                 favorite,
                 (ID_CONTEXT_COPY_LOCATION, "copy_link"),
             ]),
@@ -1733,6 +1850,8 @@ fn list_context_entries(
                     (ID_CONTEXT_CHANNEL_POPULAR, "channel_popular"),
                     (ID_CONTEXT_CHANNEL_PLAYLISTS, "channel_playlists"),
                     (ID_CONTEXT_CHANNEL_STREAMS, "channel_live_streams"),
+                    (ID_CONTEXT_DOWNLOAD_AUDIO, "download_audio"),
+                    (ID_CONTEXT_DOWNLOAD_VIDEO, "download_video"),
                 ];
                 entries.extend(subscription_actions);
                 entries.extend([favorite, (ID_CONTEXT_COPY_LOCATION, "copy_link")]);
@@ -1742,6 +1861,8 @@ fn list_context_entries(
                 let mut entries = vec![(ID_CONTEXT_PLAY, "play"), favorite];
                 entries.extend(subscription_actions);
                 entries.extend([
+                    (ID_CONTEXT_DOWNLOAD_AUDIO, "download_audio"),
+                    (ID_CONTEXT_DOWNLOAD_VIDEO, "download_video"),
                     (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
                     (ID_CONTEXT_REMOVE_FROM_QUEUE, "remove_from_playback_queue"),
                     (ID_CONTEXT_PLAYBACK_QUEUE, "playback_queue"),
@@ -1767,6 +1888,8 @@ fn list_context_entries(
         ]),
         MainView::Favorites => Some(vec![
             (ID_CONTEXT_PLAY, "play"),
+            (ID_CONTEXT_DOWNLOAD_AUDIO, "download_audio"),
+            (ID_CONTEXT_DOWNLOAD_VIDEO, "download_video"),
             (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
             (ID_CONTEXT_COPY_LOCATION, "copy_link"),
             (ID_CONTEXT_COLLECTION_REMOVE, "remove_favorite"),
@@ -1776,6 +1899,8 @@ fn list_context_entries(
         ]),
         MainView::History => Some(vec![
             (ID_CONTEXT_PLAY, "play"),
+            (ID_CONTEXT_DOWNLOAD_AUDIO, "download_audio"),
+            (ID_CONTEXT_DOWNLOAD_VIDEO, "download_video"),
             (ID_CONTEXT_ADD_FAVORITE, "add_favorite"),
             (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
             (ID_CONTEXT_COPY_LOCATION, "copy_link"),
@@ -1842,6 +1967,8 @@ fn list_context_entries(
         ]),
         MainView::UserPlaylistItems => Some(vec![
             (ID_CONTEXT_PLAY, "play"),
+            (ID_CONTEXT_DOWNLOAD_AUDIO, "download_audio"),
+            (ID_CONTEXT_DOWNLOAD_VIDEO, "download_video"),
             (ID_CONTEXT_PLAY_PLAYLIST, "play_playlist"),
             (ID_CONTEXT_SHUFFLE_PLAYLIST, "shuffle_playlist"),
             (ID_CONTEXT_ADD_TO_QUEUE, "add_to_playback_queue"),
@@ -1852,6 +1979,28 @@ fn list_context_entries(
         ]),
         _ => None,
     }
+}
+
+unsafe fn download_queue_context_entries(window: HWND) -> Option<Vec<(usize, &'static str)>> {
+    let state = state(window)?;
+    let selected = usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok()?;
+    let active_count = state.application.downloads().active().len();
+    if selected < active_count {
+        return Some(vec![
+            (ID_CONTEXT_DOWNLOAD_CANCEL, "cancel_download"),
+            (ID_CONTEXT_DOWNLOAD_CANCEL_ALL, "cancel_all_downloads"),
+        ]);
+    }
+    let queued_index = selected.checked_sub(active_count)?;
+    state.application.downloads().queued().get(queued_index)?;
+    Some(vec![
+        (ID_CONTEXT_DOWNLOAD_SELECTED, "download_selected_queued"),
+        (ID_CONTEXT_DOWNLOAD_AUDIO, "download_audio"),
+        (ID_CONTEXT_DOWNLOAD_VIDEO, "download_video"),
+        (ID_CONTEXT_DOWNLOAD_ALL_AUDIO, "download_all_as_audio"),
+        (ID_CONTEXT_DOWNLOAD_ALL_VIDEO, "download_all_as_video"),
+        (ID_CONTEXT_DOWNLOAD_REMOVE_QUEUED, "remove_from_queue"),
+    ])
 }
 
 unsafe fn show_context_menu_for_active_view(window: HWND) {
@@ -1870,7 +2019,8 @@ unsafe fn show_context_menu_for_active_view(window: HWND) {
             | MainView::PodcastSearchResults
             | MainView::PodcastCategories
             | MainView::UserPlaylists
-            | MainView::UserPlaylistItems,
+            | MainView::UserPlaylistItems
+            | MainView::DownloadQueue,
         ) => {
             show_list_context_menu(window, LPARAM(-1));
         }
@@ -1923,6 +2073,8 @@ unsafe fn show_player_context_menu(window: HWND, location: LPARAM) {
         entries.insert(2, (ID_CONTEXT_SUBSCRIBE, "subscribe_channel"));
     }
     if !item.is_local_media() {
+        entries.insert(1, (ID_CONTEXT_DOWNLOAD_VIDEO, "download_video"));
+        entries.insert(1, (ID_CONTEXT_DOWNLOAD_AUDIO, "download_audio"));
         entries.insert(1, (ID_CONTEXT_COPY_STREAM_URL, "copy_stream_url"));
     }
     if item.youtube_url_at_timestamp(0.0).is_some() {
@@ -1961,6 +2113,8 @@ unsafe fn show_player_context_menu(window: HWND, location: LPARAM) {
             ID_CONTEXT_COPY_LOCATION => copy_active_location(window),
             ID_CONTEXT_COPY_STREAM_URL => copy_active_stream_url(window),
             ID_CONTEXT_COPY_TIMESTAMP => copy_current_timestamp_link(window),
+            ID_CONTEXT_DOWNLOAD_AUDIO => start_active_download(window, DownloadChoice::Audio),
+            ID_CONTEXT_DOWNLOAD_VIDEO => start_active_download(window, DownloadChoice::Video),
             ID_CONTEXT_ADD_TO_QUEUE => add_active_item_to_playback_queue(window),
             ID_CONTEXT_REMOVE_FROM_QUEUE => remove_active_item_from_playback_queue(window),
             ID_CONTEXT_PLAYBACK_QUEUE => show_playback_queue(window),
@@ -2146,6 +2300,7 @@ unsafe fn layout_bottom_controls(
     let trending = state.view == MainView::Trending;
     let user_playlists = state.view == MainView::UserPlaylists;
     let user_playlist_items = state.view == MainView::UserPlaylistItems;
+    let download_queue = state.view == MainView::DownloadQueue;
     let first_button_y = if local_folder || subscriptions || rss_feeds {
         height - button_height * 2 - margin * 2
     } else {
@@ -2340,6 +2495,19 @@ unsafe fn layout_bottom_controls(
             margin,
             button_height,
         );
+    } else if download_queue {
+        let mut controls = vec![state.back];
+        if !state.application.downloads().queued().is_empty() {
+            controls.extend([
+                state.open,
+                state.download_all_audio,
+                state.download_all_video,
+            ]);
+        }
+        if !state.application.downloads().active().is_empty() {
+            controls.extend([state.download_cancel, state.download_cancel_all]);
+        }
+        layout_button_row(&controls, width, first_button_y, margin, button_height);
     }
 }
 
@@ -2402,6 +2570,7 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
             | MainView::PodcastCategories
             | MainView::UserPlaylists
             | MainView::UserPlaylistItems
+            | MainView::DownloadQueue
     );
     let text_entry_visible = matches!(state.view, MainView::Search | MainView::DirectLink);
     let search_visible = state.view == MainView::Search;
@@ -2414,13 +2583,22 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
             .is_some_and(|playlist| !playlist.items.is_empty());
     let collection_visible = view_has_collection_remove(state.view) && playlist_items_available;
     let back_visible = view_has_back_button(state.view);
-    let open_visible = list_visible && playlist_items_available && state.view != MainView::Trending;
+    let open_visible = list_visible
+        && playlist_items_available
+        && state.view != MainView::Trending
+        && (state.view != MainView::DownloadQueue
+            || !state.application.downloads().queued().is_empty());
     let folder_visible = state.view == MainView::LocalFolder;
     let trending_visible = state.view == MainView::Trending;
     let subscriptions_visible = state.view == MainView::Subscriptions;
     let rss_feeds_visible = state.view == MainView::RssFeeds;
     let rss_items_visible = state.view == MainView::RssItems;
     let podcast_directory_visible = state.view == MainView::PodcastSearchResults;
+    let download_queue_visible = state.view == MainView::DownloadQueue;
+    let queued_downloads_visible =
+        download_queue_visible && !state.application.downloads().queued().is_empty();
+    let active_downloads_visible =
+        download_queue_visible && !state.application.downloads().active().is_empty();
     for (control, visible) in [
         (state.list, list_visible),
         (state.open, open_visible),
@@ -2481,6 +2659,10 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
             state.playlist_add_all_to_queue,
             state.view == MainView::UserPlaylistItems && playlist_items_available,
         ),
+        (state.download_all_audio, queued_downloads_visible),
+        (state.download_all_video, queued_downloads_visible),
+        (state.download_cancel, active_downloads_visible),
+        (state.download_cancel_all, active_downloads_visible),
     ] {
         let _ = ShowWindow(control, if visible { SW_SHOW } else { SW_HIDE });
     }
@@ -2508,6 +2690,7 @@ const fn view_has_back_button(view: MainView) -> bool {
             | MainView::PodcastCategories
             | MainView::UserPlaylists
             | MainView::UserPlaylistItems
+            | MainView::DownloadQueue
     )
 }
 
@@ -2721,6 +2904,7 @@ unsafe fn activate_selection(window: HWND) {
         Some(MainView::PodcastCategories) => open_selected_podcast_category(window),
         Some(MainView::UserPlaylists) => open_selected_user_playlist(window),
         Some(MainView::UserPlaylistItems) => activate_user_playlist_item(window),
+        Some(MainView::DownloadQueue) => activate_selected_download(window),
         Some(MainView::Search | MainView::DirectLink | MainView::Player) | None => {}
     }
 }
@@ -2791,6 +2975,10 @@ unsafe fn activate_main_menu_selection(window: HWND) {
     }
     if item_id == "playback_queue" {
         show_playback_queue(window);
+        return;
+    }
+    if item_id == "current_downloads" {
+        show_download_queue(window);
         return;
     }
 
@@ -5221,25 +5409,132 @@ unsafe fn export_rss_opml(window: HWND) {
 }
 
 unsafe fn download_selected_rss_episode(window: HWND) {
-    podcast_download_not_ready(window);
+    let Some(item) =
+        state(window).and_then(|state| active_rss_episode(state).map(|(_, _, item)| item))
+    else {
+        return;
+    };
+    start_download_item(window, &item, DownloadChoice::Audio, false);
 }
 
+#[allow(clippy::too_many_lines)]
 unsafe fn download_current_rss_feed(window: HWND) {
-    podcast_download_not_ready(window);
+    let Some((title, items, ask_location, initial, language)) = state(window).and_then(|state| {
+        let feed = state
+            .application
+            .rss_feeds()
+            .get(state.current_rss_feed_index)?;
+        let items = feed
+            .items
+            .iter()
+            .filter(|item| item.url.is_some())
+            .cloned()
+            .collect::<Vec<_>>();
+        let initial_item = items.first()?;
+        let initial =
+            download_folder_for_item(state.application.settings(), initial_item, true).ok()?;
+        Some((
+            feed.title.clone(),
+            items,
+            state.application.settings().ask_download_location_each_time,
+            initial,
+            state.application.settings().language.clone(),
+        ))
+    }) else {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "rss_items_empty"),
+                true,
+            );
+        }
+        return;
+    };
+    let output_override = if ask_location {
+        let catalog = apricot_app::embedded_catalog(&language);
+        match crate::folder_dialog_win32::choose_download_folder(
+            window,
+            catalog.text("choose_save_folder"),
+            &initial,
+        ) {
+            Some(folder) => Some(folder),
+            None => return,
+        }
+    } else {
+        None
+    };
+    let mut requests = Vec::with_capacity(items.len());
+    for item in &items {
+        match build_download_request(
+            window,
+            item,
+            DownloadChoice::Audio,
+            output_override.as_deref(),
+        ) {
+            Ok(Some(request)) => requests.push(request),
+            Ok(None) => return,
+            Err(error) => {
+                show_error_message(window, &error);
+                return;
+            }
+        }
+    }
+    let Some(executable) =
+        application_directory().map(|directory| directory.join("components").join("yt-dlp.exe"))
+    else {
+        return;
+    };
+    let (task_id, cancellation, sender) = {
+        let Some(state) = state_mut(window) else {
+            return;
+        };
+        let mut feed_item = items[0].clone();
+        feed_item.title.clone_from(&title);
+        feed_item.kind = apricot_core::MediaKind::PodcastFeed;
+        let task_id = state.application.downloads_mut().begin(
+            feed_item,
+            DownloadChoice::Audio,
+            DownloadTaskKind::PodcastFeed,
+            requests.len(),
+        );
+        let cancellation = Arc::new(AtomicBool::new(false));
+        state
+            .download_cancellations
+            .insert(task_id, Arc::clone(&cancellation));
+        (task_id, cancellation, state.download_sender.clone())
+    };
+    let completion_directory = output_override.unwrap_or(initial);
+    spawn_batch_download(
+        task_id,
+        executable,
+        requests,
+        completion_directory,
+        cancellation,
+        sender,
+    );
+    let _ = SetTimer(
+        Some(window),
+        DOWNLOAD_TIMER_ID,
+        DOWNLOAD_TIMER_INTERVAL_MS,
+        None,
+    );
+    if let Some(state) = state_mut(window) {
+        set_status(
+            state,
+            &catalog_text(&state.application, "download_feed_start"),
+            true,
+        );
+        refresh_download_projection(window, state, false);
+    }
 }
 
 unsafe fn queue_selected_rss_episode_download(window: HWND) {
-    podcast_download_not_ready(window);
-}
-
-unsafe fn podcast_download_not_ready(window: HWND) {
-    if let Some(state) = state(window) {
-        set_status(
-            state,
-            "Podcast downloads are not implemented in this internal Rust build yet.",
-            true,
-        );
-    }
+    let Some(item) =
+        state(window).and_then(|state| active_rss_episode(state).map(|(_, _, item)| item))
+    else {
+        return;
+    };
+    toggle_download_queue_item(window, &item, DownloadChoice::Audio);
 }
 
 unsafe fn open_selected_podcast_in_browser(window: HWND) {
@@ -6140,6 +6435,11 @@ unsafe fn navigate_back(window: HWND) {
             refresh_user_playlist_items(state, true, false);
             layout_controls_state(window, state);
         }
+        Route::DownloadQueue => {
+            state.view = MainView::DownloadQueue;
+            refresh_download_queue(state, true, false);
+            layout_controls_state(window, state);
+        }
         Route::Player => {
             state.view = MainView::Player;
             refresh_player(window, state, true, true);
@@ -6270,16 +6570,1110 @@ unsafe fn activate_direct_link(window: HWND, action: &str) {
         "copy_stream_url" => {
             start_youtube_resolve(window, &item, YoutubeResolvePurpose::CopyStreamUrl);
         }
-        "download_audio" | "download_video" => {
-            if let Some(state) = state(window) {
-                let message =
-                    "Direct-link downloads are not implemented in this internal Rust build yet.";
-                set_status(state, message, true);
-                let _ = SetFocus(Some(state.search_edit));
-            }
-        }
+        "download_audio" => start_download_item(window, &item, DownloadChoice::Audio, false),
+        "download_video" => start_download_item(window, &item, DownloadChoice::Video, false),
         _ => start_youtube_resolve(window, &item, YoutubeResolvePurpose::Playback),
     }
+}
+
+unsafe fn show_download_queue(window: HWND) {
+    restore_from_tray(window);
+    stop_controlled_repeat(window);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    cancel_youtube_work(window, state);
+    cancel_local_folder_scan(window, state);
+    if state.application.current_route() != Route::DownloadQueue {
+        state.application.navigate_main_menu();
+        state
+            .application
+            .navigate_to(RouteFrame::new(Route::DownloadQueue));
+    }
+    state.view = MainView::DownloadQueue;
+    refresh_download_queue(state, true, true);
+    layout_controls_state(window, state);
+}
+
+unsafe fn refresh_download_queue(state: &mut WindowState, focus: bool, announce_status: bool) {
+    let previous = usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok();
+    SendMessageW(state.list, LB_RESETCONTENT, None, None);
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    crate::accessibility_win32::set_control_name(state.list, catalog.text("current_downloads"));
+    set_open_button_label(state, "download_selected_queued");
+    let downloads = state.application.downloads();
+    for task in downloads.active() {
+        add_list_string(state.list, &active_download_label(task, &catalog));
+    }
+    for queued in downloads.queued() {
+        add_list_string(state.list, &queued_download_label(queued, &catalog));
+    }
+    let count = downloads.count();
+    if count == 0 {
+        add_list_string(state.list, catalog.text("no_queued_downloads"));
+    }
+    select_list_index(state.list, previous.filter(|_| count > 0).or(Some(0)));
+    if announce_status {
+        let message = if count == 0 {
+            catalog.text("no_queued_downloads").to_owned()
+        } else {
+            format!("{}: {count}", catalog.text("current_downloads"))
+        };
+        set_status(state, &message, true);
+    }
+    if focus {
+        let _ = SetFocus(Some(state.list));
+    }
+}
+
+fn active_download_label(
+    task: &apricot_app::ActiveDownload,
+    catalog: &apricot_core::locale::TranslationCatalog,
+) -> String {
+    let state_key = match task.status {
+        DownloadTaskStatus::Downloading => "download_state_downloading",
+        DownloadTaskStatus::Processing => "download_state_processing",
+        DownloadTaskStatus::CancelRequested => "download_state_cancelled",
+    };
+    let mut parts = vec![task.title.clone(), catalog.text(state_key).to_owned()];
+    if task.total > 0 {
+        parts.push(
+            catalog
+                .text("downloads_remaining")
+                .replace("{remaining}", &task.remaining().to_string())
+                .replace("{total}", &task.total.to_string()),
+        );
+    }
+    if task.current_title != task.title || task.total > 1 {
+        parts.push(task.current_title.clone());
+    }
+    if let Some(percent) = task.percent.filter(|percent| *percent > 0.0) {
+        parts.push(
+            catalog
+                .text("download_percent_value")
+                .replace("{percent}", &format!("{percent:.0}")),
+        );
+    }
+    parts.join(" | ")
+}
+
+fn queued_download_label(
+    queued: &apricot_app::QueuedDownload,
+    catalog: &apricot_core::locale::TranslationCatalog,
+) -> String {
+    let mode_key = match (queued.item.kind, queued.choice) {
+        (apricot_core::MediaKind::PodcastEpisode, _) => "podcast_audio_queued_marker",
+        (
+            apricot_core::MediaKind::Playlist | apricot_core::MediaKind::Channel,
+            DownloadChoice::Audio,
+        ) => "collection_audio_queued_marker",
+        (
+            apricot_core::MediaKind::Playlist | apricot_core::MediaKind::Channel,
+            DownloadChoice::Video,
+        ) => "collection_video_queued_marker",
+        (_, DownloadChoice::Audio) => "audio_queued_marker",
+        (_, DownloadChoice::Video) => "video_queued_marker",
+        (_, DownloadChoice::Ask) => "selected_queued_marker",
+    };
+    let mut parts = vec![
+        queued.item.title.clone(),
+        media_kind_label(&queued.item, catalog).to_owned(),
+    ];
+    if queued.item.kind == apricot_core::MediaKind::Video && !queued.item.channel.trim().is_empty()
+    {
+        parts.push(format!(
+            "{}: {}",
+            catalog.text("channel"),
+            queued.item.channel
+        ));
+    }
+    parts.extend([
+        catalog.text(mode_key).to_owned(),
+        catalog.text("download_state_queued").to_owned(),
+    ]);
+    parts.join(" | ")
+}
+
+fn media_kind_label<'a>(
+    item: &apricot_core::MediaItem,
+    catalog: &'a apricot_core::locale::TranslationCatalog,
+) -> &'a str {
+    let key = match item.kind {
+        apricot_core::MediaKind::Audio => "download_audio_mode",
+        apricot_core::MediaKind::Video => "video",
+        apricot_core::MediaKind::LiveStream => "live_stream",
+        apricot_core::MediaKind::Playlist => "playlist",
+        apricot_core::MediaKind::Channel => "channel",
+        apricot_core::MediaKind::PodcastFeed => "rss_feeds",
+        apricot_core::MediaKind::PodcastEpisode => "podcast_episode",
+        apricot_core::MediaKind::Movie => "movie",
+        apricot_core::MediaKind::TvShow => "tv_show",
+        apricot_core::MediaKind::TvEpisode => "episode",
+        apricot_core::MediaKind::Unknown => "unknown",
+    };
+    catalog.text(key)
+}
+
+unsafe fn activate_selected_download(window: HWND) {
+    start_selected_queued_download(window, None);
+}
+
+unsafe fn start_selected_queued_download(window: HWND, requested_choice: Option<DownloadChoice>) {
+    let Some((selected, active_count, queued_choice, queued_item)) =
+        state(window).and_then(|state| {
+            let selected =
+                usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok()?;
+            let active_count = state.application.downloads().active().len();
+            let queued = selected
+                .checked_sub(active_count)
+                .and_then(|index| state.application.downloads().queued().get(index));
+            Some((
+                selected,
+                active_count,
+                queued.map(|item| item.choice),
+                queued.map(|item| item.item.clone()),
+            ))
+        })
+    else {
+        return;
+    };
+    if selected < active_count {
+        cancel_selected_download(window);
+        return;
+    }
+    let Some(item) = queued_item else {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "download_queue_empty"),
+                true,
+            );
+        }
+        return;
+    };
+    let choice = requested_choice.unwrap_or(queued_choice.unwrap_or(DownloadChoice::Ask));
+    let choice = match choice {
+        DownloadChoice::Ask => match choose_download_format(window) {
+            Some(choice) => choice,
+            None => return,
+        },
+        choice => choice,
+    };
+    start_download_item(window, &item, choice, true);
+}
+
+unsafe fn choose_download_format(window: HWND) -> Option<DownloadChoice> {
+    let (title, prompt, choices, ok, cancel) = state_mut(window).map(|state| {
+        state.modal_open = true;
+        let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+        (
+            catalog.text("select_download_format").to_owned(),
+            catalog.text("select_download_format_message").to_owned(),
+            vec![
+                catalog.text("download_audio").to_owned(),
+                catalog.text("download_video").to_owned(),
+            ],
+            catalog.text("ok").to_owned(),
+            catalog.text("cancel").to_owned(),
+        )
+    })?;
+    let result = crate::playlist_dialog_win32::choose_with_initial(
+        window, &title, &prompt, &choices, 0, &ok, &cancel,
+    );
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
+    resume_deferred_window_work(window);
+    match result {
+        Ok(Some(0)) => Some(DownloadChoice::Audio),
+        Ok(Some(_)) => Some(DownloadChoice::Video),
+        Ok(None) => None,
+        Err(error) => {
+            show_error_message(
+                window,
+                &format!("Download format dialog did not open: {error}"),
+            );
+            None
+        }
+    }
+}
+
+unsafe fn start_active_download(window: HWND, requested_choice: DownloadChoice) {
+    if state(window).is_some_and(|state| state.view == MainView::DownloadQueue) {
+        start_selected_queued_download(window, Some(requested_choice));
+        return;
+    }
+    if state(window).is_none_or(|state| state.view == MainView::MainMenu) {
+        return;
+    }
+    let Some(item) = active_media_item(window) else {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "no_selection"),
+                true,
+            );
+        }
+        return;
+    };
+    start_download_item(window, &item, requested_choice, false);
+}
+
+unsafe fn start_download_item(
+    window: HWND,
+    item: &apricot_core::MediaItem,
+    requested_choice: DownloadChoice,
+    remove_queued: bool,
+) {
+    if item.is_local_media() {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "no_selection"),
+                true,
+            );
+        }
+        return;
+    }
+    let choice = if item.kind == apricot_core::MediaKind::PodcastEpisode {
+        DownloadChoice::Audio
+    } else {
+        requested_choice
+    };
+    let choice = match choice {
+        DownloadChoice::Ask => match choose_download_format(window) {
+            Some(choice) => choice,
+            None => return,
+        },
+        choice => choice,
+    };
+    if !confirm_download(window, item, choice) {
+        return;
+    }
+    if remove_queued && let Some(state) = state_mut(window) {
+        let _ = state.application.downloads_mut().remove_queued(item);
+    }
+    let request = match build_download_request(window, item, choice, None) {
+        Ok(Some(request)) => request,
+        Ok(None) => {
+            if let Some(state) = state(window) {
+                set_status(
+                    state,
+                    &catalog_text(&state.application, "download_cancelled"),
+                    true,
+                );
+            }
+            return;
+        }
+        Err(error) => {
+            show_error_message(window, &error);
+            return;
+        }
+    };
+    let Some(executable) =
+        application_directory().map(|directory| directory.join("components").join("yt-dlp.exe"))
+    else {
+        show_error_message(window, "Application path is unavailable.");
+        return;
+    };
+    let allow_playlist = request.allow_playlist;
+    let task_kind = match item.kind {
+        apricot_core::MediaKind::Playlist => DownloadTaskKind::Playlist,
+        apricot_core::MediaKind::Channel => DownloadTaskKind::Channel,
+        apricot_core::MediaKind::PodcastFeed => DownloadTaskKind::PodcastFeed,
+        _ => DownloadTaskKind::Single,
+    };
+    let total = usize::from(!allow_playlist);
+    let (task_id, sender, cancellation) = {
+        let Some(state) = state_mut(window) else {
+            return;
+        };
+        let task_id =
+            state
+                .application
+                .downloads_mut()
+                .begin(item.clone(), choice, task_kind, total);
+        let cancellation = Arc::new(AtomicBool::new(false));
+        state
+            .download_cancellations
+            .insert(task_id, Arc::clone(&cancellation));
+        (task_id, state.download_sender.clone(), cancellation)
+    };
+    spawn_download(task_id, executable, request, cancellation, sender);
+    let _ = SetTimer(
+        Some(window),
+        DOWNLOAD_TIMER_ID,
+        DOWNLOAD_TIMER_INTERVAL_MS,
+        None,
+    );
+    if let Some(state) = state_mut(window) {
+        let key = match task_kind {
+            DownloadTaskKind::Playlist => "download_playlist_start",
+            DownloadTaskKind::Channel => "download_channel_start",
+            DownloadTaskKind::PodcastFeed => "download_feed_start",
+            _ if choice == DownloadChoice::Audio => "download_audio_start",
+            _ => "download_video_start",
+        };
+        set_status(
+            state,
+            &catalog_text(&state.application, "download_started"),
+            true,
+        );
+        set_status(state, &catalog_text(&state.application, key), false);
+        refresh_download_projection(window, state, false);
+    }
+}
+
+unsafe fn confirm_download(
+    window: HWND,
+    item: &apricot_core::MediaItem,
+    choice: DownloadChoice,
+) -> bool {
+    let Some((required, message)) = state(window).map(|state| {
+        let required = state.application.settings().confirm_before_download;
+        let action = if choice == DownloadChoice::Audio {
+            catalog_text(&state.application, "download_audio_mode")
+        } else {
+            catalog_text(&state.application, "download_video_mode")
+        };
+        let message = catalog_text(&state.application, "download_confirm")
+            .replace("{action}", &action)
+            .replace("{title}", &item.title);
+        (required, message)
+    }) else {
+        return false;
+    };
+    if !required {
+        return true;
+    }
+    if let Some(state) = state_mut(window) {
+        state.modal_open = true;
+    }
+    let message = wide(&message);
+    let result = MessageBoxW(
+        Some(window),
+        PCWSTR(message.as_ptr()),
+        w!("ApricotPlayer 2 Beta"),
+        MB_YESNO | MB_ICONINFORMATION,
+    );
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
+    resume_deferred_window_work(window);
+    if result != IDYES {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "download_cancelled"),
+                true,
+            );
+        }
+        return false;
+    }
+    true
+}
+
+unsafe fn build_download_request(
+    window: HWND,
+    item: &apricot_core::MediaItem,
+    choice: DownloadChoice,
+    output_override: Option<&std::path::Path>,
+) -> std::result::Result<Option<DownloadRequest>, String> {
+    let Some((settings, settings_file, language)) = state(window).map(|state| {
+        (
+            state.application.settings().clone(),
+            state.application.settings_file(),
+            state.application.settings().language.clone(),
+        )
+    }) else {
+        return Err("Application state is unavailable.".to_owned());
+    };
+    let url = item
+        .url
+        .as_ref()
+        .map(ToString::to_string)
+        .ok_or_else(|| "The selected item has no downloadable URL.".to_owned())?;
+    let url = collection_download_url(item, &url);
+    let mode = if choice == DownloadChoice::Audio {
+        DownloadMode::Audio
+    } else {
+        DownloadMode::Video
+    };
+    let allow_playlist = matches!(
+        item.kind,
+        apricot_core::MediaKind::Playlist
+            | apricot_core::MediaKind::Channel
+            | apricot_core::MediaKind::PodcastFeed
+    );
+    let mut output_directory = download_folder_for_item(&settings, item, allow_playlist)?;
+    if let Some(output_override) = output_override {
+        output_override.clone_into(&mut output_directory);
+    }
+    fs::create_dir_all(&output_directory)
+        .map_err(|error| format!("Could not create the download folder: {error}"))?;
+    let mut target_path = None;
+    if settings.ask_download_location_each_time && output_override.is_none() {
+        let catalog = apricot_app::embedded_catalog(&language);
+        if allow_playlist {
+            let selected = crate::folder_dialog_win32::choose_download_folder(
+                window,
+                catalog.text("choose_save_folder"),
+                &output_directory,
+            );
+            let Some(selected) = selected else {
+                return Ok(None);
+            };
+            output_directory = selected;
+        } else {
+            let extension = if mode == DownloadMode::Audio {
+                normalized_audio_format(&settings.audio_format)
+            } else {
+                "mp4".to_owned()
+            };
+            let default_file = format!("{}.{}", safe_path_component(&item.title), extension);
+            let type_label = extension.to_ascii_uppercase();
+            let selected = crate::file_dialog_win32::save_download_file(
+                window,
+                catalog.text("choose_save_path"),
+                &output_directory,
+                &default_file,
+                &extension,
+                &type_label,
+                catalog.text("all_files"),
+            )?;
+            let Some(selected) = selected else {
+                return Ok(None);
+            };
+            output_directory = selected
+                .parent()
+                .map(std::path::Path::to_path_buf)
+                .ok_or_else(|| "The selected download path has no folder.".to_owned())?;
+            target_path = Some(selected);
+        }
+    }
+    let mut options = download_options_from_settings(&settings, &settings_file);
+    options.audio_format = normalized_audio_format(&settings.audio_format);
+    Ok(Some(DownloadRequest {
+        url,
+        title: item.title.clone(),
+        mode,
+        output_directory,
+        target_path,
+        allow_playlist,
+        options,
+    }))
+}
+
+#[allow(clippy::too_many_lines)]
+unsafe fn start_all_queued_downloads(window: HWND, requested_choice: DownloadChoice) {
+    let Some((queued, ask_location, default_folder, language)) = state(window).map(|state| {
+        (
+            state.application.downloads().queued().to_vec(),
+            state.application.settings().ask_download_location_each_time,
+            PathBuf::from(state.application.settings().download_folder.trim()),
+            state.application.settings().language.clone(),
+        )
+    }) else {
+        return;
+    };
+    if queued.is_empty() {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "download_queue_empty"),
+                true,
+            );
+        }
+        return;
+    }
+    let batch_folder = if ask_location {
+        let catalog = apricot_app::embedded_catalog(&language);
+        let initial = if default_folder.is_absolute() {
+            default_folder.clone()
+        } else {
+            PathBuf::from(r"C:\")
+        };
+        if let Some(folder) = crate::folder_dialog_win32::choose_download_folder(
+            window,
+            catalog.text("choose_save_folder"),
+            &initial,
+        ) {
+            Some(folder)
+        } else {
+            if let Some(state) = state(window) {
+                set_status(
+                    state,
+                    &catalog_text(&state.application, "download_cancelled"),
+                    true,
+                );
+            }
+            return;
+        }
+    } else {
+        None
+    };
+    let mut requests = Vec::with_capacity(queued.len());
+    for queued_item in &queued {
+        let choice = if queued_item.item.kind == apricot_core::MediaKind::PodcastEpisode {
+            DownloadChoice::Audio
+        } else {
+            requested_choice
+        };
+        match build_download_request(window, &queued_item.item, choice, batch_folder.as_deref()) {
+            Ok(Some(request)) => requests.push(request),
+            Ok(None) => return,
+            Err(error) => {
+                show_error_message(window, &error);
+                return;
+            }
+        }
+    }
+    let Some(executable) =
+        application_directory().map(|directory| directory.join("components").join("yt-dlp.exe"))
+    else {
+        show_error_message(window, "Application path is unavailable.");
+        return;
+    };
+    let (task_id, cancellation, sender, batch_title) = {
+        let Some(state) = state_mut(window) else {
+            return;
+        };
+        let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+        let batch_title = if requested_choice == DownloadChoice::Audio {
+            catalog.text("download_all_as_audio").to_owned()
+        } else {
+            catalog.text("download_all_as_video").to_owned()
+        };
+        let mut batch_item = queued[0].item.clone();
+        batch_item.title.clone_from(&batch_title);
+        let _ = state.application.downloads_mut().take_queued();
+        let task_id = state.application.downloads_mut().begin(
+            batch_item,
+            requested_choice,
+            DownloadTaskKind::Batch,
+            requests.len(),
+        );
+        let cancellation = Arc::new(AtomicBool::new(false));
+        state
+            .download_cancellations
+            .insert(task_id, Arc::clone(&cancellation));
+        (
+            task_id,
+            cancellation,
+            state.download_sender.clone(),
+            batch_title,
+        )
+    };
+    let completion_directory = batch_folder.unwrap_or(default_folder);
+    spawn_batch_download(
+        task_id,
+        executable,
+        requests,
+        completion_directory,
+        cancellation,
+        sender,
+    );
+    let _ = SetTimer(
+        Some(window),
+        DOWNLOAD_TIMER_ID,
+        DOWNLOAD_TIMER_INTERVAL_MS,
+        None,
+    );
+    if let Some(state) = state_mut(window) {
+        let message = catalog_text(&state.application, "batch_download_start")
+            .replace("{count}", &queued.len().to_string());
+        set_status(state, &message, true);
+        if let Some(task) = state.application.downloads_mut().active_task(task_id) {
+            debug_assert_eq!(task.title, batch_title);
+        }
+        refresh_download_projection(window, state, false);
+    }
+}
+
+fn download_options_from_settings(
+    settings: &apricot_storage::SettingsDocument,
+    settings_file: &std::path::Path,
+) -> DownloadOptions {
+    let packaged_ffmpeg = application_directory()
+        .map(|directory| directory.join("ffmpeg").join("ffmpeg.exe"))
+        .filter(|path| path.is_file());
+    let configured_ffmpeg = nonempty(&settings.ffmpeg_location)
+        .map(PathBuf::from)
+        .filter(|path| path.exists());
+    let cookies_file = nonempty(&settings.cookies_file)
+        .map(PathBuf::from)
+        .filter(|path| path.is_file());
+    DownloadOptions {
+        audio_format: normalized_audio_format(&settings.audio_format),
+        audio_quality: settings.audio_quality.trim().to_owned(),
+        video_format: VideoDownloadFormat::from_setting(&settings.video_format),
+        max_video_height: u32::try_from(settings.max_video_height.clamp(144, 8_640))
+            .unwrap_or(1_080),
+        quiet: settings.quiet_downloads,
+        keep_playlist_order: settings.keep_playlist_order,
+        filename_template: settings.filename_template.clone(),
+        write_thumbnail: settings.write_thumbnail,
+        write_description: settings.write_description,
+        write_info_json: settings.write_info_json,
+        write_subtitles: settings.write_subtitles,
+        write_automatic_subtitles: settings.auto_subtitles,
+        subtitle_languages: settings
+            .subtitle_languages
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .collect(),
+        embed_metadata: settings.embed_metadata,
+        embed_thumbnail: settings.embed_thumbnail,
+        restrict_filenames: settings.restrict_filenames,
+        concurrent_fragments: u32::try_from(settings.concurrent_fragments.clamp(1, 32))
+            .unwrap_or(4),
+        retries: u32::try_from(settings.retries.clamp(0, 100)).unwrap_or(10),
+        socket_timeout_seconds: u32::try_from(settings.socket_timeout.clamp(1, 300)).unwrap_or(20),
+        rate_limit: nonempty(&settings.rate_limit),
+        proxy_url: nonempty(&settings.proxy),
+        cookies_file,
+        ffmpeg_location: configured_ffmpeg.or(packaged_ffmpeg),
+        download_archive: settings.download_archive.then(|| {
+            settings_file
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("download-archive.txt")
+        }),
+    }
+}
+
+fn download_folder_for_item(
+    settings: &apricot_storage::SettingsDocument,
+    item: &apricot_core::MediaItem,
+    collection: bool,
+) -> std::result::Result<PathBuf, String> {
+    let root = PathBuf::from(settings.download_folder.trim());
+    if !root.is_absolute() {
+        return Err("The configured download folder must be an absolute path.".to_owned());
+    }
+    let root_name = root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let mut folder = if item.kind == apricot_core::MediaKind::PodcastEpisode
+        || item.kind == apricot_core::MediaKind::PodcastFeed
+    {
+        if root_name == "podcasts" {
+            root
+        } else if root_name == "music" {
+            root.parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("podcasts")
+        } else {
+            root.join("podcasts")
+        }
+    } else if root_name == "music" {
+        root
+    } else {
+        root.join("music")
+    };
+    if item.kind == apricot_core::MediaKind::PodcastEpisode {
+        let feed = if item.channel.trim().is_empty() {
+            "Unknown podcast"
+        } else {
+            &item.channel
+        };
+        folder.push(safe_path_component(feed));
+    } else if collection {
+        folder.push(safe_path_component(&item.title));
+    }
+    Ok(folder)
+}
+
+fn normalized_audio_format(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "m4a" | "opus" | "wav" | "flac" => value.trim().to_ascii_lowercase(),
+        _ => "mp3".to_owned(),
+    }
+}
+
+fn collection_download_url(item: &apricot_core::MediaItem, url: &str) -> String {
+    if item.kind != apricot_core::MediaKind::Channel {
+        return url.to_owned();
+    }
+    let mut url = url.trim_end_matches('/').to_owned();
+    if !url.ends_with("/videos") {
+        url.push_str("/videos");
+    }
+    url
+}
+
+fn safe_path_component(value: &str) -> String {
+    let result = value
+        .trim()
+        .chars()
+        .map(|character| {
+            if matches!(
+                character,
+                '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+            ) || character.is_control()
+            {
+                '_'
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    let mut result = result
+        .chars()
+        .take(120)
+        .collect::<String>()
+        .trim_matches([' ', '.'])
+        .to_owned();
+    if result.is_empty() {
+        result.push_str("download");
+    }
+    let reserved_stem = result
+        .split_once('.')
+        .map_or(result.as_str(), |(stem, _)| stem)
+        .to_ascii_uppercase();
+    let reserved = matches!(reserved_stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || reserved_stem
+            .strip_prefix("COM")
+            .or_else(|| reserved_stem.strip_prefix("LPT"))
+            .is_some_and(|suffix| suffix.len() == 1 && matches!(suffix.as_bytes()[0], b'1'..=b'9'));
+    if reserved {
+        result.insert(0, '_');
+    }
+    result
+}
+
+unsafe fn poll_download_updates(window: HWND) {
+    loop {
+        let update = state(window).map(|state| state.download_receiver.try_recv());
+        match update {
+            Some(Ok(update)) => apply_download_update(window, update),
+            Some(Err(TryRecvError::Empty)) | None => break,
+            Some(Err(TryRecvError::Disconnected)) => {
+                let _ = KillTimer(Some(window), DOWNLOAD_TIMER_ID);
+                break;
+            }
+        }
+    }
+    if state(window).is_none_or(|state| state.application.downloads().active().is_empty()) {
+        let _ = KillTimer(Some(window), DOWNLOAD_TIMER_ID);
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+unsafe fn apply_download_update(window: HWND, update: DownloadWorkerUpdate) {
+    match update {
+        DownloadWorkerUpdate::Event { task_id, event } => {
+            let Some(state) = state_mut(window) else {
+                return;
+            };
+            match event {
+                DownloadEvent::Progress {
+                    phase,
+                    title,
+                    percent,
+                    playlist_index,
+                    playlist_count,
+                } => {
+                    let status = if phase == DownloadPhase::Processing {
+                        DownloadTaskStatus::Processing
+                    } else {
+                        DownloadTaskStatus::Downloading
+                    };
+                    let _ = state.application.downloads_mut().update_progress(
+                        task_id,
+                        status,
+                        &title,
+                        percent,
+                        playlist_index.and_then(|value| usize::try_from(value).ok()),
+                        playlist_count.and_then(|value| usize::try_from(value).ok()),
+                    );
+                }
+                DownloadEvent::ItemFailed { message } => {
+                    let _ = state
+                        .application
+                        .downloads_mut()
+                        .add_item_failure(task_id, &message);
+                }
+                DownloadEvent::FileFinished { title, .. } => {
+                    if let Some(task) = state.application.downloads().active_task(task_id) {
+                        let should_increment = !matches!(
+                            task.kind,
+                            DownloadTaskKind::Playlist | DownloadTaskKind::Channel
+                        ) || task.total == 0;
+                        let completed =
+                            task.completed.saturating_add(usize::from(should_increment));
+                        let total = task.total.max(completed);
+                        let _ = state
+                            .application
+                            .downloads_mut()
+                            .set_completed(task_id, completed, total);
+                    }
+                    let _ = state.application.downloads_mut().update_progress(
+                        task_id,
+                        DownloadTaskStatus::Processing,
+                        &title,
+                        Some(100.0),
+                        None,
+                        None,
+                    );
+                }
+            }
+            refresh_download_projection(window, state, false);
+        }
+        DownloadWorkerUpdate::Finished {
+            task_id,
+            result,
+            output_directory,
+        } => {
+            let Some(state) = state_mut(window) else {
+                return;
+            };
+            state.download_cancellations.remove(&task_id);
+            let Some(task) = state.application.downloads_mut().finish(task_id) else {
+                return;
+            };
+            let cancelled = result
+                .as_ref()
+                .err()
+                .is_some_and(|error| error.to_ascii_lowercase().contains("cancelled"));
+            let succeeded = result.is_ok();
+            let message = match result {
+                Ok(summary) if !summary.item_failures.is_empty() => {
+                    catalog_text(&state.application, "batch_download_done_with_errors")
+                        .replace("{failed}", &summary.item_failures.len().to_string())
+                }
+                Ok(_) => {
+                    let key = match task.kind {
+                        DownloadTaskKind::Batch => "batch_download_done",
+                        DownloadTaskKind::PodcastFeed => "download_feed_done",
+                        DownloadTaskKind::Playlist => "download_playlist_done",
+                        DownloadTaskKind::Channel => "download_channel_done",
+                        DownloadTaskKind::Single if task.choice == DownloadChoice::Audio => {
+                            "download_audio_done"
+                        }
+                        DownloadTaskKind::Single => "download_video_done",
+                    };
+                    catalog_text(&state.application, key).replace("{title}", &task.title)
+                }
+                Err(_) if cancelled => catalog_text(&state.application, "download_cancelled"),
+                Err(error) => {
+                    catalog_text(&state.application, "download_failed").replace("{error}", &error)
+                }
+            };
+            set_status(state, &message, true);
+            if succeeded {
+                let history_action = match task.kind {
+                    DownloadTaskKind::Single if task.choice == DownloadChoice::Audio => {
+                        Some("downloaded audio")
+                    }
+                    DownloadTaskKind::Single => Some("downloaded video"),
+                    DownloadTaskKind::Playlist => Some("downloaded playlist"),
+                    DownloadTaskKind::Channel => Some("downloaded channel"),
+                    DownloadTaskKind::PodcastFeed | DownloadTaskKind::Batch => None,
+                };
+                if let Some(action) = history_action
+                    && let Err(error) = state.application.record_history(
+                        task.item.clone(),
+                        action,
+                        unix_timestamp(),
+                    )
+                {
+                    set_status(
+                        state,
+                        &format!("Download history was not saved: {error}"),
+                        true,
+                    );
+                }
+            }
+            let foreground = GetForegroundWindow();
+            let app_has_focus = foreground == window
+                || IsChild(window, foreground).as_bool()
+                || GetAncestor(foreground, GA_ROOTOWNER) == window;
+            let popup = app_has_focus
+                && state.application.settings().popup_when_download_complete
+                && !cancelled
+                && succeeded;
+            let open_folder = state.application.settings().open_folder_after_download
+                && succeeded
+                && output_directory.is_dir();
+            let notify = !app_has_focus
+                && state.application.settings().download_notifications
+                && state.application.settings().windows_notifications
+                && succeeded;
+            refresh_download_projection(window, state, true);
+            if notify {
+                let title = catalog_text(&state.application, "notification_download_title");
+                show_tray_notification(window, &title, &message);
+            }
+            if popup {
+                show_error_message(window, &message);
+            }
+            if open_folder
+                && let Err(error) = std::process::Command::new("explorer.exe")
+                    .arg(&output_directory)
+                    .spawn()
+            {
+                set_status(
+                    state,
+                    &format!("Could not open the download folder: {error}"),
+                    true,
+                );
+            }
+        }
+    }
+}
+
+unsafe fn refresh_download_projection(
+    window: HWND,
+    state: &mut WindowState,
+    update_main_menu: bool,
+) {
+    if state.view == MainView::DownloadQueue {
+        refresh_download_queue(state, false, false);
+        layout_controls_state(window, state);
+    } else if update_main_menu && state.view == MainView::MainMenu {
+        refresh_main_menu(state);
+        layout_controls_state(window, state);
+    }
+}
+
+unsafe fn cancel_selected_download(window: HWND) {
+    let task_id = state(window).and_then(|state| {
+        let selected =
+            usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok()?;
+        state
+            .application
+            .downloads()
+            .active()
+            .get(selected)
+            .map(|task| task.id)
+    });
+    let Some(task_id) = task_id else {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "no_active_download"),
+                true,
+            );
+        }
+        return;
+    };
+    cancel_download_task(window, task_id);
+}
+
+unsafe fn remove_selected_queued_download(window: HWND) {
+    let Some(item) = state(window).and_then(|state| {
+        let selected =
+            usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok()?;
+        let queued_index = selected.checked_sub(state.application.downloads().active().len())?;
+        state
+            .application
+            .downloads()
+            .queued()
+            .get(queued_index)
+            .map(|queued| queued.item.clone())
+    }) else {
+        return;
+    };
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let _ = state.application.downloads_mut().remove_queued(&item);
+    let message =
+        catalog_text(&state.application, "download_deselected").replace("{title}", &item.title);
+    set_status(state, &message, true);
+    refresh_download_projection(window, state, false);
+}
+
+unsafe fn cancel_download_task(window: HWND, task_id: u64) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let title = state
+        .application
+        .downloads()
+        .active_task(task_id)
+        .map(|task| task.title.clone());
+    let Some(title) = title else {
+        return;
+    };
+    if let Some(cancellation) = state.download_cancellations.get(&task_id) {
+        cancellation.store(true, AtomicOrdering::Release);
+    }
+    let _ = state.application.downloads_mut().request_cancel(task_id);
+    let message =
+        catalog_text(&state.application, "download_cancel_requested").replace("{title}", &title);
+    set_status(state, &message, true);
+    refresh_download_projection(window, state, false);
+}
+
+unsafe fn cancel_all_downloads(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    if state.application.downloads().active().is_empty() {
+        set_status(
+            state,
+            &catalog_text(&state.application, "no_active_download"),
+            true,
+        );
+        return;
+    }
+    for cancellation in state.download_cancellations.values() {
+        cancellation.store(true, AtomicOrdering::Release);
+    }
+    let _ = state.application.downloads_mut().request_cancel_all();
+    set_status(
+        state,
+        &catalog_text(&state.application, "all_downloads_cancel_requested"),
+        true,
+    );
+    refresh_download_projection(window, state, false);
+}
+
+unsafe fn toggle_active_download_queue(window: HWND) {
+    let Some(item) = active_media_item(window) else {
+        return;
+    };
+    let choice = if item.kind == apricot_core::MediaKind::PodcastEpisode {
+        DownloadChoice::Audio
+    } else {
+        DownloadChoice::Ask
+    };
+    toggle_download_queue_item(window, &item, choice);
+}
+
+unsafe fn toggle_download_queue_item(
+    window: HWND,
+    item: &apricot_core::MediaItem,
+    choice: DownloadChoice,
+) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let outcome = state
+        .application
+        .downloads_mut()
+        .queue_item(item.clone(), choice);
+    let key = match outcome {
+        apricot_app::QueueToggleOutcome::Deselected => "download_deselected",
+        apricot_app::QueueToggleOutcome::Selected
+        | apricot_app::QueueToggleOutcome::SelectionChanged
+            if item.kind == apricot_core::MediaKind::PodcastEpisode =>
+        {
+            "podcast_episode_audio_selected_download"
+        }
+        apricot_app::QueueToggleOutcome::Selected
+        | apricot_app::QueueToggleOutcome::SelectionChanged => "selected_for_download_or_playlist",
+        apricot_app::QueueToggleOutcome::Rejected => "no_selection",
+    };
+    let message = catalog_text(&state.application, key).replace("{title}", &item.title);
+    set_status(state, &message, true);
+    refresh_download_projection(window, state, false);
 }
 
 unsafe fn start_youtube_work(window: HWND, work: SearchWork) {
@@ -8462,7 +9856,8 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
         | MainView::PodcastSearchResults
         | MainView::PodcastCategories
         | MainView::UserPlaylists
-        | MainView::UserPlaylistItems => (ActionScope::List, false),
+        | MainView::UserPlaylistItems
+        | MainView::DownloadQueue => (ActionScope::List, false),
         MainView::Player => (ActionScope::Player, false),
     };
     let Some(action) = action_for_shortcut(
@@ -8670,6 +10065,10 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "add_to_playback_queue" => add_active_item_to_playback_queue(window),
         "remove_from_playback_queue" => remove_active_item_from_playback_queue(window),
         "open_playback_queue" => show_playback_queue(window),
+        "open_current_downloads" => show_download_queue(window),
+        "download_audio" => start_active_download(window, DownloadChoice::Audio),
+        "download_video" => start_active_download(window, DownloadChoice::Video),
+        "queue_audio" => toggle_active_download_queue(window),
         "toggle_podcast_played" => toggle_selected_rss_played(window),
         "clear_podcast_progress" => clear_selected_rss_progress(window),
         "save_podcast_speed_preset" => save_current_podcast_speed_preset(window),
@@ -8851,7 +10250,8 @@ unsafe fn active_media_item(window: HWND) -> Option<apricot_core::MediaItem> {
         | MainView::RssFeeds
         | MainView::PodcastSearchResults
         | MainView::PodcastCategories
-        | MainView::UserPlaylists => None,
+        | MainView::UserPlaylists
+        | MainView::DownloadQueue => None,
     }
 }
 
@@ -10903,6 +12303,7 @@ unsafe fn open_settings(window: HWND) {
         MainView::PodcastCategories => refresh_podcast_categories(state, false),
         MainView::UserPlaylists => refresh_user_playlists(state, false, false),
         MainView::UserPlaylistItems => refresh_user_playlist_items(state, false, false),
+        MainView::DownloadQueue => refresh_download_queue(state, false, false),
         MainView::Search | MainView::DirectLink => {}
         MainView::Player => refresh_player(window, state, false, true),
     }
@@ -10990,7 +12391,8 @@ fn active_primary_control(state: &WindowState) -> HWND {
         | MainView::PodcastSearchResults
         | MainView::PodcastCategories
         | MainView::UserPlaylists
-        | MainView::UserPlaylistItems => state.list,
+        | MainView::UserPlaylistItems
+        | MainView::DownloadQueue => state.list,
         MainView::Player => state.player_controls.initial_focus(),
     }
 }
@@ -11003,13 +12405,16 @@ fn wide(value: &str) -> Vec<u16> {
 mod tests {
     use super::{
         MainView, SEEK_HOLD_DELAY_MS, SEEK_HOLD_INTERVAL_MS, collection_backend,
-        controlled_repeat_timing, copy_wide_array, item_needs_youtube_metadata,
-        list_context_entries, media_resolve_backend, notification_label, resolved_playback_item,
-        result_label, subscription_label, view_has_back_button, view_has_collection_remove,
+        collection_download_url, controlled_repeat_timing, copy_wide_array,
+        download_folder_for_item, item_needs_youtube_metadata, list_context_entries,
+        media_resolve_backend, normalized_audio_format, notification_label, queued_download_label,
+        resolved_playback_item, result_label, safe_path_component, subscription_label,
+        view_has_back_button, view_has_collection_remove,
     };
-    use apricot_app::AppNotification;
+    use apricot_app::{AppNotification, DownloadChoice, QueuedDownload};
     use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
     use apricot_media::{YoutubeBackend, YoutubeCollectionKind};
+    use apricot_storage::SettingsDocument;
 
     #[test]
     fn tray_text_is_cleared_truncated_and_null_terminated() {
@@ -11062,6 +12467,73 @@ mod tests {
     fn notification_center_shows_back_without_a_python_incompatible_remove_button() {
         assert!(view_has_back_button(MainView::NotificationCenter));
         assert!(!view_has_collection_remove(MainView::NotificationCenter));
+    }
+
+    #[test]
+    fn queued_podcast_download_label_has_source_mode_and_state_in_order() {
+        let mut item = youtube_item("podcast");
+        item.kind = MediaKind::PodcastEpisode;
+        item.source = MediaSource::Podcast;
+        item.title = "Episode One".to_owned();
+        let queued = QueuedDownload {
+            item,
+            choice: DownloadChoice::Audio,
+        };
+        let catalog = apricot_app::embedded_catalog("en");
+
+        assert_eq!(
+            queued_download_label(&queued, &catalog),
+            "Episode One | Podcast episode | podcast audio queued | Queued"
+        );
+    }
+
+    #[test]
+    fn download_paths_are_absolute_source_aware_and_windows_safe() {
+        let mut settings = SettingsDocument {
+            download_folder: r"C:\Downloads".to_owned(),
+            ..SettingsDocument::default()
+        };
+        let mut podcast = youtube_item("podcast");
+        podcast.kind = MediaKind::PodcastEpisode;
+        podcast.source = MediaSource::Podcast;
+        podcast.channel = "A:Podcast".to_owned();
+        assert_eq!(
+            download_folder_for_item(&settings, &podcast, false).expect("podcast folder"),
+            std::path::PathBuf::from(r"C:\Downloads\podcasts\A_Podcast")
+        );
+
+        settings.download_folder = "relative".to_owned();
+        assert!(download_folder_for_item(&settings, &podcast, false).is_err());
+        assert_eq!(safe_path_component("CON.txt"), "_CON.txt");
+        assert_eq!(safe_path_component("Lpt9"), "_Lpt9");
+        assert_eq!(
+            safe_path_component("name:with*invalid?chars"),
+            "name_with_invalid_chars"
+        );
+        assert_eq!(
+            safe_path_component(&format!("{}.tail", "a".repeat(119))),
+            "a".repeat(119)
+        );
+    }
+
+    #[test]
+    fn channel_downloads_use_only_the_videos_tab() {
+        let mut channel = youtube_item("channel");
+        channel.kind = MediaKind::Channel;
+        assert_eq!(
+            collection_download_url(&channel, "https://youtube.com/@apricot/"),
+            "https://youtube.com/@apricot/videos"
+        );
+        assert_eq!(
+            collection_download_url(&channel, "https://youtube.com/@apricot/videos"),
+            "https://youtube.com/@apricot/videos"
+        );
+    }
+
+    #[test]
+    fn unsupported_audio_format_uses_python_mp3_fallback() {
+        assert_eq!(normalized_audio_format("FLAC"), "flac");
+        assert_eq!(normalized_audio_format("aac"), "mp3");
     }
 
     #[test]
@@ -11165,6 +12637,8 @@ mod tests {
                 "play_playlist",
                 "shuffle_playlist",
                 "open_playlist_videos",
+                "download_audio",
+                "download_video",
                 "add_favorite",
                 "copy_link",
             ]

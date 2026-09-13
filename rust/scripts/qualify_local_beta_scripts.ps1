@@ -23,6 +23,7 @@ try {
     $BundledMpvD3dCompiler = Join-Path $PackageDir "mpv\d3dcompiler_43.dll"
     $BundledYoutubeHelper = Join-Path $PackageDir "components\apricot-youtube-helper.exe"
     $BundledYtDlp = Join-Path $PackageDir "components\yt-dlp.exe"
+    $BundledFfmpeg = Join-Path $PackageDir "ffmpeg\ffmpeg.exe"
     if (-not (Test-Path -LiteralPath $BundledMpv -PathType Leaf)) {
         throw "Local beta package omitted mpv.exe"
     }
@@ -37,6 +38,9 @@ try {
     }
     if (-not (Test-Path -LiteralPath $BundledYtDlp -PathType Leaf)) {
         throw "Local beta package omitted standalone yt-dlp"
+    }
+    if (-not (Test-Path -LiteralPath $BundledFfmpeg -PathType Leaf)) {
+        throw "Local beta package omitted FFmpeg"
     }
     $BuildInfo = Get-Content -LiteralPath (Join-Path $PackageDir "build-info.json") -Raw | ConvertFrom-Json
     if ($BuildInfo.bundled_components.nvda_controller_client -ne "nvda/nvdaControllerClient64.dll") {
@@ -60,6 +64,9 @@ try {
     if ($BuildInfo.bundled_components.yt_dlp -ne "components/yt-dlp.exe" -or
         $BuildInfo.bundled_components.yt_dlp_version -ne "2026.08.19") {
         throw "Local beta build metadata omitted the standalone yt-dlp component"
+    }
+    if ($BuildInfo.bundled_components.ffmpeg -ne "ffmpeg/ffmpeg.exe") {
+        throw "Local beta build metadata omitted FFmpeg"
     }
     Copy-Item -LiteralPath $PackageDir -Destination $TamperedPackage -Recurse
     Add-Content -LiteralPath (Join-Path $TamperedPackage "build-info.json") -Value "tampered"
@@ -91,17 +98,26 @@ try {
     }
     $InstalledYoutubeHelper = Join-Path $InstallRoot "components\apricot-youtube-helper.exe"
     $InstalledYtDlp = Join-Path $InstallRoot "components\yt-dlp.exe"
+    $InstalledFfmpeg = Join-Path $InstallRoot "ffmpeg\ffmpeg.exe"
     if (-not (Test-Path -LiteralPath $InstalledYoutubeHelper -PathType Leaf)) {
         throw "Installed local beta omitted the Rust YouTube helper"
     }
     if (-not (Test-Path -LiteralPath $InstalledYtDlp -PathType Leaf)) {
         throw "Installed local beta omitted standalone yt-dlp"
     }
+    if (-not (Test-Path -LiteralPath $InstalledFfmpeg -PathType Leaf)) {
+        throw "Installed local beta omitted FFmpeg"
+    }
     $InstalledYtDlpOutput = @(& $InstalledYtDlp --version)
     $InstalledYtDlpExitCode = $LASTEXITCODE
     $InstalledYtDlpVersion = ($InstalledYtDlpOutput | Select-Object -First 1).Trim()
     if ($InstalledYtDlpExitCode -ne 0 -or $InstalledYtDlpVersion -ne "2026.08.19") {
         throw "Installed standalone yt-dlp failed its version check (exit=$InstalledYtDlpExitCode, version='$InstalledYtDlpVersion')"
+    }
+    $InstalledFfmpegOutput = @(& $InstalledFfmpeg -version)
+    $InstalledFfmpegExitCode = $LASTEXITCODE
+    if ($InstalledFfmpegExitCode -ne 0 -or -not (($InstalledFfmpegOutput | Select-Object -First 1) -match '^ffmpeg version ')) {
+        throw "Installed FFmpeg failed its version check (exit=$InstalledFfmpegExitCode)"
     }
     $YoutubeProtocolVersion = 4
     $HelloRequest = [ordered]@{

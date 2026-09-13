@@ -17,6 +17,8 @@ mod clipboard_win32;
 #[cfg(windows)]
 mod details_win32;
 #[cfg(windows)]
+mod download_win32;
+#[cfg(windows)]
 mod file_dialog_win32;
 #[cfg(windows)]
 mod first_run_language_win32;

@@ -99,6 +99,13 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "yt-dlp preparation failed with exit code $LASTEXITCODE" }
     }
     Copy-Item -LiteralPath $YtDlpSource -Destination $ComponentsDestination
+    $FfmpegSource = Join-Path (Split-Path -Parent $RustRoot) "vendor\ffmpeg\ffmpeg.exe"
+    if (-not (Test-Path -LiteralPath $FfmpegSource -PathType Leaf)) {
+        throw "Bundled FFmpeg executable was not found at $FfmpegSource"
+    }
+    $FfmpegDestination = Join-Path $StagingDir "ffmpeg"
+    New-Item -ItemType Directory -Path $FfmpegDestination -Force | Out-Null
+    Copy-Item -LiteralPath $FfmpegSource -Destination $FfmpegDestination
     $BuildInfo = [ordered]@{
         schema_version = 1
         application_id = "ApricotPlayer.RustBeta"
@@ -121,6 +128,7 @@ try {
             rusty_ytdl_revision = "b1c6eb7c83f0d6189f256ed5df50019a5803c734"
             yt_dlp = "components/yt-dlp.exe"
             yt_dlp_version = "2026.08.19"
+            ffmpeg = "ffmpeg/ffmpeg.exe"
         }
     }
     $BuildInfo | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $StagingDir "build-info.json") -Encoding utf8
