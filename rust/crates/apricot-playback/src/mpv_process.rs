@@ -503,6 +503,7 @@ fn event_monitor_inner(
         (11, "audio-params/samplerate"),
         (12, "audio-params/channel-count"),
         (13, "audio-params/hr-channels"),
+        (14, "chapter-list"),
     ] {
         let mut payload = serde_json::to_vec(&json!({
             "command": ["observe_property", observer_id, property]
@@ -588,6 +589,14 @@ fn project_event(
             let _ = sender.try_send(PlaybackEvent::Ended);
         }
         Some("property-change") => match event.get("name").and_then(Value::as_str) {
+            Some("chapter-list") => {
+                media_info.chapters = event
+                    .get("data")
+                    .and_then(Value::as_array)
+                    .map(|chapters| chapters.iter().take(10000).cloned().collect())
+                    .unwrap_or_default();
+                emit_media_info(sender, media_info);
+            }
             Some("pause") => {
                 if let Some(paused) = event.get("data").and_then(Value::as_bool) {
                     let _ = sender.try_send(PlaybackEvent::Paused(paused));

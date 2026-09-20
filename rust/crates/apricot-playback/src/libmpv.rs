@@ -20,6 +20,92 @@ const MPV_FORMAT_STRING: c_int = 1;
 const MPV_FORMAT_FLAG: c_int = 3;
 const MPV_FORMAT_INT64: c_int = 4;
 const MPV_FORMAT_DOUBLE: c_int = 5;
+const MPV_FORMAT_NODE: c_int = 6;
+const MPV_FORMAT_NODE_ARRAY: c_int = 7;
+const MPV_FORMAT_NODE_MAP: c_int = 8;
+
+#[repr(C)]
+union NodeValue {
+    string: *const c_char,
+    integer: i64,
+    double: f64,
+    list: *const NodeList,
+}
+
+#[repr(C)]
+struct Node {
+    value: NodeValue,
+    format: c_int,
+}
+
+#[repr(C)]
+struct NodeList {
+    count: c_int,
+    values: *const Node,
+    keys: *const *const c_char,
+}
+
+// libmpv owns these nodes until the next wait_event call. Copy only the shallow
+// chapter array/maps while that lifetime is active; never retain native pointers.
+unsafe fn chapter_node(node: &Node, depth: usize) -> serde_json::Value {
+    use serde_json::Value;
+    if depth > 3 {
+        return Value::Null;
+    }
+    match node.format {
+        MPV_FORMAT_STRING if !node.value.string.is_null() => Value::String(
+            CStr::from_ptr(node.value.string)
+                .to_string_lossy()
+                .chars()
+                .take(4096)
+                .collect(),
+        ),
+        MPV_FORMAT_DOUBLE => {
+            serde_json::Number::from_f64(node.value.double).map_or(Value::Null, Value::Number)
+        }
+        MPV_FORMAT_INT64 => Value::from(node.value.integer),
+        MPV_FORMAT_NODE_ARRAY | MPV_FORMAT_NODE_MAP if !node.value.list.is_null() => {
+            let list = &*node.value.list;
+            let Ok(count) = usize::try_from(list.count) else {
+                return Value::Null;
+            };
+            if count > 10000 || (count > 0 && list.values.is_null()) {
+                return Value::Null;
+            }
+            if count == 0 {
+                return if node.format == MPV_FORMAT_NODE_ARRAY {
+                    Value::Array(Vec::new())
+                } else {
+                    Value::Object(serde_json::Map::new())
+                };
+            }
+            let values = std::slice::from_raw_parts(list.values, count);
+            if node.format == MPV_FORMAT_NODE_ARRAY {
+                return Value::Array(
+                    values
+                        .iter()
+                        .map(|value| chapter_node(value, depth + 1))
+                        .collect(),
+                );
+            }
+            if list.keys.is_null() {
+                return Value::Null;
+            }
+            let keys = std::slice::from_raw_parts(list.keys, count);
+            let mut result = serde_json::Map::new();
+            for (key, value) in keys.iter().zip(values) {
+                if !key.is_null() {
+                    let key = CStr::from_ptr(*key).to_string_lossy();
+                    if matches!(key.as_ref(), "time" | "title") {
+                        result.insert(key.into_owned(), chapter_node(value, depth + 1));
+                    }
+                }
+            }
+            Value::Object(result)
+        }
+        _ => Value::Null,
+    }
+}
 const MPV_EVENT_SHUTDOWN: c_int = 1;
 const MPV_EVENT_END_FILE: c_int = 7;
 const MPV_EVENT_FILE_LOADED: c_int = 8;
@@ -317,6 +403,13 @@ impl LibMpvEngine {
             return Ok(None);
         }
         match CStr::from_ptr(property.name).to_bytes() {
+            b"chapter-list" if property.format == MPV_FORMAT_NODE => {
+                self.media_info.chapters = chapter_node(&*property.data.cast::<Node>(), 0)
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                Ok(Some(self.media_info_event()))
+            }
             b"pause" if property.format == MPV_FORMAT_FLAG => {
                 let paused = *property.data.cast::<c_int>() != 0;
                 Ok(Some(PlaybackEvent::Paused(paused)))
@@ -549,6 +642,7 @@ unsafe fn subscribe(api: &MpvApi, handle: *mut MpvHandle) -> Result<(), Playback
         (10, "audio-params/samplerate", MPV_FORMAT_INT64),
         (11, "audio-params/channel-count", MPV_FORMAT_INT64),
         (12, "audio-params/hr-channels", MPV_FORMAT_STRING),
+        (13, "chapter-list", MPV_FORMAT_NODE),
     ] {
         api.observe(handle, id, name, format)?;
     }
@@ -671,6 +765,71 @@ mod tests {
 
     use super::{command_arguments, library_path};
     use crate::{MpvLaunchOptions, PlaybackCommand};
+
+    #[test]
+    fn chapter_nodes_are_copied_without_retaining_native_pointers() {
+        use super::{
+            MPV_FORMAT_DOUBLE, MPV_FORMAT_NODE_ARRAY, MPV_FORMAT_NODE_MAP, MPV_FORMAT_STRING, Node,
+            NodeList, NodeValue,
+        };
+        let title = std::ffi::CString::new("Opening").unwrap();
+        let keys = [c"time".as_ptr(), c"title".as_ptr()];
+        let values = [
+            Node {
+                value: NodeValue { double: 12.5 },
+                format: MPV_FORMAT_DOUBLE,
+            },
+            Node {
+                value: NodeValue {
+                    string: title.as_ptr(),
+                },
+                format: MPV_FORMAT_STRING,
+            },
+        ];
+        let map = NodeList {
+            count: 2,
+            values: values.as_ptr(),
+            keys: keys.as_ptr(),
+        };
+        let child = Node {
+            value: NodeValue {
+                list: &raw const map,
+            },
+            format: MPV_FORMAT_NODE_MAP,
+        };
+        let list = NodeList {
+            count: 1,
+            values: &raw const child,
+            keys: std::ptr::null(),
+        };
+        let root = Node {
+            value: NodeValue {
+                list: &raw const list,
+            },
+            format: MPV_FORMAT_NODE_ARRAY,
+        };
+        // SAFETY: All pointers reference live local allocations for the complete call.
+        let copied = unsafe { super::chapter_node(&root, 0) };
+        drop(title);
+        assert_eq!(copied, serde_json::json!([{"time":12.5,"title":"Opening"}]));
+    }
+
+    #[test]
+    fn chapter_nodes_reject_invalid_lengths_before_dereferencing_values() {
+        let list = super::NodeList {
+            count: -1,
+            values: std::ptr::null(),
+            keys: std::ptr::null(),
+        };
+        let root = super::Node {
+            value: super::NodeValue {
+                list: &raw const list,
+            },
+            format: super::MPV_FORMAT_NODE_ARRAY,
+        };
+        // SAFETY: The list is live and rejected before its null values pointer is accessed.
+        assert!(unsafe { super::chapter_node(&root, 0) }.is_null());
+    }
 
     #[test]
     fn library_defaults_to_the_runtime_directory() {

@@ -8890,8 +8890,7 @@ unsafe fn poll_playback_runtime(window: HWND) {
                 );
                 refresh_player(window, state, false, true);
             }
-            PlaybackEvent::Position { .. } => {}
-            PlaybackEvent::MediaInfo(_) => {}
+            PlaybackEvent::Position { .. } | PlaybackEvent::MediaInfo(_) => {}
             PlaybackEvent::PreviewFinished => {
                 if state
                     .clip_preview
@@ -10766,6 +10765,9 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "player_previous" => navigate_player_relative(window, -1),
         "player_next" => navigate_player_relative(window, 1),
         "player_time" => announce_player_time(window),
+        "player_previous_chapter" => seek_relative_player_chapter(window, false),
+        "player_chapters" => show_player_chapters(window),
+        "player_next_chapter" => seek_relative_player_chapter(window, true),
         "player_marker_start" => toggle_player_clip_marker(window, true),
         "player_marker_end" => toggle_player_clip_marker(window, false),
         "player_preview_marked_clip" => preview_marked_clip(window),
@@ -12422,6 +12424,120 @@ unsafe fn announce_player_time(window: HWND) {
         },
     );
     set_status(state, &message, true);
+}
+
+unsafe fn show_player_chapters(window: HWND) {
+    stop_controlled_repeat(window);
+    let Some(main_state) = state_mut(window) else {
+        return;
+    };
+    let session = main_state.application.player_session();
+    let Some(_) = session.current_item() else {
+        return;
+    };
+    let chapters = apricot_app::chapters::session_chapters(session);
+    if chapters.is_empty() {
+        set_status(
+            main_state,
+            &catalog_text(&main_state.application, "no_chapters_available"),
+            true,
+        );
+        return;
+    }
+    let generation = session.generation();
+    let position = session.position_seconds();
+    let selected = chapters
+        .iter()
+        .rposition(|chapter| chapter.start_seconds <= position + 0.1)
+        .unwrap_or(0);
+    let title = catalog_text(&main_state.application, "chapters");
+    let list_name = catalog_text(&main_state.application, "chapter_list");
+    let play = catalog_text(&main_state.application, "play");
+    let back = catalog_text(&main_state.application, "back");
+    let choices = chapters
+        .iter()
+        .enumerate()
+        .map(|(index, chapter)| {
+            let name = if chapter.title.is_empty() {
+                format!("{title} {}", index + 1)
+            } else {
+                chapter.title.clone()
+            };
+            let time = format_duration(chapter.start_seconds);
+            let range = chapter.end_seconds.map_or(time.clone(), |end| {
+                format!("{time} - {}", format_duration(end))
+            });
+            format!("{}. {range}. {name}", index + 1)
+        })
+        .collect::<Vec<_>>();
+    main_state.modal_open = true;
+    let outcome = crate::playlist_dialog_win32::choose_with_initial(
+        window, &title, &list_name, &choices, selected, &play, &back,
+    );
+    if let Some(main_state) = state_mut(window) {
+        main_state.modal_open = false;
+    }
+    resume_deferred_window_work(window);
+    match outcome {
+        Ok(Some(index)) => {
+            if state(window)
+                .is_some_and(|state| state.application.player_session().generation() == generation)
+                && let Some(chapter) = chapters.get(index)
+            {
+                seek_player_absolute(window, chapter.start_seconds);
+                if let Some(main_state) = state(window) {
+                    let name = if chapter.title.is_empty() {
+                        &title
+                    } else {
+                        &chapter.title
+                    };
+                    let message = catalog_text(&main_state.application, "chapter_selected")
+                        .replace("{title}", name)
+                        .replace("{time}", &format_duration(chapter.start_seconds));
+                    set_status(main_state, &message, true);
+                }
+            }
+        }
+        Ok(None) => {}
+        Err(error) => show_error_message(window, &error.to_string()),
+    }
+    if let Some(main_state) = state(window) {
+        let _ = SetFocus(Some(active_primary_control(main_state)));
+    }
+}
+
+unsafe fn seek_relative_player_chapter(window: HWND, next: bool) {
+    let Some(main_state) = state(window) else {
+        return;
+    };
+    let session = main_state.application.player_session();
+    let Some(_) = session.current_item() else {
+        return;
+    };
+    let chapters = apricot_app::chapters::session_chapters(session);
+    let Some(chapter) =
+        apricot_app::chapters::relative_chapter(&chapters, session.position_seconds(), next)
+    else {
+        set_status(
+            main_state,
+            &catalog_text(&main_state.application, "no_chapters_available"),
+            true,
+        );
+        return;
+    };
+    let title = if chapter.title.is_empty() {
+        catalog_text(&main_state.application, "chapters")
+    } else {
+        chapter.title.clone()
+    };
+    let message = catalog_text(&main_state.application, "chapter_selected")
+        .replace("{title}", &title)
+        .replace("{time}", &format_duration(chapter.start_seconds));
+    let target = chapter.start_seconds;
+    seek_player_absolute(window, target);
+    if let Some(state) = state(window) {
+        set_status(state, &message, true);
+    }
 }
 
 unsafe fn toggle_player_clip_marker(window: HWND, start: bool) {

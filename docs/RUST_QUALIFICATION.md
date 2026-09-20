@@ -862,3 +862,19 @@ Other open issues include export cancellation and source HTTP-header forwarding,
 and preview completion projection when UI event consumption is delayed. This is
 not a declaration of full marked-clip or overall product parity. No public release
 or stable installation change was made.
+
+## Chapter implementation checkpoint (2026-09-20)
+
+The player Chapters action now opens the native list picker with current-chapter
+selection, time ranges, Play and Back. Previous/next chapter actions retain the
+Python 0.75/1.5-second thresholds. Chapter normalization accepts the Python field
+aliases and numeric/clock-string timestamps. Source metadata takes precedence;
+libmpv chapter-list observations provide embedded chapters as a fallback. The
+external mpv qualification adapter also observes chapter-list.
+
+Evidence: three chapter model tests, 22 playback tests including native node
+copy lifetime and invalid-list bounds, workspace compilation and full-workspace
+Clippy. The node layout was checked against mpv's public client.h. Real embedded
+media, external podcast chapter fetch, default/custom dialog shortcuts, full
+UI parity and NVDA/computer-use acceptance remain open. No chapter manifest gate
+has been marked complete based solely on these unit tests.

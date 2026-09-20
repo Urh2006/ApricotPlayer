@@ -53,6 +53,7 @@ pub enum PlaybackCommand {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PlaybackMediaInfo {
+    pub chapters: Vec<serde_json::Value>,
     pub container: Option<String>,
     pub video_codec: Option<String>,
     pub width: Option<u32>,

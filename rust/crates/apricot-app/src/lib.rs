@@ -4,6 +4,7 @@ pub mod action_finder;
 pub mod activation;
 pub mod application;
 pub mod bookmark_controller;
+pub mod chapters;
 pub mod download_controller;
 pub mod last_player_session_controller;
 pub mod local_folder;
