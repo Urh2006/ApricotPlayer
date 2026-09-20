@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+pub mod clip_export;
 pub mod diagnostics;
 pub mod download;
 pub mod local_media;
@@ -17,6 +18,10 @@ pub mod youtube_helper_process;
 pub mod youtube_search_service;
 pub mod ytdlp_youtube;
 
+pub use clip_export::{
+    ClipExportError, ClipExportMode, ClipExportRequest, build_clip_export_arguments,
+    export_marked_clip,
+};
 pub use diagnostics::{DiagnosticLog, DiagnosticLogError, install_panic_hook};
 pub use download::{
     DownloadError, DownloadEvent, DownloadMode, DownloadOptions, DownloadPhase, DownloadRequest,

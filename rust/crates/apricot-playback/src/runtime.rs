@@ -37,6 +37,14 @@ pub enum PlaybackRuntimeError {
 }
 
 enum RuntimeRequest {
+    CancelPreview {
+        generation: u64,
+    },
+    Preview {
+        generation: u64,
+        start: f64,
+        end: f64,
+    },
     Start {
         generation: u64,
         options: Box<MpvLaunchOptions>,
@@ -63,6 +71,29 @@ pub struct PlaybackRuntime {
 }
 
 impl PlaybackRuntime {
+    /// Seeks, unpauses, and arms a generation-bound preview in one worker turn.
+    ///
+    /// # Errors
+    /// Returns an error if the worker queue is full or disconnected.
+    pub fn preview(
+        &self,
+        generation: u64,
+        start: f64,
+        end: f64,
+    ) -> Result<(), PlaybackRuntimeError> {
+        self.send(RuntimeRequest::Preview {
+            generation,
+            start,
+            end,
+        })
+    }
+    /// Cancels the matching preview without changing playback position or pause.
+    ///
+    /// # Errors
+    /// Returns an error if the worker queue is full or disconnected.
+    pub fn cancel_preview(&self, generation: u64) -> Result<(), PlaybackRuntimeError> {
+        self.send(RuntimeRequest::CancelPreview { generation })
+    }
     /// Creates the worker thread without loading libmpv. The first media request
     /// lazily creates one in-process player, keeping application launch fast.
     ///
@@ -174,6 +205,7 @@ fn playback_worker(
     mut factory: EngineFactory,
 ) {
     let mut active: Option<(u64, Box<dyn PlaybackEngine>)> = None;
+    let mut preview: Option<(u64, f64, f64, bool)> = None;
     loop {
         let request = if active.is_some() {
             match requests.recv_timeout(ACTIVE_POLL_INTERVAL) {
@@ -189,11 +221,47 @@ fn playback_worker(
         };
         if let Some(request) = request {
             match request {
+                RuntimeRequest::CancelPreview { generation } => {
+                    if preview.is_some_and(|(current, ..)| current == generation) {
+                        preview = None;
+                    }
+                }
+                RuntimeRequest::Preview {
+                    generation,
+                    start,
+                    end,
+                } => {
+                    if start.is_finite()
+                        && end.is_finite()
+                        && start >= 0.0
+                        && end - start >= 0.25
+                        && let Some((current, engine)) = active.as_mut()
+                        && *current == generation
+                    {
+                        preview = None;
+                        let result = engine
+                            .execute(PlaybackCommand::SeekAbsolute {
+                                seconds: start,
+                                exact: true,
+                            })
+                            .and_then(|()| engine.execute(PlaybackCommand::SetPaused(false)));
+                        match result {
+                            Ok(()) => preview = Some((generation, start, end, false)),
+                            Err(error) => {
+                                let _ = updates.try_send(PlaybackUpdate {
+                                    generation,
+                                    event: PlaybackEvent::Failed(error.to_string()),
+                                });
+                            }
+                        }
+                    }
+                }
                 RuntimeRequest::Start {
                     generation,
                     options,
                     item,
                 } => {
+                    preview = None;
                     active = start_or_replace_engine(
                         active,
                         generation,
@@ -206,19 +274,34 @@ fn playback_worker(
                 RuntimeRequest::Execute {
                     generation,
                     command,
-                } => execute_if_current(&mut active, generation, command, updates),
+                } => {
+                    if active
+                        .as_ref()
+                        .is_some_and(|(current, _)| *current == generation)
+                        && matches!(
+                            command,
+                            PlaybackCommand::SeekAbsolute { .. }
+                                | PlaybackCommand::SeekRelative { .. }
+                                | PlaybackCommand::SetPaused(_)
+                        )
+                    {
+                        preview = None;
+                    }
+                    execute_if_current(&mut active, generation, command, updates);
+                }
                 RuntimeRequest::Close { generation } => {
                     if active
                         .as_ref()
                         .is_some_and(|(active_generation, _)| *active_generation == generation)
                     {
                         active = None;
+                        preview = None;
                     }
                 }
                 RuntimeRequest::Shutdown => break,
             }
         }
-        poll_engine_events(&mut active, updates);
+        poll_engine_events(&mut active, updates, &mut preview);
     }
 }
 
@@ -280,13 +363,40 @@ fn execute_if_current(
 fn poll_engine_events(
     active: &mut Option<(u64, Box<dyn PlaybackEngine>)>,
     updates: &SyncSender<PlaybackUpdate>,
+    preview: &mut Option<(u64, f64, f64, bool)>,
 ) {
     let Some((generation, engine)) = active else {
         return;
     };
     for _ in 0..MAX_EVENTS_PER_TICK {
         match engine.poll_event() {
-            Ok(Some(event)) => {
+            Ok(Some(mut event)) => {
+                let finish = preview
+                    .as_mut()
+                    .is_some_and(|(token, start, end, arrived)| {
+                        if token != generation {
+                            return false;
+                        }
+                        match &event {
+                            PlaybackEvent::Position { elapsed, .. } if elapsed.is_finite() => {
+                                if *elapsed >= *start - 0.1 && *elapsed < *end - 0.03 {
+                                    *arrived = true;
+                                }
+                                *arrived && *elapsed >= *end - 0.03
+                            }
+                            PlaybackEvent::Ended => true,
+                            _ => false,
+                        }
+                    });
+                if finish {
+                    *preview = None;
+                    if let Err(error) = engine.execute(PlaybackCommand::SetPaused(true)) {
+                        emit_failure(updates, *generation, &error);
+                    }
+                    if matches!(event, PlaybackEvent::Ended) {
+                        event = PlaybackEvent::Paused(true);
+                    }
+                }
                 let _ = updates.try_send(PlaybackUpdate {
                     generation: *generation,
                     event,
@@ -400,6 +510,68 @@ mod tests {
         assert_eq!(commands.len(), 2);
         assert!(matches!(commands[0], PlaybackCommand::Load { .. }));
         assert_eq!(commands[1], PlaybackCommand::SetPaused(true));
+    }
+
+    #[test]
+    fn preview_seeks_and_unpauses_only_the_current_generation() {
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let fake_commands = Arc::clone(&commands);
+        let runtime = PlaybackRuntime::spawn_with(Box::new(move |_| {
+            Ok(Box::new(FakeEngine {
+                events: Vec::new(),
+                commands: Arc::clone(&fake_commands),
+            }))
+        }))
+        .expect("runtime");
+        runtime
+            .start(7, MpvLaunchOptions::new("mpv.exe"), item("track"))
+            .expect("start");
+        runtime.preview(6, 10.0, 15.0).expect("stale preview");
+        runtime.preview(7, 10.0, 10.1).expect("invalid range");
+        runtime.preview(7, 10.0, 15.0).expect("preview");
+        runtime.cancel_preview(7).expect("cancel");
+        // Shutdown joins the worker after all previously queued requests.
+        drop(runtime);
+        let commands = commands.lock().expect("commands");
+        assert_eq!(commands.len(), 3);
+        assert_eq!(
+            commands[1],
+            PlaybackCommand::SeekAbsolute {
+                seconds: 10.0,
+                exact: true
+            }
+        );
+        assert_eq!(commands[2], PlaybackCommand::SetPaused(false));
+    }
+
+    #[test]
+    fn preview_pauses_in_worker_without_ui_consuming_updates() {
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let engine = FakeEngine {
+            events: vec![
+                PlaybackEvent::Position {
+                    elapsed: 15.0,
+                    duration: Some(90.0),
+                },
+                PlaybackEvent::Position {
+                    elapsed: 10.0,
+                    duration: Some(90.0),
+                },
+            ],
+            commands: Arc::clone(&commands),
+        };
+        let mut active = Some((7, Box::new(engine) as Box<dyn PlaybackEngine>));
+        let (sender, _unread_receiver) = std::sync::mpsc::sync_channel(128);
+        let mut preview = Some((7, 10.0, 15.0, false));
+        super::poll_engine_events(&mut active, &sender, &mut preview);
+        assert!(preview.is_none());
+        assert!(
+            commands
+                .lock()
+                .expect("commands")
+                .iter()
+                .any(|command| matches!(command, PlaybackCommand::SetPaused(true)))
+        );
     }
 
     #[test]

@@ -13,11 +13,9 @@ encoding_rs.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tempfile = "3"
 url.workspace = true
 windows.workspace = true
-
-[dev-dependencies]
-tempfile = "3"
 
 [lints]
 workspace = true

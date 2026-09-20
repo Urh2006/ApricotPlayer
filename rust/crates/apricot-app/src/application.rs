@@ -1848,6 +1848,14 @@ impl Application {
         self.state.player.set_volume(volume);
     }
 
+    pub fn toggle_player_clip_marker(&mut self, start: bool) -> Option<f64> {
+        if start {
+            self.state.player.toggle_clip_start()
+        } else {
+            self.state.player.toggle_clip_end()
+        }
+    }
+
     pub fn set_player_speed(&mut self, speed: f64) {
         self.state.player.set_speed(speed);
     }

@@ -57,6 +57,8 @@ pub struct PlayerSession {
     enabled_toggles: BTreeSet<SessionToggle>,
     position_seconds: f64,
     duration_seconds: Option<f64>,
+    clip_start_seconds: Option<f64>,
+    clip_end_seconds: Option<f64>,
     media_info: PlaybackMediaInfo,
     last_error: Option<String>,
 }
@@ -92,6 +94,21 @@ impl PlayerSession {
 
     pub const fn duration_seconds(&self) -> Option<f64> {
         self.duration_seconds
+    }
+
+    pub const fn clip_start_seconds(&self) -> Option<f64> {
+        self.clip_start_seconds
+    }
+
+    pub const fn clip_end_seconds(&self) -> Option<f64> {
+        self.clip_end_seconds
+    }
+
+    pub const fn clip_range(&self) -> Option<(f64, f64)> {
+        match (self.clip_start_seconds, self.clip_end_seconds) {
+            (Some(start), Some(end)) if end - start >= 0.25 => Some((start, end)),
+            _ => None,
+        }
     }
 
     pub const fn media_info(&self) -> &PlaybackMediaInfo {
@@ -131,6 +148,8 @@ impl PlayerSession {
             .unwrap_or_default()
             .max(0.0);
         self.duration_seconds = None;
+        self.clip_start_seconds = None;
+        self.clip_end_seconds = None;
         self.media_info = PlaybackMediaInfo::default();
         self.last_error = None;
         self.generation
@@ -201,6 +220,26 @@ impl PlayerSession {
         }
     }
 
+    /// Sets or clears a clip marker. Repeating the same marker action clears it,
+    /// matching the Python player's toggle behavior.
+    pub fn toggle_clip_start(&mut self) -> Option<f64> {
+        if self.clip_start_seconds.take().is_some() {
+            return None;
+        }
+        let position = self.position_seconds.max(0.0);
+        self.clip_start_seconds = Some(position);
+        Some(position)
+    }
+
+    pub fn toggle_clip_end(&mut self) -> Option<f64> {
+        if self.clip_end_seconds.take().is_some() {
+            return None;
+        }
+        let position = self.position_seconds.max(0.0);
+        self.clip_end_seconds = Some(position);
+        Some(position)
+    }
+
     pub fn close(&mut self) {
         self.advance_generation();
         self.phase = PlaybackPhase::Closed;
@@ -209,6 +248,8 @@ impl PlayerSession {
         self.enabled_toggles.clear();
         self.position_seconds = 0.0;
         self.duration_seconds = None;
+        self.clip_start_seconds = None;
+        self.clip_end_seconds = None;
         self.media_info = PlaybackMediaInfo::default();
         self.last_error = None;
     }
@@ -358,5 +399,58 @@ mod tests {
         ));
         assert!(session.media_info().audio_codec.is_none());
         assert!(session.apply_event(second, PlaybackEvent::Started));
+    }
+
+    #[test]
+    fn clip_markers_toggle_independently_and_never_cross_media() {
+        let mut session = PlayerSession::default();
+        let first = session.start_item(item("first"), defaults());
+        assert!(session.apply_event(
+            first,
+            PlaybackEvent::Position {
+                elapsed: 12.5,
+                duration: Some(90.0),
+            }
+        ));
+        assert_eq!(session.toggle_clip_start(), Some(12.5));
+        assert_eq!(session.clip_range(), None);
+        assert!(session.apply_event(
+            first,
+            PlaybackEvent::Position {
+                elapsed: 20.0,
+                duration: Some(90.0),
+            }
+        ));
+        assert_eq!(session.toggle_clip_end(), Some(20.0));
+        assert_eq!(session.clip_range(), Some((12.5, 20.0)));
+        assert_eq!(session.toggle_clip_end(), None);
+        assert_eq!(session.clip_end_seconds(), None);
+
+        session.start_item(item("second"), defaults());
+        assert_eq!(session.clip_start_seconds(), None);
+        assert_eq!(session.clip_end_seconds(), None);
+    }
+
+    #[test]
+    fn clip_range_rejects_reversed_and_too_short_markers() {
+        let mut session = PlayerSession::default();
+        let generation = session.start_item(item("track"), defaults());
+        assert!(session.apply_event(
+            generation,
+            PlaybackEvent::Position {
+                elapsed: 10.0,
+                duration: Some(90.0),
+            }
+        ));
+        session.toggle_clip_end();
+        assert!(session.apply_event(
+            generation,
+            PlaybackEvent::Position {
+                elapsed: 9.9,
+                duration: Some(90.0),
+            }
+        ));
+        session.toggle_clip_start();
+        assert_eq!(session.clip_range(), None);
     }
 }

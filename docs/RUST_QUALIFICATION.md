@@ -840,3 +840,25 @@ AudioVault download paths, marked-clip export, converters, network throughput
 comparison, and a real NVDA/Narrator listening pass remain open. Native-app
 computer use was unavailable, so no automated harness result is represented as
 a screen-reader listening test.
+
+## Marked clip checkpoint (2026-09-20)
+
+Local in-progress implementation now includes independent start/end marker
+toggles, generation-bound preview, and FFmpeg audio/video clip export. Preview
+seek, unpause, and watchdog setup run in one worker request; marker changes
+cancel the matching worker preview. Export encodes to a same-directory temporary
+file and publishes without overwriting an existing destination only after
+successful, nonempty output. Failure removes the temporary result.
+
+Evidence: playback unit tests (18 passed), Windows UI cargo check, full workspace
+tests and Clippy in the local build before transactional export, platform Clippy
+after transactional export, and the opt-in packaged-FFmpeg test for actual WAV
+clip output, existing-output preservation, invalid input, and temporary cleanup.
+
+Windows computer use successfully inspected the beta main menu. The user stopped
+the next keyboard action with physical Escape. Marker, preview, and export UI
+acceptance and NVDA listening remain unverified; the manifest remains unchecked.
+Other open issues include export cancellation and source HTTP-header forwarding,
+and preview completion projection when UI event consumption is delayed. This is
+not a declaration of full marked-clip or overall product parity. No public release
+or stable installation change was made.

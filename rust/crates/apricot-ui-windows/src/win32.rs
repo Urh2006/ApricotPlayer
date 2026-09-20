@@ -372,6 +372,25 @@ struct ControlledRepeatState {
     chord: apricot_core::shortcut::ShortcutChord,
 }
 
+struct ClipPreview {
+    generation: u64,
+    start: f64,
+    end: f64,
+    reached_start: bool,
+}
+
+impl ClipPreview {
+    fn observe_position(&mut self, generation: u64, elapsed: f64) -> bool {
+        if generation != self.generation || !elapsed.is_finite() {
+            return false;
+        }
+        if elapsed >= self.start - 0.1 && elapsed < self.end - 0.03 {
+            self.reached_start = true;
+        }
+        self.reached_start && elapsed >= self.end - 0.03
+    }
+}
+
 struct PendingLocalFolderScan {
     generation: u64,
     path: PathBuf,
@@ -467,6 +486,7 @@ struct WindowState {
     next_youtube_operation_token: u64,
     playback: Option<PlaybackRuntime>,
     controlled_repeat: Option<ControlledRepeatState>,
+    clip_preview: Option<ClipPreview>,
     pending_local_folder_scan: Option<PendingLocalFolderScan>,
     next_local_folder_generation: u64,
     current_user_playlist_index: usize,
@@ -477,6 +497,7 @@ struct WindowState {
     download_progress_window: Option<DownloadProgressWindow>,
     download_progress_task_ids: HashSet<u64>,
     download_progress_task_id: Option<u64>,
+    clip_exports: Vec<Receiver<std::result::Result<PathBuf, String>>>,
 }
 
 pub fn run_application(application: Application, version: &str, start_hidden: bool) -> Result<()> {
@@ -1554,6 +1575,7 @@ unsafe fn create_controls(
         next_youtube_operation_token: 0,
         playback: None,
         controlled_repeat: None,
+        clip_preview: None,
         pending_local_folder_scan: None,
         next_local_folder_generation: 0,
         current_user_playlist_index: 0,
@@ -1564,6 +1586,7 @@ unsafe fn create_controls(
         download_progress_window: None,
         download_progress_task_ids: HashSet::new(),
         download_progress_task_id: None,
+        clip_exports: Vec::new(),
     })
 }
 
@@ -3741,6 +3764,7 @@ unsafe fn start_player_at(
     persist_current_playback_position(state);
     let podcast_speed =
         metadata_number(&item, "podcast_speed_preset").filter(|speed| (0.25..=4.0).contains(speed));
+    state.clip_preview = None;
     let generation = state.application.start_player_item_with_shuffle_at(
         item,
         session_shuffle,
@@ -6939,6 +6963,22 @@ unsafe fn choose_download_format(window: HWND) -> Option<DownloadChoice> {
 }
 
 unsafe fn start_active_download(window: HWND, requested_choice: DownloadChoice) {
+    if state(window).is_some_and(|state| {
+        state.view == MainView::Player
+            && (state
+                .application
+                .player_session()
+                .clip_start_seconds()
+                .is_some()
+                || state
+                    .application
+                    .player_session()
+                    .clip_end_seconds()
+                    .is_some())
+    }) {
+        start_clip_export(window, requested_choice);
+        return;
+    }
     if state(window).is_some_and(|state| state.view == MainView::DownloadQueue) {
         start_selected_queued_download(window, Some(requested_choice));
         return;
@@ -6957,6 +6997,181 @@ unsafe fn start_active_download(window: HWND, requested_choice: DownloadChoice) 
         return;
     };
     start_download_item(window, &item, requested_choice, false);
+}
+
+#[allow(clippy::too_many_lines)]
+unsafe fn start_clip_export(window: HWND, choice: DownloadChoice) {
+    let Some((item, range, settings)) = state(window).and_then(|state| {
+        let session = state.application.player_session();
+        Some((
+            session.current_item()?.clone(),
+            session.clip_range(),
+            state.application.settings().clone(),
+        ))
+    }) else {
+        return;
+    };
+    let Some((start, end)) = range else {
+        if let Some(state) = state(window) {
+            let session = state.application.player_session();
+            let key =
+                if session.clip_start_seconds().is_some() && session.clip_end_seconds().is_some() {
+                    "clip_marker_invalid"
+                } else {
+                    "clip_markers_missing"
+                };
+            set_status(state, &catalog_text(&state.application, key), true);
+        }
+        return;
+    };
+    let primary = item.local_path.clone().or_else(|| {
+        item.stream_url
+            .as_ref()
+            .or(item.url.as_ref())
+            .map(ToString::to_string)
+    });
+    let Some(primary) = primary else {
+        return;
+    };
+    let configured = PathBuf::from(settings.ffmpeg_location.trim());
+    let ffmpeg = if configured.is_file() {
+        configured
+    } else if configured.is_dir() {
+        configured.join("ffmpeg.exe")
+    } else {
+        application_directory()
+            .unwrap_or_default()
+            .join("ffmpeg")
+            .join("ffmpeg.exe")
+    };
+    let mut folder_item = item.clone();
+    if folder_item.kind == apricot_core::MediaKind::PodcastEpisode {
+        folder_item.kind = apricot_core::MediaKind::PodcastFeed;
+    }
+    let folder = match download_folder_for_item(&settings, &folder_item, false) {
+        Ok(folder) => folder.join("clips"),
+        Err(error) => {
+            show_error_message(window, &error);
+            return;
+        }
+    };
+    let extension = if choice == DownloadChoice::Audio {
+        normalized_audio_format(&settings.audio_format)
+    } else {
+        item.local_path
+            .as_deref()
+            .and_then(|path| std::path::Path::new(path).extension())
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("mp4")
+            .to_owned()
+    };
+    let stem = format!(
+        "{} - {}-{}",
+        safe_path_component(&item.title),
+        format_duration(start).replace(':', "-"),
+        format_duration(end).replace(':', "-")
+    );
+    let mut output = folder.join(format!("{stem}.{extension}"));
+    let mut counter = 2;
+    while output.exists() {
+        output = folder.join(format!("{stem} ({counter}).{extension}"));
+        counter += 1;
+    }
+    if settings.ask_download_location_each_time {
+        let catalog = apricot_app::embedded_catalog(&settings.language);
+        let default_name = output.file_name().unwrap_or_default().to_string_lossy();
+        match crate::file_dialog_win32::save_download_file(
+            window,
+            catalog.text("choose_save_path"),
+            &folder,
+            &default_name,
+            &extension,
+            &extension.to_ascii_uppercase(),
+            catalog.text("all_files"),
+        ) {
+            Ok(Some(path)) => output = path,
+            Ok(None) => return,
+            Err(error) => {
+                show_error_message(window, &error);
+                return;
+            }
+        }
+    }
+    let request = apricot_platform::ClipExportRequest {
+        ffmpeg,
+        primary_input: primary,
+        external_audio_input: item.external_audio_url.as_ref().map(ToString::to_string),
+        start_seconds: start,
+        end_seconds: end,
+        output_path: output,
+        mode: if choice == DownloadChoice::Audio {
+            apricot_platform::ClipExportMode::Audio
+        } else {
+            apricot_platform::ClipExportMode::Video
+        },
+        audio_format: settings.audio_format,
+        audio_quality: settings.audio_quality,
+    };
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let result =
+            apricot_platform::export_marked_clip(&request).map_err(|error| error.to_string());
+        let _ = sender.send(result);
+    });
+    if let Some(state) = state_mut(window) {
+        state.clip_exports.push(receiver);
+        set_status(
+            state,
+            &catalog_text(&state.application, "clip_export_started"),
+            true,
+        );
+    }
+    let _ = SetTimer(
+        Some(window),
+        DOWNLOAD_TIMER_ID,
+        DOWNLOAD_TIMER_INTERVAL_MS,
+        None,
+    );
+}
+
+unsafe fn poll_clip_exports(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let mut completed = Vec::new();
+    state
+        .clip_exports
+        .retain(|receiver| match receiver.try_recv() {
+            Ok(result) => {
+                completed.push(result);
+                false
+            }
+            Err(TryRecvError::Empty) => true,
+            Err(TryRecvError::Disconnected) => {
+                completed.push(Err("Clip export worker stopped".to_owned()));
+                false
+            }
+        });
+    for result in completed {
+        let message = match result {
+            Ok(path) => catalog_text(&state.application, "clip_export_done").replace(
+                "{title}",
+                &path.file_name().unwrap_or_default().to_string_lossy(),
+            ),
+            Err(error) => {
+                catalog_text(&state.application, "clip_export_failed").replace("{error}", &error)
+            }
+        };
+        set_status(state, &message, true);
+    }
+    if !state.clip_exports.is_empty() {
+        let _ = SetTimer(
+            Some(window),
+            DOWNLOAD_TIMER_ID,
+            DOWNLOAD_TIMER_INTERVAL_MS,
+            None,
+        );
+    }
 }
 
 struct UserPlaylistDownloadPlan {
@@ -7850,6 +8065,7 @@ unsafe fn close_download_progress_window(state: &mut WindowState, task_id: u64) 
 }
 
 unsafe fn poll_download_updates(window: HWND) {
+    poll_clip_exports(window);
     loop {
         let update = state(window).map(|state| state.download_receiver.try_recv());
         match update {
@@ -7861,7 +8077,9 @@ unsafe fn poll_download_updates(window: HWND) {
             }
         }
     }
-    if state(window).is_none_or(|state| state.application.downloads().active().is_empty()) {
+    if state(window).is_none_or(|state| {
+        state.application.downloads().active().is_empty() && state.clip_exports.is_empty()
+    }) {
         let _ = KillTimer(Some(window), DOWNLOAD_TIMER_ID);
     }
 }
@@ -8614,6 +8832,7 @@ unsafe fn poll_youtube_api_metadata(window: HWND) {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 unsafe fn poll_playback_runtime(window: HWND) {
     if state(window).is_some_and(|state| state.modal_open) {
         return;
@@ -8686,8 +8905,39 @@ unsafe fn poll_playback_runtime(window: HWND) {
                 );
                 refresh_player(window, state, false, true);
             }
-            PlaybackEvent::Position { .. } | PlaybackEvent::MediaInfo(_) => {}
+            PlaybackEvent::Position { elapsed, .. } => {
+                let finished = state
+                    .clip_preview
+                    .as_mut()
+                    .is_some_and(|preview| preview.observe_position(update.generation, elapsed));
+                if finished {
+                    let end = state.clip_preview.take().expect("active preview").end;
+                    let _ = execute_player_command(window, PlaybackCommand::SetPaused(true));
+                    let _ = execute_player_command(
+                        window,
+                        PlaybackCommand::SeekAbsolute {
+                            seconds: end,
+                            exact: true,
+                        },
+                    );
+                    set_status(
+                        state,
+                        &catalog_text(&state.application, "clip_preview_finished"),
+                        true,
+                    );
+                }
+            }
+            PlaybackEvent::MediaInfo(_) => {}
             PlaybackEvent::Ended => {
+                if state.clip_preview.take().is_some() {
+                    let _ = execute_player_command(window, PlaybackCommand::SetPaused(true));
+                    set_status(
+                        state,
+                        &catalog_text(&state.application, "clip_preview_finished"),
+                        true,
+                    );
+                    continue;
+                }
                 mark_current_podcast_episode_played(state);
                 let autoplay_next = state
                     .application
@@ -8705,6 +8955,7 @@ unsafe fn poll_playback_runtime(window: HWND) {
                 );
             }
             PlaybackEvent::Failed(error) => {
+                state.clip_preview = None;
                 state.pending_queued_start = None;
                 let message =
                     catalog_text(&state.application, "player_failed").replace("{error}", &error);
@@ -10536,6 +10787,9 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "player_previous" => navigate_player_relative(window, -1),
         "player_next" => navigate_player_relative(window, 1),
         "player_time" => announce_player_time(window),
+        "player_marker_start" => toggle_player_clip_marker(window, true),
+        "player_marker_end" => toggle_player_clip_marker(window, false),
+        "player_preview_marked_clip" => preview_marked_clip(window),
         "player_volume_status" => announce_player_volume(window),
         "player_format_status" => announce_player_format(window),
         "player_details" => show_player_details(window),
@@ -12121,6 +12375,9 @@ unsafe fn execute_player_command(window: HWND, command: PlaybackCommand) -> bool
 }
 
 unsafe fn toggle_player_pause(window: HWND) {
+    if let Some(state) = state_mut(window) {
+        state.clip_preview = None;
+    }
     let Some(state) = state(window) else {
         return;
     };
@@ -12132,6 +12389,9 @@ unsafe fn toggle_player_pause(window: HWND) {
 }
 
 unsafe fn seek_player(window: HWND, seconds: f64) {
+    if let Some(state) = state_mut(window) {
+        state.clip_preview = None;
+    }
     let _ = execute_player_command(
         window,
         PlaybackCommand::SeekRelative {
@@ -12142,6 +12402,9 @@ unsafe fn seek_player(window: HWND, seconds: f64) {
 }
 
 unsafe fn seek_player_absolute(window: HWND, seconds: f64) {
+    if let Some(state) = state_mut(window) {
+        state.clip_preview = None;
+    }
     let _ = execute_player_command(
         window,
         PlaybackCommand::SeekAbsolute {
@@ -12179,6 +12442,84 @@ unsafe fn announce_player_time(window: HWND) {
             )
         },
     );
+    set_status(state, &message, true);
+}
+
+unsafe fn toggle_player_clip_marker(window: HWND, start: bool) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    if state.clip_preview.is_some() {
+        if let Some(runtime) = state.playback.as_ref()
+            && let Err(error) =
+                runtime.cancel_preview(state.application.player_session().generation())
+        {
+            show_error_message(window, &format!("Player command failed: {error}"));
+            return;
+        }
+        state.clip_preview = None;
+    }
+    let session = state.application.player_session();
+    if !session.is_open() {
+        return;
+    }
+    if matches!(
+        session.phase(),
+        PlaybackPhase::Starting | PlaybackPhase::Failed
+    ) {
+        set_status(
+            state,
+            &catalog_text(&state.application, "timing_unavailable"),
+            true,
+        );
+        return;
+    }
+    let position = state.application.toggle_player_clip_marker(start);
+    let key = match (start, position.is_some()) {
+        (true, true) => "clip_start_marker_set",
+        (true, false) => "clip_start_marker_cleared",
+        (false, true) => "clip_end_marker_set",
+        (false, false) => "clip_end_marker_cleared",
+    };
+    let mut message = catalog_text(&state.application, key);
+    if let Some(position) = position {
+        message = message.replace("{time}", &format_duration(position));
+    }
+    set_status(state, &message, true);
+}
+
+unsafe fn preview_marked_clip(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let session = state.application.player_session();
+    let Some((start, end)) = session.clip_range() else {
+        let key = if session.clip_start_seconds().is_some() && session.clip_end_seconds().is_some()
+        {
+            "clip_marker_invalid"
+        } else {
+            "clip_markers_missing"
+        };
+        set_status(state, &catalog_text(&state.application, key), true);
+        return;
+    };
+    let generation = session.generation();
+    let Some(runtime) = state.playback.as_ref() else {
+        return;
+    };
+    if let Err(error) = runtime.preview(generation, start, end) {
+        show_error_message(window, &format!("Player command failed: {error}"));
+        return;
+    }
+    state.clip_preview = Some(ClipPreview {
+        generation,
+        start,
+        end,
+        reached_start: false,
+    });
+    let message = catalog_text(&state.application, "clip_preview_started")
+        .replace("{start}", &format_duration(start))
+        .replace("{end}", &format_duration(end));
     set_status(state, &message, true);
 }
 
@@ -12409,6 +12750,7 @@ unsafe fn configured_pitch_step(window: HWND) -> f64 {
 }
 
 unsafe fn close_player_runtime(window: HWND, state: &mut WindowState) {
+    state.clip_preview = None;
     let _ = KillTimer(Some(window), CONTROLLED_REPEAT_TIMER_ID);
     state.controlled_repeat = None;
     let generation = state.application.player_session().generation();
@@ -12912,6 +13254,22 @@ fn wide(value: &str) -> Vec<u16> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn clip_preview_ignores_old_positions_until_seek_has_arrived() {
+        let mut preview = super::ClipPreview {
+            generation: 7,
+            start: 10.0,
+            end: 15.0,
+            reached_start: false,
+        };
+        assert!(!preview.observe_position(7, 80.0));
+        assert!(!preview.observe_position(6, 10.0));
+        assert!(!preview.observe_position(7, f64::NAN));
+        assert!(!preview.observe_position(7, 10.1));
+        assert!(!preview.observe_position(7, 14.0));
+        assert!(preview.observe_position(7, 15.0));
+    }
+
     use super::{
         MainView, SEEK_HOLD_DELAY_MS, SEEK_HOLD_INTERVAL_MS, collection_backend,
         collection_download_submenu_key, collection_download_url, controlled_repeat_timing,
