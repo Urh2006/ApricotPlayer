@@ -374,21 +374,6 @@ struct ControlledRepeatState {
 
 struct ClipPreview {
     generation: u64,
-    start: f64,
-    end: f64,
-    reached_start: bool,
-}
-
-impl ClipPreview {
-    fn observe_position(&mut self, generation: u64, elapsed: f64) -> bool {
-        if generation != self.generation || !elapsed.is_finite() {
-            return false;
-        }
-        if elapsed >= self.start - 0.1 && elapsed < self.end - 0.03 {
-            self.reached_start = true;
-        }
-        self.reached_start && elapsed >= self.end - 0.03
-    }
 }
 
 struct PendingLocalFolderScan {
@@ -8905,29 +8890,23 @@ unsafe fn poll_playback_runtime(window: HWND) {
                 );
                 refresh_player(window, state, false, true);
             }
-            PlaybackEvent::Position { elapsed, .. } => {
-                let finished = state
+            PlaybackEvent::Position { .. } => {}
+            PlaybackEvent::MediaInfo(_) => {}
+            PlaybackEvent::PreviewFinished => {
+                if state
                     .clip_preview
-                    .as_mut()
-                    .is_some_and(|preview| preview.observe_position(update.generation, elapsed));
-                if finished {
-                    let end = state.clip_preview.take().expect("active preview").end;
-                    let _ = execute_player_command(window, PlaybackCommand::SetPaused(true));
-                    let _ = execute_player_command(
-                        window,
-                        PlaybackCommand::SeekAbsolute {
-                            seconds: end,
-                            exact: true,
-                        },
-                    );
+                    .as_ref()
+                    .is_some_and(|preview| preview.generation == update.generation)
+                {
+                    state.clip_preview = None;
                     set_status(
                         state,
                         &catalog_text(&state.application, "clip_preview_finished"),
                         true,
                     );
                 }
+                refresh_player(window, state, false, true);
             }
-            PlaybackEvent::MediaInfo(_) => {}
             PlaybackEvent::Ended => {
                 if state.clip_preview.take().is_some() {
                     let _ = execute_player_command(window, PlaybackCommand::SetPaused(true));
@@ -12511,12 +12490,7 @@ unsafe fn preview_marked_clip(window: HWND) {
         show_error_message(window, &format!("Player command failed: {error}"));
         return;
     }
-    state.clip_preview = Some(ClipPreview {
-        generation,
-        start,
-        end,
-        reached_start: false,
-    });
+    state.clip_preview = Some(ClipPreview { generation });
     let message = catalog_text(&state.application, "clip_preview_started")
         .replace("{start}", &format_duration(start))
         .replace("{end}", &format_duration(end));
@@ -13254,22 +13228,6 @@ fn wide(value: &str) -> Vec<u16> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn clip_preview_ignores_old_positions_until_seek_has_arrived() {
-        let mut preview = super::ClipPreview {
-            generation: 7,
-            start: 10.0,
-            end: 15.0,
-            reached_start: false,
-        };
-        assert!(!preview.observe_position(7, 80.0));
-        assert!(!preview.observe_position(6, 10.0));
-        assert!(!preview.observe_position(7, f64::NAN));
-        assert!(!preview.observe_position(7, 10.1));
-        assert!(!preview.observe_position(7, 14.0));
-        assert!(preview.observe_position(7, 15.0));
-    }
-
     use super::{
         MainView, SEEK_HOLD_DELAY_MS, SEEK_HOLD_INTERVAL_MS, collection_backend,
         collection_download_submenu_key, collection_download_url, controlled_repeat_timing,

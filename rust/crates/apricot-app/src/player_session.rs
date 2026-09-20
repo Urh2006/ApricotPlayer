@@ -174,6 +174,7 @@ impl PlayerSession {
             }
             PlaybackEvent::MediaInfo(info) => self.media_info = info,
             PlaybackEvent::Ended => self.phase = PlaybackPhase::Ended,
+            PlaybackEvent::PreviewFinished => self.phase = PlaybackPhase::Paused,
             PlaybackEvent::Failed(error) => {
                 self.phase = PlaybackPhase::Failed;
                 self.last_error = Some(error);

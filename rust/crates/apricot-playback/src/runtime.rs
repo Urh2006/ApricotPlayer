@@ -393,9 +393,7 @@ fn poll_engine_events(
                     if let Err(error) = engine.execute(PlaybackCommand::SetPaused(true)) {
                         emit_failure(updates, *generation, &error);
                     }
-                    if matches!(event, PlaybackEvent::Ended) {
-                        event = PlaybackEvent::Paused(true);
-                    }
+                    event = PlaybackEvent::PreviewFinished;
                 }
                 let _ = updates.try_send(PlaybackUpdate {
                     generation: *generation,
@@ -542,6 +540,53 @@ mod tests {
             }
         );
         assert_eq!(commands[2], PlaybackCommand::SetPaused(false));
+    }
+
+    #[test]
+    fn preview_ignores_pre_seek_and_nonfinite_positions() {
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let engine = FakeEngine {
+            events: vec![
+                PlaybackEvent::Position {
+                    elapsed: f64::NAN,
+                    duration: None,
+                },
+                PlaybackEvent::Position {
+                    elapsed: 80.0,
+                    duration: Some(90.0),
+                },
+            ],
+            commands: Arc::clone(&commands),
+        };
+        let mut active = Some((7, Box::new(engine) as Box<dyn PlaybackEngine>));
+        let (sender, _receiver) = std::sync::mpsc::sync_channel(128);
+        let mut preview = Some((7, 10.0, 15.0, false));
+        super::poll_engine_events(&mut active, &sender, &mut preview);
+        assert_eq!(preview, Some((7, 10.0, 15.0, false)));
+        assert!(commands.lock().expect("commands").is_empty());
+    }
+
+    #[test]
+    fn preview_end_of_file_is_not_projected_as_autoplay_end() {
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let engine = FakeEngine {
+            events: vec![PlaybackEvent::Ended],
+            commands: Arc::clone(&commands),
+        };
+        let mut active = Some((7, Box::new(engine) as Box<dyn PlaybackEngine>));
+        let (sender, receiver) = std::sync::mpsc::sync_channel(128);
+        let mut preview = Some((7, 10.0, 15.0, true));
+        super::poll_engine_events(&mut active, &sender, &mut preview);
+        assert!(preview.is_none());
+        assert_eq!(
+            receiver.try_recv().expect("completion").event,
+            PlaybackEvent::PreviewFinished
+        );
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(
+            *commands.lock().expect("commands"),
+            vec![PlaybackCommand::SetPaused(true)]
+        );
     }
 
     #[test]

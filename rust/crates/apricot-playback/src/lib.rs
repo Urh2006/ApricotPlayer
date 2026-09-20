@@ -71,6 +71,7 @@ pub enum PlaybackEvent {
     Position { elapsed: f64, duration: Option<f64> },
     MediaInfo(PlaybackMediaInfo),
     Ended,
+    PreviewFinished,
     Failed(String),
 }
 
