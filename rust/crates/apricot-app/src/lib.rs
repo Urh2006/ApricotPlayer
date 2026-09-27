@@ -5,6 +5,7 @@ pub mod activation;
 pub mod application;
 pub mod bookmark_controller;
 pub mod chapters;
+pub mod context_menu;
 pub mod download_controller;
 pub mod last_player_session_controller;
 pub mod local_folder;
@@ -40,6 +41,7 @@ pub use application::{
     player_start_speed,
 };
 pub use bookmark_controller::{BookmarkController, BookmarkControllerError};
+pub use context_menu::{ContextCommand, ContextMenuContext, ContextMenuEntry};
 pub use download_controller::{
     ActiveDownload, DownloadChoice, DownloadController, DownloadTaskKind, DownloadTaskStatus,
     QueueToggleOutcome, QueuedDownload,

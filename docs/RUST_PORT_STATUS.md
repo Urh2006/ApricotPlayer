@@ -153,10 +153,7 @@ Enote, ki popravljajo odstopanja, so na vrsti prve.
 
 - **E1. Oglasi in seja predvajalnika. Zaključeno 27. 9. 2026, glej razdelek 6.**
 - **E2. Enotna pot za dejanja, ki še niso narejena. Zaključeno 27. 9. 2026, glej razdelek 6.**
-- **E3. Kontekstni meniji.** Predvajalnik, rezultati, kanal, priljubljeni, zgodovina
-  in playlisti natančno po `apricot/ui/menus.py` in `apricot/library/library.py`,
-  vključno s podmenijem playlistov, "Open in browser", "Copy URL" in razlikovanjem
-  med lokalnimi in spletnimi elementi (PLAYER-03, SEARCH-02/03/05/06, LIBRARY-02/03).
+- **E3. Kontekstni meniji. Zaključeno 27. 9. 2026, glej razdelek 6.**
 - **E4. Nastavitve, prvi del.** Save ostane na zaslonu in oglasi shranjevanje.
   Gumb "Restore to defaults" brez dodatnega okna. Lokaliziran konflikt bližnjice.
   Zamik pri preklopu razdelkov. Browse za mape. Set default player. Odstranitev
@@ -277,3 +274,44 @@ Preverjanje: `cargo build`, `cargo test` (410 uspešnih, 8 izključenih), `cargo
 -D warnings` in `cargo fmt --check` gredo skozi. Novi testi preverijo besedila in
 Pythonova sporočila za posamezna dejanja, tihe primere, pokritost vseh jezikov in
 to, da zavrnjen ukaz mpv sporoči `CommandFailed` in ne konča posnetka.
+
+### E3: kontekstni meniji (27. 9. 2026)
+
+Spremembe:
+
+- Kontekstni meniji rezultatov iskanja, Trending, vsebine kanala ali playlista,
+  mape, priljubljenih, zgodovine, seznama playlistov, vsebine playlista in
+  predvajalnika se zdaj gradijo iz enega modela v `apricot-app/src/context_menu.rs`,
+  ki sledi `open_context_menu`, `open_player_context_menu`,
+  `open_user_playlists_context_menu`, `open_favorites_context_menu`,
+  `open_history_context_menu` in `open_user_playlist_items_context_menu` postavko
+  za postavko. Model ni vezan na Win32, zato ga lahko uporabi tudi macOS.
+- Ločevanje lokalnih in spletnih elementov kot v Pythonu, "Copy URL" za spletne in
+  "Copy path" za lokalne elemente, v predvajalniku "Copy link" (SEARCH-03, LIBRARY-02).
+- Dodane manjkajoče postavke: "Open in browser" (SEARCH-02), `remove_from_playlist`
+  in `open_channel` pri videih (SEARCH-06), `remove_from_playback_queue` in
+  `copy_stream_url` v priljubljenih in zgodovini, obe postavki "Add to favorites"
+  in "Remove from favorites" hkrati, kot v Pythonu, ter "Download all as audio" in
+  "Download all as video" za Play, kadar sta v vrsti za prenos vsaj dva elementa.
+- Meni kanala ima Pythonov vrstni red. Revizija se je pri SEARCH-05 zmotila: Python
+  podmeni "Download channel" ima (oznaka `(None, None)`), zato ostane, le na pravem
+  mestu za naročnino.
+- Meni predvajalnika ima vse Pythonove postavke v istem vrstnem redu (PLAYER-03).
+  Postavke za izhodne naprave, celozaslonski način, izenačevalnik, ReplayGain,
+  sorodni video in komentarje gredo skozi isto pot kot bližnjice, zato do enot
+  E8 do E13 oglasijo "ni na voljo v tej beti" iz E2. Odstranjeni sta Rust postavki
+  za podrobnosti in vrsto predvajanja, ki ju Python v tem meniju nima.
+- "Add to playlist" je podmeni z imeni playlistov in postavko "Create playlist", kadar
+  playlisti obstajajo (PLAYER-M-02). Kot v Pythonu "Create playlist" v podmeniju
+  pokliče `add_active_to_playlist`, ki nov playlist ustvari samo, če ga še ni.
+- Meni seznama playlistov ima samo štiri Pythonove postavke, brez playlistov pa
+  samo "Create playlist" (LIBRARY-03). Meni mape uporablja Pythonov lokalni del
+  menija rezultatov; Play folder, Shuffle folder in Add folder to queue ostanejo
+  gumbi na zaslonu, kot v Pythonu.
+- Oznake imajo bližnjico za tabulatorjem, kot `menu_label_with_shortcut`, in
+  upoštevajo nastavitev "show shortcuts in labels". NVDA jo prebere kot bližnjico
+  postavke.
+
+Ostaja za poznejše enote: meni SoundCloud kanala (E14), dejansko odpiranje kanala
+(E5), meniji naročnin, RSS, podcastov, obvestil in vrste prenosov niso bili del E3
+in ostajajo na starem seznamu, dokler jih ne pregleda E6 ali E7.
