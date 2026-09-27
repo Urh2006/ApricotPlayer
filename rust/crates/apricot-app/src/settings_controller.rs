@@ -197,6 +197,27 @@ mod tests {
     }
 
     #[test]
+    fn leaving_settings_keeps_applied_edits_until_the_next_save() {
+        // Python's Back from Settings neither saves nor reverts: sections the
+        // user left stay applied in memory and the next save writes them.
+        let root = tempdir().expect("temporary directory");
+        let paths =
+            SettingsPaths::for_app_data(&root.path().join("beta"), &root.path().join("old"));
+        let primary = paths.primary.clone();
+        let mut controller = SettingsController::load(paths, SettingsDocument::default());
+        controller
+            .set_value(SettingId::AutoplayNext, json!(true))
+            .expect("draft update");
+        assert!(controller.current().autoplay_next);
+        assert!(!primary.exists());
+
+        controller.save().expect("save");
+        let saved: serde_json::Value =
+            serde_json::from_slice(&fs::read(primary).expect("settings bytes")).expect("settings");
+        assert_eq!(saved["autoplay_next"], true);
+    }
+
+    #[test]
     fn save_commits_only_after_atomic_storage_succeeds() {
         let root = tempdir().expect("temporary directory");
         let paths =

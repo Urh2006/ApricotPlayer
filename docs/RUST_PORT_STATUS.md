@@ -355,5 +355,8 @@ Restore to defaults brez okna.
 
 Ostaja: preostali ukazni gumbi nastavitev (posodobitve, piškotki, AudioVault, EQ
 profili, naročnine) oglasijo "ni na voljo v tej beti" do enot E10, E16, E18 in E19.
-Python pri Back ohrani v pomnilniku spremembe razdelkov, ki jih je uporabnik zapustil,
-ne da bi shranil, Rust pa jih zavrže. To ni popravljeno in čaka na odločitev.
+Dopolnitev po Urhovi odločitvi: Back, zapiranje okna in dejanje iz Action Finderja
+nastavitev ne shranijo in ne zavržejo več. Kot `back_from_settings` ostanejo spremembe
+razdelkov, ki jih je uporabnik zapustil, uveljavljene v pomnilniku do naslednjega
+shranjevanja ali ponovnega zagona, spremembe v trenutno vidnem razdelku pa se ne
+uveljavijo.

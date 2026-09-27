@@ -266,7 +266,7 @@ unsafe extern "system" fn settings_window_proc(
             LRESULT(0)
         }
         WM_CLOSE => {
-            cancel_and_close(window);
+            close_without_saving(window);
             LRESULT(0)
         }
         WM_NCDESTROY => {
@@ -391,7 +391,6 @@ unsafe fn defer_global_action(window: HWND, action_id: &'static str) {
         return;
     };
     state.deferred_action = Some(action_id);
-    (&mut *state.application).cancel_settings();
     let _ = DestroyWindow(window);
 }
 
@@ -702,7 +701,7 @@ unsafe fn handle_command(window: HWND, wparam: WPARAM) {
     let id = wparam.0 & 0xffff;
     let notification = (wparam.0 >> 16) & 0xffff;
     match id {
-        ID_BACK => cancel_and_close(window),
+        ID_BACK => close_without_saving(window),
         ID_SAVE => save_settings(window),
         ID_RESET_ALL => restore_defaults(window),
         ID_SECTION_LIST
@@ -1092,10 +1091,11 @@ unsafe fn rebuild_screen(window: HWND) {
     let _ = SetFocus(Some(section_list));
 }
 
-unsafe fn cancel_and_close(window: HWND) {
-    if let Some(state) = state_mut(window) {
-        (&mut *state.application).cancel_settings();
-    }
+/// Python's `back_from_settings`: leave without saving and without applying
+/// the visible section. Sections the user already left were applied to the
+/// in-memory settings when the selection moved, and they stay applied until
+/// the next save or restart, as in Python.
+unsafe fn close_without_saving(window: HWND) {
     let _ = DestroyWindow(window);
 }
 
