@@ -1839,8 +1839,22 @@ impl Application {
         self.state.player.apply_event(generation, event)
     }
 
+    pub fn cache_external_chapters(&mut self, generation: u64, chapters: Vec<Value>) -> bool {
+        self.state
+            .player
+            .cache_external_chapters(generation, chapters)
+    }
+
     pub fn set_player_volume(&mut self, volume: f64) {
         self.state.player.set_volume(volume);
+    }
+
+    pub fn cache_transcript(
+        &mut self,
+        generation: u64,
+        transcript: crate::transcript::CachedTranscript,
+    ) -> bool {
+        self.state.player.cache_transcript(generation, transcript)
     }
 
     pub fn toggle_player_clip_marker(&mut self, start: bool) -> Option<f64> {

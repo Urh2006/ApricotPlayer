@@ -101,6 +101,102 @@ impl YtDlpYoutubeEngine {
         })
     }
 
+    /// Extracts subtitle metadata on demand, without downloading media or captions.
+    /// Call on a worker after configuring the engine's proxy/cookie settings.
+    ///
+    /// # Errors
+    /// Returns validation, process, timeout, or invalid JSON errors.
+    pub fn transcript_metadata(
+        &self,
+        media_url: &str,
+        languages: &[String],
+    ) -> Result<Value, YtDlpError> {
+        let arguments = self.transcript_arguments(media_url, languages)?;
+        parse_json(self.run(arguments)?)
+    }
+
+    /// Downloads subtitle sidecars only when the caller's direct fetch fails.
+    ///
+    /// # Errors
+    /// Returns validation, temporary-directory, process or subtitle read errors.
+    pub fn transcript_fallback(
+        &self,
+        media_url: &str,
+        languages: &[String],
+    ) -> Result<String, YtDlpError> {
+        let directory = tempfile::Builder::new()
+            .prefix("apricot-transcript-")
+            .tempdir()
+            .map_err(|error| YtDlpError::Request(error.to_string()))?;
+        let arguments =
+            self.transcript_download_arguments(media_url, languages, directory.path())?;
+        checked_stdout(self.run(arguments)?)?;
+        read_downloaded_transcript(directory.path())
+    }
+
+    fn transcript_download_arguments(
+        &self,
+        media_url: &str,
+        languages: &[String],
+        directory: &Path,
+    ) -> Result<Vec<OsString>, YtDlpError> {
+        let mut arguments = self.transcript_arguments(media_url, languages)?;
+        arguments.retain(|argument| argument != "--dump-single-json");
+        // Keep every generated artifact in the private temporary directory.
+        let target = arguments.split_off(arguments.len() - 2);
+        arguments.extend([
+            OsString::from("--output"),
+            directory.join("caption.%(ext)s").into_os_string(),
+        ]);
+        arguments.extend(target);
+        Ok(arguments)
+    }
+
+    fn transcript_arguments(
+        &self,
+        media_url: &str,
+        languages: &[String],
+    ) -> Result<Vec<OsString>, YtDlpError> {
+        let url = Url::parse(media_url).map_err(|_| {
+            YtDlpError::InvalidConfiguration("invalid transcript source URL".to_owned())
+        })?;
+        if media_url.len() > MAX_MEDIA_URL_BYTES
+            || !matches!(url.scheme(), "http" | "https")
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+        {
+            return Err(YtDlpError::InvalidConfiguration(
+                "invalid transcript source URL".to_owned(),
+            ));
+        }
+        let languages = languages.join(",");
+        if languages.len() > MAX_SEARCH_QUERY_BYTES || languages.contains('\0') {
+            return Err(YtDlpError::InvalidConfiguration(
+                "invalid transcript languages".to_owned(),
+            ));
+        }
+        let mut arguments = self.base_arguments();
+        arguments.extend(
+            [
+                "--no-playlist",
+                "--skip-download",
+                "--write-subs",
+                "--write-auto-subs",
+                "--sub-langs",
+                &languages,
+                "--sub-format",
+                "vtt/srt/best",
+                "--ignore-no-formats-error",
+                "--dump-single-json",
+                "--",
+                media_url,
+            ]
+            .map(OsString::from),
+        );
+        Ok(arguments)
+    }
+
     fn configure(&mut self, config: YoutubeSessionConfig) -> Result<(), YtDlpError> {
         validate_config(&config)?;
         if self.config != config {
@@ -324,6 +420,52 @@ impl YtDlpYoutubeEngine {
             .map_err(|error| YtDlpError::Launch(error.to_string()))?;
         collect_process_output(&mut child, OPERATION_TIMEOUT)
     }
+}
+
+fn read_downloaded_transcript(directory: &Path) -> Result<String, YtDlpError> {
+    let files =
+        std::fs::read_dir(directory).map_err(|error| YtDlpError::Request(error.to_string()))?;
+    let mut candidates = Vec::new();
+    for entry in files.flatten() {
+        let path = entry.path();
+        let extension = path.extension().and_then(OsStr::to_str).unwrap_or_default();
+        if !["vtt", "srt"]
+            .iter()
+            .any(|expected| extension.eq_ignore_ascii_case(expected))
+        {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_file()
+            || metadata.len() > 5_000_000
+            || entry.file_type().map_or(true, |kind| kind.is_symlink())
+        {
+            continue;
+        }
+        candidates.push((
+            metadata
+                .modified()
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+            path,
+        ));
+    }
+    candidates.sort_by_key(|(modified, _)| Reverse(*modified));
+    for (_, path) in candidates {
+        let Ok(file) = std::fs::File::open(path) else {
+            continue;
+        };
+        let mut bytes = Vec::new();
+        if file.take(5_000_001).read_to_end(&mut bytes).is_err() || bytes.len() > 5_000_000 {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        if !text.trim().is_empty() {
+            return Ok(text);
+        }
+    }
+    Ok(String::new())
 }
 
 fn search_target(query: &str, kind: YoutubeSearchKind, limit: u32) -> String {
@@ -727,6 +869,10 @@ fn media_item_from_value(value: &Value) -> Option<MediaItem> {
         "verified",
         "thumbnail",
         "chapters",
+        "track",
+        "artist",
+        "creator",
+        "album",
         "live_status",
     ] {
         if let Some(value) = object.get(key).filter(|value| !value.is_null()) {
@@ -988,6 +1134,70 @@ fn sanitize_error(message: &str, config: &YoutubeSessionConfig) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn subtitle_fallback_keeps_outputs_local_and_skips_unusable_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let engine = super::YtDlpYoutubeEngine::new(&std::env::current_exe().unwrap()).unwrap();
+        let args = engine
+            .transcript_download_arguments(
+                "https://example.test/video",
+                &["en".to_owned()],
+                directory.path(),
+            )
+            .unwrap();
+        assert!(!args.iter().any(|arg| arg == "--dump-single-json"));
+        assert!(args.iter().any(|arg| arg == "--skip-download"));
+        assert!(args.contains(&directory.path().join("caption.%(ext)s").into_os_string()));
+        std::fs::write(directory.path().join("caption.mp4"), "not subtitles").unwrap();
+        std::fs::write(directory.path().join("empty.srt"), "  ").unwrap();
+        std::fs::write(directory.path().join("caption.en.vtt"), "WEBVTT\n").unwrap();
+        assert_eq!(
+            super::read_downloaded_transcript(directory.path()).unwrap(),
+            "WEBVTT\n"
+        );
+    }
+    #[test]
+    fn transcript_arguments_are_on_demand_metadata_only_and_option_safe() {
+        let engine = super::YtDlpYoutubeEngine::new(&std::env::current_exe().unwrap()).unwrap();
+        let source = "https://example.test/watch?id=one&other=two";
+        let args = engine
+            .transcript_arguments(source, &["sl".to_owned(), "en".to_owned()])
+            .unwrap();
+        let args: Vec<_> = args.iter().map(|arg| arg.to_string_lossy()).collect();
+        assert!(args.iter().any(|arg| arg == "--dump-single-json"));
+        assert!(args.iter().any(|arg| arg == "--skip-download"));
+        assert!(args.iter().any(|arg| arg == "sl,en"));
+        assert_eq!(&args[args.len() - 2..], ["--", source]);
+        for invalid in [
+            "file:///C:/secret",
+            "--exec=bad",
+            "https://user:password@example.test/video",
+        ] {
+            assert!(engine.transcript_arguments(invalid, &[]).is_err());
+        }
+    }
+    #[test]
+    fn music_metadata_survives_extraction_for_lyrics_lookup() {
+        let item = super::media_item_from_value(&serde_json::json!({
+            "id": "track-id",
+            "title": "Promotional upload title",
+            "webpage_url": "https://www.youtube.com/watch?v=track-id",
+            "channel": "Label Channel",
+            "track": "Actual Song",
+            "artist": "Recording Artist",
+            "creator": "Composer",
+            "album": "Actual Album",
+            "duration": 180
+        }))
+        .unwrap();
+        let query = crate::lyrics::LyricsQuery::from_item(&item);
+        assert_eq!(query.title, "Actual Song");
+        assert_eq!(query.artist, "Recording Artist");
+        assert_eq!(query.album, "Actual Album");
+        assert_eq!(query.duration_seconds, 180);
+        assert_eq!(item.metadata["creator"], "Composer");
+    }
+
     use super::{
         BoundedBytes, YtDlpYoutubeEngine, collection_kind_accepts, collection_response,
         collection_target, component_executable, media_item_from_value, popular_numeric_value,

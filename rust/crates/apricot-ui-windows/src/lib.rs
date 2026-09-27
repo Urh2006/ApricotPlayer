@@ -2,6 +2,10 @@
 
 #![cfg_attr(not(windows), allow(dead_code))]
 
+pub mod transcript_loader;
+#[cfg(windows)]
+pub mod transcript_win32;
+
 #[cfg(windows)]
 mod accessibility_win32;
 #[cfg(windows)]

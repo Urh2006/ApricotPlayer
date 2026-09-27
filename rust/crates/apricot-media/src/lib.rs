@@ -4,6 +4,7 @@
 use apricot_core::{MediaItem, MediaSource};
 use thiserror::Error;
 
+pub mod lyrics;
 pub mod podcast_directory;
 pub mod podcast_feed;
 pub mod podcast_opml;

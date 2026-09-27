@@ -62,6 +62,9 @@ pub struct PlaybackQueueDialogLabels {
     pub tv_show: String,
     pub tv_episode: String,
     pub unknown: String,
+    pub removed: String,
+    pub reordered: String,
+    pub cleared: String,
 }
 
 pub struct PlaybackQueueDialogOutcome {
@@ -72,6 +75,7 @@ pub struct PlaybackQueueDialogOutcome {
 
 struct PlaybackQueueDialogState {
     labels: PlaybackQueueDialogLabels,
+    announcer: crate::announcement_win32::WindowsAnnouncer,
     items: Vec<MediaItem>,
     changed: bool,
     play: Option<MediaItem>,
@@ -272,6 +276,7 @@ unsafe fn create_controls(
     }
     Ok(PlaybackQueueDialogState {
         labels,
+        announcer: crate::announcement_win32::WindowsAnnouncer::new(HWND::default()),
         items,
         changed: false,
         play: None,
@@ -395,6 +400,7 @@ unsafe fn move_selected(window: HWND, delta: i32) {
     state.items.swap(index, target);
     state.changed = true;
     refresh_list(window, target);
+    announce(window, |labels| labels.reordered.clone());
 }
 
 unsafe fn remove_selected(window: HWND) {
@@ -404,9 +410,16 @@ unsafe fn remove_selected(window: HWND) {
     let Some(index) = selected_index(state) else {
         return;
     };
-    state.items.remove(index);
+    let removed = state.items.remove(index);
     state.changed = true;
     refresh_list(window, index.min(state.items.len().saturating_sub(1)));
+    announce(window, |labels| {
+        labels.removed.replace("{title}", &removed.title)
+    });
+    // Python `remove_selected` closes the dialog once the queue is empty.
+    if state_mut(window).is_some_and(|state| state.items.is_empty()) {
+        let _ = DestroyWindow(window);
+    }
 }
 
 unsafe fn clear_queue(window: HWND) {
@@ -414,11 +427,21 @@ unsafe fn clear_queue(window: HWND) {
         return;
     };
     if state.items.is_empty() {
+        announce(window, |labels| labels.empty.clone());
         return;
     }
     state.items.clear();
     state.changed = true;
     refresh_list(window, 0);
+    announce(window, |labels| labels.cleared.clone());
+    // Python `clear_queue` closes the dialog after clearing.
+    let _ = DestroyWindow(window);
+}
+
+unsafe fn announce(window: HWND, message: impl FnOnce(&PlaybackQueueDialogLabels) -> String) {
+    if let Some(state) = state(window) {
+        state.announcer.announce(&message(&state.labels), true);
+    }
 }
 
 unsafe fn show_context_menu(window: HWND) {
@@ -478,9 +501,9 @@ unsafe fn refresh_list(window: HWND, selection: usize) {
             add_list_string(state.list, &parts.join(" | "));
         }
     }
+    // Focus stays where it is, like Python's buttons.
     let selection = selection.min(state.items.len().saturating_sub(1));
     SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selection)), None);
-    let _ = SetFocus(Some(state.list));
 }
 
 fn kind_label(kind: apricot_core::MediaKind, labels: &PlaybackQueueDialogLabels) -> &str {

@@ -117,11 +117,9 @@ impl PlayerScreenModel {
             window_title: item.title.clone(),
             heading: format!("{}: {}", catalog.text("internal_player"), item.title),
             controls,
-            initial_focus_id: if settings.show_video_details_by_default {
-                "details"
-            } else {
-                "video_host"
-            },
+            // With `show_video_details_by_default` the page opens its details
+            // field instead, like Python `show_player_page`.
+            initial_focus_id: "video_host",
         }
     }
 }

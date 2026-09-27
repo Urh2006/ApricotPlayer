@@ -1,4 +1,5 @@
-//! Native accessible read-only player-details dialog.
+//! Native accessible read-only lyrics dialog (Python `show_lyrics`). Video
+//! details are not a dialog; they live in the player page.
 
 #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
@@ -6,21 +7,26 @@ use std::mem::size_of;
 
 use windows::{
     Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
+        Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
         Graphics::Gdi::{DEFAULT_GUI_FONT, GetStockObject},
-        System::LibraryLoader::GetModuleHandleW,
+        System::LibraryLoader::{GetModuleHandleW, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW},
         UI::{
+            Controls::EM_SCROLLCARET,
+            Controls::RichEdit::{
+                CFE_AUTOBACKCOLOR, CFM_BACKCOLOR, CHARFORMAT2W, CHARRANGE, EM_EXGETSEL,
+                EM_EXSETSEL, EM_SETCHARFORMAT, SCF_SELECTION,
+            },
             Input::KeyboardAndMouse::{EnableWindow, SetFocus, VK_ESCAPE},
             WindowsAndMessaging::{
                 BS_DEFPUSHBUTTON, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow,
                 DispatchMessageW, ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, GetClientRect,
                 GetMessageW, GetWindowLongPtrW, HMENU, IDC_ARROW, IsDialogMessageW, IsWindow,
-                LoadCursorW, MSG, MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW,
-                SendMessageW, SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TranslateMessage,
-                WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CLOSE, WM_COMMAND,
-                WM_KEYDOWN, WM_NCDESTROY, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_CHILD,
-                WS_EX_CLIENTEDGE, WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
-                WS_VSCROLL,
+                KillTimer, LoadCursorW, MSG, MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW,
+                SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowTextW,
+                ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE,
+                WM_CLOSE, WM_COMMAND, WM_KEYDOWN, WM_NCDESTROY, WM_SETFONT, WM_SIZE, WM_TIMER,
+                WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE, WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_TABSTOP,
+                WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -40,6 +46,14 @@ pub struct DetailsDialogLabels {
 }
 
 struct DetailsDialogState {
+    timeline: Option<(
+        apricot_media::lyrics::LyricsDocument,
+        apricot_playback::PlaybackPositionReader,
+        u64,
+    )>,
+    active_line: Option<usize>,
+    pending: Option<AsyncText>,
+    unavailable: Option<String>,
     text_value: String,
     copied_message: String,
     text: HWND,
@@ -49,7 +63,16 @@ struct DetailsDialogState {
     announcer: crate::announcement_win32::WindowsAnnouncer,
 }
 
+pub struct AsyncText {
+    pub receiver: std::sync::mpsc::Receiver<Option<apricot_media::lyrics::LyricsDocument>>,
+    pub position: Option<(apricot_playback::PlaybackPositionReader, u64)>,
+    pub unavailable: String,
+    pub ready: String,
+}
+
 pub unsafe fn register() -> Result<()> {
+    // Retain the system Rich Edit module for the lifetime of its window class.
+    let _ = LoadLibraryExW(w!("Msftedit.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32)?;
     let module = GetModuleHandleW(None)?;
     let class = WNDCLASSW {
         cbWndExtra: i32::try_from(size_of::<isize>()).expect("pointer size fits in i32"),
@@ -65,7 +88,12 @@ pub unsafe fn register() -> Result<()> {
     Ok(())
 }
 
-pub unsafe fn show(owner: HWND, text_value: String, labels: &DetailsDialogLabels) -> Result<()> {
+pub unsafe fn show_async(
+    owner: HWND,
+    text_value: String,
+    labels: &DetailsDialogLabels,
+    pending: AsyncText,
+) -> Result<()> {
     let module = GetModuleHandleW(None)?;
     let instance = HINSTANCE(module.0);
     let title = wide(&labels.title);
@@ -76,20 +104,23 @@ pub unsafe fn show(owner: HWND, text_value: String, labels: &DetailsDialogLabels
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
-        760,
-        560,
+        620,
+        460,
         Some(owner),
         None,
         Some(instance),
         None,
     )?;
-    let state = match create_controls(window, instance, text_value, labels) {
+    let mut state = match create_controls(window, instance, text_value, labels) {
         Ok(state) => state,
         Err(error) => {
             let _ = DestroyWindow(window);
             return Err(error);
         }
     };
+    state.unavailable = Some(pending.unavailable.clone());
+    state.pending = Some(pending);
+    let _ = SetTimer(Some(window), 1, 50, None);
     let initial_focus = state.text;
     let state_pointer = Box::into_raw(Box::new(state));
     SetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0), state_pointer as isize);
@@ -138,6 +169,14 @@ unsafe extern "system" fn window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match message {
+        WM_TIMER if wparam.0 == 1 => {
+            poll_text(window);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == 2 => {
+            highlight_lyrics(window);
+            LRESULT(0)
+        }
         WM_SIZE => {
             layout(window);
             LRESULT(0)
@@ -174,7 +213,7 @@ unsafe fn create_controls(
     let text = create_control(
         parent,
         instance,
-        w!("EDIT"),
+        w!("RICHEDIT50W"),
         PCWSTR(text_wide.as_ptr()),
         WS_CHILD
             | WS_VISIBLE
@@ -187,6 +226,7 @@ unsafe fn create_controls(
         WS_EX_CLIENTEDGE,
         ID_TEXT,
     )?;
+    crate::accessibility_win32::annotate_control_name(text, &labels.title);
     let copy_label = wide(&labels.copy);
     let copy = create_control(
         parent,
@@ -226,6 +266,10 @@ unsafe fn create_controls(
         );
     }
     Ok(DetailsDialogState {
+        timeline: None,
+        active_line: None,
+        pending: None,
+        unavailable: None,
         text_value,
         copied_message: labels.copied.clone(),
         text,
@@ -265,9 +309,107 @@ unsafe fn copy_details(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
     };
+    if let Some(message) = state.unavailable.as_ref() {
+        state.announcer.announce(message, true);
+        return;
+    }
     if crate::clipboard_win32::copy_text(window, &state.text_value).is_ok() {
         state.announcer.announce(&state.copied_message, true);
     }
+}
+
+unsafe fn poll_text(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let Some(pending) = state.pending.as_ref() else {
+        return;
+    };
+    let text = match pending.receiver.try_recv() {
+        Ok(text) => text,
+        Err(std::sync::mpsc::TryRecvError::Empty) => return,
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
+    };
+    let message = if let Some(document) = text.filter(|document| !document.text.trim().is_empty()) {
+        state.text_value.clone_from(&document.text);
+        if let Some((reader, generation)) = pending.position.as_ref() {
+            state.timeline = Some((document, reader.clone(), *generation));
+            let _ = SetTimer(Some(window), 2, 200, None);
+        }
+        state.unavailable = None;
+        pending.ready.clone()
+    } else {
+        state.text_value.clone_from(&pending.unavailable);
+        pending.unavailable.clone()
+    };
+    state.pending = None;
+    let _ = KillTimer(Some(window), 1);
+    let text = wide(&state.text_value);
+    let _ = SetWindowTextW(state.text, PCWSTR(text.as_ptr()));
+    let _ = SetFocus(Some(state.text));
+    state.announcer.announce(&message, true);
+}
+
+unsafe fn highlight_lyrics(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let Some((document, reader, generation)) = &state.timeline else {
+        return;
+    };
+    let Some(position) = reader.read(*generation) else {
+        return;
+    };
+    let active = document.active_line(position);
+    if active == state.active_line {
+        return;
+    }
+    let mut saved = CHARRANGE::default();
+    SendMessageW(
+        state.text,
+        EM_EXGETSEL,
+        None,
+        Some(LPARAM((&raw mut saved) as isize)),
+    );
+    for (index, enabled) in [(state.active_line, false), (active, true)] {
+        let Some(line) = index.and_then(|index| document.timed_lines.get(index)) else {
+            continue;
+        };
+        let range = CHARRANGE {
+            cpMin: i32::try_from(line.rich_start).unwrap_or(i32::MAX),
+            cpMax: i32::try_from(line.rich_end).unwrap_or(i32::MAX),
+        };
+        SendMessageW(
+            state.text,
+            EM_EXSETSEL,
+            None,
+            Some(LPARAM((&raw const range) as isize)),
+        );
+        let mut format = CHARFORMAT2W::default();
+        format.Base.cbSize = u32::try_from(size_of::<CHARFORMAT2W>()).expect("format size");
+        format.Base.dwMask = CFM_BACKCOLOR;
+        if enabled {
+            format.crBackColor = COLORREF(0x00e6_d8ad);
+        } else {
+            format.Base.dwEffects = CFE_AUTOBACKCOLOR;
+        }
+        SendMessageW(
+            state.text,
+            EM_SETCHARFORMAT,
+            Some(WPARAM(SCF_SELECTION as usize)),
+            Some(LPARAM((&raw const format) as isize)),
+        );
+        if enabled {
+            SendMessageW(state.text, EM_SCROLLCARET, None, None);
+        }
+    }
+    SendMessageW(
+        state.text,
+        EM_EXSETSEL,
+        None,
+        Some(LPARAM((&raw const saved) as isize)),
+    );
+    state.active_line = active;
 }
 
 unsafe fn layout(window: HWND) {
@@ -326,4 +468,98 @@ unsafe fn state_mut(window: HWND) -> Option<&'static mut DetailsDialogState> {
 
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::UI::Controls::RichEdit::EM_GETSELTEXT;
+
+    #[test]
+    fn native_lyrics_control_preserves_text_beyond_default_edit_limit() {
+        use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextLengthW, GetWindowTextW};
+        let expected = "Long lyric line. ".repeat(8_000);
+        // SAFETY: Hidden, test-owned control with buffers sized from its value.
+        unsafe {
+            let _ = LoadLibraryExW(w!("Msftedit.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32).unwrap();
+            let control = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("RICHEDIT50W"),
+                w!("Loading"),
+                WINDOW_STYLE((ES_MULTILINE | ES_READONLY) as u32),
+                0,
+                0,
+                200,
+                100,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            let text = wide(&expected);
+            SetWindowTextW(control, PCWSTR(text.as_ptr())).unwrap();
+            let length = usize::try_from(GetWindowTextLengthW(control)).unwrap();
+            let mut buffer = vec![0_u16; length + 1];
+            let copied = usize::try_from(GetWindowTextW(control, &mut buffer)).unwrap();
+            let actual = String::from_utf16_lossy(&buffer[..copied]);
+            let _ = DestroyWindow(control);
+            assert_eq!(actual.len(), expected.len());
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn lyric_ranges_select_exact_text_in_native_rich_edit() {
+        let document = apricot_media::lyrics::LyricsDocument::parse(
+            "Plain line\n[00:01.00] First \u{1f3b5}\n[00:02.00] Second \u{17e}",
+            "Local",
+        );
+        // SAFETY: Hidden test-owned control; no user focus or window is touched.
+        unsafe {
+            let _ = LoadLibraryExW(w!("Msftedit.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32).unwrap();
+            let text = wide(&document.text);
+            let control = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("RICHEDIT50W"),
+                PCWSTR(text.as_ptr()),
+                WINDOW_STYLE(ES_MULTILINE as u32),
+                0,
+                0,
+                200,
+                100,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            let mut selected = Vec::new();
+            for line in &document.timed_lines {
+                let range = CHARRANGE {
+                    cpMin: i32::try_from(line.rich_start).unwrap(),
+                    cpMax: i32::try_from(line.rich_end).unwrap(),
+                };
+                SendMessageW(
+                    control,
+                    EM_EXSETSEL,
+                    None,
+                    Some(LPARAM((&raw const range) as isize)),
+                );
+                let mut buffer = [0_u16; 128];
+                let copied = SendMessageW(
+                    control,
+                    EM_GETSELTEXT,
+                    None,
+                    Some(LPARAM(buffer.as_mut_ptr() as isize)),
+                )
+                .0;
+                selected.push(String::from_utf16_lossy(
+                    &buffer[..usize::try_from(copied).unwrap()],
+                ));
+            }
+            let _ = DestroyWindow(control);
+            assert_eq!(selected, ["First \u{1f3b5}", "Second \u{17e}"]);
+        }
+    }
 }

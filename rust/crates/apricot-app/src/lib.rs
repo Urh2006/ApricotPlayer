@@ -26,6 +26,7 @@ pub mod settings_controller;
 pub mod settings_model;
 pub mod settings_session;
 pub mod subscription_controller;
+pub mod transcript;
 pub mod unavailable;
 pub mod user_playlist_controller;
 pub mod youtube_collection;

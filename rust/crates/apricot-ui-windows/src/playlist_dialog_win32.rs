@@ -2,6 +2,7 @@
 
 #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
+use apricot_core::shortcut::ShortcutChord;
 use std::{ffi::c_void, mem::size_of};
 
 use windows::{
@@ -15,7 +16,7 @@ use windows::{
             WindowsAndMessaging::{
                 BS_DEFPUSHBUTTON, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow,
                 DispatchMessageW, ES_AUTOHSCROLL, GetClientRect, GetMessageW, GetParent,
-                GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW,
+                GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW, IsChild,
                 IsDialogMessageW, IsWindow, LB_ADDSTRING, LB_GETCURSEL, LB_SETCURSEL, LBN_DBLCLK,
                 LBS_NOTIFY, LoadCursorW, MSG, MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW,
                 SendMessageW, SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TranslateMessage,
@@ -34,6 +35,25 @@ const ID_VALUE: usize = 1701;
 const ID_OK: usize = 1702;
 const ID_CANCEL: usize = 1703;
 
+#[derive(Default)]
+pub struct PickerBehavior {
+    pub initial_selection: usize,
+    pub accept: Option<ShortcutChord>,
+    pub back: Option<ShortcutChord>,
+}
+
+impl PickerBehavior {
+    fn command(&self, chord: ShortcutChord) -> Option<usize> {
+        if self.back == Some(chord) {
+            Some(ID_CANCEL)
+        } else if self.accept == Some(chord) {
+            Some(ID_OK)
+        } else {
+            None
+        }
+    }
+}
+
 #[repr(C)]
 struct DialogBase {
     previous_focus: HWND,
@@ -47,6 +67,7 @@ struct DialogBase {
 struct DialogState<T> {
     base: DialogBase,
     result: Option<T>,
+    behavior: PickerBehavior,
 }
 
 pub fn register() -> Result<()> {
@@ -106,7 +127,17 @@ pub fn choose(
 ) -> Result<Option<usize>> {
     // SAFETY: The nested modal loop owns its state and disables its owner until
     // the state allocation has been recovered.
-    unsafe { choose_win32(owner, title, prompt, choices, 0, ok_label, cancel_label) }
+    unsafe {
+        choose_win32(
+            owner,
+            title,
+            prompt,
+            choices,
+            PickerBehavior::default(),
+            ok_label,
+            cancel_label,
+        )
+    }
 }
 
 /// Lets the user choose one item with a caller-provided initial selection.
@@ -123,6 +154,33 @@ pub fn choose_with_initial(
     ok_label: &str,
     cancel_label: &str,
 ) -> Result<Option<usize>> {
+    choose_configured(
+        owner,
+        title,
+        prompt,
+        choices,
+        PickerBehavior {
+            initial_selection,
+            ..Default::default()
+        },
+        ok_label,
+        cancel_label,
+    )
+}
+
+/// Opens a picker honoring its caller's configured accept/back shortcuts.
+///
+/// # Errors
+/// Returns a Win32 error if the dialog cannot be created.
+pub fn choose_configured(
+    owner: HWND,
+    title: &str,
+    prompt: &str,
+    choices: &[String],
+    behavior: PickerBehavior,
+    ok_label: &str,
+    cancel_label: &str,
+) -> Result<Option<usize>> {
     // SAFETY: The nested modal loop owns its state and disables its owner until
     // the state allocation has been recovered.
     unsafe {
@@ -131,7 +189,7 @@ pub fn choose_with_initial(
             title,
             prompt,
             choices,
-            initial_selection,
+            behavior,
             ok_label,
             cancel_label,
         )
@@ -208,7 +266,7 @@ unsafe fn choose_win32(
     title: &str,
     prompt: &str,
     choices: &[String],
-    initial_selection: usize,
+    behavior: PickerBehavior,
     ok_label: &str,
     cancel_label: &str,
 ) -> Result<Option<usize>> {
@@ -229,7 +287,7 @@ unsafe fn choose_win32(
         Some(instance),
         None,
     )?;
-    let state = create_common_controls::<usize>(
+    let mut state = create_common_controls::<usize>(
         window,
         instance,
         prompt,
@@ -238,6 +296,8 @@ unsafe fn choose_win32(
         ok_label,
         cancel_label,
     )?;
+    let initial_selection = behavior.initial_selection;
+    state.behavior = behavior;
     for choice in choices {
         let choice = wide(choice);
         SendMessageW(
@@ -328,6 +388,7 @@ unsafe fn create_common_controls<T>(
             cancel,
         },
         result: None,
+        behavior: PickerBehavior::default(),
     })
 }
 
@@ -357,6 +418,13 @@ unsafe fn run_modal<T, R>(
             let _ = DestroyWindow(window);
             PostQuitMessage(i32::try_from(message.wParam.0).unwrap_or_default());
             break;
+        }
+        if (message.hwnd == window || IsChild(window, message.hwnd).as_bool())
+            && let Some(chord) = crate::shortcut_win32::chord_from_message(&message)
+            && let Some(command) = (*pointer).behavior.command(chord)
+        {
+            SendMessageW(window, WM_COMMAND, Some(WPARAM(command)), None);
+            continue;
         }
         if message.message == WM_KEYDOWN && message.wParam.0 == usize::from(VK_ESCAPE.0) {
             let _ = DestroyWindow(window);
@@ -623,4 +691,31 @@ unsafe fn apply_font(controls: &[HWND]) {
 
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(test)]
+mod shortcut_tests {
+    use super::*;
+
+    #[test]
+    fn picker_honors_custom_bindings_without_capturing_other_player_keys() {
+        let behavior = PickerBehavior {
+            initial_selection: 2,
+            accept: ShortcutChord::parse("Ctrl+J"),
+            back: ShortcutChord::parse("Alt+Left"),
+        };
+        assert_eq!(
+            behavior.command(ShortcutChord::parse("Ctrl+J").unwrap()),
+            Some(ID_OK)
+        );
+        assert_eq!(
+            behavior.command(ShortcutChord::parse("Alt+Left").unwrap()),
+            Some(ID_CANCEL)
+        );
+        assert_eq!(behavior.command(ShortcutChord::parse("V").unwrap()), None);
+        assert_eq!(
+            PickerBehavior::default().command(ShortcutChord::parse("Ctrl+J").unwrap()),
+            None
+        );
+    }
 }

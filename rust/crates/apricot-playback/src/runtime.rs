@@ -9,6 +9,7 @@ use std::{
 };
 
 use apricot_core::MediaItem;
+use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
 use crate::{
@@ -19,6 +20,27 @@ const REQUEST_CAPACITY: usize = 32;
 const UPDATE_CAPACITY: usize = 128;
 const ACTIVE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const MAX_EVENTS_PER_TICK: usize = 32;
+
+#[derive(Clone, Default)]
+pub struct PlaybackPositionReader(Arc<Mutex<Option<(u64, f64)>>>);
+
+impl PlaybackPositionReader {
+    /// Reads cached position without waiting for the worker or consuming events.
+    #[must_use]
+    pub fn read(&self, generation: u64) -> Option<f64> {
+        self.0.try_lock().ok().and_then(|value| {
+            value
+                .filter(|(current, _)| *current == generation)
+                .map(|(_, seconds)| seconds)
+        })
+    }
+
+    fn publish(&self, position: Option<(u64, f64)>) {
+        if let Ok(mut current) = self.0.lock() {
+            *current = position;
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlaybackUpdate {
@@ -65,12 +87,17 @@ type EngineFactory = Box<
 >;
 
 pub struct PlaybackRuntime {
+    position: PlaybackPositionReader,
     requests: SyncSender<RuntimeRequest>,
     updates: Receiver<PlaybackUpdate>,
     worker: Option<JoinHandle<()>>,
 }
 
 impl PlaybackRuntime {
+    #[must_use]
+    pub fn position_reader(&self) -> PlaybackPositionReader {
+        self.position.clone()
+    }
     /// Seeks, unpauses, and arms a generation-bound preview in one worker turn.
     ///
     /// # Errors
@@ -178,11 +205,16 @@ impl PlaybackRuntime {
     fn spawn_with(factory: EngineFactory) -> Result<Self, PlaybackRuntimeError> {
         let (requests, request_receiver) = sync_channel(REQUEST_CAPACITY);
         let (update_sender, updates) = sync_channel(UPDATE_CAPACITY);
+        let position = PlaybackPositionReader::default();
+        let worker_position = position.clone();
         let worker = thread::Builder::new()
             .name("apricot-playback-worker".to_owned())
-            .spawn(move || playback_worker(&request_receiver, &update_sender, factory))
+            .spawn(move || {
+                playback_worker(&request_receiver, &update_sender, factory, &worker_position);
+            })
             .map_err(|error| PlaybackRuntimeError::Spawn(error.to_string()))?;
         Ok(Self {
+            position,
             requests,
             updates,
             worker: Some(worker),
@@ -199,10 +231,13 @@ impl Drop for PlaybackRuntime {
     }
 }
 
+// Keep generation-sensitive request transitions in one worker dispatch table.
+#[allow(clippy::too_many_lines)]
 fn playback_worker(
     requests: &Receiver<RuntimeRequest>,
     updates: &SyncSender<PlaybackUpdate>,
     mut factory: EngineFactory,
+    position: &PlaybackPositionReader,
 ) {
     let mut active: Option<(u64, Box<dyn PlaybackEngine>)> = None;
     let mut preview: Option<(u64, f64, f64, bool)> = None;
@@ -262,6 +297,7 @@ fn playback_worker(
                     item,
                 } => {
                     preview = None;
+                    position.publish(None);
                     active = start_or_replace_engine(
                         active,
                         generation,
@@ -296,13 +332,15 @@ fn playback_worker(
                     {
                         active = None;
                         preview = None;
+                        position.publish(None);
                     }
                 }
                 RuntimeRequest::Shutdown => break,
             }
         }
-        poll_engine_events(&mut active, updates, &mut preview);
+        poll_engine_events(&mut active, updates, &mut preview, position);
     }
+    position.publish(None);
 }
 
 fn start_or_replace_engine(
@@ -391,6 +429,7 @@ fn poll_engine_events(
     active: &mut Option<(u64, Box<dyn PlaybackEngine>)>,
     updates: &SyncSender<PlaybackUpdate>,
     preview: &mut Option<(u64, f64, f64, bool)>,
+    position: &PlaybackPositionReader,
 ) {
     let Some((generation, engine)) = active else {
         return;
@@ -398,6 +437,11 @@ fn poll_engine_events(
     for _ in 0..MAX_EVENTS_PER_TICK {
         match engine.poll_event() {
             Ok(Some(mut event)) => {
+                if let PlaybackEvent::Position { elapsed, .. } = &event
+                    && elapsed.is_finite()
+                {
+                    position.publish(Some((*generation, elapsed.max(0.0))));
+                }
                 let finish = preview
                     .as_mut()
                     .is_some_and(|(token, start, end, arrived)| {
@@ -462,6 +506,31 @@ mod tests {
     struct FakeEngine {
         events: Vec<PlaybackEvent>,
         commands: Arc<Mutex<Vec<PlaybackCommand>>>,
+    }
+
+    #[test]
+    fn position_reader_is_generation_bound_and_does_not_consume_updates() {
+        let reader = super::PlaybackPositionReader::default();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let mut active: Option<(u64, Box<dyn PlaybackEngine>)> = Some((
+            7,
+            Box::new(FakeEngine {
+                events: vec![PlaybackEvent::Position {
+                    elapsed: 12.5,
+                    duration: Some(100.0),
+                }],
+                commands: Arc::new(Mutex::new(Vec::new())),
+            }),
+        ));
+        super::poll_engine_events(&mut active, &sender, &mut None, &reader);
+        assert_eq!(reader.read(7), Some(12.5));
+        assert_eq!(reader.read(8), None);
+        assert_eq!(receiver.try_recv().unwrap().generation, 7);
+        let guard = reader.0.lock().unwrap();
+        assert_eq!(reader.read(7), None);
+        drop(guard);
+        reader.publish(None);
+        assert_eq!(reader.read(7), None);
     }
 
     impl PlaybackEngine for FakeEngine {
@@ -620,7 +689,12 @@ mod tests {
         let mut active = Some((7, Box::new(engine) as Box<dyn PlaybackEngine>));
         let (sender, _receiver) = std::sync::mpsc::sync_channel(128);
         let mut preview = Some((7, 10.0, 15.0, false));
-        super::poll_engine_events(&mut active, &sender, &mut preview);
+        super::poll_engine_events(
+            &mut active,
+            &sender,
+            &mut preview,
+            &super::PlaybackPositionReader::default(),
+        );
         assert_eq!(preview, Some((7, 10.0, 15.0, false)));
         assert!(commands.lock().expect("commands").is_empty());
     }
@@ -635,7 +709,12 @@ mod tests {
         let mut active = Some((7, Box::new(engine) as Box<dyn PlaybackEngine>));
         let (sender, receiver) = std::sync::mpsc::sync_channel(128);
         let mut preview = Some((7, 10.0, 15.0, true));
-        super::poll_engine_events(&mut active, &sender, &mut preview);
+        super::poll_engine_events(
+            &mut active,
+            &sender,
+            &mut preview,
+            &super::PlaybackPositionReader::default(),
+        );
         assert!(preview.is_none());
         assert_eq!(
             receiver.try_recv().expect("completion").event,
@@ -667,7 +746,12 @@ mod tests {
         let mut active = Some((7, Box::new(engine) as Box<dyn PlaybackEngine>));
         let (sender, _unread_receiver) = std::sync::mpsc::sync_channel(128);
         let mut preview = Some((7, 10.0, 15.0, false));
-        super::poll_engine_events(&mut active, &sender, &mut preview);
+        super::poll_engine_events(
+            &mut active,
+            &sender,
+            &mut preview,
+            &super::PlaybackPositionReader::default(),
+        );
         assert!(preview.is_none());
         assert!(
             commands

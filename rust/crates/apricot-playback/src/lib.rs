@@ -30,7 +30,7 @@ pub use mpv_process::{
     RepeatMode,
 };
 #[cfg(windows)]
-pub use runtime::{PlaybackRuntime, PlaybackRuntimeError, PlaybackUpdate};
+pub use runtime::{PlaybackPositionReader, PlaybackRuntime, PlaybackRuntimeError, PlaybackUpdate};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PlaybackCommand {

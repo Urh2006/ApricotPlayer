@@ -73,7 +73,7 @@ Prioriteta: P1 pomeni, da je osnovna uporaba s tipkovnico ali NVDA zlomljena ali
 | PLAYER2-02 | P1 | Oglasi za T, V, S/D, Ctrl+gor/dol, Ctrl+0, R, volume boost in bass boost so trdo kodirani v angleščini in drugače oblikovani (npr. "Speed 1.25" namesto "Playback speed 1.3x.", "Speed and pitch reset" brez vrednosti, "Elapsed x" namesto "Timing is not available yet."). |
 | PLAYER-03 | P1 | Kontekstni meni predvajalnika nima postavk za izhodne naprave, celozaslonski način, izenačevalnik, ReplayGain, shranjevanje hitrosti podcasta, sorodni video, dodajanje zaznamka, seznam zaznamkov, poglavja, prepis, besedilo pesmi, komentarje in odpiranje v brskalniku. Namesto tega ima dodatni postavki za podrobnosti in vrsto, dodajanje na playlist pa ni podmeni obstoječih playlistov. |
 | PLAYER2-08 | P2 | Nastavitev "Audio quality when changing speed" (rubberband, scaletempo2, scaletempo, mpv) se ne uporabi; mpv vedno uporabi privzeti algoritem. Treba je preveriti tudi `pitch_mode` pri spremembi višine tona (PLAYER2-M-09). |
-| PLAYER2-06 | P2 | `show_video_details_by_default` samo fokusira gumb Details; Python samodejno odpre podrobnosti. |
+| PLAYER2-06 | P2 | Odpravljeno v E7: podrobnosti so vgrajene v predvajalnik in se ob nastavitvi odprejo same. |
 | PLAYER2-05 | P2 | Pri background playback Python vključi seznam rezultatov v Tab vrstni red predvajalnika, Rust ne. |
 | PLAYER-02 | P3 | Pot pri neuspelem nalaganju je treba preveriti med izvajanjem (oglas `player_failed`). |
 
@@ -137,10 +137,9 @@ Prioriteta: P1 pomeni, da je osnovna uporaba s tipkovnico ali NVDA zlomljena ali
 | PODDL-M-03, SHELL-M-02 | P1 | yt-dlp posodobitve ter posodobitve aplikacije s kanali, preskokom verzije, preverjanjem in rollbackom | `apricot/updater/updater.py` |
 | PODDL-M-02, SHELL-M-01 | P1 | AudioVault v celoti | `apricot/network/audiovault.py` |
 
-Nepregledano ali le delno pregledano. Ti deli se primerjajo na začetku ustrezne enote:
-Action Finder, pladenj in zapiranje v pladenj, center obvestil, zaslon naročnin,
-zaslon vrste predvajanja, dialog neposredne povezave, podrobnosti (F7), poglavja,
-obnovitev fokusa ob vrnitvi v glavni meni ter natančna besedila napak pri iskanju.
+Action Finder, pladenj, center obvestil in obnovitev fokusa v glavnem meniju je pregledala
+E6, naročnine, vrsto predvajanja, neposredno povezavo, podrobnosti (F7) in poglavja pa E7.
+Nepregledana ostajajo natančna besedila napak pri iskanju.
 
 ## 4. Delovne enote
 
@@ -157,7 +156,7 @@ Enote, ki popravljajo odstopanja, so na vrsti prve.
 - **E4. Nastavitve, prvi del. Zaključeno 27. 9. 2026, glej razdelek 6.**
 - **E5. Seznami in knjižnica. Zaključeno 27. 9. 2026, glej razdelek 6.**
 - **E6. Lupina in oglaševanje. Zaključeno 28. 9. 2026, glej razdelek 6.**
-- **E7. Revizija in popravki preostalih zaslonov.** Naročnine, vrsta predvajanja,
+- **E7. Revizija in popravki preostalih zaslonov. Zaključeno 28. 9. 2026, glej razdelek 6.** Naročnine, vrsta predvajanja,
   neposredna povezava, podrobnosti in poglavja ter trenutno necommitano delo za
   lyrics in transcript. Python podrobnosti (F7) niso dialog, ampak vgrajeno polje
   za branje z gumboma Copy details in Back na zaslonu predvajalnika. Rust jih ima
@@ -202,6 +201,14 @@ odstopanje se najprej predlaga Urhu in se po odobritvi zapiše sem.
   uspe (dopolnitev E6).
 - **O-2.** Po vrnitvi iz predvajalnika v center obvestil ali zgodovino ostane izbrana
   predvajana vrstica namesto prve vrstice (dopolnitev E6).
+
+Predlogi, ki čakajo na Urhovo odločitev (Rust se zdaj obnaša tako, kot je opisano):
+
+- **P-1.** Iskanje v prepisu med nalaganjem: Python seznam zamenja z "No transcript or
+  captions available.", čeprav se prepis še nalaga. Rust ohrani "Loading transcript".
+- **P-2.** Neposredna povezava, ki tudi z dodanim `https://` ni veljaven naslov (na primer
+  presledki v imenu strežnika): Python jo poskusi predvajati in javi napako yt-dlp, Rust
+  takoj oglasi `direct_link_invalid`.
 
 ## 6. Dnevnik enot
 
@@ -450,3 +457,69 @@ glavnem meniju. Samodejni preizkus na ločeni kopiji podatkov je potrdil, da skr
 zagon ne odpre okna, da viden prvi zagon odpre jezikovno okno samo enkrat, izbiro
 Favorites in Notification center ob vrnitvi v meni, vrstni red Tab v centru obvestil,
 seznam Action Finderja in Escape z gumba.
+
+### E7: preostali zasloni in GPT-jevo delo za prepis, besedila in poglavja (28. 9. 2026)
+
+Pregled GPT-jevega necommitanega dela (prepis, besedila pesmi, poglavja z zunanjih
+povezav) glede na `apricot/media/media.py` in `apricot/ui/misc.py`. Razčlenjevanje SRT in
+WebVTT, izbira podnapisov po jezikih, lokalne datoteke ob posnetku, LRCLIB, časovne vrstice
+besedil in zunanja poglavja se ujemajo s Pythonom. Popravki:
+
+- Napaka pri prepisu je Pythonov `transcript_failed` z dejanskim besedilom napake. Prej je
+  Rust v `{error}` vstavil "No transcript or captions available.". Omejitev YouTube
+  (HTTP 429) se pokaže kot `transcript_failed` z besedilom `transcript_rate_limited` in se
+  zapomni kot preverjena, zato ponovno odprtje ne poskuša znova, kot v Pythonu.
+  Neuspešen HTTP odgovor ima Pythonovo obliko "HTTP Error 403: Forbidden". Privzeti
+  User-Agent za podnapise je Pythonov.
+- Play, Copy line in Copy timestamp link brez izbrane vrstice oglasijo
+  `no_transcript_available`, kot v Pythonu.
+- Poglavje brez naslova se imenuje "Chapters" brez številke, kot `normalized_chapters`.
+- Prepis, besedila in poglavja izven predvajalnika oglasijo `no_player`, kot
+  `ensure_player_for_auxiliary_view`.
+
+Preostali zasloni:
+
+- Podrobnosti (F7) niso več okno. Kot `show_video_details` se pod kontrolami
+  predvajalnika pokažejo oznaka, polje samo za branje ter gumba Copy details in Back.
+  Fokus gre v polje s kazalko na začetku in oglasi se "Details". Back ali Escape
+  (`player_back`) jih skrije, fokus gre na predvajalnik in oglasi se `details_closed`.
+  Gumb Back v navigaciji predvajalnika še vedno zapusti predvajalnik. Tab iz polja gre na
+  Copy details in Back, nato na začetek strani. Puščice, Home, End, PageUp, PageDown,
+  Ctrl+C in Ctrl+A ostanejo v polju (`details_text_navigation_key`), druge bližnjice
+  predvajalnika delujejo tudi v polju. Hitrost in višina tona se v polju posodobita
+  sproti (`update_details_text`). Z nastavitvijo `show_video_details_by_default` se
+  podrobnosti odprejo same ob vsakem novem posnetku (PLAYER2-06).
+- Vrsta predvajanja oglasi `playback_queue_removed`, `playback_queue_reordered` in
+  `playback_queue_cleared`. Clear queue in odstranitev zadnjega elementa zapreta okno,
+  prazna vrsta ob Clear oglasi `playback_queue_empty`. Gumbi Move up, Move down in
+  Remove fokusa ne premaknejo več na seznam.
+- Naročnine, priljubljene, zgodovina, podcasti in playlisti ob odprtju ne oglasijo več
+  števila elementov ("Subscriptions: 3") in ga ne pišejo v statusno vrstico. Python
+  statusno vrstico nastavi samo za prazen seznam in ničesar ne oglasi. Po odstranitvi
+  naročnine ostane izbrana ista vrstica, torej naslednja naročnina. Open videos in New
+  videos brez izbire pokažeta sporočilno okno `no_selection`, kot `self.message`.
+- Neposredna povezava brez sheme dobi `https://`, kot `direct_link_item`; prej je Rust
+  "youtube.com/watch?v=..." zavrnil kot neveljavno. Prazno polje pokaže sporočilno okno
+  `no_selection`.
+- Enter v polju za iskanje in v polju neposredne povezave ni naredil ničesar, ker ga je
+  `IsDialogMessageW` spremenil v neobdelan ukaz IDOK. Napaka je bila tudi v nameščeni
+  beti. Zdaj Enter zažene iskanje oziroma nastavljeno dejanje povezave.
+- Po zaprtju vsakega sporočilnega okna se fokus vrne na kontrolo, ki ga je imela prej.
+  Prej je ostal na glavnem oknu brez fokusirane kontrole.
+
+Preverjeno brez sprememb: vrstni red Tab na zaslonu neposredne povezave (Back, Play link,
+Download link audio, Download link video, Copy direct media URL, polje) in naročnin, meni
+naročnin, izbira jezika podnapisov in lokalnih datotek.
+
+Ostaja: prepis in besedila oglašajo prek NVDA in JAWS, ne pa prek MSAA dogodkov glavnega
+okna. Vrsta predvajanja spremembe shrani ob zaprtju okna, Python po vsakem koraku; rezultat
+je enak. Predloga P-1 in P-2 čakata na odločitev.
+
+Preverjanje: `cargo build`, `cargo test` (445 uspešnih, 8 izključenih), `cargo clippy
+--all-targets -D warnings` in `cargo fmt --check`. Novi testi pokrijejo besedilo napak in
+omejitev prepisa, dodajanje `https://` in tipke, ki ostanejo v polju podrobnosti. Samodejni
+preizkus na ločeni kopiji podatkov z lokalnim MKA posnetkom s poglavji, SRT in LRC
+datotekama je potrdil F7, Tab in Shift+Tab v podrobnostih, sprotno hitrost, Escape,
+samodejno odprte podrobnosti, poglavje brez naslova, prepis in besedila iz lokalnih
+datotek, brisanje naročnine, Tab in Enter na neposredni povezavi, Enter v iskanju,
+fokus po sporočilnem oknu ter premikanje, odstranjevanje in brisanje vrste.

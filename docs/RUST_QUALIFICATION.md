@@ -878,3 +878,189 @@ Clippy. The node layout was checked against mpv's public client.h. Real embedded
 media, external podcast chapter fetch, default/custom dialog shortcuts, full
 UI parity and NVDA/computer-use acceptance remain open. No chapter manifest gate
 has been marked complete based solely on these unit tests.
+
+### External and embedded chapter follow-up (2026-09-20)
+
+Podcast chapter URLs now load on demand on a background thread for the list and
+previous/next actions. Repeated requests for the same player generation coalesce;
+the pending action is discarded when polling detects a replacement item or a
+non-player route. Results are cached only into the requesting player generation.
+An empty/failed external response allows the embedded chapter fallback. No
+chapter request is added to ordinary playback startup.
+
+Evidence: all 142 apricot-app tests pass, including stale chapter response and
+closed-session rejection; four rss_client tests pass, including localhost HTTP
+success, HTTP 403, invalid JSON and oversized Content-Length rejection. The body
+reader additionally remains bounded for missing/inaccurate Content-Length, but
+that specific streaming-overflow path is not yet covered by the HTTP fixture.
+The packaged libmpv integration test passes with generated chapter-bearing MKA
+and replacement WAV, proving chapter observation and clearing on replacement.
+Workspace Clippy passes. No NVDA or native chapter dialog acceptance is claimed.
+Custom dialog shortcut parity and complete keyboard/computer-use verification
+remain outstanding. No public build or stable installation was changed.
+
+### Chapter dialog shortcut wiring (2026-09-20)
+
+The chapter picker now receives the configured open_selected/player_back chords,
+while retaining native Enter/Escape behavior. Custom key handling is restricted
+to messages targeting the dialog or its children. Other generic pickers keep
+their existing default behavior. A focused unit test verifies custom accept/back
+mapping and that an unrelated player key is not captured. Full workspace tests
+passed before that additional test; the additional test and final workspace
+Clippy also passed. Native UI/NVDA verification of custom bindings remains open.
+
+## Lyrics implementation checkpoint (2026-09-21)
+
+The player_lyrics action now opens a read-only native text dialog immediately,
+fetching local sidecars or optional LRCLIB text on a worker. Copy lyrics and Back
+use localized labels; copy does not put loading/no-result messages on the
+clipboard. Sidecar order, 512 KB limit, UTF-8 replacement, title cleanup, artist
+fallback, and synchronized/plain response preference follow the Python source.
+Online requests are bounded to 20 seconds and 2 MB, with trusted HTTPS redirects.
+
+Evidence: nine platform lyrics tests, three display/timing model tests, and
+workspace Clippy pass. Native screen-reader acceptance and a live service request
+have not been performed. The initial UI uses the existing text-dialog surface;
+timed rich-text highlighting, exact dimensions/accessibility-name parity, and
+live playback observation while the modal view is open still need implementation
+or verification. This is not complete Lyrics parity and no release was made.
+
+Follow-up: the lyrics dialog now starts at the Python 620x460 size. Read-only
+text controls receive an MSAA name annotation without changing their value.
+A Windows-native hidden EDIT-control test confirms that annotating it as Lyrics
+preserves its original text. This test does not assert NVDA speech or substitute
+for full UI acceptance. Timed highlighting and modal playback observation remain
+outstanding.
+
+Live lyrics follow-up (2026-09-21): the opt-in
+`live_lrclib_returns_displayable_lyrics` test passed against LRCLIB using the
+production HTTP client and a public song query. It verifies nonempty retrieved
+lyrics and display parsing without logging the lyrics. This supersedes the
+earlier note that no live service request had been performed; native dialog,
+NVDA, and highlighting acceptance are still open. yt-dlp item conversion now
+retains track/artist/creator/album fields, with an extraction-to-query regression
+test, without extra extraction requests.
+
+Timed lyrics wiring (2026-09-21): lyrics now use the system Rich Edit control
+and retain parsed timed lines. A 200 ms UI timer reads a generation-bound cached
+position, without consuming player events or querying mpv. Highlight changes
+restore the user's selection; initial implementation does not yet implement
+Python's ShowPosition automatic scrolling. Rich Edit character-offset behavior,
+highlight colors, selection restoration and NVDA interaction still require
+native runtime verification. Workspace Clippy passes; this is implementation
+evidence, not a completed accessibility gate.
+
+Rich Edit offset verification (2026-09-21): timed-line Rich Edit ranges are now
+precomputed once, rather than rescanning the text during each highlight change.
+Automatic scrolling to the active line is wired via EM_SCROLLCARET. A hidden
+native RICHEDIT50W test selects both timed lines using these ranges and reads
+them back through EM_GETSELTEXT; exact matches pass with a source header,
+untimed paragraph, supplementary Unicode character and accented text. This
+verifies the CRLF-to-Rich-Edit offset conversion, but does not yet verify visible
+scrolling, highlight colors, user selection restoration, or NVDA speech.
+
+Long lyrics verification (2026-09-21): a hidden native read-only RICHEDIT50W
+control preserves 136,000 characters set through SetWindowTextW and retrieved
+through GetWindowTextW, with exact content equality. No production text-limit
+change was necessary. The complete ordinary workspace suite passes (380 tests,
+7 opt-in tests ignored), as does workspace/all-targets Clippy with warnings
+denied. This does not qualify clipboard behavior or screen-reader interaction.
+
+Transcript parser checkpoint (2026-09-21): added app-level SRT/WebVTT parsing
+based on Python media.py, retaining cue source order, optional valid end times,
+metadata/comment-block exclusion, inline-tag cleanup and near-duplicate cue
+suppression. Three focused tests pass and workspace/all-targets Clippy passes.
+This is not a wired transcript feature: local/remote fetching, caching,
+language selection, search/copy/seek dialog and NVDA acceptance remain open.
+HTML decoding currently uses html-escape 0.2.15; unlike Python html.unescape,
+its documented handling excludes legacy semicolonless references and C1
+replacement. Resolve that parity gap before accepting this parser as complete.
+
+Transcript track selection checkpoint (2026-09-21): configured CSV languages
+are deduplicated case-insensitively with en/sl fallbacks, language-region
+matching is supported, requested/manual/automatic source priority is explicit,
+and VTT precedes SRT within each language. Selection borrows the entire track
+including request headers. Six transcript tests and workspace Clippy pass.
+Source JSON object insertion order still needs preservation for fallback
+language ties: default serde_json maps sort keys, unlike Python dictionaries.
+No network or dialog wiring is implied by these model tests.
+
+Local transcript loading (2026-09-21): worker-callable sidecar loading follows
+Python's plain VTT/SRT, captions, transcript, then configured-language order.
+Only regular files up to 5,000,000 bytes are accepted; reads are bounded even
+if a file grows after its metadata check. Invalid/empty candidates fall through
+to the next file. Temporary-directory tests cover precedence, invalid content,
+language fallback, oversized files and absent files. Eight transcript tests
+and workspace Clippy pass. The native transcript dialog is still not wired.
+
+Transcript source-order correction (2026-09-21): workspace serde_json now
+preserves object insertion order. A raw-JSON regression verifies fallback
+language order and regional-language ties, including an explicit regional
+preference. This resolves the source-order gap above. All 389 ordinary workspace
+tests pass; seven opt-in integration tests remain skipped by this command.
+No stable installation or user-data files were touched.
+
+Transcript dialog model (2026-09-21): TranscriptView formats Python-style
+numbered/time-stamped labels, filters against the full label, maps visible rows
+back to original cues and retains all cues for full-text copying regardless of
+the filter. Regression coverage verifies timestamp searches, case-insensitive
+text searches, original row numbering, empty results and copy-all semantics.
+All ten transcript tests and workspace Clippy pass. Native control wiring,
+actual clipboard/seek actions and screen-reader acceptance remain outstanding.
+
+Transcript extraction adapter (2026-09-21): yt-dlp now exposes an on-demand
+subtitle metadata operation using the existing bounded process runner and
+configured proxy/cookie arguments. It accepts HTTP(S) source URLs, rejects
+embedded credentials, separates the source using --, requests manual/automatic
+subtitle metadata and skips media downloading. A command-construction test
+and workspace Clippy pass. This is not a live extraction test: caption fetching,
+fallback handling, session cache and dialog wiring remain unfinished. Normal
+playback does not invoke this operation.
+
+Transcript HTTP transport (2026-09-21): bounded worker HTTP loading now merges
+extractor/track headers, applies the proxy, classifies HTTP 429 separately,
+limits responses to 5 MB and follows at most five redirects without HTTPS
+downgrades. Origin changes remove Authorization, Cookie and Referer. Loopback
+HTTP tests verify text retrieval, 429, oversized Content-Length and removal
+of those headers across a redirect to another port. Four platform transcript
+tests pass. Actual public-service requests, unknown-length oversized bodies,
+yt-dlp fallback, cookie-retry integration and native dialog remain open; this
+transport is not yet connected to a user action. Default User-Agent still
+needs alignment with the Python/configured browser identity.
+
+Transcript fallback adapter (2026-09-21): yt-dlp subtitle-only fallback writes
+under an automatically cleaned private temporary directory. Arguments retain
+skip-download and remove metadata-only dump mode; output names use a fixed
+caption stem. Bounded reading accepts nonempty VTT/SRT regular files in newest
+mtime order and excludes symlinks. A command/file fixture and workspace Clippy
+pass. The test does not launch yt-dlp or prove a real 429 recovery; invoking
+fallback only after direct-fetch failure still requires orchestration wiring.
+
+Transcript worker orchestration (2026-09-21): a native-UI worker module now
+combines local loading, durable source URL selection, configured yt-dlp metadata,
+language/track selection, direct HTTP and fallback. Tests prove that direct
+success never invokes fallback, fallback success recovers direct failure,
+rate-limit classification survives failed recovery, and an expired resolved
+stream is not used as the extraction source. Three worker tests and Clippy
+pass. The worker is not yet launched by a dialog; generation-bound caching,
+cookie-retry behavior and complete UI/NVDA verification remain outstanding.
+
+Transcript session cache (2026-09-21): PlayerSession now stores a typed checked
+transcript result, distinguishing not-yet-requested from checked-and-empty.
+Replacement and close clear it; generation checks reject responses belonging
+to old playback items. An application entry point exposes safe caching to the
+dialog. Eleven app transcript/cache tests and workspace Clippy pass. Cache
+consumption by the native dialog still needs wiring; this alone does not prove
+that reopening the UI avoids network requests.
+
+Native transcript initial wiring (2026-09-22): player_transcript now opens a
+native dialog with search, cue list, Play, copy-line, copy-all, timestamp-link
+and Back controls. A worker supplies local/online data; the 50 ms UI poll retains
+search text without moving focus. Enter from search/list seeks without closing;
+Escape closes. Timestamp copying and exact seek callbacks check the requesting
+playback generation. Successful results are cached on dialog close and reused
+on reopening. All 39 Windows UI crate tests and workspace Clippy pass, but these
+tests do not exercise this new dialog. Still pending: configured accept/back
+chords, minimum size/localized button sizing, full loading/error/success speech,
+exact Python seek announcement text, rate-limit cache handling and actual
+computer-use/NVDA acceptance. No local package has been rebuilt for this dialog.

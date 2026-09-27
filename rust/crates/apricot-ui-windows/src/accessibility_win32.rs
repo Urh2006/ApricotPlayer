@@ -31,8 +31,19 @@ pub fn set_control_name(window: HWND, value: &str) {
 }
 
 unsafe fn set_control_name_win32(window: HWND, value: &str) {
+    let text = wide(value);
+    let _ = SetWindowTextW(window, PCWSTR(text.as_ptr()));
+    annotate_control_name(window, value);
+}
+
+/// Names an edit control without overwriting its user-visible value.
+pub fn annotate_control_name(window: HWND, value: &str) {
+    // SAFETY: Same UI-thread HWND and synchronous annotation contract as above.
+    unsafe { annotate_control_name_win32(window, value) };
+}
+
+unsafe fn annotate_control_name_win32(window: HWND, value: &str) {
     let value = wide(value);
-    let _ = SetWindowTextW(window, PCWSTR(value.as_ptr()));
     ACCESSIBILITY_SERVICES.with_borrow_mut(|slot| {
         if matches!(slot, AccessibilityServicesState::Uninitialized) {
             *slot = unsafe { AccessibilityServices::initialize() }.map_or(
@@ -111,5 +122,45 @@ impl Drop for ComApartment {
         // SAFETY: The guard exists only after successful initialization and is
         // dropped synchronously on the same UI thread.
         unsafe { CoUninitialize() };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::{
+        Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, GetWindowTextW, WINDOW_EX_STYLE, WINDOW_STYLE,
+        },
+        core::w,
+    };
+
+    #[test]
+    fn annotating_a_native_edit_preserves_its_text_value() {
+        // SAFETY: This hidden standard control is created, read and destroyed on
+        // the test thread; no user window, focus or input is touched.
+        unsafe {
+            let window = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("EDIT"),
+                w!("Original lyrics"),
+                WINDOW_STYLE::default(),
+                0,
+                0,
+                100,
+                30,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("native edit control");
+            annotate_control_name(window, "Lyrics");
+            let mut text = [0_u16; 64];
+            let copied = GetWindowTextW(window, &mut text);
+            let value = String::from_utf16_lossy(&text[..usize::try_from(copied).unwrap()]);
+            let _ = DestroyWindow(window);
+            assert_eq!(value, "Original lyrics");
+        }
     }
 }

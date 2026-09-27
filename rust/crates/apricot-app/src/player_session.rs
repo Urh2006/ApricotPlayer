@@ -61,6 +61,7 @@ pub struct PlayerSession {
     clip_end_seconds: Option<f64>,
     media_info: PlaybackMediaInfo,
     last_error: Option<String>,
+    transcript: Option<crate::transcript::CachedTranscript>,
 }
 
 impl PlayerSession {
@@ -78,6 +79,40 @@ impl PlayerSession {
 
     pub const fn current_item(&self) -> Option<&MediaItem> {
         self.current_item.as_ref()
+    }
+
+    pub const fn transcript(&self) -> Option<&crate::transcript::CachedTranscript> {
+        self.transcript.as_ref()
+    }
+
+    pub fn cache_transcript(
+        &mut self,
+        generation: u64,
+        transcript: crate::transcript::CachedTranscript,
+    ) -> bool {
+        if generation != self.generation || !self.is_open() || self.current_item.is_none() {
+            return false;
+        }
+        self.transcript = Some(transcript);
+        true
+    }
+
+    /// A late chapter response must never attach to a replacement episode.
+    pub fn cache_external_chapters(
+        &mut self,
+        generation: u64,
+        chapters: Vec<serde_json::Value>,
+    ) -> bool {
+        if generation != self.generation || !self.is_open() {
+            return false;
+        }
+        let Some(item) = self.current_item.as_mut() else {
+            return false;
+        };
+        item.metadata
+            .insert("_chapters_url_checked".into(), true.into());
+        item.metadata.insert("chapters".into(), chapters.into());
+        true
     }
 
     pub const fn audio(&self) -> Option<&AudioSession> {
@@ -150,6 +185,7 @@ impl PlayerSession {
             PlaybackPhase::Starting
         };
         self.current_item = Some(item);
+        self.transcript = None;
         self.position_seconds = initial_position_seconds
             .filter(|position| position.is_finite())
             .unwrap_or_default()
@@ -254,6 +290,7 @@ impl PlayerSession {
         self.advance_generation();
         self.phase = PlaybackPhase::Closed;
         self.current_item = None;
+        self.transcript = None;
         self.audio = None;
         self.enabled_toggles.clear();
         self.position_seconds = 0.0;
@@ -406,6 +443,53 @@ mod tests {
         assert!((session.position_seconds() - 42.5).abs() < f64::EPSILON);
         session.start_item(item("second"), defaults());
         assert!(session.position_seconds().abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn external_chapters_are_cached_only_for_the_requesting_episode() {
+        let mut session = PlayerSession::default();
+        let first = session.start_item(item("first"), defaults());
+        let chapters = vec![serde_json::json!({"startTime": 0, "title": "Opening"})];
+        assert!(session.cache_external_chapters(first, chapters.clone()));
+        assert_eq!(crate::chapters::session_chapters(&session).len(), 1);
+        let second = session.start_item(item("second"), defaults());
+        assert!(!session.cache_external_chapters(first, chapters));
+        assert!(crate::chapters::session_chapters(&session).is_empty());
+        assert!(session.cache_external_chapters(second, Vec::new()));
+        assert_eq!(
+            session
+                .current_item()
+                .unwrap()
+                .metadata
+                .get("_chapters_url_checked"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        session.close();
+        assert!(!session.cache_external_chapters(second, Vec::new()));
+    }
+
+    #[test]
+    fn transcript_cache_rejects_late_results_and_distinguishes_empty_from_unchecked() {
+        let mut session = PlayerSession::default();
+        let first = session.start_item(item("first"), defaults());
+        let cached = crate::transcript::CachedTranscript {
+            entries: crate::transcript::parse_transcript("00:01.000 --> 00:02.000\nFirst\n"),
+            source_key: "transcript_source_local".to_owned(),
+        };
+        assert!(session.cache_transcript(first, cached.clone()));
+        assert_eq!(session.transcript(), Some(&cached));
+        let second = session.start_item(item("second"), defaults());
+        assert!(session.transcript().is_none());
+        assert!(!session.cache_transcript(first, cached.clone()));
+        let empty = crate::transcript::CachedTranscript {
+            entries: Vec::new(),
+            source_key: String::new(),
+        };
+        assert!(session.cache_transcript(second, empty));
+        assert!(session.transcript().unwrap().entries.is_empty());
+        session.close();
+        assert!(session.transcript().is_none());
+        assert!(!session.cache_transcript(second, cached));
     }
 
     #[test]

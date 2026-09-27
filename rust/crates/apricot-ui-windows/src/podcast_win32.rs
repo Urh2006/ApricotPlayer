@@ -10,7 +10,7 @@ use apricot_media::{PodcastDirectoryItem, PodcastFeedDocument};
 use apricot_platform::{ApplePodcastDirectoryClient, RssClient};
 
 pub(crate) enum PodcastWorkResult {
-    FeedAdded(Result<RssFeed, String>),
+    FeedAdded(Result<Box<RssFeed>, String>),
     FeedsRefreshed {
         results: Vec<RssRefreshResult>,
         silent: bool,
@@ -50,7 +50,7 @@ pub(crate) fn add_feed(
             .and_then(|client| client.fetch(&url))
             .map(|document| feed_from_document(document, &unknown_title, timestamp))
             .map_err(|error| error.to_string());
-        PodcastWorkResult::FeedAdded(result)
+        PodcastWorkResult::FeedAdded(result.map(Box::new))
     })
 }
 

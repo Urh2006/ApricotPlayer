@@ -67,7 +67,9 @@ dependencies = [
  "apricot-playback",
  "apricot-storage",
  "chrono",
+ "html-escape",
  "rand 0.9.5",
+ "regex",
  "serde_json",
  "tempfile",
  "thiserror",
@@ -133,6 +135,7 @@ dependencies = [
  "apricot-media",
  "chrono",
  "encoding_rs",
+ "regex",
  "reqwest",
  "serde_json",
  "tempfile",
@@ -198,6 +201,7 @@ dependencies = [
  "apricot-storage",
  "chrono",
  "serde_json",
+ "url",
  "windows",
 ]
 
@@ -1173,6 +1177,12 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
+name = "html-escape"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9356095b4b41197bba32173600e1582792cda618f65d12f68e2e77d273413c5"
 
 [[package]]
 name = "html5ever"
@@ -2563,6 +2573,7 @@ version = "1.0.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
 dependencies = [
+ "indexmap",
  "itoa",
  "memchr",
  "serde",

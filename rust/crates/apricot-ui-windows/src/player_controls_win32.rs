@@ -5,20 +5,27 @@
 use std::ffi::c_void;
 
 use apricot_app::{PlayerControlRole, PlayerScreenModel};
+use windows::Win32::UI::Controls::EM_SETSEL;
 use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
         Graphics::Gdi::{DEFAULT_GUI_FONT, GetStockObject},
         UI::WindowsAndMessaging::{
-            BS_AUTOCHECKBOX, CreateWindowExW, HMENU, MoveWindow, SW_HIDE, SW_SHOW, SendMessageW,
-            SetWindowTextW, ShowWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_SETFONT, WS_CHILD,
-            WS_EX_CLIENTEDGE, WS_GROUP, WS_TABSTOP,
+            BS_AUTOCHECKBOX, CreateWindowExW, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE,
+            ES_READONLY, GetWindowTextLengthW, GetWindowTextW, HMENU, MoveWindow, SW_HIDE, SW_SHOW,
+            SendMessageW, SetWindowTextW, ShowWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_SETFONT,
+            WS_CHILD, WS_EX_CLIENTEDGE, WS_GROUP, WS_HSCROLL, WS_TABSTOP, WS_VSCROLL,
         },
     },
     core::{PCWSTR, Result, w},
 };
 
 const CONTROL_ID_BASE: usize = 2_000;
+const DETAILS_COPY_ID: usize = 2_100;
+const DETAILS_BACK_ID: usize = 2_101;
+const DETAILS_LABEL_HEIGHT: i32 = 22;
+const DETAILS_TEXT_HEIGHT: i32 = 160;
+const DETAILS_BUTTON_HEIGHT: i32 = 30;
 const BM_SETCHECK: u32 = 0x00F1;
 const BST_CHECKED: usize = 1;
 
@@ -91,11 +98,30 @@ struct NativeControl {
 pub enum PlayerControlActivation {
     Action(&'static str),
     SessionAutoplayNext,
+    CopyDetails,
+    HideDetails,
+}
+
+/// Python `show_video_details`: a label, a read-only text field and the Copy
+/// details and Back buttons added below the player controls, not a dialog.
+struct DetailsPanel {
+    label: HWND,
+    text: HWND,
+    copy: HWND,
+    back: HWND,
+    visible: bool,
+}
+
+pub struct DetailsLabels {
+    pub title: String,
+    pub copy: String,
+    pub back: String,
 }
 
 pub struct PlayerControls {
     video_host: HWND,
     controls: Vec<NativeControl>,
+    details: DetailsPanel,
     surface_visible: bool,
     initial_focus_id: &'static str,
 }
@@ -138,12 +164,58 @@ impl PlayerControls {
                 font_param,
             )?);
         }
+        // Created last so the details follow the checkboxes in Tab order, as
+        // Python appends them to the end of the player page.
+        let details = DetailsPanel::create(parent, instance, font_param)?;
         Ok(Self {
             video_host,
             controls,
+            details,
             surface_visible: false,
             initial_focus_id: "video_host",
         })
+    }
+
+    pub const fn details_visible(&self) -> bool {
+        self.details.visible
+    }
+
+    pub const fn details_text(&self) -> HWND {
+        self.details.text
+    }
+
+    /// Shows the details with the caret at the start; the caller focuses and
+    /// announces them like Python `show_video_details`.
+    pub unsafe fn show_details(&mut self, labels: &DetailsLabels, text: &str) {
+        set_text(self.details.label, &labels.title);
+        crate::accessibility_win32::annotate_control_name(self.details.text, &labels.title);
+        set_text(self.details.copy, &labels.copy);
+        set_text(self.details.back, &labels.back);
+        self.details.visible = true;
+        self.set_details_text(text);
+        self.details.show(self.surface_visible);
+    }
+
+    pub unsafe fn hide_details(&mut self) {
+        self.details.visible = false;
+        self.details.show(false);
+    }
+
+    /// Python `update_details_text`: replaces the value and puts the caret at
+    /// the start. Unchanged text is left alone so periodic refreshes do not
+    /// move the reading position.
+    pub unsafe fn set_details_text(&self, text: &str) {
+        let text = text.replace("\r\n", "\n").replace('\n', "\r\n");
+        if window_text(self.details.text) == text {
+            return;
+        }
+        set_text(self.details.text, &text);
+        SendMessageW(
+            self.details.text,
+            EM_SETSEL,
+            Some(WPARAM(0)),
+            Some(LPARAM(0)),
+        );
     }
 
     pub const fn video_host(&self) -> HWND {
@@ -187,6 +259,7 @@ impl PlayerControls {
             show(native.window, self.surface_visible && native.active);
         }
         show(self.video_host, self.surface_visible);
+        self.details.show(self.surface_visible);
     }
 
     pub unsafe fn set_visible(&mut self, visible: bool) {
@@ -195,6 +268,7 @@ impl PlayerControls {
         for control in &self.controls {
             show(control.window, visible && control.active);
         }
+        self.details.show(visible);
     }
 
     pub unsafe fn layout(&self, width: i32, height: i32, margin: i32, status_height: i32) {
@@ -219,7 +293,21 @@ impl PlayerControls {
         }
         let gap = 6;
         let controls_top = margin * 2 + video_height;
-        let available_height = (height - controls_top - status_height - margin * 2).max(28);
+        let details_height = if self.details.visible {
+            DETAILS_LABEL_HEIGHT + DETAILS_TEXT_HEIGHT + DETAILS_BUTTON_HEIGHT + gap * 3
+        } else {
+            0
+        };
+        let available_height =
+            (height - controls_top - status_height - margin * 2 - details_height).max(28);
+        if self.details.visible {
+            self.details.layout(
+                margin,
+                controls_top + available_height + gap,
+                inner_width,
+                gap,
+            );
+        }
         let preferred_button_height = 34;
         let rows_at_preferred = (available_height / (preferred_button_height + gap)).max(1);
         let required_columns = div_ceil(
@@ -244,6 +332,13 @@ impl PlayerControls {
     }
 
     pub fn activation_for_command(&self, command_id: usize) -> Option<PlayerControlActivation> {
+        if self.details.visible {
+            match command_id {
+                DETAILS_COPY_ID => return Some(PlayerControlActivation::CopyDetails),
+                DETAILS_BACK_ID => return Some(PlayerControlActivation::HideDetails),
+                _ => {}
+            }
+        }
         let control = self
             .controls
             .iter()
@@ -295,6 +390,9 @@ impl PlayerControls {
     }
 
     pub fn initial_focus(&self) -> HWND {
+        if self.details.visible {
+            return self.details.text;
+        }
         self.window_for_id(self.initial_focus_id)
             .unwrap_or(self.video_host)
     }
@@ -303,6 +401,102 @@ impl PlayerControls {
         self.controls
             .iter()
             .any(|control| control.active && control.window == window)
+            || (self.details.visible && [self.details.copy, self.details.back].contains(&window))
+    }
+}
+
+impl DetailsPanel {
+    unsafe fn create(parent: HWND, instance: HINSTANCE, font: Option<WPARAM>) -> Result<Self> {
+        let label = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            PCWSTR::null(),
+            WS_CHILD,
+            0,
+            0,
+            100,
+            DETAILS_LABEL_HEIGHT,
+            Some(parent),
+            None,
+            Some(instance),
+            None,
+        )?;
+        let text = CreateWindowExW(
+            WS_EX_CLIENTEDGE,
+            w!("EDIT"),
+            PCWSTR::null(),
+            WS_CHILD
+                | WS_TABSTOP
+                | WS_VSCROLL
+                | WS_HSCROLL
+                | WINDOW_STYLE(
+                    (ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | ES_AUTOHSCROLL) as u32,
+                ),
+            0,
+            0,
+            100,
+            DETAILS_TEXT_HEIGHT,
+            Some(parent),
+            None,
+            Some(instance),
+            None,
+        )?;
+        let mut buttons = [HWND::default(); 2];
+        for (button, id) in buttons.iter_mut().zip([DETAILS_COPY_ID, DETAILS_BACK_ID]) {
+            *button = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("BUTTON"),
+                PCWSTR::null(),
+                WS_CHILD | WS_TABSTOP,
+                0,
+                0,
+                100,
+                DETAILS_BUTTON_HEIGHT,
+                Some(parent),
+                Some(HMENU(id as *mut c_void)),
+                Some(instance),
+                None,
+            )?;
+        }
+        for window in [label, text, buttons[0], buttons[1]] {
+            SendMessageW(window, WM_SETFONT, font, Some(LPARAM(1)));
+        }
+        Ok(Self {
+            label,
+            text,
+            copy: buttons[0],
+            back: buttons[1],
+            visible: false,
+        })
+    }
+
+    unsafe fn show(&self, surface_visible: bool) {
+        for window in [self.label, self.text, self.copy, self.back] {
+            show(window, surface_visible && self.visible);
+        }
+    }
+
+    unsafe fn layout(&self, left: i32, top: i32, width: i32, gap: i32) {
+        let _ = MoveWindow(self.label, left, top, width, DETAILS_LABEL_HEIGHT, true);
+        let text_top = top + DETAILS_LABEL_HEIGHT + gap;
+        let _ = MoveWindow(self.text, left, text_top, width, DETAILS_TEXT_HEIGHT, true);
+        let buttons_top = text_top + DETAILS_TEXT_HEIGHT + gap;
+        let _ = MoveWindow(
+            self.copy,
+            left,
+            buttons_top,
+            160,
+            DETAILS_BUTTON_HEIGHT,
+            true,
+        );
+        let _ = MoveWindow(
+            self.back,
+            left + 160 + gap,
+            buttons_top,
+            120,
+            DETAILS_BUTTON_HEIGHT,
+            true,
+        );
     }
 }
 
@@ -348,6 +542,13 @@ const fn role_matches(native: NativeRole, projected: PlayerControlRole) -> bool 
         (NativeRole::Button, PlayerControlRole::Button)
             | (NativeRole::Checkbox, PlayerControlRole::Checkbox)
     )
+}
+
+unsafe fn window_text(window: HWND) -> String {
+    let length = usize::try_from(GetWindowTextLengthW(window)).unwrap_or_default();
+    let mut buffer = vec![0_u16; length + 1];
+    let copied = usize::try_from(GetWindowTextW(window, &mut buffer)).unwrap_or_default();
+    String::from_utf16_lossy(&buffer[..copied])
 }
 
 unsafe fn set_text(window: HWND, value: &str) {

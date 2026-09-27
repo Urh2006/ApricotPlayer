@@ -68,18 +68,33 @@ fn first_field<'a>(value: &'a serde_json::Value, keys: &[&str]) -> Option<&'a se
     keys.iter().find_map(|key| value.get(*key))
 }
 
-fn chapter_seconds(value: &serde_json::Value) -> Option<f64> {
+pub(crate) fn chapter_seconds(value: &serde_json::Value) -> Option<f64> {
     let seconds = if let Some(number) = value.as_f64() {
         number
     } else {
-        let text = value.as_str()?.trim();
+        let text = value.as_str()?.trim().replace(',', ".");
+        let parts: Vec<_> = text.split(':').collect();
+        if parts.len() == 1 {
+            let mut decimal = text.split('.');
+            let integer = decimal.next()?;
+            let fraction = decimal.next();
+            let digits = |part: &str| !part.is_empty() && part.bytes().all(|c| c.is_ascii_digit());
+            if !digits(integer)
+                || fraction.is_some_and(|part| !digits(part))
+                || decimal.next().is_some()
+            {
+                return None;
+            }
+        } else if parts.len() > 3 {
+            return None;
+        }
         let mut seconds = 0.0;
-        for part in text.split(':') {
-            seconds = seconds * 60.0 + part.parse::<f64>().ok()?;
+        for part in parts {
+            seconds = seconds * 60.0 + part.trim().parse::<f64>().ok()?;
         }
         seconds
     };
-    (seconds.is_finite() && seconds >= 0.0).then_some(seconds)
+    seconds.is_finite().then_some(seconds.max(0.0))
 }
 
 /// Retains Python's next/previous tolerances, including restarting the current
@@ -128,7 +143,6 @@ mod tests {
             {"time":0, "title":"Intro"},
             {"start":"00:30", "end":"00:20", "title":"Topic"},
             {"start_time":"NaN"},
-            {"start_time":-3},
             null
         ]));
         assert_eq!(result.len(), 3);
@@ -138,6 +152,26 @@ mod tests {
         assert_eq!(result[2].start_seconds, 3723.5);
         assert_eq!(result[2].end_seconds, Some(3780.0));
         assert_eq!(result[2].title, "Late");
+    }
+
+    #[test]
+    fn chapter_time_formats_match_python_without_accepting_nonfinite_values() {
+        for (value, expected) in [
+            (serde_json::json!("12,5"), Some(12.5)),
+            (serde_json::json!("01:02,5"), Some(62.5)),
+            (serde_json::json!(" 1 : 02 "), Some(62.0)),
+            (serde_json::json!(-3), Some(0.0)),
+            (serde_json::json!("-3"), None),
+            (serde_json::json!("1:2:3:4"), None),
+            (serde_json::json!("1e3"), None),
+            (serde_json::json!("1."), None),
+            (serde_json::json!(true), None),
+            (serde_json::json!("1:NaN"), None),
+            (serde_json::json!("1:inf"), None),
+            (serde_json::json!(""), None),
+        ] {
+            assert_eq!(chapter_seconds(&value), expected, "{value}");
+        }
     }
 
     #[test]

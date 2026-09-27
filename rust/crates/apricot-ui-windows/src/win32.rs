@@ -194,6 +194,7 @@ const LOCAL_FOLDER_TIMER_ID: usize = 4;
 const SUBSCRIPTION_TIMER_ID: usize = 5;
 const RSS_TIMER_ID: usize = 6;
 const DOWNLOAD_TIMER_ID: usize = 7;
+const CHAPTER_TIMER_ID: usize = 8;
 const DOWNLOAD_TIMER_INTERVAL_MS: u32 = 50;
 const SEEK_HOLD_DELAY_MS: u32 = 180;
 const SEEK_HOLD_INTERVAL_MS: u32 = 110;
@@ -355,6 +356,13 @@ struct ClipPreview {
     generation: u64,
 }
 
+struct PendingChapters {
+    generation: u64,
+    // None opens the list; Some selects the next/previous chapter.
+    direction: Option<bool>,
+    receiver: Receiver<Vec<serde_json::Value>>,
+}
+
 struct PendingLocalFolderScan {
     generation: u64,
     path: PathBuf,
@@ -466,6 +474,7 @@ struct WindowState {
     download_progress_task_ids: HashSet<u64>,
     download_progress_task_id: Option<u64>,
     clip_exports: Vec<Receiver<std::result::Result<PathBuf, String>>>,
+    pending_chapters: Option<PendingChapters>,
 }
 
 pub fn run_application(application: Application, version: &str, start_hidden: bool) -> Result<()> {
@@ -566,6 +575,9 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
         if handle_view_tab_message(window, &message) {
             continue;
         }
+        if handle_text_entry_enter(window, &message) {
+            continue;
+        }
         if handle_shortcut_message(window, &message) {
             continue;
         }
@@ -577,6 +589,45 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
     Ok(())
 }
 
+/// Python `on_char_hook`: Enter in the search or direct link field runs the
+/// search or the configured direct link action. `IsDialogMessageW` would turn
+/// it into an unhandled IDOK command before the field ever saw the key.
+unsafe fn handle_text_entry_enter(window: HWND, message: &MSG) -> bool {
+    if message.message != WM_KEYDOWN || message.wParam.0 != usize::from(VK_RETURN.0) {
+        return false;
+    }
+    if !state(window).is_some_and(|state| {
+        matches!(state.view, MainView::Search | MainView::DirectLink)
+            && message.hwnd == state.search_edit
+    }) {
+        return false;
+    }
+    submit_primary_text(window);
+    true
+}
+
+/// A multiline edit keeps Tab for itself; Python's details field passes it on
+/// to the next control like any other.
+unsafe fn handle_details_tab_message(window: HWND, state: &WindowState, message: &MSG) -> bool {
+    if state.view != MainView::Player
+        || !state.player_controls.details_visible()
+        || GetFocus() != state.player_controls.details_text()
+    {
+        return false;
+    }
+    if message.message == WM_KEYDOWN {
+        let backward = virtual_key_is_down(usize::from(VK_SHIFT.0));
+        if let Ok(next) = windows::Win32::UI::WindowsAndMessaging::GetNextDlgTabItem(
+            window,
+            Some(GetFocus()),
+            backward,
+        ) {
+            let _ = SetFocus(Some(next));
+        }
+    }
+    true
+}
+
 unsafe fn handle_view_tab_message(window: HWND, message: &MSG) -> bool {
     if message.wParam.0 != usize::from(VK_TAB.0)
         || !matches!(message.message, WM_KEYDOWN | WM_KEYUP)
@@ -586,6 +637,9 @@ unsafe fn handle_view_tab_message(window: HWND, message: &MSG) -> bool {
     let Some(state) = state(window) else {
         return false;
     };
+    if handle_details_tab_message(window, state, message) {
+        return true;
+    }
     let controls = match state.view {
         MainView::Trending => vec![
             state.trending_country,
@@ -701,6 +755,8 @@ fn user_playlist_tab_controls(state: &WindowState) -> Vec<HWND> {
     controls
 }
 
+// Keep the native message dispatch table together.
+#[allow(clippy::too_many_lines)]
 unsafe extern "system" fn window_proc(
     window: HWND,
     message: u32,
@@ -783,6 +839,10 @@ unsafe extern "system" fn window_proc(
         }
         WM_TIMER if wparam.0 == DOWNLOAD_TIMER_ID => {
             poll_download_updates(window);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == CHAPTER_TIMER_ID => {
+            poll_external_chapters(window);
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -1568,6 +1628,7 @@ unsafe fn create_controls(
         download_progress_task_ids: HashSet::new(),
         download_progress_task_id: None,
         clip_exports: Vec::new(),
+        pending_chapters: None,
     })
 }
 
@@ -3562,6 +3623,8 @@ unsafe fn activate_player_control(window: HWND, activation: PlayerControlActivat
         PlayerControlActivation::SessionAutoplayNext => {
             toggle_player_session_setting(window, SessionToggle::AutoplayNext);
         }
+        PlayerControlActivation::CopyDetails => copy_player_details(window),
+        PlayerControlActivation::HideDetails => hide_player_details(window),
     }
 }
 
@@ -3722,10 +3785,31 @@ unsafe fn refresh_player(
     let Some(model) = state.application.player_screen_model() else {
         return;
     };
+    let show_details = focus && state.application.settings().show_video_details_by_default;
+    if focus {
+        state.player_controls.hide_details();
+    }
     state.player_controls.sync(&model);
+    if show_details {
+        let text = player_details_text(&state.application);
+        state
+            .player_controls
+            .show_details(&player_details_labels(&state.application), &text);
+    } else {
+        sync_player_details(state);
+    }
     let title = wide(&model.window_title);
     let _ = SetWindowTextW(window, PCWSTR(title.as_ptr()));
     layout_controls_state(window, state);
+    if show_details {
+        let _ = SetFocus(Some(state.player_controls.details_text()));
+        set_status(
+            state,
+            &catalog_text(&state.application, "video_details"),
+            true,
+        );
+        return;
+    }
     if focus {
         let target = previous_focus
             .and_then(|id| state.player_controls.window_for_id(id))
@@ -3984,7 +4068,7 @@ unsafe fn show_media_collection(window: HWND, view: MainView) {
         state.application.navigate_to(RouteFrame::new(route));
     }
     state.view = view;
-    refresh_media_collection(state, true, true);
+    refresh_media_collection(state, true);
     layout_controls_state(window, state);
 }
 
@@ -4035,7 +4119,7 @@ unsafe fn show_subscriptions(window: HWND) {
     );
     set_control_text(state, state.subscription_filter, "filter_category");
     set_control_text(state, state.subscription_set_category, "set_category");
-    refresh_subscriptions(state, true, true, None);
+    refresh_subscriptions(state, true, None);
     layout_controls_state(window, state);
 }
 
@@ -4062,16 +4146,12 @@ unsafe fn show_rss_feeds(window: HWND) {
     set_open_button_label(state, "open_feed");
     set_control_text(state, state.collection_remove, "remove_feed");
     set_control_text(state, state.rss_refresh, "refresh_feeds");
-    refresh_rss_feeds(state, true, true, None);
+    refresh_rss_feeds(state, true, None);
     layout_controls_state(window, state);
 }
 
-unsafe fn refresh_rss_feeds(
-    state: &mut WindowState,
-    focus: bool,
-    announce_status: bool,
-    preferred_url: Option<&str>,
-) {
+/// Python `refresh_rss_feed_list`: only an empty list writes the status bar.
+unsafe fn refresh_rss_feeds(state: &mut WindowState, focus: bool, preferred_url: Option<&str>) {
     let previous_url = preferred_url
         .map(str::to_owned)
         .or_else(|| selected_rss_feed(state).map(|feed| feed.url.clone()));
@@ -4082,15 +4162,11 @@ unsafe fn refresh_rss_feeds(
     if state.application.rss_feeds().is_empty() {
         add_list_string(state.list, catalog.text("rss_feeds_empty"));
         SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
-        set_status(state, catalog.text("rss_feeds_empty"), announce_status);
+        set_status(state, catalog.text("rss_feeds_empty"), false);
     } else if visible.is_empty() {
         add_list_string(state.list, catalog.text("category_filter_empty"));
         SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
-        set_status(
-            state,
-            catalog.text("category_filter_empty"),
-            announce_status,
-        );
+        set_status(state, catalog.text("category_filter_empty"), false);
     } else {
         for index in &visible {
             if let Some(feed) = state.application.rss_feeds().get(*index) {
@@ -4116,11 +4192,6 @@ unsafe fn refresh_rss_feeds(
             .unwrap_or_default();
         SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selected)), None);
         state.current_rss_feed_index = visible[selected];
-        set_status(
-            state,
-            &format!("{}: {}", catalog.text("rss_feeds"), visible.len()),
-            announce_status,
-        );
     }
     if let Some(error) = state.application.rss_feed_load_error() {
         show_error_message(
@@ -4738,13 +4809,13 @@ unsafe fn poll_podcast_work(window: HWND) {
     match outcome {
         PodcastWorkResult::FeedAdded(Ok(feed)) => {
             let title = feed.title.clone();
-            match state.application.add_rss_feed(feed) {
+            match state.application.add_rss_feed(*feed) {
                 Ok(RssFeedAddOutcome::Added(_)) => {
                     let message = catalog_text(&state.application, "rss_feed_added")
                         .replace("{title}", &title);
                     set_status(state, &message, true);
                     if state.view == MainView::RssFeeds {
-                        refresh_rss_feeds(state, false, false, None);
+                        refresh_rss_feeds(state, false, None);
                     }
                 }
                 Ok(RssFeedAddOutcome::AlreadyPresent) => {
@@ -4809,7 +4880,7 @@ unsafe fn poll_podcast_work(window: HWND) {
                         set_status(state, &message, true);
                     }
                     if state.view == MainView::RssFeeds {
-                        refresh_rss_feeds(state, false, false, None);
+                        refresh_rss_feeds(state, false, None);
                     } else if state.view == MainView::RssItems {
                         refresh_rss_items(state, false, false);
                     }
@@ -4858,7 +4929,7 @@ unsafe fn poll_podcast_work(window: HWND) {
         PodcastWorkResult::FeedsImported { feeds, failures } => {
             match state.application.import_rss_feeds(feeds) {
                 Ok(summary) => {
-                    refresh_rss_feeds(state, false, false, None);
+                    refresh_rss_feeds(state, false, None);
                     let key = if failures == 0 {
                         "opml_import_done"
                     } else {
@@ -4995,7 +5066,7 @@ unsafe fn choose_rss_category_filter(window: HWND) {
                 .unwrap_or_default();
             if let Some(state) = state_mut(window) {
                 state.application.set_rss_category_filter(&category);
-                refresh_rss_feeds(state, true, false, None);
+                refresh_rss_feeds(state, true, None);
                 let message = if category.is_empty() {
                     catalog_text(&state.application, "category_filter_all")
                 } else {
@@ -5053,7 +5124,7 @@ unsafe fn set_selected_rss_category(window: HWND) {
             match result {
                 Some(Ok(_)) => {
                     if let Some(state) = state_mut(window) {
-                        refresh_rss_feeds(state, true, false, Some(&feed.url));
+                        refresh_rss_feeds(state, true, Some(&feed.url));
                         let message = if category.is_empty() {
                             catalog_text(&state.application, "category_cleared")
                                 .replace("{title}", &feed.title)
@@ -5100,7 +5171,7 @@ unsafe fn remove_selected_rss_feed(window: HWND) {
     match result {
         Some(Ok(Some(_))) => {
             if let Some(state) = state_mut(window) {
-                refresh_rss_feeds(state, true, false, preferred_url.as_deref());
+                refresh_rss_feeds(state, true, preferred_url.as_deref());
                 set_status(
                     state,
                     &catalog_text(&state.application, "rss_feed_removed"),
@@ -5173,7 +5244,7 @@ unsafe fn choose_rss_speed_preset(window: HWND) {
                 Some(Ok(_)) => {
                     if let Some(state) = state_mut(window) {
                         if state.view == MainView::RssFeeds {
-                            refresh_rss_feeds(state, true, false, Some(&feed.url));
+                            refresh_rss_feeds(state, true, Some(&feed.url));
                         } else {
                             refresh_rss_items(state, true, false);
                         }
@@ -5766,38 +5837,28 @@ fn subscription_media_item(
 }
 
 unsafe fn open_selected_subscription_videos(window: HWND) {
-    let Some(subscription) = state(window).and_then(|state| selected_subscription(state)) else {
-        if let Some(state) = state(window) {
-            set_status(
-                state,
-                &catalog_text(&state.application, "no_selection"),
-                true,
-            );
-        }
-        return;
-    };
-    let Some(item) = subscription_media_item(&subscription) else {
-        if let Some(state) = state(window) {
-            set_status(
-                state,
-                &catalog_text(&state.application, "no_selection"),
-                true,
-            );
-        }
+    let Some(item) = state(window)
+        .and_then(|state| selected_subscription(state))
+        .and_then(|subscription| subscription_media_item(&subscription))
+    else {
+        show_no_selection_message(window);
         return;
     };
     open_youtube_collection(window, item, YoutubeCollectionKind::ChannelVideos);
 }
 
+/// Python `self.message(self.t("no_selection"))`.
+unsafe fn show_no_selection_message(window: HWND) {
+    if let Some(message) =
+        state(window).map(|state| catalog_text(&state.application, "no_selection"))
+    {
+        show_error_message(window, &message);
+    }
+}
+
 unsafe fn open_selected_subscription_new_videos(window: HWND) {
     let Some(subscription) = state(window).and_then(|state| selected_subscription(state)) else {
-        if let Some(state) = state(window) {
-            set_status(
-                state,
-                &catalog_text(&state.application, "no_selection"),
-                true,
-            );
-        }
+        show_no_selection_message(window);
         return;
     };
     if subscription.last_new_items.is_empty() {
@@ -5846,7 +5907,7 @@ unsafe fn remove_selected_subscription(window: HWND) {
     match result {
         Some(Ok(Some(_))) => {
             if let Some(state) = state_mut(window) {
-                refresh_subscriptions(state, true, false, None);
+                refresh_subscriptions(state, true, None);
                 let message = catalog_text(&state.application, "subscription_removed")
                     .replace("{title}", &title);
                 set_status(state, &message, true);
@@ -5904,7 +5965,7 @@ unsafe fn choose_subscription_category_filter(window: HWND) {
                 state
                     .application
                     .set_subscription_category_filter(&category);
-                refresh_subscriptions(state, true, false, None);
+                refresh_subscriptions(state, true, None);
                 let message = if category.is_empty() {
                     catalog_text(&state.application, "category_filter_all")
                 } else {
@@ -5969,7 +6030,7 @@ unsafe fn set_selected_subscription_category(window: HWND) {
             match result {
                 Some(Ok(_)) => {
                     if let Some(state) = state_mut(window) {
-                        refresh_subscriptions(state, true, false, Some(&subscription.url));
+                        refresh_subscriptions(state, true, Some(&subscription.url));
                         let message = if category.is_empty() {
                             catalog_text(&state.application, "category_cleared")
                                 .replace("{title}", &subscription.title)
@@ -6320,7 +6381,7 @@ unsafe fn finish_subscription_check(window: HWND) {
             set_status(state, &message, true);
         }
         if state.view == MainView::Subscriptions {
-            refresh_subscriptions(state, true, false, None);
+            refresh_subscriptions(state, true, None);
             layout_controls_state(window, state);
         }
         if pending.manual {
@@ -6359,7 +6420,7 @@ unsafe fn show_user_playlists(window: HWND) {
             .navigate_to(RouteFrame::new(Route::UserPlaylists));
     }
     state.view = MainView::UserPlaylists;
-    refresh_user_playlists(state, true, true);
+    refresh_user_playlists(state, true);
     layout_controls_state(window, state);
 }
 
@@ -6489,13 +6550,13 @@ unsafe fn navigate_back(window: HWND) {
         }
         Route::Favorites => {
             state.view = MainView::Favorites;
-            refresh_media_collection(state, true, false);
+            refresh_media_collection(state, true);
             select_list_index(state.list, saved_index);
             layout_controls_state(window, state);
         }
         Route::History => {
             state.view = MainView::History;
-            refresh_media_collection(state, true, false);
+            refresh_media_collection(state, true);
             select_list_index(state.list, saved_index);
             layout_controls_state(window, state);
         }
@@ -6506,12 +6567,12 @@ unsafe fn navigate_back(window: HWND) {
         }
         Route::Subscriptions => {
             state.view = MainView::Subscriptions;
-            refresh_subscriptions(state, true, false, None);
+            refresh_subscriptions(state, true, None);
             layout_controls_state(window, state);
         }
         Route::RssFeeds => {
             state.view = MainView::RssFeeds;
-            refresh_rss_feeds(state, true, false, None);
+            refresh_rss_feeds(state, true, None);
             layout_controls_state(window, state);
         }
         Route::RssItems => {
@@ -6541,7 +6602,7 @@ unsafe fn navigate_back(window: HWND) {
         }
         Route::UserPlaylists => {
             state.view = MainView::UserPlaylists;
-            refresh_user_playlists(state, true, false);
+            refresh_user_playlists(state, true);
             layout_controls_state(window, state);
         }
         Route::UserPlaylistItems => {
@@ -6668,10 +6729,36 @@ unsafe fn submit_primary_text(window: HWND) {
     }
 }
 
+/// Python `direct_link_item`: a link without a scheme gets `https://`.
+fn direct_link_with_scheme(value: &str) -> String {
+    let value = value.trim();
+    let has_scheme = value.split_once("://").is_some_and(|(scheme, _)| {
+        let mut characters = scheme.chars();
+        characters
+            .next()
+            .is_some_and(|first| first.is_ascii_alphabetic())
+            && characters.all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '+' | '.' | '-')
+            })
+    });
+    if has_scheme {
+        value.to_owned()
+    } else {
+        format!("https://{value}")
+    }
+}
+
 unsafe fn activate_direct_link(window: HWND, action: &str) {
-    let item = state(window)
-        .map(|state| window_text(state.search_edit))
-        .and_then(|value| apricot_core::MediaItem::from_direct_link(&value));
+    let text = state(window).map(|state| window_text(state.search_edit));
+    // Python `direct_link_item` returns nothing for an empty field and the
+    // action shows the `no_selection` message box.
+    if text.as_deref().is_none_or(|text| text.trim().is_empty()) {
+        show_no_selection_message(window);
+        return;
+    }
+    let item = text.and_then(|value| {
+        apricot_core::MediaItem::from_direct_link(&direct_link_with_scheme(&value))
+    });
     let Some(item) = item else {
         if let Some(state) = state(window) {
             let message = catalog_text(&state.application, "direct_link_invalid");
@@ -9980,7 +10067,9 @@ unsafe fn refresh_local_folder(state: &mut WindowState, focus: bool, announce_st
     }
 }
 
-unsafe fn refresh_media_collection(state: &mut WindowState, focus: bool, announce_status: bool) {
+/// Python `refresh_favorites` and `refresh_history`: only an empty list
+/// writes the status bar, and opening the screen announces nothing.
+unsafe fn refresh_media_collection(state: &mut WindowState, focus: bool) {
     SendMessageW(state.list, LB_RESETCONTENT, None, None);
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
     let (name_key, empty_key, items) = match state.view {
@@ -10006,7 +10095,7 @@ unsafe fn refresh_media_collection(state: &mut WindowState, focus: bool, announc
     if items.is_empty() {
         add_list_string(state.list, catalog.text(empty_key));
         SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
-        set_status(state, catalog.text(empty_key), announce_status);
+        set_status(state, catalog.text(empty_key), false);
     } else {
         for item in items {
             add_list_string(
@@ -10015,11 +10104,6 @@ unsafe fn refresh_media_collection(state: &mut WindowState, focus: bool, announc
             );
         }
         SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
-        set_status(
-            state,
-            &format!("{}: {}", catalog.text(name_key), items.len()),
-            announce_status,
-        );
     }
     if focus {
         let _ = SetFocus(Some(state.list));
@@ -10061,12 +10145,10 @@ unsafe fn refresh_notification_center(
     }
 }
 
-unsafe fn refresh_subscriptions(
-    state: &mut WindowState,
-    focus: bool,
-    announce_status: bool,
-    preferred_url: Option<&str>,
-) {
+/// Python `refresh_subscriptions`: keeps the selected subscription, or the same
+/// row when it is gone, and only an empty list writes the status bar.
+unsafe fn refresh_subscriptions(state: &mut WindowState, focus: bool, preferred_url: Option<&str>) {
+    let previous_row = usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok();
     let previous_url = preferred_url
         .map(str::to_owned)
         .or_else(|| selected_subscription(state).map(|subscription| subscription.url));
@@ -10079,15 +10161,11 @@ unsafe fn refresh_subscriptions(
     if state.application.subscriptions().is_empty() {
         add_list_string(state.list, catalog.text("subscription_empty"));
         SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
-        set_status(state, catalog.text("subscription_empty"), announce_status);
+        set_status(state, catalog.text("subscription_empty"), false);
     } else if visible.is_empty() {
         add_list_string(state.list, catalog.text("category_filter_empty"));
         SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
-        set_status(
-            state,
-            catalog.text("category_filter_empty"),
-            announce_status,
-        );
+        set_status(state, catalog.text("category_filter_empty"), false);
     } else {
         for index in &visible {
             if let Some(subscription) = state.application.subscriptions().get(*index) {
@@ -10105,13 +10183,10 @@ unsafe fn refresh_subscriptions(
                         .is_some_and(|subscription| subscription.url == url)
                 })
             })
-            .unwrap_or_default();
+            .or(previous_row)
+            .unwrap_or_default()
+            .min(visible.len() - 1);
         SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selected)), None);
-        set_status(
-            state,
-            &format!("{}: {}", catalog.text("subscriptions"), visible.len()),
-            announce_status,
-        );
     }
     if let Some(error) = state.application.subscription_load_error() {
         set_status(
@@ -10209,7 +10284,8 @@ fn notification_label(
     parts.join(" | ")
 }
 
-unsafe fn refresh_user_playlists(state: &mut WindowState, focus: bool, announce_status: bool) {
+/// Python `refresh_user_playlists`: only an empty list writes the status bar.
+unsafe fn refresh_user_playlists(state: &mut WindowState, focus: bool) {
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
     SendMessageW(state.list, LB_RESETCONTENT, None, None);
     crate::accessibility_win32::set_control_name(state.list, catalog.text("playlists"));
@@ -10219,7 +10295,7 @@ unsafe fn refresh_user_playlists(state: &mut WindowState, focus: bool, announce_
     if playlists.is_empty() {
         add_list_string(state.list, catalog.text("no_playlists"));
         SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
-        set_status(state, catalog.text("no_playlists"), announce_status);
+        set_status(state, catalog.text("no_playlists"), false);
     } else {
         for playlist in playlists {
             add_list_string(
@@ -10237,11 +10313,6 @@ unsafe fn refresh_user_playlists(state: &mut WindowState, focus: bool, announce_
             .min(playlists.len().saturating_sub(1));
         state.current_user_playlist_index = selected;
         SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selected)), None);
-        set_status(
-            state,
-            &format!("{}: {}", catalog.text("playlists"), playlists.len()),
-            announce_status,
-        );
     }
     if focus {
         let _ = SetFocus(Some(state.list));
@@ -10641,6 +10712,9 @@ unsafe fn set_status(state: &WindowState, message: &str, announce: bool) {
 }
 
 unsafe fn show_error_message(window: HWND, message: &str) {
+    // The message box hands activation back to the main window itself, so
+    // focus returns to the control that had it, as with wx.MessageBox.
+    let previous = GetFocus();
     let message = wide(message);
     let _ = MessageBoxW(
         Some(window),
@@ -10648,6 +10722,11 @@ unsafe fn show_error_message(window: HWND, message: &str) {
         w!("ApricotPlayer 2 Beta"),
         MB_OK | MB_ICONINFORMATION,
     );
+    if !previous.is_invalid()
+        && windows::Win32::UI::WindowsAndMessaging::IsWindow(Some(previous)).as_bool()
+    {
+        let _ = SetFocus(Some(previous));
+    }
 }
 
 unsafe fn add_list_string(control: HWND, value: &str) {
@@ -10688,13 +10767,23 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
     let Some(chord) = crate::shortcut_win32::chord_from_message(message) else {
         return false;
     };
+    if state(window).is_some_and(|state| {
+        state.view == MainView::Player
+            && state.player_controls.details_visible()
+            && GetFocus() == state.player_controls.details_text()
+            && details_text_navigation_key(chord)
+    }) {
+        return false;
+    }
     if !chord.control
         && !chord.shift
         && !chord.alt
         && chord.key == ShortcutKey::Escape
         && state(window).is_some_and(|state| state.view != MainView::MainMenu)
     {
-        navigate_back(window);
+        if !hide_player_details_for_back(window) {
+            navigate_back(window);
+        }
         return true;
     }
     let Some(state) = state(window) else {
@@ -10752,7 +10841,37 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
         }
         return true;
     }
+    if action.id.as_str() == "player_back" && hide_player_details_for_back(window) {
+        return true;
+    }
     activate_action(window, action.id.as_str());
+    true
+}
+
+/// Python `details_text_navigation_key`: reading keys stay in the details
+/// field instead of seeking or changing volume.
+fn details_text_navigation_key(chord: apricot_core::shortcut::ShortcutChord) -> bool {
+    matches!(
+        chord.key,
+        ShortcutKey::Up
+            | ShortcutKey::Down
+            | ShortcutKey::Left
+            | ShortcutKey::Right
+            | ShortcutKey::Home
+            | ShortcutKey::End
+            | ShortcutKey::PageUp
+            | ShortcutKey::PageDown
+    ) || (chord.control && matches!(chord.key, ShortcutKey::Character('c' | 'C' | 'a' | 'A')))
+}
+
+/// Python `player_back`: while details are shown the shortcut only hides them.
+unsafe fn hide_player_details_for_back(window: HWND) -> bool {
+    if !state(window).is_some_and(|state| {
+        state.view == MainView::Player && state.player_controls.details_visible()
+    }) {
+        return false;
+    }
+    hide_player_details(window);
     true
 }
 
@@ -10908,6 +11027,8 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "player_volume_status" => announce_player_volume(window),
         "player_format_status" => announce_player_format(window),
         "player_details" => show_player_details(window),
+        "player_lyrics" => show_player_lyrics(window),
+        "player_transcript" => show_player_transcript(window),
         "player_add_bookmark" => show_add_current_bookmark_prompt(window),
         "player_bookmarks" => show_bookmarks_dialog(window, true, false),
         "player_seek_back" => seek_player(window, -configured_seek_seconds(window)),
@@ -11252,7 +11373,7 @@ unsafe fn remove_active_favorite(window: HWND) {
         Some(Ok(Some(_))) => {
             if let Some(state) = state_mut(window) {
                 if state.view == MainView::Favorites {
-                    refresh_media_collection(state, true, false);
+                    refresh_media_collection(state, true);
                 }
                 set_status(
                     state,
@@ -11350,7 +11471,7 @@ unsafe fn finish_collection_removal(
     match result {
         Ok(Some(_)) => {
             if let Some(state) = state_mut(window) {
-                refresh_media_collection(state, true, false);
+                refresh_media_collection(state, true);
                 set_status(state, &catalog_text(&state.application, success_key), true);
             }
         }
@@ -11373,7 +11494,7 @@ unsafe fn clear_history(window: HWND) {
     match result {
         Ok(_) => {
             if let Some(state) = state_mut(window) {
-                refresh_media_collection(state, true, false);
+                refresh_media_collection(state, true);
                 set_status(
                     state,
                     &catalog_text(&state.application, "history_cleared"),
@@ -11857,7 +11978,7 @@ unsafe fn create_user_playlist(window: HWND, initial_item: Option<apricot_core::
         Ok(apricot_app::PlaylistCreateOutcome::Created(index)) => {
             state.current_user_playlist_index = index;
             if state.view == MainView::UserPlaylists {
-                refresh_user_playlists(state, true, false);
+                refresh_user_playlists(state, true);
             } else if state.view == MainView::UserPlaylistItems {
                 refresh_user_playlist_items(state, true, false);
             }
@@ -12039,7 +12160,7 @@ unsafe fn remove_selected_user_playlist(window: HWND) {
             if let Some(state) = state_mut(window) {
                 state.current_user_playlist_index =
                     index.min(state.application.user_playlists().len().saturating_sub(1));
-                refresh_user_playlists(state, true, false);
+                refresh_user_playlists(state, true);
                 set_status(
                     state,
                     &catalog_text(&state.application, "playlist_removed"),
@@ -12609,8 +12730,118 @@ unsafe fn announce_player_time(window: HWND) {
     );
 }
 
+unsafe fn request_external_chapters(window: HWND, direction: Option<bool>) -> bool {
+    let Some(state) = state_mut(window) else {
+        return false;
+    };
+    let session = state.application.player_session();
+    let Some(item) = session.current_item() else {
+        return false;
+    };
+    if !apricot_app::chapters::item_chapters(item).is_empty()
+        || item
+            .metadata
+            .get("_chapters_url_checked")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+    {
+        return false;
+    }
+    let Some(url) = item
+        .metadata
+        .get("chapters_url")
+        .and_then(serde_json::Value::as_str)
+        .filter(|url| !url.trim().is_empty())
+        .map(str::to_owned)
+    else {
+        return false;
+    };
+    let generation = session.generation();
+    if let Some(pending) = state.pending_chapters.as_mut()
+        && pending.generation == generation
+    {
+        pending.direction = direction;
+        return true;
+    }
+    let proxy = state.application.settings().proxy.clone();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let chapters = apricot_platform::RssClient::new(Some(&proxy))
+            .and_then(|client| client.fetch_chapters(&url))
+            .unwrap_or_default();
+        let _ = sender.send(chapters);
+    });
+    state.pending_chapters = Some(PendingChapters {
+        generation,
+        direction,
+        receiver,
+    });
+    let _ = SetTimer(Some(window), CHAPTER_TIMER_ID, 50, None);
+    true
+}
+
+unsafe fn poll_external_chapters(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let Some(pending) = state.pending_chapters.as_ref() else {
+        let _ = KillTimer(Some(window), CHAPTER_TIMER_ID);
+        return;
+    };
+    if pending.generation != state.application.player_session().generation()
+        || state.application.current_route() != Route::Player
+    {
+        state.pending_chapters = None;
+        let _ = KillTimer(Some(window), CHAPTER_TIMER_ID);
+        return;
+    }
+    if state.modal_open {
+        return;
+    }
+    let chapters = match pending.receiver.try_recv() {
+        Ok(chapters) => chapters,
+        Err(std::sync::mpsc::TryRecvError::Empty) => return,
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => Vec::new(),
+    };
+    let pending = state
+        .pending_chapters
+        .take()
+        .expect("pending chapter request");
+    let _ = KillTimer(Some(window), CHAPTER_TIMER_ID);
+    if !state
+        .application
+        .cache_external_chapters(pending.generation, chapters)
+    {
+        return;
+    }
+    match pending.direction {
+        Some(next) => seek_relative_player_chapter(window, next),
+        None => show_player_chapters(window),
+    }
+}
+
+/// Python `ensure_player_for_auxiliary_view`. The Rust player lives only on
+/// its own page, so outside it there is no player to show.
+unsafe fn ensure_player_for_auxiliary_view(window: HWND) -> bool {
+    let Some(state) = state(window) else {
+        return false;
+    };
+    if state.view == MainView::Player && state.application.player_session().current_item().is_some()
+    {
+        return true;
+    }
+    set_status(state, &catalog_text(&state.application, "no_player"), true);
+    false
+}
+
 unsafe fn show_player_chapters(window: HWND) {
     stop_controlled_repeat(window);
+    if !ensure_player_for_auxiliary_view(window) {
+        return;
+    }
+    if request_external_chapters(window, None) {
+        return;
+    }
     let Some(main_state) = state_mut(window) else {
         return;
     };
@@ -12642,7 +12873,7 @@ unsafe fn show_player_chapters(window: HWND) {
         .enumerate()
         .map(|(index, chapter)| {
             let name = if chapter.title.is_empty() {
-                format!("{title} {}", index + 1)
+                title.clone()
             } else {
                 chapter.title.clone()
             };
@@ -12654,8 +12885,19 @@ unsafe fn show_player_chapters(window: HWND) {
         })
         .collect::<Vec<_>>();
     main_state.modal_open = true;
-    let outcome = crate::playlist_dialog_win32::choose_with_initial(
-        window, &title, &list_name, &choices, selected, &play, &back,
+    let shortcuts = &main_state.application.settings().keyboard_shortcuts;
+    let configured = |id: &str, default: &str| {
+        apricot_core::shortcut::ShortcutChord::parse(
+            shortcuts.get(id).map_or(default, String::as_str),
+        )
+    };
+    let behavior = crate::playlist_dialog_win32::PickerBehavior {
+        initial_selection: selected,
+        accept: configured("open_selected", "Enter"),
+        back: configured("player_back", "Escape"),
+    };
+    let outcome = crate::playlist_dialog_win32::choose_configured(
+        window, &title, &list_name, &choices, behavior, &play, &back,
     );
     if let Some(main_state) = state_mut(window) {
         main_state.modal_open = false;
@@ -12663,22 +12905,23 @@ unsafe fn show_player_chapters(window: HWND) {
     resume_deferred_window_work(window);
     match outcome {
         Ok(Some(index)) => {
-            if state(window)
-                .is_some_and(|state| state.application.player_session().generation() == generation)
-                && let Some(chapter) = chapters.get(index)
+            if state(window).is_some_and(|state| {
+                state.application.current_route() == Route::Player
+                    && state.application.player_session().is_open()
+                    && state.application.player_session().generation() == generation
+            }) && let Some(chapter) = chapters.get(index)
+                && seek_player_chapter(window, chapter.start_seconds)
+                && let Some(main_state) = state(window)
             {
-                seek_player_chapter(window, chapter.start_seconds);
-                if let Some(main_state) = state(window) {
-                    let name = if chapter.title.is_empty() {
-                        &title
-                    } else {
-                        &chapter.title
-                    };
-                    let message = catalog_text(&main_state.application, "chapter_selected")
-                        .replace("{title}", name)
-                        .replace("{time}", &format_duration(chapter.start_seconds));
-                    set_status(main_state, &message, true);
-                }
+                let name = if chapter.title.is_empty() {
+                    &title
+                } else {
+                    &chapter.title
+                };
+                let message = catalog_text(&main_state.application, "chapter_selected")
+                    .replace("{title}", name)
+                    .replace("{time}", &format_duration(chapter.start_seconds));
+                set_status(main_state, &message, true);
             }
         }
         Ok(None) => {}
@@ -12690,6 +12933,9 @@ unsafe fn show_player_chapters(window: HWND) {
 }
 
 unsafe fn seek_relative_player_chapter(window: HWND, next: bool) {
+    if request_external_chapters(window, Some(next)) {
+        return;
+    }
     let Some(main_state) = state(window) else {
         return;
     };
@@ -12833,32 +13079,307 @@ unsafe fn announce_player_format(window: HWND) {
     set_status(state, &message, true);
 }
 
+/// Python `build_video_details_text`.
+fn player_details_text(application: &Application) -> String {
+    application
+        .player_details_text()
+        .unwrap_or_else(|| catalog_text(application, "details_unavailable"))
+}
+
+fn player_details_labels(application: &Application) -> crate::player_controls_win32::DetailsLabels {
+    crate::player_controls_win32::DetailsLabels {
+        title: catalog_text(application, "video_details"),
+        copy: catalog_text(application, "copy_details"),
+        back: catalog_text(application, "back"),
+    }
+}
+
+/// Python `update_details_text` after speed, pitch or metadata changes.
+unsafe fn sync_player_details(state: &WindowState) {
+    if state.view == MainView::Player && state.player_controls.details_visible() {
+        state
+            .player_controls
+            .set_details_text(&player_details_text(&state.application));
+    }
+}
+
+/// Python `show_video_details`: the details open inside the player page.
 unsafe fn show_player_details(window: HWND) {
+    stop_controlled_repeat(window);
     let Some(state) = state_mut(window) else {
         return;
     };
-    let Some(details) = state.application.player_details_text() else {
-        let message = catalog_text(&state.application, "details_unavailable");
-        set_status(state, &message, true);
+    if state.view != MainView::Player {
+        set_status(state, &catalog_text(&state.application, "no_player"), true);
+        return;
+    }
+    let text = player_details_text(&state.application);
+    state
+        .player_controls
+        .show_details(&player_details_labels(&state.application), &text);
+    layout_controls_state(window, state);
+    let _ = SetFocus(Some(state.player_controls.details_text()));
+    set_status(
+        state,
+        &catalog_text(&state.application, "video_details"),
+        true,
+    );
+}
+
+/// Python `hide_video_details`.
+unsafe fn hide_player_details(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    if !state.player_controls.details_visible() {
+        return;
+    }
+    state.player_controls.hide_details();
+    layout_controls_state(window, state);
+    let _ = SetFocus(Some(state.player_controls.video_host()));
+    set_status(
+        state,
+        &catalog_text(&state.application, "details_closed"),
+        true,
+    );
+}
+
+/// Python `copy_video_details`: copies freshly built text.
+unsafe fn copy_player_details(window: HWND) {
+    let Some(text) = state(window).map(|state| player_details_text(&state.application)) else {
+        return;
+    };
+    if crate::clipboard_win32::copy_text(window, &text).is_ok()
+        && let Some(state) = state(window)
+    {
+        set_status(
+            state,
+            &catalog_text(&state.application, "details_copied"),
+            true,
+        );
+    }
+}
+
+// Keep the generation guard and modal lifetime in one place.
+#[allow(clippy::too_many_lines)]
+unsafe fn show_player_transcript(window: HWND) {
+    stop_controlled_repeat(window);
+    if !ensure_player_for_auxiliary_view(window) {
+        return;
+    }
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let Some(item) = state.application.player_session().current_item().cloned() else {
+        return;
+    };
+    let generation = state.application.player_session().generation();
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let keys = [
+        "transcript",
+        "transcript_search",
+        "transcript_loading",
+        "play",
+        "copy_transcript_line",
+        "copy_transcript",
+        "copy_timestamp_link",
+        "back",
+        "transcript_no_search_results",
+        "no_transcript_available",
+        "transcript_failed",
+        "transcript_rate_limited",
+        "transcript_copied",
+        "transcript_line_copied",
+        "transcript_loaded_from_source",
+        "transcript_source_local",
+        "transcript_source_subtitles",
+        "transcript_source_auto_captions",
+    ];
+    let labels = keys
+        .into_iter()
+        .map(|key| (key.to_owned(), catalog.text(key).to_owned()))
+        .collect();
+    let languages = state.application.settings().subtitle_languages.clone();
+    let user_agent = state.application.settings().cookie_user_agent.clone();
+    let config = youtube_session_config(state);
+    let cached = state.application.player_session().transcript().cloned();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    if let Some(cached) = cached {
+        let source_key = match cached.source_key.as_str() {
+            "transcript_source_local" => "transcript_source_local",
+            "transcript_source_auto_captions" => "transcript_source_auto_captions",
+            _ => "transcript_source_subtitles",
+        };
+        let _ = sender.send(Ok(crate::transcript_loader::LoadedTranscript {
+            entries: cached.entries,
+            source_key,
+        }));
+    } else {
+        let worker_item = item.clone();
+        let executable =
+            application_directory().map(|path| path.join("components").join("yt-dlp.exe"));
+        std::thread::spawn(move || {
+            let result = crate::transcript_loader::load(
+                &worker_item,
+                executable.as_deref().unwrap_or(std::path::Path::new("")),
+                config,
+                &languages,
+                &user_agent,
+            );
+            let _ = sender.send(result);
+        });
+    }
+    let options = crate::transcript_win32::TranscriptDialogOptions {
+        labels,
+        can_copy_timestamp: item.youtube_url_at_timestamp(0.0).is_some(),
+        receiver,
+        accept: apricot_core::shortcut::ShortcutChord::parse(
+            state
+                .application
+                .settings()
+                .keyboard_shortcuts
+                .get("open_selected")
+                .map_or("Enter", String::as_str),
+        ),
+        back: apricot_core::shortcut::ShortcutChord::parse(
+            state
+                .application
+                .settings()
+                .keyboard_shortcuts
+                .get("player_back")
+                .map_or("Escape", String::as_str),
+        ),
+    };
+    state.modal_open = true;
+    let mut action = |action| {
+        let Some(state) = self::state(window) else {
+            return String::new();
+        };
+        if state.application.player_session().generation() != generation {
+            return catalog.text("no_player").to_owned();
+        }
+        match action {
+            crate::transcript_win32::TranscriptAction::Seek(entry) => {
+                if seek_player_chapter(window, entry.start) {
+                    let text = if entry.text.chars().count() > 90 {
+                        format!(
+                            "{}...",
+                            entry.text.chars().take(87).collect::<String>().trim_end()
+                        )
+                    } else {
+                        entry.text
+                    };
+                    catalog
+                        .text("transcript_selected")
+                        .replace("{time}", &format_duration(entry.start))
+                        .replace("{text}", &text)
+                } else {
+                    catalog.text("timing_unavailable").to_owned()
+                }
+            }
+            crate::transcript_win32::TranscriptAction::CopyTimestamp(entry) => {
+                if let Some(url) = item.youtube_url_at_timestamp(entry.start) {
+                    if crate::clipboard_win32::copy_text(window, url.as_str()).is_ok() {
+                        catalog.text("timestamp_url_copied").to_owned()
+                    } else {
+                        catalog.text("copy_failed").to_owned()
+                    }
+                } else {
+                    catalog.text("timestamp_url_unavailable").to_owned()
+                }
+            }
+        }
+    };
+    let result = crate::transcript_win32::show(window, options, &mut action);
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+        if let Ok(Some(loaded)) = &result {
+            state.application.cache_transcript(
+                generation,
+                apricot_app::transcript::CachedTranscript {
+                    entries: loaded.entries.clone(),
+                    source_key: loaded.source_key.to_owned(),
+                },
+            );
+        }
+    }
+    resume_deferred_window_work(window);
+    if let Err(error) = result {
+        show_error_message(window, &error.to_string());
+    }
+    if let Some(state) = state_mut(window) {
+        let _ = SetFocus(Some(active_primary_control(state)));
+    }
+}
+
+unsafe fn show_player_lyrics(window: HWND) {
+    stop_controlled_repeat(window);
+    if !ensure_player_for_auxiliary_view(window) {
+        return;
+    }
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let Some(item) = state.application.player_session().current_item().cloned() else {
         return;
     };
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
     let labels = crate::details_win32::DetailsDialogLabels {
-        title: catalog.text("video_details").to_owned(),
-        copy: catalog.text("copy_details").to_owned(),
-        copied: catalog.text("details_copied").to_owned(),
+        title: catalog.text("lyrics").to_owned(),
+        copy: catalog.text("copy_lyrics").to_owned(),
+        copied: catalog.text("lyrics_copied").to_owned(),
         back: catalog.text("back").to_owned(),
     };
-    state.modal_open = true;
-    let _ = crate::details_win32::show(window, details, &labels);
-    let Some(state) = state_mut(window) else {
-        return;
+    let local_source = catalog.text("lyrics_source_local").to_owned();
+    let online_source = catalog.text("lyrics_source_online").to_owned();
+    let loading = catalog.text("lyrics_fetching").to_owned();
+    let unavailable = catalog.text("no_lyrics_available").to_owned();
+    let online = state.application.settings().enable_online_lyrics;
+    let proxy = state.application.settings().proxy.clone();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        use apricot_platform::lyrics::{LyricsQuery, LyricsSource, fetch_lyrics};
+        let query = LyricsQuery::from_item(&item);
+        let text = fetch_lyrics(
+            item.local_path.as_deref().map(std::path::Path::new),
+            &query,
+            online,
+            Some(&proxy),
+        )
+        .ok()
+        .flatten()
+        .map(|lyrics| {
+            let source = match lyrics.source {
+                LyricsSource::Local => &local_source,
+                LyricsSource::Online => &online_source,
+            };
+            apricot_media::lyrics::LyricsDocument::parse(&lyrics.text, source)
+        });
+        let _ = sender.send(text);
+    });
+    let pending = crate::details_win32::AsyncText {
+        position: state.playback.as_ref().map(|runtime| {
+            (
+                runtime.position_reader(),
+                state.application.player_session().generation(),
+            )
+        }),
+        receiver,
+        unavailable,
+        ready: labels.title.clone(),
     };
-    state.modal_open = false;
+    state.modal_open = true;
+    let result = crate::details_win32::show_async(window, loading, &labels, pending);
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
     resume_deferred_window_work(window);
-    let message = catalog_text(&state.application, "details_closed");
-    set_status(state, &message, false);
-    let _ = SetFocus(Some(state.player_controls.initial_focus()));
+    if let Err(error) = result {
+        show_error_message(window, &error.to_string());
+    }
+    if let Some(state) = state_mut(window) {
+        let _ = SetFocus(Some(active_primary_control(state)));
+    }
 }
 
 unsafe fn adjust_player_volume(window: HWND, delta: f64) {
@@ -12933,6 +13454,7 @@ unsafe fn apply_player_speed(window: HWND, speed: f64) -> bool {
     }
     if let Some(state) = state_mut(window) {
         state.application.set_player_speed(speed);
+        sync_player_details(state);
     }
     true
 }
@@ -12958,6 +13480,7 @@ unsafe fn apply_player_pitch(window: HWND, pitch: f64, speed_delta: Option<f64>)
     }
     if let Some(state) = state_mut(window) {
         state.application.set_player_pitch(pitch);
+        sync_player_details(state);
     }
     if mode == PitchMode::LinkedSpeed
         && let Some(delta) = speed_delta
@@ -12970,6 +13493,7 @@ unsafe fn apply_player_pitch(window: HWND, pitch: f64, speed_delta: Option<f64>)
             && let Some(state) = state_mut(window)
         {
             state.application.set_player_speed(speed);
+            sync_player_details(state);
         }
     }
     true
@@ -13435,6 +13959,9 @@ unsafe fn show_playback_queue(window: HWND) {
         tv_show: catalog.text("tv_show").to_owned(),
         tv_episode: catalog.text("episode").to_owned(),
         unknown: catalog.text("unknown").to_owned(),
+        removed: catalog.text("playback_queue_removed").to_owned(),
+        reordered: catalog.text("playback_queue_reordered").to_owned(),
+        cleared: catalog.text("playback_queue_cleared").to_owned(),
     };
     let items = main_state.application.playback_queue().items().to_vec();
     main_state.modal_open = true;
@@ -13542,19 +14069,19 @@ unsafe fn open_settings(window: HWND) {
         MainView::YoutubeCollection => refresh_youtube_collection(state, false),
         MainView::LocalFolder => refresh_local_folder(state, false, false),
         MainView::Favorites | MainView::History => {
-            refresh_media_collection(state, false, false);
+            refresh_media_collection(state, false);
         }
         MainView::NotificationCenter => {
             refresh_notification_center(state, false, false, None);
         }
-        MainView::Subscriptions => refresh_subscriptions(state, false, false, None),
-        MainView::RssFeeds => refresh_rss_feeds(state, false, false, None),
+        MainView::Subscriptions => refresh_subscriptions(state, false, None),
+        MainView::RssFeeds => refresh_rss_feeds(state, false, None),
         MainView::RssItems => refresh_rss_items(state, false, false),
         MainView::PodcastSearchResults => {
             refresh_podcast_directory_results(state, false, false);
         }
         MainView::PodcastCategories => refresh_podcast_categories(state, false),
-        MainView::UserPlaylists => refresh_user_playlists(state, false, false),
+        MainView::UserPlaylists => refresh_user_playlists(state, false),
         MainView::UserPlaylistItems => refresh_user_playlist_items(state, false, false),
         MainView::DownloadQueue => refresh_download_queue(state, false, false),
         MainView::Search | MainView::DirectLink => {}
@@ -13708,11 +14235,12 @@ mod tests {
     use super::{
         MainView, SEEK_HOLD_DELAY_MS, SEEK_HOLD_INTERVAL_MS, collection_backend,
         collection_download_url, controlled_repeat_timing, copy_wide_array,
-        download_folder_for_item, download_progress_presentation, item_needs_youtube_metadata,
-        list_context_entries, main_menu_last_activated_index, main_menu_preserved_index,
-        media_resolve_backend, normalized_audio_format, notification_label, queued_download_label,
-        resolved_playback_item, result_label, safe_path_component, subscription_label,
-        user_playlist_download_folder, view_has_back_button, view_has_collection_remove,
+        details_text_navigation_key, direct_link_with_scheme, download_folder_for_item,
+        download_progress_presentation, item_needs_youtube_metadata, list_context_entries,
+        main_menu_last_activated_index, main_menu_preserved_index, media_resolve_backend,
+        normalized_audio_format, notification_label, queued_download_label, resolved_playback_item,
+        result_label, safe_path_component, subscription_label, user_playlist_download_folder,
+        view_has_back_button, view_has_collection_remove,
     };
     use apricot_app::{
         ActiveDownload, AppNotification, ContextMenuContext, DownloadChoice, DownloadTaskKind,
@@ -14269,6 +14797,47 @@ mod tests {
             channel: String::new(),
             duration_seconds: None,
             metadata: std::collections::BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn direct_links_without_a_scheme_get_https_like_python() {
+        assert_eq!(
+            direct_link_with_scheme(" youtube.com/watch?v=x "),
+            "https://youtube.com/watch?v=x"
+        );
+        assert_eq!(
+            direct_link_with_scheme("HTTP://example.test/a"),
+            "HTTP://example.test/a"
+        );
+        assert_eq!(
+            direct_link_with_scheme("svn+ssh://host/x"),
+            "svn+ssh://host/x"
+        );
+        assert_eq!(direct_link_with_scheme("1http://x"), "https://1http://x");
+    }
+
+    #[test]
+    fn details_field_keeps_python_reading_keys() {
+        use apricot_core::shortcut::ShortcutChord;
+        for key in [
+            "Up",
+            "Ctrl+Left",
+            "Shift+End",
+            "PageDown",
+            "Ctrl+C",
+            "Ctrl+A",
+        ] {
+            assert!(
+                details_text_navigation_key(ShortcutChord::parse(key).unwrap()),
+                "{key}"
+            );
+        }
+        for key in ["Space", "C", "Escape", "F7", "Ctrl+L"] {
+            assert!(
+                !details_text_navigation_key(ShortcutChord::parse(key).unwrap()),
+                "{key}"
+            );
         }
     }
 }

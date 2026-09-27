@@ -814,6 +814,82 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires APRICOT_TEST_MPV and APRICOT_TEST_FFMPEG"]
+    fn real_libmpv_reports_embedded_chapters() {
+        use crate::{PlaybackEngine, PlaybackEvent};
+        let (_folder, chapter_media, plain_media) = chapter_fixtures();
+        let mut options = MpvLaunchOptions::new(std::path::PathBuf::from(
+            std::env::var_os("APRICOT_TEST_MPV").expect("mpv path"),
+        ));
+        options.audio_driver = Some("null".to_owned());
+        options.video_mode = crate::MpvVideoMode::AudioOnly;
+        options.initial_playback_state = crate::InitialPlaybackState::Paused;
+        let mut engine = super::LibMpvEngine::load(&options).expect("load real library");
+        let item = MediaItem {
+            id: MediaId("chapter-fixture".to_owned()),
+            source: MediaSource::Local,
+            kind: MediaKind::Audio,
+            title: "Chapter fixture".to_owned(),
+            local_path: Some(chapter_media.to_string_lossy().into_owned()),
+            url: None,
+            stream_url: None,
+            external_audio_url: None,
+            channel: String::new(),
+            duration_seconds: None,
+            metadata: BTreeMap::new(),
+        };
+        engine
+            .execute(PlaybackCommand::Load {
+                item: Box::new(item.clone()),
+                start_position_seconds: None,
+            })
+            .expect("load fixture");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match engine.poll_event().expect("poll real library") {
+                Some(PlaybackEvent::MediaInfo(info)) if !info.chapters.is_empty() => {
+                    assert_eq!(info.chapters.len(), 2);
+                    assert_eq!(info.chapters[0]["title"], "Opening");
+                    assert_eq!(info.chapters[1]["time"], 10.0);
+                    break;
+                }
+                Some(PlaybackEvent::Failed(error)) => panic!("fixture playback failed: {error}"),
+                _ => {}
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no embedded chapter event"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let mut replacement = item;
+        replacement.id = MediaId("no-chapters-fixture".to_owned());
+        replacement.local_path = Some(plain_media.to_string_lossy().into_owned());
+        engine
+            .execute(PlaybackCommand::Load {
+                item: Box::new(replacement),
+                start_position_seconds: None,
+            })
+            .expect("replace fixture");
+        assert!(engine.media_info.chapters.is_empty());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut started = false;
+        while std::time::Instant::now() < deadline {
+            match engine.poll_event().expect("replacement event") {
+                Some(PlaybackEvent::Started) => started = true,
+                Some(PlaybackEvent::MediaInfo(info)) if started => {
+                    assert!(info.chapters.is_empty());
+                    return;
+                }
+                Some(PlaybackEvent::Failed(error)) => panic!("replacement failed: {error}"),
+                _ => {}
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("replacement did not provide fresh metadata");
+    }
+
+    #[test]
     fn chapter_nodes_are_copied_without_retaining_native_pointers() {
         use super::{
             MPV_FORMAT_DOUBLE, MPV_FORMAT_NODE_ARRAY, MPV_FORMAT_NODE_MAP, MPV_FORMAT_STRING, Node,
