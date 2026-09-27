@@ -155,11 +155,7 @@ Enote, ki popravljajo odstopanja, so na vrsti prve.
 - **E2. Enotna pot za dejanja, ki še niso narejena. Zaključeno 27. 9. 2026, glej razdelek 6.**
 - **E3. Kontekstni meniji. Zaključeno 27. 9. 2026, glej razdelek 6.**
 - **E4. Nastavitve, prvi del. Zaključeno 27. 9. 2026, glej razdelek 6.**
-- **E5. Seznami in knjižnica.** Celotna mapa naenkrat (LIBRARY-01). Odpiranje kanala
-  in playlista iz priljubljenih in zgodovine (LIBRARY-M-01). Odpri kanal in stolpci
-  rezultatov (SEARCH-M-02). Število videov v vrstici playlista (SEARCH-04).
-  Oznaka epizode v vrsti za prenos (PODDL-03). Zaščita pred dvojnim prenosom in
-  omejitev napredka (PODDL-01/02).
+- **E5. Seznami in knjižnica. Zaključeno 27. 9. 2026, glej razdelek 6.**
 - **E6. Lupina in oglaševanje.** Jezikovno okno pri skritem zagonu (SHELL-02/03).
   Pot za JAWS in manjkajoči MSAA dogodki (SHELL-M-04). Revizija in popravki za
   Action Finder, pladenj, center obvestil in obnovitev fokusa ob vrnitvi v glavni meni.
@@ -360,3 +356,38 @@ nastavitev ne shranijo in ne zavržejo več. Kot `back_from_settings` ostanejo s
 razdelkov, ki jih je uporabnik zapustil, uveljavljene v pomnilniku do naslednjega
 shranjevanja ali ponovnega zagona, spremembe v trenutno vidnem razdelku pa se ne
 uveljavijo.
+
+### E5: seznami in knjižnica (27. 9. 2026)
+
+Spremembe:
+
+- Predvajanje iz mape pokaže vse datoteke naenkrat, kot `show_local_media_folder`
+  (LIBRARY-01). Paketi po 20 in angleško besedilo "files loaded" so odstranjeni.
+- Enter na kanalu ali playlistu v priljubljenih ali zgodovini odpre njegove videe, kot
+  `open_library_item` (LIBRARY-M-01). Kanal odpre zavihek Videos brez okna z možnostmi,
+  Back vrne na priljubljene ali zgodovino. Tak element ne postane zaporedje predvajanja.
+  SoundCloud kanal še vedno oglasi "ni na voljo" do E14.
+- Odpri kanal (Ctrl+Shift+O in postavka v kontekstnem meniju) odpre videe kanala, ki je
+  naložil izbrani video, sicer videe kanala trenutno predvajanega elementa. Brez kanala
+  oglasi `no_channel`, kot `open_item_channel` (SEARCH-M-02).
+- Ctrl+Alt+desno in Ctrl+Alt+levo na seznamu prebereta naslednje ali prejšnje polje
+  izbrane vrstice v Pythonovem vrstnem redu in z besedilom `result_column_value`. Nova
+  vrstica začne pri prvem polju naprej ali pri zadnjem nazaj. Brez polj se oglasi
+  `result_column_unavailable` (SEARCH-M-02).
+- Vrstica playlista ima število videov, `playlist_video_count` (SEARCH-04).
+- Vrstica rezultata na koncu pove način v vrsti za prenos (`queue_mode_label`), vrstica
+  epizode pa `podcast_audio_queued_marker` (PODDL-03). Kot v Pythonu se vrstica
+  rezultata, na kateri je fokus, posodobi šele, ko se izbira premakne, seznam epizod pa
+  takoj. Oglas ob izbiri za prenos zdaj loči zvok, video in zbirke, kot
+  `toggle_download_queue`.
+- Ista bližnjica za prenos na istem elementu v 0,35 s se prezre, kot
+  `start_download_shortcut` (PODDL-01). Kontekstni meni te zaščite nima, kot v Pythonu.
+- Napredek prenosa se v vmesnik sporoči, ko se spremeni cel odstotek ali naslov, sicer
+  največ vsakih 0,75 s, kot `make_download_progress_hook` (PODDL-02).
+
+Preverjanje: `cargo build`, `cargo test`, `cargo clippy -D warnings` in `cargo fmt
+--check`. Novi testi pokrijejo celotno mapo, odpiranje zbirk iz priljubljenih brez
+zamenjave zaporedja, kanal za Odpri kanal, polja vrstice in kroženje po njih, število
+videov, oznake vrste za prenos, zaščito bližnjice in omejitev napredka. Samodejni UI
+Automation preizkus na ločeni kopiji podatkov je potrdil branje polj v priljubljenih in
+odpiranje kanala z Enter in s Ctrl+Shift+O.

@@ -18,9 +18,9 @@ use serde_json::{Map, Value};
 
 use crate::{
     ActionFinderContext, ActionFinderModel, ActivationRequest, AppState, AudioSession,
-    BookmarkController, BookmarkControllerError, CollectionAddOutcome, DEFAULT_FOLDER_BATCH_SIZE,
-    DownloadController, EqualizerSession, LastPlayerSessionController, MainMenuAvailability,
-    MainMenuModel, MediaCollectionController, MediaCollectionControllerError, MenuVisibility,
+    BookmarkController, BookmarkControllerError, CollectionAddOutcome, DownloadController,
+    EqualizerSession, LastPlayerSessionController, MainMenuAvailability, MainMenuModel,
+    MediaCollectionController, MediaCollectionControllerError, MenuVisibility,
     NotificationController, NotificationControllerError, PlaybackPositionController,
     PlaybackPositionControllerError, PlaybackPositionUpdate, PlaybackQueue,
     PlaybackQueueController, PlaybackQueueControllerError, PlaybackSequenceSource,
@@ -707,11 +707,13 @@ impl Application {
 
     pub fn prepare_favorite_playback(&mut self, index: usize) -> Option<MediaItem> {
         let item = self.state.favorites.items().get(index)?.clone();
-        let _ = self.state.player_sequence.set(
-            PlaybackSequenceSource::Collection,
-            self.state.favorites.items(),
-            &item,
-        );
+        if !is_library_collection(&item) {
+            let _ = self.state.player_sequence.set(
+                PlaybackSequenceSource::Collection,
+                self.state.favorites.items(),
+                &item,
+            );
+        }
         Some(item)
     }
 
@@ -756,11 +758,13 @@ impl Application {
 
     pub fn prepare_history_playback(&mut self, index: usize) -> Option<MediaItem> {
         let item = self.state.history.items().get(index)?.clone();
-        let _ = self.state.player_sequence.set(
-            PlaybackSequenceSource::Collection,
-            self.state.history.items(),
-            &item,
-        );
+        if !is_library_collection(&item) {
+            let _ = self.state.player_sequence.set(
+                PlaybackSequenceSource::Collection,
+                self.state.history.items(),
+                &item,
+            );
+        }
         Some(item)
     }
 
@@ -1207,17 +1211,11 @@ impl Application {
     }
 
     pub fn load_local_folder(&mut self, path: PathBuf, items: Vec<MediaItem>) {
-        let batch_size = usize::try_from(self.settings.current().results_limit.max(0))
-            .unwrap_or(crate::DEFAULT_FOLDER_BATCH_SIZE);
-        self.state.local_folder.load(path, items, batch_size);
+        self.state.local_folder.load(path, items);
     }
 
     pub fn select_local_folder_item(&mut self, index: usize) -> bool {
         self.state.local_folder.select(index)
-    }
-
-    pub fn append_local_folder_batch(&mut self) -> usize {
-        self.state.local_folder.append_visible_batch()
     }
 
     pub fn prepare_local_folder_playback(
@@ -1240,7 +1238,7 @@ impl Application {
                 .iter()
                 .position(|item| item.stable_identity() == current.stable_identity())
             {
-                let _ = self.state.local_folder.reveal_and_select(source_index);
+                let _ = self.state.local_folder.select(source_index);
             }
         }
         let source = PlaybackSequenceSource::LocalFolder {
@@ -1541,17 +1539,12 @@ impl Application {
                 {
                     return Route::MainMenu;
                 }
-                self.state.local_folder.load(
-                    folder,
-                    sequence.to_vec(),
-                    usize::try_from(self.settings.current().results_limit.max(0))
-                        .unwrap_or(DEFAULT_FOLDER_BATCH_SIZE),
-                );
+                self.state.local_folder.load(folder, sequence.to_vec());
                 if let Some(index) = sequence
                     .iter()
                     .position(|candidate| candidate.stable_identity() == current.stable_identity())
                 {
-                    let _ = self.state.local_folder.reveal_and_select(index);
+                    let _ = self.state.local_folder.select(index);
                 }
                 Route::LocalFolder
             }
@@ -1712,7 +1705,7 @@ impl Application {
                     .iter()
                     .position(|candidate| candidate.stable_identity().as_deref() == Some(&identity))
                 {
-                    let _ = self.state.local_folder.reveal_and_select(index);
+                    let _ = self.state.local_folder.select(index);
                 }
             }
             _ => {}
@@ -2191,6 +2184,15 @@ impl Application {
         let _ = self.settings.save()?;
         Ok(())
     }
+}
+
+/// Python's `open_library_item` opens channels and playlists instead of
+/// playing them, so they never become the current playback sequence.
+const fn is_library_collection(item: &MediaItem) -> bool {
+    matches!(
+        item.kind,
+        apricot_core::MediaKind::Channel | apricot_core::MediaKind::Playlist
+    )
 }
 
 const fn visibility(enabled: bool) -> MenuVisibility {
@@ -3203,6 +3205,23 @@ mod tests {
     }
 
     #[test]
+    fn favorite_channels_and_playlists_open_without_replacing_the_sequence() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        app.add_favorite(youtube_item(1, MediaKind::Channel))
+            .expect("favorite channel");
+        app.add_favorite(youtube_item(2, MediaKind::Video))
+            .expect("favorite video");
+
+        let channel = app.prepare_favorite_playback(0).expect("channel");
+        assert_eq!(channel.kind, MediaKind::Channel);
+        assert!(!app.player_sequence_contains(&channel));
+
+        let video = app.prepare_favorite_playback(1).expect("video");
+        assert!(app.player_sequence_contains(&video));
+    }
+
+    #[test]
     fn local_folder_builds_a_sequence_only_when_playback_starts() {
         let root = tempdir().expect("temporary directory");
         let mut app = application(root.path());
@@ -3211,7 +3230,7 @@ mod tests {
             .collect();
         app.load_local_folder(PathBuf::from(r"C:\Music"), items);
 
-        assert_eq!(app.local_folder_session().visible_items().len(), 20);
+        assert_eq!(app.local_folder_session().items().len(), 45);
         assert!(app.playback_queue().is_empty());
         assert_eq!(
             app.request_relative_player_item(1),
@@ -3242,7 +3261,6 @@ mod tests {
             app.start_player_item(*item);
         }
         assert_eq!(app.local_folder_session().selected_index(), 25);
-        assert_eq!(app.local_folder_session().visible_items().len(), 26);
         assert!(app.playback_queue().is_empty());
 
         let outcome = app

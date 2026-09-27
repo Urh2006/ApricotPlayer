@@ -19,6 +19,7 @@ pub mod playback_sequence;
 pub mod player_information;
 pub mod player_model;
 pub mod player_session;
+pub mod result_columns;
 pub mod rss_feed_controller;
 pub mod search_session;
 pub mod settings_controller;
@@ -49,7 +50,7 @@ pub use download_controller::{
 pub use last_player_session_controller::{
     LastPlayerSessionController, LastPlayerSessionControllerError,
 };
-pub use local_folder::{DEFAULT_FOLDER_BATCH_SIZE, LocalFolderSession};
+pub use local_folder::LocalFolderSession;
 pub use main_menu::{
     MainMenuAvailability, MainMenuItem, MainMenuModel, MenuVisibility, embedded_catalog,
     english_catalog,

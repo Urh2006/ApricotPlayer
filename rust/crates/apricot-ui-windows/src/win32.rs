@@ -445,6 +445,8 @@ struct WindowState {
     hydrated_youtube_urls: HashSet<String>,
     youtube_api_metadata_disabled_scopes: HashSet<YoutubeMetadataScope>,
     deferred_youtube_metadata_rows: HashSet<usize>,
+    last_download_shortcut: Option<DownloadShortcutPress>,
+    result_column_cursor: apricot_app::result_columns::ResultColumnCursor,
     pending_player_navigation: Option<i32>,
     pending_queued_start: Option<PendingQueuedStart>,
     next_youtube_operation_token: u64,
@@ -458,6 +460,7 @@ struct WindowState {
     download_sender: SyncSender<DownloadWorkerUpdate>,
     download_receiver: Receiver<DownloadWorkerUpdate>,
     download_cancellations: HashMap<u64, Arc<AtomicBool>>,
+    download_progress_reports: HashMap<u64, DownloadProgressReport>,
     download_progress_window: Option<DownloadProgressWindow>,
     download_progress_task_ids: HashSet<u64>,
     download_progress_task_id: Option<u64>,
@@ -1534,6 +1537,8 @@ unsafe fn create_controls(
         hydrated_youtube_urls: HashSet::new(),
         youtube_api_metadata_disabled_scopes: HashSet::new(),
         deferred_youtube_metadata_rows: HashSet::new(),
+        last_download_shortcut: None,
+        result_column_cursor: apricot_app::result_columns::ResultColumnCursor::default(),
         pending_player_navigation: None,
         pending_queued_start: None,
         next_youtube_operation_token: 0,
@@ -1547,6 +1552,7 @@ unsafe fn create_controls(
         download_sender,
         download_receiver,
         download_cancellations: HashMap::new(),
+        download_progress_reports: HashMap::new(),
         download_progress_window: None,
         download_progress_task_ids: HashSet::new(),
         download_progress_task_id: None,
@@ -3051,6 +3057,56 @@ unsafe fn show_channel_options(window: HWND, item: apricot_core::MediaItem) {
     open_youtube_collection(window, item, kind);
 }
 
+/// Python's `announce_active_media_column`, only while a media list has focus.
+unsafe fn announce_active_media_column(window: HWND, forward: bool) {
+    let focused = state(window).is_some_and(|state| {
+        GetFocus() == state.list && !matches!(state.view, MainView::MainMenu | MainView::Player)
+    });
+    if !focused {
+        return;
+    }
+    let item = active_media_item(window);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let message = match item {
+        Some(item) => apricot_app::result_columns::result_column_announcement(
+            &mut state.result_column_cursor,
+            &item,
+            &catalog,
+            forward,
+        ),
+        None => catalog.text("no_selection").to_owned(),
+    };
+    set_status(state, &message, true);
+}
+
+/// Python's `open_item_channel`: open the uploading channel's videos for the
+/// selected row, or for the playing item when the selection has no channel.
+unsafe fn open_item_channel(window: HWND) {
+    let channel = active_media_item(window)
+        .as_ref()
+        .and_then(apricot_app::context_menu::youtube_channel_item_for_video)
+        .or_else(|| {
+            state(window)?
+                .application
+                .player_session()
+                .current_item()
+                .and_then(apricot_app::context_menu::youtube_channel_item_for_video)
+        });
+    match channel {
+        Some(channel) => {
+            open_youtube_collection(window, channel, YoutubeCollectionKind::ChannelVideos);
+        }
+        None => {
+            if let Some(state) = state(window) {
+                set_status(state, &catalog_text(&state.application, "no_channel"), true);
+            }
+        }
+    }
+}
+
 unsafe fn open_youtube_collection(
     window: HWND,
     item: apricot_core::MediaItem,
@@ -3188,22 +3244,30 @@ unsafe fn activate_collection_selection(window: HWND) {
         _ => None,
     });
     if let Some(item) = item {
-        if matches!(
-            item.kind,
-            apricot_core::MediaKind::Playlist | apricot_core::MediaKind::Channel
-        ) {
-            let feature_key = if item.kind == apricot_core::MediaKind::Channel {
-                "open_channel"
-            } else {
-                "open_playlist"
-            };
+        open_library_item(window, item);
+    }
+}
+
+/// Python's `open_library_item`: a favorited or history channel opens its
+/// videos directly and a playlist opens its videos, both with Back returning
+/// to the library screen. Everything else plays.
+unsafe fn open_library_item(window: HWND, item: apricot_core::MediaItem) {
+    match item.kind {
+        apricot_core::MediaKind::Channel
+            if item.source == apricot_core::MediaSource::Soundcloud =>
+        {
             if let Some(state) = state(window) {
-                let feature = catalog_text(&state.application, feature_key);
+                let feature = catalog_text(&state.application, "open_channel");
                 announce_unavailable_feature(window, &feature);
             }
-            return;
         }
-        start_sequence_media_item(window, item, None);
+        apricot_core::MediaKind::Channel => {
+            open_youtube_collection(window, item, YoutubeCollectionKind::ChannelVideos);
+        }
+        apricot_core::MediaKind::Playlist => {
+            open_youtube_collection(window, item, YoutubeCollectionKind::PlaylistVideos);
+        }
+        _ => start_sequence_media_item(window, item, None),
     }
 }
 
@@ -4158,16 +4222,7 @@ unsafe fn refresh_rss_items(state: &mut WindowState, focus: bool, announce_statu
             .max(batch_size)
             .min(feed.items.len());
         for item in &feed.items[..state.rss_visible_item_count] {
-            add_list_string(
-                state.list,
-                &rss_episode_label(
-                    item,
-                    &catalog,
-                    (!metadata_bool(item, "played"))
-                        .then(|| state.application.playback_resume_position(item))
-                        .flatten(),
-                ),
-            );
+            add_list_string(state.list, &rss_episode_row(state, item, &catalog));
         }
         state.current_rss_item_index = state
             .current_rss_item_index
@@ -4230,10 +4285,54 @@ unsafe fn maybe_extend_rss_items(window: HWND) {
     }
 }
 
+/// Python's `rss_item_line` for one visible episode.
+fn rss_episode_row(
+    state: &WindowState,
+    item: &apricot_core::MediaItem,
+    catalog: &apricot_core::TranslationCatalog,
+) -> String {
+    rss_episode_label(
+        item,
+        catalog,
+        (!metadata_bool(item, "played"))
+            .then(|| state.application.playback_resume_position(item))
+            .flatten(),
+        state.application.downloads().queued_item(item).is_some(),
+    )
+}
+
+/// Replaces one visible episode row and keeps the selection, as Python's
+/// `refresh_rss_items_list(selection)` does after a queue change.
+unsafe fn refresh_rss_episode_line(state: &WindowState, index: usize) {
+    let Some(item) = state
+        .application
+        .rss_feeds()
+        .get(state.current_rss_feed_index)
+        .and_then(|feed| feed.items.get(index))
+        .filter(|_| index < state.rss_visible_item_count)
+    else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let label = wide(&rss_episode_row(state, item, &catalog));
+    let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
+    SendMessageW(state.list, LB_DELETESTRING, Some(WPARAM(index)), None);
+    SendMessageW(
+        state.list,
+        LB_INSERTSTRING,
+        Some(WPARAM(index)),
+        Some(LPARAM(label.as_ptr() as isize)),
+    );
+    if let Ok(selected) = usize::try_from(selected) {
+        SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selected)), None);
+    }
+}
+
 fn rss_episode_label(
     item: &apricot_core::MediaItem,
     catalog: &apricot_core::TranslationCatalog,
     resume_position: Option<f64>,
+    queued: bool,
 ) -> String {
     let mut parts = vec![item.title.clone()];
     if metadata_bool(item, "played") {
@@ -4256,6 +4355,9 @@ fn rss_episode_label(
         parts.push(duration);
     }
     parts.push(catalog.text("podcast_episode").to_owned());
+    if queued {
+        parts.push(catalog.text("podcast_audio_queued_marker").to_owned());
+    }
     parts.join(" | ")
 }
 
@@ -6628,11 +6730,9 @@ fn active_download_label(
     parts.join(" | ")
 }
 
-fn queued_download_label(
-    queued: &apricot_app::QueuedDownload,
-    catalog: &apricot_core::locale::TranslationCatalog,
-) -> String {
-    let mode_key = match (queued.item.kind, queued.choice) {
+/// Python's `queue_mode_label`.
+const fn queued_marker_key(queued: &apricot_app::QueuedDownload) -> &'static str {
+    match (queued.item.kind, queued.choice) {
         (apricot_core::MediaKind::PodcastEpisode, _) => "podcast_audio_queued_marker",
         (
             apricot_core::MediaKind::Playlist | apricot_core::MediaKind::Channel,
@@ -6645,7 +6745,14 @@ fn queued_download_label(
         (_, DownloadChoice::Audio) => "audio_queued_marker",
         (_, DownloadChoice::Video) => "video_queued_marker",
         (_, DownloadChoice::Ask) => "selected_queued_marker",
-    };
+    }
+}
+
+fn queued_download_label(
+    queued: &apricot_app::QueuedDownload,
+    catalog: &apricot_core::locale::TranslationCatalog,
+) -> String {
+    let mode_key = queued_marker_key(queued);
     let mut parts = vec![
         queued.item.title.clone(),
         media_kind_label(&queued.item, catalog).to_owned(),
@@ -6766,6 +6873,53 @@ unsafe fn choose_download_format(window: HWND) -> Option<DownloadChoice> {
             );
             None
         }
+    }
+}
+
+/// One press of a download shortcut, as Python's `last_download_shortcut`.
+#[derive(Clone, Debug, PartialEq)]
+struct DownloadShortcutPress {
+    choice: DownloadChoice,
+    identity: String,
+    at: std::time::Instant,
+}
+
+/// Python ignores the same download shortcut for the same item within 0.35 s,
+/// so a repeated or doubled key press does not start the download twice.
+const DOWNLOAD_SHORTCUT_REPEAT_WINDOW: std::time::Duration = std::time::Duration::from_millis(350);
+
+fn accept_download_shortcut(
+    last: &mut Option<DownloadShortcutPress>,
+    press: DownloadShortcutPress,
+) -> bool {
+    if let Some(previous) = last.as_ref()
+        && previous.choice == press.choice
+        && previous.identity == press.identity
+        && press.at.saturating_duration_since(previous.at) < DOWNLOAD_SHORTCUT_REPEAT_WINDOW
+    {
+        return false;
+    }
+    *last = Some(press);
+    true
+}
+
+/// Python's `start_download_shortcut`.
+unsafe fn start_download_shortcut(window: HWND, choice: DownloadChoice) {
+    if state(window).is_none_or(|state| state.view == MainView::MainMenu) {
+        return;
+    }
+    let identity = active_media_item(window)
+        .and_then(|item| item.stable_identity())
+        .unwrap_or_default();
+    let press = DownloadShortcutPress {
+        choice,
+        identity,
+        at: std::time::Instant::now(),
+    };
+    let accepted = state_mut(window)
+        .is_some_and(|state| accept_download_shortcut(&mut state.last_download_shortcut, press));
+    if accepted {
+        start_active_download(window, choice);
     }
 }
 
@@ -7891,6 +8045,73 @@ unsafe fn poll_download_updates(window: HWND) {
     }
 }
 
+/// The last progress a download reported to the UI.
+#[derive(Clone, Debug, PartialEq)]
+struct DownloadProgressReport {
+    percent_bucket: Option<i64>,
+    title: String,
+    at: std::time::Instant,
+}
+
+impl DownloadProgressReport {
+    fn new(percent: Option<f64>, title: &str) -> Self {
+        Self {
+            percent_bucket: download_percent_bucket(percent),
+            title: title.to_owned(),
+            at: std::time::Instant::now(),
+        }
+    }
+}
+
+/// Python's progress hook reports the whole percent, clamped to 0..100.
+#[allow(clippy::cast_possible_truncation)]
+fn download_percent_bucket(percent: Option<f64>) -> Option<i64> {
+    percent
+        .filter(|value| value.is_finite())
+        .map(|value| value.clamp(0.0, 100.0) as i64)
+}
+
+/// Python's `make_download_progress_hook`: report when the whole percent or
+/// the title changes, otherwise at most every 0.75 s.
+fn should_report_download_progress(
+    last: Option<&mut DownloadProgressReport>,
+    percent: Option<f64>,
+    title: &str,
+    now: std::time::Instant,
+) -> bool {
+    let Some(last) = last else {
+        return true;
+    };
+    let bucket = download_percent_bucket(percent);
+    let report = bucket != last.percent_bucket
+        || title != last.title
+        || now.saturating_duration_since(last.at) >= std::time::Duration::from_millis(750);
+    if report {
+        last.percent_bucket = bucket;
+        title.clone_into(&mut last.title);
+        last.at = now;
+    }
+    report
+}
+
+fn accept_download_progress(
+    state: &mut WindowState,
+    task_id: u64,
+    phase: DownloadPhase,
+    percent: Option<f64>,
+    title: &str,
+) -> bool {
+    let now = std::time::Instant::now();
+    let last = state.download_progress_reports.get_mut(&task_id);
+    if last.is_none() {
+        state
+            .download_progress_reports
+            .insert(task_id, DownloadProgressReport::new(percent, title));
+        return true;
+    }
+    phase == DownloadPhase::Processing || should_report_download_progress(last, percent, title, now)
+}
+
 #[allow(clippy::too_many_lines)]
 unsafe fn apply_download_update(window: HWND, update: DownloadWorkerUpdate) {
     match update {
@@ -7906,6 +8127,9 @@ unsafe fn apply_download_update(window: HWND, update: DownloadWorkerUpdate) {
                     playlist_index,
                     playlist_count,
                 } => {
+                    if !accept_download_progress(state, task_id, phase, percent, &title) {
+                        return;
+                    }
                     let status = if phase == DownloadPhase::Processing {
                         DownloadTaskStatus::Processing
                     } else {
@@ -7962,6 +8186,7 @@ unsafe fn apply_download_update(window: HWND, update: DownloadWorkerUpdate) {
                 return;
             };
             state.download_cancellations.remove(&task_id);
+            state.download_progress_reports.remove(&task_id);
             let Some(task) = state.application.downloads_mut().finish(task_id) else {
                 return;
             };
@@ -8193,21 +8418,48 @@ unsafe fn toggle_download_queue_item(
         .application
         .downloads_mut()
         .queue_item(item.clone(), choice);
+    let collection = matches!(
+        item.kind,
+        apricot_core::MediaKind::Playlist | apricot_core::MediaKind::Channel
+    );
     let key = match outcome {
         apricot_app::QueueToggleOutcome::Deselected => "download_deselected",
-        apricot_app::QueueToggleOutcome::Selected
-        | apricot_app::QueueToggleOutcome::SelectionChanged
-            if item.kind == apricot_core::MediaKind::PodcastEpisode =>
-        {
+        apricot_app::QueueToggleOutcome::Rejected => "no_selection",
+        _ if item.kind == apricot_core::MediaKind::PodcastEpisode => {
             "podcast_episode_audio_selected_download"
         }
-        apricot_app::QueueToggleOutcome::Selected
-        | apricot_app::QueueToggleOutcome::SelectionChanged => "selected_for_download_or_playlist",
-        apricot_app::QueueToggleOutcome::Rejected => "no_selection",
+        _ => match choice {
+            DownloadChoice::Ask => "selected_for_download_or_playlist",
+            DownloadChoice::Audio if collection => "collection_audio_selected_download",
+            DownloadChoice::Video if collection => "collection_video_selected_download",
+            DownloadChoice::Audio => "audio_selected_download",
+            DownloadChoice::Video => "video_selected_download",
+        },
     };
     let message = catalog_text(&state.application, key).replace("{title}", &item.title);
     set_status(state, &message, true);
+    refresh_queued_row(state);
     refresh_download_projection(window, state, false);
+}
+
+/// Shows or hides the queue marker on the selected row. Python defers the
+/// result row while the list has focus on it, so the marker appears once the
+/// selection moves, and rebuilds the episode list at once.
+unsafe fn refresh_queued_row(state: &mut WindowState) {
+    let Ok(index) = usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0) else {
+        return;
+    };
+    match state.view {
+        MainView::Results | MainView::Trending | MainView::YoutubeCollection => {
+            if GetFocus() == state.list {
+                state.deferred_youtube_metadata_rows.insert(index);
+            } else {
+                refresh_youtube_result_line(state, index);
+            }
+        }
+        MainView::RssItems => refresh_rss_episode_line(state, index),
+        _ => {}
+    }
 }
 
 unsafe fn start_youtube_work(window: HWND, work: SearchWork) {
@@ -9449,7 +9701,7 @@ unsafe fn refresh_youtube_result_line(state: &WindowState, index: usize) {
     let Some(item) = item else {
         return;
     };
-    let label = wide(&result_label(item, &catalog));
+    let label = wide(&result_label(item, &catalog, state.application.downloads()));
     SendMessageW(state.list, LB_DELETESTRING, Some(WPARAM(index)), None);
     SendMessageW(
         state.list,
@@ -9566,51 +9818,13 @@ unsafe fn result_selection_changed(window: HWND) {
 }
 
 unsafe fn local_folder_selection_changed(window: HWND) {
-    let (before, added) = {
-        let Some(state) = state_mut(window) else {
-            return;
-        };
-        let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
-        let Ok(index) = usize::try_from(selected) else {
-            return;
-        };
-        if !state.application.select_local_folder_item(index) {
-            return;
-        }
-        let before = state
-            .application
-            .local_folder_session()
-            .visible_items()
-            .len();
-        let added = if index + 1 == before && state.application.local_folder_session().has_more() {
-            state.application.append_local_folder_batch()
-        } else {
-            0
-        };
-        (before, added)
-    };
-    if added == 0 {
-        return;
-    }
     let Some(state) = state_mut(window) else {
         return;
     };
-    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
-    for item in &state.application.local_folder_session().visible_items()[before..] {
-        add_list_string(state.list, &local_folder_result_label(item, &catalog));
+    let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
+    if let Ok(index) = usize::try_from(selected) {
+        let _ = state.application.select_local_folder_item(index);
     }
-    let selected = state.application.local_folder_session().selected_index();
-    SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selected)), None);
-    let loaded = format!(
-        "{} of {} files loaded",
-        state
-            .application
-            .local_folder_session()
-            .visible_items()
-            .len(),
-        state.application.local_folder_session().items().len()
-    );
-    set_status(state, &loaded, true);
 }
 
 unsafe fn refresh_results(state: &mut WindowState, focus: bool) {
@@ -9631,7 +9845,10 @@ unsafe fn refresh_results(state: &mut WindowState, focus: bool) {
         set_status(state, catalog.text("no_results"), true);
     } else {
         for item in items {
-            add_list_string(state.list, &result_label(item, &catalog));
+            add_list_string(
+                state.list,
+                &result_label(item, &catalog, state.application.downloads()),
+            );
         }
         let selected = state
             .application
@@ -9676,7 +9893,10 @@ unsafe fn refresh_youtube_collection(state: &mut WindowState, focus: bool) {
         set_status(state, catalog.text("no_results"), true);
     } else {
         for item in collection.items() {
-            add_list_string(state.list, &result_label(item, &catalog));
+            add_list_string(
+                state.list,
+                &result_label(item, &catalog, state.application.downloads()),
+            );
         }
         let selected = collection
             .selected_index()
@@ -9703,12 +9923,10 @@ unsafe fn refresh_local_folder(state: &mut WindowState, focus: bool, announce_st
         SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
         set_status(state, catalog.text("folder_no_media"), announce_status);
     } else {
-        for item in session.visible_items() {
+        for item in session.items() {
             add_list_string(state.list, &local_folder_result_label(item, &catalog));
         }
-        let selected = session
-            .selected_index()
-            .min(session.visible_items().len() - 1);
+        let selected = session.selected_index().min(session.items().len() - 1);
         SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selected)), None);
         let message = catalog
             .text("folder_loaded")
@@ -10127,7 +10345,10 @@ unsafe fn append_results(state: &mut WindowState, added: usize) {
     }
     let first_new = items.len().saturating_sub(added);
     for item in &items[first_new..] {
-        add_list_string(state.list, &result_label(item, &catalog));
+        add_list_string(
+            state.list,
+            &result_label(item, &catalog, state.application.downloads()),
+        );
     }
     let selected = state
         .application
@@ -10152,7 +10373,10 @@ unsafe fn append_youtube_collection_results(state: &mut WindowState, added: usiz
     }
     let first_new = collection.items().len().saturating_sub(added);
     for item in &collection.items()[first_new..] {
-        add_list_string(state.list, &result_label(item, &catalog));
+        add_list_string(
+            state.list,
+            &result_label(item, &catalog, state.application.downloads()),
+        );
     }
     let selected = collection
         .selected_index()
@@ -10164,10 +10388,24 @@ unsafe fn append_youtube_collection_results(state: &mut WindowState, added: usiz
     set_status(state, &loaded, true);
 }
 
+/// Python's `result_line` for online results, with the download queue marker
+/// last.
 fn result_label(
     item: &apricot_core::MediaItem,
     catalog: &apricot_core::TranslationCatalog,
+    downloads: &apricot_app::DownloadController,
 ) -> String {
+    let mut parts = result_label_parts(item, catalog);
+    if let Some(queued) = downloads.queued_item(item) {
+        parts.push(catalog.text(queued_marker_key(queued)).to_owned());
+    }
+    parts.join(" | ")
+}
+
+fn result_label_parts(
+    item: &apricot_core::MediaItem,
+    catalog: &apricot_core::TranslationCatalog,
+) -> Vec<String> {
     let kind = match item.kind {
         apricot_core::MediaKind::Playlist => catalog.text("playlist"),
         apricot_core::MediaKind::Channel => catalog.text("channel"),
@@ -10178,7 +10416,13 @@ fn result_label(
         item.kind,
         apricot_core::MediaKind::Playlist | apricot_core::MediaKind::Channel
     ) {
-        return format!("{} | {kind}", item.title);
+        let mut parts = vec![item.title.clone(), kind.to_owned()];
+        if item.kind == apricot_core::MediaKind::Playlist
+            && let Some(count) = playlist_count_text(item, catalog)
+        {
+            parts.push(count);
+        }
+        return parts;
     }
     let mut parts = vec![
         item.title.clone(),
@@ -10198,7 +10442,28 @@ fn result_label(
         parts.push(format_duration(duration));
     }
     parts.push(kind.to_owned());
-    parts.join(" | ")
+    parts
+}
+
+/// Python's `playlist_count_text`.
+fn playlist_count_text(
+    item: &apricot_core::MediaItem,
+    catalog: &apricot_core::TranslationCatalog,
+) -> Option<String> {
+    let raw = ["playlist_count", "n_entries", "video_count"]
+        .iter()
+        .filter_map(|key| item.metadata.get(*key))
+        .find_map(|value| match value {
+            serde_json::Value::Number(number) => Some(number.to_string()),
+            serde_json::Value::String(text) if !text.trim().is_empty() => Some(text.clone()),
+            _ => None,
+        })?;
+    Some(match raw.replace(',', "").trim().parse::<i64>() {
+        Ok(count) => catalog
+            .text("playlist_video_count")
+            .replace("{count}", &count.to_string()),
+        Err(_) => raw,
+    })
 }
 
 fn format_duration(seconds: f64) -> String {
@@ -10593,6 +10858,9 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "open_play_file" => open_media_file(window),
         "open_play_from_folder" => open_media_folder(window),
         "open_selected" => activate_selection(window),
+        "open_channel" => open_item_channel(window),
+        "result_column_previous" => announce_active_media_column(window, false),
+        "result_column_next" => announce_active_media_column(window, true),
         "background_play_pause" | "player_play_pause" => toggle_player_pause(window),
         "player_back" => navigate_back(window),
         "player_previous" => navigate_player_relative(window, -1),
@@ -10643,8 +10911,8 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "remove_from_playback_queue" => remove_active_item_from_playback_queue(window),
         "open_playback_queue" => show_playback_queue(window),
         "open_current_downloads" => show_download_queue(window),
-        "download_audio" => start_active_download(window, DownloadChoice::Audio),
-        "download_video" => start_active_download(window, DownloadChoice::Video),
+        "download_audio" => start_download_shortcut(window, DownloadChoice::Audio),
+        "download_video" => start_download_shortcut(window, DownloadChoice::Video),
         "queue_audio" => toggle_active_download_queue(window),
         "toggle_podcast_played" => toggle_selected_rss_played(window),
         "clear_podcast_progress" => clear_selected_rss_progress(window),
@@ -10782,7 +11050,7 @@ unsafe fn active_media_item(window: HWND) -> Option<apricot_core::MediaItem> {
             state
                 .application
                 .local_folder_session()
-                .visible_items()
+                .items()
                 .get(index)
                 .cloned()
         }
@@ -13580,9 +13848,135 @@ mod tests {
         let catalog = apricot_app::embedded_catalog("en");
 
         assert_eq!(
-            result_label(&item, &catalog),
+            result_label(&item, &catalog, &apricot_app::DownloadController::default()),
             "Video | Channel: OpenAI | Views: 37.0M | Uploaded 2 days ago | 1:05 | Video"
         );
+    }
+
+    #[test]
+    fn a_repeated_download_shortcut_for_the_same_item_is_ignored_like_python() {
+        let start = std::time::Instant::now();
+        let press = |choice, identity: &str, millis| super::DownloadShortcutPress {
+            choice,
+            identity: identity.to_owned(),
+            at: start + std::time::Duration::from_millis(millis),
+        };
+        let mut last = None;
+        assert!(super::accept_download_shortcut(
+            &mut last,
+            press(DownloadChoice::Audio, "a", 0)
+        ));
+        assert!(!super::accept_download_shortcut(
+            &mut last,
+            press(DownloadChoice::Audio, "a", 200)
+        ));
+        assert!(super::accept_download_shortcut(
+            &mut last,
+            press(DownloadChoice::Video, "a", 250)
+        ));
+        assert!(super::accept_download_shortcut(
+            &mut last,
+            press(DownloadChoice::Video, "b", 300)
+        ));
+        assert!(super::accept_download_shortcut(
+            &mut last,
+            press(DownloadChoice::Video, "b", 700)
+        ));
+    }
+
+    #[test]
+    fn download_progress_reports_whole_percent_changes_or_every_three_quarters_second() {
+        let start = std::time::Instant::now();
+        let at = |millis| start + std::time::Duration::from_millis(millis);
+        let mut last = super::DownloadProgressReport {
+            percent_bucket: Some(10),
+            title: "Song".to_owned(),
+            at: start,
+        };
+        assert!(!super::should_report_download_progress(
+            Some(&mut last),
+            Some(10.4),
+            "Song",
+            at(100)
+        ));
+        assert!(super::should_report_download_progress(
+            Some(&mut last),
+            Some(11.0),
+            "Song",
+            at(150)
+        ));
+        assert!(!super::should_report_download_progress(
+            Some(&mut last),
+            Some(11.9),
+            "Song",
+            at(800)
+        ));
+        assert!(super::should_report_download_progress(
+            Some(&mut last),
+            Some(11.9),
+            "Song",
+            at(900)
+        ));
+        assert!(super::should_report_download_progress(
+            Some(&mut last),
+            Some(11.9),
+            "Next",
+            at(950)
+        ));
+        assert!(super::should_report_download_progress(
+            None,
+            None,
+            "Song",
+            at(960)
+        ));
+    }
+
+    #[test]
+    fn queued_episode_rows_end_with_the_podcast_marker() {
+        let catalog = apricot_app::embedded_catalog("en");
+        let mut episode = youtube_item("episode");
+        episode.kind = apricot_core::MediaKind::PodcastEpisode;
+        episode.title = "Episode".to_owned();
+        assert_eq!(
+            super::rss_episode_label(&episode, &catalog, None, false),
+            "Episode | Podcast episode"
+        );
+        assert_eq!(
+            super::rss_episode_label(&episode, &catalog, None, true),
+            "Episode | Podcast episode | podcast audio queued"
+        );
+    }
+
+    #[test]
+    fn playlist_rows_show_the_video_count_and_queued_rows_their_marker() {
+        let catalog = apricot_app::embedded_catalog("en");
+        let mut playlist = youtube_item("list");
+        playlist.kind = apricot_core::MediaKind::Playlist;
+        playlist.title = "Mix".to_owned();
+        playlist
+            .metadata
+            .insert("playlist_count".to_owned(), 42.into());
+        let mut downloads = apricot_app::DownloadController::default();
+        assert_eq!(
+            result_label(&playlist, &catalog, &downloads),
+            "Mix | Playlist | 42 videos"
+        );
+        playlist
+            .metadata
+            .insert("playlist_count".to_owned(), "1,204".into());
+        assert_eq!(
+            result_label(&playlist, &catalog, &downloads),
+            "Mix | Playlist | 1204 videos"
+        );
+        downloads.queue_item(playlist.clone(), DownloadChoice::Audio);
+        assert_eq!(
+            result_label(&playlist, &catalog, &downloads),
+            "Mix | Playlist | 1204 videos | collection audio queued"
+        );
+        let mut video = youtube_item("video");
+        video.metadata.insert("views".to_owned(), 1.into());
+        downloads.queue_item(video.clone(), DownloadChoice::Ask);
+        assert!(result_label(&video, &catalog, &downloads).ends_with(" | Video | selected"));
     }
 
     #[test]

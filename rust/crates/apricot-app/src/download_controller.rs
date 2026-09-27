@@ -85,6 +85,14 @@ impl DownloadController {
         &self.active
     }
 
+    /// The queued download for this item, as Python's `download_queue.get(url)`.
+    pub fn queued_item(&self, item: &MediaItem) -> Option<&QueuedDownload> {
+        let identity = item.stable_identity()?;
+        self.queued
+            .iter()
+            .find(|queued| queued.item.stable_identity().as_deref() == Some(identity.as_str()))
+    }
+
     pub fn active_task(&self, id: u64) -> Option<&ActiveDownload> {
         self.active.iter().find(|task| task.id == id)
     }

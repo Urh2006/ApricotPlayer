@@ -204,6 +204,12 @@ fn shortcut_for(settings: &SettingsDocument, action_id: &str) -> String {
 
 /// Python `item_has_openable_youtube_channel`.
 pub fn has_openable_youtube_channel(item: &MediaItem) -> bool {
+    youtube_channel_item_for_video(item).is_some()
+}
+
+/// Python `youtube_channel_item_for_video`: the channel that uploaded a video,
+/// as a channel item that "Open channel" can open.
+pub fn youtube_channel_item_for_video(item: &MediaItem) -> Option<MediaItem> {
     if item.is_local_media()
         || matches!(
             item.kind,
@@ -213,9 +219,34 @@ pub fn has_openable_youtube_channel(item: &MediaItem) -> bool {
                 | MediaKind::PodcastEpisode
         )
     {
-        return false;
+        return None;
     }
-    channel_url(item).is_some_and(|url| url.to_lowercase().contains("youtube.com"))
+    let url = channel_url(item).filter(|url| url.to_lowercase().contains("youtube.com"))?;
+    let title = [
+        Some(item.channel.trim().to_owned()),
+        metadata_text(item, "uploader"),
+        metadata_text(item, "channel_id"),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|value| !value.is_empty())
+    .unwrap_or_else(|| url.clone());
+    let parsed = url::Url::parse(&url).ok()?;
+    Some(MediaItem {
+        id: apricot_core::MediaId(url.clone()),
+        source: apricot_core::MediaSource::Youtube,
+        kind: MediaKind::Channel,
+        title: title.clone(),
+        url: Some(parsed),
+        stream_url: None,
+        external_audio_url: None,
+        local_path: None,
+        channel: title,
+        duration_seconds: None,
+        metadata: [("channel_url".to_owned(), serde_json::Value::String(url))]
+            .into_iter()
+            .collect(),
+    })
 }
 
 /// Python `normalize_channel_url`.
@@ -601,6 +632,7 @@ mod tests {
         ContextCommand, ContextMenuContext, ContextMenuEntry, browser_url, favorites_context_menu,
         history_context_menu, player_context_menu, results_context_menu,
         user_playlist_items_context_menu, user_playlists_context_menu,
+        youtube_channel_item_for_video,
     };
     use crate::embedded_catalog;
 
@@ -1058,6 +1090,20 @@ mod tests {
                 "player_comments",
             ]
         );
+    }
+
+    #[test]
+    fn open_channel_builds_the_uploader_channel_like_python() {
+        let channel = youtube_channel_item_for_video(&youtube_video()).expect("channel");
+        assert_eq!(channel.kind, MediaKind::Channel);
+        assert_eq!(channel.title, "Channel");
+        assert_eq!(
+            channel.url.map(|url| url.to_string()).as_deref(),
+            Some("https://www.youtube.com/channel/UCabc")
+        );
+        assert!(youtube_channel_item_for_video(&video_without_channel()).is_none());
+        assert!(youtube_channel_item_for_video(&local_file()).is_none());
+        assert!(youtube_channel_item_for_video(&collection(MediaKind::Channel)).is_none());
     }
 
     #[test]
