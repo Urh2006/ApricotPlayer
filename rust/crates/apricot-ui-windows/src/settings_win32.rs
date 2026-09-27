@@ -35,14 +35,13 @@ use windows::{
                 GetMessageW, GetParent, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW,
                 HMENU, IDC_ARROW, IsDialogMessageW, LB_ADDSTRING, LB_DELETESTRING, LB_GETCURSEL,
                 LB_INSERTSTRING, LB_SETCURSEL, LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW,
-                MB_ICONERROR, MB_ICONINFORMATION, MB_ICONQUESTION, MB_OK, MB_YESNO, MSG,
-                MessageBoxW, MoveWindow, PostQuitMessage, RegisterClassW, SB_VERT, SCROLLINFO,
-                SIF_PAGE, SIF_POS, SIF_RANGE, SW_SHOW, SendMessageW, SetForegroundWindow,
-                SetWindowLongPtrW, SetWindowTextW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE,
-                WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_HSCROLL,
-                WM_KEYDOWN, WM_NCDESTROY, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_VSCROLL, WNDCLASSW,
-                WS_CHILD, WS_EX_CLIENTEDGE, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
-                WS_VSCROLL,
+                MB_ICONERROR, MB_ICONQUESTION, MB_OK, MB_YESNO, MSG, MessageBoxW, MoveWindow,
+                PostQuitMessage, RegisterClassW, SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE,
+                SW_SHOW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowTextW,
+                ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE,
+                WM_CHAR, WM_CLOSE, WM_COMMAND, WM_HSCROLL, WM_KEYDOWN, WM_NCDESTROY, WM_SETFOCUS,
+                WM_SETFONT, WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE, WS_GROUP,
+                WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -133,6 +132,7 @@ struct SettingsWindowState {
     scroll_offset: i32,
     content_height: i32,
     deferred_action: Option<&'static str>,
+    announcer: crate::announcement_win32::WindowsAnnouncer,
 }
 
 pub unsafe fn register() -> Result<()> {
@@ -320,6 +320,7 @@ unsafe fn create_base_controls(
         scroll_offset: 0,
         content_height: 0,
         deferred_action: None,
+        announcer: crate::announcement_win32::WindowsAnnouncer::new(HWND::default()),
     })
 }
 
@@ -760,7 +761,7 @@ unsafe fn activate_dynamic_control(window: HWND, id: usize) {
         return;
     };
     if let ControlBinding::Command(command) = bound.binding {
-        handle_settings_command(window, command);
+        handle_settings_command(window, command, &window_text(bound.control));
         return;
     }
     if matches!(bound.binding, ControlBinding::ShortcutActionList(_)) {
@@ -815,7 +816,7 @@ unsafe fn sync_shortcut_selection(state: &mut SettingsWindowState, source: &Boun
     }
 }
 
-unsafe fn handle_settings_command(window: HWND, command: SettingsCommand) {
+unsafe fn handle_settings_command(window: HWND, command: SettingsCommand, label: &str) {
     if command == SettingsCommand::ResetSection {
         let Some(state) = state_mut(window) else {
             return;
@@ -830,9 +831,13 @@ unsafe fn handle_settings_command(window: HWND, command: SettingsCommand) {
             return;
         }
         focus_first_control(window);
-    } else {
-        let label = format!("{command:?} is not implemented in this internal build yet.");
-        show_information(window, &label);
+    } else if let Some(state) = state_mut(window) {
+        // Python has every settings command. Until the Rust route exists, speak
+        // the beta message and keep focus on the button.
+        let catalog = apricot_app::embedded_catalog(&(*state.application).settings().language);
+        let feature = label.replace('&', "");
+        let message = apricot_app::unavailable_feature_message(&catalog, feature.trim());
+        state.announcer.announce(&message, false);
     }
 }
 
@@ -1618,16 +1623,6 @@ unsafe fn show_error(window: HWND, message: &str) {
         PCWSTR(message.as_ptr()),
         w!("ApricotPlayer 2 Beta"),
         MB_OK | MB_ICONERROR,
-    );
-}
-
-unsafe fn show_information(window: HWND, message: &str) {
-    let message = wide(message);
-    let _ = MessageBoxW(
-        Some(window),
-        PCWSTR(message.as_ptr()),
-        w!("ApricotPlayer 2 Beta"),
-        MB_OK | MB_ICONINFORMATION,
     );
 }
 

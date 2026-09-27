@@ -152,10 +152,7 @@ Enote, ki popravljajo odstopanja, so na vrsti prve.
 ### A. Popravki obstoječih odstopanj
 
 - **E1. Oglasi in seja predvajalnika. Zaključeno 27. 9. 2026, glej razdelek 6.**
-- **E2. Enotna pot za dejanja, ki še niso narejena.** Namesto angleškega modalnega
-  sporočila uporabi Pythonov način za nedostopna dejanja, kjer tak obstaja. Sicer
-  uporabi en lokaliziran govorni oglas brez modalnega okna. To je prehodna rešitev,
-  dokler enote C ne zapolnijo manjkajočih funkcij.
+- **E2. Enotna pot za dejanja, ki še niso narejena. Zaključeno 27. 9. 2026, glej razdelek 6.**
 - **E3. Kontekstni meniji.** Predvajalnik, rezultati, kanal, priljubljeni, zgodovina
   in playlisti natančno po `apricot/ui/menus.py` in `apricot/library/library.py`,
   vključno s podmenijem playlistov, "Open in browser", "Copy URL" in razlikovanjem
@@ -250,3 +247,33 @@ ukazom `set af`. Python dodaja in odstranjuje samo EQ filter z oznako. To bo
 treba poenotiti v E10 skupaj z izenačevalnikom. Napaka posameznega ukaza mpv se v
 Rustu še vedno pokaže kot okno "Player did not start" namesto oglasa
 "Timing is not available yet.", kar ostaja za E2.
+
+### E2: enotna pot za dejanja, ki še niso narejena (27. 9. 2026)
+
+Spremembe:
+
+- Nobeno dejanje brez Rust izvedbe ne odpre več angleškega modalnega okna. Namesto
+  tega se v vrstici stanja in govoru oglasi lokaliziran stavek, na primer
+  "Equalizer is not available in this beta yet." Fokus ostane, kjer je bil.
+  To velja za 16 bližnjic in gumbov predvajalnika iz SHELL-01 in PLAYER2-04, za
+  postavke glavnega menija brez Rust zaslona, za odpiranje kanala ali playlista
+  iz priljubljenih in zgodovine ter za ukazne gumbe v nastavitvah (SETTINGS-01).
+- Kjer ima Python za isto situacijo svoje sporočilo, se uporabi to: komentarji
+  pri posnetku brez YouTube ID ("comments_disabled"), naslednji sorodni posnetek
+  pri posnetku, ki ni z YouTuba ("no_related_video"), način urejanja pri spletnem
+  posnetku ("edit_mode_local_only") in BPM brez predvajalnika ("bpm_not_available").
+  Ctrl+S in Ctrl+R v predvajalniku ostaneta tiha, ker Python brez vklopljenega
+  načina urejanja ne naredi ničesar.
+- Potrditveno polje Full screen se po neuspelem dejanju vrne v stanje seje.
+- Napaka posameznega ukaza mpv med predvajanjem ne ustavi več seje in ne odpre
+  okna "Player did not start". Oglasi se "Timing is not available yet.", kot v
+  Pythonu. Nov dogodek `PlaybackEvent::CommandFailed` loči to od napake ob zagonu
+  ali med predvajanjem, ki še vedno pokaže `player_failed`.
+- Besedila, ki jih ima samo Rust, so zdaj v `rust/crates/apricot-app/locales/rust_strings.json`
+  za vseh 27 jezikov. Pythonovih besedil nikoli ne nadomestijo. E4 bo sem premaknil
+  ključe, ki jih je GPT dodal v Pythonov `en.json`.
+
+Preverjanje: `cargo build`, `cargo test` (410 uspešnih, 8 izključenih), `cargo clippy
+-D warnings` in `cargo fmt --check` gredo skozi. Novi testi preverijo besedila in
+Pythonova sporočila za posamezna dejanja, tihe primere, pokritost vseh jezikov in
+to, da zavrnjen ukaz mpv sporoči `CommandFailed` in ne konča posnetka.

@@ -1,0 +1,31 @@
+{
+  "rust_feature_unavailable": {
+    "en": "{feature} is not available in this beta yet.",
+    "sl": "{feature} v tej beta različici še ni na voljo.",
+    "de": "{feature} ist in dieser Beta noch nicht verfügbar.",
+    "fr": "{feature} n'est pas encore disponible dans cette bêta.",
+    "es": "{feature} aún no está disponible en esta beta.",
+    "pt": "{feature} ainda não está disponível nesta beta.",
+    "it": "{feature} non è ancora disponibile in questa beta.",
+    "pl": "{feature} nie jest jeszcze dostępne w tej wersji beta.",
+    "nl": "{feature} is nog niet beschikbaar in deze bèta.",
+    "sv": "{feature} är inte tillgängligt i denna beta ännu.",
+    "hr": "{feature} još nije dostupno u ovoj beta verziji.",
+    "sr": "{feature} још није доступно у овој бета верзији.",
+    "cs": "{feature} zatím není v této betaverzi k dispozici.",
+    "sk": "{feature} zatiaľ nie je v tejto beta verzii k dispozícii.",
+    "hu": "{feature} ebben a bétában még nem érhető el.",
+    "ro": "{feature} nu este încă disponibil în această versiune beta.",
+    "tr": "{feature} bu beta sürümünde henüz kullanılamıyor.",
+    "uk": "{feature} ще недоступно в цій бета-версії.",
+    "ru": "{feature} пока недоступно в этой бета-версии.",
+    "ja": "{feature} はこのベータ版ではまだ利用できません。",
+    "ko": "{feature}은(는) 이 베타 버전에서 아직 사용할 수 없습니다.",
+    "zh": "此测试版尚未提供{feature}。",
+    "ar": "{feature} غير متاح بعد في هذا الإصدار التجريبي.",
+    "hi": "{feature} इस बीटा में अभी उपलब्ध नहीं है।",
+    "id": "{feature} belum tersedia di versi beta ini.",
+    "fi": "{feature} ei ole vielä käytettävissä tässä beetaversiossa.",
+    "el": "Το {feature} δεν είναι ακόμη διαθέσιμο σε αυτή τη δοκιμαστική έκδοση."
+  }
+}

@@ -257,6 +257,23 @@ impl PlayerControls {
         )
     }
 
+    /// Puts a native checkbox back to the session state, for example after an
+    /// action that could not be performed.
+    pub unsafe fn set_checked(&self, id: &str, checked: bool) {
+        if let Some(control) = self
+            .controls
+            .iter()
+            .find(|control| control.id == id && control.role == NativeRole::Checkbox)
+        {
+            SendMessageW(
+                control.window,
+                BM_SETCHECK,
+                Some(WPARAM(if checked { BST_CHECKED } else { 0 })),
+                None,
+            );
+        }
+    }
+
     pub fn control_id_for_window(&self, window: HWND) -> Option<&'static str> {
         if window == self.video_host {
             return Some("video_host");

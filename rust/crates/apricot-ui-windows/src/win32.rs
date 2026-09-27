@@ -3131,20 +3131,7 @@ unsafe fn activate_main_menu_selection(window: HWND) {
         return;
     }
 
-    let message = wide(&format!(
-        "{} is registered, but its Rust screen is not implemented in this internal build yet.",
-        item_label.split('\t').next().unwrap_or(&item_label)
-    ));
-    let title = wide("ApricotPlayer 2 Beta");
-    let _ = MessageBoxW(
-        Some(window),
-        PCWSTR(message.as_ptr()),
-        PCWSTR(title.as_ptr()),
-        MB_OK | MB_ICONINFORMATION,
-    );
-    if let Some(state) = state(window) {
-        let _ = SetFocus(Some(active_primary_control(state)));
-    }
+    announce_unavailable_feature(window, item_label.split('\t').next().unwrap_or(&item_label));
 }
 
 unsafe fn activate_result_selection(window: HWND) {
@@ -3373,11 +3360,15 @@ unsafe fn activate_collection_selection(window: HWND) {
             item.kind,
             apricot_core::MediaKind::Playlist | apricot_core::MediaKind::Channel
         ) {
-            let message = format!(
-                "{} is preserved in favorites, but collection navigation is not implemented in this internal build yet.",
-                item.title
-            );
-            show_error_message(window, &message);
+            let feature_key = if item.kind == apricot_core::MediaKind::Channel {
+                "open_channel"
+            } else {
+                "open_playlist"
+            };
+            if let Some(state) = state(window) {
+                let feature = catalog_text(&state.application, feature_key);
+                announce_unavailable_feature(window, &feature);
+            }
             return;
         }
         start_sequence_media_item(window, item, None);
@@ -8941,6 +8932,10 @@ unsafe fn poll_playback_runtime(window: HWND) {
                 set_status(state, &message, true);
                 show_error_message(window, &message);
             }
+            PlaybackEvent::CommandFailed(_) => {
+                let message = catalog_text(&state.application, "timing_unavailable");
+                set_status(state, &message, true);
+            }
         }
     }
 }
@@ -10823,7 +10818,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "toggle_podcast_played" => toggle_selected_rss_played(window),
         "clear_podcast_progress" => clear_selected_rss_progress(window),
         "save_podcast_speed_preset" => save_current_podcast_speed_preset(window),
-        _ => show_unimplemented_action(window, action_id),
+        _ => announce_unimplemented_action(window, action_id),
     }
 }
 
@@ -12353,13 +12348,12 @@ unsafe fn execute_player_command(window: HWND, command: PlaybackCommand) -> bool
     let Some(runtime) = state.playback.as_ref() else {
         return false;
     };
-    match runtime.execute(generation, command) {
-        Ok(()) => true,
-        Err(error) => {
-            show_error_message(window, &format!("Player command failed: {error}"));
-            false
-        }
+    if runtime.execute(generation, command).is_ok() {
+        return true;
     }
+    // Python announces a failed player command and keeps playing.
+    announce_player_text(window, "timing_unavailable", &[]);
+    false
 }
 
 unsafe fn toggle_player_pause(window: HWND) {
@@ -12836,7 +12830,6 @@ unsafe fn adjust_player_speed(window: HWND, delta: f64) {
     };
     let speed = clamp_rate(audio.speed + delta, 0.25, 4.0);
     if !apply_player_speed(window, speed) {
-        announce_player_text(window, "timing_unavailable", &[]);
         return;
     }
     announce_player_text(
@@ -12874,7 +12867,6 @@ unsafe fn reset_player_speed_pitch(window: HWND) {
         apricot_app::player_start_speed(&state.application.settings().player_speed)
     });
     if !apply_player_speed(window, speed) || !apply_player_pitch(window, 1.0, None) {
-        announce_player_text(window, "timing_unavailable", &[]);
         return;
     }
     announce_player_text(
@@ -13328,23 +13320,43 @@ unsafe fn show_playback_queue(window: HWND) {
     }
 }
 
-unsafe fn show_unimplemented_action(window: HWND, action_id: &str) {
+/// Speaks Python's message, or the beta message, for an action without a Rust
+/// route. No window opens and focus stays where it is.
+unsafe fn announce_unimplemented_action(window: HWND, action_id: &str) {
     let Some(state) = state(window) else {
         return;
     };
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
-    let label_key =
-        apricot_core::action::action_by_id(action_id).map_or(action_id, |action| action.label_key);
-    let message = wide(&format!(
-        "{} is registered, but its Rust route is not implemented in this internal build yet.",
-        catalog.text(label_key)
-    ));
-    let _ = MessageBoxW(
-        Some(window),
-        PCWSTR(message.as_ptr()),
-        w!("ApricotPlayer 2 Beta"),
-        MB_OK | MB_ICONINFORMATION,
-    );
+    let session = state.application.player_session();
+    let current_item = session.is_open().then(|| session.current_item()).flatten();
+    if action_id == "player_fullscreen" {
+        // The native checkbox toggles itself before the action arrives.
+        restore_player_checkbox(state, "fullscreen", SessionToggle::Fullscreen);
+    }
+    if let Some(message) =
+        apricot_app::unavailable_action_message(&catalog, action_id, current_item)
+    {
+        set_status(state, &message, true);
+    }
+}
+
+unsafe fn restore_player_checkbox(state: &WindowState, control_id: &str, toggle: SessionToggle) {
+    let checked = state
+        .application
+        .player_session()
+        .enabled_toggles()
+        .contains(&toggle);
+    state.player_controls.set_checked(control_id, checked);
+}
+
+/// Speaks the beta message for a Python feature without a Rust screen.
+unsafe fn announce_unavailable_feature(window: HWND, feature: &str) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let message = apricot_app::unavailable_feature_message(&catalog, feature);
+    set_status(state, &message, true);
 }
 
 unsafe fn open_settings(window: HWND) {

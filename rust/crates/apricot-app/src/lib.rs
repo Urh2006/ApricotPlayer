@@ -24,6 +24,7 @@ pub mod settings_controller;
 pub mod settings_model;
 pub mod settings_session;
 pub mod subscription_controller;
+pub mod unavailable;
 pub mod user_playlist_controller;
 pub mod youtube_collection;
 pub mod youtube_trending;
@@ -88,6 +89,7 @@ pub use subscription_controller::{
     SubscriptionController, SubscriptionControllerError, SubscriptionRemoveOutcome,
     canonical_channel_url, normalize_category,
 };
+pub use unavailable::{unavailable_action_message, unavailable_feature_message};
 pub use user_playlist_controller::{
     PlaylistAddOutcome, PlaylistCreateOutcome, UserPlaylistController, UserPlaylistControllerError,
 };

@@ -186,6 +186,8 @@ impl PlayerSession {
                 self.phase = PlaybackPhase::Failed;
                 self.last_error = Some(error);
             }
+            // The item keeps playing after a single failed command.
+            PlaybackEvent::CommandFailed(_) => {}
         }
         true
     }

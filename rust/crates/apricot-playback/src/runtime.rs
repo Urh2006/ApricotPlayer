@@ -380,7 +380,10 @@ fn execute_if_current(
         return;
     }
     if let Err(error) = engine.execute(command) {
-        emit_failure(updates, generation, &error);
+        let _ = updates.try_send(PlaybackUpdate {
+            generation,
+            event: PlaybackEvent::CommandFailed(error.to_string()),
+        });
     }
 }
 
@@ -470,6 +473,38 @@ mod tests {
         fn poll_event(&mut self) -> Result<Option<PlaybackEvent>, PlaybackError> {
             Ok(self.events.pop())
         }
+    }
+
+    struct RejectingEngine;
+
+    impl PlaybackEngine for RejectingEngine {
+        fn execute(&mut self, _command: PlaybackCommand) -> Result<(), PlaybackError> {
+            Err(PlaybackError::Operation("rejected".to_owned()))
+        }
+
+        fn poll_event(&mut self) -> Result<Option<PlaybackEvent>, PlaybackError> {
+            Ok(None)
+        }
+    }
+
+    #[test]
+    fn rejected_command_is_reported_without_ending_the_item() {
+        let mut active: Option<(u64, Box<dyn PlaybackEngine>)> =
+            Some((7, Box::new(RejectingEngine)));
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        super::execute_if_current(
+            &mut active,
+            7,
+            PlaybackCommand::SeekRelative {
+                seconds: 5.0,
+                exact: false,
+            },
+            &sender,
+        );
+        let update = receiver.try_recv().expect("command failure update");
+        assert_eq!(update.generation, 7);
+        assert!(matches!(update.event, PlaybackEvent::CommandFailed(_)));
+        assert!(active.is_some(), "the item keeps playing");
     }
 
     fn item(id: &str) -> apricot_core::MediaItem {

@@ -75,11 +75,17 @@ pub struct PlaybackMediaInfo {
 pub enum PlaybackEvent {
     Started,
     Paused(bool),
-    Position { elapsed: f64, duration: Option<f64> },
+    Position {
+        elapsed: f64,
+        duration: Option<f64>,
+    },
     MediaInfo(PlaybackMediaInfo),
     Ended,
     PreviewFinished,
     Failed(String),
+    /// A single command failed while the item keeps playing. Python announces
+    /// "Timing is not available yet." for this instead of stopping playback.
+    CommandFailed(String),
 }
 
 #[derive(Debug, Error)]

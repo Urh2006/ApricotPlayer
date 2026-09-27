@@ -136,17 +136,45 @@ pub fn embedded_catalog(requested_code: &str) -> TranslationCatalog {
         .iter()
         .find(|language| language.code == requested_code)
         .map_or("en", |language| language.code);
-    let english = parse_embedded_locale(locale_source("en"));
+    let rust_strings = rust_only_strings();
+    let mut english = parse_embedded_locale(locale_source("en"));
+    add_rust_only_strings(&mut english, &rust_strings, "en");
     let selected = if selected_code == "en" {
         english.clone()
     } else {
-        parse_embedded_locale(locale_source(selected_code))
+        let mut selected = parse_embedded_locale(locale_source(selected_code));
+        add_rust_only_strings(&mut selected, &rust_strings, selected_code);
+        selected
     };
     TranslationCatalog::new(selected_code, english, selected)
 }
 
 fn parse_embedded_locale(source: &str) -> BTreeMap<String, String> {
     serde_json::from_str(source).expect("embedded locale must remain valid")
+}
+
+/// Texts that only the Rust port needs, keyed by text key and then language
+/// code. They never replace a text from the Python locales.
+type RustOnlyStrings = BTreeMap<String, BTreeMap<String, String>>;
+
+fn rust_only_strings() -> RustOnlyStrings {
+    serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/locales/rust_strings.json"
+    )))
+    .expect("embedded Rust-only strings must remain valid")
+}
+
+fn add_rust_only_strings(
+    locale: &mut BTreeMap<String, String>,
+    strings: &RustOnlyStrings,
+    code: &str,
+) {
+    for (key, translations) in strings {
+        if let Some(text) = translations.get(code) {
+            locale.entry(key.clone()).or_insert_with(|| text.clone());
+        }
+    }
 }
 
 macro_rules! locale_json {
@@ -342,5 +370,35 @@ mod tests {
             assert!(catalog.selected_key_count() > 0);
         }
         assert_eq!(embedded_catalog("unknown").selected_code(), "en");
+    }
+
+    #[test]
+    fn rust_only_strings_cover_every_language_without_replacing_python_texts() {
+        let python_english = super::parse_embedded_locale(super::locale_source("en"));
+        for (key, translations) in super::rust_only_strings() {
+            assert!(
+                !python_english.contains_key(&key),
+                "{key} must not replace a Python text"
+            );
+            let english = translations.get("en").expect("English text");
+            let placeholders = |text: &str| {
+                text.split('{')
+                    .skip(1)
+                    .filter_map(|part| part.split_once('}').map(|(name, _)| name.to_owned()))
+                    .collect::<Vec<_>>()
+            };
+            for language in LANGUAGES {
+                let text = translations
+                    .get(language.code)
+                    .unwrap_or_else(|| panic!("{key} lacks {}", language.code));
+                assert_eq!(
+                    placeholders(text),
+                    placeholders(english),
+                    "{key}/{}",
+                    language.code
+                );
+                assert_eq!(embedded_catalog(language.code).text(&key), text);
+            }
+        }
     }
 }
