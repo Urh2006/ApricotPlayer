@@ -1641,7 +1641,7 @@ impl Application {
             audio: AudioSession {
                 volume: f64::from(i32::try_from(settings.default_volume).unwrap_or(100)),
                 output_device: settings.audio_output_device.clone(),
-                speed: settings.player_speed.parse().unwrap_or(1.0),
+                speed: player_start_speed(&settings.player_speed),
                 pitch: 1.0,
                 equalizer: EqualizerSession {
                     enabled: settings.global_equalizer_enabled,
@@ -2246,6 +2246,19 @@ fn unix_timestamp() -> f64 {
         .map_or(0.0, |duration| duration.as_secs_f64())
 }
 
+/// Python `player_start_speed_value`/`default_speed_value`: accepts an
+/// optional `x` suffix and clamps to the supported 0.25-4.0 range.
+pub fn player_start_speed(value: &str) -> f64 {
+    value
+        .trim()
+        .trim_end_matches(['x', 'X'])
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|speed| speed.is_finite())
+        .map_or(1.0, |speed| speed.clamp(0.25, 4.0))
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -2333,6 +2346,14 @@ mod tests {
             duration_seconds: Some(1_800.0),
             metadata: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn player_start_speed_matches_python_parsing_and_clamping() {
+        assert!((super::player_start_speed("1.25x") - 1.25).abs() < f64::EPSILON);
+        assert!((super::player_start_speed(" 0.1 ") - 0.25).abs() < f64::EPSILON);
+        assert!((super::player_start_speed("9") - 4.0).abs() < f64::EPSILON);
+        assert!((super::player_start_speed("fast") - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]

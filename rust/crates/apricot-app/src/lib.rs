@@ -36,6 +36,7 @@ pub use action_finder::{ActionFinderContext, ActionFinderItem, ActionFinderModel
 pub use activation::ActivationRequest;
 pub use application::{
     Application, LastSessionResume, PlayerNavigationOrigin, PlayerNavigationOutcome,
+    player_start_speed,
 };
 pub use bookmark_controller::{BookmarkController, BookmarkControllerError};
 pub use download_controller::{

@@ -76,6 +76,7 @@ pub struct MpvLaunchOptions {
     pub volume_max: u16,
     pub initial_speed: f64,
     pub initial_pitch: f64,
+    pub audio_pitch_correction: bool,
     pub initial_playback_state: InitialPlaybackState,
     pub initial_position_seconds: Option<f64>,
     pub repeat_mode: RepeatMode,
@@ -103,6 +104,7 @@ impl MpvLaunchOptions {
             volume_max: 100,
             initial_speed: 1.0,
             initial_pitch: 1.0,
+            audio_pitch_correction: true,
             initial_playback_state: InitialPlaybackState::Playing,
             initial_position_seconds: None,
             repeat_mode: RepeatMode::Off,
@@ -223,6 +225,9 @@ impl PlaybackEngine for MpvProcessEngine {
             PlaybackCommand::SetPitch(pitch) => {
                 json!(["set_property", "pitch", pitch.clamp(0.01, 100.0)])
             }
+            PlaybackCommand::SetAudioPitchCorrection(enabled) => {
+                json!(["set_property", "audio-pitch-correction", enabled])
+            }
             PlaybackCommand::SetRepeat(enabled) => {
                 json!([
                     "set_property",
@@ -336,6 +341,14 @@ fn launch_arguments(options: &MpvLaunchOptions, pipe_path: &str) -> Vec<OsString
         OsString::from(format!(
             "--speed={}",
             options.initial_speed.clamp(0.01, 100.0)
+        )),
+        OsString::from(format!(
+            "--audio-pitch-correction={}",
+            if options.audio_pitch_correction {
+                "yes"
+            } else {
+                "no"
+            }
         )),
         OsString::from(format!(
             "--loop-file={}",

@@ -1,0 +1,252 @@
+# Stanje Rust porta ApricotPlayerja
+
+Datum revizije: 27. september 2026.
+Vir resnice: Python `main` fe62a21 (1.0.21).
+Revidirano stanje Rust: lokalna veja `rust-2.0` na f904192, skupaj z necommitanim
+delom za lyrics in transcript.
+
+Ta dokument nadomešča kljukice v `docs/RUST_PARITY_MANIFEST.md` kot oceno
+dejanskega stanja. Postavka v manifestu, označena z `[x]`, ni nujno enaka Python
+verziji. Podrobni revizijski zapisi s sklici na vrstice v obeh verzijah so v
+`docs/rust-audit/`. Oznake v oklepajih, na primer (PLAYER2-02), kažejo na
+ustrezno ugotovitev v teh zapisih.
+
+## 0. Povzetek
+
+- Rust projekt se zgradi, 399 testov gre skozi (6 jih je izključenih), `cargo clippy` je čist.
+- Arhitektura: lasten Win32 UI z uradnim `windows` crateom, predvajanje z libmpv v
+  procesu, yt-dlp kot zunanji proces, besedila so ob gradnji vgrajena iz Pythonovih
+  `apricot/locales/*.json` (vseh 27 jezikov).
+- Dobro portano: tabela 91 bližnjic, vrstni red in prilagajanje glavnega menija,
+  shema nastavitev z ohranjanjem neznanih ključev, EQ prednastavitve in filtrski niz,
+  dinamično nalaganje rezultatov, Trending, podcasti in RSS, jedro prenosov,
+  bookmarks, resume pozicije, vrstni red Tab v predvajalniku, uvoz Python podatkov.
+- Največja težava: 16 od 91 registriranih dejanj nima izvedbe. Bližnjica ali gumb
+  odpre modalno angleško sporočilo "is registered, but its Rust route is not
+  implemented". To velja tudi za gumbe v predvajalniku (izenačevalnik, izhodne
+  naprave, komentarji, način urejanja) in za skoraj vse gumbe v nastavitvah.
+- Manjkajoči večji sklopi: AudioVault, updater, SoundCloud, piškotki, pretvornika,
+  diagnostično poročilo, BPM, komentarji, izenačevalnik iz predvajalnika, izbira
+  izhodne naprave, način urejanja.
+
+## 1. Odstopanja od cilja 1:1 v GPT-jevem planu
+
+1. **Dodatni Rust YouTube backend.** GPT je dodal "Rusty YTDL" z novo nastavitvijo
+   `youtube_backend`, lastnim pomožnim programom `apricot-youtube-helper` in
+   dodatnim poljem v razdelku General (SEARCH-09, SETTINGS-04). Python tega nima.
+   Polje premakne vrstni red Tab v razdelku General.
+2. **Sprememba Python datoteke.** Veja `rust-2.0` je v `apricot/locales/en.json`
+   dodala ključe `ok`, `cancel`, `youtube_backend*`, `direct_link_invalid`,
+   `direct_link_fallback` in `check_youtube_component_updates_now`. Drugi jeziki jih nimajo.
+3. **Namerne spremembe vmesnika.** V planu so sprejete kot izboljšave, v kodi pa se
+   kažejo kot odstopanja. Primeri: Save zapre nastavitve, Reset all ima dodatno
+   potrditveno okno, kontekstni meniji imajo dodatne ali drugače razvrščene postavke,
+   mapa se nalaga po 20 datotek.
+4. **Vrstni red faz.** Plan je predvideval, da se predvajalnik (faza 3) konča pred
+   YouTube, podcasti in prenosi. GPT je nadaljeval s fazami 5, 7 in 8, preden je bil
+   predvajalnik zaključen. Zato velik del predvajalnika še manjka.
+5. **Označevanje zaključenosti.** Manifest ima nekaj postavk označenih kot
+   zaključene brez NVDA preizkusa. Revizija je pri teh našla odstopanja.
+6. **Ločen podatkovni imenik.** Rust beta uporablja `%APPDATA%\ApricotPlayer2Beta`
+   (odločitev D-011). Ob prvem zagonu enkrat prekopira vsako Python datoteko, ki je
+   v beta imeniku še ni. Python podatkov nikoli ne spreminja in poznejših sprememb
+   v Pythonu ne prevzame. To je skladno z zahtevo, da Rust prebere Python podatke.
+
+## 2. Odstopanja v že portanih delih
+
+Prioriteta: P1 pomeni, da je osnovna uporaba s tipkovnico ali NVDA zlomljena ali zmedena. P2 je opazna razlika, P3 kozmetična.
+
+### Globalno
+
+| ID | P | Odstopanje |
+|---|---|---|
+| SHELL-01 | P1 | 16 dejanj pade na angleško modalno sporočilo namesto izvedbe: `open_audiovault`, `open_channel`, `copy_diagnostic_report`, `player_bpm`, `player_comments`, `player_edit_mode`, `player_equalizer`, `player_fullscreen`, `player_next_related`, `player_output_devices`, `player_replace_edit_original`, `player_replaygain`, `player_save_edit_copy`, `player_shuffle`, `result_column_previous`, `result_column_next`. Enako se zgodi pri pretvornikih iz glavnega menija. |
+| SHELL-02 | P2 | Ob prvem zagonu, skritem v pladnju, se vseeno odpre okno za izbiro jezika. |
+| SHELL-03 | P3 | Prvi zagon ne preverja, ali datoteka z nastavitvami sploh obstaja (Python `first_run_without_settings`). |
+| SHELL-M-04 | P2 | Oglaševanje nima poti za JAWS, dogodka `EVENT_SYSTEM_ALERT` in `VALUECHANGE` na statusni kontroli; uporablja le NVDA in `NAMECHANGE`. |
+
+### Predvajalnik
+
+| ID | P | Odstopanje |
+|---|---|---|
+| PLAYER2-01 | P1 | Next, Previous in Related v Rustu ohranijo hitrost, višino tona, izhodno napravo in EQ prejšnjega posnetka. Python vsak posnetek zažene z nastavljeno privzeto hitrostjo in višino 1.0 in ohrani samo glasnost. |
+| PLAYER2-02 | P1 | Oglasi za T, V, S/D, Ctrl+gor/dol, Ctrl+0, R, volume boost in bass boost so trdo kodirani v angleščini in drugače oblikovani (npr. "Speed 1.25" namesto "Playback speed 1.3x.", "Speed and pitch reset" brez vrednosti, "Elapsed x" namesto "Timing is not available yet."). |
+| PLAYER-03 | P1 | Kontekstni meni predvajalnika nima postavk za izhodne naprave, celozaslonski način, izenačevalnik, ReplayGain, shranjevanje hitrosti podcasta, sorodni video, dodajanje zaznamka, seznam zaznamkov, poglavja, prepis, besedilo pesmi, komentarje in odpiranje v brskalniku. Namesto tega ima dodatni postavki za podrobnosti in vrsto, dodajanje na playlist pa ni podmeni obstoječih playlistov. |
+| PLAYER2-08 | P2 | Nastavitev "Audio quality when changing speed" (rubberband, scaletempo2, scaletempo, mpv) se ne uporabi; mpv vedno uporabi privzeti algoritem. Treba je preveriti tudi `pitch_mode` pri spremembi višine tona (PLAYER2-M-09). |
+| PLAYER2-06 | P2 | `show_video_details_by_default` samo fokusira gumb Details; Python samodejno odpre podrobnosti. |
+| PLAYER2-05 | P2 | Pri background playback Python vključi seznam rezultatov v Tab vrstni red predvajalnika, Rust ne. |
+| PLAYER-02 | P3 | Pot pri neuspelem nalaganju je treba preveriti med izvajanjem (oglas `player_failed`). |
+
+### Iskanje in rezultati
+
+| ID | P | Odstopanje |
+|---|---|---|
+| SEARCH-01 | P1 | Iskalni zaslon nima izbire ponudnika SoundCloud in tipov Track/Playlist/User. |
+| SEARCH-08 | P2 | Iskalni zaslon nima gumbov Play, Download audio, Download video in Add favorite; to spremeni Tab vrstni red. |
+| SEARCH-02 | P2 | Kontekstni meni rezultatov nima "Open in browser". |
+| SEARCH-05 | P2 | Meni kanala ima dodaten podmeni za prenos in drugačen vrstni red. |
+| SEARCH-06 | P2 | Meni videa nima `remove_from_playlist` in `open_channel`, vrstni red je drugačen, dodana je postavka za vrsto. |
+| SEARCH-03 | P3 | "Copy link" namesto "Copy URL". |
+| SEARCH-04 | P3 | Vrstica playlista nima števila videov. |
+
+### Knjižnica
+
+| ID | P | Odstopanje |
+|---|---|---|
+| LIBRARY-M-01 | P1 | Enter na kanalu ali playlistu v priljubljenih ali zgodovini pokaže angleško napako namesto odprtja. |
+| LIBRARY-01 | P2 | Mapa se naloži po 20 datotek; Python naloži celo mapo naenkrat (preverjeno v `apricot/ui/misc.py:1304-1310`). |
+| LIBRARY-02 | P2 | Meniji priljubljenih in zgodovine ne ločijo lokalnih in spletnih elementov, manjkajo `remove_from_playback_queue`, `copy_stream_url`, `open_channel`, napačen ključ `copy_link` namesto `copy_path` ali `copy_url`. |
+| LIBRARY-03 | P3 | Meni seznama playlistov ima tri dodatne postavke in drugačen vrstni red. |
+
+### Nastavitve
+
+| ID | P | Odstopanje |
+|---|---|---|
+| SETTINGS-01 | P1 | Deluje samo gumb za ponastavitev razdelka. Browse, Set default player, preverjanje posodobitev, piškotki, API ključ, AudioVault, EQ profili in "Check subscriptions now" pokažejo angleško sporočilo "not implemented". |
+| SETTINGS-02 | P2 | Save zapre okno in ne oglasi "settings saved"; Python ostane na zaslonu. |
+| SETTINGS-03 | P2 | Gumb za vse nastavitve se imenuje "Reset all settings" namesto "Restore to defaults" in ima dodatno angleško potrditveno okno. |
+| SETTINGS-04 | P2 | Dodatno polje YouTube backend v razdelku General. |
+| SETTINGS-05 | P2 | Sporočilo o konfliktu bližnjice je v angleščini in izpiše notranji ID dejanja. |
+| SETTINGS-06 | P3 | Preklop razdelkov nima zamika 140 ms, zato se kontrole gradijo ob vsaki puščici. |
+
+### Podcasti in prenosi
+
+| ID | P | Odstopanje |
+|---|---|---|
+| PODDL-01 | P2 | Bližnjica za prenos nima zaščite 0,35 s pred dvojnim pritiskom. |
+| PODDL-03 | P2 | Vrstica epizode nima oznake, da je v vrsti za prenos. |
+| PODDL-02 | P3 | Napredek prenosa zvoka ni omejen po pogostosti. |
+
+## 3. Manjkajoče funkcije Python verzije
+
+| ID | P | Funkcija | Python |
+|---|---|---|---|
+| PLAYER2-M-02, SETTINGS-M-02 | P1 | Izenačevalnik iz predvajalnika (F4) ter ustvarjanje, uvoz, izvoz, brisanje in ponastavitev EQ profilov | `apricot/ui/equalizer.py`, `apricot/ui/settings.py:762-846` |
+| PLAYER2-M-03 | P1 | Izbira izhodne naprave (O) | `apricot/player/volume.py`, `apricot/ui/player.py` |
+| PLAYER2-M-05 | P1 | Preklop shuffle (Shift+S), sorodni video (Ctrl+Shift+PageDown), ReplayGain (Ctrl+Shift+G), celozaslonski način (F11) | `apricot/ui/misc.py:1358`, `apricot/ui/player.py` |
+| PLAYER2-M-01 | P1 | BPM analiza (B) | `apricot/ui/misc.py:2710-2803` |
+| PLAYER2-M-04 | P1 | Komentarji (Ctrl+Shift+M) | `apricot/ui/misc.py:2095+` |
+| PLAYER2-M-06 | P1 | Način urejanja (E, Ctrl+S, Ctrl+R) | `apricot/ui/misc.py:2389-2433` |
+| SEARCH-M-01 | P1 | SoundCloud iskanje, izvajalci in seti | `apricot/search/search.py:451-474, 703-729` |
+| SEARCH-M-02 | P1 | Odpri kanal (Ctrl+Shift+O) in stolpci rezultatov (Ctrl+Alt+levo/desno) | `apricot/search/search.py:233` |
+| SEARCH-M-04 | P2 | Vmešavanje Shorts v iskanje in v objave kanala | `apricot/search/search.py:374-495` |
+| SHELL-M-03 | P1 | Kopiranje diagnostičnega poročila | `apricot/system/diagnostics.py` |
+| SETTINGS-M-01 | P1 | Piškotki: datoteka, uvoz iz brskalnika, DevTools izvoz, prijavni profil | `apricot/ui/cookies.py` |
+| SETTINGS-M-03 | P2 | Set default player in pomoč pri povezavah datotek | `apricot/ui/settings.py:462` |
+| PODDL-M-01 | P1 | Pretvornik datotek in pretvornik map | `apricot/media/media.py:40-436` |
+| PODDL-M-03, SHELL-M-02 | P1 | yt-dlp posodobitve ter posodobitve aplikacije s kanali, preskokom verzije, preverjanjem in rollbackom | `apricot/updater/updater.py` |
+| PODDL-M-02, SHELL-M-01 | P1 | AudioVault v celoti | `apricot/network/audiovault.py` |
+
+Nepregledano ali le delno pregledano. Ti deli se primerjajo na začetku ustrezne enote:
+Action Finder, pladenj in zapiranje v pladenj, center obvestil, zaslon naročnin,
+zaslon vrste predvajanja, dialog neposredne povezave, podrobnosti (F7), poglavja,
+obnovitev fokusa ob vrnitvi v glavni meni ter natančna besedila napak pri iskanju.
+
+## 4. Delovne enote
+
+Vsaka enota se začne s ciljano primerjavo Python kode za svoje področje. Konča se s
+`cargo build`, `cargo test`, `cargo clippy`, avtomatiziranim testom, kjer je izvedljiv,
+in kratkim ročnim NVDA preizkusom. Pri predvajalniku enota preveri tudi dejansko mpv pot.
+Enote, ki popravljajo odstopanja, so na vrsti prve.
+
+### A. Popravki obstoječih odstopanj
+
+- **E1. Oglasi in seja predvajalnika. Zaključeno 27. 9. 2026, glej razdelek 6.**
+- **E2. Enotna pot za dejanja, ki še niso narejena.** Namesto angleškega modalnega
+  sporočila uporabi Pythonov način za nedostopna dejanja, kjer tak obstaja. Sicer
+  uporabi en lokaliziran govorni oglas brez modalnega okna. To je prehodna rešitev,
+  dokler enote C ne zapolnijo manjkajočih funkcij.
+- **E3. Kontekstni meniji.** Predvajalnik, rezultati, kanal, priljubljeni, zgodovina
+  in playlisti natančno po `apricot/ui/menus.py` in `apricot/library/library.py`,
+  vključno s podmenijem playlistov, "Open in browser", "Copy URL" in razlikovanjem
+  med lokalnimi in spletnimi elementi (PLAYER-03, SEARCH-02/03/05/06, LIBRARY-02/03).
+- **E4. Nastavitve, prvi del.** Save ostane na zaslonu in oglasi shranjevanje.
+  Gumb "Restore to defaults" brez dodatnega okna. Lokaliziran konflikt bližnjice.
+  Zamik pri preklopu razdelkov. Browse za mape. Set default player. Odstranitev
+  polja YouTube backend. Premik ključev, ki jih je GPT dodal v Pythonov `en.json`,
+  na Rust stran in vrnitev `en.json` na stanje iz `main` (SETTINGS-02 do 06, del
+  SETTINGS-01, SETTINGS-M-03, odločitvi 1 in 2).
+- **E5. Seznami in knjižnica.** Celotna mapa naenkrat (LIBRARY-01). Odpiranje kanala
+  in playlista iz priljubljenih in zgodovine (LIBRARY-M-01). Odpri kanal in stolpci
+  rezultatov (SEARCH-M-02). Število videov v vrstici playlista (SEARCH-04).
+  Oznaka epizode v vrsti za prenos (PODDL-03). Zaščita pred dvojnim prenosom in
+  omejitev napredka (PODDL-01/02).
+- **E6. Lupina in oglaševanje.** Jezikovno okno pri skritem zagonu (SHELL-02/03).
+  Pot za JAWS in manjkajoči MSAA dogodki (SHELL-M-04). Revizija in popravki za
+  Action Finder, pladenj, center obvestil in obnovitev fokusa ob vrnitvi v glavni meni.
+- **E7. Revizija in popravki preostalih zaslonov.** Naročnine, vrsta predvajanja,
+  neposredna povezava, podrobnosti in poglavja ter trenutno necommitano delo za
+  lyrics in transcript. Python podrobnosti (F7) niso dialog, ampak vgrajeno polje
+  za branje z gumboma Copy details in Back na zaslonu predvajalnika. Rust jih ima
+  kot dialog, zato sem vanjo prestavil tudi PLAYER2-06 (samodejno odpiranje
+  podrobnosti) in sprotno posodabljanje hitrosti in višine tona v podrobnostih.
+
+### B. Majhne manjkajoče funkcije predvajalnika
+
+- **E8.** Shuffle, sorodni video, ReplayGain cikel in celozaslonski način.
+- **E9.** Izbira izhodne naprave (O) z osvežitvijo seznama in varnim nadomestkom.
+- **E10.** Izenačevalnik iz predvajalnika (F4) ter EQ profili v nastavitvah.
+- **E11.** BPM analiza.
+- **E12.** Način urejanja z varnim shranjevanjem kopije in zamenjavo izvirnika.
+- **E13.** Komentarji.
+
+### C. Večji manjkajoči sklopi
+
+- **E14.** SoundCloud, Shorts vmešavanje in gumbi na iskalnem zaslonu.
+- **E15.** Diagnostično poročilo z zakrivanjem zasebnih podatkov.
+- **E16.** Piškotki.
+- **E17.** Pretvornik datotek in pretvornik map.
+- **E18.** yt-dlp posodobitve in posodobitve aplikacije. Pred objavo 2.0 ostanejo
+  po D-011 lokalno onemogočene.
+- **E19.** AudioVault.
+- **E20.** Zaključna parity vrata: ponovna primerjava manifesta, preverjanje števil
+  v registrih, NVDA preizkus celote, preverjanje uvoza podatkov in zmogljivosti.
+
+## 5. Odobrene odločitve (27. 9. 2026)
+
+1. Polje YouTube backend se odstrani iz nastavitev, vedno se uporablja yt-dlp.
+   Koda pomožnega programa ostane v repozitoriju neuporabljena.
+2. Ključi, ki jih je GPT dodal v Pythonov `en.json`, se premaknejo na Rust stran,
+   `en.json` pa se vrne v stanje iz `main`.
+3. Rust beta ostane v ločenem imeniku z enkratnim uvozom Python podatkov.
+
+## 6. Dnevnik enot
+
+### E1: oglasi in seja predvajalnika (27. 9. 2026)
+
+Spremembe:
+
+- Next, Previous, Related in drugi novi posnetki v odprti seji dobijo nastavljeno
+  začetno hitrost (ali hitrost podcasta) in višino tona 1.0. Glasnost, izhodna
+  naprava, EQ in preklopi ostanejo za sejo, tako kot v Pythonu (PLAYER2-01).
+- Ker Rust ohrani eno libmpv instanco, runtime pred zamenjavo posnetka pošlje
+  stanje, ki ga Python dobi z novim mpv procesom: pavza glede na
+  `player_start_paused`, meja in vrednost glasnosti, `audio-pitch-correction`,
+  hitrost, višina tona, ponavljanje in celoten filtrski niz. Prej je nov posnetek
+  podedoval tudi pavzo prejšnjega.
+- `speed_audio_mode` in `pitch_mode` se uporabita kot v Pythonu: filter
+  `@apricot_speed`, `audio-pitch-correction`, Rubberband filter `@apricot_pitch`
+  za načina Rubberband in povezano hitrost, pri povezanem načinu pa tipke za višino
+  tona spremenijo tudi hitrost (PLAYER2-08).
+- Oglasi T, V, S in D, Ctrl+gor/dol, Ctrl+0, Ctrl+Home, Ctrl+End, R, volume boost,
+  bass boost in samodejni naslednji uporabljajo Pythonove ključe in oblike
+  (PLAYER2-02). Dodana sta oglasa "Jumped to start." in "Jumped to end.", skok na
+  začetek in konec je natančen, konec pa je 0,5 s pred koncem.
+- Tipki gor in dol spremenita glasnost brez oglasa, kot v Pythonu. Rust je prej
+  vsakič prebral glasnost.
+- Ob doseženi hitrosti ali višini tona 1.0 in ob Ctrl+0 se predvaja
+  `assets/default_reached.wav`. Skript za lokalni beta paket zdaj kopira to datoteko.
+- Napake ob zagonu predvajalnika uporabljajo lokaliziran `player_failed` (PLAYER-02).
+
+Preverjanje: `cargo build`, `cargo test` (406 uspešnih, 8 izključenih), `cargo clippy
+-D warnings` in `cargo fmt --check` gredo skozi. Nov test z dejanskim libmpv
+(`real_libmpv_accepts_python_speed_pitch_and_equalizer_chains`) predvaja posnetek z
+vsemi 12 kombinacijami načinov hitrosti in višine tona skupaj z EQ filtrom in
+potrdi, da libmpv neveljaven filter zavrne. Zaženeš ga z nastavljenima
+`APRICOT_TEST_MPV` in `APRICOT_TEST_FFMPEG` ter zastavico `--ignored`.
+
+Odprto za poznejše enote: EQ spremembe zdaj ponastavijo celoten filtrski niz z
+ukazom `set af`. Python dodaja in odstranjuje samo EQ filter z oznako. To bo
+treba poenotiti v E10 skupaj z izenačevalnikom. Napaka posameznega ukaza mpv se v
+Rustu še vedno pokaže kot okno "Player did not start" namesto oglasa
+"Timing is not available yet.", kar ostaja za E2.

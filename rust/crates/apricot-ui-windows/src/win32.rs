@@ -50,8 +50,9 @@ use apricot_platform::{
     scan_local_media_folder_with_cancel,
 };
 use apricot_playback::{
-    InitialPlaybackState, MpvCacheConfig, MpvLaunchOptions, MpvVideoMode, PlaybackCommand,
-    PlaybackEvent, PlaybackRuntime, RepeatMode,
+    InitialPlaybackState, MpvCacheConfig, MpvLaunchOptions, MpvVideoMode, PitchMode,
+    PlaybackCommand, PlaybackEvent, PlaybackRuntime, RepeatMode, SpeedAudioMode,
+    audio_filter_chain, is_default_rate, mpv_pitch_property,
 };
 use windows::{
     Win32::{
@@ -3741,7 +3742,8 @@ unsafe fn start_player_at(
             Ok(runtime) => state.playback = Some(runtime),
             Err(error) => {
                 state.pending_queued_start = None;
-                show_error_message(window, &format!("Player did not start: {error}"));
+                let message = player_failed_message(&state.application, &error.to_string());
+                show_error_message(window, &message);
                 return;
             }
         }
@@ -3759,12 +3761,12 @@ unsafe fn start_player_at(
         state.application.set_player_speed(speed);
     }
     let Some(options) = playback_launch_options(state, start_position_seconds) else {
-        let message = "Internal mpv player was not found";
+        let message = player_failed_message(&state.application, "mpv was not found");
         let _ = state
             .application
-            .apply_playback_event(generation, PlaybackEvent::Failed(message.to_owned()));
+            .apply_playback_event(generation, PlaybackEvent::Failed(message.clone()));
         state.pending_queued_start = None;
-        show_error_message(window, message);
+        show_error_message(window, &message);
         return;
     };
     let start_result = state
@@ -3782,7 +3784,7 @@ unsafe fn start_player_at(
                 .clone(),
         );
     if let Err(error) = start_result {
-        let message = format!("Player did not start: {error}");
+        let message = player_failed_message(&state.application, &error.to_string());
         let _ = state
             .application
             .apply_playback_event(generation, PlaybackEvent::Failed(message.clone()));
@@ -8935,8 +8937,7 @@ unsafe fn poll_playback_runtime(window: HWND) {
             PlaybackEvent::Failed(error) => {
                 state.clip_preview = None;
                 state.pending_queued_start = None;
-                let message =
-                    catalog_text(&state.application, "player_failed").replace("{error}", &error);
+                let message = player_failed_message(&state.application, &error);
                 set_status(state, &message, true);
                 show_error_message(window, &message);
             }
@@ -10448,7 +10449,8 @@ fn playback_launch_options(
     options.initial_volume = audio.volume;
     options.volume_max = if boosted { 300 } else { 100 };
     options.initial_speed = audio.speed;
-    options.initial_pitch = audio.pitch;
+    options.initial_pitch = mpv_pitch_property(pitch_mode(state), audio.pitch);
+    options.audio_pitch_correction = speed_audio_mode(state).audio_pitch_correction();
     options.initial_playback_state = if session.phase() == PlaybackPhase::Paused {
         InitialPlaybackState::Paused
     } else {
@@ -10466,7 +10468,7 @@ fn playback_launch_options(
     options.cache = settings.enable_stream_cache.then(|| MpvCacheConfig {
         megabytes: u32::try_from(settings.cache_size_mb.clamp(128, 4_096)).unwrap_or(512),
     });
-    options.initial_audio_filter = player_equalizer_filter(state, None);
+    options.initial_audio_filter = player_audio_filter(state, None, None);
     Some(options)
 }
 
@@ -10493,6 +10495,11 @@ fn player_equalizer_filter(
 fn nonempty(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_owned())
+}
+
+/// Python `player_failed` message shown when mpv cannot start or play.
+fn player_failed_message(application: &Application, error: &str) -> String {
+    catalog_text(application, "player_failed").replace("{error}", error)
 }
 
 fn catalog_text(application: &Application, key: &str) -> String {
@@ -10782,7 +10789,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "player_seek_forward_large" => seek_player(window, 60.0),
         "player_seek_back_huge" => seek_player(window, -600.0),
         "player_seek_forward_huge" => seek_player(window, 600.0),
-        "player_seek_start" => seek_player_absolute(window, 0.0),
+        "player_seek_start" => seek_player_to_start(window),
         "player_seek_end" => seek_player_to_end(window),
         "player_volume_up" => adjust_player_volume(window, configured_volume_step(window)),
         "player_volume_down" => adjust_player_volume(window, -configured_volume_step(window)),
@@ -12382,29 +12389,57 @@ unsafe fn seek_player(window: HWND, seconds: f64) {
     );
 }
 
-unsafe fn seek_player_absolute(window: HWND, seconds: f64) {
+/// Python `player_seek_absolute`: exact absolute seek followed by the
+/// localized jump announcement.
+unsafe fn seek_player_absolute(window: HWND, seconds: f64, announcement_key: &str) {
     if let Some(state) = state_mut(window) {
         state.clip_preview = None;
     }
-    let _ = execute_player_command(
+    if execute_player_command(
         window,
         PlaybackCommand::SeekAbsolute {
-            seconds,
-            exact: false,
+            seconds: seconds.max(0.0),
+            exact: true,
         },
-    );
+    ) {
+        announce_player_text(window, announcement_key, &[]);
+    }
+}
+
+unsafe fn seek_player_to_start(window: HWND) {
+    seek_player_absolute(window, 0.0, "seeked_to_start");
 }
 
 unsafe fn seek_player_to_end(window: HWND) {
     let Some(duration) =
         state(window).and_then(|state| state.application.player_session().duration_seconds())
     else {
-        if let Some(state) = state(window) {
-            set_status(state, "Timing is not available yet", true);
-        }
+        announce_player_text(window, "timing_unavailable", &[]);
         return;
     };
-    seek_player_absolute(window, duration);
+    seek_player_absolute(window, (duration - 0.5).max(0.0), "seeked_to_end");
+}
+
+/// Python `announce_player`: status text plus speech for one catalog key.
+unsafe fn announce_player_text(window: HWND, key: &str, replacements: &[(&str, &str)]) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    let mut message = catalog_text(&state.application, key);
+    for (name, value) in replacements {
+        message = message.replace(&format!("{{{name}}}"), value);
+    }
+    set_status(state, &message, true);
+}
+
+/// Python `format_rate_for_speech`.
+fn format_rate_for_speech(value: f64) -> String {
+    format!("{value:.2}")
+}
+
+/// Python `clamp_rate`: clamp and round to two decimals.
+fn clamp_rate(value: f64, minimum: f64, maximum: f64) -> f64 {
+    (value.clamp(minimum, maximum) * 100.0).round() / 100.0
 }
 
 unsafe fn announce_player_time(window: HWND) {
@@ -12412,18 +12447,20 @@ unsafe fn announce_player_time(window: HWND) {
         return;
     };
     let session = state.application.player_session();
-    let elapsed = format_duration(session.position_seconds());
-    let message = session.duration_seconds().map_or_else(
-        || format!("Elapsed {elapsed}"),
-        |duration| {
-            let remaining = format_duration((duration - session.position_seconds()).max(0.0));
-            format!(
-                "Elapsed {elapsed}, remaining {remaining}, total {}",
-                format_duration(duration)
-            )
-        },
+    let elapsed = session.position_seconds();
+    let Some(duration) = session.duration_seconds() else {
+        announce_player_text(window, "timing_unavailable", &[]);
+        return;
+    };
+    announce_player_text(
+        window,
+        "time_announcement",
+        &[
+            ("elapsed", &format_duration(elapsed)),
+            ("remaining", &format_duration((duration - elapsed).max(0.0))),
+            ("total", &format_duration(duration)),
+        ],
     );
-    set_status(state, &message, true);
 }
 
 unsafe fn show_player_chapters(window: HWND) {
@@ -12484,7 +12521,7 @@ unsafe fn show_player_chapters(window: HWND) {
                 .is_some_and(|state| state.application.player_session().generation() == generation)
                 && let Some(chapter) = chapters.get(index)
             {
-                seek_player_absolute(window, chapter.start_seconds);
+                seek_player_chapter(window, chapter.start_seconds);
                 if let Some(main_state) = state(window) {
                     let name = if chapter.title.is_empty() {
                         &title
@@ -12534,10 +12571,24 @@ unsafe fn seek_relative_player_chapter(window: HWND, next: bool) {
         .replace("{title}", &title)
         .replace("{time}", &format_duration(chapter.start_seconds));
     let target = chapter.start_seconds;
-    seek_player_absolute(window, target);
-    if let Some(state) = state(window) {
+    if seek_player_chapter(window, target)
+        && let Some(state) = state(window)
+    {
         set_status(state, &message, true);
     }
+}
+
+unsafe fn seek_player_chapter(window: HWND, seconds: f64) -> bool {
+    if let Some(state) = state_mut(window) {
+        state.clip_preview = None;
+    }
+    execute_player_command(
+        window,
+        PlaybackCommand::SeekAbsolute {
+            seconds,
+            exact: true,
+        },
+    )
 }
 
 unsafe fn toggle_player_clip_marker(window: HWND, start: bool) {
@@ -12618,9 +12669,11 @@ unsafe fn announce_player_volume(window: HWND) {
         return;
     };
     let Some(audio) = state.application.player_session().audio() else {
+        announce_player_text(window, "timing_unavailable", &[]);
         return;
     };
-    set_status(state, &format!("Volume {:.0}", audio.volume), true);
+    let volume = format!("{:.0}", audio.volume.round());
+    announce_player_text(window, "volume_announcement", &[("volume", &volume)]);
 }
 
 unsafe fn announce_player_format(window: HWND) {
@@ -12684,9 +12737,96 @@ unsafe fn adjust_player_volume(window: HWND, delta: f64) {
         let Some(state) = state_mut(window) else {
             return;
         };
+        // Python `change_volume_async` adjusts volume without an announcement.
         state.application.set_player_volume(volume);
-        set_status(state, &format!("Volume {volume:.0}"), true);
     }
+}
+
+fn speed_audio_mode(state: &WindowState) -> SpeedAudioMode {
+    SpeedAudioMode::from_setting(&state.application.settings().speed_audio_mode)
+}
+
+fn pitch_mode(state: &WindowState) -> PitchMode {
+    PitchMode::from_setting(&state.application.settings().pitch_mode)
+}
+
+/// Complete tagged `af` chain for the current session with optional
+/// bass-boost and pitch overrides.
+fn player_audio_filter(
+    state: &WindowState,
+    bass_boost_override: Option<bool>,
+    pitch_override: Option<f64>,
+) -> Option<String> {
+    let pitch = pitch_override.unwrap_or_else(|| {
+        state
+            .application
+            .player_session()
+            .audio()
+            .map_or(1.0, |audio| audio.pitch)
+    });
+    let equalizer = player_equalizer_filter(state, bass_boost_override);
+    audio_filter_chain(
+        speed_audio_mode(state),
+        equalizer.as_deref(),
+        pitch_mode(state),
+        pitch,
+    )
+}
+
+/// Python `apply_speed_target_worker`.
+unsafe fn apply_player_speed(window: HWND, speed: f64) -> bool {
+    let Some(correction) =
+        state(window).map(|state| speed_audio_mode(state).audio_pitch_correction())
+    else {
+        return false;
+    };
+    if !execute_player_command(window, PlaybackCommand::SetAudioPitchCorrection(correction))
+        || !execute_player_command(window, PlaybackCommand::SetSpeed(speed))
+    {
+        return false;
+    }
+    if let Some(state) = state_mut(window) {
+        state.application.set_player_speed(speed);
+    }
+    true
+}
+
+/// Python `apply_pitch_value`, including linked speed changes.
+unsafe fn apply_player_pitch(window: HWND, pitch: f64, speed_delta: Option<f64>) -> bool {
+    let Some((mode, filter)) = state(window).map(|state| {
+        (
+            pitch_mode(state),
+            player_audio_filter(state, None, Some(pitch)),
+        )
+    }) else {
+        return false;
+    };
+    if !execute_player_command(window, PlaybackCommand::SetAudioPitchCorrection(true))
+        || !execute_player_command(
+            window,
+            PlaybackCommand::SetPitch(mpv_pitch_property(mode, pitch)),
+        )
+        || !execute_player_command(window, PlaybackCommand::SetAudioFilter(filter))
+    {
+        return false;
+    }
+    if let Some(state) = state_mut(window) {
+        state.application.set_player_pitch(pitch);
+    }
+    if mode == PitchMode::LinkedSpeed
+        && let Some(delta) = speed_delta
+        && let Some(current) = state(window)
+            .and_then(|state| state.application.player_session().audio())
+            .map(|audio| audio.speed)
+    {
+        let speed = clamp_rate(current + delta, 0.25, 4.0);
+        if execute_player_command(window, PlaybackCommand::SetSpeed(speed))
+            && let Some(state) = state_mut(window)
+        {
+            state.application.set_player_speed(speed);
+        }
+    }
+    true
 }
 
 unsafe fn adjust_player_speed(window: HWND, delta: f64) {
@@ -12694,13 +12834,18 @@ unsafe fn adjust_player_speed(window: HWND, delta: f64) {
     else {
         return;
     };
-    let speed = (audio.speed + delta).clamp(0.25, 4.0);
-    if execute_player_command(window, PlaybackCommand::SetSpeed(speed)) {
-        let Some(state) = state_mut(window) else {
-            return;
-        };
-        state.application.set_player_speed(speed);
-        set_status(state, &format!("Speed {speed:.2}"), true);
+    let speed = clamp_rate(audio.speed + delta, 0.25, 4.0);
+    if !apply_player_speed(window, speed) {
+        announce_player_text(window, "timing_unavailable", &[]);
+        return;
+    }
+    announce_player_text(
+        window,
+        "speed_announcement",
+        &[("speed", &format_rate_for_speech(speed))],
+    );
+    if is_default_rate(speed) {
+        crate::sound_win32::play_default_reached_sound();
     }
 }
 
@@ -12709,37 +12854,38 @@ unsafe fn adjust_player_pitch(window: HWND, delta: f64) {
     else {
         return;
     };
-    let pitch = (audio.pitch + delta).clamp(0.5, 2.0);
-    if execute_player_command(window, PlaybackCommand::SetPitch(pitch)) {
-        let Some(state) = state_mut(window) else {
-            return;
-        };
-        state.application.set_player_pitch(pitch);
-        set_status(state, &format!("Pitch {pitch:.2}"), true);
+    let pitch = clamp_rate(audio.pitch + delta, 0.5, 2.0);
+    if !apply_player_pitch(window, pitch, Some(pitch - audio.pitch)) {
+        return;
+    }
+    announce_player_text(
+        window,
+        "pitch_announcement",
+        &[("pitch", &format_rate_for_speech(pitch))],
+    );
+    if is_default_rate(pitch) {
+        crate::sound_win32::play_default_reached_sound();
     }
 }
 
+/// Python `reset_speed_pitch_worker`.
 unsafe fn reset_player_speed_pitch(window: HWND) {
     let speed = state(window).map_or(1.0, |state| {
-        state
-            .application
-            .settings()
-            .player_speed
-            .parse::<f64>()
-            .unwrap_or(1.0)
-            .clamp(0.25, 4.0)
+        apricot_app::player_start_speed(&state.application.settings().player_speed)
     });
-    if !execute_player_command(window, PlaybackCommand::SetSpeed(speed))
-        || !execute_player_command(window, PlaybackCommand::SetPitch(1.0))
-    {
+    if !apply_player_speed(window, speed) || !apply_player_pitch(window, 1.0, None) {
+        announce_player_text(window, "timing_unavailable", &[]);
         return;
     }
-    let Some(state) = state_mut(window) else {
-        return;
-    };
-    state.application.set_player_speed(speed);
-    state.application.set_player_pitch(1.0);
-    set_status(state, "Speed and pitch reset", true);
+    announce_player_text(
+        window,
+        "speed_pitch_reset",
+        &[
+            ("speed", &format_rate_for_speech(speed)),
+            ("pitch", &format_rate_for_speech(1.0)),
+        ],
+    );
+    crate::sound_win32::play_default_reached_sound();
 }
 
 unsafe fn toggle_player_session_setting(window: HWND, toggle: SessionToggle) {
@@ -12760,7 +12906,7 @@ unsafe fn toggle_player_session_setting(window: HWND, toggle: SessionToggle) {
             PlaybackCommand::SetVolumeMax(if enabled { 300 } else { 100 }),
         ),
         SessionToggle::BassBoost => {
-            let filter = player_equalizer_filter(state, Some(enabled));
+            let filter = player_audio_filter(state, Some(enabled), None);
             execute_player_command(window, PlaybackCommand::SetAudioFilter(filter))
         }
         SessionToggle::AutoplayNext | SessionToggle::Fullscreen | SessionToggle::Shuffle => true,
@@ -12788,28 +12934,28 @@ unsafe fn toggle_player_session_setting(window: HWND, toggle: SessionToggle) {
     if let Some(volume) = clamped_volume {
         state.application.set_player_volume(volume);
     }
-    set_status(
-        state,
-        &format!(
-            "{} {}",
-            session_toggle_name(toggle),
-            if enabled { "on" } else { "off" }
-        ),
-        true,
-    );
+    let message = catalog_text(&state.application, session_toggle_key(toggle, enabled));
+    set_status(state, &message, true);
     if state.view == MainView::Player {
         refresh_player(window, state, true, true);
     }
 }
 
-const fn session_toggle_name(toggle: SessionToggle) -> &'static str {
-    match toggle {
-        SessionToggle::AutoplayNext => "Autoplay next",
-        SessionToggle::BassBoost => "Bass boost",
-        SessionToggle::VolumeBoost => "Volume boost",
-        SessionToggle::Repeat => "Repeat",
-        SessionToggle::Shuffle => "Shuffle",
-        SessionToggle::Fullscreen => "Fullscreen",
+/// Python announcement keys for session toggles.
+const fn session_toggle_key(toggle: SessionToggle, enabled: bool) -> &'static str {
+    match (toggle, enabled) {
+        (SessionToggle::AutoplayNext, true) => "autoplay_next_on",
+        (SessionToggle::AutoplayNext, false) => "autoplay_next_off",
+        (SessionToggle::BassBoost, true) => "bass_boost_on",
+        (SessionToggle::BassBoost, false) => "bass_boost_off",
+        (SessionToggle::VolumeBoost, true) => "volume_boost_on",
+        (SessionToggle::VolumeBoost, false) => "volume_boost_off",
+        (SessionToggle::Repeat, true) => "repeat_on",
+        (SessionToggle::Repeat, false) => "repeat_off",
+        (SessionToggle::Shuffle, true) => "shuffle_on",
+        (SessionToggle::Shuffle, false) => "shuffle_off",
+        (SessionToggle::Fullscreen, true) => "fullscreen_on",
+        (SessionToggle::Fullscreen, false) => "fullscreen_off",
     }
 }
 
@@ -13360,6 +13506,52 @@ mod tests {
     use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
     use apricot_media::{YoutubeBackend, YoutubeCollectionKind};
     use apricot_storage::SettingsDocument;
+
+    #[test]
+    fn player_announcements_use_python_catalog_keys_and_formats() {
+        use apricot_app::SessionToggle;
+        let catalog = apricot_app::embedded_catalog("en");
+        for (key, expected) in [
+            ("timing_unavailable", "Timing is not available yet."),
+            (
+                "time_announcement",
+                "Elapsed {elapsed}, remaining {remaining}, total {total}.",
+            ),
+            ("volume_announcement", "Volume: {volume}"),
+            ("speed_announcement", "Playback speed {speed}x."),
+            ("pitch_announcement", "Pitch {pitch}x."),
+            (
+                "speed_pitch_reset",
+                "Speed reset to {speed}x and pitch reset to {pitch}x.",
+            ),
+            ("seeked_to_start", "Jumped to start."),
+            ("seeked_to_end", "Jumped to end."),
+            ("player_failed", "Player did not start: {error}"),
+        ] {
+            assert_eq!(catalog.text(key), expected);
+        }
+        for toggle in [
+            SessionToggle::AutoplayNext,
+            SessionToggle::BassBoost,
+            SessionToggle::VolumeBoost,
+            SessionToggle::Repeat,
+            SessionToggle::Shuffle,
+            SessionToggle::Fullscreen,
+        ] {
+            for enabled in [true, false] {
+                let key = super::session_toggle_key(toggle, enabled);
+                assert_ne!(catalog.text(key), key, "missing catalog text for {key}");
+            }
+        }
+        assert_eq!(
+            catalog.text(super::session_toggle_key(SessionToggle::Repeat, true)),
+            "Repeat on."
+        );
+        assert_eq!(super::format_rate_for_speech(1.25), "1.25");
+        assert_eq!(super::format_rate_for_speech(1.0), "1.00");
+        assert!((super::clamp_rate(1.004 + 0.01, 0.25, 4.0) - 1.01).abs() < f64::EPSILON);
+        assert!((super::clamp_rate(0.1, 0.25, 4.0) - 0.25).abs() < f64::EPSILON);
+    }
 
     #[test]
     fn tray_text_is_cleared_truncated_and_null_terminated() {

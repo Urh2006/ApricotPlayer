@@ -314,6 +314,13 @@ fn start_or_replace_engine(
     factory: &mut EngineFactory,
 ) -> Option<(u64, Box<dyn PlaybackEngine>)> {
     if let Some((_, mut engine)) = active {
+        let reset = item_start_commands(options)
+            .into_iter()
+            .try_for_each(|command| engine.execute(command));
+        if let Err(error) = reset {
+            emit_failure(updates, generation, &error);
+            return None;
+        }
         return match engine.execute(PlaybackCommand::Load {
             item,
             start_position_seconds: options.initial_position_seconds,
@@ -341,6 +348,23 @@ fn start_or_replace_engine(
             None
         }
     }
+}
+
+/// Python starts a fresh mpv process for every item. A reused libmpv instance
+/// therefore receives the per-item launch state before the replacement load.
+fn item_start_commands(options: &MpvLaunchOptions) -> Vec<PlaybackCommand> {
+    vec![
+        PlaybackCommand::SetPaused(
+            options.initial_playback_state == crate::InitialPlaybackState::Paused,
+        ),
+        PlaybackCommand::SetVolumeMax(options.volume_max),
+        PlaybackCommand::SetVolume(options.initial_volume),
+        PlaybackCommand::SetAudioPitchCorrection(options.audio_pitch_correction),
+        PlaybackCommand::SetSpeed(options.initial_speed),
+        PlaybackCommand::SetPitch(options.initial_pitch),
+        PlaybackCommand::SetRepeat(options.repeat_mode == crate::RepeatMode::One),
+        PlaybackCommand::SetAudioFilter(options.initial_audio_filter.clone()),
+    ]
 }
 
 fn execute_if_current(
@@ -639,8 +663,12 @@ mod tests {
         runtime
             .start(1, bookmark_options, item("first"))
             .expect("first start");
+        let mut replacement_options = MpvLaunchOptions::new("mpv.exe");
+        replacement_options.initial_speed = 1.25;
+        replacement_options.audio_pitch_correction = false;
+        replacement_options.initial_audio_filter = Some("@apricot_speed:scaletempo".to_owned());
         runtime
-            .start(2, MpvLaunchOptions::new("mpv.exe"), item("second"))
+            .start(2, replacement_options, item("second"))
             .expect("replacement start");
         std::thread::sleep(Duration::from_millis(30));
 
@@ -653,7 +681,7 @@ mod tests {
 
         assert_eq!(factory_calls.load(Ordering::Relaxed), 2);
         let commands = commands.lock().expect("commands");
-        assert_eq!(commands.len(), 3);
+        assert_eq!(commands.len(), 11);
         assert!(matches!(
             &commands[0],
             PlaybackCommand::Load {
@@ -661,15 +689,29 @@ mod tests {
                 start_position_seconds: Some(position),
             } if item.id.0 == "first" && (*position - 12.3).abs() < f64::EPSILON
         ));
+        // A reused engine receives Python's fresh-process start state first.
+        assert_eq!(
+            &commands[1..9],
+            &[
+                PlaybackCommand::SetPaused(false),
+                PlaybackCommand::SetVolumeMax(100),
+                PlaybackCommand::SetVolume(100.0),
+                PlaybackCommand::SetAudioPitchCorrection(false),
+                PlaybackCommand::SetSpeed(1.25),
+                PlaybackCommand::SetPitch(1.0),
+                PlaybackCommand::SetRepeat(false),
+                PlaybackCommand::SetAudioFilter(Some("@apricot_speed:scaletempo".to_owned())),
+            ]
+        );
         assert!(matches!(
-            &commands[1],
+            &commands[9],
             PlaybackCommand::Load {
                 item,
                 start_position_seconds: None,
             } if item.id.0 == "second"
         ));
         assert!(matches!(
-            &commands[2],
+            &commands[10],
             PlaybackCommand::Load { item, .. } if item.id.0 == "third"
         ));
     }

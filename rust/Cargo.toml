@@ -50,11 +50,13 @@ url = { version = "2", features = ["serde"] }
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
+    "Win32_Media_Audio",
     "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",
     "Win32_System_DataExchange",
+    "Win32_System_Diagnostics_Debug",
     "Win32_System_JobObjects",
     "Win32_System_Com",
     "Win32_System_Pipes",

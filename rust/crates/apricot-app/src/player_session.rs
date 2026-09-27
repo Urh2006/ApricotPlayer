@@ -119,8 +119,10 @@ impl PlayerSession {
         self.last_error.as_deref()
     }
 
-    /// Starts or replaces media. Existing open sessions retain their audio and
-    /// toggle state; a genuinely new session receives current defaults.
+    /// Starts or replaces media. Existing open sessions retain volume, output
+    /// device, equalizer and toggle state, while speed and pitch return to the
+    /// configured start values for every item as in Python `start_mpv`. A
+    /// genuinely new session receives all current defaults.
     pub fn start_item(&mut self, item: MediaItem, defaults: PlayerSessionDefaults) -> u64 {
         self.start_item_at(item, defaults, None)
     }
@@ -132,7 +134,12 @@ impl PlayerSession {
         defaults: PlayerSessionDefaults,
         initial_position_seconds: Option<f64>,
     ) -> u64 {
-        if !self.is_open() {
+        if self.is_open()
+            && let Some(audio) = self.audio.as_mut()
+        {
+            audio.speed = defaults.audio.speed;
+            audio.pitch = defaults.audio.pitch;
+        } else {
             self.audio = Some(defaults.audio);
             self.enabled_toggles = defaults.enabled_toggles;
         }
@@ -331,6 +338,29 @@ mod tests {
         assert_eq!(session.phase(), PlaybackPhase::Closed);
         assert!(session.audio().is_none());
         assert!(session.enabled_toggles().is_empty());
+    }
+
+    #[test]
+    fn replacement_resets_speed_and_pitch_like_a_fresh_python_mpv_process() {
+        let mut session = PlayerSession::default();
+        session.start_item(item("first"), defaults());
+        session.set_speed(1.7);
+        session.set_pitch(0.8);
+
+        let mut next_defaults = defaults();
+        next_defaults.audio.speed = 1.25;
+        next_defaults.audio.volume = 20.0;
+        next_defaults.audio.equalizer.enabled = false;
+        session.start_item(item("second"), next_defaults);
+
+        let audio = session.audio().expect("open audio session");
+        assert!((audio.speed - 1.25).abs() < f64::EPSILON);
+        assert!((audio.pitch - 1.0).abs() < f64::EPSILON);
+        assert!(
+            audio.equalizer.enabled,
+            "session equalizer stays for the session"
+        );
+        assert!((audio.volume - 80.0).abs() < f64::EPSILON);
     }
 
     #[test]

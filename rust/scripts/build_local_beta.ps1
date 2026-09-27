@@ -106,6 +106,13 @@ try {
     $FfmpegDestination = Join-Path $StagingDir "ffmpeg"
     New-Item -ItemType Directory -Path $FfmpegDestination -Force | Out-Null
     Copy-Item -LiteralPath $FfmpegSource -Destination $FfmpegDestination
+    $DefaultReachedSound = Join-Path (Split-Path -Parent $RustRoot) "assets\default_reached.wav"
+    if (-not (Test-Path -LiteralPath $DefaultReachedSound -PathType Leaf)) {
+        throw "Bundled default reached sound was not found at $DefaultReachedSound"
+    }
+    $AssetsDestination = Join-Path $StagingDir "assets"
+    New-Item -ItemType Directory -Path $AssetsDestination -Force | Out-Null
+    Copy-Item -LiteralPath $DefaultReachedSound -Destination $AssetsDestination
     $BuildInfo = [ordered]@{
         schema_version = 1
         application_id = "ApricotPlayer.RustBeta"

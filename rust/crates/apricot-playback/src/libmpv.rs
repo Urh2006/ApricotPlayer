@@ -551,6 +551,10 @@ unsafe fn configure(
             options.initial_pitch.clamp(0.01, 100.0).to_string(),
         ),
         (
+            "audio-pitch-correction",
+            yes_no(options.audio_pitch_correction).to_owned(),
+        ),
+        (
             "pause",
             yes_no(options.initial_playback_state == InitialPlaybackState::Paused).to_owned(),
         ),
@@ -732,6 +736,11 @@ fn command_arguments(command: PlaybackCommand) -> Result<Vec<String>, PlaybackEr
             "pitch".to_owned(),
             pitch.clamp(0.01, 100.0).to_string(),
         ],
+        PlaybackCommand::SetAudioPitchCorrection(enabled) => vec![
+            "set".to_owned(),
+            "audio-pitch-correction".to_owned(),
+            yes_no(enabled).to_owned(),
+        ],
         PlaybackCommand::SetRepeat(enabled) => vec![
             "set".to_owned(),
             "loop-file".to_owned(),
@@ -765,6 +774,44 @@ mod tests {
 
     use super::{command_arguments, library_path};
     use crate::{MpvLaunchOptions, PlaybackCommand};
+
+    fn chapter_fixtures() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+        let folder = tempfile::tempdir().expect("fixture folder");
+        let metadata = folder.path().join("chapters.ffmeta");
+        std::fs::write(&metadata, ";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=10000\ntitle=Opening\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=10000\nEND=20000\ntitle=Second chapter\n").expect("chapter metadata");
+        let chapter_media = folder.path().join("chapters.mka");
+        let plain_media = folder.path().join("plain.wav");
+        for (output, with_chapters) in [(&chapter_media, true), (&plain_media, false)] {
+            use std::os::windows::process::CommandExt;
+            let mut command = std::process::Command::new(
+                std::env::var_os("APRICOT_TEST_FFMPEG").expect("FFmpeg"),
+            );
+            command.creation_flags(0x0800_0000);
+            command.args([
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=44100:cl=stereo",
+            ]);
+            if with_chapters {
+                command.arg("-i").arg(&metadata).args([
+                    "-map_metadata",
+                    "1",
+                    "-map_chapters",
+                    "1",
+                    "-c:a",
+                    "flac",
+                ]);
+            }
+            command.args(["-t", "20"]).arg(output);
+            assert!(command.status().expect("FFmpeg fixture").success());
+        }
+        (folder, chapter_media, plain_media)
+    }
 
     #[test]
     fn chapter_nodes_are_copied_without_retaining_native_pointers() {
@@ -925,5 +972,102 @@ mod tests {
                 "audio-file=%24%https://media.test/audio,start=12.3",
             ]
         );
+    }
+
+    #[test]
+    #[ignore = "requires APRICOT_TEST_MPV and APRICOT_TEST_FFMPEG"]
+    fn real_libmpv_accepts_python_speed_pitch_and_equalizer_chains() {
+        use crate::{
+            PitchMode, PlaybackEngine, PlaybackEvent, SpeedAudioMode, audio_filter_chain,
+            mpv_pitch_property,
+        };
+        let (_folder, _chapter_media, plain_media) = chapter_fixtures();
+        let equalizer = "@apricot_eq:lavfi=[volume=-3.0dB,equalizer=f=31:t=q:w=1.7:g=3.0,alimiter=limit=0.95:attack=5:release=80]";
+        for speed_mode in [
+            "Rubberband high quality",
+            "High quality scaletempo2",
+            "mpv default scaletempo2",
+            "Classic scaletempo",
+        ] {
+            for pitch_mode in [
+                "Independent pitch - highest quality (mpv built-in)",
+                "Independent pitch - advanced (Rubberband)",
+                "Linked pitch and speed - pitch keys change both",
+            ] {
+                let speed_mode = SpeedAudioMode::from_setting(speed_mode);
+                let pitch_mode = PitchMode::from_setting(pitch_mode);
+                let mut options = MpvLaunchOptions::new(std::path::PathBuf::from(
+                    std::env::var_os("APRICOT_TEST_MPV").expect("mpv path"),
+                ));
+                options.audio_driver = Some("null".to_owned());
+                options.video_mode = crate::MpvVideoMode::AudioOnly;
+                options.initial_speed = 1.5;
+                options.audio_pitch_correction = speed_mode.audio_pitch_correction();
+                options.initial_audio_filter =
+                    audio_filter_chain(speed_mode, Some(equalizer), pitch_mode, 1.0);
+                let mut engine = super::LibMpvEngine::load(&options).expect("load real library");
+                engine
+                    .execute(PlaybackCommand::Load {
+                        item: Box::new(MediaItem {
+                            id: MediaId("tone".to_owned()),
+                            source: MediaSource::Local,
+                            kind: MediaKind::Audio,
+                            title: "Tone".to_owned(),
+                            local_path: Some(plain_media.to_string_lossy().into_owned()),
+                            url: None,
+                            stream_url: None,
+                            external_audio_url: None,
+                            channel: String::new(),
+                            duration_seconds: None,
+                            metadata: BTreeMap::new(),
+                        }),
+                        start_position_seconds: None,
+                    })
+                    .expect("load fixture");
+                let pitch = 1.12;
+                engine
+                    .execute(PlaybackCommand::SetAudioPitchCorrection(true))
+                    .expect("pitch correction");
+                engine
+                    .execute(PlaybackCommand::SetPitch(mpv_pitch_property(
+                        pitch_mode, pitch,
+                    )))
+                    .expect("pitch property");
+                engine
+                    .execute(PlaybackCommand::SetAudioFilter(audio_filter_chain(
+                        speed_mode,
+                        Some(equalizer),
+                        pitch_mode,
+                        pitch,
+                    )))
+                    .expect("pitch filter chain");
+                engine
+                    .execute(PlaybackCommand::SetSpeed(0.75))
+                    .expect("speed change");
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                let mut advanced = false;
+                while std::time::Instant::now() < deadline {
+                    match engine.poll_event().expect("poll real library") {
+                        Some(PlaybackEvent::Position { elapsed, .. }) if elapsed > 0.3 => {
+                            advanced = true;
+                            break;
+                        }
+                        Some(PlaybackEvent::Failed(error)) => {
+                            panic!("{speed_mode:?}/{pitch_mode:?} failed: {error}")
+                        }
+                        _ => std::thread::sleep(std::time::Duration::from_millis(5)),
+                    }
+                }
+                assert!(advanced, "{speed_mode:?}/{pitch_mode:?} did not play");
+                assert!(
+                    engine
+                        .execute(PlaybackCommand::SetAudioFilter(Some(
+                            "@apricot_speed:not_a_real_filter".to_owned()
+                        )))
+                        .is_err(),
+                    "invalid filters must be rejected so the chain check is meaningful"
+                );
+            }
+        }
     }
 }

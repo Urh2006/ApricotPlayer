@@ -39,6 +39,8 @@ mod settings_win32;
 #[cfg(windows)]
 mod shortcut_win32;
 #[cfg(windows)]
+mod sound_win32;
+#[cfg(windows)]
 mod win32;
 
 use apricot_app::Application;
