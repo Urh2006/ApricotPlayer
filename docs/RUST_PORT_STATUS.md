@@ -193,6 +193,16 @@ Enote, ki popravljajo odstopanja, so na vrsti prve.
    `en.json` pa se vrne v stanje iz `main`.
 3. Rust beta ostane v ločenem imeniku z enkratnim uvozom Python podatkov.
 
+### Odobrena odstopanja od Pythona
+
+Kadar je Pythonovo vedenje očitna majhna napaka ali pozaba, sme biti Rust boljši. Tako
+odstopanje se najprej predlaga Urhu in se po odobritvi zapiše sem.
+
+- **O-1.** Delujoč neposreden klic JAWS (`SayString`), ki ga Python poskuša, a mu ne
+  uspe (dopolnitev E6).
+- **O-2.** Po vrnitvi iz predvajalnika v center obvestil ali zgodovino ostane izbrana
+  predvajana vrstica namesto prve vrstice (dopolnitev E6).
+
 ## 6. Dnevnik enot
 
 ### E1: oglasi in seja predvajalnika (27. 9. 2026)
@@ -401,9 +411,7 @@ Spremembe:
   oglasi s "Settings saved.", kot `prompt_initial_language`.
 - Kadar NVDA besedila ne prevzame, oglas poleg spremembe imena statusne vrstice sproži
   še `EVENT_SYSTEM_ALERT` na glavnem oknu in `EVENT_OBJECT_VALUECHANGE` na statusni
-  vrstici, kot `raise_accessibility_alert` (SHELL-M-04). Klica za JAWS nisem dodal:
-  Pythonov `_jaws_speak_ctypes` kliče `ole32.CoGetActiveObject`, ki ga ole32.dll ne
-  izvaža, zato v Pythonu JAWS nikoli ne dobi besedila neposredno. Odločitev je pri Urhu.
+  vrstici, kot `raise_accessibility_alert` (SHELL-M-04). Za JAWS glej dopolnitev spodaj.
 - Action Finder ima natanko Pythonov seznam `action_finder_actions` v istem vrstnem
   redu: 16 stalnih postavk, Trending in Resume last session na tretjem mestu, History
   in RSS na koncu ter blok predvajalnika, kadar predvajalnik teče (s Play ali Pause,
@@ -423,8 +431,17 @@ Spremembe:
   Back, Play, Clear notifications, seznam. Po brisanju z Delete ostane izbrana ista
   vrstica, torej naslednje obvestilo. Clear notifications ne premakne fokusa.
 
-Odprto za Urha: Python ob vrnitvi iz predvajalnika v center obvestil ali v zgodovino
-izbere prvo vrstico, Rust pa vrstico, iz katere je bil element predvajan.
+Dopolnitev po Urhovih odločitvah (28. 9. 2026):
+
+- Oglas, ki ga NVDA ne prevzame, gre zdaj JAWS neposredno s klicem `SayString` na
+  tekočem strežniku `FreedomSci.JawsApi`, šele nato na dogodke MSAA. Python ima enak
+  namen v `_jaws_speak_ctypes`, vendar kliče `ole32.CoGetActiveObject`, ki ga ole32.dll
+  ne izvaža, zato v Pythonu JAWS besedila nikoli ne dobi neposredno. Rust uporablja
+  `oleaut32.GetActiveObject` in ob vsakem oglasu vzame svežo referenco. Kadar JAWS
+  besedilo prevzame, se dogodki MSAA ne sprožijo, da ga ne prebere dvakrat. Odobreno
+  odstopanje O-1.
+- Ob vrnitvi iz predvajalnika v center obvestil ali v zgodovino ostane izbrana vrstica,
+  iz katere je bil element predvajan. Python izbere prvo vrstico. Odobreno odstopanje O-2.
 
 Preverjanje: `cargo build`, `cargo test`, `cargo clippy --all-targets` in `cargo fmt
 --check`. Novi testi pokrijejo pogoje jezikovnega okna in oglas po njem, seznam Action
