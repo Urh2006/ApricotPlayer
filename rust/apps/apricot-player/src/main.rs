@@ -34,7 +34,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "beta",
     );
     let settings_paths = SettingsPaths::for_app_data(&paths.app_data, &paths.legacy_app_data);
-    let settings = SettingsController::load(settings_paths, defaults);
+    // Python `first_run_without_settings` and `settings_file_existed`.
+    let settings_file_existed = settings_paths.primary.exists();
+    let first_run_without_settings = !settings_file_existed && !settings_paths.legacy.exists();
+    let mut settings = SettingsController::load(settings_paths, defaults);
     let startup_file = startup_file_argument(&arguments);
     let instance = acquire_single_instance(ApplicationIdentity::RustBeta)?;
     let _instance_guard = match instance {
@@ -52,6 +55,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
     };
+    if !settings_file_existed {
+        let _ = settings.save();
+    }
     if let Ok(executable) = std::env::current_exe() {
         let _ = sync_startup_registration(
             ApplicationIdentity::RustBeta,
@@ -100,7 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         LastPlayerSessionFile::new(paths.app_data.join("last_player_session.json")),
         &LastPlayerSessionFile::new(paths.legacy_app_data.join("last_player_session.json")),
     );
-    if !application.settings().language_prompted {
+    if application.initial_language_prompt_due(first_run_without_settings, start_hidden) {
         let selected =
             apricot_ui_windows::choose_initial_language(&application.settings().language)?;
         application.complete_initial_language(selected)?;

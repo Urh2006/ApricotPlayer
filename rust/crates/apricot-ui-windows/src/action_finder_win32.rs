@@ -19,7 +19,7 @@ use windows::{
                 BS_DEFPUSHBUTTON, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow,
                 DispatchMessageW, EN_CHANGE, GetClientRect, GetMessageW, GetParent,
                 GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW,
-                IsDialogMessageW, IsWindow, LB_ADDSTRING, LB_GETCURSEL, LB_RESETCONTENT,
+                IDCANCEL, IsDialogMessageW, IsWindow, LB_ADDSTRING, LB_GETCURSEL, LB_RESETCONTENT,
                 LB_SETCURSEL, LBN_DBLCLK, LBS_NOTIFY, LoadCursorW, MSG, MoveWindow,
                 PostQuitMessage, RegisterClassW, SW_SHOW, SendMessageW, SetForegroundWindow,
                 SetWindowLongPtrW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE,
@@ -150,7 +150,7 @@ unsafe extern "system" fn window_proc(
                     && notification == usize::try_from(LBN_DBLCLK).expect("notification fits"))
             {
                 activate(window);
-            } else if command == ID_CANCEL {
+            } else if command == ID_CANCEL || command == IDCANCEL.0 as usize {
                 let _ = DestroyWindow(window);
             }
             LRESULT(0)

@@ -35,7 +35,9 @@ use apricot_core::NavigationStack;
 pub use apricot_media::{YoutubeCollectionKind, YoutubeSearchKind};
 pub use apricot_storage::{AppNotification, RssFeed, Subscription};
 
-pub use action_finder::{ActionFinderContext, ActionFinderItem, ActionFinderModel};
+pub use action_finder::{
+    ActionFinderContext, ActionFinderItem, ActionFinderModel, ActionFinderPlayer,
+};
 pub use activation::ActivationRequest;
 pub use application::{
     Application, LastSessionResume, PlayerNavigationOrigin, PlayerNavigationOutcome,

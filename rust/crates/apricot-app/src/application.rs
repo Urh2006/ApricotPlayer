@@ -17,11 +17,11 @@ use rand::seq::SliceRandom;
 use serde_json::{Map, Value};
 
 use crate::{
-    ActionFinderContext, ActionFinderModel, ActivationRequest, AppState, AudioSession,
-    BookmarkController, BookmarkControllerError, CollectionAddOutcome, DownloadController,
-    EqualizerSession, LastPlayerSessionController, MainMenuAvailability, MainMenuModel,
-    MediaCollectionController, MediaCollectionControllerError, MenuVisibility,
-    NotificationController, NotificationControllerError, PlaybackPositionController,
+    ActionFinderContext, ActionFinderModel, ActionFinderPlayer, ActivationRequest, AppState,
+    AudioSession, BookmarkController, BookmarkControllerError, CollectionAddOutcome,
+    DownloadController, EqualizerSession, LastPlayerSessionController, MainMenuAvailability,
+    MainMenuModel, MediaCollectionController, MediaCollectionControllerError, MenuVisibility,
+    NotificationController, NotificationControllerError, PlaybackPhase, PlaybackPositionController,
     PlaybackPositionControllerError, PlaybackPositionUpdate, PlaybackQueue,
     PlaybackQueueController, PlaybackQueueControllerError, PlaybackSequenceSource,
     PlayerScreenModel, PlayerSession, PlayerSessionDefaults, PlayerViewState, PlaylistAddOutcome,
@@ -66,6 +66,7 @@ pub struct Application {
     settings: SettingsController,
     menu_availability: MainMenuAvailability,
     activation_requests: VecDeque<ActivationRequest>,
+    startup_announcement: Option<&'static str>,
     state: AppState,
 }
 
@@ -75,6 +76,7 @@ impl Application {
             settings,
             menu_availability,
             activation_requests: VecDeque::new(),
+            startup_announcement: None,
             state: AppState::default(),
         }
     }
@@ -1898,16 +1900,24 @@ impl Application {
         )
     }
 
-    pub fn action_finder_model(&self, context: ActionFinderContext) -> ActionFinderModel {
+    /// Python `action_finder_actions` for the current application state.
+    pub fn action_finder_model(&self) -> ActionFinderModel {
         let settings = self.settings.current();
-        let mut availability = self.current_menu_availability();
-        availability.resume = visibility(self.state.last_player_session.is_available());
-        ActionFinderModel::build(
-            &embedded_catalog(&settings.language),
-            settings,
-            availability,
-            context,
-        )
+        let player = &self.state.player;
+        let context = ActionFinderContext {
+            resume_available: self.state.last_player_session.is_available(),
+            player: player
+                .is_open()
+                .then(|| player.current_item())
+                .flatten()
+                .map(|item| ActionFinderPlayer {
+                    paused: player.phase() == PlaybackPhase::Paused,
+                    local_media: item.is_local_media(),
+                    youtube: crate::context_menu::has_youtube_url(item),
+                    podcast_episode: item.kind == apricot_core::MediaKind::PodcastEpisode,
+                }),
+        };
+        ActionFinderModel::build(&embedded_catalog(&settings.language), settings, context)
     }
 
     fn current_menu_availability(&self) -> MainMenuAvailability {
@@ -2147,6 +2157,16 @@ impl Application {
         self.settings.cancel();
     }
 
+    /// Python `wx_main.py` asks for the language only on a first run without
+    /// any settings file, and never when the app starts hidden in the tray.
+    pub fn initial_language_prompt_due(
+        &self,
+        first_run_without_settings: bool,
+        started_hidden: bool,
+    ) -> bool {
+        first_run_without_settings && !self.settings.current().language_prompted && !started_hidden
+    }
+
     /// Completes the one-time language prompt and persists both values atomically.
     ///
     /// An absent or unknown selection keeps the currently configured language,
@@ -2172,7 +2192,14 @@ impl Application {
             (SettingId::LanguagePrompted, serde_json::json!(true)),
         ])?;
         let _ = self.settings.save()?;
+        self.startup_announcement = Some("settings_saved");
         Ok(())
+    }
+
+    /// The catalog key Python announces once the main menu is shown after
+    /// the first-run language prompt (`prompt_initial_language`).
+    pub fn take_startup_announcement(&mut self) -> Option<&'static str> {
+        self.startup_announcement.take()
     }
 
     /// Saves the complete current settings draft atomically.
@@ -2281,9 +2308,9 @@ mod tests {
 
     use super::{Application, PlayerNavigationOrigin, PlayerNavigationOutcome};
     use crate::{
-        ActionFinderContext, ActivationRequest, MainMenuAvailability, PlaybackSequenceSource,
-        PlaylistAddOutcome, PlaylistCreateOutcome, SessionToggle, SettingsController,
-        YoutubeCollectionKind, YoutubeSearchKind,
+        ActivationRequest, MainMenuAvailability, PlaybackSequenceSource, PlaylistAddOutcome,
+        PlaylistCreateOutcome, SessionToggle, SettingsController, YoutubeCollectionKind,
+        YoutubeSearchKind,
     };
 
     fn application(root: &Path) -> Application {
@@ -2723,6 +2750,23 @@ mod tests {
     }
 
     #[test]
+    fn language_prompt_follows_python_first_run_and_tray_conditions() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        assert!(app.initial_language_prompt_due(true, false));
+        assert!(!app.initial_language_prompt_due(true, true));
+        assert!(!app.initial_language_prompt_due(false, false));
+        assert_eq!(app.take_startup_announcement(), None);
+
+        app.complete_initial_language(Some("sl"))
+            .expect("save language");
+        assert_eq!(app.settings().language, "sl");
+        assert!(!app.initial_language_prompt_due(true, false));
+        assert_eq!(app.take_startup_announcement(), Some("settings_saved"));
+        assert_eq!(app.take_startup_announcement(), None);
+    }
+
+    #[test]
     fn hiding_resume_menu_does_not_hide_it_from_action_finder() {
         let root = tempdir().expect("temporary directory");
         let mut app = application(root.path());
@@ -2740,7 +2784,7 @@ mod tests {
                 .all(|item| item.id != "resume_last_session")
         );
         assert!(
-            app.action_finder_model(ActionFinderContext::default())
+            app.action_finder_model()
                 .items
                 .iter()
                 .any(|item| item.action_id == "resume_last_session")

@@ -156,9 +156,7 @@ Enote, ki popravljajo odstopanja, so na vrsti prve.
 - **E3. Kontekstni meniji. Zaključeno 27. 9. 2026, glej razdelek 6.**
 - **E4. Nastavitve, prvi del. Zaključeno 27. 9. 2026, glej razdelek 6.**
 - **E5. Seznami in knjižnica. Zaključeno 27. 9. 2026, glej razdelek 6.**
-- **E6. Lupina in oglaševanje.** Jezikovno okno pri skritem zagonu (SHELL-02/03).
-  Pot za JAWS in manjkajoči MSAA dogodki (SHELL-M-04). Revizija in popravki za
-  Action Finder, pladenj, center obvestil in obnovitev fokusa ob vrnitvi v glavni meni.
+- **E6. Lupina in oglaševanje. Zaključeno 28. 9. 2026, glej razdelek 6.**
 - **E7. Revizija in popravki preostalih zaslonov.** Naročnine, vrsta predvajanja,
   neposredna povezava, podrobnosti in poglavja ter trenutno necommitano delo za
   lyrics in transcript. Python podrobnosti (F7) niso dialog, ampak vgrajeno polje
@@ -391,3 +389,47 @@ zamenjave zaporedja, kanal za Odpri kanal, polja vrstice in kroženje po njih, �
 videov, oznake vrste za prenos, zaščito bližnjice in omejitev napredka. Samodejni UI
 Automation preizkus na ločeni kopiji podatkov je potrdil branje polj v priljubljenih in
 odpiranje kanala z Enter in s Ctrl+Shift+O.
+
+### E6: lupina in oglaševanje (28. 9. 2026)
+
+Spremembe:
+
+- Jezikovno okno se pokaže samo ob prvem zagonu brez datoteke nastavitev beta in brez
+  Pythonovih nastavitev ter nikoli ob skritem zagonu v pladenj, kot `wx_main.py`
+  (SHELL-02, SHELL-03). Kot v Pythonu se nastavitve ob prvem zagonu takoj shranijo, zato
+  skriti prvi zagon jezika ne vpraša tudi pozneje. Po izbiri jezika se glavni meni
+  oglasi s "Settings saved.", kot `prompt_initial_language`.
+- Kadar NVDA besedila ne prevzame, oglas poleg spremembe imena statusne vrstice sproži
+  še `EVENT_SYSTEM_ALERT` na glavnem oknu in `EVENT_OBJECT_VALUECHANGE` na statusni
+  vrstici, kot `raise_accessibility_alert` (SHELL-M-04). Klica za JAWS nisem dodal:
+  Pythonov `_jaws_speak_ctypes` kliče `ole32.CoGetActiveObject`, ki ga ole32.dll ne
+  izvaža, zato v Pythonu JAWS nikoli ne dobi besedila neposredno. Odločitev je pri Urhu.
+- Action Finder ima natanko Pythonov seznam `action_finder_actions` v istem vrstnem
+  redu: 16 stalnih postavk, Trending in Resume last session na tretjem mestu, History
+  in RSS na koncu ter blok predvajalnika, kadar predvajalnik teče (s Play ali Pause,
+  Copy path ali Copy link, YouTube in podcast vstavki). Oznake so Pythonova besedila z
+  bližnjico za vejico. Prej je Rust kazal vse registrirane akcije z drugačnimi imeni in
+  nikoli akcij predvajalnika. Escape na gumbih Open in Cancel zdaj zapre okno.
+- Glavni meni ob vrnitvi izbere postavko zadnjega odprtega zaslona, kot
+  `last_activated_menu_action`, tudi kadar je bil zaslon odprt z bližnjico ali iz
+  Action Finderja. Osvežitev menija v ozadju (število prenosov, vrsta predvajanja) ohrani
+  izbrano postavko po besedilu ali vrstici, kot `refresh_main_menu_download_label`.
+  Prej je vsaka osvežitev skočila na prvo postavko.
+- Pladenj: ikona je prisotna ves čas seje, kot `setup_taskbar_icon`, in ob obnovitvi okna
+  ne izgine. Meni pladnja ima ločilo pred Exit. Ob zapiranju v pladenj se besedilo
+  "tray_still_running" zapiše tudi v statusno vrstico, kot `announce_player`.
+- Center obvestil: ob odprtju ni več dodatnega oglasa "Notification center: N" ali
+  "No notifications.", fokus gre samo na seznam. Tab gre v Pythonovem vrstnem redu
+  Back, Play, Clear notifications, seznam. Po brisanju z Delete ostane izbrana ista
+  vrstica, torej naslednje obvestilo. Clear notifications ne premakne fokusa.
+
+Odprto za Urha: Python ob vrnitvi iz predvajalnika v center obvestil ali v zgodovino
+izbere prvo vrstico, Rust pa vrstico, iz katere je bil element predvajan.
+
+Preverjanje: `cargo build`, `cargo test`, `cargo clippy --all-targets` in `cargo fmt
+--check`. Novi testi pokrijejo pogoje jezikovnega okna in oglas po njem, seznam Action
+Finderja z vsemi pogoji in vstavki, izbiro zadnjega zaslona in ohranjanje izbire v
+glavnem meniju. Samodejni preizkus na ločeni kopiji podatkov je potrdil, da skriti prvi
+zagon ne odpre okna, da viden prvi zagon odpre jezikovno okno samo enkrat, izbiro
+Favorites in Notification center ob vrnitvi v meni, vrstni red Tab v centru obvestil,
+seznam Action Finderja in Escape z gumba.

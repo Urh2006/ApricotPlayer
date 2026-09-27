@@ -191,7 +191,7 @@ impl ContextMenuContext<'_> {
 }
 
 /// Python `shortcut_for`: the configured shortcut, or the default when unset.
-fn shortcut_for(settings: &SettingsDocument, action_id: &str) -> String {
+pub(crate) fn shortcut_for(settings: &SettingsDocument, action_id: &str) -> String {
     settings
         .keyboard_shortcuts
         .get(action_id)
@@ -285,7 +285,7 @@ pub fn browser_url(item: &MediaItem) -> Option<String> {
 }
 
 /// Python `is_youtube_url` on the item's `url` or `webpage_url`.
-fn has_youtube_url(item: &MediaItem) -> bool {
+pub(crate) fn has_youtube_url(item: &MediaItem) -> bool {
     let url = item
         .url
         .as_ref()

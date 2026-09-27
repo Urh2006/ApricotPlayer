@@ -26,10 +26,10 @@ use crate::{
     podcast_win32::{PendingPodcastWork, PodcastWorkResult},
 };
 use apricot_app::{
-    ActionFinderContext, ActivationRequest, ActiveDownload, Application, ContextCommand,
-    ContextMenuContext, ContextMenuEntry, DownloadChoice, DownloadTaskKind, DownloadTaskStatus,
-    MainMenuModel, PlaybackPhase, PlayerNavigationOutcome, RssFeedAddOutcome, SearchApplyOutcome,
-    SearchWork, SearchWorkKind, SessionToggle, SubscriptionAddOutcome, SubscriptionCheckResult,
+    ActivationRequest, ActiveDownload, Application, ContextCommand, ContextMenuContext,
+    ContextMenuEntry, DownloadChoice, DownloadTaskKind, DownloadTaskStatus, MainMenuModel,
+    PlaybackPhase, PlayerNavigationOutcome, RssFeedAddOutcome, SearchApplyOutcome, SearchWork,
+    SearchWorkKind, SessionToggle, SubscriptionAddOutcome, SubscriptionCheckResult,
     SubscriptionRemoveOutcome, YOUTUBE_TRENDING_CATEGORIES, YOUTUBE_TRENDING_COUNTRIES,
     YoutubeCollectionApplyOutcome, YoutubeCollectionKind, YoutubeCollectionPhase,
     YoutubeCollectionWork, YoutubeCollectionWorkKind, YoutubeSearchKind, YoutubeTrendingWork,
@@ -79,8 +79,8 @@ use windows::{
                 IDI_APPLICATION, IDYES, IsChild, IsDialogMessageW, KillTimer, LB_ADDSTRING,
                 LB_DELETESTRING, LB_GETCOUNT, LB_GETCURSEL, LB_INSERTSTRING, LB_RESETCONTENT,
                 LB_SETCURSEL, LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW, LoadIconW,
-                MB_ICONINFORMATION, MB_OK, MB_YESNO, MF_GRAYED, MF_POPUP, MF_STRING, MSG,
-                MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassW,
+                MB_ICONINFORMATION, MB_OK, MB_YESNO, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING,
+                MSG, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassW,
                 RegisterWindowMessageW, SW_HIDE, SW_SHOW, SendMessageW, SetForegroundWindow,
                 SetTimer, SetWindowLongPtrW, SetWindowTextW, ShowWindow, TPM_LEFTALIGN,
                 TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE,
@@ -424,6 +424,7 @@ struct WindowState {
     settings_open: bool,
     modal_open: bool,
     tray_icon_added: bool,
+    last_activated_menu_item: Option<&'static str>,
     lifecycle: WindowLifecycle,
     taskbar_created_message: u32,
     view: MainView,
@@ -532,6 +533,13 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
     } else {
         let _ = ShowWindow(window, SW_SHOW);
         let _ = SetFocus(Some(initial_focus));
+        // Python `setup_taskbar_icon`: the icon stays for the whole session.
+        add_tray_icon(window);
+        let startup_announcement =
+            state_mut(window).and_then(|state| state.application.take_startup_announcement());
+        if let Some(key) = startup_announcement {
+            announce_player_text(window, key, &[]);
+        }
     }
     process_pending_activations(window);
     configure_subscription_timer(window);
@@ -625,6 +633,10 @@ unsafe fn handle_view_tab_message(window: HWND, message: &MSG) -> bool {
             state.list,
         ],
         MainView::PodcastCategories => vec![state.back, state.open, state.list],
+        // Python `show_notification_center`: Back, Play, Clear notifications, list.
+        MainView::NotificationCenter => {
+            vec![state.back, state.open, state.notification_clear, state.list]
+        }
         MainView::DownloadQueue => {
             let mut controls = vec![state.back];
             if !state.application.downloads().queued().is_empty() {
@@ -699,9 +711,7 @@ unsafe extern "system" fn window_proc(
         && message == state.taskbar_created_message
     {
         state.tray_icon_added = false;
-        if state.lifecycle == WindowLifecycle::HiddenInTray {
-            add_tray_icon(window);
-        }
+        add_tray_icon(window);
         return LRESULT(0);
     }
     match message {
@@ -1516,6 +1526,7 @@ unsafe fn create_controls(
         settings_open: false,
         modal_open: false,
         tray_icon_added: false,
+        last_activated_menu_item: None,
         lifecycle: WindowLifecycle::Visible,
         taskbar_created_message: RegisterWindowMessageW(w!("TaskbarCreated")),
         view: MainView::MainMenu,
@@ -2763,6 +2774,8 @@ unsafe fn announce_tray_state(window: HWND) {
     };
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
     let message = catalog.text("tray_still_running");
+    // Python `announce_player`: status text first, then speech.
+    set_status(state, message, false);
     state.announcer.announce(message, true);
     if state.application.settings().tray_notification
         && state.application.settings().windows_notifications
@@ -2793,7 +2806,6 @@ unsafe fn restore_from_tray(window: HWND) {
         state.lifecycle = WindowLifecycle::Visible;
     }
     crate::activation_win32::restore_window(window);
-    remove_tray_icon(window);
     if let Some(state) = state(window) {
         let _ = SetFocus(Some(active_primary_control(state)));
     }
@@ -2825,6 +2837,9 @@ unsafe fn show_tray_menu(window: HWND) {
         (ID_TRAY_CHECK_SUBSCRIPTIONS, "tray_check_subscriptions"),
         (ID_TRAY_EXIT, "tray_exit"),
     ] {
+        if id == ID_TRAY_EXIT {
+            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+        }
         let label = wide(catalog.text(key));
         let _ = AppendMenuW(menu, MF_STRING, id, PCWSTR(label.as_ptr()));
     }
@@ -2902,6 +2917,7 @@ unsafe fn activate_main_menu_selection(window: HWND) {
     let Some((item_id, item_label)) = selected_main_menu_item(window) else {
         return;
     };
+    remember_menu_item(window, item_id);
     if item_id == "exit" {
         let _ = DestroyWindow(window);
         return;
@@ -3726,6 +3742,14 @@ unsafe fn selected_main_menu_item(window: HWND) -> Option<(&'static str, String)
     Some((item.id, item.label.clone()))
 }
 
+/// Python `last_activated_menu_action`: the screen the main menu selects
+/// when the user comes back to it.
+unsafe fn remember_menu_item(window: HWND, item_id: &'static str) {
+    if let Some(state) = state_mut(window) {
+        state.last_activated_menu_item = Some(item_id);
+    }
+}
+
 unsafe fn show_main_menu(window: HWND) {
     restore_from_tray(window);
     stop_controlled_repeat(window);
@@ -3736,13 +3760,14 @@ unsafe fn show_main_menu(window: HWND) {
     cancel_local_folder_scan(window, state);
     state.application.navigate_main_menu();
     state.view = MainView::MainMenu;
-    refresh_main_menu(state);
+    refresh_main_menu(state, MainMenuSelection::LastActivated);
     set_status(state, &catalog_text(&state.application, "ready"), false);
     layout_controls_state(window, state);
     let _ = SetFocus(Some(state.list));
 }
 
 unsafe fn show_search(window: HWND) {
+    remember_menu_item(window, "search");
     restore_from_tray(window);
     stop_controlled_repeat(window);
     let Some(state) = state_mut(window) else {
@@ -3765,6 +3790,7 @@ unsafe fn show_search(window: HWND) {
 }
 
 unsafe fn show_trending(window: HWND) {
+    remember_menu_item(window, "trending");
     restore_from_tray(window);
     stop_controlled_repeat(window);
     let Some(state) = state_mut(window) else {
@@ -3904,6 +3930,7 @@ unsafe fn resume_last_player_session(window: HWND) {
 }
 
 unsafe fn show_direct_link(window: HWND) {
+    remember_menu_item(window, "direct_link");
     restore_from_tray(window);
     stop_controlled_repeat(window);
     let Some(state) = state_mut(window) else {
@@ -3926,6 +3953,14 @@ unsafe fn show_direct_link(window: HWND) {
 }
 
 unsafe fn show_media_collection(window: HWND, view: MainView) {
+    remember_menu_item(
+        window,
+        if view == MainView::History {
+            "history"
+        } else {
+            "favorites"
+        },
+    );
     if view == MainView::History
         && state(window).is_some_and(|state| !state.application.settings().enable_history)
     {
@@ -3954,6 +3989,7 @@ unsafe fn show_media_collection(window: HWND, view: MainView) {
 }
 
 unsafe fn show_notification_center(window: HWND) {
+    remember_menu_item(window, "notification_center");
     restore_from_tray(window);
     stop_controlled_repeat(window);
     let Some(state) = state_mut(window) else {
@@ -3968,11 +4004,13 @@ unsafe fn show_notification_center(window: HWND) {
             .navigate_to(RouteFrame::new(Route::NotificationCenter));
     }
     state.view = MainView::NotificationCenter;
-    refresh_notification_center(state, true, true, None);
+    // Python `show_notification_center` only moves focus to the list.
+    refresh_notification_center(state, true, false, None);
     layout_controls_state(window, state);
 }
 
 unsafe fn show_subscriptions(window: HWND) {
+    remember_menu_item(window, "subscriptions");
     restore_from_tray(window);
     stop_controlled_repeat(window);
     let Some(state) = state_mut(window) else {
@@ -4002,6 +4040,7 @@ unsafe fn show_subscriptions(window: HWND) {
 }
 
 unsafe fn show_rss_feeds(window: HWND) {
+    remember_menu_item(window, "rss_feeds");
     restore_from_tray(window);
     stop_controlled_repeat(window);
     let Some(state) = state_mut(window) else {
@@ -5640,6 +5679,7 @@ unsafe fn open_selected_podcast_in_browser(window: HWND) {
 }
 
 unsafe fn show_podcast_categories(window: HWND) {
+    remember_menu_item(window, "rss_feeds");
     let Some(state) = state_mut(window) else {
         return;
     };
@@ -6304,6 +6344,7 @@ unsafe fn finish_subscription_check(window: HWND) {
 }
 
 unsafe fn show_user_playlists(window: HWND) {
+    remember_menu_item(window, "playlists");
     restore_from_tray(window);
     stop_controlled_repeat(window);
     let Some(state) = state_mut(window) else {
@@ -6494,7 +6535,7 @@ unsafe fn navigate_back(window: HWND) {
         }
         Route::Bookmarks => {
             state.view = MainView::MainMenu;
-            refresh_main_menu(state);
+            refresh_main_menu(state, MainMenuSelection::LastActivated);
             layout_controls_state(window, state);
             show_bookmarks_dialog(window, false, true);
         }
@@ -6520,7 +6561,7 @@ unsafe fn navigate_back(window: HWND) {
         _ => {
             state.application.navigate_main_menu();
             state.view = MainView::MainMenu;
-            refresh_main_menu(state);
+            refresh_main_menu(state, MainMenuSelection::LastActivated);
             layout_controls_state(window, state);
             let _ = SetFocus(Some(state.list));
         }
@@ -6650,6 +6691,7 @@ unsafe fn activate_direct_link(window: HWND, action: &str) {
 }
 
 unsafe fn show_download_queue(window: HWND) {
+    remember_menu_item(window, "current_downloads");
     restore_from_tray(window);
     stop_controlled_repeat(window);
     let Some(state) = state_mut(window) else {
@@ -8295,7 +8337,7 @@ unsafe fn refresh_download_projection(
         refresh_download_queue(state, false, false);
         layout_controls_state(window, state);
     } else if update_main_menu && state.view == MainView::MainMenu {
-        refresh_main_menu(state);
+        refresh_main_menu(state, MainMenuSelection::Preserve);
         layout_controls_state(window, state);
     }
 }
@@ -10013,15 +10055,6 @@ unsafe fn refresh_notification_center(
             .unwrap_or_default()
             .min(notifications.len() - 1);
         SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selected)), None);
-        set_status(
-            state,
-            &format!(
-                "{}: {}",
-                catalog.text("notification_center"),
-                notifications.len()
-            ),
-            announce_status,
-        );
     }
     if focus {
         let _ = SetFocus(Some(state.list));
@@ -11281,7 +11314,8 @@ unsafe fn remove_notification_at(window: HWND, index: usize) {
     match result {
         Ok(Some(_)) => {
             if let Some(state) = state_mut(window) {
-                refresh_notification_center(state, true, false, Some(index.saturating_sub(1)));
+                // Python `clear_selected_notification` keeps the row index.
+                refresh_notification_center(state, true, false, Some(index));
             }
         }
         Ok(None) => {}
@@ -11365,7 +11399,8 @@ unsafe fn clear_notifications(window: HWND) {
     match result {
         Ok(_) => {
             if let Some(state) = state_mut(window) {
-                refresh_notification_center(state, true, false, None);
+                // Python `clear_notifications` leaves focus where it was.
+                refresh_notification_center(state, false, false, None);
                 set_status(
                     state,
                     &catalog_text(&state.application, "notifications_cleared"),
@@ -11384,6 +11419,9 @@ unsafe fn clear_notifications(window: HWND) {
 }
 
 unsafe fn show_bookmarks_dialog(window: HWND, current_only: bool, return_on_close: bool) {
+    if !current_only {
+        remember_menu_item(window, "bookmarks");
+    }
     let Some((labels, entries, can_add)) = state_mut(window).map(|state| {
         state.modal_open = true;
         let labels = BookmarkDialogOwnedLabels {
@@ -13168,6 +13206,7 @@ unsafe fn play_local_file(window: HWND, path: &std::path::Path) {
 }
 
 unsafe fn open_media_file(window: HWND) {
+    remember_menu_item(window, "play_file");
     let title = state(window).map_or_else(
         || "Play file".to_owned(),
         |state| {
@@ -13202,6 +13241,7 @@ unsafe fn open_media_file(window: HWND) {
 }
 
 unsafe fn open_media_folder(window: HWND) {
+    remember_menu_item(window, "play_folder");
     stop_controlled_repeat(window);
     let title = state(window).map_or_else(
         || "Choose a folder with audio or video files".to_owned(),
@@ -13333,9 +13373,7 @@ unsafe fn show_action_finder(window: HWND) {
     let Some(main_state) = state_mut(window) else {
         return;
     };
-    let model = main_state
-        .application
-        .action_finder_model(ActionFinderContext::default());
+    let model = main_state.application.action_finder_model();
     main_state.modal_open = true;
     let outcome = crate::action_finder_win32::show(window, model);
     if let Some(main_state) = state_mut(window) {
@@ -13361,6 +13399,7 @@ unsafe fn show_action_finder(window: HWND) {
 }
 
 unsafe fn show_playback_queue(window: HWND) {
+    remember_menu_item(window, "playback_queue");
     stop_controlled_repeat(window);
     let Some(main_state) = state_mut(window) else {
         return;
@@ -13417,7 +13456,7 @@ unsafe fn show_playback_queue(window: HWND) {
                 return;
             }
             if main_state.view == MainView::MainMenu {
-                refresh_main_menu(main_state);
+                refresh_main_menu(main_state, MainMenuSelection::Preserve);
             }
             if let Some(item) = outcome.play {
                 start_media_item(window, item, Some(QueueStartMode::Matching));
@@ -13474,6 +13513,7 @@ unsafe fn announce_unavailable_feature(window: HWND, feature: &str) {
 }
 
 unsafe fn open_settings(window: HWND) {
+    remember_menu_item(window, "settings");
     stop_controlled_repeat(window);
     let settings_result = {
         let Some(state) = state_mut(window) else {
@@ -13493,7 +13533,7 @@ unsafe fn open_settings(window: HWND) {
     state.modal_open = false;
     resume_deferred_window_work(window);
     match state.view {
-        MainView::MainMenu => refresh_main_menu(state),
+        MainView::MainMenu => refresh_main_menu(state, MainMenuSelection::LastActivated),
         MainView::Results => refresh_results(state, false),
         MainView::Trending => {
             refresh_trending_category_choices(state);
@@ -13570,9 +13610,36 @@ unsafe fn resume_deferred_window_work(window: HWND) {
     let _ = PostMessageW(Some(window), WM_PROCESS_ACTIVATION, WPARAM(0), LPARAM(0));
 }
 
-unsafe fn refresh_main_menu(state: &mut WindowState) {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MainMenuSelection {
+    /// Python `show_main_menu`: the last opened screen's item, else the first.
+    LastActivated,
+    /// Python `refresh_main_menu_download_label`: the same label, else the
+    /// same row, so background updates never move the selection.
+    Preserve,
+}
+
+unsafe fn refresh_main_menu(state: &mut WindowState, selection: MainMenuSelection) {
     set_open_button_label(state, "open");
+    let old_selection = usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok();
+    let old_label = old_selection
+        .and_then(|index| state.model.items.get(index))
+        .map(|item| item.label.clone());
     state.model = state.application.main_menu_model();
+    let labels: Vec<_> = state
+        .model
+        .items
+        .iter()
+        .map(|item| item.label.as_str())
+        .collect();
+    let selected = match selection {
+        MainMenuSelection::LastActivated => {
+            main_menu_last_activated_index(&state.model.items, state.last_activated_menu_item)
+        }
+        MainMenuSelection::Preserve => {
+            main_menu_preserved_index(&labels, old_label.as_deref(), old_selection)
+        }
+    };
     SendMessageW(state.list, LB_RESETCONTENT, None, None);
     crate::accessibility_win32::set_control_name(state.list, &state.model.accessible_name);
     for item in &state.model.items {
@@ -13584,7 +13651,29 @@ unsafe fn refresh_main_menu(state: &mut WindowState) {
             Some(LPARAM(label.as_ptr() as isize)),
         );
     }
-    SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
+    SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selected)), None);
+}
+
+fn main_menu_last_activated_index(
+    items: &[apricot_app::MainMenuItem],
+    last_activated: Option<&str>,
+) -> usize {
+    last_activated
+        .and_then(|id| items.iter().position(|item| item.id == id))
+        .unwrap_or_default()
+}
+
+fn main_menu_preserved_index(
+    labels: &[&str],
+    old_label: Option<&str>,
+    old_selection: Option<usize>,
+) -> usize {
+    if let Some(index) = old_label.and_then(|old| labels.iter().position(|label| *label == old)) {
+        return index;
+    }
+    old_selection
+        .unwrap_or_default()
+        .min(labels.len().saturating_sub(1))
 }
 
 fn active_primary_control(state: &WindowState) -> HWND {
@@ -13620,10 +13709,10 @@ mod tests {
         MainView, SEEK_HOLD_DELAY_MS, SEEK_HOLD_INTERVAL_MS, collection_backend,
         collection_download_url, controlled_repeat_timing, copy_wide_array,
         download_folder_for_item, download_progress_presentation, item_needs_youtube_metadata,
-        list_context_entries, media_resolve_backend, normalized_audio_format, notification_label,
-        queued_download_label, resolved_playback_item, result_label, safe_path_component,
-        subscription_label, user_playlist_download_folder, view_has_back_button,
-        view_has_collection_remove,
+        list_context_entries, main_menu_last_activated_index, main_menu_preserved_index,
+        media_resolve_backend, normalized_audio_format, notification_label, queued_download_label,
+        resolved_playback_item, result_label, safe_path_component, subscription_label,
+        user_playlist_download_folder, view_has_back_button, view_has_collection_remove,
     };
     use apricot_app::{
         ActiveDownload, AppNotification, ContextMenuContext, DownloadChoice, DownloadTaskKind,
@@ -13724,6 +13813,38 @@ mod tests {
         item.kind = MediaKind::Video;
         item.source = MediaSource::Soundcloud;
         assert!(!item_needs_youtube_metadata(&item));
+    }
+
+    #[test]
+    fn main_menu_selects_the_last_opened_screen_like_python() {
+        let items: Vec<_> = ["search", "favorites", "settings", "exit"]
+            .into_iter()
+            .map(|id| apricot_app::MainMenuItem {
+                id,
+                label: id.to_owned(),
+            })
+            .collect();
+        assert_eq!(main_menu_last_activated_index(&items, None), 0);
+        assert_eq!(main_menu_last_activated_index(&items, Some("settings")), 2);
+        assert_eq!(main_menu_last_activated_index(&items, Some("trending")), 0);
+    }
+
+    #[test]
+    fn background_main_menu_refresh_keeps_the_selection_like_python() {
+        let labels = ["Current downloads (1)", "Search", "Favorites", "Settings"];
+        assert_eq!(
+            main_menu_preserved_index(&labels, Some("Favorites"), Some(1)),
+            2
+        );
+        assert_eq!(
+            main_menu_preserved_index(&labels, Some("Current downloads (2)"), Some(0)),
+            0
+        );
+        assert_eq!(
+            main_menu_preserved_index(&labels[..2], Some("Gone"), Some(3)),
+            1
+        );
+        assert_eq!(main_menu_preserved_index(&labels, None, None), 0);
     }
 
     #[test]

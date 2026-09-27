@@ -10,7 +10,10 @@ use windows::{
         System::LibraryLoader::{GetProcAddress, LoadLibraryW},
         UI::{
             Accessibility::NotifyWinEvent,
-            WindowsAndMessaging::{EVENT_OBJECT_NAMECHANGE, OBJID_CLIENT, SetWindowTextW},
+            WindowsAndMessaging::{
+                EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_VALUECHANGE, EVENT_SYSTEM_ALERT, GA_ROOT,
+                GetAncestor, OBJID_ALERT, OBJID_CLIENT, SetWindowTextW,
+            },
         },
     },
     core::{PCSTR, PCWSTR},
@@ -95,9 +98,25 @@ impl WindowsAnnouncer {
         {
             return;
         }
+        if self.status_control.is_invalid() {
+            return;
+        }
+        // Python `raise_accessibility_alert` for Narrator, JAWS and other
+        // MSAA screen readers. The alert is raised only because NVDA did not
+        // take the text; NVDA would otherwise read it twice.
         let _ = SetWindowTextW(self.status_control, PCWSTR(text.as_ptr()));
         NotifyWinEvent(
             EVENT_OBJECT_NAMECHANGE,
+            self.status_control,
+            OBJID_CLIENT.0,
+            0,
+        );
+        let root = GetAncestor(self.status_control, GA_ROOT);
+        if !root.is_invalid() {
+            NotifyWinEvent(EVENT_SYSTEM_ALERT, root, OBJID_ALERT.0, 0);
+        }
+        NotifyWinEvent(
+            EVENT_OBJECT_VALUECHANGE,
             self.status_control,
             OBJID_CLIENT.0,
             0,

@@ -5,8 +5,8 @@
 use std::{ffi::c_void, mem::size_of};
 
 use apricot_app::{
-    ActionFinderContext, Application, SettingsCommand, SettingsControl, SettingsScreenModel,
-    SettingsValueType, ShortcutActionItem,
+    Application, SettingsCommand, SettingsControl, SettingsScreenModel, SettingsValueType,
+    ShortcutActionItem,
 };
 use apricot_core::{
     SettingId, SettingsSection,
@@ -370,11 +370,7 @@ unsafe fn show_action_finder(window: HWND) {
     let Some(settings_state) = state(window) else {
         return;
     };
-    let model = (&*settings_state.application).action_finder_model(ActionFinderContext {
-        scope: Some(ActionScope::Dialog),
-        selection_available: false,
-        player_active: false,
-    });
+    let model = (&*settings_state.application).action_finder_model();
     match crate::action_finder_win32::show(window, model) {
         Ok(Some("open_settings" | "open_action_finder") | None) => {
             if let Some(state) = state(window) {
