@@ -124,7 +124,6 @@ define_setting_ids! {
     EnableHistory => "enable_history",
     EnablePodcastsRss => "enable_podcasts_rss",
     ShowShortcutsInLabels => "show_shortcuts_in_labels",
-    YoutubeBackend => "youtube_backend",
     MainMenuHiddenActions => "main_menu_hidden_actions",
     PodcastSearchProvider => "podcast_search_provider",
     PodcastSearchCountry => "podcast_search_country",
@@ -146,9 +145,9 @@ mod tests {
     use super::SettingId;
 
     #[test]
-    fn baseline_contains_117_unique_settings() {
+    fn baseline_contains_116_unique_settings() {
         let keys: HashSet<_> = SettingId::ALL.iter().map(|id| id.key()).collect();
-        assert_eq!(SettingId::ALL.len(), 117);
+        assert_eq!(SettingId::ALL.len(), 116);
         assert_eq!(keys.len(), SettingId::ALL.len());
     }
 }

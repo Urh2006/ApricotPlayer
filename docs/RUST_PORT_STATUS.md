@@ -154,12 +154,7 @@ Enote, ki popravljajo odstopanja, so na vrsti prve.
 - **E1. Oglasi in seja predvajalnika. Zaključeno 27. 9. 2026, glej razdelek 6.**
 - **E2. Enotna pot za dejanja, ki še niso narejena. Zaključeno 27. 9. 2026, glej razdelek 6.**
 - **E3. Kontekstni meniji. Zaključeno 27. 9. 2026, glej razdelek 6.**
-- **E4. Nastavitve, prvi del.** Save ostane na zaslonu in oglasi shranjevanje.
-  Gumb "Restore to defaults" brez dodatnega okna. Lokaliziran konflikt bližnjice.
-  Zamik pri preklopu razdelkov. Browse za mape. Set default player. Odstranitev
-  polja YouTube backend. Premik ključev, ki jih je GPT dodal v Pythonov `en.json`,
-  na Rust stran in vrnitev `en.json` na stanje iz `main` (SETTINGS-02 do 06, del
-  SETTINGS-01, SETTINGS-M-03, odločitvi 1 in 2).
+- **E4. Nastavitve, prvi del. Zaključeno 27. 9. 2026, glej razdelek 6.**
 - **E5. Seznami in knjižnica.** Celotna mapa naenkrat (LIBRARY-01). Odpiranje kanala
   in playlista iz priljubljenih in zgodovine (LIBRARY-M-01). Odpri kanal in stolpci
   rezultatov (SEARCH-M-02). Število videov v vrstici playlista (SEARCH-04).
@@ -315,3 +310,50 @@ Spremembe:
 Ostaja za poznejše enote: meni SoundCloud kanala (E14), dejansko odpiranje kanala
 (E5), meniji naročnin, RSS, podcastov, obvestil in vrste prenosov niso bili del E3
 in ostajajo na starem seznamu, dokler jih ne pregleda E6 ali E7.
+
+### E4: nastavitve, prvi del (27. 9. 2026)
+
+Spremembe:
+
+- Save shrani, oglasi "Settings saved." in pusti okno odprto, fokus ostane na gumbu
+  (SETTINGS-02). Kot v Pythonu se zaslon ob spremembi jezika zgradi znova in fokus gre
+  na seznam razdelkov.
+- Gumb se imenuje "Restore to defaults" in nima potrditvenega okna. Nastavitve takoj
+  shrani, oglasi "Default settings restored." in postavi fokus na seznam razdelkov
+  (SETTINGS-03). Tudi ponastavitev razdelka zdaj takoj shrani in oglasi
+  "{razdelek} settings reset.", kot `reset_settings_section`.
+- Gumbi Back, Save in Restore to defaults so v vrstnem redu Tab pred seznamom
+  razdelkov, kot v Pythonu, kjer je vrstica gumbov dodana prva.
+- Konflikt bližnjice pokaže Pythonovo opozorilo `shortcut_in_use` s prevedenim imenom
+  drugega dejanja in naslovom `shortcut_in_use_title`, nato isto besedilo izgovori.
+  Uspešno zajeta bližnjica oglasi `shortcut_captured`, kar prej ni (SETTINGS-05).
+- Preklop razdelkov počaka 140 ms po zadnji puščici, vidne kontrole se uveljavijo
+  enkrat. Tab in Enter na seznamu razdelek takoj prikažeta in premakneta fokus na
+  prvo kontrolo (SETTINGS-06). Tab in Enter sta prej prestregla `IsDialogMessageW`,
+  zato je Enter na seznamu sprožil Save; zdaj ju seznam prejme sam.
+- Browse izbere mapo za prenose, jo takoj shrani in vpiše v polje, fokus se vrne na
+  Browse, kot `choose_download_folder`.
+- Set default player registrira beto kot predvajalnik medijev za trenutnega
+  uporabnika, če registracija še ni popolna, in odpre Windows Default apps. Ob napaki
+  poskusi nadzorno ploščo Default Programs, sicer pokaže `default_player_settings_failed`
+  (SETTINGS-M-03). Beta uporablja svoje ključe `ApricotPlayer2Beta` in ne prepiše
+  registracije Python verzije.
+- Odstranjeni so polje YouTube backend, nastavitev `youtube_backend` in Rust ključi za
+  besedila "YouTube component" (odločitev 1, SETTINGS-04). Oznake so zdaj Pythonove
+  `auto_update` in `check_ytdlp_updates_now`. Odstranjen je tudi dodatni gumb Browse
+  za mapo predpomnilnika, ki ga Python nima.
+- Ključi `ok`, `cancel`, `direct_link_invalid` in `direct_link_fallback` so v
+  `rust_strings.json` za vseh 27 jezikov, `apricot/locales/en.json` je spet enak `main`
+  (odločitev 2).
+
+Preverjanje: `cargo build`, `cargo test` (425 uspešnih, 8 izključenih), `cargo clippy
+-D warnings` in `cargo fmt --check`. Novi testi preverijo postavitev registracije
+predvajalnika in ločitev bete od stabilne verzije, števila kontrol v razdelkih General
+in Playback ter oznako za yt-dlp. Samodejni UI Automation preizkus na ločeni kopiji
+podatkov je potrdil vrstni red Tab, Enter na seznamu, zamik, Save brez zapiranja in
+Restore to defaults brez okna.
+
+Ostaja: preostali ukazni gumbi nastavitev (posodobitve, piškotki, AudioVault, EQ
+profili, naročnine) oglasijo "ni na voljo v tej beti" do enot E10, E16, E18 in E19.
+Python pri Back ohrani v pomnilniku spremembe razdelkov, ki jih je uporabnik zapustil,
+ne da bi shranil, Rust pa jih zavrže. To ni popravljeno in čaka na odločitev.

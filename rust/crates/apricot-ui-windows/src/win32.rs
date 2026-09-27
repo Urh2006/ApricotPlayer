@@ -3120,9 +3120,7 @@ unsafe fn play_youtube_playlist(window: HWND, item: &apricot_core::MediaItem, sh
     };
     state.next_youtube_operation_token = state.next_youtube_operation_token.wrapping_add(1).max(1);
     let token = state.next_youtube_operation_token;
-    let selected_backend =
-        YoutubeBackend::from_setting_value(&state.application.settings().youtube_backend);
-    let backend = collection_backend(selected_backend, YoutubeCollectionKind::PlaylistVideos);
+    let backend = collection_backend(YOUTUBE_BACKEND, YoutubeCollectionKind::PlaylistVideos);
     let Some(components) = application_directory().map(|path| path.join("components")) else {
         show_error_message(window, "Application path is unavailable");
         return;
@@ -3387,7 +3385,7 @@ unsafe fn start_youtube_resolve_with_options(
     };
     state.next_youtube_operation_token = state.next_youtube_operation_token.wrapping_add(1).max(1);
     let token = state.next_youtube_operation_token;
-    let backend = media_resolve_backend(item, &state.application.settings().youtube_backend);
+    let backend = media_resolve_backend(item, YOUTUBE_BACKEND.setting_value());
     let Some(components) = application_directory().map(|path| path.join("components")) else {
         report_youtube_resolve_start_error(
             window,
@@ -6002,10 +6000,7 @@ unsafe fn start_next_subscription_check(window: HWND) {
             if let Some(pending) = state.pending_subscription_check.as_mut() {
                 pending.current = Some((token, url.clone(), title));
             }
-            let backend = collection_backend(
-                YoutubeBackend::from_setting_value(&state.application.settings().youtube_backend),
-                YoutubeCollectionKind::ChannelVideos,
-            );
+            let backend = collection_backend(YOUTUBE_BACKEND, YoutubeCollectionKind::ChannelVideos);
             match application_directory().map(|path| path.join("components")) {
                 Some(components) => {
                     let config = youtube_session_config(state);
@@ -8219,7 +8214,7 @@ unsafe fn start_youtube_work(window: HWND, work: SearchWork) {
     let Some(state) = state_mut(window) else {
         return;
     };
-    let backend = YoutubeBackend::from_setting_value(&state.application.settings().youtube_backend);
+    let backend = YOUTUBE_BACKEND;
     let generation = work.generation;
     let query = work.query.clone();
     let kind = work.kind;
@@ -8364,9 +8359,7 @@ unsafe fn start_youtube_collection_work(window: HWND, work: YoutubeCollectionWor
     let Some(state) = state_mut(window) else {
         return;
     };
-    let selected_backend =
-        YoutubeBackend::from_setting_value(&state.application.settings().youtube_backend);
-    let backend = collection_backend(selected_backend, work.kind);
+    let backend = collection_backend(YOUTUBE_BACKEND, work.kind);
     let Some(components) = std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(|parent| parent.join("components")))
@@ -8432,6 +8425,10 @@ unsafe fn report_youtube_collection_start_error(
     show_error_message(window, message);
     let _ = SetFocus(Some(active_primary_control(state)));
 }
+
+/// Python always uses yt-dlp. The Rusty YTDL helper path stays in the code but
+/// is no longer selectable in Settings.
+const YOUTUBE_BACKEND: YoutubeBackend = YoutubeBackend::YtDlp;
 
 fn collection_backend(selected: YoutubeBackend, kind: YoutubeCollectionKind) -> YoutubeBackend {
     if selected == YoutubeBackend::RustyYtdl && kind != YoutubeCollectionKind::PlaylistVideos {
@@ -9292,7 +9289,7 @@ unsafe fn start_result_metadata_hydration(window: HWND) {
     let Some(components) = application_directory().map(|path| path.join("components")) else {
         return;
     };
-    let backend = YoutubeBackend::from_setting_value(&state.application.settings().youtube_backend);
+    let backend = YOUTUBE_BACKEND;
     let config = youtube_session_config(state);
     if state
         .youtube_metadata

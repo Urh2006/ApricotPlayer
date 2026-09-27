@@ -36,9 +36,8 @@ impl SettingsChoiceOption {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SettingsCommand {
     BrowseDownloadFolder,
-    BrowseCacheFolder,
     SetDefaultPlayer,
-    CheckYoutubeComponentUpdates,
+    CheckYtdlpUpdates,
     CheckAppUpdates,
     CheckSubscriptions,
     ChooseCookiesFile,
@@ -300,23 +299,9 @@ fn general_controls(
             settings.show_shortcuts_in_labels,
             catalog,
         ),
-        SettingsControl::Choice {
-            setting: SettingId::YoutubeBackend,
-            label: catalog.text("youtube_backend").to_owned(),
-            value: settings.youtube_backend.clone(),
-            value_type: SettingsValueType::String,
-            options: [
-                SettingsChoiceOption::labeled("yt-dlp", catalog.text("youtube_backend_ytdlp")),
-                SettingsChoiceOption::labeled(
-                    "rusty_ytdl",
-                    catalog.text("youtube_backend_rusty_ytdl"),
-                ),
-            ]
-            .into(),
-        },
         checkbox(
             SettingId::AutoUpdateYtdlp,
-            "auto_update_youtube_components",
+            "auto_update",
             settings.auto_update_ytdlp,
             catalog,
         ),
@@ -345,10 +330,8 @@ fn general_controls(
             options: update_intervals,
         },
         SettingsControl::Command {
-            command: SettingsCommand::CheckYoutubeComponentUpdates,
-            label: catalog
-                .text("check_youtube_component_updates_now")
-                .to_owned(),
+            command: SettingsCommand::CheckYtdlpUpdates,
+            label: catalog.text("check_ytdlp_updates_now").to_owned(),
         },
         SettingsControl::Command {
             command: SettingsCommand::CheckAppUpdates,
@@ -443,7 +426,7 @@ fn playback_controls(
             SettingsChoiceOption::labeled(value, label)
         })
         .collect();
-    let mut controls = vec![
+    vec![
         choice_raw(
             SettingId::PlayerSpeed,
             "player_speed",
@@ -689,15 +672,7 @@ fn playback_controls(
             settings.enable_background_playback,
             catalog,
         ),
-    ];
-    controls.insert(
-        18,
-        SettingsControl::Command {
-            command: SettingsCommand::BrowseCacheFolder,
-            label: catalog.text("browse").to_owned(),
-        },
-    );
-    controls
+    ]
 }
 
 fn equalizer_controls(
@@ -1538,7 +1513,7 @@ mod tests {
             Path::new(r"C:\Profile\settings.json"),
             SettingsSection::General,
         );
-        assert_eq!(model.controls.len(), 19);
+        assert_eq!(model.controls.len(), 18);
         assert!(matches!(
             &model.controls[0],
             SettingsControl::Choice {
@@ -1558,12 +1533,11 @@ mod tests {
         ));
         assert!(matches!(
             &model.controls[8],
-            SettingsControl::Choice {
-                setting: SettingId::YoutubeBackend,
-                value,
-                options,
+            SettingsControl::Checkbox {
+                setting: SettingId::AutoUpdateYtdlp,
+                label,
                 ..
-            } if value == "yt-dlp" && options.len() == 2
+            } if label == "Check yt-dlp updates on every startup"
         ));
     }
 
@@ -1609,9 +1583,9 @@ mod tests {
     fn implemented_sections_preserve_complete_control_counts() {
         let settings = SettingsDocument::default();
         let expected = [
-            (SettingsSection::General, 19),
+            (SettingsSection::General, 18),
             (SettingsSection::MainMenu, 20),
-            (SettingsSection::Playback, 36),
+            (SettingsSection::Playback, 35),
             (SettingsSection::Equalizer, 3),
             (SettingsSection::Downloads, 23),
             (SettingsSection::Library, 7),

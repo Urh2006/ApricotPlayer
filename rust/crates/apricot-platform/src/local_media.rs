@@ -11,7 +11,7 @@ use std::{
 use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
 use thiserror::Error;
 
-const MEDIA_EXTENSIONS: &[&str] = &[
+pub(crate) const MEDIA_EXTENSIONS: &[&str] = &[
     "3g2", "3ga", "3gp", "aac", "ac3", "aif", "aifc", "aiff", "alac", "amr", "ape", "asf", "au",
     "avi", "caf", "divx", "dts", "flac", "flv", "m2ts", "m2v", "m4a", "m4v", "mka", "mkv", "mov",
     "mp2", "mp2v", "mp3", "mp4", "mpe", "mpeg", "mpg", "mpv", "mts", "mxf", "oga", "ogg", "ogm",

@@ -13,7 +13,13 @@ use apricot_core::{
     action::{ActionScope, RepeatPolicy},
     shortcut::{ShortcutContext, action_for_shortcut},
 };
-use apricot_platform::{ApplicationIdentity, sync_startup_registration};
+use apricot_platform::{
+    ApplicationIdentity, PlatformError, sync_startup_registration,
+    windows_registration::{
+        media_association_registration_complete, open_default_apps_settings,
+        open_default_programs_control_panel, register_media_associations,
+    },
+};
 use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
@@ -33,15 +39,16 @@ use windows::{
                 BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, CBS_DROPDOWNLIST, CW_USEDEFAULT,
                 CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
                 GetMessageW, GetParent, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW,
-                HMENU, IDC_ARROW, IsDialogMessageW, LB_ADDSTRING, LB_DELETESTRING, LB_GETCURSEL,
-                LB_INSERTSTRING, LB_SETCURSEL, LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW,
-                MB_ICONERROR, MB_ICONQUESTION, MB_OK, MB_YESNO, MSG, MessageBoxW, MoveWindow,
-                PostQuitMessage, RegisterClassW, SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE,
-                SW_SHOW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowTextW,
-                ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE,
-                WM_CHAR, WM_CLOSE, WM_COMMAND, WM_HSCROLL, WM_KEYDOWN, WM_NCDESTROY, WM_SETFOCUS,
-                WM_SETFONT, WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE, WS_GROUP,
-                WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+                HMENU, IDC_ARROW, IsDialogMessageW, KillTimer, LB_ADDSTRING, LB_DELETESTRING,
+                LB_GETCURSEL, LB_INSERTSTRING, LB_RESETCONTENT, LB_SETCURSEL, LBN_SELCHANGE,
+                LBS_NOTIFY, LoadCursorW, MB_ICONERROR, MB_ICONWARNING, MB_OK, MESSAGEBOX_STYLE,
+                MSG, MessageBoxW, MoveWindow, PostQuitMessage, RegisterClassW, SB_VERT, SCROLLINFO,
+                SIF_PAGE, SIF_POS, SIF_RANGE, SW_SHOW, SendMessageW, SetForegroundWindow, SetTimer,
+                SetWindowLongPtrW, SetWindowTextW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE,
+                WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_HSCROLL,
+                WM_KEYDOWN, WM_NCDESTROY, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_TIMER, WM_VSCROLL,
+                WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_TABSTOP,
+                WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -53,6 +60,10 @@ const ID_BACK: usize = 2;
 const ID_RESET_ALL: usize = 1203;
 const ID_SECTION_LIST: usize = 1204;
 const DYNAMIC_ID_START: usize = 2000;
+/// Python waits 140 ms after the last arrow key in the section list before it
+/// renders the selected section.
+const SECTION_RENDER_TIMER_ID: usize = 1;
+const SECTION_RENDER_DELAY_MS: u32 = 140;
 const CBN_SELCHANGE: usize = 1;
 const BN_CLICKED: usize = 0;
 const EN_KILLFOCUS: usize = 0x0200;
@@ -63,6 +74,8 @@ const CB_ADDSTRING: u32 = 0x0143;
 const CB_GETCURSEL: u32 = 0x0147;
 const CB_SETCURSEL: u32 = 0x014E;
 const TBM_GETPOS: u32 = 0x0400;
+const WM_GETDLGCODE_MESSAGE: u32 = 0x0087;
+const DLGC_WANTMESSAGE_CODE: isize = 0x0004;
 const VK_ESCAPE_CODE: usize = 0x1B;
 const VK_SPACE_CODE: usize = 0x20;
 const VK_DELETE_CODE: usize = 0x2E;
@@ -128,6 +141,8 @@ struct SettingsWindowState {
     back: HWND,
     reset_all: HWND,
     selected_section: SettingsSection,
+    pending_section: Option<SettingsSection>,
+    displayed_language: String,
     controls: Vec<BoundControl>,
     scroll_offset: i32,
     content_height: i32,
@@ -246,6 +261,10 @@ unsafe extern "system" fn settings_window_proc(
             handle_vertical_scroll(window, wparam);
             LRESULT(0)
         }
+        WM_TIMER if wparam.0 == SECTION_RENDER_TIMER_ID => {
+            flush_section_render(window);
+            LRESULT(0)
+        }
         WM_CLOSE => {
             cancel_and_close(window);
             LRESULT(0)
@@ -264,6 +283,18 @@ unsafe fn create_base_controls(
     application: &mut Application,
     model: &SettingsScreenModel,
 ) -> Result<SettingsWindowState> {
+    let catalog = apricot_app::embedded_catalog(&application.settings().language);
+    // Python adds the button row before the section list, so Back, Save and
+    // Restore to defaults come first in the Tab order.
+    let back = button(parent, instance, catalog.text("back"), ID_BACK, false)?;
+    let save = button(parent, instance, catalog.text("save"), ID_SAVE, true)?;
+    let reset_all = button(
+        parent,
+        instance,
+        catalog.text("restore_defaults"),
+        ID_RESET_ALL,
+        false,
+    )?;
     let section_name = wide(&model.section_list_name);
     let section_list = create_control(
         parent,
@@ -286,36 +317,16 @@ unsafe fn create_base_controls(
     if !SetWindowSubclass(section_list, Some(section_list_proc), 1, 0).as_bool() {
         return Err(windows::core::Error::from_thread());
     }
-
-    let back = button(
-        parent,
-        instance,
-        &model_text(application, "back"),
-        ID_BACK,
-        false,
-    )?;
-    let save = button(
-        parent,
-        instance,
-        &model_text(application, "save"),
-        ID_SAVE,
-        true,
-    )?;
-    let reset_all = button(
-        parent,
-        instance,
-        &model_text(application, "reset_all_settings"),
-        ID_RESET_ALL,
-        false,
-    )?;
-    apply_font(&[section_list, back, save, reset_all]);
+    apply_font(&[back, save, reset_all, section_list]);
     Ok(SettingsWindowState {
+        displayed_language: application.settings().language.clone(),
         application,
         section_list,
         save,
         back,
         reset_all,
         selected_section: SettingsSection::General,
+        pending_section: None,
         controls: Vec::new(),
         scroll_offset: 0,
         content_height: 0,
@@ -692,12 +703,12 @@ unsafe fn handle_command(window: HWND, wparam: WPARAM) {
     let notification = (wparam.0 >> 16) & 0xffff;
     match id {
         ID_BACK => cancel_and_close(window),
-        ID_SAVE => save_and_close(window),
-        ID_RESET_ALL => reset_all(window),
+        ID_SAVE => save_settings(window),
+        ID_RESET_ALL => restore_defaults(window),
         ID_SECTION_LIST
             if notification == usize::try_from(LBN_SELCHANGE).expect("notification fits") =>
         {
-            change_section(window);
+            schedule_section_render(window);
         }
         _ if id >= DYNAMIC_ID_START
             && (notification == BN_CLICKED
@@ -817,43 +828,171 @@ unsafe fn sync_shortcut_selection(state: &mut SettingsWindowState, source: &Boun
 }
 
 unsafe fn handle_settings_command(window: HWND, command: SettingsCommand, label: &str) {
-    if command == SettingsCommand::ResetSection {
-        let Some(state) = state_mut(window) else {
-            return;
-        };
-        if let Err(error) = (&mut *state.application).reset_settings_section(state.selected_section)
-        {
-            show_error(window, &error.to_string());
-            return;
+    match command {
+        SettingsCommand::ResetSection => reset_section(window),
+        SettingsCommand::BrowseDownloadFolder => browse_download_folder(window),
+        SettingsCommand::SetDefaultPlayer => set_default_player(window),
+        _ => {
+            if let Some(state) = state_mut(window) {
+                // Python has every settings command. Until the Rust route exists,
+                // speak the beta message and keep focus on the button.
+                let catalog = settings_catalog(state);
+                let feature = label.replace('&', "");
+                let message = apricot_app::unavailable_feature_message(&catalog, feature.trim());
+                state.announcer.announce(&message, false);
+            }
         }
-        if let Err(error) = render_controls(window) {
-            show_error(window, &error.to_string());
-            return;
-        }
-        focus_first_control(window);
-    } else if let Some(state) = state_mut(window) {
-        // Python has every settings command. Until the Rust route exists, speak
-        // the beta message and keep focus on the button.
-        let catalog = apricot_app::embedded_catalog(&(*state.application).settings().language);
-        let feature = label.replace('&', "");
-        let message = apricot_app::unavailable_feature_message(&catalog, feature.trim());
-        state.announcer.announce(&message, false);
     }
 }
 
-unsafe fn change_section(window: HWND) {
+/// Python's `reset_settings_section`: reset, save, speak, then focus the first
+/// control of the section.
+unsafe fn reset_section(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
     };
-    if let Err(error) = sync_all_controls(state) {
+    let section = state.selected_section;
+    if let Err(error) = (&mut *state.application).reset_settings_section(section) {
         show_error(window, &error.to_string());
         return;
     }
-    let selected = SendMessageW(state.section_list, LB_GETCURSEL, None, None).0;
-    let Ok(index) = usize::try_from(selected) else {
+    if !save_and_register_startup(window, state) {
+        return;
+    }
+    let catalog = settings_catalog(state);
+    let label = (&*state.application)
+        .settings_model(section)
+        .sections
+        .into_iter()
+        .find(|item| item.section == section)
+        .map(|item| item.label)
+        .unwrap_or_default();
+    let message = catalog
+        .text("section_settings_reset")
+        .replace("{section}", &label);
+    state.announcer.announce(&message, true);
+    if let Err(error) = render_controls(window) {
+        show_error(window, &error.to_string());
+        return;
+    }
+    focus_first_control(window);
+}
+
+/// Python's `choose_download_folder`: the chosen folder is saved at once.
+unsafe fn browse_download_folder(window: HWND) {
+    let Some(state) = state_mut(window) else {
         return;
     };
-    let Some(section) = SettingsSection::ALL.get(index).copied() else {
+    let catalog = settings_catalog(state);
+    let initial = std::path::PathBuf::from(&(*state.application).settings().download_folder);
+    let selected = crate::folder_dialog_win32::choose_download_folder(
+        window,
+        catalog.text("choose_download_folder"),
+        &initial,
+    );
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let browse = state
+        .controls
+        .iter()
+        .find(|bound| {
+            matches!(
+                bound.binding,
+                ControlBinding::Command(SettingsCommand::BrowseDownloadFolder)
+            )
+        })
+        .map(|bound| bound.control);
+    if let Some(folder) = selected {
+        let folder = folder.to_string_lossy().into_owned();
+        let application = &mut *state.application;
+        if let Err(error) = application
+            .set_string_setting(SettingId::DownloadFolder, &folder)
+            .and_then(|()| application.save_settings())
+        {
+            show_error(window, &error.to_string());
+        }
+        if let Some(bound) = state.controls.iter().find(|bound| {
+            matches!(
+                bound.binding,
+                ControlBinding::Text(SettingId::DownloadFolder)
+            )
+        }) {
+            set_window_text(bound.control, &folder);
+        }
+    }
+    if let Some(browse) = browse {
+        let _ = SetFocus(Some(browse));
+    }
+}
+
+/// Python's `open_windows_default_apps_settings`.
+unsafe fn set_default_player(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let catalog = settings_catalog(state);
+    let opened = std::env::current_exe()
+        .map_err(|error| PlatformError::Operation(error.to_string()))
+        .and_then(|executable| {
+            let identity = ApplicationIdentity::RustBeta;
+            if !media_association_registration_complete(identity, &executable) {
+                register_media_associations(identity, &executable)?;
+            }
+            open_default_apps_settings()
+        })
+        .or_else(|error| open_default_programs_control_panel().map_err(|_| error));
+    match opened {
+        Ok(()) => state
+            .announcer
+            .announce(catalog.text("default_player_settings_opened"), true),
+        Err(PlatformError::Operation(error)) => {
+            let message = catalog
+                .text("default_player_settings_failed")
+                .replace("{error}", &error);
+            show_error(window, &message);
+        }
+    }
+}
+
+/// Python applies the visible controls once, then renders the newly selected
+/// section 140 ms after the last selection change.
+unsafe fn schedule_section_render(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let selected = SendMessageW(state.section_list, LB_GETCURSEL, None, None).0;
+    let Some(section) = usize::try_from(selected)
+        .ok()
+        .and_then(|index| SettingsSection::ALL.get(index).copied())
+    else {
+        return;
+    };
+    if state.pending_section.is_none() {
+        if section == state.selected_section {
+            return;
+        }
+        if let Err(error) = sync_all_controls(state) {
+            show_error(window, &error.to_string());
+            return;
+        }
+    }
+    state.pending_section = Some(section);
+    let _ = SetTimer(
+        Some(window),
+        SECTION_RENDER_TIMER_ID,
+        SECTION_RENDER_DELAY_MS,
+        None,
+    );
+}
+
+/// Renders a pending section now. Tab, Enter and the timer all end here.
+unsafe fn flush_section_render(window: HWND) {
+    let _ = KillTimer(Some(window), SECTION_RENDER_TIMER_ID);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let Some(section) = state.pending_section.take() else {
         return;
     };
     state.selected_section = section;
@@ -861,10 +1000,11 @@ unsafe fn change_section(window: HWND) {
     if let Err(error) = render_controls(window) {
         show_error(window, &error.to_string());
     }
-    let _ = SetFocus(Some(state.section_list));
 }
 
-unsafe fn save_and_close(window: HWND) {
+/// Python's `save_settings_from_ui`: save, speak "Settings saved." and stay on
+/// the Settings screen. Only a language change rebuilds the screen.
+unsafe fn save_settings(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
     };
@@ -872,9 +1012,22 @@ unsafe fn save_and_close(window: HWND) {
         show_error(window, &error.to_string());
         return;
     }
+    if !save_and_register_startup(window, state) {
+        return;
+    }
+    let catalog = settings_catalog(state);
+    state
+        .announcer
+        .announce(catalog.text("settings_saved"), true);
+    if (*state.application).settings().language != state.displayed_language {
+        rebuild_screen(window);
+    }
+}
+
+unsafe fn save_and_register_startup(window: HWND, state: &mut SettingsWindowState) -> bool {
     if let Err(error) = (&mut *state.application).save_settings() {
         show_error(window, &error.to_string());
-        return;
+        return false;
     }
     let executable = match std::env::current_exe() {
         Ok(executable) => executable,
@@ -883,7 +1036,7 @@ unsafe fn save_and_close(window: HWND) {
                 window,
                 &format!("Could not locate the running executable: {error}"),
             );
-            return;
+            return false;
         }
     };
     if let Err(error) = sync_startup_registration(
@@ -892,9 +1045,51 @@ unsafe fn save_and_close(window: HWND) {
         (&*state.application).settings().start_with_windows,
     ) {
         show_error(window, &error.to_string());
-        return;
+        return false;
     }
-    let _ = DestroyWindow(window);
+    true
+}
+
+/// Python's `show_settings` after Save with a new language or after Restore to
+/// defaults: every text is rebuilt and focus returns to the section list.
+unsafe fn rebuild_screen(window: HWND) {
+    let _ = KillTimer(Some(window), SECTION_RENDER_TIMER_ID);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state.pending_section = None;
+    state.scroll_offset = 0;
+    let application = &*state.application;
+    let catalog = apricot_app::embedded_catalog(&application.settings().language);
+    let model = application.settings_model(state.selected_section);
+    set_window_text(window, &model.title);
+    set_window_text(state.back, catalog.text("back"));
+    set_window_text(state.save, catalog.text("save"));
+    set_window_text(state.reset_all, catalog.text("restore_defaults"));
+    let section_name = wide(&model.section_list_name);
+    let _ = SetWindowTextW(state.section_list, PCWSTR(section_name.as_ptr()));
+    SendMessageW(state.section_list, LB_RESETCONTENT, None, None);
+    for section in &model.sections {
+        add_list_string(state.section_list, &section.label);
+    }
+    let selected = SettingsSection::ALL
+        .iter()
+        .position(|section| *section == state.selected_section)
+        .unwrap_or_default();
+    SendMessageW(
+        state.section_list,
+        LB_SETCURSEL,
+        Some(WPARAM(selected)),
+        None,
+    );
+    state
+        .displayed_language
+        .clone_from(&application.settings().language);
+    let section_list = state.section_list;
+    if let Err(error) = render_controls(window) {
+        show_error(window, &error.to_string());
+    }
+    let _ = SetFocus(Some(section_list));
 }
 
 unsafe fn cancel_and_close(window: HWND) {
@@ -904,25 +1099,21 @@ unsafe fn cancel_and_close(window: HWND) {
     let _ = DestroyWindow(window);
 }
 
-unsafe fn reset_all(window: HWND) {
-    let answer = MessageBoxW(
-        Some(window),
-        w!("Reset all ApricotPlayer settings to their defaults?"),
-        w!("ApricotPlayer 2 Beta"),
-        MB_YESNO | MB_ICONQUESTION,
-    );
-    if answer.0 != 6 {
-        return;
-    }
+/// Python's `restore_default_settings`: no confirmation, save at once, speak
+/// "Default settings restored." and show the Settings screen again.
+unsafe fn restore_defaults(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
     };
     (&mut *state.application).reset_all_settings();
-    if let Err(error) = render_controls(window) {
-        show_error(window, &error.to_string());
+    if !save_and_register_startup(window, state) {
         return;
     }
-    focus_first_control(window);
+    let catalog = settings_catalog(state);
+    state
+        .announcer
+        .announce(catalog.text("defaults_restored"), true);
+    rebuild_screen(window);
 }
 
 unsafe fn sync_all_controls(
@@ -1022,12 +1213,24 @@ unsafe extern "system" fn section_list_proc(
     subclass_id: usize,
     _reference_data: usize,
 ) -> LRESULT {
+    // IsDialogMessageW would otherwise move focus on Tab or press Save on Enter
+    // before the list sees the key.
+    if message == WM_GETDLGCODE_MESSAGE
+        && lparam.0 != 0
+        && is_section_list_commit_key(&*(lparam.0 as *const MSG))
+    {
+        let code = DefSubclassProc(window, message, wparam, lparam).0;
+        return LRESULT(code | DLGC_WANTMESSAGE_CODE);
+    }
     if message == WM_KEYDOWN
-        && (wparam.0 == usize::from(VK_RETURN.0)
-            || wparam.0 == usize::from(VK_TAB.0)
-                && !GetKeyState(i32::from(VK_SHIFT.0)).is_negative())
+        && is_section_list_commit_key(&MSG {
+            message,
+            wParam: wparam,
+            ..MSG::default()
+        })
         && let Ok(parent) = GetParent(window)
     {
+        flush_section_render(parent);
         focus_first_control(parent);
         return LRESULT(0);
     }
@@ -1035,6 +1238,14 @@ unsafe extern "system" fn section_list_proc(
         let _ = RemoveWindowSubclass(window, Some(section_list_proc), subclass_id);
     }
     DefSubclassProc(window, message, wparam, lparam)
+}
+
+/// Python renders the pending section and moves into it on Tab or Enter.
+unsafe fn is_section_list_commit_key(message: &MSG) -> bool {
+    message.message == WM_KEYDOWN
+        && (message.wParam.0 == usize::from(VK_RETURN.0)
+            || message.wParam.0 == usize::from(VK_TAB.0)
+                && !GetKeyState(i32::from(VK_SHIFT.0)).is_negative())
 }
 
 unsafe extern "system" fn settings_control_proc(
@@ -1125,14 +1336,53 @@ unsafe fn capture_shortcut(
     let Some(shortcut) = shortcut_from_virtual_key(key) else {
         return;
     };
-    if let Err(error) = (&mut *state.application).set_keyboard_shortcut(action_id, &shortcut) {
-        show_error(parent, &error.to_string());
-        let _ = SetFocus(Some(capture));
-        return;
+    let catalog = settings_catalog(state);
+    match (&mut *state.application).set_keyboard_shortcut(action_id, &shortcut) {
+        Ok(()) => {}
+        Err(apricot_app::SettingsControllerError::ShortcutConflict { shortcut, action }) => {
+            // Python names the other action by its translated label, shows a
+            // warning and then speaks the same sentence.
+            let message = catalog
+                .text("shortcut_in_use")
+                .replace("{shortcut}", &shortcut)
+                .replace("{action}", &shortcut_action_name(state, &action));
+            show_message(
+                parent,
+                &message,
+                catalog.text("shortcut_in_use_title"),
+                MB_ICONWARNING,
+            );
+            state.announcer.announce(&message, true);
+            let _ = SetFocus(Some(capture));
+            return;
+        }
+        Err(error) => {
+            show_error(parent, &error.to_string());
+            let _ = SetFocus(Some(capture));
+            return;
+        }
     }
     set_window_text(capture, &shortcut);
     update_shortcut_action_list(state, action_id, &shortcut);
     let _ = SetFocus(Some(capture));
+    let message = catalog
+        .text("shortcut_captured")
+        .replace("{shortcut}", &shortcut);
+    state.announcer.announce(&message, true);
+}
+
+fn shortcut_action_name(state: &SettingsWindowState, action_id: &str) -> String {
+    state
+        .controls
+        .iter()
+        .find_map(|bound| match &bound.binding {
+            ControlBinding::ShortcutActionList(actions) => actions
+                .iter()
+                .find(|action| action.action_id == action_id)
+                .map(|action| action.label.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| action_id.to_owned())
 }
 
 unsafe fn update_shortcut_action_list(
@@ -1413,20 +1663,8 @@ unsafe fn state(window: HWND) -> Option<&'static SettingsWindowState> {
     pointer.as_ref()
 }
 
-unsafe fn model_text(application: &Application, key: &str) -> String {
-    let model = application.settings_model(SettingsSection::General);
-    match key {
-        "back" => apricot_app::embedded_catalog(&application.settings().language)
-            .text("back")
-            .to_owned(),
-        "save" => apricot_app::embedded_catalog(&application.settings().language)
-            .text("save")
-            .to_owned(),
-        "reset_all_settings" => apricot_app::embedded_catalog(&application.settings().language)
-            .text("reset_all_settings")
-            .to_owned(),
-        _ => model.title,
-    }
+unsafe fn settings_catalog(state: &SettingsWindowState) -> apricot_core::TranslationCatalog {
+    apricot_app::embedded_catalog(&(*state.application).settings().language)
 }
 
 unsafe fn button(
@@ -1617,12 +1855,17 @@ unsafe fn apply_font(controls: &[HWND]) {
 }
 
 unsafe fn show_error(window: HWND, message: &str) {
+    show_message(window, message, "ApricotPlayer 2 Beta", MB_ICONERROR);
+}
+
+unsafe fn show_message(window: HWND, message: &str, title: &str, icon: MESSAGEBOX_STYLE) {
     let message = wide(message);
+    let title = wide(title);
     let _ = MessageBoxW(
         Some(window),
         PCWSTR(message.as_ptr()),
-        w!("ApricotPlayer 2 Beta"),
-        MB_OK | MB_ICONERROR,
+        PCWSTR(title.as_ptr()),
+        MB_OK | icon,
     );
 }
 
