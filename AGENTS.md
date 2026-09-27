@@ -4,7 +4,6 @@ Ta datoteka je trajni repozitorijski kontekst za Codex. Velja za celoten projekt
 
 ## Komunikacija
 
-- Vsak uporabniku viden odgovor začni z naslovom prve ravni `# Codex je odgovoril`, ker uporabnik navigira z bralnikom zaslona.
 - Privzeto odgovarjaj v slovenščini. Drug jezik uporabi, če ga uporabnik zahteva ali če pripravljaš vsebino za tuje uporabnike.
 - Najprej povej rezultat oziroma trenutno ugotovitev, nato podrobnosti.
 
