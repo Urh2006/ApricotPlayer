@@ -41,6 +41,10 @@ const ID_RENAME: usize = 2_304;
 const ID_DELETE: usize = 2_305;
 const ID_COPY: usize = 2_306;
 const ID_CLOSE: usize = 2_307;
+/// `IsDialogMessageW` turns Enter and Escape into `IDOK` and `IDCANCEL`
+/// before the focused list sees the key.
+const IDOK_COMMAND: usize = 1;
+const IDCANCEL_COMMAND: usize = 2;
 
 #[derive(Clone, Debug)]
 pub struct BookmarkDialogEntry {
@@ -244,8 +248,11 @@ unsafe extern "system" fn window_proc(
         WM_COMMAND => {
             let command = wparam.0 & 0xffff;
             let notification = (wparam.0 >> 16) & 0xffff;
-            if command == ID_CLOSE {
+            if command == ID_CLOSE || command == IDCANCEL_COMMAND {
                 let _ = DestroyWindow(window);
+            } else if command == IDOK_COMMAND {
+                // Enter in the list plays the selected bookmark.
+                dispatch_selected(window, ID_PLAY);
             } else if command == ID_ADD {
                 dispatch_action(window, BookmarkDialogRequest::Add);
             } else if command == ID_PLAY

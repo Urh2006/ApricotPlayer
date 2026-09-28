@@ -1,40 +1,37 @@
 use std::collections::BTreeMap;
 
-use apricot_core::audio::{EQUALIZER_BANDS, FACTORY_EQUALIZER_PRESETS};
+use apricot_core::audio::EQUALIZER_BANDS;
 
-#[derive(Clone, Copy, Debug)]
-pub struct EqualizerFilterConfig<'a> {
-    pub gains: &'a BTreeMap<String, f64>,
-    pub equalizer_enabled: bool,
-    pub bass_boost: bool,
-    pub clipping_protection: bool,
-}
+/// Python `EQ_FILTER_LABEL`.
+pub const EQUALIZER_FILTER_LABEL: &str = "apricot_eq";
+/// Python `EQ_FILTER_ALT_LABEL`, used while replacing a running equalizer.
+pub const EQUALIZER_FILTER_ALT_LABEL: &str = "apricot_eq_next";
+/// Python `EQ_LIMITER_FILTER`.
+const LIMITER_FILTER: &str = "alimiter=limit=0.95:attack=5:release=80";
+/// Python `EQ_CLIPPING_HEADROOM_LIMIT_DB`.
+const CLIPPING_HEADROOM_LIMIT_DB: f64 = 12.0;
 
-/// Builds Apricot's tagged mpv audio filter without mutating the stored gains.
-pub fn build_equalizer_filter(config: EqualizerFilterConfig<'_>) -> Option<String> {
-    let mut gains = config.gains.clone();
-    if config.bass_boost {
-        let preset = FACTORY_EQUALIZER_PRESETS
-            .iter()
-            .find(|preset| preset.id == "bass_boost")?;
-        for (band, boost) in EQUALIZER_BANDS.iter().zip(preset.gains_db) {
-            let gain = gains.entry(band.id.to_owned()).or_default();
-            *gain = (*gain + f64::from(boost)).clamp(-24.0, 24.0);
-        }
-    }
-    if !config.equalizer_enabled && !config.bass_boost {
-        return None;
-    }
-
-    let has_positive = gains.values().any(|gain| *gain > 0.05);
-    let protect = config.clipping_protection && has_positive;
+/// Python `equalizer_filter` without its `@label:` prefix: the `lavfi` graph
+/// for the given gains, or `None` when no band is audible. As in Python
+/// `equalizer_clipping_protection_active`, protection only applies when a
+/// band boosts: it adds headroom for the largest positive gain and a limiter.
+pub fn equalizer_filter_graph(
+    gains: &BTreeMap<String, f64>,
+    clipping_protection: bool,
+) -> Option<String> {
+    let maximum = EQUALIZER_BANDS
+        .iter()
+        .filter_map(|band| gains.get(band.id).copied())
+        .fold(0.0_f64, f64::max);
+    let clipping_protection = clipping_protection && maximum > 0.05;
     let mut filters = Vec::new();
-    if protect {
-        let maximum = gains.values().copied().fold(0.0_f64, f64::max);
-        if maximum > 0.05 {
-            filters.push(format!("volume={:.1}dB", -maximum.min(12.0)));
+    if clipping_protection {
+        let headroom = -maximum.clamp(0.0, CLIPPING_HEADROOM_LIMIT_DB);
+        if headroom <= -0.05 {
+            filters.push(format!("volume={headroom:.1}dB"));
         }
     }
+    let mut audible = false;
     for band in EQUALIZER_BANDS {
         let gain = gains
             .get(band.id)
@@ -44,16 +41,25 @@ pub fn build_equalizer_filter(config: EqualizerFilterConfig<'_>) -> Option<Strin
         if gain.abs() < 0.05 {
             continue;
         }
+        audible = true;
         filters.push(format!(
             "equalizer=f={}:t=q:w={}:g={gain:.1}",
             band.frequency_hz,
             band_width(band.id)
         ));
     }
-    if protect && !filters.is_empty() {
-        filters.push("alimiter=limit=0.95:attack=5:release=80".to_owned());
+    if !audible {
+        return None;
     }
-    (!filters.is_empty()).then(|| format!("@apricot_eq:lavfi=[{}]", filters.join(",")))
+    if clipping_protection {
+        filters.push(LIMITER_FILTER.to_owned());
+    }
+    Some(format!("lavfi=[{}]", filters.join(",")))
+}
+
+/// Tagged filter string for `af add` and the initial `af` chain.
+pub fn tagged_equalizer_filter(label: &str, graph: &str) -> String {
+    format!("@{label}:{graph}")
 }
 
 fn band_width(id: &str) -> f64 {
@@ -73,7 +79,7 @@ fn band_width(id: &str) -> f64 {
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{EqualizerFilterConfig, build_equalizer_filter};
+    use super::{EQUALIZER_FILTER_LABEL, equalizer_filter_graph, tagged_equalizer_filter};
 
     #[test]
     fn all_ten_bands_keep_independent_values_and_widths() {
@@ -90,13 +96,8 @@ mod tests {
             ("16000".to_owned(), 10.0),
         ]);
 
-        let filter = build_equalizer_filter(EqualizerFilterConfig {
-            gains: &gains,
-            equalizer_enabled: true,
-            bass_boost: false,
-            clipping_protection: false,
-        })
-        .expect("enabled equalizer filter");
+        let graph = equalizer_filter_graph(&gains, false).expect("audible equalizer");
+        let filter = tagged_equalizer_filter(EQUALIZER_FILTER_LABEL, &graph);
 
         let expected = [
             "f=31:t=q:w=1.7:g=1.0",
@@ -113,9 +114,8 @@ mod tests {
         for fragment in expected {
             assert!(filter.contains(fragment), "missing {fragment}: {filter}");
         }
+        assert!(filter.starts_with("@apricot_eq:lavfi=[equalizer=f=31:"));
         assert_eq!(filter.matches("equalizer=").count(), 10);
-        assert_eq!(gains.get("31"), Some(&1.0));
-        assert_eq!(gains.get("16000"), Some(&10.0));
     }
 
     #[test]
@@ -125,45 +125,25 @@ mod tests {
             ("1000".to_owned(), 4.0),
             ("16000".to_owned(), -3.0),
         ]);
-        let filter = build_equalizer_filter(EqualizerFilterConfig {
-            gains: &gains,
-            equalizer_enabled: true,
-            bass_boost: false,
-            clipping_protection: true,
-        })
-        .expect("protected equalizer filter");
+        let graph = equalizer_filter_graph(&gains, true).expect("protected equalizer");
 
-        assert!(filter.starts_with("@apricot_eq:lavfi=[volume=-12.0dB,"));
-        assert!(filter.ends_with("alimiter=limit=0.95:attack=5:release=80]"));
+        assert!(graph.starts_with("lavfi=[volume=-12.0dB,"));
+        assert!(graph.ends_with("alimiter=limit=0.95:attack=5:release=80]"));
     }
 
     #[test]
-    fn bass_boost_is_added_once_without_changing_input_gains() {
-        let gains = BTreeMap::from([("31".to_owned(), 2.0), ("62".to_owned(), -1.0)]);
-        let filter = build_equalizer_filter(EqualizerFilterConfig {
-            gains: &gains,
-            equalizer_enabled: false,
-            bass_boost: true,
-            clipping_protection: false,
-        })
-        .expect("bass boost filter");
-
-        assert!(filter.contains("f=31:t=q:w=1.7:g=7.0"));
-        assert!(filter.contains("f=62:t=q:w=2:g=3.0"));
-        assert_eq!(gains.get("31"), Some(&2.0));
-        assert_eq!(gains.get("62"), Some(&-1.0));
-    }
-
-    #[test]
-    fn disabled_flat_equalizer_has_no_filter() {
+    fn clipping_protection_is_inactive_without_a_boosted_band() {
+        let gains = BTreeMap::from([("250".to_owned(), -4.0)]);
         assert_eq!(
-            build_equalizer_filter(EqualizerFilterConfig {
-                gains: &BTreeMap::new(),
-                equalizer_enabled: false,
-                bass_boost: false,
-                clipping_protection: true,
-            }),
-            None
+            equalizer_filter_graph(&gains, true).as_deref(),
+            Some("lavfi=[equalizer=f=250:t=q:w=2.3:g=-4.0]")
         );
+    }
+
+    #[test]
+    fn flat_gains_have_no_filter() {
+        assert_eq!(equalizer_filter_graph(&BTreeMap::new(), true), None);
+        let tiny = BTreeMap::from([("31".to_owned(), 0.04)]);
+        assert_eq!(equalizer_filter_graph(&tiny, false), None);
     }
 }

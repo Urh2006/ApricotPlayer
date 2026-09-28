@@ -4,11 +4,11 @@ use std::path::Path;
 
 use apricot_core::{
     CUSTOMIZABLE_MAIN_MENU, SETTINGS_SECTIONS, SettingId, SettingsSection, TranslationCatalog,
-    action::ACTIONS,
-    audio::{CUSTOM_EQUALIZER_PRESET_IDS, EQUALIZER_BANDS, FACTORY_EQUALIZER_PRESETS},
-    locale::LANGUAGES,
+    action::ACTIONS, audio::EQUALIZER_BANDS, locale::LANGUAGES,
 };
 use apricot_storage::SettingsDocument;
+
+use crate::equalizer::EqualizerSettings;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SettingsChoiceOption {
@@ -180,6 +180,25 @@ impl SettingsScreenModel {
                 && *setting == target
             {
                 *current = options;
+                return;
+            }
+        }
+    }
+
+    /// Python `equalizer_current_device_key`: the equalizer device choice
+    /// belongs to the running player's output device when a player is open.
+    pub fn set_equalizer_device(&mut self, device_key: &str, settings: &SettingsDocument) {
+        for control in &mut self.controls {
+            if let SettingsControl::EqualizerDevicePresetChoice {
+                device_id, value, ..
+            } = control
+            {
+                device_key.clone_into(device_id);
+                *value = settings
+                    .equalizer_device_presets
+                    .get(device_key)
+                    .cloned()
+                    .unwrap_or_default();
                 return;
             }
         }
@@ -726,8 +745,9 @@ fn enabled_equalizer_controls(
     settings: &SettingsDocument,
 ) -> Vec<SettingsControl> {
     let mut controls = Vec::new();
-    let preset = settings.global_equalizer_preset.clone();
-    let preset_options = equalizer_preset_options(catalog, settings);
+    let equalizer = EqualizerSettings::from_document(settings);
+    let preset = equalizer.normalized_preset(&settings.global_equalizer_preset);
+    let preset_options = equalizer_preset_options(catalog, &equalizer);
     controls.push(SettingsControl::Choice {
         setting: SettingId::GlobalEqualizerPreset,
         label: catalog.text("equalizer_preset").to_owned(),
@@ -735,11 +755,7 @@ fn enabled_equalizer_controls(
         value_type: SettingsValueType::String,
         options: preset_options.clone(),
     });
-    let device_id = if settings.audio_output_device.trim().is_empty() {
-        "auto".to_owned()
-    } else {
-        settings.audio_output_device.clone()
-    };
+    let device_id = crate::equalizer::device_key(&settings.audio_output_device);
     let device_value = settings
         .equalizer_device_presets
         .get(&device_id)
@@ -756,44 +772,32 @@ fn enabled_equalizer_controls(
         value: device_value,
         options: device_options,
     });
-    if !FACTORY_EQUALIZER_PRESETS
-        .iter()
-        .any(|factory| factory.id == preset)
-    {
+    let custom = crate::equalizer::is_custom_preset(&preset);
+    if custom {
         controls.push(SettingsControl::EqualizerPresetName {
             preset_id: preset.clone(),
             label: catalog.text("equalizer_preset_name").to_owned(),
-            value: settings
-                .equalizer_custom_names
-                .get(&preset)
-                .cloned()
-                .unwrap_or_else(|| preset.clone()),
+            value: equalizer.custom_name(&preset),
         });
     }
+    let db_range = equalizer.db_range();
     controls.push(choice_raw(
         SettingId::EqualizerDbRange,
         "equalizer_db_range",
-        &settings.equalizer_db_range.to_string(),
-        &["6", "12", "18", "24"],
+        &db_range.to_string(),
+        &crate::equalizer::RANGE_OPTIONS,
         SettingsValueType::Integer,
         catalog,
     ));
-    let gains = settings
-        .equalizer_preset_gains
-        .get(&preset)
-        .unwrap_or(&settings.global_equalizer_gains);
+    let gains = equalizer.gains_for_preset(&preset);
     for band in EQUALIZER_BANDS {
-        let frequency = band.frequency_hz.to_string();
-        let label = catalog
-            .text("equalizer_band_gain")
-            .replace("{band}", &format!("{frequency} Hz"));
         controls.push(SettingsControl::EqualizerBandSlider {
             preset_id: preset.clone(),
             band_id: band.id,
-            label,
+            label: crate::equalizer::band_gain_label(catalog, band.id),
             value_db: gains.get(band.id).copied().unwrap_or(0.0),
-            minimum_db: -settings.equalizer_db_range,
-            maximum_db: settings.equalizer_db_range,
+            minimum_db: -db_range,
+            maximum_db: db_range,
         });
     }
     controls.extend([
@@ -814,10 +818,7 @@ fn enabled_equalizer_controls(
             label: catalog.text("export_equalizer_profile").to_owned(),
         },
     ]);
-    if !FACTORY_EQUALIZER_PRESETS
-        .iter()
-        .any(|factory| factory.id == preset)
-    {
+    if custom {
         controls.push(SettingsControl::Command {
             command: SettingsCommand::DeleteEqualizerProfile,
             label: catalog.text("delete_equalizer_profile").to_owned(),
@@ -826,51 +827,19 @@ fn enabled_equalizer_controls(
     controls
 }
 
+/// Python `equalizer_preset_options` with `equalizer_preset_labels`.
 fn equalizer_preset_options(
     catalog: &TranslationCatalog,
-    settings: &SettingsDocument,
+    equalizer: &EqualizerSettings,
 ) -> Vec<SettingsChoiceOption> {
-    let mut options: Vec<_> = FACTORY_EQUALIZER_PRESETS
-        .iter()
-        .map(|preset| {
-            SettingsChoiceOption::labeled(
-                preset.id,
-                catalog.text(&format!("eq_preset_{}", preset.id)),
-            )
+    equalizer
+        .preset_options()
+        .into_iter()
+        .map(|id| {
+            let label = equalizer.preset_label(catalog, &id);
+            SettingsChoiceOption::labeled(id, label)
         })
-        .collect();
-    let mut custom_ids: Vec<_> = settings
-        .equalizer_preset_gains
-        .keys()
-        .filter(|id| {
-            !FACTORY_EQUALIZER_PRESETS
-                .iter()
-                .any(|factory| factory.id == id.as_str())
-        })
-        .cloned()
-        .collect();
-    for id in CUSTOM_EQUALIZER_PRESET_IDS {
-        if !custom_ids.iter().any(|existing| existing == id) {
-            custom_ids.push((*id).to_owned());
-        }
-    }
-    custom_ids.sort_by_key(|id| {
-        CUSTOM_EQUALIZER_PRESET_IDS
-            .iter()
-            .position(|default| *default == id)
-            .map_or((1, usize::MAX, id.clone()), |index| {
-                (0, index, String::new())
-            })
-    });
-    options.extend(custom_ids.into_iter().map(|id| {
-        let label = settings
-            .equalizer_custom_names
-            .get(&id)
-            .cloned()
-            .unwrap_or_else(|| id.clone());
-        SettingsChoiceOption::labeled(id, label)
-    }));
-    options
+        .collect()
 }
 
 #[allow(clippy::too_many_lines)]

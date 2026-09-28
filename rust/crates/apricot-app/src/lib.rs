@@ -8,6 +8,7 @@ pub mod bookmark_controller;
 pub mod chapters;
 pub mod context_menu;
 pub mod download_controller;
+pub mod equalizer;
 pub mod last_player_session_controller;
 pub mod local_folder;
 pub mod main_menu;

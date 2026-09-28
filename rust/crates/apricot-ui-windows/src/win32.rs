@@ -189,6 +189,8 @@ const WM_PROCESS_ACTIVATION: u32 = WM_APP + 1;
 const WM_TRAY_ICON: u32 = WM_APP + 2;
 const WM_SHOW_DOWNLOAD_DETAILS: u32 = WM_APP + 3;
 const WM_SYNC_FULLSCREEN: u32 = WM_APP + 4;
+/// Posted by the settings window after a global equalizer change.
+pub(crate) const WM_APPLY_GLOBAL_EQUALIZER: u32 = WM_APP + 5;
 const YOUTUBE_TIMER_ID: usize = 1;
 const YOUTUBE_TIMER_INTERVAL_MS: u32 = 25;
 const YOUTUBE_METADATA_BATCH_SIZE: usize = 5;
@@ -516,6 +518,17 @@ pub fn run_application(application: Application, version: &str, start_hidden: bo
     unsafe { run_win32(application, version, start_hidden) }
 }
 
+unsafe fn register_secondary_window_classes() -> Result<()> {
+    crate::settings_win32::register()?;
+    crate::action_finder_win32::register()?;
+    crate::playback_queue_win32::register()?;
+    crate::playlist_dialog_win32::register()?;
+    crate::bookmark_dialog_win32::register()?;
+    crate::equalizer_win32::register()?;
+    crate::details_win32::register()?;
+    crate::download_progress_win32::register()
+}
+
 unsafe fn run_win32(application: Application, version: &str, start_hidden: bool) -> Result<()> {
     InitCommonControls();
     let module = GetModuleHandleW(None)?;
@@ -532,13 +545,7 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
     if RegisterClassW(&raw const class) == 0 {
         return Err(windows::core::Error::from_thread());
     }
-    crate::settings_win32::register()?;
-    crate::action_finder_win32::register()?;
-    crate::playback_queue_win32::register()?;
-    crate::playlist_dialog_win32::register()?;
-    crate::bookmark_dialog_win32::register()?;
-    crate::details_win32::register()?;
-    crate::download_progress_win32::register()?;
+    register_secondary_window_classes()?;
 
     let title = wide(&format!("ApricotPlayer 2 Beta {version}"));
     let window = CreateWindowExW(
@@ -880,6 +887,14 @@ unsafe extern "system" fn window_proc(
         }
         WM_SYNC_FULLSCREEN => {
             apply_window_fullscreen(window);
+            LRESULT(0)
+        }
+        WM_APPLY_GLOBAL_EQUALIZER => {
+            if wparam.0 == 0 {
+                apply_global_player_equalizer(window);
+            } else {
+                let _ = apply_player_equalizer(window, None);
+            }
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == RELATED_TIMER_ID => {
@@ -10732,28 +10747,42 @@ fn playback_launch_options(
     options.cache = settings.enable_stream_cache.then(|| MpvCacheConfig {
         megabytes: u32::try_from(settings.cache_size_mb.clamp(128, 4_096)).unwrap_or(512),
     });
-    options.initial_audio_filter = player_audio_filter(state, None, None);
+    options.initial_audio_filter = player_audio_filter(state, None);
     Some(options)
 }
 
-fn player_equalizer_filter(
-    state: &WindowState,
-    bass_boost_override: Option<bool>,
-) -> Option<String> {
-    let audio = state.application.player_session().audio()?;
-    let bass_boost = bass_boost_override.unwrap_or_else(|| {
-        state
-            .application
-            .player_session()
-            .enabled_toggles()
-            .contains(&SessionToggle::BassBoost)
-    });
-    apricot_playback::build_equalizer_filter(apricot_playback::EqualizerFilterConfig {
-        gains: &audio.equalizer.gains,
-        equalizer_enabled: audio.equalizer.enabled,
-        bass_boost,
-        clipping_protection: state.application.settings().equalizer_clipping_protection,
+/// Python `start_mpv` initial `--af` equalizer filter.
+fn player_equalizer_filter(state: &WindowState) -> Option<String> {
+    state.application.player_equalizer_graph(None).map(|graph| {
+        apricot_playback::tagged_equalizer_filter(apricot_playback::EQUALIZER_FILTER_LABEL, &graph)
     })
+}
+
+/// Python `apply_equalizer_to_player`: replaces only the equalizer filter of
+/// the running player.
+unsafe fn apply_player_equalizer(window: HWND, bass_boost_override: Option<bool>) -> bool {
+    let Some(state) = state(window) else {
+        return false;
+    };
+    if !state.application.player_session().is_open() || state.playback.is_none() {
+        return false;
+    }
+    let graph = state
+        .application
+        .player_equalizer_graph(bass_boost_override);
+    execute_player_command(window, PlaybackCommand::SetEqualizerFilter(graph))
+}
+
+/// Python `if self.session_equalizer_enabled is None: schedule_equalizer_apply`:
+/// global equalizer changes only reach a player that follows the global
+/// equalizer.
+unsafe fn apply_global_player_equalizer(window: HWND) {
+    let follows_global = state(window)
+        .and_then(|state| state.application.player_session().audio())
+        .is_some_and(|audio| audio.equalizer.is_none());
+    if follows_global {
+        let _ = apply_player_equalizer(window, None);
+    }
 }
 
 fn nonempty(value: &str) -> Option<String> {
@@ -11148,6 +11177,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "player_shuffle" => toggle_player_session_setting(window, SessionToggle::Shuffle),
         "player_replaygain" => cycle_player_replaygain(window),
         "player_output_devices" => show_output_devices(window),
+        "player_equalizer" => show_player_equalizer(window),
         "player_next_related" => play_related_video(window, true),
         "player_fullscreen" => toggle_player_fullscreen(window, false, true),
         "player_bass_boost" => toggle_player_session_setting(window, SessionToggle::BassBoost),
@@ -13538,13 +13568,9 @@ fn pitch_mode(state: &WindowState) -> PitchMode {
     PitchMode::from_setting(&state.application.settings().pitch_mode)
 }
 
-/// Complete tagged `af` chain for the current session with optional
-/// bass-boost and pitch overrides.
-fn player_audio_filter(
-    state: &WindowState,
-    bass_boost_override: Option<bool>,
-    pitch_override: Option<f64>,
-) -> Option<String> {
+/// Complete tagged `af` chain for a starting player, with an optional pitch
+/// override.
+fn player_audio_filter(state: &WindowState, pitch_override: Option<f64>) -> Option<String> {
     let pitch = pitch_override.unwrap_or_else(|| {
         state
             .application
@@ -13552,7 +13578,7 @@ fn player_audio_filter(
             .audio()
             .map_or(1.0, |audio| audio.pitch)
     });
-    let equalizer = player_equalizer_filter(state, bass_boost_override);
+    let equalizer = player_equalizer_filter(state);
     audio_filter_chain(
         speed_audio_mode(state),
         equalizer.as_deref(),
@@ -13582,20 +13608,16 @@ unsafe fn apply_player_speed(window: HWND, speed: f64) -> bool {
 
 /// Python `apply_pitch_value`, including linked speed changes.
 unsafe fn apply_player_pitch(window: HWND, pitch: f64, speed_delta: Option<f64>) -> bool {
-    let Some((mode, filter)) = state(window).map(|state| {
-        (
-            pitch_mode(state),
-            player_audio_filter(state, None, Some(pitch)),
-        )
-    }) else {
+    let Some(mode) = state(window).map(pitch_mode) else {
         return false;
     };
+    let pitch_filter = apricot_playback::pitch_filter_active(mode, pitch).then_some(pitch);
     if !execute_player_command(window, PlaybackCommand::SetAudioPitchCorrection(true))
         || !execute_player_command(
             window,
             PlaybackCommand::SetPitch(mpv_pitch_property(mode, pitch)),
         )
-        || !execute_player_command(window, PlaybackCommand::SetAudioFilter(filter))
+        || !execute_player_command(window, PlaybackCommand::SetPitchFilter(pitch_filter))
     {
         return false;
     }
@@ -13694,10 +13716,7 @@ unsafe fn toggle_player_session_setting(window: HWND, toggle: SessionToggle) {
             window,
             PlaybackCommand::SetVolumeMax(if enabled { 300 } else { 100 }),
         ),
-        SessionToggle::BassBoost => {
-            let filter = player_audio_filter(state, Some(enabled), None);
-            execute_player_command(window, PlaybackCommand::SetAudioFilter(filter))
-        }
+        SessionToggle::BassBoost => apply_player_equalizer(window, Some(enabled)),
         SessionToggle::AutoplayNext | SessionToggle::Fullscreen | SessionToggle::Shuffle => true,
     };
     if !command_succeeded {
@@ -13787,6 +13806,114 @@ unsafe fn cycle_player_replaygain(window: HWND) {
     }
 }
 
+/// Python `show_player_equalizer`: silent without a running player.
+unsafe fn show_player_equalizer(window: HWND) {
+    let Some(window_state) = state_mut(window) else {
+        return;
+    };
+    if !window_state.application.player_session().is_open() || window_state.playback.is_none() {
+        return;
+    }
+    window_state.modal_open = true;
+    let result = crate::equalizer_win32::show(window, Box::new(PlayerEqualizerHost { window }));
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
+    resume_deferred_window_work(window);
+    if let Err(error) = result
+        && let Some(current) = state(window)
+    {
+        let message = format!("Equalizer dialog failed: {error}");
+        set_status(current, &message, true);
+        show_error_message(window, &message);
+    }
+}
+
+/// The main window side of the equalizer dialog.
+struct PlayerEqualizerHost {
+    window: HWND,
+}
+
+impl crate::equalizer_win32::EqualizerDialogHost for PlayerEqualizerHost {
+    fn catalog(&self) -> apricot_core::TranslationCatalog {
+        // SAFETY: The host is only used on the UI thread while the main window lives.
+        unsafe { state(self.window) }.map_or_else(
+            || apricot_app::embedded_catalog("en"),
+            |state| apricot_app::embedded_catalog(&state.application.settings().language),
+        )
+    }
+
+    fn settings(&self) -> apricot_app::equalizer::EqualizerSettings {
+        // SAFETY: As above.
+        unsafe { state(self.window) }.map_or_else(
+            || {
+                apricot_app::equalizer::EqualizerSettings::from_document(
+                    &apricot_storage::SettingsDocument::default(),
+                )
+            },
+            |state| state.application.equalizer_settings(),
+        )
+    }
+
+    fn update_settings(
+        &mut self,
+        settings: &apricot_app::equalizer::EqualizerSettings,
+        save: bool,
+    ) -> std::result::Result<(), String> {
+        // SAFETY: As above.
+        let Some(state) = (unsafe { state_mut(self.window) }) else {
+            return Ok(());
+        };
+        state
+            .application
+            .set_equalizer_settings(settings)
+            .and_then(|()| {
+                if save {
+                    state.application.save_settings()
+                } else {
+                    Ok(())
+                }
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    fn session_equalizer(&self) -> Option<apricot_app::EqualizerSession> {
+        // SAFETY: As above.
+        unsafe { state(self.window) }
+            .and_then(|state| state.application.player_session().audio())
+            .and_then(|audio| audio.equalizer.clone())
+    }
+
+    fn set_session_equalizer(&mut self, equalizer: Option<apricot_app::EqualizerSession>) {
+        // SAFETY: As above.
+        if let Some(state) = unsafe { state_mut(self.window) } {
+            state.application.set_player_equalizer(equalizer);
+        }
+    }
+
+    fn apply_to_player(&mut self) {
+        // SAFETY: As above.
+        unsafe {
+            let _ = apply_player_equalizer(self.window, None);
+        }
+    }
+
+    fn device_key(&self) -> String {
+        // SAFETY: As above.
+        unsafe { state(self.window) }.map_or_else(
+            || "auto".to_owned(),
+            |state| state.application.equalizer_device_key(),
+        )
+    }
+
+    fn announce(&mut self, message: &str) {
+        // SAFETY: As above.
+        if let Some(state) = unsafe { state(self.window) } {
+            unsafe { set_status(state, message, true) };
+        }
+    }
+}
+
 /// Python `show_output_devices`: lists the running player's
 /// `audio-device-list` and switches this player session to the chosen device.
 unsafe fn show_output_devices(window: HWND) {
@@ -13840,6 +13967,7 @@ unsafe fn show_output_devices(window: HWND) {
     match result {
         Ok(()) => {
             state.application.set_player_output_device(&choice.value);
+            apply_global_player_equalizer(window);
             announce_player_text(window, "output_device_set", &[("device", &choice.label)]);
         }
         Err(error) => {

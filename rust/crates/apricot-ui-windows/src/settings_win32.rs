@@ -42,13 +42,13 @@ use windows::{
                 HMENU, IDC_ARROW, IsDialogMessageW, KillTimer, LB_ADDSTRING, LB_DELETESTRING,
                 LB_GETCURSEL, LB_INSERTSTRING, LB_RESETCONTENT, LB_SETCURSEL, LBN_SELCHANGE,
                 LBS_NOTIFY, LoadCursorW, MB_ICONERROR, MB_ICONWARNING, MB_OK, MESSAGEBOX_STYLE,
-                MSG, MessageBoxW, MoveWindow, PostQuitMessage, RegisterClassW, SB_VERT, SCROLLINFO,
-                SIF_PAGE, SIF_POS, SIF_RANGE, SW_SHOW, SendMessageW, SetForegroundWindow, SetTimer,
-                SetWindowLongPtrW, SetWindowTextW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE,
-                WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_HSCROLL,
-                WM_KEYDOWN, WM_NCDESTROY, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_TIMER, WM_VSCROLL,
-                WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_TABSTOP,
-                WS_VISIBLE, WS_VSCROLL,
+                MSG, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassW,
+                SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SW_SHOW, SendMessageW,
+                SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
+                TranslateMessage, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CHAR,
+                WM_CLOSE, WM_COMMAND, WM_HSCROLL, WM_KEYDOWN, WM_NCDESTROY, WM_SETFOCUS,
+                WM_SETFONT, WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE,
+                WS_GROUP, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -67,6 +67,10 @@ const SECTION_RENDER_DELAY_MS: u32 = 140;
 /// Polls the background device probe started by the Playback section.
 const AUDIO_DEVICE_TIMER_ID: usize = 2;
 const AUDIO_DEVICE_POLL_MS: u32 = 100;
+/// Python `schedule_equalizer_apply()` after an equalizer slider moves.
+const EQUALIZER_APPLY_TIMER_ID: usize = 3;
+const TBM_SETPAGESIZE: u32 = 0x0415;
+const TBM_SETLINESIZE: u32 = 0x0417;
 const CB_RESETCONTENT: u32 = 0x014B;
 const CBN_SELCHANGE: usize = 1;
 const BN_CLICKED: usize = 0;
@@ -77,6 +81,8 @@ const BST_CHECKED: usize = 1;
 const CB_ADDSTRING: u32 = 0x0143;
 const CB_GETCURSEL: u32 = 0x0147;
 const CB_SETCURSEL: u32 = 0x014E;
+const CB_DELETESTRING: u32 = 0x0144;
+const CB_INSERTSTRING: u32 = 0x014A;
 const TBM_GETPOS: u32 = 0x0400;
 const WM_GETDLGCODE_MESSAGE: u32 = 0x0087;
 const DLGC_WANTMESSAGE_CODE: isize = 0x0004;
@@ -140,6 +146,8 @@ struct BoundControl {
 
 struct SettingsWindowState {
     application: *mut Application,
+    /// The main window, which applies equalizer changes to a running player.
+    owner: HWND,
     section_list: HWND,
     save: HWND,
     back: HWND,
@@ -201,6 +209,8 @@ pub unsafe fn show(owner: HWND, application: &mut Application) -> Result<Option<
         }
     };
     let initial_focus = state.section_list;
+    let mut state = state;
+    state.owner = owner;
     let state_pointer = Box::into_raw(Box::new(state));
     SetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0), state_pointer as isize);
     if let Err(error) = render_controls(window) {
@@ -275,6 +285,11 @@ unsafe extern "system" fn settings_window_proc(
             finish_audio_device_refresh(window);
             LRESULT(0)
         }
+        WM_TIMER if wparam.0 == EQUALIZER_APPLY_TIMER_ID => {
+            let _ = KillTimer(Some(window), EQUALIZER_APPLY_TIMER_ID);
+            post_equalizer_apply(window, true);
+            LRESULT(0)
+        }
         WM_CLOSE => {
             close_without_saving(window);
             LRESULT(0)
@@ -331,6 +346,7 @@ unsafe fn create_base_controls(
     Ok(SettingsWindowState {
         displayed_language: application.settings().language.clone(),
         application,
+        owner: HWND::default(),
         section_list,
         save,
         back,
@@ -682,9 +698,8 @@ unsafe fn create_bound_control(
             minimum_db,
             maximum_db,
         } => {
-            let accessible_label = equalizer_slider_name(&label, value_db);
             let label_control = static_label(parent, instance, &label)?;
-            let accessible_label = wide(&accessible_label);
+            let accessible_label = wide(&label);
             let control = create_control(
                 parent,
                 instance,
@@ -695,13 +710,31 @@ unsafe fn create_bound_control(
                 id,
             )?;
             set_trackbar_range(control, minimum_db * 10, maximum_db * 10);
+            // Python `configure_equalizer_slider_steps`.
+            SendMessageW(
+                control,
+                TBM_SETLINESIZE,
+                None,
+                Some(LPARAM(apricot_app::equalizer::SLIDER_LINE_STEP as isize)),
+            );
+            SendMessageW(
+                control,
+                TBM_SETPAGESIZE,
+                None,
+                Some(LPARAM(apricot_app::equalizer::SLIDER_PAGE_STEP as isize)),
+            );
+            let tenths = apricot_app::equalizer::slider_from_gain(value_db, maximum_db);
             SendMessageW(
                 control,
                 TBM_SETPOS,
                 Some(WPARAM(1)),
-                Some(LPARAM(
-                    isize::try_from(db_to_tenths(value_db)).unwrap_or_default(),
-                )),
+                Some(LPARAM(isize::try_from(tenths).unwrap_or_default())),
+            );
+            crate::accessibility_win32::annotate_slider(
+                control,
+                &label,
+                &apricot_app::equalizer::slider_value_text(tenths),
+                false,
             );
             (
                 Some(label_control),
@@ -817,6 +850,9 @@ unsafe fn handle_slider_change(window: HWND, lparam: LPARAM) {
         return;
     }
     update_slider_accessible_name(&bound);
+    if let ControlBinding::EqualizerBand { preset_id, .. } = &bound.binding {
+        equalizer_slider_live_preview(window, preset_id);
+    }
 }
 
 unsafe fn update_slider_accessible_name(bound: &BoundControl) {
@@ -831,11 +867,148 @@ unsafe fn update_slider_accessible_name(bound: &BoundControl) {
         }
         ControlBinding::EqualizerBand { label, .. } => {
             let tenths = i32::try_from(position).unwrap_or_default();
-            equalizer_slider_name(label, f64::from(tenths) / 10.0)
+            crate::accessibility_win32::annotate_slider(
+                bound.control,
+                label,
+                &apricot_app::equalizer::slider_value_text(tenths),
+                true,
+            );
+            return;
         }
         _ => return,
     };
     set_window_text(bound.control, &name);
+}
+
+/// Python `on_equalizer_settings_slider` with a running player: the global
+/// equalizer turns on and the visible sliders are heard, as the custom
+/// profile itself or as a preview of the edited factory preset.
+unsafe fn equalizer_slider_live_preview(window: HWND, preset_id: &str) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let app = &mut *state.application;
+    if !app.player_session().is_open() {
+        return;
+    }
+    let _ = app.set_boolean_setting(SettingId::GlobalEqualizerEnabled, true);
+    if apricot_app::equalizer::is_custom_preset(preset_id) {
+        app.set_player_equalizer(None);
+    } else {
+        let gains = visible_equalizer_gains(state);
+        (*state.application).set_player_equalizer(Some(apricot_app::EqualizerSession {
+            enabled: true,
+            gains,
+        }));
+    }
+    let _ = SetTimer(
+        Some(window),
+        EQUALIZER_APPLY_TIMER_ID,
+        apricot_app::equalizer::APPLY_DELAY_MS,
+        None,
+    );
+}
+
+/// Python `visible_equalizer_gains_from_controls`.
+unsafe fn visible_equalizer_gains(
+    state: &SettingsWindowState,
+) -> apricot_app::equalizer::EqualizerGains {
+    state
+        .controls
+        .iter()
+        .filter_map(|bound| match &bound.binding {
+            ControlBinding::EqualizerBand { band_id, .. } => {
+                let tenths = SendMessageW(bound.control, TBM_GETPOS, None, None).0;
+                Some((
+                    (*band_id).to_owned(),
+                    apricot_app::equalizer::gain_from_slider(
+                        i32::try_from(tenths).unwrap_or_default(),
+                    ),
+                ))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Asks the main window to apply the equalizer to a running player. `force`
+/// also reaches a player that uses its own F4 equalizer, as Python's
+/// clipping and slider handlers do.
+unsafe fn post_equalizer_apply(window: HWND, force: bool) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    if (*state.application).player_session().is_open() && !state.owner.0.is_null() {
+        let _ = PostMessageW(
+            Some(state.owner),
+            crate::win32::WM_APPLY_GLOBAL_EQUALIZER,
+            WPARAM(usize::from(force)),
+            LPARAM(0),
+        );
+    }
+}
+
+/// Python's equalizer handlers that follow a settings change while a player
+/// is open.
+unsafe fn equalizer_setting_changed(window: HWND, binding: &ControlBinding) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let app = &mut *state.application;
+    match binding {
+        // `on_global_equalizer_toggle` and `on_equalizer_settings_preset_changed`.
+        ControlBinding::Checkbox(SettingId::GlobalEqualizerEnabled)
+        | ControlBinding::Choice {
+            setting: SettingId::GlobalEqualizerPreset,
+            ..
+        } => {
+            if app.player_session().is_open() {
+                app.set_player_equalizer(None);
+            }
+            post_equalizer_apply(window, false);
+        }
+        // `on_equalizer_clipping_protection_changed`.
+        ControlBinding::Checkbox(SettingId::EqualizerClippingProtection) => {
+            post_equalizer_apply(window, true);
+        }
+        // `on_equalizer_device_preset_changed`.
+        ControlBinding::EqualizerDevicePreset { .. } => post_equalizer_apply(window, false),
+        // `on_equalizer_range_changed`: the visible gains are limited to the
+        // new range and saved to the visible preset.
+        ControlBinding::Choice {
+            setting: SettingId::EqualizerDbRange,
+            ..
+        } => {
+            let range = f64::from(
+                i32::try_from(app.settings().equalizer_db_range.clamp(6, 24)).unwrap_or(12),
+            );
+            let preset = app.settings().global_equalizer_preset.clone();
+            let gains = visible_equalizer_gains(state)
+                .into_iter()
+                .map(|(band, gain)| (band, gain.clamp(-range, range)))
+                .collect();
+            let _ = (*state.application).set_visible_equalizer_gains(&preset, &gains);
+        }
+        // `on_equalizer_settings_name_changed`: the preset choice shows the
+        // new name at once.
+        ControlBinding::EqualizerPresetName(preset_id) => {
+            let label = app.equalizer_settings().custom_name(preset_id);
+            if let Some(bound) = state.controls.iter().find(|bound| {
+                matches!(
+                    &bound.binding,
+                    ControlBinding::Choice {
+                        setting: SettingId::GlobalEqualizerPreset,
+                        ..
+                    }
+                )
+            }) && let ControlBinding::Choice { values, .. } = &bound.binding
+                && let Some(index) = values.iter().position(|value| value == preset_id)
+            {
+                replace_combo_string(bound.control, index, &label);
+            }
+        }
+        _ => {}
+    }
 }
 
 unsafe fn activate_dynamic_control(window: HWND, id: usize) {
@@ -858,6 +1031,7 @@ unsafe fn activate_dynamic_control(window: HWND, id: usize) {
         show_error(window, &error.to_string());
         return;
     }
+    equalizer_setting_changed(window, &bound.binding);
     if let Some(setting) = dependent_setting(&bound.binding) {
         if let Err(error) = render_controls(window) {
             show_error(window, &error.to_string());
@@ -907,6 +1081,11 @@ unsafe fn handle_settings_command(window: HWND, command: SettingsCommand, label:
         SettingsCommand::ResetSection => reset_section(window),
         SettingsCommand::BrowseDownloadFolder => browse_download_folder(window),
         SettingsCommand::SetDefaultPlayer => set_default_player(window),
+        SettingsCommand::ResetEqualizerPreset => reset_equalizer_preset(window),
+        SettingsCommand::AddEqualizerProfile => add_equalizer_profile(window),
+        SettingsCommand::ImportEqualizerProfile => import_equalizer_profile(window),
+        SettingsCommand::ExportEqualizerProfile => export_equalizer_profile(window),
+        SettingsCommand::DeleteEqualizerProfile => delete_equalizer_profile(window),
         _ => {
             if let Some(state) = state_mut(window) {
                 // Python has every settings command. Until the Rust route exists,
@@ -918,6 +1097,206 @@ unsafe fn handle_settings_command(window: HWND, command: SettingsCommand, label:
             }
         }
     }
+}
+
+/// Settings side of the shared equalizer profile prompts.
+struct SettingsEqualizerHost {
+    window: HWND,
+}
+
+impl crate::equalizer_win32::EqualizerDialogHost for SettingsEqualizerHost {
+    fn catalog(&self) -> apricot_core::TranslationCatalog {
+        // SAFETY: Used on the UI thread while the settings window lives.
+        unsafe { state(self.window) }.map_or_else(
+            || apricot_app::embedded_catalog("en"),
+            |state| unsafe { settings_catalog(state) },
+        )
+    }
+
+    fn settings(&self) -> apricot_app::equalizer::EqualizerSettings {
+        // SAFETY: As above.
+        unsafe { state(self.window) }.map_or_else(
+            || {
+                apricot_app::equalizer::EqualizerSettings::from_document(
+                    &apricot_storage::SettingsDocument::default(),
+                )
+            },
+            |state| unsafe { (*state.application).equalizer_settings() },
+        )
+    }
+
+    fn update_settings(
+        &mut self,
+        settings: &apricot_app::equalizer::EqualizerSettings,
+        save: bool,
+    ) -> std::result::Result<(), String> {
+        // SAFETY: As above.
+        let Some(state) = (unsafe { state_mut(self.window) }) else {
+            return Ok(());
+        };
+        let application = unsafe { &mut *state.application };
+        application
+            .set_equalizer_settings(settings)
+            .and_then(|()| {
+                if save {
+                    application.save_settings()
+                } else {
+                    Ok(())
+                }
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    fn session_equalizer(&self) -> Option<apricot_app::EqualizerSession> {
+        // SAFETY: As above.
+        unsafe { state(self.window) }
+            .and_then(|state| unsafe { (*state.application).player_session().audio() })
+            .and_then(|audio| audio.equalizer.clone())
+    }
+
+    fn set_session_equalizer(&mut self, equalizer: Option<apricot_app::EqualizerSession>) {
+        // SAFETY: As above.
+        if let Some(state) = unsafe { state_mut(self.window) } {
+            unsafe { (*state.application).set_player_equalizer(equalizer) };
+        }
+    }
+
+    fn apply_to_player(&mut self) {
+        // SAFETY: As above.
+        unsafe { post_equalizer_apply(self.window, false) };
+    }
+
+    fn device_key(&self) -> String {
+        // SAFETY: As above.
+        unsafe { state(self.window) }.map_or_else(
+            || "auto".to_owned(),
+            |state| unsafe { (*state.application).equalizer_device_key() },
+        )
+    }
+
+    fn announce(&mut self, message: &str) {
+        // SAFETY: As above.
+        if let Some(state) = unsafe { state_mut(self.window) } {
+            unsafe { state.announcer.announce(message, false) };
+        }
+    }
+}
+
+/// The preset shown in the Equalizer section (Python `visible_equalizer_preset`).
+unsafe fn visible_equalizer_preset(state: &SettingsWindowState) -> String {
+    let application = &*state.application;
+    application
+        .equalizer_settings()
+        .normalized_preset(&application.settings().global_equalizer_preset)
+}
+
+/// Python `reset_visible_equalizer_controls`.
+unsafe fn reset_equalizer_preset(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let preset = visible_equalizer_preset(state);
+    let gains = apricot_app::equalizer::factory_gains(&preset);
+    if let Err(error) = (*state.application).set_visible_equalizer_gains(&preset, &gains) {
+        show_error(window, &error.to_string());
+        return;
+    }
+    let range = (*state.application).equalizer_settings().db_range();
+    for bound in &state.controls {
+        if let ControlBinding::EqualizerBand { band_id, label, .. } = &bound.binding {
+            let tenths = apricot_app::equalizer::slider_from_gain(
+                gains.get(*band_id).copied().unwrap_or_default(),
+                range,
+            );
+            SendMessageW(
+                bound.control,
+                TBM_SETPOS,
+                Some(WPARAM(1)),
+                Some(LPARAM(isize::try_from(tenths).unwrap_or_default())),
+            );
+            crate::accessibility_win32::annotate_slider(
+                bound.control,
+                label,
+                &apricot_app::equalizer::slider_value_text(tenths),
+                false,
+            );
+        }
+    }
+    let application = &mut *state.application;
+    if application.player_session().is_open() {
+        if apricot_app::equalizer::is_custom_preset(&preset) {
+            application.set_player_equalizer(None);
+        } else {
+            application.set_player_equalizer(Some(apricot_app::EqualizerSession {
+                enabled: true,
+                gains: apricot_app::equalizer::normalized_gains(&gains),
+            }));
+        }
+        post_equalizer_apply(window, true);
+    }
+    let catalog = settings_catalog(state);
+    state
+        .announcer
+        .announce(catalog.text("equalizer_saved"), false);
+}
+
+/// Python `add_equalizer_profile_from_settings`.
+unsafe fn add_equalizer_profile(window: HWND) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    let gains = visible_equalizer_gains(state);
+    let mut host = SettingsEqualizerHost { window };
+    if crate::equalizer_win32::create_profile_with_prompt(window, &mut host, &gains).is_some() {
+        rerender_and_focus(window, SettingId::GlobalEqualizerPreset);
+    }
+}
+
+/// Python `import_equalizer_profile_from_settings`.
+unsafe fn import_equalizer_profile(window: HWND) {
+    let mut host = SettingsEqualizerHost { window };
+    if crate::equalizer_win32::import_profile_with_prompt(window, &mut host).is_some() {
+        post_equalizer_apply(window, false);
+        rerender_and_focus(window, SettingId::GlobalEqualizerPreset);
+    }
+}
+
+/// Python `export_visible_equalizer_profile_from_settings`.
+unsafe fn export_equalizer_profile(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let preset = visible_equalizer_preset(state);
+    let gains = visible_equalizer_gains(state);
+    let _ = (*state.application).set_visible_equalizer_gains(&preset, &gains);
+    let catalog = settings_catalog(state);
+    let name = (*state.application)
+        .equalizer_settings()
+        .preset_label(&catalog, &preset);
+    let mut host = SettingsEqualizerHost { window };
+    crate::equalizer_win32::export_profile_with_prompt(window, &mut host, &name, &gains, &preset);
+}
+
+/// Python `delete_visible_equalizer_profile_from_settings`.
+unsafe fn delete_equalizer_profile(window: HWND) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    let preset = visible_equalizer_preset(state);
+    let mut host = SettingsEqualizerHost { window };
+    if crate::equalizer_win32::delete_profile_with_prompt(window, &mut host, &preset).is_some() {
+        post_equalizer_apply(window, false);
+        rerender_and_focus(window, SettingId::GlobalEqualizerPreset);
+    }
+}
+
+/// Python `render_settings_section_and_focus(key)`.
+unsafe fn rerender_and_focus(window: HWND, setting: SettingId) {
+    if let Err(error) = render_controls(window) {
+        show_error(window, &error.to_string());
+        return;
+    }
+    focus_setting(window, setting);
 }
 
 /// Python's `reset_settings_section`: reset, save, speak, then focus the first
@@ -1268,12 +1647,9 @@ unsafe fn sync_bound_control(
         ControlBinding::EqualizerPresetName(preset_id) => {
             app.set_equalizer_preset_name(preset_id, &window_text(bound.control))
         }
-        ControlBinding::EqualizerBand {
-            preset_id, band_id, ..
-        } => {
-            let tenths = SendMessageW(bound.control, TBM_GETPOS, None, None).0;
-            let tenths = i32::try_from(tenths).unwrap_or_default();
-            app.set_equalizer_band_gain(preset_id, band_id, f64::from(tenths) / 10.0)
+        ControlBinding::EqualizerBand { preset_id, .. } => {
+            let gains = visible_equalizer_gains(state);
+            (*state.application).set_visible_equalizer_gains(preset_id, &gains)
         }
         ControlBinding::ShortcutCapture(action_id) => {
             app.set_keyboard_shortcut(action_id, &window_text(bound.control))
@@ -1893,13 +2269,19 @@ unsafe fn set_trackbar_range(control: HWND, minimum: i64, maximum: i64) {
     );
 }
 
-fn equalizer_slider_name(label: &str, value_db: f64) -> String {
-    format!("{label}, {value_db:.1} dB")
-}
-
-#[allow(clippy::cast_possible_truncation)]
-fn db_to_tenths(value_db: f64) -> i32 {
-    (value_db.clamp(-24.0, 24.0) * 10.0).round() as i32
+unsafe fn replace_combo_string(control: HWND, index: usize, label: &str) {
+    let selected = SendMessageW(control, CB_GETCURSEL, None, None).0;
+    let text = wide(label);
+    SendMessageW(control, CB_DELETESTRING, Some(WPARAM(index)), None);
+    SendMessageW(
+        control,
+        CB_INSERTSTRING,
+        Some(WPARAM(index)),
+        Some(LPARAM(text.as_ptr() as isize)),
+    );
+    if let Ok(selected) = usize::try_from(selected) {
+        SendMessageW(control, CB_SETCURSEL, Some(WPARAM(selected)), None);
+    }
 }
 
 fn shortcut_action_label(action: &ShortcutActionItem) -> String {

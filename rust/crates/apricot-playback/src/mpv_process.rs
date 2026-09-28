@@ -238,6 +238,18 @@ impl PlaybackEngine for MpvProcessEngine {
             PlaybackCommand::SetAudioFilter(filter) => {
                 json!(["set_property", "af", filter.unwrap_or_default()])
             }
+            PlaybackCommand::AddAudioFilter(filter) => json!(["af", "add", filter]),
+            PlaybackCommand::RemoveAudioFilter(reference) => json!(["af", "remove", reference]),
+            PlaybackCommand::AudioFilterCommand {
+                label,
+                command,
+                argument,
+            } => json!(["af-command", label, command, argument]),
+            PlaybackCommand::SetEqualizerFilter(_) | PlaybackCommand::SetPitchFilter(_) => {
+                return Err(PlaybackError::Operation(
+                    "audio filter updates are expanded by the playback worker".to_owned(),
+                ));
+            }
             PlaybackCommand::SetReplayGain(mode) => {
                 json!(["set_property", "replaygain", mode])
             }

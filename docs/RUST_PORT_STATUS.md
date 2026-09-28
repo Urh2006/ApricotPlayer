@@ -168,7 +168,7 @@ Enote, ki popravljajo odstopanja, so na vrsti prve.
 
 - **E8. Shuffle, sorodni video, ReplayGain cikel in celozaslonski način. Zaključeno 28. 9. 2026, glej razdelek 6.**
 - **E9. Izbira izhodne naprave (O) z osvežitvijo seznama in varnim nadomestkom. Zaključeno 28. 9. 2026, glej razdelek 6.**
-- **E10.** Izenačevalnik iz predvajalnika (F4) ter EQ profili v nastavitvah.
+- **E10. Izenačevalnik iz predvajalnika (F4) ter EQ profili v nastavitvah. Zaključeno 28. 9. 2026, glej razdelek 6.**
 - **E11.** BPM analiza.
 - **E12.** Način urejanja z varnim shranjevanjem kopije in zamenjavo izvirnika.
 - **E13.** Komentarji.
@@ -642,3 +642,66 @@ preklopita napravo in oglasita "Audio output device set to Line 1 (Virtual Audio
 6,5 sekunde pokaže opozorilo, nato izbira z "auto", Enter shrani "auto" in oglasi
 "Settings saved.". V nastavitvah se seznam naprav po preizkusu osveži, izbrana ostane
 shranjena naprava in fokus ostane na seznamu razdelkov.
+
+### E10: izenačevalnik in EQ profili (28. 9. 2026)
+
+Spremembe:
+
+- F4, gumb "Equalizer" in postavka kontekstnega menija odprejo okno "Equalizer" kot
+  Pythonov `show_player_equalizer`. Vrstni red Tab: "Equalizer preset" (izbran je
+  učinkoviti preset, tudi preset izhodne naprave), "Equalizer range in dB", "Custom
+  preset name" (samo pri lastnih profilih), deset drsnikov "Equalizer 31 Hz sub bass
+  rumble" do "Equalizer 16 kHz air and sparkle", nato gumbi v Pythonovem vrstnem redu
+  ustvarjanja: OK, Cancel, Reset this preset, Save as global equalizer preset, Add
+  equalizer profile, Delete equalizer profile (onemogočen pri tovarniških presetih),
+  Import, Export, Compare with original, Save as default for this output device, Clear
+  output device default. Drsnik ima ime oznake, vrednost "3.0 dB" in opis "oznaka:
+  vrednost" kot `SliderAccessible`; puščice premaknejo za 1 dB, Page Up in Page Down za
+  3 dB. Sprememba se sliši po 160 ms. Enter shrani obseg in ime ter oglasi "Equalizer
+  saved.", izenačevalnik ostane za to sejo predvajalnika. Escape, Cancel ali zaprtje
+  okna vrnejo prejšnji izenačevalnik in oglasijo "Equalizer closed.". Fokus se vrne na
+  kontrolo predvajalnika. Brez predvajalnika F4 ne naredi ničesar.
+- Stanje izenačevalnika je zdaj kot v Pythonu: seja predvajalnika ima lasten
+  izenačevalnik samo po F4 (`session_equalizer_*`), sicer sledi nastavitvam v živo, s
+  presetom izhodne naprave pred globalnim presetom. Prej je Rust ob začetku seje
+  prepisal `global_equalizer_gains` in ni upošteval ne preseta ne naprave. Bass boost pri
+  izklopljenem izenačevalniku doda svojo krivuljo ravnemu odzivu, kot v Pythonu (prej je
+  prištel shranjene vrednosti). Zaščita pred popačenjem velja samo, ko kak pas ojača.
+- Filter v mpv: izenačevalnik se zamenja z `af add`/`af remove` z izmeničnima oznakama
+  `@apricot_eq` in `@apricot_eq_next`, višina tona z `af-command apricot_pitch set-pitch`
+  oziroma `af add`/`af remove` kot v Pythonu. Prej je vsaka sprememba izenačevalnika,
+  bass boosta ali višine tona na novo nastavila celoten niz filtrov (`set af`).
+  Po preklopu izhodne naprave z O se uporabi preset te naprave, če seja nima lastnega
+  izenačevalnika.
+- Nastavitve, razdelek Equalizer: oznake pasov so Pythonove ("Equalizer 1 kHz midrange
+  presence" namesto "Equalizer 1000 Hz"), drsniki imajo ime, vrednost in opis kot v
+  Pythonu namesto vrednosti v imenu, tovarniški preseti kažejo svoje tovarniške vrednosti.
+  Gumbi Reset this preset, Add, Import, Export in Delete equalizer profile delujejo kot v
+  Pythonu (vnos imena, datoteka JSON v Pythonovi obliki, potrditev brisanja, fokus po
+  dodajanju, uvozu in brisanju na "Equalizer preset"). Sprememba imena lastnega profila
+  takoj posodobi seznam presetov. Ob odprtem predvajalniku se spremembe slišijo kot v
+  Pythonu (drsnik, preset, vklop, zaščita, preset naprave, ponastavitev).
+- Popravek Enter in Escape v oknu zaznamkov (Enter predvaja izbrani zaznamek) in v izbiri
+  jezika ob prvem zagonu (Enter potrdi jezik). Oba sta imela isto napako kot izbirna okna
+  v E9.
+
+Odstopanja, ki ostajajo: Python ob neuspehu `af add` poskusi še dvakrat po 180 ms, Rust
+napako sporoči takoj (libmpv ukaz je sinhron). Python po vklopu ali izklopu volume
+boosta ponovno uporabi isti izenačevalnik, Rust tega ne naredi, ker se zvok ne spremeni.
+Okno zaznamkov ima Enter, Delete in Escape fiksne, Python pa uporablja nastavljive
+bližnjice `open_selected`, `remove_selected` in `player_back`. Gumbi okna izenačevalnika
+so vizualno v mreži, vrstni red Tab je Pythonov.
+
+Preverjanje: `cargo build`, `cargo test` (469 uspešnih, 11 izključenih), `cargo clippy
+--all-targets -D warnings` in `cargo fmt --check`. Novi testi pokrijejo menjavo oznak
+izenačevalnika, `af-command` za višino tona s ponovnim dodajanjem, učinkovito stanje s
+presetom naprave, sejo in bass boostom, ustvarjanje, poimenovanje in brisanje profilov,
+izvoz in uvoz v Pythonovi obliki, oznake pasov ter vrstni red gumbov. Nov izključen test
+z dejansko libmpv med predvajanjem zamenja izenačevalnik dvakrat, doda, spremeni in
+odstrani filter višine tona ter potrdi, da predvajanje teče naprej. Samodejni preizkus
+nameščene bete na ločeni kopiji podatkov je potrdil vrstni red Tab, imena in vrednosti
+drsnikov prek MSAA, puščico desno (5.0 na 6.0 dB), Page Up (3.0 dB), Enter z oglasom
+"Equalizer saved.", ohranjen izenačevalnik ob ponovnem F4, Escape z "Equalizer closed."
+in neshranjenim obsegom, v nastavitvah vklop, dodajanje profila "Live" z imenom in
+vrednostmi v `settings.json` ter brisanje s potrditvijo, Enter v zaznamkih in v izbiri
+jezika ob prvem zagonu.

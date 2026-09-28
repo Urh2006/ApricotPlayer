@@ -13,7 +13,8 @@ use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
 use crate::{
-    LibMpvEngine, MpvLaunchOptions, PlaybackCommand, PlaybackEngine, PlaybackError, PlaybackEvent,
+    AudioFilterState, LibMpvEngine, MpvLaunchOptions, PlaybackCommand, PlaybackEngine,
+    PlaybackError, PlaybackEvent,
 };
 
 const REQUEST_CAPACITY: usize = 32;
@@ -240,6 +241,7 @@ fn playback_worker(
     position: &PlaybackPositionReader,
 ) {
     let mut active: Option<(u64, Box<dyn PlaybackEngine>)> = None;
+    let mut filters = AudioFilterState::default();
     let mut preview: Option<(u64, f64, f64, bool)> = None;
     loop {
         let request = if active.is_some() {
@@ -306,6 +308,7 @@ fn playback_worker(
                         updates,
                         &mut factory,
                     );
+                    filters = AudioFilterState::from_chain(options.initial_audio_filter.as_deref());
                 }
                 RuntimeRequest::Execute {
                     generation,
@@ -323,7 +326,7 @@ fn playback_worker(
                     {
                         preview = None;
                     }
-                    execute_if_current(&mut active, generation, command, updates);
+                    execute_if_current(&mut active, &mut filters, generation, command, updates);
                 }
                 RuntimeRequest::Close { generation } => {
                     if active
@@ -331,6 +334,7 @@ fn playback_worker(
                         .is_some_and(|(active_generation, _)| *active_generation == generation)
                     {
                         active = None;
+                        filters = AudioFilterState::default();
                         preview = None;
                         position.publish(None);
                     }
@@ -408,6 +412,7 @@ fn item_start_commands(options: &MpvLaunchOptions) -> Vec<PlaybackCommand> {
 
 fn execute_if_current(
     active: &mut Option<(u64, Box<dyn PlaybackEngine>)>,
+    filters: &mut AudioFilterState,
     generation: u64,
     command: PlaybackCommand,
     updates: &SyncSender<PlaybackUpdate>,
@@ -418,7 +423,7 @@ fn execute_if_current(
     if *active_generation != generation {
         return;
     }
-    if let Err(error) = engine.execute(command) {
+    if let Err(error) = filters.execute(engine.as_mut(), command) {
         let _ = updates.try_send(PlaybackUpdate {
             generation,
             event: PlaybackEvent::CommandFailed(error.to_string()),
@@ -564,6 +569,7 @@ mod tests {
         let (sender, receiver) = std::sync::mpsc::sync_channel(4);
         super::execute_if_current(
             &mut active,
+            &mut crate::AudioFilterState::default(),
             7,
             PlaybackCommand::SeekRelative {
                 seconds: 5.0,

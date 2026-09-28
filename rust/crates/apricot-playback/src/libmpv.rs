@@ -845,6 +845,11 @@ fn command_arguments(command: PlaybackCommand) -> Result<Vec<String>, PlaybackEr
             "af".to_owned(),
             filter.unwrap_or_default(),
         ],
+        command @ (PlaybackCommand::AddAudioFilter(_)
+        | PlaybackCommand::RemoveAudioFilter(_)
+        | PlaybackCommand::AudioFilterCommand { .. }
+        | PlaybackCommand::SetEqualizerFilter(_)
+        | PlaybackCommand::SetPitchFilter(_)) => audio_filter_arguments(command)?,
         PlaybackCommand::SetReplayGain(mode) => {
             vec!["set".to_owned(), "replaygain".to_owned(), mode]
         }
@@ -854,6 +859,27 @@ fn command_arguments(command: PlaybackCommand) -> Result<Vec<String>, PlaybackEr
         PlaybackCommand::Stop => vec!["stop".to_owned()],
     };
     Ok(arguments)
+}
+
+/// mpv `af` and `af-command` arguments. The equalizer and pitch updates are
+/// expanded into these by the playback worker before they reach the engine.
+fn audio_filter_arguments(command: PlaybackCommand) -> Result<Vec<String>, PlaybackError> {
+    match command {
+        PlaybackCommand::AddAudioFilter(filter) => {
+            Ok(vec!["af".to_owned(), "add".to_owned(), filter])
+        }
+        PlaybackCommand::RemoveAudioFilter(reference) => {
+            Ok(vec!["af".to_owned(), "remove".to_owned(), reference])
+        }
+        PlaybackCommand::AudioFilterCommand {
+            label,
+            command,
+            argument,
+        } => Ok(vec!["af-command".to_owned(), label, command, argument]),
+        _ => Err(PlaybackError::Operation(
+            "audio filter updates are expanded by the playback worker".to_owned(),
+        )),
+    }
 }
 
 fn media_target(item: &apricot_core::MediaItem) -> Result<String, PlaybackError> {
@@ -1165,6 +1191,106 @@ mod tests {
                 "-1",
                 "audio-file=%24%https://media.test/audio,start=12.3",
             ]
+        );
+    }
+
+    #[test]
+    #[ignore = "requires APRICOT_TEST_MPV and APRICOT_TEST_FFMPEG"]
+    fn real_libmpv_replaces_only_the_equalizer_and_pitch_filters() {
+        use crate::{AudioFilterState, PlaybackEngine, PlaybackEvent, SpeedAudioMode};
+        let (_folder, _chapter_media, plain_media) = chapter_fixtures();
+        let mut options = MpvLaunchOptions::new(std::path::PathBuf::from(
+            std::env::var_os("APRICOT_TEST_MPV").expect("mpv path"),
+        ));
+        options.audio_driver = Some("null".to_owned());
+        options.video_mode = crate::MpvVideoMode::AudioOnly;
+        options.initial_audio_filter = crate::audio_filter_chain(
+            SpeedAudioMode::Scaletempo2,
+            Some("@apricot_eq:lavfi=[equalizer=f=31:t=q:w=1.7:g=3.0]"),
+            crate::PitchMode::Rubberband,
+            1.0,
+        );
+        let mut engine = super::LibMpvEngine::load(&options).expect("load real library");
+        engine
+            .execute(PlaybackCommand::Load {
+                item: Box::new(MediaItem {
+                    id: MediaId("tone".to_owned()),
+                    source: MediaSource::Local,
+                    kind: MediaKind::Audio,
+                    title: "Tone".to_owned(),
+                    local_path: Some(plain_media.to_string_lossy().into_owned()),
+                    url: None,
+                    stream_url: None,
+                    external_audio_url: None,
+                    channel: String::new(),
+                    duration_seconds: None,
+                    metadata: BTreeMap::new(),
+                }),
+                start_position_seconds: None,
+            })
+            .expect("load fixture");
+        let wait_until_playing = |engine: &mut super::LibMpvEngine, after: f64| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while std::time::Instant::now() < deadline {
+                match engine.poll_event().expect("poll real library") {
+                    Some(PlaybackEvent::Position { elapsed, .. }) if elapsed > after => {
+                        return true;
+                    }
+                    Some(PlaybackEvent::Failed(error)) => panic!("playback failed: {error}"),
+                    _ => std::thread::sleep(std::time::Duration::from_millis(5)),
+                }
+            }
+            false
+        };
+        assert!(wait_until_playing(&mut engine, 0.1), "fixture plays");
+        let mut filters = AudioFilterState::from_chain(options.initial_audio_filter.as_deref());
+        for graph in [
+            "lavfi=[equalizer=f=62:t=q:w=2:g=4.0]",
+            "lavfi=[volume=-6.0dB,equalizer=f=1000:t=q:w=2:g=6.0,alimiter=limit=0.95:attack=5:release=80]",
+        ] {
+            filters
+                .execute(
+                    &mut engine,
+                    PlaybackCommand::SetEqualizerFilter(Some(graph.to_owned())),
+                )
+                .expect("equalizer replacement");
+        }
+        filters
+            .execute(&mut engine, PlaybackCommand::SetPitchFilter(Some(1.1)))
+            .expect("pitch filter added");
+        let pitch_command = |pitch: &str| PlaybackCommand::AudioFilterCommand {
+            label: "apricot_pitch".to_owned(),
+            command: "set-pitch".to_owned(),
+            argument: pitch.to_owned(),
+        };
+        assert!(
+            engine.execute(pitch_command("1.2000")).is_ok(),
+            "the Rubberband filter accepts set-pitch in place"
+        );
+        filters
+            .execute(&mut engine, PlaybackCommand::SetPitchFilter(Some(1.3)))
+            .expect("pitch adjusted");
+        filters
+            .execute(&mut engine, PlaybackCommand::SetEqualizerFilter(None))
+            .expect("equalizer cleared");
+        filters
+            .execute(&mut engine, PlaybackCommand::SetPitchFilter(None))
+            .expect("pitch cleared");
+        assert!(
+            engine.execute(pitch_command("1.0000")).is_err(),
+            "the pitch filter is gone"
+        );
+        assert!(
+            engine
+                .execute(PlaybackCommand::AddAudioFilter(
+                    "@apricot_eq:not_a_real_filter".to_owned()
+                ))
+                .is_err(),
+            "af add reports invalid filters"
+        );
+        assert!(
+            wait_until_playing(&mut engine, 0.5),
+            "playback continues after the filter updates"
         );
     }
 

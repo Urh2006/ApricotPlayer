@@ -26,6 +26,8 @@ pub enum SessionToggle {
     Fullscreen,
 }
 
+/// Python `session_equalizer_enabled` and `session_equalizer_gains`: the
+/// player equalizer chosen in the F4 dialog for this session only.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EqualizerSession {
     pub enabled: bool,
@@ -38,7 +40,8 @@ pub struct AudioSession {
     pub output_device: String,
     pub speed: f64,
     pub pitch: f64,
-    pub equalizer: EqualizerSession,
+    /// `None` follows the global settings, as Python's `None` session value.
+    pub equalizer: Option<EqualizerSession>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -258,6 +261,14 @@ impl PlayerSession {
         }
     }
 
+    /// Python `session_equalizer_enabled`/`session_equalizer_gains`; `None`
+    /// returns to the global equalizer (`use_global_equalizer_for_live_preview`).
+    pub fn set_equalizer(&mut self, equalizer: Option<EqualizerSession>) {
+        if let Some(audio) = &mut self.audio {
+            audio.equalizer = equalizer;
+        }
+    }
+
     pub fn set_pitch(&mut self, pitch: f64) {
         if let Some(audio) = &mut self.audio
             && pitch.is_finite()
@@ -349,10 +360,7 @@ mod tests {
                 output_device: "speakers".to_owned(),
                 speed: 1.0,
                 pitch: 1.0,
-                equalizer: EqualizerSession {
-                    enabled: true,
-                    gains: BTreeMap::from([("31".to_owned(), 3.0)]),
-                },
+                equalizer: None,
             },
             enabled_toggles: BTreeSet::from([SessionToggle::BassBoost]),
             starts_paused: false,
@@ -393,18 +401,23 @@ mod tests {
         session.start_item(item("first"), defaults());
         session.set_speed(1.7);
         session.set_pitch(0.8);
+        let player_equalizer = EqualizerSession {
+            enabled: true,
+            gains: BTreeMap::from([("31".to_owned(), 3.0)]),
+        };
+        session.set_equalizer(Some(player_equalizer.clone()));
 
         let mut next_defaults = defaults();
         next_defaults.audio.speed = 1.25;
         next_defaults.audio.volume = 20.0;
-        next_defaults.audio.equalizer.enabled = false;
         session.start_item(item("second"), next_defaults);
 
         let audio = session.audio().expect("open audio session");
         assert!((audio.speed - 1.25).abs() < f64::EPSILON);
         assert!((audio.pitch - 1.0).abs() < f64::EPSILON);
-        assert!(
-            audio.equalizer.enabled,
+        assert_eq!(
+            audio.equalizer.as_ref(),
+            Some(&player_equalizer),
             "session equalizer stays for the session"
         );
         assert!((audio.volume - 80.0).abs() < f64::EPSILON);

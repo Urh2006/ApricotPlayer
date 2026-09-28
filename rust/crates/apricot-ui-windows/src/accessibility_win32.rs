@@ -13,10 +13,12 @@ use windows::{
         },
         UI::{
             Accessibility::{
-                CLSID_AccPropServices, IAccPropServices, NotifyWinEvent, PROPID_ACC_NAME,
+                CLSID_AccPropServices, IAccPropServices, NotifyWinEvent, PROPID_ACC_DESCRIPTION,
+                PROPID_ACC_NAME, PROPID_ACC_VALUE,
             },
             WindowsAndMessaging::{
-                CHILDID_SELF, EVENT_OBJECT_NAMECHANGE, OBJID_CLIENT, SetWindowTextW,
+                CHILDID_SELF, EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_VALUECHANGE, OBJID_CLIENT,
+                SetWindowTextW,
             },
         },
     },
@@ -67,6 +69,59 @@ unsafe fn annotate_control_name_win32(window: HWND, value: &str) {
         {
             NotifyWinEvent(
                 EVENT_OBJECT_NAMECHANGE,
+                window,
+                OBJID_CLIENT.0,
+                CHILDID_SELF.cast_signed(),
+            );
+        }
+    });
+}
+
+/// Python `set_equalizer_slider_accessibility` with `SliderAccessible`: the
+/// slider is named by its label, reports `value` (for example "3.0 dB") and
+/// describes itself as "label: value". A value change is announced only when
+/// `notify` is set, as Python suppresses notifications for programmatic
+/// updates.
+pub fn annotate_slider(window: HWND, name: &str, value: &str, notify: bool) {
+    // SAFETY: Same UI-thread HWND and synchronous annotation contract as above.
+    unsafe { annotate_slider_win32(window, name, value, notify) };
+}
+
+unsafe fn annotate_slider_win32(window: HWND, name: &str, value: &str, notify: bool) {
+    let name_text = wide(name);
+    let value_text = wide(value);
+    let description = wide(&format!("{name}: {value}"));
+    let _ = SetWindowTextW(window, PCWSTR(name_text.as_ptr()));
+    ACCESSIBILITY_SERVICES.with_borrow_mut(|slot| {
+        if matches!(slot, AccessibilityServicesState::Uninitialized) {
+            *slot = unsafe { AccessibilityServices::initialize() }.map_or(
+                AccessibilityServicesState::Unavailable,
+                AccessibilityServicesState::Ready,
+            );
+        }
+        let AccessibilityServicesState::Ready(services) = slot else {
+            return;
+        };
+        let mut annotated = true;
+        for (property, text) in [
+            (PROPID_ACC_NAME, &name_text),
+            (PROPID_ACC_VALUE, &value_text),
+            (PROPID_ACC_DESCRIPTION, &description),
+        ] {
+            annotated &= services
+                .properties
+                .SetHwndPropStr(
+                    window,
+                    OBJID_CLIENT.0.cast_unsigned(),
+                    CHILDID_SELF,
+                    property,
+                    PCWSTR(text.as_ptr()),
+                )
+                .is_ok();
+        }
+        if annotated && notify {
+            NotifyWinEvent(
+                EVENT_OBJECT_VALUECHANGE,
                 window,
                 OBJID_CLIENT.0,
                 CHILDID_SELF.cast_signed(),

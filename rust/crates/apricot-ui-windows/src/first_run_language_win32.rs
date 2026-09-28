@@ -32,6 +32,10 @@ const CLASS_NAME: PCWSTR = w!("ApricotPlayer2BetaFirstRunLanguageWindow");
 const ID_LANGUAGE_LIST: usize = 1501;
 const ID_OK: usize = 1502;
 const ID_CANCEL: usize = 1503;
+/// `IsDialogMessageW` turns Enter and Escape into `IDOK` and `IDCANCEL`
+/// before the focused list sees the key.
+const IDOK_COMMAND: usize = 1;
+const IDCANCEL_COMMAND: usize = 2;
 
 struct LanguageWindowState {
     prompt: HWND,
@@ -135,11 +139,12 @@ unsafe extern "system" fn window_proc(
             let command = wparam.0 & 0xffff;
             let notification = (wparam.0 >> 16) & 0xffff;
             if command == ID_OK
+                || command == IDOK_COMMAND
                 || (command == ID_LANGUAGE_LIST
                     && notification == usize::try_from(LBN_DBLCLK).expect("notification fits"))
             {
                 accept(window);
-            } else if command == ID_CANCEL {
+            } else if command == ID_CANCEL || command == IDCANCEL_COMMAND {
                 let _ = DestroyWindow(window);
             }
             LRESULT(0)

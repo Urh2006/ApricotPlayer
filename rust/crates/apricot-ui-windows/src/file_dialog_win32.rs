@@ -115,6 +115,61 @@ pub fn save_download_file(
     }
 }
 
+/// Python `import_equalizer_profile_dialog` file picker.
+///
+/// # Errors
+///
+/// Returns a diagnostic string if the Windows common dialog reports a failure.
+pub fn choose_json_file(
+    owner: HWND,
+    title: &str,
+    type_label: &str,
+    all_files_label: &str,
+) -> Result<Option<PathBuf>, String> {
+    // SAFETY: The synchronous dialog only borrows the owned UTF-16 buffers.
+    unsafe {
+        choose_file_win32(
+            owner,
+            title,
+            &json_filter(type_label, all_files_label),
+            "",
+            None,
+            "json",
+            false,
+        )
+    }
+}
+
+/// Python `export_equalizer_profile_dialog` file picker.
+///
+/// # Errors
+///
+/// Returns a diagnostic string if the Windows common dialog reports a failure.
+pub fn save_json_file(
+    owner: HWND,
+    title: &str,
+    default_file: &str,
+    type_label: &str,
+    all_files_label: &str,
+) -> Result<Option<PathBuf>, String> {
+    // SAFETY: The synchronous dialog only borrows the owned UTF-16 buffers.
+    unsafe {
+        choose_file_win32(
+            owner,
+            title,
+            &json_filter(type_label, all_files_label),
+            default_file,
+            None,
+            "json",
+            true,
+        )
+    }
+}
+
+fn json_filter(type_label: &str, all_files_label: &str) -> String {
+    format!("{type_label} (*.json)\0*.json\0{all_files_label} (*.*)\0*.*\0\0")
+}
+
 unsafe fn choose_media_file_win32(owner: HWND, title: &str) -> Result<Option<PathBuf>, String> {
     let mut file = vec![0_u16; FILE_BUFFER_UNITS];
     let title = wide(title);

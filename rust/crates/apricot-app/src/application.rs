@@ -1683,10 +1683,7 @@ impl Application {
                 output_device: settings.audio_output_device.clone(),
                 speed: player_start_speed(&settings.player_speed),
                 pitch: 1.0,
-                equalizer: EqualizerSession {
-                    enabled: settings.global_equalizer_enabled,
-                    gains: settings.global_equalizer_gains.clone(),
-                },
+                equalizer: None,
             },
             enabled_toggles: toggles,
             starts_paused: settings.player_start_paused,
@@ -1924,6 +1921,74 @@ impl Application {
         self.state.player.set_pitch(pitch);
     }
 
+    /// Python `session_equalizer_enabled`/`session_equalizer_gains`.
+    pub fn set_player_equalizer(&mut self, equalizer: Option<EqualizerSession>) {
+        self.state.player.set_equalizer(equalizer);
+    }
+
+    /// Python `equalizer_current_device_key`: the session output device
+    /// while a player is open, otherwise the configured default device.
+    pub fn equalizer_device_key(&self) -> String {
+        let session_device = self
+            .state
+            .player
+            .audio()
+            .map(|audio| audio.output_device.trim())
+            .filter(|device| !device.is_empty());
+        crate::equalizer::device_key(
+            session_device.unwrap_or(&self.settings.current().audio_output_device),
+        )
+    }
+
+    /// Python `effective_equalizer_state` for the open player, with an
+    /// optional bass-boost state that is about to be applied.
+    pub fn player_equalizer_state(
+        &self,
+        bass_boost_override: Option<bool>,
+    ) -> Option<(bool, crate::equalizer::EqualizerGains)> {
+        let audio = self.state.player.audio()?;
+        let bass_boost = bass_boost_override.unwrap_or_else(|| {
+            self.state
+                .player
+                .enabled_toggles()
+                .contains(&SessionToggle::BassBoost)
+        });
+        Some(self.equalizer_settings().effective_state(
+            audio.equalizer.as_ref(),
+            &self.equalizer_device_key(),
+            bass_boost,
+        ))
+    }
+
+    /// Python `apply_equalizer_to_player`: the `lavfi` graph for the open
+    /// player, or `None` when the equalizer is off or flat.
+    pub fn player_equalizer_graph(&self, bass_boost_override: Option<bool>) -> Option<String> {
+        let (enabled, gains) = self.player_equalizer_state(bass_boost_override)?;
+        if !enabled || !crate::equalizer::has_audible_gain(&gains) {
+            return None;
+        }
+        apricot_playback::equalizer_filter_graph(
+            &gains,
+            self.settings.current().equalizer_clipping_protection,
+        )
+    }
+
+    pub fn equalizer_settings(&self) -> crate::equalizer::EqualizerSettings {
+        crate::equalizer::EqualizerSettings::from_document(self.settings.current())
+    }
+
+    /// Writes every equalizer setting to the unsaved draft at once.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the values do not match the settings schema.
+    pub fn set_equalizer_settings(
+        &mut self,
+        equalizer: &crate::equalizer::EqualizerSettings,
+    ) -> Result<(), SettingsControllerError> {
+        self.settings.set_values(equalizer.setting_values())
+    }
+
     pub fn set_player_toggle(&mut self, toggle: SessionToggle, enabled: bool) {
         self.state.player.set_toggle(toggle, enabled);
     }
@@ -2057,6 +2122,9 @@ impl Application {
             && probed_at.elapsed() < AUDIO_DEVICE_OPTIONS_FRESH
         {
             model.replace_choice_options(SettingId::AudioOutputDevice, options.clone());
+        }
+        if section == SettingsSection::Equalizer {
+            model.set_equalizer_device(&self.equalizer_device_key(), settings);
         }
         model
     }
@@ -2198,53 +2266,25 @@ impl Application {
             .set_value(SettingId::MainMenuHiddenActions, serde_json::json!(hidden))
     }
 
-    /// Updates one equalizer band without changing any other band.
+    /// Python `save_visible_equalizer_gains_to_preset`: the visible sliders
+    /// become the global gains and, for a custom profile, its saved gains.
     ///
     /// # Errors
     ///
-    /// Returns an error if a typed equalizer map cannot be persisted to the draft.
-    pub fn set_equalizer_band_gain(
+    /// Returns an error if the equalizer settings cannot be written to the draft.
+    pub fn set_visible_equalizer_gains(
         &mut self,
         preset_id: &str,
-        band_id: &str,
-        gain_db: f64,
+        gains: &crate::equalizer::EqualizerGains,
     ) -> Result<(), SettingsControllerError> {
-        if !apricot_core::audio::EQUALIZER_BANDS
-            .iter()
-            .any(|band| band.id == band_id)
-        {
-            return Ok(());
-        }
-        let range = f64::from(
-            i32::try_from(self.settings.current().equalizer_db_range).unwrap_or(i32::MAX),
-        );
-        let gain = ((gain_db.clamp(-range, range) * 10.0).round()) / 10.0;
-        let mut current_gains = self.settings.current().global_equalizer_gains.clone();
-        current_gains.insert(band_id.to_owned(), gain);
-        let is_custom = !apricot_core::audio::FACTORY_EQUALIZER_PRESETS
-            .iter()
-            .any(|preset| preset.id == preset_id);
-        if is_custom {
-            let mut presets = self.settings.current().equalizer_preset_gains.clone();
-            let gains = presets.entry(preset_id.to_owned()).or_default();
-            gains.insert(band_id.to_owned(), gain);
-            self.settings.set_values([
-                (
-                    SettingId::GlobalEqualizerGains,
-                    serde_json::json!(current_gains),
-                ),
-                (SettingId::EqualizerPresetGains, serde_json::json!(presets)),
-            ])?;
-        } else {
-            self.settings.set_value(
-                SettingId::GlobalEqualizerGains,
-                serde_json::json!(current_gains),
-            )?;
-        }
-        Ok(())
+        let mut equalizer = self.equalizer_settings();
+        let gains = crate::equalizer::normalized_gains(gains);
+        equalizer.set_preset_gains(preset_id, &gains);
+        equalizer.global_gains = gains;
+        self.set_equalizer_settings(&equalizer)
     }
 
-    /// Updates the custom name for one equalizer preset.
+    /// Python `on_equalizer_settings_name_changed`.
     ///
     /// # Errors
     ///
@@ -2254,25 +2294,12 @@ impl Application {
         preset_id: &str,
         name: &str,
     ) -> Result<(), SettingsControllerError> {
-        let mut names = self.settings.current().equalizer_custom_names.clone();
-        let fallback = names
-            .get(preset_id)
-            .cloned()
-            .unwrap_or_else(|| preset_id.to_owned());
-        let trimmed = name.trim();
-        names.insert(
-            preset_id.to_owned(),
-            if trimmed.is_empty() {
-                fallback
-            } else {
-                trimmed.chars().take(80).collect()
-            },
-        );
-        self.settings
-            .set_value(SettingId::EqualizerCustomNames, serde_json::json!(names))
+        let mut equalizer = self.equalizer_settings();
+        equalizer.set_custom_name(preset_id, name);
+        self.set_equalizer_settings(&equalizer)
     }
 
-    /// Sets or clears the equalizer preset associated with one output device.
+    /// Python `set_equalizer_device_preset`: an empty preset clears the entry.
     ///
     /// # Errors
     ///
@@ -2282,16 +2309,9 @@ impl Application {
         device_id: &str,
         preset_id: &str,
     ) -> Result<(), SettingsControllerError> {
-        let mut presets = self.settings.current().equalizer_device_presets.clone();
-        if preset_id.trim().is_empty() {
-            presets.remove(device_id);
-        } else {
-            presets.insert(device_id.to_owned(), preset_id.to_owned());
-        }
-        self.settings.set_value(
-            SettingId::EqualizerDevicePresets,
-            serde_json::json!(presets),
-        )
+        let mut equalizer = self.equalizer_settings();
+        equalizer.set_device_preset(device_id, preset_id);
+        self.set_equalizer_settings(&equalizer)
     }
 
     /// Assigns a shortcut through the central conflict validator.
@@ -2634,21 +2654,47 @@ mod tests {
     }
 
     #[test]
-    fn equalizer_band_updates_are_strictly_independent() {
+    fn visible_equalizer_gains_update_global_and_custom_profile_gains() {
         let root = tempdir().expect("temporary directory");
         let mut app = application(root.path());
-        let before = app.settings().global_equalizer_gains.clone();
-        app.set_equalizer_band_gain("flat", "31", 7.5)
-            .expect("gain");
+        let mut gains = crate::equalizer::factory_gains("rock");
+        gains.insert("31".to_owned(), 7.5);
+        app.set_visible_equalizer_gains("rock", &gains)
+            .expect("factory gains");
         assert!((app.settings().global_equalizer_gains["31"] - 7.5).abs() < f64::EPSILON);
-        for (band, gain) in before {
-            if band != "31" {
-                assert!(
-                    (app.settings().global_equalizer_gains[&band] - gain).abs() < f64::EPSILON,
-                    "{band}"
-                );
-            }
-        }
+        assert!((app.settings().global_equalizer_gains["62"] - 3.0).abs() < f64::EPSILON);
+        assert!(
+            crate::equalizer::gains_match(
+                &app.equalizer_settings().gains_for_preset("rock"),
+                &crate::equalizer::factory_gains("rock")
+            ),
+            "factory presets stay read-only"
+        );
+        app.set_visible_equalizer_gains("custom2", &gains)
+            .expect("custom gains");
+        assert!(
+            (app.equalizer_settings().gains_for_preset("custom2")["31"] - 7.5).abs() < f64::EPSILON
+        );
+    }
+
+    #[test]
+    fn player_equalizer_graph_follows_session_override_and_bass_boost() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        assert_eq!(app.player_equalizer_graph(None), None, "no open player");
+        app.start_player_item(media_item("song"));
+        assert_eq!(app.player_equalizer_graph(None), None, "equalizer off");
+        let boosted = app.player_equalizer_graph(Some(true)).expect("bass boost");
+        assert!(boosted.contains("f=31:t=q:w=1.7:g=5.0"), "{boosted}");
+
+        app.set_player_equalizer(Some(crate::EqualizerSession {
+            enabled: true,
+            gains: crate::equalizer::factory_gains("treble_boost"),
+        }));
+        let graph = app.player_equalizer_graph(None).expect("session equalizer");
+        assert!(graph.contains("f=16000:t=q:w=1.5:g=6.0"), "{graph}");
+        app.set_player_equalizer(None);
+        assert_eq!(app.player_equalizer_graph(None), None);
     }
 
     #[test]

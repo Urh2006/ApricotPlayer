@@ -5,6 +5,7 @@ use apricot_core::MediaItem;
 use thiserror::Error;
 
 mod audio_chain;
+mod audio_filters;
 mod equalizer;
 #[cfg(windows)]
 mod libmpv;
@@ -19,7 +20,11 @@ pub use audio_chain::{
     PITCH_FILTER_LABEL, PitchMode, SPEED_FILTER_LABEL, SpeedAudioMode, audio_filter_chain,
     is_default_rate, mpv_pitch_property, pitch_filter_active, rubberband_pitch_filter,
 };
-pub use equalizer::{EqualizerFilterConfig, build_equalizer_filter};
+pub use audio_filters::AudioFilterState;
+pub use equalizer::{
+    EQUALIZER_FILTER_ALT_LABEL, EQUALIZER_FILTER_LABEL, equalizer_filter_graph,
+    tagged_equalizer_filter,
+};
 #[cfg(windows)]
 pub use libmpv::{LibMpvEngine, probe_audio_output_devices};
 #[cfg(windows)]
@@ -54,6 +59,24 @@ pub enum PlaybackCommand {
     SetAudioPitchCorrection(bool),
     SetRepeat(bool),
     SetAudioFilter(Option<String>),
+    /// mpv `af add`: appends one tagged filter to the running chain.
+    AddAudioFilter(String),
+    /// mpv `af remove`: removes one filter by its `@label` reference.
+    RemoveAudioFilter(String),
+    /// mpv `af-command`: sends a runtime command to one labeled filter.
+    AudioFilterCommand {
+        label: String,
+        command: String,
+        argument: String,
+    },
+    /// Python `apply_equalizer_to_player`: replaces only the equalizer filter
+    /// (a `lavfi=[...]` graph, or `None` to clear it) through the alternating
+    /// `@apricot_eq` and `@apricot_eq_next` labels, so the speed and pitch
+    /// filters keep running. The playback worker expands it into `af` commands.
+    SetEqualizerFilter(Option<String>),
+    /// Python `apply_rubberband_pitch_filter` (`Some`) and
+    /// `clear_rubberband_pitch_filter` (`None`), expanded by the playback worker.
+    SetPitchFilter(Option<f64>),
     /// mpv `replaygain`: `no`, `track` or `album`.
     SetReplayGain(String),
     /// mpv `audio-device`, a name from `audio-device-list`.
