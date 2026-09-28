@@ -12,13 +12,20 @@ const LIMITER_FILTER: &str = "alimiter=limit=0.95:attack=5:release=80";
 const CLIPPING_HEADROOM_LIMIT_DB: f64 = 12.0;
 
 /// Python `equalizer_filter` without its `@label:` prefix: the `lavfi` graph
-/// for the given gains, or `None` when no band is audible. As in Python
-/// `equalizer_clipping_protection_active`, protection only applies when a
-/// band boosts: it adds headroom for the largest positive gain and a limiter.
+/// for the given gains, or `None` when no band is audible.
 pub fn equalizer_filter_graph(
     gains: &BTreeMap<String, f64>,
     clipping_protection: bool,
 ) -> Option<String> {
+    let filters = equalizer_filters(gains, clipping_protection);
+    (!filters.is_empty()).then(|| format!("lavfi=[{}]", filters.join(",")))
+}
+
+/// Python `ffmpeg_equalizer_filters`: the separate filters of the graph, empty
+/// when no band is audible. As in Python `equalizer_clipping_protection_active`,
+/// protection only applies when a band boosts: it adds headroom for the largest
+/// positive gain and a limiter.
+pub fn equalizer_filters(gains: &BTreeMap<String, f64>, clipping_protection: bool) -> Vec<String> {
     let maximum = EQUALIZER_BANDS
         .iter()
         .filter_map(|band| gains.get(band.id).copied())
@@ -49,12 +56,12 @@ pub fn equalizer_filter_graph(
         ));
     }
     if !audible {
-        return None;
+        return Vec::new();
     }
     if clipping_protection {
         filters.push(LIMITER_FILTER.to_owned());
     }
-    Some(format!("lavfi=[{}]", filters.join(",")))
+    filters
 }
 
 /// Tagged filter string for `af add` and the initial `af` chain.
@@ -79,7 +86,9 @@ fn band_width(id: &str) -> f64 {
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{EQUALIZER_FILTER_LABEL, equalizer_filter_graph, tagged_equalizer_filter};
+    use super::{
+        EQUALIZER_FILTER_LABEL, equalizer_filter_graph, equalizer_filters, tagged_equalizer_filter,
+    };
 
     #[test]
     fn all_ten_bands_keep_independent_values_and_widths() {
@@ -145,5 +154,20 @@ mod tests {
         assert_eq!(equalizer_filter_graph(&BTreeMap::new(), true), None);
         let tiny = BTreeMap::from([("31".to_owned(), 0.04)]);
         assert_eq!(equalizer_filter_graph(&tiny, false), None);
+        assert!(equalizer_filters(&tiny, true).is_empty());
+    }
+
+    #[test]
+    fn separate_filters_match_python_ffmpeg_equalizer_filters() {
+        let gains = BTreeMap::from([("62".to_owned(), 6.0), ("8000".to_owned(), -2.0)]);
+        assert_eq!(
+            equalizer_filters(&gains, true),
+            [
+                "volume=-6.0dB",
+                "equalizer=f=62:t=q:w=2:g=6.0",
+                "equalizer=f=8000:t=q:w=1.7:g=-2.0",
+                "alimiter=limit=0.95:attack=5:release=80",
+            ]
+        );
     }
 }

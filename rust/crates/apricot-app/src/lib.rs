@@ -11,6 +11,7 @@ pub mod context_menu;
 pub mod download_controller;
 pub mod equalizer;
 pub mod last_player_session_controller;
+pub mod local_edit;
 pub mod local_folder;
 pub mod main_menu;
 pub mod media_collection_controller;

@@ -22,15 +22,6 @@ pub fn unavailable_action_message(
     current_item: Option<&MediaItem>,
 ) -> Option<String> {
     let python_key = match action_id {
-        // Python `save_edited_local_file` returns silently while edit mode is
-        // off, and the Rust beta cannot turn edit mode on yet.
-        "player_save_edit_copy" | "player_replace_edit_original" => return None,
-        // Python `toggle_edit_mode`.
-        "player_edit_mode" => match current_item {
-            None => return None,
-            Some(item) if !has_local_path(item) => Some("edit_mode_local_only"),
-            Some(_) => None,
-        },
         // Python `show_comments`.
         "player_comments" => match current_item {
             None => Some("no_player"),
@@ -54,19 +45,10 @@ fn feature_label_key(action_id: &str) -> &str {
     match action_id {
         "player_equalizer" => "equalizer",
         "player_comments" => "comments",
-        "player_edit_mode" => "edit_mode",
         "open_audiovault" => "audiovault",
         "open_channel" => "open_channel",
         _ => action_by_id(action_id).map_or(action_id, |action| action.label_key),
     }
-}
-
-fn has_local_path(item: &MediaItem) -> bool {
-    item.is_local_media()
-        && item
-            .local_path
-            .as_deref()
-            .is_some_and(|path| !path.trim().is_empty())
 }
 
 #[cfg(test)]
@@ -144,37 +126,11 @@ mod tests {
             text("comments_disabled")
         );
         assert_eq!(
-            unavailable_action_message(&catalog, "player_edit_mode", Some(&youtube)),
-            text("edit_mode_local_only")
-        );
-        assert_eq!(
             unavailable_action_message(&catalog, "player_comments", Some(&youtube)),
             Some(unavailable_feature_message(
                 &catalog,
                 catalog.text("comments")
             ))
-        );
-        assert_eq!(
-            unavailable_action_message(&catalog, "player_edit_mode", Some(&local)),
-            Some(unavailable_feature_message(
-                &catalog,
-                catalog.text("edit_mode")
-            ))
-        );
-    }
-
-    #[test]
-    fn python_silent_cases_stay_silent() {
-        let catalog = embedded_catalog("en");
-        for action in ["player_save_edit_copy", "player_replace_edit_original"] {
-            assert_eq!(
-                unavailable_action_message(&catalog, action, Some(&local_item())),
-                None
-            );
-        }
-        assert_eq!(
-            unavailable_action_message(&catalog, "player_edit_mode", None),
-            None
         );
     }
 }

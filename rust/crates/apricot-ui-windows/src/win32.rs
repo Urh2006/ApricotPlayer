@@ -210,6 +210,8 @@ const AUDIO_DEVICE_CHECK_TIMER_ID: usize = 10;
 const AUDIO_DEVICE_CHECK_DELAY_MS: u32 = 6_500;
 const BPM_TIMER_ID: usize = 11;
 const BPM_TIMER_INTERVAL_MS: u32 = 100;
+const EDIT_SAVE_TIMER_ID: usize = 12;
+const EDIT_SAVE_TIMER_INTERVAL_MS: u32 = 100;
 const AUDIO_DEVICE_POLL_MS: u32 = 100;
 /// Python waits up to 5 seconds for `mpv --audio-device=help`.
 const AUDIO_DEVICE_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -400,6 +402,12 @@ struct PendingBpmAnalysis {
     receiver: Receiver<Option<i64>>,
 }
 
+/// Python `save_edited_local_file_worker` running in the background.
+struct PendingEditSave {
+    replace_original: bool,
+    receiver: Receiver<std::result::Result<PathBuf, String>>,
+}
+
 /// Window style and placement to restore after full screen.
 struct FullscreenRestore {
     style: isize,
@@ -518,6 +526,7 @@ struct WindowState {
     download_progress_task_id: Option<u64>,
     clip_exports: Vec<Receiver<std::result::Result<PathBuf, String>>>,
     pending_bpm: Vec<PendingBpmAnalysis>,
+    pending_edit_saves: Vec<PendingEditSave>,
     pending_chapters: Option<PendingChapters>,
     pending_related: Option<PendingRelatedVideos>,
     pending_audio_device_check: Option<Receiver<Vec<apricot_playback::AudioOutputDevice>>>,
@@ -920,6 +929,10 @@ unsafe extern "system" fn window_proc(
         }
         WM_TIMER if wparam.0 == BPM_TIMER_ID => {
             poll_bpm_analyses(window);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == EDIT_SAVE_TIMER_ID => {
+            poll_edit_saves(window);
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -1709,6 +1722,7 @@ unsafe fn create_controls(
         download_progress_task_id: None,
         clip_exports: Vec::new(),
         pending_bpm: Vec::new(),
+        pending_edit_saves: Vec::new(),
         pending_chapters: None,
         pending_related: None,
         pending_audio_device_check: None,
@@ -11178,6 +11192,9 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "player_next" => navigate_player_relative(window, 1),
         "player_time" => announce_player_time(window),
         "player_bpm" => announce_bpm(window),
+        "player_edit_mode" => toggle_player_edit_mode(window),
+        "player_save_edit_copy" => save_edited_local_file(window, false),
+        "player_replace_edit_original" => save_edited_local_file(window, true),
         "player_previous_chapter" => seek_relative_player_chapter(window, false),
         "player_chapters" => show_player_chapters(window),
         "player_next_chapter" => seek_relative_player_chapter(window, true),
@@ -13042,6 +13059,163 @@ unsafe fn poll_bpm_analyses(window: HWND) {
             None => catalog_text(&state.application, "bpm_not_available"),
         };
         set_status(state, &message, true);
+    }
+}
+
+/// Python `current_local_media_path`: the file of a playing local item.
+fn current_local_media_path(state: &WindowState) -> Option<PathBuf> {
+    state
+        .application
+        .player_session()
+        .current_item()
+        .filter(|item| item.is_local_media())
+        .and_then(|item| item.local_path.as_deref())
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+}
+
+/// Python `toggle_edit_mode`.
+unsafe fn toggle_player_edit_mode(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    if !state.application.player_session().is_open() || state.playback.is_none() {
+        return;
+    }
+    let key = if current_local_media_path(state).is_none() {
+        "edit_mode_local_only"
+    } else if state.application.toggle_player_edit_mode() {
+        "edit_mode_on"
+    } else {
+        "edit_mode_off"
+    };
+    let message = catalog_text(&state.application, key);
+    set_status(state, &message, true);
+}
+
+/// Python `save_edited_local_file`: Ctrl+S saves an edited copy beside the
+/// file, Ctrl+R stops the player and replaces the file.
+unsafe fn save_edited_local_file(window: HWND, replace_original: bool) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    if !state.application.player_session().edit_mode() {
+        return;
+    }
+    let Some(source) = current_local_media_path(state) else {
+        let message = catalog_text(&state.application, "edit_mode_local_only");
+        set_status(state, &message, true);
+        return;
+    };
+    let Some(audio) = state.application.local_edit_audio() else {
+        return;
+    };
+    let output = apricot_app::local_edit::edited_output_path(&source, replace_original);
+    let temporary_output = if replace_original {
+        apricot_app::local_edit::temporary_conversion_path(&output)
+    } else {
+        output.clone()
+    };
+    let directory = application_directory();
+    let mpv = directory
+        .as_ref()
+        .map(|directory| directory.join("mpv").join("mpv.exe"))
+        .filter(|path| path.is_file());
+    let ffmpeg = apricot_platform::ffmpeg_executable(
+        &state.application.settings().ffmpeg_location,
+        directory.as_deref(),
+    );
+    let render = mpv.zip(ffmpeg.clone()).map(|(mpv, ffmpeg)| {
+        let pcm = apricot_app::local_edit::pcm_render_path(&temporary_output);
+        apricot_platform::LocalEditRender {
+            mpv,
+            mpv_arguments: audio.mpv_render_arguments(&source, &pcm),
+            ffmpeg,
+            mux_arguments: audio.mux_arguments(&source, &pcm, &temporary_output),
+            pcm,
+        }
+    });
+    let fallback =
+        ffmpeg.map(|ffmpeg| (ffmpeg, audio.ffmpeg_arguments(&source, &temporary_output)));
+    let job = apricot_platform::LocalEditJob {
+        source,
+        output,
+        temporary_output,
+        render,
+        fallback,
+    };
+    let message = catalog_text(&state.application, "edit_save_started");
+    set_status(state, &message, true);
+    if replace_original {
+        // Python `stop_player(silent=True)` releases the file and keeps the
+        // player page open.
+        close_player_runtime(window, state);
+    }
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let _ = sender.send(apricot_platform::save_local_edit(&job));
+    });
+    state.pending_edit_saves.push(PendingEditSave {
+        replace_original,
+        receiver,
+    });
+    let _ = SetTimer(
+        Some(window),
+        EDIT_SAVE_TIMER_ID,
+        EDIT_SAVE_TIMER_INTERVAL_MS,
+        None,
+    );
+}
+
+/// The end of Python `save_edited_local_file_worker`.
+unsafe fn poll_edit_saves(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let mut finished = Vec::new();
+    state
+        .pending_edit_saves
+        .retain(|save| match save.receiver.try_recv() {
+            Ok(result) => {
+                finished.push((save.replace_original, result));
+                false
+            }
+            Err(TryRecvError::Empty) => true,
+            Err(TryRecvError::Disconnected) => {
+                finished.push((save.replace_original, Err("Edit worker stopped".to_owned())));
+                false
+            }
+        });
+    if state.pending_edit_saves.is_empty() {
+        let _ = KillTimer(Some(window), EDIT_SAVE_TIMER_ID);
+    }
+    let mut failures = Vec::new();
+    for (replace_original, result) in finished {
+        match result {
+            Ok(path) => {
+                let key = if replace_original {
+                    "edit_replace_done"
+                } else {
+                    "edit_save_done"
+                };
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                let message = catalog_text(&state.application, key).replace("{title}", &name);
+                set_status(state, &message, true);
+            }
+            Err(error) => failures.push(
+                catalog_text(&state.application, "edit_save_failed").replace("{error}", &error),
+            ),
+        }
+    }
+    // Python `self.message(..., wx.ICON_ERROR)`.
+    for message in failures {
+        show_message_box(
+            window,
+            &message,
+            windows::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
+        );
     }
 }
 

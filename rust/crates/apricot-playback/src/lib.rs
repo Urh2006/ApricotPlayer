@@ -22,7 +22,7 @@ pub use audio_chain::{
 };
 pub use audio_filters::AudioFilterState;
 pub use equalizer::{
-    EQUALIZER_FILTER_ALT_LABEL, EQUALIZER_FILTER_LABEL, equalizer_filter_graph,
+    EQUALIZER_FILTER_ALT_LABEL, EQUALIZER_FILTER_LABEL, equalizer_filter_graph, equalizer_filters,
     tagged_equalizer_filter,
 };
 #[cfg(windows)]

@@ -8,6 +8,7 @@ pub mod bpm;
 pub mod clip_export;
 pub mod diagnostics;
 pub mod download;
+pub mod local_edit;
 pub mod local_media;
 pub mod lyrics;
 pub mod paths;
@@ -32,6 +33,7 @@ pub use download::{
     DownloadError, DownloadEvent, DownloadMode, DownloadOptions, DownloadPhase, DownloadRequest,
     DownloadSummary, VideoDownloadFormat, YtDlpDownloader,
 };
+pub use local_edit::{LocalEditJob, LocalEditRender, save_local_edit};
 pub use local_media::{
     LocalMediaError, scan_local_media_folder, scan_local_media_folder_with_cancel,
 };

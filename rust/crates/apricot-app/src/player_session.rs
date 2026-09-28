@@ -68,6 +68,8 @@ pub struct PlayerSession {
     audio_devices: Vec<AudioOutputDevice>,
     last_error: Option<String>,
     transcript: Option<crate::transcript::CachedTranscript>,
+    /// Python `edit_mode_enabled`, off again for every started item.
+    edit_mode: bool,
 }
 
 impl PlayerSession {
@@ -141,6 +143,16 @@ impl PlayerSession {
         self.duration_seconds
     }
 
+    pub const fn edit_mode(&self) -> bool {
+        self.edit_mode
+    }
+
+    /// Python `toggle_edit_mode`; returns the new state.
+    pub const fn toggle_edit_mode(&mut self) -> bool {
+        self.edit_mode = !self.edit_mode;
+        self.edit_mode
+    }
+
     pub const fn clip_start_seconds(&self) -> Option<f64> {
         self.clip_start_seconds
     }
@@ -203,6 +215,7 @@ impl PlayerSession {
         self.duration_seconds = None;
         self.clip_start_seconds = None;
         self.clip_end_seconds = None;
+        self.edit_mode = false;
         self.media_info = PlaybackMediaInfo::default();
         self.last_error = None;
         self.generation
@@ -316,6 +329,7 @@ impl PlayerSession {
         self.duration_seconds = None;
         self.clip_start_seconds = None;
         self.clip_end_seconds = None;
+        self.edit_mode = false;
         self.media_info = PlaybackMediaInfo::default();
         self.last_error = None;
     }
@@ -393,6 +407,25 @@ mod tests {
         assert_eq!(session.phase(), PlaybackPhase::Closed);
         assert!(session.audio().is_none());
         assert!(session.enabled_toggles().is_empty());
+    }
+
+    #[test]
+    fn edit_mode_is_off_for_every_started_item_and_after_close() {
+        let mut session = PlayerSession::default();
+        session.start_item(item("first"), defaults());
+        assert!(!session.edit_mode());
+        assert!(session.toggle_edit_mode());
+        assert!(session.edit_mode());
+        session.start_item(item("second"), defaults());
+        assert!(
+            !session.edit_mode(),
+            "Python start_mpv clears edit_mode_enabled"
+        );
+        assert!(session.toggle_edit_mode());
+        assert!(!session.toggle_edit_mode());
+        session.toggle_edit_mode();
+        session.close();
+        assert!(!session.edit_mode());
     }
 
     #[test]

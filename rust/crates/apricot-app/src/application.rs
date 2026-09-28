@@ -1921,6 +1921,27 @@ impl Application {
         self.state.player.set_pitch(pitch);
     }
 
+    /// Python `toggle_edit_mode` state; returns whether edit mode is now on.
+    pub fn toggle_player_edit_mode(&mut self) -> bool {
+        self.state.player.toggle_edit_mode()
+    }
+
+    /// The open player's speed, pitch and equalizer that Python edit mode
+    /// writes into the file.
+    pub fn local_edit_audio(&self) -> Option<crate::local_edit::LocalEditAudio> {
+        let audio = self.state.player.audio()?;
+        let (enabled, gains) = self.player_equalizer_state(None)?;
+        let settings = self.settings.current();
+        Some(crate::local_edit::LocalEditAudio {
+            speed: audio.speed,
+            pitch: audio.pitch,
+            speed_mode: apricot_playback::SpeedAudioMode::from_setting(&settings.speed_audio_mode),
+            pitch_mode: apricot_playback::PitchMode::from_setting(&settings.pitch_mode),
+            equalizer: enabled.then_some(gains),
+            clipping_protection: settings.equalizer_clipping_protection,
+        })
+    }
+
     /// Python `session_equalizer_enabled`/`session_equalizer_gains`.
     pub fn set_player_equalizer(&mut self, equalizer: Option<EqualizerSession>) {
         self.state.player.set_equalizer(equalizer);

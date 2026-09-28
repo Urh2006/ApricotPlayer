@@ -170,7 +170,7 @@ Enote, ki popravljajo odstopanja, so na vrsti prve.
 - **E9. Izbira izhodne naprave (O) z osvežitvijo seznama in varnim nadomestkom. Zaključeno 28. 9. 2026, glej razdelek 6.**
 - **E10. Izenačevalnik iz predvajalnika (F4) ter EQ profili v nastavitvah. Zaključeno 28. 9. 2026, glej razdelek 6.**
 - **E11. BPM analiza. Zaključeno 28. 9. 2026, glej razdelek 6.**
-- **E12.** Način urejanja z varnim shranjevanjem kopije in zamenjavo izvirnika.
+- **E12. Način urejanja z varnim shranjevanjem kopije in zamenjavo izvirnika. Zaključeno 28. 9. 2026, glej razdelek 6.**
 - **E13.** Komentarji.
 - **E13a.** Predvajanje v ozadju (PLAYER2-M-10): nastavitev `enable_background_playback`,
   Back brez ustavitve predvajanja, vgrajen seznam rezultatov v predvajalniku in gumb
@@ -750,3 +750,63 @@ najde 60 BPM v piskih na sekundo. Samodejni preizkus nameščene bete (skrita ko
 NVDA odjemalca, tipke poslane kot sporočila oknu) je potrdil B z "Analyzing tempo...",
 ponovni B med analizo, "137 BPM." za lokalni ritem, "138 BPM." po D (1,01x), brez oglasa
 po D med analizo, ter v iskanju dvojni Enter in tri zaporedna iskanja z Escape vmes.
+
+### E12: način urejanja (28. 9. 2026)
+
+Spremembe:
+
+- E in gumb "Edit mode" preklopita način urejanja kot
+  Pythonov `toggle_edit_mode`: "Edit mode on." ali "Edit mode off.". Pri posnetku, ki ni
+  obstoječa lokalna datoteka, se oglasi "Edit mode is available only for local files.",
+  brez predvajalnika se ne zgodi nič. Način se izklopi ob vsakem novem posnetku, kot v
+  Pythonovem `start_mpv`. Prej je E oglasil, da funkcija v beti še ni na voljo.
+- Ctrl+S (`player_save_edit_copy`) pri vklopljenem načinu oglasi "Saving edited file." in
+  v ozadju shrani kopijo "ime - edited.končnica" (ali "ime - edited (2).končnica" in
+  naprej) ob izvirniku, nato oglasi "Edited file saved: ...". Pri izklopljenem načinu
+  Ctrl+S in Ctrl+R ne naredita nič, kot v Pythonu.
+- Ctrl+R (`player_replace_edit_original`) oglasi "Saving edited file.", tiho ustavi
+  predvajalnik (stran predvajalnika ostane odprta, fokus ostane na mestu), zapiše novo
+  datoteko v skrito sosednjo začasno datoteko ".ime.apricot-converting-xxxxxxxxxxxx.končnica"
+  in šele po uspehu z njo zamenja izvirnik ter oglasi "Original file replaced: ...".
+- Pot je Pythonova: mpv (`mpv.exe` iz namestitve) predvaja datoteko brez zvoka v začasen
+  WAV z enako verigo kot predvajalnik (hitrost, filter za hitrost glede na
+  `speed_audio_mode`, višina tona glede na `pitch_mode`, izenačevalnik z bass boostom),
+  ffmpeg pa ga zapiše v izhodno datoteko s Pythonovimi kodeki (MP3 320k, Opus 160k, WAV,
+  FLAC, sicer AAC 256k). Pri videu ffmpeg ohrani sliko (`-c:v copy`) ali jo pri spremenjeni
+  hitrosti pospeši z `setpts` in libx264. Brez mpv se uporabi samo ffmpeg z Pythonovim
+  `local_edit_ffmpeg_args` (izenačevalnik, Rubberband ali veriga `atempo`).
+- Napaka odpre sporočilno okno "Could not save edited file: ..." z zadnjimi 600 znaki
+  izpisa programa ali "... exited with code N", kot Python. Začasna datoteka za zamenjavo
+  se ob napaki izbriše, izvirnik ostane nespremenjen.
+
+Predlog P-3 (čaka odobritev): Python med vklopljenim izenačevalnikom vedno doda filter
+izenačevalnika, tudi ko so vsi pasovi na 0 (na primer preset Flat). mpv prazen graf
+`lavfi=[]` zavrne ("Creating filter 'lavfi' failed"), zato Pythonovo shranjevanje v tem
+primeru vedno javi napako. To sem preveril z dejanskim `mpv.exe`. Rust ploskega
+izenačevalnika ne doda, kot ga ne doda niti predvajalnik, zato shranjevanje uspe.
+
+Predlog P-4 (čaka odobritev): kadar shranjevanje kopije (Ctrl+S) spodleti med pisanjem, Python
+pusti delno datoteko "ime - edited". Rust se zdaj obnaša enako; predlagam, da Rust delno
+kopijo izbriše, kot to že naredi pri zamenjavi izvirnika.
+
+Odstopanja, ki ostajajo: besedilo sistemske napake je Windowsovo ("Access is denied. (os
+error 5)"), Python pa ga oblikuje kot "[WinError 5] Access is denied: ...". Po Ctrl+R se
+naslov okna vrne na "ApricotPlayer 2 Beta", kot pri vsakem ustavljenem predvajalniku v
+Rustu. Python ob Ctrl+R uniči ploščo predvajalnika, na kateri je fokus, Rust fokus pusti
+na mestu.
+
+Preverjanje: `cargo build`, `cargo test` (491 uspešnih, 12 izključenih), `cargo clippy
+--all-targets -D warnings` in `cargo fmt --check`. Novi testi pokrijejo verigo `atempo`,
+argumente mpv za Rubberband, mpv višino tona in ploski izenačevalnik, filtre in argumente
+samega ffmpeg, korak združevanja za zvok in video, kodeke, video končnice, imena izhodnih in
+začasnih datotek, izklop načina ob novem posnetku, napako brez kodirnika z brisanjem začasne
+datoteke in besedilo napak. Samodejni preizkus nameščene bete (skrita kopija brez NVDA
+odjemalca, tipke poslane oknu, Ctrl samo v stanju tipkovnice bete) na ločeni kopiji podatkov
+z začetno hitrostjo 1,5x in vklopljenim ploskim izenačevalnikom je potrdil: Ctrl+S brez
+načina ne naredi nič, E, E, E oglasijo on, off, on, Ctrl+S ustvari "song - edited.mka" z
+dolžino 26,8 s namesto 40 s, Ctrl+R zamenja "song.mka" (26,8 s) brez ostankov začasnih
+datotek, fokus ostane na predvajalniku, E po zamenjavi ne naredi nič. Video MP4 pri 2x je dal
+6,1 s namesto 12 s s sliko in zvokom. Zamenjava datoteke samo za branje je odprla okno
+"Could not save edited file: Access is denied. (os error 5)", izvirnik je ostal cel. Ročno
+sem z dejanskim mpv in ffmpeg preveril še verigo Rubberband za hitrost in višino tona z
+zaščito izenačevalnika pred popačenjem.
