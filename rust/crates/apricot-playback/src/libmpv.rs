@@ -751,6 +751,9 @@ fn command_arguments(command: PlaybackCommand) -> Result<Vec<String>, PlaybackEr
             "af".to_owned(),
             filter.unwrap_or_default(),
         ],
+        PlaybackCommand::SetReplayGain(mode) => {
+            vec!["set".to_owned(), "replaygain".to_owned(), mode]
+        }
         PlaybackCommand::Stop => vec!["stop".to_owned()],
     };
     Ok(arguments)

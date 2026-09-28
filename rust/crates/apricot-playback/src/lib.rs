@@ -54,6 +54,8 @@ pub enum PlaybackCommand {
     SetAudioPitchCorrection(bool),
     SetRepeat(bool),
     SetAudioFilter(Option<String>),
+    /// mpv `replaygain`: `no`, `track` or `album`.
+    SetReplayGain(String),
     Stop,
 }
 

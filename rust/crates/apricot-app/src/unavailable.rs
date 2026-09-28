@@ -5,7 +5,7 @@
 //! current situation (for example comments on a local file), that message is
 //! used. Otherwise the action is announced as not available in this beta.
 
-use apricot_core::{MediaItem, MediaSource, TranslationCatalog, action::action_by_id};
+use apricot_core::{MediaItem, TranslationCatalog, action::action_by_id};
 
 /// Spoken text for a Python feature that the Rust beta cannot perform yet.
 pub fn unavailable_feature_message(catalog: &TranslationCatalog, feature: &str) -> String {
@@ -39,12 +39,6 @@ pub fn unavailable_action_message(
             Some(item) if item.youtube_url_at_timestamp(0.0).is_none() => Some("comments_disabled"),
             Some(_) => None,
         },
-        // Python `play_related_item`.
-        "player_next_related" => match current_item {
-            None => Some("no_player"),
-            Some(item) if !is_youtube_item(item) => Some("no_related_video"),
-            Some(_) => None,
-        },
         // Python `announce_bpm_async`.
         "player_bpm" if current_item.is_none() => Some("bpm_not_available"),
         _ => None,
@@ -66,8 +60,6 @@ fn feature_label_key(action_id: &str) -> &str {
         "player_output_devices" => "output_devices",
         "player_comments" => "comments",
         "player_edit_mode" => "edit_mode",
-        "player_replaygain" => "audio_normalization",
-        "player_shuffle" => "shuffle",
         "open_audiovault" => "audiovault",
         "open_channel" => "open_channel",
         _ => action_by_id(action_id).map_or(action_id, |action| action.label_key),
@@ -80,10 +72,6 @@ fn has_local_path(item: &MediaItem) -> bool {
             .local_path
             .as_deref()
             .is_some_and(|path| !path.trim().is_empty())
-}
-
-fn is_youtube_item(item: &MediaItem) -> bool {
-    item.source == MediaSource::Youtube || item.youtube_url_at_timestamp(0.0).is_some()
 }
 
 #[cfg(test)]
@@ -159,10 +147,6 @@ mod tests {
         assert_eq!(
             unavailable_action_message(&catalog, "player_comments", Some(&local)),
             text("comments_disabled")
-        );
-        assert_eq!(
-            unavailable_action_message(&catalog, "player_next_related", Some(&local)),
-            text("no_related_video")
         );
         assert_eq!(
             unavailable_action_message(&catalog, "player_edit_mode", Some(&youtube)),

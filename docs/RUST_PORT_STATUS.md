@@ -123,7 +123,8 @@ Prioriteta: P1 pomeni, da je osnovna uporaba s tipkovnico ali NVDA zlomljena ali
 |---|---|---|---|
 | PLAYER2-M-02, SETTINGS-M-02 | P1 | Izenačevalnik iz predvajalnika (F4) ter ustvarjanje, uvoz, izvoz, brisanje in ponastavitev EQ profilov | `apricot/ui/equalizer.py`, `apricot/ui/settings.py:762-846` |
 | PLAYER2-M-03 | P1 | Izbira izhodne naprave (O) | `apricot/player/volume.py`, `apricot/ui/player.py` |
-| PLAYER2-M-05 | P1 | Preklop shuffle (Shift+S), sorodni video (Ctrl+Shift+PageDown), ReplayGain (Ctrl+Shift+G), celozaslonski način (F11) | `apricot/ui/misc.py:1358`, `apricot/ui/player.py` |
+| PLAYER2-M-05 | P1 | Odpravljeno v E8: preklop shuffle (Shift+S), sorodni video (Ctrl+Shift+PageDown), ReplayGain (Ctrl+Shift+G), celozaslonski način (F11) | `apricot/ui/misc.py:1358`, `apricot/ui/player.py` |
+| PLAYER2-M-10 | P2 | Predvajanje v ozadju (`enable_background_playback`, privzeto izklopljeno): Back pusti predvajanje teči in odpre glavni meni, predvajalnik ima vgrajen seznam rezultatov (PLAYER2-05), v celozaslonskem načinu pa gumb "Back to results". V Rustu vsi gumbi Back in Close player predvajanje ustavijo. Ugotovljeno iz kode med E8, predlagam lastno enoto. | `apricot/ui/player.py:648-812`, `apricot/ui/events.py:605-620` |
 | PLAYER2-M-01 | P1 | BPM analiza (B) | `apricot/ui/misc.py:2710-2803` |
 | PLAYER2-M-04 | P1 | Komentarji (Ctrl+Shift+M) | `apricot/ui/misc.py:2095+` |
 | PLAYER2-M-06 | P1 | Način urejanja (E, Ctrl+S, Ctrl+R) | `apricot/ui/misc.py:2389-2433` |
@@ -165,7 +166,7 @@ Enote, ki popravljajo odstopanja, so na vrsti prve.
 
 ### B. Majhne manjkajoče funkcije predvajalnika
 
-- **E8.** Shuffle, sorodni video, ReplayGain cikel in celozaslonski način.
+- **E8. Shuffle, sorodni video, ReplayGain cikel in celozaslonski način. Zaključeno 28. 9. 2026, glej razdelek 6.**
 - **E9.** Izbira izhodne naprave (O) z osvežitvijo seznama in varnim nadomestkom.
 - **E10.** Izenačevalnik iz predvajalnika (F4) ter EQ profili v nastavitvah.
 - **E11.** BPM analiza.
@@ -201,14 +202,21 @@ odstopanje se najprej predlaga Urhu in se po odobritvi zapiše sem.
   uspe (dopolnitev E6).
 - **O-2.** Po vrnitvi iz predvajalnika v center obvestil ali zgodovino ostane izbrana
   predvajana vrstica namesto prve vrstice (dopolnitev E6).
-
-Predlogi, ki čakajo na Urhovo odločitev (Rust se zdaj obnaša tako, kot je opisano):
-
-- **P-1.** Iskanje v prepisu med nalaganjem: Python seznam zamenja z "No transcript or
-  captions available.", čeprav se prepis še nalaga. Rust ohrani "Loading transcript".
-- **P-2.** Neposredna povezava, ki tudi z dodanim `https://` ni veljaven naslov (na primer
+- **O-3.** Iskanje v prepisu med nalaganjem: Python seznam zamenja z "No transcript or
+  captions available.", čeprav se prepis še nalaga. Rust ohrani "Loading transcript"
+  (predlog P-1 iz E7, odobren 28. 9. 2026).
+- **O-4.** Neposredna povezava, ki tudi z dodanim `https://` ni veljaven naslov (na primer
   presledki v imenu strežnika): Python jo poskusi predvajati in javi napako yt-dlp, Rust
-  takoj oglasi `direct_link_invalid`.
+  takoj oglasi `direct_link_invalid` (predlog P-2 iz E7, odobren 28. 9. 2026).
+- **O-5.** Ko ročni sorodni video (Ctrl+Shift+PageDown) ne najde ničesar, Python poleg
+  oglasa "No related video available." označi predvajanje kot končano in gumb Pause
+  preimenuje v Play, čeprav posnetek teče naprej. Rust samo oglasi sporočilo (E8, čaka
+  na Urhovo potrditev).
+- **O-6.** Konec posnetka: Python oglasi "Playback finished." samo, ko samodejni sorodni
+  video ne najde ničesar. Ob navadnem koncu (z ali brez "autoplay next") je tiho, zato
+  nastavitev "Announce when playback finishes" skoraj nima učinka. Rust (že pred E8) ob
+  vsakem koncu brez naslednjega elementa oglasi "Playback finished.", če je nastavitev
+  vklopljena (E8, čaka na Urhovo potrditev).
 
 ## 6. Dnevnik enot
 
@@ -513,7 +521,7 @@ naročnin, izbira jezika podnapisov in lokalnih datotek.
 
 Ostaja: prepis in besedila oglašajo prek NVDA in JAWS, ne pa prek MSAA dogodkov glavnega
 okna. Vrsta predvajanja spremembe shrani ob zaprtju okna, Python po vsakem koraku; rezultat
-je enak. Predloga P-1 in P-2 čakata na odločitev.
+je enak. Predloga P-1 in P-2 sta bila odobrena kot O-3 in O-4.
 
 Preverjanje: `cargo build`, `cargo test` (445 uspešnih, 8 izključenih), `cargo clippy
 --all-targets -D warnings` in `cargo fmt --check`. Novi testi pokrijejo besedilo napak in
@@ -523,3 +531,56 @@ datotekama je potrdil F7, Tab in Shift+Tab v podrobnostih, sprotno hitrost, Esca
 samodejno odprte podrobnosti, poglavje brez naslova, prepis in besedila iz lokalnih
 datotek, brisanje naročnine, Tab in Enter na neposredni povezavi, Enter v iskanju,
 fokus po sporočilnem oknu ter premikanje, odstranjevanje in brisanje vrste.
+
+### E8: shuffle, sorodni video, ReplayGain in celozaslonski način (28. 9. 2026)
+
+Spremembe:
+
+- Shift+S (`toggle_shuffle`) preklopi shuffle in oglasi "Shuffle on." ali "Shuffle off.".
+  S shuffle Next in samodejno nadaljevanje izbereta naključni drug element trenutnega
+  seznama, Previous ostane po vrsti, vrsta predvajanja ima še vedno prednost. Epizode
+  podcasta in playlista gredo po vrsti, dokler naslednja obstaja, kot v
+  `relative_player_item`. Izbira elementa s seznama shuffle izklopi (`play_selected`).
+- Ctrl+Shift+G (`cycle_replaygain_mode`) zamenja Off, Track, Album, nastavitev takoj
+  shrani, jo pošlje mpv (`replaygain`) in oglasi "Audio normalization: Track.". Če ukaza
+  ni mogoče poslati, sledi še "Audio normalization will apply when playback restarts.".
+  Gumb v predvajalniku se imenuje po trenutnem načinu ("Audio normalization: Off
+  Ctrl+Shift+G"), kot `audio_normalization_status_label`. Nov posnetek v isti libmpv
+  instanci dobi nastavljeni način.
+- Ctrl+Shift+PageDown (`play_related_item`) v ozadju prenese stran YouTube videa, iz
+  `ytInitialData` prebere sorodne videe (`lockupViewModel` in `compactVideoRenderer`,
+  enako kot Python), preskoči že predvajane v tej seji, z njimi zamenja rezultate iskanja
+  in predvaja prvega. Next nato gre po sorodnih videih. Brez YouTube posnetka se oglasi
+  "No related video available.", brez predvajalnika "No player.". Statusna vrstica
+  med nalaganjem pokaže "Loading related video..." brez oglasa.
+- Ob koncu posnetka z vklopljenima "autoplay next" in "autoplay related" se namesto
+  naslednjega elementa predvaja sorodni video (`handle_player_eof`). Če ga ni, se
+  predvaja naslednji element, brez njega pa se oglasi "Playback finished." (z
+  nastavitvijo `announce_playback_finished`), kot `play_next_standard_fallback`. Enako
+  zdaj velja za konec z "autoplay next" brez naslednjega elementa, kjer je Rust prej
+  oglasil "No next item.". Glej predlog O-6.
+- F11, postavka menija in potrditveno polje Full screen (`toggle_player_fullscreen`)
+  razširijo okno čez cel zaslon brez okvirja in oglasijo "Full screen on." ali "Full
+  screen off.". F11 in meni premakneta fokus na predvajalnik, potrditveno polje obdrži
+  fokus. Escape v celozaslonskem načinu najprej zapre podrobnosti, nato izklopi cel
+  zaslon brez oglasa in fokus postavi na predvajalnik (`exit_fullscreen_to_player`),
+  šele naslednji Escape zapusti predvajalnik. Nastavitev `player_fullscreen` odpre vsak
+  nov predvajalnik čez cel zaslon. Ob odhodu s strani predvajalnika se okno vrne v
+  prejšnjo velikost. mpv lastnosti `fullscreen` Rust ne nastavlja, ker je video vgrajen
+  v okno (`wid`) in celozaslonsko je glavno okno, kot pri Pythonovem `ShowFullScreen`.
+
+Predloga O-5 in O-6 (glej razdelek 5) čakata na potrditev. Med delom sem opazil, da Rust nima
+predvajanja v ozadju (PLAYER2-M-10), zato celozaslonska različica gumba "Back to
+results" ni narejena.
+
+Preverjanje: `cargo build`, `cargo test` (452 uspešnih, 8 izključenih), `cargo clippy
+--all-targets -D warnings` in `cargo fmt --check`. Novi testi pokrijejo branje sorodnih
+videov iz strani, zavrnitev naslovov zunaj youtube.com, preskok že videnih videov in
+zamenjavo rezultatov, naključni Next s shuffle, cikel ReplayGain s shranjevanjem in ime
+gumba. Izključen omrežni test je prebral sorodne videe z dejanske YouTube strani.
+Samodejni preizkus nameščene bete na ločeni kopiji podatkov je potrdil: ime gumba in
+oglas pri Ctrl+Shift+G ter shranjeni način, Shift+S, F11 (okno 1920 x 1080 brez okvirja,
+fokus na predvajalniku, potrditveno polje obkljukano), Escape (okno nazaj, fokus na
+predvajalniku, brez oglasa), preslednico na potrditvenem polju (fokus ostane), dva Escapa
+za izhod, Ctrl+Shift+PageDown na YouTube videu (predvaja sorodni video) in Ctrl+PageDown
+za naslednji sorodni video.

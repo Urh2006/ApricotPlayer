@@ -238,6 +238,9 @@ impl PlaybackEngine for MpvProcessEngine {
             PlaybackCommand::SetAudioFilter(filter) => {
                 json!(["set_property", "af", filter.unwrap_or_default()])
             }
+            PlaybackCommand::SetReplayGain(mode) => {
+                json!(["set_property", "replaygain", mode])
+            }
             PlaybackCommand::Stop => json!(["stop"]),
         };
         request_success(&self.client, command, COMMAND_TIMEOUT)

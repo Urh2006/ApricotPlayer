@@ -118,6 +118,25 @@ impl PlaybackSequence {
         self.items.get(candidate).cloned()
     }
 
+    /// Python `relative_player_item` with shuffle on: a random item other
+    /// than the current one, or the current one when it is the only item.
+    pub fn random_next(&self) -> Option<MediaItem> {
+        use rand::seq::IndexedRandom;
+
+        let current = self.current_index()?;
+        let others: Vec<_> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != current)
+            .map(|(_, item)| item)
+            .collect();
+        if others.is_empty() {
+            return self.items.get(current).cloned();
+        }
+        others.choose(&mut rand::rng()).map(|item| (*item).clone())
+    }
+
     pub fn clear(&mut self) {
         self.source = None;
         self.items.clear();

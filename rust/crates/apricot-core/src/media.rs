@@ -106,6 +106,14 @@ impl MediaItem {
         self.url.as_ref().map(ToString::to_string)
     }
 
+    /// Python `extract_youtube_video_id`: the video id of a `YouTube` item.
+    pub fn youtube_video_id(&self) -> Option<String> {
+        if self.source == MediaSource::Youtube && valid_youtube_video_id(&self.id.0) {
+            return Some(self.id.0.clone());
+        }
+        self.url.as_ref().and_then(youtube_video_id_from_url)
+    }
+
     /// Builds a canonical `YouTube` watch URL at the current whole second.
     /// Existing non-time query parameters, such as a playlist identity, are
     /// preserved when the durable source URL is a `YouTube` URL.

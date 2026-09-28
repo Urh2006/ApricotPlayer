@@ -1,7 +1,7 @@
 //! Top-level application coordinator consumed by platform UI adapters.
 
 use std::{
-    collections::{BTreeSet, VecDeque},
+    collections::{BTreeSet, HashSet, VecDeque},
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -67,6 +67,9 @@ pub struct Application {
     menu_availability: MainMenuAvailability,
     activation_requests: VecDeque<ActivationRequest>,
     startup_announcement: Option<&'static str>,
+    /// Python `related_autoplay_seen_ids`: related videos already played in
+    /// this player session.
+    related_seen_ids: HashSet<String>,
     state: AppState,
 }
 
@@ -77,6 +80,7 @@ impl Application {
             menu_availability,
             activation_requests: VecDeque::new(),
             startup_announcement: None,
+            related_seen_ids: HashSet::new(),
             state: AppState::default(),
         }
     }
@@ -1274,6 +1278,30 @@ impl Application {
                 origin: PlayerNavigationOrigin::Queue,
             };
         }
+        // Python `relative_player_item`: podcast and user playlist episodes
+        // keep their order while a next one exists; otherwise shuffle picks
+        // any other item of the list.
+        let ordered_source = matches!(
+            self.state.player_sequence.source(),
+            Some(
+                PlaybackSequenceSource::RssFeed { .. }
+                    | PlaybackSequenceSource::UserPlaylist { .. }
+            )
+        ) && self.state.player_sequence.relative(delta).is_some();
+        if delta > 0
+            && !ordered_source
+            && self
+                .state
+                .player
+                .enabled_toggles()
+                .contains(&SessionToggle::Shuffle)
+            && let Some(item) = self.state.player_sequence.random_next()
+        {
+            return PlayerNavigationOutcome::Item {
+                item: Box::new(item),
+                origin: PlayerNavigationOrigin::Sequence,
+            };
+        }
         if let Some(item) = self.state.player_sequence.relative(delta) {
             return PlayerNavigationOutcome::Item {
                 item: Box::new(item),
@@ -1621,6 +1649,14 @@ impl Application {
         if self.state.player_sequence.activate(&item) {
             self.sync_sequence_source_selection(sequence_source, &item);
         }
+        // Python `play_url`: a new session forgets the related videos, and
+        // every played YouTube video counts as seen.
+        if !self.state.player.is_open() {
+            self.related_seen_ids.clear();
+        }
+        if let Some(video_id) = item.youtube_video_id() {
+            self.related_seen_ids.insert(video_id);
+        }
         let settings = self.settings.current();
         let mut toggles = BTreeSet::new();
         if settings.autoplay_next {
@@ -1884,6 +1920,52 @@ impl Application {
     pub fn close_player_session(&mut self) {
         self.state.player.close();
         self.state.player_sequence.clear();
+        self.related_seen_ids.clear();
+    }
+
+    /// Python `apply_related_videos_and_play`: the unseen related videos
+    /// replace the search results and the first of them plays next.
+    pub fn apply_related_videos(&mut self, videos: Vec<MediaItem>) -> Option<MediaItem> {
+        let mut seen = self.related_seen_ids.clone();
+        let unseen: Vec<_> = videos
+            .into_iter()
+            .filter(|video| {
+                video
+                    .youtube_video_id()
+                    .is_some_and(|video_id| seen.insert(video_id))
+            })
+            .collect();
+        if unseen.is_empty() {
+            return None;
+        }
+        let query = self.state.search.query().to_owned();
+        let kind = self.state.search.kind();
+        if !self.state.search.restore_snapshot(query, kind, unseen, 0) {
+            return None;
+        }
+        let item = self.prepare_search_playback(0)?;
+        if let Some(video_id) = item.youtube_video_id() {
+            self.related_seen_ids.insert(video_id);
+        }
+        Some(item)
+    }
+
+    /// Python `cycle_replaygain_mode`: Off, Track and Album in turn, saved
+    /// at once. Returns the new mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the settings cannot be saved.
+    pub fn cycle_replaygain_mode(&mut self) -> Result<String, SettingsControllerError> {
+        let next = match self.settings.current().replaygain_mode.as_str() {
+            "no" => "track",
+            "track" => "album",
+            _ => "no",
+        };
+        self.settings
+            .set_value(SettingId::ReplaygainMode, serde_json::json!(next))?;
+        let _ = self.settings.save()?;
+        Ok(next.to_owned())
     }
 
     pub fn enqueue_activation(&mut self, request: ActivationRequest) {
@@ -3260,6 +3342,122 @@ mod tests {
                 .enabled_toggles()
                 .contains(&SessionToggle::Shuffle)
         );
+    }
+
+    fn watch_video(id: &str) -> MediaItem {
+        MediaItem {
+            id: MediaId(id.to_owned()),
+            source: MediaSource::Youtube,
+            kind: MediaKind::Video,
+            title: id.to_owned(),
+            url: Some(
+                format!("https://www.youtube.com/watch?v={id}")
+                    .parse()
+                    .expect("URL"),
+            ),
+            stream_url: None,
+            external_audio_url: None,
+            local_path: None,
+            channel: String::new(),
+            duration_seconds: None,
+            metadata: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn shuffle_picks_another_list_item_and_previous_keeps_order() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        let work = app
+            .begin_youtube_search("query", YoutubeSearchKind::All)
+            .expect("search");
+        let videos: Vec<_> = (0..4)
+            .map(|index| watch_video(&format!("video{index:06}")))
+            .collect();
+        app.apply_search_results(work.generation, videos, None);
+        let current = app.prepare_search_playback(3).expect("last result");
+        app.start_player_item(current);
+        assert_eq!(
+            app.request_relative_player_item(1),
+            PlayerNavigationOutcome::Unavailable
+        );
+        app.set_player_toggle(SessionToggle::Shuffle, true);
+        for _ in 0..20 {
+            let PlayerNavigationOutcome::Item { item, origin } =
+                app.request_relative_player_item(1)
+            else {
+                panic!("shuffle picks an item");
+            };
+            assert_eq!(origin, PlayerNavigationOrigin::Sequence);
+            assert_ne!(item.id.0, "video000003");
+        }
+        // Previous keeps the list order with shuffle on.
+        let PlayerNavigationOutcome::Item { item, .. } = app.request_relative_player_item(-1)
+        else {
+            panic!("previous item");
+        };
+        assert_eq!(item.id.0, "video000002");
+    }
+
+    #[test]
+    fn related_videos_skip_seen_ones_and_replace_the_results() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        let work = app
+            .begin_youtube_search("query", YoutubeSearchKind::All)
+            .expect("search");
+        app.apply_search_results(work.generation, vec![watch_video("current0001")], None);
+        let current = app.prepare_search_playback(0).expect("current");
+        app.start_player_item(current);
+
+        assert_eq!(
+            app.apply_related_videos(vec![watch_video("current0001")]),
+            None
+        );
+        let next = app
+            .apply_related_videos(vec![
+                watch_video("current0001"),
+                watch_video("related0001"),
+                watch_video("related0002"),
+            ])
+            .expect("unseen related video");
+        assert_eq!(next.id.0, "related0001");
+        let titles: Vec<_> = app
+            .search_session()
+            .items()
+            .iter()
+            .map(|item| item.id.0.as_str())
+            .collect();
+        assert_eq!(titles, ["related0001", "related0002"]);
+        app.start_player_item(next);
+        let PlayerNavigationOutcome::Item { item, .. } = app.request_relative_player_item(1) else {
+            panic!("next related video");
+        };
+        assert_eq!(item.id.0, "related0002");
+        // Played related videos stay seen until the session closes.
+        assert_eq!(
+            app.apply_related_videos(vec![watch_video("related0001")]),
+            None
+        );
+        app.close_player_session();
+        app.start_player_item(watch_video("current0001"));
+        assert!(
+            app.apply_related_videos(vec![watch_video("related0001")])
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn replaygain_cycles_off_track_album_and_is_saved() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        assert_eq!(app.settings().replaygain_mode, "no");
+        assert_eq!(app.cycle_replaygain_mode().expect("track"), "track");
+        assert_eq!(app.cycle_replaygain_mode().expect("album"), "album");
+        assert_eq!(app.cycle_replaygain_mode().expect("off"), "no");
+        app.cycle_replaygain_mode().expect("track again");
+        let reloaded = application(root.path());
+        assert_eq!(reloaded.settings().replaygain_mode, "track");
     }
 
     #[test]

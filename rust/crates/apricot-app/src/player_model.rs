@@ -144,11 +144,22 @@ fn append_primary_controls(
         ("bookmarks", "bookmarks", "player_bookmarks"),
         ("output_devices", "output_devices", "player_output_devices"),
         ("equalizer", "equalizer", "player_equalizer"),
-        (
-            "audio_normalization",
-            "audio_normalization",
-            "player_replaygain",
-        ),
+    ] {
+        controls.push(button(catalog, settings, id, label_key, action_id));
+    }
+    // Python `audio_normalization_status_label`: the button names the mode.
+    let status = catalog.text("audio_normalization_status").replace(
+        "{mode}",
+        catalog.text(replaygain_mode_key(&settings.replaygain_mode)),
+    );
+    controls.push(PlayerControlModel {
+        id: "audio_normalization",
+        action_id: Some("player_replaygain"),
+        label: label_with_shortcut(&status, "player_replaygain", settings),
+        role: PlayerControlRole::Button,
+        checked: None,
+    });
+    for (id, label_key, action_id) in [
         ("chapters", "chapters", "player_chapters"),
         ("transcript", "transcript", "player_transcript"),
         ("lyrics", "lyrics", "player_lyrics"),
@@ -156,6 +167,15 @@ fn append_primary_controls(
         ("edit_mode", "edit_mode", "player_edit_mode"),
     ] {
         controls.push(button(catalog, settings, id, label_key, action_id));
+    }
+}
+
+/// Python `replaygain_mode_label`.
+pub fn replaygain_mode_key(mode: &str) -> &'static str {
+    match mode {
+        "track" => "replaygain_track",
+        "album" => "replaygain_album",
+        _ => "replaygain_off",
     }
 }
 
@@ -379,6 +399,37 @@ mod tests {
                 .iter()
                 .find(|control| control.id == "copy_location")
                 .is_some_and(|control| control.label.starts_with("Copy path"))
+        );
+    }
+
+    #[test]
+    fn audio_normalization_button_names_the_current_mode() {
+        let settings = SettingsDocument {
+            replaygain_mode: "album".to_owned(),
+            ..SettingsDocument::default()
+        };
+        let model = PlayerScreenModel::build(
+            &english_catalog(),
+            &settings,
+            &local_item(),
+            &PlayerViewState::default(),
+        );
+        let button = model
+            .controls
+            .iter()
+            .find(|control| control.id == "audio_normalization")
+            .expect("audio normalization button");
+        assert_eq!(button.label, "Audio normalization: Album Ctrl+Shift+G");
+        assert_eq!(button.action_id, Some("player_replaygain"));
+        let ids: Vec<_> = model.controls.iter().map(|control| control.id).collect();
+        let position = |id| ids.iter().position(|candidate| *candidate == id);
+        assert_eq!(
+            position("audio_normalization"),
+            position("equalizer").map(|i| i + 1)
+        );
+        assert_eq!(
+            position("chapters"),
+            position("audio_normalization").map(|i| i + 1)
         );
     }
 

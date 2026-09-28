@@ -10,6 +10,7 @@ pub mod podcast_feed;
 pub mod podcast_opml;
 pub mod xml_text;
 pub mod youtube_protocol;
+pub mod youtube_related;
 pub mod youtube_runtime;
 
 pub use podcast_directory::PodcastDirectoryItem;
@@ -24,6 +25,7 @@ pub use youtube_protocol::{
     YoutubeHelperError, YoutubeRequest, YoutubeResponse, YoutubeResponsePayload, YoutubeSearchKind,
     YoutubeSessionConfig, YoutubeStreamPreference, select_youtube_playback_formats,
 };
+pub use youtube_related::parse_related_videos;
 pub use youtube_runtime::{
     YoutubeEngine, YoutubeEngineError, YoutubeRuntime, YoutubeRuntimeError, YoutubeUpdate,
 };

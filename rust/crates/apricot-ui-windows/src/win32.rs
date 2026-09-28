@@ -57,7 +57,10 @@ use apricot_playback::{
 use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
-        Graphics::Gdi::{DEFAULT_GUI_FONT, GetStockObject},
+        Graphics::Gdi::{
+            DEFAULT_GUI_FONT, GetMonitorInfoW, GetStockObject, MONITOR_DEFAULTTONEAREST,
+            MONITORINFO, MonitorFromWindow,
+        },
         System::LibraryLoader::GetModuleHandleW,
         UI::{
             Controls::InitCommonControls,
@@ -73,22 +76,24 @@ use windows::{
             WindowsAndMessaging::{
                 AppendMenuW, BS_DEFPUSHBUTTON, CBN_SELCHANGE, CBS_DROPDOWNLIST, CW_USEDEFAULT,
                 CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-                DispatchMessageW, ES_AUTOHSCROLL, GA_ROOTOWNER, GetAncestor, GetClientRect,
-                GetCursorPos, GetForegroundWindow, GetMessageW, GetParent, GetWindowLongPtrW,
-                GetWindowRect, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW,
-                IDI_APPLICATION, IDYES, IsChild, IsDialogMessageW, KillTimer, LB_ADDSTRING,
-                LB_DELETESTRING, LB_GETCOUNT, LB_GETCURSEL, LB_INSERTSTRING, LB_RESETCONTENT,
-                LB_SETCURSEL, LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW, LoadIconW,
-                MB_ICONINFORMATION, MB_OK, MB_YESNO, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING,
-                MSG, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassW,
-                RegisterWindowMessageW, SW_HIDE, SW_SHOW, SendMessageW, SetForegroundWindow,
-                SetTimer, SetWindowLongPtrW, SetWindowTextW, ShowWindow, TPM_LEFTALIGN,
+                DispatchMessageW, ES_AUTOHSCROLL, GA_ROOTOWNER, GWL_STYLE, GetAncestor,
+                GetClientRect, GetCursorPos, GetForegroundWindow, GetMessageW, GetParent,
+                GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, GetWindowTextLengthW,
+                GetWindowTextW, HMENU, HWND_TOP, IDC_ARROW, IDI_APPLICATION, IDYES, IsChild,
+                IsDialogMessageW, KillTimer, LB_ADDSTRING, LB_DELETESTRING, LB_GETCOUNT,
+                LB_GETCURSEL, LB_INSERTSTRING, LB_RESETCONTENT, LB_SETCURSEL, LBN_DBLCLK,
+                LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW, LoadIconW, MB_ICONINFORMATION, MB_OK,
+                MB_YESNO, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, MessageBoxW,
+                MoveWindow, PostMessageW, PostQuitMessage, RegisterClassW, RegisterWindowMessageW,
+                SW_HIDE, SW_SHOW, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
+                SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW,
+                SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, TPM_LEFTALIGN,
                 TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE,
-                WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU,
-                WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDBLCLK,
-                WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WM_SYSKEYUP, WM_TIMER, WNDCLASSW,
-                WS_CHILD, WS_EX_CLIENTEDGE, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
-                WS_VSCROLL,
+                WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WINDOWPLACEMENT, WM_APP, WM_CLOSE, WM_COMMAND,
+                WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_KEYUP,
+                WM_LBUTTONDBLCLK, WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WM_SYSKEYUP,
+                WM_TIMER, WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE, WS_GROUP, WS_OVERLAPPEDWINDOW,
+                WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -183,6 +188,7 @@ const ID_CONTEXT_MODEL_FIRST: usize = 2001;
 const WM_PROCESS_ACTIVATION: u32 = WM_APP + 1;
 const WM_TRAY_ICON: u32 = WM_APP + 2;
 const WM_SHOW_DOWNLOAD_DETAILS: u32 = WM_APP + 3;
+const WM_SYNC_FULLSCREEN: u32 = WM_APP + 4;
 const YOUTUBE_TIMER_ID: usize = 1;
 const YOUTUBE_TIMER_INTERVAL_MS: u32 = 25;
 const YOUTUBE_METADATA_BATCH_SIZE: usize = 5;
@@ -195,6 +201,7 @@ const SUBSCRIPTION_TIMER_ID: usize = 5;
 const RSS_TIMER_ID: usize = 6;
 const DOWNLOAD_TIMER_ID: usize = 7;
 const CHAPTER_TIMER_ID: usize = 8;
+const RELATED_TIMER_ID: usize = 9;
 const DOWNLOAD_TIMER_INTERVAL_MS: u32 = 50;
 const SEEK_HOLD_DELAY_MS: u32 = 180;
 const SEEK_HOLD_INTERVAL_MS: u32 = 110;
@@ -363,6 +370,21 @@ struct PendingChapters {
     receiver: Receiver<Vec<serde_json::Value>>,
 }
 
+/// Python `fetch_related_and_play_next` running in the background.
+struct PendingRelatedVideos {
+    generation: u64,
+    // Ctrl+Shift+PageDown announces a missing related video; the end of
+    // playback falls back to the next item instead.
+    manual: bool,
+    receiver: Receiver<std::result::Result<Vec<apricot_core::MediaItem>, String>>,
+}
+
+/// Window style and placement to restore after full screen.
+struct FullscreenRestore {
+    style: isize,
+    placement: WINDOWPLACEMENT,
+}
+
 struct PendingLocalFolderScan {
     generation: u64,
     path: PathBuf,
@@ -475,6 +497,8 @@ struct WindowState {
     download_progress_task_id: Option<u64>,
     clip_exports: Vec<Receiver<std::result::Result<PathBuf, String>>>,
     pending_chapters: Option<PendingChapters>,
+    pending_related: Option<PendingRelatedVideos>,
+    fullscreen_restore: Option<FullscreenRestore>,
 }
 
 pub fn run_application(application: Application, version: &str, start_hidden: bool) -> Result<()> {
@@ -843,6 +867,14 @@ unsafe extern "system" fn window_proc(
         }
         WM_TIMER if wparam.0 == CHAPTER_TIMER_ID => {
             poll_external_chapters(window);
+            LRESULT(0)
+        }
+        WM_SYNC_FULLSCREEN => {
+            apply_window_fullscreen(window);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == RELATED_TIMER_ID => {
+            poll_related_videos(window);
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -1629,6 +1661,8 @@ unsafe fn create_controls(
         download_progress_task_id: None,
         clip_exports: Vec::new(),
         pending_chapters: None,
+        pending_related: None,
+        fullscreen_restore: None,
     })
 }
 
@@ -2224,6 +2258,7 @@ unsafe fn layout_controls(window: HWND) {
 }
 
 unsafe fn layout_controls_state(window: HWND, state: &mut WindowState) {
+    sync_window_fullscreen(window, state);
     let mut bounds = RECT::default();
     if GetClientRect(window, &raw mut bounds).is_err() {
         return;
@@ -3085,7 +3120,8 @@ unsafe fn activate_youtube_item(window: HWND, item: apricot_core::MediaItem) {
         apricot_core::MediaKind::Playlist => {
             open_youtube_collection(window, item, YoutubeCollectionKind::PlaylistVideos);
         }
-        _ => start_sequence_media_item(window, item, None),
+        // Python `play_selected` turns shuffle off.
+        _ => start_media_item_with_shuffle(window, item, None, false),
     }
 }
 
@@ -3344,7 +3380,8 @@ unsafe fn open_library_item(window: HWND, item: apricot_core::MediaItem) {
         apricot_core::MediaKind::Playlist => {
             open_youtube_collection(window, item, YoutubeCollectionKind::PlaylistVideos);
         }
-        _ => start_sequence_media_item(window, item, None),
+        // Python `play_selected` turns shuffle off.
+        _ => start_media_item_with_shuffle(window, item, None, false),
     }
 }
 
@@ -3619,6 +3656,10 @@ unsafe fn report_youtube_resolve_start_error(
 
 unsafe fn activate_player_control(window: HWND, activation: PlayerControlActivation) {
     match activation {
+        // Python `on_player_fullscreen_changed` keeps focus on the checkbox.
+        PlayerControlActivation::Action("player_fullscreen") => {
+            toggle_player_fullscreen(window, true, true);
+        }
         PlayerControlActivation::Action(action_id) => activate_action(window, action_id),
         PlayerControlActivation::SessionAutoplayNext => {
             toggle_player_session_setting(window, SessionToggle::AutoplayNext);
@@ -9128,7 +9169,19 @@ unsafe fn poll_playback_runtime(window: HWND) {
                     .enabled_toggles()
                     .contains(&SessionToggle::AutoplayNext);
                 if autoplay_next {
-                    navigate_player_relative(window, 1);
+                    // Python `handle_player_eof`: with "autoplay related" a
+                    // related YouTube video plays instead of the next item.
+                    let related = state.application.settings().autoplay_related
+                        && state
+                            .application
+                            .player_session()
+                            .current_item()
+                            .is_some_and(|item| item.youtube_video_id().is_some());
+                    if related {
+                        play_related_video(window, false);
+                    } else {
+                        navigate_player_relative_after_end(window);
+                    }
                     return;
                 }
                 set_status(
@@ -10781,7 +10834,7 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
         && chord.key == ShortcutKey::Escape
         && state(window).is_some_and(|state| state.view != MainView::MainMenu)
     {
-        if !hide_player_details_for_back(window) {
+        if !handle_player_back_in_place(window) {
             navigate_back(window);
         }
         return true;
@@ -10841,7 +10894,7 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
         }
         return true;
     }
-    if action.id.as_str() == "player_back" && hide_player_details_for_back(window) {
+    if action.id.as_str() == "player_back" && handle_player_back_in_place(window) {
         return true;
     }
     activate_action(window, action.id.as_str());
@@ -10862,6 +10915,27 @@ fn details_text_navigation_key(chord: apricot_core::shortcut::ShortcutChord) -> 
             | ShortcutKey::PageUp
             | ShortcutKey::PageDown
     ) || (chord.control && matches!(chord.key, ShortcutKey::Character('c' | 'C' | 'a' | 'A')))
+}
+
+/// Python `player_back` on the player page: it first hides details, then
+/// leaves full screen, and only then leaves the player.
+unsafe fn handle_player_back_in_place(window: HWND) -> bool {
+    if hide_player_details_for_back(window) {
+        return true;
+    }
+    let fullscreen = state(window).is_some_and(|state| {
+        state.view == MainView::Player
+            && state
+                .application
+                .player_session()
+                .enabled_toggles()
+                .contains(&SessionToggle::Fullscreen)
+    });
+    if fullscreen {
+        // Python `exit_fullscreen_to_player` without an announcement.
+        set_player_fullscreen(window, false, false, false);
+    }
+    fullscreen
 }
 
 /// Python `player_back`: while details are shown the shortcut only hides them.
@@ -11047,6 +11121,10 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "player_pitch_down" => adjust_player_pitch(window, -configured_pitch_step(window)),
         "player_reset_speed_pitch" => reset_player_speed_pitch(window),
         "player_repeat" => toggle_player_session_setting(window, SessionToggle::Repeat),
+        "player_shuffle" => toggle_player_session_setting(window, SessionToggle::Shuffle),
+        "player_replaygain" => cycle_player_replaygain(window),
+        "player_next_related" => play_related_video(window, true),
+        "player_fullscreen" => toggle_player_fullscreen(window, false, true),
         "player_bass_boost" => toggle_player_session_setting(window, SessionToggle::BassBoost),
         "player_volume_boost" => toggle_player_session_setting(window, SessionToggle::VolumeBoost),
         "copy_link" | "player_copy_link" => copy_active_location(window),
@@ -11076,6 +11154,16 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
 }
 
 unsafe fn navigate_player_relative(window: HWND, delta: i32) {
+    navigate_player_relative_from(window, delta, false);
+}
+
+/// Python `handle_player_eof` and `play_next_standard_fallback`: without a
+/// next item the end of playback is announced as finished.
+unsafe fn navigate_player_relative_after_end(window: HWND) {
+    navigate_player_relative_from(window, 1, true);
+}
+
+unsafe fn navigate_player_relative_from(window: HWND, delta: i32, after_end: bool) {
     let outcome = {
         let Some(state) = state_mut(window) else {
             return;
@@ -11124,6 +11212,14 @@ unsafe fn navigate_player_relative(window: HWND, delta: i32) {
             let Some(state) = state(window) else {
                 return;
             };
+            if after_end {
+                set_status(
+                    state,
+                    &catalog_text(&state.application, "playback_finished"),
+                    state.application.settings().announce_playback_finished,
+                );
+                return;
+            }
             let key = if delta < 0 {
                 "no_previous_item"
             } else {
@@ -13627,6 +13723,249 @@ const fn session_toggle_key(toggle: SessionToggle, enabled: bool) -> &'static st
     }
 }
 
+/// Python `cycle_replaygain_mode`: Off, Track, Album, saved at once and
+/// applied to the running player.
+unsafe fn cycle_player_replaygain(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let mode = match state.application.cycle_replaygain_mode() {
+        Ok(mode) => mode,
+        Err(error) => {
+            let message = format!("Settings were not saved: {error}");
+            set_status(state, &message, true);
+            return;
+        }
+    };
+    let applied = !state.application.player_session().is_open()
+        || state.playback.as_ref().is_some_and(|runtime| {
+            runtime
+                .execute(
+                    state.application.player_session().generation(),
+                    PlaybackCommand::SetReplayGain(mode.clone()),
+                )
+                .is_ok()
+        });
+    let mode_label = catalog_text(
+        &state.application,
+        apricot_app::player_model::replaygain_mode_key(&mode),
+    );
+    let message = catalog_text(&state.application, "audio_normalization_changed")
+        .replace("{mode}", &mode_label);
+    set_status(state, &message, true);
+    if !applied {
+        let message = catalog_text(&state.application, "audio_normalization_restart_needed");
+        set_status(state, &message, true);
+    }
+    if state.view == MainView::Player {
+        refresh_player(window, state, false, true);
+    }
+}
+
+/// Python `play_related_item` (manual) and the related branch of
+/// `handle_player_eof`: loads the related videos of the current `YouTube`
+/// video in the background.
+unsafe fn play_related_video(window: HWND, manual: bool) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let session = state.application.player_session();
+    let current = session.is_open().then(|| session.current_item()).flatten();
+    let Some(item) = current else {
+        set_status(state, &catalog_text(&state.application, "no_player"), true);
+        return;
+    };
+    let Some(video_id) = item.youtube_video_id() else {
+        set_status(
+            state,
+            &catalog_text(&state.application, "no_related_video"),
+            true,
+        );
+        return;
+    };
+    let generation = session.generation();
+    if manual {
+        let message = catalog_text(&state.application, "loading_related_video");
+        set_status(state, &message, false);
+    }
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let url = format!("https://www.youtube.com/watch?v={video_id}");
+        let result = apricot_platform::youtube_related::fetch_related_videos(&url)
+            .map_err(|error| error.to_string());
+        let _ = sender.send(result);
+    });
+    state.pending_related = Some(PendingRelatedVideos {
+        generation,
+        manual,
+        receiver,
+    });
+    let _ = SetTimer(Some(window), RELATED_TIMER_ID, 50, None);
+}
+
+unsafe fn poll_related_videos(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let Some(pending) = state.pending_related.as_ref() else {
+        let _ = KillTimer(Some(window), RELATED_TIMER_ID);
+        return;
+    };
+    // Python `apply_related_videos_and_play` ignores results for an older
+    // player generation.
+    if pending.generation != state.application.player_session().generation()
+        || !state.application.player_session().is_open()
+    {
+        state.pending_related = None;
+        let _ = KillTimer(Some(window), RELATED_TIMER_ID);
+        return;
+    }
+    if state.modal_open {
+        return;
+    }
+    let videos = match pending.receiver.try_recv() {
+        Ok(result) => result.unwrap_or_default(),
+        Err(std::sync::mpsc::TryRecvError::Empty) => return,
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => Vec::new(),
+    };
+    let manual = pending.manual;
+    state.pending_related = None;
+    let _ = KillTimer(Some(window), RELATED_TIMER_ID);
+    if let Some(item) = state.application.apply_related_videos(videos) {
+        start_sequence_media_item(window, item, None);
+        return;
+    }
+    // Python `play_next_standard_fallback`.
+    if manual {
+        set_status(
+            state,
+            &catalog_text(&state.application, "no_related_video"),
+            true,
+        );
+    } else {
+        navigate_player_relative_after_end(window);
+    }
+}
+
+/// Python `toggle_player_fullscreen`. `focus_checkbox` keeps focus on the
+/// Full screen checkbox; otherwise focus goes to the player.
+unsafe fn toggle_player_fullscreen(window: HWND, focus_checkbox: bool, announce: bool) {
+    let enabled = !state(window).is_some_and(|state| {
+        state
+            .application
+            .player_session()
+            .enabled_toggles()
+            .contains(&SessionToggle::Fullscreen)
+    });
+    set_player_fullscreen(window, enabled, focus_checkbox, announce);
+}
+
+/// Python `enter_player_fullscreen` and `exit_fullscreen_to_player`.
+unsafe fn set_player_fullscreen(window: HWND, enabled: bool, focus_checkbox: bool, announce: bool) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    if enabled && !state.application.player_session().is_open() {
+        restore_player_checkbox(state, "fullscreen", SessionToggle::Fullscreen);
+        set_status(state, &catalog_text(&state.application, "no_player"), true);
+        return;
+    }
+    state
+        .application
+        .set_player_toggle(SessionToggle::Fullscreen, enabled);
+    if state.view == MainView::Player {
+        refresh_player(window, state, false, true);
+        let target = if focus_checkbox {
+            state.player_controls.window_for_id("fullscreen")
+        } else {
+            Some(state.player_controls.video_host())
+        };
+        if let Some(target) = target {
+            let _ = SetFocus(Some(target));
+        }
+    }
+    if announce {
+        let key = if enabled {
+            "fullscreen_on"
+        } else {
+            "fullscreen_off"
+        };
+        set_status(state, &catalog_text(&state.application, key), true);
+    }
+}
+
+/// Python `ShowFullScreen` follows the player page: the window covers the
+/// monitor while the player is shown in full screen mode. The change is
+/// posted so that it never runs inside a layout pass.
+unsafe fn sync_window_fullscreen(window: HWND, state: &WindowState) {
+    if wants_window_fullscreen(state) != state.fullscreen_restore.is_some() {
+        let _ = PostMessageW(Some(window), WM_SYNC_FULLSCREEN, WPARAM(0), LPARAM(0));
+    }
+}
+
+fn wants_window_fullscreen(state: &WindowState) -> bool {
+    let session = state.application.player_session();
+    state.view == MainView::Player
+        && session.is_open()
+        && session
+            .enabled_toggles()
+            .contains(&SessionToggle::Fullscreen)
+}
+
+unsafe fn apply_window_fullscreen(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let wanted = wants_window_fullscreen(state);
+    if wanted && state.fullscreen_restore.is_none() {
+        let mut placement = WINDOWPLACEMENT {
+            length: u32::try_from(std::mem::size_of::<WINDOWPLACEMENT>()).unwrap_or_default(),
+            ..WINDOWPLACEMENT::default()
+        };
+        if GetWindowPlacement(window, &raw mut placement).is_err() {
+            return;
+        }
+        let mut monitor = MONITORINFO {
+            cbSize: u32::try_from(std::mem::size_of::<MONITORINFO>()).unwrap_or_default(),
+            ..MONITORINFO::default()
+        };
+        if !GetMonitorInfoW(
+            MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST),
+            &raw mut monitor,
+        )
+        .as_bool()
+        {
+            return;
+        }
+        let style = GetWindowLongPtrW(window, GWL_STYLE);
+        state.fullscreen_restore = Some(FullscreenRestore { style, placement });
+        let overlapped = isize::try_from(WS_OVERLAPPEDWINDOW.0).unwrap_or_default();
+        let _ = SetWindowLongPtrW(window, GWL_STYLE, style & !overlapped);
+        let bounds = monitor.rcMonitor;
+        let _ = SetWindowPos(
+            window,
+            Some(HWND_TOP),
+            bounds.left,
+            bounds.top,
+            bounds.right - bounds.left,
+            bounds.bottom - bounds.top,
+            SWP_NOOWNERZORDER | SWP_FRAMECHANGED,
+        );
+    } else if !wanted && let Some(restore) = state.fullscreen_restore.take() {
+        let _ = SetWindowLongPtrW(window, GWL_STYLE, restore.style);
+        let _ = SetWindowPlacement(window, &raw const restore.placement);
+        let _ = SetWindowPos(
+            window,
+            None,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED,
+        );
+    }
+}
+
 unsafe fn configured_seek_seconds(window: HWND) -> f64 {
     state(window).map_or(5.0, |state| {
         state.application.settings().seek_seconds.clamp(0.1, 600.0)
@@ -14009,10 +14348,6 @@ unsafe fn announce_unimplemented_action(window: HWND, action_id: &str) {
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
     let session = state.application.player_session();
     let current_item = session.is_open().then(|| session.current_item()).flatten();
-    if action_id == "player_fullscreen" {
-        // The native checkbox toggles itself before the action arrives.
-        restore_player_checkbox(state, "fullscreen", SessionToggle::Fullscreen);
-    }
     if let Some(message) =
         apricot_app::unavailable_action_message(&catalog, action_id, current_item)
     {

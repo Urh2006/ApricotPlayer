@@ -402,6 +402,7 @@ fn item_start_commands(options: &MpvLaunchOptions) -> Vec<PlaybackCommand> {
         PlaybackCommand::SetPitch(options.initial_pitch),
         PlaybackCommand::SetRepeat(options.repeat_mode == crate::RepeatMode::One),
         PlaybackCommand::SetAudioFilter(options.initial_audio_filter.clone()),
+        PlaybackCommand::SetReplayGain(options.replay_gain.clone()),
     ]
 }
 
@@ -800,7 +801,7 @@ mod tests {
 
         assert_eq!(factory_calls.load(Ordering::Relaxed), 2);
         let commands = commands.lock().expect("commands");
-        assert_eq!(commands.len(), 11);
+        assert_eq!(commands.len(), 12);
         assert!(matches!(
             &commands[0],
             PlaybackCommand::Load {
@@ -810,7 +811,7 @@ mod tests {
         ));
         // A reused engine receives Python's fresh-process start state first.
         assert_eq!(
-            &commands[1..9],
+            &commands[1..10],
             &[
                 PlaybackCommand::SetPaused(false),
                 PlaybackCommand::SetVolumeMax(100),
@@ -820,17 +821,18 @@ mod tests {
                 PlaybackCommand::SetPitch(1.0),
                 PlaybackCommand::SetRepeat(false),
                 PlaybackCommand::SetAudioFilter(Some("@apricot_speed:scaletempo".to_owned())),
+                PlaybackCommand::SetReplayGain("no".to_owned()),
             ]
         );
         assert!(matches!(
-            &commands[9],
+            &commands[10],
             PlaybackCommand::Load {
                 item,
                 start_position_seconds: None,
             } if item.id.0 == "second"
         ));
         assert!(matches!(
-            &commands[10],
+            &commands[11],
             PlaybackCommand::Load { item, .. } if item.id.0 == "third"
         ));
     }
