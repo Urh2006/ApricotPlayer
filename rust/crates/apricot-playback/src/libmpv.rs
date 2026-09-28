@@ -6,6 +6,7 @@ use std::{
     ffi::{CStr, CString, c_char, c_double, c_int, c_void},
     path::{Path, PathBuf},
     ptr,
+    time::{Duration, Instant},
 };
 
 use libloading::Library;
@@ -46,8 +47,9 @@ struct NodeList {
 }
 
 // libmpv owns these nodes until the next wait_event call. Copy only the shallow
-// chapter array/maps while that lifetime is active; never retain native pointers.
-unsafe fn chapter_node(node: &Node, depth: usize) -> serde_json::Value {
+// array/maps with the listed keys while that lifetime is active; never retain
+// native pointers.
+unsafe fn node_json(node: &Node, depth: usize, wanted: &[&str]) -> serde_json::Value {
     use serde_json::Value;
     if depth > 3 {
         return Value::Null;
@@ -84,7 +86,7 @@ unsafe fn chapter_node(node: &Node, depth: usize) -> serde_json::Value {
                 return Value::Array(
                     values
                         .iter()
-                        .map(|value| chapter_node(value, depth + 1))
+                        .map(|value| node_json(value, depth + 1, wanted))
                         .collect(),
                 );
             }
@@ -96,8 +98,8 @@ unsafe fn chapter_node(node: &Node, depth: usize) -> serde_json::Value {
             for (key, value) in keys.iter().zip(values) {
                 if !key.is_null() {
                     let key = CStr::from_ptr(*key).to_string_lossy();
-                    if matches!(key.as_ref(), "time" | "title") {
-                        result.insert(key.into_owned(), chapter_node(value, depth + 1));
+                    if wanted.contains(&key.as_ref()) {
+                        result.insert(key.into_owned(), node_json(value, depth + 1, wanted));
                     }
                 }
             }
@@ -404,11 +406,18 @@ impl LibMpvEngine {
         }
         match CStr::from_ptr(property.name).to_bytes() {
             b"chapter-list" if property.format == MPV_FORMAT_NODE => {
-                self.media_info.chapters = chapter_node(&*property.data.cast::<Node>(), 0)
-                    .as_array()
-                    .cloned()
-                    .unwrap_or_default();
+                self.media_info.chapters =
+                    node_json(&*property.data.cast::<Node>(), 0, &["time", "title"])
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default();
                 Ok(Some(self.media_info_event()))
+            }
+            b"audio-device-list" if property.format == MPV_FORMAT_NODE => {
+                let list = node_json(&*property.data.cast::<Node>(), 0, &["name", "description"]);
+                Ok(Some(PlaybackEvent::AudioDevices(
+                    crate::audio_output_devices_from_json(&list),
+                )))
             }
             b"pause" if property.format == MPV_FORMAT_FLAG => {
                 let paused = *property.data.cast::<c_int>() != 0;
@@ -473,6 +482,90 @@ impl LibMpvEngine {
 
     fn media_info_event(&self) -> PlaybackEvent {
         PlaybackEvent::MediaInfo(self.media_info.clone())
+    }
+}
+
+/// Python `audio_output_device_options` runs `mpv --audio-device=help`. The
+/// libmpv equivalent is a short-lived idle client that reports
+/// `audio-device-list` without a window and without playing anything.
+///
+/// # Errors
+///
+/// Returns an error when libmpv cannot be loaded or initialized, or when it
+/// does not report the device list before `timeout`.
+pub fn probe_audio_output_devices(
+    library: &Path,
+    audio_driver: Option<&str>,
+    timeout: Duration,
+) -> Result<Vec<crate::AudioOutputDevice>, PlaybackError> {
+    if !library.is_file() {
+        return Err(PlaybackError::Operation(format!(
+            "libmpv was not found at {}",
+            library.display()
+        )));
+    }
+    // SAFETY: The probe owns its client handle and destroys it before returning.
+    unsafe {
+        let api = MpvApi::load(library)?;
+        let handle = (api.create)();
+        if handle.is_null() {
+            return Err(PlaybackError::Operation(
+                "libmpv could not create a player instance".to_owned(),
+            ));
+        }
+        let result = probe_devices(&api, handle, audio_driver, timeout);
+        (api.terminate_destroy)(handle);
+        result
+    }
+}
+
+unsafe fn probe_devices(
+    api: &MpvApi,
+    handle: *mut MpvHandle,
+    audio_driver: Option<&str>,
+    timeout: Duration,
+) -> Result<Vec<crate::AudioOutputDevice>, PlaybackError> {
+    for (name, value) in [
+        ("config", "no"),
+        ("terminal", "no"),
+        ("idle", "yes"),
+        ("vo", "null"),
+    ] {
+        api.set_option(handle, name, value)?;
+    }
+    if let Some(driver) = audio_driver {
+        api.set_option(handle, "ao", driver)?;
+    }
+    api.check((api.initialize)(handle), "libmpv initialization failed")?;
+    api.observe(handle, 1, "audio-device-list", MPV_FORMAT_NODE)?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(PlaybackError::Timeout);
+        }
+        let event = (api.wait_event)(handle, remaining.as_secs_f64());
+        if event.is_null() {
+            return Err(PlaybackError::InvalidData(
+                "libmpv returned a null event".to_owned(),
+            ));
+        }
+        match (*event).event_id {
+            MPV_EVENT_PROPERTY_CHANGE if !(*event).data.is_null() => {
+                let property = &*(*event).data.cast::<MpvEventProperty>();
+                if property.format == MPV_FORMAT_NODE && !property.data.is_null() {
+                    let list =
+                        node_json(&*property.data.cast::<Node>(), 0, &["name", "description"]);
+                    return Ok(crate::audio_output_devices_from_json(&list));
+                }
+            }
+            MPV_EVENT_SHUTDOWN => {
+                return Err(PlaybackError::Operation(
+                    "libmpv shut down during the device probe".to_owned(),
+                ));
+            }
+            _ => {}
+        }
     }
 }
 
@@ -647,6 +740,7 @@ unsafe fn subscribe(api: &MpvApi, handle: *mut MpvHandle) -> Result<(), Playback
         (11, "audio-params/channel-count", MPV_FORMAT_INT64),
         (12, "audio-params/hr-channels", MPV_FORMAT_STRING),
         (13, "chapter-list", MPV_FORMAT_NODE),
+        (14, "audio-device-list", MPV_FORMAT_NODE),
     ] {
         api.observe(handle, id, name, format)?;
     }
@@ -754,6 +848,9 @@ fn command_arguments(command: PlaybackCommand) -> Result<Vec<String>, PlaybackEr
         PlaybackCommand::SetReplayGain(mode) => {
             vec!["set".to_owned(), "replaygain".to_owned(), mode]
         }
+        PlaybackCommand::SetAudioDevice(device) => {
+            vec!["set".to_owned(), "audio-device".to_owned(), device]
+        }
         PlaybackCommand::Stop => vec!["stop".to_owned()],
     };
     Ok(arguments)
@@ -814,6 +911,24 @@ mod tests {
             assert!(command.status().expect("FFmpeg fixture").success());
         }
         (folder, chapter_media, plain_media)
+    }
+
+    #[test]
+    #[ignore = "requires APRICOT_TEST_MPV"]
+    fn real_libmpv_probe_lists_auto_first() {
+        let options = MpvLaunchOptions::new(std::path::PathBuf::from(
+            std::env::var_os("APRICOT_TEST_MPV").expect("mpv path"),
+        ));
+        let devices = super::probe_audio_output_devices(
+            &library_path(&options),
+            None,
+            std::time::Duration::from_secs(5),
+        )
+        .expect("device probe");
+        assert_eq!(
+            devices.first().map(|device| device.name.as_str()),
+            Some("auto")
+        );
     }
 
     #[test]
@@ -935,7 +1050,7 @@ mod tests {
             format: MPV_FORMAT_NODE_ARRAY,
         };
         // SAFETY: All pointers reference live local allocations for the complete call.
-        let copied = unsafe { super::chapter_node(&root, 0) };
+        let copied = unsafe { super::node_json(&root, 0, &["time", "title"]) };
         drop(title);
         assert_eq!(copied, serde_json::json!([{"time":12.5,"title":"Opening"}]));
     }
@@ -954,7 +1069,7 @@ mod tests {
             format: super::MPV_FORMAT_NODE_ARRAY,
         };
         // SAFETY: The list is live and rejected before its null values pointer is accessed.
-        assert!(unsafe { super::chapter_node(&root, 0) }.is_null());
+        assert!(unsafe { super::node_json(&root, 0, &["time", "title"]) }.is_null());
     }
 
     #[test]

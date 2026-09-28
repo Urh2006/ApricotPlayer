@@ -241,6 +241,9 @@ impl PlaybackEngine for MpvProcessEngine {
             PlaybackCommand::SetReplayGain(mode) => {
                 json!(["set_property", "replaygain", mode])
             }
+            PlaybackCommand::SetAudioDevice(device) => {
+                json!(["set_property", "audio-device", device])
+            }
             PlaybackCommand::Stop => json!(["stop"]),
         };
         request_success(&self.client, command, COMMAND_TIMEOUT)
@@ -520,6 +523,7 @@ fn event_monitor_inner(
         (12, "audio-params/channel-count"),
         (13, "audio-params/hr-channels"),
         (14, "chapter-list"),
+        (15, "audio-device-list"),
     ] {
         let mut payload = serde_json::to_vec(&json!({
             "command": ["observe_property", observer_id, property]
@@ -612,6 +616,13 @@ fn project_event(
                     .map(|chapters| chapters.iter().take(10000).cloned().collect())
                     .unwrap_or_default();
                 emit_media_info(sender, media_info);
+            }
+            Some("audio-device-list") => {
+                let devices = event
+                    .get("data")
+                    .map(crate::audio_output_devices_from_json)
+                    .unwrap_or_default();
+                let _ = sender.try_send(PlaybackEvent::AudioDevices(devices));
             }
             Some("pause") => {
                 if let Some(paused) = event.get("data").and_then(Value::as_bool) {

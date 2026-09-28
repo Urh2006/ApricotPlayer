@@ -64,6 +64,10 @@ const DYNAMIC_ID_START: usize = 2000;
 /// renders the selected section.
 const SECTION_RENDER_TIMER_ID: usize = 1;
 const SECTION_RENDER_DELAY_MS: u32 = 140;
+/// Polls the background device probe started by the Playback section.
+const AUDIO_DEVICE_TIMER_ID: usize = 2;
+const AUDIO_DEVICE_POLL_MS: u32 = 100;
+const CB_RESETCONTENT: u32 = 0x014B;
 const CBN_SELCHANGE: usize = 1;
 const BN_CLICKED: usize = 0;
 const EN_KILLFOCUS: usize = 0x0200;
@@ -148,6 +152,8 @@ struct SettingsWindowState {
     content_height: i32,
     deferred_action: Option<&'static str>,
     announcer: crate::announcement_win32::WindowsAnnouncer,
+    pending_audio_devices:
+        Option<std::sync::mpsc::Receiver<Vec<apricot_playback::AudioOutputDevice>>>,
 }
 
 pub unsafe fn register() -> Result<()> {
@@ -265,6 +271,10 @@ unsafe extern "system" fn settings_window_proc(
             flush_section_render(window);
             LRESULT(0)
         }
+        WM_TIMER if wparam.0 == AUDIO_DEVICE_TIMER_ID => {
+            finish_audio_device_refresh(window);
+            LRESULT(0)
+        }
         WM_CLOSE => {
             close_without_saving(window);
             LRESULT(0)
@@ -332,6 +342,7 @@ unsafe fn create_base_controls(
         content_height: 0,
         deferred_action: None,
         announcer: crate::announcement_win32::WindowsAnnouncer::new(HWND::default()),
+        pending_audio_devices: None,
     })
 }
 
@@ -414,7 +425,76 @@ unsafe fn render_controls(window: HWND) -> Result<()> {
         }
     }
     layout(window);
+    // Python `refresh_audio_output_devices_async` after building the
+    // Playback section.
+    if state.selected_section == SettingsSection::Playback
+        && state.pending_audio_devices.is_none()
+        && (&*state.application).audio_device_refresh_due()
+    {
+        state.pending_audio_devices = Some(crate::win32::spawn_audio_device_probe());
+        let _ = SetTimer(
+            Some(window),
+            AUDIO_DEVICE_TIMER_ID,
+            AUDIO_DEVICE_POLL_MS,
+            None,
+        );
+    }
     Ok(())
+}
+
+/// Python `finish_audio_output_device_refresh`: caches the probe and, while
+/// the Playback section is still shown, replaces the device choices in place
+/// without moving focus and without losing the selected value.
+unsafe fn finish_audio_device_refresh(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        let _ = KillTimer(Some(window), AUDIO_DEVICE_TIMER_ID);
+        return;
+    };
+    let Some(pending) = state.pending_audio_devices.as_ref() else {
+        let _ = KillTimer(Some(window), AUDIO_DEVICE_TIMER_ID);
+        return;
+    };
+    let devices = match pending.try_recv() {
+        Ok(devices) => devices,
+        Err(std::sync::mpsc::TryRecvError::Empty) => return,
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => Vec::new(),
+    };
+    let _ = KillTimer(Some(window), AUDIO_DEVICE_TIMER_ID);
+    state.pending_audio_devices = None;
+    let options = (&mut *state.application).store_probed_audio_devices(&devices);
+    if state.selected_section != SettingsSection::Playback || state.pending_section.is_some() {
+        return;
+    }
+    let saved = apricot_app::audio_devices::normalized_device(
+        &(&*state.application).settings().audio_output_device,
+    );
+    for bound in &mut state.controls {
+        let ControlBinding::Choice {
+            setting: SettingId::AudioOutputDevice,
+            values,
+            ..
+        } = &mut bound.binding
+        else {
+            continue;
+        };
+        let selected_index =
+            usize::try_from(SendMessageW(bound.control, CB_GETCURSEL, None, None).0).ok();
+        let selected = selected_index
+            .and_then(|index| values.get(index).cloned())
+            .unwrap_or(saved);
+        let options = apricot_app::audio_devices::refreshed_options_keeping(options, &selected);
+        SendMessageW(bound.control, CB_RESETCONTENT, None, None);
+        for option in &options {
+            add_combo_string(bound.control, &option.label);
+        }
+        let position = options
+            .iter()
+            .position(|option| option.value == selected)
+            .unwrap_or_default();
+        SendMessageW(bound.control, CB_SETCURSEL, Some(WPARAM(position)), None);
+        *values = options.into_iter().map(|option| option.value).collect();
+        return;
+    }
 }
 
 #[allow(clippy::too_many_lines)]

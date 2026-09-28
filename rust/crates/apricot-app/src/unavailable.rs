@@ -31,8 +31,6 @@ pub fn unavailable_action_message(
             Some(item) if !has_local_path(item) => Some("edit_mode_local_only"),
             Some(_) => None,
         },
-        // Python `show_output_devices` returns silently without a player.
-        "player_output_devices" if current_item.is_none() => return None,
         // Python `show_comments`.
         "player_comments" => match current_item {
             None => Some("no_player"),
@@ -57,7 +55,6 @@ pub fn unavailable_action_message(
 fn feature_label_key(action_id: &str) -> &str {
     match action_id {
         "player_equalizer" => "equalizer",
-        "player_output_devices" => "output_devices",
         "player_comments" => "comments",
         "player_edit_mode" => "edit_mode",
         "open_audiovault" => "audiovault",
@@ -183,10 +180,6 @@ mod tests {
         }
         assert_eq!(
             unavailable_action_message(&catalog, "player_edit_mode", None),
-            None
-        );
-        assert_eq!(
-            unavailable_action_message(&catalog, "player_output_devices", None),
             None
         );
     }

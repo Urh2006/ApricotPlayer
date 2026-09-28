@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use apricot_core::MediaItem;
-use apricot_playback::{PlaybackEvent, PlaybackMediaInfo};
+use apricot_playback::{AudioOutputDevice, PlaybackEvent, PlaybackMediaInfo};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum PlaybackPhase {
@@ -60,6 +60,9 @@ pub struct PlayerSession {
     clip_start_seconds: Option<f64>,
     clip_end_seconds: Option<f64>,
     media_info: PlaybackMediaInfo,
+    /// mpv `audio-device-list` of the running player, for Python
+    /// `show_output_devices`.
+    audio_devices: Vec<AudioOutputDevice>,
     last_error: Option<String>,
     transcript: Option<crate::transcript::CachedTranscript>,
 }
@@ -113,6 +116,10 @@ impl PlayerSession {
             .insert("_chapters_url_checked".into(), true.into());
         item.metadata.insert("chapters".into(), chapters.into());
         true
+    }
+
+    pub fn audio_devices(&self) -> &[AudioOutputDevice] {
+        &self.audio_devices
     }
 
     pub const fn audio(&self) -> Option<&AudioSession> {
@@ -216,6 +223,7 @@ impl PlayerSession {
                 self.duration_seconds = duration.filter(|value| value.is_finite() && *value >= 0.0);
             }
             PlaybackEvent::MediaInfo(info) => self.media_info = info,
+            PlaybackEvent::AudioDevices(devices) => self.audio_devices = devices,
             PlaybackEvent::Ended => self.phase = PlaybackPhase::Ended,
             PlaybackEvent::PreviewFinished => self.phase = PlaybackPhase::Paused,
             PlaybackEvent::Failed(error) => {

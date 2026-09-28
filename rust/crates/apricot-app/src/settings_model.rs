@@ -17,7 +17,7 @@ pub struct SettingsChoiceOption {
 }
 
 impl SettingsChoiceOption {
-    fn raw(value: impl Into<String>) -> Self {
+    pub(crate) fn raw(value: impl Into<String>) -> Self {
         let value = value.into();
         Self {
             label: value.clone(),
@@ -25,7 +25,7 @@ impl SettingsChoiceOption {
         }
     }
 
-    fn labeled(value: impl Into<String>, label: impl Into<String>) -> Self {
+    pub(crate) fn labeled(value: impl Into<String>, label: impl Into<String>) -> Self {
         Self {
             value: value.into(),
             label: label.into(),
@@ -164,6 +164,27 @@ pub struct SettingsScreenModel {
 }
 
 impl SettingsScreenModel {
+    /// Replaces the options of one choice, as Python does when a device probe
+    /// finishes while the section is open.
+    pub fn replace_choice_options(
+        &mut self,
+        target: SettingId,
+        options: Vec<SettingsChoiceOption>,
+    ) {
+        for control in &mut self.controls {
+            if let SettingsControl::Choice {
+                setting,
+                options: current,
+                ..
+            } = control
+                && *setting == target
+            {
+                *current = options;
+                return;
+            }
+        }
+    }
+
     pub fn build(
         catalog: &TranslationCatalog,
         settings: &SettingsDocument,
@@ -579,14 +600,13 @@ fn playback_controls(
             settings.show_resume_in_menu,
             catalog,
         ),
-        choice_raw(
-            SettingId::AudioOutputDevice,
-            "default_audio_device",
-            &settings.audio_output_device,
-            &["auto"],
-            SettingsValueType::String,
-            catalog,
-        ),
+        SettingsControl::Choice {
+            setting: SettingId::AudioOutputDevice,
+            label: catalog.text("default_audio_device").to_owned(),
+            value: crate::audio_devices::normalized_device(&settings.audio_output_device),
+            value_type: SettingsValueType::String,
+            options: crate::audio_devices::unprobed_device_options(&settings.audio_output_device),
+        },
         choice_raw(
             SettingId::SeekSeconds,
             "seek_seconds",

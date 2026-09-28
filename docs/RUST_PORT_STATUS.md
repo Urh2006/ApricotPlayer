@@ -122,9 +122,9 @@ Prioriteta: P1 pomeni, da je osnovna uporaba s tipkovnico ali NVDA zlomljena ali
 | ID | P | Funkcija | Python |
 |---|---|---|---|
 | PLAYER2-M-02, SETTINGS-M-02 | P1 | Izenačevalnik iz predvajalnika (F4) ter ustvarjanje, uvoz, izvoz, brisanje in ponastavitev EQ profilov | `apricot/ui/equalizer.py`, `apricot/ui/settings.py:762-846` |
-| PLAYER2-M-03 | P1 | Izbira izhodne naprave (O) | `apricot/player/volume.py`, `apricot/ui/player.py` |
+| PLAYER2-M-03 | P1 | Odpravljeno v E9: izbira izhodne naprave (O) | `apricot/player/volume.py`, `apricot/ui/player.py` |
 | PLAYER2-M-05 | P1 | Odpravljeno v E8: preklop shuffle (Shift+S), sorodni video (Ctrl+Shift+PageDown), ReplayGain (Ctrl+Shift+G), celozaslonski način (F11) | `apricot/ui/misc.py:1358`, `apricot/ui/player.py` |
-| PLAYER2-M-10 | P2 | Predvajanje v ozadju (`enable_background_playback`, privzeto izklopljeno): Back pusti predvajanje teči in odpre glavni meni, predvajalnik ima vgrajen seznam rezultatov (PLAYER2-05), v celozaslonskem načinu pa gumb "Back to results". V Rustu vsi gumbi Back in Close player predvajanje ustavijo. Ugotovljeno iz kode med E8, predlagam lastno enoto. | `apricot/ui/player.py:648-812`, `apricot/ui/events.py:605-620` |
+| PLAYER2-M-10 | P2 | Predvajanje v ozadju (`enable_background_playback`, privzeto izklopljeno): Back pusti predvajanje teči in odpre glavni meni, predvajalnik ima vgrajen seznam rezultatov (PLAYER2-05), v celozaslonskem načinu pa gumb "Back to results". V Rustu vsi gumbi Back in Close player predvajanje ustavijo. Ugotovljeno iz kode med E8. Ni del E9, dodano kot enota E13a. | `apricot/ui/player.py:648-812`, `apricot/ui/events.py:605-620` |
 | PLAYER2-M-01 | P1 | BPM analiza (B) | `apricot/ui/misc.py:2710-2803` |
 | PLAYER2-M-04 | P1 | Komentarji (Ctrl+Shift+M) | `apricot/ui/misc.py:2095+` |
 | PLAYER2-M-06 | P1 | Način urejanja (E, Ctrl+S, Ctrl+R) | `apricot/ui/misc.py:2389-2433` |
@@ -167,11 +167,14 @@ Enote, ki popravljajo odstopanja, so na vrsti prve.
 ### B. Majhne manjkajoče funkcije predvajalnika
 
 - **E8. Shuffle, sorodni video, ReplayGain cikel in celozaslonski način. Zaključeno 28. 9. 2026, glej razdelek 6.**
-- **E9.** Izbira izhodne naprave (O) z osvežitvijo seznama in varnim nadomestkom.
+- **E9. Izbira izhodne naprave (O) z osvežitvijo seznama in varnim nadomestkom. Zaključeno 28. 9. 2026, glej razdelek 6.**
 - **E10.** Izenačevalnik iz predvajalnika (F4) ter EQ profili v nastavitvah.
 - **E11.** BPM analiza.
 - **E12.** Način urejanja z varnim shranjevanjem kopije in zamenjavo izvirnika.
 - **E13.** Komentarji.
+- **E13a.** Predvajanje v ozadju (PLAYER2-M-10): nastavitev `enable_background_playback`,
+  Back brez ustavitve predvajanja, vgrajen seznam rezultatov v predvajalniku in gumb
+  "Back to results" v celozaslonskem načinu. Dodano po E8, vrstni red lahko Urh spremeni.
 
 ### C. Večji manjkajoči sklopi
 
@@ -210,13 +213,13 @@ odstopanje se najprej predlaga Urhu in se po odobritvi zapiše sem.
   takoj oglasi `direct_link_invalid` (predlog P-2 iz E7, odobren 28. 9. 2026).
 - **O-5.** Ko ročni sorodni video (Ctrl+Shift+PageDown) ne najde ničesar, Python poleg
   oglasa "No related video available." označi predvajanje kot končano in gumb Pause
-  preimenuje v Play, čeprav posnetek teče naprej. Rust samo oglasi sporočilo (E8, čaka
-  na Urhovo potrditev).
+  preimenuje v Play, čeprav posnetek teče naprej. Rust samo oglasi sporočilo (predlog iz
+  E8, odobren 28. 9. 2026).
 - **O-6.** Konec posnetka: Python oglasi "Playback finished." samo, ko samodejni sorodni
   video ne najde ničesar. Ob navadnem koncu (z ali brez "autoplay next") je tiho, zato
   nastavitev "Announce when playback finishes" skoraj nima učinka. Rust (že pred E8) ob
   vsakem koncu brez naslednjega elementa oglasi "Playback finished.", če je nastavitev
-  vklopljena (E8, čaka na Urhovo potrditev).
+  vklopljena (predlog iz E8, odobren 28. 9. 2026).
 
 ## 6. Dnevnik enot
 
@@ -569,9 +572,9 @@ Spremembe:
   prejšnjo velikost. mpv lastnosti `fullscreen` Rust ne nastavlja, ker je video vgrajen
   v okno (`wid`) in celozaslonsko je glavno okno, kot pri Pythonovem `ShowFullScreen`.
 
-Predloga O-5 in O-6 (glej razdelek 5) čakata na potrditev. Med delom sem opazil, da Rust nima
-predvajanja v ozadju (PLAYER2-M-10), zato celozaslonska različica gumba "Back to
-results" ni narejena.
+Predloga O-5 in O-6 (glej razdelek 5) sta bila odobrena 28. 9. 2026. Med delom sem opazil, da
+Rust nima predvajanja v ozadju (PLAYER2-M-10), zato celozaslonska različica gumba "Back to
+results" ni narejena. Predvajanje v ozadju je zdaj enota E13a.
 
 Preverjanje: `cargo build`, `cargo test` (452 uspešnih, 8 izključenih), `cargo clippy
 --all-targets -D warnings` in `cargo fmt --check`. Novi testi pokrijejo branje sorodnih
@@ -584,3 +587,58 @@ fokus na predvajalniku, potrditveno polje obkljukano), Escape (okno nazaj, fokus
 predvajalniku, brez oglasa), preslednico na potrditvenem polju (fokus ostane), dva Escapa
 za izhod, Ctrl+Shift+PageDown na YouTube videu (predvaja sorodni video) in Ctrl+PageDown
 za naslednji sorodni video.
+
+### E9: izbira izhodne naprave (28. 9. 2026)
+
+Spremembe:
+
+- O (`player_output_devices`), gumb "Audio output devices" in postavka kontekstnega
+  menija odprejo izbirno okno "Audio output devices" s pozivom "Select audio output
+  device" in seznamom mpv `audio-device-list` tekočega predvajalnika, prvi element je
+  izbran. Oznaka je "opis (ime)", kot v `show_output_devices`. Izbira preklopi napravo
+  takoj (mpv `audio-device`), velja do konca seje predvajalnika in oglasi "Audio output
+  device set to ...". Privzeta naprava v nastavitvah se ne spremeni. Escape zapre okno
+  brez oglasa, fokus se vrne na kontrolo predvajalnika. Brez predvajalnika O ne naredi
+  ničesar, prazen seznam oglasi "No audio output devices were found.".
+- Rust seznam naprav dobi z opazovanjem lastnosti `audio-device-list`, zato se ob
+  priključitvi ali odklopu naprave osveži sam in O ne čaka na mpv.
+- Nastavitve, razdelek Playback: polje "Default audio output device" je prej imelo samo
+  "auto", zato bi shranjevanje nastavitev tiho izbrisalo shranjeno napravo. Zdaj ima
+  "auto" in shranjeno napravo, ob odprtju razdelka pa se v ozadju zažene preizkus
+  naprav (`refresh_audio_output_devices_async`). Ko konča, se seznam zamenja na mestu,
+  izbrana vrednost ostane in fokus se ne premakne. Preizkus je kratko živeč libmpv
+  odjemalec brez okna, ki nadomesti Pythonov `mpv --audio-device=help`. Rezultat se
+  hrani 20 sekund za ponovno odprtje in 60 sekund do naslednjega preizkusa, kot v
+  Pythonu. Shranjena naprava, ki je preizkus ne najde, ima oznako "ime (No audio output
+  devices were found.)".
+- Varen nadomestek (`check_saved_audio_device_available`): 6,5 sekunde po vidnem zagonu
+  (ne ob zagonu v sistemsko vrstico) Rust preveri shranjeno napravo, če ni "auto". Če je
+  ni več, pokaže opozorilo "The saved audio output device is no longer available.
+  Choose a new default device." in nato izbirno okno "Default audio output device" z
+  izbranim "auto". OK shrani izbiro in oglasi "Settings saved.", Cancel shrani "auto"
+  brez oglasa. Če je takrat odprto drugo modalno okno, preverjanje počaka nanj.
+- Popravek izbirnih oken in oken za ime (`playlist_dialog_win32`): Enter v seznamu ali
+  polju ni naredil ničesar, ker ga je `IsDialogMessageW` spremenil v ukaz `IDOK`, ki ga
+  okno ni poznalo. To je veljalo za vse izbire s tem oknom (playlisti, hitrost podcasta,
+  kategorije, format prenosa in druge). Zdaj Enter potrdi izbiro, Escape jo prekliče.
+  Enako napako iz kode sumim tudi v oknu zaznamkov in v oknu za izbiro jezika ob prvem
+  zagonu. Nisem je preveril v živo, zato ju nisem spreminjal.
+
+Odstopanji, ki ostajata: če mpv zavrne ukaz za preklop naprave šele v predvajalni niti,
+Rust oglasi splošno "Timing is not available yet." namesto `stream_url_failed`, ker se
+ukazi izvajajo asinhrono. EQ profil za posamezno napravo se po preklopu še ne uporabi,
+ker izenačevalnik predvajalnika še ni narejen (E10).
+
+Preverjanje: `cargo build`, `cargo test` (457 uspešnih, 10 izključenih), `cargo clippy
+--all-targets -D warnings` in `cargo fmt --check`. Novi testi pokrijejo branje
+`audio-device-list`, oznake v izbirnem oknu, začetni seznam v nastavitvah s shranjeno
+napravo, seznam po preizkusu z manjkajočo napravo, zaznavo manjkajoče naprave in
+ohranitev izbrane vrednosti ob osvežitvi. Izključen test z dejansko libmpv je potrdil
+preizkus naprav ("auto" je prvi). Samodejni preizkus nameščene bete na ločeni kopiji
+podatkov je potrdil: O odpre okno s fokusom na "Autoselect device (auto)" in devetimi
+napravami, Escape vrne fokus na predvajalnik brez oglasa, puščica dol in Enter
+preklopita napravo in oglasita "Audio output device set to Line 1 (Virtual Audio Cable)
+(...)", privzeta naprava ostane "auto". Ob zagonu z neobstoječo shranjeno napravo se po
+6,5 sekunde pokaže opozorilo, nato izbira z "auto", Enter shrani "auto" in oglasi
+"Settings saved.". V nastavitvah se seznam naprav po preizkusu osveži, izbrana ostane
+shranjena naprava in fokus ostane na seznamu razdelkov.

@@ -202,6 +202,13 @@ const RSS_TIMER_ID: usize = 6;
 const DOWNLOAD_TIMER_ID: usize = 7;
 const CHAPTER_TIMER_ID: usize = 8;
 const RELATED_TIMER_ID: usize = 9;
+/// Python `check_saved_audio_device_available` runs 6.5 seconds after a
+/// visible start.
+const AUDIO_DEVICE_CHECK_TIMER_ID: usize = 10;
+const AUDIO_DEVICE_CHECK_DELAY_MS: u32 = 6_500;
+const AUDIO_DEVICE_POLL_MS: u32 = 100;
+/// Python waits up to 5 seconds for `mpv --audio-device=help`.
+const AUDIO_DEVICE_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const DOWNLOAD_TIMER_INTERVAL_MS: u32 = 50;
 const SEEK_HOLD_DELAY_MS: u32 = 180;
 const SEEK_HOLD_INTERVAL_MS: u32 = 110;
@@ -498,6 +505,7 @@ struct WindowState {
     clip_exports: Vec<Receiver<std::result::Result<PathBuf, String>>>,
     pending_chapters: Option<PendingChapters>,
     pending_related: Option<PendingRelatedVideos>,
+    pending_audio_device_check: Option<Receiver<Vec<apricot_playback::AudioOutputDevice>>>,
     fullscreen_restore: Option<FullscreenRestore>,
 }
 
@@ -573,6 +581,7 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
         if let Some(key) = startup_announcement {
             announce_player_text(window, key, &[]);
         }
+        schedule_saved_audio_device_check(window);
     }
     process_pending_activations(window);
     configure_subscription_timer(window);
@@ -875,6 +884,10 @@ unsafe extern "system" fn window_proc(
         }
         WM_TIMER if wparam.0 == RELATED_TIMER_ID => {
             poll_related_videos(window);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == AUDIO_DEVICE_CHECK_TIMER_ID => {
+            check_saved_audio_device(window);
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -1662,6 +1675,7 @@ unsafe fn create_controls(
         clip_exports: Vec::new(),
         pending_chapters: None,
         pending_related: None,
+        pending_audio_device_check: None,
         fullscreen_restore: None,
     })
 }
@@ -9136,7 +9150,9 @@ unsafe fn poll_playback_runtime(window: HWND) {
                 );
                 refresh_player(window, state, false, true);
             }
-            PlaybackEvent::Position { .. } | PlaybackEvent::MediaInfo(_) => {}
+            PlaybackEvent::Position { .. }
+            | PlaybackEvent::MediaInfo(_)
+            | PlaybackEvent::AudioDevices(_) => {}
             PlaybackEvent::PreviewFinished => {
                 if state
                     .clip_preview
@@ -10765,6 +10781,14 @@ unsafe fn set_status(state: &WindowState, message: &str, announce: bool) {
 }
 
 unsafe fn show_error_message(window: HWND, message: &str) {
+    show_message_box(window, message, MB_ICONINFORMATION);
+}
+
+unsafe fn show_message_box(
+    window: HWND,
+    message: &str,
+    icon: windows::Win32::UI::WindowsAndMessaging::MESSAGEBOX_STYLE,
+) {
     // The message box hands activation back to the main window itself, so
     // focus returns to the control that had it, as with wx.MessageBox.
     let previous = GetFocus();
@@ -10773,7 +10797,7 @@ unsafe fn show_error_message(window: HWND, message: &str) {
         Some(window),
         PCWSTR(message.as_ptr()),
         w!("ApricotPlayer 2 Beta"),
-        MB_OK | MB_ICONINFORMATION,
+        MB_OK | icon,
     );
     if !previous.is_invalid()
         && windows::Win32::UI::WindowsAndMessaging::IsWindow(Some(previous)).as_bool()
@@ -11123,6 +11147,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "player_repeat" => toggle_player_session_setting(window, SessionToggle::Repeat),
         "player_shuffle" => toggle_player_session_setting(window, SessionToggle::Shuffle),
         "player_replaygain" => cycle_player_replaygain(window),
+        "player_output_devices" => show_output_devices(window),
         "player_next_related" => play_related_video(window, true),
         "player_fullscreen" => toggle_player_fullscreen(window, false, true),
         "player_bass_boost" => toggle_player_session_setting(window, SessionToggle::BassBoost),
@@ -13759,6 +13784,194 @@ unsafe fn cycle_player_replaygain(window: HWND) {
     }
     if state.view == MainView::Player {
         refresh_player(window, state, false, true);
+    }
+}
+
+/// Python `show_output_devices`: lists the running player's
+/// `audio-device-list` and switches this player session to the chosen device.
+unsafe fn show_output_devices(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let session = state.application.player_session();
+    // Python `player_is_active`: silent without a running player.
+    if !session.is_open() || state.playback.is_none() {
+        return;
+    }
+    let choices = apricot_app::audio_devices::player_device_choices(session.audio_devices());
+    if choices.is_empty() {
+        announce_player_text(window, "no_output_devices", &[]);
+        return;
+    }
+    let labels = choices
+        .iter()
+        .map(|choice| choice.label.clone())
+        .collect::<Vec<_>>();
+    let title = catalog_text(&state.application, "output_devices");
+    let prompt = catalog_text(&state.application, "select_output_device");
+    let ok = catalog_text(&state.application, "ok");
+    let cancel = catalog_text(&state.application, "cancel");
+    state.modal_open = true;
+    let selected =
+        crate::playlist_dialog_win32::choose(window, &title, &prompt, &labels, &ok, &cancel);
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
+    resume_deferred_window_work(window);
+    let Ok(Some(index)) = selected else {
+        return;
+    };
+    let Some(choice) = choices.get(index) else {
+        return;
+    };
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let generation = state.application.player_session().generation();
+    let result = state.playback.as_ref().map_or(
+        Err(apricot_playback::PlaybackRuntimeError::Stopped),
+        |runtime| {
+            runtime.execute(
+                generation,
+                PlaybackCommand::SetAudioDevice(choice.value.clone()),
+            )
+        },
+    );
+    match result {
+        Ok(()) => {
+            state.application.set_player_output_device(&choice.value);
+            announce_player_text(window, "output_device_set", &[("device", &choice.label)]);
+        }
+        Err(error) => {
+            announce_player_text(
+                window,
+                "stream_url_failed",
+                &[("error", &error.to_string())],
+            );
+        }
+    }
+}
+
+/// Python `audio_output_device_options(allow_probe=True)` in the background:
+/// a failed probe reports no devices.
+pub(crate) fn spawn_audio_device_probe() -> Receiver<Vec<apricot_playback::AudioOutputDevice>> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let library =
+        application_directory().map(|directory| directory.join("mpv").join("libmpv-2.dll"));
+    std::thread::spawn(move || {
+        let devices = library
+            .and_then(|library| {
+                apricot_playback::probe_audio_output_devices(
+                    &library,
+                    None,
+                    AUDIO_DEVICE_PROBE_TIMEOUT,
+                )
+                .ok()
+            })
+            .unwrap_or_default();
+        let _ = sender.send(devices);
+    });
+    receiver
+}
+
+/// Python runs the saved device check only after a visible start, not when
+/// the app starts hidden in the tray.
+unsafe fn schedule_saved_audio_device_check(window: HWND) {
+    let _ = SetTimer(
+        Some(window),
+        AUDIO_DEVICE_CHECK_TIMER_ID,
+        AUDIO_DEVICE_CHECK_DELAY_MS,
+        None,
+    );
+}
+
+/// Python `check_saved_audio_device_available`: probes the devices once after
+/// a visible start and asks for a new default when the saved one is gone.
+unsafe fn check_saved_audio_device(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        let _ = KillTimer(Some(window), AUDIO_DEVICE_CHECK_TIMER_ID);
+        return;
+    };
+    let Some(pending) = state.pending_audio_device_check.as_ref() else {
+        let saved = apricot_app::audio_devices::normalized_device(
+            &state.application.settings().audio_output_device,
+        );
+        if saved.eq_ignore_ascii_case(apricot_app::audio_devices::AUTO_DEVICE) {
+            let _ = KillTimer(Some(window), AUDIO_DEVICE_CHECK_TIMER_ID);
+            return;
+        }
+        state.pending_audio_device_check = Some(spawn_audio_device_probe());
+        let _ = SetTimer(
+            Some(window),
+            AUDIO_DEVICE_CHECK_TIMER_ID,
+            AUDIO_DEVICE_POLL_MS,
+            None,
+        );
+        return;
+    };
+    if state.modal_open {
+        return;
+    }
+    let devices = match pending.try_recv() {
+        Ok(devices) => devices,
+        Err(std::sync::mpsc::TryRecvError::Empty) => return,
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => Vec::new(),
+    };
+    let _ = KillTimer(Some(window), AUDIO_DEVICE_CHECK_TIMER_ID);
+    state.pending_audio_device_check = None;
+    let options = state.application.store_probed_audio_devices(&devices);
+    if state.application.saved_audio_device_missing(&options) {
+        prompt_for_new_default_audio_device(window, &options);
+    }
+}
+
+/// Python `prompt_for_new_default_audio_device`: a warning, then a choice
+/// with `auto` selected. Cancel falls back to `auto` without an announcement.
+unsafe fn prompt_for_new_default_audio_device(
+    window: HWND,
+    options: &[apricot_app::SettingsChoiceOption],
+) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let message = catalog_text(&state.application, "audio_device_missing");
+    let title = catalog_text(&state.application, "default_audio_device");
+    let ok = catalog_text(&state.application, "ok");
+    let cancel = catalog_text(&state.application, "cancel");
+    let labels = options
+        .iter()
+        .map(|option| option.label.clone())
+        .collect::<Vec<_>>();
+    state.modal_open = true;
+    show_message_box(
+        window,
+        &message,
+        windows::Win32::UI::WindowsAndMessaging::MB_ICONWARNING,
+    );
+    let selected = crate::playlist_dialog_win32::choose_with_initial(
+        window, &title, &message, &labels, 0, &ok, &cancel,
+    );
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
+    resume_deferred_window_work(window);
+    let chosen = match selected {
+        Ok(Some(index)) => options.get(index).map(|option| option.value.clone()),
+        _ => None,
+    };
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let device = chosen
+        .clone()
+        .unwrap_or_else(|| apricot_app::audio_devices::AUTO_DEVICE.to_owned());
+    if let Err(error) = state.application.set_default_audio_output_device(&device) {
+        let message = format!("Settings were not saved: {error}");
+        set_status(state, &message, true);
+        return;
+    }
+    if chosen.is_some() {
+        announce_player_text(window, "settings_saved", &[]);
     }
 }
 

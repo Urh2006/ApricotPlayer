@@ -21,7 +21,7 @@ pub use audio_chain::{
 };
 pub use equalizer::{EqualizerFilterConfig, build_equalizer_filter};
 #[cfg(windows)]
-pub use libmpv::LibMpvEngine;
+pub use libmpv::{LibMpvEngine, probe_audio_output_devices};
 #[cfg(windows)]
 pub use mpv_ipc::{MpvIpcClient, make_unique_ipc_path};
 #[cfg(windows)]
@@ -56,7 +56,48 @@ pub enum PlaybackCommand {
     SetAudioFilter(Option<String>),
     /// mpv `replaygain`: `no`, `track` or `album`.
     SetReplayGain(String),
+    /// mpv `audio-device`, a name from `audio-device-list`.
+    SetAudioDevice(String),
     Stop,
+}
+
+/// One entry of mpv `audio-device-list`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct AudioOutputDevice {
+    pub name: String,
+    pub description: String,
+}
+
+/// Reads mpv `audio-device-list` the way Python `show_output_devices` does:
+/// entries without a name are skipped and a missing description falls back
+/// to the name.
+#[must_use]
+pub fn audio_output_devices_from_json(value: &serde_json::Value) -> Vec<AudioOutputDevice> {
+    value
+        .as_array()
+        .map(|devices| {
+            devices
+                .iter()
+                .take(1000)
+                .filter_map(|device| {
+                    let name = device.get("name")?.as_str()?.trim();
+                    if name.is_empty() {
+                        return None;
+                    }
+                    let description = device
+                        .get("description")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|description| !description.is_empty())
+                        .unwrap_or(name);
+                    Some(AudioOutputDevice {
+                        name: name.to_owned(),
+                        description: description.to_owned(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -82,6 +123,8 @@ pub enum PlaybackEvent {
         duration: Option<f64>,
     },
     MediaInfo(PlaybackMediaInfo),
+    /// mpv `audio-device-list` changed or was first reported.
+    AudioDevices(Vec<AudioOutputDevice>),
     Ended,
     PreviewFinished,
     Failed(String),
@@ -118,4 +161,34 @@ pub trait PlaybackEngine: Send {
     /// Returns [`PlaybackError`] when polling the engine fails or its response
     /// cannot be decoded.
     fn poll_event(&mut self) -> Result<Option<PlaybackEvent>, PlaybackError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AudioOutputDevice, audio_output_devices_from_json};
+
+    #[test]
+    fn audio_device_list_skips_unnamed_entries_and_defaults_description() {
+        let devices = audio_output_devices_from_json(&serde_json::json!([
+            {"name": "auto", "description": "Autoselect device"},
+            {"name": "", "description": "Broken"},
+            {"description": "No name"},
+            {"name": "wasapi/{abc}"},
+            "not a device",
+        ]));
+        assert_eq!(
+            devices,
+            vec![
+                AudioOutputDevice {
+                    name: "auto".to_owned(),
+                    description: "Autoselect device".to_owned(),
+                },
+                AudioOutputDevice {
+                    name: "wasapi/{abc}".to_owned(),
+                    description: "wasapi/{abc}".to_owned(),
+                },
+            ]
+        );
+        assert!(audio_output_devices_from_json(&serde_json::Value::Null).is_empty());
+    }
 }

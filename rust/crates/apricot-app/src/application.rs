@@ -3,11 +3,11 @@
 use std::{
     collections::{BTreeSet, HashSet, VecDeque},
     path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use apricot_core::{MediaItem, Route, RouteFrame, SettingId, SettingsSection};
-use apricot_playback::PlaybackEvent;
+use apricot_playback::{AudioOutputDevice, PlaybackEvent};
 use apricot_storage::{
     AppNotification, Bookmark, BookmarkFile, LastPlayerSession, LastPlayerSessionFile,
     MediaListFile, NotificationFile, PlaybackPositionFile, PlaybackQueueFile, RssFeed, RssFeedFile,
@@ -70,8 +70,16 @@ pub struct Application {
     /// Python `related_autoplay_seen_ids`: related videos already played in
     /// this player session.
     related_seen_ids: HashSet<String>,
+    /// Python `audio_device_options_cache`: the last device probe and when it
+    /// finished.
+    audio_device_options: Option<(Instant, Vec<crate::SettingsChoiceOption>)>,
     state: AppState,
 }
+
+/// Python reuses a device probe for 20 seconds when Settings opens and skips
+/// a background refresh for 60 seconds.
+const AUDIO_DEVICE_OPTIONS_FRESH: Duration = Duration::from_secs(20);
+const AUDIO_DEVICE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 impl Application {
     pub fn new(settings: SettingsController, menu_availability: MainMenuAvailability) -> Self {
@@ -81,6 +89,7 @@ impl Application {
             activation_requests: VecDeque::new(),
             startup_announcement: None,
             related_seen_ids: HashSet::new(),
+            audio_device_options: None,
             state: AppState::default(),
         }
     }
@@ -1881,6 +1890,12 @@ impl Application {
             .cache_external_chapters(generation, chapters)
     }
 
+    /// Python `session_audio_output_device`: the device chosen with O stays
+    /// for the rest of this player session.
+    pub fn set_player_output_device(&mut self, device: &str) {
+        self.state.player.set_output_device(device);
+    }
+
     pub fn set_player_volume(&mut self, volume: f64) {
         self.state.player.set_volume(volume);
     }
@@ -2032,12 +2047,71 @@ impl Application {
 
     pub fn settings_model(&self, section: SettingsSection) -> SettingsScreenModel {
         let settings = self.settings.current();
-        SettingsScreenModel::build(
+        let mut model = SettingsScreenModel::build(
             &embedded_catalog(&settings.language),
             settings,
             &self.settings.settings_file(),
             section,
+        );
+        if let Some((probed_at, options)) = &self.audio_device_options
+            && probed_at.elapsed() < AUDIO_DEVICE_OPTIONS_FRESH
+        {
+            model.replace_choice_options(SettingId::AudioOutputDevice, options.clone());
+        }
+        model
+    }
+
+    /// Python `refresh_audio_output_devices_async`: a new probe is due when
+    /// none ran in the last 60 seconds.
+    pub fn audio_device_refresh_due(&self) -> bool {
+        self.audio_device_options
+            .as_ref()
+            .is_none_or(|(probed_at, _)| probed_at.elapsed() >= AUDIO_DEVICE_REFRESH_INTERVAL)
+    }
+
+    /// Python `audio_output_device_options(allow_probe=True)`: builds and
+    /// caches the Settings choices from a finished probe. A failed probe
+    /// passes no devices, which leaves `auto` and the saved device.
+    pub fn store_probed_audio_devices(
+        &mut self,
+        devices: &[AudioOutputDevice],
+    ) -> Vec<crate::SettingsChoiceOption> {
+        let settings = self.settings.current();
+        let options = crate::audio_devices::probed_device_options(
+            devices,
+            &settings.audio_output_device,
+            embedded_catalog(&settings.language).text("no_output_devices"),
+        );
+        self.audio_device_options = Some((Instant::now(), options.clone()));
+        options
+    }
+
+    /// Python `check_saved_audio_device_available`.
+    pub fn saved_audio_device_missing(&self, options: &[crate::SettingsChoiceOption]) -> bool {
+        let settings = self.settings.current();
+        crate::audio_devices::saved_device_missing(
+            &settings.audio_output_device,
+            options,
+            embedded_catalog(&settings.language).text("no_output_devices"),
         )
+    }
+
+    /// Python `prompt_for_new_default_audio_device`: saves the new default
+    /// device at once.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the settings cannot be saved.
+    pub fn set_default_audio_output_device(
+        &mut self,
+        device: &str,
+    ) -> Result<(), SettingsControllerError> {
+        self.settings.set_value(
+            SettingId::AudioOutputDevice,
+            serde_json::json!(crate::audio_devices::normalized_device(device)),
+        )?;
+        let _ = self.settings.save()?;
+        Ok(())
     }
 
     pub fn settings(&self) -> &SettingsDocument {

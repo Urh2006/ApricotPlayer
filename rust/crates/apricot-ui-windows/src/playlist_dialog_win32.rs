@@ -34,6 +34,10 @@ const PICKER_CLASS: PCWSTR = w!("ApricotPlayer2BetaPlaylistPickerWindow");
 const ID_VALUE: usize = 1701;
 const ID_OK: usize = 1702;
 const ID_CANCEL: usize = 1703;
+/// `IsDialogMessageW` turns Enter and Escape into `IDOK` and `IDCANCEL`
+/// before the focused list or edit field sees the key.
+const IDOK_COMMAND: usize = 1;
+const IDCANCEL_COMMAND: usize = 2;
 
 #[derive(Default)]
 pub struct PickerBehavior {
@@ -460,9 +464,9 @@ unsafe extern "system" fn name_window_proc(
         }
         WM_COMMAND => {
             let command = wparam.0 & 0xffff;
-            if command == ID_OK {
+            if command == ID_OK || command == IDOK_COMMAND {
                 accept_name(window);
-            } else if command == ID_CANCEL {
+            } else if command == ID_CANCEL || command == IDCANCEL_COMMAND {
                 let _ = DestroyWindow(window);
             }
             LRESULT(0)
@@ -494,11 +498,12 @@ unsafe extern "system" fn picker_window_proc(
             let command = wparam.0 & 0xffff;
             let notification = (wparam.0 >> 16) & 0xffff;
             if command == ID_OK
+                || command == IDOK_COMMAND
                 || (command == ID_VALUE
                     && notification == usize::try_from(LBN_DBLCLK).expect("notification fits"))
             {
                 accept_choice(window);
-            } else if command == ID_CANCEL {
+            } else if command == ID_CANCEL || command == IDCANCEL_COMMAND {
                 let _ = DestroyWindow(window);
             }
             LRESULT(0)

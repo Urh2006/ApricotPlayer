@@ -91,7 +91,11 @@ mod tests {
         let videos = fetch_related_videos("https://www.youtube.com/watch?v=jNQXAC9IVRw")
             .expect("watch page");
         assert!(!videos.is_empty());
-        assert!(videos.iter().all(|video| video.youtube_video_id().is_some()));
+        assert!(
+            videos
+                .iter()
+                .all(|video| video.youtube_video_id().is_some())
+        );
     }
 
     #[test]
