@@ -53,7 +53,9 @@ impl LocalEditJob {
 /// a description of the missing encoder or failed replacement.
 pub fn save_local_edit(job: &LocalEditJob) -> Result<PathBuf, String> {
     let result = run(job);
-    if result.is_err() && job.replaces_original() {
+    if result.is_err() {
+        // A failed copy leaves no partial "name - edited" file (approved
+        // deviation P-4; Python keeps it). The output name was unused before.
         let _ = fs::remove_file(&job.temporary_output);
     }
     result.map(|()| job.output.clone())
@@ -200,5 +202,24 @@ mod tests {
             fallback: Some((folder.path().join("missing-ffmpeg.exe"), Vec::new())),
         };
         assert!(save_local_edit(&job).is_err());
+    }
+
+    #[test]
+    fn a_failed_copy_removes_the_partial_edited_file() {
+        let folder = tempfile::tempdir().expect("temporary folder");
+        let source = folder.path().join("song.mp3");
+        std::fs::write(&source, b"original").expect("source");
+        let output = folder.path().join("song - edited.mp3");
+        std::fs::write(&output, b"partial").expect("partial copy");
+        let job = LocalEditJob {
+            source: source.clone(),
+            output: output.clone(),
+            temporary_output: output.clone(),
+            render: None,
+            fallback: Some((folder.path().join("missing-ffmpeg.exe"), Vec::new())),
+        };
+        assert!(save_local_edit(&job).is_err());
+        assert!(!output.exists());
+        assert_eq!(std::fs::read(&source).expect("source"), b"original");
     }
 }

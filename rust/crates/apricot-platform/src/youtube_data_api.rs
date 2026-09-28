@@ -9,6 +9,7 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 
 const VIDEOS_ENDPOINT: &str = "https://www.googleapis.com/youtube/v3/videos";
+const COMMENT_THREADS_ENDPOINT: &str = "https://www.googleapis.com/youtube/v3/commentThreads";
 const MAX_VIDEO_IDS: usize = 50;
 const MAX_VIDEO_RESULTS: u32 = 50;
 const MAX_RESPONSE_BYTES: u64 = 10_000_000;
@@ -31,6 +32,15 @@ pub enum YoutubeDataApiError {
     InvalidResponse,
     #[error("YouTube Data API rejected the request: {0}")]
     Api(String),
+    #[error("YouTube video ID is invalid")]
+    InvalidVideo,
+    /// Python `urllib` `HTTPError` text, for example `HTTP Error 403: Forbidden`.
+    #[error("{0}")]
+    Http(String),
+    #[error("{0}")]
+    Transport(String),
+    #[error("comments are disabled")]
+    CommentsDisabled,
 }
 
 #[derive(Clone)]
@@ -148,6 +158,66 @@ impl YoutubeDataApiClient {
         normalize_trending(&payload)
     }
 
+    /// Python `fetch_youtube_comments`: one page of 20 comment threads in
+    /// relevance order. Call on a worker.
+    ///
+    /// # Errors
+    /// Returns Python's texts: `HTTP Error <code>: <reason>` for a rejected
+    /// request, the API's message, or [`YoutubeDataApiError::CommentsDisabled`].
+    pub fn fetch_comment_threads(
+        &self,
+        api_key: &str,
+        video_id: &str,
+        page_token: &str,
+    ) -> Result<Value, YoutubeDataApiError> {
+        let api_key = api_key.trim();
+        if api_key.is_empty() {
+            return Err(YoutubeDataApiError::MissingApiKey);
+        }
+        if !valid_video_id(video_id) {
+            return Err(YoutubeDataApiError::InvalidVideo);
+        }
+        let mut parameters = vec![
+            ("part", "snippet,replies"),
+            ("videoId", video_id),
+            ("maxResults", "20"),
+            ("order", "relevance"),
+            ("textFormat", "plainText"),
+            ("key", api_key),
+        ];
+        if !page_token.is_empty() {
+            parameters.push(("pageToken", page_token));
+        }
+        let mut response = self
+            .client
+            .get(COMMENT_THREADS_ENDPOINT)
+            .query(&parameters)
+            .send()
+            .map_err(|error| YoutubeDataApiError::Transport(error.without_url().to_string()))?;
+        let status = response.status();
+        if !status.is_success() {
+            // Python `urlopen` raises `HTTPError` before reading the body.
+            return Err(YoutubeDataApiError::Http(format!(
+                "HTTP Error {}: {}",
+                status.as_u16(),
+                status.canonical_reason().unwrap_or_default()
+            )));
+        }
+        let payload = read_json(&mut response)?;
+        if let Some(error) = payload.get("error") {
+            if error.pointer("/errors/0/reason").and_then(Value::as_str) == Some("commentsDisabled")
+            {
+                return Err(YoutubeDataApiError::CommentsDisabled);
+            }
+            let message = error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(YoutubeDataApiError::Api(redact(message, api_key)));
+        }
+        Ok(payload)
+    }
+
     fn request(
         &self,
         api_key: &str,
@@ -182,6 +252,18 @@ impl YoutubeDataApiClient {
         }
         Ok(payload)
     }
+}
+
+fn read_json(response: &mut reqwest::blocking::Response) -> Result<Value, YoutubeDataApiError> {
+    let mut bytes = Vec::new();
+    response
+        .take(MAX_RESPONSE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| YoutubeDataApiError::Transport(error.to_string()))?;
+    if bytes.len() as u64 > MAX_RESPONSE_BYTES {
+        return Err(YoutubeDataApiError::ResponseTooLarge);
+    }
+    serde_json::from_slice(&bytes).map_err(|_| YoutubeDataApiError::InvalidResponse)
 }
 
 fn normalize_trending(payload: &Value) -> Result<Vec<MediaItem>, YoutubeDataApiError> {

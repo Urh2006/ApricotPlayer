@@ -11206,6 +11206,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "player_details" => show_player_details(window),
         "player_lyrics" => show_player_lyrics(window),
         "player_transcript" => show_player_transcript(window),
+        "player_comments" => show_player_comments(window),
         "player_add_bookmark" => show_add_current_bookmark_prompt(window),
         "player_bookmarks" => show_bookmarks_dialog(window, true, false),
         "player_seek_back" => seek_player(window, -configured_seek_seconds(window)),
@@ -13796,6 +13797,106 @@ unsafe fn show_player_transcript(window: HWND) {
     if let Err(error) = result {
         show_error_message(window, &error.to_string());
     }
+    if let Some(state) = state_mut(window) {
+        let _ = SetFocus(Some(active_primary_control(state)));
+    }
+}
+
+/// Python `show_comments`: a modal list of the video's comments, loaded page
+/// by page on workers from the Data API or yt-dlp.
+unsafe fn show_player_comments(window: HWND) {
+    stop_controlled_repeat(window);
+    if !ensure_player_for_auxiliary_view(window) {
+        return;
+    }
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let Some(item) = state.application.player_session().current_item().cloned() else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let Some(video_id) = item.youtube_video_id() else {
+        set_status(state, catalog.text("comments_disabled"), true);
+        return;
+    };
+    let source_url = apricot_app::comments::source_url(&item, &video_id);
+    let api_key = state
+        .application
+        .settings()
+        .youtube_data_api_key
+        .trim()
+        .to_owned();
+    let proxy = nonempty(&state.application.settings().proxy);
+    let config = youtube_session_config(state);
+    let executable = application_directory().map(|path| path.join("components").join("yt-dlp.exe"));
+    let worker_catalog = catalog.clone();
+    let loader: crate::comments_win32::CommentsLoader = Box::new(move |page_token: String| {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let catalog = worker_catalog.clone();
+        let video_id = video_id.clone();
+        let source_url = source_url.clone();
+        let api_key = api_key.clone();
+        let proxy = proxy.clone();
+        let config = config.clone();
+        let executable = executable.clone();
+        std::thread::spawn(move || {
+            let api = |token: &str| -> std::result::Result<serde_json::Value, String> {
+                use apricot_platform::YoutubeDataApiError as E;
+                apricot_platform::YoutubeDataApiClient::new(proxy.as_deref())
+                    .and_then(|client| client.fetch_comment_threads(&api_key, &video_id, token))
+                    .map_err(|error| match error {
+                        E::CommentsDisabled => catalog.text("comments_disabled").to_owned(),
+                        E::Api(message) | E::Http(message) | E::Transport(message) => message,
+                        other => other.to_string(),
+                    })
+            };
+            let ytdlp = || -> std::result::Result<serde_json::Value, String> {
+                use apricot_media::{YoutubeCommand, YoutubeEngine};
+                let path = executable.as_deref().unwrap_or(std::path::Path::new(""));
+                let mut engine = apricot_platform::YtDlpYoutubeEngine::new(path)
+                    .map_err(|_| catalog.text("missing_ytdlp").to_owned())?;
+                engine
+                    .execute(YoutubeCommand::Configure {
+                        config: config.clone(),
+                    })
+                    .map_err(|error| error.to_string())?;
+                engine
+                    .comments_metadata(&source_url)
+                    .map_err(|error| match error {
+                        apricot_platform::ytdlp_youtube::YtDlpError::Request(message) => message,
+                        other => other.to_string(),
+                    })
+            };
+            let api: Option<&apricot_app::comments::ApiRequest<'_>> =
+                (!api_key.is_empty()).then_some(&api);
+            let result = apricot_app::comments::fetch_page(&catalog, &page_token, api, &ytdlp);
+            let _ = sender.send(result);
+        });
+        receiver
+    });
+    let shortcuts = &state.application.settings().keyboard_shortcuts;
+    let configured = |id: &str, default: &str| {
+        apricot_core::shortcut::ShortcutChord::parse(
+            shortcuts.get(id).map_or(default, String::as_str),
+        )
+    };
+    let options = crate::comments_win32::CommentsDialogOptions {
+        accept: configured("open_selected", "Enter"),
+        back: configured("player_back", "Escape"),
+        catalog,
+        loader,
+    };
+    state.modal_open = true;
+    let result = crate::comments_win32::show(window, options);
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
+    resume_deferred_window_work(window);
+    if let Err(error) = result {
+        show_error_message(window, &error.to_string());
+    }
+    // Python `focus_player_target_later("player")`.
     if let Some(state) = state_mut(window) {
         let _ = SetFocus(Some(active_primary_control(state)));
     }

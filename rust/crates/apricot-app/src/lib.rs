@@ -7,6 +7,7 @@ pub mod audio_devices;
 pub mod bookmark_controller;
 pub mod bpm;
 pub mod chapters;
+pub mod comments;
 pub mod context_menu;
 pub mod download_controller;
 pub mod equalizer;

@@ -126,8 +126,8 @@ Prioriteta: P1 pomeni, da je osnovna uporaba s tipkovnico ali NVDA zlomljena ali
 | PLAYER2-M-05 | P1 | Odpravljeno v E8: preklop shuffle (Shift+S), sorodni video (Ctrl+Shift+PageDown), ReplayGain (Ctrl+Shift+G), celozaslonski način (F11) | `apricot/ui/misc.py:1358`, `apricot/ui/player.py` |
 | PLAYER2-M-10 | P2 | Predvajanje v ozadju (`enable_background_playback`, privzeto izklopljeno): Back pusti predvajanje teči in odpre glavni meni, predvajalnik ima vgrajen seznam rezultatov (PLAYER2-05), v celozaslonskem načinu pa gumb "Back to results". V Rustu vsi gumbi Back in Close player predvajanje ustavijo. Ugotovljeno iz kode med E8. Ni del E9, dodano kot enota E13a. | `apricot/ui/player.py:648-812`, `apricot/ui/events.py:605-620` |
 | PLAYER2-M-01 | P1 | Odpravljeno v E11: BPM analiza (B) | `apricot/ui/misc.py:2710-2803` |
-| PLAYER2-M-04 | P1 | Komentarji (Ctrl+Shift+M) | `apricot/ui/misc.py:2095+` |
-| PLAYER2-M-06 | P1 | Način urejanja (E, Ctrl+S, Ctrl+R) | `apricot/ui/misc.py:2389-2433` |
+| PLAYER2-M-04 | P1 | Odpravljeno v E13: komentarji (Ctrl+Shift+M) | `apricot/ui/misc.py:2095+` |
+| PLAYER2-M-06 | P1 | Odpravljeno v E12: način urejanja (E, Ctrl+S, Ctrl+R) | `apricot/ui/misc.py:2389-2433` |
 | SEARCH-M-01 | P1 | SoundCloud iskanje, izvajalci in seti | `apricot/search/search.py:451-474, 703-729` |
 | SEARCH-M-02 | P1 | Odpri kanal (Ctrl+Shift+O) in stolpci rezultatov (Ctrl+Alt+levo/desno) | `apricot/search/search.py:233` |
 | SEARCH-M-04 | P2 | Vmešavanje Shorts v iskanje in v objave kanala | `apricot/search/search.py:374-495` |
@@ -171,7 +171,7 @@ Enote, ki popravljajo odstopanja, so na vrsti prve.
 - **E10. Izenačevalnik iz predvajalnika (F4) ter EQ profili v nastavitvah. Zaključeno 28. 9. 2026, glej razdelek 6.**
 - **E11. BPM analiza. Zaključeno 28. 9. 2026, glej razdelek 6.**
 - **E12. Način urejanja z varnim shranjevanjem kopije in zamenjavo izvirnika. Zaključeno 28. 9. 2026, glej razdelek 6.**
-- **E13.** Komentarji.
+- **E13. Komentarji. Zaključeno 28. 9. 2026, glej razdelek 6.**
 - **E13a.** Predvajanje v ozadju (PLAYER2-M-10): nastavitev `enable_background_playback`,
   Back brez ustavitve predvajanja, vgrajen seznam rezultatov v predvajalniku in gumb
   "Back to results" v celozaslonskem načinu. Dodano po E8, vrstni red lahko Urh spremeni.
@@ -220,6 +220,14 @@ odstopanje se najprej predlaga Urhu in se po odobritvi zapiše sem.
   nastavitev "Announce when playback finishes" skoraj nima učinka. Rust (že pred E8) ob
   vsakem koncu brez naslednjega elementa oglasi "Playback finished.", če je nastavitev
   vklopljena (predlog iz E8, odobren 28. 9. 2026).
+- **O-7.** Shranjevanje v načinu urejanja pri vklopljenem, a ploskem izenačevalniku (vsi
+  pasovi na 0, na primer preset Flat): Python v mpv poda prazen filter `lavfi=[]`, ki ga
+  mpv zavrne, zato shranjevanje vedno spodleti. Rust ploskega izenačevalnika ne doda, kot
+  ga ne doda niti predvajalnik, zato shranjevanje uspe (predlog P-3 iz E12, odobren
+  28. 9. 2026).
+- **O-8.** Kadar shranjevanje kopije (Ctrl+S) spodleti med pisanjem, Python pusti delno
+  datoteko "ime - edited". Rust jo izbriše, kot že pri zamenjavi izvirnika izbriše
+  začasno datoteko (predlog P-4 iz E12, odobren 28. 9. 2026, narejeno v E13).
 
 ## 6. Dnevnik enot
 
@@ -779,13 +787,13 @@ Spremembe:
   izpisa programa ali "... exited with code N", kot Python. Začasna datoteka za zamenjavo
   se ob napaki izbriše, izvirnik ostane nespremenjen.
 
-Predlog P-3 (čaka odobritev): Python med vklopljenim izenačevalnikom vedno doda filter
+Predlog P-3 (odobren kot O-7): Python med vklopljenim izenačevalnikom vedno doda filter
 izenačevalnika, tudi ko so vsi pasovi na 0 (na primer preset Flat). mpv prazen graf
 `lavfi=[]` zavrne ("Creating filter 'lavfi' failed"), zato Pythonovo shranjevanje v tem
 primeru vedno javi napako. To sem preveril z dejanskim `mpv.exe`. Rust ploskega
 izenačevalnika ne doda, kot ga ne doda niti predvajalnik, zato shranjevanje uspe.
 
-Predlog P-4 (čaka odobritev): kadar shranjevanje kopije (Ctrl+S) spodleti med pisanjem, Python
+Predlog P-4 (odobren kot O-8, narejen v E13): kadar shranjevanje kopije (Ctrl+S) spodleti med pisanjem, Python
 pusti delno datoteko "ime - edited". Rust se zdaj obnaša enako; predlagam, da Rust delno
 kopijo izbriše, kot to že naredi pri zamenjavi izvirnika.
 
@@ -810,3 +818,64 @@ datotek, fokus ostane na predvajalniku, E po zamenjavi ne naredi nič. Video MP4
 "Could not save edited file: Access is denied. (os error 5)", izvirnik je ostal cel. Ročno
 sem z dejanskim mpv in ffmpeg preveril še verigo Rubberband za hitrost in višino tona z
 zaščito izenačevalnika pred popačenjem.
+
+### E13: komentarji in odobritev P-3 in P-4 (28. 9. 2026)
+
+Spremembe:
+
+- Predloga P-3 in P-4 iz E12 sta odobrena kot O-7 in O-8. Za O-8 Rust ob neuspelem
+  Ctrl+S izbriše delno datoteko "ime - edited" (nov test).
+- Ctrl+Shift+M, gumb "Comments" in postavka "Comments" v kontekstnem meniju predvajalnika
+  odprejo okno komentarjev kot Pythonov `show_comments`. Prej so oglasili, da funkcija v
+  beti še ni na voljo. Brez predvajalnika se oglasi "Player not found.", pri posnetku
+  brez YouTube ID (lokalna datoteka) "Comments are disabled or unavailable for this
+  video.".
+- Okno "Comments" ima Pythonov vrstni red Tab: iskalno polje "Search comments", izbirni
+  seznam "Sort comments" (Original order, Newest first, Oldest first, Most liked, Most
+  replies), seznam "Comments" ter gumbe "Open comment", "Copy comment", "Copy visible
+  comments", "Open author channel", "Load more comments" in "Back to main menu". Fokus je
+  najprej v iskalnem polju, seznam kaže "Loading comments...", vsi gumbi razen Back so
+  onemogočeni.
+- Nalaganje teče v ozadju kot Pythonov `fetch_comments_worker`: z nastavljenim ključem
+  YouTube Data API stran 20 niti v vrstnem redu relevance, sicer ali po napaki prve strani
+  yt-dlp z največ 20 komentarji. Oglas je "Loaded N comments from YouTube Data API." ali
+  "... from yt-dlp.", brez komentarjev "Comments are disabled ...", ob napaki "Could not
+  load comments: ..." s Pythonovimi namigi za piškotke in prijavo. Po nalaganju naslednje
+  strani je izbran prvi nov komentar.
+- Vrstice seznama, besedilo za kopiranje, podrobnosti komentarja, iskanje (tudi po
+  odgovorih), stabilno razvrščanje in zaokroževanje števil ("4.8M likes") so Pythonovi.
+  Enter (`open_selected`) na seznamu odpre okno "Comment details" z besedilom samo za
+  branje in gumbom Back, Escape ga zapre in fokus se vrne na seznam. `player_back` na
+  seznamu in Escape kjerkoli zapreta okno komentarjev, fokus se vrne v predvajalnik.
+- Kontekstni meni seznama (tipka Applications, Shift+F10, desni klik) ima Pythonove
+  postavke: Open comment, Copy comment, Copy visible comments, Open author channel,
+  ločilo, Load more comments, z enakim omogočanjem.
+- Kadar se onemogoči gumb s fokusom (na primer "Load more comments" med nalaganjem), se
+  fokus premakne na naslednjo kontrolo, kot to naredi wxWidgets.
+
+Odstopanja, ki ostajajo: HTTP napake API so oblikovane kot v Pythonu ("HTTP Error 403:
+Forbidden"), omrežne napake pa imajo besedilo knjižnice reqwest namesto urllib. yt-dlp
+dobi piškotke iz nastavitev takoj, Python pa jih doda šele ob ponovnem poskusu po napaki
+prijave.
+
+Opažanje zunaj te enote: podrobnosti predvajalnika (F7) število ogledov krajšajo z
+odrezovanjem (1999 je "1.9K"), Python pa zaokroži ("2.0K"). Komentarji uporabljajo
+Pythonovo zaokroževanje. Predlagam popravek v eni od naslednjih enot.
+
+Preverjanje: `cargo build`, `cargo test` (503 uspešni, 12 izključenih), `cargo clippy
+--all-targets -D warnings` in `cargo fmt --check`. Novi testi pokrijejo normalizacijo
+niti API in komentarjev yt-dlp (meja 20, naslovi kanalov avtorjev), vrstice seznama,
+besedilo za kopiranje in podrobnosti, iskanje in razvrščanje, stanje okna med
+nalaganjem, napako in praznim rezultatom, izbiro vira (API, yt-dlp in združena napaka),
+izvorni naslov, argumente yt-dlp in brisanje delne kopije. Z dejanskim `yt-dlp.exe` sem
+preveril, da argumenti vrnejo 20 komentarjev v približno 5 s. Samodejni preizkus kopije
+bete z ločenimi podatki (tipke poslane oknu) na videu "Me at the zoo": okno "Comments" s
+fokusom v iskalnem polju in "Loading comments...", po 4 do 6 s 20 komentarjev z
+omogočenimi gumbi razen "Load more comments", Tab na "Sort comments", puščica dol
+razvrsti "Newest first", Tab na seznam, Enter odpre "Comment details" s fokusom na
+besedilu, Tab na Back, Escape vrne fokus na seznam, kontekstni meni se odpre in Escape ga
+zapre, iskanje brez zadetkov pokaže "No matching comments." in onemogoči gumbe, Escape na
+seznamu zapre okno s fokusom v predvajalniku. Kopiranja v odložišče in odpiranja kanala
+avtorja nisem preizkusil živo, ker bi spremenilo Urhovo odložišče in odprlo brskalnik;
+pokrivajo ju testi besedila. Pot YouTube Data API je preverjena samo s testi, ker ključ
+ni nastavljen.

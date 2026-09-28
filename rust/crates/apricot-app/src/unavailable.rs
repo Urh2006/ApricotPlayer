@@ -1,9 +1,8 @@
 //! Spoken feedback for Python actions that the Rust beta cannot perform yet.
 //!
 //! Python announces unavailable actions through the player status and speech
-//! and never opens a window for them. Where Python has a message for the
-//! current situation (for example comments on a local file), that message is
-//! used. Otherwise the action is announced as not available in this beta.
+//! and never opens a window for them, so an action without a Rust route is
+//! announced as not available in this beta.
 
 use apricot_core::{MediaItem, TranslationCatalog, action::action_by_id};
 
@@ -19,20 +18,8 @@ pub fn unavailable_feature_message(catalog: &TranslationCatalog, feature: &str) 
 pub fn unavailable_action_message(
     catalog: &TranslationCatalog,
     action_id: &str,
-    current_item: Option<&MediaItem>,
+    _current_item: Option<&MediaItem>,
 ) -> Option<String> {
-    let python_key = match action_id {
-        // Python `show_comments`.
-        "player_comments" => match current_item {
-            None => Some("no_player"),
-            Some(item) if item.youtube_url_at_timestamp(0.0).is_none() => Some("comments_disabled"),
-            Some(_) => None,
-        },
-        _ => None,
-    };
-    if let Some(key) = python_key {
-        return Some(catalog.text(key).to_owned());
-    }
     Some(unavailable_feature_message(
         catalog,
         catalog.text(feature_label_key(action_id)),
@@ -44,7 +31,6 @@ pub fn unavailable_action_message(
 fn feature_label_key(action_id: &str) -> &str {
     match action_id {
         "player_equalizer" => "equalizer",
-        "player_comments" => "comments",
         "open_audiovault" => "audiovault",
         "open_channel" => "open_channel",
         _ => action_by_id(action_id).map_or(action_id, |action| action.label_key),
@@ -57,7 +43,7 @@ mod tests {
 
     use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
 
-    use super::{unavailable_action_message, unavailable_feature_message};
+    use super::unavailable_action_message;
     use crate::embedded_catalog;
 
     fn local_item() -> MediaItem {
@@ -68,26 +54,6 @@ mod tests {
             title: "Song".to_owned(),
             local_path: Some(r"C:\Music\song.mp3".to_owned()),
             url: None,
-            stream_url: None,
-            external_audio_url: None,
-            channel: String::new(),
-            duration_seconds: None,
-            metadata: BTreeMap::new(),
-        }
-    }
-
-    fn youtube_item() -> MediaItem {
-        MediaItem {
-            id: MediaId("dQw4w9WgXcQ".to_owned()),
-            source: MediaSource::Youtube,
-            kind: MediaKind::Video,
-            title: "Video".to_owned(),
-            local_path: None,
-            url: Some(
-                "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-                    .parse()
-                    .expect("url"),
-            ),
             stream_url: None,
             external_audio_url: None,
             channel: String::new(),
@@ -113,24 +79,5 @@ mod tests {
                 .expect("message");
         assert!(message.ends_with(" v tej beta različici še ni na voljo."));
         assert!(message.starts_with(slovenian.text("equalizer")));
-    }
-
-    #[test]
-    fn python_messages_are_used_where_python_has_one() {
-        let catalog = embedded_catalog("en");
-        let local = local_item();
-        let youtube = youtube_item();
-        let text = |key: &str| Some(catalog.text(key).to_owned());
-        assert_eq!(
-            unavailable_action_message(&catalog, "player_comments", Some(&local)),
-            text("comments_disabled")
-        );
-        assert_eq!(
-            unavailable_action_message(&catalog, "player_comments", Some(&youtube)),
-            Some(unavailable_feature_message(
-                &catalog,
-                catalog.text("comments")
-            ))
-        );
     }
 }

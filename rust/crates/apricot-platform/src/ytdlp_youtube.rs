@@ -115,6 +115,49 @@ impl YtDlpYoutubeEngine {
         parse_json(self.run(arguments)?)
     }
 
+    /// Python `fetch_ytdlp_comments`: extracts the video's information with
+    /// up to 20 comments and no download. Call on a worker after configuring
+    /// the engine's proxy/cookie settings.
+    ///
+    /// # Errors
+    /// Returns validation, process, timeout, or invalid JSON errors.
+    pub fn comments_metadata(&self, media_url: &str) -> Result<Value, YtDlpError> {
+        let arguments = self.comments_arguments(media_url)?;
+        parse_json(self.run(arguments)?)
+    }
+
+    fn comments_arguments(&self, media_url: &str) -> Result<Vec<OsString>, YtDlpError> {
+        let url = Url::parse(media_url).map_err(|_| {
+            YtDlpError::InvalidConfiguration("invalid comments source URL".to_owned())
+        })?;
+        if media_url.len() > MAX_MEDIA_URL_BYTES
+            || !matches!(url.scheme(), "http" | "https")
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+        {
+            return Err(YtDlpError::InvalidConfiguration(
+                "invalid comments source URL".to_owned(),
+            ));
+        }
+        let mut arguments = self.base_arguments();
+        arguments.extend(
+            [
+                "--no-playlist",
+                "--skip-download",
+                "--write-comments",
+                "--extractor-args",
+                "youtube:max_comments=20",
+                "--ignore-no-formats-error",
+                "--dump-single-json",
+                "--",
+                media_url,
+            ]
+            .map(OsString::from),
+        );
+        Ok(arguments)
+    }
+
     /// Downloads subtitle sidecars only when the caller's direct fetch fails.
     ///
     /// # Errors
@@ -1174,6 +1217,30 @@ mod tests {
             "https://user:password@example.test/video",
         ] {
             assert!(engine.transcript_arguments(invalid, &[]).is_err());
+        }
+    }
+    #[test]
+    fn comment_arguments_fetch_twenty_comments_without_download() {
+        let engine = super::YtDlpYoutubeEngine::new(&std::env::current_exe().unwrap()).unwrap();
+        let source = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+        let args = engine.comments_arguments(source).unwrap();
+        let args: Vec<_> = args.iter().map(|arg| arg.to_string_lossy()).collect();
+        for expected in [
+            "--write-comments",
+            "youtube:max_comments=20",
+            "--skip-download",
+            "--no-playlist",
+            "--dump-single-json",
+        ] {
+            assert!(args.iter().any(|arg| arg == expected), "{expected}");
+        }
+        assert_eq!(&args[args.len() - 2..], ["--", source]);
+        for invalid in [
+            "file:///C:/secret",
+            "--exec=bad",
+            "https://user:pw@example.test/v",
+        ] {
+            assert!(engine.comments_arguments(invalid).is_err());
         }
     }
     #[test]
