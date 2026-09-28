@@ -479,6 +479,52 @@ mod tests {
         assert!(!service.is_pending());
     }
 
+    /// A second Enter in the search field: the running search refuses a new
+    /// one until it is cancelled, and after the cancel only the new search
+    /// reports results.
+    #[test]
+    fn new_search_after_cancel_replaces_the_running_one() {
+        let runtime = YoutubeRuntime::spawn(Box::new(|| {
+            Ok(Box::new(FakeEngine {
+                commands: Arc::new(Mutex::new(Vec::new())),
+            }))
+        }))
+        .expect("runtime");
+        let mut service = YoutubeSearchService::with_runtime(YoutubeBackend::YtDlp, runtime);
+        let start = |service: &mut YoutubeSearchService, token: u64, query: &str| {
+            service.start(
+                YoutubeBackend::YtDlp,
+                Path::new("unused"),
+                YoutubeSessionConfig::default(),
+                token,
+                query.to_owned(),
+                apricot_media::YoutubeSearchKind::Video,
+                20,
+            )
+        };
+        start(&mut service, 1, "first").expect("first start");
+        assert_eq!(
+            start(&mut service, 2, "second"),
+            Err(super::YoutubeSearchServiceError::Busy)
+        );
+        assert!(service.cancel());
+        start(&mut service, 2, "second").expect("second start");
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let update = loop {
+            if let Some(update) = service.poll().expect("poll") {
+                break update;
+            }
+            assert!(Instant::now() < deadline, "service timed out");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert!(matches!(
+            update,
+            YoutubeSearchServiceUpdate::Results { token: 2, items, .. }
+                if items[0].title == "second"
+        ));
+        assert!(!service.is_pending());
+    }
+
     #[test]
     fn collection_configuration_precedes_the_typed_collection_request() {
         let commands = Arc::new(Mutex::new(Vec::new()));

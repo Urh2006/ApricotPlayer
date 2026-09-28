@@ -37,8 +37,6 @@ pub fn unavailable_action_message(
             Some(item) if item.youtube_url_at_timestamp(0.0).is_none() => Some("comments_disabled"),
             Some(_) => None,
         },
-        // Python `announce_bpm_async`.
-        "player_bpm" if current_item.is_none() => Some("bpm_not_available"),
         _ => None,
     };
     if let Some(key) = python_key {
@@ -148,10 +146,6 @@ mod tests {
         assert_eq!(
             unavailable_action_message(&catalog, "player_edit_mode", Some(&youtube)),
             text("edit_mode_local_only")
-        );
-        assert_eq!(
-            unavailable_action_message(&catalog, "player_bpm", None),
-            text("bpm_not_available")
         );
         assert_eq!(
             unavailable_action_message(&catalog, "player_comments", Some(&youtube)),

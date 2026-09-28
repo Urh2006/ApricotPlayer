@@ -208,6 +208,8 @@ const RELATED_TIMER_ID: usize = 9;
 /// visible start.
 const AUDIO_DEVICE_CHECK_TIMER_ID: usize = 10;
 const AUDIO_DEVICE_CHECK_DELAY_MS: u32 = 6_500;
+const BPM_TIMER_ID: usize = 11;
+const BPM_TIMER_INTERVAL_MS: u32 = 100;
 const AUDIO_DEVICE_POLL_MS: u32 = 100;
 /// Python waits up to 5 seconds for `mpv --audio-device=help`.
 const AUDIO_DEVICE_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -388,6 +390,16 @@ struct PendingRelatedVideos {
     receiver: Receiver<std::result::Result<Vec<apricot_core::MediaItem>, String>>,
 }
 
+/// Python `analyze_bpm_worker` running in the background. The key is also
+/// Python's `bpm_analysis_running_keys` entry.
+struct PendingBpmAnalysis {
+    key: String,
+    item_key: String,
+    generation: u64,
+    cancelled: Arc<AtomicBool>,
+    receiver: Receiver<Option<i64>>,
+}
+
 /// Window style and placement to restore after full screen.
 struct FullscreenRestore {
     style: isize,
@@ -505,6 +517,7 @@ struct WindowState {
     download_progress_task_ids: HashSet<u64>,
     download_progress_task_id: Option<u64>,
     clip_exports: Vec<Receiver<std::result::Result<PathBuf, String>>>,
+    pending_bpm: Vec<PendingBpmAnalysis>,
     pending_chapters: Option<PendingChapters>,
     pending_related: Option<PendingRelatedVideos>,
     pending_audio_device_check: Option<Receiver<Vec<apricot_playback::AudioOutputDevice>>>,
@@ -905,6 +918,10 @@ unsafe extern "system" fn window_proc(
             check_saved_audio_device(window);
             LRESULT(0)
         }
+        WM_TIMER if wparam.0 == BPM_TIMER_ID => {
+            poll_bpm_analyses(window);
+            LRESULT(0)
+        }
         WM_DESTROY => {
             remove_tray_icon(window);
             let pointer = GetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0)) as *mut WindowState;
@@ -914,6 +931,9 @@ unsafe extern "system" fn window_proc(
                     cancellation.store(true, AtomicOrdering::Release);
                 }
                 state.download_cancellations.clear();
+                for analysis in &state.pending_bpm {
+                    analysis.cancelled.store(true, AtomicOrdering::Release);
+                }
                 if let Some(progress_window) = state.download_progress_window.take() {
                     progress_window.destroy();
                 }
@@ -1688,6 +1708,7 @@ unsafe fn create_controls(
         download_progress_task_ids: HashSet::new(),
         download_progress_task_id: None,
         clip_exports: Vec::new(),
+        pending_bpm: Vec::new(),
         pending_chapters: None,
         pending_related: None,
         pending_audio_device_check: None,
@@ -6763,6 +6784,17 @@ unsafe fn submit_search(window: HWND) {
         return;
     };
     let query = window_text(state.search_edit);
+    // Python `search` shows `enter_query` and leaves a running search alone.
+    if query.trim().is_empty() {
+        let message = catalog_text(&state.application, "enter_query");
+        show_error_message(window, &message);
+        return;
+    }
+    // Python `search` starts a new generation and ignores the older results.
+    // The component runs one request at a time, so a search that is still
+    // running would otherwise refuse this one and its own results would be
+    // dropped as stale, leaving no results at all.
+    cancel_youtube_work(window, state);
     let kind = selected_search_kind(state.kind);
     let work = match state.application.begin_youtube_search(&query, kind) {
         Ok(work) => work,
@@ -11145,6 +11177,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "player_previous" => navigate_player_relative(window, -1),
         "player_next" => navigate_player_relative(window, 1),
         "player_time" => announce_player_time(window),
+        "player_bpm" => announce_bpm(window),
         "player_previous_chapter" => seek_relative_player_chapter(window, false),
         "player_chapters" => show_player_chapters(window),
         "player_next_chapter" => seek_relative_player_chapter(window, true),
@@ -12879,6 +12912,137 @@ unsafe fn announce_player_time(window: HWND) {
             ("total", &format_duration(duration)),
         ],
     );
+}
+
+/// Python `current_bpm_analysis_state`, with the item key and speed.
+fn current_bpm_state(
+    session: &apricot_app::player_session::PlayerSession,
+) -> Option<(String, String, f64)> {
+    let item_key = session
+        .current_item()?
+        .copy_location()
+        .filter(|key| !key.trim().is_empty())?;
+    let (speed, pitch) = session
+        .audio()
+        .map_or((1.0, 1.0), |audio| (audio.speed, audio.pitch));
+    Some((
+        apricot_app::bpm::bpm_analysis_state_key(&item_key, speed, pitch),
+        item_key,
+        speed,
+    ))
+}
+
+/// Python `announce_bpm_async`.
+unsafe fn announce_bpm(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let session = state.application.player_session();
+    let current = session
+        .is_open()
+        .then(|| current_bpm_state(session))
+        .flatten();
+    let Some((key, item_key, speed)) = current else {
+        let message = catalog_text(&state.application, "bpm_not_available");
+        set_status(state, &message, true);
+        return;
+    };
+    let analyzing = catalog_text(&state.application, "bpm_analyzing");
+    if state.pending_bpm.iter().any(|analysis| analysis.key == key) {
+        set_status(state, &analyzing, true);
+        return;
+    }
+    let (start_seconds, duration_seconds) = apricot_app::bpm::bpm_analysis_window(
+        session.position_seconds(),
+        session.duration_seconds(),
+    );
+    let generation = session.generation();
+    // Python `current_stream_url`: what the player was given to play.
+    let source = session
+        .current_item()
+        .and_then(|item| {
+            item.local_path
+                .clone()
+                .filter(|path| !path.trim().is_empty())
+                .or_else(|| item.stream_url.as_ref().map(ToString::to_string))
+                .or_else(|| item.url.as_ref().map(ToString::to_string))
+        })
+        .unwrap_or_default();
+    let request = apricot_platform::BpmAnalysisRequest {
+        ffmpeg: apricot_platform::ffmpeg_executable(
+            &state.application.settings().ffmpeg_location,
+            application_directory().as_deref(),
+        ),
+        source,
+        start_seconds,
+        duration_seconds,
+    };
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let worker_cancelled = Arc::clone(&cancelled);
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let bpm = apricot_platform::analyze_source_bpm(&request, &worker_cancelled)
+            .map(|source_bpm| apricot_app::bpm::effective_playback_bpm(source_bpm, speed));
+        let _ = sender.send(bpm);
+    });
+    state.pending_bpm.push(PendingBpmAnalysis {
+        key,
+        item_key,
+        generation,
+        cancelled,
+        receiver,
+    });
+    set_status(state, &analyzing, true);
+    let _ = SetTimer(Some(window), BPM_TIMER_ID, BPM_TIMER_INTERVAL_MS, None);
+}
+
+/// The end of Python `analyze_bpm_worker`: ffmpeg stops when the player,
+/// speed or pitch changes, and only the unchanged player hears the result.
+unsafe fn poll_bpm_analyses(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let session = state.application.player_session();
+    let generation = session.generation();
+    let current = session
+        .is_open()
+        .then(|| current_bpm_state(session))
+        .flatten();
+    let mut finished = Vec::new();
+    state.pending_bpm.retain(|analysis| {
+        let still_current = analysis.generation == generation
+            && current.as_ref().is_some_and(|(key, item_key, _)| {
+                *key == analysis.key && *item_key == analysis.item_key
+            });
+        if !still_current {
+            analysis.cancelled.store(true, AtomicOrdering::Release);
+        }
+        match analysis.receiver.try_recv() {
+            Ok(bpm) => {
+                finished.push((still_current, bpm));
+                false
+            }
+            Err(TryRecvError::Empty) => true,
+            Err(TryRecvError::Disconnected) => {
+                finished.push((still_current, None));
+                false
+            }
+        }
+    });
+    if state.pending_bpm.is_empty() {
+        let _ = KillTimer(Some(window), BPM_TIMER_ID);
+    }
+    for (still_current, bpm) in finished {
+        if !still_current {
+            continue;
+        }
+        let message = match bpm.filter(|bpm| *bpm != 0) {
+            Some(bpm) => catalog_text(&state.application, "bpm_announcement")
+                .replace("{bpm}", &bpm.to_string()),
+            None => catalog_text(&state.application, "bpm_not_available"),
+        };
+        set_status(state, &message, true);
+    }
 }
 
 unsafe fn request_external_chapters(window: HWND, direction: Option<bool>) -> bool {

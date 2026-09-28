@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+pub mod bpm;
 pub mod clip_export;
 pub mod diagnostics;
 pub mod download;
@@ -21,6 +22,7 @@ pub mod youtube_related;
 pub mod youtube_search_service;
 pub mod ytdlp_youtube;
 
+pub use bpm::{BpmAnalysisRequest, analyze_source_bpm, bpm_ffmpeg_arguments, ffmpeg_executable};
 pub use clip_export::{
     ClipExportError, ClipExportMode, ClipExportRequest, build_clip_export_arguments,
     export_marked_clip,

@@ -8,6 +8,7 @@ pub mod lyrics;
 pub mod podcast_directory;
 pub mod podcast_feed;
 pub mod podcast_opml;
+pub mod tempo;
 pub mod xml_text;
 pub mod youtube_protocol;
 pub mod youtube_related;

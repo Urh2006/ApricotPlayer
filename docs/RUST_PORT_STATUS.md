@@ -125,7 +125,7 @@ Prioriteta: P1 pomeni, da je osnovna uporaba s tipkovnico ali NVDA zlomljena ali
 | PLAYER2-M-03 | P1 | Odpravljeno v E9: izbira izhodne naprave (O) | `apricot/player/volume.py`, `apricot/ui/player.py` |
 | PLAYER2-M-05 | P1 | Odpravljeno v E8: preklop shuffle (Shift+S), sorodni video (Ctrl+Shift+PageDown), ReplayGain (Ctrl+Shift+G), celozaslonski način (F11) | `apricot/ui/misc.py:1358`, `apricot/ui/player.py` |
 | PLAYER2-M-10 | P2 | Predvajanje v ozadju (`enable_background_playback`, privzeto izklopljeno): Back pusti predvajanje teči in odpre glavni meni, predvajalnik ima vgrajen seznam rezultatov (PLAYER2-05), v celozaslonskem načinu pa gumb "Back to results". V Rustu vsi gumbi Back in Close player predvajanje ustavijo. Ugotovljeno iz kode med E8. Ni del E9, dodano kot enota E13a. | `apricot/ui/player.py:648-812`, `apricot/ui/events.py:605-620` |
-| PLAYER2-M-01 | P1 | BPM analiza (B) | `apricot/ui/misc.py:2710-2803` |
+| PLAYER2-M-01 | P1 | Odpravljeno v E11: BPM analiza (B) | `apricot/ui/misc.py:2710-2803` |
 | PLAYER2-M-04 | P1 | Komentarji (Ctrl+Shift+M) | `apricot/ui/misc.py:2095+` |
 | PLAYER2-M-06 | P1 | Način urejanja (E, Ctrl+S, Ctrl+R) | `apricot/ui/misc.py:2389-2433` |
 | SEARCH-M-01 | P1 | SoundCloud iskanje, izvajalci in seti | `apricot/search/search.py:451-474, 703-729` |
@@ -169,7 +169,7 @@ Enote, ki popravljajo odstopanja, so na vrsti prve.
 - **E8. Shuffle, sorodni video, ReplayGain cikel in celozaslonski način. Zaključeno 28. 9. 2026, glej razdelek 6.**
 - **E9. Izbira izhodne naprave (O) z osvežitvijo seznama in varnim nadomestkom. Zaključeno 28. 9. 2026, glej razdelek 6.**
 - **E10. Izenačevalnik iz predvajalnika (F4) ter EQ profili v nastavitvah. Zaključeno 28. 9. 2026, glej razdelek 6.**
-- **E11.** BPM analiza.
+- **E11. BPM analiza. Zaključeno 28. 9. 2026, glej razdelek 6.**
 - **E12.** Način urejanja z varnim shranjevanjem kopije in zamenjavo izvirnika.
 - **E13.** Komentarji.
 - **E13a.** Predvajanje v ozadju (PLAYER2-M-10): nastavitev `enable_background_playback`,
@@ -705,3 +705,48 @@ drsnikov prek MSAA, puščico desno (5.0 na 6.0 dB), Page Up (3.0 dB), Enter z o
 in neshranjenim obsegom, v nastavitvah vklop, dodajanje profila "Live" z imenom in
 vrednostmi v `settings.json` ter brisanje s potrditvijo, Enter v zaznamkih in v izbiri
 jezika ob prvem zagonu.
+
+### E11: BPM analiza in drugi Enter v iskanju (28. 9. 2026)
+
+Spremembe:
+
+- B v predvajalniku oglasi "Analyzing tempo..." in nato "{bpm} BPM." ali "BPM not
+  available." kot Pythonov `announce_bpm_async`. Brez odprtega predvajalnika takoj oglasi
+  "BPM not available.". Ponovni B med analizo istega posnetka pri isti hitrosti in višini
+  tona oglasi samo "Analyzing tempo..." in ne zažene nove analize. ffmpeg dekodira do 72
+  sekund od 18 sekund pred trenutnim položajem z enakim filtrom kot Python (celoten pas in
+  pas 35 do 250 Hz, 11025 Hz, s16le), največ 35 sekund. Rezultat je tempo izvirnika,
+  pomnožen s hitrostjo predvajanja in zaokrožen kot v Pythonu. Če se med analizo
+  zamenja posnetek, hitrost ali višina tona ali se predvajalnik zapre, se ffmpeg ustavi
+  in rezultat se ne oglasi. ffmpeg se išče kot Pythonov `ffmpeg_executable`: nastavljena
+  datoteka ali mapa, priložena kopija, nato `PATH`.
+- Ocena tempa (`apricot-media` `tempo.rs`) je prenos Pythonovega `apricot/media/tempo.py`
+  vrstico za vrstico, vključno z Pythonovim zaokroževanjem polovic na sodo število. Na
+  šestih posnetkih (trije ritmi, ton, govor, testni MKA), dekodiranih z Pythonovimi
+  argumenti ffmpeg, sta Python in Rust vrnila enak tempo na šest decimalk oziroma oba
+  "ni tempa".
+- Hrošč v iskanju, ki ga je opisal Urh: drugi Enter v iskalnem polju, preden so prišli
+  rezultati prvega, je pustil iskanje brez rezultatov. Drugo iskanje je dobilo novo
+  generacijo, komponenta YouTube pa ga je zavrnila z angleškim "a YouTube search is already
+  active", zato so bili rezultati prvega zavrženi kot zastareli. Zdaj novo iskanje najprej
+  prekliče tekoče delo, kot Python začne novo generacijo, in rezultati se odprejo (v
+  preizkusu po 7 sekundah, ker komponenta najprej konča prvo iskanje). Enter v praznem
+  polju zdaj odpre sporočilno okno "Enter a search query." kot Python, prej je statusna
+  vrstica oglasila angleško "search query is empty". Osnovni Enter v iskalnem polju je
+  bil popravljen že v E7 (`IsDialogMessageW`), ne v E3.
+
+Odstopanja, ki ostajajo: Rust za tokove ne hrani dodatnih HTTP glav, zato jih ffmpeg ne
+dobi (predvajalnik jih prav tako ne uporablja). Enako kot v Pythonu BPM ni na voljo, če
+predvajalnik dobi video tok brez zvoka in ločen zvočni tok. Tudi odpiranje kanala ali
+seznama predvajanja med tekočim iskanjem verjetno naleti na isto zavrnitev komponente;
+to ni preverjeno in ostaja za E14.
+
+Preverjanje: `cargo build`, `cargo test` (479 uspešnih, 12 izključenih), `cargo clippy
+--all-targets -D warnings` in `cargo fmt --check`. Novi testi pokrijejo Pythonovo
+zaokroževanje, mediano in percentil, tempo ritmov 90 do 140 BPM, tišino in prekratek
+posnetek, ključ stanja, okno analize, tempo pri hitrosti, argumente ffmpeg, iskanje
+ffmpeg in zamenjavo tekočega iskanja po preklicu. Nov izključen test z dejanskim ffmpeg
+najde 60 BPM v piskih na sekundo. Samodejni preizkus nameščene bete (skrita kopija brez
+NVDA odjemalca, tipke poslane kot sporočila oknu) je potrdil B z "Analyzing tempo...",
+ponovni B med analizo, "137 BPM." za lokalni ritem, "138 BPM." po D (1,01x), brez oglasa
+po D med analizo, ter v iskanju dvojni Enter in tri zaporedna iskanja z Escape vmes.
