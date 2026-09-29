@@ -186,6 +186,59 @@ pub fn save_json_file(
     }
 }
 
+/// An open picker with Python wildcard filters given as (label, patterns).
+///
+/// # Errors
+///
+/// Returns a diagnostic string if the Windows common dialog reports a failure.
+pub fn choose_file_with_filters(
+    owner: HWND,
+    title: &str,
+    filters: &[(String, String)],
+) -> Result<Option<PathBuf>, String> {
+    // SAFETY: The synchronous dialog only borrows the owned UTF-16 buffers.
+    unsafe { choose_file_win32(owner, title, &filter_text(filters), "", None, "", false) }
+}
+
+/// A Save As picker with overwrite confirmation and Python wildcard filters.
+///
+/// # Errors
+///
+/// Returns a diagnostic string if the Windows common dialog reports a failure.
+pub fn save_file_with_filters(
+    owner: HWND,
+    title: &str,
+    filters: &[(String, String)],
+    initial_directory: &Path,
+    default_file: &str,
+    default_extension: &str,
+) -> Result<Option<PathBuf>, String> {
+    // SAFETY: The synchronous dialog only borrows the owned UTF-16 buffers.
+    unsafe {
+        choose_file_win32(
+            owner,
+            title,
+            &filter_text(filters),
+            default_file,
+            Some(initial_directory),
+            default_extension,
+            true,
+        )
+    }
+}
+
+fn filter_text(filters: &[(String, String)]) -> String {
+    let mut text = filters
+        .iter()
+        .fold(String::new(), |mut text, (label, patterns)| {
+            use std::fmt::Write as _;
+            let _ = write!(text, "{label}\0{patterns}\0");
+            text
+        });
+    text.push('\0');
+    text
+}
+
 fn json_filter(type_label: &str, all_files_label: &str) -> String {
     format!("{type_label} (*.json)\0*.json\0{all_files_label} (*.*)\0*.*\0\0")
 }

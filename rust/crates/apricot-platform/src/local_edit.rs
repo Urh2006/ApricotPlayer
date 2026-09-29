@@ -125,8 +125,26 @@ fn run_program(program: &Path, arguments: &[OsString]) -> Result<ProgramOutput, 
     })
 }
 
+/// Python `run_ffmpeg_conversion` for the file and folder converters: the
+/// last 900 characters of the output, or "`FFmpeg` exited with code N".
+///
+/// # Errors
+/// Returns that text when ffmpeg fails or cannot start.
+pub fn run_ffmpeg_conversion(ffmpeg: &Path, arguments: &[OsString]) -> Result<(), String> {
+    let output = run_program(ffmpeg, arguments)?;
+    if output.success {
+        Ok(())
+    } else {
+        Err(program_error_tail(&output, "FFmpeg", 900))
+    }
+}
+
 /// Python `error[-600:]`, or "<program> exited with code N".
 fn program_error(output: &ProgramOutput, program: &str) -> String {
+    program_error_tail(output, program, 600)
+}
+
+fn program_error_tail(output: &ProgramOutput, program: &str, limit: usize) -> String {
     if output.text.is_empty() {
         let code = output
             .code
@@ -137,7 +155,7 @@ fn program_error(output: &ProgramOutput, program: &str) -> String {
     output
         .text
         .chars()
-        .skip(characters.saturating_sub(600))
+        .skip(characters.saturating_sub(limit))
         .collect()
 }
 

@@ -179,7 +179,7 @@ Enote, ki popravljajo odstopanja, so na vrsti prve.
 - **E14.** SoundCloud, Shorts vmešavanje in gumbi na iskalnem zaslonu.
 - **E15.** Diagnostično poročilo z zakrivanjem zasebnih podatkov.
 - **E16. Piškotki. Zaključeno 29. 9. 2026, glej razdelek 6.**
-- **E17.** Pretvornik datotek in pretvornik map.
+- **E17. Pretvornik datotek in pretvornik map. Zaključeno 29. 9. 2026, glej razdelek 6.**
 - **E18.** yt-dlp posodobitve in posodobitve aplikacije. Pred objavo 2.0 ostanejo
   po D-011 lokalno onemogočene.
 - **E19.** AudioVault.
@@ -1139,4 +1139,66 @@ predpomnilnika ter YouTube iskanje in predvajanje brez piškotkov. Resnični brs
 niso bili zaprti ali brani.
 
 Še odprto: odstopanje iz E13 (odrezovanje števila ogledov v F7) ostaja, ker E16 tega dela
+ne spreminja.
+
+### E17: pretvornik datotek in pretvornik map (29. 9. 2026)
+
+Spremembe:
+
+- "File converter" in "Folder converter" iz glavnega menija in iskalnika dejanj odpreta
+  dialog Pythonovega `show_converter_dialog` (`apricot-ui-windows/src/converter_win32.rs`)
+  namesto oglasa, da funkcija v beti ni na voljo (PODDL-M-01). Kontrole so v Pythonovem
+  vrstnem redu, ki je tudi vrstni red Tab: pot, Browse file ali Browse folder, izbira
+  formata, pri pretvorbi zvoka v video Add image in Dark background, pri sliki še pot do
+  slike in Choose image, Create a new file in Replace original file (za mapo Pythonova
+  besedila za mapo), Convert in "Back to main menu". Začetni fokus je na poti, Escape in
+  Back zapreta dialog, fokus se vrne na glavni meni. Enter pritisne gumb s fokusom.
+- Logika je v `apricot-app/src/converter.rs`: seznama formatov (pri video vhodu najprej
+  video formati), oznaka "ALAC (M4A)", ffmpeg argumenti enaki Pythonovim
+  `converter_ffmpeg_args`, `converter_audio_codec_args` in `converter_video_codec_args`
+  (črno ozadje 1280x720 ali slika z `-loop 1`), privzeto ime izhoda, "ime (2).končnica" za
+  nov izhod, "mapa converted" oziroma "mapa converted (2)" za nove mape, rekurzivni pregled
+  mape v Pythonovem vrstnem redu brez delovnih datotek `.apricot-converting`, filtri
+  datotečnih dialogov in delavca za datoteko in mapo. Zamenjava izvirnika gre prek skrite
+  sosednje datoteke, izvirnik se izbriše šele po uspehu.
+- Preverjanja in sporočila so Pythonova: "Select an item.", "Choose image for video
+  background", "This input format is not supported.", preklic dialoga za shranjevanje ali
+  mapo oglasi "Conversion cancelled." in pusti pretvornik odprt. Ob začetku se oglasi
+  "Conversion started.", med pretvorbo mape vrstica stanja kaže "Conversion started. 1/2:
+  ime". Konec pokaže sporočilno okno ali, če je `popup_when_conversion_complete` izklopljen,
+  oglasi "Conversion complete: ..." oziroma "Folder conversion complete: ...". Napaka
+  pokaže "Conversion failed: ..." z zadnjimi 900 znaki izpisa ffmpeg in namigi
+  `friendly_error`.
+- Pretvorba mape odpre nemodalno okno napredka "Converting folder" s Pythonovim besedilom
+  (datoteka, Converted: x of y, Remaining: z), vrstico napredka ter pretečenim,
+  ocenjenim in preostalim časom. Okno je pravi sistemski dialog brez gumbov, zato bralnik
+  zaslona ob prikazu prebere naslov in besedilo, kot pri wx `ProgressDialog`. Ob zaprtju se
+  fokus vrne tja, kjer je bil.
+
+Nujne razlike: wx na Windows za `ProgressDialog` uporablja sistemski Task Dialog, ki
+zahteva Common Controls 6. Rust beta tega manifesta nima, zato je okno napredka navaden
+sistemski dialog z enako vsebino. Besedila o času so kot v wx angleška.
+
+Predlogi za Urha (Python obnašanje, ki je videti kot majhna napaka, Rust ga zaenkrat
+posnema):
+
+- **P-8.** Pri neuspeli pretvorbi ene datoteke Python pusti delno izhodno datoteko, pri
+  zamenjavi izvirnika pa skrito datoteko ".ime.apricot-converting-...". Rust bi ju lahko
+  izbrisal, kot to Python že naredi pri pretvorbi mape z zamenjavo.
+- **P-9.** Ko uporabnik v dialogu za shranjevanje potrdi prepis obstoječe datoteke, Python
+  vseeno zapiše "ime (2).končnica". Rust bi lahko prepisal izbrano datoteko.
+
+Preverjanje: `cargo build`, `cargo test` (571 uspešnih, 15 izključenih), `cargo clippy
+--workspace --all-targets -D warnings` in `cargo fmt`. Novi testi pokrijejo vrste vhoda,
+vrstni red formatov, poti izhodov, edinstvena imena, ffmpeg argumente, filtre, pregled
+mape, oba delavca z zamenjavo in napakami, besedila napredka ter predlogo dialoga. Kopija
+bete na ločenem nevidnem namizju z ločenimi podatki in pravim ffmpeg je potrdila začetni
+fokus in vrstni red Tab (tudi z možnostmi slike), opozorilo pri prazni poti s fokusom na
+Convert, prikaz možnosti za video in preklop Add image in Dark background, pretvorbo WAV v
+MP4 s sliko (privzeto ime "song.mp4" v dialogu), preklic s "Conversion cancelled.",
+zamenjavo izvirnika brez ostankov, Escape z vrnitvijo fokusa na glavni meni, pretvorbo
+mape v "music converted" s podmapo in oknom napredka ter pretvorbo mape z zamenjavo
+izvirnikov. Po vsakem koncu je fokus na glavnem meniju.
+
+Še odprto: odstopanje iz E13 (odrezovanje števila ogledov v F7) ostaja, ker E17 tega dela
 ne spreminja.

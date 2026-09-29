@@ -220,6 +220,8 @@ const EDIT_SAVE_TIMER_ID: usize = 12;
 const EDIT_SAVE_TIMER_INTERVAL_MS: u32 = 100;
 const DIAGNOSTIC_REPORT_TIMER_ID: usize = 13;
 const DIAGNOSTIC_REPORT_TIMER_INTERVAL_MS: u32 = 100;
+const CONVERSION_TIMER_ID: usize = 14;
+const CONVERSION_TIMER_INTERVAL_MS: u32 = 100;
 const AUDIO_DEVICE_POLL_MS: u32 = 100;
 /// Python waits up to 5 seconds for `mpv --audio-device=help`.
 const AUDIO_DEVICE_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -418,6 +420,14 @@ struct PendingEditSave {
     receiver: Receiver<std::result::Result<PathBuf, String>>,
 }
 
+/// Messages from Python's `file_conversion_worker` and
+/// `folder_conversion_worker`.
+enum ConversionMessage {
+    Folder(apricot_app::converter::FolderConversionEvent),
+    FileFinished(std::result::Result<PathBuf, String>),
+    FolderFinished(std::result::Result<apricot_app::converter::FolderConversionOutcome, String>),
+}
+
 /// Window style and placement to restore after full screen.
 struct FullscreenRestore {
     style: isize,
@@ -548,6 +558,9 @@ struct WindowState {
     clip_exports: Vec<Receiver<std::result::Result<PathBuf, String>>>,
     pending_bpm: Vec<PendingBpmAnalysis>,
     pending_edit_saves: Vec<PendingEditSave>,
+    pending_conversions: Vec<Receiver<ConversionMessage>>,
+    /// Python `conversion_progress_dialog`.
+    conversion_progress_window: Option<crate::converter_win32::ConversionProgressWindow>,
     pending_chapters: Option<PendingChapters>,
     pending_related: Option<PendingRelatedVideos>,
     pending_audio_device_check: Option<Receiver<Vec<apricot_playback::AudioOutputDevice>>>,
@@ -664,10 +677,7 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
             break;
         }
         handle_controlled_repeat_release(window, &message);
-        if state(window)
-            .and_then(|state| state.download_progress_window)
-            .is_some_and(|progress_window| progress_window.handles_dialog_message(&message))
-        {
+        if handles_progress_dialog_message(window, &message) {
             continue;
         }
         if handle_view_tab_message(window, &message) {
@@ -685,6 +695,19 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
         }
     }
     Ok(())
+}
+
+/// Keyboard messages for the modeless download and conversion progress windows.
+unsafe fn handles_progress_dialog_message(window: HWND, message: &MSG) -> bool {
+    let Some(state) = state(window) else {
+        return false;
+    };
+    state
+        .download_progress_window
+        .is_some_and(|progress_window| progress_window.handles_dialog_message(message))
+        || state
+            .conversion_progress_window
+            .is_some_and(|progress_window| progress_window.handles_dialog_message(message))
 }
 
 /// Python `on_char_hook`: Enter in the search or direct link field runs the
@@ -1033,6 +1056,10 @@ unsafe extern "system" fn window_proc(
         }
         WM_TIMER if wparam.0 == DIAGNOSTIC_REPORT_TIMER_ID => {
             poll_diagnostic_report(window);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == CONVERSION_TIMER_ID => {
+            poll_conversions(window);
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -1901,6 +1928,8 @@ unsafe fn create_controls(
         clip_exports: Vec::new(),
         pending_bpm: Vec::new(),
         pending_edit_saves: Vec::new(),
+        pending_conversions: Vec::new(),
+        conversion_progress_window: None,
         pending_chapters: None,
         pending_related: None,
         pending_audio_device_check: None,
@@ -3479,6 +3508,10 @@ unsafe fn activate_main_menu_selection(window: HWND) {
     }
     if item_id == "diagnostic_report" {
         copy_diagnostic_report(window);
+        return;
+    }
+    if item_id == "file_converter" || item_id == "folder_converter" {
+        show_converter(window, item_id == "folder_converter");
         return;
     }
 
@@ -12537,6 +12570,8 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "clear_podcast_progress" => clear_selected_rss_progress(window),
         "save_podcast_speed_preset" => save_current_podcast_speed_preset(window),
         "copy_diagnostic_report" => copy_diagnostic_report(window),
+        "file_converter" => show_converter(window, false),
+        "folder_converter" => show_converter(window, true),
         _ => announce_unimplemented_action(window, action_id),
     }
 }
@@ -14507,6 +14542,244 @@ unsafe fn poll_edit_saves(window: HWND) {
             &message,
             windows::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
         );
+    }
+}
+
+/// Python `show_file_converter` and `show_folder_converter`.
+unsafe fn show_converter(window: HWND, folder_mode: bool) {
+    stop_controlled_repeat(window);
+    let Some(main_state) = state_mut(window) else {
+        return;
+    };
+    main_state.modal_open = true;
+    let options = crate::converter_win32::ConverterDialogOptions {
+        catalog: apricot_app::embedded_catalog(&main_state.application.settings().language),
+        folder_mode,
+        announce: Box::new(move |text: &str| {
+            if let Some(state) = state(window) {
+                set_status(state, text, true);
+            }
+        }),
+    };
+    let outcome = crate::converter_win32::show(window, options);
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+        // wx returns focus to the control that opened the dialog.
+        let _ = SetFocus(Some(active_primary_control(state)));
+    }
+    resume_deferred_window_work(window);
+    match outcome {
+        Ok(Some(start)) => start_conversion(window, start),
+        Ok(None) => {}
+        Err(error) => show_error_message(window, &format!("Converter did not open: {error}")),
+    }
+}
+
+/// Python `start_file_conversion` and `start_folder_conversion`.
+unsafe fn start_conversion(window: HWND, start: crate::converter_win32::ConverterStart) {
+    use crate::converter_win32::ConverterStart;
+    use apricot_app::converter::{
+        FileConversionJob, FolderConversionJob, run_file_conversion, run_folder_conversion,
+    };
+
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let ffmpeg = apricot_platform::ffmpeg_executable(
+        &state.application.settings().ffmpeg_location,
+        application_directory().as_deref(),
+    );
+    let (sender, receiver) = mpsc::channel();
+    match start {
+        ConverterStart::File {
+            source,
+            output,
+            target,
+            image,
+            replace_original,
+        } => {
+            let job = FileConversionJob::new(
+                ffmpeg,
+                source,
+                output,
+                &target,
+                image,
+                replace_original,
+                catalog_text(&state.application, "unsupported_input_format"),
+            );
+            std::thread::spawn(move || {
+                let result =
+                    run_file_conversion(&job, &mut apricot_platform::run_ffmpeg_conversion);
+                let _ = sender.send(ConversionMessage::FileFinished(result));
+            });
+        }
+        ConverterStart::Folder {
+            source,
+            output_folder,
+            target,
+            image,
+            replace_originals,
+        } => {
+            let job = FolderConversionJob {
+                ffmpeg,
+                source_folder: source,
+                output_folder,
+                target,
+                image,
+                replace_originals,
+            };
+            std::thread::spawn(move || {
+                let events = sender.clone();
+                let result = run_folder_conversion(
+                    &job,
+                    &mut apricot_platform::run_ffmpeg_conversion,
+                    &mut |event| {
+                        let _ = events.send(ConversionMessage::Folder(event));
+                    },
+                );
+                let _ = sender.send(ConversionMessage::FolderFinished(result));
+            });
+        }
+    }
+    let message = catalog_text(&state.application, "conversion_started");
+    set_status(state, &message, true);
+    state.pending_conversions.push(receiver);
+    let _ = SetTimer(
+        Some(window),
+        CONVERSION_TIMER_ID,
+        CONVERSION_TIMER_INTERVAL_MS,
+        None,
+    );
+}
+
+/// The `wx.CallAfter` and `ui_queue` side of Python's conversion workers.
+unsafe fn poll_conversions(window: HWND) {
+    let mut messages = Vec::new();
+    {
+        let Some(state) = state_mut(window) else {
+            return;
+        };
+        state.pending_conversions.retain(|receiver| {
+            loop {
+                match receiver.try_recv() {
+                    Ok(message) => {
+                        let finished = !matches!(message, ConversionMessage::Folder(_));
+                        messages.push(message);
+                        if finished {
+                            break false;
+                        }
+                    }
+                    Err(TryRecvError::Empty) => break true,
+                    Err(TryRecvError::Disconnected) => break false,
+                }
+            }
+        });
+        if state.pending_conversions.is_empty() {
+            let _ = KillTimer(Some(window), CONVERSION_TIMER_ID);
+        }
+    }
+    for message in messages {
+        handle_conversion_message(window, message);
+    }
+}
+
+unsafe fn handle_conversion_message(window: HWND, message: ConversionMessage) {
+    use apricot_app::converter::{
+        FolderConversionEvent, FolderConversionOutcome, folder_done_message, progress_message,
+    };
+
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    match message {
+        ConversionMessage::Folder(FolderConversionEvent::Started { total }) => {
+            close_conversion_progress(state);
+            state.conversion_progress_window =
+                crate::converter_win32::ConversionProgressWindow::create(
+                    window,
+                    catalog.text("conversion_progress_title"),
+                    &progress_message(&catalog, "", 0, total),
+                    total,
+                )
+                .ok();
+        }
+        ConversionMessage::Folder(FolderConversionEvent::FileStarted { index, total, name }) => {
+            let text = format!(
+                "{} {index}/{total}: {name}",
+                catalog.text("conversion_started")
+            );
+            set_status(state, &text, false);
+        }
+        ConversionMessage::Folder(FolderConversionEvent::Progress {
+            file,
+            converted,
+            total,
+        }) => {
+            if let Some(progress) = state
+                .conversion_progress_window
+                .filter(|progress| progress.is_open())
+            {
+                progress.update(
+                    converted,
+                    &progress_message(&catalog, &file, converted, total),
+                );
+            }
+        }
+        ConversionMessage::FileFinished(Ok(path)) => {
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            let text = catalog.text("conversion_done").replace("{title}", &name);
+            set_status(state, &text, false);
+            finish_conversion_message(window, &text);
+        }
+        ConversionMessage::FolderFinished(Ok(FolderConversionOutcome::NoMediaFiles)) => {
+            show_message_box(
+                window,
+                catalog.text("conversion_no_media_files"),
+                MB_ICONINFORMATION,
+            );
+        }
+        ConversionMessage::FolderFinished(Ok(FolderConversionOutcome::Done {
+            converted,
+            failed,
+        })) => {
+            let text = folder_done_message(&catalog, converted, failed);
+            set_status(state, &text, false);
+            close_conversion_progress(state);
+            finish_conversion_message(window, &text);
+        }
+        ConversionMessage::FileFinished(Err(error))
+        | ConversionMessage::FolderFinished(Err(error)) => {
+            close_conversion_progress(state);
+            let text = catalog.text("conversion_failed").replace(
+                "{error}",
+                &apricot_app::comments::friendly_error(&catalog, &error),
+            );
+            show_message_box(
+                window,
+                &text,
+                windows::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
+            );
+        }
+    }
+}
+
+/// Python `close_conversion_progress_dialog`.
+unsafe fn close_conversion_progress(state: &mut WindowState) {
+    if let Some(progress) = state.conversion_progress_window.take() {
+        progress.destroy();
+    }
+}
+
+/// Python `finish_conversion_message`.
+unsafe fn finish_conversion_message(window: HWND, text: &str) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    if state.application.settings().popup_when_conversion_complete {
+        show_message_box(window, text, MB_ICONINFORMATION);
+    } else {
+        set_status(state, text, true);
     }
 }
 

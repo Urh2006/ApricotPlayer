@@ -23,6 +23,8 @@ mod clipboard_win32;
 #[cfg(windows)]
 mod comments_win32;
 #[cfg(windows)]
+mod converter_win32;
+#[cfg(windows)]
 mod cookies_win32;
 #[cfg(windows)]
 mod details_win32;
