@@ -15,6 +15,7 @@ pub mod paths;
 pub mod podcast_directory;
 pub mod rss_client;
 pub mod single_instance;
+pub mod soundcloud_search;
 pub mod transcript;
 pub mod windows_registration;
 pub mod youtube_data_api;
@@ -41,7 +42,9 @@ pub use paths::{PathDiscoveryError, discover_windows_beta_paths, discover_window
 pub use podcast_directory::{ApplePodcastDirectoryClient, PodcastDirectoryError};
 pub use rss_client::{RssClient, RssClientError};
 pub use single_instance::{SingleInstanceGuard, SingleInstanceOutcome, acquire_single_instance};
-pub use windows_registration::{startup_command, startup_value_name, sync_startup_registration};
+pub use windows_registration::{
+    startup_command, startup_value_name, sync_startup_registration, windows_platform_description,
+};
 pub use youtube_data_api::{YoutubeDataApiClient, YoutubeDataApiError};
 pub use youtube_helper_process::{YoutubeHelperProcess, YoutubeProcessError};
 pub use youtube_search_service::{

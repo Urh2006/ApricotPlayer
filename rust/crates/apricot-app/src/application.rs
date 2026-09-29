@@ -1392,6 +1392,21 @@ impl Application {
         self.state.player_sequence.source()
     }
 
+    /// Python `len(player_sequence_results)`, for the diagnostic report.
+    pub fn player_sequence_len(&self) -> usize {
+        self.state.player_sequence.items().len()
+    }
+
+    /// Python `player_return_screen`, for the diagnostic report: the screen
+    /// the open player returns to, empty without a player.
+    pub fn player_return_screen(&self) -> String {
+        let Some(item) = self.state.player.current_item() else {
+            return String::new();
+        };
+        let frame = self.open_player_return_frame();
+        self.last_session_return_context(&frame, item).0.to_owned()
+    }
+
     pub fn player_sequence_contains(&self, item: &MediaItem) -> bool {
         self.state.player_sequence.contains(item)
     }
@@ -1812,13 +1827,7 @@ impl Application {
         let Some(item) = self.state.player.current_item().cloned() else {
             return;
         };
-        let frame = if self.state.navigation.current().route == Route::Player {
-            self.state.navigation.player_return_frame().clone()
-        } else {
-            self.background_return_frame
-                .clone()
-                .unwrap_or_else(|| self.state.navigation.player_return_frame().clone())
-        };
+        let frame = self.open_player_return_frame();
         let (return_screen, mut return_data) = self.last_session_return_context(&frame, &item);
         for (key, value) in frame.parameters {
             return_data.entry(key).or_insert(value);
@@ -1837,6 +1846,18 @@ impl Application {
         let snapshot =
             LastPlayerSession::new(unix_timestamp(), item, return_screen, return_data, sequence);
         let _ = self.state.last_player_session.replace(snapshot);
+    }
+
+    /// The screen the open player returns to, also while it plays on in the
+    /// background.
+    fn open_player_return_frame(&self) -> RouteFrame {
+        if self.state.navigation.current().route == Route::Player {
+            self.state.navigation.player_return_frame().clone()
+        } else {
+            self.background_return_frame
+                .clone()
+                .unwrap_or_else(|| self.state.navigation.player_return_frame().clone())
+        }
     }
 
     fn last_session_return_context(

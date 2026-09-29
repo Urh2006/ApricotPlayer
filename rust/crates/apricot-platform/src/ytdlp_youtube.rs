@@ -13,6 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::soundcloud_search::{SoundcloudCollectionSearch, search_soundcloud_collections};
 use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
 use apricot_media::{
     MAX_YOUTUBE_METADATA_ITEMS, YoutubeBackend, YoutubeCapability, YoutubeCollectionKind,
@@ -38,10 +39,6 @@ const MAX_MEDIA_URL_BYTES: usize = 16_384;
 const MAX_COOKIE_HEADER_BYTES: usize = 131_072;
 const MAX_COOKIE_FILE_BYTES: usize = 32_768;
 const MAX_PROXY_URL_BYTES: usize = 2_048;
-/// Python lists `SoundCloud` playlists and users through the web API with the
-/// web client ID; the `yt-dlp` executable only searches tracks.
-const SOUNDCLOUD_COLLECTION_SEARCH_UNAVAILABLE: &str =
-    "SoundCloud playlist and user search is not available yet";
 
 #[derive(Debug, Error)]
 pub enum YtDlpError {
@@ -90,7 +87,12 @@ impl YtDlpYoutubeEngine {
         })
     }
 
-    fn version(&self) -> Result<String, YtDlpError> {
+    /// `yt-dlp --version`, for the diagnostic report.
+    ///
+    /// # Errors
+    ///
+    /// Returns process, timeout or invalid output errors.
+    pub fn version(&self) -> Result<String, YtDlpError> {
         let output = self.run([OsString::from("--version")])?;
         checked_stdout(output).and_then(|bytes| {
             let version = String::from_utf8(bytes)
@@ -272,13 +274,29 @@ impl YtDlpYoutubeEngine {
             ));
         }
 
-        if matches!(
-            kind,
-            YoutubeSearchKind::SoundcloudPlaylist | YoutubeSearchKind::SoundcloudUser
-        ) {
-            return Err(YtDlpError::Request(
-                SOUNDCLOUD_COLLECTION_SEARCH_UNAVAILABLE.to_owned(),
-            ));
+        // Python `soundcloud_search_entries`: playlists and users come from
+        // the SoundCloud web API, not from a yt-dlp listing.
+        let collection_search = match kind {
+            YoutubeSearchKind::SoundcloudPlaylist => Some(SoundcloudCollectionSearch::Playlist),
+            YoutubeSearchKind::SoundcloudUser => Some(SoundcloudCollectionSearch::User),
+            _ => None,
+        };
+        if let Some(collection_search) = collection_search {
+            let items = search_soundcloud_collections(
+                query,
+                collection_search,
+                limit,
+                self.config.proxy_url.as_deref(),
+            )
+            .map_err(|error| YtDlpError::Request(error.to_string()))?
+            .iter()
+            .filter_map(media_item_from_value)
+            .filter(|item| search_kind_accepts(kind, item.kind))
+            .collect();
+            return Ok(YoutubeResponsePayload::SearchResults {
+                items,
+                continuation: None,
+            });
         }
 
         let fetch_limit = search_fetch_limit(kind, limit);
@@ -1139,6 +1157,14 @@ fn media_item_from_value(value: &Value) -> Option<MediaItem> {
         &["channel_is_verified", "uploader_is_verified"],
     );
     insert_alias(&mut metadata, object, "uploaded_at", &["upload_date"]);
+    // Python `normalize_entry`: a SoundCloud web API playlist names its owner
+    // in a nested `user`.
+    let user = object.get("user").and_then(Value::as_object);
+    if let Some(owner_url) = user.and_then(|user| string(user, "permalink_url")) {
+        metadata
+            .entry("channel_url".to_owned())
+            .or_insert_with(|| Value::String(owner_url.to_owned()));
+    }
     let source = if is_soundcloud_entry(object, raw_url) {
         MediaSource::Soundcloud
     } else {
@@ -1153,7 +1179,8 @@ fn media_item_from_value(value: &Value) -> Option<MediaItem> {
         stream_url: None,
         external_audio_url: None,
         local_path: None,
-        channel: first_string(object, &["channel", "uploader", "channel_name"])
+        channel: first_string(object, &["uploader", "channel", "channel_name"])
+            .or_else(|| user.and_then(|user| string(user, "username")))
             .unwrap_or_default()
             .to_owned(),
         duration_seconds: number(object, "duration"),
@@ -1623,6 +1650,18 @@ mod tests {
         assert_eq!(set.source, MediaSource::Soundcloud);
         assert_eq!(set.kind, MediaKind::Playlist);
         assert_eq!(set.metadata["playlist_count"], 12);
+        let api_set = media_item_from_value(&json!({
+            "kind": "playlist", "id": 3, "title": "Web set", "track_count": 4,
+            "permalink_url": "https://soundcloud.com/owner/sets/web",
+            "user": {"username": "Owner", "permalink_url": "https://soundcloud.com/owner"}
+        }))
+        .expect("api set");
+        assert_eq!(api_set.kind, MediaKind::Playlist);
+        assert_eq!(api_set.channel, "Owner");
+        assert_eq!(
+            api_set.metadata["channel_url"],
+            "https://soundcloud.com/owner"
+        );
         let user = media_item_from_value(&json!({
             "kind": "user", "id": "2", "username": "Artist",
             "permalink_url": "https://soundcloud.com/artist"
@@ -1862,6 +1901,31 @@ mod tests {
                 .iter()
                 .all(|item| item.source == MediaSource::Soundcloud)
         );
+        for (kind, media_kind) in [
+            (YoutubeSearchKind::SoundcloudPlaylist, MediaKind::Playlist),
+            (YoutubeSearchKind::SoundcloudUser, MediaKind::Channel),
+        ] {
+            let items = match engine
+                .execute(YoutubeCommand::Search {
+                    query: "daft punk".to_owned(),
+                    kind,
+                    limit: 5,
+                    safe_search: false,
+                })
+                .expect("SoundCloud web API search")
+            {
+                YoutubeResponsePayload::SearchResults { items, .. } => items,
+                other => panic!("unexpected {other:?}"),
+            };
+            assert_eq!(items.len(), 5, "{kind:?}");
+            assert!(
+                items
+                    .iter()
+                    .all(|item| item.source == MediaSource::Soundcloud
+                        && item.kind == media_kind
+                        && item.url.is_some())
+            );
+        }
         let resolved = engine
             .execute(YoutubeCommand::Resolve {
                 url: tracks[0].url.as_ref().expect("track URL").to_string(),

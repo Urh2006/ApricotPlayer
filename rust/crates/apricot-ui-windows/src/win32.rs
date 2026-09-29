@@ -218,6 +218,8 @@ const BPM_TIMER_ID: usize = 11;
 const BPM_TIMER_INTERVAL_MS: u32 = 100;
 const EDIT_SAVE_TIMER_ID: usize = 12;
 const EDIT_SAVE_TIMER_INTERVAL_MS: u32 = 100;
+const DIAGNOSTIC_REPORT_TIMER_ID: usize = 13;
+const DIAGNOSTIC_REPORT_TIMER_INTERVAL_MS: u32 = 100;
 const AUDIO_DEVICE_POLL_MS: u32 = 100;
 /// Python waits up to 5 seconds for `mpv --audio-device=help`.
 const AUDIO_DEVICE_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -546,6 +548,9 @@ struct WindowState {
     pending_chapters: Option<PendingChapters>,
     pending_related: Option<PendingRelatedVideos>,
     pending_audio_device_check: Option<Receiver<Vec<apricot_playback::AudioOutputDevice>>>,
+    // Python `copy_diagnostic_report`; yt-dlp and the log tails are read off
+    // the window thread.
+    pending_diagnostic_report: Option<Receiver<String>>,
     fullscreen_restore: Option<FullscreenRestore>,
     background_player: BackgroundPlayerSection,
     // The result screen shown inside the player page, Python `results_list`
@@ -1011,6 +1016,10 @@ unsafe extern "system" fn window_proc(
         }
         WM_TIMER if wparam.0 == EDIT_SAVE_TIMER_ID => {
             poll_edit_saves(window);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == DIAGNOSTIC_REPORT_TIMER_ID => {
+            poll_diagnostic_report(window);
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -1881,6 +1890,7 @@ unsafe fn create_controls(
         pending_chapters: None,
         pending_related: None,
         pending_audio_device_check: None,
+        pending_diagnostic_report: None,
         fullscreen_restore: None,
         background_player,
         embedded_results: None,
@@ -3451,6 +3461,10 @@ unsafe fn activate_main_menu_selection(window: HWND) {
     }
     if item_id == "current_downloads" {
         show_download_queue(window);
+        return;
+    }
+    if item_id == "diagnostic_report" {
+        copy_diagnostic_report(window);
         return;
     }
 
@@ -11399,7 +11413,116 @@ fn playback_launch_options(
         megabytes: u32::try_from(settings.cache_size_mb.clamp(128, 4_096)).unwrap_or(512),
     });
     options.initial_audio_filter = player_audio_filter(state, None);
+    // Python `start_mpv` writes the mpv output to `mpv.log` in the data folder.
+    options.log_file = state
+        .application
+        .settings_file()
+        .parent()
+        .map(|folder| folder.join("mpv.log"));
     Some(options)
+}
+
+/// Python `copy_diagnostic_report`: builds the report, copies it and announces
+/// "Diagnostic report copied.".
+unsafe fn copy_diagnostic_report(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    if state.pending_diagnostic_report.is_some() {
+        return;
+    }
+    let directory = application_directory();
+    let mpv_library = directory
+        .as_ref()
+        .map(|directory| directory.join("mpv").join("libmpv-2.dll"))
+        .filter(|path| path.is_file());
+    let ffmpeg = apricot_platform::ffmpeg_executable(
+        &state.application.settings().ffmpeg_location,
+        directory.as_deref(),
+    );
+    let ytdlp = directory
+        .as_ref()
+        .map(|directory| directory.join("components").join("yt-dlp.exe"));
+    let version = env!("CARGO_PKG_VERSION");
+    let session_open = state.application.player_session().is_open();
+    let environment = apricot_app::diagnostic_report::DiagnosticEnvironment {
+        app_version: version.to_owned(),
+        app_label: format!("2 Beta {version}"),
+        frozen_build: !cfg!(debug_assertions),
+        executable: std::env::current_exe()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
+        working_directory: std::env::current_dir()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
+        platform: apricot_platform::windows_platform_description(),
+        ytdlp_version: String::new(),
+        mpv_path: mpv_library
+            .map_or_else(|| "not found".to_owned(), |path| path.display().to_string()),
+        ffmpeg_path: ffmpeg
+            .map_or_else(|| "not found".to_owned(), |path| path.display().to_string()),
+        player_active: session_open && state.playback.is_some(),
+        resolve_pending: state.pending_youtube_resolve.is_some(),
+        in_player_screen: state.view == MainView::Player,
+        current_index: usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok(),
+        visible_results: usize::try_from(SendMessageW(state.list, LB_GETCOUNT, None, None).0)
+            .unwrap_or_default(),
+        process_id: std::process::id(),
+    };
+    let mut sections =
+        apricot_app::diagnostic_report::diagnostic_sections(&state.application, &environment);
+    let data_folder = state
+        .application
+        .settings_file()
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_default();
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let ytdlp_version = match ytdlp.filter(|path| path.is_file()) {
+            None => "unknown".to_owned(),
+            Some(path) => apricot_platform::YtDlpYoutubeEngine::new(&path)
+                .and_then(|engine| engine.version())
+                .unwrap_or_else(|error| format!("unavailable: {error}")),
+        };
+        if let Some(app) = sections.first_mut() {
+            app.set(apricot_app::diagnostic_report::YTDLP_LINE, ytdlp_version);
+        }
+        let mpv_log = data_folder.join("mpv.log");
+        let updater_log = data_folder.join("updater.log");
+        let report = apricot_app::diagnostic_report::DiagnosticRedactor::from_environment().report(
+            &sections,
+            &[("mpv.log", &mpv_log), ("updater.log", &updater_log)],
+        );
+        let _ = sender.send(report);
+    });
+    state.pending_diagnostic_report = Some(receiver);
+    let _ = SetTimer(
+        Some(window),
+        DIAGNOSTIC_REPORT_TIMER_ID,
+        DIAGNOSTIC_REPORT_TIMER_INTERVAL_MS,
+        None,
+    );
+}
+
+unsafe fn poll_diagnostic_report(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let report = match state
+        .pending_diagnostic_report
+        .as_ref()
+        .map(Receiver::try_recv)
+    {
+        Some(Err(TryRecvError::Empty)) => return,
+        Some(Ok(report)) => Some(report),
+        Some(Err(TryRecvError::Disconnected)) | None => None,
+    };
+    state.pending_diagnostic_report = None;
+    let _ = KillTimer(Some(window), DIAGNOSTIC_REPORT_TIMER_ID);
+    if let Some(report) = report {
+        copy_text_and_announce(window, &report, "diagnostic_report_copied");
+    }
 }
 
 /// Python `start_mpv` initial `--af` equalizer filter.
@@ -12170,6 +12293,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "toggle_podcast_played" => toggle_selected_rss_played(window),
         "clear_podcast_progress" => clear_selected_rss_progress(window),
         "save_podcast_speed_preset" => save_current_podcast_speed_preset(window),
+        "copy_diagnostic_report" => copy_diagnostic_report(window),
         _ => announce_unimplemented_action(window, action_id),
     }
 }

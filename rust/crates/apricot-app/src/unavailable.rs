@@ -70,8 +70,11 @@ mod tests {
             Some("Equalizer is not available in this beta yet.".to_owned())
         );
         assert_eq!(
-            unavailable_action_message(&english, "copy_diagnostic_report", None),
-            Some("Copy diagnostic report is not available in this beta yet.".to_owned())
+            unavailable_action_message(&english, "open_audiovault", None),
+            Some(format!(
+                "{} is not available in this beta yet.",
+                english.text("audiovault")
+            ))
         );
         let slovenian = embedded_catalog("sl");
         let message =

@@ -81,7 +81,7 @@ Prioriteta: P1 pomeni, da je osnovna uporaba s tipkovnico ali NVDA zlomljena ali
 
 | ID | P | Odstopanje |
 |---|---|---|
-| SEARCH-01 | P1 | Odpravljeno v E14: ponudnik SoundCloud s tipi Track, Playlist in User. Iskanje playlistov in uporabnikov čaka na odločitev P-7. |
+| SEARCH-01 | P1 | Odpravljeno v E14 in E15: ponudnik SoundCloud s tipi Track, Playlist in User (playlisti in uporabniki po O-11). |
 | SEARCH-08 | P2 | Odpravljeno v E14: gumbi Play, Download audio, Download video in Add favorite ter rezultati na iskalnem zaslonu. |
 | SEARCH-02 | P2 | Kontekstni meni rezultatov nima "Open in browser". |
 | SEARCH-05 | P2 | Meni kanala ima dodaten podmeni za prenos in drugačen vrstni red. |
@@ -128,10 +128,10 @@ Prioriteta: P1 pomeni, da je osnovna uporaba s tipkovnico ali NVDA zlomljena ali
 | PLAYER2-M-01 | P1 | Odpravljeno v E11: BPM analiza (B) | `apricot/ui/misc.py:2710-2803` |
 | PLAYER2-M-04 | P1 | Odpravljeno v E13: komentarji (Ctrl+Shift+M) | `apricot/ui/misc.py:2095+` |
 | PLAYER2-M-06 | P1 | Odpravljeno v E12: način urejanja (E, Ctrl+S, Ctrl+R) | `apricot/ui/misc.py:2389-2433` |
-| SEARCH-M-01 | P1 | Odpravljeno v E14 razen iskanja playlistov in uporabnikov (P-7): SoundCloud iskanje, izvajalci in seti | `apricot/search/search.py:451-474, 703-729` |
+| SEARCH-M-01 | P1 | Odpravljeno v E14 in E15: SoundCloud iskanje, izvajalci, seti ter iskanje playlistov in uporabnikov | `apricot/search/search.py:451-474, 703-729` |
 | SEARCH-M-02 | P1 | Odpri kanal (Ctrl+Shift+O) in stolpci rezultatov (Ctrl+Alt+levo/desno) | `apricot/search/search.py:233` |
 | SEARCH-M-04 | P2 | Odpravljeno v E14: vmešavanje Shorts v iskanje in v objave kanala | `apricot/search/search.py:374-495` |
-| SHELL-M-03 | P1 | Kopiranje diagnostičnega poročila | `apricot/system/diagnostics.py` |
+| SHELL-M-03 | P1 | Odpravljeno v E15: kopiranje diagnostičnega poročila | `apricot/system/diagnostics.py` |
 | SETTINGS-M-01 | P1 | Piškotki: datoteka, uvoz iz brskalnika, DevTools izvoz, prijavni profil | `apricot/ui/cookies.py` |
 | SETTINGS-M-03 | P2 | Set default player in pomoč pri povezavah datotek | `apricot/ui/settings.py:462` |
 | PODDL-M-01 | P1 | Pretvornik datotek in pretvornik map | `apricot/media/media.py:40-436` |
@@ -233,6 +233,12 @@ odstopanje se najprej predlaga Urhu in se po odobritvi zapiše sem.
 - **O-10.** Brez predvajanja v ozadju Python ob odprtju nastavitev s strani predvajalnika
   ustavi predvajanje. Rust nastavitve odpre kot okno nad predvajalnikom in predvajanje
   pusti teči (predlog P-6 iz E13a, odobren 29. 9. 2026).
+- **O-11.** SoundCloud iskanje playlistov in uporabnikov: Python kliče spletni API
+  SoundClouda prek vgrajenega `yt-dlp`, ki javni ID spletnega odjemalca pobere s strani
+  soundcloud.com. Samostojni `yt-dlp.exe` te poti nima, zato Rust ID pobere sam na enak
+  način (skripte s soundcloud.com, vzorec `client_id:"..."`, ponovno branje ob odgovoru
+  401 ali 403) in ga hrani v pomnilniku do konca zagona (odločitev P-7, odobrena
+  29. 9. 2026, narejeno v E15).
 
 ## 6. Dnevnik enot
 
@@ -1000,7 +1006,7 @@ Spremembe:
 
 Odločitev za Urha:
 
-- **P-7.** Python SoundCloud playliste in uporabnike išče prek spletnega API-ja
+- **P-7** (odobreno 29. 9. 2026 kot O-11, narejeno v E15). Python SoundCloud playliste in uporabnike išče prek spletnega API-ja
   SoundClouda z javnim ID-jem spletnega odjemalca, ki ga yt-dlp pobere s strani
   soundcloud.com. Samostojni yt-dlp.exe te poti nima, zato bi moral Rust ta ID pobrati sam.
   Samodejna varovalka mojega okolja mi je pregled tega ID-ja ustavila, zato te poti nisem
@@ -1016,3 +1022,48 @@ Samodejni preizkus kopije bete na ločenem nevidnem namizju je potrdil Tab vrstn
 sporočilo na prazni vrstici, menjavo tipov, iskanje in predvajanje SoundCloud skladbe z
 gumbom Play, Back v glavni meni, prazen nov obisk iskanja, YouTube iskanje ter odprtje
 SoundCloud izvajalca iz priljubljenih z vrnitvijo v priljubljene.
+
+### E15: diagnostično poročilo in SoundCloud playlisti ter uporabniki (29. 9. 2026)
+
+Spremembe:
+
+- O-11 (P-7): `apricot-platform/src/soundcloud_search.rs` išče SoundCloud playliste
+  (`search/playlists_without_albums`) in uporabnike (`search/users`) prek
+  `api-v2.soundcloud.com` s Pythonovimi parametri in straničenjem `next_href`. ID
+  odjemalca prebere iz skript domače strani kot `yt-dlp`, sprejme le skripte s
+  soundcloud.com in sndcdn.com ter naslednje strani le z `api-v2.soundcloud.com`.
+  Napake ID-ja ne izpišejo. Vrstice playlistov dobijo lastnika iz vgnezdenega `user`
+  (ime in `channel_url`), kot `normalize_entry`. Kanal vnosa se zdaj bere v Pythonovem
+  vrstnem redu `uploader`, nato `channel`.
+- Ctrl+Alt+Shift+D, postavka glavnega menija in Action Finder sestavijo Pythonovo
+  diagnostično poročilo (`apricot-app/src/diagnostic_report.rs`) z enakimi razdelki,
+  oznakami in oblikovanjem vrednosti (yes/no, none, decimalke brez ničel, omejitev
+  1000 znakov), ga kopirajo in oglasijo "Diagnostic report copied.". Zakrivanje je
+  Pythonovo: naslovi brez poizvedbe, fragmenta in poverilnic, polja Cookie,
+  Authorization, Proxy-Authorization, X-Api-Key in youtube_data_api_key ter mape
+  APPDATA, LOCALAPPDATA, USERPROFILE in TEMP brez razlikovanja velikih črk, najdaljša
+  najprej. Naslov toka se povzame brez poizvedbe. Repi `mpv.log` in `updater.log`
+  (zadnjih 50 vrstic iz največ 256 KiB).
+- Različico yt-dlp in repe dnevnikov prebere delovna nit, zato okno med kopiranjem ne
+  zamrzne; poročilo se kopira, ko je sestavljeno (običajno v pol sekunde).
+- libmpv zdaj piše `mpv.log` v podatkovno mapo, kot Python piše izhod mpv: sporočila
+  ravni info in višje v obliki terminala, datoteka se ob vsakem novem posnetku prepiše.
+- Nujne razlike v vsebini poročila: vrstice "Python" ni, "mpv path" kaže `libmpv-2.dll`,
+  "Process PID" je PID aplikacije (mpv teče v procesu), "Stream header names" je vedno
+  "none", "Return index" je "none", "Cookies source refresh error" je prazen do E16,
+  vrstice "mpv ..." pa se berejo iz stanja seje namesto sprotnega branja lastnosti.
+  "App label" je "2 Beta" z različico, kot v naslovu okna.
+
+Preverjanje: `cargo build`, `cargo test` (530 uspešnih), `cargo clippy --all-targets -D
+warnings` in `cargo fmt`. Novi testi pokrijejo Pythonov varnostni test zakrivanja,
+oblikovanje vrednosti, povzetek naslova toka, repe dnevnikov, sestavo razdelkov z odprtim
+predvajalnikom, vrstice `mpv.log`, opis platforme, poizvedbe in gostitelje SoundCloud API
+ter lastnika playlistov. Živa testa s pravim SoundCloudom vrneta po 25 oziroma 5
+playlistov in uporabnikov. Kopija bete na ločenem nevidnem namizju je potrdila iskanje
+playlistov in uporabnikov z vrsticami "Playlist" in "Artist", predvajanje skladbe, `mpv.log`,
+kopiranje poročila s Ctrl+Alt+Shift+D in iz glavnega menija brez premika fokusa.
+Uporabnikovo odložišče je driver po testu obnovil.
+
+Še odprto: postavka "Type" trenutnega elementa je prazna, kadar element nima shranjenega
+prikaznega tipa (na primer SoundCloud skladba iz iskanja); Python tam napiše "Track".
+Odstopanje iz E13 (odrezovanje števila ogledov v F7) ostaja, ker E15 tega dela ne spreminja.

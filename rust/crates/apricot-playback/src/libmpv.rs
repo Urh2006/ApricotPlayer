@@ -4,6 +4,8 @@
 
 use std::{
     ffi::{CStr, CString, c_char, c_double, c_int, c_void},
+    fs::File,
+    io::Write,
     path::{Path, PathBuf},
     ptr,
     time::{Duration, Instant},
@@ -109,6 +111,7 @@ unsafe fn node_json(node: &Node, depth: usize, wanted: &[&str]) -> serde_json::V
     }
 }
 const MPV_EVENT_SHUTDOWN: c_int = 1;
+const MPV_EVENT_LOG_MESSAGE: c_int = 2;
 const MPV_EVENT_END_FILE: c_int = 7;
 const MPV_EVENT_FILE_LOADED: c_int = 8;
 const MPV_EVENT_PROPERTY_CHANGE: c_int = 22;
@@ -125,6 +128,19 @@ type Command = unsafe extern "C" fn(*mut MpvHandle, *const *const c_char) -> c_i
 type ObserveProperty = unsafe extern "C" fn(*mut MpvHandle, u64, *const c_char, c_int) -> c_int;
 type WaitEvent = unsafe extern "C" fn(*mut MpvHandle, c_double) -> *const MpvEvent;
 type ErrorString = unsafe extern "C" fn(c_int) -> *const c_char;
+type RequestLogMessages = unsafe extern "C" fn(*mut MpvHandle, *const c_char) -> c_int;
+
+/// Python `start_mpv` writes the terminal output of mpv to `mpv.log`. mpv
+/// prints messages of level info and above on the terminal.
+const TERMINAL_LOG_LEVEL: &str = "info";
+
+#[repr(C)]
+struct MpvEventLogMessage {
+    prefix: *const c_char,
+    _level: *const c_char,
+    text: *const c_char,
+    _log_level: c_int,
+}
 
 #[repr(C)]
 struct MpvEvent {
@@ -160,6 +176,7 @@ struct MpvApi {
     observe_property: ObserveProperty,
     wait_event: WaitEvent,
     error_string: ErrorString,
+    request_log_messages: RequestLogMessages,
 }
 
 impl MpvApi {
@@ -194,6 +211,9 @@ impl MpvApi {
         let error_string = *library
             .get::<ErrorString>(b"mpv_error_string\0")
             .map_err(|error| symbol_error(&error))?;
+        let request_log_messages = *library
+            .get::<RequestLogMessages>(b"mpv_request_log_messages\0")
+            .map_err(|error| symbol_error(&error))?;
         Ok(Self {
             _library: library,
             create,
@@ -204,6 +224,7 @@ impl MpvApi {
             observe_property,
             wait_event,
             error_string,
+            request_log_messages,
         })
     }
 
@@ -292,6 +313,9 @@ pub struct LibMpvEngine {
     duration: Option<f64>,
     media_info: PlaybackMediaInfo,
     shutdown_reported: bool,
+    /// Python `mpv.log`: rewritten for every started item.
+    log_path: Option<PathBuf>,
+    log: Option<File>,
 }
 
 impl LibMpvEngine {
@@ -327,7 +351,17 @@ impl LibMpvEngine {
         }
         let result = configure(&api, handle, options)
             .and_then(|()| api.check((api.initialize)(handle), "libmpv initialization failed"))
-            .and_then(|()| subscribe(&api, handle));
+            .and_then(|()| subscribe(&api, handle))
+            .and_then(|()| {
+                if options.log_file.is_none() {
+                    return Ok(());
+                }
+                let level = c_string(TERMINAL_LOG_LEVEL, "libmpv log level")?;
+                api.check(
+                    (api.request_log_messages)(handle, level.as_ptr()),
+                    "could not request libmpv log messages",
+                )
+            });
         if let Err(error) = result {
             (api.terminate_destroy)(handle);
             return Err(error);
@@ -339,6 +373,8 @@ impl LibMpvEngine {
             duration: None,
             media_info: PlaybackMediaInfo::default(),
             shutdown_reported: false,
+            log_path: options.log_file.clone(),
+            log: None,
         })
     }
 
@@ -354,6 +390,10 @@ impl LibMpvEngine {
             ));
         }
         match (*event).event_id {
+            MPV_EVENT_LOG_MESSAGE => {
+                self.write_log_message((*event).data);
+                Ok(None)
+            }
             MPV_EVENT_FILE_LOADED => Ok(Some(PlaybackEvent::Started)),
             MPV_EVENT_END_FILE => self.project_end_file((*event).data),
             MPV_EVENT_PROPERTY_CHANGE => self.project_property((*event).data),
@@ -368,6 +408,33 @@ impl LibMpvEngine {
             }
             _ => Ok(None),
         }
+    }
+
+    /// Diagnostics only: a failing log file never stops playback.
+    unsafe fn write_log_message(&mut self, data: *mut c_void) {
+        let Some(log) = self.log.as_mut() else {
+            return;
+        };
+        if data.is_null() {
+            return;
+        }
+        let message = &*data.cast::<MpvEventLogMessage>();
+        let text = |pointer: *const c_char| {
+            if pointer.is_null() {
+                String::new()
+            } else {
+                CStr::from_ptr(pointer).to_string_lossy().into_owned()
+            }
+        };
+        let line = terminal_log_line(&text(message.prefix), &text(message.text));
+        let _ = log.write_all(line.as_bytes());
+    }
+
+    fn restart_log(&mut self) {
+        self.log = self
+            .log_path
+            .as_deref()
+            .and_then(|path| File::create(path).ok());
     }
 
     unsafe fn project_end_file(
@@ -575,6 +642,7 @@ impl PlaybackEngine for LibMpvEngine {
             self.elapsed = 0.0;
             self.duration = None;
             self.media_info = PlaybackMediaInfo::default();
+            self.restart_log();
         }
         let arguments = command_arguments(command)?;
         unsafe { self.api.run_command(self.handle(), &arguments) }
@@ -687,10 +755,21 @@ fn configure_video(values: &mut Vec<(&'static str, String)>, mode: MpvVideoMode)
     }
 }
 
-fn configure_optional_values(values: &mut Vec<(&'static str, String)>, options: &MpvLaunchOptions) {
-    if let Some(path) = &options.log_file {
-        values.push(("log-file", path.to_string_lossy().into_owned()));
+/// mpv prints the messages of its main module without a prefix and those of
+/// other modules as `[module] text`.
+fn terminal_log_line(prefix: &str, text: &str) -> String {
+    let mut line = if prefix.is_empty() || prefix == "cplayer" {
+        text.to_owned()
+    } else {
+        format!("[{prefix}] {text}")
+    };
+    if !line.ends_with('\n') {
+        line.push('\n');
     }
+    line
+}
+
+fn configure_optional_values(values: &mut Vec<(&'static str, String)>, options: &MpvLaunchOptions) {
     if let Some(device) = options
         .audio_device
         .as_deref()
@@ -898,7 +977,7 @@ mod tests {
 
     use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
 
-    use super::{command_arguments, library_path};
+    use super::{command_arguments, library_path, terminal_log_line};
     use crate::{MpvLaunchOptions, PlaybackCommand};
 
     fn chapter_fixtures() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
@@ -1096,6 +1175,18 @@ mod tests {
         };
         // SAFETY: The list is live and rejected before its null values pointer is accessed.
         assert!(unsafe { super::node_json(&root, 0, &["time", "title"]) }.is_null());
+    }
+
+    #[test]
+    fn terminal_log_lines_match_mpv_terminal_output() {
+        assert_eq!(
+            terminal_log_line("cplayer", " (+) Audio --aid=1 (opus 2ch 48000Hz)\n"),
+            " (+) Audio --aid=1 (opus 2ch 48000Hz)\n"
+        );
+        assert_eq!(
+            terminal_log_line("ffmpeg/demuxer", "error reading header"),
+            "[ffmpeg/demuxer] error reading header\n"
+        );
     }
 
     #[test]

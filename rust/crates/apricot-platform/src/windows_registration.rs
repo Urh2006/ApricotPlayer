@@ -392,6 +392,68 @@ fn read_registry_text(root: RegistryRoot, _subkey: &str, _name: &str) -> Option<
     match root {}
 }
 
+const WINDOWS_VERSION_KEY: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
+
+/// Python `platform.platform()` on Windows, for example
+/// `Windows-11-10.0.26200-SP0`.
+pub fn windows_platform_description() -> String {
+    #[cfg(windows)]
+    {
+        let machine = RegistryRoot::LocalMachine;
+        let major = read_registry_number(machine, WINDOWS_VERSION_KEY, "CurrentMajorVersionNumber");
+        let minor = read_registry_number(machine, WINDOWS_VERSION_KEY, "CurrentMinorVersionNumber");
+        let build = read_registry_text(machine, WINDOWS_VERSION_KEY, "CurrentBuildNumber");
+        platform_description(major, minor, build.as_deref())
+    }
+    #[cfg(not(windows))]
+    {
+        platform_description(None, None, None)
+    }
+}
+
+fn platform_description(major: Option<u32>, minor: Option<u32>, build: Option<&str>) -> String {
+    let (Some(major), Some(minor), Some(build)) = (major, minor, build) else {
+        return std::env::consts::OS.to_owned();
+    };
+    let release = if major == 10 && build.parse::<u32>().is_ok_and(|build| build >= 22_000) {
+        "11".to_owned()
+    } else {
+        major.to_string()
+    };
+    format!("Windows-{release}-{major}.{minor}.{build}-SP0")
+}
+
+#[cfg(windows)]
+fn read_registry_number(root: RegistryRoot, subkey: &str, name: &str) -> Option<u32> {
+    use windows::{
+        Win32::System::Registry::{
+            HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RegGetValueW,
+        },
+        core::PCWSTR,
+    };
+
+    let root = match root {
+        RegistryRoot::CurrentUser => HKEY_CURRENT_USER,
+        RegistryRoot::LocalMachine => HKEY_LOCAL_MACHINE,
+    };
+    let subkey = wide(subkey);
+    let name = wide(name);
+    let mut value = 0_u32;
+    let mut size = u32::try_from(size_of::<u32>()).ok()?;
+    let status = unsafe {
+        RegGetValueW(
+            root,
+            PCWSTR(subkey.as_ptr()),
+            PCWSTR(name.as_ptr()),
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&raw mut value).cast()),
+            Some(&raw mut size),
+        )
+    };
+    status.is_ok().then_some(value)
+}
+
 #[cfg(windows)]
 fn register_media_associations_platform(writes: &[RegistryWrite]) -> Result<(), PlatformError> {
     use windows::{
@@ -500,6 +562,18 @@ fn wide(value: &str) -> Vec<u16> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn platform_description_matches_python_platform() {
+        assert_eq!(
+            super::platform_description(Some(10), Some(0), Some("26200")),
+            "Windows-11-10.0.26200-SP0"
+        );
+        assert_eq!(
+            super::platform_description(Some(10), Some(0), Some("19045")),
+            "Windows-10-10.0.19045-SP0"
+        );
+    }
+
     use std::path::Path;
 
     use crate::ApplicationIdentity;

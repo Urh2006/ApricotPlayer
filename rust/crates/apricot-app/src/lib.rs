@@ -9,6 +9,7 @@ pub mod bpm;
 pub mod chapters;
 pub mod comments;
 pub mod context_menu;
+pub mod diagnostic_report;
 pub mod download_controller;
 pub mod equalizer;
 pub mod last_player_session_controller;
