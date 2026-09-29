@@ -70,6 +70,9 @@ pub struct Application {
     /// Python `related_autoplay_seen_ids`: related videos already played in
     /// this player session.
     related_seen_ids: HashSet<String>,
+    /// Python `player_return_screen` of a player that plays on in the
+    /// background.
+    background_return_frame: Option<RouteFrame>,
     /// Python `audio_device_options_cache`: the last device probe and when it
     /// finished.
     audio_device_options: Option<(Instant, Vec<crate::SettingsChoiceOption>)>,
@@ -89,6 +92,7 @@ impl Application {
             activation_requests: VecDeque::new(),
             startup_announcement: None,
             related_seen_ids: HashSet::new(),
+            background_return_frame: None,
             audio_device_options: None,
             state: AppState::default(),
         }
@@ -961,6 +965,38 @@ impl Application {
         self.state.youtube_collections.clear();
     }
 
+    /// Python keeps `player_return_screen` while playback continues away from
+    /// the player page. Channel and playlist results are not kept, because
+    /// the main menu clears them.
+    pub fn keep_player_return_frame(&mut self) {
+        if self.state.navigation.current().route != Route::Player {
+            return;
+        }
+        let frame = self.state.navigation.player_return_frame().clone();
+        self.background_return_frame = (!matches!(
+            frame.route,
+            Route::MainMenu | Route::ChannelResults | Route::PlaylistResults
+        ))
+        .then_some(frame);
+    }
+
+    pub fn forget_player_return_frame(&mut self) {
+        self.background_return_frame = None;
+    }
+
+    /// Python `show_player_page`: the player returns to the screen it was
+    /// opened from, and a background player to the screen it was started from.
+    pub fn navigate_to_player(&mut self) {
+        if self.state.navigation.current().route == Route::Player {
+            return;
+        }
+        if let Some(frame) = self.background_return_frame.take() {
+            self.state.navigation.reset();
+            self.state.navigation.push(frame);
+        }
+        self.state.navigation.push(RouteFrame::new(Route::Player));
+    }
+
     pub fn update_trending_route_context(
         &mut self,
         country_index: usize,
@@ -1468,6 +1504,22 @@ impl Application {
         ))
     }
 
+    /// Python `add_background_player_section`: only while background
+    /// playback is on and a player is open.
+    pub fn background_player_model(&self) -> Option<crate::BackgroundPlayerModel> {
+        let settings = self.settings.current();
+        if !settings.enable_background_playback || !self.state.player.is_open() {
+            return None;
+        }
+        let item = self.state.player.current_item()?;
+        Some(crate::BackgroundPlayerModel::build(
+            &embedded_catalog(&settings.language),
+            settings,
+            item,
+            PlayerViewState::from(&self.state.player).transport,
+        ))
+    }
+
     pub fn player_format_status(&self) -> Option<String> {
         let item = self.state.player.current_item()?;
         Some(crate::player_information::format_status(
@@ -1760,7 +1812,13 @@ impl Application {
         let Some(item) = self.state.player.current_item().cloned() else {
             return;
         };
-        let frame = self.state.navigation.player_return_frame().clone();
+        let frame = if self.state.navigation.current().route == Route::Player {
+            self.state.navigation.player_return_frame().clone()
+        } else {
+            self.background_return_frame
+                .clone()
+                .unwrap_or_else(|| self.state.navigation.player_return_frame().clone())
+        };
         let (return_screen, mut return_data) = self.last_session_return_context(&frame, &item);
         for (key, value) in frame.parameters {
             return_data.entry(key).or_insert(value);
@@ -2019,6 +2077,7 @@ impl Application {
     }
 
     pub fn close_player_session(&mut self) {
+        self.background_return_frame = None;
         self.state.player.close();
         self.state.player_sequence.clear();
         self.related_seen_ids.clear();
@@ -3758,5 +3817,35 @@ mod tests {
             .find(|item| item.id == "playback_queue")
             .expect("queue menu item");
         assert!(queue.label.contains("(1)"));
+    }
+
+    #[test]
+    fn background_player_returns_to_the_screen_it_was_started_from() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        app.navigate_to(RouteFrame::new(Route::Favorites));
+        app.navigate_to_player();
+        assert_eq!(app.current_route(), Route::Player);
+        // Back keeps playing and opens the main menu, then another screen.
+        app.keep_player_return_frame();
+        app.navigate_main_menu();
+        app.navigate_to(RouteFrame::new(Route::History));
+        app.navigate_to_player();
+        assert_eq!(app.current_route(), Route::Player);
+        assert_eq!(
+            app.navigate_back().map(|frame| frame.route),
+            Some(Route::Favorites)
+        );
+        // A player opened from a screen forgets the earlier return screen.
+        app.navigate_to_player();
+        app.keep_player_return_frame();
+        app.forget_player_return_frame();
+        app.navigate_main_menu();
+        app.navigate_to(RouteFrame::new(Route::History));
+        app.navigate_to_player();
+        assert_eq!(
+            app.navigate_back().map(|frame| frame.route),
+            Some(Route::History)
+        );
     }
 }

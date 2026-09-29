@@ -124,7 +124,7 @@ Prioriteta: P1 pomeni, da je osnovna uporaba s tipkovnico ali NVDA zlomljena ali
 | PLAYER2-M-02, SETTINGS-M-02 | P1 | Izenačevalnik iz predvajalnika (F4) ter ustvarjanje, uvoz, izvoz, brisanje in ponastavitev EQ profilov | `apricot/ui/equalizer.py`, `apricot/ui/settings.py:762-846` |
 | PLAYER2-M-03 | P1 | Odpravljeno v E9: izbira izhodne naprave (O) | `apricot/player/volume.py`, `apricot/ui/player.py` |
 | PLAYER2-M-05 | P1 | Odpravljeno v E8: preklop shuffle (Shift+S), sorodni video (Ctrl+Shift+PageDown), ReplayGain (Ctrl+Shift+G), celozaslonski način (F11) | `apricot/ui/misc.py:1358`, `apricot/ui/player.py` |
-| PLAYER2-M-10 | P2 | Predvajanje v ozadju (`enable_background_playback`, privzeto izklopljeno): Back pusti predvajanje teči in odpre glavni meni, predvajalnik ima vgrajen seznam rezultatov (PLAYER2-05), v celozaslonskem načinu pa gumb "Back to results". V Rustu vsi gumbi Back in Close player predvajanje ustavijo. Ugotovljeno iz kode med E8. Ni del E9, dodano kot enota E13a. | `apricot/ui/player.py:648-812`, `apricot/ui/events.py:605-620` |
+| PLAYER2-M-10 | P2 | Odpravljeno v E13a: predvajanje v ozadju | `apricot/ui/player.py:648-812`, `apricot/ui/events.py:605-620` |
 | PLAYER2-M-01 | P1 | Odpravljeno v E11: BPM analiza (B) | `apricot/ui/misc.py:2710-2803` |
 | PLAYER2-M-04 | P1 | Odpravljeno v E13: komentarji (Ctrl+Shift+M) | `apricot/ui/misc.py:2095+` |
 | PLAYER2-M-06 | P1 | Odpravljeno v E12: način urejanja (E, Ctrl+S, Ctrl+R) | `apricot/ui/misc.py:2389-2433` |
@@ -172,9 +172,7 @@ Enote, ki popravljajo odstopanja, so na vrsti prve.
 - **E11. BPM analiza. Zaključeno 28. 9. 2026, glej razdelek 6.**
 - **E12. Način urejanja z varnim shranjevanjem kopije in zamenjavo izvirnika. Zaključeno 28. 9. 2026, glej razdelek 6.**
 - **E13. Komentarji. Zaključeno 28. 9. 2026, glej razdelek 6.**
-- **E13a.** Predvajanje v ozadju (PLAYER2-M-10): nastavitev `enable_background_playback`,
-  Back brez ustavitve predvajanja, vgrajen seznam rezultatov v predvajalniku in gumb
-  "Back to results" v celozaslonskem načinu. Dodano po E8, vrstni red lahko Urh spremeni.
+- **E13a. Predvajanje v ozadju. Zaključeno 29. 9. 2026, glej razdelek 6.**
 
 ### C. Večji manjkajoči sklopi
 
@@ -879,3 +877,81 @@ seznamu zapre okno s fokusom v predvajalniku. Kopiranja v odložišče in odpira
 avtorja nisem preizkusil živo, ker bi spremenilo Urhovo odložišče in odprlo brskalnik;
 pokrivajo ju testi besedila. Pot YouTube Data API je preverjena samo s testi, ker ključ
 ni nastavljen.
+
+### E13a: predvajanje v ozadju (29. 9. 2026)
+
+Spremembe pri vklopljeni nastavitvi "Enable background playback":
+
+- Stran predvajalnika ima gumb "Back to main menu Escape", ki pusti predvajanje teči in
+  odpre glavni meni, pod njim je vgrajen seznam "Results" zaslona, s katerega se je
+  predvajanje začelo (iskanje, Trending, kanal ali seznam predvajanja, mapa), z izbranim
+  predvajanim elementom. Tab: Back, Results, predvajalnik, gumbi. Na seznamu delujejo
+  Enter, kontekstni meni, bližnjice seznama in bližnjice predvajalnika, ki jih seznam ne
+  uporablja sam. Na koncu gumbov je "Close Escape": ustavi predvajanje, oglasi "Player
+  closed." in odpre glavni meni.
+- V celozaslonskem načinu je edini navigacijski gumb "Back to results Escape": zapusti
+  celozaslonski način in postavi fokus na vgrajeni seznam.
+- Escape na strani predvajalnika: na predvajalniku in gumbih ustavi predvajanje in vrne
+  na prejšnji zaslon, na vgrajenem seznamu in na gumbu Back pusti predvajanje in odpre
+  glavni meni (Python `player_escape_closes_playback`).
+- Na vseh drugih zaslonih je na koncu razdelek predvajalnika v ozadju: napis "Player:
+  naslov", predvajalnik ("Player") in gumbi Previous, Play ali Pause, Next, Playback
+  queue, Add to playlist, Audio output devices, Equalizer, Start full screen, Bass boost,
+  Repeat, Shuffle, Copy link in Close. Tab ga doseže za kontrolami zaslona, Shift+Tab s
+  predvajalnika vrne na seznam ali besedilno polje zaslona. Na predvajalniku in gumbih
+  delujejo tipke predvajalnika, preslednica na predvajalniku ustavi ali nadaljuje
+  predvajanje, Enter in preslednica na gumbu ga pritisneta, F7, poglavja in podobno
+  odprejo stran predvajalnika. Python gumbom sicer nastavi ime "Player: napis", a wx tega
+  imena ne pokaže bralnikom zaslona (preverjeno z wx 4.2.5 in MSAA), zato jih tudi Rust
+  poimenuje samo z napisom.
+- Previous, Next, sorodni video, naslednji element po koncu in element iz vrste
+  predvajanja se ob predvajanju v ozadju začnejo brez preklopa zaslona. Na zaslonih brez
+  besedilnega polja in izven seznama rezultatov delujejo tudi Ctrl+PageUp, Ctrl+PageDown,
+  Ctrl+Shift+PageDown in F11 (Python `handle_active_player_global_shortcut_event`).
+- Ko se predvajalnik po predvajanju v ozadju spet pokaže, Back vodi na zaslon, s katerega
+  se je predvajanje začelo, in "Resume last session" si ga zapomni (Python
+  `player_return_screen`).
+- Ctrl+Space brez predvajalnika oglasi "Player not found.".
+
+Popravki, ki veljajo tudi brez predvajanja v ozadju:
+
+- Globalne bližnjice za zaslone (glavni meni, iskanje, priljubljene, zgodovina, mapa,
+  datoteka, bookmarks, nastavitve in druge) na strani predvajalnika ustavijo predvajanje,
+  kot v Pythonu. Rust je predvajanje prej nevidno nadaljeval.
+- "Back to main menu" na strani predvajalnika odpre glavni meni, prej je vodil na
+  prejšnji zaslon. Close v kontekstnem meniju in v Action Finderju je Pythonov
+  `close_current_player`.
+- Enter na gumbu glavnega okna pritisne ta gumb, prej je izbral vrstico seznama ali pa na
+  strani predvajalnika ni naredil ničesar (Python `activate_focused_button_from_key`).
+- Gumb Play ali Pause nima bližnjice v napisu, kot `current_play_pause_label`.
+
+Predloga za Urha (nista narejena):
+
+- **P-5.** Ko se predvajanje začne s priljubljenih, zgodovine, podcasta ali seznama
+  predvajanja, Python v vgrajenem seznamu pokaže stare rezultate zadnjega iskanja. Rust
+  takrat vgrajenega seznama ne pokaže.
+- **P-6.** Python ob odprtju nastavitev s strani predvajalnika ustavi predvajanje, kadar
+  predvajanje v ozadju ni vklopljeno. Rust nastavitve odpre kot okno nad predvajalnikom in
+  predvajanje pusti teči.
+
+Ostaja: vgrajeni seznam ne nalaga dodatnih rezultatov ob koncu seznama, kot jih Python.
+Po vrnitvi v glavni meni se rezultati kanala ali seznama predvajanja pozabijo, zato
+takrat vgrajenega seznama ni.
+
+Preverjanje: `cargo build`, `cargo test` (509 uspešnih, 12 izključenih), `cargo clippy
+--all-targets -D warnings` in `cargo fmt --check`. Novi testi pokrijejo gumbe strani
+predvajalnika v treh načinih, razdelek predvajalnika v ozadju, napis Play in Pause,
+Close v Action Finderju in vrnitev na začetni zaslon. Samodejni preizkus kopije bete z
+ločenimi podatki, glasnostjo 0 in brez knjižnice NVDA je tekel na ločenem nevidnem
+namizju, zato ni prevzel ospredja in ga NVDA ni videl. Nadaljevanje seje iz mape pokaže
+seznam "Results" z dvema elementoma, Tab vrstni red je Back, Results, Player, Previous,
+Pause. Dol in Enter predvajata drugi element, Escape na seznamu odpre glavni meni med
+predvajanjem z razdelkom, Tab na glavnem meniju: seznam, Open, Player, Previous, Pause,
+Shift+Tab s predvajalnika vrne na seznam, preslednica spremeni gumb v Play in obdrži
+fokus, Ctrl+PageUp na seznamu glavnega menija predvaja prejšnji element v ozadju, Enter
+na gumbu Previous deluje, gumb celozaslonskega načina odpre predvajalnik z "Back to
+results", ta postavi fokus na seznam, Close oglasi "Player closed.", nadaljevanje seje
+in Escape na predvajalniku vrneta v mapo. Na iskalnem zaslonu je Tab vrstni red polje,
+Type, Search, Back, Player, Previous, Ctrl+PageDown v polju ne preskoči, F7 na
+predvajalniku odpre stran s podrobnostmi. Brez predvajanja v ozadju Ctrl+Alt+Y na strani
+predvajalnika ustavi predvajanje in odpre iskanje.

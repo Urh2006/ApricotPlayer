@@ -13,8 +13,9 @@ use windows::{
         UI::WindowsAndMessaging::{
             BS_AUTOCHECKBOX, CreateWindowExW, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE,
             ES_READONLY, GetWindowTextLengthW, GetWindowTextW, HMENU, MoveWindow, SW_HIDE, SW_SHOW,
-            SendMessageW, SetWindowTextW, ShowWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_SETFONT,
-            WS_CHILD, WS_EX_CLIENTEDGE, WS_GROUP, WS_HSCROLL, WS_TABSTOP, WS_VSCROLL,
+            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SendMessageW, SetWindowPos, SetWindowTextW,
+            ShowWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_SETFONT, WS_CHILD, WS_EX_CLIENTEDGE,
+            WS_GROUP, WS_HSCROLL, WS_TABSTOP, WS_VSCROLL,
         },
     },
     core::{PCWSTR, Result, w},
@@ -41,8 +42,12 @@ struct ControlSpec {
     role: NativeRole,
 }
 
-const NAVIGATION_SPECS: &[ControlSpec] =
-    &[button("back"), button("back_results"), button("back_main")];
+const NAVIGATION_SPECS: &[ControlSpec] = &[
+    button("back"),
+    button("back_results"),
+    button("back_main"),
+    button("back_fullscreen_results"),
+];
 
 const ACTION_SPECS: &[ControlSpec] = &[
     button("previous"),
@@ -123,6 +128,8 @@ pub struct PlayerControls {
     controls: Vec<NativeControl>,
     details: DetailsPanel,
     surface_visible: bool,
+    // The background player shows the video host on another screen.
+    video_host_shared: bool,
     initial_focus_id: &'static str,
 }
 
@@ -172,6 +179,7 @@ impl PlayerControls {
             controls,
             details,
             surface_visible: false,
+            video_host_shared: false,
             initial_focus_id: "video_host",
         })
     }
@@ -258,26 +266,114 @@ impl PlayerControls {
             }
             show(native.window, self.surface_visible && native.active);
         }
-        show(self.video_host, self.surface_visible);
+        show(
+            self.video_host,
+            self.surface_visible || self.video_host_shared,
+        );
         self.details.show(self.surface_visible);
     }
 
     pub unsafe fn set_visible(&mut self, visible: bool) {
         self.surface_visible = visible;
-        show(self.video_host, visible);
+        show(self.video_host, visible || self.video_host_shared);
         for control in &self.controls {
             show(control.window, visible && control.active);
         }
         self.details.show(visible);
     }
 
+    /// While the background player shows the video host on another screen,
+    /// refreshes never hide it, so it keeps focus.
+    pub const fn set_video_host_shared(&mut self, shared: bool) {
+        self.video_host_shared = shared;
+    }
+
+    /// Python `add_background_player_section` reuses the player: shown on
+    /// another screen it follows `previous` in Tab order.
+    pub unsafe fn show_video_host_after(&self, previous: HWND) {
+        let _ = SetWindowPos(
+            self.video_host,
+            Some(previous),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+        show(self.video_host, true);
+    }
+
+    /// Puts the player back between the navigation buttons and the action
+    /// buttons of the player page.
+    pub unsafe fn restore_video_host_order(&self) {
+        if let Some(last_navigation) = self.controls.get(NAVIGATION_SPECS.len() - 1) {
+            let _ = SetWindowPos(
+                self.video_host,
+                Some(last_navigation.window),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    /// The page's focusable controls in Tab order, for the page with the
+    /// embedded result list, which sits in `list_slot` after the navigation.
+    pub fn tab_order_with(&self, list_slot: HWND) -> Vec<HWND> {
+        let mut order: Vec<_> = self.controls[..NAVIGATION_SPECS.len()]
+            .iter()
+            .filter(|control| control.active)
+            .map(|control| control.window)
+            .collect();
+        order.push(list_slot);
+        order.push(self.video_host);
+        order.extend(
+            self.controls[NAVIGATION_SPECS.len()..]
+                .iter()
+                .filter(|control| control.active)
+                .map(|control| control.window),
+        );
+        if self.details.visible {
+            order.extend([self.details.text, self.details.copy, self.details.back]);
+        }
+        order
+    }
+
+    /// Python `player_escape_stop_controls` without the navigation row.
+    pub fn is_action_control(&self, window: HWND) -> bool {
+        window == self.video_host
+            || self.controls[NAVIGATION_SPECS.len()..]
+                .iter()
+                .any(|control| control.active && control.window == window)
+    }
+
+    pub fn is_navigation_control(&self, window: HWND) -> bool {
+        self.controls[..NAVIGATION_SPECS.len()]
+            .iter()
+            .any(|control| control.active && control.window == window)
+    }
+
     pub unsafe fn layout(&self, width: i32, height: i32, margin: i32, status_height: i32) {
+        self.layout_below(width, height, margin, status_height, 0);
+    }
+
+    /// Lays the page out below `top`, where the embedded result list sits.
+    pub unsafe fn layout_below(
+        &self,
+        width: i32,
+        height: i32,
+        margin: i32,
+        status_height: i32,
+        top: i32,
+    ) {
         let inner_width = (width - margin * 2).max(1);
-        let video_height = ((height - status_height - margin * 4) / 4).clamp(80, 180);
+        let video_height = ((height - top - status_height - margin * 4) / 4).clamp(80, 180);
         let _ = MoveWindow(
             self.video_host,
             margin,
-            margin,
+            margin + top,
             inner_width,
             video_height,
             true,
@@ -292,7 +388,7 @@ impl PlayerControls {
             return;
         }
         let gap = 6;
-        let controls_top = margin * 2 + video_height;
+        let controls_top = margin * 2 + top + video_height;
         let details_height = if self.details.visible {
             DETAILS_LABEL_HEIGHT + DETAILS_TEXT_HEIGHT + DETAILS_BUTTON_HEIGHT + gap * 3
         } else {
@@ -572,7 +668,7 @@ fn wide(value: &str) -> Vec<u16> {
 mod tests {
     use std::collections::{BTreeMap, HashSet};
 
-    use apricot_app::{PlayerScreenModel, PlayerViewState, english_catalog};
+    use apricot_app::{PlayerScreenModel, PlayerToggle, PlayerViewState, english_catalog};
     use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
     use apricot_storage::SettingsDocument;
 
@@ -597,7 +693,11 @@ mod tests {
             (MediaSource::Podcast, MediaKind::PodcastEpisode, None),
         ] {
             for background in [false, true] {
-                for autoplay in [false, true] {
+                for (autoplay, fullscreen) in [(false, false), (true, false), (false, true)] {
+                    let mut view = PlayerViewState::default();
+                    if fullscreen {
+                        view.enabled_toggles.insert(PlayerToggle::Fullscreen);
+                    }
                     settings.enable_background_playback = background;
                     settings.autoplay_next = autoplay;
                     let model = PlayerScreenModel::build(
@@ -616,7 +716,7 @@ mod tests {
                             duration_seconds: None,
                             metadata: BTreeMap::new(),
                         },
-                        &PlayerViewState::default(),
+                        &view,
                     );
                     for control in model.controls {
                         assert!(native_ids.contains(control.id), "missing {}", control.id);

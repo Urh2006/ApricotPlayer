@@ -77,6 +77,10 @@ pub struct PlayerScreenModel {
     pub heading: String,
     pub controls: Vec<PlayerControlModel>,
     pub initial_focus_id: &'static str,
+    /// Python `show_player_page`: with background playback the result list
+    /// the player came from sits between Back and the player, except in full
+    /// screen.
+    pub embedded_results: bool,
 }
 
 impl PlayerScreenModel {
@@ -86,7 +90,8 @@ impl PlayerScreenModel {
         item: &MediaItem,
         state: &PlayerViewState,
     ) -> Self {
-        let mut controls = navigation_controls(catalog, settings);
+        let fullscreen = state.enabled_toggles.contains(&PlayerToggle::Fullscreen);
+        let mut controls = navigation_controls(catalog, settings, fullscreen);
         controls.push(PlayerControlModel {
             id: "video_host",
             action_id: None,
@@ -104,9 +109,11 @@ impl PlayerScreenModel {
             "player_details",
         ));
         if settings.enable_background_playback {
-            controls.push(button(
+            // Python `close_current_player`, labelled with the Back shortcut.
+            controls.push(button_for(
                 catalog,
                 settings,
+                "close_player",
                 "close_player",
                 "close_player",
                 "player_back",
@@ -120,6 +127,7 @@ impl PlayerScreenModel {
             // With `show_video_details_by_default` the page opens its details
             // field instead, like Python `show_player_page`.
             initial_focus_id: "video_host",
+            embedded_results: settings.enable_background_playback && !fullscreen,
         }
     }
 }
@@ -130,13 +138,22 @@ fn append_primary_controls(
     settings: &SettingsDocument,
     transport: TransportState,
 ) {
-    let play_pause_label = match transport {
-        TransportState::Playing => "pause",
-        TransportState::Paused => "play",
-    };
+    controls.push(button(
+        catalog,
+        settings,
+        "previous",
+        "previous",
+        "player_previous",
+    ));
+    // Python `current_play_pause_label`: the button never shows a shortcut.
+    controls.push(PlayerControlModel {
+        id: "play_pause",
+        action_id: Some("player_play_pause"),
+        label: catalog.text(play_pause_key(transport)).to_owned(),
+        role: PlayerControlRole::Button,
+        checked: None,
+    });
     for (id, label_key, action_id) in [
-        ("previous", "previous", "player_previous"),
-        ("play_pause", play_pause_label, "player_play_pause"),
         ("next", "next", "player_next"),
         ("queue", "playback_queue", "open_playback_queue"),
         ("add_to_playlist", "add_to_playlist", "add_to_playlist"),
@@ -167,6 +184,14 @@ fn append_primary_controls(
         ("edit_mode", "edit_mode", "player_edit_mode"),
     ] {
         controls.push(button(catalog, settings, id, label_key, action_id));
+    }
+}
+
+/// Python `current_play_pause_label`.
+pub const fn play_pause_key(transport: TransportState) -> &'static str {
+    match transport {
+        TransportState::Playing => "pause",
+        TransportState::Paused => "play",
     }
 }
 
@@ -261,22 +286,54 @@ fn append_toggle_controls(
     ));
 }
 
+/// Python `show_player_page` navigation row. Every button is labelled with
+/// the Back shortcut; the activation ids say where each one goes.
 fn navigation_controls(
     catalog: &TranslationCatalog,
     settings: &SettingsDocument,
+    fullscreen: bool,
 ) -> Vec<PlayerControlModel> {
+    if settings.enable_background_playback && fullscreen {
+        // Python `exit_fullscreen_to_results`.
+        return vec![button_for(
+            catalog,
+            settings,
+            "back_fullscreen_results",
+            "back_results",
+            "player_fullscreen_back_to_results",
+            "player_back",
+        )];
+    }
     if settings.enable_background_playback {
-        return vec![button(catalog, settings, "back", "back", "player_back")];
+        // Python `leave_player_to_main_menu(force_keep_playing=True)`.
+        return vec![button_for(
+            catalog,
+            settings,
+            "back",
+            "back",
+            "player_back_keep_playing",
+            "player_back",
+        )];
     }
     vec![
-        button(
+        // Python `leave_player_to_previous_screen`.
+        button_for(
             catalog,
             settings,
             "back_results",
             "back_results",
+            "player_back_to_results",
             "player_back",
         ),
-        button(catalog, settings, "back_main", "back", "player_back"),
+        // Python `leave_player_to_main_menu(force_keep_playing=False)`.
+        button_for(
+            catalog,
+            settings,
+            "back_main",
+            "back",
+            "player_back_to_main_menu",
+            "player_back",
+        ),
     ]
 }
 
@@ -287,12 +344,98 @@ fn button(
     label_key: &str,
     action_id: &'static str,
 ) -> PlayerControlModel {
+    button_for(catalog, settings, id, label_key, action_id, action_id)
+}
+
+/// A button whose activation differs from the action that names its
+/// shortcut in the label.
+fn button_for(
+    catalog: &TranslationCatalog,
+    settings: &SettingsDocument,
+    id: &'static str,
+    label_key: &str,
+    action_id: &'static str,
+    shortcut_action_id: &str,
+) -> PlayerControlModel {
     PlayerControlModel {
         id,
         action_id: Some(action_id),
-        label: label_with_shortcut(catalog.text(label_key), action_id, settings),
+        label: label_with_shortcut(catalog.text(label_key), shortcut_action_id, settings),
         role: PlayerControlRole::Button,
         checked: None,
+    }
+}
+
+/// Python `add_background_player_section`: the player and a row of buttons
+/// appended to every other screen while background playback continues.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BackgroundPlayerModel {
+    /// The static label "Player: title".
+    pub label: String,
+    pub buttons: Vec<BackgroundPlayerButton>,
+}
+
+/// A button of the background player. Python also calls `SetName("Player:
+/// label")`, but wx keeps that name private: screen readers get the label.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BackgroundPlayerButton {
+    pub id: &'static str,
+    pub action_id: &'static str,
+    pub label: String,
+}
+
+impl BackgroundPlayerModel {
+    pub fn build(
+        catalog: &TranslationCatalog,
+        settings: &SettingsDocument,
+        item: &MediaItem,
+        transport: TransportState,
+    ) -> Self {
+        let label = catalog
+            .text("background_player_now_playing")
+            .replace("{title}", &item.title);
+        let button = |id, label, action_id| BackgroundPlayerButton {
+            id,
+            action_id,
+            label,
+        };
+        let mut buttons = vec![
+            button(
+                "previous",
+                label_with_shortcut(catalog.text("previous"), "player_previous", settings),
+                "player_previous",
+            ),
+            // Python `current_play_pause_label` has no shortcut.
+            button(
+                "play_pause",
+                catalog.text(play_pause_key(transport)).to_owned(),
+                "player_play_pause",
+            ),
+        ];
+        for (id, label_key, action_id) in [
+            ("next", "next", "player_next"),
+            ("queue", "playback_queue", "open_playback_queue"),
+            ("add_to_playlist", "add_to_playlist", "add_to_playlist"),
+            ("output_devices", "output_devices", "player_output_devices"),
+            ("equalizer", "equalizer", "player_equalizer"),
+            ("fullscreen", "fullscreen", "player_fullscreen"),
+            ("bass_boost", "bass_boost", "player_bass_boost"),
+            ("repeat", "repeat", "player_repeat"),
+            ("shuffle", "shuffle", "player_shuffle"),
+            ("copy_link", "copy_link", "player_copy_link"),
+        ] {
+            buttons.push(button(
+                id,
+                label_with_shortcut(catalog.text(label_key), action_id, settings),
+                action_id,
+            ));
+        }
+        buttons.push(button(
+            "close",
+            label_with_shortcut(catalog.text("close_player"), "player_back", settings),
+            "close_player",
+        ));
+        Self { label, buttons }
     }
 }
 
@@ -352,7 +495,10 @@ mod tests {
     use apricot_core::{MediaId, MediaKind, MediaSource};
     use apricot_storage::SettingsDocument;
 
-    use super::{PlayerControlRole, PlayerScreenModel, PlayerViewState};
+    use super::{
+        BackgroundPlayerModel, PlayerControlRole, PlayerScreenModel, PlayerToggle, PlayerViewState,
+        TransportState,
+    };
     use crate::english_catalog;
 
     fn local_item() -> apricot_core::MediaItem {
@@ -470,6 +616,145 @@ mod tests {
                 .filter(|control| control.role == PlayerControlRole::Checkbox)
                 .count(),
             3
+        );
+    }
+
+    fn background_settings() -> SettingsDocument {
+        SettingsDocument {
+            enable_background_playback: true,
+            ..SettingsDocument::default()
+        }
+    }
+
+    fn control<'a>(model: &'a PlayerScreenModel, id: &str) -> &'a super::PlayerControlModel {
+        model
+            .controls
+            .iter()
+            .find(|control| control.id == id)
+            .expect("control")
+    }
+
+    #[test]
+    fn navigation_buttons_leave_the_player_like_python() {
+        let model = PlayerScreenModel::build(
+            &english_catalog(),
+            &SettingsDocument::default(),
+            &local_item(),
+            &PlayerViewState::default(),
+        );
+        assert!(!model.embedded_results);
+        let back_results = control(&model, "back_results");
+        assert_eq!(back_results.label, "Back to results Escape");
+        assert_eq!(back_results.action_id, Some("player_back_to_results"));
+        let back_main = control(&model, "back_main");
+        assert_eq!(back_main.label, "Back to main menu Escape");
+        assert_eq!(back_main.action_id, Some("player_back_to_main_menu"));
+        assert!(
+            model
+                .controls
+                .iter()
+                .all(|control| control.id != "close_player")
+        );
+    }
+
+    #[test]
+    fn background_playback_keeps_playing_and_embeds_results() {
+        let model = PlayerScreenModel::build(
+            &english_catalog(),
+            &background_settings(),
+            &local_item(),
+            &PlayerViewState::default(),
+        );
+        assert!(model.embedded_results);
+        assert_eq!(model.controls[0].id, "back");
+        assert_eq!(model.controls[0].label, "Back to main menu Escape");
+        assert_eq!(
+            model.controls[0].action_id,
+            Some("player_back_keep_playing")
+        );
+        let close = control(&model, "close_player");
+        assert_eq!(close.label, "Close Escape");
+        assert_eq!(close.action_id, Some("close_player"));
+        let ids: Vec<_> = model.controls.iter().map(|control| control.id).collect();
+        let details = ids.iter().position(|id| *id == "details");
+        assert_eq!(
+            ids.iter().position(|id| *id == "close_player"),
+            details.map(|index| index + 1)
+        );
+    }
+
+    #[test]
+    fn full_screen_background_player_goes_back_to_results() {
+        let mut state = PlayerViewState::default();
+        state.enabled_toggles.insert(PlayerToggle::Fullscreen);
+        let model = PlayerScreenModel::build(
+            &english_catalog(),
+            &background_settings(),
+            &local_item(),
+            &state,
+        );
+        assert!(!model.embedded_results);
+        assert_eq!(model.controls[0].id, "back_fullscreen_results");
+        assert_eq!(model.controls[0].label, "Back to results Escape");
+        assert_eq!(
+            model.controls[0].action_id,
+            Some("player_fullscreen_back_to_results")
+        );
+        assert_eq!(model.controls[1].id, "video_host");
+    }
+
+    #[test]
+    fn play_pause_button_has_no_shortcut_in_its_label() {
+        let model = PlayerScreenModel::build(
+            &english_catalog(),
+            &SettingsDocument::default(),
+            &local_item(),
+            &PlayerViewState::default(),
+        );
+        assert_eq!(control(&model, "play_pause").label, "Pause");
+        assert_eq!(control(&model, "previous").label, "Previous Ctrl+PageUp");
+    }
+
+    #[test]
+    fn background_player_section_matches_python_buttons() {
+        let model = BackgroundPlayerModel::build(
+            &english_catalog(),
+            &background_settings(),
+            &local_item(),
+            TransportState::Paused,
+        );
+        assert_eq!(model.label, "Player: Track");
+        let labels: Vec<_> = model
+            .buttons
+            .iter()
+            .map(|button| button.label.as_str())
+            .collect();
+        assert_eq!(labels.len(), 13);
+        assert_eq!(labels[0], "Previous Ctrl+PageUp");
+        assert_eq!(labels[1], "Play");
+        assert_eq!(labels[12], "Close Escape");
+        let actions: Vec<_> = model
+            .buttons
+            .iter()
+            .map(|button| button.action_id)
+            .collect();
+        assert_eq!(
+            actions,
+            [
+                "player_previous",
+                "player_play_pause",
+                "player_next",
+                "open_playback_queue",
+                "add_to_playlist",
+                "player_output_devices",
+                "player_equalizer",
+                "player_fullscreen",
+                "player_bass_boost",
+                "player_repeat",
+                "player_shuffle",
+                "player_copy_link",
+                "close_player",
+            ]
         );
     }
 }

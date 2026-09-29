@@ -195,7 +195,14 @@ fn player_items(labels: &Labels<'_>, player: ActionFinderPlayer) -> Vec<ActionFi
         labels.item("chapters", "player_chapters"),
         labels.item("transcript", "player_transcript"),
         labels.item("lyrics", "player_lyrics"),
-        labels.item("close_player", "player_back"),
+        // Python `close_current_player`, labelled with the Back shortcut.
+        ActionFinderItem {
+            action_id: "close_player",
+            label: labels.with_shortcut(
+                labels.catalog.text("close_player").to_owned(),
+                "player_back",
+            ),
+        },
     ];
     if player.youtube {
         items.insert(3, labels.item("play_related_video", "player_next_related"));
@@ -363,7 +370,7 @@ mod tests {
                 "player_transcript",
                 "player_lyrics",
                 "player_comments",
-                "player_back",
+                "close_player",
             ]
         );
         let first = model
@@ -398,7 +405,8 @@ mod tests {
         assert!(player[3].label.starts_with("Copy path"));
         let close = player.len() - 1;
         assert_eq!(player[close - 1].action_id, "save_podcast_speed_preset");
-        assert_eq!(player[close].action_id, "player_back");
+        assert_eq!(player[close].action_id, "close_player");
+        assert_eq!(player[close].label, "Close, Escape");
         assert!(
             player
                 .iter()

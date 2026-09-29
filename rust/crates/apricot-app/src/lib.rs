@@ -74,8 +74,8 @@ pub use playback_queue::{PlaybackQueue, QueueAddOutcome, QueueBatchAddOutcome};
 pub use playback_queue_controller::{PlaybackQueueController, PlaybackQueueControllerError};
 pub use playback_sequence::{PlaybackSequence, PlaybackSequenceSource};
 pub use player_model::{
-    PlayerControlModel, PlayerControlRole, PlayerScreenModel, PlayerToggle, PlayerViewState,
-    TransportState,
+    BackgroundPlayerButton, BackgroundPlayerModel, PlayerControlModel, PlayerControlRole,
+    PlayerScreenModel, PlayerToggle, PlayerViewState, TransportState,
 };
 pub use player_session::{
     AudioSession, EqualizerSession, PlaybackPhase, PlayerSession, PlayerSessionDefaults,

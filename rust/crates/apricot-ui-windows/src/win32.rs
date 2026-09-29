@@ -17,6 +17,7 @@ use std::{
 };
 
 use crate::{
+    background_player_win32::BackgroundPlayerSection,
     bookmark_dialog_win32::{
         BookmarkDialogEntry, BookmarkDialogLabels, BookmarkDialogRequest, BookmarkDialogResponse,
     },
@@ -301,6 +302,8 @@ struct PendingYoutubeResolve {
     session_shuffle: Option<bool>,
     preserve_sequence: bool,
     start_position_seconds: Option<f64>,
+    // Python `show_player=False`: the start keeps the current screen.
+    background: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -421,6 +424,8 @@ struct PendingLocalFolderScan {
     receiver: Receiver<std::result::Result<Vec<apricot_core::MediaItem>, String>>,
 }
 
+// The window keeps several independent flags of Python's frame.
+#[allow(clippy::struct_excessive_bools)]
 struct WindowState {
     list: HWND,
     open: HWND,
@@ -531,6 +536,14 @@ struct WindowState {
     pending_related: Option<PendingRelatedVideos>,
     pending_audio_device_check: Option<Receiver<Vec<apricot_playback::AudioOutputDevice>>>,
     fullscreen_restore: Option<FullscreenRestore>,
+    background_player: BackgroundPlayerSection,
+    // The result screen shown inside the player page, Python `results_list`
+    // of `add_player_results_section`, while background playback is on.
+    embedded_results: Option<MainView>,
+    // Python `return_all_results`: the result screen the player came from.
+    player_results_source: Option<MainView>,
+    // Python `show_player=False`: the next start keeps the current screen.
+    background_start: bool,
 }
 
 pub fn run_application(application: Application, version: &str, start_hidden: bool) -> Result<()> {
@@ -699,10 +712,63 @@ unsafe fn handle_view_tab_message(window: HWND, message: &MSG) -> bool {
     let Some(state) = state(window) else {
         return false;
     };
-    if handle_details_tab_message(window, state, message) {
+    // Shift as it was when this Tab was sent.
+    let backward = windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState(i32::from(VK_SHIFT.0))
+        .is_negative();
+    if state.background_player.is_visible()
+        && backward
+        && GetFocus() == state.player_controls.video_host()
+        && let Some(target) = background_player_previous_target(state)
+    {
+        // Python `move_background_player_tab_focus`: Shift+Tab from the
+        // player returns to the screen's main control.
+        if message.message == WM_KEYDOWN {
+            let _ = SetFocus(Some(target));
+        }
         return true;
     }
-    let controls = match state.view {
+    let mut controls = if state.view == MainView::Player && state.embedded_results.is_some() {
+        // Python `player_tab_order`: navigation, results, player, actions.
+        state.player_controls.tab_order_with(state.list)
+    } else {
+        if handle_details_tab_message(window, state, message) {
+            return true;
+        }
+        let Some(controls) = explicit_view_tab_controls(state) else {
+            return false;
+        };
+        controls
+    };
+    if state.background_player.is_visible() {
+        controls.push(state.player_controls.video_host());
+        controls.extend(state.background_player.button_windows());
+    }
+    let Some(current) = controls.iter().position(|control| *control == GetFocus()) else {
+        return false;
+    };
+    if message.message == WM_KEYUP {
+        return true;
+    }
+    let next = if backward {
+        (current + controls.len() - 1) % controls.len()
+    } else {
+        (current + 1) % controls.len()
+    };
+    let _ = SetFocus(Some(controls[next]));
+    true
+}
+
+/// Python `background_player_previous_target`: the screen's list, or its
+/// text field when it has no list.
+unsafe fn background_player_previous_target(state: &WindowState) -> Option<HWND> {
+    [state.list, state.search_edit].into_iter().find(|control| {
+        windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(*control).as_bool()
+    })
+}
+
+/// Views whose Tab order is not their creation order.
+fn explicit_view_tab_controls(state: &WindowState) -> Option<Vec<HWND>> {
+    Some(match state.view {
         MainView::Trending => vec![
             state.trending_country,
             state.trending_category,
@@ -769,21 +835,8 @@ unsafe fn handle_view_tab_message(window: HWND, message: &MSG) -> bool {
             controls
         }
         MainView::UserPlaylists | MainView::UserPlaylistItems => user_playlist_tab_controls(state),
-        _ => return false,
-    };
-    let Some(current) = controls.iter().position(|control| *control == GetFocus()) else {
-        return false;
-    };
-    if message.message == WM_KEYUP {
-        return true;
-    }
-    let next = if virtual_key_is_down(usize::from(VK_SHIFT.0)) {
-        (current + controls.len() - 1) % controls.len()
-    } else {
-        (current + 1) % controls.len()
-    };
-    let _ = SetFocus(Some(controls[next]));
-    true
+        _ => return None,
+    })
 }
 
 fn user_playlist_tab_controls(state: &WindowState) -> Vec<HWND> {
@@ -969,8 +1022,13 @@ unsafe fn handle_window_command(window: HWND, wparam: WPARAM) {
             .then(|| state.player_controls.activation_for_command(command))
             .flatten()
     });
+    let background_action =
+        state(window).and_then(|state| state.background_player.action_for_command(command));
     if let Some(activation) = player_activation {
         activate_player_control(window, activation);
+    } else if let Some(action_id) = background_action {
+        // Python binds each button of the background player to its handler.
+        activate_action(window, action_id);
     } else if command == ID_OPEN
         || (command == ID_MENU_LIST
             && notification == usize::try_from(LBN_DBLCLK).expect("notification fits"))
@@ -1556,6 +1614,7 @@ unsafe fn create_controls(
         ID_DOWNLOAD_CANCEL_ALL,
     )?;
     let player_controls = PlayerControls::create(parent, instance)?;
+    let background_player = BackgroundPlayerSection::create(parent, instance)?;
     let video_host = player_controls.video_host();
     let font = GetStockObject(DEFAULT_GUI_FONT);
     let font_param = Some(WPARAM(font.0 as usize));
@@ -1727,6 +1786,10 @@ unsafe fn create_controls(
         pending_related: None,
         pending_audio_device_check: None,
         fullscreen_restore: None,
+        background_player,
+        embedded_results: None,
+        player_results_source: None,
+        background_start: false,
     })
 }
 
@@ -1838,7 +1901,7 @@ unsafe extern "system" fn text_entry_proc(
 unsafe fn show_list_context_menu(window: HWND, location: LPARAM) {
     let Some((view, language, list)) = state(window).map(|main_state| {
         (
-            main_state.view,
+            list_view(main_state),
             main_state.application.settings().language.clone(),
             main_state.list,
         )
@@ -2055,7 +2118,7 @@ unsafe fn execute_context_command(
         C::DownloadUserPlaylist => download_current_user_playlist(window),
         C::RemoveUserPlaylist => remove_selected_user_playlist(window),
         C::PlayerAction(action_id) => activate_action(window, action_id),
-        C::ClosePlayer => navigate_back(window),
+        C::ClosePlayer => close_current_player(window),
     }
 }
 
@@ -2203,7 +2266,14 @@ unsafe fn download_queue_context_entries(window: HWND) -> Option<Vec<(usize, &'s
 }
 
 unsafe fn show_context_menu_for_active_view(window: HWND) {
-    match state(window).map(|state| state.view) {
+    // The background player is Python's own player panel with its menu.
+    if state(window).is_some_and(|state| {
+        state.background_player.is_visible() && GetFocus() == state.player_controls.video_host()
+    }) {
+        show_player_context_menu(window, LPARAM(-1));
+        return;
+    }
+    match state(window).map(|state| list_view(state)) {
         Some(
             MainView::Results
             | MainView::Trending
@@ -2328,13 +2398,19 @@ unsafe fn layout_controls_state(window: HWND, state: &mut WindowState) {
         return;
     }
     let width = (bounds.right - bounds.left).max(320);
-    let height = (bounds.bottom - bounds.top).max(240);
     let margin = 12;
     let button_height = 34;
     let status_height = 24;
     let label_height = 22;
     let field_height = 30;
     set_view_visibility(state);
+    let height = layout_player_surfaces(
+        state,
+        width,
+        (bounds.bottom - bounds.top).max(240),
+        margin,
+        status_height,
+    );
     if matches!(state.view, MainView::Search | MainView::DirectLink) {
         let _ = MoveWindow(
             state.search_label,
@@ -2381,11 +2457,7 @@ unsafe fn layout_controls_state(window: HWND, state: &mut WindowState) {
             field_height,
             button_height + status_height,
         );
-    } else if state.view == MainView::Player {
-        state
-            .player_controls
-            .layout(width, height, margin, status_height);
-    } else {
+    } else if state.view != MainView::Player {
         let action_rows = if matches!(
             state.view,
             MainView::LocalFolder | MainView::Subscriptions | MainView::RssFeeds
@@ -2404,6 +2476,50 @@ unsafe fn layout_controls_state(window: HWND, state: &mut WindowState) {
         );
     }
     layout_bottom_controls(state, width, height, margin, button_height, status_height);
+}
+
+/// Lays out the player page, or the background player below another screen,
+/// and returns the height left for the screen itself.
+unsafe fn layout_player_surfaces(
+    state: &WindowState,
+    width: i32,
+    mut height: i32,
+    margin: i32,
+    status_height: i32,
+) -> i32 {
+    if state.background_player.is_visible() {
+        // Python appends the background player below the screen content.
+        height = (height - BackgroundPlayerSection::height()).max(240);
+        state.background_player.layout(
+            state.player_controls.video_host(),
+            margin,
+            height,
+            width - margin * 2,
+        );
+    }
+    if state.view != MainView::Player {
+        return height;
+    }
+    if state.embedded_results.is_none() {
+        state
+            .player_controls
+            .layout(width, height, margin, status_height);
+        return height;
+    }
+    // Python `show_player_page`: the result list comes before the player.
+    let list_height = ((height - status_height - margin * 4) / 4).clamp(60, 200);
+    let _ = MoveWindow(
+        state.list,
+        margin,
+        margin,
+        width - margin * 2,
+        list_height,
+        true,
+    );
+    state
+        .player_controls
+        .layout_below(width, height, margin, status_height, margin + list_height);
+    height
 }
 
 unsafe fn layout_trending_controls(
@@ -2752,7 +2868,11 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
     let active_downloads_visible =
         download_queue_visible && !state.application.downloads().active().is_empty();
     for (control, visible) in [
-        (state.list, list_visible),
+        // Never hidden and shown again, which would drop its focus.
+        (
+            state.list,
+            list_visible || (state.view == MainView::Player && state.embedded_results.is_some()),
+        ),
         (state.open, open_visible),
         (state.search_label, text_entry_visible),
         (state.search_edit, text_entry_visible),
@@ -2826,9 +2946,26 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
     ] {
         let _ = ShowWindow(control, if visible { SW_SHOW } else { SW_HIDE });
     }
+    let background = if state.view == MainView::Player {
+        None
+    } else {
+        state.application.background_player_model()
+    };
+    state
+        .player_controls
+        .set_video_host_shared(background.is_some());
     state
         .player_controls
         .set_visible(state.view == MainView::Player);
+    if state.view == MainView::Player {
+        state.player_controls.restore_video_host_order();
+    }
+    state.background_player.sync(background.as_ref());
+    if state.background_player.is_visible() {
+        state
+            .player_controls
+            .show_video_host_after(state.background_player.label());
+    }
 }
 
 const fn view_has_back_button(view: MainView) -> bool {
@@ -3054,7 +3191,7 @@ fn copy_wide_array<const N: usize>(target: &mut [u16; N], value: &str) {
 }
 
 unsafe fn activate_selection(window: HWND) {
-    match state(window).map(|state| state.view) {
+    match state(window).map(|state| list_view(state)) {
         Some(MainView::MainMenu) => activate_main_menu_selection(window),
         Some(MainView::Results | MainView::Trending) => activate_result_selection(window),
         Some(MainView::YoutubeCollection) => activate_youtube_collection_selection(window),
@@ -3577,7 +3714,14 @@ unsafe fn start_media_item_with_options(
         item.source,
         apricot_core::MediaSource::Youtube | apricot_core::MediaSource::Direct
     ) {
-        start_player_at(window, item, session_shuffle, start_position_seconds);
+        let background = std::mem::take(&mut state.background_start);
+        start_player_at(
+            window,
+            item,
+            session_shuffle,
+            start_position_seconds,
+            background,
+        );
         return;
     }
     start_youtube_resolve_with_options(
@@ -3611,6 +3755,8 @@ unsafe fn start_youtube_resolve_with_options(
     preserve_sequence: bool,
     start_position_seconds: Option<f64>,
 ) {
+    let background =
+        state_mut(window).is_some_and(|state| std::mem::take(&mut state.background_start));
     let Some(url) = item.url.as_ref().map(ToString::to_string) else {
         if let Some(state) = state_mut(window) {
             report_youtube_resolve_start_error(
@@ -3652,6 +3798,7 @@ unsafe fn start_youtube_resolve_with_options(
                 session_shuffle,
                 preserve_sequence,
                 start_position_seconds,
+                background,
             });
             set_status(
                 state,
@@ -3723,6 +3870,17 @@ unsafe fn activate_player_control(window: HWND, activation: PlayerControlActivat
         // Python `on_player_fullscreen_changed` keeps focus on the checkbox.
         PlayerControlActivation::Action("player_fullscreen") => {
             toggle_player_fullscreen(window, true, true);
+        }
+        // Python `leave_player_to_previous_screen`.
+        PlayerControlActivation::Action("player_back_to_results") => navigate_back(window),
+        PlayerControlActivation::Action("player_back_to_main_menu") => {
+            leave_player_to_main_menu(window, false);
+        }
+        PlayerControlActivation::Action("player_back_keep_playing") => {
+            leave_player_to_main_menu(window, true);
+        }
+        PlayerControlActivation::Action("player_fullscreen_back_to_results") => {
+            exit_fullscreen_to_results(window);
         }
         PlayerControlActivation::Action(action_id) => activate_action(window, action_id),
         PlayerControlActivation::SessionAutoplayNext => {
@@ -3796,6 +3954,7 @@ unsafe fn finish_youtube_resolve(
         item,
         pending.session_shuffle,
         pending.start_position_seconds,
+        pending.background,
     );
 }
 
@@ -3804,6 +3963,7 @@ unsafe fn start_player_at(
     item: apricot_core::MediaItem,
     session_shuffle: Option<bool>,
     start_position_seconds: Option<f64>,
+    background: bool,
 ) {
     let Some(state) = state_mut(window) else {
         return;
@@ -3818,6 +3978,10 @@ unsafe fn start_player_at(
                 return;
             }
         }
+    }
+    if !background {
+        // A player opened from a screen returns there.
+        state.application.forget_player_return_frame();
     }
     persist_current_playback_position(state);
     let podcast_speed =
@@ -3863,13 +4027,33 @@ unsafe fn start_player_at(
         show_error_message(window, &message);
         return;
     }
-    if state.application.current_route() != Route::Player {
-        state
-            .application
-            .navigate_to(RouteFrame::new(Route::Player));
+    if background {
+        // Python `play_url(show_player=False)`: the screen and its focus
+        // stay; only the background player follows the new item.
+        let focused = GetFocus();
+        refresh_player(window, state, false, false);
+        if !focused.is_invalid()
+            && windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(focused).as_bool()
+        {
+            let _ = SetFocus(Some(focused));
+        }
+    } else {
+        if state.view != MainView::Player {
+            // Python `play_selected` keeps `return_all_results` of the result
+            // screens only; next and previous keep the list they came from.
+            state.player_results_source = matches!(
+                state.view,
+                MainView::Results
+                    | MainView::Trending
+                    | MainView::YoutubeCollection
+                    | MainView::LocalFolder
+            )
+            .then_some(state.view);
+        }
+        state.application.navigate_to_player();
+        state.view = MainView::Player;
+        refresh_player(window, state, true, false);
     }
-    state.view = MainView::Player;
-    refresh_player(window, state, true, false);
     let _ = SetTimer(
         Some(window),
         PLAYBACK_TIMER_ID,
@@ -3895,6 +4079,14 @@ unsafe fn refresh_player(
         state.player_controls.hide_details();
     }
     state.player_controls.sync(&model);
+    let embedded = if state.view == MainView::Player && model.embedded_results {
+        state.player_results_source
+    } else {
+        None
+    };
+    if embedded != state.embedded_results || (focus && embedded.is_some()) {
+        state.embedded_results = embedded.filter(|source| fill_embedded_results(state, *source));
+    }
     if show_details {
         let text = player_details_text(&state.application);
         state
@@ -3920,6 +4112,76 @@ unsafe fn refresh_player(
             .and_then(|id| state.player_controls.window_for_id(id))
             .unwrap_or_else(|| state.player_controls.initial_focus());
         let _ = SetFocus(Some(target));
+    }
+}
+
+/// Python `add_player_results_section`: the "Results" list with the playing
+/// item selected. Returns false, showing nothing, for an empty list.
+unsafe fn fill_embedded_results(state: &WindowState, source: MainView) -> bool {
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let items = match source {
+        MainView::Results | MainView::Trending => state.application.search_session().items(),
+        MainView::YoutubeCollection => state
+            .application
+            .youtube_collection()
+            .map_or(&[][..], |collection| collection.items()),
+        MainView::LocalFolder => state.application.local_folder_session().items(),
+        _ => &[],
+    };
+    if items.is_empty() {
+        return false;
+    }
+    let fallback = match source {
+        MainView::Results | MainView::Trending => {
+            state.application.search_session().selected_index()
+        }
+        MainView::YoutubeCollection => state
+            .application
+            .youtube_collection()
+            .map_or(0, apricot_app::YoutubeCollectionSession::selected_index),
+        _ => state.application.local_folder_session().selected_index(),
+    };
+    let current = state
+        .application
+        .player_session()
+        .current_item()
+        .and_then(apricot_core::MediaItem::stable_identity);
+    let selected = current
+        .and_then(|identity| {
+            items
+                .iter()
+                .position(|item| item.stable_identity().as_deref() == Some(identity.as_str()))
+        })
+        .unwrap_or(fallback)
+        .min(items.len() - 1);
+    SendMessageW(state.list, LB_RESETCONTENT, None, None);
+    crate::accessibility_win32::set_control_name(state.list, catalog.text("result_list"));
+    for item in items {
+        let label = if source == MainView::LocalFolder {
+            local_folder_result_label(item, &catalog)
+        } else {
+            result_label(item, &catalog, state.application.downloads())
+        };
+        add_list_string(state.list, &label);
+    }
+    SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selected)), None);
+    true
+}
+
+/// Python `focus_in_background_player_controls`.
+unsafe fn focus_in_background_player(state: &WindowState) -> bool {
+    let focus = GetFocus();
+    state.background_player.is_visible()
+        && (focus == state.player_controls.video_host()
+            || state.background_player.contains_button(focus))
+}
+
+/// The screen whose list has focus: the embedded result list of the player
+/// page acts as the result screen it shows, like Python's `results_list`.
+unsafe fn list_view(state: &WindowState) -> MainView {
+    match state.embedded_results {
+        Some(source) if state.view == MainView::Player && GetFocus() == state.list => source,
+        _ => state.view,
     }
 }
 
@@ -4111,10 +4373,20 @@ unsafe fn resume_last_player_session(window: HWND) {
             .unwrap_or_default();
         state.rss_visible_item_count = state.current_rss_item_index.saturating_add(1);
     }
+    let folder = resume.return_screen == "folder";
     if resume.sequence_active {
         start_sequence_media_item(window, resume.item, None);
     } else {
         start_media_item(window, resume.item, None);
+    }
+    // Python `resume_last_player_session` keeps the folder as the player's
+    // result list.
+    if folder
+        && let Some(state) = state_mut(window)
+        && state.view == MainView::Player
+    {
+        state.player_results_source = Some(MainView::LocalFolder);
+        refresh_player(window, state, false, true);
     }
 }
 
@@ -9203,7 +9475,8 @@ unsafe fn poll_playback_runtime(window: HWND) {
                 let focused_play_pause = state
                     .player_controls
                     .control_id_for_window(GetFocus())
-                    .is_some_and(|id| id == "play_pause");
+                    .is_some_and(|id| id == "play_pause")
+                    || state.background_player.is_play_pause_button(GetFocus());
                 set_status(
                     state,
                     &catalog_text(&state.application, key),
@@ -9556,6 +9829,7 @@ unsafe fn finish_youtube_error(window: HWND, generation: u64, message: &str) {
                     pending.original_item,
                     pending.session_shuffle,
                     pending.start_position_seconds,
+                    pending.background,
                 ))
             } else {
                 let visible_message = if pending.purpose == YoutubeResolvePurpose::CopyStreamUrl {
@@ -9580,8 +9854,14 @@ unsafe fn finish_youtube_error(window: HWND, generation: u64, message: &str) {
         navigate_back(window);
         return;
     }
-    if let Some((item, session_shuffle, start_position_seconds)) = direct_fallback {
-        start_player_at(window, item, session_shuffle, start_position_seconds);
+    if let Some((item, session_shuffle, start_position_seconds, background)) = direct_fallback {
+        start_player_at(
+            window,
+            item,
+            session_shuffle,
+            start_position_seconds,
+            background,
+        );
     }
 }
 
@@ -10915,6 +11195,8 @@ unsafe fn window_text(control: HWND) -> String {
     String::from_utf16_lossy(&value[..usize::try_from(copied).unwrap_or_default()])
 }
 
+// Python `on_char_hook` keeps its key routing in one place.
+#[allow(clippy::too_many_lines)]
 unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
     let Some(chord) = crate::shortcut_win32::chord_from_message(message) else {
         return false;
@@ -10927,30 +11209,197 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
     }) {
         return false;
     }
-    if !chord.control
-        && !chord.shift
-        && !chord.alt
+    let plain = !chord.control && !chord.shift && !chord.alt;
+    if plain
         && chord.key == ShortcutKey::Escape
         && state(window).is_some_and(|state| state.view != MainView::MainMenu)
     {
-        if !handle_player_back_in_place(window) {
-            navigate_back(window);
-        }
+        player_back_shortcut(window);
+        return true;
+    }
+    if plain
+        && chord.key == ShortcutKey::Enter
+        && let Some(button) = focused_push_button(window)
+    {
+        // Python `activate_focused_button_from_key`: Enter runs the focused
+        // button, not the screen's Enter action.
+        SendMessageW(
+            button,
+            windows::Win32::UI::WindowsAndMessaging::BM_CLICK,
+            None,
+            None,
+        );
         return true;
     }
     let Some(state) = state(window) else {
         return false;
     };
-    if state.view == MainView::Player
-        && !chord.control
-        && !chord.shift
-        && !chord.alt
+    let focus = GetFocus();
+    let background_focus = focus_in_background_player(state);
+    if plain
         && chord.key == ShortcutKey::Space
-        && state.player_controls.is_native_action_control(GetFocus())
+        && ((state.view == MainView::Player
+            && state.player_controls.is_native_action_control(focus))
+            || state.background_player.contains_button(focus))
     {
         return false;
     }
-    let (scope, accepts_text) = match state.view {
+    let shortcuts = &state.application.settings().keyboard_shortcuts;
+    if state.background_player.is_visible()
+        && !background_focus
+        && focus != state.search_edit
+        && !(focus == state.list && view_list_holds_results(state.view))
+        && let Some(action) = action_for_shortcut(
+            shortcuts,
+            chord,
+            ShortcutContext::new(ActionScope::Player, false),
+        )
+        && matches!(
+            action.id.as_str(),
+            "player_previous" | "player_next" | "player_next_related" | "player_fullscreen"
+        )
+    {
+        // Python `handle_active_player_global_shortcut_event`.
+        if !crate::shortcut_win32::is_repeat(message) {
+            activate_action(window, action.id.as_str());
+        }
+        return true;
+    }
+    let embedded_list_focus =
+        state.view == MainView::Player && state.embedded_results.is_some() && focus == state.list;
+    if embedded_list_focus {
+        // Python `player_shortcuts_allowed`: the embedded result list takes
+        // list shortcuts and every player shortcut the list does not own.
+        let list_owns = plain_list_key(chord);
+        let action = action_for_shortcut(
+            shortcuts,
+            chord,
+            ShortcutContext::new(ActionScope::List, false),
+        )
+        .or_else(|| {
+            (!list_owns)
+                .then(|| {
+                    action_for_shortcut(
+                        shortcuts,
+                        chord,
+                        ShortcutContext::new(ActionScope::Player, false),
+                    )
+                })
+                .flatten()
+        });
+        let Some(action) = action else {
+            return false;
+        };
+        return run_shortcut_action(window, message, chord, action);
+    }
+    let (scope, accepts_text) = if background_focus {
+        (ActionScope::Player, false)
+    } else {
+        view_shortcut_scope(state.view)
+    };
+    let Some(action) =
+        action_for_shortcut(shortcuts, chord, ShortcutContext::new(scope, accepts_text))
+    else {
+        return false;
+    };
+    let is_global = action.scopes.contains(&ActionScope::Global);
+    if !background_focus
+        && !is_global
+        && matches!(state.view, MainView::Search | MainView::DirectLink)
+    {
+        return false;
+    }
+    if !background_focus
+        && !is_global
+        && state.view == MainView::MainMenu
+        && action.id.as_str() != "open_selected"
+    {
+        return false;
+    }
+    run_shortcut_action(window, message, chord, action)
+}
+
+fn run_shortcut_action(
+    window: HWND,
+    message: &MSG,
+    chord: apricot_core::shortcut::ShortcutChord,
+    action: &'static apricot_core::action::ActionDefinition,
+) -> bool {
+    // SAFETY: Called from the UI thread's message loop with the main window.
+    unsafe {
+        if crate::shortcut_win32::is_repeat(message) && action.repeat == RepeatPolicy::None {
+            return true;
+        }
+        if action.repeat == RepeatPolicy::Controlled {
+            if !crate::shortcut_win32::is_repeat(message) {
+                start_controlled_repeat(window, action.id.as_str(), chord, message.wParam.0);
+            }
+            return true;
+        }
+        if action.id.as_str() == "player_back" {
+            player_back_shortcut(window);
+            return true;
+        }
+        activate_action(window, action.id.as_str());
+    }
+    true
+}
+
+/// Python `results_list_owns_key`: plain navigation and typing keys stay
+/// with the result list.
+const fn plain_list_key(chord: apricot_core::shortcut::ShortcutChord) -> bool {
+    !chord.control
+        && !chord.alt
+        && matches!(
+            chord.key,
+            ShortcutKey::Up
+                | ShortcutKey::Down
+                | ShortcutKey::Left
+                | ShortcutKey::Right
+                | ShortcutKey::Home
+                | ShortcutKey::End
+                | ShortcutKey::PageUp
+                | ShortcutKey::PageDown
+                | ShortcutKey::Space
+                | ShortcutKey::Backspace
+                | ShortcutKey::Delete
+                | ShortcutKey::Character(_)
+                | ShortcutKey::LeftBracket
+                | ShortcutKey::RightBracket
+        )
+}
+
+/// Python `results_list`: the screens whose list is the result list.
+const fn view_list_holds_results(view: MainView) -> bool {
+    matches!(
+        view,
+        MainView::Results
+            | MainView::Trending
+            | MainView::YoutubeCollection
+            | MainView::LocalFolder
+    )
+}
+
+/// The focused push button of the main window, if any.
+unsafe fn focused_push_button(window: HWND) -> Option<HWND> {
+    let focus = GetFocus();
+    if focus.is_invalid() || GetParent(focus).ok() != Some(window) {
+        return None;
+    }
+    let mut class = [0_u16; 16];
+    let length = usize::try_from(windows::Win32::UI::WindowsAndMessaging::GetClassNameW(
+        focus, &mut class,
+    ))
+    .unwrap_or_default();
+    if !String::from_utf16_lossy(&class[..length]).eq_ignore_ascii_case("button") {
+        return None;
+    }
+    let style = u32::try_from(GetWindowLongPtrW(focus, GWL_STYLE)).unwrap_or_default();
+    matches!(style & 0x0F, 0 | 1).then_some(focus)
+}
+
+fn view_shortcut_scope(view: MainView) -> (ActionScope, bool) {
+    match view {
         MainView::Search | MainView::DirectLink => (ActionScope::Dialog, true),
         MainView::MainMenu
         | MainView::Results
@@ -10969,35 +11418,7 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
         | MainView::UserPlaylistItems
         | MainView::DownloadQueue => (ActionScope::List, false),
         MainView::Player => (ActionScope::Player, false),
-    };
-    let Some(action) = action_for_shortcut(
-        &state.application.settings().keyboard_shortcuts,
-        chord,
-        ShortcutContext::new(scope, accepts_text),
-    ) else {
-        return false;
-    };
-    let is_global = action.scopes.contains(&ActionScope::Global);
-    if !is_global && matches!(state.view, MainView::Search | MainView::DirectLink) {
-        return false;
     }
-    if !is_global && state.view == MainView::MainMenu && action.id.as_str() != "open_selected" {
-        return false;
-    }
-    if crate::shortcut_win32::is_repeat(message) && action.repeat == RepeatPolicy::None {
-        return true;
-    }
-    if action.repeat == RepeatPolicy::Controlled {
-        if !crate::shortcut_win32::is_repeat(message) {
-            start_controlled_repeat(window, action.id.as_str(), chord, message.wParam.0);
-        }
-        return true;
-    }
-    if action.id.as_str() == "player_back" && handle_player_back_in_place(window) {
-        return true;
-    }
-    activate_action(window, action.id.as_str());
-    true
 }
 
 /// Python `details_text_navigation_key`: reading keys stay in the details
@@ -11048,6 +11469,164 @@ unsafe fn hide_player_details_for_back(window: HWND) -> bool {
     true
 }
 
+/// Python `player_back`: on the player page Escape hides the details, then
+/// leaves full screen, and then leaves the player. From the player and its
+/// buttons it stops playback and returns to the previous screen; from the
+/// embedded results or the Back button it goes to the main menu, and there
+/// playback continues when background playback is on.
+unsafe fn player_back_shortcut(window: HWND) {
+    if handle_player_back_in_place(window) {
+        return;
+    }
+    let Some(state) = state(window) else {
+        return;
+    };
+    if state.view != MainView::Player {
+        navigate_back(window);
+        return;
+    }
+    let focus = GetFocus();
+    let background = state.application.settings().enable_background_playback;
+    let closes_playback = focus != state.list
+        && (state.player_controls.is_action_control(focus)
+            || (!background && state.player_controls.is_navigation_control(focus)));
+    if closes_playback {
+        navigate_back(window);
+    } else {
+        leave_player_to_main_menu(window, true);
+    }
+}
+
+/// Python `leave_player_to_main_menu`.
+unsafe fn leave_player_to_main_menu(window: HWND, force_keep_playing: bool) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let keep_playing =
+        force_keep_playing && state.application.settings().enable_background_playback;
+    // Python `exit_fullscreen_window`.
+    state
+        .application
+        .set_player_toggle(SessionToggle::Fullscreen, false);
+    if keep_playing {
+        state.application.keep_player_return_frame();
+    } else {
+        close_player_runtime(window, state);
+    }
+    show_main_menu(window);
+}
+
+/// Python `run_global_navigation_shortcut` and
+/// `leave_player_for_global_navigation`: leaving the player page for another
+/// screen stops playback unless background playback is on.
+unsafe fn leave_player_for_global_navigation(window: HWND, action_id: &str) {
+    if !matches!(
+        action_id,
+        "open_main_menu"
+            | "open_search"
+            | "open_play_from_folder"
+            | "open_play_file"
+            | "open_direct_link"
+            | "open_favorites"
+            | "open_bookmarks"
+            | "open_playlists"
+            | "open_subscriptions"
+            | "open_current_downloads"
+            | "open_history"
+            | "open_podcasts_rss"
+            | "open_settings"
+            | "new_subscription_videos"
+    ) {
+        return;
+    }
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    if state.view != MainView::Player {
+        return;
+    }
+    if state.application.settings().enable_background_playback {
+        state.application.keep_player_return_frame();
+        return;
+    }
+    close_player_runtime(window, state);
+    if matches!(
+        action_id,
+        "open_settings" | "open_bookmarks" | "open_play_file" | "open_play_from_folder"
+    ) {
+        // These open over the current screen; without a player there is no
+        // player page to return to.
+        show_main_menu(window);
+    }
+}
+
+/// Python `close_current_player`.
+unsafe fn close_current_player(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let show_menu = matches!(state.view, MainView::Player | MainView::MainMenu)
+        || state.background_player.is_visible();
+    close_player_runtime(window, state);
+    let message = catalog_text(&state.application, "player_closed");
+    set_status(state, &message, true);
+    if show_menu {
+        show_main_menu(window);
+        if let Some(state) = self::state(window) {
+            set_status(state, &message, false);
+        }
+    } else {
+        layout_controls_state(window, state);
+    }
+}
+
+/// Python `show_current_player_screen`.
+unsafe fn show_current_player_screen(window: HWND) -> bool {
+    let Some(state) = state_mut(window) else {
+        return false;
+    };
+    if !state.application.player_session().is_open() {
+        set_status(state, &catalog_text(&state.application, "no_player"), true);
+        show_main_menu(window);
+        return false;
+    }
+    if state.view != MainView::Player {
+        cancel_youtube_work(window, state);
+        cancel_local_folder_scan(window, state);
+        state.application.navigate_to_player();
+        state.view = MainView::Player;
+    }
+    refresh_player(window, state, true, false);
+    true
+}
+
+/// Python `exit_fullscreen_to_results`.
+unsafe fn exit_fullscreen_to_results(window: HWND) {
+    set_player_fullscreen(window, false, false, false);
+    if let Some(state) = state(window)
+        && state.view == MainView::Player
+        && state.embedded_results.is_some()
+    {
+        let _ = SetFocus(Some(state.list));
+    }
+}
+
+/// Python `background_play_pause_shortcut`.
+unsafe fn background_play_pause(window: HWND) {
+    if state(window).is_some_and(|state| state.application.player_session().is_open()) {
+        toggle_player_pause(window);
+    } else if let Some(state) = state(window) {
+        set_status(state, &catalog_text(&state.application, "no_player"), true);
+    }
+}
+
+/// Python `play_url(show_player=...)`: with background playback a new item
+/// started away from the player page keeps the current screen.
+fn mark_background_start(state: &mut WindowState) {
+    state.background_start =
+        state.view != MainView::Player && state.application.settings().enable_background_playback;
+}
+
 unsafe fn start_controlled_repeat(
     window: HWND,
     action_id: &'static str,
@@ -11087,7 +11666,7 @@ unsafe fn tick_controlled_repeat(window: HWND) {
             stop_controlled_repeat(window);
             return;
         };
-        if state.view != MainView::Player
+        if (state.view != MainView::Player && !focus_in_background_player(state))
             || !state.application.player_session().is_open()
             || !controlled_repeat_keys_still_down(repeat)
         {
@@ -11165,6 +11744,7 @@ unsafe fn virtual_key_is_down(key: usize) -> bool {
 }
 
 unsafe fn activate_action(window: HWND, action_id: &str) {
+    leave_player_for_global_navigation(window, action_id);
     match action_id {
         "open_main_menu" => show_main_menu(window),
         "open_search" => show_search(window),
@@ -11186,8 +11766,10 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "open_channel" => open_item_channel(window),
         "result_column_previous" => announce_active_media_column(window, false),
         "result_column_next" => announce_active_media_column(window, true),
-        "background_play_pause" | "player_play_pause" => toggle_player_pause(window),
-        "player_back" => navigate_back(window),
+        "background_play_pause" => background_play_pause(window),
+        "player_play_pause" => toggle_player_pause(window),
+        "close_player" => close_current_player(window),
+        "player_back" => player_back_shortcut(window),
         "player_previous" => navigate_player_relative(window, -1),
         "player_next" => navigate_player_relative(window, 1),
         "player_time" => announce_player_time(window),
@@ -11283,6 +11865,7 @@ unsafe fn navigate_player_relative_from(window: HWND, delta: i32, after_end: boo
         PlayerNavigationOutcome::Item { item, origin } => {
             if let Some(state) = state_mut(window) {
                 sync_user_playlist_item_selection(state, &item);
+                mark_background_start(state);
             }
             let preserve_sequence = origin == apricot_app::PlayerNavigationOrigin::Sequence;
             if preserve_sequence {
@@ -11379,7 +11962,11 @@ unsafe fn confirm_pending_queued_start(window: HWND, state: &mut WindowState) {
 
 unsafe fn active_media_item(window: HWND) -> Option<apricot_core::MediaItem> {
     let state = state(window)?;
-    match state.view {
+    // Python `active_item`: the background player acts on the playing item.
+    if focus_in_background_player(state) {
+        return state.application.player_session().current_item().cloned();
+    }
+    match list_view(state) {
         MainView::Results | MainView::Trending => {
             let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
             let index = usize::try_from(selected).ok()?;
@@ -13310,15 +13897,18 @@ unsafe fn poll_external_chapters(window: HWND) {
     }
 }
 
-/// Python `ensure_player_for_auxiliary_view`. The Rust player lives only on
-/// its own page, so outside it there is no player to show.
+/// Python `ensure_player_for_auxiliary_view`: away from the player page a
+/// running player is shown first, as with background playback.
 unsafe fn ensure_player_for_auxiliary_view(window: HWND) -> bool {
     let Some(state) = state(window) else {
         return false;
     };
-    if state.view == MainView::Player && state.application.player_session().current_item().is_some()
-    {
+    let session = state.application.player_session();
+    if state.view == MainView::Player && session.current_item().is_some() {
         return true;
+    }
+    if state.view != MainView::Player && session.is_open() {
+        return show_current_player_screen(window);
     }
     set_status(state, &catalog_text(&state.application, "no_player"), true);
     false
@@ -13599,8 +14189,16 @@ unsafe fn show_player_details(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
     };
-    if state.view != MainView::Player {
-        set_status(state, &catalog_text(&state.application, "no_player"), true);
+    // Python `show_video_details`: away from the player page a running
+    // player is shown first.
+    if state.view != MainView::Player
+        && !(state.application.player_session().is_open() && show_current_player_screen(window))
+    {
+        if let Some(state) = self::state(window)
+            && !state.application.player_session().is_open()
+        {
+            set_status(state, &catalog_text(&state.application, "no_player"), true);
+        }
         return;
     }
     let text = player_details_text(&state.application);
@@ -14612,6 +15210,7 @@ unsafe fn poll_related_videos(window: HWND) {
     state.pending_related = None;
     let _ = KillTimer(Some(window), RELATED_TIMER_ID);
     if let Some(item) = state.application.apply_related_videos(videos) {
+        mark_background_start(state);
         start_sequence_media_item(window, item, None);
         return;
     }
@@ -14663,6 +15262,10 @@ unsafe fn set_player_fullscreen(window: HWND, enabled: bool, focus_checkbox: boo
         if let Some(target) = target {
             let _ = SetFocus(Some(target));
         }
+    } else {
+        // Python `enter_player_fullscreen` and `exit_fullscreen_to_player`
+        // both show the player page.
+        show_current_player_screen(window);
     }
     if announce {
         let key = if enabled {
@@ -15105,7 +15708,15 @@ unsafe fn show_playback_queue(window: HWND) {
                 refresh_main_menu(main_state, MainMenuSelection::Preserve);
             }
             if let Some(item) = outcome.play {
+                // Python `open_playback_queue_item`: away from the player page
+                // background playback keeps the current screen.
+                mark_background_start(main_state);
                 start_media_item(window, item, Some(QueueStartMode::Matching));
+                if let Some(state) = state(window)
+                    && state.view != MainView::Player
+                {
+                    let _ = SetFocus(Some(active_primary_control(state)));
+                }
                 return;
             }
         }
