@@ -226,6 +226,13 @@ odstopanje se najprej predlaga Urhu in se po odobritvi zapiše sem.
 - **O-8.** Kadar shranjevanje kopije (Ctrl+S) spodleti med pisanjem, Python pusti delno
   datoteko "ime - edited". Rust jo izbriše, kot že pri zamenjavi izvirnika izbriše
   začasno datoteko (predlog P-4 iz E12, odobren 28. 9. 2026, narejeno v E13).
+- **O-9.** Kadar se predvajanje začne s priljubljenih, zgodovine, podcasta ali seznama
+  predvajanja, Python v vgrajenem seznamu predvajalnika pokaže stare rezultate zadnjega
+  iskanja. Rust vgrajenega seznama takrat ne pokaže (predlog P-5 iz E13a, odobren
+  29. 9. 2026).
+- **O-10.** Brez predvajanja v ozadju Python ob odprtju nastavitev s strani predvajalnika
+  ustavi predvajanje. Rust nastavitve odpre kot okno nad predvajalnikom in predvajanje
+  pusti teči (predlog P-6 iz E13a, odobren 29. 9. 2026).
 
 ## 6. Dnevnik enot
 
@@ -925,7 +932,7 @@ Popravki, ki veljajo tudi brez predvajanja v ozadju:
   strani predvajalnika ni naredil ničesar (Python `activate_focused_button_from_key`).
 - Gumb Play ali Pause nima bližnjice v napisu, kot `current_play_pause_label`.
 
-Predloga za Urha (nista narejena):
+Predloga za Urha, odobrena 29. 9. 2026 kot O-9 in O-10 (Rust vedenje ostane):
 
 - **P-5.** Ko se predvajanje začne s priljubljenih, zgodovine, podcasta ali seznama
   predvajanja, Python v vgrajenem seznamu pokaže stare rezultate zadnjega iskanja. Rust
