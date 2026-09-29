@@ -529,9 +529,11 @@ pub struct FileConversionJob {
 }
 
 impl FileConversionJob {
-    /// Python `start_file_conversion`: a new file never overwrites an
-    /// existing one or the source.
+    /// Python `start_file_conversion`: a new file never overwrites the
+    /// source. Python also never overwrites an existing file; Rust overwrites
+    /// it when the user confirmed that in the save dialog (O-13).
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         ffmpeg: Option<PathBuf>,
         source: PathBuf,
@@ -539,9 +541,10 @@ impl FileConversionJob {
         target: &str,
         image: Option<PathBuf>,
         replace_original: bool,
+        overwrite_confirmed: bool,
         unsupported_message: String,
     ) -> Self {
-        let output = if replace_original {
+        let output = if replace_original || (overwrite_confirmed && !same_path(&output, &source)) {
             output
         } else {
             unique_output_path(&output, Some(&source))
@@ -577,16 +580,34 @@ pub fn run_file_conversion(
     {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    let work_output = if job.replace_original {
+    // A confirmed overwrite also goes through a hidden work file, so a failed
+    // conversion keeps the existing file.
+    let overwrite = !job.replace_original && job.output.exists();
+    let work_output = if job.replace_original || overwrite {
         temporary_conversion_path(&job.output)
     } else {
         job.output.clone()
     };
     let arguments = ffmpeg_arguments(&job.source, &work_output, &job.target, job.image.as_deref())
         .ok_or_else(|| job.unsupported_message.clone())?;
-    run(ffmpeg, &arguments)?;
-    if job.replace_original {
-        replace_converted_original(&job.source, &work_output, &job.output)?;
+    let result = run(ffmpeg, &arguments).and_then(|()| {
+        if job.replace_original {
+            replace_converted_original(&job.source, &work_output, &job.output)
+        } else if overwrite {
+            if !work_output.exists() {
+                return Err("Converted file was not created".to_owned());
+            }
+            fs::rename(&work_output, &job.output).map_err(|error| error.to_string())
+        } else {
+            Ok(())
+        }
+    });
+    if let Err(error) = result {
+        // O-12: Python leaves the partial output or the hidden work file.
+        if work_output.exists() && !same_path(&work_output, &job.source) {
+            let _ = fs::remove_file(&work_output);
+        }
+        return Err(error);
     }
     Ok(job.output.clone())
 }
@@ -1023,6 +1044,7 @@ mod tests {
             "mp3",
             None,
             true,
+            false,
             "unsupported".to_owned(),
         );
         let mut calls = Vec::new();
@@ -1055,6 +1077,7 @@ mod tests {
             "mp3",
             None,
             false,
+            true,
             String::new(),
         );
         assert_eq!(job.output, folder.path().join("song (2).mp3"));
@@ -1062,6 +1085,88 @@ mod tests {
             run_file_conversion(&job, &mut |_, _| Ok(())),
             Err("FFmpeg was not found".to_owned())
         );
+    }
+
+    #[test]
+    fn confirmed_overwrite_replaces_the_chosen_file_only_after_success() {
+        let folder = tempfile::tempdir().expect("folder");
+        let source = folder.path().join("song.flac");
+        let chosen = folder.path().join("song.mp3");
+        fs::write(&source, b"flac").expect("source");
+        fs::write(&chosen, b"old").expect("chosen");
+        let job = FileConversionJob::new(
+            Some(PathBuf::from("ffmpeg.exe")),
+            source.clone(),
+            chosen.clone(),
+            "mp3",
+            None,
+            false,
+            true,
+            String::new(),
+        );
+        assert_eq!(job.output, chosen);
+        let failed = run_file_conversion(&job, &mut |_, arguments| {
+            fs::write(PathBuf::from(arguments.last().expect("output")), b"partial")
+                .expect("partial");
+            Err("broken".to_owned())
+        });
+        assert_eq!(failed, Err("broken".to_owned()));
+        assert_eq!(fs::read(&chosen).expect("kept"), b"old");
+        assert_eq!(fs::read_dir(folder.path()).expect("list").count(), 2);
+        let result = run_file_conversion(&job, &mut |_, arguments| {
+            fs::write(PathBuf::from(arguments.last().expect("output")), b"new")
+                .map_err(|error| error.to_string())
+        });
+        assert_eq!(result, Ok(chosen.clone()));
+        assert_eq!(fs::read(&chosen).expect("overwritten"), b"new");
+        assert!(source.exists());
+        assert_eq!(fs::read_dir(folder.path()).expect("list").count(), 2);
+        let same = FileConversionJob::new(
+            None,
+            chosen.clone(),
+            chosen.clone(),
+            "mp3",
+            None,
+            false,
+            true,
+            String::new(),
+        );
+        assert_eq!(same.output, folder.path().join("song (2).mp3"));
+    }
+
+    #[test]
+    fn failed_file_conversion_removes_partial_and_work_files() {
+        let folder = tempfile::tempdir().expect("folder");
+        let source = folder.path().join("song.flac");
+        fs::write(&source, b"flac").expect("source");
+        for replace in [false, true] {
+            let output = if replace {
+                replaced_output_path(&source, "mp3")
+            } else {
+                folder.path().join("new.mp3")
+            };
+            let job = FileConversionJob::new(
+                Some(PathBuf::from("ffmpeg.exe")),
+                source.clone(),
+                output,
+                "mp3",
+                None,
+                replace,
+                false,
+                String::new(),
+            );
+            let result = run_file_conversion(&job, &mut |_, arguments| {
+                fs::write(PathBuf::from(arguments.last().expect("output")), b"partial")
+                    .expect("partial");
+                Err("broken".to_owned())
+            });
+            assert_eq!(result, Err("broken".to_owned()));
+            let names: Vec<_> = fs::read_dir(folder.path())
+                .expect("list")
+                .map(|entry| entry.expect("entry").file_name())
+                .collect();
+            assert_eq!(names, ["song.flac"]);
+        }
     }
 
     #[test]

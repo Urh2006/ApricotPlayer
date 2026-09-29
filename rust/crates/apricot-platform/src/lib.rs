@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+pub mod app_update;
 pub mod bpm;
 pub mod browser_cookies;
 pub mod clip_export;

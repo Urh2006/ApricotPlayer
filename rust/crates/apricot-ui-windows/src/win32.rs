@@ -197,6 +197,11 @@ const WM_SHOW_DOWNLOAD_DETAILS: u32 = WM_APP + 3;
 const WM_SYNC_FULLSCREEN: u32 = WM_APP + 4;
 /// Posted by the settings window after a global equalizer change.
 pub(crate) const WM_APPLY_GLOBAL_EQUALIZER: u32 = WM_APP + 5;
+/// Posted by the settings window: Python `manual_ytdlp_update_check` and
+/// `manual_app_update_check`.
+pub(crate) const WM_UPDATE_REQUEST: u32 = WM_APP + 7;
+pub(crate) const UPDATE_REQUEST_YTDLP: usize = 0;
+pub(crate) const UPDATE_REQUEST_APP: usize = 1;
 const YOUTUBE_TIMER_ID: usize = 1;
 const YOUTUBE_TIMER_INTERVAL_MS: u32 = 25;
 const YOUTUBE_METADATA_BATCH_SIZE: usize = 5;
@@ -222,6 +227,15 @@ const DIAGNOSTIC_REPORT_TIMER_ID: usize = 13;
 const DIAGNOSTIC_REPORT_TIMER_INTERVAL_MS: u32 = 100;
 const CONVERSION_TIMER_ID: usize = 14;
 const CONVERSION_TIMER_INTERVAL_MS: u32 = 100;
+const UPDATE_TIMER_ID: usize = 15;
+const UPDATE_TIMER_INTERVAL_MS: u32 = 100;
+/// Python checks yt-dlp 3.5 and the app 5.5 seconds after start, then the
+/// app every `app_update_interval_hours`.
+const YTDLP_STARTUP_TIMER_ID: usize = 16;
+const YTDLP_STARTUP_DELAY_MS: u32 = 3_500;
+const APP_UPDATE_STARTUP_TIMER_ID: usize = 17;
+const APP_UPDATE_STARTUP_DELAY_MS: u32 = 5_500;
+const APP_UPDATE_TIMER_ID: usize = 18;
 const AUDIO_DEVICE_POLL_MS: u32 = 100;
 /// Python waits up to 5 seconds for `mpv --audio-device=help`.
 const AUDIO_DEVICE_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -428,6 +442,31 @@ enum ConversionMessage {
     FolderFinished(std::result::Result<apricot_app::converter::FolderConversionOutcome, String>),
 }
 
+/// Messages from Python's `update_ytdlp_worker`, `app_update_worker` and
+/// `download_and_install_update`.
+enum UpdateMessage {
+    YtdlpMissing,
+    YtdlpUpdating,
+    YtdlpFinished {
+        manual: bool,
+        result: std::result::Result<apricot_updater::YtdlpUpdate, String>,
+    },
+    AppChecked {
+        manual: bool,
+        prompt: bool,
+        notify: bool,
+        result: apricot_updater::AppUpdateCheck,
+    },
+    AppDownloadProgress {
+        version: String,
+        percent: Option<u8>,
+    },
+    AppDownloaded {
+        version: String,
+        result: std::result::Result<apricot_updater::DownloadedUpdate, String>,
+    },
+}
+
 /// Window style and placement to restore after full screen.
 struct FullscreenRestore {
     style: isize,
@@ -561,6 +600,13 @@ struct WindowState {
     pending_conversions: Vec<Receiver<ConversionMessage>>,
     /// Python `conversion_progress_dialog`.
     conversion_progress_window: Option<crate::converter_win32::ConversionProgressWindow>,
+    pending_updates: Vec<Receiver<UpdateMessage>>,
+    /// Python `app_update_check_running`.
+    app_update_check_running: bool,
+    /// Python `pending_app_update_release` and `pending_app_update_asset`.
+    pending_app_update: Option<(apricot_updater::Release, apricot_updater::ReleaseAsset)>,
+    /// Python `update_progress_dialog`.
+    update_progress_window: Option<crate::converter_win32::ConversionProgressWindow>,
     pending_chapters: Option<PendingChapters>,
     pending_related: Option<PendingRelatedVideos>,
     pending_audio_device_check: Option<Receiver<Vec<apricot_playback::AudioOutputDevice>>>,
@@ -666,6 +712,8 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
     check_subscriptions_if_due(window);
     configure_rss_timer(window);
     refresh_rss_feeds_on_startup(window);
+    configure_app_update_timer(window);
+    schedule_startup_update_checks(window);
 
     let mut message = MSG::default();
     loop {
@@ -1060,6 +1108,33 @@ unsafe extern "system" fn window_proc(
         }
         WM_TIMER if wparam.0 == CONVERSION_TIMER_ID => {
             poll_conversions(window);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == UPDATE_TIMER_ID => {
+            poll_updates(window);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == YTDLP_STARTUP_TIMER_ID => {
+            let _ = KillTimer(Some(window), YTDLP_STARTUP_TIMER_ID);
+            start_ytdlp_update_check(window, false);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == APP_UPDATE_STARTUP_TIMER_ID => {
+            let _ = KillTimer(Some(window), APP_UPDATE_STARTUP_TIMER_ID);
+            start_app_update_check(window, false, true, false);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == APP_UPDATE_TIMER_ID => {
+            // Python `on_app_update_timer`.
+            start_app_update_check(window, false, false, true);
+            LRESULT(0)
+        }
+        WM_UPDATE_REQUEST => {
+            if wparam.0 == UPDATE_REQUEST_YTDLP {
+                manual_ytdlp_update_check(window);
+            } else if wparam.0 == UPDATE_REQUEST_APP {
+                start_app_update_check(window, true, true, false);
+            }
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -1930,6 +2005,10 @@ unsafe fn create_controls(
         pending_edit_saves: Vec::new(),
         pending_conversions: Vec::new(),
         conversion_progress_window: None,
+        pending_updates: Vec::new(),
+        app_update_check_running: false,
+        pending_app_update: None,
+        update_progress_window: None,
         pending_chapters: None,
         pending_related: None,
         pending_audio_device_check: None,
@@ -3438,6 +3517,10 @@ unsafe fn activate_main_menu_selection(window: HWND) {
         return;
     };
     remember_menu_item(window, item_id);
+    if item_id == "app_update" {
+        open_pending_app_update(window);
+        return;
+    }
     if item_id == "exit" {
         let _ = DestroyWindow(window);
         return;
@@ -6301,9 +6384,9 @@ unsafe fn download_current_rss_feed(window: HWND) {
             }
         }
     }
-    let Some(executable) =
-        application_directory().map(|directory| directory.join("components").join("yt-dlp.exe"))
-    else {
+    let Some(executable) = application_directory().map(|directory| {
+        apricot_platform::app_update::preferred_ytdlp_executable(&directory.join("components"))
+    }) else {
         return;
     };
     let (task_id, cancellation, sender) = {
@@ -7995,7 +8078,9 @@ unsafe fn spawn_user_playlist_download(
     output_folder: PathBuf,
 ) -> std::result::Result<(), String> {
     let executable = application_directory()
-        .map(|directory| directory.join("components").join("yt-dlp.exe"))
+        .map(|directory| {
+            apricot_platform::app_update::preferred_ytdlp_executable(&directory.join("components"))
+        })
         .ok_or_else(|| "Application path is unavailable.".to_owned())?;
     let (task_id, cancellation, sender) = {
         let state =
@@ -8143,9 +8228,9 @@ unsafe fn start_download_item(
             return;
         }
     };
-    let Some(executable) =
-        application_directory().map(|directory| directory.join("components").join("yt-dlp.exe"))
-    else {
+    let Some(executable) = application_directory().map(|directory| {
+        apricot_platform::app_update::preferred_ytdlp_executable(&directory.join("components"))
+    }) else {
         show_error_message(window, "Application path is unavailable.");
         return;
     };
@@ -8405,9 +8490,9 @@ unsafe fn start_all_queued_downloads(window: HWND, requested_choice: DownloadCho
             }
         }
     }
-    let Some(executable) =
-        application_directory().map(|directory| directory.join("components").join("yt-dlp.exe"))
-    else {
+    let Some(executable) = application_directory().map(|directory| {
+        apricot_platform::app_update::preferred_ytdlp_executable(&directory.join("components"))
+    }) else {
         show_error_message(window, "Application path is unavailable.");
         return;
     };
@@ -11519,9 +11604,9 @@ unsafe fn copy_diagnostic_report(window: HWND) {
         &state.application.settings().ffmpeg_location,
         directory.as_deref(),
     );
-    let ytdlp = directory
-        .as_ref()
-        .map(|directory| directory.join("components").join("yt-dlp.exe"));
+    let ytdlp = directory.as_ref().map(|directory| {
+        apricot_platform::app_update::preferred_ytdlp_executable(&directory.join("components"))
+    });
     let version = env!("CARGO_PKG_VERSION");
     let session_open = state.application.player_session().is_open();
     let environment = apricot_app::diagnostic_report::DiagnosticEnvironment {
@@ -14597,6 +14682,7 @@ unsafe fn start_conversion(window: HWND, start: crate::converter_win32::Converte
             target,
             image,
             replace_original,
+            overwrite_confirmed,
         } => {
             let job = FileConversionJob::new(
                 ffmpeg,
@@ -14605,6 +14691,7 @@ unsafe fn start_conversion(window: HWND, start: crate::converter_win32::Converte
                 &target,
                 image,
                 replace_original,
+                overwrite_confirmed,
                 catalog_text(&state.application, "unsupported_input_format"),
             );
             std::thread::spawn(move || {
@@ -14769,6 +14856,606 @@ unsafe fn close_conversion_progress(state: &mut WindowState) {
     if let Some(progress) = state.conversion_progress_window.take() {
         progress.destroy();
     }
+}
+
+/// Python `UPDATE_LOG_FILE`.
+fn update_log_path() -> Option<PathBuf> {
+    apricot_platform::discover_windows_beta_paths()
+        .ok()
+        .map(|paths| paths.app_data.join("updater.log"))
+}
+
+/// Python `log_update_event`.
+fn log_update_event(message: &str) {
+    if let Some(path) = update_log_path() {
+        apricot_updater::script::log_update_event(&path, message);
+    }
+}
+
+/// Python `app_has_focus`.
+unsafe fn app_has_focus(window: HWND) -> bool {
+    let foreground = GetForegroundWindow();
+    foreground == window
+        || IsChild(window, foreground).as_bool()
+        || GetAncestor(foreground, GA_ROOTOWNER) == window
+}
+
+/// Python `configure_app_update_timer`.
+unsafe fn configure_app_update_timer(window: HWND) {
+    let _ = KillTimer(Some(window), APP_UPDATE_TIMER_ID);
+    let Some(state) = state(window) else {
+        return;
+    };
+    if !state.application.settings().auto_update_app {
+        return;
+    }
+    // Python `refresh_interval_seconds(hours, 6.0, maximum_hours=24.0)`.
+    let hours = state.application.settings().app_update_interval_hours;
+    let hours = if hours.is_finite() {
+        hours.clamp(0.5, 24.0)
+    } else {
+        6.0
+    };
+    let interval_ms = std::time::Duration::try_from_secs_f64((hours * 3600.0).max(1800.0))
+        .ok()
+        .and_then(|duration| u32::try_from(duration.as_millis()).ok())
+        .unwrap_or(21_600_000);
+    let _ = SetTimer(Some(window), APP_UPDATE_TIMER_ID, interval_ms, None);
+}
+
+/// Python's startup `wx.CallLater(3500, start_ytdlp_update_check)` and
+/// `wx.CallLater(5500, start_app_update_check)`.
+unsafe fn schedule_startup_update_checks(window: HWND) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    if state.application.settings().auto_update_ytdlp {
+        let _ = SetTimer(
+            Some(window),
+            YTDLP_STARTUP_TIMER_ID,
+            YTDLP_STARTUP_DELAY_MS,
+            None,
+        );
+    }
+    if state.application.settings().auto_update_app {
+        let _ = SetTimer(
+            Some(window),
+            APP_UPDATE_STARTUP_TIMER_ID,
+            APP_UPDATE_STARTUP_DELAY_MS,
+            None,
+        );
+    }
+}
+
+unsafe fn watch_update_worker(window: HWND, receiver: Receiver<UpdateMessage>) {
+    if let Some(state) = state_mut(window) {
+        state.pending_updates.push(receiver);
+        let _ = SetTimer(
+            Some(window),
+            UPDATE_TIMER_ID,
+            UPDATE_TIMER_INTERVAL_MS,
+            None,
+        );
+    }
+}
+
+/// Python `manual_ytdlp_update_check`; Settings applied its controls first.
+unsafe fn manual_ytdlp_update_check(window: HWND) {
+    announce_player_text(window, "checking_updates", &[]);
+    start_ytdlp_update_check(window, true);
+}
+
+/// Python `start_ytdlp_update_check` and `update_ytdlp_worker`.
+unsafe fn start_ytdlp_update_check(window: HWND, manual: bool) {
+    let Some(bundled) = application_directory().map(|path| path.join("components")) else {
+        return;
+    };
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let executable = apricot_platform::app_update::preferred_ytdlp_executable(&bundled);
+        if !executable.is_file() {
+            let _ = sender.send(UpdateMessage::YtdlpMissing);
+            return;
+        }
+        let current = apricot_platform::app_update::ytdlp_version(&executable);
+        let result = apricot_platform::app_update::user_components_directory()
+            .ok_or_else(|| "Application data path is unavailable".to_owned())
+            .and_then(|components| {
+                let mut transport =
+                    apricot_platform::app_update::update_transport(env!("CARGO_PKG_VERSION"));
+                let updating = sender.clone();
+                apricot_updater::update_ytdlp_component(
+                    transport.as_mut(),
+                    &current,
+                    &components,
+                    &mut || {
+                        let _ = updating.send(UpdateMessage::YtdlpUpdating);
+                    },
+                )
+            });
+        let _ = sender.send(UpdateMessage::YtdlpFinished { manual, result });
+    });
+    watch_update_worker(window, receiver);
+}
+
+/// Python `start_app_update_check` and `app_update_worker`.
+unsafe fn start_app_update_check(window: HWND, manual: bool, prompt: bool, notify: bool) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    if !manual && !state.application.settings().auto_update_app {
+        set_status(state, catalog.text("app_update_disabled"), false);
+        return;
+    }
+    if state.app_update_check_running {
+        if manual {
+            set_status(state, catalog.text("checking_app_updates"), true);
+        }
+        return;
+    }
+    state.app_update_check_running = true;
+    set_status(state, catalog.text("checking_app_updates"), manual);
+    let channel = state.application.settings().update_channel.clone();
+    let skipped = state.application.settings().skipped_update_version.clone();
+    let no_changelog = catalog.text("no_changelog").to_owned();
+    let installed = std::env::current_exe()
+        .is_ok_and(|executable| apricot_platform::app_update::is_installed_build(&executable));
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut transport =
+            apricot_platform::app_update::update_transport(env!("CARGO_PKG_VERSION"));
+        let mut feed = apricot_updater::GithubReleaseFeed {
+            transport: transport.as_mut(),
+        };
+        let result = apricot_updater::check_app_update(
+            &mut feed,
+            &apricot_updater::RUST_BETA_PACKAGE,
+            &channel,
+            env!("CARGO_PKG_VERSION"),
+            &skipped,
+            manual,
+            installed,
+            &no_changelog,
+        );
+        let _ = sender.send(UpdateMessage::AppChecked {
+            manual,
+            prompt,
+            notify,
+            result,
+        });
+    });
+    watch_update_worker(window, receiver);
+}
+
+/// The `wx.CallAfter` and `ui_queue` side of Python's update workers.
+unsafe fn poll_updates(window: HWND) {
+    let mut messages = Vec::new();
+    {
+        let Some(state) = state_mut(window) else {
+            return;
+        };
+        state.pending_updates.retain(|receiver| {
+            loop {
+                match receiver.try_recv() {
+                    Ok(message) => {
+                        let finished = !matches!(
+                            message,
+                            UpdateMessage::YtdlpUpdating
+                                | UpdateMessage::AppDownloadProgress { .. }
+                        );
+                        messages.push(message);
+                        if finished {
+                            break false;
+                        }
+                    }
+                    Err(TryRecvError::Empty) => break true,
+                    Err(TryRecvError::Disconnected) => break false,
+                }
+            }
+        });
+        if state.pending_updates.is_empty() {
+            let _ = KillTimer(Some(window), UPDATE_TIMER_ID);
+        }
+    }
+    for message in messages {
+        handle_update_message(window, message);
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+unsafe fn handle_update_message(window: HWND, message: UpdateMessage) {
+    use apricot_updater::{AppUpdateCheck, YtdlpUpdate};
+
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    match message {
+        UpdateMessage::YtdlpMissing => set_status(state, catalog.text("missing_ytdlp"), true),
+        UpdateMessage::YtdlpUpdating => {
+            set_status(state, catalog.text("components_updating"), true);
+        }
+        UpdateMessage::YtdlpFinished { manual, result } => match result {
+            Ok(YtdlpUpdate::Updated(_)) => {
+                set_status(state, catalog.text("components_updated"), true);
+            }
+            Ok(YtdlpUpdate::Current) => {
+                if manual {
+                    set_status(state, catalog.text("updates_ok"), true);
+                }
+            }
+            Err(error) => {
+                let text = catalog.text("updates_failed").replace("{error}", &error);
+                set_status(state, &text, true);
+            }
+        },
+        UpdateMessage::AppChecked {
+            manual,
+            prompt,
+            notify,
+            result,
+        } => {
+            state.app_update_check_running = false;
+            // Python `report_app_update_status`: status, and speech when manual.
+            match result {
+                AppUpdateCheck::UpToDate => {
+                    set_status(state, catalog.text("app_up_to_date"), manual);
+                }
+                AppUpdateCheck::Skipped(version) => {
+                    let text = catalog
+                        .text("update_skip_status")
+                        .replace("{version}", &version);
+                    set_status(state, &text, manual);
+                }
+                AppUpdateCheck::NoAsset => {
+                    let text = catalog
+                        .text("app_update_failed")
+                        .replace("{error}", "no Windows asset found in release");
+                    set_status(state, &text, manual);
+                }
+                AppUpdateCheck::Available { release, asset } => {
+                    if prompt {
+                        log_update_event(&format!(
+                            "Prompting for update {} with asset {}",
+                            release.version(),
+                            asset.name
+                        ));
+                        offer_app_update(window, &release, asset, false);
+                    } else {
+                        store_pending_app_update(window, *release, asset, notify);
+                    }
+                }
+            }
+        }
+        UpdateMessage::AppDownloadProgress { version, percent } => {
+            // Python `update_app_update_progress`.
+            let Some(progress) = state
+                .update_progress_window
+                .filter(|progress| progress.is_open())
+            else {
+                return;
+            };
+            match percent {
+                Some(percent) => progress.update(
+                    usize::from(percent.min(100)),
+                    &catalog
+                        .text("update_download_percent")
+                        .replace("{version}", &version)
+                        .replace("{percent}", &percent.min(100).to_string()),
+                ),
+                None => progress.pulse(
+                    &catalog
+                        .text("update_download_unknown")
+                        .replace("{version}", &version),
+                ),
+            }
+        }
+        UpdateMessage::AppDownloaded { version, result } => match result {
+            Ok(downloaded) => {
+                // Python `update_app_update_finished`.
+                if let Some(progress) = state
+                    .update_progress_window
+                    .filter(|progress| progress.is_open())
+                {
+                    progress.update(100, catalog.text("update_download_complete"));
+                }
+                set_status(state, catalog.text("update_download_complete"), true);
+                finish_app_update_install(window, &downloaded, &version);
+            }
+            Err(error) => {
+                // Python `update_app_update_failed`.
+                log_update_event(&format!("Update failed before install: {error}"));
+                close_update_progress(window);
+                let text = catalog.text("app_update_failed").replace("{error}", &error);
+                show_message_box(
+                    window,
+                    &text,
+                    windows::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
+                );
+            }
+        },
+    }
+}
+
+/// Python `store_pending_app_update`.
+unsafe fn store_pending_app_update(
+    window: HWND,
+    release: apricot_updater::Release,
+    asset: apricot_updater::ReleaseAsset,
+    notify: bool,
+) {
+    let version = release.version();
+    if !apricot_updater::is_newer_version(&version, env!("CARGO_PKG_VERSION")) {
+        return;
+    }
+    let focused = app_has_focus(window);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state.pending_app_update = Some((release, asset));
+    state
+        .application
+        .set_pending_app_update_version(Some(version.clone()));
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let text = catalog
+        .text("app_update_ready_status")
+        .replace("{version}", &version);
+    set_status(state, &text, false);
+    let settings = state.application.settings();
+    if notify && settings.app_update_notifications && settings.windows_notifications && !focused {
+        let message = catalog
+            .text("app_update_notification_message")
+            .replace("{version}", &version);
+        show_tray_notification(window, catalog.text("update_available_title"), &message);
+    }
+    if let Some(state) = state_mut(window)
+        && state.view == MainView::MainMenu
+    {
+        refresh_main_menu(state, MainMenuSelection::LastActivated);
+    }
+}
+
+/// Python `open_pending_app_update`, the "Update available" menu item.
+unsafe fn open_pending_app_update(window: HWND) {
+    match state(window).and_then(|state| state.pending_app_update.clone()) {
+        Some((release, asset)) => offer_app_update(window, &release, asset, true),
+        None => start_app_update_check(window, true, true, false),
+    }
+}
+
+/// The shared part of Python `prompt_for_app_update` and
+/// `open_pending_app_update`.
+unsafe fn offer_app_update(
+    window: HWND,
+    release: &apricot_updater::Release,
+    asset: apricot_updater::ReleaseAsset,
+    from_menu: bool,
+) {
+    let version = release.version();
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    // Python only installs in the frozen .exe build; a local beta only from
+    // its test feed (D-011).
+    if !apricot_platform::app_update::app_update_install_allowed() {
+        let text = catalog
+            .text("update_source_only")
+            .replace("{version}", &version);
+        show_message_box(window, &text, MB_ICONINFORMATION);
+        return;
+    }
+    let changelog = apricot_updater::release_changelog_text(release, catalog.text("no_changelog"));
+    let active = windows::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow();
+    let owner = if active.is_invalid() { window } else { active };
+    let previous = GetFocus();
+    state.modal_open = true;
+    let accepted = crate::update_win32::show_update_prompt(owner, &catalog, &version, &changelog);
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
+    if !previous.is_invalid()
+        && windows::Win32::UI::WindowsAndMessaging::IsWindow(Some(previous)).as_bool()
+    {
+        let _ = SetFocus(Some(previous));
+    }
+    resume_deferred_window_work(window);
+    let kind = if from_menu {
+        "pending update"
+    } else {
+        "update"
+    };
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    if accepted {
+        log_update_event(&format!("User selected {kind} now for {version}"));
+        if !state
+            .application
+            .settings()
+            .skipped_update_version
+            .is_empty()
+            && let Err(error) = state.application.set_skipped_update_version("")
+        {
+            show_error_message(window, &error.to_string());
+        }
+        begin_app_update_install(window, release, asset);
+        return;
+    }
+    log_update_event(&format!("User skipped {kind} {version}"));
+    state.pending_app_update = None;
+    state.application.set_pending_app_update_version(None);
+    if let Err(error) = state.application.set_skipped_update_version(&version) {
+        show_error_message(window, &error.to_string());
+    }
+    announce_player_text(window, "update_skipped", &[("version", &version)]);
+    if from_menu && state.view == MainView::MainMenu {
+        show_main_menu(window);
+    }
+}
+
+/// Python `begin_app_update_install` and `download_and_install_update`.
+unsafe fn begin_app_update_install(
+    window: HWND,
+    release: &apricot_updater::Release,
+    asset: apricot_updater::ReleaseAsset,
+) {
+    let version = release.version();
+    log_update_event(&format!("Beginning update {version}; asset={}", asset.name));
+    close_update_progress(window);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let unknown = catalog
+        .text("update_download_unknown")
+        .replace("{version}", &version);
+    state.update_progress_window =
+        crate::converter_win32::ConversionProgressWindow::create_with_times(
+            window,
+            catalog.text("update_progress_title"),
+            &unknown,
+            100,
+            false,
+        )
+        .ok();
+    // wx `PD_APP_MODAL`.
+    let _ = EnableWindow(window, false);
+    let text = catalog
+        .text("downloading_update")
+        .replace("{version}", &version);
+    set_status(state, &text, true);
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut transport =
+            apricot_platform::app_update::update_transport(env!("CARGO_PKG_VERSION"));
+        let progress_sender = sender.clone();
+        let progress_version = version.clone();
+        let result = apricot_updater::download_app_update(
+            transport.as_mut(),
+            &apricot_updater::RUST_BETA_PACKAGE,
+            &asset,
+            &mut |line| log_update_event(line),
+            &mut |percent| {
+                let _ = progress_sender.send(UpdateMessage::AppDownloadProgress {
+                    version: progress_version.clone(),
+                    percent,
+                });
+            },
+        );
+        let _ = sender.send(UpdateMessage::AppDownloaded { version, result });
+    });
+    watch_update_worker(window, receiver);
+}
+
+/// Python `close_update_progress_dialog`.
+unsafe fn close_update_progress(window: HWND) {
+    let _ = EnableWindow(window, true);
+    if let Some(progress) = state_mut(window).and_then(|state| state.update_progress_window.take())
+    {
+        progress.destroy();
+    }
+}
+
+/// Python `finish_app_update_install`: write and start the install script,
+/// then leave so it can replace the app.
+unsafe fn finish_app_update_install(
+    window: HWND,
+    downloaded: &apricot_updater::DownloadedUpdate,
+    version: &str,
+) {
+    use apricot_updater::{RUST_BETA_PACKAGE, script};
+
+    let Some(catalog) = state(window)
+        .map(|state| apricot_app::embedded_catalog(&state.application.settings().language))
+    else {
+        return;
+    };
+    if !apricot_platform::app_update::app_update_install_allowed() {
+        close_update_progress(window);
+        let text = catalog
+            .text("update_source_only")
+            .replace("{version}", version);
+        show_message_box(window, &text, MB_ICONINFORMATION);
+        return;
+    }
+    let launched = (|| -> std::result::Result<PathBuf, String> {
+        let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+        let folder = executable
+            .parent()
+            .ok_or_else(|| "Application path is unavailable".to_owned())?;
+        log_update_event(&format!(
+            "Preparing install for {version}; package={}; current_exe={}",
+            downloaded.path.display(),
+            executable.display()
+        ));
+        let log_path =
+            update_log_path().ok_or_else(|| "Application data path is unavailable".to_owned())?;
+        let input = script::UpdateScriptInput {
+            package: &RUST_BETA_PACKAGE,
+            downloaded_path: &downloaded.path,
+            target_dir: folder,
+            process_id: std::process::id(),
+            log_path: &log_path,
+            restart: true,
+            expected_sha256: &downloaded.sha256,
+        };
+        let name = downloaded.path.to_string_lossy();
+        let (text, prefix) = if RUST_BETA_PACKAGE.is_installer_asset(&name) {
+            (
+                script::installer_update_script(&input),
+                "apricotplayer-installer-update-",
+            )
+        } else if RUST_BETA_PACKAGE.is_portable_zip_asset(&name) {
+            (
+                script::portable_zip_update_script(&input),
+                "apricotplayer-portable-update-",
+            )
+        } else {
+            return Err(format!("unexpected update asset name: {name}"));
+        };
+        let script_path = script::write_update_script(&text, prefix)?;
+        log_update_event(&format!(
+            "Launching update script {}",
+            script_path.display()
+        ));
+        script::launch_update_script(&script_path)?;
+        Ok(log_path)
+    })();
+    let log_path = match launched {
+        Ok(log_path) => log_path,
+        Err(error) => {
+            close_update_progress(window);
+            let text = catalog.text("app_update_failed").replace("{error}", &error);
+            show_message_box(
+                window,
+                &text,
+                windows::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
+            );
+            return;
+        }
+    };
+    if let Some(state) = state(window) {
+        let text = catalog
+            .text("installing_update")
+            .replace("{version}", version);
+        set_status(state, &text, false);
+    }
+    close_update_progress(window);
+    if let Some(state) = state(window) {
+        set_status(state, catalog.text("update_install_started"), true);
+        let text = catalog
+            .text("update_install_log")
+            .replace("{path}", &log_path.to_string_lossy());
+        set_status(state, &text, false);
+    }
+    log_update_event("Exiting ApricotPlayer for update");
+    // Python `exit_for_update`.
+    if let Some(state) = state_mut(window) {
+        state.lifecycle = WindowLifecycle::Exiting;
+    }
+    let _ = DestroyWindow(window);
 }
 
 /// Python `finish_conversion_message`.
@@ -15280,8 +15967,9 @@ unsafe fn show_player_transcript(window: HWND) {
         }));
     } else {
         let worker_item = item.clone();
-        let executable =
-            application_directory().map(|path| path.join("components").join("yt-dlp.exe"));
+        let executable = application_directory().map(|path| {
+            apricot_platform::app_update::preferred_ytdlp_executable(&path.join("components"))
+        });
         std::thread::spawn(move || {
             let result = crate::transcript_loader::load(
                 &worker_item,
@@ -15403,7 +16091,9 @@ unsafe fn show_player_comments(window: HWND) {
         .to_owned();
     let proxy = nonempty(&state.application.settings().proxy);
     let config = youtube_session_config(state);
-    let executable = application_directory().map(|path| path.join("components").join("yt-dlp.exe"));
+    let executable = application_directory().map(|path| {
+        apricot_platform::app_update::preferred_ytdlp_executable(&path.join("components"))
+    });
     let worker_catalog = catalog.clone();
     let loader: crate::comments_win32::CommentsLoader = Box::new(move |page_token: String| {
         let (sender, receiver) = std::sync::mpsc::channel();
@@ -16795,6 +17485,7 @@ unsafe fn open_settings(window: HWND) {
     layout_controls_state(window, state);
     let _ = SetFocus(Some(active_primary_control(state)));
     configure_subscription_timer(window);
+    configure_app_update_timer(window);
     check_subscriptions_if_due(window);
     configure_rss_timer(window);
     process_pending_activations(window);

@@ -135,6 +135,7 @@ version = "2.0.0-dev.1"
 dependencies = [
  "apricot-core",
  "apricot-media",
+ "apricot-updater",
  "chrono",
  "encoding_rs",
  "regex",
@@ -201,6 +202,7 @@ dependencies = [
  "apricot-platform",
  "apricot-playback",
  "apricot-storage",
+ "apricot-updater",
  "chrono",
  "serde_json",
  "url",
@@ -211,8 +213,13 @@ dependencies = [
 name = "apricot-updater"
 version = "2.0.0-dev.1"
 dependencies = [
+ "chrono",
  "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
  "thiserror",
+ "url",
 ]
 
 [[package]]

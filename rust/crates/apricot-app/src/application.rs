@@ -78,6 +78,9 @@ pub struct Application {
     audio_device_options: Option<(Instant, Vec<crate::SettingsChoiceOption>)>,
     /// Python `cookie_source_refresh_error`.
     cookie_source_refresh_error: String,
+    /// Python `pending_app_update_version()`: a found update that waits in
+    /// the main menu.
+    pending_app_update_version: Option<String>,
     state: AppState,
 }
 
@@ -97,8 +100,15 @@ impl Application {
             background_return_frame: None,
             audio_device_options: None,
             cookie_source_refresh_error: String::new(),
+            pending_app_update_version: None,
             state: AppState::default(),
         }
+    }
+
+    /// Python `pending_app_update_release` changes: the main menu shows
+    /// "Update available: {version}" first while a version is set.
+    pub fn set_pending_app_update_version(&mut self, version: Option<String>) {
+        self.pending_app_update_version = version;
     }
 
     pub const fn player_session(&self) -> &PlayerSession {
@@ -2171,13 +2181,26 @@ impl Application {
     pub fn main_menu_model(&self) -> MainMenuModel {
         let settings = self.settings.current();
         let availability = self.current_menu_availability();
-        MainMenuModel::build(
-            &embedded_catalog(&settings.language),
+        let catalog = embedded_catalog(&settings.language);
+        let mut model = MainMenuModel::build(
+            &catalog,
             availability,
             &settings.main_menu_hidden_actions,
             settings.show_shortcuts_in_labels,
             &settings.keyboard_shortcuts,
-        )
+        );
+        if let Some(version) = &self.pending_app_update_version {
+            model.items.insert(
+                0,
+                crate::MainMenuItem {
+                    id: "app_update",
+                    label: catalog
+                        .text("app_update_menu_item")
+                        .replace("{version}", version),
+                },
+            );
+        }
+        model
     }
 
     /// Python `action_finder_actions` for the current application state.
@@ -2512,6 +2535,22 @@ impl Application {
     pub fn save_settings(&mut self) -> Result<(), SettingsControllerError> {
         let _ = self.settings.save()?;
         Ok(())
+    }
+
+    /// Python sets `skipped_update_version` and calls `save_settings`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the value cannot be stored or saved.
+    pub fn set_skipped_update_version(
+        &mut self,
+        version: &str,
+    ) -> Result<(), SettingsControllerError> {
+        self.settings.set_value(
+            SettingId::SkippedUpdateVersion,
+            Value::String(version.to_owned()),
+        )?;
+        self.save_settings()
     }
 
     /// Python `CACHED_COOKIES_FILE`, next to the settings file.

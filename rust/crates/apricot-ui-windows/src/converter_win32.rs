@@ -87,6 +87,8 @@ pub enum ConverterStart {
         target: String,
         image: Option<PathBuf>,
         replace_original: bool,
+        /// The save dialog confirmed overwriting an existing `output` (O-13).
+        overwrite_confirmed: bool,
     },
     Folder {
         source: PathBuf,
@@ -713,14 +715,18 @@ unsafe fn convert(window: HWND, state: &mut DialogState) {
             warn(window, &state.text("unsupported_input_format"));
             return;
         }
-        let output = if replace {
-            replaced_output_path(&source, target)
+        let (output, overwrite_confirmed) = if replace {
+            (replaced_output_path(&source, target), false)
         } else {
-            let Some(output) = choose_output_file(window, state, &source, target) else {
+            let Some(chosen) = choose_output_file(window, state, &source, target) else {
                 (state.options.announce)(&state.text("conversion_cancelled"));
                 return;
             };
-            with_default_extension(output, target)
+            // The dialog asked about exactly this name only when no extension
+            // had to be added afterwards.
+            let output = with_default_extension(chosen.clone(), target);
+            let confirmed = output == chosen;
+            (output, confirmed)
         };
         ConverterStart::File {
             source,
@@ -728,6 +734,7 @@ unsafe fn convert(window: HWND, state: &mut DialogState) {
             target: target.to_owned(),
             image,
             replace_original: replace,
+            overwrite_confirmed,
         }
     };
     state.result = Some(start);
@@ -811,6 +818,9 @@ struct ProgressState {
     total: usize,
     converted: usize,
     started: Instant,
+    /// wx `PD_REMAINING_TIME`; the update dialog shows only elapsed and
+    /// estimated time.
+    show_remaining: bool,
 }
 
 /// Python's modeless `wx.ProgressDialog` for folder conversion: a real dialog
@@ -826,6 +836,20 @@ impl ConversionProgressWindow {
     /// # Errors
     /// Returns a Windows error if the dialog cannot be created.
     pub unsafe fn create(owner: HWND, title: &str, message: &str, total: usize) -> Result<Self> {
+        Self::create_with_times(owner, title, message, total, true)
+    }
+
+    /// Python's update `wx.ProgressDialog` has no remaining time.
+    ///
+    /// # Errors
+    /// Returns a Windows error if the dialog cannot be created.
+    pub unsafe fn create_with_times(
+        owner: HWND,
+        title: &str,
+        message: &str,
+        total: usize,
+        show_remaining: bool,
+    ) -> Result<Self> {
         let instance = HINSTANCE(GetModuleHandleW(None)?.0);
         let template = dialog_template(title);
         let window = CreateDialogIndirectParamW(
@@ -893,6 +917,7 @@ impl ConversionProgressWindow {
             total: maximum,
             converted: 0,
             started: Instant::now(),
+            show_remaining,
         });
         SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(state) as isize);
         update_times(window);
@@ -915,6 +940,13 @@ impl ConversionProgressWindow {
         set_window_text(state.message, message);
         SendMessageW(state.bar, PBM_SETPOS, Some(WPARAM(state.converted)), None);
         update_times(self.window);
+    }
+
+    /// wx `Pulse(message)`: new text while the size is unknown.
+    pub unsafe fn pulse(self, message: &str) {
+        if let Some(state) = progress_state(self.window) {
+            set_window_text(state.message, message);
+        }
     }
 
     pub unsafe fn handles_dialog_message(self, message: &MSG) -> bool {
@@ -942,8 +974,14 @@ impl ConversionProgressWindow {
 
 /// An empty dialog template: the window class is the system dialog class.
 fn dialog_template(title: &str) -> Vec<u32> {
+    sized_dialog_template(title, 250, 110, 0)
+}
+
+/// [`dialog_template`] with a size in dialog units and extra window styles.
+pub(crate) fn sized_dialog_template(title: &str, cx: i16, cy: i16, extra_style: u32) -> Vec<u32> {
     let style = (WS_POPUP | WS_CAPTION | WS_SYSMENU).0
-        | u32::try_from(DS_MODALFRAME | DS_CENTER).unwrap_or_default();
+        | u32::try_from(DS_MODALFRAME | DS_CENTER).unwrap_or_default()
+        | extra_style;
     let mut words: Vec<u16> = Vec::new();
     let header = DLGTEMPLATE {
         style,
@@ -951,8 +989,8 @@ fn dialog_template(title: &str) -> Vec<u32> {
         cdit: 0,
         x: 0,
         y: 0,
-        cx: 250,
-        cy: 110,
+        cx,
+        cy,
     };
     // SAFETY: DLGTEMPLATE is a packed plain-data struct of 18 bytes.
     let bytes = unsafe {
@@ -994,10 +1032,14 @@ unsafe fn update_times(window: HWND) {
             / u64::try_from(state.converted).unwrap_or(1);
         (clock(estimated), clock(estimated.saturating_sub(elapsed)))
     };
-    let text = format!(
-        "Elapsed time: {}\r\nEstimated time: {estimated}\r\nRemaining time: {remaining}",
+    let mut text = format!(
+        "Elapsed time: {}\r\nEstimated time: {estimated}",
         clock(elapsed)
     );
+    if state.show_remaining {
+        text.push_str("\r\nRemaining time: ");
+        text.push_str(&remaining);
+    }
     set_window_text(state.times, &text);
 }
 

@@ -981,7 +981,12 @@ pub fn spawn_youtube_runtime(
     backend: YoutubeBackend,
     components_directory: &Path,
 ) -> Result<YoutubeRuntime, YoutubeRuntimeError> {
-    let executable = components_directory.join(component_executable(backend));
+    let executable = match backend {
+        YoutubeBackend::YtDlp => {
+            crate::app_update::preferred_ytdlp_executable(components_directory)
+        }
+        YoutubeBackend::RustyYtdl => components_directory.join(component_executable(backend)),
+    };
     YoutubeRuntime::spawn(Box::new(move || match backend {
         YoutubeBackend::YtDlp => YtDlpYoutubeEngine::new(&executable)
             .map(|engine| Box::new(engine) as Box<dyn YoutubeEngine>)

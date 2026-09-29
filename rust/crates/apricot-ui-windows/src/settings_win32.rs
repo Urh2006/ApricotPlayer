@@ -1104,6 +1104,8 @@ unsafe fn handle_settings_command(window: HWND, command: SettingsCommand, label:
         SettingsCommand::OpenYoutubeLoginProfile => open_youtube_login_profile(window),
         SettingsCommand::ExportBrowserCookies => export_browser_cookies(window),
         SettingsCommand::ObtainYoutubeApiKey => open_youtube_api_key_page(window),
+        SettingsCommand::CheckYtdlpUpdates => request_update_check(window, false),
+        SettingsCommand::CheckAppUpdates => request_update_check(window, true),
         _ => {
             if let Some(state) = state_mut(window) {
                 // Python has every settings command. Until the Rust route exists,
@@ -1115,6 +1117,33 @@ unsafe fn handle_settings_command(window: HWND, command: SettingsCommand, label:
             }
         }
     }
+}
+
+/// Python `manual_ytdlp_update_check` applies the visible controls;
+/// `manual_app_update_check` also saves them. The main window runs the check
+/// and speaks its result, so focus stays on the button.
+unsafe fn request_update_check(window: HWND, app: bool) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    if let Err(error) = sync_all_controls(state) {
+        show_error(window, &error.to_string());
+        return;
+    }
+    if app && !save_and_register_startup(window, state) {
+        return;
+    }
+    let request = if app {
+        crate::win32::UPDATE_REQUEST_APP
+    } else {
+        crate::win32::UPDATE_REQUEST_YTDLP
+    };
+    let _ = PostMessageW(
+        Some(state.owner),
+        crate::win32::WM_UPDATE_REQUEST,
+        WPARAM(request),
+        LPARAM(0),
+    );
 }
 
 /// Settings side of the shared equalizer profile prompts.

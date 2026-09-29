@@ -135,7 +135,7 @@ Prioriteta: P1 pomeni, da je osnovna uporaba s tipkovnico ali NVDA zlomljena ali
 | SETTINGS-M-01 | P1 | Piškotki: datoteka, uvoz iz brskalnika, DevTools izvoz, prijavni profil | `apricot/ui/cookies.py` |
 | SETTINGS-M-03 | P2 | Set default player in pomoč pri povezavah datotek | `apricot/ui/settings.py:462` |
 | PODDL-M-01 | P1 | Pretvornik datotek in pretvornik map | `apricot/media/media.py:40-436` |
-| PODDL-M-03, SHELL-M-02 | P1 | yt-dlp posodobitve ter posodobitve aplikacije s kanali, preskokom verzije, preverjanjem in rollbackom | `apricot/updater/updater.py` |
+| PODDL-M-03, SHELL-M-02 | P1 | Odpravljeno v E18: yt-dlp posodobitve ter posodobitve aplikacije s kanali, preskokom verzije, preverjanjem in rollbackom | `apricot/updater/updater.py` |
 | PODDL-M-02, SHELL-M-01 | P1 | AudioVault v celoti | `apricot/network/audiovault.py` |
 
 Action Finder, pladenj, center obvestil in obnovitev fokusa v glavnem meniju je pregledala
@@ -180,8 +180,9 @@ Enote, ki popravljajo odstopanja, so na vrsti prve.
 - **E15.** Diagnostično poročilo z zakrivanjem zasebnih podatkov.
 - **E16. Piškotki. Zaključeno 29. 9. 2026, glej razdelek 6.**
 - **E17. Pretvornik datotek in pretvornik map. Zaključeno 29. 9. 2026, glej razdelek 6.**
-- **E18.** yt-dlp posodobitve in posodobitve aplikacije. Pred objavo 2.0 ostanejo
-  po D-011 lokalno onemogočene.
+- **E18. yt-dlp posodobitve in posodobitve aplikacije. Zaključeno 29. 9. 2026, glej
+  razdelek 6.** Namestitev posodobitve aplikacije ostane po D-011 v lokalni beti
+  onemogočena.
 - **E19.** AudioVault.
 - **E20.** Zaključna parity vrata: ponovna primerjava manifesta, preverjanje števil
   v registrih, NVDA preizkus celote, preverjanje uvoza podatkov in zmogljivosti.
@@ -239,6 +240,15 @@ odstopanje se najprej predlaga Urhu in se po odobritvi zapiše sem.
   način (skripte s soundcloud.com, vzorec `client_id:"..."`, ponovno branje ob odgovoru
   401 ali 403) in ga hrani v pomnilniku do konca zagona (odločitev P-7, odobrena
   29. 9. 2026, narejeno v E15).
+- **O-12.** Kadar pretvorba ene datoteke spodleti, Python pusti delno izhodno datoteko
+  oziroma pri zamenjavi izvirnika skrito datoteko ".ime.apricot-converting-...". Rust jo
+  izbriše, kot Python že naredi pri pretvorbi mape z zamenjavo (predlog P-8 iz E17,
+  odobren 29. 9. 2026, narejeno pred E18).
+- **O-13.** Ko uporabnik v dialogu za shranjevanje pretvorbe potrdi prepis obstoječe
+  datoteke, Python vseeno zapiše "ime (2).končnica". Rust prepiše izbrano datoteko. Pretvorba
+  gre prek skrite delovne datoteke, zato obstoječa datoteka ob napaki ostane nespremenjena.
+  Izvirnika samega se tudi s potrditvijo ne prepiše, takrat ostane "ime (2)" (predlog P-9 iz
+  E17, odobren 29. 9. 2026, narejeno pred E18).
 
 ## 6. Dnevnik enot
 
@@ -1182,10 +1192,10 @@ sistemski dialog z enako vsebino. Besedila o času so kot v wx angleška.
 Predlogi za Urha (Python obnašanje, ki je videti kot majhna napaka, Rust ga zaenkrat
 posnema):
 
-- **P-8.** Pri neuspeli pretvorbi ene datoteke Python pusti delno izhodno datoteko, pri
+- **P-8** (odobreno 29. 9. 2026 kot O-12). Pri neuspeli pretvorbi ene datoteke Python pusti delno izhodno datoteko, pri
   zamenjavi izvirnika pa skrito datoteko ".ime.apricot-converting-...". Rust bi ju lahko
   izbrisal, kot to Python že naredi pri pretvorbi mape z zamenjavo.
-- **P-9.** Ko uporabnik v dialogu za shranjevanje potrdi prepis obstoječe datoteke, Python
+- **P-9** (odobreno 29. 9. 2026 kot O-13). Ko uporabnik v dialogu za shranjevanje potrdi prepis obstoječe datoteke, Python
   vseeno zapiše "ime (2).končnica". Rust bi lahko prepisal izbrano datoteko.
 
 Preverjanje: `cargo build`, `cargo test` (571 uspešnih, 15 izključenih), `cargo clippy
@@ -1202,3 +1212,77 @@ izvirnikov. Po vsakem koncu je fokus na glavnem meniju.
 
 Še odprto: odstopanje iz E13 (odrezovanje števila ogledov v F7) ostaja, ker E17 tega dela
 ne spreminja.
+
+### E18: posodobitve yt-dlp in aplikacije (29. 9. 2026)
+
+Najprej sta narejena odobrena O-12 in O-13 iz E17 (pretvornik): neuspela pretvorba ene
+datoteke izbriše delno izhodno ali skrito začasno datoteko, potrjen prepis v dialogu za
+shranjevanje pa res prepiše izbrano datoteko prek skrite delovne datoteke.
+
+Spremembe E18:
+
+- `apricot-updater` ima Pythonovo logiko: `parse_version`, `is_newer_version` in
+  `is_component_version_newer`, branje GitHub izdaj s kanaloma stable in beta
+  (`fetch_latest_release`, `fetch_public_releases`, zbirni seznam novosti z mejo 12000 znakov
+  in besedilo izdaje z mejo 6000 znakov), izbiro paketa glede na nameščeno ali prenosno
+  različico, preverjanje zaupanja naslovov, velikosti in SHA-256, preverjanje zip paketa
+  (število, velikost in razmerje stiskanja članov, nevarne poti, šifrirani in posebni
+  vnosi), skripte za posodobitev s prenosnim zipom in z namestitvenim programom
+  (čakanje na izhod, preverjanje zgoščene vrednosti, varnostna kopija, rollback, ponovni
+  zagon z `--updated-relaunch`), zagon skripte v skritem PowerShellu in `updater.log` z
+  obrezovanjem pri 2 MiB.
+- Omrežje je v `apricot-platform/src/app_update.rs` (samo HTTPS preusmeritve, končni
+  naslov mora biti pod github.com oziroma githubusercontent.com, meje velikosti).
+- yt-dlp: ob zagonu po 3,5 sekunde in z gumbom "Check yt-dlp updates now" se preveri
+  najnovejša uradna izdaja. Novejši `yt-dlp.exe` gre v `components` v podatkovni mapi
+  (Pythonov `COMPONENTS_DIR`) in ima prednost pred priloženim. Oglasi so Pythonovi:
+  "Checking updates for YouTube support.", "Updating components.", "Components updated.",
+  "YouTube support is up to date." (samo ročno) in "Could not check YouTube support
+  updates: ...".
+- Aplikacija: ob zagonu po 5,5 sekunde (z vprašanjem), vsakih `app_update_interval_hours`
+  (brez vprašanja: postavka "Update available: X" na vrhu glavnega menija, stanje in
+  obvestilo, ko aplikacija nima fokusa) in z gumbom "Check for updates" (shrani nastavitve
+  in vpraša tudi za preskočeno verzijo). Dialog "Update available" ima Pythonove kontrole:
+  "Version X", "What's new?", polje samo za branje z imenom "What's new?" in začetnim
+  fokusom, "Would you like to update now?", "Update now" (privzeti gumb) in "Skip this
+  version". Escape in zapiranje pomenita preskok, ki se shrani v `skipped_update_version`.
+  Prenos pokaže okno napredka "Updating ApricotPlayer" s pretečenim in ocenjenim časom,
+  nato se zažene skripta in aplikacija se zapre.
+- Ponovni zagon z `--updated-relaunch` 45 sekund ne pokaže sporočila, da je aplikacija že
+  odprta (Python `suppress_already_open_for_update`).
+
+Nujne razlike:
+
+- Rust uporablja samostojni `yt-dlp.exe`, zato se posodobi iz uradnih GitHub izdaj yt-dlp
+  (SHA-256 iz podatkov izdaje ali iz `SHA2-256SUMS`), ne iz PyPI paketa.
+- Rust paket ima drugačno obliko kot PyInstaller: prenosni zip ima korensko mapo z
+  izvršljivo datoteko ter mapami `components`, `mpv`, `ffmpeg`, `assets` in `nvda`. Imena
+  paketov za beto (`ApricotPlayer2Beta.zip`, `ApricotPlayer2BetaSetup.exe`) so začasna in se
+  določijo ob pripravi izdaje 2.0 (E20).
+- Lokalna beta (D-011) preverja GitHub kot Python, a namesto namestitve pokaže Pythonovo
+  sporočilo "Automatic install works only in the .exe build. New release available: X".
+  Samo z okoljsko spremenljivko `APRICOT_UPDATE_TEST_FEED` (mapa z `latest.json`,
+  `releases.json`, `ytdlp-latest.json` in paketi) lokalna beta namesti posodobitev, za
+  preizkuse.
+- Časovnik posodobitev se ponastavi, ko se zaprejo nastavitve, ne ob Save, kot že pri
+  časovniku naročnin.
+- Pythonova tretja skripta (zamenjava samo .exe) ni prenesena, ker je Python nikoli ne
+  uporabi: dovoljena imena paketov so samo zip in namestitveni program.
+
+Opozorilo za izdajo 2.0: Pythonov `parse_version` oznako "dev" razvrsti kot končno
+izdajo, zato "2.0.0" ni novejša od "2.0.0-dev.1". Javne predizdaje naj uporabljajo
+"alpha", "beta" ali "rc".
+
+Preverjanje: `cargo build`, `cargo test` (596 uspešnih, 16 izključenih), `cargo clippy
+--workspace --all-targets -D warnings` in `cargo fmt`. Novi testi pokrijejo primerjavo
+verzij, izbiro izdaj po kanalih, zbirni seznam novosti, izbiro in imena paketov,
+preverjanje naslovov, velikosti, SHA-256 in zipa, obe skripti, dnevnik, preverjanje in
+prenos z lažnim GitHubom ter oba primera O-12 in O-13. Izključeni test v živo je enkrat
+prenesel pravi `yt-dlp.exe` z GitHuba v začasno mapo. Kopija bete na ločenem nevidnem
+namizju z ločenimi podatki in lokalnim testnim virom je potrdila napako pri napačni
+zgoščeni vrednosti, začetni dialog (imena, vloge, fokus v polju, Tab, Enter v polju ne
+stori ničesar, Escape preskoči in shrani), ročni preverjanji yt-dlp iz nastavitev (posodobitev
+in "up to date"), ročni dialog nad nastavitvami s fokusom nazaj na gumbu, postavko "Update
+available: 2.0.0-dev.3" po časovniku ter celotno posodobitev z zamenjavo datotek, brez
+ostankov in s ponovnim zagonom z `--updated-relaunch`. Na pravem GitHubu je zagonsko
+preverjanje v kopiji javilo "The app is up to date." (izdaje 1.x niso novejše).

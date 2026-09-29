@@ -1,6 +1,23 @@
 //! App and component update policy. Local Rust betas explicitly disable remote
 //! publication and installation.
 
+pub mod flow;
+pub mod package;
+pub mod release;
+pub mod script;
+pub mod version;
+
+pub use flow::{
+    AppUpdateCheck, DownloadedUpdate, GithubReleaseFeed, UpdateTransport, YtdlpUpdate,
+    check_app_update, download_app_update, update_ytdlp_component,
+};
+pub use release::{PackageNames, RUST_BETA_PACKAGE, Release, ReleaseAsset, release_changelog_text};
+pub use version::{is_component_version_newer, is_newer_version, parse_version};
+
+/// This build's channel: every local Rust beta is `LocalOnly` until the 2.0
+/// release (D-011).
+pub const BUILD_CHANNEL: UpdateChannel = UpdateChannel::LocalOnly;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UpdateChannel {
     Stable,

@@ -18,6 +18,7 @@ use apricot_storage::{
 };
 use apricot_updater::UpdateChannel;
 
+#[allow(clippy::too_many_lines)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
     let start_hidden = arguments
@@ -39,10 +40,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let first_run_without_settings = !settings_file_existed && !settings_paths.legacy.exists();
     let mut settings = SettingsController::load(settings_paths, defaults);
     let startup_file = startup_file_argument(&arguments);
+    // Python `mark_update_relaunch_window` and
+    // `suppress_already_open_for_update`.
+    if apricot_platform::app_update::relaunch_requested(&arguments) {
+        apricot_platform::app_update::mark_update_relaunch_window(
+            &paths.app_data,
+            unix_timestamp(),
+        );
+    }
     let instance = acquire_single_instance(ApplicationIdentity::RustBeta)?;
     let _instance_guard = match instance {
         SingleInstanceOutcome::Primary(guard) => guard,
         SingleInstanceOutcome::Secondary => {
+            if apricot_platform::app_update::suppress_already_open_for_update(
+                &paths.app_data,
+                unix_timestamp(),
+            ) {
+                return Ok(());
+            }
             if let Some(path) = startup_file {
                 apricot_ui_windows::forward_to_existing(&ActivationRequest::OpenFile(path))?;
             } else if settings.current().close_to_tray {
