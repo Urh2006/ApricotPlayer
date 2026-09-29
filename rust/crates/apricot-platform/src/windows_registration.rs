@@ -304,6 +304,20 @@ pub fn open_default_apps_settings() -> Result<(), PlatformError> {
     shell_open_platform("ms-settings:defaultapps", "")
 }
 
+/// Python `webbrowser.open` for an http or https page.
+///
+/// # Errors
+///
+/// Returns an error for another scheme or when Windows cannot open it.
+pub fn open_web_url(url: &str) -> Result<(), PlatformError> {
+    let parsed =
+        url::Url::parse(url).map_err(|error| PlatformError::Operation(error.to_string()))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(PlatformError::Operation(format!("unsupported URL: {url}")));
+    }
+    shell_open_platform(parsed.as_str(), "")
+}
+
 /// Opens the Default Programs control panel, Python's fallback when the
 /// Default apps page or the registration fails.
 ///
@@ -333,6 +347,17 @@ enum RegistryRoot {}
 #[cfg(not(windows))]
 const fn registry_roots() -> [RegistryRoot; 0] {
     []
+}
+
+/// One current-user string value, with `REG_EXPAND_SZ` expanded.
+#[cfg(windows)]
+pub(crate) fn read_current_user_text(subkey: &str, name: &str) -> Option<String> {
+    read_registry_text(RegistryRoot::CurrentUser, subkey, name)
+}
+
+#[cfg(not(windows))]
+pub(crate) fn read_current_user_text(_subkey: &str, _name: &str) -> Option<String> {
+    None
 }
 
 #[cfg(windows)]

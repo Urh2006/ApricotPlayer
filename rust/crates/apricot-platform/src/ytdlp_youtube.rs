@@ -15,6 +15,7 @@ use std::{
 
 use crate::soundcloud_search::{SoundcloudCollectionSearch, search_soundcloud_collections};
 use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
+use apricot_media::cookie_errors::{is_age_or_js_playback_error, is_cookie_auth_error};
 use apricot_media::{
     MAX_YOUTUBE_METADATA_ITEMS, YoutubeBackend, YoutubeCapability, YoutubeCollectionKind,
     YoutubeCommand, YoutubeEngine, YoutubeEngineError, YoutubeErrorCode, YoutubeFormat,
@@ -93,7 +94,7 @@ impl YtDlpYoutubeEngine {
     ///
     /// Returns process, timeout or invalid output errors.
     pub fn version(&self) -> Result<String, YtDlpError> {
-        let output = self.run([OsString::from("--version")])?;
+        let output = run_executable(&self.executable, [OsString::from("--version")])?;
         checked_stdout(output).and_then(|bytes| {
             let version = String::from_utf8(bytes)
                 .map_err(|error| YtDlpError::InvalidOutput(error.to_string()))?;
@@ -119,7 +120,7 @@ impl YtDlpYoutubeEngine {
         languages: &[String],
     ) -> Result<Value, YtDlpError> {
         let arguments = self.transcript_arguments(media_url, languages)?;
-        parse_json(self.run(arguments)?)
+        parse_json(self.run(&arguments)?)
     }
 
     /// Python `fetch_ytdlp_comments`: extracts the video's information with
@@ -130,7 +131,7 @@ impl YtDlpYoutubeEngine {
     /// Returns validation, process, timeout, or invalid JSON errors.
     pub fn comments_metadata(&self, media_url: &str) -> Result<Value, YtDlpError> {
         let arguments = self.comments_arguments(media_url)?;
-        parse_json(self.run(arguments)?)
+        parse_json(self.run(&arguments)?)
     }
 
     fn comments_arguments(&self, media_url: &str) -> Result<Vec<OsString>, YtDlpError> {
@@ -180,7 +181,7 @@ impl YtDlpYoutubeEngine {
             .map_err(|error| YtDlpError::Request(error.to_string()))?;
         let arguments =
             self.transcript_download_arguments(media_url, languages, directory.path())?;
-        checked_stdout(self.run(arguments)?)?;
+        checked_stdout(self.run(&arguments)?)?;
         read_downloaded_transcript(directory.path())
     }
 
@@ -335,7 +336,7 @@ impl YtDlpYoutubeEngine {
         description: &str,
     ) -> Result<Vec<MediaItem>, YtDlpError> {
         let arguments = self.flat_arguments(target, limit, &[]);
-        flat_items_from_output(run_executable(&self.executable, arguments)?, description)
+        flat_items_from_output(self.run(&arguments)?, description)
     }
 
     /// Runs a flat listing on its own thread, like Python's Shorts requests.
@@ -347,10 +348,12 @@ impl YtDlpYoutubeEngine {
     ) -> mpsc::Receiver<Result<Vec<MediaItem>, YtDlpError>> {
         let (sender, receiver) = mpsc::channel();
         let executable = self.executable.clone();
+        let config = self.config.clone();
         let arguments = self.flat_arguments(target, limit, extra_arguments);
         thread::spawn(move || {
-            let result = run_executable(&executable, arguments)
-                .and_then(|output| flat_items_from_output(output, "Shorts"));
+            let result =
+                run_with_cookie_retry(&executable, &config, &arguments, CookieRetry::Extract)
+                    .and_then(|output| flat_items_from_output(output, "Shorts"));
             let _ = sender.send(result);
         });
         receiver
@@ -396,7 +399,12 @@ impl YtDlpYoutubeEngine {
             OsString::from("--"),
             OsString::from(media_url),
         ]);
-        let root = parse_json(self.run(arguments)?)?;
+        let root = parse_json(run_with_cookie_retry(
+            &self.executable,
+            &self.config,
+            &arguments,
+            CookieRetry::Playback { media_url },
+        )?)?;
         let item = media_item_from_value(&root).ok_or_else(|| {
             YtDlpError::InvalidOutput("resolved media metadata was incomplete".to_owned())
         })?;
@@ -438,7 +446,7 @@ impl YtDlpYoutubeEngine {
             OsString::from("--"),
         ]);
         arguments.extend(urls.iter().map(OsString::from));
-        let items = parse_json_lines(self.run(arguments)?)?
+        let items = parse_json_lines(self.run(&arguments)?)?
             .iter()
             .filter_map(media_item_from_value)
             .collect::<Vec<_>>();
@@ -510,10 +518,6 @@ impl YtDlpYoutubeEngine {
             OsString::from("--no-warnings"),
             OsString::from("--no-progress"),
         ];
-        if let Some(path) = self.config.cookies_file.as_deref() {
-            arguments.push(OsString::from("--cookies"));
-            arguments.push(OsString::from(path));
-        }
         if let Some(proxy) = self.config.proxy_url.as_deref() {
             arguments.push(OsString::from("--proxy"));
             arguments.push(OsString::from(proxy));
@@ -521,13 +525,120 @@ impl YtDlpYoutubeEngine {
         arguments
     }
 
-    fn run<I, S>(&self, arguments: I) -> Result<ProcessOutput, YtDlpError>
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        run_executable(&self.executable, arguments)
+    /// Python `ydl_extract_info`: first without cookies, then with them.
+    fn run(&self, arguments: &[OsString]) -> Result<ProcessOutput, YtDlpError> {
+        run_with_cookie_retry(
+            &self.executable,
+            &self.config,
+            arguments,
+            CookieRetry::Extract,
+        )
     }
+}
+
+/// When a failed yt-dlp run is repeated with the cookies file.
+#[derive(Clone, Copy)]
+enum CookieRetry<'a> {
+    /// Python `ydl_extract_info(use_cookies=False)`: sign-in errors retry
+    /// with the cookies file, then after `repair_cookies_for_error`.
+    Extract,
+    /// Python `resolve_stream_url`: sign-in, age and player errors retry
+    /// once with `playback_cookies_file_for_url`, without a browser refresh.
+    Playback { media_url: &'a str },
+}
+
+/// Python `ydl_options(use_cookies=True)`: the cookies file and, with it,
+/// the cookie user agent.
+fn cookie_arguments(config: &YoutubeSessionConfig, cookies_file: &str) -> Vec<OsString> {
+    let mut arguments = vec![OsString::from("--cookies"), OsString::from(cookies_file)];
+    if let Some(user_agent) = config
+        .cookie_user_agent
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        arguments.push(OsString::from("--add-headers"));
+        arguments.push(OsString::from(format!("User-Agent:{user_agent}")));
+    }
+    arguments
+}
+
+fn with_cookies(
+    config: &YoutubeSessionConfig,
+    cookies_file: &str,
+    arguments: &[OsString],
+) -> Vec<OsString> {
+    let mut with_cookies = cookie_arguments(config, cookies_file);
+    with_cookies.extend(arguments.iter().cloned());
+    with_cookies
+}
+
+fn run_with_cookie_retry(
+    executable: &Path,
+    config: &YoutubeSessionConfig,
+    arguments: &[OsString],
+    retry: CookieRetry<'_>,
+) -> Result<ProcessOutput, YtDlpError> {
+    let output = run_executable(executable, arguments)?;
+    if output.status.success() {
+        return Ok(output);
+    }
+    let error = process_error_text(&output);
+    let cookies_file = config
+        .cookies_file
+        .as_deref()
+        .filter(|path| Path::new(path).is_file());
+    match retry {
+        CookieRetry::Extract => {
+            if !is_cookie_auth_error(&error) {
+                return Ok(output);
+            }
+            let mut retry_error = error;
+            let mut last = output;
+            if let Some(cookies_file) = cookies_file {
+                let output =
+                    run_executable(executable, with_cookies(config, cookies_file, arguments))?;
+                if output.status.success() {
+                    return Ok(output);
+                }
+                retry_error = process_error_text(&output);
+                last = output;
+                if !is_cookie_auth_error(&retry_error) {
+                    return Ok(last);
+                }
+            }
+            match crate::browser_cookies::repair_cookies_for_error(&retry_error) {
+                Some(repaired) => run_executable(
+                    executable,
+                    with_cookies(config, &repaired.to_string_lossy(), arguments),
+                ),
+                None => Ok(last),
+            }
+        }
+        CookieRetry::Playback { media_url } => {
+            let retryable = is_cookie_auth_error(&error) || is_age_or_js_playback_error(&error);
+            let cookies_file = cookies_file
+                .filter(|_| !is_youtube_media_url(media_url) || config.cookies_have_youtube_login);
+            match cookies_file {
+                Some(cookies_file) if retryable => {
+                    run_executable(executable, with_cookies(config, cookies_file, arguments))
+                }
+                _ => Ok(output),
+            }
+        }
+    }
+}
+
+/// Python `is_youtube_url` for the playback cookie rule.
+fn is_youtube_media_url(media_url: &str) -> bool {
+    Url::parse(media_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+        .is_some_and(|host| {
+            ["youtube.com", "youtu.be", "youtube-nocookie.com"]
+                .iter()
+                .any(|root| host == *root || host.ends_with(&format!(".{root}")))
+        })
 }
 
 fn run_executable<I, S>(executable: &Path, arguments: I) -> Result<ProcessOutput, YtDlpError>
@@ -1062,14 +1173,18 @@ fn checked_stdout(output: ProcessOutput) -> Result<Vec<u8>, YtDlpError> {
     if output.status.success() {
         return Ok(output.stdout.bytes);
     }
+    Err(YtDlpError::Request(process_error_text(&output)))
+}
+
+fn process_error_text(output: &ProcessOutput) -> String {
     let message = String::from_utf8_lossy(&output.stderr.bytes);
-    let message = message
+    message
         .lines()
         .rev()
         .find(|line| !line.trim().is_empty())
         .unwrap_or("yt-dlp exited without an error message")
-        .trim();
-    Err(YtDlpError::Request(message.to_owned()))
+        .trim()
+        .to_owned()
 }
 
 fn parse_json(output: ProcessOutput) -> Result<Value, YtDlpError> {
@@ -1429,6 +1544,68 @@ fn sanitize_error(message: &str, config: &YoutubeSessionConfig) -> String {
     }
     sanitized.truncate(sanitized.floor_char_boundary(2_048));
     sanitized
+}
+
+#[cfg(test)]
+mod cookie_retry_tests {
+    use super::*;
+
+    #[test]
+    fn cookies_come_first_with_the_cookie_user_agent() {
+        let config = YoutubeSessionConfig {
+            cookie_user_agent: Some(" Mozilla/5.0 test ".to_owned()),
+            ..YoutubeSessionConfig::default()
+        };
+        let arguments = with_cookies(
+            &config,
+            r"C:\app\cookies.txt",
+            &[OsString::from("--"), OsString::from("https://youtu.be/x")],
+        );
+        assert_eq!(
+            arguments,
+            [
+                "--cookies",
+                r"C:\app\cookies.txt",
+                "--add-headers",
+                "User-Agent:Mozilla/5.0 test",
+                "--",
+                "https://youtu.be/x",
+            ]
+            .map(OsString::from)
+        );
+        assert_eq!(
+            cookie_arguments(&YoutubeSessionConfig::default(), "c.txt"),
+            ["--cookies", "c.txt"].map(OsString::from)
+        );
+    }
+
+    #[test]
+    fn base_arguments_never_carry_cookies() {
+        let directory = tempfile::tempdir().expect("dir");
+        let executable = directory.path().join("yt-dlp.exe");
+        let cookies = directory.path().join("cookies.txt");
+        std::fs::write(&executable, b"").expect("exe");
+        std::fs::write(&cookies, b"# HTTP Cookie File\n").expect("cookies");
+        let mut engine = YtDlpYoutubeEngine::new(&executable).expect("engine");
+        engine
+            .configure(YoutubeSessionConfig {
+                cookies_file: Some(cookies.to_string_lossy().into_owned()),
+                ..YoutubeSessionConfig::default()
+            })
+            .expect("configure");
+        assert!(
+            !engine
+                .base_arguments()
+                .contains(&OsString::from("--cookies"))
+        );
+    }
+
+    #[test]
+    fn playback_cookie_rule_knows_youtube_hosts() {
+        assert!(is_youtube_media_url("https://www.youtube.com/watch?v=x"));
+        assert!(is_youtube_media_url("https://youtu.be/x"));
+        assert!(!is_youtube_media_url("https://soundcloud.com/a/b"));
+    }
 }
 
 #[cfg(test)]
@@ -1869,6 +2046,7 @@ mod tests {
             cookies_header: None,
             cookies_file: Some("C:\\private\\cookies.txt".to_owned()),
             proxy_url: Some("http://name:secret@proxy.test".to_owned()),
+            ..YoutubeSessionConfig::default()
         };
         let message = sanitize_error(
             "failed C:\\private\\cookies.txt through http://name:secret@proxy.test",

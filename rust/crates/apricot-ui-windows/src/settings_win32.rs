@@ -39,16 +39,17 @@ use windows::{
                 BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, CBS_DROPDOWNLIST, CW_USEDEFAULT,
                 CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
                 GetMessageW, GetParent, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW,
-                HMENU, IDC_ARROW, IsDialogMessageW, KillTimer, LB_ADDSTRING, LB_DELETESTRING,
-                LB_GETCURSEL, LB_INSERTSTRING, LB_RESETCONTENT, LB_SETCURSEL, LBN_SELCHANGE,
-                LBS_NOTIFY, LoadCursorW, MB_ICONERROR, MB_ICONWARNING, MB_OK, MESSAGEBOX_STYLE,
-                MSG, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassW,
-                SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SW_SHOW, SendMessageW,
-                SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
-                TranslateMessage, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CHAR,
-                WM_CLOSE, WM_COMMAND, WM_HSCROLL, WM_KEYDOWN, WM_NCDESTROY, WM_SETFOCUS,
-                WM_SETFONT, WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE,
-                WS_GROUP, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+                HMENU, IDC_ARROW, IDYES, IsDialogMessageW, KillTimer, LB_ADDSTRING,
+                LB_DELETESTRING, LB_GETCURSEL, LB_INSERTSTRING, LB_RESETCONTENT, LB_SETCURSEL,
+                LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW, MB_ICONERROR, MB_ICONINFORMATION,
+                MB_ICONWARNING, MB_OK, MB_YESNO, MESSAGEBOX_STYLE, MSG, MessageBoxW, MoveWindow,
+                PostMessageW, PostQuitMessage, RegisterClassW, SB_VERT, SCROLLINFO, SIF_PAGE,
+                SIF_POS, SIF_RANGE, SW_SHOW, SendMessageW, SetForegroundWindow, SetTimer,
+                SetWindowLongPtrW, SetWindowTextW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE,
+                WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_HSCROLL,
+                WM_KEYDOWN, WM_NCDESTROY, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_TIMER, WM_VSCROLL,
+                WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_TABSTOP,
+                WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -427,7 +428,20 @@ unsafe fn render_controls(window: HWND) -> Result<()> {
         }
         let _ = DestroyWindow(bound.control);
     }
-    let model = (&*state.application).settings_model(state.selected_section);
+    if state.selected_section == SettingsSection::Cookies {
+        // Python `configured_cookies_display_path` runs the legacy migration.
+        let _ = (&mut *state.application).configured_cookies_display_path(
+            &apricot_platform::browser_cookies::windows_documents_folders(),
+        );
+    }
+    let mut model = (&*state.application).settings_model(state.selected_section);
+    if state.selected_section == SettingsSection::Cookies {
+        let settings = (&*state.application).settings();
+        model.replace_choice_options(
+            SettingId::CookiesBrowserProfile,
+            cookie_profile_options(settings),
+        );
+    }
     let instance = HINSTANCE(GetModuleHandleW(None)?.0);
     for (index, control) in model.controls.into_iter().enumerate() {
         let id = DYNAMIC_ID_START + index;
@@ -1086,6 +1100,10 @@ unsafe fn handle_settings_command(window: HWND, command: SettingsCommand, label:
         SettingsCommand::ImportEqualizerProfile => import_equalizer_profile(window),
         SettingsCommand::ExportEqualizerProfile => export_equalizer_profile(window),
         SettingsCommand::DeleteEqualizerProfile => delete_equalizer_profile(window),
+        SettingsCommand::ChooseCookiesFile => choose_cookies_file(window),
+        SettingsCommand::OpenYoutubeLoginProfile => open_youtube_login_profile(window),
+        SettingsCommand::ExportBrowserCookies => export_browser_cookies(window),
+        SettingsCommand::ObtainYoutubeApiKey => open_youtube_api_key_page(window),
         _ => {
             if let Some(state) = state_mut(window) {
                 // Python has every settings command. Until the Rust route exists,
@@ -1310,6 +1328,9 @@ unsafe fn reset_section(window: HWND) {
         show_error(window, &error.to_string());
         return;
     }
+    if section == SettingsSection::Cookies {
+        crate::cookies_win32::reset_repair_suppression();
+    }
     if !save_and_register_startup(window, state) {
         return;
     }
@@ -1406,6 +1427,295 @@ unsafe fn set_default_player(window: HWND) {
                 .replace("{error}", &error);
             show_error(window, &message);
         }
+    }
+}
+
+/// Python `cookie_profile_choice_values` and `cookie_profile_choice_labels`
+/// for the saved browser.
+fn cookie_profile_options(
+    settings: &apricot_storage::SettingsDocument,
+) -> Vec<apricot_app::SettingsChoiceOption> {
+    let catalog = apricot_app::embedded_catalog(&settings.language);
+    let mut browser = settings.cookies_from_browser.trim().to_owned();
+    if browser.is_empty() {
+        "none".clone_into(&mut browser);
+    }
+    let discovered = apricot_platform::browser_cookies::discover_cookie_profiles(&browser);
+    apricot_app::cookies::cookie_profile_choice_values(
+        &discovered,
+        &settings.cookies_browser_profile,
+    )
+    .into_iter()
+    .map(|value| apricot_app::SettingsChoiceOption {
+        label: apricot_app::cookies::cookie_profile_choice_label(&catalog, &value),
+        value,
+    })
+    .collect()
+}
+
+/// The bound control for a setting or command.
+fn bound_control(
+    state: &SettingsWindowState,
+    matches: impl Fn(&ControlBinding) -> bool,
+) -> Option<HWND> {
+    state
+        .controls
+        .iter()
+        .find(|bound| matches(&bound.binding))
+        .map(|bound| bound.control)
+}
+
+/// Python `choose_cookies_file`.
+unsafe fn choose_cookies_file(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let catalog = settings_catalog(state);
+    let button = bound_control(state, |binding| {
+        matches!(
+            binding,
+            ControlBinding::Command(SettingsCommand::ChooseCookiesFile)
+        )
+    });
+    let chosen =
+        crate::file_dialog_win32::choose_cookies_file(window, catalog.text("choose_cookies_file"));
+    let restore_focus = || {
+        if let Some(button) = button {
+            let _ = SetFocus(Some(button));
+        }
+    };
+    let path = match chosen {
+        Ok(Some(path)) => path,
+        Ok(None) => {
+            restore_focus();
+            return;
+        }
+        Err(error) => {
+            show_error(window, &error);
+            restore_focus();
+            return;
+        }
+    };
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let result = (&mut *state.application).import_cookies_file(&path);
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            let message = catalog.text("cookies_file_load_failed").replace(
+                "{error}",
+                &apricot_app::comments::friendly_error(&catalog, &error.localized(&catalog)),
+            );
+            show_message(window, &message, "ApricotPlayer 2 Beta", MB_ICONWARNING);
+            restore_focus();
+            return;
+        }
+    };
+    crate::cookies_win32::reset_repair_suppression();
+    let path_text = path.to_string_lossy().into_owned();
+    show_cookie_source(state, &path_text, 0);
+    state.announcer.announce(
+        &catalog
+            .text(result.message_key())
+            .replace("{path}", &path_text),
+        true,
+    );
+    if result.has_login {
+        state
+            .announcer
+            .announce(catalog.text("cookies_file_login_found"), false);
+    } else {
+        show_message(
+            window,
+            catalog.text("cookies_file_no_login_warning"),
+            "ApricotPlayer 2 Beta",
+            MB_ICONWARNING,
+        );
+    }
+    restore_focus();
+}
+
+/// Python sets the cookies field and the browser choice after an import or
+/// an export; an import also puts the profile back on Auto.
+unsafe fn show_cookie_source(state: &SettingsWindowState, path: &str, browser_index: usize) {
+    for bound in &state.controls {
+        match &bound.binding {
+            ControlBinding::Text(SettingId::CookiesFile) => set_window_text(bound.control, path),
+            ControlBinding::Choice {
+                setting: SettingId::CookiesFromBrowser,
+                ..
+            } => {
+                SendMessageW(
+                    bound.control,
+                    CB_SETCURSEL,
+                    Some(WPARAM(browser_index)),
+                    None,
+                );
+            }
+            ControlBinding::Choice {
+                setting: SettingId::CookiesBrowserProfile,
+                ..
+            } if browser_index == 0 => {
+                SendMessageW(bound.control, CB_SETCURSEL, Some(WPARAM(0)), None);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Python `finish_browser_cookies_export` for an open Settings window.
+pub(crate) unsafe fn browser_cookies_exported(window: HWND, path: &str, browser: &str) {
+    if let Some(state) = state(window) {
+        let index = apricot_app::cookies::COOKIES_BROWSER_OPTIONS
+            .iter()
+            .position(|option| *option == browser)
+            .unwrap_or_default();
+        show_cookie_source(state, path, index);
+    }
+}
+
+/// Applies the visible controls and returns the chosen browser, or shows
+/// Python's `select_cookies_browser` message.
+unsafe fn selected_cookie_browser(window: HWND) -> Option<String> {
+    let state = state_mut(window)?;
+    if let Err(error) = sync_all_controls(state) {
+        show_error(window, &error.to_string());
+        return None;
+    }
+    let browser =
+        apricot_app::cookies::normalized_cookies_browser((&*state.application).settings());
+    if browser.is_empty() {
+        let catalog = settings_catalog(state);
+        show_message(
+            window,
+            catalog.text("select_cookies_browser"),
+            "ApricotPlayer 2 Beta",
+            MB_ICONINFORMATION,
+        );
+        return None;
+    }
+    Some(browser)
+}
+
+/// Python `export_browser_cookies_from_settings`.
+unsafe fn export_browser_cookies(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let catalog = settings_catalog(state);
+    if !crate::cookies_win32::ytdlp_available() {
+        show_error(window, catalog.text("missing_ytdlp"));
+        return;
+    }
+    let Some(browser) = selected_cookie_browser(window) else {
+        return;
+    };
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let button = bound_control(state, |binding| {
+        matches!(
+            binding,
+            ControlBinding::Command(SettingsCommand::ExportBrowserCookies)
+        )
+    });
+    if apricot_platform::browser_cookies::cookie_browser_is_running(&browser) {
+        let message = wide(
+            &catalog
+                .text("close_browser_for_cookie_export_message")
+                .replace("{browser}", &apricot_app::cookies::browser_title(&browser)),
+        );
+        let title = wide(catalog.text("close_browser_for_cookie_export_title"));
+        let answer = MessageBoxW(
+            Some(window),
+            PCWSTR(message.as_ptr()),
+            PCWSTR(title.as_ptr()),
+            MB_YESNO | MB_ICONWARNING,
+        );
+        if let Some(button) = button {
+            let _ = SetFocus(Some(button));
+        }
+        if answer != IDYES {
+            return;
+        }
+        if apricot_platform::browser_cookies::close_cookie_browser_processes(&browser)
+            && let Some(state) = state_mut(window)
+        {
+            state
+                .announcer
+                .announce(catalog.text("browser_closed_for_cookie_export"), true);
+        }
+        apricot_platform::browser_cookies::wait_for_cookie_browser_exit(
+            &browser,
+            std::time::Duration::from_secs(6),
+        );
+    }
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state
+        .announcer
+        .announce(catalog.text("exporting_browser_cookies"), true);
+    let application = &*state.application;
+    crate::cookies_win32::spawn_export(
+        state.owner,
+        crate::cookies_win32::CookieExportOrigin::Settings,
+        application.settings().language.clone(),
+        browser,
+        application.settings().cookies_browser_profile.clone(),
+        application.cached_cookies_file(),
+    );
+}
+
+/// Python `open_youtube_login_profile_from_settings`.
+unsafe fn open_youtube_login_profile(window: HWND) {
+    let Some(browser) = selected_cookie_browser(window) else {
+        return;
+    };
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let catalog = settings_catalog(state);
+    let profile = (&*state.application)
+        .settings()
+        .cookies_browser_profile
+        .clone();
+    match crate::cookies_win32::open_youtube_login_profile(&browser, &profile) {
+        Ok(()) => state
+            .announcer
+            .announce(catalog.text("youtube_profile_opened"), true),
+        Err(error) => show_error(
+            window,
+            &catalog
+                .text("youtube_profile_open_failed")
+                .replace("{error}", &error),
+        ),
+    }
+}
+
+/// Python `open_youtube_api_key_page_from_settings`.
+unsafe fn open_youtube_api_key_page(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    if let Err(error) = sync_all_controls(state) {
+        show_error(window, &error.to_string());
+        return;
+    }
+    let catalog = settings_catalog(state);
+    match apricot_platform::windows_registration::open_web_url(
+        "https://console.cloud.google.com/apis/credentials",
+    ) {
+        Ok(()) => state
+            .announcer
+            .announce(catalog.text("youtube_api_key_page_opened"), true),
+        Err(PlatformError::Operation(error)) => show_error(
+            window,
+            &catalog
+                .text("youtube_api_key_page_open_failed")
+                .replace("{error}", &error),
+        ),
     }
 }
 
@@ -1561,6 +1871,7 @@ unsafe fn restore_defaults(window: HWND) {
         return;
     };
     (&mut *state.application).reset_all_settings();
+    crate::cookies_win32::reset_repair_suppression();
     if !save_and_register_startup(window, state) {
         return;
     }
@@ -1590,6 +1901,9 @@ unsafe fn sync_bound_control(
         ControlBinding::ReadOnly
         | ControlBinding::Command(_)
         | ControlBinding::ShortcutActionList(_) => Ok(()),
+        ControlBinding::Text(SettingId::CookiesFile) => {
+            app.apply_cookies_path_text(&window_text(bound.control))
+        }
         ControlBinding::Text(setting) => {
             app.set_string_setting(*setting, window_text(bound.control))
         }

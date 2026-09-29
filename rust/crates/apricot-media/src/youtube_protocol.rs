@@ -102,6 +102,13 @@ pub struct YoutubeSessionConfig {
     pub cookies_file: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy_url: Option<String>,
+    /// Python `cookie_user_agent`, sent only together with the cookies file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cookie_user_agent: Option<String>,
+    /// Python `cookies_file_has_youtube_login`: `YouTube` playback retries use
+    /// the cookies file only when it holds login cookies.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cookies_have_youtube_login: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

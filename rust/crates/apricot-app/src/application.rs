@@ -2,7 +2,7 @@
 
 use std::{
     collections::{BTreeSet, HashSet, VecDeque},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -76,6 +76,8 @@ pub struct Application {
     /// Python `audio_device_options_cache`: the last device probe and when it
     /// finished.
     audio_device_options: Option<(Instant, Vec<crate::SettingsChoiceOption>)>,
+    /// Python `cookie_source_refresh_error`.
+    cookie_source_refresh_error: String,
     state: AppState,
 }
 
@@ -94,6 +96,7 @@ impl Application {
             related_seen_ids: HashSet::new(),
             background_return_frame: None,
             audio_device_options: None,
+            cookie_source_refresh_error: String::new(),
             state: AppState::default(),
         }
     }
@@ -2437,11 +2440,19 @@ impl Application {
         &mut self,
         section: SettingsSection,
     ) -> Result<(), SettingsControllerError> {
-        self.settings.reset_section(section)
+        self.settings.reset_section(section)?;
+        // Python `reset_settings_section` also forgets the cached cookies.
+        if section == SettingsSection::Cookies {
+            let _ = std::fs::remove_file(self.cached_cookies_file());
+        }
+        Ok(())
     }
 
+    /// Python `restore_default_settings`, which also deletes the cached
+    /// cookies.
     pub fn reset_all_settings(&mut self) {
         self.settings.reset_all();
+        let _ = std::fs::remove_file(self.cached_cookies_file());
     }
 
     pub fn cancel_settings(&mut self) {
@@ -2501,6 +2512,144 @@ impl Application {
     pub fn save_settings(&mut self) -> Result<(), SettingsControllerError> {
         let _ = self.settings.save()?;
         Ok(())
+    }
+
+    /// Python `CACHED_COOKIES_FILE`, next to the settings file.
+    pub fn cached_cookies_file(&self) -> PathBuf {
+        self.settings.settings_file().parent().map_or_else(
+            || PathBuf::from("cookies.txt"),
+            |folder| folder.join("cookies.txt"),
+        )
+    }
+
+    /// Python `cookie_source_refresh_error`, for the diagnostic report.
+    pub fn cookie_source_refresh_error(&self) -> &str {
+        &self.cookie_source_refresh_error
+    }
+
+    /// Stores the cookie fields of `updated` in the draft and saves, as
+    /// Python's cookie helpers do after `save_settings`.
+    fn store_cookie_settings(
+        &mut self,
+        updated: &SettingsDocument,
+    ) -> Result<(), SettingsControllerError> {
+        self.settings.set_values([
+            (
+                SettingId::CookiesFile,
+                Value::String(updated.cookies_file.clone()),
+            ),
+            (
+                SettingId::CookiesSourceFile,
+                Value::String(updated.cookies_source_file.clone()),
+            ),
+            (
+                SettingId::CookiesSourceSignature,
+                Value::String(updated.cookies_source_signature.clone()),
+            ),
+            (
+                SettingId::CookiesFromBrowser,
+                Value::String(updated.cookies_from_browser.clone()),
+            ),
+            (
+                SettingId::CookiesBrowserProfile,
+                Value::String(updated.cookies_browser_profile.clone()),
+            ),
+        ])?;
+        self.save_settings()
+    }
+
+    /// Python `effective_cookies_file`: the cookies file for yt-dlp, or empty.
+    /// A refreshed source is imported and the settings are saved.
+    pub fn effective_cookies_file(&mut self, documents_folders: &[PathBuf]) -> String {
+        let mut updated = self.settings.current().clone();
+        let catalog = embedded_catalog(&updated.language);
+        let effective = crate::cookies::effective_cookies_file(
+            &mut updated,
+            &self.cached_cookies_file(),
+            documents_folders,
+            &catalog,
+        );
+        self.cookie_source_refresh_error = effective.refresh_error;
+        if effective.settings_changed {
+            let _ = self.store_cookie_settings(&updated);
+        }
+        effective.path
+    }
+
+    /// Python `configured_cookies_display_path`, which first runs the legacy
+    /// migration.
+    pub fn configured_cookies_display_path(&mut self, documents_folders: &[PathBuf]) -> String {
+        let mut updated = self.settings.current().clone();
+        if updated.cookies_source_file.trim().is_empty()
+            && crate::cookies::migrate_legacy_cookie_source(
+                &mut updated,
+                &self.cached_cookies_file(),
+                documents_folders,
+            )
+            .is_some()
+        {
+            let _ = self.store_cookie_settings(&updated);
+        }
+        crate::cookies::configured_cookies_display_path(self.settings.current())
+    }
+
+    /// Python `choose_cookies_file` after the file dialog: import, remember
+    /// the source and save.
+    ///
+    /// # Errors
+    /// Returns the import error; settings are unchanged then.
+    pub fn import_cookies_file(
+        &mut self,
+        source: &Path,
+    ) -> Result<crate::cookies::CookieImport, crate::cookies::CookieError> {
+        let result =
+            crate::cookies::import_cookie_file_to_cache(source, &self.cached_cookies_file())?;
+        let mut updated = self.settings.current().clone();
+        crate::cookies::remember_cookie_source(
+            &mut updated,
+            &source.to_string_lossy(),
+            &result.path,
+        );
+        self.store_cookie_settings(&updated)
+            .map_err(|error| crate::cookies::CookieError::Io(error.to_string()))?;
+        Ok(result)
+    }
+
+    /// Python `finish_browser_cookies_export`: the cache now holds cookies
+    /// from `browser`.
+    ///
+    /// # Errors
+    /// Returns the settings save error.
+    pub fn remember_browser_cookie_export(
+        &mut self,
+        browser: &str,
+    ) -> Result<(), SettingsControllerError> {
+        let mut updated = self.settings.current().clone();
+        crate::cookies::remember_browser_export(&mut updated, &self.cached_cookies_file(), browser);
+        self.store_cookie_settings(&updated)
+    }
+
+    /// Python `apply_settings_from_visible_controls` for the cookies path.
+    ///
+    /// # Errors
+    /// Returns an error when the draft rejects the values.
+    pub fn apply_cookies_path_text(
+        &mut self,
+        entered: &str,
+    ) -> Result<(), SettingsControllerError> {
+        let mut updated = self.settings.current().clone();
+        crate::cookies::apply_cookies_path_text(&mut updated, entered);
+        self.settings.set_values([
+            (SettingId::CookiesFile, Value::String(updated.cookies_file)),
+            (
+                SettingId::CookiesSourceFile,
+                Value::String(updated.cookies_source_file),
+            ),
+            (
+                SettingId::CookiesSourceSignature,
+                Value::String(updated.cookies_source_signature),
+            ),
+        ])
     }
 }
 

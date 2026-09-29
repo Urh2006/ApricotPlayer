@@ -178,7 +178,7 @@ Enote, ki popravljajo odstopanja, so na vrsti prve.
 
 - **E14.** SoundCloud, Shorts vmešavanje in gumbi na iskalnem zaslonu.
 - **E15.** Diagnostično poročilo z zakrivanjem zasebnih podatkov.
-- **E16.** Piškotki.
+- **E16. Piškotki. Zaključeno 29. 9. 2026, glej razdelek 6.**
 - **E17.** Pretvornik datotek in pretvornik map.
 - **E18.** yt-dlp posodobitve in posodobitve aplikacije. Pred objavo 2.0 ostanejo
   po D-011 lokalno onemogočene.
@@ -1067,3 +1067,76 @@ Uporabnikovo odložišče je driver po testu obnovil.
 Še odprto: postavka "Type" trenutnega elementa je prazna, kadar element nima shranjenega
 prikaznega tipa (na primer SoundCloud skladba iz iskanja); Python tam napiše "Track".
 Odstopanje iz E13 (odrezovanje števila ogledov v F7) ostaja, ker E15 tega dela ne spreminja.
+
+### E16: piškotki (29. 9. 2026)
+
+Spremembe:
+
+- Jedro piškotkov je v `apricot-app/src/cookies.rs`, prenos Pythonovega `CookiesUI`:
+  branje Netscape `cookies.txt` kot `MozillaCookieJar` (glava, `#HttpOnly_`, vrstice brez
+  imena, isti zapis in vrstni red pri shranjevanju), popravljanje s presledki ločenih
+  vrstic, JSON izvozi razširitev (gnezdeni seznami, domene iz ključev in naslovov,
+  `expirationDate` v milisekundah), glava `Cookie:`, varnostni filter kontrolnih znakov,
+  filter domen YouTube in Google, točkovanje in zaznava prijavnih piškotkov. V
+  predpomnilnik `cookies.txt` v podatkovni mapi bete se kot v Pythonu zapišejo samo
+  piškotki YouTube in Google, z atomsko zamenjavo datoteke.
+- `effective_cookies_file` je Pythonov: izvorna datoteka se ob spremembi SHA-256 podpisa
+  ali praznem predpomnilniku znova uvozi, ročno vpisana pot se uvozi v predpomnilnik,
+  stara pot v mapi Dokumenti se enkrat preseli. Uvožene Pythonove nastavitve, ki kažejo
+  na Pythonov `cookies.txt`, se prepišejo v predpomnilnik bete, Pythonova datoteka pa
+  ostane nespremenjena. Napaka osvežitve je v diagnostičnem poročilu v vrstici
+  "Cookies source refresh error".
+- Nastavitve, razdelek Cookies and network: polje prikaže izvorno pot, "Choose cookies.txt
+  file" uvozi datoteko s Pythonovimi sporočili (JSON, glava, Netscape, prijava najdena
+  ali opozorilo brez prijave), izbira brskalnika se vrne na none in profil na Auto.
+  Seznam profilov je Pythonov (`Auto - try all profiles`, najdeni profili brskalnika,
+  shranjena vrednost). "Open YouTube in selected profile" odpre Chromium brskalnik s
+  profilom ali privzeti brskalnik. "Obtain YouTube API key" odpre stran Google Cloud
+  Credentials. "Export browser cookies to cookies.txt" vpraša za zaprtje odprtega
+  brskalnika, izvozi na delovni niti in na koncu posodobi polje, izbiro brskalnika in
+  oglasi "Browser cookies exported to ... from ...". Ponastavitev razdelka in obnovitev
+  privzetih nastavitev izbrišeta predpomnilnik piškotkov kot v Pythonu.
+- Izvoz iz brskalnika (`apricot-platform/src/browser_cookies.rs`) sledi
+  `export_browser_cookies_blocking`: kandidati profilov, ponovni poskus po zaklenjeni bazi
+  z zaprtjem brskalnika, izbira najboljšega profila po točkah in DevTools nadomestek za
+  Chromium brskalnike razen Chroma (zagon z `--remote-debugging-port`, preverjen lokalni
+  WebSocket, `Network.getCookies`). Namesto knjižnice `yt_dlp.cookies` Rust kliče
+  `yt-dlp.exe --cookies-from-browser ... --cookies <začasna datoteka>` brez naslova;
+  yt-dlp piškotke ob izhodu shrani, izhodna koda 2 zaradi manjkajočega naslova pa se ne
+  šteje za napako. Diagnostika neuspeha ima Pythonovo obliko.
+- yt-dlp se zdaj kliče kot v Pythonu: iskanje, zbirke, metapodatki, prepisi in komentarji
+  najprej brez piškotkov, ob napaki prijave s piškotki, nato po samodejni osvežitvi iz
+  brskalnika (`repair_cookies_for_error`, oglasi "YouTube needs sign-in cookies. Refreshing
+  cookies from ...", po neuspehu pet minut premora). Prej je Rust piškotke dodal vsakemu
+  klicu. Razrešitev predvajanja poskusi s piškotki le ob napaki prijave, starosti ali
+  predvajalnika in pri YouTube le, če datoteka vsebuje prijavo. Prenosi po neuspelem
+  poskusu s piškotki prav tako osvežijo piškotke iz brskalnika. `cookie_user_agent` se
+  pošlje samo skupaj s piškotki.
+- Napaka predvajanja zdaj pokaže Pythonovo besedilo "Player did not start: ..." z
+  namigi `friendly_error`. Pri napaki prijave, vklopljeni podpori za starostno omejene
+  videe in izbranem brskalniku Rust kot Python vpraša "Refresh YouTube cookies", po
+  potrditvi osveži piškotke in predvajanje ponovi, če se medtem ni začelo drugo.
+- Popravljeno odprto odstopanje iz E15: vrstica "Type" v diagnostičnem poročilu za
+  YouTube in SoundCloud element brez shranjenega tipa izpelje Pythonov prikazni tip
+  (Track, Artist, Playlist, Channel, Live stream, Video).
+
+Nujne razlike: izvoz teče prek `yt-dlp.exe` namesto knjižnice, zato so besedila napak
+zadnja vrstica `ERROR:` iz yt-dlp z opozorili; opisi sistemskih napak (na primer manjkajoča
+datoteka) so Windows besedila namesto Pythonovih `[Errno ...]`. Pythonovih dodatnih
+poskusov razrešitve (nadomestni format, odjemalec web_safari, JS rešitelj) E16 ne prenaša.
+
+Preverjanje: `cargo build`, `cargo test` (561 uspešnih), `cargo clippy --all-targets -D
+warnings` in `cargo fmt`. Novi testi pokrijejo branje in zapis Netscape datotek (izhod je
+enak Pythonovemu `MozillaCookieJar`), zavrnitve, JSON in glavo, točkovanje, uvoz v
+predpomnilnik, osvežitev izvora, prepis Pythonove poti, selitev iz Dokumentov, ročno
+vpisano pot, profile, algoritem izvoza z zaklenjeno bazo in DevTools, WebSocket odjemalec,
+argumente yt-dlp s piškotki in vrstico "Type". Živi test z `yt-dlp.exe` je izvozil
+ponarejen Firefox profil. Kopija bete na ločenem nevidnem namizju z ločenimi podatki je
+potrdila razdelek s profili, uvoz JSON datoteke (fokus ostane na gumbu), opozorilo brez
+prijave, izvoz iz ponarejenega Chromium profila z oglasom in posodobljenimi kontrolami,
+Pythonovo sporočilo neuspeha za Opero brez profila, ponastavitev razdelka z izbrisom
+predpomnilnika ter YouTube iskanje in predvajanje brez piškotkov. Resnični brskalniki
+niso bili zaprti ali brani.
+
+Še odprto: odstopanje iz E13 (odrezovanje števila ogledov v F7) ostaja, ker E16 tega dela
+ne spreminja.

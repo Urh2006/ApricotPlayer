@@ -99,9 +99,7 @@ fn download_with_cookie_recovery<F>(
 where
     F: FnMut(DownloadEvent),
 {
-    let Some(cookies_file) = request.options.cookies_file.clone() else {
-        return downloader.download(request, cancelled, emit);
-    };
+    let cookies_file = request.options.cookies_file.clone();
     let mut without_cookies = request.clone();
     without_cookies.options.cookies_file = None;
     let mut deferred_events = Vec::new();
@@ -126,9 +124,37 @@ where
         Err(error)
             if should_retry_with_cookies(&error.to_string(), first_attempt_started_download) =>
         {
-            let mut with_cookies = request.clone();
-            with_cookies.options.cookies_file = Some(cookies_file);
-            downloader.download(&with_cookies, cancelled, emit)
+            let mut retry_error = error;
+            if let Some(cookies_file) = cookies_file {
+                let mut with_cookies = request.clone();
+                with_cookies.options.cookies_file = Some(cookies_file);
+                let mut started = false;
+                match downloader.download(&with_cookies, cancelled, |event| {
+                    if matches!(
+                        event,
+                        DownloadEvent::Progress { .. } | DownloadEvent::FileFinished { .. }
+                    ) {
+                        started = true;
+                    }
+                    emit(event);
+                }) {
+                    Ok(summary) => return Ok(summary),
+                    Err(error) if started => return Err(error),
+                    Err(error) => retry_error = error,
+                }
+            }
+            // Python `ydl_download_urls`: a sign-in error that cookies did
+            // not fix refreshes them from the browser once.
+            match apricot_platform::browser_cookies::repair_cookies_for_error(
+                &retry_error.to_string(),
+            ) {
+                Some(repaired) => {
+                    let mut with_cookies = request.clone();
+                    with_cookies.options.cookies_file = Some(repaired);
+                    downloader.download(&with_cookies, cancelled, emit)
+                }
+                None => Err(retry_error),
+            }
         }
         Err(error) => {
             for event in deferred_events {

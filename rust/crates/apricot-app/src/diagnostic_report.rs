@@ -695,10 +695,21 @@ fn current_item_section(application: &Application) -> DiagnosticSection {
         .and_then(|item| item.stream_url.as_ref())
         .map(ToString::to_string)
         .unwrap_or_default();
+    let item_type = Some(text("type"))
+        .filter(|item_type| !item_type.is_empty())
+        .or_else(|| {
+            item.and_then(|item| {
+                normalized_display_type(
+                    item,
+                    &crate::embedded_catalog(&application.settings().language),
+                )
+            })
+        })
+        .unwrap_or_default();
     DiagnosticSection::new("## Current item")
         .line("Title", text("title"))
         .line("Kind", text("kind"))
-        .line("Type", text("type"))
+        .line("Type", item_type)
         .line("Channel", text("channel"))
         .line("Duration", duration)
         .line("URL", url)
@@ -710,6 +721,29 @@ fn current_item_section(application: &Application) -> DiagnosticSection {
         .line("Stream URL", DiagnosticValue::UrlSummary(stream_url))
         // Rust gives mpv the yt-dlp formats without extra request headers.
         .line("Stream header names", "none")
+}
+
+/// Python `normalize_entry` stores the display type on every `YouTube` and
+/// `SoundCloud` result; Rust items without a stored type derive the same text.
+fn normalized_display_type(
+    item: &apricot_core::MediaItem,
+    catalog: &apricot_core::TranslationCatalog,
+) -> Option<String> {
+    use apricot_core::{MediaKind, MediaSource};
+    let soundcloud = match item.source {
+        MediaSource::Soundcloud => true,
+        MediaSource::Youtube => false,
+        _ => return None,
+    };
+    let key = match item.kind {
+        MediaKind::Channel if soundcloud => "artist",
+        MediaKind::Channel => "channel",
+        MediaKind::Playlist => "playlist",
+        _ if soundcloud => "track",
+        MediaKind::LiveStream => "live_stream",
+        _ => "video",
+    };
+    Some(catalog.text(key).to_owned())
 }
 
 fn queue_section(
@@ -786,7 +820,10 @@ fn settings_section(application: &Application) -> DiagnosticSection {
             "Cookies source signature configured",
             !settings.cookies_source_signature.is_empty(),
         )
-        .line("Cookies source refresh error", "")
+        .line(
+            "Cookies source refresh error",
+            application.cookie_source_refresh_error(),
+        )
         .line("Cookies browser", settings.cookies_from_browser.as_str())
         .line(
             "Cookies browser profile",
@@ -1051,6 +1088,60 @@ mod tests {
             );
         }
         assert!(!report.contains("secret"));
+    }
+
+    #[test]
+    fn soundcloud_type_and_cookie_refresh_error_match_python() {
+        use std::collections::BTreeMap;
+
+        use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource, SettingId};
+        use apricot_storage::{SettingsDocument, SettingsPaths};
+
+        use crate::{MainMenuAvailability, SettingsController};
+
+        let root = tempfile::tempdir().expect("temp dir");
+        let paths =
+            SettingsPaths::for_app_data(&root.path().join("beta"), &root.path().join("stable"));
+        let mut application = Application::new(
+            SettingsController::load(paths, SettingsDocument::default()),
+            MainMenuAvailability::default(),
+        );
+        let source = root.path().join("broken.txt");
+        std::fs::write(&source, "not cookies").expect("write");
+        application
+            .set_string_setting(SettingId::CookiesSourceFile, source.to_string_lossy())
+            .expect("source");
+        assert!(application.effective_cookies_file(&[]).is_empty());
+        let track = |source, kind| MediaItem {
+            id: MediaId("track".to_owned()),
+            source,
+            kind,
+            title: "Track title".to_owned(),
+            url: Some("https://soundcloud.com/artist/track".parse().expect("URL")),
+            stream_url: None,
+            external_audio_url: None,
+            local_path: None,
+            channel: String::new(),
+            duration_seconds: None,
+            metadata: BTreeMap::new(),
+        };
+        application.start_player_item(track(MediaSource::Soundcloud, MediaKind::Audio));
+        let environment = DiagnosticEnvironment::default();
+        let report = DiagnosticRedactor::default()
+            .report(&diagnostic_sections(&application, &environment), &[]);
+        assert!(report.lines().any(|line| line == "Type: Track"), "{report}");
+        let refresh_error = report
+            .lines()
+            .find(|line| line.starts_with("Cookies source refresh error: "))
+            .expect("refresh error line");
+        assert!(
+            refresh_error.contains("not in a supported format"),
+            "{refresh_error}"
+        );
+        application.start_player_item(track(MediaSource::Youtube, MediaKind::Video));
+        let report = DiagnosticRedactor::default()
+            .report(&diagnostic_sections(&application, &environment), &[]);
+        assert!(report.lines().any(|line| line == "Type: Video"), "{report}");
     }
 
     #[test]

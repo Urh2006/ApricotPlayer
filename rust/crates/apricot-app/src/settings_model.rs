@@ -1165,7 +1165,7 @@ fn cookie_controls(
         text(
             SettingId::CookiesFile,
             "cookies",
-            &settings.cookies_file,
+            &crate::cookies::configured_cookies_display_path(settings),
             false,
             catalog,
         ),

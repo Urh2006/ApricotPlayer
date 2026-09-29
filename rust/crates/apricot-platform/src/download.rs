@@ -88,6 +88,8 @@ pub struct DownloadOptions {
     pub rate_limit: Option<String>,
     pub proxy_url: Option<String>,
     pub cookies_file: Option<PathBuf>,
+    /// Python `cookie_user_agent`, sent only with the cookies file.
+    pub cookie_user_agent: Option<String>,
     pub ffmpeg_location: Option<PathBuf>,
     pub download_archive: Option<PathBuf>,
 }
@@ -117,6 +119,7 @@ impl Default for DownloadOptions {
             rate_limit: None,
             proxy_url: None,
             cookies_file: None,
+            cookie_user_agent: None,
             ffmpeg_location: None,
             download_archive: None,
         }
@@ -393,6 +396,18 @@ fn append_location_arguments(arguments: &mut Vec<OsString>, options: &DownloadOp
     push_optional(arguments, "--limit-rate", options.rate_limit.as_deref());
     push_optional(arguments, "--proxy", options.proxy_url.as_deref());
     push_optional_path(arguments, "--cookies", options.cookies_file.as_deref());
+    if options.cookies_file.is_some()
+        && let Some(user_agent) = options
+            .cookie_user_agent
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    {
+        arguments.extend([
+            "--add-headers".into(),
+            format!("User-Agent:{user_agent}").into(),
+        ]);
+    }
     push_optional_path(
         arguments,
         "--ffmpeg-location",

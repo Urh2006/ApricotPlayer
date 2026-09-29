@@ -57,6 +57,26 @@ pub fn choose_opml_file(
     }
 }
 
+/// Python `choose_cookies_file` picker.
+///
+/// # Errors
+///
+/// Returns a diagnostic string if the Windows common dialog reports a failure.
+pub fn choose_cookies_file(owner: HWND, title: &str) -> Result<Option<PathBuf>, String> {
+    // SAFETY: The synchronous dialog only borrows the owned UTF-16 buffers.
+    unsafe {
+        choose_file_win32(
+            owner,
+            title,
+            "cookies.txt (*.txt)\0*.txt\0All files (*.*)\0*.*\0\0",
+            "",
+            None,
+            "",
+            false,
+        )
+    }
+}
+
 /// Shows the native OPML export picker with overwrite confirmation.
 ///
 /// # Errors

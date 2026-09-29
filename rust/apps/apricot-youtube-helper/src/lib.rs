@@ -627,6 +627,7 @@ mod tests {
                         cookies_header: Some("PREF=test".to_owned()),
                         cookies_file: None,
                         proxy_url: None,
+                        ..YoutubeSessionConfig::default()
                     },
                 },
             ))

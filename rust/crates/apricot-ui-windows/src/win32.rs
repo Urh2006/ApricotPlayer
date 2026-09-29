@@ -510,6 +510,9 @@ struct WindowState {
     youtube_subscriptions: YoutubeSearchService,
     pending_youtube_work: Option<PendingYoutubeListWork>,
     pending_youtube_resolve: Option<PendingYoutubeResolve>,
+    /// Python `refresh_cookies_and_retry_playback_worker`: the playback that
+    /// is retried once the browser cookies are refreshed.
+    pending_cookie_playback: Option<PendingYoutubeResolve>,
     pending_youtube_metadata: Option<PendingYoutubeMetadata>,
     pending_youtube_api_metadata: Option<PendingYoutubeApiMetadata>,
     pending_youtube_trending_api: Option<PendingYoutubeTrendingApi>,
@@ -627,6 +630,10 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
         Box::into_raw(Box::new(initial_state)) as isize,
     );
     layout_controls(window);
+    if let Some(state) = state(window) {
+        crate::cookies_win32::install_repairer(window, state.application.cached_cookies_file());
+        crate::cookies_win32::update_repair_settings(state.application.settings());
+    }
     if start_hidden {
         hide_to_tray(window, false);
     } else {
@@ -992,6 +999,12 @@ unsafe extern "system" fn window_proc(
         }
         WM_SYNC_FULLSCREEN => {
             apply_window_fullscreen(window);
+            LRESULT(0)
+        }
+        crate::cookies_win32::WM_COOKIE_EVENT => {
+            if let Some(event) = crate::cookies_win32::take_event(lparam) {
+                handle_cookie_event(window, event);
+            }
             LRESULT(0)
         }
         WM_APPLY_GLOBAL_EQUALIZER => {
@@ -1852,6 +1865,7 @@ unsafe fn create_controls(
         youtube_subscriptions: YoutubeSearchService::default(),
         pending_youtube_work: None,
         pending_youtube_resolve: None,
+        pending_cookie_playback: None,
         pending_youtube_metadata: None,
         pending_youtube_api_metadata: None,
         pending_youtube_trending_api: None,
@@ -3959,6 +3973,11 @@ unsafe fn start_youtube_resolve_with_options(
 ) {
     let background =
         state_mut(window).is_some_and(|state| std::mem::take(&mut state.background_start));
+    if purpose == YoutubeResolvePurpose::Playback
+        && let Some(state) = state_mut(window)
+    {
+        state.pending_cookie_playback = None;
+    }
     let Some(url) = item.url.as_ref().map(ToString::to_string) else {
         if let Some(state) = state_mut(window) {
             report_youtube_resolve_start_error(
@@ -8201,11 +8220,13 @@ unsafe fn build_download_request(
     choice: DownloadChoice,
     output_override: Option<&std::path::Path>,
 ) -> std::result::Result<Option<DownloadRequest>, String> {
-    let Some((settings, settings_file, language)) = state(window).map(|state| {
+    let Some((settings, settings_file, language, cookies_file)) = state_mut(window).map(|state| {
+        let cookies_file = effective_cookies_file(state);
         (
             state.application.settings().clone(),
             state.application.settings_file(),
             state.application.settings().language.clone(),
+            cookies_file,
         )
     }) else {
         return Err("Application state is unavailable.".to_owned());
@@ -8274,6 +8295,7 @@ unsafe fn build_download_request(
         }
     }
     let mut options = download_options_from_settings(&settings, &settings_file);
+    options.cookies_file = cookies_file;
     options.audio_format = normalized_audio_format(&settings.audio_format);
     Ok(Some(DownloadRequest {
         url,
@@ -8432,9 +8454,6 @@ fn download_options_from_settings(
     let configured_ffmpeg = nonempty(&settings.ffmpeg_location)
         .map(PathBuf::from)
         .filter(|path| path.exists());
-    let cookies_file = nonempty(&settings.cookies_file)
-        .map(PathBuf::from)
-        .filter(|path| path.is_file());
     DownloadOptions {
         audio_format: normalized_audio_format(&settings.audio_format),
         audio_quality: settings.audio_quality.trim().to_owned(),
@@ -8465,7 +8484,8 @@ fn download_options_from_settings(
         socket_timeout_seconds: u32::try_from(settings.socket_timeout.clamp(1, 300)).unwrap_or(20),
         rate_limit: nonempty(&settings.rate_limit),
         proxy_url: nonempty(&settings.proxy),
-        cookies_file,
+        cookies_file: None,
+        cookie_user_agent: nonempty(&settings.cookie_user_agent),
         ffmpeg_location: configured_ffmpeg.or(packaged_ffmpeg),
         download_archive: settings.download_archive.then(|| {
             settings_file
@@ -10011,6 +10031,7 @@ unsafe fn finish_youtube_error(window: HWND, generation: u64, message: &str) {
             }))
         )
     });
+    let mut cookie_prompt = None;
     let direct_fallback = {
         let Some(state) = state_mut(window) else {
             return;
@@ -10044,17 +10065,22 @@ unsafe fn finish_youtube_error(window: HWND, generation: u64, message: &str) {
                     pending.background,
                 ))
             } else {
-                let visible_message = if pending.purpose == YoutubeResolvePurpose::CopyStreamUrl {
-                    catalog_text(&state.application, "stream_url_failed")
-                        .replace("{error}", message)
+                let visible_message =
+                    resolve_failure_message(&state.application, pending.purpose, message);
+                let settings = state.application.settings();
+                if pending.purpose == YoutubeResolvePurpose::Playback
+                    && settings.enable_age_restricted_videos
+                    && apricot_media::cookie_errors::is_cookie_auth_error(message)
+                    && !apricot_app::cookies::normalized_cookies_browser(settings).is_empty()
+                {
+                    cookie_prompt = Some((pending, visible_message));
                 } else {
-                    message.to_owned()
-                };
-                set_status(state, &visible_message, true);
-                if pending.purpose == YoutubeResolvePurpose::Playback {
-                    show_error_message(window, &visible_message);
+                    set_status(state, &visible_message, true);
+                    if pending.purpose == YoutubeResolvePurpose::Playback {
+                        show_error_message(window, &visible_message);
+                    }
+                    let _ = SetFocus(Some(active_primary_control(state)));
                 }
-                let _ = SetFocus(Some(active_primary_control(state)));
                 None
             }
         } else {
@@ -10062,6 +10088,10 @@ unsafe fn finish_youtube_error(window: HWND, generation: u64, message: &str) {
             None
         }
     };
+    if let Some((pending, visible_message)) = cookie_prompt {
+        prompt_cookie_refresh_for_playback(window, pending, &visible_message);
+        return;
+    }
     if return_from_collection {
         navigate_back(window);
         return;
@@ -11347,12 +11377,28 @@ fn selected_combo_index(control: HWND) -> Option<usize> {
     usize::try_from(selected).ok()
 }
 
-fn youtube_session_config(state: &WindowState) -> YoutubeSessionConfig {
+/// Python `effective_cookies_file`, as an existing file for yt-dlp.
+fn effective_cookies_file(state: &mut WindowState) -> Option<PathBuf> {
+    crate::cookies_win32::update_repair_settings(state.application.settings());
+    let path = state
+        .application
+        .effective_cookies_file(&apricot_platform::browser_cookies::windows_documents_folders());
+    nonempty(&path)
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+}
+
+fn youtube_session_config(state: &mut WindowState) -> YoutubeSessionConfig {
+    let cookies_file = effective_cookies_file(state);
     let settings = state.application.settings();
     YoutubeSessionConfig {
         cookies_header: None,
-        cookies_file: nonempty(&settings.cookies_file),
+        cookies_have_youtube_login: cookies_file
+            .as_deref()
+            .is_some_and(apricot_app::cookies::cookies_file_has_youtube_login),
+        cookies_file: cookies_file.map(|path| path.to_string_lossy().into_owned()),
         proxy_url: nonempty(&settings.proxy),
+        cookie_user_agent: nonempty(&settings.cookie_user_agent),
     }
 }
 
@@ -11562,6 +11608,203 @@ unsafe fn apply_global_player_equalizer(window: HWND) {
 fn nonempty(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_owned())
+}
+
+fn resolve_failure_message(
+    application: &Application,
+    purpose: YoutubeResolvePurpose,
+    message: &str,
+) -> String {
+    match purpose {
+        YoutubeResolvePurpose::CopyStreamUrl => {
+            catalog_text(application, "stream_url_failed").replace("{error}", message)
+        }
+        // Python `resolve_and_start_player`: player_failed with
+        // `friendly_error`.
+        YoutubeResolvePurpose::Playback => player_failed_message(
+            application,
+            &apricot_app::comments::friendly_error(
+                &apricot_app::embedded_catalog(&application.settings().language),
+                message,
+            ),
+        ),
+    }
+}
+
+/// Python `prompt_cookie_refresh_for_playback`.
+unsafe fn prompt_cookie_refresh_for_playback(
+    window: HWND,
+    pending: PendingYoutubeResolve,
+    player_failed: &str,
+) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let message = wide(&format!(
+        "{player_failed}\n\n{}",
+        catalog_text(&state.application, "cookie_refresh_prompt_message")
+    ));
+    let title = wide(&catalog_text(
+        &state.application,
+        "cookie_refresh_prompt_title",
+    ));
+    state.modal_open = true;
+    let previous = GetFocus();
+    let answer = MessageBoxW(
+        Some(window),
+        PCWSTR(message.as_ptr()),
+        PCWSTR(title.as_ptr()),
+        MB_YESNO | windows::Win32::UI::WindowsAndMessaging::MB_ICONQUESTION,
+    );
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
+    resume_deferred_window_work(window);
+    if !previous.is_invalid()
+        && windows::Win32::UI::WindowsAndMessaging::IsWindow(Some(previous)).as_bool()
+    {
+        let _ = SetFocus(Some(previous));
+    }
+    if answer != IDYES {
+        return;
+    }
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let browser = apricot_app::cookies::normalized_cookies_browser(state.application.settings());
+    if browser.is_empty() {
+        let message = catalog_text(&state.application, "select_cookies_browser");
+        show_message_box(
+            window,
+            &message,
+            windows::Win32::UI::WindowsAndMessaging::MB_ICONWARNING,
+        );
+        return;
+    }
+    let text = catalog_text(&state.application, "cookie_auto_refresh_start")
+        .replace("{browser}", &apricot_app::cookies::browser_title(&browser));
+    set_status(state, &text, true);
+    let token = pending.token;
+    state.pending_cookie_playback = Some(pending);
+    let settings = state.application.settings();
+    crate::cookies_win32::spawn_export(
+        window,
+        crate::cookies_win32::CookieExportOrigin::Playback(token),
+        settings.language.clone(),
+        browser,
+        settings.cookies_browser_profile.clone(),
+        state.application.cached_cookies_file(),
+    );
+}
+
+/// Results of cookie workers: Python's `ui_queue` announcements,
+/// `finish_browser_cookies_export` and the playback retry.
+unsafe fn handle_cookie_event(window: HWND, event: crate::cookies_win32::CookieEvent) {
+    use crate::cookies_win32::{CookieEvent, CookieExportOrigin};
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    match event {
+        CookieEvent::Announce(text) => set_status(state, &text, true),
+        CookieEvent::Exported {
+            origin,
+            browser,
+            profile_label,
+        } => {
+            if let Err(error) = state.application.remember_browser_cookie_export(&browser) {
+                show_error_message(window, &error.to_string());
+            }
+            crate::cookies_win32::reset_repair_suppression();
+            crate::cookies_win32::update_repair_settings(state.application.settings());
+            let path = state
+                .application
+                .cached_cookies_file()
+                .to_string_lossy()
+                .into_owned();
+            match origin {
+                CookieExportOrigin::Settings => {
+                    if let Some(settings_window) = open_settings_window() {
+                        crate::settings_win32::browser_cookies_exported(
+                            settings_window,
+                            &path,
+                            &browser,
+                        );
+                    }
+                    let text = catalog
+                        .text("browser_cookies_exported")
+                        .replace("{path}", &path)
+                        .replace("{profile}", &profile_label);
+                    set_status(state, &text, true);
+                }
+                CookieExportOrigin::Repair => {}
+                CookieExportOrigin::Playback(token) => {
+                    let Some(pending) = state
+                        .pending_cookie_playback
+                        .take_if(|pending| pending.token == token)
+                    else {
+                        return;
+                    };
+                    let text = catalog
+                        .text("cookie_auto_refresh_done")
+                        .replace("{profile}", &profile_label);
+                    set_status(state, &text, true);
+                    state.background_start = pending.background;
+                    start_youtube_resolve_with_options(
+                        window,
+                        &pending.original_item,
+                        pending.purpose,
+                        pending.session_shuffle,
+                        pending.preserve_sequence,
+                        pending.start_position_seconds,
+                    );
+                }
+            }
+        }
+        CookieEvent::Failed { origin, error } => {
+            let friendly = apricot_app::comments::friendly_error(&catalog, &error);
+            match origin {
+                CookieExportOrigin::Settings => {
+                    let text = catalog
+                        .text("browser_cookies_export_failed")
+                        .replace("{error}", &friendly);
+                    let owner = open_settings_window().unwrap_or(window);
+                    show_message_box(
+                        owner,
+                        &text,
+                        windows::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
+                    );
+                }
+                CookieExportOrigin::Repair => {}
+                CookieExportOrigin::Playback(token) => {
+                    if state
+                        .pending_cookie_playback
+                        .take_if(|pending| pending.token == token)
+                        .is_some()
+                    {
+                        let text = catalog
+                            .text("cookie_auto_refresh_failed")
+                            .replace("{error}", &friendly);
+                        show_message_box(
+                            window,
+                            &text,
+                            windows::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The modal Settings window, when it is open.
+unsafe fn open_settings_window() -> Option<HWND> {
+    windows::Win32::UI::WindowsAndMessaging::FindWindowW(
+        w!("ApricotPlayer2BetaSettingsWindow"),
+        PCWSTR::null(),
+    )
+    .ok()
+    .filter(|window| !window.is_invalid())
 }
 
 /// Python `player_failed` message shown when mpv cannot start or play.
