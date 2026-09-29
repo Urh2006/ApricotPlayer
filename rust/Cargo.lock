@@ -138,6 +138,7 @@ dependencies = [
  "apricot-updater",
  "chrono",
  "encoding_rs",
+ "flate2",
  "regex",
  "reqwest",
  "serde_json",

@@ -15,6 +15,8 @@ mod activation_win32;
 #[cfg(windows)]
 mod announcement_win32;
 #[cfg(windows)]
+mod audiovault_login_win32;
+#[cfg(windows)]
 mod background_player_win32;
 #[cfg(windows)]
 mod bookmark_dialog_win32;

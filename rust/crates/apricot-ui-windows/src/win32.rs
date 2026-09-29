@@ -101,6 +101,9 @@ use windows::{
     core::{PCWSTR, Result, w},
 };
 
+#[path = "audiovault_win32.rs"]
+mod audiovault;
+
 const ID_MENU_LIST: usize = 1001;
 const ID_OPEN: usize = 1002;
 const ID_SEARCH_EDIT: usize = 1003;
@@ -202,6 +205,16 @@ pub(crate) const WM_APPLY_GLOBAL_EQUALIZER: u32 = WM_APP + 5;
 pub(crate) const WM_UPDATE_REQUEST: u32 = WM_APP + 7;
 pub(crate) const UPDATE_REQUEST_YTDLP: usize = 0;
 pub(crate) const UPDATE_REQUEST_APP: usize = 1;
+/// Posted by the settings window: Python `login_audiovault_from_settings`
+/// (with the settings window as `lParam`) and `logout_audiovault`.
+pub(crate) const WM_AUDIOVAULT_REQUEST: u32 = WM_APP + 8;
+pub(crate) const AUDIOVAULT_REQUEST_LOGIN: usize = 1;
+pub(crate) const AUDIOVAULT_REQUEST_LOGOUT: usize = 2;
+
+/// Python `open_audiovault_registration`, also from the settings window.
+pub(crate) fn open_audiovault_registration() {
+    audiovault::open_registration();
+}
 const YOUTUBE_TIMER_ID: usize = 1;
 const YOUTUBE_TIMER_INTERVAL_MS: u32 = 25;
 const YOUTUBE_METADATA_BATCH_SIZE: usize = 5;
@@ -297,6 +310,12 @@ enum MainView {
     UserPlaylists,
     UserPlaylistItems,
     DownloadQueue,
+    /// Python `show_audiovault_menu`.
+    AudiovaultMenu,
+    /// Python `show_audiovault_search`, also with TV show episodes.
+    AudiovaultSearch,
+    /// Python `show_audiovault_results_screen`, also with episodes.
+    AudiovaultResults,
     Player,
 }
 
@@ -622,6 +641,8 @@ struct WindowState {
     player_results_source: Option<MainView>,
     // Python `show_player=False`: the next start keeps the current screen.
     background_start: bool,
+    audiovault_controls: audiovault::Controls,
+    audiovault: audiovault::AudiovaultState,
 }
 
 pub fn run_application(application: Application, version: &str, start_hidden: bool) -> Result<()> {
@@ -639,6 +660,7 @@ unsafe fn register_secondary_window_classes() -> Result<()> {
     crate::bookmark_dialog_win32::register()?;
     crate::equalizer_win32::register()?;
     crate::details_win32::register()?;
+    crate::audiovault_login_win32::register()?;
     crate::download_progress_win32::register()
 }
 
@@ -764,6 +786,10 @@ unsafe fn handles_progress_dialog_message(window: HWND, message: &MSG) -> bool {
 unsafe fn handle_text_entry_enter(window: HWND, message: &MSG) -> bool {
     if message.message != WM_KEYDOWN || message.wParam.0 != usize::from(VK_RETURN.0) {
         return false;
+    }
+    if state(window).is_some_and(|state| audiovault::handles_enter(state, message.hwnd)) {
+        audiovault::search(window);
+        return true;
     }
     if !state(window).is_some_and(|state| {
         (is_search_screen(state.view) || state.view == MainView::DirectLink)
@@ -943,6 +969,9 @@ fn explicit_view_tab_controls(state: &WindowState) -> Option<Vec<HWND>> {
             controls
         }
         MainView::UserPlaylists | MainView::UserPlaylistItems => user_playlist_tab_controls(state),
+        MainView::AudiovaultMenu | MainView::AudiovaultSearch | MainView::AudiovaultResults => {
+            return audiovault::tab_controls(state);
+        }
         _ => return None,
     })
 }
@@ -1129,6 +1158,14 @@ unsafe extern "system" fn window_proc(
             start_app_update_check(window, false, false, true);
             LRESULT(0)
         }
+        WM_TIMER if wparam.0 == audiovault::AUDIOVAULT_TIMER_ID => {
+            audiovault::poll(window);
+            LRESULT(0)
+        }
+        WM_AUDIOVAULT_REQUEST => {
+            audiovault::settings_request(window, wparam.0, HWND(lparam.0 as *mut c_void));
+            LRESULT(0)
+        }
         WM_UPDATE_REQUEST => {
             if wparam.0 == UPDATE_REQUEST_YTDLP {
                 manual_ytdlp_update_check(window);
@@ -1173,6 +1210,13 @@ unsafe fn handle_window_command(window: HWND, wparam: WPARAM) {
     });
     let background_action =
         state(window).and_then(|state| state.background_player.action_for_command(command));
+    if player_activation.is_none()
+        && background_action.is_none()
+        && notification == 0
+        && audiovault::handle_command(window, command)
+    {
+        return;
+    }
     if let Some(activation) = player_activation {
         activate_player_control(window, activation);
     } else if let Some(action_id) = background_action {
@@ -1889,6 +1933,10 @@ unsafe fn create_controls(
     ] {
         SendMessageW(control, WM_SETFONT, font_param, Some(LPARAM(1)));
     }
+    let audiovault_controls = audiovault::create_controls(parent, instance, &catalog)?;
+    for control in audiovault_controls.windows() {
+        SendMessageW(control, WM_SETFONT, font_param, Some(LPARAM(1)));
+    }
     let (download_sender, download_receiver) = mpsc::sync_channel(256);
     Ok(WindowState {
         list,
@@ -2018,6 +2066,8 @@ unsafe fn create_controls(
         embedded_results: None,
         player_results_source: None,
         background_start: false,
+        audiovault_controls,
+        audiovault: audiovault::AudiovaultState::default(),
     })
 }
 
@@ -2250,6 +2300,10 @@ fn model_context_entries(
             context_menu::user_playlist_items_context_menu(&context, item)
         }
         MainView::Player => context_menu::player_context_menu(&context, item?),
+        // Python `open_audiovault_context_menu` opens only on an item.
+        MainView::AudiovaultSearch | MainView::AudiovaultResults => {
+            context_menu::audiovault_results_context_menu(&context, item?)
+        }
         _ => return None,
     })
 }
@@ -2520,7 +2574,9 @@ unsafe fn show_context_menu_for_active_view(window: HWND) {
             | MainView::PodcastCategories
             | MainView::UserPlaylists
             | MainView::UserPlaylistItems
-            | MainView::DownloadQueue,
+            | MainView::DownloadQueue
+            | MainView::AudiovaultSearch
+            | MainView::AudiovaultResults,
         ) => {
             show_list_context_menu(window, LPARAM(-1));
         }
@@ -2671,7 +2727,7 @@ unsafe fn layout_controls_state(window: HWND, state: &mut WindowState) {
             field_height,
             button_height + status_height,
         );
-    } else if state.view != MainView::Player {
+    } else if state.view != MainView::Player && !audiovault::is_view(state.view) {
         let action_rows = if matches!(
             state.view,
             MainView::LocalFolder | MainView::Subscriptions | MainView::RssFeeds
@@ -2693,6 +2749,7 @@ unsafe fn layout_controls_state(window: HWND, state: &mut WindowState) {
     if is_search_screen(state.view) {
         layout_search_screen(state, width, height, margin, button_height, status_height);
     }
+    audiovault::layout(state, width, height, margin, button_height, status_height);
 }
 
 /// Python `show_search`: query, provider and type fields, the Search button
@@ -3114,8 +3171,14 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
             | MainView::UserPlaylists
             | MainView::UserPlaylistItems
             | MainView::DownloadQueue
+            | MainView::AudiovaultMenu
+            | MainView::AudiovaultSearch
+            | MainView::AudiovaultResults
     );
     let search_visible = is_search_screen(state.view);
+    // Python's AudioVault screens have Search, Play and Download audio.
+    let audiovault_search = state.view == MainView::AudiovaultSearch;
+    let audiovault_items = audiovault_search || state.view == MainView::AudiovaultResults;
     let text_entry_visible = search_visible || state.view == MainView::DirectLink;
     let direct_link_visible = state.view == MainView::DirectLink;
     if search_visible {
@@ -3134,6 +3197,7 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
         && playlist_items_available
         && state.view != MainView::Trending
         && !search_visible
+        && !audiovault_items
         && (state.view != MainView::DownloadQueue
             || !state.application.downloads().queued().is_empty());
     let folder_visible = state.view == MainView::LocalFolder;
@@ -3160,9 +3224,12 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
         (state.provider, search_visible),
         (state.kind_label, search_visible),
         (state.kind, search_visible),
-        (state.search, search_visible),
-        (state.search_play, search_visible),
-        (state.search_download_audio, search_visible),
+        (state.search, search_visible || audiovault_search),
+        (state.search_play, search_visible || audiovault_items),
+        (
+            state.search_download_audio,
+            search_visible || audiovault_items,
+        ),
         (state.search_download_video, search_visible),
         (state.search_add_favorite, search_visible),
         (state.back, back_visible),
@@ -3232,6 +3299,7 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
     ] {
         let _ = ShowWindow(control, if visible { SW_SHOW } else { SW_HIDE });
     }
+    audiovault::sync_visibility(state);
     let background = if state.view == MainView::Player {
         None
     } else {
@@ -3283,6 +3351,9 @@ const fn view_has_back_button(view: MainView) -> bool {
             | MainView::UserPlaylists
             | MainView::UserPlaylistItems
             | MainView::DownloadQueue
+            | MainView::AudiovaultMenu
+            | MainView::AudiovaultSearch
+            | MainView::AudiovaultResults
     )
 }
 
@@ -3501,6 +3572,9 @@ unsafe fn activate_selection(window: HWND) {
         Some(MainView::UserPlaylists) => open_selected_user_playlist(window),
         Some(MainView::UserPlaylistItems) => activate_user_playlist_item(window),
         Some(MainView::DownloadQueue) => activate_selected_download(window),
+        Some(
+            MainView::AudiovaultMenu | MainView::AudiovaultSearch | MainView::AudiovaultResults,
+        ) => audiovault::activate(window),
         // Python `play_selected` on the empty result list.
         Some(MainView::Search) => {
             if let Some(state) = state(window) {
@@ -3591,6 +3665,10 @@ unsafe fn activate_main_menu_selection(window: HWND) {
     }
     if item_id == "diagnostic_report" {
         copy_diagnostic_report(window);
+        return;
+    }
+    if item_id == "audiovault" {
+        audiovault::show_menu(window);
         return;
     }
     if item_id == "file_converter" || item_id == "folder_converter" {
@@ -4027,6 +4105,11 @@ unsafe fn start_media_item_with_options(
     preserve_sequence: bool,
     start_position_seconds: Option<f64>,
 ) {
+    // Python plays AudioVault movies from their resolved stream and TV show
+    // episodes from the playback cache.
+    if audiovault::intercept_start(window, &item) {
+        return;
+    }
     let Some(state) = state_mut(window) else {
         return;
     };
@@ -7215,6 +7298,11 @@ unsafe fn activate_user_playlist_item(window: HWND) {
 #[allow(clippy::too_many_lines)]
 unsafe fn navigate_back(window: HWND) {
     stop_controlled_repeat(window);
+    if state(window).is_some_and(|state| audiovault::is_view(state.view)) {
+        // Python `back_from_audiovault`.
+        audiovault::back(window);
+        return;
+    }
     let Some(state) = state_mut(window) else {
         return;
     };
@@ -7339,6 +7427,10 @@ unsafe fn navigate_back(window: HWND) {
             state.view = MainView::Player;
             refresh_player(window, state, true, true);
         }
+        Route::AudiovaultMenu
+        | Route::AudiovaultSearch
+        | Route::AudiovaultResults
+        | Route::AudiovaultEpisodes => audiovault::restore_after_player(window),
         _ => {
             state.application.navigate_main_menu();
             state.view = MainView::MainMenu;
@@ -8177,12 +8269,17 @@ unsafe fn download_current_user_playlist(window: HWND) {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 unsafe fn start_download_item(
     window: HWND,
     item: &apricot_core::MediaItem,
     requested_choice: DownloadChoice,
     remove_queued: bool,
 ) {
+    // Python `start_download`: AudioVault items have audio only.
+    if audiovault::start_download(window, item, requested_choice == DownloadChoice::Audio) {
+        return;
+    }
     if item.is_local_media() {
         if let Some(state) = state(window) {
             set_status(
@@ -12104,7 +12201,9 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
     // Python `on_char_hook`: on the search screen's field, choices and buttons
     // Ctrl and Alt shortcuts act on the selected result, while plain keys
     // stay with the control. Its result list takes every list shortcut.
-    let search_field_focus = is_search_screen(state.view) && focus != state.list;
+    let search_field_focus = (is_search_screen(state.view)
+        || state.view == MainView::AudiovaultSearch)
+        && focus != state.list;
     let entry_focus =
         state.view == MainView::DirectLink || (search_field_focus && !(chord.control || chord.alt));
     let (scope, accepts_text) = if background_focus {
@@ -12233,7 +12332,10 @@ fn view_shortcut_scope(view: MainView) -> (ActionScope, bool) {
         | MainView::PodcastCategories
         | MainView::UserPlaylists
         | MainView::UserPlaylistItems
-        | MainView::DownloadQueue => (ActionScope::List, false),
+        | MainView::DownloadQueue
+        | MainView::AudiovaultMenu
+        | MainView::AudiovaultSearch
+        | MainView::AudiovaultResults => (ActionScope::List, false),
         MainView::Player => (ActionScope::Player, false),
     }
 }
@@ -12353,6 +12455,7 @@ unsafe fn leave_player_for_global_navigation(window: HWND, action_id: &str) {
             | "open_podcasts_rss"
             | "open_settings"
             | "new_subscription_videos"
+            | "open_audiovault"
     ) {
         return;
     }
@@ -12575,6 +12678,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "new_subscription_videos" => show_notification_center(window),
         "open_bookmarks" => show_bookmarks_dialog(window, false, false),
         "open_playlists" => show_user_playlists(window),
+        "open_audiovault" => audiovault::show_menu(window),
         "open_settings" => open_settings(window),
         "open_action_finder" => show_action_finder(window),
         "open_play_file" => open_media_file(window),
@@ -12786,6 +12890,9 @@ unsafe fn active_media_item(window: HWND) -> Option<apricot_core::MediaItem> {
     if focus_in_background_player(state) {
         return state.application.player_session().current_item().cloned();
     }
+    if audiovault::is_view(state.view) {
+        return audiovault::selected_item(state);
+    }
     match list_view(state) {
         MainView::Results | MainView::Trending => {
             let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
@@ -12859,7 +12966,10 @@ unsafe fn active_media_item(window: HWND) -> Option<apricot_core::MediaItem> {
         | MainView::PodcastSearchResults
         | MainView::PodcastCategories
         | MainView::UserPlaylists
-        | MainView::DownloadQueue => None,
+        | MainView::DownloadQueue
+        | MainView::AudiovaultMenu
+        | MainView::AudiovaultSearch
+        | MainView::AudiovaultResults => None,
     }
 }
 
@@ -17476,7 +17586,11 @@ unsafe fn open_settings(window: HWND) {
         MainView::UserPlaylists => refresh_user_playlists(state, false),
         MainView::UserPlaylistItems => refresh_user_playlist_items(state, false, false),
         MainView::DownloadQueue => refresh_download_queue(state, false, false),
-        MainView::Search | MainView::DirectLink => {}
+        MainView::Search
+        | MainView::DirectLink
+        | MainView::AudiovaultMenu
+        | MainView::AudiovaultSearch
+        | MainView::AudiovaultResults => {}
         MainView::Player => refresh_player(window, state, false, true),
     }
     if is_search_screen(state.view) {
@@ -17618,6 +17732,9 @@ fn active_primary_control(state: &WindowState) -> HWND {
         | MainView::UserPlaylists
         | MainView::UserPlaylistItems
         | MainView::DownloadQueue => state.list,
+        MainView::AudiovaultMenu | MainView::AudiovaultSearch | MainView::AudiovaultResults => {
+            audiovault::primary_control(state)
+        }
         MainView::Player => state.player_controls.initial_focus(),
     }
 }
@@ -18307,6 +18424,20 @@ mod tests {
                 !details_text_navigation_key(ShortcutChord::parse(key).unwrap()),
                 "{key}"
             );
+        }
+    }
+
+    #[test]
+    fn audiovault_screens_are_list_screens_with_back() {
+        for view in [
+            MainView::AudiovaultMenu,
+            MainView::AudiovaultSearch,
+            MainView::AudiovaultResults,
+        ] {
+            assert!(view_has_back_button(view));
+            assert!(!view_has_collection_remove(view));
+            assert!(!is_search_screen(view));
+            assert_eq!(view_shortcut_scope(view), (ActionScope::List, false));
         }
     }
 }

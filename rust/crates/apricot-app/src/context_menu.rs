@@ -318,6 +318,20 @@ fn playlist_item_is_supported(item: &MediaItem) -> bool {
         )
 }
 
+/// Python `open_audiovault_context_menu`: Open, then Download audio, or
+/// Download TV show for a show.
+pub fn audiovault_results_context_menu(
+    context: &ContextMenuContext<'_>,
+    item: &MediaItem,
+) -> Vec<ContextMenuEntry> {
+    let download = if item.kind == MediaKind::TvShow {
+        context.command("download_tv_show", ContextCommand::DownloadAudio)
+    } else {
+        context.shortcut("download_audio", ContextCommand::DownloadAudio)
+    };
+    vec![context.command("open", ContextCommand::Play), download]
+}
+
 /// Python `open_context_menu` for search results, trending, channel and
 /// playlist contents and local folders.
 pub fn results_context_menu(

@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 pub mod app_update;
+pub mod audiovault;
+pub mod audiovault_credentials;
 pub mod bpm;
 pub mod browser_cookies;
 pub mod clip_export;
@@ -25,6 +27,7 @@ pub mod youtube_helper_process;
 pub mod youtube_related;
 pub mod youtube_search_service;
 pub mod ytdlp_youtube;
+pub mod zip_archive;
 
 pub use bpm::{BpmAnalysisRequest, analyze_source_bpm, bpm_ffmpeg_arguments, ffmpeg_executable};
 pub use clip_export::{

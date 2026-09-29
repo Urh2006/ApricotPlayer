@@ -183,7 +183,7 @@ Enote, ki popravljajo odstopanja, so na vrsti prve.
 - **E18. yt-dlp posodobitve in posodobitve aplikacije. Zaključeno 29. 9. 2026, glej
   razdelek 6.** Namestitev posodobitve aplikacije ostane po D-011 v lokalni beti
   onemogočena.
-- **E19.** AudioVault.
+- **E19. AudioVault. Zaključeno 30. 9. 2026, glej razdelek 6.**
 - **E20.** Zaključna parity vrata: ponovna primerjava manifesta, preverjanje števil
   v registrih, NVDA preizkus celote, preverjanje uvoza podatkov in zmogljivosti.
 
@@ -1286,3 +1286,76 @@ in "up to date"), ročni dialog nad nastavitvami s fokusom nazaj na gumbu, posta
 available: 2.0.0-dev.3" po časovniku ter celotno posodobitev z zamenjavo datotek, brez
 ostankov in s ponovnim zagonom z `--updated-relaunch`. Na pravem GitHubu je zagonsko
 preverjanje v kopiji javilo "The app is up to date." (izdaje 1.x niso novejše).
+
+### E19: AudioVault (30. 9. 2026)
+
+Spremembe:
+
+- Ctrl+Alt+A in postavka AudioVault v glavnem meniju odpreta Pythonov AudioVault meni
+  (gumba "Back to main menu" in "Open", seznam z imenom "AudioVault": "Search", "View
+  recently added TV shows", "View recently added movies"). Brez prijave se najprej
+  pokaže okno "Log in to AudioVault" (Email, Password, Register, OK, Cancel; fokus na
+  Email, Enter v obeh poljih pomeni OK, Escape prekliče), s shranjenim geslom pa se
+  prijava zgodi sama. Napačno shranjeno geslo pokaže sporočilo, pozabi geslo in odpre
+  okno; napačno vneseno geslo pokaže samo sporočilo, kot v Pythonu.
+- Geslo se shrani z DPAPI in isto entropijo kot v Pythonu, zato Rust prebere geslo, ki
+  ga je shranila Python verzija (preverjeno z izključenim testom na pravem Pythonovem
+  zapisu). Sprememba e-pošte v nastavitvah pozabi geslo in odjavi, kot Python.
+- Iskalni zaslon (Back, Search query, Type z Movies in TV shows, Search, Play, Download
+  audio, seznam), zaslon nedavnih naslovov (Back, Play, Download audio, naslov, seznam z
+  imenom naslova), Pythonov vrstni red Tab, vrstice "Naslov | Movie", "Naslov | TV show"
+  in "Epizoda | Episode", kontekstni meni Open ter "Download audio" s kratico ali "Download
+  TV show", Ctrl+Shift+D oglasi "Video is unavailable from AudioVault. Download audio
+  instead.".
+- TV serija: seznam epizod se prebere iz oddaljenega zipa z branjem po delih (Range),
+  epizode so v naravnem vrstnem redu, predvajana epizoda se prenese v predpomnilnik
+  (`cache\audiovault\<id>\_episodes`), star predpomnilnik se obreže na `cache_size_mb`.
+  Kadar strežnik ne podpira Range, se prenese in varno razširi cel paket (80 odstotkov
+  prenos, 20 odstotkov razširjanje). Naslednja in prejšnja epizoda v predvajalniku
+  pripravita še nepreneseno epizodo in jo predvajata.
+- Film se predvaja iz razrešenega naslova s piškotkom seje, User-Agent in Referer (mpv
+  dobi glave prek `http_headers`); glave se nikoli ne shranijo v zgodovino, priljubljene
+  ali zadnjo sejo.
+- Prenosi: film v `Downloads\AudioVault`, epizoda v `AudioVault\<serija>`, serija v
+  `AudioVault\<serija>`, z vprašanjem za mesto, kadar je vklopljeno. Oglas "AudioVault
+  download complete: X. Saved to Y".
+- Iztek seje (preusmeritev na prijavo) sproži ponovno prijavo in ponovi dejanje, kot
+  Python. Nastavitve: "Log in to AudioVault" (nad oknom nastavitev), "Log out of
+  AudioVault" in "Register".
+- Nazaj s predvajalnika obnovi AudioVault zaslon po Pythonovem
+  `restore_audiovault_player_results` (epizode dobijo zaslon z naslovom serije), Escape
+  in Back sledita `back_from_audiovault`.
+
+Nujne razlike:
+
+- Besedila omrežnih napak (na primer brez povezave) prihajajo iz Rust HTTP knjižnice;
+  "HTTP Error 404: Not Found" in Pythonova angleška besedila o varnosti zipa ostanejo enaka.
+- Bralnik zipa podpira shranjene in stisnjene (deflate) člane, kar AudioVault uporablja;
+  Pythonov `zipfile` bi znal še bzip2 in lzma.
+- Rezultati, ki pridejo po tem, ko je uporabnik zaslon že zapustil, se zavržejo (Python bi
+  pisal v uničen ali drug seznam).
+- Film iz zgodovine ali priljubljenih se razreši prek AudioVault seje (s ponovno prijavo);
+  Python bi ga poskusil predvajati prek yt-dlp.
+- Sprotni odstotki prenosa se samo izpišejo v vrstici stanja, ne oglasijo, da NVDA ne
+  bere vsakega odstotka.
+- Za preizkuse lokalna beta (ne izdaja) sprejme `APRICOT_AUDIOVAULT_TEST_BASE` z
+  naslovom na 127.0.0.1.
+
+Predlog, že narejen in čaka odločitev:
+
+- **P-10.** Python ob novem AudioVault zaslonu obdrži prejšnje rezultate, zato Play ali
+  Download audio na vrstici "No search results." predvaja ali prenese prvi element
+  prejšnjega seznama. Rust ob novem zaslonu rezultate počisti, tako da gumba ne storita
+  ničesar, dokler ni novih rezultatov. Hkrati fokus po kontekstnem meniju ostane na
+  seznamu.
+
+Preverjanje: `cargo build`, `cargo test` (613 uspešnih, 17 izključenih), `cargo clippy
+--workspace --all-targets -D warnings` in `cargo fmt`. Novi testi pokrijejo razčlenjevanje
+strani kot Pythonov HTMLParser, polja rezultatov in epizod, poti predpomnilnika in
+prenosov, `safe_folder_name`, naravni vrstni red, varnost zipa, bralnik zipa (tudi napačen
+CRC), branje po delih, razširjanje, obrezovanje predpomnilnika, DPAPI, glave za mpv in
+kontekstni meni. Kopija bete na ločenem nevidnem namizju je proti lokalnemu lažnemu
+AudioVault strežniku preverila vse zgoraj: prijavo in napake prijave, menije, fokus, imena
+in vrstni red Tab, nedavne naslove, iskanje, epizode, predvajanje epizod in filma (strežnik
+je videl piškotek iz mpv), naslednjo in prejšnjo epizodo, vrnitev iz predvajalnika, prenose,
+iztek seje in odjavo. Prave AudioVault prijave nisem preizkusil, ker nimam računa.

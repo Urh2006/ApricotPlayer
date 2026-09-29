@@ -4,6 +4,7 @@ pub mod action_finder;
 pub mod activation;
 pub mod application;
 pub mod audio_devices;
+pub mod audiovault;
 pub mod bookmark_controller;
 pub mod bpm;
 pub mod chapters;

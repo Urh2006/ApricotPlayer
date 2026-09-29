@@ -2537,6 +2537,79 @@ impl Application {
         Ok(())
     }
 
+    /// Python `play_audiovault_local_item`: `set_player_sequence` with the
+    /// `AudioVault` list the episode was played from.
+    pub fn prepare_audiovault_playback(&mut self, items: &[MediaItem], item: &MediaItem) {
+        let _ = self
+            .state
+            .player_sequence
+            .set(PlaybackSequenceSource::Audiovault, items, item);
+    }
+
+    /// Python `apply_settings_from_visible_controls` for the `AudioVault`
+    /// email: another address forgets the saved password.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the draft rejects the value.
+    pub fn apply_audiovault_email_text(
+        &mut self,
+        text: &str,
+    ) -> Result<(), SettingsControllerError> {
+        let email = text.trim().to_owned();
+        if email != self.settings().audiovault_email {
+            self.settings.set_value(
+                SettingId::AudiovaultPasswordProtected,
+                Value::String(String::new()),
+            )?;
+        }
+        self.settings
+            .set_value(SettingId::AudiovaultEmail, Value::String(email))
+    }
+
+    /// Python `audiovault_login_worker` after a login: the address, the
+    /// protected password when it is remembered, then `save_settings`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the settings cannot be saved.
+    pub fn store_audiovault_login(
+        &mut self,
+        email: &str,
+        protected_password: Option<String>,
+    ) -> Result<(), SettingsControllerError> {
+        self.settings
+            .set_value(SettingId::AudiovaultEmail, Value::String(email.to_owned()))?;
+        if let Some(protected_password) = protected_password {
+            self.settings.set_value(
+                SettingId::AudiovaultPasswordProtected,
+                Value::String(protected_password),
+            )?;
+        }
+        self.save_settings()
+    }
+
+    /// Python forgets the saved password after a failed automatic login,
+    /// and `logout_audiovault` also the address.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the settings cannot be saved.
+    pub fn forget_audiovault_login(
+        &mut self,
+        email_too: bool,
+    ) -> Result<(), SettingsControllerError> {
+        self.settings.set_value(
+            SettingId::AudiovaultPasswordProtected,
+            Value::String(String::new()),
+        )?;
+        if email_too {
+            self.settings
+                .set_value(SettingId::AudiovaultEmail, Value::String(String::new()))?;
+        }
+        self.save_settings()
+    }
+
     /// Python sets `skipped_update_version` and calls `save_settings`.
     ///
     /// # Errors

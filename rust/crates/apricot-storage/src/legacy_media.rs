@@ -61,6 +61,9 @@ pub fn media_item_to_python_value(item: &MediaItem) -> Value {
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
+    // Stream headers carry the AudioVault session cookie; like Python's
+    // `_audiovault_headers` they only live with the playing item.
+    object.remove("http_headers");
     object.insert("title".to_owned(), Value::String(item.title.clone()));
     object.insert("channel".to_owned(), Value::String(item.channel.clone()));
     object.insert("kind".to_owned(), Value::String(python_kind(item)));

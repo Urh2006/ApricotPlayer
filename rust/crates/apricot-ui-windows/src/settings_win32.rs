@@ -1106,7 +1106,10 @@ unsafe fn handle_settings_command(window: HWND, command: SettingsCommand, label:
         SettingsCommand::ObtainYoutubeApiKey => open_youtube_api_key_page(window),
         SettingsCommand::CheckYtdlpUpdates => request_update_check(window, false),
         SettingsCommand::CheckAppUpdates => request_update_check(window, true),
-        _ => {
+        SettingsCommand::AudiovaultLogin => request_audiovault(window, true),
+        SettingsCommand::AudiovaultLogout => request_audiovault(window, false),
+        SettingsCommand::AudiovaultRegister => crate::win32::open_audiovault_registration(),
+        SettingsCommand::CheckSubscriptions => {
             if let Some(state) = state_mut(window) {
                 // Python has every settings command. Until the Rust route exists,
                 // speak the beta message and keep focus on the button.
@@ -1143,6 +1146,30 @@ unsafe fn request_update_check(window: HWND, app: bool) {
         crate::win32::WM_UPDATE_REQUEST,
         WPARAM(request),
         LPARAM(0),
+    );
+}
+
+/// Python `login_audiovault_from_settings` applies the visible controls and
+/// shows the login over the settings; `logout_audiovault` forgets the login.
+/// The main window owns the `AudioVault` session and runs both.
+unsafe fn request_audiovault(window: HWND, login: bool) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    if login && let Err(error) = sync_all_controls(state) {
+        show_error(window, &error.to_string());
+        return;
+    }
+    let request = if login {
+        crate::win32::AUDIOVAULT_REQUEST_LOGIN
+    } else {
+        crate::win32::AUDIOVAULT_REQUEST_LOGOUT
+    };
+    let _ = PostMessageW(
+        Some(state.owner),
+        crate::win32::WM_AUDIOVAULT_REQUEST,
+        WPARAM(request),
+        LPARAM(window.0 as isize),
     );
 }
 
@@ -1932,6 +1959,9 @@ unsafe fn sync_bound_control(
         | ControlBinding::ShortcutActionList(_) => Ok(()),
         ControlBinding::Text(SettingId::CookiesFile) => {
             app.apply_cookies_path_text(&window_text(bound.control))
+        }
+        ControlBinding::Text(SettingId::AudiovaultEmail) => {
+            app.apply_audiovault_email_text(&window_text(bound.control))
         }
         ControlBinding::Text(setting) => {
             app.set_string_setting(*setting, window_text(bound.control))

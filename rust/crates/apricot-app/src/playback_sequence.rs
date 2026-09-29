@@ -4,12 +4,26 @@ use apricot_core::MediaItem;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PlaybackSequenceSource {
-    Search { generation: u64 },
-    YoutubeCollection { generation: u64 },
-    YoutubePlaylist { token: u64 },
-    LocalFolder { generation: u64 },
-    UserPlaylist { playlist_index: usize },
-    RssFeed { feed_index: usize },
+    Search {
+        generation: u64,
+    },
+    YoutubeCollection {
+        generation: u64,
+    },
+    YoutubePlaylist {
+        token: u64,
+    },
+    LocalFolder {
+        generation: u64,
+    },
+    UserPlaylist {
+        playlist_index: usize,
+    },
+    RssFeed {
+        feed_index: usize,
+    },
+    /// Python `set_player_sequence(self.audiovault_results)`.
+    Audiovault,
     Collection,
 }
 

@@ -867,6 +867,7 @@ fn command_arguments(command: PlaybackCommand) -> Result<Vec<String>, PlaybackEr
             {
                 options.push(format!("start={position}"));
             }
+            options.extend(http_header_options(&item));
             if !options.is_empty() {
                 arguments.extend(["-1".to_owned(), options.join(",")]);
             }
@@ -961,6 +962,36 @@ fn audio_filter_arguments(command: PlaybackCommand) -> Result<Vec<String>, Playb
     }
 }
 
+/// Python `start_mpv` with stream headers: `--user-agent`, `--referrer`
+/// and the other headers as HTTP header fields, from the item's
+/// `http_headers` metadata.
+fn http_header_options(item: &apricot_core::MediaItem) -> Vec<String> {
+    let Some(headers) = item
+        .metadata
+        .get("http_headers")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Vec::new();
+    };
+    let quoted = |value: &str| format!("%{}%{value}", value.len());
+    let mut options = Vec::new();
+    let mut fields = Vec::new();
+    for (name, value) in headers {
+        let Some(value) = value.as_str().filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        match name.to_ascii_lowercase().as_str() {
+            "user-agent" => options.push(format!("user-agent={}", quoted(value))),
+            "referer" => options.push(format!("referrer={}", quoted(value))),
+            _ => fields.push(format!("{name}: {value}")),
+        }
+    }
+    if !fields.is_empty() {
+        options.push(format!("http-header-fields={}", quoted(&fields.join(","))));
+    }
+    options
+}
+
 fn media_target(item: &apricot_core::MediaItem) -> Result<String, PlaybackError> {
     item.local_path
         .as_deref()
@@ -977,7 +1008,7 @@ mod tests {
 
     use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
 
-    use super::{command_arguments, library_path, terminal_log_line};
+    use super::{command_arguments, http_header_options, library_path, terminal_log_line};
     use crate::{MpvLaunchOptions, PlaybackCommand};
 
     fn chapter_fixtures() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
@@ -1480,5 +1511,39 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn stream_headers_become_per_file_options() {
+        let mut item = MediaItem {
+            id: MediaId("1".to_owned()),
+            source: MediaSource::Audiovault,
+            kind: MediaKind::Movie,
+            title: "Movie".to_owned(),
+            url: None,
+            stream_url: Some("https://media.test/movie.mp3".parse().expect("URL")),
+            external_audio_url: None,
+            local_path: None,
+            channel: String::new(),
+            duration_seconds: None,
+            metadata: BTreeMap::new(),
+        };
+        assert!(http_header_options(&item).is_empty());
+        item.metadata.insert(
+            "http_headers".to_owned(),
+            serde_json::json!({
+                "User-Agent": "ApricotPlayer/2",
+                "Referer": "https://direct.audiovault.net",
+                "Cookie": "a=1; b=2"
+            }),
+        );
+        assert_eq!(
+            http_header_options(&item),
+            [
+                "user-agent=%15%ApricotPlayer/2",
+                "referrer=%29%https://direct.audiovault.net",
+                "http-header-fields=%16%Cookie: a=1; b=2",
+            ]
+        );
     }
 }

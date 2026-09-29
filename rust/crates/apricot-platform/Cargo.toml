@@ -11,7 +11,8 @@ apricot-media.workspace = true
 apricot-updater.workspace = true
 chrono.workspace = true
 encoding_rs.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["cookies"] }
+flate2 = "1.1.10"
 regex = "1"
 serde_json.workspace = true
 thiserror.workspace = true
