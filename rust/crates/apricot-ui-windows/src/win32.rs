@@ -150,6 +150,11 @@ const ID_DOWNLOAD_ALL_VIDEO: usize = 1046;
 const ID_DOWNLOAD_CANCEL: usize = 1047;
 const ID_DOWNLOAD_CANCEL_ALL: usize = 1048;
 const ID_PLAYLIST_DOWNLOAD: usize = 1049;
+const ID_SEARCH_PROVIDER: usize = 1050;
+const ID_SEARCH_PLAY: usize = 1051;
+const ID_SEARCH_DOWNLOAD_AUDIO: usize = 1052;
+const ID_SEARCH_DOWNLOAD_VIDEO: usize = 1053;
+const ID_SEARCH_ADD_FAVORITE: usize = 1054;
 const ID_CONTEXT_PLAY: usize = 1101;
 const ID_CONTEXT_ADD_TO_QUEUE: usize = 1104;
 const ID_CONTEXT_REMOVE_FROM_QUEUE: usize = 1105;
@@ -431,9 +436,15 @@ struct WindowState {
     open: HWND,
     search_label: HWND,
     search_edit: HWND,
+    provider_label: HWND,
+    provider: HWND,
     kind_label: HWND,
     kind: HWND,
     search: HWND,
+    search_play: HWND,
+    search_download_audio: HWND,
+    search_download_video: HWND,
+    search_add_favorite: HWND,
     back: HWND,
     trending_country_label: HWND,
     trending_country: HWND,
@@ -672,7 +683,7 @@ unsafe fn handle_text_entry_enter(window: HWND, message: &MSG) -> bool {
         return false;
     }
     if !state(window).is_some_and(|state| {
-        matches!(state.view, MainView::Search | MainView::DirectLink)
+        (is_search_screen(state.view) || state.view == MainView::DirectLink)
             && message.hwnd == state.search_edit
     }) {
         return false;
@@ -769,6 +780,20 @@ unsafe fn background_player_previous_target(state: &WindowState) -> Option<HWND>
 /// Views whose Tab order is not their creation order.
 fn explicit_view_tab_controls(state: &WindowState) -> Option<Vec<HWND>> {
     Some(match state.view {
+        // Python `show_search`: Back, the query, provider and type, the
+        // button row, then the result list.
+        MainView::Search | MainView::Results | MainView::YoutubeCollection => vec![
+            state.back,
+            state.search_edit,
+            state.provider,
+            state.kind,
+            state.search,
+            state.search_play,
+            state.search_download_audio,
+            state.search_download_video,
+            state.search_add_favorite,
+            state.list,
+        ],
         MainView::Trending => vec![
             state.trending_country,
             state.trending_category,
@@ -1040,6 +1065,20 @@ unsafe fn handle_window_command(window: HWND, wparam: WPARAM) {
         result_selection_changed(window);
     } else if command == ID_SEARCH {
         submit_search(window);
+    } else if command == ID_SEARCH_PROVIDER
+        && notification == usize::try_from(CBN_SELCHANGE).expect("notification fits")
+    {
+        if let Some(state) = state(window) {
+            search_provider_changed(state);
+        }
+    } else if matches!(
+        command,
+        ID_SEARCH_PLAY
+            | ID_SEARCH_DOWNLOAD_AUDIO
+            | ID_SEARCH_DOWNLOAD_VIDEO
+            | ID_SEARCH_ADD_FAVORITE
+    ) {
+        activate_search_button(window, command);
     } else if command == ID_LOAD_TRENDING
         || (matches!(command, ID_TRENDING_COUNTRY | ID_TRENDING_CATEGORY)
             && notification == usize::try_from(CBN_SELCHANGE).expect("notification fits"))
@@ -1214,6 +1253,36 @@ unsafe fn create_controls(
     if !SetWindowSubclass(search_edit, Some(text_entry_proc), 1, 0).as_bool() {
         return Err(windows::core::Error::from_thread());
     }
+    // Python `show_search`: Search provider between the query and the type.
+    let provider_label_text = wide(catalog.text("search_provider"));
+    let provider_label = create_control(
+        parent,
+        instance,
+        w!("STATIC"),
+        PCWSTR(provider_label_text.as_ptr()),
+        WS_CHILD,
+        WINDOW_EX_STYLE::default(),
+        0,
+    )?;
+    let provider = create_control(
+        parent,
+        instance,
+        w!("COMBOBOX"),
+        PCWSTR::null(),
+        WS_CHILD | WS_TABSTOP | WINDOW_STYLE(CBS_DROPDOWNLIST as u32) | WS_VSCROLL,
+        WINDOW_EX_STYLE::default(),
+        ID_SEARCH_PROVIDER,
+    )?;
+    for key in SEARCH_PROVIDER_KEYS {
+        let label = wide(catalog.text(key));
+        SendMessageW(
+            provider,
+            CB_ADDSTRING,
+            None,
+            Some(LPARAM(label.as_ptr() as isize)),
+        );
+    }
+    SendMessageW(provider, CB_SETCURSEL, Some(WPARAM(0)), None);
     let kind_label_text = wide(catalog.text("type"));
     let kind_label = create_control(
         parent,
@@ -1233,16 +1302,7 @@ unsafe fn create_controls(
         WINDOW_EX_STYLE::default(),
         ID_SEARCH_KIND,
     )?;
-    for key in ["all", "video", "playlist", "channel"] {
-        let label = wide(catalog.text(key));
-        SendMessageW(
-            kind,
-            CB_ADDSTRING,
-            None,
-            Some(LPARAM(label.as_ptr() as isize)),
-        );
-    }
-    SendMessageW(kind, CB_SETCURSEL, Some(WPARAM(0)), None);
+    set_search_kind_choices(kind, &catalog, 0, 0);
     let search_text = wide(catalog.text("search"));
     let search = create_control(
         parent,
@@ -1252,6 +1312,30 @@ unsafe fn create_controls(
         WS_CHILD | WS_TABSTOP | WINDOW_STYLE(BS_DEFPUSHBUTTON as u32),
         WINDOW_EX_STYLE::default(),
         ID_SEARCH,
+    )?;
+    // Python `show_search`: Play, Download audio, Download video and Add
+    // favorite follow Search.
+    let search_play = create_button(parent, instance, &catalog, "play", ID_SEARCH_PLAY)?;
+    let search_download_audio = create_button(
+        parent,
+        instance,
+        &catalog,
+        "download_audio",
+        ID_SEARCH_DOWNLOAD_AUDIO,
+    )?;
+    let search_download_video = create_button(
+        parent,
+        instance,
+        &catalog,
+        "download_video",
+        ID_SEARCH_DOWNLOAD_VIDEO,
+    )?;
+    let search_add_favorite = create_button(
+        parent,
+        instance,
+        &catalog,
+        "add_favorite",
+        ID_SEARCH_ADD_FAVORITE,
     )?;
     let back_text = wide(catalog.text("back"));
     let back = create_control(
@@ -1623,9 +1707,15 @@ unsafe fn create_controls(
         open,
         search_label,
         search_edit,
+        provider_label,
+        provider,
         kind_label,
         kind,
         search,
+        search_play,
+        search_download_audio,
+        search_download_video,
+        search_add_favorite,
         back,
         trending_country_label,
         trending_country,
@@ -1681,9 +1771,15 @@ unsafe fn create_controls(
         open,
         search_label,
         search_edit,
+        provider_label,
+        provider,
         kind_label,
         kind,
         search,
+        search_play,
+        search_download_audio,
+        search_download_video,
+        search_add_favorite,
         back,
         trending_country_label,
         trending_country,
@@ -2009,7 +2105,9 @@ fn model_context_entries(
         queued_download_count: state.application.downloads().queued().len(),
     };
     Some(match view {
-        MainView::Results
+        // Python `open_context_menu` also opens on the empty result list.
+        MainView::Search
+        | MainView::Results
         | MainView::Trending
         | MainView::YoutubeCollection
         | MainView::LocalFolder => context_menu::results_context_menu(&context, item),
@@ -2275,7 +2373,8 @@ unsafe fn show_context_menu_for_active_view(window: HWND) {
     }
     match state(window).map(|state| list_view(state)) {
         Some(
-            MainView::Results
+            MainView::Search
+            | MainView::Results
             | MainView::Trending
             | MainView::YoutubeCollection
             | MainView::LocalFolder
@@ -2411,7 +2510,9 @@ unsafe fn layout_controls_state(window: HWND, state: &mut WindowState) {
         margin,
         status_height,
     );
-    if matches!(state.view, MainView::Search | MainView::DirectLink) {
+    if is_search_screen(state.view) {
+        // Laid out after the bottom controls, which it partly overrides.
+    } else if state.view == MainView::DirectLink {
         let _ = MoveWindow(
             state.search_label,
             margin,
@@ -2428,25 +2529,6 @@ unsafe fn layout_controls_state(window: HWND, state: &mut WindowState) {
             field_height,
             true,
         );
-        if state.view == MainView::Search {
-            let kind_y = margin + label_height + field_height + margin;
-            let _ = MoveWindow(
-                state.kind_label,
-                margin,
-                kind_y,
-                width - margin * 2,
-                label_height,
-                true,
-            );
-            let _ = MoveWindow(
-                state.kind,
-                margin,
-                kind_y + label_height,
-                width - margin * 2,
-                240,
-                true,
-            );
-        }
     } else if state.view == MainView::Trending {
         layout_trending_controls(
             state,
@@ -2476,6 +2558,66 @@ unsafe fn layout_controls_state(window: HWND, state: &mut WindowState) {
         );
     }
     layout_bottom_controls(state, width, height, margin, button_height, status_height);
+    if is_search_screen(state.view) {
+        layout_search_screen(state, width, height, margin, button_height, status_height);
+    }
+}
+
+/// Python `show_search`: query, provider and type fields, the Search button
+/// row, the result list, and Back below it.
+unsafe fn layout_search_screen(
+    state: &WindowState,
+    width: i32,
+    height: i32,
+    margin: i32,
+    button_height: i32,
+    status_height: i32,
+) {
+    let label_height = 22;
+    let field_height = 30;
+    let field_width = width - margin * 2;
+    let mut y = margin;
+    for (label, field, field_box_height) in [
+        (state.search_label, state.search_edit, field_height),
+        (state.provider_label, state.provider, 240),
+        (state.kind_label, state.kind, 240),
+    ] {
+        let _ = MoveWindow(label, margin, y, field_width, label_height, true);
+        let _ = MoveWindow(
+            field,
+            margin,
+            y + label_height,
+            field_width,
+            field_box_height,
+            true,
+        );
+        y += label_height + field_height + margin;
+    }
+    layout_button_row(
+        &[
+            state.search,
+            state.search_play,
+            state.search_download_audio,
+            state.search_download_video,
+            state.search_add_favorite,
+        ],
+        width,
+        y,
+        margin,
+        button_height,
+    );
+    y += button_height + margin;
+    let back_y = height - button_height - margin;
+    let status_y = back_y - status_height - margin;
+    let _ = MoveWindow(
+        state.list,
+        margin,
+        y,
+        field_width,
+        (status_y - margin - y).max(40),
+        true,
+    );
+    let _ = MoveWindow(state.back, margin, back_y, 180, button_height, true);
 }
 
 /// Lays out the player page, or the background player below another screen,
@@ -2824,6 +2966,7 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
     let list_visible = matches!(
         state.view,
         MainView::MainMenu
+            | MainView::Search
             | MainView::Results
             | MainView::Trending
             | MainView::YoutubeCollection
@@ -2840,9 +2983,13 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
             | MainView::UserPlaylistItems
             | MainView::DownloadQueue
     );
-    let text_entry_visible = matches!(state.view, MainView::Search | MainView::DirectLink);
-    let search_visible = state.view == MainView::Search;
+    let search_visible = is_search_screen(state.view);
+    let text_entry_visible = search_visible || state.view == MainView::DirectLink;
     let direct_link_visible = state.view == MainView::DirectLink;
+    if search_visible {
+        // The direct link screen shares the field and renames its label.
+        set_control_text(state, state.search_label, "search_query");
+    }
     let playlist_items_available = state.view != MainView::UserPlaylistItems
         || state
             .application
@@ -2854,6 +3001,7 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
     let open_visible = list_visible
         && playlist_items_available
         && state.view != MainView::Trending
+        && !search_visible
         && (state.view != MainView::DownloadQueue
             || !state.application.downloads().queued().is_empty());
     let folder_visible = state.view == MainView::LocalFolder;
@@ -2876,9 +3024,15 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
         (state.open, open_visible),
         (state.search_label, text_entry_visible),
         (state.search_edit, text_entry_visible),
+        (state.provider_label, search_visible),
+        (state.provider, search_visible),
         (state.kind_label, search_visible),
         (state.kind, search_visible),
         (state.search, search_visible),
+        (state.search_play, search_visible),
+        (state.search_download_audio, search_visible),
+        (state.search_download_video, search_visible),
+        (state.search_add_favorite, search_visible),
         (state.back, back_visible),
         (state.trending_country_label, trending_visible),
         (state.trending_country, trending_visible),
@@ -2966,6 +3120,15 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
             .player_controls
             .show_video_host_after(state.background_player.label());
     }
+}
+
+/// Python shows search results, channel and playlist contents and saved
+/// subscription videos on the search screen (`show_search`).
+const fn is_search_screen(view: MainView) -> bool {
+    matches!(
+        view,
+        MainView::Search | MainView::Results | MainView::YoutubeCollection
+    )
 }
 
 const fn view_has_back_button(view: MainView) -> bool {
@@ -3206,7 +3369,14 @@ unsafe fn activate_selection(window: HWND) {
         Some(MainView::UserPlaylists) => open_selected_user_playlist(window),
         Some(MainView::UserPlaylistItems) => activate_user_playlist_item(window),
         Some(MainView::DownloadQueue) => activate_selected_download(window),
-        Some(MainView::Search | MainView::DirectLink | MainView::Player) | None => {}
+        // Python `play_selected` on the empty result list.
+        Some(MainView::Search) => {
+            if let Some(state) = state(window) {
+                let message = catalog_text(&state.application, "no_selection");
+                show_error_message(window, &message);
+            }
+        }
+        Some(MainView::DirectLink | MainView::Player) | None => {}
     }
 }
 
@@ -3317,6 +3487,12 @@ unsafe fn activate_youtube_collection_selection(window: HWND) {
 
 unsafe fn activate_youtube_item(window: HWND, item: apricot_core::MediaItem) {
     match item.kind {
+        // Python `play_selected`: a SoundCloud artist opens its tracks.
+        apricot_core::MediaKind::Channel
+            if item.source == apricot_core::MediaSource::Soundcloud =>
+        {
+            open_youtube_collection(window, item, YoutubeCollectionKind::SoundcloudArtistTracks);
+        }
         apricot_core::MediaKind::Channel => show_channel_options(window, item),
         apricot_core::MediaKind::Playlist => {
             open_youtube_collection(window, item, YoutubeCollectionKind::PlaylistVideos);
@@ -3436,14 +3612,21 @@ unsafe fn open_youtube_collection(
         }
         return;
     };
+    // Python `open_channel_tab` loads the videos tab as `channel_uploads`.
+    let kind = if kind == YoutubeCollectionKind::ChannelVideos {
+        YoutubeCollectionKind::ChannelUploads
+    } else {
+        kind
+    };
     let work = {
         let Some(state) = state_mut(window) else {
             return;
         };
         let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
         let title = match kind {
-            YoutubeCollectionKind::PlaylistVideos => item.title,
-            YoutubeCollectionKind::ChannelVideos => {
+            YoutubeCollectionKind::PlaylistVideos
+            | YoutubeCollectionKind::SoundcloudArtistTracks => item.title,
+            YoutubeCollectionKind::ChannelVideos | YoutubeCollectionKind::ChannelUploads => {
                 format!("{} - {}", item.title, catalog.text("channel_videos"))
             }
             YoutubeCollectionKind::ChannelPlaylists => {
@@ -3461,7 +3644,13 @@ unsafe fn open_youtube_collection(
             .begin_youtube_collection(title.clone(), url, kind)
         {
             Ok(work) => {
-                let message = catalog.text("loading_playlist").replace("{title}", &title);
+                // Python `open_soundcloud_artist_tracks` says `loading_channel`.
+                let key = if kind == YoutubeCollectionKind::SoundcloudArtistTracks {
+                    "loading_channel"
+                } else {
+                    "loading_playlist"
+                };
+                let message = catalog.text(key).replace("{title}", &title);
                 set_status(state, &message, true);
                 work
             }
@@ -3570,10 +3759,7 @@ unsafe fn open_library_item(window: HWND, item: apricot_core::MediaItem) {
         apricot_core::MediaKind::Channel
             if item.source == apricot_core::MediaSource::Soundcloud =>
         {
-            if let Some(state) = state(window) {
-                let feature = catalog_text(&state.application, "open_channel");
-                announce_unavailable_feature(window, &feature);
-            }
+            open_youtube_collection(window, item, YoutubeCollectionKind::SoundcloudArtistTracks);
         }
         apricot_core::MediaKind::Channel => {
             open_youtube_collection(window, item, YoutubeCollectionKind::ChannelVideos);
@@ -3712,7 +3898,9 @@ unsafe fn start_media_item_with_options(
     });
     if !matches!(
         item.source,
-        apricot_core::MediaSource::Youtube | apricot_core::MediaSource::Direct
+        apricot_core::MediaSource::Youtube
+            | apricot_core::MediaSource::Soundcloud
+            | apricot_core::MediaSource::Direct
     ) {
         let background = std::mem::take(&mut state.background_start);
         start_player_at(
@@ -3822,8 +4010,9 @@ fn media_resolve_backend(
     item: &apricot_core::MediaItem,
     configured_backend: &str,
 ) -> YoutubeBackend {
-    if item.source == apricot_core::MediaSource::Direct
-        && item.youtube_url_at_timestamp(0.0).is_none()
+    if item.source == apricot_core::MediaSource::Soundcloud
+        || (item.source == apricot_core::MediaSource::Direct
+            && item.youtube_url_at_timestamp(0.0).is_none())
     {
         YoutubeBackend::YtDlp
     } else {
@@ -4233,8 +4422,12 @@ unsafe fn show_search(window: HWND) {
             .navigate_to(RouteFrame::new(Route::Search));
     }
     state.view = MainView::Search;
-    set_control_text(state, state.search_label, "search_query");
-    set_control_text(state, state.search, "search");
+    // Python `show_search` without `restore_search`: an empty query, the
+    // YouTube provider with its first type, and an empty result list.
+    let _ = SetWindowTextW(state.search_edit, w!(""));
+    SendMessageW(state.provider, CB_SETCURSEL, Some(WPARAM(0)), None);
+    relabel_search_screen(state);
+    refresh_search_placeholder(state);
     set_status(state, &catalog_text(&state.application, "ready"), false);
     layout_controls_state(window, state);
     let _ = SetFocus(Some(state.search_edit));
@@ -6898,6 +7091,7 @@ unsafe fn navigate_back(window: HWND) {
     match route {
         Route::Search => {
             state.view = MainView::Search;
+            refresh_search_placeholder(state);
             layout_controls_state(window, state);
             let _ = SetFocus(Some(state.search_edit));
         }
@@ -7081,7 +7275,7 @@ unsafe fn submit_search(window: HWND) {
     // running would otherwise refuse this one and its own results would be
     // dropped as stale, leaving no results at all.
     cancel_youtube_work(window, state);
-    let kind = selected_search_kind(state.kind);
+    let kind = selected_search_kind(state.provider, state.kind);
     let work = match state.application.begin_youtube_search(&query, kind) {
         Ok(work) => work,
         Err(error) => {
@@ -7093,13 +7287,14 @@ unsafe fn submit_search(window: HWND) {
     let message = catalog_text(&state.application, "searching")
         .replace("{query}", state.application.search_session().query());
     set_status(state, &message, true);
-    let _ = EnableWindow(state.search, false);
     start_youtube_work(window, work);
 }
 
 unsafe fn submit_primary_text(window: HWND) {
     match state(window).map(|state| state.view) {
-        Some(MainView::Search) => submit_search(window),
+        Some(MainView::Search | MainView::Results | MainView::YoutubeCollection) => {
+            submit_search(window);
+        }
         Some(MainView::DirectLink) => {
             let action = state(window).map_or_else(
                 || "play".to_owned(),
@@ -9707,6 +9902,9 @@ unsafe fn finish_youtube_search(
             state.hydrated_youtube_urls.clear();
             state.youtube_api_metadata_disabled_scopes.clear();
             state.deferred_youtube_metadata_rows.clear();
+            // Python `search` clears `search_results_stack` and shows the
+            // results on the search screen, so Back returns to the main menu.
+            state.application.navigate_main_menu();
             state
                 .application
                 .navigate_to(RouteFrame::new(Route::Results));
@@ -10366,6 +10564,16 @@ unsafe fn local_folder_selection_changed(window: HWND) {
     }
 }
 
+/// Python `show_search` before a search: the result list holds one
+/// `search_results_empty` row.
+unsafe fn refresh_search_placeholder(state: &WindowState) {
+    SendMessageW(state.list, LB_RESETCONTENT, None, None);
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    crate::accessibility_win32::set_control_name(state.list, catalog.text("result_list"));
+    add_list_string(state.list, catalog.text("search_results_empty"));
+    SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
+}
+
 unsafe fn refresh_results(state: &mut WindowState, focus: bool) {
     state.deferred_youtube_metadata_rows.clear();
     set_open_button_label(state, "open");
@@ -10413,7 +10621,9 @@ unsafe fn refresh_youtube_collection(state: &mut WindowState, focus: bool) {
     let Some(collection) = state.application.youtube_collection() else {
         return;
     };
-    crate::accessibility_win32::set_control_name(state.list, collection.title());
+    // Python shows channel and playlist contents in the search screen's
+    // result list.
+    crate::accessibility_win32::set_control_name(state.list, catalog.text("result_list"));
     if collection.phase() == YoutubeCollectionPhase::LoadingInitial {
         let loading = catalog
             .text("loading_playlist")
@@ -10920,9 +11130,13 @@ fn result_label_parts(
     item: &apricot_core::MediaItem,
     catalog: &apricot_core::TranslationCatalog,
 ) -> Vec<String> {
+    // Python `normalize_entry` names SoundCloud users and tracks differently.
+    let soundcloud = item.source == apricot_core::MediaSource::Soundcloud;
     let kind = match item.kind {
         apricot_core::MediaKind::Playlist => catalog.text("playlist"),
+        apricot_core::MediaKind::Channel if soundcloud => catalog.text("artist"),
         apricot_core::MediaKind::Channel => catalog.text("channel"),
+        _ if soundcloud => catalog.text("track"),
         apricot_core::MediaKind::LiveStream => catalog.text("live_stream"),
         _ => catalog.text("video"),
     };
@@ -10993,14 +11207,125 @@ fn format_duration(seconds: f64) -> String {
     }
 }
 
-fn selected_search_kind(control: HWND) -> YoutubeSearchKind {
-    let selected = unsafe { SendMessageW(control, CB_GETCURSEL, None, None).0 };
-    match selected {
-        1 => YoutubeSearchKind::Video,
-        2 => YoutubeSearchKind::Playlist,
-        3 => YoutubeSearchKind::Channel,
-        _ => YoutubeSearchKind::All,
+/// Python `show_search` provider choices: `YouTube`, then `SoundCloud`.
+const SEARCH_PROVIDER_KEYS: [&str; 2] = ["youtube", "soundcloud"];
+
+/// Python `search_type_definitions`: the type labels and search kinds of one
+/// provider.
+fn search_type_definitions(provider_index: usize) -> &'static [(&'static str, YoutubeSearchKind)] {
+    if provider_index == 1 {
+        &[
+            ("track", YoutubeSearchKind::SoundcloudTrack),
+            ("playlist", YoutubeSearchKind::SoundcloudPlaylist),
+            ("artist", YoutubeSearchKind::SoundcloudUser),
+        ]
+    } else {
+        &[
+            ("all", YoutubeSearchKind::All),
+            ("video", YoutubeSearchKind::Video),
+            ("playlist", YoutubeSearchKind::Playlist),
+            ("channel", YoutubeSearchKind::Channel),
+        ]
     }
+}
+
+/// Python `set_search_type_choices`.
+unsafe fn set_search_kind_choices(
+    control: HWND,
+    catalog: &apricot_core::TranslationCatalog,
+    provider_index: usize,
+    selection: usize,
+) {
+    let definitions = search_type_definitions(provider_index);
+    SendMessageW(control, CB_RESETCONTENT, None, None);
+    for (key, _) in definitions {
+        let label = wide(catalog.text(key));
+        SendMessageW(
+            control,
+            CB_ADDSTRING,
+            None,
+            Some(LPARAM(label.as_ptr() as isize)),
+        );
+    }
+    let selection = selection.min(definitions.len() - 1);
+    SendMessageW(control, CB_SETCURSEL, Some(WPARAM(selection)), None);
+}
+
+/// Python `show_search` buttons `play_selected`, `download_audio`,
+/// `download_video` and `add_selected_favorite`. Without a selected result
+/// each shows `no_selection` in a message box.
+unsafe fn activate_search_button(window: HWND, command: usize) {
+    if active_media_item(window).is_none() {
+        if let Some(state) = state(window) {
+            let message = catalog_text(&state.application, "no_selection");
+            show_error_message(window, &message);
+        }
+        return;
+    }
+    match command {
+        ID_SEARCH_PLAY => activate_selection(window),
+        ID_SEARCH_DOWNLOAD_AUDIO => start_active_download(window, DownloadChoice::Audio),
+        ID_SEARCH_DOWNLOAD_VIDEO => start_active_download(window, DownloadChoice::Video),
+        _ => add_active_favorite(window),
+    }
+}
+
+/// Python `search_type_code` for the provider and type choices.
+fn selected_search_kind(provider: HWND, control: HWND) -> YoutubeSearchKind {
+    let definitions = search_type_definitions(selected_combo_index(provider).unwrap_or(0));
+    selected_combo_index(control)
+        .and_then(|index| definitions.get(index))
+        .unwrap_or(&definitions[0])
+        .1
+}
+
+/// Python builds the search screen in the current language each time.
+unsafe fn relabel_search_screen(state: &WindowState) {
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    for (control, key) in [
+        (state.search_label, "search_query"),
+        (state.provider_label, "search_provider"),
+        (state.kind_label, "type"),
+        (state.search, "search"),
+        (state.search_play, "play"),
+        (state.search_download_audio, "download_audio"),
+        (state.search_download_video, "download_video"),
+        (state.search_add_favorite, "add_favorite"),
+    ] {
+        let label = wide(catalog.text(key));
+        let _ = SetWindowTextW(control, PCWSTR(label.as_ptr()));
+    }
+    let provider_index = selected_combo_index(state.provider).unwrap_or(0);
+    SendMessageW(state.provider, CB_RESETCONTENT, None, None);
+    for key in SEARCH_PROVIDER_KEYS {
+        let label = wide(catalog.text(key));
+        SendMessageW(
+            state.provider,
+            CB_ADDSTRING,
+            None,
+            Some(LPARAM(label.as_ptr() as isize)),
+        );
+    }
+    SendMessageW(
+        state.provider,
+        CB_SETCURSEL,
+        Some(WPARAM(provider_index)),
+        None,
+    );
+    let kind_index = selected_combo_index(state.kind).unwrap_or(0);
+    set_search_kind_choices(state.kind, &catalog, provider_index, kind_index);
+}
+
+/// Python `on_search_provider_change`: the type list follows the provider and
+/// starts at its first type.
+unsafe fn search_provider_changed(state: &WindowState) {
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    set_search_kind_choices(
+        state.kind,
+        &catalog,
+        selected_combo_index(state.provider).unwrap_or(0),
+        0,
+    );
 }
 
 fn selected_combo_index(control: HWND) -> Option<usize> {
@@ -11292,8 +11617,18 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
         };
         return run_shortcut_action(window, message, chord, action);
     }
+    // Python `on_char_hook`: on the search screen's field, choices and buttons
+    // Ctrl and Alt shortcuts act on the selected result, while plain keys
+    // stay with the control. Its result list takes every list shortcut.
+    let search_field_focus = is_search_screen(state.view) && focus != state.list;
+    let entry_focus =
+        state.view == MainView::DirectLink || (search_field_focus && !(chord.control || chord.alt));
     let (scope, accepts_text) = if background_focus {
         (ActionScope::Player, false)
+    } else if entry_focus {
+        (ActionScope::Dialog, true)
+    } else if search_field_focus {
+        (ActionScope::List, false)
     } else {
         view_shortcut_scope(state.view)
     };
@@ -11303,10 +11638,7 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
         return false;
     };
     let is_global = action.scopes.contains(&ActionScope::Global);
-    if !background_focus
-        && !is_global
-        && matches!(state.view, MainView::Search | MainView::DirectLink)
-    {
+    if !background_focus && !is_global && entry_focus {
         return false;
     }
     if !background_focus
@@ -11400,8 +11732,9 @@ unsafe fn focused_push_button(window: HWND) -> Option<HWND> {
 
 fn view_shortcut_scope(view: MainView) -> (ActionScope, bool) {
     match view {
-        MainView::Search | MainView::DirectLink => (ActionScope::Dialog, true),
+        MainView::DirectLink => (ActionScope::Dialog, true),
         MainView::MainMenu
+        | MainView::Search
         | MainView::Results
         | MainView::Trending
         | MainView::YoutubeCollection
@@ -13311,7 +13644,10 @@ unsafe fn copy_active_stream_url(window: HWND) {
         copy_text_and_announce(window, stream_url.as_str(), "stream_url_copied");
         return;
     }
-    if item.source == apricot_core::MediaSource::Youtube {
+    if matches!(
+        item.source,
+        apricot_core::MediaSource::Youtube | apricot_core::MediaSource::Soundcloud
+    ) {
         start_youtube_resolve(window, &item, YoutubeResolvePurpose::CopyStreamUrl);
         return;
     }
@@ -15813,6 +16149,9 @@ unsafe fn open_settings(window: HWND) {
         MainView::Search | MainView::DirectLink => {}
         MainView::Player => refresh_player(window, state, false, true),
     }
+    if is_search_screen(state.view) {
+        relabel_search_screen(state);
+    }
     layout_controls_state(window, state);
     let _ = SetFocus(Some(active_primary_control(state)));
     configure_subscription_timer(window);
@@ -15959,21 +16298,22 @@ fn wide(value: &str) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::{
-        MainView, SEEK_HOLD_DELAY_MS, SEEK_HOLD_INTERVAL_MS, collection_backend,
-        collection_download_url, controlled_repeat_timing, copy_wide_array,
+        MainView, SEARCH_PROVIDER_KEYS, SEEK_HOLD_DELAY_MS, SEEK_HOLD_INTERVAL_MS,
+        collection_backend, collection_download_url, controlled_repeat_timing, copy_wide_array,
         details_text_navigation_key, direct_link_with_scheme, download_folder_for_item,
-        download_progress_presentation, item_needs_youtube_metadata, list_context_entries,
-        main_menu_last_activated_index, main_menu_preserved_index, media_resolve_backend,
-        normalized_audio_format, notification_label, queued_download_label, resolved_playback_item,
-        result_label, safe_path_component, subscription_label, user_playlist_download_folder,
-        view_has_back_button, view_has_collection_remove,
+        download_progress_presentation, is_search_screen, item_needs_youtube_metadata,
+        list_context_entries, main_menu_last_activated_index, main_menu_preserved_index,
+        media_resolve_backend, normalized_audio_format, notification_label, queued_download_label,
+        resolved_playback_item, result_label, result_label_parts, safe_path_component,
+        search_type_definitions, subscription_label, user_playlist_download_folder,
+        view_has_back_button, view_has_collection_remove, view_shortcut_scope,
     };
     use apricot_app::{
         ActiveDownload, AppNotification, ContextMenuContext, DownloadChoice, DownloadTaskKind,
         DownloadTaskStatus, QueuedDownload, context_menu,
     };
-    use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
-    use apricot_media::{YoutubeBackend, YoutubeCollectionKind};
+    use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource, action::ActionScope};
+    use apricot_media::{YoutubeBackend, YoutubeCollectionKind, YoutubeSearchKind};
     use apricot_storage::SettingsDocument;
 
     #[test]
@@ -16524,6 +16864,78 @@ mod tests {
             duration_seconds: None,
             metadata: std::collections::BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn search_types_follow_the_provider_like_python() {
+        let labels = |provider| {
+            search_type_definitions(provider)
+                .iter()
+                .map(|(key, kind)| (*key, *kind))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            labels(0),
+            [
+                ("all", YoutubeSearchKind::All),
+                ("video", YoutubeSearchKind::Video),
+                ("playlist", YoutubeSearchKind::Playlist),
+                ("channel", YoutubeSearchKind::Channel),
+            ]
+        );
+        assert_eq!(
+            labels(1),
+            [
+                ("track", YoutubeSearchKind::SoundcloudTrack),
+                ("playlist", YoutubeSearchKind::SoundcloudPlaylist),
+                ("artist", YoutubeSearchKind::SoundcloudUser),
+            ]
+        );
+        assert_eq!(SEARCH_PROVIDER_KEYS, ["youtube", "soundcloud"]);
+    }
+
+    #[test]
+    fn results_and_collections_are_shown_on_the_search_screen_like_python() {
+        for view in [
+            MainView::Search,
+            MainView::Results,
+            MainView::YoutubeCollection,
+        ] {
+            assert!(is_search_screen(view));
+            assert_eq!(view_shortcut_scope(view), (ActionScope::List, false));
+        }
+        for view in [
+            MainView::Trending,
+            MainView::DirectLink,
+            MainView::Favorites,
+        ] {
+            assert!(!is_search_screen(view));
+        }
+    }
+
+    #[test]
+    fn soundcloud_rows_name_tracks_and_artists_like_python() {
+        let catalog = apricot_app::embedded_catalog("en");
+        let mut track = youtube_item("88335161");
+        track.source = MediaSource::Soundcloud;
+        track.title = "Get Lucky".to_owned();
+        track.channel = "DJ KB".to_owned();
+        assert_eq!(
+            result_label_parts(&track, &catalog)
+                .last()
+                .map(String::as_str),
+            Some("Track")
+        );
+        track.kind = MediaKind::Channel;
+        assert_eq!(
+            result_label_parts(&track, &catalog),
+            ["Get Lucky", "Artist"]
+        );
+        track.source = MediaSource::Youtube;
+        assert_eq!(
+            result_label_parts(&track, &catalog),
+            ["Get Lucky", "Channel"]
+        );
     }
 
     #[test]

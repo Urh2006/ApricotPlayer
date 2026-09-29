@@ -41,6 +41,21 @@ pub enum YoutubeSearchKind {
     Playlist,
     Channel,
     Film,
+    /// Python's `SoundCloud` provider with the Track type (`scsearch`).
+    SoundcloudTrack,
+    /// Python's `SoundCloud` provider with the Playlist type.
+    SoundcloudPlaylist,
+    /// Python's `SoundCloud` provider with the User type.
+    SoundcloudUser,
+}
+
+impl YoutubeSearchKind {
+    pub const fn is_soundcloud(self) -> bool {
+        matches!(
+            self,
+            Self::SoundcloudTrack | Self::SoundcloudPlaylist | Self::SoundcloudUser
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -69,9 +84,14 @@ pub enum YoutubeCapability {
 pub enum YoutubeCollectionKind {
     PlaylistVideos,
     ChannelVideos,
+    /// Python `channel_uploads`: the videos tab with the channel's Shorts
+    /// mixed in, as opened from the interface.
+    ChannelUploads,
     ChannelPlaylists,
     ChannelStreams,
     ChannelPopular,
+    /// Python `open_soundcloud_artist_tracks`: the artist's `/tracks` page.
+    SoundcloudArtistTracks,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

@@ -81,8 +81,8 @@ Prioriteta: P1 pomeni, da je osnovna uporaba s tipkovnico ali NVDA zlomljena ali
 
 | ID | P | Odstopanje |
 |---|---|---|
-| SEARCH-01 | P1 | Iskalni zaslon nima izbire ponudnika SoundCloud in tipov Track/Playlist/User. |
-| SEARCH-08 | P2 | Iskalni zaslon nima gumbov Play, Download audio, Download video in Add favorite; to spremeni Tab vrstni red. |
+| SEARCH-01 | P1 | Odpravljeno v E14: ponudnik SoundCloud s tipi Track, Playlist in User. Iskanje playlistov in uporabnikov čaka na odločitev P-7. |
+| SEARCH-08 | P2 | Odpravljeno v E14: gumbi Play, Download audio, Download video in Add favorite ter rezultati na iskalnem zaslonu. |
 | SEARCH-02 | P2 | Kontekstni meni rezultatov nima "Open in browser". |
 | SEARCH-05 | P2 | Meni kanala ima dodaten podmeni za prenos in drugačen vrstni red. |
 | SEARCH-06 | P2 | Meni videa nima `remove_from_playlist` in `open_channel`, vrstni red je drugačen, dodana je postavka za vrsto. |
@@ -128,9 +128,9 @@ Prioriteta: P1 pomeni, da je osnovna uporaba s tipkovnico ali NVDA zlomljena ali
 | PLAYER2-M-01 | P1 | Odpravljeno v E11: BPM analiza (B) | `apricot/ui/misc.py:2710-2803` |
 | PLAYER2-M-04 | P1 | Odpravljeno v E13: komentarji (Ctrl+Shift+M) | `apricot/ui/misc.py:2095+` |
 | PLAYER2-M-06 | P1 | Odpravljeno v E12: način urejanja (E, Ctrl+S, Ctrl+R) | `apricot/ui/misc.py:2389-2433` |
-| SEARCH-M-01 | P1 | SoundCloud iskanje, izvajalci in seti | `apricot/search/search.py:451-474, 703-729` |
+| SEARCH-M-01 | P1 | Odpravljeno v E14 razen iskanja playlistov in uporabnikov (P-7): SoundCloud iskanje, izvajalci in seti | `apricot/search/search.py:451-474, 703-729` |
 | SEARCH-M-02 | P1 | Odpri kanal (Ctrl+Shift+O) in stolpci rezultatov (Ctrl+Alt+levo/desno) | `apricot/search/search.py:233` |
-| SEARCH-M-04 | P2 | Vmešavanje Shorts v iskanje in v objave kanala | `apricot/search/search.py:374-495` |
+| SEARCH-M-04 | P2 | Odpravljeno v E14: vmešavanje Shorts v iskanje in v objave kanala | `apricot/search/search.py:374-495` |
 | SHELL-M-03 | P1 | Kopiranje diagnostičnega poročila | `apricot/system/diagnostics.py` |
 | SETTINGS-M-01 | P1 | Piškotki: datoteka, uvoz iz brskalnika, DevTools izvoz, prijavni profil | `apricot/ui/cookies.py` |
 | SETTINGS-M-03 | P2 | Set default player in pomoč pri povezavah datotek | `apricot/ui/settings.py:462` |
@@ -955,3 +955,57 @@ in Escape na predvajalniku vrneta v mapo. Na iskalnem zaslonu je Tab vrstni red 
 Type, Search, Back, Player, Previous, Ctrl+PageDown v polju ne preskoči, F7 na
 predvajalniku odpre stran s podrobnostmi. Brez predvajanja v ozadju Ctrl+Alt+Y na strani
 predvajalnika ustavi predvajanje in odpre iskanje.
+
+### E14: SoundCloud, Shorts in iskalni zaslon (29. 9. 2026)
+
+Spremembe:
+
+- Iskalni zaslon je zgrajen kot Pythonov `show_search`: Back, polje "Search query",
+  izbira "Search provider" (YouTube, SoundCloud), izbira "Type", vrstica gumbov Search,
+  Play, Download audio, Download video in Add to favorites ter seznam "Result list". Tab
+  gre v tem vrstnem redu, Back je pred poljem. Pred iskanjem ima seznam vrstico "No search
+  results.", Enter na njej in gumbi brez izbranega rezultata pokažejo "Select an item.",
+  kot `play_selected` in `start_download`.
+- Rezultati iskanja, vsebina kanala, playlista in izvajalca ter shranjeni novi videi
+  naročnine so zdaj prikazani na iskalnem zaslonu, kot v Pythonu. Prej so imeli svoj
+  zaslon z gumboma Open in Back. Seznam se tudi pri kanalu imenuje "Result list".
+- Back po iskanju vodi v glavni meni, kot `back_from_search`. Prej je vodil nazaj na
+  prazen iskalni zaslon. Iz kanala ali playlista Back še vedno vrne na prejšnje
+  rezultate. Nov obisk iskanja izprazni polje in izbere YouTube s tipom All.
+- Izbira ponudnika zamenja tipe: YouTube All, Video, Playlist, Channel; SoundCloud Track,
+  Playlist, User (`on_search_provider_change`). Enter v polju išče tudi, ko so rezultati
+  že prikazani. Gumb Search se med iskanjem ne onemogoči več, zato fokus na njem ostane.
+- Na polju, izbirah in gumbih iskalnega zaslona delujejo bližnjice s Ctrl ali Alt na
+  izbranem rezultatu, navadne tipke ostanejo kontroli (`on_char_hook`).
+- SoundCloud skladbe (Track) se iščejo z `scsearch`, vrstice imajo tip "Track",
+  izvajalci "Artist". Predvajanje, kopiranje neposrednega URL-ja in prenos gredo skozi
+  yt-dlp. Enter ali "Open" v meniju izvajalca odpre njegove skladbe (`/tracks`) z oglasom
+  "Loading channel", tudi iz priljubljenih in zgodovine, kjer je Rust prej oglasil "ni na
+  voljo". Meni izvajalca je Pythonov: Open, prenos, priljubljene, Open in browser, Copy
+  URL, brez naročnine in zavihkov kanala. SoundCloud seti se odprejo kot playlist, njihovo
+  število skladb se prebere iz `track_count`.
+- Iskanje YouTube All in Video hkrati poišče Shorts in jih, kadar so do konca glavnega
+  iskanja že prejeti, vmeša po en Short za vsake štiri rezultate brez podvojitev
+  (`youtube_search_results_with_shorts`, `interleave_youtube_results`). Zavihek Videos
+  kanala enako vmeša kanalove Shorts, pri čemer počaka na oba seznama
+  (`youtube_channel_upload_results`). Preverjanje naročnin še naprej bere samo zavihek
+  Videos, kot `fetch_subscription_entries`.
+
+Odločitev za Urha:
+
+- **P-7.** Python SoundCloud playliste in uporabnike išče prek spletnega API-ja
+  SoundClouda z javnim ID-jem spletnega odjemalca, ki ga yt-dlp pobere s strani
+  soundcloud.com. Samostojni yt-dlp.exe te poti nima, zato bi moral Rust ta ID pobrati sam.
+  Samodejna varovalka mojega okolja mi je pregled tega ID-ja ustavila, zato te poti nisem
+  naredil. Do odločitve tipa Playlist in User pri SoundCloudu pokažeta angleško napako
+  "SoundCloud playlist and user search is not available yet".
+
+Preverjanje: `cargo build`, `cargo test` (vsi uspešni), `cargo clippy --all-targets -D
+warnings` in `cargo fmt --check`. Novi testi pokrijejo vmešavanje Shorts po Pythonovem
+vrstnem redu, SoundCloud vnose, cilje iskanja in skladb izvajalca, tipe po ponudniku,
+zaslone z rezultati, oznake vrstic in meni izvajalca. Živi test z yt-dlp je potrdil
+SoundCloud iskanje, razrešitev skladbe, skladbe izvajalca in Shorts v zavihku Videos.
+Samodejni preizkus kopije bete na ločenem nevidnem namizju je potrdil Tab vrstni red,
+sporočilo na prazni vrstici, menjavo tipov, iskanje in predvajanje SoundCloud skladbe z
+gumbom Play, Back v glavni meni, prazen nov obisk iskanja, YouTube iskanje ter odprtje
+SoundCloud izvajalca iz priljubljenih z vrnitvijo v priljubljene.

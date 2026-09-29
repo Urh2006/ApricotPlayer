@@ -8,6 +8,7 @@ use std::{
     io::{self, Read},
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
+    sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
@@ -37,6 +38,10 @@ const MAX_MEDIA_URL_BYTES: usize = 16_384;
 const MAX_COOKIE_HEADER_BYTES: usize = 131_072;
 const MAX_COOKIE_FILE_BYTES: usize = 32_768;
 const MAX_PROXY_URL_BYTES: usize = 2_048;
+/// Python lists `SoundCloud` playlists and users through the web API with the
+/// web client ID; the `yt-dlp` executable only searches tracks.
+const SOUNDCLOUD_COLLECTION_SEARCH_UNAVAILABLE: &str =
+    "SoundCloud playlist and user search is not available yet";
 
 #[derive(Debug, Error)]
 pub enum YtDlpError {
@@ -267,33 +272,96 @@ impl YtDlpYoutubeEngine {
             ));
         }
 
+        if matches!(
+            kind,
+            YoutubeSearchKind::SoundcloudPlaylist | YoutubeSearchKind::SoundcloudUser
+        ) {
+            return Err(YtDlpError::Request(
+                SOUNDCLOUD_COLLECTION_SEARCH_UNAVAILABLE.to_owned(),
+            ));
+        }
+
         let fetch_limit = search_fetch_limit(kind, limit);
         let target = search_target(query, kind, fetch_limit);
-        let mut arguments = self.base_arguments();
-        arguments.extend([
-            OsString::from("--flat-playlist"),
-            OsString::from("--skip-download"),
-            OsString::from("--playlist-end"),
-            OsString::from(fetch_limit.to_string()),
-            OsString::from("--dump-single-json"),
-            OsString::from("--"),
-            OsString::from(target),
-        ]);
-        let root = parse_json(self.run(arguments)?)?;
-        let entries = root
-            .get("entries")
-            .and_then(Value::as_array)
-            .ok_or_else(|| YtDlpError::InvalidOutput("search results were missing".to_owned()))?;
-        let items = entries
-            .iter()
-            .filter_map(media_item_from_value)
+        // Python `youtube_search_results_with_shorts`: All and Video ask for
+        // Shorts at the same time and mix them in only when they are already
+        // there once the main results arrive.
+        let shorts = matches!(kind, YoutubeSearchKind::All | YoutubeSearchKind::Video).then(|| {
+            self.spawn_flat_items(
+                youtube_shorts_search_url(query),
+                Some(fetch_limit),
+                &["--extractor-retries", "0"],
+            )
+        });
+        let primary = self
+            .flat_items(target, Some(fetch_limit), "search results")?
+            .into_iter()
             .filter(|item| search_kind_accepts(kind, item.kind))
-            .take(limit as usize)
-            .collect();
+            .collect::<Vec<_>>();
+        let limit = limit as usize;
+        let items = match shorts.and_then(|receiver| receiver.try_recv().ok()) {
+            Some(shorts) => interleave_youtube_results(primary, shorts.unwrap_or_default(), limit),
+            None => primary.into_iter().take(limit).collect(),
+        };
         Ok(YoutubeResponsePayload::SearchResults {
             items,
             continuation: None,
         })
+    }
+
+    /// Python `extract_flat_entries`: one flat `yt-dlp` listing as items.
+    fn flat_items(
+        &self,
+        target: String,
+        limit: Option<u32>,
+        description: &str,
+    ) -> Result<Vec<MediaItem>, YtDlpError> {
+        let arguments = self.flat_arguments(target, limit, &[]);
+        flat_items_from_output(run_executable(&self.executable, arguments)?, description)
+    }
+
+    /// Runs a flat listing on its own thread, like Python's Shorts requests.
+    fn spawn_flat_items(
+        &self,
+        target: String,
+        limit: Option<u32>,
+        extra_arguments: &[&str],
+    ) -> mpsc::Receiver<Result<Vec<MediaItem>, YtDlpError>> {
+        let (sender, receiver) = mpsc::channel();
+        let executable = self.executable.clone();
+        let arguments = self.flat_arguments(target, limit, extra_arguments);
+        thread::spawn(move || {
+            let result = run_executable(&executable, arguments)
+                .and_then(|output| flat_items_from_output(output, "Shorts"));
+            let _ = sender.send(result);
+        });
+        receiver
+    }
+
+    fn flat_arguments(
+        &self,
+        target: String,
+        limit: Option<u32>,
+        extra_arguments: &[&str],
+    ) -> Vec<OsString> {
+        let mut arguments = self.base_arguments();
+        arguments.extend([
+            OsString::from("--flat-playlist"),
+            OsString::from("--skip-download"),
+        ]);
+        arguments.extend(extra_arguments.iter().map(OsString::from));
+        if let Some(limit) = limit {
+            arguments.extend([
+                OsString::from("--playlist-end"),
+                OsString::from(limit.to_string()),
+            ]);
+        }
+        arguments.extend([
+            OsString::from("--dump-single-json"),
+            OsString::from("--"),
+            OsString::from(target),
+        ]);
+        arguments
     }
 
     fn resolve(
@@ -301,7 +369,7 @@ impl YtDlpYoutubeEngine {
         media_url: &str,
         preference: YoutubeStreamPreference,
     ) -> Result<YoutubeResponsePayload, YtDlpError> {
-        validate_youtube_url(media_url)?;
+        validate_media_url(media_url)?;
         let mut arguments = self.base_arguments();
         arguments.extend([
             OsString::from("--no-playlist"),
@@ -384,39 +452,29 @@ impl YtDlpYoutubeEngine {
         {
             return Ok(collection_response(&cache.items, limit));
         }
-        let mut arguments = self.base_arguments();
-        arguments.extend([
-            OsString::from("--flat-playlist"),
-            OsString::from("--skip-download"),
-        ]);
         // YouTube currently ignores the legacy channel `sort=p` query in
         // yt-dlp. Popular therefore needs one complete flat scan before it can
         // be sorted correctly; the cache keeps later 20/40/60 loads cheap.
-        if kind != YoutubeCollectionKind::ChannelPopular
-            && let Some(limit) = limit
-        {
-            arguments.extend([
-                OsString::from("--playlist-end"),
-                OsString::from(limit.to_string()),
-            ]);
+        let fetch_limit = limit.filter(|_| kind != YoutubeCollectionKind::ChannelPopular);
+        // Python `youtube_channel_upload_results`: a channel's videos tab
+        // mixes in its Shorts, fetched at the same time.
+        let shorts =
+            (kind == YoutubeCollectionKind::ChannelUploads && limit.is_some()).then(|| {
+                let base = target.strip_suffix("/videos").unwrap_or(&target);
+                self.spawn_flat_items(format!("{base}/shorts"), fetch_limit, &[])
+            });
+        let accepted = |items: Vec<MediaItem>| {
+            items
+                .into_iter()
+                .filter(|item| collection_kind_accepts(kind, item.kind))
+                .collect::<Vec<_>>()
+        };
+        let mut items =
+            accepted(self.flat_items(target.clone(), fetch_limit, "collection entries")?);
+        if let (Some(shorts), Some(limit)) = (shorts, limit) {
+            let shorts = shorts.recv().ok().and_then(Result::ok).unwrap_or_default();
+            items = interleave_youtube_results(items, accepted(shorts), limit as usize);
         }
-        arguments.extend([
-            OsString::from("--dump-single-json"),
-            OsString::from("--"),
-            OsString::from(target.clone()),
-        ]);
-        let root = parse_json(self.run(arguments)?)?;
-        let entries = root
-            .get("entries")
-            .and_then(Value::as_array)
-            .ok_or_else(|| {
-                YtDlpError::InvalidOutput("collection entries were missing".to_owned())
-            })?;
-        let mut items = entries
-            .iter()
-            .filter_map(media_item_from_value)
-            .filter(|item| collection_kind_accepts(kind, item.kind))
-            .collect::<Vec<_>>();
         if kind == YoutubeCollectionKind::ChannelPopular {
             sort_popular_items(&mut items);
             self.popular_cache = Some(PopularCollectionCache {
@@ -450,19 +508,104 @@ impl YtDlpYoutubeEngine {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let mut command = Command::new(&self.executable);
-        command
-            .args(arguments)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        #[cfg(windows)]
-        command.creation_flags(CREATE_NO_WINDOW);
-        let mut child = command
-            .spawn()
-            .map_err(|error| YtDlpError::Launch(error.to_string()))?;
-        collect_process_output(&mut child, OPERATION_TIMEOUT)
+        run_executable(&self.executable, arguments)
     }
+}
+
+fn run_executable<I, S>(executable: &Path, arguments: I) -> Result<ProcessOutput, YtDlpError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut command = Command::new(executable);
+    command
+        .args(arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    let mut child = command
+        .spawn()
+        .map_err(|error| YtDlpError::Launch(error.to_string()))?;
+    collect_process_output(&mut child, OPERATION_TIMEOUT)
+}
+
+fn flat_items_from_output(
+    output: ProcessOutput,
+    description: &str,
+) -> Result<Vec<MediaItem>, YtDlpError> {
+    let root = parse_json(output)?;
+    let entries = root
+        .get("entries")
+        .and_then(Value::as_array)
+        .ok_or_else(|| YtDlpError::InvalidOutput(format!("{description} were missing")))?;
+    Ok(entries.iter().filter_map(media_item_from_value).collect())
+}
+
+/// Python `youtube_shorts_search_url`.
+fn youtube_shorts_search_url(query: &str) -> String {
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    serializer.append_pair("search_query", query);
+    serializer.append_pair("sp", "EgIQCQ==");
+    format!("https://www.youtube.com/results?{}", serializer.finish())
+}
+
+/// Python `interleave_youtube_results`: up to four main results, then one
+/// Short, skipping anything already listed.
+fn interleave_youtube_results(
+    primary: Vec<MediaItem>,
+    shorts: Vec<MediaItem>,
+    limit: usize,
+) -> Vec<MediaItem> {
+    fn identity(item: &MediaItem) -> String {
+        let id = item.id.0.trim();
+        let is_video_id = id.chars().count() == 11
+            && id
+                .chars()
+                .all(|character| character.is_alphanumeric() || matches!(character, '_' | '-'));
+        if is_video_id {
+            id.to_owned()
+        } else {
+            item.url
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default()
+        }
+    }
+    fn append_next(
+        items: &mut std::iter::Peekable<std::vec::IntoIter<MediaItem>>,
+        merged: &mut Vec<MediaItem>,
+        seen: &mut std::collections::HashSet<String>,
+    ) -> bool {
+        for item in items.by_ref() {
+            let identity = identity(&item);
+            if identity.is_empty() || !seen.insert(identity) {
+                continue;
+            }
+            merged.push(item);
+            return true;
+        }
+        false
+    }
+    let mut merged = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut primary = primary.into_iter().peekable();
+    let mut shorts = shorts.into_iter().peekable();
+    while merged.len() < limit && (primary.peek().is_some() || shorts.peek().is_some()) {
+        for _slot in 0..4 {
+            if merged.len() >= limit || !append_next(&mut primary, &mut merged, &mut seen) {
+                break;
+            }
+        }
+        if merged.len() >= limit {
+            break;
+        }
+        if !append_next(&mut shorts, &mut merged, &mut seen) && primary.peek().is_none() {
+            break;
+        }
+    }
+    merged
 }
 
 fn read_downloaded_transcript(directory: &Path) -> Result<String, YtDlpError> {
@@ -515,10 +658,19 @@ fn search_target(query: &str, kind: YoutubeSearchKind, limit: u32) -> String {
     if kind == YoutubeSearchKind::Video {
         return format!("ytsearch{limit}:{query}");
     }
+    // Python `soundcloud_search_entries` for the Track type.
+    if kind.is_soundcloud() {
+        return format!("scsearch{limit}:{query}");
+    }
     let filter = match kind {
         YoutubeSearchKind::Playlist => Some("EgIQAw=="),
         YoutubeSearchKind::Channel => Some("EgIQAg=="),
-        YoutubeSearchKind::All | YoutubeSearchKind::Film | YoutubeSearchKind::Video => None,
+        YoutubeSearchKind::All
+        | YoutubeSearchKind::Film
+        | YoutubeSearchKind::Video
+        | YoutubeSearchKind::SoundcloudTrack
+        | YoutubeSearchKind::SoundcloudPlaylist
+        | YoutubeSearchKind::SoundcloudUser => None,
     };
     let mut serializer = url::form_urlencoded::Serializer::new(String::new());
     serializer.append_pair("search_query", query);
@@ -530,7 +682,11 @@ fn search_target(query: &str, kind: YoutubeSearchKind, limit: u32) -> String {
 
 fn search_fetch_limit(kind: YoutubeSearchKind, requested: u32) -> u32 {
     match kind {
-        YoutubeSearchKind::All | YoutubeSearchKind::Video => requested,
+        YoutubeSearchKind::All
+        | YoutubeSearchKind::Video
+        | YoutubeSearchKind::SoundcloudTrack
+        | YoutubeSearchKind::SoundcloudPlaylist
+        | YoutubeSearchKind::SoundcloudUser => requested,
         // Filtered YouTube result pages can contain pinned entries of another
         // kind. Fetch a bounded cushion, then preserve the caller's visible
         // limit after typed filtering.
@@ -582,10 +738,21 @@ impl YoutubeEngine for YtDlpYoutubeEngine {
 }
 
 fn collection_target(value: &str, kind: YoutubeCollectionKind) -> Result<String, YtDlpError> {
-    validate_youtube_url(value)?;
     if kind == YoutubeCollectionKind::PlaylistVideos {
+        // SoundCloud sets open like YouTube playlists in Python.
+        validate_media_url(value)?;
         return Ok(value.to_owned());
     }
+    if kind == YoutubeCollectionKind::SoundcloudArtistTracks {
+        validate_media_url(value)?;
+        if !is_soundcloud_url(value) {
+            return Err(YtDlpError::InvalidConfiguration(
+                "artist tracks need a SoundCloud URL".to_owned(),
+            ));
+        }
+        return Ok(format!("{}/tracks", value.trim().trim_end_matches('/')));
+    }
+    validate_youtube_url(value)?;
     let mut url = Url::parse(value)
         .map_err(|_| YtDlpError::InvalidConfiguration("collection URL is invalid".to_owned()))?;
     let mut path = url.path().trim_end_matches('/').to_owned();
@@ -596,8 +763,12 @@ fn collection_target(value: &str, kind: YoutubeCollectionKind) -> Result<String,
         }
     }
     let suffix = match kind {
-        YoutubeCollectionKind::PlaylistVideos => unreachable!("handled above"),
-        YoutubeCollectionKind::ChannelVideos | YoutubeCollectionKind::ChannelPopular => "/videos",
+        YoutubeCollectionKind::PlaylistVideos | YoutubeCollectionKind::SoundcloudArtistTracks => {
+            unreachable!("handled above")
+        }
+        YoutubeCollectionKind::ChannelVideos
+        | YoutubeCollectionKind::ChannelUploads
+        | YoutubeCollectionKind::ChannelPopular => "/videos",
         YoutubeCollectionKind::ChannelPlaylists => "/playlists",
         YoutubeCollectionKind::ChannelStreams => "/streams",
     };
@@ -662,8 +833,10 @@ fn collection_kind_accepts(kind: YoutubeCollectionKind, item: MediaKind) -> bool
         YoutubeCollectionKind::ChannelPlaylists => item == MediaKind::Playlist,
         YoutubeCollectionKind::PlaylistVideos
         | YoutubeCollectionKind::ChannelVideos
+        | YoutubeCollectionKind::ChannelUploads
         | YoutubeCollectionKind::ChannelStreams
-        | YoutubeCollectionKind::ChannelPopular => {
+        | YoutubeCollectionKind::ChannelPopular
+        | YoutubeCollectionKind::SoundcloudArtistTracks => {
             matches!(item, MediaKind::Video | MediaKind::LiveStream)
         }
     }
@@ -758,6 +931,23 @@ fn validate_youtube_url(value: &str) -> Result<(), YtDlpError> {
         ));
     }
     Ok(())
+}
+
+/// Media this backend resolves and lists: `YouTube` and, as in Python's
+/// search provider, `SoundCloud`.
+fn validate_media_url(value: &str) -> Result<(), YtDlpError> {
+    if is_soundcloud_url(value) && value.len() <= MAX_MEDIA_URL_BYTES {
+        return Ok(());
+    }
+    validate_youtube_url(value)
+}
+
+fn is_soundcloud_url(value: &str) -> bool {
+    Url::parse(value.trim()).is_ok_and(|url| {
+        let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+        matches!(url.scheme(), "http" | "https")
+            && (host == "soundcloud.com" || host.ends_with(".soundcloud.com"))
+    })
 }
 
 struct ProcessOutput {
@@ -886,11 +1076,16 @@ fn parse_json_lines(output: ProcessOutput) -> Result<Vec<Value>, YtDlpError> {
 
 fn media_item_from_value(value: &Value) -> Option<MediaItem> {
     let object = value.as_object()?;
-    let title = string(object, "title")?.trim().to_owned();
+    let title = first_string(object, &["title", "username"])?
+        .trim()
+        .to_owned();
     if title.is_empty() {
         return None;
     }
-    let raw_url = first_string(object, &["webpage_url", "original_url", "url"]);
+    let raw_url = first_string(
+        object,
+        &["webpage_url", "permalink_url", "original_url", "url"],
+    );
     let kind = media_kind(object, raw_url);
     let id = string(object, "id")
         .filter(|value| !value.is_empty())
@@ -929,6 +1124,13 @@ fn media_item_from_value(value: &Value) -> Option<MediaItem> {
         "subscribers",
         &["channel_follower_count"],
     );
+    // Python `normalize_entry` counts a SoundCloud set by `track_count`.
+    insert_alias(
+        &mut metadata,
+        object,
+        "playlist_count",
+        &["track_count", "playlist_count"],
+    );
     insert_alias(&mut metadata, object, "video_count", &["playlist_count"]);
     insert_alias(
         &mut metadata,
@@ -937,9 +1139,14 @@ fn media_item_from_value(value: &Value) -> Option<MediaItem> {
         &["channel_is_verified", "uploader_is_verified"],
     );
     insert_alias(&mut metadata, object, "uploaded_at", &["upload_date"]);
+    let source = if is_soundcloud_entry(object, raw_url) {
+        MediaSource::Soundcloud
+    } else {
+        MediaSource::Youtube
+    };
     Some(MediaItem {
         id: MediaId(id),
-        source: MediaSource::Youtube,
+        source,
         kind,
         title,
         url,
@@ -969,13 +1176,31 @@ fn insert_alias(
     }
 }
 
+/// Python `normalize_entry`: an entry is from `SoundCloud` when its extractor
+/// or URL says so.
+fn is_soundcloud_entry(object: &Map<String, Value>, raw_url: Option<&str>) -> bool {
+    first_string(object, &["ie_key", "extractor_key"])
+        .is_some_and(|extractor| extractor.to_ascii_lowercase().contains("soundcloud"))
+        || raw_url.is_some_and(|url| url.to_ascii_lowercase().contains("soundcloud"))
+}
+
 fn media_kind(object: &Map<String, Value>, raw_url: Option<&str>) -> MediaKind {
+    let item_type = string(object, "_type").unwrap_or_default();
+    let url = raw_url.unwrap_or_default().to_ascii_lowercase();
+    if is_soundcloud_entry(object, raw_url) {
+        let entry_kind = string(object, "kind").unwrap_or_default();
+        return if entry_kind == "user" {
+            MediaKind::Channel
+        } else if entry_kind == "playlist" || item_type == "playlist" || url.contains("/sets/") {
+            MediaKind::Playlist
+        } else {
+            MediaKind::Video
+        };
+    }
     if is_live_object(object) {
         return MediaKind::LiveStream;
     }
-    let item_type = string(object, "_type").unwrap_or_default();
     let extractor = string(object, "ie_key").unwrap_or_default();
-    let url = raw_url.unwrap_or_default().to_ascii_lowercase();
     if item_type == "playlist" || url.contains("/playlist") || url.contains("list=") {
         MediaKind::Playlist
     } else if extractor.eq_ignore_ascii_case("YoutubeTab")
@@ -1077,11 +1302,15 @@ fn sort_formats(formats: &mut [YoutubeFormat], preference: YoutubeStreamPreferen
 const fn search_kind_accepts(kind: YoutubeSearchKind, media_kind: MediaKind) -> bool {
     match kind {
         YoutubeSearchKind::All => true,
-        YoutubeSearchKind::Video | YoutubeSearchKind::Film => {
+        YoutubeSearchKind::Video | YoutubeSearchKind::Film | YoutubeSearchKind::SoundcloudTrack => {
             matches!(media_kind, MediaKind::Video | MediaKind::LiveStream)
         }
-        YoutubeSearchKind::Playlist => matches!(media_kind, MediaKind::Playlist),
-        YoutubeSearchKind::Channel => matches!(media_kind, MediaKind::Channel),
+        YoutubeSearchKind::Playlist | YoutubeSearchKind::SoundcloudPlaylist => {
+            matches!(media_kind, MediaKind::Playlist)
+        }
+        YoutubeSearchKind::Channel | YoutubeSearchKind::SoundcloudUser => {
+            matches!(media_kind, MediaKind::Channel)
+        }
     }
 }
 
@@ -1267,11 +1496,12 @@ mod tests {
 
     use super::{
         BoundedBytes, YtDlpYoutubeEngine, collection_kind_accepts, collection_response,
-        collection_target, component_executable, media_item_from_value, popular_numeric_value,
-        read_bounded, sanitize_error, search_fetch_limit, search_kind_accepts, search_target,
-        sort_formats, sort_popular_items, youtube_format,
+        collection_target, component_executable, interleave_youtube_results, media_item_from_value,
+        popular_numeric_value, read_bounded, sanitize_error, search_fetch_limit,
+        search_kind_accepts, search_target, sort_formats, sort_popular_items, validate_media_url,
+        youtube_format, youtube_shorts_search_url,
     };
-    use apricot_core::MediaKind;
+    use apricot_core::{MediaItem, MediaKind, MediaSource};
     use apricot_media::{
         YoutubeBackend, YoutubeCollectionKind, YoutubeCommand, YoutubeEngine,
         YoutubeResponsePayload, YoutubeSearchKind, YoutubeSessionConfig, YoutubeStreamPreference,
@@ -1311,6 +1541,152 @@ mod tests {
         assert_eq!(playlist.kind, MediaKind::Playlist);
         assert!(search_kind_accepts(YoutubeSearchKind::Video, video.kind));
         assert!(!search_kind_accepts(YoutubeSearchKind::Video, channel.kind));
+    }
+
+    fn video(id: &str) -> MediaItem {
+        media_item_from_value(&json!({
+            "id": id, "title": id, "url": format!("https://www.youtube.com/watch?v={id}")
+        }))
+        .expect("video")
+    }
+
+    fn ids(items: &[MediaItem]) -> Vec<&str> {
+        items.iter().map(|item| item.id.0.as_str()).collect()
+    }
+
+    #[test]
+    fn shorts_are_mixed_in_after_every_four_results_like_python() {
+        let primary = [
+            "aaaaaaaaaa1",
+            "aaaaaaaaaa2",
+            "aaaaaaaaaa3",
+            "aaaaaaaaaa4",
+            "aaaaaaaaaa5",
+        ]
+        .map(video)
+        .to_vec();
+        // The duplicate Short is skipped, as Python's `seen` set does.
+        let shorts = ["aaaaaaaaaa2", "sssssssssS1", "sssssssssS2"]
+            .map(video)
+            .to_vec();
+        let merged = interleave_youtube_results(primary.clone(), shorts.clone(), 20);
+        assert_eq!(
+            ids(&merged),
+            [
+                "aaaaaaaaaa1",
+                "aaaaaaaaaa2",
+                "aaaaaaaaaa3",
+                "aaaaaaaaaa4",
+                "sssssssssS1",
+                "aaaaaaaaaa5",
+                "sssssssssS2",
+            ]
+        );
+        assert_eq!(
+            ids(&interleave_youtube_results(primary, shorts, 5)),
+            [
+                "aaaaaaaaaa1",
+                "aaaaaaaaaa2",
+                "aaaaaaaaaa3",
+                "aaaaaaaaaa4",
+                "sssssssssS1",
+            ]
+        );
+        assert_eq!(
+            youtube_shorts_search_url("open ai"),
+            "https://www.youtube.com/results?search_query=open+ai&sp=EgIQCQ%3D%3D"
+        );
+    }
+
+    #[test]
+    fn soundcloud_entries_keep_python_provider_kinds_and_urls() {
+        let track = media_item_from_value(&json!({
+            "_type": "url", "ie_key": "Soundcloud", "id": "88335161",
+            "title": "Get Lucky", "uploader": "DJ KB",
+            "webpage_url": "https://soundcloud.com/eldjkb/get-lucky",
+            "url": "https://api.soundcloud.com/tracks/soundcloud%3Atracks%3A88335161",
+            "duration": 246.4, "view_count": 21_220_721
+        }))
+        .expect("track");
+        assert_eq!(track.source, MediaSource::Soundcloud);
+        assert_eq!(track.kind, MediaKind::Video);
+        assert_eq!(
+            track.url.as_ref().map(ToString::to_string).as_deref(),
+            Some("https://soundcloud.com/eldjkb/get-lucky")
+        );
+        assert_eq!(track.channel, "DJ KB");
+        let set = media_item_from_value(&json!({
+            "id": "1", "title": "Set", "track_count": 12,
+            "permalink_url": "https://soundcloud.com/artist/sets/best"
+        }))
+        .expect("set");
+        assert_eq!(set.source, MediaSource::Soundcloud);
+        assert_eq!(set.kind, MediaKind::Playlist);
+        assert_eq!(set.metadata["playlist_count"], 12);
+        let user = media_item_from_value(&json!({
+            "kind": "user", "id": "2", "username": "Artist",
+            "permalink_url": "https://soundcloud.com/artist"
+        }))
+        .expect("user");
+        assert_eq!(user.kind, MediaKind::Channel);
+        assert_eq!(user.title, "Artist");
+        assert!(search_kind_accepts(
+            YoutubeSearchKind::SoundcloudTrack,
+            track.kind
+        ));
+        assert!(search_kind_accepts(
+            YoutubeSearchKind::SoundcloudUser,
+            user.kind
+        ));
+        assert!(!search_kind_accepts(
+            YoutubeSearchKind::SoundcloudTrack,
+            set.kind
+        ));
+    }
+
+    #[test]
+    fn soundcloud_targets_follow_python_search_and_artist_tracks() {
+        assert_eq!(
+            search_target("daft punk", YoutubeSearchKind::SoundcloudTrack, 20),
+            "scsearch20:daft punk"
+        );
+        assert_eq!(
+            collection_target(
+                "https://soundcloud.com/daftpunkofficialmusic/",
+                YoutubeCollectionKind::SoundcloudArtistTracks,
+            )
+            .expect("artist tracks"),
+            "https://soundcloud.com/daftpunkofficialmusic/tracks"
+        );
+        let set = "https://soundcloud.com/artist/sets/best";
+        assert_eq!(
+            collection_target(set, YoutubeCollectionKind::PlaylistVideos).expect("set"),
+            set
+        );
+        assert!(
+            collection_target(
+                "https://www.youtube.com/@creator",
+                YoutubeCollectionKind::SoundcloudArtistTracks,
+            )
+            .is_err()
+        );
+        assert!(
+            collection_target(
+                "https://soundcloud.com/artist",
+                YoutubeCollectionKind::ChannelVideos,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            collection_target(
+                "https://www.youtube.com/@creator",
+                YoutubeCollectionKind::ChannelUploads,
+            )
+            .expect("uploads"),
+            "https://www.youtube.com/@creator/videos"
+        );
+        assert!(validate_media_url("https://soundcloud.com/artist/track").is_ok());
+        assert!(validate_media_url("https://notsoundcloud.com/artist/track").is_err());
     }
 
     #[test]
@@ -1460,6 +1836,73 @@ mod tests {
             &config,
         );
         assert_eq!(message, "failed [cookies file] through [proxy]");
+    }
+
+    #[test]
+    #[ignore = "requires live SoundCloud, YouTube and APRICOT_YTDLP"]
+    fn live_soundcloud_and_shorts_follow_python() {
+        let executable = std::env::var_os("APRICOT_YTDLP").expect("APRICOT_YTDLP");
+        let mut engine =
+            YtDlpYoutubeEngine::new(std::path::Path::new(&executable)).expect("standalone yt-dlp");
+        let tracks = match engine
+            .execute(YoutubeCommand::Search {
+                query: "daft punk".to_owned(),
+                kind: YoutubeSearchKind::SoundcloudTrack,
+                limit: 5,
+                safe_search: false,
+            })
+            .expect("SoundCloud search")
+        {
+            YoutubeResponsePayload::SearchResults { items, .. } => items,
+            other => panic!("unexpected {other:?}"),
+        };
+        assert_eq!(tracks.len(), 5);
+        assert!(
+            tracks
+                .iter()
+                .all(|item| item.source == MediaSource::Soundcloud)
+        );
+        let resolved = engine
+            .execute(YoutubeCommand::Resolve {
+                url: tracks[0].url.as_ref().expect("track URL").to_string(),
+                preference: YoutubeStreamPreference::PreferAudio,
+            })
+            .expect("SoundCloud resolve");
+        assert!(matches!(
+            resolved,
+            YoutubeResponsePayload::Resolved { item, formats }
+                if item.source == MediaSource::Soundcloud && !formats.is_empty()
+        ));
+        let artist = engine
+            .execute(YoutubeCommand::Collection {
+                url: "https://soundcloud.com/daftpunkofficialmusic".to_owned(),
+                kind: YoutubeCollectionKind::SoundcloudArtistTracks,
+                limit: 3,
+            })
+            .expect("artist tracks");
+        assert!(matches!(
+            artist,
+            YoutubeResponsePayload::SearchResults { items, .. } if items.len() == 3
+        ));
+        let uploads = match engine
+            .execute(YoutubeCommand::Collection {
+                url: "https://www.youtube.com/@YouTube".to_owned(),
+                kind: YoutubeCollectionKind::ChannelUploads,
+                limit: 10,
+            })
+            .expect("channel uploads")
+        {
+            YoutubeResponsePayload::SearchResults { items, .. } => items,
+            other => panic!("unexpected {other:?}"),
+        };
+        assert_eq!(uploads.len(), 10);
+        assert!(
+            uploads.iter().any(|item| item
+                .url
+                .as_ref()
+                .is_some_and(|url| url.path().starts_with("/shorts/"))),
+            "the videos tab mixes in Shorts"
+        );
     }
 
     #[test]

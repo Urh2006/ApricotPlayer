@@ -152,6 +152,13 @@ impl YoutubeHelper {
                 false,
             ));
         }
+        if kind.is_soundcloud() {
+            return Err(YoutubeHelperError::new(
+                YoutubeErrorCode::Unavailable,
+                "This Rust YouTube component does not search SoundCloud",
+                false,
+            ));
+        }
 
         let options = SearchOptions {
             limit: u64::from(limit),
@@ -382,7 +389,11 @@ fn request_options(config: &YoutubeSessionConfig) -> Result<RequestOptions, Yout
 const fn search_type(kind: YoutubeSearchKind) -> SearchType {
     match kind {
         YoutubeSearchKind::All => SearchType::All,
-        YoutubeSearchKind::Video => SearchType::Video,
+        // SoundCloud kinds are rejected in `search` before this mapping.
+        YoutubeSearchKind::Video
+        | YoutubeSearchKind::SoundcloudTrack
+        | YoutubeSearchKind::SoundcloudPlaylist
+        | YoutubeSearchKind::SoundcloudUser => SearchType::Video,
         YoutubeSearchKind::Playlist => SearchType::Playlist,
         YoutubeSearchKind::Channel => SearchType::Channel,
         YoutubeSearchKind::Film => SearchType::Film,

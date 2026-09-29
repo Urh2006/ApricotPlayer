@@ -335,7 +335,15 @@ pub fn results_context_menu(
             context.command("open_browser", C::OpenInBrowser),
             context.command_with_shortcut("copy_url", "copy_link", C::CopyLocation),
         ];
-        if collection.kind == MediaKind::Channel {
+        if collection.kind == MediaKind::Channel
+            && collection.source == apricot_core::MediaSource::Soundcloud
+        {
+            // Python: a SoundCloud artist opens its tracks and cannot be
+            // subscribed to.
+            let mut entries = vec![context.command("open", C::Play)];
+            entries.extend(tail);
+            entries
+        } else if collection.kind == MediaKind::Channel {
             let mut entries = vec![
                 context.command("channel_options", C::ChannelOptions),
                 context.command("channel_videos", C::ChannelVideos),
@@ -847,6 +855,35 @@ mod tests {
                 "Copy URL",
             ]
         );
+    }
+
+    #[test]
+    fn soundcloud_artist_matches_python_without_subscribe_or_channel_tabs() {
+        let fixture = Fixture::new();
+        let artist = MediaItem {
+            source: MediaSource::Soundcloud,
+            url: Some("https://soundcloud.com/artist".parse().unwrap()),
+            ..collection(MediaKind::Channel)
+        };
+        let entries = fixture.with(|context| results_context_menu(context, Some(&artist)));
+        assert_eq!(
+            labels(&entries),
+            [
+                "Open",
+                "Download channel > [Download audio, Download video]",
+                "Add to favorites",
+                "Remove from favorites",
+                "Open in browser",
+                "Copy URL",
+            ]
+        );
+        assert!(matches!(
+            entries[0],
+            ContextMenuEntry::Command {
+                command: ContextCommand::Play,
+                ..
+            }
+        ));
     }
 
     #[test]
