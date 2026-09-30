@@ -20,5 +20,9 @@ tempfile = "3"
 url.workspace = true
 windows.workspace = true
 
+[features]
+# ApricotPlayer 2.0 in place of the Python version (same folders and names).
+stable-identity = ["apricot-updater/stable-identity"]
+
 [lints]
 workspace = true

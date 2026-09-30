@@ -120,6 +120,16 @@ pub fn check_app_update(
     if !is_newer_version(&remote, current_version) {
         return AppUpdateCheck::UpToDate;
     }
+    // The Rust version never installs a Python 1.x release, whatever the
+    // version compare says.
+    if crate::version::parse_version(&remote)
+        .first()
+        .copied()
+        .unwrap_or(0)
+        < 2
+    {
+        return AppUpdateCheck::UpToDate;
+    }
     if !manual && remote == skipped_version {
         return AppUpdateCheck::Skipped(remote);
     }
@@ -512,7 +522,7 @@ mod tests {
         let mut github = FakeGithub::default();
         github.json.insert(
             crate::release::GITHUB_LATEST_RELEASE_API_URL.to_owned(),
-            json!({"tag_name": "v1.0.22", "assets": [{"name": "ApricotPlayerSetup.exe"}]}),
+            json!({"tag_name": "v2.0.1", "assets": [{"name": "ApricotPlayerSetup.exe"}]}),
         );
         let mut feed = GithubReleaseFeed {
             transport: &mut github,
@@ -522,13 +532,38 @@ mod tests {
                 &mut feed,
                 &RUST_BETA_PACKAGE,
                 "stable",
-                "1.0.21",
+                "2.0.0",
                 "",
                 true,
                 true,
                 ""
             ),
             AppUpdateCheck::NoAsset
+        );
+    }
+
+    #[test]
+    fn a_python_release_is_never_offered() {
+        let mut github = FakeGithub::default();
+        github.json.insert(
+            crate::release::GITHUB_LATEST_RELEASE_API_URL.to_owned(),
+            json!({"tag_name": "v1.0.22", "assets": [{"name": "ApricotPlayerSetup.exe"}]}),
+        );
+        let mut feed = GithubReleaseFeed {
+            transport: &mut github,
+        };
+        assert_eq!(
+            check_app_update(
+                &mut feed,
+                &crate::release::STABLE_PACKAGE,
+                "stable",
+                "1.0.21",
+                "",
+                true,
+                true,
+                ""
+            ),
+            AppUpdateCheck::UpToDate
         );
     }
 

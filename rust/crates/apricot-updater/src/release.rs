@@ -294,6 +294,23 @@ pub const RUST_BETA_PACKAGE: PackageNames = PackageNames {
     display_name: "ApricotPlayer 2 Beta",
 };
 
+/// `ApricotPlayer` 2.0 in place of the Python version: Python's asset names,
+/// install folder and executable, so it updates a Python installation.
+pub const STABLE_PACKAGE: PackageNames = PackageNames {
+    installer: "ApricotPlayerSetup.exe",
+    portable: &["ApricotPlayer.zip", "ApricotPlayerPortable.zip"],
+    portable_root: "ApricotPlayer",
+    executable: "ApricotPlayer.exe",
+    display_name: "ApricotPlayer",
+};
+
+/// This build's package names.
+pub const APP_PACKAGE: PackageNames = if cfg!(feature = "stable-identity") {
+    STABLE_PACKAGE
+} else {
+    RUST_BETA_PACKAGE
+};
+
 impl PackageNames {
     /// Python `find_release_asset`.
     #[must_use]

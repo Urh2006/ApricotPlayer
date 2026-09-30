@@ -14,7 +14,7 @@ use apricot_core::{
     shortcut::{ShortcutContext, action_for_shortcut},
 };
 use apricot_platform::{
-    ApplicationIdentity, PlatformError, sync_startup_registration,
+    PlatformError, sync_startup_registration,
     windows_registration::{
         media_association_registration_complete, open_default_apps_settings,
         open_default_programs_control_panel, register_media_associations,
@@ -1468,7 +1468,7 @@ unsafe fn set_default_player(window: HWND) {
     let opened = std::env::current_exe()
         .map_err(|error| PlatformError::Operation(error.to_string()))
         .and_then(|executable| {
-            let identity = ApplicationIdentity::RustBeta;
+            let identity = apricot_platform::BUILD_IDENTITY;
             if !media_association_registration_complete(identity, &executable) {
                 register_media_associations(identity, &executable)?;
             }
@@ -1565,7 +1565,12 @@ unsafe fn choose_cookies_file(window: HWND) {
                 "{error}",
                 &apricot_app::comments::friendly_error(&catalog, &error.localized(&catalog)),
             );
-            show_message(window, &message, "ApricotPlayer 2 Beta", MB_ICONWARNING);
+            show_message(
+                window,
+                &message,
+                apricot_platform::product_name(),
+                MB_ICONWARNING,
+            );
             restore_focus();
             return;
         }
@@ -1587,7 +1592,7 @@ unsafe fn choose_cookies_file(window: HWND) {
         show_message(
             window,
             catalog.text("cookies_file_no_login_warning"),
-            "ApricotPlayer 2 Beta",
+            apricot_platform::product_name(),
             MB_ICONWARNING,
         );
     }
@@ -1648,7 +1653,7 @@ unsafe fn selected_cookie_browser(window: HWND) -> Option<String> {
         show_message(
             window,
             catalog.text("select_cookies_browser"),
-            "ApricotPlayer 2 Beta",
+            apricot_platform::product_name(),
             MB_ICONINFORMATION,
         );
         return None;
@@ -1862,7 +1867,7 @@ unsafe fn save_and_register_startup(window: HWND, state: &mut SettingsWindowStat
         }
     };
     if let Err(error) = sync_startup_registration(
-        ApplicationIdentity::RustBeta,
+        apricot_platform::BUILD_IDENTITY,
         &executable,
         (&*state.application).settings().start_with_windows,
     ) {
@@ -2688,7 +2693,12 @@ unsafe fn apply_font(controls: &[HWND]) {
 }
 
 unsafe fn show_error(window: HWND, message: &str) {
-    show_message(window, message, "ApricotPlayer 2 Beta", MB_ICONERROR);
+    show_message(
+        window,
+        message,
+        apricot_platform::product_name(),
+        MB_ICONERROR,
+    );
 }
 
 unsafe fn show_message(window: HWND, message: &str, title: &str, icon: MESSAGEBOX_STYLE) {

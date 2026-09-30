@@ -15,5 +15,9 @@ apricot-storage.workspace = true
 apricot-ui-windows.workspace = true
 apricot-updater.workspace = true
 
+[features]
+release-beta = ["apricot-updater/release-beta"]
+stable-identity = ["apricot-platform/stable-identity"]
+
 [lints]
 workspace = true

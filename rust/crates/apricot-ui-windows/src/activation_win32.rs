@@ -128,7 +128,7 @@ pub fn show_already_open(message: &str) {
         let _ = MessageBoxW(
             None,
             PCWSTR(message.as_ptr()),
-            w!("ApricotPlayer 2 Beta"),
+            crate::PRODUCT_CAPTION,
             MB_OK | MB_ICONINFORMATION,
         );
     }

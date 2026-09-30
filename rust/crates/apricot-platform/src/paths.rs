@@ -34,6 +34,16 @@ pub fn discover_windows_beta_paths() -> Result<PlatformPaths, PathDiscoveryError
     discover_windows_paths_for_identity(ApplicationIdentity::RustBeta)
 }
 
+/// This build's paths: Python's for the 2.0 that replaces it.
+///
+/// # Errors
+///
+/// Returns [`PathDiscoveryError`] when required environment values or the
+/// executable directory are unavailable.
+pub fn discover_app_paths() -> Result<PlatformPaths, PathDiscoveryError> {
+    discover_windows_paths_for_identity(crate::BUILD_IDENTITY)
+}
+
 fn discover_windows_paths_for_identity(
     identity: ApplicationIdentity,
 ) -> Result<PlatformPaths, PathDiscoveryError> {

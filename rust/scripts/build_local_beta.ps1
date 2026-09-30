@@ -3,7 +3,10 @@ param(
     [switch]$SkipChecks,
     # "beta" builds the distributed 2.0 beta, which installs GitHub updates.
     [ValidateSet("local-only", "beta")]
-    [string]$Channel = "local-only"
+    [string]$Channel = "local-only",
+    # ApricotPlayer 2.0 in place of the Python version: Python's folders,
+    # ApricotPlayer.exe and Python's installer identity.
+    [switch]$Stable
 )
 
 $ErrorActionPreference = "Stop"
@@ -42,8 +45,11 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "cargo clippy failed with exit code $LASTEXITCODE" }
     }
 
-    if ($Channel -eq "beta") {
-        cargo build --release -p apricot-player -p apricot-youtube-helper --features apricot-updater/release-beta
+    $Features = @()
+    if ($Channel -eq "beta") { $Features += "apricot-player/release-beta" }
+    if ($Stable) { $Features += "apricot-player/stable-identity" }
+    if ($Features.Count -gt 0) {
+        cargo build --release -p apricot-player -p apricot-youtube-helper --features ($Features -join ",")
     }
     else {
         cargo build --release -p apricot-player -p apricot-youtube-helper
@@ -72,7 +78,11 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "rustc --version failed with exit code $LASTEXITCODE" }
 
     New-Item -ItemType Directory -Path $StagingDir -Force | Out-Null
-    Copy-Item -LiteralPath $BuiltExe -Destination (Join-Path $StagingDir "ApricotPlayer2Beta.exe")
+    $ApplicationId = if ($Stable) { "ApricotPlayer" } else { "ApricotPlayer.RustBeta" }
+    $ProductName = if ($Stable) { "ApricotPlayer" } else { "ApricotPlayer 2 Beta" }
+    $ExecutableName = if ($Stable) { "ApricotPlayer.exe" } else { "ApricotPlayer2Beta.exe" }
+    $AppDataName = if ($Stable) { "ApricotPlayer" } else { "ApricotPlayer2Beta" }
+    Copy-Item -LiteralPath $BuiltExe -Destination (Join-Path $StagingDir $ExecutableName)
     $NvdaSource = Join-Path (Split-Path -Parent $RustRoot) "vendor\nvda\nvdaControllerClient64.dll"
     if (-not (Test-Path -LiteralPath $NvdaSource -PathType Leaf)) {
         throw "Bundled NVDA Controller Client was not found at $NvdaSource"
@@ -123,9 +133,9 @@ try {
     Copy-Item -LiteralPath $DefaultReachedSound -Destination $AssetsDestination
     $BuildInfo = [ordered]@{
         schema_version = 1
-        application_id = "ApricotPlayer.RustBeta"
-        product_name = "ApricotPlayer 2 Beta"
-        executable_name = "ApricotPlayer2Beta.exe"
+        application_id = $ApplicationId
+        product_name = $ProductName
+        executable_name = $ExecutableName
         version = [string]$Package.version
         commit = $Commit
         dirty = $Dirty
@@ -133,7 +143,7 @@ try {
         rust = $RustVersion
         data_schema_version = 1
         update_channel = $Channel
-        app_data_directory = "%APPDATA%\ApricotPlayer2Beta"
+        app_data_directory = "%APPDATA%\$AppDataName"
         bundled_components = [ordered]@{
             nvda_controller_client = "nvda/nvdaControllerClient64.dll"
             mpv = "mpv/mpv.exe"
@@ -159,7 +169,7 @@ try {
     }
     $Manifest = [ordered]@{
         schema_version = 1
-        application_id = "ApricotPlayer.RustBeta"
+        application_id = $ApplicationId
         files = $ManifestFiles
     }
     $Manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $StagingDir "package-manifest.json") -Encoding utf8

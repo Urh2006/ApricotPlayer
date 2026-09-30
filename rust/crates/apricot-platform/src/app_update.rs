@@ -159,14 +159,24 @@ impl UpdateTransport for HttpUpdateTransport {
 /// requests, and a download is the file named like the last part of its
 /// address. Missing JSON files are a 404. Addresses must still be the trusted
 /// GitHub ones, so every check before the transport runs as with GitHub.
+/// Without `ytdlp-latest.json`, yt-dlp keeps updating from GitHub, so a feed
+/// used day to day never leaves `YouTube` support behind.
 pub struct LocalFeedTransport {
     folder: PathBuf,
+    ytdlp_fallback: Option<HttpUpdateTransport>,
 }
 
 impl LocalFeedTransport {
     #[must_use]
     pub fn new(folder: PathBuf) -> Self {
-        Self { folder }
+        Self {
+            folder,
+            ytdlp_fallback: None,
+        }
+    }
+
+    fn uses_github_for_ytdlp(&self) -> bool {
+        !self.folder.join("ytdlp-latest.json").is_file()
     }
 
     /// The test feed of a local beta, from `APRICOT_UPDATE_TEST_FEED`.
@@ -178,12 +188,21 @@ impl LocalFeedTransport {
         std::env::var_os(UPDATE_TEST_FEED_VARIABLE)
             .map(PathBuf::from)
             .filter(|folder| folder.is_dir())
-            .map(Self::new)
+            .map(|folder| Self {
+                folder,
+                ytdlp_fallback: Some(HttpUpdateTransport::new(env!("CARGO_PKG_VERSION"))),
+            })
     }
 }
 
 impl UpdateTransport for LocalFeedTransport {
     fn get_json(&mut self, url: &str, limit: u64) -> Result<Option<Value>, String> {
+        if url == apricot_updater::flow::YTDLP_LATEST_RELEASE_API_URL
+            && self.uses_github_for_ytdlp()
+            && let Some(github) = self.ytdlp_fallback.as_mut()
+        {
+            return github.get_json(url, limit);
+        }
         let name = if url == apricot_updater::flow::YTDLP_LATEST_RELEASE_API_URL {
             "ytdlp-latest.json"
         } else if url == apricot_updater::release::GITHUB_LATEST_RELEASE_API_URL {
@@ -209,13 +228,26 @@ impl UpdateTransport for LocalFeedTransport {
     fn download(
         &mut self,
         url: &str,
-        _octet_stream: bool,
+        octet_stream: bool,
         allowed_roots: &[&str],
         destination: &Path,
         maximum: u64,
         progress: &mut dyn FnMut(u64, Option<u64>),
     ) -> Result<(), String> {
         validate_https_response_url(url, allowed_roots)?;
+        if url.contains("/yt-dlp/")
+            && self.uses_github_for_ytdlp()
+            && let Some(github) = self.ytdlp_fallback.as_mut()
+        {
+            return github.download(
+                url,
+                octet_stream,
+                allowed_roots,
+                destination,
+                maximum,
+                progress,
+            );
+        }
         let name = url
             .rsplit('/')
             .next()
@@ -256,7 +288,7 @@ pub fn app_update_install_allowed() -> bool {
 /// updated components go.
 #[must_use]
 pub fn user_components_directory() -> Option<PathBuf> {
-    crate::discover_windows_beta_paths()
+    crate::discover_app_paths()
         .ok()
         .map(|paths| paths.app_data.join("components"))
 }

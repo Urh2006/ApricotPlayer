@@ -43,7 +43,9 @@ pub use local_edit::{LocalEditJob, LocalEditRender, run_ffmpeg_conversion, save_
 pub use local_media::{
     LocalMediaError, scan_local_media_folder, scan_local_media_folder_with_cancel,
 };
-pub use paths::{PathDiscoveryError, discover_windows_beta_paths, discover_windows_paths};
+pub use paths::{
+    PathDiscoveryError, discover_app_paths, discover_windows_beta_paths, discover_windows_paths,
+};
 pub use podcast_directory::{ApplePodcastDirectoryClient, PodcastDirectoryError};
 pub use rss_client::{RssClient, RssClientError};
 pub use single_instance::{SingleInstanceGuard, SingleInstanceOutcome, acquire_single_instance};
@@ -61,6 +63,27 @@ pub use ytdlp_youtube::{YtDlpYoutubeEngine, spawn_youtube_runtime};
 pub enum ApplicationIdentity {
     Stable,
     RustBeta,
+}
+
+/// Whether this build replaces the Python version (`stable-identity`).
+pub const STABLE_BUILD: bool = cfg!(feature = "stable-identity");
+
+/// This build's identity: Python's for the 2.0 that replaces it, otherwise
+/// the side-by-side beta.
+pub const BUILD_IDENTITY: ApplicationIdentity = if STABLE_BUILD {
+    ApplicationIdentity::Stable
+} else {
+    ApplicationIdentity::RustBeta
+};
+
+/// The name in window titles and message boxes.
+#[must_use]
+pub const fn product_name() -> &'static str {
+    if STABLE_BUILD {
+        "ApricotPlayer"
+    } else {
+        "ApricotPlayer 2 Beta"
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -63,6 +63,14 @@ mod win32;
 
 use apricot_app::Application;
 
+/// This build's name for window captions.
+#[cfg(windows)]
+pub(crate) const PRODUCT_CAPTION: windows::core::PCWSTR = if apricot_platform::STABLE_BUILD {
+    windows::core::w!("ApricotPlayer")
+} else {
+    windows::core::w!("ApricotPlayer 2 Beta")
+};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QualificationGate {
     Pending,

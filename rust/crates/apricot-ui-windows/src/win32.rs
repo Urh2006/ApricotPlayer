@@ -678,7 +678,7 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
     }
     register_secondary_window_classes()?;
 
-    let title = wide(&format!("ApricotPlayer 2 Beta {version}"));
+    let title = wide(&format!("{} {version}", apricot_platform::product_name()));
     let window = CreateWindowExW(
         WINDOW_EX_STYLE::default(),
         class_name,
@@ -3319,7 +3319,7 @@ unsafe fn add_tray_icon(window: HWND) -> bool {
         hIcon: icon,
         ..Default::default()
     };
-    copy_wide_array(&mut data.szTip, "ApricotPlayer 2 Beta");
+    copy_wide_array(&mut data.szTip, apricot_platform::product_name());
     if !Shell_NotifyIconW(NIM_ADD, &raw const data).as_bool() {
         return false;
     }
@@ -3377,7 +3377,7 @@ unsafe fn announce_tray_state(window: HWND) {
     if state.application.settings().tray_notification
         && state.application.settings().windows_notifications
     {
-        show_tray_notification(window, "ApricotPlayer 2 Beta", message);
+        show_tray_notification(window, apricot_platform::product_name(), message);
     }
 }
 
@@ -8343,7 +8343,7 @@ unsafe fn confirm_download(
     let result = MessageBoxW(
         Some(window),
         PCWSTR(message.as_ptr()),
-        w!("ApricotPlayer 2 Beta"),
+        crate::PRODUCT_CAPTION,
         MB_YESNO | MB_ICONINFORMATION,
     );
     if let Some(state) = state_mut(window) {
@@ -10323,7 +10323,7 @@ unsafe fn finish_youtube_error_state(
         let _ = MessageBoxW(
             Some(window),
             PCWSTR(text.as_ptr()),
-            w!("ApricotPlayer 2 Beta"),
+            crate::PRODUCT_CAPTION,
             MB_OK | MB_ICONINFORMATION,
         );
         let _ = SetFocus(Some(if restore_search_focus {
@@ -11996,7 +11996,7 @@ unsafe fn show_message_box(
     let _ = MessageBoxW(
         Some(window),
         PCWSTR(message.as_ptr()),
-        w!("ApricotPlayer 2 Beta"),
+        crate::PRODUCT_CAPTION,
         MB_OK | icon,
     );
     if !previous.is_invalid()
@@ -14825,7 +14825,7 @@ unsafe fn close_conversion_progress(state: &mut WindowState) {
 
 /// Python `UPDATE_LOG_FILE`.
 fn update_log_path() -> Option<PathBuf> {
-    apricot_platform::discover_windows_beta_paths()
+    apricot_platform::discover_app_paths()
         .ok()
         .map(|paths| paths.app_data.join("updater.log"))
 }
@@ -14975,7 +14975,7 @@ unsafe fn start_app_update_check(window: HWND, manual: bool, prompt: bool, notif
         };
         let result = apricot_updater::check_app_update(
             &mut feed,
-            &apricot_updater::RUST_BETA_PACKAGE,
+            &apricot_updater::APP_PACKAGE,
             &channel,
             env!("CARGO_PKG_VERSION"),
             &skipped,
@@ -15299,7 +15299,7 @@ unsafe fn begin_app_update_install(
         let progress_version = version.clone();
         let result = apricot_updater::download_app_update(
             transport.as_mut(),
-            &apricot_updater::RUST_BETA_PACKAGE,
+            &apricot_updater::APP_PACKAGE,
             &asset,
             &mut |line| log_update_event(line),
             &mut |percent| {
@@ -15330,7 +15330,7 @@ unsafe fn finish_app_update_install(
     downloaded: &apricot_updater::DownloadedUpdate,
     version: &str,
 ) {
-    use apricot_updater::{RUST_BETA_PACKAGE, script};
+    use apricot_updater::{APP_PACKAGE, script};
 
     let Some(catalog) = state(window)
         .map(|state| apricot_app::embedded_catalog(&state.application.settings().language))
@@ -15358,7 +15358,7 @@ unsafe fn finish_app_update_install(
         let log_path =
             update_log_path().ok_or_else(|| "Application data path is unavailable".to_owned())?;
         let input = script::UpdateScriptInput {
-            package: &RUST_BETA_PACKAGE,
+            package: &APP_PACKAGE,
             downloaded_path: &downloaded.path,
             target_dir: folder,
             process_id: std::process::id(),
@@ -15367,12 +15367,12 @@ unsafe fn finish_app_update_install(
             expected_sha256: &downloaded.sha256,
         };
         let name = downloaded.path.to_string_lossy();
-        let (text, prefix) = if RUST_BETA_PACKAGE.is_installer_asset(&name) {
+        let (text, prefix) = if APP_PACKAGE.is_installer_asset(&name) {
             (
                 script::installer_update_script(&input),
                 "apricotplayer-installer-update-",
             )
-        } else if RUST_BETA_PACKAGE.is_portable_zip_asset(&name) {
+        } else if APP_PACKAGE.is_portable_zip_asset(&name) {
             (
                 script::portable_zip_update_script(&input),
                 "apricotplayer-portable-update-",
@@ -17018,7 +17018,7 @@ unsafe fn close_player_runtime(window: HWND, state: &mut WindowState) {
     state.application.close_player_session();
     state.pending_queued_start = None;
     stop_playback_timer(window);
-    let title = wide("ApricotPlayer 2 Beta");
+    let title = wide(apricot_platform::product_name());
     let _ = SetWindowTextW(window, PCWSTR(title.as_ptr()));
 }
 
@@ -17107,7 +17107,7 @@ unsafe fn open_media_file(window: HWND) {
             let _ = MessageBoxW(
                 Some(window),
                 PCWSTR(message.as_ptr()),
-                w!("ApricotPlayer 2 Beta"),
+                crate::PRODUCT_CAPTION,
                 MB_OK | MB_ICONINFORMATION,
             );
         }
@@ -17265,7 +17265,7 @@ unsafe fn show_action_finder(window: HWND) {
             let _ = MessageBoxW(
                 Some(window),
                 PCWSTR(message.as_ptr()),
-                w!("ApricotPlayer 2 Beta"),
+                crate::PRODUCT_CAPTION,
                 MB_OK | MB_ICONINFORMATION,
             );
         }
@@ -17466,7 +17466,7 @@ unsafe fn open_settings(window: HWND) {
             let _ = MessageBoxW(
                 Some(window),
                 PCWSTR(message.as_ptr()),
-                w!("ApricotPlayer 2 Beta"),
+                crate::PRODUCT_CAPTION,
                 MB_OK | MB_ICONINFORMATION,
             );
         }

@@ -8,8 +8,8 @@ use apricot_core::{
 };
 use apricot_media::{YoutubeCommand, YoutubeEngine, YoutubeResponsePayload};
 use apricot_platform::{
-    ApplicationIdentity, SingleInstanceOutcome, YoutubeHelperProcess, YtDlpYoutubeEngine,
-    acquire_single_instance, discover_windows_beta_paths, sync_startup_registration,
+    SingleInstanceOutcome, YoutubeHelperProcess, YtDlpYoutubeEngine, acquire_single_instance,
+    discover_app_paths, sync_startup_registration,
 };
 use apricot_storage::{
     BookmarkFile, LastPlayerSessionFile, MediaListFile, NotificationFile, PlaybackPositionFile,
@@ -28,7 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let paths = discover_windows_beta_paths()?;
+    let paths = discover_app_paths()?;
     let defaults = SettingsDocument::with_platform_defaults(
         paths.downloads.to_string_lossy().into_owned(),
         paths.cache.to_string_lossy().into_owned(),
@@ -48,7 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             unix_timestamp(),
         );
     }
-    let instance = acquire_single_instance(ApplicationIdentity::RustBeta)?;
+    let instance = acquire_single_instance(apricot_platform::BUILD_IDENTITY)?;
     let _instance_guard = match instance {
         SingleInstanceOutcome::Primary(guard) => guard,
         SingleInstanceOutcome::Secondary => {
@@ -75,7 +75,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if let Ok(executable) = std::env::current_exe() {
         let _ = sync_startup_registration(
-            ApplicationIdentity::RustBeta,
+            apricot_platform::BUILD_IDENTITY,
             &executable,
             settings.current().start_with_windows,
         );
@@ -178,7 +178,7 @@ fn run_qualification(arguments: &[std::ffi::OsString]) -> Result<bool, Box<dyn s
             .map(PathBuf::from)
             .ok_or("--qualification-media-associations needs an executable path")?;
         let writes = apricot_platform::windows_registration::media_association_writes(
-            ApplicationIdentity::RustBeta,
+            apricot_platform::BUILD_IDENTITY,
             &executable,
         )?;
         for write in writes {

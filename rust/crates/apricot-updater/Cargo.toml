@@ -17,6 +17,8 @@ url.workspace = true
 [features]
 # The distributed 2.0 beta: installs updates from GitHub prereleases.
 release-beta = []
+# ApricotPlayer 2.0 replacing the Python version: its names and package.
+stable-identity = []
 
 [lints]
 workspace = true

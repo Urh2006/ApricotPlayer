@@ -11,7 +11,10 @@ pub use flow::{
     AppUpdateCheck, DownloadedUpdate, GithubReleaseFeed, UpdateTransport, YtdlpUpdate,
     check_app_update, download_app_update, update_ytdlp_component,
 };
-pub use release::{PackageNames, RUST_BETA_PACKAGE, Release, ReleaseAsset, release_changelog_text};
+pub use release::{
+    APP_PACKAGE, PackageNames, RUST_BETA_PACKAGE, Release, ReleaseAsset, STABLE_PACKAGE,
+    release_changelog_text,
+};
 pub use version::{is_component_version_newer, is_newer_version, parse_version};
 
 /// This build's channel: a local Rust beta is `LocalOnly` (D-011); the

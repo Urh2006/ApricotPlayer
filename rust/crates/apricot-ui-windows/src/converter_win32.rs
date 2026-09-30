@@ -771,7 +771,7 @@ unsafe fn warn(window: HWND, text: &str) {
     let _ = MessageBoxW(
         Some(window),
         PCWSTR(text.as_ptr()),
-        w!("ApricotPlayer 2 Beta"),
+        crate::PRODUCT_CAPTION,
         MB_OK | MB_ICONWARNING,
     );
     restore_focus(focus);
