@@ -1,0 +1,76 @@
+# Spotify manifest
+
+Vir zahtev: `docs/SPOTIFY_PLAN.md` (potrjen 30. 9. 2026). Dokazi:
+`docs/spotify-p0/P0_EVIDENCE.md` (razdelki v stolpcu Dokaz). Obstoječi
+Python-Rust parity gate (`RUST_PARITY_MANIFEST.md`) ostane nespremenjen.
+
+Statusi: `source_verified`, `live_verified`, `implemented`, `accepted`,
+`account_unavailable`, `service_unsupported`, `blocked`, `open` (še ni dokaza).
+Adapter: **LS** = LibreSpot 0.8.0 knjižnica, **SP** = spclient, **PF** =
+pathfinder GraphQL, **AP** = Apricot sama. Faza pove, kdaj se implementira.
+
+| ID | Funkcija | Adapter in metoda | Status P0 | Dokaz | Faza |
+| --- | --- | --- | --- | --- | --- |
+| S01 | Prijava, refresh, ponovna prijava, odjava | LS oauth PKCE + reusable credentials; discovery kot alternativa | live_verified (prijava, ponovni zagon); open (preklic, odjava) | 2 | P1 |
+| S02 | Več računov in izolacija | AP (ločen cache in credentials po računu) | open | - | P1 |
+| S03 | Premium, market, explicit | LS user attributes (`type`, `country`, `filter-explicit-content`) | live_verified | 2 | P1 |
+| S04 | Predvajanje, pavza, stop, seek | LS Player + mpv most | live_verified | 8 | P2 |
+| S05 | Next/previous, EOF | LS Spirc | source_verified | 5 | P3 |
+| S06 | Celoten kontekst | LS Spirc `LoadRequest::from_context_uri`, SP context-resolve | live_verified (branje konteksta) | 4, 6 | P3 |
+| S07 | Točna occurrence | LS `PlayingTrack::Uid` (hex `itemId`), uid iz SP | live_verified | 5, 6 | P3 |
+| S08 | Shuffle, repeat | LS Spirc + remote SetOptions | source_verified | 5 | P3 |
+| S09 | Ročna queue add/remove/reorder/clear | SP connect-state `add_to_queue`, `set_queue`; potrjeno stanje lastne naprave potrebuje razširitev LS | live_verified (prek opazovalca); blocked do odločitve o razširitvi | 5 | P3 |
+| S10 | Connect receiver, transfer | LS Spirc, discovery | live_verified (telefon -> Apricot) | 5 | P2 |
+| S11 | Seznam naprav in oddaljene kontrole | SP cluster `device` map, connect-state ukazi | live_verified (ukazi drugi napravi) | 5 | P3 |
+| S12 | Usklajevanje stanja | SP cluster pubsub na isti seji | source_verified | 5 | P3 |
+| S13 | Autoplay, radio | SP context-resolve autoplay, radio-apollo, inspiredby-mix | live_verified (radio); source_verified (autoplay kontekst) | 3 | P5 |
+| S14 | Preload, gapless | LS preload + mpv most brez prekinitve | live_verified | 8 | P2 |
+| S15 | Kakovost, normalizacija | LS PlayerConfig (96/160/320, normalizacija) | source_verified | 8, 9 | P2 |
+| S16 | EQ, boost, speed, pitch, izhod | AP mpv filtri na PCM mostu | live_verified (filtri sprejeti); open (slušni R18) | 8 | P2 |
+| S17 | Medijske informacije | LS metadata, PF `getAlbum`/`getTrack` | live_verified (album) | 3 | P4 |
+| S18 | Resume, bookmarks | AP + vsebinska ura mostu | source_verified (ura) | 8 | P6 |
+| S19 | Iskanje vseh tipov | PF `searchDesktop` (+ `searchTracks` ... `searchAudiobooks`) | live_verified | 3 | P4 |
+| S20 | Filtri, strani | PF search type-specific queries z offset/limit | source_verified | 3 | P4 |
+| S21 | Album, izvajalec, related | PF `getAlbum`, `queryArtistOverview` (top 10, related 20, diskografija) | live_verified | 3 | P4 |
+| S22 | Like/Unlike (D17) | PF `addToLibrary`/`removeFromLibrary`, SP `collection/v2/contains` | live_verified; open (uradni klient R13) | 4 | P4 |
+| S23 | Shranjeni albumi, izvajalci, oddaje | PF `libraryV3` | live_verified | 4 | P4 |
+| S24 | Follow/save vseh tipov | PF `addToLibrary`/`removeFromLibrary` (URI kateregakoli tipa) | source_verified | 4 | P4 |
+| S25 | Recently played, top | SP `recently-played/v3` (live_verified); top tracks/artists samo Web API | live_verified (recently); blocked (top prek Web API 429) | 3 | P5 |
+| S26 | Home / Made for you | PF `home` | live_verified | 6 | P5 |
+| S27 | Daily Mixes | PF `home` + SP playlist `format=daily-mix` | live_verified (6 mixov, vsebina) | 6 | P5 |
+| S28 | Discover Weekly, Release Radar, daylist ... | isto, format po formatu | live_verified | 6 | P5 |
+| S29 | Browse, kategorije | PF `browseAll` (`browseEndUserIntegration`) | live_verified | 3 | P5 |
+| S30 | Radio | SP radio-apollo, inspiredby-mix | live_verified | 3 | P5 |
+| S31 | Profili | SP user profile (LS `get_user_profile`) | source_verified | 3 | P5 |
+| S32 | Dislike / hide in undo | SP collection set `ban` (globalno), `artistban`, `ignoreinrecs` | live_verified (učinek potrjen v uradnem klientu, razveljavljen) | 7 | P4 |
+| S33 | Playlisti, mape | SP rootlist (mape `start-group`/`end-group`), playlist v2 capabilities | live_verified | 3, 4 | P4 |
+| S34 | Create | SP `POST /playlist/v2/playlist` + rootlist ADD | live_verified | 4 | P4 |
+| S35 | Rename, opis, vidnost, sodelovanje | SP playlist `changes` UPDATE_LIST_ATTRIBUTES, permission endpoints | source_verified | 4 | P4 |
+| S36 | Add (tudi dvojniki) | PF `addToPlaylist` | live_verified | 4 | P4 |
+| S37 | Remove točne occurrence | PF `removeFromPlaylist` po `uids` | live_verified | 4 | P4 |
+| S38 | Move, revision | PF `moveItemsInPlaylist` po `uids`; SP `baseRevision` | live_verified | 4 | P4 |
+| S39 | Follow/unfollow playlist | PF library mutations / SP rootlist | live_verified (rootlist add/remove) | 4 | P4 |
+| S40 | Cover, share link | PF `fetchPlaylist` images, `sharingInfo` | live_verified (branje) | 4 | P4 |
+| S41 | Sort, filter, mape | PF `libraryV3` sort/filter; AP lokalni sort | live_verified (ponujeni sorti) | 4 | P4 |
+| S42 | Spremembe s telefona | SP pubsub `hm://playlist/v2/playlist/` | source_verified | 4 | P4 |
+| S43 | Oddaje in epizode | PF `queryPodcastEpisodes`, search podcasts/episodes | live_verified (search) | 3 | P6 |
+| S44 | Audiobooks | PF `queryBookChapters`, metadata `is_audiobook` | source_verified; open (upravičenost) | 9 | P6 |
+| S45 | Lyrics | SP `color-lyrics/v2` (vrstice s časi) | live_verified | 3 | P6 |
+| S46 | Transcript, poglavja | SP `transcript-read-along/v2` | open | 9 | P6 |
+| S47 | Cover, credits, explicit | PF `getAlbum` (copyright, coverArt), LS metadata | live_verified | 3 | P4 |
+| S48 | Preview | LS `get_audio_preview` | source_verified | 1 | P6 |
+| S49 | Lokalne datoteke | LS local_file_directories; Connect jih zavrne | source_verified (omejitev) | 9 | P6 |
+| S50 | URI, open.spotify.com URL | AP parser | open | - | P1 |
+| S51 | Favorites, zgodovina, mešani playlisti | AP | open | - | P6 |
+| S52 | Background player, tray, media keys | AP | open | - | P2 |
+| S53 | Cache, offline, čiščenje | LS Cache (limit), AP ločitev credentials | source_verified | 1 | P6 |
+| S54 | Diagnostika brez skrivnosti | AP (redakcija kot v evidenci P0) | source_verified (orodje) | uvod | P6 |
+| S55 | Tipkovnica, NVDA, meniji, lokalizacija | AP | open | - | P1-P7 |
+
+## Meje (razdelek 3.5 plana)
+
+Offline prenos: `service_unsupported` (cache ni prenos). Lossless:
+`service_unsupported` v LibreSpot 0.8.0. Crossfade: ni v knjižnici, potrebna
+odločitev. Canvas: podatki obstajajo, brez vsebine za bralnik zaslona. Smart
+Shuffle: pathfinder query obstaja, ni preizkušeno. DJ, Jam, private session,
+Wrapped: `open`, brez znanega vmesnika v P0.
