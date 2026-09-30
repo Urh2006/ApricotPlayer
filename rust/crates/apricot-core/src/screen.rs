@@ -154,6 +154,13 @@ pub const SCREENS: &[ScreenDefinition] = &[
     ),
     page!("audiovault_results", "audiovault", AudiovaultResults, List),
     page!("audiovault_episodes", "episode", AudiovaultEpisodes, List),
+    page!("spotify_hub", "spotify", SpotifyHub, List),
+    page!(
+        "spotify_accounts",
+        "spotify_accounts",
+        SpotifyAccounts,
+        List
+    ),
     page!("download_queue", "current_downloads", DownloadQueue, List),
     dialog!("playback_queue", "playback_queue", PlaybackQueue, List),
     page!("settings", "settings", Settings, List),
@@ -162,6 +169,7 @@ pub const SCREENS: &[ScreenDefinition] = &[
     native_dialog!("missing_audio_device", "audio_device_missing", Choice),
     dialog!("action_finder", "action_finder", Edit),
     dialog!("audiovault_login", "audiovault_login", Edit),
+    dialog!("spotify_login", "spotify_login", ReadOnlyText),
     dialog!("file_converter", "file_converter", Edit),
     dialog!("folder_converter", "folder_converter", Edit),
     dialog!("equalizer", "equalizer", SliderGroup),
@@ -213,7 +221,7 @@ mod tests {
     #[test]
     fn screen_ids_are_unique_and_every_route_has_one_screen() {
         let ids: HashSet<_> = SCREENS.iter().map(|screen| screen.id).collect();
-        assert_eq!(SCREENS.len(), 63);
+        assert_eq!(SCREENS.len(), 66);
         assert_eq!(ids.len(), SCREENS.len());
 
         let mut route_counts = HashMap::new();

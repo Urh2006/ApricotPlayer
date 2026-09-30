@@ -6,7 +6,9 @@ Baseline: the exact `main` commit and Python release that exist when the user
 says `zacnimo`. At the time this plan was written, that baseline is 1.0.21.
 
 Scope: a complete rewrite of ApricotPlayer-owned application code in Rust with
-no intentional feature loss. Spotify is explicitly outside this plan. macOS
+no intentional feature loss. Spotify is not part of this parity plan; it is a
+separate, user-approved scope in `SPOTIFY_PLAN.md` and `SPOTIFY_PARITY_MANIFEST.md`
+(30. 9. 2026) and does not reduce this plan's gate. macOS
 implementation starts only after the Windows Rust edition reaches the parity
 gate described below.
 

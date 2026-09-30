@@ -13,8 +13,9 @@ pub mod screen;
 pub mod setting;
 pub mod settings_layout;
 pub mod shortcut;
+pub mod spotify;
 
-pub use action::{ActionDefinition, ActionId, ActionScope, RepeatPolicy};
+pub use action::{ActionDefinition, ActionId, ActionScope, PYTHON_BASELINE_ACTIONS, RepeatPolicy};
 pub use announcement::{
     AnnouncementBroker, AnnouncementPriority, AnnouncementRequest, GenerationToken,
 };
@@ -29,4 +30,7 @@ pub use screen::{PrimaryControlRole, SCREENS, ScreenDefinition, ScreenKind};
 pub use setting::SettingId;
 pub use settings_layout::{
     INTERNAL_SETTINGS, SETTINGS_SECTIONS, SettingsSection, SettingsSectionDefinition,
+};
+pub use spotify::{
+    CapabilityState, SpotifyCapability, SpotifyEntityKind, SpotifyEpochs, SpotifyRef, SpotifyStamp,
 };

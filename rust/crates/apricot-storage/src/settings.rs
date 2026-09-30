@@ -655,7 +655,10 @@ mod tests {
         assert_eq!(document.audio_quality, "320");
         assert_eq!(document.replaygain_mode, "track");
         assert!((document.global_equalizer_gains["31"] - 24.0).abs() < f64::EPSILON);
-        assert_eq!(document.keyboard_shortcuts.len(), 91);
+        assert_eq!(
+            document.keyboard_shortcuts.len(),
+            apricot_core::action::ACTIONS.len()
+        );
         assert_eq!(document.keyboard_shortcuts["open_search"], "Ctrl+F");
         assert_eq!(document.main_menu_hidden_actions, ["search"]);
     }

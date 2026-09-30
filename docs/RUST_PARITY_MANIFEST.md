@@ -16,7 +16,8 @@ An item is complete only when implementation, automated evidence where
 practical, and keyboard/NVDA behavior all pass. A parent checkbox cannot be
 closed while a child behavior is missing.
 
-Spotify is intentionally not part of this manifest.
+Spotify is not part of this Python parity manifest; its separate requirements
+and evidence are in `SPOTIFY_PARITY_MANIFEST.md`.
 
 ## Baseline cardinalities
 

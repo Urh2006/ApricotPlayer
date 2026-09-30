@@ -9,6 +9,7 @@ publish.workspace = true
 apricot-core.workspace = true
 apricot-media.workspace = true
 apricot-playback.workspace = true
+apricot-spotify.workspace = true
 apricot-storage.workspace = true
 chrono.workspace = true
 encoding_rs.workspace = true

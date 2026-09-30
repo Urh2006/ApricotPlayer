@@ -56,6 +56,11 @@ pub enum ContextCommand {
     /// A player action routed through the shortcut dispatcher.
     PlayerAction(&'static str),
     ClosePlayer,
+    /// Spotify account list (`docs/SPOTIFY_PLAN.md` 9.1).
+    SpotifyUseAccount,
+    SpotifyLogIn,
+    SpotifyLogOut,
+    SpotifyRemoveAccount,
 }
 
 /// One row of a context menu.
@@ -330,6 +335,33 @@ pub fn audiovault_results_context_menu(
         context.shortcut("download_audio", ContextCommand::DownloadAudio)
     };
     vec![context.command("open", ContextCommand::Play), download]
+}
+
+/// The Spotify account list: the selected account, or the Add account row
+/// (`account` is `None`) with only the login.
+pub fn spotify_accounts_context_menu(
+    context: &ContextMenuContext<'_>,
+    account: Option<(bool, bool)>,
+) -> Vec<ContextMenuEntry> {
+    use ContextCommand as C;
+    let Some((logged_in, active)) = account else {
+        return vec![context.command("spotify_log_in", C::SpotifyLogIn)];
+    };
+    let mut entries = Vec::new();
+    if logged_in && !active {
+        entries.push(context.command("spotify_use_account", C::SpotifyUseAccount));
+    }
+    if logged_in {
+        entries.push(context.command("spotify_log_out", C::SpotifyLogOut));
+    } else {
+        entries.push(context.command("spotify_log_in_again", C::SpotifyLogIn));
+    }
+    entries.push(context.command_with_shortcut(
+        "spotify_remove_account",
+        "remove_selected",
+        C::SpotifyRemoveAccount,
+    ));
+    entries
 }
 
 /// Python `open_context_menu` for search results, trending, channel and

@@ -106,7 +106,21 @@ mod tests {
     #[test]
     fn all_registry_labels_exist_in_the_english_locale() {
         let locales = python_locales_directory();
-        let english = read_locale(&locales, "en").expect("English locale");
+        let mut english = read_locale(&locales, "en").expect("English locale");
+        // Texts only the Rust port needs (Spotify, ...) live beside the app.
+        let rust_only: std::collections::BTreeMap<
+            String,
+            std::collections::BTreeMap<String, String>,
+        > = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../apricot-app/locales/rust_strings.json"
+        )))
+        .expect("Rust-only strings");
+        for (key, texts) in rust_only {
+            if let Some(text) = texts.get("en") {
+                english.entry(key).or_insert_with(|| text.clone());
+            }
+        }
         let mut missing = Vec::new();
 
         for action in ACTIONS {

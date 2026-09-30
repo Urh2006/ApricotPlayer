@@ -31,6 +31,11 @@ pub const CUSTOMIZABLE_MAIN_MENU: &[MainMenuDefinition] = &[
         action_id: "audiovault",
         label_key: "audiovault",
     },
+    // Spotify (`docs/SPOTIFY_PLAN.md` D01, 4.1): not in Python 1.0.21.
+    MainMenuDefinition {
+        action_id: "spotify",
+        label_key: "spotify",
+    },
     MainMenuDefinition {
         action_id: "play_folder",
         label_key: "play_folder",
@@ -99,7 +104,8 @@ mod tests {
             .iter()
             .map(|item| item.action_id)
             .collect();
-        assert_eq!(CUSTOMIZABLE_MAIN_MENU.len(), 19);
+        // 19 Python items plus Spotify.
+        assert_eq!(CUSTOMIZABLE_MAIN_MENU.len(), 20);
         assert_eq!(ids.len(), CUSTOMIZABLE_MAIN_MENU.len());
     }
 

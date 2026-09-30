@@ -56,6 +56,7 @@ mod settings_win32;
 mod shortcut_win32;
 #[cfg(windows)]
 mod sound_win32;
+mod spotify_login_win32;
 #[cfg(windows)]
 mod update_win32;
 #[cfg(windows)]

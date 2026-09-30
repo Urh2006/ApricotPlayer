@@ -1,0 +1,28 @@
+[package]
+name = "apricot-spotify"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Spotify accounts, login and session runtime (LibreSpot 0.8.0)"
+
+[dependencies]
+apricot-core.workspace = true
+apricot-platform.workspace = true
+apricot-storage.workspace = true
+librespot-core = { version = "=0.8.0", default-features = false, features = ["rustls-tls-native-roots"] }
+librespot-protocol = "=0.8.0"
+rand.workspace = true
+reqwest = { workspace = true, features = ["form"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

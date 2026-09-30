@@ -1573,7 +1573,8 @@ mod tests {
         let settings = SettingsDocument::default();
         let expected = [
             (SettingsSection::General, 18),
-            (SettingsSection::MainMenu, 20),
+            // 19 Python items, Spotify and the reset button.
+            (SettingsSection::MainMenu, 21),
             (SettingsSection::Playback, 35),
             (SettingsSection::Equalizer, 3),
             (SettingsSection::Downloads, 23),
@@ -1658,7 +1659,7 @@ mod tests {
         );
         assert!(matches!(
             &model.controls[0],
-            SettingsControl::ShortcutActionList { actions, .. } if actions.len() == 91
+            SettingsControl::ShortcutActionList { actions, .. } if actions.len() == super::ACTIONS.len()
         ));
         assert!(matches!(
             &model.controls[1],

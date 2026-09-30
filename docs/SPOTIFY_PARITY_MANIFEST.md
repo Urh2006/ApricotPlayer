@@ -11,9 +11,9 @@ pathfinder GraphQL, **AP** = Apricot sama. Faza pove, kdaj se implementira.
 
 | ID | Funkcija | Adapter in metoda | Status P0 | Dokaz | Faza |
 | --- | --- | --- | --- | --- | --- |
-| S01 | Prijava, refresh, ponovna prijava, odjava | LS oauth PKCE + reusable credentials; discovery kot alternativa | live_verified (prijava, ponovni zagon); open (preklic, odjava) | 2 | P1 |
-| S02 | Več računov in izolacija | AP (ločen cache in credentials po računu) | open | - | P1 |
-| S03 | Premium, market, explicit | LS user attributes (`type`, `country`, `filter-explicit-content`) | live_verified | 2 | P1 |
+| S01 | Prijava, refresh, ponovna prijava, odjava | AP PKCE (`apricot-spotify` `oauth.rs`) z LibreSpotovim client ID + LS reusable credentials; discovery kot alternativa | implemented (PKCE prijava v brskalniku s preklicem, rokom, napačnim callbackom in ponovnim poskusom; odjava; zavrnjena prijava se pozabi); open (R01 z NVDA in pravim računom) | 2 | P1 |
+| S02 | Več računov in izolacija | AP (ločen cache in credentials po računu) | implemented (seznam računov, izbira aktivnega šele po uspešni povezavi, odjava, odstranitev z mapo računa, DPAPI poverilnice); open (R03 z dvema pravima računoma) | - | P1 |
+| S03 | Premium, market, explicit | LS user attributes (`type`, `country`, `filter-explicit-content`) | implemented (Premium ali Free v vrstici računa); ostalo v P2 | 2 | P1 |
 | S04 | Predvajanje, pavza, stop, seek | LS Player + mpv most | live_verified | 8 | P2 |
 | S05 | Next/previous, EOF | LS Spirc | source_verified | 5 | P3 |
 | S06 | Celoten kontekst | LS Spirc `LoadRequest::from_context_uri`, SP context-resolve | live_verified (branje konteksta) | 4, 6 | P3 |
@@ -60,12 +60,12 @@ pathfinder GraphQL, **AP** = Apricot sama. Faza pove, kdaj se implementira.
 | S47 | Cover, credits, explicit | PF `getAlbum` (copyright, coverArt), LS metadata | live_verified | 3 | P4 |
 | S48 | Preview | LS `get_audio_preview` | source_verified | 1 | P6 |
 | S49 | Lokalne datoteke | LS local_file_directories; Connect jih zavrne | source_verified (omejitev) | 9 | P6 |
-| S50 | URI, open.spotify.com URL | AP parser | open | - | P1 |
+| S50 | URI, open.spotify.com URL | AP parser | implemented (tip `SpotifyRef`: `spotify:` URI in `open.spotify.com` povezave); open (Direct link in odložišče v P6, short link) | - | P1 |
 | S51 | Favorites, zgodovina, mešani playlisti | AP | open | - | P6 |
 | S52 | Background player, tray, media keys | AP | open | - | P2 |
 | S53 | Cache, offline, čiščenje | LS Cache (limit), AP ločitev credentials | source_verified | 1 | P6 |
 | S54 | Diagnostika brez skrivnosti | AP (redakcija kot v evidenci P0) | source_verified (orodje) | uvod | P6 |
-| S55 | Tipkovnica, NVDA, meniji, lokalizacija | AP | open | - | P1-P7 |
+| S55 | Tipkovnica, NVDA, meniji, lokalizacija | AP | implemented za hub, račune in prijavo (dve dejanji z bližnjicama, kontekstni meni, Action Finder, 27 jezikov); ostalo po fazah | - | P1-P7 |
 
 ## Meje (razdelek 3.5 plana)
 
@@ -74,3 +74,11 @@ Offline prenos: `service_unsupported` (cache ni prenos). Lossless:
 odločitev. Canvas: podatki obstajajo, brez vsebine za bralnik zaslona. Smart
 Shuffle: pathfinder query obstaja, ni preizkušeno. DJ, Jam, private session,
 Wrapped: `open`, brez znanega vmesnika v P0.
+
+## Odločitve med izvedbo
+
+| ID | Datum | Odločitev |
+| --- | --- | --- |
+| SD-1 | 30. 9. 2026 | Urh je izbral možnost a: potrjeno Connect stanje (vrsta z `uid` in `queue_revision`) izpostavi ozek lokalni popravek `librespot-connect` prek `[patch.crates-io]`, hkrati se pripravi upstream predlog. Izvedba v P3. |
+| SD-2 | 30. 9. 2026 | `MediaSource::Spotify` se doda v P2 skupaj s prvim predvajanjem; P1 uvede samo trajno referenco `SpotifyRef`, da se Python podatki ne spremenijo brez potrebe. |
+| SD-3 | 30. 9. 2026 | Hub prikazuje samo delujoče vnose (P1: Prijava, Spotify računi); vsaka faza doda svoje vnose, brez neaktivnih vrstic. |

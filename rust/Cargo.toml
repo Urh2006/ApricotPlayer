@@ -8,6 +8,7 @@ members = [
     "crates/apricot-media",
     "crates/apricot-platform",
     "crates/apricot-playback",
+    "crates/apricot-spotify",
     "crates/apricot-storage",
     "crates/apricot-test-support",
     "crates/apricot-ui-windows",
@@ -30,6 +31,7 @@ apricot-core = { path = "crates/apricot-core" }
 apricot-media = { path = "crates/apricot-media" }
 apricot-platform = { path = "crates/apricot-platform" }
 apricot-playback = { path = "crates/apricot-playback" }
+apricot-spotify = { path = "crates/apricot-spotify" }
 apricot-storage = { path = "crates/apricot-storage" }
 apricot-test-support = { path = "crates/apricot-test-support" }
 apricot-ui-windows = { path = "crates/apricot-ui-windows" }

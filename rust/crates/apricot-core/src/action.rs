@@ -172,7 +172,14 @@ pub const ACTIONS: &[ActionDefinition] = &[
     action!("player_seek_end", "Ctrl+End", PLAYER),
     action!("player_volume_up", "Up", PLAYER, Native),
     action!("player_volume_down", "Down", PLAYER, Native),
+    // Spotify (`docs/SPOTIFY_PLAN.md` 5.2). Not in Python 1.0.21; the first
+    // `PYTHON_BASELINE_ACTIONS` entries stay the Python catalog.
+    action!("open_spotify", "Ctrl+Alt+C", GLOBAL),
+    action!("spotify_accounts", "Ctrl+Alt+Shift+C", GLOBAL),
 ];
+
+/// Number of leading [`ACTIONS`] that mirror the Python 1.0.21 catalog.
+pub const PYTHON_BASELINE_ACTIONS: usize = 91;
 
 pub fn action_by_id(id: &str) -> Option<&'static ActionDefinition> {
     ACTIONS
@@ -184,13 +191,19 @@ pub fn action_by_id(id: &str) -> Option<&'static ActionDefinition> {
 mod tests {
     use std::collections::HashSet;
 
-    use super::{ACTIONS, ActionScope, RepeatPolicy, action_by_id};
+    use super::{ACTIONS, ActionScope, PYTHON_BASELINE_ACTIONS, RepeatPolicy, action_by_id};
 
     #[test]
     fn baseline_contains_91_unique_actions() {
         let ids: HashSet<_> = ACTIONS.iter().map(|action| action.id.as_str()).collect();
-        assert_eq!(ACTIONS.len(), 91);
+        assert_eq!(PYTHON_BASELINE_ACTIONS, 91);
+        assert_eq!(ACTIONS.len(), PYTHON_BASELINE_ACTIONS + 2);
         assert_eq!(ids.len(), ACTIONS.len());
+        assert!(
+            ACTIONS[PYTHON_BASELINE_ACTIONS..]
+                .iter()
+                .all(|action| action.id.as_str().contains("spotify"))
+        );
     }
 
     #[test]

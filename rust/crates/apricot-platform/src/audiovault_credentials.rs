@@ -17,7 +17,22 @@ pub fn protect_password(password: &str) -> Result<String, String> {
     if password.is_empty() {
         return Ok(String::new());
     }
-    protect(password.as_bytes()).map(|blob| crate::browser_cookies::base64_encode(&blob))
+    protect_data(password.as_bytes(), ENTROPY, "ApricotPlayer AudioVault")
+}
+
+/// Protects any data for the current Windows user with DPAPI and an
+/// application-specific entropy; returns base64 of the blob.
+///
+/// # Errors
+///
+/// Returns the Windows error when DPAPI refuses the data.
+pub fn protect_data(data: &[u8], entropy: &[u8], description: &str) -> Result<String, String> {
+    protect(data, entropy, description).map(|blob| crate::browser_cookies::base64_encode(&blob))
+}
+
+/// Reverses [`protect_data`]; `None` for anything that does not decrypt.
+pub fn unprotect_data(value: &str, entropy: &[u8]) -> Option<Vec<u8>> {
+    unprotect(&base64_decode(value)?, entropy)
 }
 
 /// Python `unprotect_audiovault_password`: an empty text for anything that
@@ -29,7 +44,7 @@ pub fn unprotect_password(value: &str) -> String {
     let Some(encrypted) = base64_decode(value) else {
         return String::new();
     };
-    unprotect(&encrypted)
+    unprotect(&encrypted, ENTROPY)
         .and_then(|data| String::from_utf8(data).ok())
         .unwrap_or_default()
 }
@@ -71,23 +86,24 @@ fn base64_decode(value: &str) -> Option<Vec<u8>> {
 }
 
 #[cfg(windows)]
-fn protect(data: &[u8]) -> Result<Vec<u8>, String> {
+fn protect(data: &[u8], entropy: &[u8], description: &str) -> Result<Vec<u8>, String> {
     use windows::{
         Win32::{
             Foundation::{HLOCAL, LocalFree},
             Security::Cryptography::{CRYPT_INTEGER_BLOB, CryptProtectData},
         },
-        core::w,
+        core::PCWSTR,
     };
+    let description: Vec<u16> = description.encode_utf16().chain(Some(0)).collect();
     let input = blob(data);
-    let entropy = blob(ENTROPY);
+    let entropy = blob(entropy);
     let mut output = CRYPT_INTEGER_BLOB::default();
     // SAFETY: The input blobs point at live slices that DPAPI only reads, and
     // the output blob is freed with LocalFree after it has been copied.
     unsafe {
         CryptProtectData(
             &raw const input,
-            w!("ApricotPlayer AudioVault"),
+            PCWSTR(description.as_ptr()),
             Some(&raw const entropy),
             None,
             None,
@@ -102,13 +118,13 @@ fn protect(data: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(windows)]
-fn unprotect(data: &[u8]) -> Option<Vec<u8>> {
+fn unprotect(data: &[u8], entropy: &[u8]) -> Option<Vec<u8>> {
     use windows::Win32::{
         Foundation::{HLOCAL, LocalFree},
         Security::Cryptography::{CRYPT_INTEGER_BLOB, CryptUnprotectData},
     };
     let input = blob(data);
-    let entropy = blob(ENTROPY);
+    let entropy = blob(entropy);
     let mut output = CRYPT_INTEGER_BLOB::default();
     // SAFETY: As in `protect`.
     unsafe {
@@ -147,12 +163,12 @@ unsafe fn copy_blob(blob: &windows::Win32::Security::Cryptography::CRYPT_INTEGER
 }
 
 #[cfg(not(windows))]
-fn protect(_data: &[u8]) -> Result<Vec<u8>, String> {
+fn protect(_data: &[u8], _entropy: &[u8], _description: &str) -> Result<Vec<u8>, String> {
     Ok(Vec::new())
 }
 
 #[cfg(not(windows))]
-fn unprotect(_data: &[u8]) -> Option<Vec<u8>> {
+fn unprotect(_data: &[u8], _entropy: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
