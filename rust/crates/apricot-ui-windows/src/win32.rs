@@ -9909,14 +9909,15 @@ unsafe fn poll_playback_runtime(window: HWND) {
                     .control_id_for_window(GetFocus())
                     .is_some_and(|id| id == "play_pause")
                     || state.background_player.is_play_pause_button(GetFocus());
-                let quiet = !paused && std::mem::take(&mut state.quiet_next_resume);
-                set_status(
-                    state,
-                    &catalog_text(&state.application, key),
-                    state.application.settings().announce_play_pause
-                        && !focused_play_pause
-                        && !quiet,
-                );
+                // After a restart the status keeps "Playback restarted".
+                let restarted = !paused && std::mem::take(&mut state.quiet_next_resume);
+                if !restarted {
+                    set_status(
+                        state,
+                        &catalog_text(&state.application, key),
+                        state.application.settings().announce_play_pause && !focused_play_pause,
+                    );
+                }
                 refresh_player(window, state, false, true);
             }
             PlaybackEvent::Position { .. }
