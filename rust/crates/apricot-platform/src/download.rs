@@ -318,7 +318,7 @@ fn validate_options(options: &DownloadOptions) -> Result<(), DownloadError> {
 
 fn build_arguments(request: &DownloadRequest) -> Result<Vec<OsString>, DownloadError> {
     let options = &request.options;
-    let mut arguments = vec![
+    let mut arguments: Vec<OsString> = vec![
         "--ignore-config".into(),
         "--no-plugin-dirs".into(),
         "--newline".into(),
@@ -360,6 +360,7 @@ fn build_arguments(request: &DownloadRequest) -> Result<Vec<OsString>, DownloadE
             "--skip-unavailable-fragments".into(),
         ]);
     }
+    arguments.extend(crate::ytdlp_youtube::js_runtime_arguments());
     append_feature_arguments(&mut arguments, options);
     append_location_arguments(&mut arguments, options);
     append_mode_arguments(&mut arguments, request.mode, options);

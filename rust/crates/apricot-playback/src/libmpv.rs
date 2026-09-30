@@ -112,6 +112,7 @@ unsafe fn node_json(node: &Node, depth: usize, wanted: &[&str]) -> serde_json::V
 }
 const MPV_EVENT_SHUTDOWN: c_int = 1;
 const MPV_EVENT_LOG_MESSAGE: c_int = 2;
+const MPV_EVENT_START_FILE: c_int = 6;
 const MPV_EVENT_END_FILE: c_int = 7;
 const MPV_EVENT_FILE_LOADED: c_int = 8;
 const MPV_EVENT_PROPERTY_CHANGE: c_int = 22;
@@ -126,6 +127,7 @@ type TerminateDestroy = unsafe extern "C" fn(*mut MpvHandle);
 type SetOptionString = unsafe extern "C" fn(*mut MpvHandle, *const c_char, *const c_char) -> c_int;
 type Command = unsafe extern "C" fn(*mut MpvHandle, *const *const c_char) -> c_int;
 type ObserveProperty = unsafe extern "C" fn(*mut MpvHandle, u64, *const c_char, c_int) -> c_int;
+type GetProperty = unsafe extern "C" fn(*mut MpvHandle, *const c_char, c_int, *mut c_void) -> c_int;
 type WaitEvent = unsafe extern "C" fn(*mut MpvHandle, c_double) -> *const MpvEvent;
 type ErrorString = unsafe extern "C" fn(c_int) -> *const c_char;
 type RequestLogMessages = unsafe extern "C" fn(*mut MpvHandle, *const c_char) -> c_int;
@@ -158,6 +160,11 @@ struct MpvEventProperty {
 }
 
 #[repr(C)]
+struct MpvEventStartFile {
+    playlist_entry_id: i64,
+}
+
+#[repr(C)]
 struct MpvEventEndFile {
     reason: c_int,
     error: c_int,
@@ -174,6 +181,7 @@ struct MpvApi {
     set_option_string: SetOptionString,
     command: Command,
     observe_property: ObserveProperty,
+    get_property: GetProperty,
     wait_event: WaitEvent,
     error_string: ErrorString,
     request_log_messages: RequestLogMessages,
@@ -205,6 +213,9 @@ impl MpvApi {
         let observe_property = *library
             .get::<ObserveProperty>(b"mpv_observe_property\0")
             .map_err(|error| symbol_error(&error))?;
+        let get_property = *library
+            .get::<GetProperty>(b"mpv_get_property\0")
+            .map_err(|error| symbol_error(&error))?;
         let wait_event = *library
             .get::<WaitEvent>(b"mpv_wait_event\0")
             .map_err(|error| symbol_error(&error))?;
@@ -222,6 +233,7 @@ impl MpvApi {
             set_option_string,
             command,
             observe_property,
+            get_property,
             wait_event,
             error_string,
             request_log_messages,
@@ -281,6 +293,30 @@ impl MpvApi {
         )
     }
 
+    unsafe fn property_i64(&self, handle: *mut MpvHandle, property: &str) -> Option<i64> {
+        let property = c_string(property, "libmpv property name").ok()?;
+        let mut value: i64 = 0;
+        let status = (self.get_property)(
+            handle,
+            property.as_ptr(),
+            MPV_FORMAT_INT64,
+            (&raw mut value).cast(),
+        );
+        (status >= 0).then_some(value)
+    }
+
+    unsafe fn property_flag(&self, handle: *mut MpvHandle, property: &str) -> Option<bool> {
+        let property = c_string(property, "libmpv property name").ok()?;
+        let mut value: c_int = 0;
+        let status = (self.get_property)(
+            handle,
+            property.as_ptr(),
+            MPV_FORMAT_FLAG,
+            (&raw mut value).cast(),
+        );
+        (status >= 0).then_some(value != 0)
+    }
+
     unsafe fn observe(
         &self,
         handle: *mut MpvHandle,
@@ -316,6 +352,13 @@ pub struct LibMpvEngine {
     /// Python `mpv.log`: rewritten for every started item.
     log_path: Option<PathBuf>,
     log: Option<File>,
+    /// Playlist entry of the latest `loadfile`. libmpv may still hold events of
+    /// the replaced file; they must not be reported as the new item's events.
+    expected_entry: Option<i64>,
+    current_entry: Option<i64>,
+    /// With `keep-open=yes` mpv pauses at the end instead of ending the file,
+    /// so the end is reported once from `eof-reached` (Python `player_monitor_worker`).
+    ended_reported: bool,
 }
 
 impl LibMpvEngine {
@@ -375,6 +418,9 @@ impl LibMpvEngine {
             shutdown_reported: false,
             log_path: options.log_file.clone(),
             log: None,
+            expected_entry: None,
+            current_entry: None,
+            ended_reported: false,
         })
     }
 
@@ -394,6 +440,16 @@ impl LibMpvEngine {
                 self.write_log_message((*event).data);
                 Ok(None)
             }
+            MPV_EVENT_START_FILE => {
+                let data = (*event).data;
+                if !data.is_null() {
+                    self.current_entry =
+                        Some((*data.cast::<MpvEventStartFile>()).playlist_entry_id);
+                    self.ended_reported = false;
+                }
+                Ok(None)
+            }
+            MPV_EVENT_FILE_LOADED if self.stale() => Ok(None),
             MPV_EVENT_FILE_LOADED => Ok(Some(PlaybackEvent::Started)),
             MPV_EVENT_END_FILE => self.project_end_file((*event).data),
             MPV_EVENT_PROPERTY_CHANGE => self.project_property((*event).data),
@@ -437,6 +493,12 @@ impl LibMpvEngine {
             .and_then(|path| File::create(path).ok());
     }
 
+    /// True while libmpv still reports events of a replaced file.
+    fn stale(&self) -> bool {
+        self.expected_entry
+            .is_some_and(|expected| self.current_entry != Some(expected))
+    }
+
     unsafe fn project_end_file(
         &self,
         data: *mut c_void,
@@ -447,7 +509,14 @@ impl LibMpvEngine {
             ));
         }
         let end = &*data.cast::<MpvEventEndFile>();
+        if self
+            .expected_entry
+            .is_some_and(|expected| expected != end.playlist_entry_id)
+        {
+            return Ok(None);
+        }
         match end.reason {
+            MPV_END_FILE_REASON_EOF if self.ended_reported => Ok(None),
             MPV_END_FILE_REASON_EOF => Ok(Some(PlaybackEvent::Ended)),
             MPV_END_FILE_REASON_ERROR => Ok(Some(PlaybackEvent::Failed(format!(
                 "libmpv playback failed: {}",
@@ -471,7 +540,11 @@ impl LibMpvEngine {
         {
             return Ok(None);
         }
-        match CStr::from_ptr(property.name).to_bytes() {
+        let name = CStr::from_ptr(property.name).to_bytes();
+        if self.stale() && !matches!(name, b"pause" | b"audio-device-list") {
+            return Ok(None);
+        }
+        match name {
             b"chapter-list" if property.format == MPV_FORMAT_NODE => {
                 self.media_info.chapters =
                     node_json(&*property.data.cast::<Node>(), 0, &["time", "title"])
@@ -488,7 +561,29 @@ impl LibMpvEngine {
             }
             b"pause" if property.format == MPV_FORMAT_FLAG => {
                 let paused = *property.data.cast::<c_int>() != 0;
+                // The pause mpv applies at the end is the end, not a user pause.
+                if paused
+                    && !self.stale()
+                    && self.api.property_flag(self.handle(), "eof-reached") == Some(true)
+                {
+                    return Ok(self.report_end());
+                }
                 Ok(Some(PlaybackEvent::Paused(paused)))
+            }
+            b"eof-reached" if property.format == MPV_FORMAT_FLAG => {
+                // mpv sets eof-reached when decoding ends, while the audio output
+                // still plays its buffer. The end is the pause mpv applies after
+                // that, or eof-reached arriving while the player is already paused.
+                if *property.data.cast::<c_int>() != 0 {
+                    if self.api.property_flag(self.handle(), "pause") == Some(true) {
+                        Ok(self.report_end())
+                    } else {
+                        Ok(None)
+                    }
+                } else {
+                    self.ended_reported = false;
+                    Ok(None)
+                }
             }
             b"time-pos" if property.format == MPV_FORMAT_DOUBLE => {
                 self.elapsed = (*property.data.cast::<f64>()).max(0.0);
@@ -538,6 +633,14 @@ impl LibMpvEngine {
             }
             _ => Ok(None),
         }
+    }
+
+    fn report_end(&mut self) -> Option<PlaybackEvent> {
+        if self.ended_reported {
+            return None;
+        }
+        self.ended_reported = true;
+        Some(PlaybackEvent::Ended)
     }
 
     fn position_event(&self) -> PlaybackEvent {
@@ -644,8 +747,17 @@ impl PlaybackEngine for LibMpvEngine {
             self.media_info = PlaybackMediaInfo::default();
             self.restart_log();
         }
+        let load = matches!(&command, PlaybackCommand::Load { .. });
         let arguments = command_arguments(command)?;
-        unsafe { self.api.run_command(self.handle(), &arguments) }
+        unsafe {
+            self.api.run_command(self.handle(), &arguments)?;
+            if load {
+                // `loadfile replace` leaves only the new entry in the playlist.
+                self.expected_entry = self.api.property_i64(self.handle(), "playlist/0/id");
+                self.ended_reported = false;
+            }
+        }
+        Ok(())
     }
 
     fn poll_event(&mut self) -> Result<Option<PlaybackEvent>, PlaybackError> {
@@ -820,6 +932,7 @@ unsafe fn subscribe(api: &MpvApi, handle: *mut MpvHandle) -> Result<(), Playback
         (12, "audio-params/hr-channels", MPV_FORMAT_STRING),
         (13, "chapter-list", MPV_FORMAT_NODE),
         (14, "audio-device-list", MPV_FORMAT_NODE),
+        (15, "eof-reached", MPV_FORMAT_FLAG),
     ] {
         api.observe(handle, id, name, format)?;
     }
@@ -1545,5 +1658,175 @@ mod tests {
                 "http-header-fields=%16%Cookie: a=1; b=2",
             ]
         );
+    }
+
+    fn short_fixture(folder: &Path) -> MediaItem {
+        use std::os::windows::process::CommandExt;
+        let wav = folder.join("short.wav");
+        let mut command =
+            std::process::Command::new(std::env::var_os("APRICOT_TEST_FFMPEG").expect("FFmpeg"));
+        command.creation_flags(0x0800_0000);
+        command
+            .args([
+                "-nostdin",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=44100:cl=stereo",
+                "-t",
+                "1",
+            ])
+            .arg(&wav);
+        assert!(command.status().expect("FFmpeg fixture").success());
+        MediaItem {
+            id: MediaId("short-fixture".to_owned()),
+            source: MediaSource::Local,
+            kind: MediaKind::Audio,
+            title: "Short fixture".to_owned(),
+            local_path: Some(wav.to_string_lossy().into_owned()),
+            url: None,
+            stream_url: None,
+            external_audio_url: None,
+            channel: String::new(),
+            duration_seconds: None,
+            metadata: BTreeMap::new(),
+        }
+    }
+
+    fn short_engine(paused: bool) -> super::LibMpvEngine {
+        let mut options = MpvLaunchOptions::new(std::path::PathBuf::from(
+            std::env::var_os("APRICOT_TEST_MPV").expect("mpv path"),
+        ));
+        options.audio_driver = Some("null".to_owned());
+        options.video_mode = crate::MpvVideoMode::AudioOnly;
+        if paused {
+            options.initial_playback_state = crate::InitialPlaybackState::Paused;
+        }
+        super::LibMpvEngine::load(&options).expect("load real library")
+    }
+
+    fn collect_events(
+        engine: &mut super::LibMpvEngine,
+        duration: std::time::Duration,
+    ) -> Vec<crate::PlaybackEvent> {
+        use crate::{PlaybackEngine, PlaybackEvent};
+        let deadline = std::time::Instant::now() + duration;
+        let mut events = Vec::new();
+        while std::time::Instant::now() < deadline {
+            match engine.poll_event().expect("poll real library") {
+                Some(
+                    PlaybackEvent::MediaInfo(_)
+                    | PlaybackEvent::AudioDevices(_)
+                    | PlaybackEvent::Position { .. },
+                ) => {}
+                Some(event) => events.push(event),
+                None => std::thread::sleep(std::time::Duration::from_millis(5)),
+            }
+        }
+        events
+    }
+
+    /// With `keep-open=yes` mpv only pauses at the end; the engine must report
+    /// the end once (Python `player_monitor_worker` polls `eof-reached`).
+    #[test]
+    #[ignore = "requires APRICOT_TEST_MPV and APRICOT_TEST_FFMPEG"]
+    fn real_libmpv_reports_the_natural_end_once_instead_of_a_pause() {
+        use crate::{PlaybackEngine, PlaybackEvent};
+        let folder = tempfile::tempdir().expect("fixture folder");
+        let item = short_fixture(folder.path());
+        let mut engine = short_engine(false);
+        engine
+            .execute(PlaybackCommand::Load {
+                item: Box::new(item),
+                start_position_seconds: None,
+            })
+            .expect("load fixture");
+        let events = collect_events(&mut engine, std::time::Duration::from_millis(2500));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, PlaybackEvent::Ended))
+                .count(),
+            1,
+            "{events:?}"
+        );
+        assert!(!events.contains(&PlaybackEvent::Paused(true)), "{events:?}");
+        // Python `restart_current_playback`: seek to the start, then unpause.
+        engine
+            .execute(PlaybackCommand::SeekAbsolute {
+                seconds: 0.0,
+                exact: true,
+            })
+            .expect("seek to start");
+        engine
+            .execute(PlaybackCommand::SetPaused(false))
+            .expect("unpause");
+        let events = collect_events(&mut engine, std::time::Duration::from_millis(2500));
+        assert_eq!(
+            events,
+            vec![PlaybackEvent::Paused(false), PlaybackEvent::Ended],
+            "the restarted item plays to its end again"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires APRICOT_TEST_MPV and APRICOT_TEST_FFMPEG"]
+    fn real_libmpv_starting_paused_reports_the_pause_before_started() {
+        use crate::{PlaybackEngine, PlaybackEvent};
+        let folder = tempfile::tempdir().expect("fixture folder");
+        let item = short_fixture(folder.path());
+        let mut engine = short_engine(true);
+        engine
+            .execute(PlaybackCommand::Load {
+                item: Box::new(item),
+                start_position_seconds: None,
+            })
+            .expect("load fixture");
+        let events = collect_events(&mut engine, std::time::Duration::from_millis(1500));
+        assert_eq!(
+            events,
+            vec![PlaybackEvent::Paused(true), PlaybackEvent::Started]
+        );
+    }
+
+    #[test]
+    #[ignore = "requires APRICOT_TEST_MPV and APRICOT_TEST_FFMPEG"]
+    fn real_libmpv_does_not_report_the_failure_of_a_replaced_file() {
+        use crate::{PlaybackEngine, PlaybackEvent};
+        let folder = tempfile::tempdir().expect("fixture folder");
+        let item = short_fixture(folder.path());
+        let mut missing = item.clone();
+        missing.local_path = Some(
+            folder
+                .path()
+                .join("missing.wav")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let mut engine = short_engine(false);
+        engine
+            .execute(PlaybackCommand::Load {
+                item: Box::new(missing),
+                start_position_seconds: None,
+            })
+            .expect("load missing file");
+        // The failure of the missing file is queued but not read yet.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        engine
+            .execute(PlaybackCommand::Load {
+                item: Box::new(item),
+                start_position_seconds: None,
+            })
+            .expect("load fixture");
+        let events = collect_events(&mut engine, std::time::Duration::from_millis(1500));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, PlaybackEvent::Failed(_))),
+            "{events:?}"
+        );
+        assert!(events.contains(&PlaybackEvent::Started), "{events:?}");
     }
 }

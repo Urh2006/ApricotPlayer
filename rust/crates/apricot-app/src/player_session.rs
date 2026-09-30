@@ -16,6 +16,15 @@ pub enum PlaybackPhase {
     Failed,
 }
 
+/// Python `player_play_pause`: what Play/Pause does in the current state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlayAction {
+    Pause,
+    Resume,
+    /// Python `restart_current_playback`: seek to the start and play.
+    RestartFromStart,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SessionToggle {
     AutoplayNext,
@@ -79,6 +88,30 @@ impl PlayerSession {
 
     pub const fn phase(&self) -> PlaybackPhase {
         self.phase
+    }
+
+    /// Python `player_play_pause` and `player_should_restart_from_end`: at the
+    /// end the item starts again, unless the user moved back from the end.
+    pub fn play_action(&self) -> PlayAction {
+        match self.phase {
+            PlaybackPhase::Paused => PlayAction::Resume,
+            PlaybackPhase::Ended => {
+                let at_end = self
+                    .duration_seconds
+                    .is_none_or(|duration| self.position_seconds >= (duration - 0.35).max(0.0));
+                if at_end {
+                    PlayAction::RestartFromStart
+                } else {
+                    PlayAction::Resume
+                }
+            }
+            _ => PlayAction::Pause,
+        }
+    }
+
+    /// Python `player_paused`: the end counts as paused for the Play/Pause button.
+    pub const fn is_paused(&self) -> bool {
+        matches!(self.phase, PlaybackPhase::Paused | PlaybackPhase::Ended)
     }
 
     pub fn is_open(&self) -> bool {
@@ -226,6 +259,9 @@ impl PlayerSession {
             return false;
         }
         match event {
+            // A player started paused (Python `player_start_paused`) reports
+            // the pause before the file is loaded; loading does not unpause it.
+            PlaybackEvent::Started if self.phase == PlaybackPhase::Paused => {}
             PlaybackEvent::Started => self.phase = PlaybackPhase::Playing,
             PlaybackEvent::Paused(paused) => {
                 self.phase = if paused {
@@ -347,8 +383,8 @@ mod tests {
     use apricot_playback::{PlaybackEvent, PlaybackMediaInfo};
 
     use super::{
-        AudioSession, EqualizerSession, PlaybackPhase, PlayerSession, PlayerSessionDefaults,
-        SessionToggle,
+        AudioSession, EqualizerSession, PlayAction, PlaybackPhase, PlayerSession,
+        PlayerSessionDefaults, SessionToggle,
     };
 
     fn item(id: &str) -> apricot_core::MediaItem {
@@ -488,6 +524,50 @@ mod tests {
         assert_eq!(session.duration_seconds(), Some(90.0));
         assert!(session.apply_event(generation, PlaybackEvent::Paused(true)));
         assert_eq!(session.phase(), PlaybackPhase::Paused);
+    }
+
+    #[test]
+    fn a_player_started_paused_stays_paused_after_the_file_loads() {
+        let mut session = PlayerSession::default();
+        let mut paused_defaults = defaults();
+        paused_defaults.starts_paused = true;
+        let generation = session.start_item(item("track"), paused_defaults);
+        // libmpv order for `pause=yes`: the pause, then FILE_LOADED.
+        assert!(session.apply_event(generation, PlaybackEvent::Paused(true)));
+        assert!(session.apply_event(generation, PlaybackEvent::Started));
+        assert_eq!(session.phase(), PlaybackPhase::Paused);
+        assert_eq!(session.play_action(), PlayAction::Resume);
+
+        let generation = session.start_item(item("next"), defaults());
+        assert!(session.apply_event(generation, PlaybackEvent::Paused(false)));
+        assert!(session.apply_event(generation, PlaybackEvent::Started));
+        assert_eq!(session.phase(), PlaybackPhase::Playing);
+        assert_eq!(session.play_action(), PlayAction::Pause);
+    }
+
+    #[test]
+    fn play_at_the_end_restarts_unless_the_user_moved_back() {
+        let mut session = PlayerSession::default();
+        let generation = session.start_item(item("track"), defaults());
+        assert!(session.apply_event(generation, PlaybackEvent::Started));
+        assert!(session.apply_event(
+            generation,
+            PlaybackEvent::Position {
+                elapsed: 90.0,
+                duration: Some(90.0),
+            }
+        ));
+        assert!(session.apply_event(generation, PlaybackEvent::Ended));
+        assert!(session.is_paused());
+        assert_eq!(session.play_action(), PlayAction::RestartFromStart);
+        assert!(session.apply_event(
+            generation,
+            PlaybackEvent::Position {
+                elapsed: 30.0,
+                duration: Some(90.0),
+            }
+        ));
+        assert_eq!(session.play_action(), PlayAction::Resume);
     }
 
     #[test]

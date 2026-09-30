@@ -37,6 +37,9 @@ const ID_QUERY: usize = 1401;
 const ID_RESULTS: usize = 1402;
 const ID_OPEN: usize = 1403;
 const ID_CANCEL: usize = 1404;
+/// `IsDialogMessageW` turns Enter in the field or list into `IDOK` before the
+/// control subclass sees the key.
+const IDOK_COMMAND: usize = 1;
 
 struct ActionFinderState {
     model: ActionFinderModel,
@@ -146,6 +149,7 @@ unsafe extern "system" fn window_proc(
             {
                 refresh_results(window);
             } else if command == ID_OPEN
+                || command == IDOK_COMMAND
                 || (command == ID_RESULTS
                     && notification == usize::try_from(LBN_DBLCLK).expect("notification fits"))
             {

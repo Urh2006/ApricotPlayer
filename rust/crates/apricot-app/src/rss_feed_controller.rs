@@ -353,7 +353,8 @@ impl RssFeedController {
                 }
             }
         }
-        sort_feeds(&mut candidate);
+        // Python `refresh_rss_feeds_worker` replaces each feed in place, so an
+        // open feed keeps its position even when its title changed.
         self.commit(candidate)?;
         Ok(summary)
     }

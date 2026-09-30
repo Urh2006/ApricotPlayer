@@ -1516,3 +1516,27 @@ Zamenjava na Urhovem računalniku:
   `--qualification-smoke`.
 - Stara vgnezdena mapa `C:\Program Files\ApricotPlayer\ApricotPlayer` (Python iz maja,
   480 MB) je ostala, ker je ni ustvarila ta namestitev.
+
+### Preverba 26 GPT-jevih točk in 2.0.0-beta.2 (30. 9. 2026)
+
+Podrobnosti po točkah so v `docs/rust-audit/GPT_26_REVIEW.md`. Popravljene so točke 2 do
+19, 21 in 23 ter padajoči RSS test (Windows sprejeti socket podeduje neblokirajoč
+način). Pomembnejše spremembe:
+
+- libmpv engine opazuje `eof-reached`: premor, ki ga mpv s `keep-open=yes` nastavi na
+  koncu, se poroča kot en dogodek Ended; Play na koncu skoči na začetek in oglasi
+  `playback_restarted` (Python `restart_current_playback`); Started ne prekliče
+  začetnega premora; dogodki zamenjanega posnetka se zavržejo po `playlist/0/id`.
+- Runtime ob polnem kanalu (modalno okno) hrani pomembne dogodke v vrsti, zavrže le
+  položaje.
+- Položaj se shrani ob izhodu; Direct link gre za vsak http(s) naslov skozi yt-dlp,
+  sprejme RTSP, RTMP in MMS, element iz čakalne vrste se po fallbacku odstrani.
+- `IDOK`/`IDCANCEL` v Action Finderju in playback queue; polje za zajem bližnjice zajame
+  vse razen Tab in obide globalne bližnjice; alternative `A | B`, kanonični konflikti in
+  Shift+črka kot pisanje.
+- Višina videa 0 brez omejitve, izvoz izseka s HTTP glavami in pripono toka, playlisti in
+  kanali v zgodovini, `node\node.exe` v paketu z `--js-runtimes` in ponovni poskus s
+  klientom `web_safari`, RSS osvežitev na istem mestu.
+
+Odprto: točka 20 (predpomnilnik tokov in prefetch) kot nova enota; predlogi P-11 do P-15
+(točke 1, 22, 24, 25, 26) čakajo na Urha.

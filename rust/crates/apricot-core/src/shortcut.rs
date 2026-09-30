@@ -45,8 +45,21 @@ impl ShortcutChord {
         }
     }
 
+    /// Python `parse_shortcut`: the first alternative of `A | B`.
     pub fn parse(value: &str) -> Option<Self> {
-        let primary = value.split('|').next()?.trim().replace('-', "+");
+        Self::parse_single(value.split('|').next()?)
+    }
+
+    /// Python `event_matches_shortcut`: every alternative of `A | B` matches.
+    pub fn matches_configured(self, configured: &str) -> bool {
+        configured
+            .split('|')
+            .filter(|alternative| !alternative.trim().is_empty())
+            .any(|alternative| Self::parse_single(alternative) == Some(self))
+    }
+
+    fn parse_single(value: &str) -> Option<Self> {
+        let primary = value.trim().replace('-', "+");
         let mut control = false;
         let mut shift = false;
         let mut alt = false;
@@ -70,11 +83,18 @@ impl ShortcutChord {
         Some(Self::new(control, shift, alt, key))
     }
 
+    /// Python `shortcut_is_plain_printable`: a printable character, also with
+    /// Shift, is typing in a text field and never runs an action there.
     pub const fn is_plain_text_input(self) -> bool {
         !self.control
-            && !self.shift
             && !self.alt
-            && matches!(self.key, ShortcutKey::Character(_) | ShortcutKey::Space)
+            && match self.key {
+                ShortcutKey::Character(_)
+                | ShortcutKey::LeftBracket
+                | ShortcutKey::RightBracket => true,
+                ShortcutKey::Space => !self.shift,
+                _ => false,
+            }
     }
 }
 
@@ -119,7 +139,7 @@ fn resolve_pass(
         let configured = shortcuts
             .get(action.id.as_str())
             .map_or(action.default_windows_shortcut, String::as_str);
-        ShortcutChord::parse(configured) == Some(chord)
+        chord.matches_configured(configured)
     })
 }
 
@@ -203,6 +223,53 @@ mod tests {
         assert_eq!(
             ShortcutChord::parse("Ctrl+Shift+PageDown | F9"),
             Some(expected)
+        );
+    }
+
+    #[test]
+    fn every_alternative_of_an_imported_shortcut_runs_the_action() {
+        let shortcuts = BTreeMap::from([("open_search".to_owned(), "Ctrl+F8 | F9".to_owned())]);
+        for key in ["Ctrl+F8", "F9"] {
+            let action = action_for_shortcut(
+                &shortcuts,
+                ShortcutChord::parse(key).expect("chord"),
+                ShortcutContext::new(ActionScope::List, false),
+            )
+            .expect("action");
+            assert_eq!(action.id.as_str(), "open_search", "{key}");
+        }
+    }
+
+    #[test]
+    fn shifted_letters_are_typing_in_text_fields() {
+        let shortcuts = BTreeMap::from([("open_search".to_owned(), "Shift+Y".to_owned())]);
+        let chord = ShortcutChord::parse("Shift+Y").expect("chord");
+        assert!(chord.is_plain_text_input());
+        assert!(
+            action_for_shortcut(
+                &shortcuts,
+                chord,
+                ShortcutContext::new(ActionScope::List, true)
+            )
+            .is_none()
+        );
+        assert!(
+            action_for_shortcut(
+                &shortcuts,
+                chord,
+                ShortcutContext::new(ActionScope::List, false)
+            )
+            .is_some()
+        );
+        assert!(
+            !ShortcutChord::parse("Shift+Space")
+                .unwrap()
+                .is_plain_text_input()
+        );
+        assert!(
+            !ShortcutChord::parse("Ctrl+Y")
+                .unwrap()
+                .is_plain_text_input()
         );
     }
 

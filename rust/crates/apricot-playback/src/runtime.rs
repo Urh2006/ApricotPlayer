@@ -1,6 +1,8 @@
 //! Bounded worker that owns the blocking playback engine off the UI thread.
 
 use std::{
+    cell::RefCell,
+    collections::VecDeque,
     sync::mpsc::{
         Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError, sync_channel,
     },
@@ -21,6 +23,63 @@ const REQUEST_CAPACITY: usize = 32;
 const UPDATE_CAPACITY: usize = 128;
 const ACTIVE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const MAX_EVENTS_PER_TICK: usize = 32;
+/// Updates kept while the UI does not read the channel (a modal dialog).
+const MAX_BACKLOG: usize = 1024;
+
+/// The update channel plus a backlog for a full channel. Position updates may
+/// be dropped because the latest position is also published through
+/// [`PlaybackPositionReader`]; every other update (start, pause, end, failure)
+/// is kept in order until the UI reads the channel again.
+struct UpdateSink {
+    sender: SyncSender<PlaybackUpdate>,
+    backlog: RefCell<VecDeque<PlaybackUpdate>>,
+}
+
+impl UpdateSink {
+    fn new(sender: SyncSender<PlaybackUpdate>) -> Self {
+        Self {
+            sender,
+            backlog: RefCell::new(VecDeque::new()),
+        }
+    }
+
+    fn try_send(&self, update: PlaybackUpdate) {
+        self.flush();
+        let mut backlog = self.backlog.borrow_mut();
+        let update = if backlog.is_empty() {
+            match self.sender.try_send(update) {
+                Ok(()) | Err(TrySendError::Disconnected(_)) => return,
+                Err(TrySendError::Full(update)) => update,
+            }
+        } else {
+            update
+        };
+        if !matches!(update.event, PlaybackEvent::Position { .. }) && backlog.len() < MAX_BACKLOG {
+            backlog.push_back(update);
+        }
+    }
+
+    fn flush(&self) {
+        let mut backlog = self.backlog.borrow_mut();
+        while let Some(update) = backlog.pop_front() {
+            match self.sender.try_send(update) {
+                Ok(()) => {}
+                Err(TrySendError::Full(update)) => {
+                    backlog.push_front(update);
+                    break;
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    backlog.clear();
+                    break;
+                }
+            }
+        }
+    }
+
+    fn has_backlog(&self) -> bool {
+        !self.backlog.borrow().is_empty()
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct PlaybackPositionReader(Arc<Mutex<Option<(u64, f64)>>>);
@@ -211,7 +270,12 @@ impl PlaybackRuntime {
         let worker = thread::Builder::new()
             .name("apricot-playback-worker".to_owned())
             .spawn(move || {
-                playback_worker(&request_receiver, &update_sender, factory, &worker_position);
+                playback_worker(
+                    &request_receiver,
+                    &UpdateSink::new(update_sender),
+                    factory,
+                    &worker_position,
+                );
             })
             .map_err(|error| PlaybackRuntimeError::Spawn(error.to_string()))?;
         Ok(Self {
@@ -236,7 +300,7 @@ impl Drop for PlaybackRuntime {
 #[allow(clippy::too_many_lines)]
 fn playback_worker(
     requests: &Receiver<RuntimeRequest>,
-    updates: &SyncSender<PlaybackUpdate>,
+    updates: &UpdateSink,
     mut factory: EngineFactory,
     position: &PlaybackPositionReader,
 ) {
@@ -244,7 +308,8 @@ fn playback_worker(
     let mut filters = AudioFilterState::default();
     let mut preview: Option<(u64, f64, f64, bool)> = None;
     loop {
-        let request = if active.is_some() {
+        updates.flush();
+        let request = if active.is_some() || updates.has_backlog() {
             match requests.recv_timeout(ACTIVE_POLL_INTERVAL) {
                 Ok(request) => Some(request),
                 Err(RecvTimeoutError::Timeout) => None,
@@ -285,7 +350,7 @@ fn playback_worker(
                         match result {
                             Ok(()) => preview = Some((generation, start, end, false)),
                             Err(error) => {
-                                let _ = updates.try_send(PlaybackUpdate {
+                                updates.try_send(PlaybackUpdate {
                                     generation,
                                     event: PlaybackEvent::Failed(error.to_string()),
                                 });
@@ -352,7 +417,7 @@ fn start_or_replace_engine(
     generation: u64,
     options: &MpvLaunchOptions,
     item: Box<MediaItem>,
-    updates: &SyncSender<PlaybackUpdate>,
+    updates: &UpdateSink,
     factory: &mut EngineFactory,
 ) -> Option<(u64, Box<dyn PlaybackEngine>)> {
     if let Some((_, mut engine)) = active {
@@ -415,7 +480,7 @@ fn execute_if_current(
     filters: &mut AudioFilterState,
     generation: u64,
     command: PlaybackCommand,
-    updates: &SyncSender<PlaybackUpdate>,
+    updates: &UpdateSink,
 ) {
     let Some((active_generation, engine)) = active else {
         return;
@@ -424,7 +489,7 @@ fn execute_if_current(
         return;
     }
     if let Err(error) = filters.execute(engine.as_mut(), command) {
-        let _ = updates.try_send(PlaybackUpdate {
+        updates.try_send(PlaybackUpdate {
             generation,
             event: PlaybackEvent::CommandFailed(error.to_string()),
         });
@@ -433,7 +498,7 @@ fn execute_if_current(
 
 fn poll_engine_events(
     active: &mut Option<(u64, Box<dyn PlaybackEngine>)>,
-    updates: &SyncSender<PlaybackUpdate>,
+    updates: &UpdateSink,
     preview: &mut Option<(u64, f64, f64, bool)>,
     position: &PlaybackPositionReader,
 ) {
@@ -472,7 +537,7 @@ fn poll_engine_events(
                     }
                     event = PlaybackEvent::PreviewFinished;
                 }
-                let _ = updates.try_send(PlaybackUpdate {
+                updates.try_send(PlaybackUpdate {
                     generation: *generation,
                     event,
                 });
@@ -486,8 +551,8 @@ fn poll_engine_events(
     }
 }
 
-fn emit_failure(updates: &SyncSender<PlaybackUpdate>, generation: u64, error: &PlaybackError) {
-    let _ = updates.try_send(PlaybackUpdate {
+fn emit_failure(updates: &UpdateSink, generation: u64, error: &PlaybackError) {
+    updates.try_send(PlaybackUpdate {
         generation,
         event: PlaybackEvent::Failed(error.to_string()),
     });
@@ -528,7 +593,12 @@ mod tests {
                 commands: Arc::new(Mutex::new(Vec::new())),
             }),
         ));
-        super::poll_engine_events(&mut active, &sender, &mut None, &reader);
+        super::poll_engine_events(
+            &mut active,
+            &super::UpdateSink::new(sender),
+            &mut None,
+            &reader,
+        );
         assert_eq!(reader.read(7), Some(12.5));
         assert_eq!(reader.read(8), None);
         assert_eq!(receiver.try_recv().unwrap().generation, 7);
@@ -575,7 +645,7 @@ mod tests {
                 seconds: 5.0,
                 exact: false,
             },
-            &sender,
+            &super::UpdateSink::new(sender),
         );
         let update = receiver.try_recv().expect("command failure update");
         assert_eq!(update.generation, 7);
@@ -698,7 +768,7 @@ mod tests {
         let mut preview = Some((7, 10.0, 15.0, false));
         super::poll_engine_events(
             &mut active,
-            &sender,
+            &super::UpdateSink::new(sender),
             &mut preview,
             &super::PlaybackPositionReader::default(),
         );
@@ -718,7 +788,7 @@ mod tests {
         let mut preview = Some((7, 10.0, 15.0, true));
         super::poll_engine_events(
             &mut active,
-            &sender,
+            &super::UpdateSink::new(sender),
             &mut preview,
             &super::PlaybackPositionReader::default(),
         );
@@ -755,7 +825,7 @@ mod tests {
         let mut preview = Some((7, 10.0, 15.0, false));
         super::poll_engine_events(
             &mut active,
-            &sender,
+            &super::UpdateSink::new(sender),
             &mut preview,
             &super::PlaybackPositionReader::default(),
         );
@@ -766,6 +836,46 @@ mod tests {
                 .expect("commands")
                 .iter()
                 .any(|command| matches!(command, PlaybackCommand::SetPaused(true)))
+        );
+    }
+
+    #[test]
+    fn important_updates_survive_a_full_channel_while_positions_are_dropped() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(2);
+        let sink = super::UpdateSink::new(sender);
+        for elapsed in 0..10 {
+            sink.try_send(PlaybackUpdate {
+                generation: 3,
+                event: PlaybackEvent::Position {
+                    elapsed: f64::from(elapsed),
+                    duration: Some(90.0),
+                },
+            });
+        }
+        sink.try_send(PlaybackUpdate {
+            generation: 3,
+            event: PlaybackEvent::Paused(true),
+        });
+        sink.try_send(PlaybackUpdate {
+            generation: 3,
+            event: PlaybackEvent::Ended,
+        });
+        assert!(sink.has_backlog());
+        let mut collected = Vec::new();
+        for _ in 0..4 {
+            while let Ok(update) = receiver.try_recv() {
+                collected.push(update.event);
+            }
+            sink.flush();
+        }
+        assert!(!sink.has_backlog());
+        let important = collected
+            .into_iter()
+            .filter(|event| !matches!(event, PlaybackEvent::Position { .. }))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            important,
+            vec![PlaybackEvent::Paused(true), PlaybackEvent::Ended]
         );
     }
 

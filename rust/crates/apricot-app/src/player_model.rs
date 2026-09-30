@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use apricot_core::{MediaItem, MediaKind, MediaSource, TranslationCatalog, action::action_by_id};
 use apricot_storage::SettingsDocument;
 
-use crate::{PlaybackPhase, PlayerSession, SessionToggle};
+use crate::{PlayerSession, SessionToggle};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PlayerControlRole {
@@ -61,7 +61,7 @@ impl From<&PlayerSession> for PlayerViewState {
             }
         }
         Self {
-            transport: if session.phase() == PlaybackPhase::Paused {
+            transport: if session.is_paused() {
                 TransportState::Paused
             } else {
                 TransportState::Playing

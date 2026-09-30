@@ -33,6 +33,9 @@ pub struct ClipExportRequest {
     pub mode: ClipExportMode,
     pub audio_format: String,
     pub audio_quality: String,
+    /// Python `export_marked_clip_worker`: the stream's HTTP headers as one
+    /// `Name: value\r\n` block for `FFmpeg` `-headers` (empty for none).
+    pub headers: String,
 }
 
 #[derive(Debug, Error)]
@@ -201,7 +204,12 @@ pub fn build_clip_export_arguments(
     ];
     match request.mode {
         ClipExportMode::Audio => {
-            add_input(&mut arguments, request.start_seconds, selected_audio);
+            add_input(
+                &mut arguments,
+                request.start_seconds,
+                selected_audio,
+                &request.headers,
+            );
             arguments.extend([
                 OsString::from("-t"),
                 OsString::from(format!("{duration:.3}")),
@@ -216,9 +224,15 @@ pub fn build_clip_export_arguments(
                 &mut arguments,
                 request.start_seconds,
                 request.primary_input.trim(),
+                &request.headers,
             );
             if let Some(audio) = external_audio {
-                add_input(&mut arguments, request.start_seconds, audio);
+                add_input(
+                    &mut arguments,
+                    request.start_seconds,
+                    audio,
+                    &request.headers,
+                );
                 arguments.extend([
                     OsString::from("-map"),
                     OsString::from("0:v:0?"),
@@ -243,13 +257,15 @@ pub fn build_clip_export_arguments(
     Ok(arguments)
 }
 
-fn add_input(arguments: &mut Vec<OsString>, start_seconds: f64, input: &str) {
+fn add_input(arguments: &mut Vec<OsString>, start_seconds: f64, input: &str, headers: &str) {
     arguments.extend([
         OsString::from("-ss"),
         OsString::from(format!("{start_seconds:.3}")),
-        OsString::from("-i"),
-        OsString::from(input),
     ]);
+    if !headers.is_empty() && (input.starts_with("http://") || input.starts_with("https://")) {
+        arguments.extend([OsString::from("-headers"), OsString::from(headers)]);
+    }
+    arguments.extend([OsString::from("-i"), OsString::from(input)]);
 }
 
 fn audio_codec_arguments(format: &str, quality: &str) -> Vec<OsString> {
@@ -339,6 +355,7 @@ mod tests {
             mode,
             audio_format: "mp3".to_owned(),
             audio_quality: "320kbps".to_owned(),
+            headers: String::new(),
         }
     }
 
@@ -372,6 +389,21 @@ mod tests {
         );
         assert!(args.windows(2).any(|pair| pair == ["-b:a", "320k"]));
         assert_eq!(normalized_audio_quality("nonsense"), "0");
+    }
+
+    #[test]
+    fn stream_headers_precede_each_network_input() {
+        let mut request = request(ClipExportMode::Video);
+        request.headers = "Cookie: session=1\r\n".to_owned();
+        let args = arguments(&request);
+        let headers = args
+            .iter()
+            .position(|value| value == "-headers")
+            .expect("headers");
+        assert_eq!(args[headers + 1], "Cookie: session=1\r\n");
+        assert_eq!(args[headers + 2], "-i");
+        request.primary_input = r"C:\media\local.mp4".to_owned();
+        assert!(!arguments(&request).contains(&"-headers".to_owned()));
     }
 
     #[test]

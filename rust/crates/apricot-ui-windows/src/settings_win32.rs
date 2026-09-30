@@ -370,6 +370,13 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
     let Some(state) = state(window) else {
         return false;
     };
+    // Python `on_key_down` lets the shortcut capture field record any chord
+    // before global navigation runs.
+    if state.controls.iter().any(|bound| {
+        bound.control == message.hwnd && matches!(bound.binding, ControlBinding::ShortcutCapture(_))
+    }) {
+        return false;
+    }
     let application = &*state.application;
     let Some(action) = action_for_shortcut(
         &application.settings().keyboard_shortcuts,
@@ -2092,6 +2099,22 @@ unsafe extern "system" fn settings_control_proc(
         && let Ok(parent) = GetParent(window)
     {
         ensure_control_visible(parent, window);
+    }
+    // Python captures Enter and Escape too; only Tab leaves the capture field.
+    if message == WM_GETDLGCODE_MESSAGE
+        && lparam.0 != 0
+        && let Ok(parent) = GetParent(window)
+        && let Some(state) = state(parent)
+        && state.controls.iter().any(|bound| {
+            bound.control == window && matches!(bound.binding, ControlBinding::ShortcutCapture(_))
+        })
+    {
+        let pending = &*(lparam.0 as *const MSG);
+        let code = DefSubclassProc(window, message, wparam, lparam).0;
+        if pending.message == WM_KEYDOWN && pending.wParam.0 != usize::from(VK_TAB.0) {
+            return LRESULT(code | DLGC_WANTMESSAGE_CODE);
+        }
+        return LRESULT(code);
     }
     if (message == WM_KEYDOWN || message == WM_CHAR)
         && let Ok(parent) = GetParent(window)

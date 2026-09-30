@@ -114,7 +114,9 @@ impl SettingsController {
         self.draft.discard();
     }
 
-    /// Assigns one non-empty shortcut while rejecting case-insensitive conflicts.
+    /// Assigns one non-empty shortcut while rejecting conflicts in the
+    /// canonical form (Python `canonical_shortcut`), so `Control+F8` and
+    /// `ctrl-f8` are the same key.
     ///
     /// # Errors
     ///
@@ -132,13 +134,16 @@ impl SettingsController {
         } else {
             shortcut
         };
+        let wanted = apricot_core::shortcut::ShortcutChord::parse(shortcut);
         if let Some((conflicting_action, _)) =
             self.draft
                 .current()
                 .keyboard_shortcuts
                 .iter()
                 .find(|(other_id, other)| {
-                    other_id.as_str() != action_id && other.trim().eq_ignore_ascii_case(shortcut)
+                    other_id.as_str() != action_id
+                        && wanted.is_some()
+                        && apricot_core::shortcut::ShortcutChord::parse(other) == wanted
                 })
         {
             return Err(SettingsControllerError::ShortcutConflict {
@@ -176,6 +181,28 @@ mod tests {
     use tempfile::tempdir;
 
     use super::SettingsController;
+
+    #[test]
+    fn shortcut_conflicts_use_the_canonical_chord() {
+        let root = tempdir().expect("temporary directory");
+        let paths =
+            SettingsPaths::for_app_data(&root.path().join("beta"), &root.path().join("old"));
+        let mut controller = SettingsController::load(paths, SettingsDocument::default());
+        controller
+            .set_shortcut("open_search", "Control+F8")
+            .expect("free shortcut");
+        let error = controller
+            .set_shortcut("open_settings", "ctrl-F8")
+            .expect_err("same key in another spelling");
+        assert!(matches!(
+            error,
+            super::SettingsControllerError::ShortcutConflict { ref action, .. }
+                if action == "open_search"
+        ));
+        controller
+            .set_shortcut("open_search", "Ctrl+Shift+F8")
+            .expect("own action may change");
+    }
 
     #[test]
     fn cancel_discards_the_complete_unsaved_draft() {

@@ -124,6 +124,14 @@ try {
     $FfmpegDestination = Join-Path $StagingDir "ffmpeg"
     New-Item -ItemType Directory -Path $FfmpegDestination -Force | Out-Null
     Copy-Item -LiteralPath $FfmpegSource -Destination $FfmpegDestination
+    # Python bundles Node.js so yt-dlp can solve YouTube's JavaScript challenges.
+    $NodeSource = Join-Path (Split-Path -Parent $RustRoot) "vendor\node\node.exe"
+    if (-not (Test-Path -LiteralPath $NodeSource -PathType Leaf)) {
+        throw "Bundled Node.js executable was not found at $NodeSource"
+    }
+    $NodeDestination = Join-Path $StagingDir "node"
+    New-Item -ItemType Directory -Path $NodeDestination -Force | Out-Null
+    Copy-Item -LiteralPath $NodeSource -Destination $NodeDestination
     $DefaultReachedSound = Join-Path (Split-Path -Parent $RustRoot) "assets\default_reached.wav"
     if (-not (Test-Path -LiteralPath $DefaultReachedSound -PathType Leaf)) {
         throw "Bundled default reached sound was not found at $DefaultReachedSound"
@@ -154,6 +162,7 @@ try {
             yt_dlp = "components/yt-dlp.exe"
             yt_dlp_version = "2026.08.19"
             ffmpeg = "ffmpeg/ffmpeg.exe"
+            node = "node/node.exe"
         }
     }
     $BuildInfo | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $StagingDir "build-info.json") -Encoding utf8

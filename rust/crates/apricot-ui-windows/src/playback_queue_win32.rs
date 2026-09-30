@@ -39,6 +39,10 @@ const ID_MOVE_DOWN: usize = 1504;
 const ID_REMOVE: usize = 1505;
 const ID_CLEAR: usize = 1506;
 const ID_BACK: usize = 1507;
+/// `IsDialogMessageW` turns Enter and Escape into `IDOK` and `IDCANCEL` before
+/// the list subclass sees the key.
+const IDOK_COMMAND: usize = 1;
+const IDCANCEL_COMMAND: usize = 2;
 
 pub struct PlaybackQueueDialogLabels {
     pub title: String,
@@ -190,6 +194,7 @@ unsafe extern "system" fn window_proc(
             let command = wparam.0 & 0xffff;
             let notification = (wparam.0 >> 16) & 0xffff;
             if command == ID_PLAY
+                || command == IDOK_COMMAND
                 || (command == ID_LIST
                     && notification == usize::try_from(LBN_DBLCLK).expect("notification fits"))
             {
@@ -202,7 +207,7 @@ unsafe extern "system" fn window_proc(
                 remove_selected(window);
             } else if command == ID_CLEAR {
                 clear_queue(window);
-            } else if command == ID_BACK {
+            } else if command == ID_BACK || command == IDCANCEL_COMMAND {
                 let _ = DestroyWindow(window);
             }
             LRESULT(0)

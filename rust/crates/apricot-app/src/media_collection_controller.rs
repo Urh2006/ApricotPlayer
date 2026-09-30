@@ -103,7 +103,9 @@ impl MediaCollectionController {
     }
 
     /// Moves the item to the front, replacing an older matching entry and
-    /// truncating to the configured history limit.
+    /// truncating to the configured history limit. Like Python `record_history`
+    /// any entry with a location is kept, so a downloaded playlist or channel
+    /// is recorded as well.
     ///
     /// # Errors
     ///
@@ -113,7 +115,12 @@ impl MediaCollectionController {
         item: MediaItem,
         limit: usize,
     ) -> Result<(), MediaCollectionControllerError> {
-        if !item.is_playable() {
+        let has_location = item.url.is_some()
+            || item
+                .local_path
+                .as_ref()
+                .is_some_and(|path| !path.trim().is_empty());
+        if !has_location {
             return Ok(());
         }
         let Some(identity) = collection_identity(&item) else {
@@ -279,6 +286,41 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn downloaded_playlists_and_channels_are_recorded_in_history() {
+        let root = tempdir().expect("temporary directory");
+        let current = MediaListFile::new(root.path().join("history.json"));
+        let missing = MediaListFile::new(root.path().join("missing.json"));
+        let mut controller = MediaCollectionController::load(current, &missing);
+        let mut playlist = item("PLlist");
+        playlist.kind = MediaKind::Playlist;
+        playlist.url = Some(
+            "https://www.youtube.com/playlist?list=PLlist"
+                .parse()
+                .expect("URL"),
+        );
+        let mut channel = item("UCchannel");
+        channel.kind = MediaKind::Channel;
+        channel.url = Some(
+            "https://www.youtube.com/channel/UCchannel"
+                .parse()
+                .expect("URL"),
+        );
+        controller.upsert_front(playlist, 10).expect("playlist");
+        controller.upsert_front(channel, 10).expect("channel");
+        let mut without_location = item("none");
+        without_location.url = None;
+        controller
+            .upsert_front(without_location, 10)
+            .expect("ignored");
+        let kinds = controller
+            .items()
+            .iter()
+            .map(|entry| entry.kind)
+            .collect::<Vec<_>>();
+        assert_eq!(kinds, vec![MediaKind::Channel, MediaKind::Playlist]);
     }
 
     #[test]

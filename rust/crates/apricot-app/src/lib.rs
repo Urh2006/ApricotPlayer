@@ -82,8 +82,8 @@ pub use player_model::{
     PlayerScreenModel, PlayerToggle, PlayerViewState, TransportState,
 };
 pub use player_session::{
-    AudioSession, EqualizerSession, PlaybackPhase, PlayerSession, PlayerSessionDefaults,
-    SessionToggle,
+    AudioSession, EqualizerSession, PlayAction, PlaybackPhase, PlayerSession,
+    PlayerSessionDefaults, SessionToggle,
 };
 pub use rss_feed_controller::{
     RssFeedAddOutcome, RssFeedController, RssFeedControllerError, RssFeedImportSummary,

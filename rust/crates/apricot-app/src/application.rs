@@ -21,7 +21,7 @@ use crate::{
     AudioSession, BookmarkController, BookmarkControllerError, CollectionAddOutcome,
     DownloadController, EqualizerSession, LastPlayerSessionController, MainMenuAvailability,
     MainMenuModel, MediaCollectionController, MediaCollectionControllerError, MenuVisibility,
-    NotificationController, NotificationControllerError, PlaybackPhase, PlaybackPositionController,
+    NotificationController, NotificationControllerError, PlaybackPositionController,
     PlaybackPositionControllerError, PlaybackPositionUpdate, PlaybackQueue,
     PlaybackQueueController, PlaybackQueueControllerError, PlaybackSequenceSource,
     PlayerScreenModel, PlayerSession, PlayerSessionDefaults, PlayerViewState, PlaylistAddOutcome,
@@ -2214,7 +2214,7 @@ impl Application {
                 .then(|| player.current_item())
                 .flatten()
                 .map(|item| ActionFinderPlayer {
-                    paused: player.phase() == PlaybackPhase::Paused,
+                    paused: player.is_paused(),
                     local_media: item.is_local_media(),
                     youtube: crate::context_menu::has_youtube_url(item),
                     podcast_episode: item.kind == apricot_core::MediaKind::PodcastEpisode,

@@ -390,7 +390,9 @@ impl YtDlpYoutubeEngine {
         media_url: &str,
         preference: YoutubeStreamPreference,
     ) -> Result<YoutubeResponsePayload, YtDlpError> {
-        validate_media_url(media_url)?;
+        // Python `resolve_stream_url` runs yt-dlp for every page, so direct
+        // links to other sites get its generic extraction.
+        validate_resolvable_url(media_url)?;
         let mut arguments = self.base_arguments();
         arguments.extend([
             OsString::from("--no-playlist"),
@@ -399,13 +401,39 @@ impl YtDlpYoutubeEngine {
             OsString::from("--"),
             OsString::from(media_url),
         ]);
-        let root = parse_json(run_with_cookie_retry(
+        let output = match run_with_cookie_retry(
             &self.executable,
             &self.config,
             &arguments,
             CookieRetry::Playback { media_url },
-        )?)?;
-        let item = media_item_from_value(&root).ok_or_else(|| {
+        ) {
+            Ok(output) => output,
+            // Python `resolve_stream_url`: recoverable YouTube extraction
+            // errors retry once with the web_safari player client.
+            Err(error)
+                if validate_youtube_url(media_url).is_ok()
+                    && is_youtube_recoverable_error(&error.to_string()) =>
+            {
+                let mut retry = arguments.clone();
+                let separator = retry.len() - 2;
+                retry.splice(
+                    separator..separator,
+                    [
+                        OsString::from("--extractor-args"),
+                        OsString::from("youtube:player_client=web_safari"),
+                    ],
+                );
+                run_with_cookie_retry(
+                    &self.executable,
+                    &self.config,
+                    &retry,
+                    CookieRetry::Playback { media_url },
+                )?
+            }
+            Err(error) => return Err(error),
+        };
+        let root = parse_json(output)?;
+        let mut item = media_item_from_value(&root).ok_or_else(|| {
             YtDlpError::InvalidOutput("resolved media metadata was incomplete".to_owned())
         })?;
         let is_live = is_live(&root);
@@ -416,6 +444,17 @@ impl YtDlpYoutubeEngine {
             .flatten()
             .filter_map(|format| youtube_format(format, is_live))
             .collect::<Vec<_>>();
+        if validate_media_url(media_url).is_err() {
+            // The generic extractor can report the stream on the root object.
+            if formats.is_empty() {
+                formats.extend(youtube_format(&root, is_live));
+            }
+            // Python hands the extractor's HTTP headers to mpv.
+            if let Some(headers) = root.get("http_headers").filter(|value| value.is_object()) {
+                item.metadata
+                    .insert("http_headers".to_owned(), headers.clone());
+            }
+        }
         sort_formats(&mut formats, preference);
         if formats.is_empty() {
             return Err(YtDlpError::Request(
@@ -522,6 +561,7 @@ impl YtDlpYoutubeEngine {
             arguments.push(OsString::from("--proxy"));
             arguments.push(OsString::from(proxy));
         }
+        arguments.extend(js_runtime_arguments());
         arguments
     }
 
@@ -1076,6 +1116,75 @@ fn validate_media_url(value: &str) -> Result<(), YtDlpError> {
     validate_youtube_url(value)
 }
 
+/// Python `is_youtube_download_recoverable_error`.
+fn is_youtube_recoverable_error(message: &str) -> bool {
+    let lowered = message.to_lowercase();
+    [
+        "video unavailable",
+        "this video is unavailable",
+        "no video formats found",
+        "requested format is not available",
+        "nsig extraction failed",
+        "signature extraction failed",
+        "n challenge",
+        "unable to extract",
+    ]
+    .iter()
+    .any(|check| lowered.contains(check))
+}
+
+/// Python `bundled_node_executable`: the Node.js runtime next to the
+/// application, otherwise one on `PATH`.
+fn node_executable() -> Option<PathBuf> {
+    let bundled = std::env::current_exe()
+        .ok()
+        .and_then(|executable| {
+            executable
+                .parent()
+                .map(|parent| parent.join("node").join("node.exe"))
+        })
+        .filter(|path| path.is_file());
+    bundled.or_else(|| {
+        std::env::var_os("PATH").and_then(|paths| {
+            std::env::split_paths(&paths)
+                .map(|directory| directory.join("node.exe"))
+                .find(|path| path.is_file())
+        })
+    })
+}
+
+/// Python `ydl_options`: yt-dlp solves the `YouTube` JavaScript challenges with
+/// Node.js (`js_runtimes = {"node": {"path": node}}`).
+#[must_use]
+pub fn js_runtime_arguments() -> Vec<OsString> {
+    node_executable().map_or_else(Vec::new, |node| {
+        let mut runtime = OsString::from("node:");
+        runtime.push(node.as_os_str());
+        vec![OsString::from("--js-runtimes"), runtime]
+    })
+}
+
+/// Python `resolve_stream_url`: any web page yt-dlp may know.
+fn validate_resolvable_url(value: &str) -> Result<(), YtDlpError> {
+    if validate_media_url(value).is_ok() {
+        return Ok(());
+    }
+    let valid = value.len() <= MAX_MEDIA_URL_BYTES
+        && Url::parse(value.trim()).is_ok_and(|url| {
+            matches!(url.scheme(), "http" | "https")
+                && url.host_str().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err(YtDlpError::InvalidConfiguration(
+            "media URL is invalid".to_owned(),
+        ))
+    }
+}
+
 fn is_soundcloud_url(value: &str) -> bool {
     Url::parse(value.trim()).is_ok_and(|url| {
         let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
@@ -1378,8 +1487,9 @@ fn youtube_format(value: &Value, root_is_live: bool) -> Option<YoutubeFormat> {
     if !matches!(parsed.scheme(), "http" | "https") {
         return None;
     }
-    let video = string(object, "vcodec").is_some_and(|codec| codec != "none");
-    let audio = string(object, "acodec").is_some_and(|codec| codec != "none");
+    // The generic extractor often omits codecs; an unknown track may be present.
+    let video = string(object, "vcodec").is_none_or(|codec| codec != "none");
+    let audio = string(object, "acodec").is_none_or(|codec| codec != "none");
     if !video && !audio {
         return None;
     }
@@ -1708,7 +1818,7 @@ mod tests {
         collection_target, component_executable, interleave_youtube_results, media_item_from_value,
         popular_numeric_value, read_bounded, sanitize_error, search_fetch_limit,
         search_kind_accepts, search_target, sort_formats, sort_popular_items, validate_media_url,
-        youtube_format, youtube_shorts_search_url,
+        validate_resolvable_url, youtube_format, youtube_shorts_search_url,
     };
     use apricot_core::{MediaItem, MediaKind, MediaSource};
     use apricot_media::{
@@ -1908,6 +2018,10 @@ mod tests {
         );
         assert!(validate_media_url("https://soundcloud.com/artist/track").is_ok());
         assert!(validate_media_url("https://notsoundcloud.com/artist/track").is_err());
+        assert!(validate_resolvable_url("https://vimeo.com/76979871").is_ok());
+        assert!(validate_resolvable_url("https://user:pw@media.example/a.mp3").is_err());
+        assert!(validate_resolvable_url("rtsp://camera.example/live").is_err());
+        assert!(validate_resolvable_url("file:///C:/private.mp3").is_err());
     }
 
     #[test]
@@ -2035,6 +2149,42 @@ mod tests {
         assert_eq!(formats[0].itag, 140);
         assert_eq!(formats[0].bitrate, 129_500);
         assert_eq!(formats[0].mime_type, "audio/m4a");
+    }
+
+    #[test]
+    fn recoverable_youtube_errors_match_python() {
+        assert!(super::is_youtube_recoverable_error(
+            "ERROR: [youtube] abc: nsig extraction failed: Some formats may be missing"
+        ));
+        assert!(super::is_youtube_recoverable_error(
+            "Requested format is not available"
+        ));
+        assert!(!super::is_youtube_recoverable_error(
+            "Sign in to confirm your age"
+        ));
+    }
+
+    #[test]
+    fn generic_formats_without_codecs_are_playable() {
+        let generic = youtube_format(
+            &json!({"format_id": "mp3", "url": "https://media.example/a.mp3", "ext": "mp3"}),
+            false,
+        )
+        .expect("generic format");
+        assert!(generic.tracks.audio && generic.tracks.video);
+        let audio = youtube_format(
+            &json!({"url": "https://media.example/a.m4a", "vcodec": "none"}),
+            false,
+        )
+        .expect("audio format");
+        assert!(audio.tracks.audio && !audio.tracks.video);
+        assert!(
+            youtube_format(
+                &json!({"url": "https://i.example/sb", "vcodec": "none", "acodec": "none"}),
+                false
+            )
+            .is_none()
+        );
     }
 
     #[test]

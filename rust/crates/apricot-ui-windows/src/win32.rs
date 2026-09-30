@@ -29,8 +29,8 @@ use crate::{
 use apricot_app::{
     ActivationRequest, ActiveDownload, Application, ContextCommand, ContextMenuContext,
     ContextMenuEntry, DownloadChoice, DownloadTaskKind, DownloadTaskStatus, MainMenuModel,
-    PlaybackPhase, PlayerNavigationOutcome, RssFeedAddOutcome, SearchApplyOutcome, SearchWork,
-    SearchWorkKind, SessionToggle, SubscriptionAddOutcome, SubscriptionCheckResult,
+    PlayAction, PlaybackPhase, PlayerNavigationOutcome, RssFeedAddOutcome, SearchApplyOutcome,
+    SearchWork, SearchWorkKind, SessionToggle, SubscriptionAddOutcome, SubscriptionCheckResult,
     SubscriptionRemoveOutcome, YOUTUBE_TRENDING_CATEGORIES, YOUTUBE_TRENDING_COUNTRIES,
     YoutubeCollectionApplyOutcome, YoutubeCollectionKind, YoutubeCollectionPhase,
     YoutubeCollectionWork, YoutubeCollectionWorkKind, YoutubeSearchKind, YoutubeTrendingWork,
@@ -594,6 +594,9 @@ struct WindowState {
     result_column_cursor: apricot_app::result_columns::ResultColumnCursor,
     pending_player_navigation: Option<i32>,
     pending_queued_start: Option<PendingQueuedStart>,
+    /// Python `restart_current_playback` announces only the restart, not the
+    /// play state that the resumed player reports afterwards.
+    quiet_next_resume: bool,
     next_youtube_operation_token: u64,
     playback: Option<PlaybackRuntime>,
     controlled_repeat: Option<ControlledRepeatState>,
@@ -1170,6 +1173,10 @@ unsafe extern "system" fn window_proc(
             let pointer = GetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0)) as *mut WindowState;
             if !pointer.is_null() {
                 let mut state = Box::from_raw(pointer);
+                // Python `on_close` saves the position of the playing item.
+                if state.application.player_session().is_open() {
+                    persist_current_playback_position(&mut state);
+                }
                 for cancellation in state.download_cancellations.values() {
                     cancellation.store(true, AtomicOrdering::Release);
                 }
@@ -1982,6 +1989,7 @@ unsafe fn create_controls(
         result_column_cursor: apricot_app::result_columns::ResultColumnCursor::default(),
         pending_player_navigation: None,
         pending_queued_start: None,
+        quiet_next_resume: false,
         next_youtube_operation_token: 0,
         playback: None,
         controlled_repeat: None,
@@ -7487,6 +7495,51 @@ unsafe fn submit_primary_text(window: HWND) {
     }
 }
 
+/// Python `clip_output_extension` for a video clip: the local suffix, the
+/// stream's reported `ext`, `.m4a` for a podcast episode, otherwise `.mp4`.
+fn clip_video_extension(item: &apricot_core::MediaItem) -> String {
+    let local = item
+        .local_path
+        .as_deref()
+        .and_then(|path| std::path::Path::new(path).extension())
+        .and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase);
+    let reported = || {
+        item.metadata
+            .get("ext")
+            .and_then(serde_json::Value::as_str)
+            .map(|ext| ext.trim().trim_start_matches('.').to_ascii_lowercase())
+            .filter(|ext| {
+                (1..=10).contains(&ext.len())
+                    && ext
+                        .bytes()
+                        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+            })
+    };
+    local.or_else(reported).unwrap_or_else(|| {
+        if item.kind == apricot_core::MediaKind::PodcastEpisode {
+            "m4a".to_owned()
+        } else {
+            "mp4".to_owned()
+        }
+    })
+}
+
+/// Python passes the stream headers to `FFmpeg` as one `-headers` block.
+fn clip_http_headers(item: &apricot_core::MediaItem) -> String {
+    item.metadata
+        .get("http_headers")
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter_map(|(name, value)| {
+            let value = value.as_str()?.trim();
+            (!value.is_empty() && !name.contains(['\r', '\n']) && !value.contains(['\r', '\n']))
+                .then(|| format!("{name}: {value}\r\n"))
+        })
+        .collect()
+}
+
 /// Python `direct_link_item`: a link without a scheme gets `https://`.
 fn direct_link_with_scheme(value: &str) -> String {
     let value = value.trim();
@@ -7906,12 +7959,7 @@ unsafe fn start_clip_export(window: HWND, choice: DownloadChoice) {
     let extension = if choice == DownloadChoice::Audio {
         normalized_audio_format(&settings.audio_format)
     } else {
-        item.local_path
-            .as_deref()
-            .and_then(|path| std::path::Path::new(path).extension())
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("mp4")
-            .to_owned()
+        clip_video_extension(&item)
     };
     let stem = format!(
         "{} - {}-{}",
@@ -7959,6 +8007,7 @@ unsafe fn start_clip_export(window: HWND, choice: DownloadChoice) {
         },
         audio_format: settings.audio_format,
         audio_quality: settings.audio_quality,
+        headers: clip_http_headers(&item),
     };
     let (sender, receiver) = mpsc::sync_channel(1);
     std::thread::spawn(move || {
@@ -8607,8 +8656,8 @@ fn download_options_from_settings(
         audio_format: normalized_audio_format(&settings.audio_format),
         audio_quality: settings.audio_quality.trim().to_owned(),
         video_format: VideoDownloadFormat::from_setting(&settings.video_format),
-        max_video_height: u32::try_from(settings.max_video_height.clamp(144, 8_640))
-            .unwrap_or(1_080),
+        // Python `video_format_selector`: 0 (or less) means no height limit.
+        max_video_height: u32::try_from(settings.max_video_height.max(0)).unwrap_or(1_080),
         quiet: settings.quiet_downloads,
         keep_playlist_order: settings.keep_playlist_order,
         filename_template: settings.filename_template.clone(),
@@ -9860,10 +9909,13 @@ unsafe fn poll_playback_runtime(window: HWND) {
                     .control_id_for_window(GetFocus())
                     .is_some_and(|id| id == "play_pause")
                     || state.background_player.is_play_pause_button(GetFocus());
+                let quiet = !paused && std::mem::take(&mut state.quiet_next_resume);
                 set_status(
                     state,
                     &catalog_text(&state.application, key),
-                    state.application.settings().announce_play_pause && !focused_play_pause,
+                    state.application.settings().announce_play_pause
+                        && !focused_play_pause
+                        && !quiet,
                 );
                 refresh_player(window, state, false, true);
             }
@@ -9922,6 +9974,7 @@ unsafe fn poll_playback_runtime(window: HWND) {
                     &catalog_text(&state.application, "playback_finished"),
                     state.application.settings().announce_playback_finished,
                 );
+                refresh_player(window, state, false, true);
             }
             PlaybackEvent::Failed(error) => {
                 state.clip_preview = None;
@@ -10199,17 +10252,19 @@ unsafe fn finish_youtube_error(window: HWND, generation: u64, message: &str) {
                 .pending_youtube_resolve
                 .take()
                 .expect("matching pending resolve exists");
-            if pending.purpose == YoutubeResolvePurpose::Playback {
-                state.pending_queued_start = None;
-            }
             stop_youtube_timer(window);
-            if pending.purpose == YoutubeResolvePurpose::Playback
+            let direct_fallback = pending.purpose == YoutubeResolvePurpose::Playback
                 && pending.original_item.source == apricot_core::MediaSource::Direct
                 && pending
                     .original_item
                     .youtube_url_at_timestamp(0.0)
-                    .is_none()
-            {
+                    .is_none();
+            // The Direct fallback still starts the queued item, so its queue
+            // entry is confirmed when mpv reports the start.
+            if pending.purpose == YoutubeResolvePurpose::Playback && !direct_fallback {
+                state.pending_queued_start = None;
+            }
+            if direct_fallback {
                 let fallback_message = catalog_text(&state.application, "direct_link_fallback");
                 set_status(state, &fallback_message, true);
                 Some((
@@ -14216,8 +14271,30 @@ unsafe fn toggle_player_pause(window: HWND) {
     if !state.application.player_session().is_open() {
         return;
     }
-    let paused = state.application.player_session().phase() != PlaybackPhase::Paused;
-    let _ = execute_player_command(window, PlaybackCommand::SetPaused(paused));
+    match state.application.player_session().play_action() {
+        PlayAction::Pause => {
+            let _ = execute_player_command(window, PlaybackCommand::SetPaused(true));
+        }
+        PlayAction::Resume => {
+            let _ = execute_player_command(window, PlaybackCommand::SetPaused(false));
+        }
+        PlayAction::RestartFromStart => {
+            // Python `restart_current_playback`.
+            if execute_player_command(
+                window,
+                PlaybackCommand::SeekAbsolute {
+                    seconds: 0.0,
+                    exact: true,
+                },
+            ) && execute_player_command(window, PlaybackCommand::SetPaused(false))
+            {
+                if let Some(state) = state_mut(window) {
+                    state.quiet_next_resume = true;
+                }
+                announce_player_text(window, "playback_restarted", &[]);
+            }
+        }
+    }
 }
 
 unsafe fn seek_player(window: HWND, seconds: f64) {
@@ -17611,6 +17688,7 @@ mod tests {
         search_type_definitions, subscription_label, user_playlist_download_folder,
         view_has_back_button, view_has_collection_remove, view_shortcut_scope,
     };
+    use super::{clip_http_headers, clip_video_extension, download_options_from_settings};
     use apricot_app::{
         ActiveDownload, AppNotification, ContextMenuContext, DownloadChoice, DownloadTaskKind,
         DownloadTaskStatus, QueuedDownload, context_menu,
@@ -17618,6 +17696,42 @@ mod tests {
     use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource, action::ActionScope};
     use apricot_media::{YoutubeBackend, YoutubeCollectionKind, YoutubeSearchKind};
     use apricot_storage::SettingsDocument;
+
+    #[test]
+    fn video_height_zero_means_no_limit_like_python() {
+        let mut settings = SettingsDocument {
+            max_video_height: 0,
+            ..SettingsDocument::default()
+        };
+        let options = download_options_from_settings(&settings, std::path::Path::new("s.json"));
+        assert_eq!(options.max_video_height, 0);
+        settings.max_video_height = 720;
+        let options = download_options_from_settings(&settings, std::path::Path::new("s.json"));
+        assert_eq!(options.max_video_height, 720);
+    }
+
+    #[test]
+    fn clip_export_uses_the_stream_extension_and_headers_like_python() {
+        let mut item = MediaItem::from_direct_link("https://media.example/show").expect("item");
+        assert_eq!(clip_video_extension(&item), "mp4");
+        item.metadata
+            .insert("ext".to_owned(), serde_json::json!("WMV"));
+        assert_eq!(clip_video_extension(&item), "wmv");
+        item.metadata
+            .insert("ext".to_owned(), serde_json::json!("../x"));
+        item.kind = MediaKind::PodcastEpisode;
+        assert_eq!(clip_video_extension(&item), "m4a");
+        item.local_path = Some(r"C:\media\clip.MKV".to_owned());
+        assert_eq!(clip_video_extension(&item), "mkv");
+        item.metadata.insert(
+            "http_headers".to_owned(),
+            serde_json::json!({"Cookie": "a=1", "Referer": "https://vault.example/", "Bad": "x\r\ny"}),
+        );
+        assert_eq!(
+            clip_http_headers(&item),
+            "Cookie: a=1\r\nReferer: https://vault.example/\r\n"
+        );
+    }
 
     #[test]
     fn player_announcements_use_python_catalog_keys_and_formats() {

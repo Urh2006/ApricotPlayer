@@ -65,7 +65,10 @@ pub struct MediaItem {
 impl MediaItem {
     pub fn from_direct_link(value: &str) -> Option<Self> {
         let url = Url::parse(value.trim()).ok()?;
-        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        // Python `play_direct_link` also hands RTMP, RTSP and MMS streams to mpv.
+        if !matches!(url.scheme(), "http" | "https" | "rtmp" | "rtsp" | "mms")
+            || url.host_str().is_none()
+        {
             return None;
         }
         let durable_url = url.to_string();
@@ -377,6 +380,14 @@ mod tests {
             item.copy_location().as_deref(),
             Some("https://media.example/track.mp3")
         );
+        for stream in [
+            "rtsp://camera.example/live",
+            "rtmp://live.example/app/key",
+            "mms://radio.example/stream",
+        ] {
+            let item = MediaItem::from_direct_link(stream).expect("stream link");
+            assert_eq!(item.url.as_ref().map(url::Url::as_str), Some(stream));
+        }
         assert!(MediaItem::from_direct_link("file:///C:/private.mp3").is_none());
         assert!(MediaItem::from_direct_link("javascript:alert(1)").is_none());
         assert!(MediaItem::from_direct_link("media.example/track.mp3").is_none());
