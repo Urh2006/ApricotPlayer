@@ -65,7 +65,7 @@ try {
     if (-not $Package) { throw "apricot-player package metadata was not found" }
     $Commit = (git rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0) { throw "git rev-parse failed with exit code $LASTEXITCODE" }
-    $GitStatus = @(git status --porcelain --untracked-files=normal)
+    $GitStatus = @(git status --porcelain --untracked-files=no)
     if ($LASTEXITCODE -ne 0) { throw "git status failed with exit code $LASTEXITCODE" }
     $Dirty = $GitStatus.Count -gt 0
     $RustVersion = ((rustc --version) | Select-Object -First 1).Trim()
