@@ -14,9 +14,13 @@ pub use flow::{
 pub use release::{PackageNames, RUST_BETA_PACKAGE, Release, ReleaseAsset, release_changelog_text};
 pub use version::{is_component_version_newer, is_newer_version, parse_version};
 
-/// This build's channel: every local Rust beta is `LocalOnly` until the 2.0
-/// release (D-011).
-pub const BUILD_CHANNEL: UpdateChannel = UpdateChannel::LocalOnly;
+/// This build's channel: a local Rust beta is `LocalOnly` (D-011); the
+/// distributed 2.0 beta is built with the `release-beta` feature.
+pub const BUILD_CHANNEL: UpdateChannel = if cfg!(feature = "release-beta") {
+    UpdateChannel::Beta
+} else {
+    UpdateChannel::LocalOnly
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UpdateChannel {

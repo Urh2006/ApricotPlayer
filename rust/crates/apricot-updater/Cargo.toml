@@ -14,5 +14,9 @@ tempfile = "3"
 thiserror.workspace = true
 url.workspace = true
 
+[features]
+# The distributed 2.0 beta: installs updates from GitHub prereleases.
+release-beta = []
+
 [lints]
 workspace = true

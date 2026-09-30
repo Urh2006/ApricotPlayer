@@ -166,6 +166,34 @@ fn run_qualification(arguments: &[std::ffi::OsString]) -> Result<bool, Box<dyn s
         assert!(!helper.backend_revision().is_empty());
         return Ok(true);
     }
+    // The installer registers the same current-user values as Settings'
+    // "Set default player"; the release script turns these lines into its
+    // registry section. Arguments: the flag, then the installed executable.
+    if let Some(position) = arguments
+        .iter()
+        .position(|argument| argument == "--qualification-media-associations")
+    {
+        let executable = arguments
+            .get(position + 1)
+            .map(PathBuf::from)
+            .ok_or("--qualification-media-associations needs an executable path")?;
+        let writes = apricot_platform::windows_registration::media_association_writes(
+            ApplicationIdentity::RustBeta,
+            &executable,
+        )?;
+        for write in writes {
+            let (kind, data) = match write.data {
+                apricot_platform::windows_registration::RegistryData::Text(text) => {
+                    ("string", text)
+                }
+                apricot_platform::windows_registration::RegistryData::Empty => {
+                    ("none", String::new())
+                }
+            };
+            println!("{}\t{}\t{kind}\t{data}", write.subkey, write.name);
+        }
+        return Ok(true);
+    }
     if arguments
         .iter()
         .any(|argument| argument == "--qualification-ytdlp")

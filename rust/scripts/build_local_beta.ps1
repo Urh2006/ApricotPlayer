@@ -1,6 +1,9 @@
 param(
     [string]$OutputDir = "",
-    [switch]$SkipChecks
+    [switch]$SkipChecks,
+    # "beta" builds the distributed 2.0 beta, which installs GitHub updates.
+    [ValidateSet("local-only", "beta")]
+    [string]$Channel = "local-only"
 )
 
 $ErrorActionPreference = "Stop"
@@ -39,7 +42,12 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "cargo clippy failed with exit code $LASTEXITCODE" }
     }
 
-    cargo build --release -p apricot-player -p apricot-youtube-helper
+    if ($Channel -eq "beta") {
+        cargo build --release -p apricot-player -p apricot-youtube-helper --features apricot-updater/release-beta
+    }
+    else {
+        cargo build --release -p apricot-player -p apricot-youtube-helper
+    }
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed with exit code $LASTEXITCODE" }
 
     $BuiltExe = Join-Path $RustRoot "target\release\apricot-player.exe"
@@ -124,7 +132,7 @@ try {
         built_at_utc = [DateTime]::UtcNow.ToString("o")
         rust = $RustVersion
         data_schema_version = 1
-        update_channel = "local-only"
+        update_channel = $Channel
         app_data_directory = "%APPDATA%\ApricotPlayer2Beta"
         bundled_components = [ordered]@{
             nvda_controller_client = "nvda/nvdaControllerClient64.dll"
