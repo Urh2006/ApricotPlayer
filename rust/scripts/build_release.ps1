@@ -37,8 +37,9 @@ if ($SkipChecks) { $BuildArguments.SkipChecks = $true }
 & (Join-Path $PSScriptRoot "build_local_beta.ps1") @BuildArguments
 if (-not $?) { throw "The package build failed" }
 $Executable = Join-Path $PackageDir "ApricotPlayer2Beta.exe"
-& $Executable --qualification-smoke
-if ($LASTEXITCODE -ne 0) { throw "The qualification smoke test failed" }
+# The executable is a GUI program, so PowerShell must wait for it explicitly.
+$Smoke = Start-Process -FilePath $Executable -ArgumentList "--qualification-smoke" -Wait -PassThru -WindowStyle Hidden
+if ($Smoke.ExitCode -ne 0) { throw "The qualification smoke test failed" }
 
 # Portable zip: one root folder, as the updater expects.
 $Zip = Join-Path $ReleaseRoot "ApricotPlayer2Beta.zip"
@@ -46,8 +47,12 @@ Compress-Archive -LiteralPath $PackageDir -DestinationPath $Zip -CompressionLeve
 
 # Registry section: the same values as Settings "Set default player".
 $Placeholder = "C:\APRICOT_APP_DIR\ApricotPlayer2Beta.exe"
-$Lines = & $Executable --qualification-media-associations $Placeholder
-if ($LASTEXITCODE -ne 0) { throw "Listing the media associations failed" }
+$Listing = Join-Path $ReleaseRoot "media-associations.txt"
+$List = Start-Process -FilePath $Executable -ArgumentList @("--qualification-media-associations", "`"$Placeholder`"") -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput $Listing
+if ($List.ExitCode -ne 0) { throw "Listing the media associations failed" }
+$Lines = [IO.File]::ReadAllLines($Listing)
+Remove-Item -LiteralPath $Listing
+if ($Lines.Count -lt 100) { throw "The media association list is incomplete" }
 $Section = New-Object System.Collections.Generic.List[string]
 function Inno([string]$Text) { return $Text.Replace('{', '{{').Replace('"', '""').Replace('C:\APRICOT_APP_DIR', '{app}') }
 $Owned = [System.Collections.Generic.List[string]]::new()
@@ -63,8 +68,12 @@ foreach ($Line in $Lines) {
             $Section.Add("Root: HKCU; Subkey: `"$(Inno $Root)`"; Tasks: mediaassoc; Flags: uninsdeletekey")
         }
     }
-    $Entry = "Root: HKCU; Subkey: `"$(Inno $Subkey)`"; ValueType: $Kind; ValueName: `"$(Inno $Name)`""
+    # Inno Setup's "none" type writes no value at all, so an empty
+    # OpenWithProgids value is written as empty binary data.
+    $InnoKind = if ($Kind -eq "none") { "binary" } else { $Kind }
+    $Entry = "Root: HKCU; Subkey: `"$(Inno $Subkey)`"; ValueType: $InnoKind; ValueName: `"$(Inno $Name)`""
     if ($Kind -eq "string") { $Entry += "; ValueData: `"$(Inno $Data)`"" }
+    if ($Kind -eq "none") { $Entry += "; ValueData: `"`"" }
     $Entry += "; Tasks: mediaassoc"
     if (-not $Root) { $Entry += "; Flags: uninsdeletevalue" }
     $Section.Add($Entry)
