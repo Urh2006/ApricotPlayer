@@ -207,6 +207,8 @@ pub(crate) const UPDATE_REQUEST_SUBSCRIPTIONS: usize = 2;
 /// Posted by the settings window: Python `login_audiovault_from_settings`
 /// (with the settings window as `lParam`) and `logout_audiovault`.
 pub(crate) const WM_AUDIOVAULT_REQUEST: u32 = WM_APP + 8;
+/// Posted by a stream prefetch worker when its result is in the channel.
+const WM_STREAM_PREFETCH: u32 = WM_APP + 9;
 pub(crate) const AUDIOVAULT_REQUEST_LOGIN: usize = 1;
 pub(crate) const AUDIOVAULT_REQUEST_LOGOUT: usize = 2;
 
@@ -327,6 +329,13 @@ enum QueueStartMode {
 struct PendingQueuedStart {
     item: apricot_core::MediaItem,
     mode: QueueStartMode,
+}
+
+/// A prefetch worker's answer: the cache key and the resolved item with its
+/// formats, or nothing when yt-dlp failed (Python ignores prefetch errors).
+struct StreamPrefetchResult {
+    key: String,
+    resolved: Option<(apricot_core::MediaItem, Vec<YoutubeFormat>)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -594,6 +603,12 @@ struct WindowState {
     result_column_cursor: apricot_app::result_columns::ResultColumnCursor,
     pending_player_navigation: Option<i32>,
     pending_queued_start: Option<PendingQueuedStart>,
+    /// Python `stream_url_cache`, loaded on first use.
+    stream_cache: Option<apricot_app::stream_url_cache::StreamUrlCache>,
+    /// Python `prefetch_stream_urls`: cache keys a prefetch worker resolves.
+    stream_prefetches: HashSet<String>,
+    stream_prefetch_sender: mpsc::Sender<StreamPrefetchResult>,
+    stream_prefetch_receiver: mpsc::Receiver<StreamPrefetchResult>,
     /// Python `restart_current_playback` announces only the restart, not the
     /// play state that the resumed player reports afterwards.
     quiet_next_resume: bool,
@@ -1152,6 +1167,10 @@ unsafe extern "system" fn window_proc(
         }
         WM_TIMER if wparam.0 == audiovault::AUDIOVAULT_TIMER_ID => {
             audiovault::poll(window);
+            LRESULT(0)
+        }
+        WM_STREAM_PREFETCH => {
+            finish_stream_prefetches(window);
             LRESULT(0)
         }
         WM_AUDIOVAULT_REQUEST => {
@@ -1897,6 +1916,7 @@ unsafe fn create_controls(
         SendMessageW(control, WM_SETFONT, font_param, Some(LPARAM(1)));
     }
     let (download_sender, download_receiver) = mpsc::sync_channel(256);
+    let (stream_prefetch_sender, stream_prefetch_receiver) = mpsc::channel();
     Ok(WindowState {
         list,
         open,
@@ -1989,6 +2009,10 @@ unsafe fn create_controls(
         result_column_cursor: apricot_app::result_columns::ResultColumnCursor::default(),
         pending_player_navigation: None,
         pending_queued_start: None,
+        stream_cache: None,
+        stream_prefetches: HashSet::new(),
+        stream_prefetch_sender,
+        stream_prefetch_receiver,
         quiet_next_resume: false,
         next_youtube_operation_token: 0,
         playback: None,
@@ -4133,6 +4157,29 @@ unsafe fn start_youtube_resolve_with_options(
     let Some(state) = state_mut(window) else {
         return;
     };
+    // Python `resolve_stream_url` first asks `cached_stream_url`.
+    if let Some(cached) = cached_stream(state, &url) {
+        if purpose == YoutubeResolvePurpose::CopyStreamUrl {
+            copy_text_and_announce(window, &cached.stream_url, "stream_url_copied");
+            return;
+        }
+        let mut resolved = resolved_playback_item(cached.item, item, preserve_sequence);
+        resolved.stream_url = cached.stream_url.parse().ok();
+        resolved.external_audio_url = cached
+            .external_audio_url
+            .as_deref()
+            .and_then(|url| url.parse().ok());
+        if resolved.stream_url.is_some() {
+            start_player_at(
+                window,
+                resolved,
+                session_shuffle,
+                start_position_seconds,
+                background,
+            );
+            return;
+        }
+    }
     state.next_youtube_operation_token = state.next_youtube_operation_token.wrapping_add(1).max(1);
     let token = state.next_youtube_operation_token;
     let backend = media_resolve_backend(item, YOUTUBE_BACKEND.setting_value());
@@ -4177,6 +4224,189 @@ unsafe fn start_youtube_resolve_with_options(
         Err(error) => {
             report_youtube_resolve_start_error(window, state, purpose, &error.to_string());
         }
+    }
+}
+
+fn unix_now() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |duration| duration.as_secs_f64())
+}
+
+/// Python `stream_url_cache_key` for this window's settings.
+fn stream_cache_key(state: &mut WindowState, url: &str) -> String {
+    let cookies = effective_cookies_file(state);
+    let settings = state.application.settings();
+    apricot_app::stream_url_cache::cache_key(
+        url,
+        &apricot_app::stream_url_cache::StreamKeySettings {
+            stream_format_preference: settings.stream_format_preference.trim().to_lowercase(),
+            video_format: settings.video_format.trim().to_lowercase(),
+            max_height: settings.max_video_height.max(0),
+            restricted: settings.enable_age_restricted_videos,
+            cookies_file: cookies
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            cookies_signature: cookies
+                .as_deref()
+                .map(apricot_app::stream_url_cache::cookies_signature)
+                .unwrap_or_default(),
+            cookies_browser: settings.cookies_from_browser.trim().to_lowercase(),
+        },
+    )
+}
+
+fn stream_cache(state: &mut WindowState) -> &mut apricot_app::stream_url_cache::StreamUrlCache {
+    let path = state
+        .application
+        .settings_file()
+        .parent()
+        .map(|folder| folder.join(apricot_app::stream_url_cache::STREAM_URL_CACHE_FILE));
+    state.stream_cache.get_or_insert_with(|| {
+        path.map_or_else(Default::default, |path| {
+            apricot_app::stream_url_cache::StreamUrlCache::load(path, unix_now())
+        })
+    })
+}
+
+/// Python `cached_stream_url`.
+fn cached_stream(
+    state: &mut WindowState,
+    url: &str,
+) -> Option<apricot_app::stream_url_cache::CachedStream> {
+    if !state.application.settings().enable_stream_url_cache {
+        return None;
+    }
+    let key = stream_cache_key(state, url);
+    stream_cache(state).get(&key, unix_now())
+}
+
+/// Python `cache_stream_url` after a successful resolve.
+fn remember_stream(
+    state: &mut WindowState,
+    original: &apricot_core::MediaItem,
+    resolved: &apricot_core::MediaItem,
+    stream_url: &str,
+    external_audio_url: Option<String>,
+) {
+    let settings = state.application.settings();
+    if !settings.enable_stream_url_cache {
+        return;
+    }
+    let minutes = settings.stream_url_cache_minutes;
+    let Some(url) = original.url.as_ref().map(ToString::to_string) else {
+        return;
+    };
+    let key = stream_cache_key(state, &url);
+    let stream = apricot_app::stream_url_cache::CachedStream {
+        item: resolved.clone(),
+        stream_url: stream_url.to_owned(),
+        external_audio_url,
+    };
+    stream_cache(state).insert(&key, &stream, minutes, unix_now());
+}
+
+/// Python `schedule_next_stream_prefetch`: resolves the next item in the
+/// background, so its start does not wait for yt-dlp.
+unsafe fn schedule_stream_prefetch(window: HWND, state: &mut WindowState) {
+    let settings = state.application.settings();
+    if !settings.prefetch_next_stream_url || !settings.enable_stream_url_cache {
+        return;
+    }
+    let Some(item) = state.application.prefetch_candidate() else {
+        return;
+    };
+    if item.is_local_media()
+        || audiovault::is_item(&item)
+        || !matches!(
+            item.source,
+            apricot_core::MediaSource::Youtube
+                | apricot_core::MediaSource::Soundcloud
+                | apricot_core::MediaSource::Direct
+        )
+        || media_resolve_backend(&item, YOUTUBE_BACKEND.setting_value()) != YoutubeBackend::YtDlp
+    {
+        return;
+    }
+    let Some(url) = item.url.as_ref().map(ToString::to_string) else {
+        return;
+    };
+    let key = stream_cache_key(state, &url);
+    if state.stream_prefetches.contains(&key) || stream_cache(state).contains(&key, unix_now()) {
+        return;
+    }
+    let Some(components) = application_directory().map(|path| path.join("components")) else {
+        return;
+    };
+    let executable = apricot_platform::app_update::preferred_ytdlp_executable(&components);
+    let config = youtube_session_config(state);
+    let preference =
+        youtube_stream_preference(&state.application.settings().stream_format_preference);
+    state.stream_prefetches.insert(key.clone());
+    let sender = state.stream_prefetch_sender.clone();
+    let window_handle = window.0 as isize;
+    std::thread::spawn(move || {
+        use apricot_media::YoutubeEngine;
+        let resolved = apricot_platform::YtDlpYoutubeEngine::new(&executable)
+            .ok()
+            .and_then(|mut engine| {
+                engine
+                    .execute(apricot_media::YoutubeCommand::Configure { config })
+                    .ok()?;
+                match engine
+                    .execute(apricot_media::YoutubeCommand::Resolve { url, preference })
+                    .ok()?
+                {
+                    apricot_media::YoutubeResponsePayload::Resolved { item, formats } => {
+                        Some((*item, formats))
+                    }
+                    _ => None,
+                }
+            });
+        if sender.send(StreamPrefetchResult { key, resolved }).is_ok() {
+            let _ = PostMessageW(
+                Some(HWND(window_handle as *mut c_void)),
+                WM_STREAM_PREFETCH,
+                WPARAM(0),
+                LPARAM(0),
+            );
+        }
+    });
+}
+
+/// Python `prefetch_stream_url_worker` finishing: the resolved stream goes
+/// into the cache under the key it was started with.
+unsafe fn finish_stream_prefetches(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    while let Ok(result) = state.stream_prefetch_receiver.try_recv() {
+        state.stream_prefetches.remove(&result.key);
+        let Some((item, formats)) = result.resolved else {
+            continue;
+        };
+        let settings = state.application.settings();
+        if !settings.enable_stream_url_cache {
+            continue;
+        }
+        let minutes = settings.stream_url_cache_minutes;
+        let preference = youtube_stream_preference(&settings.stream_format_preference);
+        let Some(selection) = select_youtube_playback_formats(&formats, preference) else {
+            continue;
+        };
+        let Some(primary) = formats.get(selection.primary_index) else {
+            continue;
+        };
+        let stream = apricot_app::stream_url_cache::CachedStream {
+            item,
+            stream_url: primary.url.clone(),
+            external_audio_url: selection
+                .external_audio_index
+                .and_then(|index| formats.get(index))
+                .map(|format| format.url.clone()),
+        };
+        stream_cache(state).insert(&result.key, &stream, minutes, unix_now());
     }
 }
 
@@ -4293,6 +4523,17 @@ unsafe fn finish_youtube_resolve(
         );
         return;
     };
+    let external_audio_url = selection
+        .external_audio_index
+        .and_then(|index| formats.get(index))
+        .map(|format| format.url.clone());
+    remember_stream(
+        state,
+        &pending.original_item,
+        &item,
+        &primary.url,
+        external_audio_url,
+    );
     if pending.purpose == YoutubeResolvePurpose::CopyStreamUrl {
         copy_text_and_announce(window, &primary.url, "stream_url_copied");
         return;
@@ -9897,6 +10138,8 @@ unsafe fn poll_playback_runtime(window: HWND) {
                         set_status(state, &message, true);
                     }
                 }
+                // Python `schedule_next_stream_prefetch_for_request`.
+                schedule_stream_prefetch(window, state);
             }
             PlaybackEvent::Paused(paused) => {
                 let key = if paused {

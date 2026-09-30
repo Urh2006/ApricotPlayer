@@ -109,6 +109,18 @@ pub fn replaced_output_path(source: &Path, target: &str) -> PathBuf {
     source.with_extension(output_extension(target))
 }
 
+/// P-13 (O-17): a replaced original never overwrites another existing file.
+/// `song.mp3` converted to WAV next to an unrelated `song.wav` becomes
+/// `song (2).wav`; converting a file to its own format still replaces it.
+#[must_use]
+pub fn safe_replaced_output(source: &Path, output: &Path) -> PathBuf {
+    if same_path(output, source) || !output.exists() {
+        output.to_path_buf()
+    } else {
+        unique_output_path(output, Some(source))
+    }
+}
+
 /// Python adds the target extension when the chosen save name has none.
 #[must_use]
 pub fn with_default_extension(output: PathBuf, target: &str) -> PathBuf {
@@ -544,7 +556,9 @@ impl FileConversionJob {
         overwrite_confirmed: bool,
         unsupported_message: String,
     ) -> Self {
-        let output = if replace_original || (overwrite_confirmed && !same_path(&output, &source)) {
+        let output = if replace_original {
+            safe_replaced_output(&source, &output)
+        } else if overwrite_confirmed && !same_path(&output, &source) {
             output
         } else {
             unique_output_path(&output, Some(&source))
@@ -700,7 +714,7 @@ pub fn run_folder_conversion(
     let mut failed = 0;
     for (index, source) in files.iter().enumerate() {
         let (target, work_target) = if job.replace_originals {
-            let target = source.with_extension(extension);
+            let target = safe_replaced_output(source, &source.with_extension(extension));
             let work = temporary_conversion_path(&target);
             (target, work)
         } else {
@@ -1231,6 +1245,57 @@ mod tests {
             run_folder_conversion(&empty, &mut |_, _| Ok(()), &mut |_| {}),
             Ok(FolderConversionOutcome::NoMediaFiles)
         );
+    }
+
+    #[test]
+    fn replacing_originals_never_overwrites_another_file() {
+        let folder = tempfile::tempdir().expect("folder");
+        fs::write(folder.path().join("song.mp3"), b"mp3").expect("mp3");
+        fs::write(folder.path().join("song.wav"), b"other wav").expect("wav");
+        let job = FolderConversionJob {
+            ffmpeg: Some(PathBuf::from("ffmpeg.exe")),
+            source_folder: folder.path().to_path_buf(),
+            output_folder: folder.path().to_path_buf(),
+            target: "wav".to_owned(),
+            image: None,
+            replace_originals: true,
+        };
+        let outcome = run_folder_conversion(
+            &job,
+            &mut |_, arguments| {
+                fs::write(
+                    PathBuf::from(arguments.last().expect("output")),
+                    b"converted",
+                )
+                .map_err(|error| error.to_string())
+            },
+            &mut |_| {},
+        );
+        assert_eq!(
+            outcome,
+            Ok(FolderConversionOutcome::Done {
+                converted: 2,
+                failed: 0
+            })
+        );
+        assert!(!folder.path().join("song.mp3").exists());
+        assert_eq!(
+            fs::read(folder.path().join("song (2).wav")).expect("new file"),
+            b"converted"
+        );
+        // The unrelated song.wav was converted in place, not overwritten by the MP3.
+        assert!(folder.path().join("song.wav").exists());
+        let single = FileConversionJob::new(
+            None,
+            folder.path().join("song.wav"),
+            folder.path().join("song (2).wav"),
+            "wav",
+            None,
+            true,
+            false,
+            String::new(),
+        );
+        assert_eq!(single.output, folder.path().join("song (2) (2).wav"));
     }
 
     #[test]

@@ -108,6 +108,8 @@ enum Event {
         result: std::result::Result<Option<String>, AudiovaultError>,
     },
     Results {
+        /// P-14 (O-18): only the latest search or Recent request fills the list.
+        generation: u64,
         view: View,
         retry: Option<AfterLogin>,
         result: std::result::Result<Vec<vault::VaultRecord>, AudiovaultError>,
@@ -141,11 +143,13 @@ enum Event {
         download_after: bool,
         allow_retry: bool,
         task: u64,
+        request: PlayRequest,
         result: std::result::Result<(), AudiovaultError>,
     },
     Stream {
         item: MediaItem,
         allow_retry: bool,
+        request: PlayRequest,
         result: std::result::Result<ResolvedStream, AudiovaultError>,
     },
     Movie {
@@ -153,6 +157,15 @@ enum Event {
         allow_retry: bool,
         result: std::result::Result<PathBuf, AudiovaultError>,
     },
+}
+
+/// P-15 (O-19): a movie or episode that finishes preparing plays only while
+/// it is still what the user asked for.
+#[derive(Clone, Copy)]
+struct PlayRequest {
+    token: u64,
+    player_generation: u64,
+    from_audiovault: bool,
 }
 
 /// Python `resolve_audiovault_stream` without the open response.
@@ -199,6 +212,8 @@ pub(super) struct AudiovaultState {
     progress_task: u64,
     progress_generation: u64,
     show_generation: u64,
+    results_generation: u64,
+    play_request: u64,
     player_return: Option<Snapshot>,
     sender: Sender<Event>,
     receiver: Receiver<Event>,
@@ -224,6 +239,8 @@ impl Default for AudiovaultState {
             progress_task: 0,
             progress_generation: 0,
             show_generation: 0,
+            results_generation: 0,
+            play_request: 0,
             player_return: None,
             sender,
             receiver,
@@ -231,6 +248,11 @@ impl Default for AudiovaultState {
             polling: false,
         }
     }
+}
+
+/// An `AudioVault` item resolves through the `AudioVault` session, never yt-dlp.
+pub(super) fn is_item(item: &MediaItem) -> bool {
+    vault::item_kind(item).is_some()
 }
 
 pub(super) const fn is_view(view: MainView) -> bool {
@@ -748,6 +770,8 @@ unsafe fn show_recent(window: HWND, mode: AudiovaultMode, allow_retry: bool) {
     };
     state.audiovault.mode = mode;
     let title = text(state, mode.recent_title_key());
+    state.audiovault.results_generation += 1;
+    let generation = state.audiovault.results_generation;
     show_results_screen(window, &title, View::Recent(mode));
     announce(window, "audiovault_loading_recent", &[]);
     spawn(window, move |client, _| {
@@ -755,6 +779,7 @@ unsafe fn show_recent(window: HWND, mode: AudiovaultMode, allow_retry: bool) {
             .fetch_page(&format!("{AUDIOVAULT_BASE_URL}/"))
             .map(|page| vault::parse_vault_page(&page).records);
         Some(Event::Results {
+            generation,
             view: View::Recent(mode),
             retry: allow_retry.then_some(AfterLogin::Recent(mode)),
             result,
@@ -814,11 +839,17 @@ pub(super) unsafe fn search(window: HWND) {
 }
 
 unsafe fn start_search(window: HWND, query: String, mode: AudiovaultMode, allow_retry: bool) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state.audiovault.results_generation += 1;
+    let generation = state.audiovault.results_generation;
     spawn(window, move |client, _| {
         let result = client
             .fetch_page(&vault::catalog_url(mode, &query))
             .map(|page| vault::parse_vault_page(&page).records);
         Some(Event::Results {
+            generation,
             view: View::Search,
             retry: allow_retry.then_some(AfterLogin::SearchQuery(query, mode)),
             result,
@@ -1245,6 +1276,7 @@ pub(super) unsafe fn prepare_remote_episode(
         return;
     }
     state.audiovault.episode_loading.insert(key);
+    let play_request = new_play_request(state);
     let task = if download_after {
         start_progress(window, &item.title)
     } else {
@@ -1328,6 +1360,7 @@ pub(super) unsafe fn prepare_remote_episode(
             download_after,
             allow_retry,
             task,
+            request: play_request,
             result,
         })
     });
@@ -1339,6 +1372,7 @@ unsafe fn finish_episode(
     download_after: bool,
     allow_retry: bool,
     task: u64,
+    request: PlayRequest,
     result: std::result::Result<(), AudiovaultError>,
 ) {
     let Some(state) = state_mut(window) else {
@@ -1348,6 +1382,7 @@ unsafe fn finish_episode(
     state.audiovault.episode_loading.remove(&key);
     close_progress(state, task);
     match result {
+        Ok(()) if !download_after && !play_request_current(window, request) => {}
         Ok(()) => finish_remote_episode(window, &item, download_after),
         Err(AudiovaultError::SessionExpired) if allow_retry => retry_after_login(
             window,
@@ -1413,6 +1448,9 @@ unsafe fn play_local(window: HWND, item: MediaItem) {
 
 /// Python `play_audiovault_remote_item`.
 pub(super) unsafe fn play_remote(window: HWND, item: MediaItem, allow_retry: bool) {
+    let Some(request) = state_mut(window).map(new_play_request) else {
+        return;
+    };
     announce(window, "preparing_stream", &[("title", &item.title)]);
     spawn(window, move |client, _| {
         let url = item
@@ -1429,6 +1467,7 @@ pub(super) unsafe fn play_remote(window: HWND, item: MediaItem, allow_retry: boo
         Some(Event::Stream {
             item,
             allow_retry,
+            request,
             result,
         })
     });
@@ -1438,8 +1477,12 @@ unsafe fn finish_stream(
     window: HWND,
     mut item: MediaItem,
     allow_retry: bool,
+    request: PlayRequest,
     result: std::result::Result<ResolvedStream, AudiovaultError>,
 ) {
+    if result.is_ok() && !play_request_current(window, request) {
+        return;
+    }
     match result {
         Ok(ResolvedStream {
             final_url,
@@ -1485,6 +1528,25 @@ unsafe fn finish_stream(
             message(window, "player_failed", &error);
         }
     }
+}
+
+fn new_play_request(state: &mut WindowState) -> PlayRequest {
+    state.audiovault.play_request += 1;
+    PlayRequest {
+        token: state.audiovault.play_request,
+        player_generation: state.application.player_session().generation(),
+        from_audiovault: is_view(state.view),
+    }
+}
+
+/// A newer `AudioVault` request, another item started in the player, or
+/// leaving the `AudioVault` screens the request came from makes it stale.
+unsafe fn play_request_current(window: HWND, request: PlayRequest) -> bool {
+    state(window).is_some_and(|state| {
+        request.token == state.audiovault.play_request
+            && request.player_generation == state.application.player_session().generation()
+            && (!request.from_audiovault || is_view(state.view))
+    })
 }
 
 /// Starting an `AudioVault` item from anywhere: a movie needs its stream and
@@ -1757,11 +1819,17 @@ unsafe fn handle_event(window: HWND, event: Event) {
             result,
         } => finish_login(window, &email, remember, after, result),
         Event::Results {
+            generation,
             view,
             retry,
             result,
             mode,
-        } => finish_results(window, view, retry, result, mode),
+        } => {
+            if state(window).is_some_and(|state| state.audiovault.results_generation == generation)
+            {
+                finish_results(window, view, retry, result, mode);
+            }
+        }
         Event::Manifest {
             show,
             generation,
@@ -1809,13 +1877,23 @@ unsafe fn handle_event(window: HWND, event: Event) {
             download_after,
             allow_retry,
             task,
+            request,
             result,
-        } => finish_episode(window, item, download_after, allow_retry, task, result),
+        } => finish_episode(
+            window,
+            item,
+            download_after,
+            allow_retry,
+            task,
+            request,
+            result,
+        ),
         Event::Stream {
             item,
             allow_retry,
+            request,
             result,
-        } => finish_stream(window, item, allow_retry, result),
+        } => finish_stream(window, item, allow_retry, request, result),
         Event::Movie {
             item,
             allow_retry,

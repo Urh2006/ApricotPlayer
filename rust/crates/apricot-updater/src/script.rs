@@ -125,20 +125,30 @@ pub fn portable_zip_update_script(input: &UpdateScriptInput<'_>) -> String {
             "    }",
             "    $replacementStarted = $true",
             "    foreach ($item in $items) {",
-            "        Copy-Item -LiteralPath $item.FullName -Destination $targetDir -Recurse -Force -ErrorAction Stop",
+            // Recorded first, so a copy that fails halfway is removed too.
             "        $copiedItems += $item.Name",
+            "        Copy-Item -LiteralPath $item.FullName -Destination $targetDir -Recurse -Force -ErrorAction Stop",
             "    }",
             "    if (-not (Test-Path -LiteralPath $targetExe)) { throw \"Updated $executableName is missing after copy.\" }",
             "    if ((Get-Item -LiteralPath $targetExe).Length -lt 1048576) { throw \"Updated $executableName is too small.\" }",
             "} catch {",
             "    Log \"Portable update failed: $($_.Exception.Message)\"",
+            // P-11 (O-15): the backup is deleted only after every saved item is
+            // back; otherwise it stays and the log names it.
+            "    $restoreFailed = $false",
             "    try {",
             "        if ($replacementStarted) {",
-            "            foreach ($name in $copiedItems) { $copied = Join-Path $targetDir $name; if (Test-Path -LiteralPath $copied) { Remove-Item -LiteralPath $copied -Recurse -Force -ErrorAction SilentlyContinue } }",
+            "            foreach ($name in $copiedItems) { if ($movedItems -contains $name) { continue }; $copied = Join-Path $targetDir $name; if (Test-Path -LiteralPath $copied) { Remove-Item -LiteralPath $copied -Recurse -Force -ErrorAction SilentlyContinue } }",
             "        }",
-            "        foreach ($name in $movedItems) { $saved = Join-Path $backupRoot $name; $restored = Join-Path $targetDir $name; if (Test-Path -LiteralPath $restored) { Remove-Item -LiteralPath $restored -Recurse -Force -ErrorAction SilentlyContinue }; if (Test-Path -LiteralPath $saved) { Move-Item -LiteralPath $saved -Destination $restored -Force -ErrorAction SilentlyContinue } }",
-            "        if (Test-Path -LiteralPath $backupRoot) { Remove-Item -LiteralPath $backupRoot -Recurse -Force -ErrorAction SilentlyContinue }",
-            "    } catch { Log \"Portable rollback warning: $($_.Exception.Message)\" }",
+            "        foreach ($name in $movedItems) {",
+            "            $saved = Join-Path $backupRoot $name; $restored = Join-Path $targetDir $name",
+            "            try {",
+            "                if (Test-Path -LiteralPath $restored) { Remove-Item -LiteralPath $restored -Recurse -Force -ErrorAction Stop }",
+            "                if (Test-Path -LiteralPath $saved) { Move-Item -LiteralPath $saved -Destination $restored -Force -ErrorAction Stop }",
+            "            } catch { $restoreFailed = $true; Log \"Portable rollback could not restore ${name}: $($_.Exception.Message)\" }",
+            "        }",
+            "    } catch { $restoreFailed = $true; Log \"Portable rollback warning: $($_.Exception.Message)\" }",
+            "    if ($restoreFailed) { Log \"Portable rollback kept the backup in $backupRoot\" } elseif (Test-Path -LiteralPath $backupRoot) { Remove-Item -LiteralPath $backupRoot -Recurse -Force -ErrorAction SilentlyContinue }",
             "    try { if (Test-Path -LiteralPath $extractRoot) { Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue } } catch { }",
             "    exit 1",
             "}",
@@ -469,6 +479,16 @@ mod tests {
             "Move-Item -LiteralPath $existing -Destination (Join-Path $backupRoot $item.Name)"
         ));
         assert!(script.contains("-ArgumentList '--updated-relaunch'"));
+        // P-11: a partly copied item is removed and a failed restore keeps the backup.
+        let recorded = script.find("$copiedItems += $item.Name").expect("recorded");
+        let copied = script
+            .find("Copy-Item -LiteralPath $item.FullName")
+            .expect("copied");
+        assert!(recorded < copied);
+        assert!(script.contains(
+            "if ($restoreFailed) { Log \"Portable rollback kept the backup in $backupRoot\" }"
+        ));
+        assert!(!script.contains("Move-Item -LiteralPath $saved -Destination $restored -Force -ErrorAction SilentlyContinue"));
         assert!(script.ends_with(
             "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue"
         ));

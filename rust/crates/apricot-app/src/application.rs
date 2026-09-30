@@ -1401,6 +1401,21 @@ impl Application {
         PlayerNavigationOutcome::Unavailable
     }
 
+    /// Python `next_prefetch_candidate`: the next item of the running list,
+    /// otherwise the first queued item, otherwise the next list item.
+    pub fn prefetch_candidate(&self) -> Option<MediaItem> {
+        let sequence = &self.state.player_sequence;
+        if sequence.is_active() {
+            return sequence.relative(1);
+        }
+        self.state
+            .playback_queue
+            .queue()
+            .front()
+            .cloned()
+            .or_else(|| sequence.relative(1))
+    }
+
     pub const fn player_sequence_source(&self) -> Option<PlaybackSequenceSource> {
         self.state.player_sequence.source()
     }
@@ -4046,6 +4061,39 @@ mod tests {
             }
         );
         assert_eq!(app.playback_queue().len(), 1);
+    }
+
+    #[test]
+    fn prefetch_candidate_follows_python_next_prefetch_candidate() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        assert_eq!(app.prefetch_candidate(), None);
+        let queued = youtube_item(99, MediaKind::Video);
+        app.add_to_playback_queue(queued.clone())
+            .expect("queue add");
+        // Without a running list the first queued item is next.
+        app.start_player_item(media_item("unrelated"));
+        assert_eq!(app.prefetch_candidate(), Some(queued));
+
+        let work = app
+            .begin_youtube_search("query", YoutubeSearchKind::Video)
+            .expect("search");
+        let items = vec![
+            youtube_item(0, MediaKind::Video),
+            youtube_item(1, MediaKind::Video),
+        ];
+        app.apply_search_results(work.generation, items, None);
+        let current = app.prepare_search_playback(0).expect("selected item");
+        app.start_player_item(current);
+        // A running list comes first and the lookup does not move it.
+        assert_eq!(
+            app.prefetch_candidate().map(|item| item.id.0),
+            Some("1".to_owned())
+        );
+        assert_eq!(
+            app.prefetch_candidate().map(|item| item.id.0),
+            Some("1".to_owned())
+        );
     }
 
     #[test]

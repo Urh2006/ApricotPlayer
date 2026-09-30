@@ -1540,3 +1540,29 @@ način). Pomembnejše spremembe:
 
 Odprto: točka 20 (predpomnilnik tokov in prefetch) kot nova enota; predlogi P-11 do P-15
 (točke 1, 22, 24, 25, 26) čakajo na Urha.
+
+### Odločitve P-11 do P-15 in E21 (30. 9. 2026)
+
+Urh je 30. 9. 2026 potrdil vsa priporočila:
+
+- **O-15 (P-11).** Portable updater ob neuspeli obnovitvi obdrži varnostno kopijo in to zapiše v
+  `updater.log`; delno kopiran element se odstrani. Python kopijo izbriše. Preverjeno z
+  zaklenjeno datoteko v ločeni mapi.
+- **O-16 (P-12, ne).** `player_command` ostane brez učinka; Rust vedno uporablja priloženo
+  libmpv.
+- **O-17 (P-13).** Pretvorba z zamenjavo originalov ne prepiše druge obstoječe datoteke,
+  ampak zapiše na primer `song (2).wav`. Pretvorba v isti format še vedno zamenja original.
+- **O-18 (P-14).** Pozni AudioVault rezultati starejšega iskanja ali drugega Recent pogleda
+  se zavržejo (generacija zahteve).
+- **O-19 (P-15).** Pozno pripravljen AudioVault film ali epizoda se ne zažene, če je medtem
+  prišla novejša AudioVault zahteva, se je v predvajalniku začel drug posnetek ali je
+  uporabnik zapustil AudioVault zaslone, s katerih je zahteva prišla.
+
+E21 (točka 20): `apricot-app/src/stream_url_cache.rs` je Pythonov predpomnilnik naslovov tokov
+(`stream_url_cache.json` v podatkovni mapi, ključ z nastavitvami, ki vplivajo na tok, življenjska
+doba iz nastavitve, a največ minuto pred iztekom podpisanega naslova, trajno se shranijo le
+vnosi z iztekom v naslovu). Ključi imajo Rust profil, zato se Python in Rust vnosi ne mešajo,
+oba pa ohranita tuje vnose. Pred zagonom yt-dlp se preveri predpomnilnik (predvajanje in Copy
+stream URL), po uspešnem razreševanju se tok shrani. Ob začetku predvajanja se, kot Python
+`schedule_next_stream_prefetch`, naslednji element seznama (ali prvi v čakalni vrsti) razreši v
+ozadju z ločenim yt-dlp procesom in shrani v predpomnilnik.

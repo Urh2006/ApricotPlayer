@@ -34,6 +34,7 @@ pub mod search_session;
 pub mod settings_controller;
 pub mod settings_model;
 pub mod settings_session;
+pub mod stream_url_cache;
 pub mod subscription_controller;
 pub mod transcript;
 pub mod unavailable;
