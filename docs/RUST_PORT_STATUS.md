@@ -194,6 +194,8 @@ Enote, ki popravljajo odstopanja, so na vrsti prve.
 2. Ključi, ki jih je GPT dodal v Pythonov `en.json`, se premaknejo na Rust stran,
    `en.json` pa se vrne v stanje iz `main`.
 3. Rust beta ostane v ločenem imeniku z enkratnim uvozom Python podatkov.
+4. (30. 9. 2026) ApricotPlayer 2.0 nadomesti Python verzijo in ne teče ob njej; ob objavi
+   izide s Pythonovimi imeni paketov. Glej razdelek 6, "Rust 2.0 nadomesti Python".
 
 ### Odobrena odstopanja od Pythona
 
@@ -1469,3 +1471,48 @@ Pred objavo (tvoja odločitev): NVDA preizkus celote, podpis paketov, GitHub pre
 obema paketoma in odločitev, ali 2.0 pozneje nadomesti Python 1.x (ista mapa, podatki in
 AppId) ali ostane ločena. Python 1.x na kanalu beta bo predizdajo 2.0 videl; pred objavo je
 treba preveriti, kaj naredi, ko v njej ne najde svojega paketa `ApricotPlayerSetup.exe`.
+
+### Rust 2.0 nadomesti Python (30. 9. 2026)
+
+Odločitev (Urh, 30. 9. 2026): ApricotPlayer 2.0 nadomesti Python verzijo in ne teče ob
+njej. Ob objavi bo 2.0 izšla s Pythonovimi imeni paketov (`ApricotPlayerSetup.exe`,
+`ApricotPlayer.zip`), da jo nameščene 1.x najdejo in namestijo čez sebe.
+
+Preverjeno v Pythonovem updaterju: na kanalu stable Python predizdaj ne vidi. Na kanalu
+beta predizdajo 2.0 vidi kot novejšo; z imeni `ApricotPlayer2Beta*` v njej ne najde paketa,
+javlja "no Windows asset found in release" in ne dobi več nobene 1.x posodobitve. S
+Pythonovimi imeni in istim AppId pa tiho s skrbniškimi pravicami zažene namestitveni
+program v isto mapo in nato `ApricotPlayer.exe`. Prenosna 1.x se na 2.0 ne more
+posodobiti sama, ker zahteva mapo `_internal`.
+
+Spremembe:
+
+- Funkcija `stable-identity` (apricot-player, apricot-platform, apricot-updater): Pythonove
+  mape (`%APPDATA%\ApricotPlayer`, predpomnilnik, prenosi, stari
+  `UrhasaurusYouTubePlayer` kot vir uvoza), `ApricotPlayer.exe`, ime enojnega primerka,
+  vnos za zagon z Windows, registracija predvajalnika in imena paketov za posodobitve.
+  Naslovi oken in sporočil so "ApricotPlayer".
+- `rust/scripts/build_stable_release.ps1` zgradi `ApricotPlayerSetup.exe` iz
+  nespremenjenega Pythonovega `installer/ApricotPlayer.iss` (isti AppId, mapa, opravili,
+  registracija, brisanje `_internal`), `ApricotPlayer.zip` in vsote. Privzeti kanal je
+  local-only: posodobitve aplikacije samo iz mape v `APRICOT_UPDATE_TEST_FEED`.
+- Updater nikoli ne namesti izdaje pod 2.0 (nov test). Lokalna mapa s posodobitvami brez
+  `ytdlp-latest.json` yt-dlp še naprej posodablja z GitHuba.
+
+Zamenjava na Urhovem računalniku:
+
+- Kopija Urhovih podatkov na ločenem namizju: izdajna gradnja s Pythonovo identiteto je
+  prebrala vse (zgodovina 131, podcasti 4, naročnine 5, playlist z 4 elementi, glavni
+  meni z nadaljevanjem seje) in ni spremenila nobene datoteke.
+- Varnostna kopija v `%LOCALAPPDATA%\ApricotPlayer-backup\1.0.21-2026-09-30`: vse
+  podatkovne datoteke in `components` (brez 2 GB predpomnilnika), preverjeno enake, ter
+  namestitveni program 1.0.21. Vrnitev: `restore-python-1.0.21.ps1` v isti mapi
+  (`-RestoreData` vrne tudi podatke s 30. 9.).
+- Mapa za lokalne posodobitve `%LOCALAPPDATA%\ApricotPlayer-update-feed` in uporabniška
+  spremenljivka `APRICOT_UPDATE_TEST_FEED`.
+- `ApricotPlayerSetup.exe` 2.0.0-beta.1 je nameščen čez 1.0.21 (Urh je potrdil UAC): vpis za
+  odstranitev "ApricotPlayer version 2.0.0-beta.1", `_internal` odstranjen, bližnjica na
+  namizju in registracija predvajalnika kažeta na Rust `ApricotPlayer.exe`, ki prestane
+  `--qualification-smoke`.
+- Stara vgnezdena mapa `C:\Program Files\ApricotPlayer\ApricotPlayer` (Python iz maja,
+  480 MB) je ostala, ker je ni ustvarila ta namestitev.
