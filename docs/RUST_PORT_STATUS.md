@@ -1432,3 +1432,40 @@ Ročni NVDA preizkus celote (primerjaj vsak korak s Python verzijo):
 Preverjanje: `cargo build`, `cargo test` (613 uspešnih, 18 izključenih), `cargo clippy --workspace
 --all-targets -D warnings`, `cargo fmt`, `--qualification-smoke` in živi preizkusi na
 ločenem nevidnem namizju z ločenimi podatki.
+
+### Priprava izdaje 2.0.0-beta.1 (30. 9. 2026)
+
+Vse je lokalno na veji rust-2.0: nič ni potisnjeno, nič ni na main, ni GitHub izdaje.
+
+- Verzija je `2.0.0-beta.1` (Pythonov `parse_version` "dev" šteje kot končno izdajo,
+  "beta" pa pravilno kot predizdajo pred 2.0.0).
+- Izdajna gradnja ima funkcijo `apricot-updater/release-beta`: kanal posodobitev je
+  Beta, zato distribuirana beta namešča poznejše 2.0 predizdaje z GitHuba. Lokalna beta
+  (`build_local_beta.ps1` brez `-Channel beta`) ostane LocalOnly (D-011). Testni
+  okoljski spremenljivki (`APRICOT_UPDATE_TEST_FEED`, `APRICOT_AUDIOVAULT_TEST_BASE`) v
+  izdajni gradnji ne delujeta.
+- `rust/scripts/build_release.ps1` iz čistega drevesa zgradi v
+  `rust/local-dist/release/<verzija>`: `ApricotPlayer2Beta.zip` (prenosna, ena
+  korenska mapa), `ApricotPlayer2BetaSetup.exe` in `SHA256SUMS.txt`. Poganja teste,
+  clippy in `--qualification-smoke`.
+- `installer/ApricotPlayer2Beta.iss`: namestitev na uporabnika brez skrbniških pravic
+  v `%LOCALAPPDATA%\Programs\ApricotPlayer2Beta`, lasten AppId (Python namestitev in
+  njen AppId ostaneta nedotaknjena), opravili "desktopicon" in "mediaassoc" z istimi
+  imeni, kot ju uporablja skripta za posodobitev. Registracija predvajalnika zapiše
+  iste vrednosti v HKCU kot "Set default player" v nastavitvah (seznam da aplikacija z
+  `--qualification-media-associations`); odstranitev jih pobriše.
+- Osnutek opomb: `release-notes/v2.0.0-beta.1.md`.
+
+Preverjeno: oba paketa preideta preverjanje, ki ga updater izvede ob prenosu posodobitve
+(nov izključen test `release_files` z `APRICOT_RELEASE_DIR`). Tiha namestitev v ločeno
+mapo je namestila vse datoteke in `unins000.exe`, vpis za odstranitev (verzija
+2.0.0-beta.1), bližnjico v meniju Start in registracijo predvajalnika; nameščen program
+prestane `--qualification-smoke`, `build-info.json` pravi kanal beta, čista gradnja. Tiha
+odstranitev je pobrisala mapo, vpis, bližnjico in vse vrednosti v registru, podatki v
+`%APPDATA%\ApricotPlayer2Beta` so ostali. Tvoja Python namestitev in obstoječa beta
+nista bili spremenjeni.
+
+Pred objavo (tvoja odločitev): NVDA preizkus celote, podpis paketov, GitHub predizdaja z
+obema paketoma in odločitev, ali 2.0 pozneje nadomesti Python 1.x (ista mapa, podatki in
+AppId) ali ostane ločena. Python 1.x na kanalu beta bo predizdajo 2.0 videl; pred objavo je
+treba preveriti, kaj naredi, ko v njej ne najde svojega paketa `ApricotPlayerSetup.exe`.
