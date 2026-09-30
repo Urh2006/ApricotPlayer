@@ -1034,7 +1034,7 @@ unsafe fn activate_dynamic_control(window: HWND, id: usize) {
         return;
     };
     if let ControlBinding::Command(command) = bound.binding {
-        handle_settings_command(window, command, &window_text(bound.control));
+        handle_settings_command(window, command);
         return;
     }
     if matches!(bound.binding, ControlBinding::ShortcutActionList(_)) {
@@ -1090,7 +1090,7 @@ unsafe fn sync_shortcut_selection(state: &mut SettingsWindowState, source: &Boun
     }
 }
 
-unsafe fn handle_settings_command(window: HWND, command: SettingsCommand, label: &str) {
+unsafe fn handle_settings_command(window: HWND, command: SettingsCommand) {
     match command {
         SettingsCommand::ResetSection => reset_section(window),
         SettingsCommand::BrowseDownloadFolder => browse_download_folder(window),
@@ -1110,13 +1110,15 @@ unsafe fn handle_settings_command(window: HWND, command: SettingsCommand, label:
         SettingsCommand::AudiovaultLogout => request_audiovault(window, false),
         SettingsCommand::AudiovaultRegister => crate::win32::open_audiovault_registration(),
         SettingsCommand::CheckSubscriptions => {
-            if let Some(state) = state_mut(window) {
-                // Python has every settings command. Until the Rust route exists,
-                // speak the beta message and keep focus on the button.
-                let catalog = settings_catalog(state);
-                let feature = label.replace('&', "");
-                let message = apricot_app::unavailable_feature_message(&catalog, feature.trim());
-                state.announcer.announce(&message, false);
+            // Python checks with the saved settings, without applying the
+            // visible controls; the main window runs the check.
+            if let Some(state) = state(window) {
+                let _ = PostMessageW(
+                    Some(state.owner),
+                    crate::win32::WM_UPDATE_REQUEST,
+                    WPARAM(crate::win32::UPDATE_REQUEST_SUBSCRIPTIONS),
+                    LPARAM(0),
+                );
             }
         }
     }

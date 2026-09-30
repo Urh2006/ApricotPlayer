@@ -144,7 +144,7 @@ fn run_qualification(arguments: &[std::ffi::OsString]) -> Result<bool, Box<dyn s
         .iter()
         .any(|argument| argument == "--qualification-smoke")
     {
-        assert_eq!(SettingId::ALL.len(), 117);
+        assert_eq!(SettingId::ALL.len(), 116);
         assert_eq!(ACTIONS.len(), 91);
         assert_eq!(CUSTOMIZABLE_MAIN_MENU.len(), 19);
         assert_eq!(LANGUAGES.len(), 27);

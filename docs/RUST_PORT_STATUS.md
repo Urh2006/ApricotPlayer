@@ -184,8 +184,8 @@ Enote, ki popravljajo odstopanja, so na vrsti prve.
   razdelek 6.** Namestitev posodobitve aplikacije ostane po D-011 v lokalni beti
   onemogočena.
 - **E19. AudioVault. Zaključeno 30. 9. 2026, glej razdelek 6.**
-- **E20.** Zaključna parity vrata: ponovna primerjava manifesta, preverjanje števil
-  v registrih, NVDA preizkus celote, preverjanje uvoza podatkov in zmogljivosti.
+- **E20. Zaključna parity vrata. Strojni del zaključen 30. 9. 2026, glej razdelek 6.**
+  Odprti ostajajo ročni NVDA preizkus celote, pravi računi, dolgi teki in izdaja 2.0.
 
 ## 5. Odobrene odločitve (27. 9. 2026)
 
@@ -249,6 +249,10 @@ odstopanje se najprej predlaga Urhu in se po odobritvi zapiše sem.
   gre prek skrite delovne datoteke, zato obstoječa datoteka ob napaki ostane nespremenjena.
   Izvirnika samega se tudi s potrditvijo ne prepiše, takrat ostane "ime (2)" (predlog P-9 iz
   E17, odobren 29. 9. 2026, narejeno pred E18).
+- **O-14.** Python ob novem AudioVault zaslonu obdrži rezultate prejšnjega zaslona, zato Play
+  ali Download audio na vrstici "No search results." predvaja ali prenese prvi element starega
+  seznama. Rust ob novem zaslonu rezultate počisti (predlog P-10 iz E19, odobren 30. 9. 2026,
+  narejeno v E19).
 
 ## 6. Dnevnik enot
 
@@ -1341,9 +1345,9 @@ Nujne razlike:
 - Za preizkuse lokalna beta (ne izdaja) sprejme `APRICOT_AUDIOVAULT_TEST_BASE` z
   naslovom na 127.0.0.1.
 
-Predlog, že narejen in čaka odločitev:
+Predlog, že narejen:
 
-- **P-10.** Python ob novem AudioVault zaslonu obdrži prejšnje rezultate, zato Play ali
+- **P-10** (odobreno 30. 9. 2026 kot O-14). Python ob novem AudioVault zaslonu obdrži prejšnje rezultate, zato Play ali
   Download audio na vrstici "No search results." predvaja ali prenese prvi element
   prejšnjega seznama. Rust ob novem zaslonu rezultate počisti, tako da gumba ne storita
   ničesar, dokler ni novih rezultatov. Hkrati fokus po kontekstnem meniju ostane na
@@ -1359,3 +1363,72 @@ AudioVault strežniku preverila vse zgoraj: prijavo in napake prijave, menije, f
 in vrstni red Tab, nedavne naslove, iskanje, epizode, predvajanje epizod in filma (strežnik
 je videl piškotek iz mpv), naslednjo in prejšnjo epizodo, vrnitev iz predvajalnika, prenose,
 iztek seje in odjavo. Prave AudioVault prijave nisem preizkusil, ker nimam računa.
+
+### E20: zaključna parity vrata (30. 9. 2026)
+
+Rezultat: vsa strojna preverjanja so uspešna, vrata pa še niso zaprta, ker ostajajo
+preizkusi, ki jih lahko opravi samo Urh (NVDA celote, pravi računi) ali ki zahtevajo
+dolge teke in pripravo izdaje.
+
+Preverjeno s skripto proti Pythonu 1.0.21 (imena, vrstni red in vrednosti, ne samo
+števila):
+
+- 116 polj nastavitev, 91 dejanj s privzetimi kraticami in vrstnim redom v seznamu
+  kratic, 19 postavk glavnega menija z enakimi ključi besedil, 27 jezikov z imeni,
+  10 pasov EQ in 18 tovarniških nastavitev z enakimi vrednostmi ter 3 prosta mesta.
+- Pythonove datoteke jezikov so nespremenjene, 5 besedil samo za Rust obstaja v vseh
+  27 jezikih in ne prekriva Pythonovih ključev, vsi ključi, ki jih Rust uporablja
+  (170), obstajajo, nadomestna mesta `{...}` so v vseh jezikih enaka.
+- Nobeno dejanje in nobena postavka glavnega menija ne pade več na sporočilo "ni na
+  voljo v tej beti".
+
+Najdeno in popravljeno:
+
+- Zaslon elementov uporabniškega playlista je imel tri gumbe, ki jih Python nima
+  ("Play playlist", "Shuffle playlist", "Add to playback queue"). Zadnji je ob uporabi
+  izgovoril surova ključa `playback_queue_added_count` in `playback_queue_exists`, ki ne
+  obstajata. Gumbi so odstranjeni, zaslon ima Pythonove gumbe Back, Play, Download
+  playlist in Remove from playlist ter enak vrstni red Tab.
+- Gumb "Check subscriptions now" v nastavitvah je še kazal "ni na voljo". Zdaj kot v
+  Pythonu požene ročno preverjanje naročnin; rezultat se oglasi, medtem ko nastavitve
+  ostanejo odprte in fokus ostane v njih (preverjeno v kopiji s tvojimi naročninami:
+  "1 new videos from SomeOrdinaryGamers.").
+- Zagon z `--qualification-smoke` se je sesul, ker je še pričakoval 117 nastavitev
+  (pred odstranitvijo `youtube_backend`). Zdaj 116.
+
+Podatki: kopija tvojih pravih Python podatkov je šla skozi iste krmilnike kot prvi
+zagon bete (nov test `python_data_import`, zaženeš ga z `APRICOT_PYTHON_APP_DATA`):
+zgodovina 131, obvestila 200, naročnine 5, RSS viri 4 s 1205 epizodami, playlist 1 s 4
+elementi, zadnja seja prebrana, nobena nastavitev ni spremenjena. Obstoječi preizkus
+povratnega zapisa (`qualify_python_data_compat.ps1`) je uspešen.
+
+Zmogljivost (izdajna beta na ločenem namizju, s tvojimi podatki): glavni meni po 227 ms
+ob prvem zagonu z uvozom, nato okoli 145 ms, 41 MB delovnega pomnilnika in 18 MB
+zasebnega. Primerjave s Pythonom nisem izmeril, ker bi Python med zagonom govoril prek
+tvojega NVDA.
+
+Manifest: potrjene točke so odkljukane z dokazom (števila, AudioVault, uvoz, zagon).
+Preostale neodkljukane točke potrebujejo spodnji ročni preizkus, prave račune, dolge
+teke (8 ur, 14.000 datotek) ali pripravo izdaje 2.0 (namestitev, odstranitev,
+podpisani paketi).
+
+Ročni NVDA preizkus celote (primerjaj vsak korak s Python verzijo):
+
+1. Glavni meni: puščice, črke, Enter na vsaki postavki, Escape nazaj; Ctrl+Alt+M,
+   Ctrl+Alt+Y, Ctrl+Alt+A, Ctrl+Alt+O, Ctrl+Alt+I, Ctrl+Alt+S od koder koli.
+2. Iskanje: vpis, Enter, Tab po vseh kontrolah, Enter na rezultatu, Aplikacije in
+   Shift+F10 na rezultatu, kanalu in playlistu, Ctrl+Shift+A in Ctrl+Shift+D.
+3. Predvajalnik: presledek, puščice, Ctrl+puščice, T, V, S, D, F4, O, B, Ctrl+PageDown,
+   Escape; enako s predvajanjem v ozadju.
+4. Priljubljene, zgodovina, playlisti (nov zaslon brez treh gumbov), vrsta za
+   predvajanje, zaznamki, center obvestil.
+5. Naročnine in podcasti: odpiranje, nove epizode, prenos, Aplikacije meni.
+6. Prenosi: posamezni in zbirke, okno napredka, preklic.
+7. Nastavitve: vsi razdelki, Tab, ponastavitev, shranjevanje, "Check subscriptions
+   now", posodobitve, piškotki, AudioVault prijava in odjava.
+8. Pladenj: zapiranje v pladenj, obnovitev, drugi zagon, odpiranje datoteke z
+   dvoklikom.
+
+Preverjanje: `cargo build`, `cargo test` (613 uspešnih, 18 izključenih), `cargo clippy --workspace
+--all-targets -D warnings`, `cargo fmt`, `--qualification-smoke` in živi preizkusi na
+ločenem nevidnem namizju z ločenimi podatki.

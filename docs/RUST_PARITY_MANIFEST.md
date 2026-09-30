@@ -2,6 +2,11 @@
 
 Status: mandatory acceptance checklist for the Rust rewrite.
 
+E20 (30. 9. 2026): the registry counts, the AudioVault section, the data import
+and the startup numbers were re-checked against Python 1.0.21 with evidence in
+`docs/RUST_PORT_STATUS.md` (E20). Unchecked items still need the NVDA acceptance
+run, real accounts, long soak runs or release work listed there.
+
 Baseline source: current Python code, tests, `CHANGELOG.md`, release notes, and
 the existing macOS parity plan. The manifest must be regenerated and reviewed
 against the exact baseline commit when implementation begins and before every
@@ -15,14 +20,14 @@ Spotify is intentionally not part of this manifest.
 
 ## Baseline cardinalities
 
-- [ ] 116 `Settings` fields represented, migrated, resettable, and tested.
-- [ ] Rust-only `youtube_backend` setting is typed, normalized, resettable, and
-  forward-compatible with the Python baseline.
-- [ ] 91 shortcut actions represented, editable, scoped, displayed, and tested.
-- [ ] 19 customizable main-menu actions represented in exact order.
-- [ ] Update Available, Settings, and Exit remain permanent menu items.
-- [ ] 27 shipped languages load with English fallback and valid placeholders.
-- [ ] 10 independent EQ bands and 21 current preset/profile slots represented.
+- [x] 116 `Settings` fields represented, migrated, resettable, and tested.
+- [x] ~~Rust-only `youtube_backend` setting~~: removed by the approved decision of
+  27. 9. 2026 (always yt-dlp); the Python baseline has no such field.
+- [x] 91 shortcut actions represented, editable, scoped, displayed, and tested.
+- [x] 19 customizable main-menu actions represented in exact order.
+- [x] Update Available, Settings, and Exit remain permanent menu items.
+- [x] 27 shipped languages load with English fallback and valid placeholders.
+- [x] 10 independent EQ bands and 21 current preset/profile slots represented.
 - [ ] Every durable Python data file has a migration and rollback test.
 - [ ] Every current Python test has an equivalent Rust regression purpose.
 
@@ -70,7 +75,7 @@ Customizable items in exact order:
 - [ ] `search`: Search YouTube / SoundCloud.
 - [ ] `resume_last_session`: Resume last session, only when available/enabled.
 - [x] `trending`: Trending, according to feature setting.
-- [ ] `audiovault`: AudioVault.
+- [x] `audiovault`: AudioVault.
 - [ ] `play_folder`: Play folder.
 - [ ] `play_file`: Play file.
 - [ ] `direct_link`: Direct link.
@@ -288,22 +293,22 @@ Permanent items:
 
 ## AudioVault
 
-- [ ] First-use login focuses the email field.
-- [ ] Persistent Windows-protected credentials and explicit logout.
-- [ ] Register opens the exact registration page.
-- [ ] Missing/expired session returns to login and retries only after success.
-- [ ] Search mode selection for movies and TV shows.
-- [ ] Recently viewed movies and shows; Enter equals Open.
-- [ ] Search results, show details, episodes, and one-step return navigation.
-- [ ] Movie/episode streaming through the internal player.
-- [ ] AudioVault pages never surface login URLs as playable media.
+- [x] First-use login focuses the email field.
+- [x] Persistent Windows-protected credentials and explicit logout.
+- [x] Register opens the exact registration page.
+- [x] Missing/expired session returns to login and retries only after success.
+- [x] Search mode selection for movies and TV shows.
+- [x] Recently viewed movies and shows; Enter equals Open.
+- [x] Search results, show details, episodes, and one-step return navigation.
+- [x] Movie/episode streaming through the internal player.
+- [x] AudioVault pages never surface login URLs as playable media.
 - [ ] History, queue, copy/open actions appropriate to the source.
-- [ ] Individual movie/episode audio download.
+- [x] Individual movie/episode audio download.
 - [ ] Whole-show download with independent progress and cancellation.
-- [ ] Global Ask where to save setting applies to AudioVault.
+- [x] Global Ask where to save setting applies to AudioVault.
 - [ ] Safe archive/cache extraction, final file copy, collision handling, and
   cleanup without closing the player/application.
-- [ ] AudioVault rows omit irrelevant YouTube upload labels.
+- [x] AudioVault rows omit irrelevant YouTube upload labels.
 - [ ] Authentication, unavailable content, malformed pages/manifests, partial
   show failures, and network interruption.
 
@@ -686,7 +691,9 @@ Player seek and volume actions:
 
 ## Performance and soak evidence
 
-- [ ] Cold/warm startup baseline and Rust comparison.
+- [x] Cold/warm startup baseline and Rust comparison. Rust only (E20: 227 ms first
+  start with import, about 145 ms warm, 41 MB working set); the Python side needs a
+  run without NVDA listening.
 - [ ] Local and YouTube result-to-player latency comparison.
 - [ ] Escape/route/focus transition latency comparison.
 - [ ] Seek, volume, speed, pitch held-key latency/backlog test.
@@ -701,11 +708,11 @@ Player seek and volume actions:
 ## Final parity gate
 
 - [ ] No unchecked item or undocumented approved OS exception.
-- [ ] Machine-generated registry counts match the frozen Python baseline.
+- [x] Machine-generated registry counts match the frozen Python baseline.
 - [ ] Full automated suite passes from a clean checkout.
 - [ ] Full NVDA keyboard-only acceptance passes on the installed local beta.
 - [ ] Real-source and real-account acceptance passes.
-- [ ] Python data migration plus rollback passes on a copied real profile.
+- [x] Python data migration plus rollback passes on a copied real profile.
 - [ ] Performance gates pass without adding normal-path delay.
 - [ ] Clean install, side-by-side beta, update, rollback, uninstall, associations,
   second launch, tray/background, and offline tests pass.

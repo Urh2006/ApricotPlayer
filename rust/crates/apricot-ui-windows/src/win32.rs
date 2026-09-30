@@ -122,9 +122,6 @@ const ID_DIRECT_ENTER: usize = 1015;
 const ID_COLLECTION_REMOVE: usize = 1016;
 const ID_HISTORY_CLEAR: usize = 1017;
 const ID_PLAYLIST_CREATE: usize = 1018;
-const ID_PLAYLIST_PLAY_ALL: usize = 1019;
-const ID_PLAYLIST_SHUFFLE: usize = 1020;
-const ID_PLAYLIST_ADD_ALL_TO_QUEUE: usize = 1021;
 const ID_NOTIFICATION_CLEAR: usize = 1022;
 const ID_TRENDING_COUNTRY: usize = 1023;
 const ID_TRENDING_CATEGORY: usize = 1024;
@@ -205,6 +202,8 @@ pub(crate) const WM_APPLY_GLOBAL_EQUALIZER: u32 = WM_APP + 5;
 pub(crate) const WM_UPDATE_REQUEST: u32 = WM_APP + 7;
 pub(crate) const UPDATE_REQUEST_YTDLP: usize = 0;
 pub(crate) const UPDATE_REQUEST_APP: usize = 1;
+/// Python `subscription_check_now`: `check_subscriptions(manual=True)`.
+pub(crate) const UPDATE_REQUEST_SUBSCRIPTIONS: usize = 2;
 /// Posted by the settings window: Python `login_audiovault_from_settings`
 /// (with the settings window as `lParam`) and `logout_audiovault`.
 pub(crate) const WM_AUDIOVAULT_REQUEST: u32 = WM_APP + 8;
@@ -552,9 +551,6 @@ struct WindowState {
     open_browser: HWND,
     rss_download_episode: HWND,
     playlist_create: HWND,
-    playlist_play_all: HWND,
-    playlist_shuffle: HWND,
-    playlist_add_all_to_queue: HWND,
     playlist_download: HWND,
     download_all_audio: HWND,
     download_all_video: HWND,
@@ -994,14 +990,7 @@ fn user_playlist_tab_controls(state: &WindowState) -> Vec<HWND> {
         .get(state.current_user_playlist_index)
         .is_some_and(|playlist| !playlist.items.is_empty())
     {
-        controls.extend([
-            state.open,
-            state.playlist_download,
-            state.collection_remove,
-            state.playlist_play_all,
-            state.playlist_shuffle,
-            state.playlist_add_all_to_queue,
-        ]);
+        controls.extend([state.open, state.playlist_download, state.collection_remove]);
     }
     controls.push(state.list);
     controls
@@ -1171,6 +1160,8 @@ unsafe extern "system" fn window_proc(
                 manual_ytdlp_update_check(window);
             } else if wparam.0 == UPDATE_REQUEST_APP {
                 start_app_update_check(window, true, true, false);
+            } else if wparam.0 == UPDATE_REQUEST_SUBSCRIPTIONS {
+                check_subscriptions(window, true);
             }
             LRESULT(0)
         }
@@ -1318,12 +1309,6 @@ unsafe fn handle_window_command(window: HWND, wparam: WPARAM) {
         open_selected_podcast_in_browser(window);
     } else if command == ID_PLAYLIST_CREATE {
         create_user_playlist(window, None);
-    } else if command == ID_PLAYLIST_PLAY_ALL {
-        play_current_user_playlist(window, false);
-    } else if command == ID_PLAYLIST_SHUFFLE {
-        play_current_user_playlist(window, true);
-    } else if command == ID_PLAYLIST_ADD_ALL_TO_QUEUE {
-        add_current_user_playlist_to_queue(window);
     } else if command == ID_PLAYLIST_DOWNLOAD {
         download_current_user_playlist(window);
     } else if command == ID_DOWNLOAD_ALL_AUDIO {
@@ -1800,36 +1785,6 @@ unsafe fn create_controls(
         WINDOW_EX_STYLE::default(),
         ID_PLAYLIST_CREATE,
     )?;
-    let playlist_play_all_text = wide(catalog.text("play_playlist"));
-    let playlist_play_all = create_control(
-        parent,
-        instance,
-        w!("BUTTON"),
-        PCWSTR(playlist_play_all_text.as_ptr()),
-        WS_CHILD | WS_TABSTOP,
-        WINDOW_EX_STYLE::default(),
-        ID_PLAYLIST_PLAY_ALL,
-    )?;
-    let playlist_shuffle_text = wide(catalog.text("shuffle_playlist"));
-    let playlist_shuffle = create_control(
-        parent,
-        instance,
-        w!("BUTTON"),
-        PCWSTR(playlist_shuffle_text.as_ptr()),
-        WS_CHILD | WS_TABSTOP,
-        WINDOW_EX_STYLE::default(),
-        ID_PLAYLIST_SHUFFLE,
-    )?;
-    let playlist_queue_text = wide(catalog.text("add_to_playback_queue"));
-    let playlist_add_all_to_queue = create_control(
-        parent,
-        instance,
-        w!("BUTTON"),
-        PCWSTR(playlist_queue_text.as_ptr()),
-        WS_CHILD | WS_TABSTOP,
-        WINDOW_EX_STYLE::default(),
-        ID_PLAYLIST_ADD_ALL_TO_QUEUE,
-    )?;
     let playlist_download = create_button(
         parent,
         instance,
@@ -1921,9 +1876,6 @@ unsafe fn create_controls(
         open_browser,
         rss_download_episode,
         playlist_create,
-        playlist_play_all,
-        playlist_shuffle,
-        playlist_add_all_to_queue,
         playlist_download,
         download_all_audio,
         download_all_video,
@@ -1989,9 +1941,6 @@ unsafe fn create_controls(
         open_browser,
         rss_download_episode,
         playlist_create,
-        playlist_play_all,
-        playlist_shuffle,
-        playlist_add_all_to_queue,
         playlist_download,
         download_all_audio,
         download_all_video,
@@ -3084,10 +3033,7 @@ unsafe fn layout_bottom_controls(
                 state.back,
                 state.open,
                 state.playlist_download,
-                state.playlist_play_all,
-                state.playlist_shuffle,
                 state.collection_remove,
-                state.playlist_add_all_to_queue,
             ],
             width,
             first_button_y,
@@ -3272,18 +3218,6 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
         (state.open_browser, podcast_directory_visible),
         (state.rss_download_episode, rss_items_visible),
         (state.playlist_create, state.view == MainView::UserPlaylists),
-        (
-            state.playlist_play_all,
-            state.view == MainView::UserPlaylistItems && playlist_items_available,
-        ),
-        (
-            state.playlist_shuffle,
-            state.view == MainView::UserPlaylistItems && playlist_items_available,
-        ),
-        (
-            state.playlist_add_all_to_queue,
-            state.view == MainView::UserPlaylistItems && playlist_items_available,
-        ),
         (
             state.playlist_download,
             matches!(
@@ -7183,7 +7117,7 @@ unsafe fn finish_subscription_check(window: HWND) {
             set_status(state, &message, true);
         }
         if state.view == MainView::Subscriptions {
-            refresh_subscriptions(state, true, None);
+            refresh_subscriptions(state, !state.modal_open, None);
             layout_controls_state(window, state);
         }
         if pending.manual {
@@ -9653,6 +9587,11 @@ fn collection_backend(selected: YoutubeBackend, kind: YoutubeCollectionKind) -> 
 
 unsafe fn poll_youtube_runtime(window: HWND) {
     if state(window).is_some_and(|state| state.modal_open) {
+        // Python's settings screen lets "Check subscriptions now" finish and
+        // speak its result while the settings stay open.
+        if state(window).is_some_and(|state| state.settings_open) {
+            poll_subscription_runtime(window);
+        }
         return;
     }
     poll_youtube_trending_api(window);
@@ -14053,90 +13992,6 @@ unsafe fn finish_user_playlist_item_removal(
             if let Some(state) = state(window) {
                 set_status(state, &message, true);
             }
-            show_error_message(window, &message);
-        }
-    }
-}
-
-unsafe fn play_current_user_playlist(window: HWND, shuffle: bool) {
-    let item = state_mut(window).and_then(|state| {
-        let item = state
-            .application
-            .prepare_user_playlist_playback(state.current_user_playlist_index, shuffle)?;
-        if let Some(index) = state
-            .application
-            .user_playlists()
-            .get(state.current_user_playlist_index)
-            .and_then(|playlist| {
-                let identity = item.stable_identity()?;
-                playlist
-                    .items
-                    .iter()
-                    .position(|candidate| candidate.stable_identity().as_deref() == Some(&identity))
-            })
-        {
-            state.current_user_playlist_item_index = index;
-        }
-        Some(item)
-    });
-    let Some(item) = item else {
-        if let Some(state) = state(window) {
-            set_status(
-                state,
-                &catalog_text(&state.application, "playlist_empty"),
-                true,
-            );
-        }
-        return;
-    };
-    start_media_item_with_shuffle(window, item, None, shuffle);
-}
-
-unsafe fn add_current_user_playlist_to_queue(window: HWND) {
-    if state(window).is_none_or(|state| {
-        state
-            .application
-            .user_playlists()
-            .get(state.current_user_playlist_index)
-            .is_none_or(|playlist| playlist.items.is_empty())
-    }) {
-        if let Some(state) = state(window) {
-            set_status(
-                state,
-                &catalog_text(&state.application, "playlist_empty"),
-                true,
-            );
-        }
-        return;
-    }
-    let result = state_mut(window).map(|state| {
-        state
-            .application
-            .add_user_playlist_to_playback_queue(state.current_user_playlist_index)
-    });
-    let Some(result) = result else {
-        return;
-    };
-    let Some(state) = state(window) else {
-        return;
-    };
-    match result {
-        Ok(Some(outcome)) if outcome.added > 0 => {
-            let message = catalog_text(&state.application, "playback_queue_added_count")
-                .replace("{count}", &outcome.added.to_string());
-            set_status(state, &message, true);
-        }
-        Ok(Some(_)) => {
-            set_status(
-                state,
-                &catalog_text(&state.application, "playback_queue_exists"),
-                true,
-            );
-        }
-        Ok(None) => {}
-        Err(error) => {
-            let message = format!("Playback queue was not updated: {error}");
-            set_status(state, &message, true);
             show_error_message(window, &message);
         }
     }
