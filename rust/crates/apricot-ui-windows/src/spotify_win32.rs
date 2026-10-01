@@ -71,6 +71,10 @@ pub(super) struct SpotifyState {
     /// The open queue dialog and the reload it waits for.
     queue_dialog: Option<HWND>,
     queue_load: Option<SpotifyStamp>,
+    /// The open device list.
+    devices_dialog: Option<HWND>,
+    /// The transfer the user asked for and the device's name.
+    transfer: Option<(SpotifyStamp, String)>,
     polling: bool,
 }
 
@@ -232,6 +236,12 @@ pub(super) unsafe fn activate(window: HWND) {
                     state.spotify.hub_selected = Some(SpotifyHubEntry::Queue);
                 }
                 show_queue(window);
+            }
+            Some(SpotifyHubEntry::Devices) => {
+                if let Some(state) = state_mut(window) {
+                    state.spotify.hub_selected = Some(SpotifyHubEntry::Devices);
+                }
+                show_devices(window);
             }
             Some(SpotifyHubEntry::Accounts) => show_accounts(window, None),
             None => {}
@@ -619,6 +629,7 @@ pub(super) unsafe fn poll(window: HWND) {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 unsafe fn handle_event(window: HWND, event: SpotifyEvent) {
     let Some(state) = state_mut(window) else {
         return;
@@ -708,6 +719,20 @@ unsafe fn handle_event(window: HWND, event: SpotifyEvent) {
                     show_error_message(window, &text);
                 }
             }
+        }
+        SpotifyEvent::Transferred { stamp, result } => {
+            let Some((wanted, name)) = state.spotify.transfer.take() else {
+                return;
+            };
+            if wanted != stamp {
+                state.spotify.transfer = Some((wanted, name));
+                return;
+            }
+            let text = match result {
+                Ok(()) => named(&texts, "spotify_transferred", &name),
+                Err(error) => error_text(&texts, &error),
+            };
+            announce(window, &text);
         }
         SpotifyEvent::Queue { stamp, queue } => {
             if state.spotify.queue_load != Some(stamp) {
@@ -847,7 +872,7 @@ unsafe fn handle_notice(window: HWND, notice: PlaybackNotice) {
     match notice {
         PlaybackNotice::Playing {
             requested: true, ..
-        } => {}
+        } => push_volume(window),
         PlaybackNotice::Playing {
             track,
             position_ms,
@@ -865,6 +890,7 @@ unsafe fn handle_notice(window: HWND, notice: PlaybackNotice) {
             state.background_start = state.view != MainView::Player;
             // The player's own "Playing: <title>" is the one announcement.
             start_media_item_at(window, item, f64::from(position_ms) / 1000.0);
+            push_volume(window);
         }
         PlaybackNotice::Unavailable { .. } => {
             let text = texts.text("spotify_track_unavailable").to_owned();
@@ -875,7 +901,190 @@ unsafe fn handle_notice(window: HWND, notice: PlaybackNotice) {
                 reload_queue(window);
             }
         }
+        PlaybackNotice::DevicesChanged => {
+            if let Some(dialog) = state.spotify.devices_dialog {
+                let rows = device_rows(window);
+                crate::spotify_devices_win32::update(dialog, rows);
+            }
+        }
+        PlaybackNotice::Volume(volume) => apply_connect_volume(window, volume),
     }
+}
+
+/// The playing Spotify item's player volume, when a Spotify item plays.
+unsafe fn spotify_volume(state: &WindowState) -> Option<f64> {
+    let session = state.application.player_session();
+    let spotify = session.is_open()
+        && session
+            .current_item()
+            .is_some_and(|item| item.source == apricot_core::MediaSource::Spotify);
+    spotify
+        .then(|| session.audio().map(|audio| audio.volume))
+        .flatten()
+}
+
+/// Apricot's volume changed (Up, Down, boost): the Connect device shows it,
+/// so the phone's volume slider follows (SD-4).
+pub(super) unsafe fn volume_changed(window: HWND, volume: f64) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    if spotify_volume(state).is_none() {
+        return;
+    }
+    if let Some(playback) = state
+        .spotify
+        .service
+        .as_ref()
+        .and_then(|service| service.playback())
+    {
+        playback.set_volume(volume);
+    }
+}
+
+/// A Spotify item started: Connect gets Apricot's volume.
+unsafe fn push_volume(window: HWND) {
+    if let Some(volume) = state(window).and_then(|state| spotify_volume(state)) {
+        volume_changed(window, volume);
+    }
+}
+
+/// The phone (or another device) set the volume of Apricot's Connect device:
+/// the player volume follows without an announcement, like Up and Down. Our
+/// own change comes back the same and is ignored; above 100 percent (boost)
+/// Connect shows 100 and the boost stays.
+unsafe fn apply_connect_volume(window: HWND, volume: u16) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    let Some(current) = spotify_volume(state) else {
+        return;
+    };
+    let percent = apricot_spotify::playback::percent_from_volume(volume);
+    if (percent - current.min(100.0)).abs() < 0.5 {
+        return;
+    }
+    if super::execute_player_command(
+        window,
+        apricot_playback::PlaybackCommand::SetVolume(percent),
+    ) && let Some(state) = state_mut(window)
+    {
+        state.application.set_player_volume(percent);
+        if state.view == MainView::Player {
+            super::refresh_player(window, state, false, true);
+        }
+    }
+}
+
+/// Rows of the device list: this computer first, the playing device marked.
+unsafe fn device_rows(window: HWND) -> Vec<crate::spotify_devices_win32::DeviceRow> {
+    let Some(state) = state(window) else {
+        return Vec::new();
+    };
+    let texts = catalog(state);
+    let devices = state
+        .spotify
+        .service
+        .as_ref()
+        .and_then(|service| service.devices_now())
+        .map(|(devices, _)| devices)
+        .unwrap_or_default();
+    if devices.is_empty() {
+        return vec![(String::new(), texts.text("spotify_devices_none").to_owned())];
+    }
+    let labels = apricot_app::spotify::device_rows(&texts, &devices);
+    devices
+        .into_iter()
+        .map(|device| device.id)
+        .zip(labels)
+        .collect()
+}
+
+/// Moves playback to the device `id`; `false` keeps the dialog open (nothing
+/// plays, or the device already plays) after saying why.
+unsafe fn transfer_to(window: HWND, id: &str) -> bool {
+    let Some(service) = service(window) else {
+        return false;
+    };
+    let Some(state) = state_mut(window) else {
+        return false;
+    };
+    let texts = catalog(state);
+    let Some((devices, playing)) = service.devices_now() else {
+        return false;
+    };
+    let Some(device) = devices.into_iter().find(|device| device.id == id) else {
+        return false;
+    };
+    if !playing {
+        let text = texts.text("spotify_nothing_playing").to_owned();
+        announce(window, &text);
+        return false;
+    }
+    if device.active {
+        let text = named(&texts, "spotify_device_already", &device.name);
+        announce(window, &text);
+        return false;
+    }
+    let stamp = state.spotify.epochs.begin();
+    state.spotify.transfer = Some((stamp, device.name));
+    service.transfer_to(stamp, id);
+    true
+}
+
+/// `spotify_devices` and the hub entry: the Connect devices in a dialog over
+/// the current screen, so playback goes on.
+pub(super) unsafe fn show_devices(window: HWND) {
+    stop_controlled_repeat(window);
+    let accounts = accounts(window);
+    let Some(service) = service(window) else {
+        return;
+    };
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    if state.spotify.devices_dialog.is_some() {
+        return;
+    }
+    let texts = catalog(state);
+    if apricot_app::spotify::active_account(&accounts).is_none() {
+        let text = texts.text("spotify_log_in_first").to_owned();
+        announce(window, &text);
+        return;
+    }
+    if service.devices_now().is_none() {
+        let text = texts.text("spotify_not_connected").to_owned();
+        announce(window, &text);
+        return;
+    }
+    let labels = crate::spotify_devices_win32::SpotifyDevicesDialogLabels {
+        title: texts.text("spotify_devices").to_owned(),
+        instructions: texts.text("spotify_devices_instructions").to_owned(),
+        play: texts.text("spotify_devices_play").to_owned(),
+        back: texts.text("back").to_owned(),
+    };
+    let rows = device_rows(window);
+    // SAFETY: Runs on this window's thread while the dialog is open.
+    let play = Box::new(move |id: &str| unsafe { transfer_to(window, id) });
+    if let Some(state) = state_mut(window) {
+        state.modal_open = true;
+    }
+    let result = crate::spotify_devices_win32::show(window, rows, labels, play, |dialog| {
+        if let Some(state) = state_mut(window) {
+            state.spotify.devices_dialog = Some(dialog);
+        }
+    });
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state.spotify.devices_dialog = None;
+    state.modal_open = false;
+    resume_deferred_window_work(window);
+    if let Err(error) = result {
+        let message = format!("Spotify devices did not open: {error}");
+        show_error_message(window, &message);
+    }
+    let _ = SetFocus(Some(super::active_primary_control(state)));
 }
 
 /// Spotify moved on to the next track (end of a track, Next, Previous, the

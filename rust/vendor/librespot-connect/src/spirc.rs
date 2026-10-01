@@ -75,6 +75,10 @@ impl From<SpircError> for Error {
 struct SpircTask {
     // ApricotPlayer patch: the confirmed player state after every update.
     state_tx: watch::Sender<PlayerState>,
+    // ApricotPlayer patch: the Connect devices of the account.
+    devices_tx: watch::Sender<ConnectDevices>,
+    // ApricotPlayer patch: the volume a remote device set for this device.
+    remote_volume_tx: watch::Sender<Option<u16>>,
 
     player: Arc<Player>,
     mixer: Arc<dyn Mixer>,
@@ -158,6 +162,19 @@ const UPDATE_STATE_DELAY: Duration = Duration::from_millis(200);
 pub struct Spirc {
     commands: mpsc::UnboundedSender<SpircCommand>,
     state: watch::Receiver<PlayerState>,
+    devices: watch::Receiver<ConnectDevices>,
+    remote_volume: watch::Receiver<Option<u16>>,
+}
+
+/// ApricotPlayer patch: the Connect devices of the account, from the last
+/// cluster this device received (its own state updates and the cluster
+/// updates of other devices).
+#[derive(Clone, Debug, Default)]
+pub struct ConnectDevices {
+    /// The device that plays, empty when none does.
+    pub active_device_id: String,
+    /// All devices of the account, sorted by name.
+    pub devices: Vec<crate::protocol::connect::DeviceInfo>,
 }
 
 impl Spirc {
@@ -238,9 +255,13 @@ impl Spirc {
         let player_events = player.get_player_event_channel();
 
         let (state_tx, state_rx) = watch::channel(PlayerState::default());
+        let (devices_tx, devices_rx) = watch::channel(ConnectDevices::default());
+        let (remote_volume_tx, remote_volume_rx) = watch::channel(None);
 
         let mut task = SpircTask {
             state_tx,
+            devices_tx,
+            remote_volume_tx,
             player,
             mixer,
 
@@ -277,6 +298,8 @@ impl Spirc {
         let spirc = Spirc {
             commands: cmd_tx,
             state: state_rx,
+            devices: devices_rx,
+            remote_volume: remote_volume_rx,
         };
 
         let initial_volume = task.connect_state.device_info().volume;
@@ -301,6 +324,17 @@ impl Spirc {
     /// update, also for changes made by remote devices.
     pub fn player_state(&self) -> watch::Receiver<PlayerState> {
         self.state.clone()
+    }
+
+    /// ApricotPlayer patch: the Connect devices of the account.
+    pub fn devices(&self) -> watch::Receiver<ConnectDevices> {
+        self.devices.clone()
+    }
+
+    /// ApricotPlayer patch: the last volume (0 to 65535) a remote device set
+    /// for this device. Local volume changes are not reported here.
+    pub fn remote_volume(&self) -> watch::Receiver<Option<u16>> {
+        self.remote_volume.clone()
     }
 
     /// ApricotPlayer patch: adds `uri` to the manual queue of this device.
@@ -520,7 +554,11 @@ impl SpircTask {
                 volume_update = self.connect_state_volume_update.next() => unwrap! {
                     volume_update,
                     match |volume_update| match volume_update.volume.try_into() {
-                        Ok(volume) => self.set_volume(volume),
+                        Ok(volume) => {
+                            self.set_volume(volume);
+                            // ApricotPlayer patch: only a remote device sets this.
+                            self.remote_volume_tx.send_replace(Some(volume));
+                        }
                         Err(why) => error!("can't update volume, failed to parse i32 to u16: {why}")
                     }
                 },
@@ -896,6 +934,7 @@ impl SpircTask {
             }
         }
         .ok_or(SpircError::FailedDealerSetup)?;
+        self.publish_devices(&cluster);
 
         debug!(
             "successfully put connect state for {} with connection-id {connection_id}",
@@ -991,6 +1030,7 @@ impl SpircTask {
         );
 
         if let Some(cluster) = cluster_update.cluster.take() {
+            self.publish_devices(&cluster);
             let became_inactive = self.connect_state.is_active()
                 && cluster.active_device_id != self.session.device_id();
             if became_inactive {
@@ -1862,14 +1902,27 @@ impl SpircTask {
 
         self.connect_state.set_now(self.now_ms() as u64);
 
-        let result = self
-            .connect_state
-            .send_state(&self.session)
-            .await
-            .map(|_| ());
+        let result = self.connect_state.send_state(&self.session).await;
         self.state_tx
             .send_replace(self.connect_state.player().clone());
-        result
+        if let Some(cluster) = result
+            .as_ref()
+            .ok()
+            .and_then(|body| <Cluster as protobuf::Message>::parse_from_bytes(body).ok())
+        {
+            self.publish_devices(&cluster);
+        }
+        result.map(|_| ())
+    }
+
+    // ApricotPlayer patch: publishes the devices of a received cluster.
+    fn publish_devices(&self, cluster: &Cluster) {
+        let mut devices: Vec<_> = cluster.device.values().cloned().collect();
+        devices.sort_by(|a, b| a.name.cmp(&b.name).then(a.device_id.cmp(&b.device_id)));
+        self.devices_tx.send_replace(ConnectDevices {
+            active_device_id: cluster.active_device_id.clone(),
+            devices,
+        });
     }
 
     fn set_volume(&mut self, volume: u16) {

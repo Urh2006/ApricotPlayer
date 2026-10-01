@@ -686,6 +686,7 @@ unsafe fn register_secondary_window_classes() -> Result<()> {
     crate::audiovault_login_win32::register()?;
     crate::spotify_login_win32::register()?;
     crate::spotify_queue_win32::register()?;
+    crate::spotify_devices_win32::register()?;
     crate::download_progress_win32::register()
 }
 
@@ -12987,6 +12988,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "open_spotify" => spotify::show_hub(window),
         "spotify_accounts" => spotify::show_accounts(window, None),
         "spotify_queue" => spotify::show_queue(window),
+        "spotify_devices" => spotify::show_devices(window),
         "open_settings" => open_settings(window),
         "open_action_finder" => show_action_finder(window),
         "open_play_file" => open_media_file(window),
@@ -16627,6 +16629,7 @@ unsafe fn adjust_player_volume(window: HWND, delta: f64) {
         };
         // Python `change_volume_async` adjusts volume without an announcement.
         state.application.set_player_volume(volume);
+        spotify::volume_changed(window, volume);
     }
 }
 
@@ -16811,6 +16814,7 @@ unsafe fn toggle_player_session_setting(window: HWND, toggle: SessionToggle) {
     state.application.set_player_toggle(toggle, enabled);
     if let Some(volume) = clamped_volume {
         state.application.set_player_volume(volume);
+        spotify::volume_changed(window, volume);
     }
     let message = catalog_text(&state.application, session_toggle_key(toggle, enabled));
     set_status(state, &message, true);

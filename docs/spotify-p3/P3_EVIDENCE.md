@@ -47,3 +47,21 @@ playing : exited 218 ms after WM_CLOSE
 paused : exited 206 ms after WM_CLOSE
 idle : exited 210 ms after WM_CLOSE
 ```
+
+## P3b: naprave in glasnost
+
+Testni podatki imajo začetno glasnost 0, predvaja se Direct link skladba:
+
+```
+devices before playback: count 1: ApricotPlayer (DESKTOP-VQNMUCF), this computer; focus ListBox 'Spotify devices'
+Enter with nothing playing: dialog ostane odprt; Nothing plays on Spotify now.
+V: Volume: 0                       (prej: Connect je ob začetku prepisal glasnost na 100)
+after Up x3 and 2 s: Volume: 15    (odmev iz Connect je ne spremeni)
+after Down and 2 s: Volume: 10
+devices while playing: ApricotPlayer (DESKTOP-VQNMUCF), this computer, playing
+Enter on this computer: Spotify already plays on ApricotPlayer (DESKTOP-VQNMUCF).
+exited 207 ms after WM_CLOSE
+```
+
+Telefon v času preizkusa ni bil v seznamu naprav, zato prenos na drugo napravo
+in glasnost s telefona čakata na Urhov NVDA preizkus.

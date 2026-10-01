@@ -15,6 +15,8 @@ pub enum SpotifyHubEntry {
     LogIn,
     /// The Spotify queue, once an account is logged in.
     Queue,
+    /// Spotify Connect devices, once an account is logged in.
+    Devices,
     Accounts,
 }
 
@@ -76,6 +78,15 @@ impl SpotifyHubModel {
                 label: with_shortcut(
                     catalog.text("spotify_queue").to_owned(),
                     "spotify_queue",
+                    show_shortcuts,
+                    shortcuts,
+                ),
+            });
+            items.push(SpotifyHubItem {
+                entry: SpotifyHubEntry::Devices,
+                label: with_shortcut(
+                    catalog.text("spotify_devices").to_owned(),
+                    "spotify_devices",
                     show_shortcuts,
                     shortcuts,
                 ),
@@ -290,6 +301,26 @@ pub fn queue_menu(rows: &[SpotifyQueueRow], index: usize) -> SpotifyQueueMenu {
     }
 }
 
+/// "Name, this computer, playing" rows of the device list.
+pub fn device_rows(
+    catalog: &TranslationCatalog,
+    devices: &[apricot_spotify::SpotifyDevice],
+) -> Vec<String> {
+    devices
+        .iter()
+        .map(|device| {
+            let mut parts = vec![device.name.clone()];
+            if device.this_device {
+                parts.push(catalog.text("spotify_device_this").to_owned());
+            }
+            if device.active {
+                parts.push(catalog.text("spotify_device_playing").to_owned());
+            }
+            parts.join(", ")
+        })
+        .collect()
+}
+
 /// Localized error text with `{error}` filled in when there is a detail.
 pub fn error_text(catalog: &TranslationCatalog, error: &SpotifyError) -> String {
     catalog
@@ -344,9 +375,38 @@ mod tests {
         };
         let model = SpotifyHubModel::build(&english_catalog(), &accounts, true, &BTreeMap::new());
         let entries: Vec<_> = model.items.iter().map(|item| item.entry).collect();
-        assert_eq!(entries, [SpotifyHubEntry::Queue, SpotifyHubEntry::Accounts]);
+        assert_eq!(
+            entries,
+            [
+                SpotifyHubEntry::Queue,
+                SpotifyHubEntry::Devices,
+                SpotifyHubEntry::Accounts
+            ]
+        );
         assert_eq!(model.items[0].label, "Spotify queue\tCtrl+Alt+Shift+Q");
-        assert!(model.items[1].label.ends_with("\tCtrl+Alt+Shift+C"));
+        assert_eq!(model.items[1].label, "Spotify devices\tCtrl+Alt+Shift+O");
+        assert!(model.items[2].label.ends_with("\tCtrl+Alt+Shift+C"));
+    }
+
+    #[test]
+    fn device_rows_name_this_computer_and_the_playing_device() {
+        let device = |name: &str, active: bool, this_device: bool| apricot_spotify::SpotifyDevice {
+            id: name.into(),
+            name: name.into(),
+            active,
+            this_device,
+        };
+        let rows = device_rows(
+            &english_catalog(),
+            &[
+                device("ApricotPlayer (PC)", false, true),
+                device("iPhone", true, false),
+            ],
+        );
+        assert_eq!(
+            rows,
+            ["ApricotPlayer (PC), this computer", "iPhone, playing"]
+        );
     }
 
     fn queue_entry(uid: &str, section: QueueSection, title: &str) -> apricot_spotify::QueueEntry {

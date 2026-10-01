@@ -110,6 +110,11 @@ pub enum SpotifyEvent {
         stamp: SpotifyStamp,
         queue: crate::queue::SpotifyQueue,
     },
+    /// Spotify accepted (or refused) moving playback to another device.
+    Transferred {
+        stamp: SpotifyStamp,
+        result: Result<(), SpotifyError>,
+    },
 }
 
 /// The locally active account: its session, Connect device and PCM source.
@@ -278,6 +283,55 @@ impl SpotifyService {
                 }
             }
             Self::emit(&sender, &notify, SpotifyEvent::Queue { stamp, queue });
+        });
+    }
+
+    /// The Connect devices that can play and the device that plays now;
+    /// `None` without a connected session.
+    pub fn devices_now(&self) -> Option<(Vec<crate::devices::SpotifyDevice>, bool)> {
+        let (own_id, playback) = self.session.lock().ok()?.as_ref().map(|(_, active)| {
+            (
+                active.session.device_id().to_owned(),
+                active.playback.clone(),
+            )
+        })?;
+        let connect = playback.connect_devices()?;
+        let playing = !connect.active_device_id.is_empty();
+        Some((crate::devices::devices(&connect, &own_id), playing))
+    }
+
+    /// Moves playback from the device that plays to `device_id` (Spotify
+    /// Connect transfer). Playing here, it moves away; playing elsewhere, it
+    /// can come here.
+    pub fn transfer_to(&self, stamp: SpotifyStamp, device_id: &str) {
+        let active = self.session.lock().ok().and_then(|slot| {
+            slot.as_ref()
+                .map(|(_, active)| (active.session.clone(), active.playback.clone()))
+        });
+        let sender = self.sender.clone();
+        let notify = self.notify.clone();
+        let target = device_id.to_owned();
+        self.runtime().spawn(async move {
+            let result = async {
+                let (session, playback) = active.ok_or(SpotifyError::NoCredentials)?;
+                let from = playback
+                    .connect_devices()
+                    .map(|connect| connect.active_device_id)
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| SpotifyError::Network(String::new()))?;
+                session
+                    .spclient()
+                    .transfer(&from, &target, None)
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| SpotifyError::Network(error.kind.to_string()))
+            }
+            .await;
+            Self::emit(
+                &sender,
+                &notify,
+                SpotifyEvent::Transferred { stamp, result },
+            );
         });
     }
 
@@ -580,6 +634,14 @@ async fn open_session(
     tokio::spawn(SpotifyPlayback::watch_state(
         shared.clone(),
         spirc.player_state(),
+    ));
+    tokio::spawn(SpotifyPlayback::watch_devices(
+        shared.clone(),
+        spirc.devices(),
+    ));
+    tokio::spawn(SpotifyPlayback::watch_remote_volume(
+        shared.clone(),
+        spirc.remote_volume(),
     ));
     playback.set_spirc(Some(spirc));
     let username = session.username();

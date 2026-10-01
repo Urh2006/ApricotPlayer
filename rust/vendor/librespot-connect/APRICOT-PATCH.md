@@ -13,6 +13,11 @@ in `src/state/tracks.rs` are changed:
 * `Spirc::set_queue(next_tracks, expected_revision)`: replaces the next
   tracks only if the queue still has that revision (stock `SetQueue` from a
   remote device has no such check).
+* `Spirc::devices()`: a watch receiver of the Connect devices of the account
+  from every cluster this device receives (`ConnectDevices`).
+* `Spirc::remote_volume()`: the volume a remote device set for this device;
+  local changes are not reported, so a player can follow the phone without
+  echoing its own volume back.
 * `ConnectState::replace_next_tracks` (`src/state/tracks.rs`): used by
   `set_queue`; queued tracks keep their UIDs (the stock remote `SetQueue`
   numbers them anew), so an open queue view still names the same

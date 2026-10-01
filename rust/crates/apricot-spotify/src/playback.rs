@@ -111,6 +111,19 @@ impl SpotifyTrack {
     }
 }
 
+/// 0 to 100 percent as a Connect volume (0 to 65535).
+pub fn volume_from_percent(percent: f64) -> u16 {
+    let clamped = percent.clamp(0.0, 100.0);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let volume = (clamped / 100.0 * f64::from(u16::MAX)).round() as u16;
+    volume
+}
+
+/// A Connect volume as 0 to 100 percent, whole percent.
+pub fn percent_from_volume(volume: u16) -> f64 {
+    (f64::from(volume) * 100.0 / f64::from(u16::MAX)).round()
+}
+
 /// Spotify repeat modes, cycled with R in the player.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RepeatMode {
@@ -134,6 +147,11 @@ pub enum PlaybackNotice {
     /// The confirmed queue, track, shuffle or repeat changed (here or on
     /// another device); an open queue view reloads.
     QueueChanged,
+    /// The Connect devices of the account changed; an open device list
+    /// reloads.
+    DevicesChanged,
+    /// Another device (the phone) set the volume of this device, 0 to 65535.
+    Volume(u16),
 }
 
 struct Generation {
@@ -579,6 +597,68 @@ impl SpotifyPlayback {
         sent
     }
 
+    /// The Connect devices of the account (patched `librespot-connect`).
+    pub fn connect_devices(&self) -> Option<librespot_connect::ConnectDevices> {
+        self.spirc
+            .lock()
+            .ok()?
+            .as_ref()
+            .map(|spirc| spirc.devices().borrow().clone())
+    }
+
+    /// Apricot's volume (0 to 100 percent) as the volume of its Connect
+    /// device, so the phone shows it. Spotify reports it back unchanged.
+    pub fn set_volume(&self, percent: f64) {
+        let volume = volume_from_percent(percent);
+        self.with_spirc(|spirc| {
+            let _ = spirc.set_volume(volume);
+        });
+    }
+
+    /// Announces volumes another device set for this one.
+    pub async fn watch_remote_volume(
+        shared: Arc<Shared>,
+        mut volumes: tokio::sync::watch::Receiver<Option<u16>>,
+    ) {
+        while volumes.changed().await.is_ok() {
+            let volume = *volumes.borrow_and_update();
+            if let Some(volume) = volume {
+                shared.push_notice(PlaybackNotice::Volume(volume));
+            }
+        }
+    }
+
+    /// Announces device list changes to the UI, at most a few times a second.
+    pub async fn watch_devices(
+        shared: Arc<Shared>,
+        mut devices: tokio::sync::watch::Receiver<librespot_connect::ConnectDevices>,
+    ) {
+        let mut previous = None;
+        while devices.changed().await.is_ok() {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            let key = {
+                let connect = devices.borrow_and_update();
+                let list: Vec<_> = connect
+                    .devices
+                    .iter()
+                    .map(|device| {
+                        (
+                            device.device_id.clone(),
+                            device.name.clone(),
+                            device.is_offline,
+                            device.can_play,
+                        )
+                    })
+                    .collect();
+                (connect.active_device_id.clone(), list)
+            };
+            if previous.as_ref() != Some(&key) {
+                previous = Some(key);
+                shared.push_notice(PlaybackNotice::DevicesChanged);
+            }
+        }
+    }
+
     /// Announces changes of the confirmed state to the UI, at most a few
     /// times a second: a burst of updates becomes one reload.
     pub async fn watch_state(
@@ -906,6 +986,15 @@ mod tests {
         assert!(!writer.is_finished());
         shared.close_all();
         writer.join().unwrap();
+    }
+
+    #[test]
+    fn whole_percent_volumes_survive_the_round_trip() {
+        for percent in 0_u16..=100 {
+            let back = percent_from_volume(volume_from_percent(f64::from(percent)));
+            assert!((back - f64::from(percent)).abs() < f64::EPSILON);
+        }
+        assert_eq!(volume_from_percent(250.0), u16::MAX);
     }
 
     #[test]

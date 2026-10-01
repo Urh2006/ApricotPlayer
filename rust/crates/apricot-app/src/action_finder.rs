@@ -105,6 +105,7 @@ impl ActionFinderModel {
             labels.item("spotify", "open_spotify"),
             labels.item("spotify_accounts", "spotify_accounts"),
             labels.item("spotify_queue", "spotify_queue"),
+            labels.item("spotify_devices", "spotify_devices"),
             labels.item("play_folder", "open_play_from_folder"),
             labels.item("play_file", "open_play_file"),
             labels.item("direct_link", "open_direct_link"),
@@ -265,6 +266,7 @@ mod tests {
                 "open_spotify",
                 "spotify_accounts",
                 "spotify_queue",
+                "spotify_devices",
                 "open_play_from_folder",
                 "open_play_file",
                 "open_direct_link",
@@ -307,7 +309,7 @@ mod tests {
         ] {
             assert!(!ids.contains(&id), "{id}");
         }
-        assert_eq!(ids.len(), 19);
+        assert_eq!(ids.len(), 20);
     }
 
     #[test]

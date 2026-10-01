@@ -4,6 +4,7 @@
 //! [`service::SpotifyService`] and receives typed events.
 
 pub mod accounts;
+pub mod devices;
 pub mod diagnostics;
 pub mod oauth;
 pub mod playback;
@@ -11,6 +12,7 @@ pub mod queue;
 pub mod service;
 
 pub use accounts::{AccountStore, SpotifyAccount, SpotifyAccounts};
+pub use devices::SpotifyDevice;
 pub use oauth::CallbackPage;
 pub use playback::{PlaybackNotice, RepeatMode, SpotifyPlayback, SpotifyTrack};
 pub use queue::{QueueEdit, QueueEntry, QueueSection, SpotifyQueue};
