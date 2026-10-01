@@ -40,10 +40,28 @@ ne pozna, zato je Spotify začel prvo skladbo, Apricot pa je kazal izbrano.
 Popravek: v albumu, oddaji in pri izvajalcu po URI, v playlistu po `uid`;
 poleg tega Apricot ob začetku drugačne skladbe zamenja postavko.
 
-## Spremembe računa
+## Spremembe računa (z Urhovim dovoljenjem, 1. 10. 2026)
 
-Všeček, shranjevanje, sledenje, Skrij skladbo, dodajanje na playlist,
-odstranitev pojavitve, premik, ustvarjanje in preimenovanje uporabljajo
-zahteve, ki jih je P0 preveril v živo (P0 dokaz 4 in 7), Apricot pa po
-spremembi prebere potrjeno stanje. Živi preizkus v aplikaciji čaka Urhovo
-dovoljenje za testni playlist in eno testno skladbo.
+```
+status: Playlist created: ApricotPlayer P4 test B.
+add 1, 2, 3 (tretja je dvojnik prve): Added to ApricotPlayer P4 test B.
+like 1: Added to Liked Songs.   row: Bohemian Rhapsody, Queen, 5:55, liked
+like 2: Removed from Liked Songs.   row: Bohemian Rhapsody, Queen, 5:55
+test playlist -> 5:55 // 5:54 // 5:55
+move down: Playlist updated.   -> 5:54 // 5:55 // 5:55, selected 1
+delete row 3: Removed from this playlist.   -> 5:54 // 5:55
+reopened test playlist (confirmed by Spotify) -> 5:54 // 5:55
+status: Playlist renamed: ApricotPlayer P4 test B 2.
+hide 'You Are My Storm, Solstice, 4:06': Song hidden.   row: ..., hidden
+show again: Song shown again.
+remove 'ApricotPlayer P4 test B 2*' from library: Removed from your library.
+remove 'ApricotPlayer P4 test 2*' from library: Removed from your library.
+test playlists still listed: False
+```
+
+Najdeni in popravljeni napaki: `addToPlaylist` potrebuje `playlistItemUris`
+(Spotify je vrnil 400), playlist pa v knjižnico ne gre prek `addToLibrary`
+(Spotify zavrne tip), ampak prek rootlist z `baseRevision` in točnim indeksom.
+Po preizkusu je stanje računa enako kot prej: rootlist 136 vnosov (prej 136,
+med preizkusom 138), Všečkane skladbe 13353 z istimi prvimi skladbami, skrita
+skladba spet prikazana.

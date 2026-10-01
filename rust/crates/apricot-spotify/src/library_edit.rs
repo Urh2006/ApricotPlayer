@@ -102,6 +102,10 @@ pub async fn apply(
     edit: LibraryEdit,
 ) -> Result<EditOutcome, ApiError> {
     match edit {
+        LibraryEdit::ToggleSaved { uri } if uri.starts_with("spotify:playlist:") => {
+            let saved = toggle_playlist_in_library(api, session, &uri).await?;
+            Ok(EditOutcome::Saved { uri, saved })
+        }
         LibraryEdit::ToggleSaved { uri } => {
             let now = catalog::saved(api, session, std::slice::from_ref(&uri))
                 .await?
@@ -117,7 +121,7 @@ pub async fn apply(
                 "addToPlaylist",
                 json!({
                     "playlistUri": playlist,
-                    "uris": uris,
+                    "playlistItemUris": uris,
                     "newPosition": { "moveType": "BOTTOM_OF_PLAYLIST", "fromUid": null },
                 }),
             )
@@ -207,6 +211,105 @@ fn name_ops(name: &str) -> Value {
             }
         }
     }])
+}
+
+/// The library's playlist list (`rootlist`): its revision and URIs in order
+/// (folders appear as their start and end entries).
+async fn rootlist(api: &Api, session: &Session) -> Result<(String, Vec<String>), ApiError> {
+    let answer = api
+        .spclient(
+            session,
+            reqwest::Method::GET,
+            &format!(
+                "/playlist/v2/user/{}/rootlist?decorate=revision&from=0&length=10000",
+                session.username()
+            ),
+            None,
+        )
+        .await?;
+    let revision = answer
+        .get("revision")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::Shape("rootlist without revision".into()))?
+        .to_owned();
+    let uris = answer
+        .pointer("/contents/items")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    item.get("uri")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok((revision, uris))
+}
+
+fn rootlist_change(ops: &Value, base_revision: Option<&str>) -> Value {
+    let mut change = json!({
+        "deltas": [{ "ops": ops, "info": { "source": { "client": "WEBPLAYER" } } }],
+        "wantResultingRevisions": false,
+        "wantSyncResult": false,
+        "nonces": []
+    });
+    if let Some(revision) = base_revision {
+        change["baseRevision"] = json!(revision);
+    }
+    change
+}
+
+/// Playlists are in the library through the rootlist, not `addToLibrary`.
+/// Removing names the exact entry and the revision it was read at, so a
+/// change made meanwhile never removes another playlist. Returns whether
+/// the playlist is in the library afterwards.
+async fn toggle_playlist_in_library(
+    api: &Api,
+    session: &Session,
+    uri: &str,
+) -> Result<bool, ApiError> {
+    let (revision, uris) = rootlist(api, session).await?;
+    let path = format!("/playlist/v2/user/{}/rootlist/changes", session.username());
+    let ops = if let Some(index) = uris.iter().position(|entry| entry == uri) {
+        let body = rootlist_change(
+            &json!([{
+                "kind": "REM",
+                "rem": { "fromIndex": index, "length": 1, "items": [{ "uri": uri }], "itemsAsKey": true }
+            }]),
+            Some(&revision),
+        );
+        api.spclient(session, reqwest::Method::POST, &path, Some(body))
+            .await?;
+        false
+    } else {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_millis());
+        let body = rootlist_change(
+            &json!([{
+                "kind": "ADD",
+                "add": {
+                    "items": [{ "uri": uri, "attributes": { "timestamp": timestamp.to_string() } }],
+                    "addFirst": true
+                }
+            }]),
+            None,
+        );
+        api.spclient(session, reqwest::Method::POST, &path, Some(body))
+            .await?;
+        true
+    };
+    let (_, now) = rootlist(api, session).await?;
+    let saved = now.iter().any(|entry| entry == uri);
+    if saved == ops {
+        Ok(saved)
+    } else {
+        Err(ApiError::Shape("the library did not change".into()))
+    }
 }
 
 /// A new playlist, first in the library (`rootlist`), as the clients do it.

@@ -532,6 +532,12 @@ async fn library_page(
         .pointer("/me/libraryV3")
         .ok_or_else(|| ApiError::Shape("libraryV3".into()))?;
     let mut page = parse_page(list, offset);
+    // Everything listed is in the library.
+    for item in &mut page.items {
+        if item.saved.is_none() && !item.kind.is_playable_item() {
+            item.saved = Some(true);
+        }
+    }
     // Folders carry their URI in the wrapper only.
     if let Some(items) = list.get("items").and_then(Value::as_array) {
         for (row, raw) in page.items.iter_mut().zip(items) {

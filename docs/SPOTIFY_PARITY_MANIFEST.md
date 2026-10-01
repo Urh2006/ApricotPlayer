@@ -32,9 +32,9 @@ pathfinder GraphQL, **AP** = Apricot sama. Faza pove, kdaj se implementira.
 | S19 | Iskanje vseh tipov | PF `searchDesktop` (+ `searchTracks` ... `searchAudiobooks`) | implemented in live_verified (dialog Iskanje po Spotifyju, Ctrl+Alt+Shift+Y: vse vrste, pri Vse ima vsaka vrstica vrsto) | 3 | P4 |
 | S20 | Filtri, strani | PF search type-specific queries z offset/limit | implemented in live_verified (vrste, strani se naložijo na zadnji vrstici, kot Apricotovi rezultati); lokalni filter open | 3 | P4 |
 | S21 | Album, izvajalec, related | PF `getAlbum`, `queryArtistOverview` (top 10, related 20, diskografija) | implemented in live_verified (izvajalec: priljubljene skladbe, albumi, singli, kompilacije, sorodni izvajalci; album s točno skladbo) | 3 | P4 |
-| S22 | Like/Unlike (D17) | PF `addToLibrary`/`removeFromLibrary`, SP `collection/v2/contains` | implemented (Ctrl+Shift+I, kontekstni meni Shrani med všečkane ali Odstrani, vrstica pove "liked", stanje prebrano po spremembi); live_verified branje stanja; mutacija čaka Urhovo dovoljenje (R13) | 4 | P4 |
+| S22 | Like/Unlike (D17) | PF `addToLibrary`/`removeFromLibrary`, SP `collection/v2/contains` | implemented (Ctrl+Shift+I, kontekstni meni Shrani med všečkane ali Odstrani, vrstica pove "liked", stanje prebrano po spremembi); live_verified branje stanja; mutacija live_verified v aplikaciji (všeček in odvšeček, stanje povrnjeno); R13 v uradnem klientu open | 4 | P4 |
 | S23 | Shranjeni albumi, izvajalci, oddaje | PF `libraryV3` | implemented in live_verified (Moja knjižnica, Všečkane skladbe s stranmi, Seznami predvajanja, mape) | 4 | P4 |
-| S24 | Follow/save vseh tipov | PF `addToLibrary`/`removeFromLibrary` (URI kateregakoli tipa) | implemented (isti ukaz za albume, playliste, oddaje, sledenje izvajalcem); mutacija čaka dovoljenje | 4 | P4 |
+| S24 | Follow/save vseh tipov | PF `addToLibrary`/`removeFromLibrary` (URI kateregakoli tipa) | implemented (isti ukaz za albume, oddaje, sledenje izvajalcem; playlisti prek rootlist z baseRevision); live_verified odstranitev playlista iz knjižnice | 4 | P4 |
 | S25 | Recently played, top | SP `recently-played/v3` (live_verified); top tracks/artists samo Web API | live_verified (recently); blocked (top prek Web API 429) | 3 | P5 |
 | S26 | Home / Made for you | PF `home` | live_verified | 6 | P5 |
 | S27 | Daily Mixes | PF `home` + SP playlist `format=daily-mix` | live_verified (6 mixov, vsebina) | 6 | P5 |
@@ -42,14 +42,14 @@ pathfinder GraphQL, **AP** = Apricot sama. Faza pove, kdaj se implementira.
 | S29 | Browse, kategorije | PF `browseAll` (`browseEndUserIntegration`) | live_verified | 3 | P5 |
 | S30 | Radio | SP radio-apollo, inspiredby-mix | live_verified | 3 | P5 |
 | S31 | Profili | SP user profile (LS `get_user_profile`) | source_verified | 3 | P5 |
-| S32 | Dislike / hide in undo | SP collection set `ban` (globalno), `artistban`, `ignoreinrecs` | implemented (Ctrl+Shift+H Skrij skladbo ali Spet pokaži v osebnih miksih, vrstica pove "hidden", drugje razlaga); live_verified branje seta ban; mutacija čaka dovoljenje | 7 | P4 |
+| S32 | Dislike / hide in undo | SP collection set `ban` (globalno), `artistban`, `ignoreinrecs` | implemented (Ctrl+Shift+H Skrij skladbo ali Spet pokaži v osebnih miksih, vrstica pove "hidden", drugje razlaga); live_verified v aplikaciji (skrij in spet pokaži v On Repeat) | 7 | P4 |
 | S33 | Playlisti, mape | SP rootlist (mape `start-group`/`end-group`), playlist v2 capabilities | implemented in live_verified (mape se odprejo, lastni playlisti imajo pravice urejanja) | 3, 4 | P4 |
-| S34 | Create | SP `POST /playlist/v2/playlist` + rootlist ADD | implemented (Ctrl+Shift+N v knjižnici in seznamih predvajanja, ime; opis in javnost open) | 4 | P4 |
-| S35 | Rename, opis, vidnost, sodelovanje | SP playlist `changes` UPDATE_LIST_ATTRIBUTES, permission endpoints | implemented (preimenovanje z baseRevision); opis, vidnost, sodelovanje open | 4 | P4 |
-| S36 | Add (tudi dvojniki) | PF `addToPlaylist` | implemented (Dodaj na seznam predvajanja Spotify z izbiro ali Nov seznam) | 4 | P4 |
-| S37 | Remove točne occurrence | PF `removeFromPlaylist` po `uids` | implemented (Delete odstrani točno izbrano pojavitev po uid) | 4 | P4 |
-| S38 | Move, revision | PF `moveItemsInPlaylist` po `uids`; SP `baseRevision` | implemented (Premakni gor ali dol po uid, BEFORE_UID ali AFTER_UID) | 4 | P4 |
-| S39 | Follow/unfollow playlist | PF library mutations / SP rootlist | implemented (Shrani v knjižnico ali Odstrani iz knjižnice na vrstici playlista) | 4 | P4 |
+| S34 | Create | SP `POST /playlist/v2/playlist` + rootlist ADD | implemented in live_verified (Ctrl+Shift+N v knjižnici in seznamih predvajanja, ime; opis in javnost open) | 4 | P4 |
+| S35 | Rename, opis, vidnost, sodelovanje | SP playlist `changes` UPDATE_LIST_ATTRIBUTES, permission endpoints | implemented in live_verified (preimenovanje z baseRevision); opis, vidnost, sodelovanje open | 4 | P4 |
+| S36 | Add (tudi dvojniki) | PF `addToPlaylist` | implemented in live_verified (Dodaj na seznam predvajanja Spotify z izbiro ali Nov seznam, tudi dvojnik) | 4 | P4 |
+| S37 | Remove točne occurrence | PF `removeFromPlaylist` po `uids` | implemented in live_verified (Delete odstrani točno izbrano pojavitev po uid, enaka skladba drugje ostane) | 4 | P4 |
+| S38 | Move, revision | PF `moveItemsInPlaylist` po `uids`; SP `baseRevision` | implemented in live_verified (Premakni gor ali dol po uid, BEFORE_UID ali AFTER_UID) | 4 | P4 |
+| S39 | Follow/unfollow playlist | PF library mutations / SP rootlist | implemented in live_verified (Shrani v knjižnico ali Odstrani iz knjižnice na vrstici playlista, prek rootlist) | 4 | P4 |
 | S40 | Cover, share link | PF `fetchPlaylist` images, `sharingInfo` | live_verified (branje) | 4 | P4 |
 | S41 | Sort, filter, mape | PF `libraryV3` sort/filter; AP lokalni sort | implemented (Seznami predvajanja so filter knjižnice); razvrščanje open | 4 | P4 |
 | S42 | Spremembe s telefona | SP pubsub `hm://playlist/v2/playlist/` | open (sprememba s telefona se pokaže ob ponovnem odprtju seznama) | 4 | P4 |
@@ -87,4 +87,4 @@ Wrapped: `open`, brez znanega vmesnika v P0.
 | SD-6 | 1. 10. 2026 | Spotify vrsta je modalni dialog kot Apricotova vrsta (Ctrl+Alt+Q), ne zaslon glavnega okna, zato je odprtje iz predvajalnika ne ustavi. Urejanja nosijo UID pojavitve; lastni `set_queue` ohrani UID-je (popravek `replace_next_tracks`). |
 | SD-7 | 1. 10. 2026 | Ctrl+PageUp/PageDown, Shift+S in R pri Spotify postavki gredo v Connect, ne v Apricotovo zaporedje. Zaslon naprav (S11) je naslednji korak P3b. |
 | SD-8 | 1. 10. 2026 | P3b: naprave so modalni dialog kot vrsta. Popravek `librespot-connect` objavi seznam naprav iz vsakega prejetega clusterja in samo glasnost, ki jo nastavi druga naprava, zato Apricot sledi telefonu brez zanke; telefon nad 100 % (Apricotov boost) vidi 100 %. |
-| SD-9 | 1. 10. 2026 | P4: Spotify seznami so en zaslon glavnega okna s skladom okvirjev (iskanje, knjižnica, albumi, playlisti, izvajalci, oddaje), Escape gre en nivo nazaj na isto vrstico. Iskanje je dialog (poizvedba in vrsta). Skladba se predvaja v kontekstu svojega seznama; v playlistu po uid (Connect ga pozna), v albumu, oddaji in pri izvajalcu po URI, ker pathfinder uid tam ni Connectov. Urejanja, ki spremenijo Urhov račun, so implementirana z zahtevami iz P0 in čakajo njegovo dovoljenje za živi preizkus. |
+| SD-9 | 1. 10. 2026 | P4: Spotify seznami so en zaslon glavnega okna s skladom okvirjev (iskanje, knjižnica, albumi, playlisti, izvajalci, oddaje), Escape gre en nivo nazaj na isto vrstico. Iskanje je dialog (poizvedba in vrsta). Skladba se predvaja v kontekstu svojega seznama; v playlistu po uid (Connect ga pozna), v albumu, oddaji in pri izvajalcu po URI, ker pathfinder uid tam ni Connectov. Urh je 1. 10. 2026 dovolil spremembe računa; vse so bile preizkušene v živo in razveljavljene. |
