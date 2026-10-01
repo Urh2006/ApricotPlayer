@@ -25,7 +25,7 @@ pathfinder GraphQL, **AP** = Apricot sama. Faza pove, kdaj se implementira.
 | S12 | Usklajevanje stanja | SP cluster pubsub na isti seji | implemented (vrsta, skladba, shuffle in repeat sledijo potrjenemu stanju, tudi spremembam z druge naprave); implemented (glasnost: Apricotova glasnost gre v Connect, glasnost, ki jo nastavi telefon, se uporabi brez oglasa, lastni odmev se ne vrne, live_verified brez telefona); open (R08 s telefonom) | 5, P3 | P3 |
 | S13 | Autoplay, radio | SP context-resolve autoplay, radio-apollo, inspiredby-mix | implemented in live_verified (radio: Ctrl+Alt+Shift+R odpre Spotifyjev radijski seznam izbrane skladbe, izvajalca, albuma ali seznama); autoplay po koncu konteksta ureja Spotify Connect, open (preizkus konca konteksta) | 3 | P5 |
 | S14 | Preload, gapless | LS preload + mpv most brez prekinitve | implemented in live_verified (meja skladbe v istem toku, ura in dolžina se zamenjata ob slišnem prehodu) | 8, P3 | P2 |
-| S15 | Kakovost, normalizacija | LS PlayerConfig (96/160/320, normalizacija) | source_verified | 8, 9 | P2 |
+| S15 | Kakovost, normalizacija | LS PlayerConfig (96/160/320, normalizacija) | implemented (Nastavitve Spotify: 96, 160 ali 320 kbps in izenačevanje glasnosti, veljajo ob povezavi); live_verified dialog | 8, 9 | P2 |
 | S16 | EQ, boost, speed, pitch, izhod | AP mpv filtri na PCM mostu | implemented (Spotify PCM gre skozi Apricotov libmpv: EQ, hitrost, višina tona, glasnost, izhod); hitrost live_verified, slušni R18 open | 8 | P2 |
 | S17 | Medijske informacije | LS metadata, PF `getAlbum`/`getTrack` | implemented (naslov, izvajalec, album, dolžina; format Ogg Vorbis 320 kbps) | 3 | P4 |
 | S18 | Resume, bookmarks | AP + vsebinska ura mostu | implemented (glasba se začne na začetku, epizode nadaljujejo, D14; zaznamki uporabljajo vsebinsko uro mostu); live_verified začetek na 0 iz priljubljenih | 8 | P6 |
@@ -60,12 +60,12 @@ pathfinder GraphQL, **AP** = Apricot sama. Faza pove, kdaj se implementira.
 | S47 | Cover, credits, explicit | PF `getAlbum` (copyright, coverArt), LS metadata | live_verified | 3 | P4 |
 | S48 | Preview | LS `get_audio_preview` | open (ni v obsegu brez odločitve: predogled ni nadomestilo polnega predvajanja) | 1 | P6 |
 | S49 | Lokalne datoteke | LS local_file_directories; Connect jih zavrne | service_unsupported (Connect zavrne lokalne datoteke, P0) | 9 | P6 |
-| S50 | URI, open.spotify.com URL | AP parser | implemented (`SpotifyRef`; Direct link predvaja povezave skladb in epizod, druge vrste v naslednjih fazah) | - | P1 |
+| S50 | URI, open.spotify.com URL | AP parser | implemented in live_verified (Direct link predvaja skladbe, epizode, albume in sezname predvajanja; izvajalci in oddaje se odprejo v seznamih) | - | P1 |
 | S51 | Favorites, zgodovina, mešani playlisti | AP | implemented in live_verified (Ctrl+F doda Spotify skladbo ali album med Apricotove priljubljene, Enter predvaja skladbo od začetka oziroma cel album; zgodovina in Apricotovi seznami uporabljajo isto postavko); open (mešana Apricot zaporedja s Spotify autoplay, R16) | - | P6 |
-| S52 | Background player, tray, media keys | AP | open | - | P2 |
+| S52 | Background player, tray, media keys | AP | implemented (predvajanje v ozadju: seznami, vrsta in naprave ne ustavijo predvajanja, live_verified; medijske tipke gredo skozi isti ukaz predvajalnika, source_verified) | - | P2 |
 | S53 | Cache, offline, čiščenje | LS Cache (limit), AP ločitev credentials | implemented (LibreSpot zvočni predpomnilnik je izklopljen, ker bi poverilnice shranil v čistem besedilu; ostane samo predpomnilnik imen operacij `spotify/pathfinder.json`); čiščenje open | 1 | P6 |
 | S54 | Diagnostika brez skrivnosti | AP (redakcija kot v evidenci P0) | implemented (diagnostično poročilo: razdelek Spotify brez imen, žetonov in povezav ter rep spotify.log) | uvod | P6 |
-| S55 | Tipkovnica, NVDA, meniji, lokalizacija | AP | implemented za hub, račune in prijavo (dve dejanji z bližnjicama, kontekstni meni, Action Finder, 27 jezikov); ostalo po fazah | - | P1-P7 |
+| S55 | Tipkovnica, NVDA, meniji, lokalizacija | AP | implemented in live_verified (vse Spotify funkcije s tipkovnico: meni Spotify, 15 bližnjic, kontekstni meniji samo z delujočimi ukazi, Action Finder, 27 jezikov); open (Urhov NVDA in brajlov preizkus) | - | P1-P7 |
 
 ## Meje (razdelek 3.5 plana)
 
