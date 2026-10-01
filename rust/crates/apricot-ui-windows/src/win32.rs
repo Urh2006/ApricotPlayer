@@ -754,6 +754,7 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
         schedule_saved_audio_device_check(window);
     }
     process_pending_activations(window);
+    spotify::autoconnect(window);
     configure_subscription_timer(window);
     check_subscriptions_if_due(window);
     configure_rss_timer(window);
@@ -7847,6 +7848,12 @@ unsafe fn activate_direct_link(window: HWND, action: &str) {
         show_no_selection_message(window);
         return;
     }
+    if text
+        .as_deref()
+        .is_some_and(|text| spotify::play_link(window, text, action))
+    {
+        return;
+    }
     let item = text.and_then(|value| {
         apricot_core::MediaItem::from_direct_link(&direct_link_with_scheme(&value))
     });
@@ -12301,6 +12308,17 @@ unsafe fn open_settings_window() -> Option<HWND> {
 
 /// Python `player_failed` message shown when mpv cannot start or play.
 fn player_failed_message(application: &Application, error: &str) -> String {
+    // A Spotify source reports a text key; its own text replaces the generic one.
+    if let Some(start) = error.find("spotify_") {
+        let key: String = error[start..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        let text = catalog_text(application, &key);
+        if text != key {
+            return text;
+        }
+    }
     catalog_text(application, "player_failed").replace("{error}", error)
 }
 

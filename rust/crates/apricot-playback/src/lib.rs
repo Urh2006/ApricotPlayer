@@ -13,6 +13,7 @@ mod libmpv;
 mod mpv_ipc;
 #[cfg(windows)]
 mod mpv_process;
+pub mod pcm_source;
 #[cfg(windows)]
 mod runtime;
 

@@ -9,10 +9,16 @@ description = "Spotify accounts, login and session runtime (LibreSpot 0.8.0)"
 [dependencies]
 apricot-core.workspace = true
 apricot-platform.workspace = true
+apricot-playback.workspace = true
 apricot-storage.workspace = true
 librespot-core = { version = "=0.8.0", default-features = false, features = ["rustls-tls-native-roots"] }
 librespot-protocol = "=0.8.0"
+librespot-connect = { version = "=0.8.0", default-features = false, features = ["rustls-tls-native-roots"] }
+librespot-metadata = { version = "=0.8.0", default-features = false, features = ["rustls-tls-native-roots"] }
+librespot-playback = { version = "=0.8.0", default-features = false, features = ["rustls-tls-native-roots"] }
+log = { version = "0.4", features = ["std"] }
 rand.workspace = true
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
 reqwest = { workspace = true, features = ["form"] }
 serde.workspace = true
 serde_json.workspace = true

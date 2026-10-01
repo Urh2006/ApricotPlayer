@@ -131,6 +131,65 @@ type GetProperty = unsafe extern "C" fn(*mut MpvHandle, *const c_char, c_int, *m
 type WaitEvent = unsafe extern "C" fn(*mut MpvHandle, c_double) -> *const MpvEvent;
 type ErrorString = unsafe extern "C" fn(c_int) -> *const c_char;
 type RequestLogMessages = unsafe extern "C" fn(*mut MpvHandle, *const c_char) -> c_int;
+type StreamCbAddRo =
+    unsafe extern "C" fn(*mut MpvHandle, *const c_char, *mut c_void, StreamOpen) -> c_int;
+type StreamOpen = unsafe extern "C" fn(*mut c_void, *mut c_char, *mut StreamCbInfo) -> c_int;
+
+/// mpv `mpv_stream_cb_info`.
+#[repr(C)]
+struct StreamCbInfo {
+    cookie: *mut c_void,
+    read_fn: Option<unsafe extern "C" fn(*mut c_void, *mut c_char, u64) -> i64>,
+    seek_fn: Option<unsafe extern "C" fn(*mut c_void, i64) -> i64>,
+    size_fn: Option<unsafe extern "C" fn(*mut c_void) -> i64>,
+    close_fn: Option<unsafe extern "C" fn(*mut c_void)>,
+    cancel_fn: Option<unsafe extern "C" fn(*mut c_void)>,
+}
+
+type PcmCookie = std::sync::Arc<dyn crate::pcm_source::PcmStream>;
+
+/// mpv opens `apricot-pcm://<generation>` from its own thread.
+unsafe extern "C" fn pcm_open(
+    _user: *mut c_void,
+    uri: *mut c_char,
+    info: *mut StreamCbInfo,
+) -> c_int {
+    const MPV_ERROR_LOADING_FAILED: c_int = -13;
+    if uri.is_null() || info.is_null() {
+        return MPV_ERROR_LOADING_FAILED;
+    }
+    let uri = CStr::from_ptr(uri).to_string_lossy();
+    let Some(id) = uri.rsplit('/').next().and_then(|id| id.parse::<u64>().ok()) else {
+        return MPV_ERROR_LOADING_FAILED;
+    };
+    let Some(stream) = crate::pcm_source::pcm_source().and_then(|source| source.open(id)) else {
+        return MPV_ERROR_LOADING_FAILED;
+    };
+    let cookie: Box<PcmCookie> = Box::new(stream);
+    (*info).cookie = Box::into_raw(cookie).cast();
+    (*info).read_fn = Some(pcm_read);
+    (*info).seek_fn = None;
+    (*info).size_fn = None;
+    (*info).close_fn = Some(pcm_close);
+    (*info).cancel_fn = Some(pcm_cancel);
+    0
+}
+
+unsafe extern "C" fn pcm_read(cookie: *mut c_void, buffer: *mut c_char, size: u64) -> i64 {
+    let stream = &*cookie.cast::<PcmCookie>();
+    let size = usize::try_from(size).unwrap_or(usize::MAX).min(1 << 20);
+    let buffer = std::slice::from_raw_parts_mut(buffer.cast::<u8>(), size);
+    i64::try_from(stream.read(buffer)).unwrap_or(0)
+}
+
+unsafe extern "C" fn pcm_close(cookie: *mut c_void) {
+    let stream = Box::from_raw(cookie.cast::<PcmCookie>());
+    stream.cancel();
+}
+
+unsafe extern "C" fn pcm_cancel(cookie: *mut c_void) {
+    (*cookie.cast::<PcmCookie>()).cancel();
+}
 
 /// Python `start_mpv` writes the terminal output of mpv to `mpv.log`. mpv
 /// prints messages of level info and above on the terminal.
@@ -185,6 +244,7 @@ struct MpvApi {
     wait_event: WaitEvent,
     error_string: ErrorString,
     request_log_messages: RequestLogMessages,
+    stream_cb_add_ro: Option<StreamCbAddRo>,
 }
 
 impl MpvApi {
@@ -225,6 +285,10 @@ impl MpvApi {
         let request_log_messages = *library
             .get::<RequestLogMessages>(b"mpv_request_log_messages\0")
             .map_err(|error| symbol_error(&error))?;
+        let stream_cb_add_ro = library
+            .get::<StreamCbAddRo>(b"mpv_stream_cb_add_ro\0")
+            .ok()
+            .map(|symbol| *symbol);
         Ok(Self {
             _library: library,
             create,
@@ -237,6 +301,7 @@ impl MpvApi {
             wait_event,
             error_string,
             request_log_messages,
+            stream_cb_add_ro,
         })
     }
 
@@ -359,6 +424,15 @@ pub struct LibMpvEngine {
     /// With `keep-open=yes` mpv pauses at the end instead of ending the file,
     /// so the end is reported once from `eof-reached` (Python `player_monitor_worker`).
     ended_reported: bool,
+    /// The item plays as PCM from the installed [`crate::pcm_source`].
+    pcm: Option<PcmPlayback>,
+}
+
+/// A PCM item: mpv positions are relative to the loaded generation.
+struct PcmPlayback {
+    base_ms: u32,
+    started: bool,
+    loaded: bool,
 }
 
 impl LibMpvEngine {
@@ -395,6 +469,7 @@ impl LibMpvEngine {
         let result = configure(&api, handle, options)
             .and_then(|()| api.check((api.initialize)(handle), "libmpv initialization failed"))
             .and_then(|()| subscribe(&api, handle))
+            .and_then(|()| register_pcm_protocol(&api, handle))
             .and_then(|()| {
                 if options.log_file.is_none() {
                     return Ok(());
@@ -421,6 +496,7 @@ impl LibMpvEngine {
             expected_entry: None,
             current_entry: None,
             ended_reported: false,
+            pcm: None,
         })
     }
 
@@ -429,6 +505,9 @@ impl LibMpvEngine {
     }
 
     unsafe fn next_event(&mut self) -> Result<Option<PlaybackEvent>, PlaybackError> {
+        if let Some(event) = self.poll_pcm()? {
+            return Ok(Some(event));
+        }
         let event = (self.api.wait_event)(self.handle(), 0.0);
         if event.is_null() {
             return Err(PlaybackError::InvalidData(
@@ -450,8 +529,28 @@ impl LibMpvEngine {
                 Ok(None)
             }
             MPV_EVENT_FILE_LOADED if self.stale() => Ok(None),
-            MPV_EVENT_FILE_LOADED => Ok(Some(PlaybackEvent::Started)),
-            MPV_EVENT_END_FILE => self.project_end_file((*event).data),
+            MPV_EVENT_FILE_LOADED => {
+                // A PCM item reports its start once, not for every generation.
+                if let Some(pcm) = self.pcm.as_mut() {
+                    if pcm.started {
+                        return Ok(None);
+                    }
+                    pcm.started = true;
+                }
+                Ok(Some(PlaybackEvent::Started))
+            }
+            MPV_EVENT_END_FILE => {
+                if self.pcm.is_some() {
+                    let end = &*(*event).data.cast::<MpvEventEndFile>();
+                    log::info!(
+                        "pcm end-file reason {} entry {} expected {:?}",
+                        end.reason,
+                        end.playlist_entry_id,
+                        self.expected_entry
+                    );
+                }
+                self.project_end_file((*event).data)
+            }
             MPV_EVENT_PROPERTY_CHANGE => self.project_property((*event).data),
             MPV_EVENT_QUEUE_OVERFLOW => Ok(Some(PlaybackEvent::Failed(
                 "libmpv event queue overflowed".to_owned(),
@@ -526,6 +625,7 @@ impl LibMpvEngine {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     unsafe fn project_property(
         &mut self,
         data: *mut c_void,
@@ -561,6 +661,12 @@ impl LibMpvEngine {
             }
             b"pause" if property.format == MPV_FORMAT_FLAG => {
                 let paused = *property.data.cast::<c_int>() != 0;
+                if self.pcm.is_some() {
+                    log::info!(
+                        "pcm pause {paused}, eof {:?}",
+                        self.api.property_flag(self.handle(), "eof-reached")
+                    );
+                }
                 // The pause mpv applies at the end is the end, not a user pause.
                 if paused
                     && !self.stale()
@@ -571,6 +677,9 @@ impl LibMpvEngine {
                 Ok(Some(PlaybackEvent::Paused(paused)))
             }
             b"eof-reached" if property.format == MPV_FORMAT_FLAG => {
+                if self.pcm.is_some() {
+                    log::info!("pcm eof-reached {}", *property.data.cast::<c_int>() != 0);
+                }
                 // mpv sets eof-reached when decoding ends, while the audio output
                 // still plays its buffer. The end is the pause mpv applies after
                 // that, or eof-reached arriving while the player is already paused.
@@ -586,8 +695,19 @@ impl LibMpvEngine {
                 }
             }
             b"time-pos" if property.format == MPV_FORMAT_DOUBLE => {
-                self.elapsed = (*property.data.cast::<f64>()).max(0.0);
+                let base = self
+                    .pcm
+                    .as_ref()
+                    .map_or(0.0, |pcm| f64::from(pcm.base_ms) / 1000.0);
+                self.elapsed = base + (*property.data.cast::<f64>()).max(0.0);
                 Ok(Some(self.position_event()))
+            }
+            // A PCM stream has no length and no codec; the item's own
+            // duration and the source's format stay.
+            b"duration" | b"audio-codec-name" | b"audio-bitrate" | b"file-format"
+                if self.pcm.is_some() =>
+            {
+                Ok(None)
             }
             b"duration" if property.format == MPV_FORMAT_DOUBLE => {
                 self.duration = Some((*property.data.cast::<f64>()).max(0.0));
@@ -632,6 +752,139 @@ impl LibMpvEngine {
                 Ok(Some(self.media_info_event()))
             }
             _ => Ok(None),
+        }
+    }
+
+    /// Loads a new PCM generation and forwards the source's own events.
+    unsafe fn poll_pcm(&mut self) -> Result<Option<PlaybackEvent>, PlaybackError> {
+        if self.pcm.is_none() {
+            return Ok(None);
+        }
+        let Some(source) = crate::pcm_source::pcm_source() else {
+            self.pcm = None;
+            return Ok(Some(PlaybackEvent::Failed(
+                "the PCM source is gone".to_owned(),
+            )));
+        };
+        if let Some(generation) = source.take_generation() {
+            let arguments = [
+                "loadfile".to_owned(),
+                format!("{}://{}", crate::pcm_source::PCM_PROTOCOL, generation.id),
+                "replace".to_owned(),
+                "-1".to_owned(),
+                crate::pcm_source::pcm_file_options(),
+            ];
+            self.api.run_command(self.handle(), &arguments)?;
+            self.expected_entry = self.api.property_i64(self.handle(), "playlist/0/id");
+            log::info!(
+                "pcm loadfile generation {} entry {:?}",
+                generation.id,
+                self.expected_entry
+            );
+            self.ended_reported = false;
+            if let Some(pcm) = self.pcm.as_mut() {
+                pcm.base_ms = generation.base_ms;
+                pcm.loaded = true;
+            }
+            self.elapsed = f64::from(generation.base_ms) / 1000.0;
+            let (codec, bitrate) = source.format();
+            self.media_info.audio_codec = Some(codec);
+            // Spotify streams are Ogg Vorbis; the PCM itself has no container.
+            self.media_info.container = Some("ogg".to_owned());
+            self.media_info.audio_bitrate_bits_per_second = bitrate;
+            return Ok(Some(self.position_event()));
+        }
+        match source.poll_event() {
+            Some(crate::pcm_source::PcmSourceEvent::Paused(paused)) => {
+                self.api.run_command(
+                    self.handle(),
+                    &[
+                        "set".to_owned(),
+                        "pause".to_owned(),
+                        yes_no(paused).to_owned(),
+                    ],
+                )?;
+                Ok(None)
+            }
+            Some(crate::pcm_source::PcmSourceEvent::Failed(reason)) => {
+                Ok(Some(PlaybackEvent::Failed(reason)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Transport commands of a PCM item go to its source; the rest (volume,
+    /// speed, filters, device) stay with mpv. Returns `true` when handled.
+    unsafe fn execute_pcm(&mut self, command: &PlaybackCommand) -> Result<bool, PlaybackError> {
+        if let PlaybackCommand::Load {
+            item,
+            start_position_seconds,
+        } = command
+        {
+            if let Some(source) = crate::pcm_source::pcm_source()
+                && self.pcm.take().is_some()
+                && !crate::pcm_source::is_pcm_item(item)
+            {
+                source.stop();
+            }
+            if !crate::pcm_source::is_pcm_item(item) {
+                return Ok(false);
+            }
+            let source = crate::pcm_source::pcm_source()
+                .ok_or_else(|| PlaybackError::Operation("Spotify is not connected".to_owned()))?;
+            let position_ms = start_position_seconds
+                .filter(|value| value.is_finite() && *value >= 0.0)
+                .map_or(0, seconds_to_ms);
+            let paused = self.api.property_flag(self.handle(), "pause") == Some(true);
+            let attach = item
+                .metadata
+                .get("spotify_attach")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            self.api.run_command(self.handle(), &["stop".to_owned()])?;
+            self.expected_entry = None;
+            self.duration = item.duration_seconds;
+            self.elapsed = f64::from(position_ms) / 1000.0;
+            source
+                .start(item, position_ms, paused, attach)
+                .map_err(PlaybackError::Operation)?;
+            self.pcm = Some(PcmPlayback {
+                base_ms: position_ms,
+                started: false,
+                loaded: false,
+            });
+            return Ok(true);
+        }
+        let Some(pcm) = self.pcm.as_ref() else {
+            return Ok(false);
+        };
+        let Some(source) = crate::pcm_source::pcm_source() else {
+            return Ok(false);
+        };
+        let clamp = |seconds: f64| {
+            let upper = self.duration.unwrap_or(f64::MAX).max(0.0);
+            seconds_to_ms(seconds.clamp(0.0, upper))
+        };
+        match command {
+            PlaybackCommand::SeekAbsolute { seconds, .. } => {
+                source.seek(clamp(*seconds));
+                Ok(true)
+            }
+            PlaybackCommand::SeekRelative { seconds, .. } => {
+                let _ = pcm;
+                source.seek(clamp(self.elapsed + seconds));
+                Ok(true)
+            }
+            PlaybackCommand::SetPaused(paused) => {
+                source.set_paused(*paused);
+                Ok(false)
+            }
+            PlaybackCommand::Stop => {
+                source.stop();
+                self.pcm = None;
+                Ok(false)
+            }
+            _ => Ok(false),
         }
     }
 
@@ -741,6 +994,13 @@ unsafe fn probe_devices(
 
 impl PlaybackEngine for LibMpvEngine {
     fn execute(&mut self, command: PlaybackCommand) -> Result<(), PlaybackError> {
+        if unsafe { self.execute_pcm(&command)? } {
+            if matches!(&command, PlaybackCommand::Load { .. }) {
+                self.media_info = PlaybackMediaInfo::default();
+                self.restart_log();
+            }
+            return Ok(());
+        }
         if matches!(&command, PlaybackCommand::Load { .. }) {
             self.elapsed = 0.0;
             self.duration = None;
@@ -914,6 +1174,25 @@ fn configure_cache(values: &mut Vec<(&'static str, String)>, options: &MpvLaunch
     } else {
         values.push(("cache", "no".to_owned()));
     }
+}
+
+/// Whole milliseconds of a non-negative position, saturated at `u32::MAX`.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn seconds_to_ms(seconds: f64) -> u32 {
+    (seconds.max(0.0) * 1000.0).round().min(f64::from(u32::MAX)) as u32
+}
+
+/// `apricot-pcm://` for PCM sources; an old libmpv without stream callbacks
+/// simply cannot play them.
+unsafe fn register_pcm_protocol(api: &MpvApi, handle: *mut MpvHandle) -> Result<(), PlaybackError> {
+    let Some(add) = api.stream_cb_add_ro else {
+        return Ok(());
+    };
+    let protocol = c_string(crate::pcm_source::PCM_PROTOCOL, "PCM protocol")?;
+    api.check(
+        add(handle, protocol.as_ptr(), ptr::null_mut(), pcm_open),
+        "could not register the PCM protocol",
+    )
 }
 
 unsafe fn subscribe(api: &MpvApi, handle: *mut MpvHandle) -> Result<(), PlaybackError> {
@@ -1828,5 +2107,289 @@ mod tests {
             "{events:?}"
         );
         assert!(events.contains(&PlaybackEvent::Started), "{events:?}");
+    }
+
+    /// A generated two-second tone through `apricot-pcm://`: one start, the
+    /// item position across a seek (new generation), and one natural end.
+    #[test]
+    #[ignore = "requires APRICOT_TEST_MPV"]
+    #[allow(clippy::too_many_lines)]
+    fn real_libmpv_plays_a_pcm_source_across_a_seek_to_its_end() {
+        use std::sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, AtomicU64, Ordering},
+        };
+
+        use crate::{
+            PlaybackEngine, PlaybackEvent,
+            pcm_source::{PcmGeneration, PcmSource, PcmSourceEvent, PcmStream, set_pcm_source},
+        };
+
+        const LENGTH_MS: u32 = 2000;
+        struct Stream {
+            id: u64,
+            current: Arc<AtomicU64>,
+            remaining: Mutex<usize>,
+            cancelled: AtomicBool,
+        }
+        impl PcmStream for Stream {
+            fn read(&self, buffer: &mut [u8]) -> usize {
+                loop {
+                    if self.cancelled.load(Ordering::SeqCst) {
+                        return 0;
+                    }
+                    if self.current.load(Ordering::SeqCst) == self.id {
+                        break;
+                    }
+                    // A replaced generation waits until mpv closes it.
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                let mut remaining = self.remaining.lock().unwrap();
+                let take = (*remaining).min(buffer.len()) & !3;
+                buffer[..take].fill(0);
+                *remaining -= take;
+                take
+            }
+            fn cancel(&self) {
+                self.cancelled.store(true, Ordering::SeqCst);
+            }
+        }
+        #[derive(Default)]
+        struct Source {
+            current: Arc<AtomicU64>,
+            pending: Mutex<Option<PcmGeneration>>,
+        }
+        impl Source {
+            fn begin(&self, base_ms: u32) {
+                let id = self.current.fetch_add(1, Ordering::SeqCst) + 1;
+                *self.pending.lock().unwrap() = Some(PcmGeneration { id, base_ms });
+            }
+        }
+        impl PcmSource for Source {
+            fn start(
+                &self,
+                _: &MediaItem,
+                position_ms: u32,
+                _: bool,
+                _: bool,
+            ) -> Result<(), String> {
+                self.begin(position_ms);
+                Ok(())
+            }
+            fn set_paused(&self, _: bool) {}
+            fn seek(&self, position_ms: u32) {
+                self.begin(position_ms);
+            }
+            fn stop(&self) {}
+            fn take_generation(&self) -> Option<PcmGeneration> {
+                self.pending.lock().unwrap().take()
+            }
+            fn open(&self, id: u64) -> Option<Arc<dyn PcmStream>> {
+                let base = if id == 1 { 0 } else { 1500 };
+                let bytes = usize::try_from((LENGTH_MS - base) * 441 / 10 * 4).unwrap();
+                Some(Arc::new(Stream {
+                    id,
+                    current: self.current.clone(),
+                    remaining: Mutex::new(bytes),
+                    cancelled: AtomicBool::new(false),
+                }))
+            }
+            fn poll_event(&self) -> Option<PcmSourceEvent> {
+                None
+            }
+            fn format(&self) -> (String, Option<f64>) {
+                ("Test PCM".to_owned(), None)
+            }
+        }
+        set_pcm_source(Some(Arc::new(Source::default())));
+        let item = MediaItem {
+            id: MediaId("spotify:track:4u7EnebtmKWzUH433cf5Qv".to_owned()),
+            source: MediaSource::Spotify,
+            kind: MediaKind::Audio,
+            title: "Tone".to_owned(),
+            url: None,
+            stream_url: None,
+            external_audio_url: None,
+            local_path: None,
+            channel: String::new(),
+            duration_seconds: Some(2.0),
+            metadata: BTreeMap::new(),
+        };
+        let mut engine = short_engine(false);
+        engine
+            .execute(PlaybackCommand::Load {
+                item: Box::new(item),
+                start_position_seconds: None,
+            })
+            .expect("load PCM item");
+        let mut positions = Vec::new();
+        let mut events = Vec::new();
+        let mut poll = |engine: &mut super::LibMpvEngine, millis: u64| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(millis);
+            while std::time::Instant::now() < deadline {
+                match engine.poll_event().expect("poll") {
+                    Some(PlaybackEvent::Position { elapsed, duration }) => {
+                        positions.push((elapsed, duration));
+                    }
+                    Some(PlaybackEvent::MediaInfo(_) | PlaybackEvent::AudioDevices(_)) => {}
+                    Some(event) => events.push(event),
+                    None => std::thread::sleep(std::time::Duration::from_millis(5)),
+                }
+            }
+        };
+        poll(&mut engine, 700);
+        engine
+            .execute(PlaybackCommand::SeekAbsolute {
+                seconds: 1.5,
+                exact: true,
+            })
+            .expect("seek");
+        poll(&mut engine, 1500);
+        set_pcm_source(None);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, PlaybackEvent::Started))
+                .count(),
+            1,
+            "{events:?}"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, PlaybackEvent::Ended))
+                .count(),
+            1,
+            "{events:?}"
+        );
+        assert!(positions.iter().all(|(_, duration)| *duration == Some(2.0)));
+        let before_seek = positions
+            .iter()
+            .filter(|(e, _)| *e > 0.1 && *e < 1.4)
+            .count();
+        let after_seek = positions.iter().filter(|(e, _)| *e >= 1.5).count();
+        assert!(before_seek > 0 && after_seek > 0, "{positions:?}");
+    }
+
+    /// Like `LibreSpot` at the end of a track: a generation opened twice by
+    /// mpv (probe), its data ends and the source closes it while mpv waits.
+    #[test]
+    #[ignore = "requires APRICOT_TEST_MPV"]
+    #[allow(clippy::too_many_lines)]
+    fn real_libmpv_reports_the_end_when_the_source_closes_a_waiting_generation() {
+        use std::sync::{
+            Arc, Condvar, Mutex,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        use crate::{
+            PlaybackEngine, PlaybackEvent,
+            pcm_source::{PcmGeneration, PcmSource, PcmSourceEvent, PcmStream, set_pcm_source},
+        };
+
+        struct Shared {
+            data: Mutex<(usize, bool)>,
+            cond: Condvar,
+        }
+        struct Reader {
+            shared: Arc<Shared>,
+            cancelled: AtomicBool,
+        }
+        impl PcmStream for Reader {
+            fn read(&self, buffer: &mut [u8]) -> usize {
+                let mut guard = self.shared.data.lock().unwrap();
+                while guard.0 == 0 && !guard.1 && !self.cancelled.load(Ordering::SeqCst) {
+                    guard = self.shared.cond.wait(guard).unwrap();
+                }
+                if self.cancelled.load(Ordering::SeqCst) {
+                    return 0;
+                }
+                let take = guard.0.min(buffer.len()) & !3;
+                buffer[..take].fill(0);
+                guard.0 -= take;
+                take
+            }
+            fn cancel(&self) {
+                self.cancelled.store(true, Ordering::SeqCst);
+                let _guard = self.shared.data.lock();
+                self.shared.cond.notify_all();
+            }
+        }
+        struct Source {
+            shared: Arc<Shared>,
+            pending: Mutex<Option<PcmGeneration>>,
+        }
+        impl PcmSource for Source {
+            fn start(&self, _: &MediaItem, _: u32, _: bool, _: bool) -> Result<(), String> {
+                *self.pending.lock().unwrap() = Some(PcmGeneration { id: 1, base_ms: 0 });
+                Ok(())
+            }
+            fn set_paused(&self, _: bool) {}
+            fn seek(&self, _: u32) {}
+            fn stop(&self) {}
+            fn take_generation(&self) -> Option<PcmGeneration> {
+                self.pending.lock().unwrap().take()
+            }
+            fn open(&self, _: u64) -> Option<Arc<dyn PcmStream>> {
+                Some(Arc::new(Reader {
+                    shared: self.shared.clone(),
+                    cancelled: AtomicBool::new(false),
+                }))
+            }
+            fn poll_event(&self) -> Option<PcmSourceEvent> {
+                None
+            }
+            fn format(&self) -> (String, Option<f64>) {
+                ("Test PCM".to_owned(), None)
+            }
+        }
+        // One second of PCM, then the source closes the generation.
+        let shared = Arc::new(Shared {
+            data: Mutex::new((44_100 * 4, false)),
+            cond: Condvar::new(),
+        });
+        set_pcm_source(Some(Arc::new(Source {
+            shared: shared.clone(),
+            pending: Mutex::new(None),
+        })));
+        let item = MediaItem {
+            id: MediaId("spotify:track:4u7EnebtmKWzUH433cf5Qv".to_owned()),
+            source: MediaSource::Spotify,
+            kind: MediaKind::Audio,
+            title: "Tone".to_owned(),
+            url: None,
+            stream_url: None,
+            external_audio_url: None,
+            local_path: None,
+            channel: String::new(),
+            duration_seconds: Some(1.0),
+            metadata: BTreeMap::new(),
+        };
+        let mut engine = short_engine(false);
+        engine
+            .execute(PlaybackCommand::Load {
+                item: Box::new(item),
+                start_position_seconds: None,
+            })
+            .expect("load PCM item");
+        let closer = {
+            let shared = shared.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+                shared.data.lock().unwrap().1 = true;
+                shared.cond.notify_all();
+            })
+        };
+        let events = collect_events(&mut engine, std::time::Duration::from_millis(3500));
+        closer.join().unwrap();
+        set_pcm_source(None);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, PlaybackEvent::Ended))
+                .count(),
+            1,
+            "{events:?}"
+        );
     }
 }

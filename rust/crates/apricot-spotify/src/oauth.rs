@@ -396,3 +396,14 @@ mod tests {
         assert!(answer.contains("<h1>ok</h1>"));
     }
 }
+
+#[cfg(test)]
+mod live_tests {
+    #[test]
+    #[ignore = "network"]
+    fn exchange_with_a_bogus_code_reports_the_endpoint_status() {
+        let login = super::PkceLogin::new("65b708073fc0480ea92a077233ca87bd").unwrap();
+        let result = login.exchange("65b708073fc0480ea92a077233ca87bd", "bogus");
+        eprintln!("exchange result: {result:?}");
+    }
+}

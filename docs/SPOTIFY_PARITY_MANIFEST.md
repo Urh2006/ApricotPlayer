@@ -14,20 +14,20 @@ pathfinder GraphQL, **AP** = Apricot sama. Faza pove, kdaj se implementira.
 | S01 | Prijava, refresh, ponovna prijava, odjava | AP PKCE (`apricot-spotify` `oauth.rs`) z LibreSpotovim client ID + LS reusable credentials; discovery kot alternativa | implemented (PKCE prijava v brskalniku s preklicem, rokom, napačnim callbackom in ponovnim poskusom; odjava; zavrnjena prijava se pozabi); open (R01 z NVDA in pravim računom) | 2 | P1 |
 | S02 | Več računov in izolacija | AP (ločen cache in credentials po računu) | implemented (seznam računov, izbira aktivnega šele po uspešni povezavi, odjava, odstranitev z mapo računa, DPAPI poverilnice); open (R03 z dvema pravima računoma) | - | P1 |
 | S03 | Premium, market, explicit | LS user attributes (`type`, `country`, `filter-explicit-content`) | implemented (Premium ali Free v vrstici računa); ostalo v P2 | 2 | P1 |
-| S04 | Predvajanje, pavza, stop, seek | LS Player + mpv most | live_verified | 8 | P2 |
+| S04 | Predvajanje, pavza, stop, seek | LS Player + mpv most | implemented in live_verified v aplikaciji (Direct link: začetek ~1 s, čas, seek, pavza, nadaljevanje, konec skladbe) | 8 | P2 |
 | S05 | Next/previous, EOF | LS Spirc | source_verified | 5 | P3 |
 | S06 | Celoten kontekst | LS Spirc `LoadRequest::from_context_uri`, SP context-resolve | live_verified (branje konteksta) | 4, 6 | P3 |
 | S07 | Točna occurrence | LS `PlayingTrack::Uid` (hex `itemId`), uid iz SP | live_verified | 5, 6 | P3 |
 | S08 | Shuffle, repeat | LS Spirc + remote SetOptions | source_verified | 5 | P3 |
 | S09 | Ročna queue add/remove/reorder/clear | SP connect-state `add_to_queue`, `set_queue`; potrjeno stanje lastne naprave potrebuje razširitev LS | live_verified (prek opazovalca); blocked do odločitve o razširitvi | 5 | P3 |
-| S10 | Connect receiver, transfer | LS Spirc, discovery | live_verified (telefon -> Apricot) | 5 | P2 |
+| S10 | Connect receiver, transfer | LS Spirc, discovery | implemented in live_verified (naprava "ApricotPlayer (računalnik)", prevzem s telefona: prejšnji medij shrani položaj in se ustavi, fokus ostane) | 5 | P2 |
 | S11 | Seznam naprav in oddaljene kontrole | SP cluster `device` map, connect-state ukazi | live_verified (ukazi drugi napravi) | 5 | P3 |
 | S12 | Usklajevanje stanja | SP cluster pubsub na isti seji | source_verified | 5 | P3 |
 | S13 | Autoplay, radio | SP context-resolve autoplay, radio-apollo, inspiredby-mix | live_verified (radio); source_verified (autoplay kontekst) | 3 | P5 |
 | S14 | Preload, gapless | LS preload + mpv most brez prekinitve | live_verified | 8 | P2 |
 | S15 | Kakovost, normalizacija | LS PlayerConfig (96/160/320, normalizacija) | source_verified | 8, 9 | P2 |
-| S16 | EQ, boost, speed, pitch, izhod | AP mpv filtri na PCM mostu | live_verified (filtri sprejeti); open (slušni R18) | 8 | P2 |
-| S17 | Medijske informacije | LS metadata, PF `getAlbum`/`getTrack` | live_verified (album) | 3 | P4 |
+| S16 | EQ, boost, speed, pitch, izhod | AP mpv filtri na PCM mostu | implemented (Spotify PCM gre skozi Apricotov libmpv: EQ, hitrost, višina tona, glasnost, izhod); hitrost live_verified, slušni R18 open | 8 | P2 |
+| S17 | Medijske informacije | LS metadata, PF `getAlbum`/`getTrack` | implemented (naslov, izvajalec, album, dolžina; format Ogg Vorbis 320 kbps) | 3 | P4 |
 | S18 | Resume, bookmarks | AP + vsebinska ura mostu | source_verified (ura) | 8 | P6 |
 | S19 | Iskanje vseh tipov | PF `searchDesktop` (+ `searchTracks` ... `searchAudiobooks`) | live_verified | 3 | P4 |
 | S20 | Filtri, strani | PF search type-specific queries z offset/limit | source_verified | 3 | P4 |
@@ -60,7 +60,7 @@ pathfinder GraphQL, **AP** = Apricot sama. Faza pove, kdaj se implementira.
 | S47 | Cover, credits, explicit | PF `getAlbum` (copyright, coverArt), LS metadata | live_verified | 3 | P4 |
 | S48 | Preview | LS `get_audio_preview` | source_verified | 1 | P6 |
 | S49 | Lokalne datoteke | LS local_file_directories; Connect jih zavrne | source_verified (omejitev) | 9 | P6 |
-| S50 | URI, open.spotify.com URL | AP parser | implemented (tip `SpotifyRef`: `spotify:` URI in `open.spotify.com` povezave); open (Direct link in odložišče v P6, short link) | - | P1 |
+| S50 | URI, open.spotify.com URL | AP parser | implemented (`SpotifyRef`; Direct link predvaja povezave skladb in epizod, druge vrste v naslednjih fazah) | - | P1 |
 | S51 | Favorites, zgodovina, mešani playlisti | AP | open | - | P6 |
 | S52 | Background player, tray, media keys | AP | open | - | P2 |
 | S53 | Cache, offline, čiščenje | LS Cache (limit), AP ločitev credentials | source_verified | 1 | P6 |
@@ -82,3 +82,5 @@ Wrapped: `open`, brez znanega vmesnika v P0.
 | SD-1 | 30. 9. 2026 | Urh je izbral možnost a: potrjeno Connect stanje (vrsta z `uid` in `queue_revision`) izpostavi ozek lokalni popravek `librespot-connect` prek `[patch.crates-io]`, hkrati se pripravi upstream predlog. Izvedba v P3. |
 | SD-2 | 30. 9. 2026 | `MediaSource::Spotify` se doda v P2 skupaj s prvim predvajanjem; P1 uvede samo trajno referenco `SpotifyRef`, da se Python podatki ne spremenijo brez potrebe. |
 | SD-3 | 30. 9. 2026 | Hub prikazuje samo delujoče vnose (P1: Prijava, Spotify računi); vsaka faza doda svoje vnose, brez neaktivnih vrstic. |
+| SD-4 | 1. 10. 2026 | En sam glasnostni člen: Connect glasnost se hrani, uporablja se Apricotova (mpv). Sinhronizacija glasnosti s telefonom v P3. |
+| SD-5 | 1. 10. 2026 | rustls dobi izrecno izbranega ponudnika aws-lc-rs ob zagonu Spotify storitve (v drevesu sta ring in aws-lc-rs). |

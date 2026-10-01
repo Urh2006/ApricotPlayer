@@ -13,6 +13,7 @@ thiserror.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 libloading.workspace = true
+log = "0.4"
 windows.workspace = true
 
 [lints]

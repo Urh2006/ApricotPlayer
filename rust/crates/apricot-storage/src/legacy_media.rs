@@ -122,6 +122,12 @@ fn media_source(
     if explicit.contains("audiovault") || kind.starts_with("audiovault") {
         return MediaSource::Audiovault;
     }
+    if explicit.contains("spotify")
+        || kind.starts_with("spotify")
+        || location.starts_with("https://open.spotify.com/")
+    {
+        return MediaSource::Spotify;
+    }
     if local_path.is_some() || kind == "local_file" {
         return MediaSource::Local;
     }

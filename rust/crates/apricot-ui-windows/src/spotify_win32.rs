@@ -11,8 +11,14 @@ use std::{
 use apricot_app::spotify::{
     SpotifyAccountRow, SpotifyHubEntry, SpotifyHubModel, account_rows, error_text, named,
 };
-use apricot_core::{Route, RouteFrame, SpotifyEpochs, SpotifyStamp, TranslationCatalog};
-use apricot_spotify::{CallbackPage, SpotifyAccounts, SpotifyError, SpotifyEvent, SpotifyService};
+use apricot_core::{
+    Route, RouteFrame, SpotifyEntityKind, SpotifyEpochs, SpotifyRef, SpotifyStamp,
+    TranslationCatalog,
+};
+use apricot_spotify::{
+    CallbackPage, PlaybackNotice, SpotifyAccounts, SpotifyError, SpotifyEvent, SpotifyService,
+    SpotifyTrack,
+};
 use windows::{
     Win32::{
         Foundation::{HWND, LPARAM, WPARAM},
@@ -31,8 +37,8 @@ use windows::{
 use super::{
     MainView, WM_SPOTIFY_EVENT, WindowState, add_list_string, cancel_local_folder_scan,
     cancel_youtube_work, layout_controls_state, remember_menu_item, restore_from_tray,
-    resume_deferred_window_work, set_status, show_error_message, show_main_menu, state, state_mut,
-    stop_controlled_repeat, wide,
+    resume_deferred_window_work, set_status, show_error_message, show_main_menu, start_media_item,
+    start_media_item_at, state, state_mut, stop_controlled_repeat, wide,
 };
 
 /// Where a finished login returns.
@@ -57,6 +63,10 @@ pub(super) struct SpotifyState {
     rows: Vec<SpotifyAccountRow>,
     /// The switch the user asked for; only its result is announced.
     connect: Option<SpotifyStamp>,
+    /// A link waiting for the connection of the active account.
+    pending_play: Option<String>,
+    /// The link whose metadata is being read; only the latest one plays.
+    resolve: Option<SpotifyStamp>,
     polling: bool,
 }
 
@@ -569,16 +579,30 @@ pub(super) unsafe fn poll(window: HWND) {
         if state.spotify.polling {
             return;
         }
-        let Some(event) = state
+        let event = state
             .spotify
             .receiver
             .as_ref()
-            .and_then(|receiver| receiver.try_recv().ok())
-        else {
-            return;
+            .and_then(|receiver| receiver.try_recv().ok());
+        let notice = if event.is_none() {
+            state
+                .spotify
+                .service
+                .as_ref()
+                .and_then(|service| service.take_notice())
+        } else {
+            None
         };
+        if event.is_none() && notice.is_none() {
+            return;
+        }
         state.spotify.polling = true;
-        handle_event(window, event);
+        if let Some(event) = event {
+            handle_event(window, event);
+        }
+        if let Some(notice) = notice {
+            handle_notice(window, notice);
+        }
         if let Some(state) = state_mut(window) {
             state.spotify.polling = false;
         }
@@ -638,8 +662,29 @@ unsafe fn handle_event(window: HWND, event: SpotifyEvent) {
                 let key = selected_key(window);
                 refresh_accounts(window, key.as_deref());
             }
+            let pending = state.spotify.pending_play.take();
             if requested || result.is_err() {
                 announce(window, &text);
+            }
+            if let (Ok(_), Some(uri)) = (&result, pending) {
+                resolve(window, &uri);
+            }
+        }
+        SpotifyEvent::Disconnected => {
+            let text = texts.text("spotify_disconnected").to_owned();
+            set_status(state, &text, true);
+        }
+        SpotifyEvent::Resolved { stamp, result } => {
+            if state.spotify.resolve != Some(stamp) {
+                return;
+            }
+            state.spotify.resolve = None;
+            match result {
+                Ok(track) => play_track(window, &track),
+                Err(error) => {
+                    let text = error_text(&texts, &error);
+                    show_error_message(window, &text);
+                }
             }
         }
     }
@@ -658,5 +703,135 @@ pub(super) unsafe fn back(window: HWND) {
 pub(super) unsafe fn shutdown(window: HWND) {
     if let Some(service) = state(window).and_then(|state| state.spotify.service.clone()) {
         service.shutdown();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Playback
+
+/// At start-up the active account connects in the background, so its
+/// Connect device is there for the phone. Nothing is announced.
+pub(super) unsafe fn autoconnect(window: HWND) {
+    let accounts = accounts(window);
+    let Some(key) = apricot_app::spotify::active_account(&accounts).map(|a| a.key.clone()) else {
+        return;
+    };
+    let Some(service) = service(window) else {
+        return;
+    };
+    if let Some(state) = state_mut(window) {
+        state.spotify.epochs.next_account();
+        let stamp = state.spotify.epochs.begin();
+        state.spotify.connect = None;
+        service.connect(stamp, &key);
+    }
+}
+
+/// A `spotify:` URI or an `open.spotify.com` link from Direct link.
+/// Returns `false` when the text is not a Spotify reference.
+pub(super) unsafe fn play_link(window: HWND, text: &str, action: &str) -> bool {
+    let Some(reference) = SpotifyRef::parse(text) else {
+        return false;
+    };
+    let Some(state) = state_mut(window) else {
+        return true;
+    };
+    let texts = catalog(state);
+    if action != "play" {
+        // Spotify content is never downloaded or exported (plan 3.5).
+        let text = texts.text("spotify_no_export").to_owned();
+        show_error_message(window, &text);
+        return true;
+    }
+    if !matches!(
+        reference.kind,
+        SpotifyEntityKind::Track | SpotifyEntityKind::Episode
+    ) {
+        let text = texts
+            .text("rust_feature_unavailable")
+            .replace("{feature}", texts.text("spotify"));
+        show_error_message(window, &text);
+        return true;
+    }
+    let uri = reference.to_uri();
+    let connected = state
+        .spotify
+        .service
+        .as_ref()
+        .is_some_and(|service| service.connected_account().is_some());
+    if connected {
+        resolve(window, &uri);
+        return true;
+    }
+    let accounts = accounts(window);
+    let Some(key) = apricot_app::spotify::active_account(&accounts).map(|a| a.key.clone()) else {
+        let text = texts.text("spotify_log_in_first").to_owned();
+        show_hub(window);
+        announce(window, &text);
+        return true;
+    };
+    if let (Some(service), Some(state)) = (service(window), state_mut(window)) {
+        state.spotify.pending_play = Some(uri);
+        state.spotify.epochs.next_account();
+        let stamp = state.spotify.epochs.begin();
+        state.spotify.connect = None;
+        let text = texts.text("spotify_connecting").to_owned();
+        set_status(state, &text, true);
+        service.connect(stamp, &key);
+    }
+    true
+}
+
+unsafe fn resolve(window: HWND, uri: &str) {
+    let Some(service) = service(window) else {
+        return;
+    };
+    if let Some(state) = state_mut(window) {
+        let stamp = state.spotify.epochs.begin();
+        state.spotify.resolve = Some(stamp);
+        service.resolve_track(stamp, uri);
+    }
+}
+
+/// Music starts at 0:00, spoken content resumes (plan D14).
+unsafe fn play_track(window: HWND, track: &SpotifyTrack) {
+    let item = track.media_item();
+    let episode =
+        item.metadata.get("kind").and_then(|kind| kind.as_str()) == Some("spotify_episode");
+    if episode {
+        start_media_item(window, item, None);
+    } else {
+        start_media_item_at(window, item, 0.0);
+    }
+}
+
+/// Connect: another device started a track on Apricot. The previous item
+/// saves its position and stops, the new one plays in the background and
+/// the focus stays where it is (plan D08). One short announcement.
+unsafe fn handle_notice(window: HWND, notice: PlaybackNotice) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let texts = catalog(state);
+    match notice {
+        PlaybackNotice::Playing {
+            requested: true, ..
+        } => {}
+        PlaybackNotice::Playing {
+            track,
+            position_ms,
+            requested: false,
+        } => {
+            let mut item = track.media_item();
+            item.metadata
+                .insert("spotify_attach".to_owned(), serde_json::Value::Bool(true));
+            state.background_start = state.view != MainView::Player;
+            // The player's own "Playing: <title>" is the one announcement.
+            start_media_item_at(window, item, f64::from(position_ms) / 1000.0);
+        }
+        PlaybackNotice::Unavailable { .. } => {
+            let text = texts.text("spotify_track_unavailable").to_owned();
+            set_status(state, &text, true);
+        }
     }
 }

@@ -19,6 +19,8 @@ pub enum MediaSource {
     Local,
     Podcast,
     Audiovault,
+    /// Spotify through the active account (`docs/SPOTIFY_PLAN.md`).
+    Spotify,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -160,6 +162,7 @@ impl MediaItem {
             MediaSource::Local => "local",
             MediaSource::Podcast => "podcast",
             MediaSource::Audiovault => "audiovault",
+            MediaSource::Spotify => "spotify",
         };
         if !self.id.0.trim().is_empty() {
             return Some(format!("{source}:id:{}", self.id.0));
