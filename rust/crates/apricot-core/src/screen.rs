@@ -165,6 +165,13 @@ pub const SCREENS: &[ScreenDefinition] = &[
     dialog!("playback_queue", "playback_queue", PlaybackQueue, List),
     dialog!("spotify_queue", "spotify_queue", SpotifyQueue, List),
     dialog!("spotify_devices", "spotify_devices", SpotifyDevices, List),
+    page!("spotify_browse", "spotify", SpotifyBrowse, List),
+    dialog!(
+        "spotify_search",
+        "spotify_search_dialog",
+        SpotifySearch,
+        Edit
+    ),
     page!("settings", "settings", Settings, List),
     page!("player", "player", Player, Button),
     native_dialog!("first_run_language", "language", Choice),
@@ -223,7 +230,7 @@ mod tests {
     #[test]
     fn screen_ids_are_unique_and_every_route_has_one_screen() {
         let ids: HashSet<_> = SCREENS.iter().map(|screen| screen.id).collect();
-        assert_eq!(SCREENS.len(), 68);
+        assert_eq!(SCREENS.len(), 70);
         assert_eq!(ids.len(), SCREENS.len());
 
         let mut route_counts = HashMap::new();

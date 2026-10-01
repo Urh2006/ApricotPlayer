@@ -105,6 +105,8 @@ use windows::{
 mod audiovault;
 #[path = "spotify_win32.rs"]
 mod spotify;
+#[path = "spotify_browse_win32.rs"]
+mod spotify_browse;
 
 const ID_MENU_LIST: usize = 1001;
 const ID_OPEN: usize = 1002;
@@ -325,6 +327,8 @@ enum MainView {
     SpotifyHub,
     /// Spotify account list.
     SpotifyAccounts,
+    /// Spotify lists: search, library, albums, playlists, artists, shows.
+    SpotifyBrowse,
     Player,
 }
 
@@ -666,6 +670,7 @@ struct WindowState {
     audiovault_controls: audiovault::Controls,
     audiovault: audiovault::AudiovaultState,
     spotify: spotify::SpotifyState,
+    spotify_browse: spotify_browse::BrowseState,
 }
 
 pub fn run_application(application: Application, version: &str, start_hidden: bool) -> Result<()> {
@@ -687,6 +692,7 @@ unsafe fn register_secondary_window_classes() -> Result<()> {
     crate::spotify_login_win32::register()?;
     crate::spotify_queue_win32::register()?;
     crate::spotify_devices_win32::register()?;
+    crate::spotify_search_win32::register()?;
     crate::download_progress_win32::register()
 }
 
@@ -2068,6 +2074,7 @@ unsafe fn create_controls(
         audiovault_controls,
         audiovault: audiovault::AudiovaultState::default(),
         spotify: spotify::SpotifyState::default(),
+        spotify_browse: spotify_browse::BrowseState::default(),
     })
 }
 
@@ -2309,6 +2316,10 @@ fn model_context_entries(
             let row = unsafe { spotify::selected_account(state) }?;
             context_menu::spotify_accounts_context_menu(&context, row.menu_account())
         }
+        MainView::SpotifyBrowse => {
+            let menu = spotify_browse::row_menu(state)?;
+            context_menu::spotify_browse_context_menu(&context, menu)
+        }
         _ => return None,
     })
 }
@@ -2360,6 +2371,13 @@ unsafe fn execute_context_command(
         C::SpotifyLogIn => spotify::log_in_from_accounts(window),
         C::SpotifyLogOut => spotify::log_out_selected(window),
         C::SpotifyRemoveAccount => spotify::remove_selected(window),
+        C::SpotifyPlay
+        | C::SpotifyOpen
+        | C::SpotifyShufflePlay
+        | C::SpotifyAddToQueue
+        | C::SpotifyGoToAlbum
+        | C::SpotifyGoToArtist
+        | C::SpotifyCopyLink => spotify_browse::command(window, command),
         C::Play | C::OpenUserPlaylist => activate_selection(window),
         C::DownloadAudio => start_active_download(window, DownloadChoice::Audio),
         C::DownloadVideo => start_active_download(window, DownloadChoice::Video),
@@ -2586,7 +2604,8 @@ unsafe fn show_context_menu_for_active_view(window: HWND) {
             | MainView::DownloadQueue
             | MainView::AudiovaultSearch
             | MainView::AudiovaultResults
-            | MainView::SpotifyAccounts,
+            | MainView::SpotifyAccounts
+            | MainView::SpotifyBrowse,
         ) => {
             show_list_context_menu(window, LPARAM(-1));
         }
@@ -3183,6 +3202,7 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
             | MainView::AudiovaultResults
             | MainView::SpotifyHub
             | MainView::SpotifyAccounts
+            | MainView::SpotifyBrowse
     );
     let search_visible = is_search_screen(state.view);
     // Python's AudioVault screens have Search, Play and Download audio.
@@ -3353,6 +3373,7 @@ const fn view_has_back_button(view: MainView) -> bool {
             | MainView::AudiovaultResults
             | MainView::SpotifyHub
             | MainView::SpotifyAccounts
+            | MainView::SpotifyBrowse
     )
 }
 
@@ -3575,6 +3596,7 @@ unsafe fn activate_selection(window: HWND) {
             MainView::AudiovaultMenu | MainView::AudiovaultSearch | MainView::AudiovaultResults,
         ) => audiovault::activate(window),
         Some(MainView::SpotifyHub | MainView::SpotifyAccounts) => spotify::activate(window),
+        Some(MainView::SpotifyBrowse) => spotify_browse::activate(window),
         // Python `play_selected` on the empty result list.
         Some(MainView::Search) => {
             if let Some(state) = state(window) {
@@ -7656,6 +7678,9 @@ unsafe fn navigate_back(window: HWND) {
         | Route::AudiovaultSearch
         | Route::AudiovaultResults
         | Route::AudiovaultEpisodes => audiovault::restore_after_player(window),
+        Route::SpotifyBrowse => spotify_browse::restore(window),
+        Route::SpotifyHub => spotify::show_hub(window),
+        Route::SpotifyAccounts => spotify::show_accounts(window, None),
         _ => {
             state.application.navigate_main_menu();
             state.view = MainView::MainMenu;
@@ -10174,8 +10199,19 @@ unsafe fn poll_playback_runtime(window: HWND) {
                 confirm_pending_queued_start(window, state);
                 let current_item = state.application.player_session().current_item().cloned();
                 let title = current_item.as_ref().map_or("", |item| item.title.as_str());
-                let message = catalog_text(&state.application, "playing").replace("{title}", title);
-                set_status(state, &message, true);
+                // A Spotify album or playlist started as a whole: the track
+                // Spotify chose is announced when it plays.
+                let collection = current_item.as_ref().is_some_and(|item| {
+                    item.metadata
+                        .get("spotify_collection")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false)
+                });
+                if !collection {
+                    let message =
+                        catalog_text(&state.application, "playing").replace("{title}", title);
+                    set_status(state, &message, true);
+                }
                 if let Some(item) = current_item {
                     let timestamp = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
@@ -11006,6 +11042,10 @@ unsafe fn apply_deferred_youtube_metadata_rows(state: &mut WindowState, exclude:
 }
 
 unsafe fn result_selection_changed(window: HWND) {
+    if state(window).is_some_and(|state| state.view == MainView::SpotifyBrowse) {
+        spotify_browse::selection_changed(window);
+        return;
+    }
     if state(window).is_some_and(|state| state.view == MainView::LocalFolder) {
         local_folder_selection_changed(window);
         return;
@@ -12634,7 +12674,8 @@ fn view_shortcut_scope(view: MainView) -> (ActionScope, bool) {
         | MainView::AudiovaultSearch
         | MainView::AudiovaultResults
         | MainView::SpotifyHub
-        | MainView::SpotifyAccounts => (ActionScope::List, false),
+        | MainView::SpotifyAccounts
+        | MainView::SpotifyBrowse => (ActionScope::List, false),
         MainView::Player => (ActionScope::Player, false),
     }
 }
@@ -12757,6 +12798,10 @@ unsafe fn leave_player_for_global_navigation(window: HWND, action_id: &str) {
             | "open_audiovault"
             | "open_spotify"
             | "spotify_accounts"
+            | "spotify_search"
+            | "spotify_library"
+            | "spotify_liked_songs"
+            | "spotify_playlists"
     ) {
         return;
     }
@@ -12988,6 +13033,10 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "open_spotify" => spotify::show_hub(window),
         "spotify_accounts" => spotify::show_accounts(window, None),
         "spotify_queue" => spotify::show_queue(window),
+        "spotify_search" => spotify::show_search(window),
+        "spotify_library" => spotify::show_library(window),
+        "spotify_liked_songs" => spotify::show_liked_songs(window),
+        "spotify_playlists" => spotify::show_playlists(window),
         "spotify_devices" => spotify::show_devices(window),
         "open_settings" => open_settings(window),
         "open_action_finder" => show_action_finder(window),
@@ -13286,7 +13335,8 @@ unsafe fn active_media_item(window: HWND) -> Option<apricot_core::MediaItem> {
         | MainView::AudiovaultSearch
         | MainView::AudiovaultResults
         | MainView::SpotifyHub
-        | MainView::SpotifyAccounts => None,
+        | MainView::SpotifyAccounts
+        | MainView::SpotifyBrowse => None,
     }
 }
 
@@ -17853,7 +17903,8 @@ unsafe fn open_settings(window: HWND) {
         | MainView::AudiovaultSearch
         | MainView::AudiovaultResults
         | MainView::SpotifyHub
-        | MainView::SpotifyAccounts => {}
+        | MainView::SpotifyAccounts
+        | MainView::SpotifyBrowse => {}
         MainView::Player => refresh_player(window, state, false, true),
     }
     if is_search_screen(state.view) {
@@ -17996,7 +18047,8 @@ fn active_primary_control(state: &WindowState) -> HWND {
         | MainView::UserPlaylistItems
         | MainView::DownloadQueue
         | MainView::SpotifyHub
-        | MainView::SpotifyAccounts => state.list,
+        | MainView::SpotifyAccounts
+        | MainView::SpotifyBrowse => state.list,
         MainView::AudiovaultMenu | MainView::AudiovaultSearch | MainView::AudiovaultResults => {
             audiovault::primary_control(state)
         }
@@ -18731,7 +18783,11 @@ mod tests {
 
     #[test]
     fn spotify_screens_are_list_screens_with_back_and_list_focus() {
-        for view in [MainView::SpotifyHub, MainView::SpotifyAccounts] {
+        for view in [
+            MainView::SpotifyHub,
+            MainView::SpotifyAccounts,
+            MainView::SpotifyBrowse,
+        ] {
             assert!(view_has_back_button(view));
             assert!(!view_has_collection_remove(view));
             assert!(!is_search_screen(view));

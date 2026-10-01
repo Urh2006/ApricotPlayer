@@ -46,6 +46,8 @@ pub enum SpotifyError {
     NoCredentials,
     /// Spotify refused the credentials (revoked or invalid).
     Rejected,
+    /// Spotify answered, but not as expected (changed interface, rights).
+    Service(String),
 }
 
 impl SpotifyError {
@@ -60,13 +62,17 @@ impl SpotifyError {
             Self::LoginFailed(_) | Self::Rejected => "spotify_error_login_failed",
             Self::Storage(_) => "spotify_error_storage",
             Self::NoCredentials => "spotify_error_logged_out",
+            Self::Service(_) => "spotify_error_service",
         }
     }
 
     /// Short technical detail for `{error}` (no tokens, no URLs).
     pub fn detail(&self) -> &str {
         match self {
-            Self::Network(detail) | Self::LoginFailed(detail) | Self::Storage(detail) => detail,
+            Self::Network(detail)
+            | Self::LoginFailed(detail)
+            | Self::Storage(detail)
+            | Self::Service(detail) => detail,
             _ => "",
         }
     }
@@ -110,6 +116,11 @@ pub enum SpotifyEvent {
         stamp: SpotifyStamp,
         queue: crate::queue::SpotifyQueue,
     },
+    /// A list or collection the UI asked for.
+    Catalog {
+        stamp: SpotifyStamp,
+        result: Result<CatalogResult, SpotifyError>,
+    },
     /// Spotify accepted (or refused) moving playback to another device.
     Transferred {
         stamp: SpotifyStamp,
@@ -136,6 +147,51 @@ pub struct SpotifyService {
     session: Arc<Mutex<Option<(String, ActiveSession)>>>,
     /// Title and artists by URI, for the queue view.
     titles: Arc<Mutex<std::collections::HashMap<String, (String, String)>>>,
+    /// Spotify's internal web interfaces (pathfinder, spclient).
+    api: Arc<crate::api::Api>,
+}
+
+/// What the UI asks to read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CatalogRequest {
+    Search {
+        query: String,
+        kind: crate::catalog::SearchKind,
+        offset: u64,
+    },
+    Library {
+        filter: crate::catalog::LibraryFilter,
+        folder: Option<String>,
+        offset: u64,
+    },
+    LikedSongs {
+        offset: u64,
+    },
+    Album(String),
+    Playlist {
+        uri: String,
+        offset: u64,
+    },
+    Artist(String),
+    Show {
+        uri: String,
+        offset: u64,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CatalogResult {
+    Page(crate::catalog::CatalogPage),
+    Collection(crate::catalog::Collection),
+}
+
+impl From<crate::api::ApiError> for SpotifyError {
+    fn from(error: crate::api::ApiError) -> Self {
+        match error {
+            crate::api::ApiError::Network(detail) => Self::Network(detail),
+            other => Self::Service(other.to_string()),
+        }
+    }
 }
 
 impl SpotifyService {
@@ -152,6 +208,9 @@ impl SpotifyService {
                 login_cancel: Mutex::new(None),
                 session: Arc::default(),
                 titles: Arc::default(),
+                api: Arc::new(crate::api::Api::new(Some(
+                    app_data.join("spotify").join("pathfinder.json"),
+                ))),
             },
             receiver,
         )
@@ -332,6 +391,72 @@ impl SpotifyService {
                 &notify,
                 SpotifyEvent::Transferred { stamp, result },
             );
+        });
+    }
+
+    fn active_session(&self) -> Option<Session> {
+        self.session
+            .lock()
+            .ok()?
+            .as_ref()
+            .map(|(_, active)| active.session.clone())
+    }
+
+    /// `spotify:user:<name>:collection`, the Liked Songs context of the
+    /// connected account.
+    pub fn liked_songs_context(&self) -> Option<String> {
+        self.active_session()
+            .map(|session| format!("spotify:user:{}:collection", session.username()))
+    }
+
+    /// Reads a list or collection; the answer is `SpotifyEvent::Catalog`.
+    pub fn load_catalog(&self, stamp: SpotifyStamp, request: CatalogRequest) {
+        use crate::catalog;
+        let session = self.active_session();
+        let api = self.api.clone();
+        let sender = self.sender.clone();
+        let notify = self.notify.clone();
+        self.runtime().spawn(async move {
+            let result = async {
+                let session = session.ok_or(SpotifyError::NoCredentials)?;
+                let api = api.as_ref();
+                Ok(match request {
+                    CatalogRequest::Search {
+                        query,
+                        kind,
+                        offset,
+                    } => CatalogResult::Page(
+                        catalog::search(api, &session, &query, kind, offset).await?,
+                    ),
+                    CatalogRequest::Library {
+                        filter,
+                        folder,
+                        offset,
+                    } => CatalogResult::Page(
+                        catalog::library(api, &session, filter, folder.as_deref(), offset).await?,
+                    ),
+                    CatalogRequest::LikedSongs { offset } => {
+                        CatalogResult::Page(catalog::liked_songs(api, &session, offset).await?)
+                    }
+                    CatalogRequest::Album(uri) => {
+                        CatalogResult::Collection(catalog::album(api, &session, &uri).await?)
+                    }
+                    CatalogRequest::Playlist { uri, offset } => CatalogResult::Collection(
+                        catalog::playlist(api, &session, &uri, offset).await?,
+                    ),
+                    CatalogRequest::Artist(uri) => {
+                        CatalogResult::Collection(catalog::artist(api, &session, &uri).await?)
+                    }
+                    CatalogRequest::Show { uri, offset } => {
+                        CatalogResult::Collection(catalog::show(api, &session, &uri, offset).await?)
+                    }
+                })
+            }
+            .await;
+            if let Err(error) = &result {
+                log::warn!("catalog request failed: {error:?}");
+            }
+            Self::emit(&sender, &notify, SpotifyEvent::Catalog { stamp, result });
         });
     }
 

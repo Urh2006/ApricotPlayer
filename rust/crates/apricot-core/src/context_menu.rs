@@ -247,6 +247,19 @@ pub const CONTEXT_MENUS: &[ContextMenuDefinition] = &[
         ],
     },
     ContextMenuDefinition {
+        id: "spotify_browse",
+        screen_ids: &["spotify_browse"],
+        item_ids: &[
+            "play",
+            "open",
+            "spotify_shuffle_play",
+            "spotify_add_to_queue",
+            "spotify_go_to_album",
+            "spotify_go_to_artist",
+            "copy_link",
+        ],
+    },
+    ContextMenuDefinition {
         id: "bookmarks",
         screen_ids: &["bookmarks"],
         item_ids: &[
@@ -290,8 +303,8 @@ mod tests {
     #[test]
     fn context_menu_ids_and_items_are_stable_and_unique() {
         let menu_ids: HashSet<_> = CONTEXT_MENUS.iter().map(|menu| menu.id).collect();
-        // 17 Python menus plus the Spotify account list.
-        assert_eq!(CONTEXT_MENUS.len(), 18);
+        // 17 Python menus plus the Spotify account list and Spotify lists.
+        assert_eq!(CONTEXT_MENUS.len(), 19);
         assert_eq!(menu_ids.len(), CONTEXT_MENUS.len());
         for menu in CONTEXT_MENUS {
             let item_ids: HashSet<_> = menu.item_ids.iter().copied().collect();

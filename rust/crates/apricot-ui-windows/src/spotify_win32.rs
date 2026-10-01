@@ -79,21 +79,31 @@ pub(super) struct SpotifyState {
 }
 
 pub(super) const fn is_view(view: MainView) -> bool {
-    matches!(view, MainView::SpotifyHub | MainView::SpotifyAccounts)
+    matches!(
+        view,
+        MainView::SpotifyHub | MainView::SpotifyAccounts | MainView::SpotifyBrowse
+    )
 }
 
-fn catalog(state: &WindowState) -> TranslationCatalog {
+impl SpotifyState {
+    /// A request stamp of the current account.
+    pub(super) fn epochs_begin(&mut self) -> SpotifyStamp {
+        self.epochs.begin()
+    }
+}
+
+pub(super) fn catalog(state: &WindowState) -> TranslationCatalog {
     apricot_app::embedded_catalog(&state.application.settings().language)
 }
 
-unsafe fn announce(window: HWND, text: &str) {
+pub(super) unsafe fn announce(window: HWND, text: &str) {
     if let Some(state) = state(window) {
         set_status(state, text, true);
     }
 }
 
 /// The runtime starts on first use, not with the application.
-unsafe fn service(window: HWND) -> Option<Arc<SpotifyService>> {
+pub(super) unsafe fn service(window: HWND) -> Option<Arc<SpotifyService>> {
     let state = state_mut(window)?;
     if state.spotify.service.is_none() {
         let app_data = apricot_platform::discover_app_paths().ok()?.app_data;
@@ -125,7 +135,7 @@ unsafe fn accounts(window: HWND) -> SpotifyAccounts {
         .unwrap_or_default()
 }
 
-unsafe fn prepare_screen(window: HWND, main_view: MainView, route: Route) {
+pub(super) unsafe fn prepare_screen(window: HWND, main_view: MainView, route: Route) {
     restore_from_tray(window);
     stop_controlled_repeat(window);
     let Some(state) = state_mut(window) else {
@@ -135,7 +145,7 @@ unsafe fn prepare_screen(window: HWND, main_view: MainView, route: Route) {
     cancel_local_folder_scan(window, state);
     if state.application.current_route() != route {
         state.application.navigate_main_menu();
-        if route == Route::SpotifyAccounts {
+        if matches!(route, Route::SpotifyAccounts | Route::SpotifyBrowse) {
             state
                 .application
                 .navigate_to(RouteFrame::new(Route::SpotifyHub));
@@ -230,6 +240,22 @@ pub(super) unsafe fn activate(window: HWND) {
                     state.spotify.hub_selected = Some(SpotifyHubEntry::LogIn);
                 }
                 log_in(window, ReturnTo::Hub);
+            }
+            Some(entry @ SpotifyHubEntry::Search) => {
+                remember_hub_entry(window, entry);
+                show_search(window);
+            }
+            Some(entry @ SpotifyHubEntry::Library) => {
+                remember_hub_entry(window, entry);
+                show_library(window);
+            }
+            Some(entry @ SpotifyHubEntry::LikedSongs) => {
+                remember_hub_entry(window, entry);
+                show_liked_songs(window);
+            }
+            Some(entry @ SpotifyHubEntry::Playlists) => {
+                remember_hub_entry(window, entry);
+                show_playlists(window);
             }
             Some(SpotifyHubEntry::Queue) => {
                 if let Some(state) = state_mut(window) {
@@ -720,6 +746,9 @@ unsafe fn handle_event(window: HWND, event: SpotifyEvent) {
                 }
             }
         }
+        SpotifyEvent::Catalog { stamp, result } => {
+            super::spotify_browse::loaded(window, stamp, result);
+        }
         SpotifyEvent::Transferred { stamp, result } => {
             let Some((wanted, name)) = state.spotify.transfer.take() else {
                 return;
@@ -746,9 +775,138 @@ unsafe fn handle_event(window: HWND, event: SpotifyEvent) {
     }
 }
 
+unsafe fn remember_hub_entry(window: HWND, entry: SpotifyHubEntry) {
+    if let Some(state) = state_mut(window) {
+        state.spotify.hub_selected = Some(entry);
+    }
+}
+
+/// The lists need a connected account; without one, it says what to do.
+unsafe fn ready_for_lists(window: HWND) -> bool {
+    let accounts = accounts(window);
+    let Some(service) = service(window) else {
+        return false;
+    };
+    let Some(state) = state(window) else {
+        return false;
+    };
+    let texts = catalog(state);
+    if apricot_app::spotify::active_account(&accounts).is_none() {
+        let text = texts.text("spotify_log_in_first").to_owned();
+        announce(window, &text);
+        return false;
+    }
+    if service.connected_account().is_none() {
+        let text = texts.text("spotify_not_connected").to_owned();
+        announce(window, &text);
+        return false;
+    }
+    true
+}
+
+/// `spotify_search`: the search dialog, then the results list.
+pub(super) unsafe fn show_search(window: HWND) {
+    stop_controlled_repeat(window);
+    if !ready_for_lists(window) {
+        return;
+    }
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let texts = catalog(state);
+    let kinds = apricot_app::spotify::search_kind_labels(&texts);
+    let search_texts = crate::spotify_search_win32::SearchTexts {
+        title: texts.text("spotify_search_dialog"),
+        query: texts.text("spotify_search_query"),
+        kind: texts.text("spotify_search_type"),
+        search: texts.text("search"),
+        cancel: texts.text("cancel"),
+    };
+    let query = state.spotify_browse.last_query.clone();
+    let kind = state.spotify_browse.last_kind;
+    state.modal_open = true;
+    let result = crate::spotify_search_win32::show(window, &search_texts, &query, &kinds, kind);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state.modal_open = false;
+    resume_deferred_window_work(window);
+    match result {
+        Ok(Some((query, kind))) => {
+            state.spotify_browse.last_query.clone_from(&query);
+            state.spotify_browse.last_kind = kind;
+            let title = super::spotify_browse::search_title(state, &query);
+            let searching = texts.text("spotify_searching").replace("{query}", &query);
+            set_status(state, &searching, true);
+            let kind = apricot_spotify::SearchKind::ALL
+                .get(kind)
+                .copied()
+                .unwrap_or(apricot_spotify::SearchKind::All);
+            super::spotify_browse::open_root(
+                window,
+                super::spotify_browse::Source::Search { query, kind },
+                title,
+            );
+        }
+        Ok(None) => {
+            let _ = SetFocus(Some(super::active_primary_control(state)));
+        }
+        Err(error) => {
+            let message = format!("Spotify search did not open: {error}");
+            show_error_message(window, &message);
+        }
+    }
+}
+
+unsafe fn show_list(window: HWND, source: super::spotify_browse::Source, title_key: &str) {
+    stop_controlled_repeat(window);
+    if !ready_for_lists(window) {
+        return;
+    }
+    let Some(state) = state(window) else {
+        return;
+    };
+    let title = catalog(state).text(title_key).to_owned();
+    super::spotify_browse::open_root(window, source, title);
+}
+
+/// `spotify_library`: everything saved, as Spotify's library lists it.
+pub(super) unsafe fn show_library(window: HWND) {
+    show_list(
+        window,
+        super::spotify_browse::Source::Library {
+            filter: apricot_spotify::LibraryFilter::All,
+            folder: None,
+        },
+        "spotify_library",
+    );
+}
+
+/// `spotify_liked_songs`.
+pub(super) unsafe fn show_liked_songs(window: HWND) {
+    show_list(
+        window,
+        super::spotify_browse::Source::LikedSongs,
+        "spotify_liked_songs",
+    );
+}
+
+/// `spotify_playlists`: the library's playlists and folders.
+pub(super) unsafe fn show_playlists(window: HWND) {
+    show_list(
+        window,
+        super::spotify_browse::Source::Library {
+            filter: apricot_spotify::LibraryFilter::Playlists,
+            folder: None,
+        },
+        "spotify_playlists",
+    );
+}
+
 /// Back and Escape: accounts return to the hub, the hub to the main menu.
 pub(super) unsafe fn back(window: HWND) {
     match state(window).map(|state| state.view) {
+        Some(MainView::SpotifyBrowse) => super::spotify_browse::back(window),
         Some(MainView::SpotifyAccounts) => show_hub(window),
         Some(MainView::SpotifyHub) => show_main_menu(window),
         _ => {}
@@ -851,7 +1009,7 @@ unsafe fn resolve(window: HWND, uri: &str) {
 }
 
 /// Music starts at 0:00, spoken content resumes (plan D14).
-unsafe fn play_track(window: HWND, item: apricot_core::MediaItem) {
+pub(super) unsafe fn play_track(window: HWND, item: apricot_core::MediaItem) {
     let episode =
         item.metadata.get("kind").and_then(|kind| kind.as_str()) == Some("spotify_episode");
     if episode {
@@ -871,8 +1029,31 @@ unsafe fn handle_notice(window: HWND, notice: PlaybackNotice) {
     let texts = catalog(state);
     match notice {
         PlaybackNotice::Playing {
-            requested: true, ..
-        } => push_volume(window),
+            track,
+            requested: true,
+            ..
+        } => {
+            // An album or playlist started as a whole becomes its first track.
+            let collection = state
+                .application
+                .player_session()
+                .current_item()
+                .and_then(|item| item.metadata.get("spotify_collection"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            // Also when Spotify started another track than the item names
+            // (a context that could not find the occurrence); a relinked
+            // track (another ID, same title) stays as it is.
+            let other_track = state
+                .application
+                .player_session()
+                .current_item()
+                .is_some_and(|item| item.id.0 != track.uri && item.title != track.title);
+            if collection || other_track {
+                continue_spotify_item(window, &track);
+            }
+            push_volume(window);
+        }
         PlaybackNotice::Playing {
             track,
             position_ms,
@@ -1223,9 +1404,14 @@ pub(super) unsafe fn add_to_queue(window: HWND) -> bool {
     let Some(state) = state(window) else {
         return false;
     };
-    let reference = super::active_media_item(window)
-        .filter(|item| item.source == apricot_core::MediaSource::Spotify)
-        .and_then(|item| SpotifyRef::parse(&item.id.0));
+    let reference = super::spotify_browse::selected_item(state)
+        .map(|item| item.uri.clone())
+        .or_else(|| {
+            super::active_media_item(window)
+                .filter(|item| item.source == apricot_core::MediaSource::Spotify)
+                .map(|item| item.id.0)
+        })
+        .and_then(|uri| SpotifyRef::parse(&uri));
     let Some(reference) = reference.filter(|reference| {
         matches!(
             reference.kind,

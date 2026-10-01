@@ -61,6 +61,14 @@ pub enum ContextCommand {
     SpotifyLogIn,
     SpotifyLogOut,
     SpotifyRemoveAccount,
+    /// Spotify lists (`docs/SPOTIFY_PLAN.md` 5.1).
+    SpotifyPlay,
+    SpotifyOpen,
+    SpotifyShufflePlay,
+    SpotifyAddToQueue,
+    SpotifyGoToAlbum,
+    SpotifyGoToArtist,
+    SpotifyCopyLink,
 }
 
 /// One row of a context menu.
@@ -361,6 +369,56 @@ pub fn spotify_accounts_context_menu(
         "remove_selected",
         C::SpotifyRemoveAccount,
     ));
+    entries
+}
+
+/// What the selected row of a Spotify list offers.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SpotifyRowMenu {
+    /// A track or episode that can play.
+    pub playable_item: bool,
+    /// An album, playlist, artist, show, folder or Liked Songs.
+    pub collection: bool,
+    /// The collection plays as a whole (not a folder).
+    pub collection_plays: bool,
+    pub album: bool,
+    pub artist: bool,
+    pub link: bool,
+}
+
+/// Spotify lists: Play or Open first, then Shuffle play, Add to Spotify
+/// queue, Go to album, Go to artist and Copy link where they apply.
+pub fn spotify_browse_context_menu(
+    context: &ContextMenuContext<'_>,
+    menu: SpotifyRowMenu,
+) -> Vec<ContextMenuEntry> {
+    use ContextCommand as C;
+    let mut entries = Vec::new();
+    if menu.playable_item {
+        entries.push(context.command("play", C::SpotifyPlay));
+        entries.push(context.command_with_shortcut(
+            "spotify_add_to_queue",
+            "add_to_playback_queue",
+            C::SpotifyAddToQueue,
+        ));
+    }
+    if menu.collection {
+        entries.push(context.command("open", C::SpotifyOpen));
+        if menu.collection_plays {
+            entries.push(context.command("play", C::SpotifyPlay));
+            entries.push(context.command("spotify_shuffle_play", C::SpotifyShufflePlay));
+        }
+    }
+    if menu.album {
+        entries.push(context.command("spotify_go_to_album", C::SpotifyGoToAlbum));
+    }
+    if menu.artist {
+        entries.push(context.command("spotify_go_to_artist", C::SpotifyGoToArtist));
+    }
+    if menu.link {
+        entries.push(context.command("copy_link", C::SpotifyCopyLink));
+    }
     entries
 }
 

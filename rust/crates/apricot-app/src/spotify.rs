@@ -7,12 +7,19 @@
 use std::collections::BTreeMap;
 
 use apricot_core::{TranslationCatalog, action::action_by_id};
-use apricot_spotify::{QueueSection, SpotifyAccount, SpotifyAccounts, SpotifyError, SpotifyQueue};
+use apricot_spotify::{
+    CatalogItem, ItemKind, QueueSection, SearchKind, SpotifyAccount, SpotifyAccounts, SpotifyError,
+    SpotifyQueue,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SpotifyHubEntry {
     /// Browser login; the only way in without a saved account.
     LogIn,
+    Search,
+    Library,
+    LikedSongs,
+    Playlists,
     /// The Spotify queue, once an account is logged in.
     Queue,
     /// Spotify Connect devices, once an account is logged in.
@@ -73,6 +80,22 @@ impl SpotifyHubModel {
             });
         }
         if active_account(accounts).is_some() {
+            for (entry, key) in [
+                (SpotifyHubEntry::Search, "spotify_search"),
+                (SpotifyHubEntry::Library, "spotify_library"),
+                (SpotifyHubEntry::LikedSongs, "spotify_liked_songs"),
+                (SpotifyHubEntry::Playlists, "spotify_playlists"),
+            ] {
+                items.push(SpotifyHubItem {
+                    entry,
+                    label: with_shortcut(
+                        catalog.text(key).to_owned(),
+                        key,
+                        show_shortcuts,
+                        shortcuts,
+                    ),
+                });
+            }
             items.push(SpotifyHubItem {
                 entry: SpotifyHubEntry::Queue,
                 label: with_shortcut(
@@ -321,6 +344,93 @@ pub fn device_rows(
         .collect()
 }
 
+/// The spoken type of a row ("album", "playlist").
+pub fn kind_word(catalog: &TranslationCatalog, kind: ItemKind) -> String {
+    catalog
+        .text(match kind {
+            ItemKind::Track => "spotify_kind_track",
+            ItemKind::Episode => "spotify_kind_episode",
+            ItemKind::Album => "spotify_kind_album",
+            ItemKind::Artist => "spotify_kind_artist",
+            ItemKind::Playlist => "spotify_kind_playlist",
+            ItemKind::Show => "spotify_kind_show",
+            ItemKind::Audiobook => "spotify_kind_audiobook",
+            ItemKind::User => "spotify_kind_user",
+            ItemKind::Folder => "spotify_kind_folder",
+            ItemKind::LikedSongs => "spotify_kind_liked_songs",
+            ItemKind::Genre => "spotify_kind_genre",
+            ItemKind::Unavailable => "spotify_unavailable",
+        })
+        .to_owned()
+}
+
+/// m:ss or h:mm:ss.
+pub fn duration_text(milliseconds: u64) -> String {
+    let seconds = milliseconds / 1000;
+    let (hours, minutes, seconds) = (seconds / 3600, (seconds % 3600) / 60, seconds % 60);
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes}:{seconds:02}")
+    }
+}
+
+/// Row text: the name first, then the type (always for collections, for
+/// tracks and episodes only in mixed lists), artists or owner, length and
+/// "unavailable" when it cannot be played.
+pub fn item_label(catalog: &TranslationCatalog, item: &CatalogItem, mixed: bool) -> String {
+    if item.kind == ItemKind::Unavailable {
+        return if item.name.is_empty() {
+            catalog.text("spotify_unavailable_item").to_owned()
+        } else {
+            format!("{}, {}", item.name, catalog.text("spotify_unavailable"))
+        };
+    }
+    let mut parts = vec![item.name.clone()];
+    if mixed || !item.kind.is_playable_item() {
+        parts.push(kind_word(catalog, item.kind));
+    }
+    if !item.subtitle.is_empty() {
+        parts.push(item.subtitle.clone());
+    }
+    if let Some(count) = item.count {
+        parts.push(
+            catalog
+                .text("spotify_song_count")
+                .replace("{count}", &count.to_string()),
+        );
+    }
+    if let Some(duration) = item.duration_ms.filter(|_| item.kind.is_playable_item()) {
+        parts.push(duration_text(duration));
+    }
+    if !item.playable && item.kind.is_playable_item() {
+        parts.push(catalog.text("spotify_unavailable").to_owned());
+    }
+    parts.retain(|part| !part.is_empty());
+    parts.join(", ")
+}
+
+/// Labels of the search type choice, in `SearchKind::ALL` order.
+pub fn search_kind_labels(catalog: &TranslationCatalog) -> Vec<String> {
+    SearchKind::ALL
+        .iter()
+        .map(|kind| {
+            catalog
+                .text(match kind {
+                    SearchKind::All => "spotify_search_all",
+                    SearchKind::Tracks => "spotify_search_tracks",
+                    SearchKind::Artists => "spotify_search_artists",
+                    SearchKind::Albums => "spotify_search_albums",
+                    SearchKind::Playlists => "spotify_search_playlists",
+                    SearchKind::Shows => "spotify_search_shows",
+                    SearchKind::Episodes => "spotify_search_episodes",
+                    SearchKind::Audiobooks => "spotify_search_audiobooks",
+                })
+                .to_owned()
+        })
+        .collect()
+}
+
 /// Localized error text with `{error}` filled in when there is a detail.
 pub fn error_text(catalog: &TranslationCatalog, error: &SpotifyError) -> String {
     catalog
@@ -378,14 +488,69 @@ mod tests {
         assert_eq!(
             entries,
             [
+                SpotifyHubEntry::Search,
+                SpotifyHubEntry::Library,
+                SpotifyHubEntry::LikedSongs,
+                SpotifyHubEntry::Playlists,
                 SpotifyHubEntry::Queue,
                 SpotifyHubEntry::Devices,
                 SpotifyHubEntry::Accounts
             ]
         );
-        assert_eq!(model.items[0].label, "Spotify queue\tCtrl+Alt+Shift+Q");
-        assert_eq!(model.items[1].label, "Spotify devices\tCtrl+Alt+Shift+O");
-        assert!(model.items[2].label.ends_with("\tCtrl+Alt+Shift+C"));
+        assert_eq!(model.items[0].label, "Search\tCtrl+Alt+Shift+Y");
+        assert_eq!(model.items[2].label, "Liked Songs\tCtrl+Alt+Shift+F");
+        assert_eq!(model.items[4].label, "Spotify queue\tCtrl+Alt+Shift+Q");
+        assert_eq!(model.items[5].label, "Spotify devices\tCtrl+Alt+Shift+O");
+        assert!(model.items[6].label.ends_with("\tCtrl+Alt+Shift+C"));
+    }
+
+    fn catalog_item(kind: ItemKind, name: &str, subtitle: &str) -> CatalogItem {
+        CatalogItem {
+            kind,
+            uri: "spotify:x:1".into(),
+            name: name.into(),
+            subtitle: subtitle.into(),
+            album: String::new(),
+            album_uri: String::new(),
+            artist_uri: String::new(),
+            duration_ms: Some(355_000),
+            playable: true,
+            explicit: false,
+            uid: None,
+            saved: None,
+            count: None,
+        }
+    }
+
+    #[test]
+    fn rows_say_name_type_people_and_length() {
+        let catalog = english_catalog();
+        let track = catalog_item(ItemKind::Track, "Bohemian Rhapsody", "Queen");
+        assert_eq!(
+            item_label(&catalog, &track, false),
+            "Bohemian Rhapsody, Queen, 5:55"
+        );
+        assert_eq!(
+            item_label(&catalog, &track, true),
+            "Bohemian Rhapsody, track, Queen, 5:55"
+        );
+        let album = catalog_item(ItemKind::Album, "A Night at the Opera", "Queen");
+        assert_eq!(
+            item_label(&catalog, &album, false),
+            "A Night at the Opera, album, Queen"
+        );
+        let mut liked = catalog_item(ItemKind::LikedSongs, "Liked Songs", "");
+        liked.count = Some(12);
+        assert_eq!(
+            item_label(&catalog, &liked, false),
+            "Liked Songs, playlist, 12 songs"
+        );
+        let mut gone = catalog_item(ItemKind::Track, "Old", "X");
+        gone.playable = false;
+        assert!(item_label(&catalog, &gone, false).ends_with(", unavailable"));
+        let restricted = catalog_item(ItemKind::Unavailable, "", "");
+        assert_eq!(item_label(&catalog, &restricted, false), "Unavailable item");
+        assert_eq!(duration_text(3_725_000), "1:02:05");
     }
 
     #[test]

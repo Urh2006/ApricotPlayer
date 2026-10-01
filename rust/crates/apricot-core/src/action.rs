@@ -176,6 +176,10 @@ pub const ACTIONS: &[ActionDefinition] = &[
     // `PYTHON_BASELINE_ACTIONS` entries stay the Python catalog.
     action!("open_spotify", "Ctrl+Alt+C", GLOBAL),
     action!("spotify_accounts", "Ctrl+Alt+Shift+C", GLOBAL),
+    action!("spotify_search", "Ctrl+Alt+Shift+Y", GLOBAL),
+    action!("spotify_library", "Ctrl+Alt+Shift+L", GLOBAL),
+    action!("spotify_liked_songs", "Ctrl+Alt+Shift+F", GLOBAL),
+    action!("spotify_playlists", "Ctrl+Alt+Shift+P", GLOBAL),
     action!("spotify_queue", "Ctrl+Alt+Shift+Q", GLOBAL),
     action!("spotify_devices", "Ctrl+Alt+Shift+O", GLOBAL),
 ];
@@ -199,7 +203,7 @@ mod tests {
     fn baseline_contains_91_unique_actions() {
         let ids: HashSet<_> = ACTIONS.iter().map(|action| action.id.as_str()).collect();
         assert_eq!(PYTHON_BASELINE_ACTIONS, 91);
-        assert_eq!(ACTIONS.len(), PYTHON_BASELINE_ACTIONS + 4);
+        assert_eq!(ACTIONS.len(), PYTHON_BASELINE_ACTIONS + 8);
         assert_eq!(ids.len(), ACTIONS.len());
         assert!(
             ACTIONS[PYTHON_BASELINE_ACTIONS..]

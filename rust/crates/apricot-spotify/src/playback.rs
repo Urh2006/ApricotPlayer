@@ -834,10 +834,20 @@ impl PcmSource for SpotifyPlayback {
                 .map(str::to_owned)
         };
         let request = if let Some(context) = text("spotify_context") {
-            // The exact occurrence when known, otherwise the track itself.
-            let playing_track = text("spotify_uid")
-                .map(PlayingTrack::Uid)
-                .or(Some(PlayingTrack::Uri(uri)));
+            // The exact occurrence when known, otherwise the track itself; a
+            // whole album or playlist lets Spotify choose (shuffle).
+            let whole = item
+                .metadata
+                .get("spotify_collection")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            let playing_track = if whole {
+                None
+            } else {
+                text("spotify_uid")
+                    .map(PlayingTrack::Uid)
+                    .or(Some(PlayingTrack::Uri(uri)))
+            };
             let shuffle = item
                 .metadata
                 .get("spotify_shuffle")

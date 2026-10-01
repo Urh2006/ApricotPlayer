@@ -104,6 +104,10 @@ impl ActionFinderModel {
             // Spotify (`docs/SPOTIFY_PLAN.md` 5.2), not in Python 1.0.21.
             labels.item("spotify", "open_spotify"),
             labels.item("spotify_accounts", "spotify_accounts"),
+            labels.item("shortcut_spotify_search", "spotify_search"),
+            labels.item("shortcut_spotify_library", "spotify_library"),
+            labels.item("shortcut_spotify_liked_songs", "spotify_liked_songs"),
+            labels.item("shortcut_spotify_playlists", "spotify_playlists"),
             labels.item("spotify_queue", "spotify_queue"),
             labels.item("spotify_devices", "spotify_devices"),
             labels.item("play_folder", "open_play_from_folder"),
@@ -265,6 +269,10 @@ mod tests {
                 "open_audiovault",
                 "open_spotify",
                 "spotify_accounts",
+                "spotify_search",
+                "spotify_library",
+                "spotify_liked_songs",
+                "spotify_playlists",
                 "spotify_queue",
                 "spotify_devices",
                 "open_play_from_folder",
@@ -309,7 +317,7 @@ mod tests {
         ] {
             assert!(!ids.contains(&id), "{id}");
         }
-        assert_eq!(ids.len(), 20);
+        assert_eq!(ids.len(), 24);
     }
 
     #[test]
@@ -431,7 +439,8 @@ mod tests {
             ActionFinderContext::default(),
         );
         let filtered = model.filtered_items("search ctrl");
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].action_id, "open_search");
+        // Spotify search (not in Python) matches too, after the Python items.
+        let ids: Vec<_> = filtered.iter().map(|item| item.action_id).collect();
+        assert_eq!(ids, ["open_search", "spotify_search"]);
     }
 }
