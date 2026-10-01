@@ -431,8 +431,13 @@ pub struct LibMpvEngine {
 /// A PCM item: mpv positions are relative to the loaded generation.
 struct PcmPlayback {
     base_ms: u32,
+    /// Stream time where the current track of the generation starts.
+    offset: f64,
     started: bool,
     loaded: bool,
+    /// Gapless boundaries not yet reached: stream seconds, base ms and the
+    /// length of the next track, applied when it becomes audible.
+    boundaries: std::collections::VecDeque<(f64, u32, Option<f64>)>,
 }
 
 impl LibMpvEngine {
@@ -695,11 +700,27 @@ impl LibMpvEngine {
                 }
             }
             b"time-pos" if property.format == MPV_FORMAT_DOUBLE => {
-                let base = self
-                    .pcm
-                    .as_ref()
-                    .map_or(0.0, |pcm| f64::from(pcm.base_ms) / 1000.0);
-                self.elapsed = base + (*property.data.cast::<f64>()).max(0.0);
+                let stream_time = (*property.data.cast::<f64>()).max(0.0);
+                if let Some(pcm) = self.pcm.as_mut() {
+                    // Gapless: the next track becomes the item when it is heard.
+                    while pcm
+                        .boundaries
+                        .front()
+                        .is_some_and(|(at, _, _)| stream_time >= *at)
+                    {
+                        if let Some((at, base_ms, duration)) = pcm.boundaries.pop_front() {
+                            pcm.offset = at;
+                            pcm.base_ms = base_ms;
+                            if duration.is_some() {
+                                self.duration = duration;
+                            }
+                        }
+                    }
+                }
+                let (base, offset) = self.pcm.as_ref().map_or((0.0, 0.0), |pcm| {
+                    (f64::from(pcm.base_ms) / 1000.0, pcm.offset)
+                });
+                self.elapsed = base + (stream_time - offset).max(0.0);
                 Ok(Some(self.position_event()))
             }
             // A PCM stream has no length and no codec; the item's own
@@ -784,7 +805,13 @@ impl LibMpvEngine {
             self.ended_reported = false;
             if let Some(pcm) = self.pcm.as_mut() {
                 pcm.base_ms = generation.base_ms;
+                pcm.offset = 0.0;
+                pcm.boundaries.clear();
                 pcm.loaded = true;
+            }
+            // A generation of a new track carries that track's length.
+            if let Some(duration_ms) = generation.duration_ms.filter(|ms| *ms > 0) {
+                self.duration = Some(f64::from(duration_ms) / 1000.0);
             }
             self.elapsed = f64::from(generation.base_ms) / 1000.0;
             let (codec, bitrate) = source.format();
@@ -808,6 +835,23 @@ impl LibMpvEngine {
             }
             Some(crate::pcm_source::PcmSourceEvent::Failed(reason)) => {
                 Ok(Some(PlaybackEvent::Failed(reason)))
+            }
+            Some(crate::pcm_source::PcmSourceEvent::Boundary {
+                at_ms,
+                base_ms,
+                duration_ms,
+            }) => {
+                if let Some(pcm) = self.pcm.as_mut() {
+                    #[allow(clippy::cast_precision_loss)]
+                    pcm.boundaries.push_back((
+                        at_ms as f64 / 1000.0,
+                        base_ms,
+                        duration_ms
+                            .filter(|ms| *ms > 0)
+                            .map(|ms| f64::from(ms) / 1000.0),
+                    ));
+                }
+                Ok(None)
             }
             None => Ok(None),
         }
@@ -850,8 +894,10 @@ impl LibMpvEngine {
                 .map_err(PlaybackError::Operation)?;
             self.pcm = Some(PcmPlayback {
                 base_ms: position_ms,
+                offset: 0.0,
                 started: false,
                 loaded: false,
+                boundaries: std::collections::VecDeque::new(),
             });
             return Ok(true);
         }
@@ -2162,7 +2208,11 @@ mod tests {
         impl Source {
             fn begin(&self, base_ms: u32) {
                 let id = self.current.fetch_add(1, Ordering::SeqCst) + 1;
-                *self.pending.lock().unwrap() = Some(PcmGeneration { id, base_ms });
+                *self.pending.lock().unwrap() = Some(PcmGeneration {
+                    id,
+                    base_ms,
+                    duration_ms: None,
+                });
             }
         }
         impl PcmSource for Source {
@@ -2321,7 +2371,11 @@ mod tests {
         }
         impl PcmSource for Source {
             fn start(&self, _: &MediaItem, _: u32, _: bool, _: bool) -> Result<(), String> {
-                *self.pending.lock().unwrap() = Some(PcmGeneration { id: 1, base_ms: 0 });
+                *self.pending.lock().unwrap() = Some(PcmGeneration {
+                    id: 1,
+                    base_ms: 0,
+                    duration_ms: None,
+                });
                 Ok(())
             }
             fn set_paused(&self, _: bool) {}

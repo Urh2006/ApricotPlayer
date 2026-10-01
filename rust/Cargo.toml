@@ -1,5 +1,6 @@
 [workspace]
 resolver = "3"
+exclude = ["vendor"]
 members = [
     "apps/apricot-player",
     "apps/apricot-youtube-helper",
@@ -93,3 +94,7 @@ lto = "thin"
 codegen-units = 1
 panic = "abort"
 strip = "symbols"
+
+# Narrow local patch, see vendor/librespot-connect/APRICOT-PATCH.md (SD-1).
+[patch.crates-io]
+librespot-connect = { path = "vendor/librespot-connect" }

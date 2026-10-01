@@ -32,6 +32,13 @@ pub enum PcmSourceEvent {
     Paused(bool),
     /// The item cannot be played; a short localized reason key or text.
     Failed(String),
+    /// Gapless: the next track starts `at_ms` into the current generation's
+    /// stream, at `base_ms` of that track, which is `duration_ms` long.
+    Boundary {
+        at_ms: u64,
+        base_ms: u32,
+        duration_ms: Option<u32>,
+    },
 }
 
 /// A PCM generation mpv should load now, starting at `base_ms` of the item.
@@ -39,6 +46,9 @@ pub enum PcmSourceEvent {
 pub struct PcmGeneration {
     pub id: u64,
     pub base_ms: u32,
+    /// Length of the track when the generation starts a new one; a seek
+    /// keeps the length it had.
+    pub duration_ms: Option<u32>,
 }
 
 pub trait PcmSource: Send + Sync {

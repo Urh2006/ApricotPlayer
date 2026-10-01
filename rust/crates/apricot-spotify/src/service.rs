@@ -18,6 +18,7 @@ use std::{
 
 use apricot_core::SpotifyStamp;
 use librespot_core::{SessionConfig, authentication::Credentials, session::Session};
+use librespot_metadata::Metadata;
 use librespot_protocol::authentication::AuthenticationType;
 
 use crate::{
@@ -98,9 +99,16 @@ pub enum SpotifyEvent {
     /// The Connect device of the active session lost its connection.
     Disconnected,
     /// Metadata of a track or episode link, for playback from Apricot.
+    /// `context` is the album or playlist URI when the link was one; the
+    /// track is then its first playable track.
     Resolved {
         stamp: SpotifyStamp,
-        result: Result<crate::playback::SpotifyTrack, SpotifyError>,
+        result: Result<(crate::playback::SpotifyTrack, Option<String>), SpotifyError>,
+    },
+    /// The confirmed queue with the titles of its tracks.
+    Queue {
+        stamp: SpotifyStamp,
+        queue: crate::queue::SpotifyQueue,
     },
 }
 
@@ -121,6 +129,8 @@ pub struct SpotifyService {
     login_cancel: Mutex<Option<Arc<AtomicBool>>>,
     /// The locally active session and its account key.
     session: Arc<Mutex<Option<(String, ActiveSession)>>>,
+    /// Title and artists by URI, for the queue view.
+    titles: Arc<Mutex<std::collections::HashMap<String, (String, String)>>>,
 }
 
 impl SpotifyService {
@@ -136,6 +146,7 @@ impl SpotifyService {
                 notify,
                 login_cancel: Mutex::new(None),
                 session: Arc::default(),
+                titles: Arc::default(),
             },
             receiver,
         )
@@ -167,16 +178,116 @@ impl SpotifyService {
         self.runtime().spawn(async move {
             let result = async {
                 let session = session.ok_or(SpotifyError::NoCredentials)?;
+                let network =
+                    |error: librespot_core::Error| SpotifyError::Network(error.kind.to_string());
                 let spotify_uri = librespot_core::SpotifyUri::from_uri(&uri)
                     .map_err(|_| SpotifyError::LoginFailed("uri".to_owned()))?;
-                let item = librespot_metadata::audio::AudioItem::get_file(&session, spotify_uri)
+                // An album or playlist plays as its context from the first track.
+                let (track_uri, context) = match &spotify_uri {
+                    librespot_core::SpotifyUri::Album { .. } => {
+                        let album = librespot_metadata::Album::get(&session, &spotify_uri)
+                            .await
+                            .map_err(network)?;
+                        let first = album.tracks().next().cloned();
+                        (first, Some(uri.clone()))
+                    }
+                    librespot_core::SpotifyUri::Playlist { .. } => {
+                        let playlist = librespot_metadata::Playlist::get(&session, &spotify_uri)
+                            .await
+                            .map_err(network)?;
+                        let first = playlist.tracks().next().cloned();
+                        (first, Some(uri.clone()))
+                    }
+                    _ => (Some(spotify_uri.clone()), None),
+                };
+                let track_uri = track_uri.ok_or(SpotifyError::LoginFailed("empty".to_owned()))?;
+                let item = librespot_metadata::audio::AudioItem::get_file(&session, track_uri)
                     .await
-                    .map_err(|error| SpotifyError::Network(error.kind.to_string()))?;
-                Ok(crate::playback::SpotifyTrack::from_audio_item(&item))
+                    .map_err(network)?;
+                Ok((
+                    crate::playback::SpotifyTrack::from_audio_item(&item),
+                    context,
+                ))
             }
             .await;
             Self::emit(&sender, &notify, SpotifyEvent::Resolved { stamp, result });
         });
+    }
+
+    /// The confirmed queue now, with the titles already known; the dialog
+    /// opens with it at once and [`Self::load_queue`] brings the rest.
+    pub fn queue_now(&self) -> crate::queue::SpotifyQueue {
+        let state = self
+            .playback()
+            .and_then(|playback| playback.player_state())
+            .unwrap_or_default();
+        let mut queue = crate::queue::snapshot(&state);
+        if let Ok(known) = self.titles.lock() {
+            fill_titles(&mut queue, &known);
+        }
+        queue
+    }
+
+    /// Reads the confirmed queue and the titles of its tracks. Titles are
+    /// cached for the session, so a reload after an edit is quick.
+    pub fn load_queue(&self, stamp: SpotifyStamp) {
+        let active = self.session.lock().ok().and_then(|slot| {
+            slot.as_ref()
+                .map(|(_, active)| (active.session.clone(), active.playback.clone()))
+        });
+        let sender = self.sender.clone();
+        let notify = self.notify.clone();
+        let titles = self.titles.clone();
+        self.runtime().spawn(async move {
+            let state = active
+                .as_ref()
+                .and_then(|(_, playback)| playback.player_state())
+                .unwrap_or_default();
+            let mut queue = crate::queue::snapshot(&state);
+            if let Some((session, _)) = active {
+                let wanted: Vec<String> = queue
+                    .current
+                    .iter()
+                    .chain(&queue.entries)
+                    .map(|entry| entry.uri.clone())
+                    .filter(|uri| titles.lock().is_ok_and(|known| !known.contains_key(uri)))
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                let mut tasks = tokio::task::JoinSet::new();
+                for uri in wanted {
+                    let session = session.clone();
+                    tasks.spawn(async move {
+                        let parsed = librespot_core::SpotifyUri::from_uri(&uri).ok()?;
+                        let item = librespot_metadata::audio::AudioItem::get_file(&session, parsed)
+                            .await
+                            .ok()?;
+                        let track = crate::playback::SpotifyTrack::from_audio_item(&item);
+                        Some((uri, (track.title, track.artists)))
+                    });
+                }
+                while let Some(result) = tasks.join_next().await {
+                    if let Ok(Some((uri, title))) = result
+                        && let Ok(mut known) = titles.lock()
+                    {
+                        known.insert(uri, title);
+                    }
+                }
+                if let Ok(known) = titles.lock() {
+                    fill_titles(&mut queue, &known);
+                }
+            }
+            Self::emit(&sender, &notify, SpotifyEvent::Queue { stamp, queue });
+        });
+    }
+
+    /// The PCM source and Connect controls of the active session.
+    pub fn playback(&self) -> Option<Arc<SpotifyPlayback>> {
+        self.session
+            .lock()
+            .ok()?
+            .as_ref()
+            .map(|(_, active)| active.playback.clone())
     }
 
     fn runtime(&self) -> &tokio::runtime::Runtime {
@@ -374,8 +485,21 @@ fn replace_session(
         .and_then(|mut guard| std::mem::replace(&mut *guard, next));
     apricot_playback::pcm_source::set_pcm_source(installed);
     if let Some((_, active)) = previous {
+        active.shared.close_all();
         active.playback.set_spirc(None);
         active.session.shutdown();
+    }
+}
+
+fn fill_titles(
+    queue: &mut crate::queue::SpotifyQueue,
+    known: &std::collections::HashMap<String, (String, String)>,
+) {
+    for entry in queue.current.iter_mut().chain(queue.entries.iter_mut()) {
+        if let Some((title, artists)) = known.get(&entry.uri) {
+            entry.title.clone_from(title);
+            entry.artists.clone_from(artists);
+        }
     }
 }
 
@@ -453,6 +577,10 @@ async fn open_session(
         notify();
     });
     tokio::spawn(SpotifyPlayback::listen(shared.clone(), listener));
+    tokio::spawn(SpotifyPlayback::watch_state(
+        shared.clone(),
+        spirc.player_state(),
+    ));
     playback.set_spirc(Some(spirc));
     let username = session.username();
     let reusable = Credentials {

@@ -685,6 +685,7 @@ unsafe fn register_secondary_window_classes() -> Result<()> {
     crate::details_win32::register()?;
     crate::audiovault_login_win32::register()?;
     crate::spotify_login_win32::register()?;
+    crate::spotify_queue_win32::register()?;
     crate::download_progress_win32::register()
 }
 
@@ -12964,6 +12965,10 @@ unsafe fn virtual_key_is_down(key: usize) -> bool {
 
 #[allow(clippy::too_many_lines)]
 unsafe fn activate_action(window: HWND, action_id: &str) {
+    // Spotify Connect owns next, previous, shuffle and repeat of its items.
+    if spotify::transport(window, action_id) {
+        return;
+    }
     leave_player_for_global_navigation(window, action_id);
     match action_id {
         "open_main_menu" => show_main_menu(window),
@@ -12981,6 +12986,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "open_audiovault" => audiovault::show_menu(window),
         "open_spotify" => spotify::show_hub(window),
         "spotify_accounts" => spotify::show_accounts(window, None),
+        "spotify_queue" => spotify::show_queue(window),
         "open_settings" => open_settings(window),
         "open_action_finder" => show_action_finder(window),
         "open_play_file" => open_media_file(window),
@@ -14503,6 +14509,10 @@ unsafe fn copy_text_and_announce(window: HWND, text: &str, success_key: &str) {
 }
 
 unsafe fn add_active_item_to_playback_queue(window: HWND) {
+    // A Spotify track goes to the Spotify queue (`docs/SPOTIFY_PLAN.md` 5.3).
+    if spotify::add_to_queue(window) {
+        return;
+    }
     let Some(item) = active_media_item(window) else {
         return;
     };

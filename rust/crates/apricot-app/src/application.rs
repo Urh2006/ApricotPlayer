@@ -2121,6 +2121,11 @@ impl Application {
         self.state.player.set_toggle(toggle, enabled);
     }
 
+    /// See [`PlayerSession::replace_current_item`].
+    pub fn replace_current_player_item(&mut self, item: MediaItem) -> bool {
+        self.state.player.replace_current_item(item)
+    }
+
     pub fn prepare_standalone_playback(&mut self) {
         self.state.player_sequence.clear();
     }

@@ -7,12 +7,14 @@
 use std::collections::BTreeMap;
 
 use apricot_core::{TranslationCatalog, action::action_by_id};
-use apricot_spotify::{SpotifyAccount, SpotifyAccounts, SpotifyError};
+use apricot_spotify::{QueueSection, SpotifyAccount, SpotifyAccounts, SpotifyError, SpotifyQueue};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SpotifyHubEntry {
     /// Browser login; the only way in without a saved account.
     LogIn,
+    /// The Spotify queue, once an account is logged in.
+    Queue,
     Accounts,
 }
 
@@ -66,6 +68,17 @@ impl SpotifyHubModel {
             items.push(SpotifyHubItem {
                 entry: SpotifyHubEntry::LogIn,
                 label: catalog.text("spotify_log_in").to_owned(),
+            });
+        }
+        if active_account(accounts).is_some() {
+            items.push(SpotifyHubItem {
+                entry: SpotifyHubEntry::Queue,
+                label: with_shortcut(
+                    catalog.text("spotify_queue").to_owned(),
+                    "spotify_queue",
+                    show_shortcuts,
+                    shortcuts,
+                ),
             });
         }
         if !accounts.accounts.is_empty() {
@@ -155,6 +168,128 @@ pub fn account_rows(
     rows
 }
 
+/// One row of the Spotify queue view.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SpotifyQueueRow {
+    /// The track that plays now.
+    Current { label: String },
+    /// An upcoming occurrence, identified by its UID.
+    Entry {
+        uid: String,
+        section: QueueSection,
+        label: String,
+    },
+    /// Nothing plays on this device, or nothing comes next.
+    Message { label: String },
+}
+
+impl SpotifyQueueRow {
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Current { label } | Self::Entry { label, .. } | Self::Message { label } => label,
+        }
+    }
+
+    pub fn uid(&self) -> Option<&str> {
+        match self {
+            Self::Entry { uid, .. } => Some(uid),
+            _ => None,
+        }
+    }
+}
+
+/// What the queue context menu offers for the selected row.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SpotifyQueueMenu {
+    pub play: bool,
+    pub move_up: bool,
+    pub move_down: bool,
+    pub remove: bool,
+    pub clear: bool,
+}
+
+fn title_and_artists(catalog: &TranslationCatalog, title: &str, artists: &str) -> String {
+    let title = if title.is_empty() {
+        catalog.text("unknown")
+    } else {
+        title
+    };
+    if artists.is_empty() {
+        title.to_owned()
+    } else {
+        format!("{title}, {artists}")
+    }
+}
+
+/// "Now playing: title, artists", then the upcoming tracks with their
+/// section ("Added manually", "Next from context", "Autoplay") last, so the
+/// title is heard first.
+pub fn queue_rows(catalog: &TranslationCatalog, queue: &SpotifyQueue) -> Vec<SpotifyQueueRow> {
+    let Some(current) = queue.current.as_ref().filter(|_| queue.active) else {
+        return vec![SpotifyQueueRow::Message {
+            label: catalog.text("spotify_queue_inactive").to_owned(),
+        }];
+    };
+    let mut rows = vec![SpotifyQueueRow::Current {
+        label: catalog.text("spotify_queue_now_playing").replace(
+            "{title}",
+            &title_and_artists(catalog, &current.title, &current.artists),
+        ),
+    }];
+    rows.extend(queue.entries.iter().map(|entry| {
+        let section = catalog.text(match entry.section {
+            QueueSection::Manual => "spotify_queue_manual",
+            QueueSection::Context => "spotify_queue_context",
+            QueueSection::Autoplay => "spotify_queue_autoplay",
+        });
+        SpotifyQueueRow::Entry {
+            uid: entry.uid.clone(),
+            section: entry.section,
+            label: format!(
+                "{}, {section}",
+                title_and_artists(catalog, &entry.title, &entry.artists)
+            ),
+        }
+    }));
+    if queue.entries.is_empty() {
+        rows.push(SpotifyQueueRow::Message {
+            label: catalog.text("spotify_queue_nothing_next").to_owned(),
+        });
+    }
+    rows
+}
+
+/// Menu of the row at `index`: moves stay within the manually added tracks,
+/// Clear only when there are any.
+pub fn queue_menu(rows: &[SpotifyQueueRow], index: usize) -> SpotifyQueueMenu {
+    let manual = |at: Option<usize>| {
+        at.and_then(|at| rows.get(at)).is_some_and(|row| {
+            matches!(
+                row,
+                SpotifyQueueRow::Entry {
+                    section: QueueSection::Manual,
+                    ..
+                }
+            )
+        })
+    };
+    let clear = (0..rows.len()).any(|at| manual(Some(at)));
+    match rows.get(index) {
+        Some(SpotifyQueueRow::Entry { section, .. }) => SpotifyQueueMenu {
+            play: true,
+            move_up: *section == QueueSection::Manual && manual(index.checked_sub(1)),
+            move_down: *section == QueueSection::Manual && manual(Some(index + 1)),
+            remove: true,
+            clear,
+        },
+        _ => SpotifyQueueMenu {
+            clear,
+            ..SpotifyQueueMenu::default()
+        },
+    }
+}
+
 /// Localized error text with `{error}` filled in when there is a detail.
 pub fn error_text(catalog: &TranslationCatalog, error: &SpotifyError) -> String {
     catalog
@@ -208,9 +343,85 @@ mod tests {
             ..SpotifyAccounts::default()
         };
         let model = SpotifyHubModel::build(&english_catalog(), &accounts, true, &BTreeMap::new());
-        assert_eq!(model.items.len(), 1);
-        assert_eq!(model.items[0].entry, SpotifyHubEntry::Accounts);
-        assert!(model.items[0].label.ends_with("\tCtrl+Alt+Shift+C"));
+        let entries: Vec<_> = model.items.iter().map(|item| item.entry).collect();
+        assert_eq!(entries, [SpotifyHubEntry::Queue, SpotifyHubEntry::Accounts]);
+        assert_eq!(model.items[0].label, "Spotify queue\tCtrl+Alt+Shift+Q");
+        assert!(model.items[1].label.ends_with("\tCtrl+Alt+Shift+C"));
+    }
+
+    fn queue_entry(uid: &str, section: QueueSection, title: &str) -> apricot_spotify::QueueEntry {
+        apricot_spotify::QueueEntry {
+            uid: uid.into(),
+            uri: format!("spotify:track:{uid}"),
+            section,
+            title: title.into(),
+            artists: "Artist".into(),
+        }
+    }
+
+    fn queue() -> SpotifyQueue {
+        SpotifyQueue {
+            active: true,
+            revision: "1".into(),
+            context_uri: "spotify:album:x".into(),
+            current: Some(queue_entry("c0", QueueSection::Context, "Now")),
+            entries: vec![
+                queue_entry("q0", QueueSection::Manual, "First"),
+                queue_entry("q1", QueueSection::Manual, ""),
+                queue_entry("c1", QueueSection::Context, "Next"),
+            ],
+            shuffle: false,
+            repeat: apricot_spotify::RepeatMode::Off,
+        }
+    }
+
+    #[test]
+    fn queue_rows_name_the_title_first_and_the_section_last() {
+        let rows = queue_rows(&english_catalog(), &queue());
+        let labels: Vec<_> = rows.iter().map(SpotifyQueueRow::label).collect();
+        assert_eq!(
+            labels,
+            [
+                "Now playing: Now, Artist",
+                "First, Artist, added manually",
+                "unknown, Artist, added manually",
+                "Next, Artist, next from the album or playlist",
+            ]
+        );
+        assert_eq!(rows[1].uid(), Some("q0"));
+        assert_eq!(rows[0].uid(), None);
+    }
+
+    #[test]
+    fn inactive_or_empty_queue_says_so() {
+        let mut inactive = queue();
+        inactive.active = false;
+        let rows = queue_rows(&english_catalog(), &inactive);
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].uid().is_none());
+        let mut empty = queue();
+        empty.entries.clear();
+        let rows = queue_rows(&english_catalog(), &empty);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].label(), "Nothing comes next.");
+    }
+
+    #[test]
+    fn queue_menu_moves_only_among_manual_tracks() {
+        let rows = queue_rows(&english_catalog(), &queue());
+        let first = queue_menu(&rows, 1);
+        assert!(first.play && first.remove && first.clear);
+        assert!(!first.move_up && first.move_down);
+        let second = queue_menu(&rows, 2);
+        assert!(second.move_up && !second.move_down);
+        let context = queue_menu(&rows, 3);
+        assert!(context.play && context.remove && !context.move_up && !context.move_down);
+        let current = queue_menu(&rows, 0);
+        assert!(!current.play && !current.remove && current.clear);
+        let mut no_manual = queue();
+        no_manual.entries.clear();
+        let rows = queue_rows(&english_catalog(), &no_manual);
+        assert_eq!(queue_menu(&rows, 0), SpotifyQueueMenu::default());
     }
 
     #[test]

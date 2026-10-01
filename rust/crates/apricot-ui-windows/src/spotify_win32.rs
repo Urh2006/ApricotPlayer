@@ -10,14 +10,15 @@ use std::{
 
 use apricot_app::spotify::{
     SpotifyAccountRow, SpotifyHubEntry, SpotifyHubModel, account_rows, error_text, named,
+    queue_rows,
 };
 use apricot_core::{
     Route, RouteFrame, SpotifyEntityKind, SpotifyEpochs, SpotifyRef, SpotifyStamp,
     TranslationCatalog,
 };
 use apricot_spotify::{
-    CallbackPage, PlaybackNotice, SpotifyAccounts, SpotifyError, SpotifyEvent, SpotifyService,
-    SpotifyTrack,
+    CallbackPage, PlaybackNotice, RepeatMode, SpotifyAccounts, SpotifyError, SpotifyEvent,
+    SpotifyService, SpotifyTrack,
 };
 use windows::{
     Win32::{
@@ -27,7 +28,7 @@ use windows::{
             Shell::ShellExecuteW,
             WindowsAndMessaging::{
                 IDYES, IsWindow, LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL, MB_ICONQUESTION,
-                MB_YESNO, MessageBoxW, PostMessageW, SW_SHOWNORMAL, SendMessageW,
+                MB_YESNO, MessageBoxW, PostMessageW, SW_SHOWNORMAL, SendMessageW, SetWindowTextW,
             },
         },
     },
@@ -67,6 +68,9 @@ pub(super) struct SpotifyState {
     pending_play: Option<String>,
     /// The link whose metadata is being read; only the latest one plays.
     resolve: Option<SpotifyStamp>,
+    /// The open queue dialog and the reload it waits for.
+    queue_dialog: Option<HWND>,
+    queue_load: Option<SpotifyStamp>,
     polling: bool,
 }
 
@@ -222,6 +226,12 @@ pub(super) unsafe fn activate(window: HWND) {
                     state.spotify.hub_selected = Some(SpotifyHubEntry::LogIn);
                 }
                 log_in(window, ReturnTo::Hub);
+            }
+            Some(SpotifyHubEntry::Queue) => {
+                if let Some(state) = state_mut(window) {
+                    state.spotify.hub_selected = Some(SpotifyHubEntry::Queue);
+                }
+                show_queue(window);
             }
             Some(SpotifyHubEntry::Accounts) => show_accounts(window, None),
             None => {}
@@ -649,7 +659,9 @@ unsafe fn handle_event(window: HWND, event: SpotifyEvent) {
             }
         }
         SpotifyEvent::Connected { stamp, result } => {
-            if !state.spotify.epochs.is_latest(stamp) {
+            // Every connect starts a new account epoch; later requests of
+            // other kinds (links, the queue) do not make it stale.
+            if !state.spotify.epochs.is_current_account(stamp) {
                 return;
             }
             let requested = state.spotify.connect.take() == Some(stamp);
@@ -680,11 +692,30 @@ unsafe fn handle_event(window: HWND, event: SpotifyEvent) {
             }
             state.spotify.resolve = None;
             match result {
-                Ok(track) => play_track(window, &track),
+                Ok((track, context)) => {
+                    let mut item = track.media_item();
+                    if let Some(context) = context {
+                        // An album or playlist link plays as that context.
+                        item.metadata.insert(
+                            "spotify_context".to_owned(),
+                            serde_json::Value::String(context),
+                        );
+                    }
+                    play_track(window, item);
+                }
                 Err(error) => {
                     let text = error_text(&texts, &error);
                     show_error_message(window, &text);
                 }
+            }
+        }
+        SpotifyEvent::Queue { stamp, queue } => {
+            if state.spotify.queue_load != Some(stamp) {
+                return;
+            }
+            state.spotify.queue_load = None;
+            if let Some(dialog) = state.spotify.queue_dialog {
+                crate::spotify_queue_win32::update(dialog, queue_rows(&texts, &queue));
             }
         }
     }
@@ -745,11 +776,12 @@ pub(super) unsafe fn play_link(window: HWND, text: &str, action: &str) -> bool {
     }
     if !matches!(
         reference.kind,
-        SpotifyEntityKind::Track | SpotifyEntityKind::Episode
+        SpotifyEntityKind::Track
+            | SpotifyEntityKind::Episode
+            | SpotifyEntityKind::Album
+            | SpotifyEntityKind::Playlist
     ) {
-        let text = texts
-            .text("rust_feature_unavailable")
-            .replace("{feature}", texts.text("spotify"));
+        let text = texts.text("spotify_link_kind_unsupported").to_owned();
         show_error_message(window, &text);
         return true;
     }
@@ -794,8 +826,7 @@ unsafe fn resolve(window: HWND, uri: &str) {
 }
 
 /// Music starts at 0:00, spoken content resumes (plan D14).
-unsafe fn play_track(window: HWND, track: &SpotifyTrack) {
-    let item = track.media_item();
+unsafe fn play_track(window: HWND, item: apricot_core::MediaItem) {
     let episode =
         item.metadata.get("kind").and_then(|kind| kind.as_str()) == Some("spotify_episode");
     if episode {
@@ -822,6 +853,12 @@ unsafe fn handle_notice(window: HWND, notice: PlaybackNotice) {
             position_ms,
             requested: false,
         } => {
+            if continue_spotify_item(window, &track) {
+                return;
+            }
+            let Some(state) = state_mut(window) else {
+                return;
+            };
             let mut item = track.media_item();
             item.metadata
                 .insert("spotify_attach".to_owned(), serde_json::Value::Bool(true));
@@ -833,5 +870,257 @@ unsafe fn handle_notice(window: HWND, notice: PlaybackNotice) {
             let text = texts.text("spotify_track_unavailable").to_owned();
             set_status(state, &text, true);
         }
+        PlaybackNotice::QueueChanged => {
+            if state.spotify.queue_dialog.is_some() {
+                reload_queue(window);
+            }
+        }
+    }
+}
+
+/// Spotify moved on to the next track (end of a track, Next, Previous, the
+/// queue, or another device) while Apricot plays a Spotify item: the player
+/// keeps running and only the item changes, with one "Playing: title"
+/// announcement as for any started item. `false` when no Spotify item
+/// plays, so the track is taken over as a new item.
+unsafe fn continue_spotify_item(window: HWND, track: &SpotifyTrack) -> bool {
+    let Some(state) = state_mut(window) else {
+        return false;
+    };
+    let session = state.application.player_session();
+    let running = matches!(
+        session.phase(),
+        apricot_app::player_session::PlaybackPhase::Starting
+            | apricot_app::player_session::PlaybackPhase::Playing
+            | apricot_app::player_session::PlaybackPhase::Paused
+    ) && session
+        .current_item()
+        .is_some_and(|item| item.source == apricot_core::MediaSource::Spotify);
+    if !running {
+        return false;
+    }
+    let mut item = track.media_item();
+    // The context and occurrence, so Play from the start keeps the context.
+    if let Some(player) = state
+        .spotify
+        .service
+        .as_ref()
+        .and_then(|service| service.playback())
+        .and_then(|playback| playback.player_state())
+    {
+        if !player.context_uri.is_empty() && player.context_uri != track.uri {
+            item.metadata.insert(
+                "spotify_context".to_owned(),
+                serde_json::Value::String(player.context_uri.clone()),
+            );
+        }
+        if let Some(current) = player
+            .track
+            .as_ref()
+            .filter(|current| current.uri == track.uri)
+        {
+            item.metadata.insert(
+                "spotify_uid".to_owned(),
+                serde_json::Value::String(current.uid.clone()),
+            );
+        }
+    }
+    if !state.application.replace_current_player_item(item.clone()) {
+        return false;
+    }
+    let message =
+        super::catalog_text(&state.application, "playing").replace("{title}", &item.title);
+    set_status(state, &message, true);
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |duration| duration.as_secs_f64());
+    if let Err(error) = state.application.record_history(item, "played", timestamp) {
+        let message = format!("History was not saved: {error}");
+        set_status(state, &message, true);
+    }
+    if state.view == MainView::Player {
+        super::refresh_player(window, state, false, true);
+    } else if let Some(model) = state.application.player_screen_model() {
+        // The window title names the playing item on every screen.
+        let title = wide(&model.window_title);
+        let _ = SetWindowTextW(window, PCWSTR(title.as_ptr()));
+    }
+    true
+}
+
+/// Ctrl+PageUp/PageDown, Shift+S and R while a Spotify item plays: Connect
+/// does them, so they follow the Spotify context and reach the phone too.
+pub(super) unsafe fn transport(window: HWND, action_id: &str) -> bool {
+    if !matches!(
+        action_id,
+        "player_next" | "player_previous" | "player_shuffle" | "player_repeat"
+    ) {
+        return false;
+    }
+    let Some(state) = state(window) else {
+        return false;
+    };
+    let session = state.application.player_session();
+    let spotify = session.is_open()
+        && session
+            .current_item()
+            .is_some_and(|item| item.source == apricot_core::MediaSource::Spotify);
+    let Some(playback) = state
+        .spotify
+        .service
+        .as_ref()
+        .and_then(|service| service.playback())
+        .filter(|_| spotify)
+    else {
+        return false;
+    };
+    let player = playback.player_state().unwrap_or_default();
+    let key = match action_id {
+        "player_next" => {
+            playback.next();
+            None
+        }
+        "player_previous" => {
+            playback.previous();
+            None
+        }
+        "player_shuffle" => {
+            let shuffle = !apricot_spotify::queue::shuffle(&player);
+            playback.set_shuffle(shuffle);
+            Some(if shuffle { "shuffle_on" } else { "shuffle_off" })
+        }
+        _ => {
+            let (mode, key) = match apricot_spotify::queue::repeat_mode(&player) {
+                RepeatMode::Off => (RepeatMode::Context, "spotify_repeat_context"),
+                RepeatMode::Context => (RepeatMode::Track, "spotify_repeat_track"),
+                RepeatMode::Track => (RepeatMode::Off, "repeat_off"),
+            };
+            playback.set_repeat(mode);
+            Some(key)
+        }
+    };
+    if let Some(key) = key {
+        let text = catalog(state).text(key).to_owned();
+        announce(window, &text);
+    }
+    true
+}
+
+/// Ctrl+Shift+Q on a Spotify track or episode (the active item: the
+/// playing one in the player, the selected one in Spotify lists). It joins
+/// the manually added tracks of the Spotify queue, which exists while
+/// Spotify plays here. `false` for other targets.
+pub(super) unsafe fn add_to_queue(window: HWND) -> bool {
+    let Some(state) = state(window) else {
+        return false;
+    };
+    let reference = super::active_media_item(window)
+        .filter(|item| item.source == apricot_core::MediaSource::Spotify)
+        .and_then(|item| SpotifyRef::parse(&item.id.0));
+    let Some(reference) = reference.filter(|reference| {
+        matches!(
+            reference.kind,
+            SpotifyEntityKind::Track | SpotifyEntityKind::Episode
+        )
+    }) else {
+        return false;
+    };
+    let texts = catalog(state);
+    let playback = state
+        .spotify
+        .service
+        .as_ref()
+        .and_then(|service| service.playback())
+        .filter(|playback| {
+            playback
+                .player_state()
+                .is_some_and(|player| apricot_spotify::queue::snapshot(&player).active)
+        });
+    let key = if let Some(playback) = playback {
+        playback.add_to_queue(reference.to_uri());
+        "spotify_queue_added"
+    } else {
+        "spotify_queue_inactive"
+    };
+    let text = texts.text(key).to_owned();
+    announce(window, &text);
+    true
+}
+
+/// `spotify_queue` and the hub entry: the queue of this Connect device in a
+/// dialog over the current screen, so playback goes on.
+pub(super) unsafe fn show_queue(window: HWND) {
+    stop_controlled_repeat(window);
+    let accounts = accounts(window);
+    let Some(service) = service(window) else {
+        return;
+    };
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    if state.spotify.queue_dialog.is_some() {
+        return;
+    }
+    let texts = catalog(state);
+    if apricot_app::spotify::active_account(&accounts).is_none() {
+        let text = texts.text("spotify_log_in_first").to_owned();
+        announce(window, &text);
+        return;
+    }
+    let Some(playback) = service.playback() else {
+        let text = texts.text("spotify_queue_inactive").to_owned();
+        announce(window, &text);
+        return;
+    };
+    let labels = crate::spotify_queue_win32::SpotifyQueueDialogLabels {
+        title: texts.text("spotify_queue").to_owned(),
+        instructions: texts.text("playback_queue_instructions").to_owned(),
+        play: texts.text("play").to_owned(),
+        move_up: texts.text("move_up").to_owned(),
+        move_down: texts.text("move_down").to_owned(),
+        remove: texts.text("spotify_queue_remove").to_owned(),
+        clear: texts.text("spotify_queue_clear").to_owned(),
+        back: texts.text("back").to_owned(),
+        removed: texts.text("spotify_queue_removed").to_owned(),
+        moved: texts.text("spotify_queue_moved").to_owned(),
+        cleared: texts.text("spotify_queue_cleared").to_owned(),
+        changed: texts.text("spotify_queue_changed").to_owned(),
+    };
+    let rows = queue_rows(&texts, &service.queue_now());
+    let actions = crate::spotify_queue_win32::SpotifyQueueActions {
+        playback,
+        // SAFETY: Runs on this window's thread while the dialog is open.
+        reload: Box::new(move || unsafe { reload_queue(window) }),
+    };
+    state.modal_open = true;
+    let result = crate::spotify_queue_win32::show(window, rows, labels, actions, |dialog| {
+        if let Some(state) = state_mut(window) {
+            state.spotify.queue_dialog = Some(dialog);
+        }
+        // Titles not known yet arrive with the confirmed queue.
+        reload_queue(window);
+    });
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state.spotify.queue_dialog = None;
+    state.spotify.queue_load = None;
+    state.modal_open = false;
+    resume_deferred_window_work(window);
+    if let Err(error) = result {
+        let message = format!("Spotify queue did not open: {error}");
+        show_error_message(window, &message);
+    }
+    let _ = SetFocus(Some(super::active_primary_control(state)));
+}
+
+unsafe fn reload_queue(window: HWND) {
+    let Some(service) = service(window) else {
+        return;
+    };
+    if let Some(state) = state_mut(window) {
+        let stamp = state.spotify.epochs.begin();
+        state.spotify.queue_load = Some(stamp);
+        service.load_queue(stamp);
     }
 }

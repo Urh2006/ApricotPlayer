@@ -254,6 +254,21 @@ impl PlayerSession {
         self.generation
     }
 
+    /// A source that owns its own transport (Spotify Connect) moved on to
+    /// the next track inside the running player: the item changes, the
+    /// engine generation, phase and audio stay. Per-item state starts over.
+    pub fn replace_current_item(&mut self, item: MediaItem) -> bool {
+        if !self.is_open() || self.current_item.is_none() {
+            return false;
+        }
+        self.current_item = Some(item);
+        self.transcript = None;
+        self.clip_start_seconds = None;
+        self.clip_end_seconds = None;
+        self.edit_mode = false;
+        true
+    }
+
     pub fn apply_event(&mut self, generation: u64, event: PlaybackEvent) -> bool {
         if generation != self.generation || !self.is_open() {
             return false;
@@ -377,6 +392,7 @@ impl PlayerSession {
 
 #[cfg(test)]
 mod tests {
+
     use std::collections::{BTreeMap, BTreeSet};
 
     use apricot_core::{MediaId, MediaKind, MediaSource};
@@ -703,5 +719,24 @@ mod tests {
         ));
         session.toggle_clip_start();
         assert_eq!(session.clip_range(), None);
+    }
+
+    #[test]
+    fn replacing_the_item_keeps_generation_and_phase() {
+        let mut session = PlayerSession::default();
+        let mut item = item("a");
+        assert!(!session.replace_current_item(item.clone()));
+        let generation = session.start_item(item.clone(), defaults());
+        session.apply_event(generation, PlaybackEvent::Started);
+        session.toggle_clip_start();
+        item.title = "B".into();
+        assert!(session.replace_current_item(item));
+        assert_eq!(session.generation(), generation);
+        assert_eq!(session.phase(), PlaybackPhase::Playing);
+        assert_eq!(
+            session.current_item().map(|item| item.title.as_str()),
+            Some("B")
+        );
+        assert_eq!(session.clip_start_seconds, None);
     }
 }
