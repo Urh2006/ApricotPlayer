@@ -186,6 +186,15 @@ pub enum CatalogRequest {
     EditablePlaylists,
     /// Songs the account hid.
     HiddenSongs,
+    Home,
+    DailyMixes,
+    RecentlyPlayed,
+    BrowseAll,
+    BrowsePage(String),
+    /// Spotify's radio for a track, artist, album or playlist.
+    Radio(String),
+    /// Top tracks and artists; the six section titles.
+    Top([String; 6]),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -194,6 +203,13 @@ pub enum CatalogResult {
     Collection(crate::catalog::Collection),
     Playlists(Vec<crate::catalog::CatalogItem>),
     HiddenSongs(Vec<String>),
+    /// Titled sections (Home, browse pages) and the page title.
+    Sections {
+        title: String,
+        sections: Vec<crate::catalog::Section>,
+    },
+    /// The station playlist of a radio.
+    Radio(String),
 }
 
 /// Liked state of the tracks and episodes Spotify did not mark, so rows
@@ -451,6 +467,7 @@ impl SpotifyService {
     }
 
     /// Reads a list or collection; the answer is `SpotifyEvent::Catalog`.
+    #[allow(clippy::too_many_lines)]
     pub fn load_catalog(&self, stamp: SpotifyStamp, request: CatalogRequest) {
         use crate::catalog;
         let session = self.active_session();
@@ -469,6 +486,38 @@ impl SpotifyService {
                     }
                     CatalogRequest::HiddenSongs => {
                         CatalogResult::HiddenSongs(catalog::hidden_songs(api, &session).await?)
+                    }
+                    CatalogRequest::Home => CatalogResult::Sections {
+                        title: String::new(),
+                        sections: catalog::home(api, &session).await?,
+                    },
+                    CatalogRequest::DailyMixes => {
+                        CatalogResult::Page(crate::catalog::CatalogPage {
+                            items: catalog::daily_mixes(api, &session).await?,
+                            total: None,
+                            next_offset: None,
+                        })
+                    }
+                    CatalogRequest::RecentlyPlayed => {
+                        CatalogResult::Page(catalog::recently_played(api, &session).await?)
+                    }
+                    CatalogRequest::BrowseAll => CatalogResult::Sections {
+                        title: String::new(),
+                        sections: catalog::browse_all(api, &session).await?,
+                    },
+                    CatalogRequest::BrowsePage(uri) => {
+                        let (title, sections) = catalog::browse_page(api, &session, &uri).await?;
+                        CatalogResult::Sections { title, sections }
+                    }
+                    CatalogRequest::Radio(seed) => {
+                        CatalogResult::Radio(catalog::radio(api, &session, &seed).await?)
+                    }
+                    CatalogRequest::Top(titles) => {
+                        let titles = titles.each_ref().map(String::as_str);
+                        CatalogResult::Sections {
+                            title: String::new(),
+                            sections: catalog::top_content(api, &session, titles).await?,
+                        }
                     }
                     CatalogRequest::Search {
                         query,
@@ -514,7 +563,10 @@ impl SpotifyService {
                     CatalogResult::Collection(collection) => {
                         fill_saved(&api_for_saved, session, &mut collection.page.items).await;
                     }
-                    CatalogResult::Playlists(_) | CatalogResult::HiddenSongs(_) => {}
+                    CatalogResult::Playlists(_)
+                    | CatalogResult::HiddenSongs(_)
+                    | CatalogResult::Sections { .. }
+                    | CatalogResult::Radio(_) => {}
                 }
             }
             Self::emit(&sender, &notify, SpotifyEvent::Catalog { stamp, result });

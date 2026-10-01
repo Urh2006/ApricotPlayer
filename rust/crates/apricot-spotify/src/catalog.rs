@@ -24,6 +24,10 @@ pub enum ItemKind {
     Folder,
     LikedSongs,
     Genre,
+    /// A browse category page (`spotify:page:`).
+    Page,
+    /// A section of Home or a browse page, listing its items.
+    Section,
     /// Spotify did not send the item (restricted, removed, unknown type).
     Unavailable,
 }
@@ -55,6 +59,8 @@ impl ItemKind {
             "show" => Self::Show,
             "audiobook" => Self::Audiobook,
             "genre" => Self::Genre,
+            "page" => Self::Page,
+            "section" => Self::Section,
             "collection" => Self::LikedSongs,
             "user" if uri.contains(":folder:") => Self::Folder,
             "user" if uri.ends_with(":collection") => Self::LikedSongs,
@@ -104,6 +110,8 @@ pub struct CatalogItem {
     pub count: Option<u64>,
     /// A playlist the account may add to and remove from.
     pub editable: bool,
+    /// Spotify's playlist format (`daily-mix`, ...), empty for others.
+    pub format: String,
 }
 
 impl CatalogItem {
@@ -123,6 +131,7 @@ impl CatalogItem {
             saved: None,
             count: None,
             editable: false,
+            format: String::new(),
         }
     }
 }
@@ -317,7 +326,271 @@ pub fn parse_item(value: &Value) -> CatalogItem {
             .pointer("/currentUserCapabilities/canEditItems")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        format: text(node, "/format").to_owned(),
     }
+}
+
+/// A titled group of Home or a browse page.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Section {
+    pub uri: String,
+    pub title: String,
+    pub items: Vec<CatalogItem>,
+}
+
+/// One entry of a section: a playlist, album, artist, show, or a browse
+/// category page. Links to other Spotify features are left out.
+fn parse_section_item(value: &Value) -> Option<CatalogItem> {
+    let content = value.get("content")?;
+    let uri = value.get("uri").and_then(Value::as_str).unwrap_or("");
+    match text(content, "/__typename") {
+        "BrowseSectionContainerWrapper" => {
+            let name = text(
+                content,
+                "/data/data/cardRepresentation/title/transformedLabel",
+            );
+            let mut item = CatalogItem::unavailable(uri.to_owned());
+            item.kind = ItemKind::Page;
+            name.clone_into(&mut item.name);
+            (!name.is_empty() && uri.starts_with("spotify:page:")).then_some(item)
+        }
+        "BrowseXlinkResponseWrapper" => None,
+        _ => {
+            let mut item = parse_item(content);
+            if item.uri.is_empty() {
+                uri.clone_into(&mut item.uri);
+            }
+            (item.kind != ItemKind::Unavailable && !item.name.is_empty()).then_some(item)
+        }
+    }
+}
+
+/// Titled sections with at least one usable entry, in Spotify's order.
+pub fn parse_sections(list: &Value) -> Vec<Section> {
+    list.get("items")
+        .and_then(Value::as_array)
+        .map(|sections| {
+            sections
+                .iter()
+                .filter_map(|section| {
+                    let title = text(section, "/data/title/transformedLabel");
+                    let items: Vec<CatalogItem> = section
+                        .pointer("/sectionItems/items")
+                        .and_then(Value::as_array)
+                        .map(|items| items.iter().filter_map(parse_section_item).collect())
+                        .unwrap_or_default();
+                    (!title.is_empty() && !items.is_empty()).then(|| Section {
+                        uri: text(section, "/uri").to_owned(),
+                        title: title.to_owned(),
+                        items,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Home: Spotify's personal sections (Made for you, mixes, recently
+/// played, recommendations), as the web player gets them.
+pub async fn home(api: &Api, session: &Session) -> Result<Vec<Section>, ApiError> {
+    let data = api
+        .pathfinder(
+            session,
+            "home",
+            json!({
+                "timeZone": "UTC",
+                "sp_t": "",
+                "facet": "",
+                "sectionItemsLimit": 50,
+                "homeEndUserIntegration": "INTEGRATION_WEB_PLAYER",
+            }),
+        )
+        .await?;
+    let sections = data
+        .pointer("/home/sectionContainer/sections")
+        .ok_or_else(|| ApiError::Shape("home without sections".into()))?;
+    Ok(parse_sections(sections))
+}
+
+/// Daily Mixes of the account, found by their format on Home (not by
+/// title), each once, in Spotify's order.
+pub async fn daily_mixes(api: &Api, session: &Session) -> Result<Vec<CatalogItem>, ApiError> {
+    let mut mixes: Vec<CatalogItem> = Vec::new();
+    for section in home(api, session).await? {
+        for item in section.items {
+            if item.format == "daily-mix" && !mixes.iter().any(|mix| mix.uri == item.uri) {
+                mixes.push(item);
+            }
+        }
+    }
+    Ok(mixes)
+}
+
+/// Browse: the category pages (genres, moods, podcasts, charts).
+pub async fn browse_all(api: &Api, session: &Session) -> Result<Vec<Section>, ApiError> {
+    let data = api
+        .pathfinder(
+            session,
+            "browseAll",
+            json!({
+                "pagePagination": { "offset": 0, "limit": 10 },
+                "sectionPagination": { "offset": 0, "limit": 99 },
+                "browseEndUserIntegration": "INTEGRATION_WEB_PLAYER",
+            }),
+        )
+        .await?;
+    let sections = data
+        .pointer("/browseStart/sections")
+        .ok_or_else(|| ApiError::Shape("browseAll without sections".into()))?;
+    Ok(parse_sections(sections))
+}
+
+/// One browse category page: its title and sections.
+pub async fn browse_page(
+    api: &Api,
+    session: &Session,
+    uri: &str,
+) -> Result<(String, Vec<Section>), ApiError> {
+    let data = api
+        .pathfinder(
+            session,
+            "browsePage",
+            json!({
+                "uri": uri,
+                "pagePagination": { "offset": 0, "limit": 20 },
+                "sectionPagination": { "offset": 0, "limit": 99 },
+                "browseEndUserIntegration": "INTEGRATION_WEB_PLAYER",
+            }),
+        )
+        .await?;
+    let browse = data
+        .get("browse")
+        .ok_or_else(|| ApiError::Shape("browsePage".into()))?;
+    Ok((
+        text(browse, "/header/title/transformedLabel").to_owned(),
+        parse_sections(&browse["sections"]),
+    ))
+}
+
+/// What the account played recently (albums, playlists, artists, shows,
+/// Liked Songs), newest first.
+pub async fn recently_played(api: &Api, session: &Session) -> Result<CatalogPage, ApiError> {
+    let played = api
+        .spclient(
+            session,
+            reqwest::Method::GET,
+            &format!(
+                "/recently-played/v3/user/{}/recently-played?format=json&offset=0&limit=50&filter=default,collection-new-episodes&market=from_token",
+                session.username()
+            ),
+            None,
+        )
+        .await?;
+    let uris: Vec<String> = played
+        .get("playContexts")
+        .and_then(Value::as_array)
+        .map(|contexts| {
+            contexts
+                .iter()
+                .filter_map(|context| context.get("uri").and_then(Value::as_str))
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    if uris.is_empty() {
+        return Ok(CatalogPage::default());
+    }
+    let data = api
+        .pathfinder(
+            session,
+            "fetchEntitiesForRecentlyPlayed",
+            json!({ "uris": uris }),
+        )
+        .await?;
+    let items = data
+        .get("lookup")
+        .and_then(Value::as_array)
+        .map(|lookup| {
+            lookup
+                .iter()
+                .map(parse_item)
+                .filter(|item| item.kind != ItemKind::Unavailable && !item.name.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(CatalogPage {
+        items,
+        total: None,
+        next_offset: None,
+    })
+}
+
+/// The account's most played tracks and artists over the last four weeks,
+/// six months and all time; `titles` name them in that order (tracks, then
+/// artists, for each period).
+pub async fn top_content(
+    api: &Api,
+    session: &Session,
+    titles: [&str; 6],
+) -> Result<Vec<Section>, ApiError> {
+    let mut sections = Vec::new();
+    for (period, range) in ["SHORT_TERM", "MID_TERM", "LONG_TERM"]
+        .iter()
+        .enumerate()
+    {
+        let input = json!({ "offset": 0, "limit": 50, "sortBy": "AFFINITY", "timeRange": range });
+        let data = api
+            .pathfinder(
+                session,
+                "userTopContent",
+                json!({
+                    "includeTopArtists": true,
+                    "topArtistsInput": input,
+                    "includeTopTracks": true,
+                    "topTracksInput": input,
+                }),
+            )
+            .await?;
+        for (offset, pointer) in ["/me/profile/topTracks", "/me/profile/topArtists"]
+            .iter()
+            .enumerate()
+        {
+            let items: Vec<CatalogItem> = data
+                .pointer(pointer)
+                .map(|list| parse_page(list, 0).items)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|item| item.kind != ItemKind::Unavailable)
+                .collect();
+            if !items.is_empty() {
+                sections.push(Section {
+                    uri: format!("apricot:top:{range}:{offset}"),
+                    title: titles[period * 2 + offset].to_owned(),
+                    items,
+                });
+            }
+        }
+    }
+    Ok(sections)
+}
+
+/// Spotify's radio for a track, artist, album or playlist: the URI of the
+/// station playlist Spotify makes for it.
+pub async fn radio(api: &Api, session: &Session, seed: &str) -> Result<String, ApiError> {
+    let answer = api
+        .spclient(
+            session,
+            reqwest::Method::GET,
+            &format!("/inspiredby-mix/v2/seed_to_playlist/{seed}?response-format=json"),
+            None,
+        )
+        .await?;
+    answer
+        .pointer("/mediaItems/0/uri")
+        .and_then(Value::as_str)
+        .filter(|uri| uri.starts_with("spotify:playlist:"))
+        .map(str::to_owned)
+        .ok_or_else(|| ApiError::Shape("no radio for this item".into()))
 }
 
 /// A page from `{items, totalCount}` at `offset`.
@@ -900,6 +1173,31 @@ mod tests {
             ItemKind::from_uri("spotify:collection:tracks"),
             Some(ItemKind::LikedSongs)
         );
+    }
+
+    #[test]
+    fn sections_keep_titles_entries_and_category_pages() {
+        let list = json!({ "items": [
+            { "uri": "spotify:section:a", "data": { "title": { "transformedLabel": "Made For You" } },
+              "sectionItems": { "items": [
+                { "uri": "spotify:playlist:m", "content": { "__typename": "PlaylistResponseWrapper", "data": {
+                    "__typename": "Playlist", "uri": "spotify:playlist:m", "name": "Daily Mix 1", "format": "daily-mix" } } },
+                { "uri": "spotify:xlink:x", "content": { "__typename": "BrowseXlinkResponseWrapper", "data": {} } }
+              ] } },
+            { "uri": "spotify:section:b", "data": { "title": { "transformedLabel": "Browse all" } },
+              "sectionItems": { "items": [
+                { "uri": "spotify:page:p", "content": { "__typename": "BrowseSectionContainerWrapper", "data": {
+                    "__typename": "BrowseSectionContainer", "data": { "cardRepresentation": { "title": { "transformedLabel": "Music" } } } } } }
+              ] } },
+            { "uri": "spotify:section:c", "data": { "title": null }, "sectionItems": { "items": [] } }
+        ]});
+        let sections = parse_sections(&list);
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].title, "Made For You");
+        assert_eq!(sections[0].items.len(), 1);
+        assert_eq!(sections[0].items[0].format, "daily-mix");
+        assert_eq!(sections[1].items[0].kind, ItemKind::Page);
+        assert_eq!(sections[1].items[0].name, "Music");
     }
 
     #[test]

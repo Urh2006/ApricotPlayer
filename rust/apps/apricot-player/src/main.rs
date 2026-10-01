@@ -147,7 +147,7 @@ fn run_qualification(arguments: &[std::ffi::OsString]) -> Result<bool, Box<dyn s
         assert_eq!(SettingId::ALL.len(), 116);
         // 91 Python actions plus the Spotify ones, 19 Python menu items plus Spotify.
         assert_eq!(apricot_core::PYTHON_BASELINE_ACTIONS, 91);
-        assert_eq!(ACTIONS.len(), 101);
+        assert_eq!(ACTIONS.len(), 103);
         assert_eq!(CUSTOMIZABLE_MAIN_MENU.len(), 20);
         assert_eq!(LANGUAGES.len(), 27);
         assert!(!UpdateChannel::LocalOnly.allows_remote_install());

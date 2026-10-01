@@ -40,11 +40,31 @@ pub(super) enum Source {
     Playlist(String),
     Artist(String),
     Show(String),
+    Home,
+    DailyMixes,
+    RecentlyPlayed,
+    /// Browse: `None` lists the categories, `Some(page)` one category.
+    Browse(Option<String>),
+    /// A section of Home or a browse page, already loaded.
+    Section(Vec<CatalogItem>),
+    /// Spotify's radio for a track, artist, album or playlist; it becomes
+    /// the station playlist once Spotify names it.
+    Radio(String),
+    /// Top tracks and artists with their six section titles.
+    Top([String; 6]),
 }
 
 impl Source {
-    fn request(&self, offset: u64) -> CatalogRequest {
-        match self {
+    fn request(&self, offset: u64) -> Option<CatalogRequest> {
+        Some(match self {
+            Self::Home => CatalogRequest::Home,
+            Self::DailyMixes => CatalogRequest::DailyMixes,
+            Self::RecentlyPlayed => CatalogRequest::RecentlyPlayed,
+            Self::Browse(None) => CatalogRequest::BrowseAll,
+            Self::Browse(Some(uri)) => CatalogRequest::BrowsePage(uri.clone()),
+            Self::Radio(seed) => CatalogRequest::Radio(seed.clone()),
+            Self::Top(titles) => CatalogRequest::Top(titles.clone()),
+            Self::Section(_) => return None,
             Self::Search { query, kind } => CatalogRequest::Search {
                 query: query.clone(),
                 kind: *kind,
@@ -66,7 +86,7 @@ impl Source {
                 uri: uri.clone(),
                 offset,
             },
-        }
+        })
     }
 
     /// The Spotify context a track of this list plays in.
@@ -101,6 +121,8 @@ struct Frame {
     can_rename: bool,
     /// A personal mix, where Spotify offers "Hide song".
     personalised: bool,
+    /// Home and browse pages: the sections behind the section rows.
+    sections: Vec<apricot_spotify::catalog::Section>,
 }
 
 /// A change waiting for Spotify's answer.
@@ -189,7 +211,14 @@ pub(super) unsafe fn open(window: HWND, source: Source, title: String) {
         can_edit: false,
         can_rename: false,
         personalised: false,
+        sections: Vec::new(),
     });
+    if let Some(frame) = state.spotify_browse.frames.last_mut()
+        && let Source::Section(items) = &frame.source
+    {
+        frame.items = items.clone();
+        frame.loaded = true;
+    }
     state.view = MainView::SpotifyBrowse;
     request(window, 0);
     render(window, true);
@@ -217,11 +246,15 @@ unsafe fn request(window: HWND, offset: u64) {
     let Some(frame) = state.spotify_browse.frames.last_mut() else {
         return;
     };
+    let Some(request) = frame.source.request(offset) else {
+        return;
+    };
     frame.loading = Some(stamp);
-    service.load_catalog(stamp, frame.source.request(offset));
+    service.load_catalog(stamp, request);
 }
 
 /// The answer to a list request.
+#[allow(clippy::too_many_lines)]
 pub(super) unsafe fn loaded(
     window: HWND,
     stamp: SpotifyStamp,
@@ -300,6 +333,22 @@ pub(super) unsafe fn loaded(
                 .contains(&collection.format.as_str());
             frame.items.extend(collection.page.items);
             frame.next_offset = collection.page.next_offset;
+        }
+        Ok(CatalogResult::Sections { title, sections }) => {
+            if !title.is_empty() {
+                frame.title = title;
+            }
+            frame.items = sections.iter().map(section_row).collect();
+            frame.sections = sections;
+        }
+        Ok(CatalogResult::Radio(playlist)) => {
+            // The station playlist loads in the same frame.
+            frame.source = Source::Playlist(playlist);
+            frame.loaded = false;
+            if is_top {
+                request(window, 0);
+            }
+            return;
         }
         Ok(CatalogResult::Playlists(_) | CatalogResult::HiddenSongs(_)) => {}
         Err(error) => {
@@ -429,9 +478,44 @@ pub(super) unsafe fn activate(window: HWND) {
     }
 }
 
+/// A section as a row: its title and number of entries.
+fn section_row(section: &apricot_spotify::catalog::Section) -> CatalogItem {
+    CatalogItem {
+        kind: ItemKind::Section,
+        uri: section.uri.clone(),
+        name: section.title.clone(),
+        subtitle: String::new(),
+        album: String::new(),
+        album_uri: String::new(),
+        artist_uri: String::new(),
+        duration_ms: None,
+        playable: false,
+        explicit: false,
+        uid: None,
+        saved: None,
+        count: Some(section.items.len() as u64),
+        editable: false,
+        format: String::new(),
+    }
+}
+
 /// Opens an album, playlist, artist, show, folder or Liked Songs row.
 pub(super) unsafe fn open_item(window: HWND, item: &CatalogItem) {
     let source = match item.kind {
+        ItemKind::Page => Source::Browse(Some(item.uri.clone())),
+        ItemKind::Section => {
+            let items = state(window)
+                .and_then(top)
+                .and_then(|frame| {
+                    frame
+                        .sections
+                        .iter()
+                        .find(|section| section.uri == item.uri)
+                })
+                .map(|section| section.items.clone())
+                .unwrap_or_default();
+            Source::Section(items)
+        }
         ItemKind::Album => Source::Album(item.uri.clone()),
         ItemKind::Playlist => Source::Playlist(item.uri.clone()),
         ItemKind::Artist => Source::Artist(item.uri.clone()),
@@ -508,10 +592,13 @@ pub(super) unsafe fn play(window: HWND, item: &CatalogItem, shuffle: bool) {
         if let Some(context) = context {
             insert("spotify_context", serde_json::Value::String(context));
             // Playlist uids are Connect's occurrence ids (P0); album and
-            // show uids from pathfinder are not, so those play by URI.
-            if let (Some(uid), Some(Source::Playlist(_))) =
-                (&item.uid, top(state).map(|frame| &frame.source))
-            {
+            // show uids from pathfinder are not, so those play by URI. A
+            // personal mix is made anew for every request, so Connect's
+            // copy has other uids: it plays by URI as well.
+            let by_uid = top(state).is_some_and(|frame| {
+                matches!(frame.source, Source::Playlist(_)) && !frame.personalised
+            });
+            if let (Some(uid), true) = (&item.uid, by_uid) {
                 insert("spotify_uid", serde_json::Value::String(uid.clone()));
             }
         }
@@ -616,7 +703,44 @@ pub(super) fn row_menu(state: &WindowState) -> Option<apricot_app::context_menu:
             .hidden
             .as_ref()
             .is_some_and(|hidden| hidden.contains(&item.uri)),
+        radio: matches!(
+            item.kind,
+            ItemKind::Track | ItemKind::Artist | ItemKind::Album | ItemKind::Playlist
+        ),
     })
+}
+
+/// `spotify_radio` (Ctrl+Alt+Shift+R): Spotify's radio for the selected
+/// track, artist, album or playlist, or for the playing Spotify track. The
+/// station opens as a list; Enter plays it.
+pub(super) unsafe fn radio(window: HWND) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    let target = selected_item(state)
+        .filter(|item| {
+            matches!(
+                item.kind,
+                ItemKind::Track | ItemKind::Artist | ItemKind::Album | ItemKind::Playlist
+            )
+        })
+        .map(|item| (item.uri.clone(), item.name.clone()))
+        .or_else(|| {
+            state
+                .application
+                .player_session()
+                .current_item()
+                .filter(|item| item.source == apricot_core::MediaSource::Spotify)
+                .filter(|item| item.id.0.starts_with("spotify:track:"))
+                .map(|item| (item.id.0.clone(), item.title.clone()))
+        });
+    let Some((seed, name)) = target else {
+        return;
+    };
+    let title = super::spotify::catalog(state)
+        .text("spotify_radio_title")
+        .replace("{name}", &name);
+    open(window, Source::Radio(seed), title);
 }
 
 /// `spotify_dislike` (Ctrl+Shift+H): Spotify's "Hide song" in a personal
@@ -991,6 +1115,7 @@ pub(super) unsafe fn edited(
                 saved: Some(true),
                 count: None,
                 editable: true,
+                format: String::new(),
             };
             if let Some(playlists) = &mut state.spotify_browse.playlists {
                 playlists.insert(0, created.clone());
@@ -1098,6 +1223,7 @@ pub(super) unsafe fn command(window: HWND, command: apricot_app::context_menu::C
         C::SpotifyMoveDown => move_selected(window, false),
         C::SpotifyRenamePlaylist => rename_selected(window),
         C::SpotifyHide => toggle_hidden(window),
+        C::SpotifyRadio => radio(window),
         _ => {}
     }
 }
@@ -1127,14 +1253,19 @@ mod tests {
     fn requests_continue_at_the_offset() {
         assert_eq!(
             Source::Playlist("spotify:playlist:p".into()).request(50),
-            CatalogRequest::Playlist {
+            Some(CatalogRequest::Playlist {
                 uri: "spotify:playlist:p".into(),
                 offset: 50
-            }
+            })
         );
         assert_eq!(
             Source::LikedSongs.request(100),
-            CatalogRequest::LikedSongs { offset: 100 }
+            Some(CatalogRequest::LikedSongs { offset: 100 })
+        );
+        assert_eq!(Source::Section(Vec::new()).request(0), None);
+        assert_eq!(
+            Source::Browse(None).request(0),
+            Some(CatalogRequest::BrowseAll)
         );
     }
 }

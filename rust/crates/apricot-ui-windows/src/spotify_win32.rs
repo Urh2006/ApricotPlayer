@@ -257,6 +257,34 @@ pub(super) unsafe fn activate(window: HWND) {
                 remember_hub_entry(window, entry);
                 show_playlists(window);
             }
+            Some(entry @ SpotifyHubEntry::Home) => {
+                remember_hub_entry(window, entry);
+                show_list(window, super::spotify_browse::Source::Home, "spotify_home");
+            }
+            Some(entry @ SpotifyHubEntry::DailyMixes) => {
+                remember_hub_entry(window, entry);
+                show_daily_mixes(window);
+            }
+            Some(entry @ SpotifyHubEntry::RecentlyPlayed) => {
+                remember_hub_entry(window, entry);
+                show_list(
+                    window,
+                    super::spotify_browse::Source::RecentlyPlayed,
+                    "spotify_recently_played",
+                );
+            }
+            Some(entry @ SpotifyHubEntry::Top) => {
+                remember_hub_entry(window, entry);
+                show_top(window);
+            }
+            Some(entry @ SpotifyHubEntry::Browse) => {
+                remember_hub_entry(window, entry);
+                show_list(
+                    window,
+                    super::spotify_browse::Source::Browse(None),
+                    "spotify_browse_all",
+                );
+            }
             Some(SpotifyHubEntry::Queue) => {
                 if let Some(state) = state_mut(window) {
                     state.spotify.hub_selected = Some(SpotifyHubEntry::Queue);
@@ -891,6 +919,38 @@ pub(super) unsafe fn show_liked_songs(window: HWND) {
         window,
         super::spotify_browse::Source::LikedSongs,
         "spotify_liked_songs",
+    );
+}
+
+/// The account's top tracks and artists for three periods.
+unsafe fn show_top(window: HWND) {
+    let titles = state(window).map(|state| {
+        let texts = catalog(state);
+        [
+            "spotify_top_tracks_short",
+            "spotify_top_artists_short",
+            "spotify_top_tracks_medium",
+            "spotify_top_artists_medium",
+            "spotify_top_tracks_long",
+            "spotify_top_artists_long",
+        ]
+        .map(|key| texts.text(key).to_owned())
+    });
+    if let Some(titles) = titles {
+        show_list(
+            window,
+            super::spotify_browse::Source::Top(titles),
+            "spotify_top",
+        );
+    }
+}
+
+/// `spotify_daily_mixes`: the account's Daily Mixes, found on Home.
+pub(super) unsafe fn show_daily_mixes(window: HWND) {
+    show_list(
+        window,
+        super::spotify_browse::Source::DailyMixes,
+        "spotify_daily_mixes",
     );
 }
 

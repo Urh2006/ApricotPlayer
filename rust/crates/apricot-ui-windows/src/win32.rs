@@ -2385,7 +2385,8 @@ unsafe fn execute_context_command(
         | C::SpotifyMoveDown
         | C::SpotifyCreatePlaylist
         | C::SpotifyRenamePlaylist
-        | C::SpotifyHide => spotify_browse::command(window, command),
+        | C::SpotifyHide
+        | C::SpotifyRadio => spotify_browse::command(window, command),
         C::Play | C::OpenUserPlaylist => activate_selection(window),
         C::DownloadAudio => start_active_download(window, DownloadChoice::Audio),
         C::DownloadVideo => start_active_download(window, DownloadChoice::Video),
@@ -12810,6 +12811,7 @@ unsafe fn leave_player_for_global_navigation(window: HWND, action_id: &str) {
             | "spotify_library"
             | "spotify_liked_songs"
             | "spotify_playlists"
+            | "spotify_daily_mixes"
     ) {
         return;
     }
@@ -13116,6 +13118,8 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "create_playlist" => create_user_playlist(window, None),
         "spotify_toggle_saved" => spotify_browse::toggle_saved(window),
         "spotify_dislike" => spotify_browse::toggle_hidden(window),
+        "spotify_daily_mixes" => spotify::show_daily_mixes(window),
+        "spotify_radio" => spotify_browse::radio(window),
         "add_to_playlist" => add_active_item_to_user_playlist(window),
         "remove_from_playlist" => remove_active_item_from_user_playlist(window),
         "remove_selected"

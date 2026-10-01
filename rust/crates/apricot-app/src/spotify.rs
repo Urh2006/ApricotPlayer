@@ -20,6 +20,11 @@ pub enum SpotifyHubEntry {
     Library,
     LikedSongs,
     Playlists,
+    Home,
+    DailyMixes,
+    RecentlyPlayed,
+    Top,
+    Browse,
     /// The Spotify queue, once an account is logged in.
     Queue,
     /// Spotify Connect devices, once an account is logged in.
@@ -85,6 +90,11 @@ impl SpotifyHubModel {
                 (SpotifyHubEntry::Library, "spotify_library"),
                 (SpotifyHubEntry::LikedSongs, "spotify_liked_songs"),
                 (SpotifyHubEntry::Playlists, "spotify_playlists"),
+                (SpotifyHubEntry::Home, "spotify_home"),
+                (SpotifyHubEntry::DailyMixes, "spotify_daily_mixes"),
+                (SpotifyHubEntry::RecentlyPlayed, "spotify_recently_played"),
+                (SpotifyHubEntry::Top, "spotify_top"),
+                (SpotifyHubEntry::Browse, "spotify_browse_all"),
             ] {
                 items.push(SpotifyHubItem {
                     entry,
@@ -358,7 +368,8 @@ pub fn kind_word(catalog: &TranslationCatalog, kind: ItemKind) -> String {
             ItemKind::User => "spotify_kind_user",
             ItemKind::Folder => "spotify_kind_folder",
             ItemKind::LikedSongs => "spotify_kind_liked_songs",
-            ItemKind::Genre => "spotify_kind_genre",
+            ItemKind::Genre | ItemKind::Page => "spotify_kind_genre",
+            ItemKind::Section => "spotify_kind_section",
             ItemKind::Unavailable => "spotify_unavailable",
         })
         .to_owned()
@@ -399,11 +410,12 @@ pub fn item_label(
         parts.push(item.subtitle.clone());
     }
     if let Some(count) = item.count {
-        parts.push(
-            catalog
-                .text("spotify_song_count")
-                .replace("{count}", &count.to_string()),
-        );
+        let key = if item.kind == ItemKind::Section {
+            "spotify_item_count"
+        } else {
+            "spotify_song_count"
+        };
+        parts.push(catalog.text(key).replace("{count}", &count.to_string()));
     }
     if let Some(duration) = item.duration_ms.filter(|_| item.kind.is_playable_item()) {
         parts.push(duration_text(duration));
@@ -500,6 +512,11 @@ mod tests {
                 SpotifyHubEntry::Library,
                 SpotifyHubEntry::LikedSongs,
                 SpotifyHubEntry::Playlists,
+                SpotifyHubEntry::Home,
+                SpotifyHubEntry::DailyMixes,
+                SpotifyHubEntry::RecentlyPlayed,
+                SpotifyHubEntry::Top,
+                SpotifyHubEntry::Browse,
                 SpotifyHubEntry::Queue,
                 SpotifyHubEntry::Devices,
                 SpotifyHubEntry::Accounts
@@ -507,9 +524,11 @@ mod tests {
         );
         assert_eq!(model.items[0].label, "Search\tCtrl+Alt+Shift+Y");
         assert_eq!(model.items[2].label, "Liked Songs\tCtrl+Alt+Shift+F");
-        assert_eq!(model.items[4].label, "Spotify queue\tCtrl+Alt+Shift+Q");
-        assert_eq!(model.items[5].label, "Spotify devices\tCtrl+Alt+Shift+O");
-        assert!(model.items[6].label.ends_with("\tCtrl+Alt+Shift+C"));
+        assert_eq!(model.items[4].label, "Home");
+        assert_eq!(model.items[5].label, "Daily Mixes\tCtrl+Alt+Shift+M");
+        assert_eq!(model.items[9].label, "Spotify queue\tCtrl+Alt+Shift+Q");
+        assert_eq!(model.items[10].label, "Spotify devices\tCtrl+Alt+Shift+O");
+        assert!(model.items[11].label.ends_with("\tCtrl+Alt+Shift+C"));
     }
 
     fn catalog_item(kind: ItemKind, name: &str, subtitle: &str) -> CatalogItem {
@@ -528,6 +547,7 @@ mod tests {
             saved: None,
             count: None,
             editable: false,
+            format: String::new(),
         }
     }
 

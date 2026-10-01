@@ -108,6 +108,7 @@ impl ActionFinderModel {
             labels.item("shortcut_spotify_library", "spotify_library"),
             labels.item("shortcut_spotify_liked_songs", "spotify_liked_songs"),
             labels.item("shortcut_spotify_playlists", "spotify_playlists"),
+            labels.item("shortcut_spotify_daily_mixes", "spotify_daily_mixes"),
             labels.item("spotify_queue", "spotify_queue"),
             labels.item("spotify_devices", "spotify_devices"),
             labels.item("play_folder", "open_play_from_folder"),
@@ -273,6 +274,7 @@ mod tests {
                 "spotify_library",
                 "spotify_liked_songs",
                 "spotify_playlists",
+                "spotify_daily_mixes",
                 "spotify_queue",
                 "spotify_devices",
                 "open_play_from_folder",
@@ -317,7 +319,7 @@ mod tests {
         ] {
             assert!(!ids.contains(&id), "{id}");
         }
-        assert_eq!(ids.len(), 24);
+        assert_eq!(ids.len(), 25);
     }
 
     #[test]

@@ -184,6 +184,8 @@ pub const ACTIONS: &[ActionDefinition] = &[
     action!("spotify_devices", "Ctrl+Alt+Shift+O", GLOBAL),
     action!("spotify_toggle_saved", "Ctrl+Shift+I", LIST_PLAYER),
     action!("spotify_dislike", "Ctrl+Shift+H", LIST_PLAYER),
+    action!("spotify_daily_mixes", "Ctrl+Alt+Shift+M", GLOBAL),
+    action!("spotify_radio", "Ctrl+Alt+Shift+R", LIST_PLAYER),
 ];
 
 /// Number of leading [`ACTIONS`] that mirror the Python 1.0.21 catalog.
@@ -205,7 +207,7 @@ mod tests {
     fn baseline_contains_91_unique_actions() {
         let ids: HashSet<_> = ACTIONS.iter().map(|action| action.id.as_str()).collect();
         assert_eq!(PYTHON_BASELINE_ACTIONS, 91);
-        assert_eq!(ACTIONS.len(), PYTHON_BASELINE_ACTIONS + 10);
+        assert_eq!(ACTIONS.len(), PYTHON_BASELINE_ACTIONS + 12);
         assert_eq!(ids.len(), ACTIONS.len());
         assert!(
             ACTIONS[PYTHON_BASELINE_ACTIONS..]

@@ -257,6 +257,7 @@ pub const CONTEXT_MENUS: &[ContextMenuDefinition] = &[
             "spotify_like",
             "spotify_save_library",
             "spotify_hide_song",
+            "spotify_radio",
             "spotify_add_to_playlist",
             "move_up",
             "move_down",

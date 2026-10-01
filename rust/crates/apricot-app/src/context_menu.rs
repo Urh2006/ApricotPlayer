@@ -77,6 +77,7 @@ pub enum ContextCommand {
     SpotifyCreatePlaylist,
     SpotifyRenamePlaylist,
     SpotifyHide,
+    SpotifyRadio,
 }
 
 /// One row of a context menu.
@@ -408,6 +409,8 @@ pub struct SpotifyRowMenu {
     /// A track in a personal mix: Spotify's "Hide song" applies.
     pub hide: bool,
     pub hidden: bool,
+    /// A track, artist, album or playlist Spotify makes a radio for.
+    pub radio: bool,
 }
 
 /// Spotify lists: Play or Open first, then Shuffle play, Add to Spotify
@@ -488,6 +491,13 @@ pub fn spotify_browse_context_menu(
             "spotify_create_playlist",
             "create_playlist",
             C::SpotifyCreatePlaylist,
+        ));
+    }
+    if menu.radio {
+        entries.push(context.command_with_shortcut(
+            "spotify_radio",
+            "spotify_radio",
+            C::SpotifyRadio,
         ));
     }
     if menu.album {
