@@ -567,6 +567,33 @@ pub(super) unsafe fn play(window: HWND, item: &CatalogItem, shuffle: bool) {
         set_status(state, &text, true);
         return;
     }
+    if let Some(media) = media_for(state, item, shuffle) {
+        super::spotify::play_track(window, media);
+    }
+}
+
+/// The selected row as an Apricot item, for Favorites, Apricot playlists
+/// and the other shared actions: a track or episode in the context of its
+/// list, or an album, playlist, artist or show that plays as a whole.
+pub(super) fn selected_media(state: &WindowState) -> Option<apricot_core::MediaItem> {
+    let item = selected_item(state)?;
+    if item.kind == ItemKind::Unavailable || apricot_core::SpotifyRef::parse(&item.uri).is_none() {
+        return None;
+    }
+    media_for(state, item, false)
+}
+
+fn media_for(
+    state: &WindowState,
+    item: &CatalogItem,
+    shuffle: bool,
+) -> Option<apricot_core::MediaItem> {
+    let liked_songs = || {
+        state
+            .spotify
+            .service_ref()
+            .and_then(|service| service.liked_songs_context())
+    };
     let track = SpotifyTrack {
         uri: item.uri.clone(),
         title: item.name.clone(),
@@ -583,9 +610,7 @@ pub(super) unsafe fn play(window: HWND, item: &CatalogItem, shuffle: bool) {
     };
     if item.kind.is_playable_item() {
         let context = match top(state).map(|frame| &frame.source) {
-            Some(Source::LikedSongs) => {
-                super::spotify::service(window).and_then(|service| service.liked_songs_context())
-            }
+            Some(Source::LikedSongs) => liked_songs(),
             Some(source) => source.context().map(str::to_owned),
             None => None,
         };
@@ -604,13 +629,11 @@ pub(super) unsafe fn play(window: HWND, item: &CatalogItem, shuffle: bool) {
         }
     } else {
         let context = if item.kind == ItemKind::LikedSongs {
-            super::spotify::service(window).and_then(|service| service.liked_songs_context())
+            liked_songs()
         } else {
             Some(item.uri.clone())
         };
-        let Some(context) = context else {
-            return;
-        };
+        let context = context?;
         insert("spotify_context", serde_json::Value::String(context));
         // The first track is not known yet: the item becomes the track
         // Spotify starts, with its own "Playing" announcement.
@@ -619,7 +642,7 @@ pub(super) unsafe fn play(window: HWND, item: &CatalogItem, shuffle: bool) {
     if shuffle {
         insert("spotify_shuffle", serde_json::Value::Bool(true));
     }
-    super::spotify::play_track(window, media);
+    Some(media)
 }
 
 /// Escape and Back: one level up, to the row the user came from.

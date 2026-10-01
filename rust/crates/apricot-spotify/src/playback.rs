@@ -777,6 +777,71 @@ impl SpotifyPlayback {
     }
 }
 
+/// The Connect load request for an Apricot item: its context at the exact
+/// occurrence (or the track), a whole album, playlist, artist or show, or a
+/// single track.
+fn load_request(item: &MediaItem, uri: String, position_ms: u32, paused: bool) -> LoadRequest {
+    let text = |key: &str| {
+        item.metadata
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    // An album, playlist, artist or show saved as an item plays whole.
+    let collection_uri = SpotifyRef::parse(&uri)
+        .filter(|reference| {
+            !matches!(
+                reference.kind,
+                SpotifyEntityKind::Track | SpotifyEntityKind::Episode
+            )
+        })
+        .map(|_| uri.clone());
+    if let Some(context) = text("spotify_context").or(collection_uri) {
+        // The exact occurrence when known, otherwise the track itself; a
+        // whole album or playlist lets Spotify choose (shuffle).
+        let whole = item
+            .metadata
+            .get("spotify_collection")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+            || context == uri;
+        let playing_track = if whole {
+            None
+        } else {
+            text("spotify_uid")
+                .map(PlayingTrack::Uid)
+                .or(Some(PlayingTrack::Uri(uri)))
+        };
+        let shuffle = item
+            .metadata
+            .get("spotify_shuffle")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        LoadRequest::from_context_uri(
+            context,
+            LoadRequestOptions {
+                start_playing: !paused,
+                seek_to: position_ms,
+                context_options: Some(LoadContextOptions::Options(ConnectOptions {
+                    shuffle,
+                    ..ConnectOptions::default()
+                })),
+                playing_track,
+            },
+        )
+    } else {
+        LoadRequest::from_tracks(
+            vec![uri],
+            LoadRequestOptions {
+                start_playing: !paused,
+                seek_to: position_ms,
+                ..LoadRequestOptions::default()
+            },
+        )
+    }
+}
+
 impl PcmSource for SpotifyPlayback {
     fn start(
         &self,
@@ -826,55 +891,7 @@ impl PcmSource for SpotifyPlayback {
             .ok_or_else(|| "spotify_unplayable".to_owned())?;
         self.shared.requested.store(true, Ordering::SeqCst);
         log::info!("start requested at {position_ms} ms, paused {paused}");
-        let text = |key: &str| {
-            item.metadata
-                .get(key)
-                .and_then(serde_json::Value::as_str)
-                .filter(|value| !value.is_empty())
-                .map(str::to_owned)
-        };
-        let request = if let Some(context) = text("spotify_context") {
-            // The exact occurrence when known, otherwise the track itself; a
-            // whole album or playlist lets Spotify choose (shuffle).
-            let whole = item
-                .metadata
-                .get("spotify_collection")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            let playing_track = if whole {
-                None
-            } else {
-                text("spotify_uid")
-                    .map(PlayingTrack::Uid)
-                    .or(Some(PlayingTrack::Uri(uri)))
-            };
-            let shuffle = item
-                .metadata
-                .get("spotify_shuffle")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            LoadRequest::from_context_uri(
-                context,
-                LoadRequestOptions {
-                    start_playing: !paused,
-                    seek_to: position_ms,
-                    context_options: Some(LoadContextOptions::Options(ConnectOptions {
-                        shuffle,
-                        ..ConnectOptions::default()
-                    })),
-                    playing_track,
-                },
-            )
-        } else {
-            LoadRequest::from_tracks(
-                vec![uri],
-                LoadRequestOptions {
-                    start_playing: !paused,
-                    seek_to: position_ms,
-                    ..LoadRequestOptions::default()
-                },
-            )
-        };
+        let request = load_request(item, uri, position_ms, paused);
         let mut result = Err("spotify_not_connected".to_owned());
         self.with_spirc(|spirc| {
             result = spirc

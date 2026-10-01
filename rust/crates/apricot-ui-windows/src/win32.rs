@@ -693,6 +693,7 @@ unsafe fn register_secondary_window_classes() -> Result<()> {
     crate::spotify_queue_win32::register()?;
     crate::spotify_devices_win32::register()?;
     crate::spotify_search_win32::register()?;
+    crate::spotify_settings_win32::register()?;
     crate::download_progress_win32::register()
 }
 
@@ -12067,6 +12068,7 @@ unsafe fn copy_diagnostic_report(window: HWND) {
     };
     let mut sections =
         apricot_app::diagnostic_report::diagnostic_sections(&state.application, &environment);
+    sections.push(spotify::diagnostic_section(window));
     let data_folder = state
         .application
         .settings_file()
@@ -12086,9 +12088,14 @@ unsafe fn copy_diagnostic_report(window: HWND) {
         }
         let mpv_log = data_folder.join("mpv.log");
         let updater_log = data_folder.join("updater.log");
+        let spotify_log = data_folder.join("spotify").join("spotify.log");
         let report = apricot_app::diagnostic_report::DiagnosticRedactor::from_environment().report(
             &sections,
-            &[("mpv.log", &mpv_log), ("updater.log", &updater_log)],
+            &[
+                ("mpv.log", &mpv_log),
+                ("updater.log", &updater_log),
+                ("spotify.log", &spotify_log),
+            ],
         );
         let _ = sender.send(report);
     });
@@ -13280,6 +13287,9 @@ unsafe fn active_media_item(window: HWND) -> Option<apricot_core::MediaItem> {
     }
     if audiovault::is_view(state.view) {
         return audiovault::selected_item(state);
+    }
+    if state.view == MainView::SpotifyBrowse {
+        return spotify_browse::selected_media(state);
     }
     match list_view(state) {
         MainView::Results | MainView::Trending => {
@@ -16633,9 +16643,25 @@ unsafe fn show_player_lyrics(window: HWND) {
     let unavailable = catalog.text("no_lyrics_available").to_owned();
     let online = state.application.settings().enable_online_lyrics;
     let proxy = state.application.settings().proxy.clone();
+    // Spotify items read Spotify's own (timed) lyrics first.
+    let spotify = (item.source == apricot_core::MediaSource::Spotify)
+        .then(|| state.spotify.service_ref().cloned())
+        .flatten();
+    let spotify_source = catalog.text("lyrics_source_spotify").to_owned();
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         use apricot_platform::lyrics::{LyricsQuery, LyricsSource, fetch_lyrics};
+        if let Some((text, provider)) = spotify
+            .as_ref()
+            .and_then(|service| service.lyrics_blocking(&item.id.0))
+        {
+            let source = spotify_source.replace("{provider}", &provider);
+            let _ = sender.send(Some(apricot_media::lyrics::LyricsDocument::parse(
+                &text,
+                source.trim_end_matches([',', ' ']),
+            )));
+            return;
+        }
         let query = LyricsQuery::from_item(&item);
         let text = fetch_lyrics(
             item.local_path.as_deref().map(std::path::Path::new),

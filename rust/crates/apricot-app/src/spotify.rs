@@ -25,6 +25,7 @@ pub enum SpotifyHubEntry {
     RecentlyPlayed,
     Top,
     Browse,
+    Settings,
     /// The Spotify queue, once an account is logged in.
     Queue,
     /// Spotify Connect devices, once an account is logged in.
@@ -125,6 +126,10 @@ impl SpotifyHubModel {
                 ),
             });
         }
+        items.push(SpotifyHubItem {
+            entry: SpotifyHubEntry::Settings,
+            label: catalog.text("spotify_settings").to_owned(),
+        });
         if !accounts.accounts.is_empty() {
             items.push(SpotifyHubItem {
                 entry: SpotifyHubEntry::Accounts,
@@ -484,7 +489,7 @@ mod tests {
     }
 
     #[test]
-    fn hub_without_accounts_offers_only_login() {
+    fn hub_without_accounts_offers_login_and_settings() {
         let model = SpotifyHubModel::build(
             &english_catalog(),
             &SpotifyAccounts::default(),
@@ -492,8 +497,8 @@ mod tests {
             &BTreeMap::new(),
         );
         assert_eq!(model.accessible_name, "Spotify");
-        assert_eq!(model.items.len(), 1);
-        assert_eq!(model.items[0].entry, SpotifyHubEntry::LogIn);
+        let entries: Vec<_> = model.items.iter().map(|item| item.entry).collect();
+        assert_eq!(entries, [SpotifyHubEntry::LogIn, SpotifyHubEntry::Settings]);
     }
 
     #[test]
@@ -519,6 +524,7 @@ mod tests {
                 SpotifyHubEntry::Browse,
                 SpotifyHubEntry::Queue,
                 SpotifyHubEntry::Devices,
+                SpotifyHubEntry::Settings,
                 SpotifyHubEntry::Accounts
             ]
         );
@@ -528,7 +534,8 @@ mod tests {
         assert_eq!(model.items[5].label, "Daily Mixes\tCtrl+Alt+Shift+M");
         assert_eq!(model.items[9].label, "Spotify queue\tCtrl+Alt+Shift+Q");
         assert_eq!(model.items[10].label, "Spotify devices\tCtrl+Alt+Shift+O");
-        assert!(model.items[11].label.ends_with("\tCtrl+Alt+Shift+C"));
+        assert_eq!(model.items[11].label, "Spotify settings");
+        assert!(model.items[12].label.ends_with("\tCtrl+Alt+Shift+C"));
     }
 
     fn catalog_item(kind: ItemKind, name: &str, subtitle: &str) -> CatalogItem {
@@ -700,8 +707,15 @@ mod tests {
         };
         let model = SpotifyHubModel::build(&english_catalog(), &accounts, false, &BTreeMap::new());
         let entries: Vec<_> = model.items.iter().map(|item| item.entry).collect();
-        assert_eq!(entries, [SpotifyHubEntry::LogIn, SpotifyHubEntry::Accounts]);
-        assert!(!model.items[1].label.contains('\t'));
+        assert_eq!(
+            entries,
+            [
+                SpotifyHubEntry::LogIn,
+                SpotifyHubEntry::Settings,
+                SpotifyHubEntry::Accounts
+            ]
+        );
+        assert!(!model.items[2].label.contains('\t'));
     }
 
     #[test]

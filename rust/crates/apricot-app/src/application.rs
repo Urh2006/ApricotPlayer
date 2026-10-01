@@ -197,6 +197,16 @@ impl Application {
     }
 
     pub fn playback_resume_position(&self, item: &MediaItem) -> Option<f64> {
+        // Spotify music starts at the beginning, spoken content resumes
+        // (`docs/SPOTIFY_PLAN.md` D14).
+        let spoken = item
+            .metadata
+            .get("kind")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|kind| kind == "spotify_episode");
+        if item.source == apricot_core::MediaSource::Spotify && !spoken {
+            return None;
+        }
         self.state
             .playback_positions
             .resume_position(item, self.settings.current().resume_playback)

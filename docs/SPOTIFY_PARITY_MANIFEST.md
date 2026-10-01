@@ -28,7 +28,7 @@ pathfinder GraphQL, **AP** = Apricot sama. Faza pove, kdaj se implementira.
 | S15 | Kakovost, normalizacija | LS PlayerConfig (96/160/320, normalizacija) | source_verified | 8, 9 | P2 |
 | S16 | EQ, boost, speed, pitch, izhod | AP mpv filtri na PCM mostu | implemented (Spotify PCM gre skozi Apricotov libmpv: EQ, hitrost, višina tona, glasnost, izhod); hitrost live_verified, slušni R18 open | 8 | P2 |
 | S17 | Medijske informacije | LS metadata, PF `getAlbum`/`getTrack` | implemented (naslov, izvajalec, album, dolžina; format Ogg Vorbis 320 kbps) | 3 | P4 |
-| S18 | Resume, bookmarks | AP + vsebinska ura mostu | source_verified (ura) | 8 | P6 |
+| S18 | Resume, bookmarks | AP + vsebinska ura mostu | implemented (glasba se začne na začetku, epizode nadaljujejo, D14; zaznamki uporabljajo vsebinsko uro mostu); live_verified začetek na 0 iz priljubljenih | 8 | P6 |
 | S19 | Iskanje vseh tipov | PF `searchDesktop` (+ `searchTracks` ... `searchAudiobooks`) | implemented in live_verified (dialog Iskanje po Spotifyju, Ctrl+Alt+Shift+Y: vse vrste, pri Vse ima vsaka vrstica vrsto) | 3 | P4 |
 | S20 | Filtri, strani | PF search type-specific queries z offset/limit | implemented in live_verified (vrste, strani se naložijo na zadnji vrstici, kot Apricotovi rezultati); lokalni filter open | 3 | P4 |
 | S21 | Album, izvajalec, related | PF `getAlbum`, `queryArtistOverview` (top 10, related 20, diskografija) | implemented in live_verified (izvajalec: priljubljene skladbe, albumi, singli, kompilacije, sorodni izvajalci; album s točno skladbo) | 3 | P4 |
@@ -55,16 +55,16 @@ pathfinder GraphQL, **AP** = Apricot sama. Faza pove, kdaj se implementira.
 | S42 | Spremembe s telefona | SP pubsub `hm://playlist/v2/playlist/` | open (sprememba s telefona se pokaže ob ponovnem odprtju seznama) | 4 | P4 |
 | S43 | Oddaje in epizode | PF `queryPodcastEpisodes`, search podcasts/episodes | implemented (odpiranje oddaje in predvajanje epizode z nadaljevanjem); live_verified iskanje oddaj in epizod | 3 | P6 |
 | S44 | Audiobooks | PF `queryBookChapters`, metadata `is_audiobook` | source_verified; open (upravičenost) | 9 | P6 |
-| S45 | Lyrics | SP `color-lyrics/v2` (vrstice s časi) | live_verified | 3 | P6 |
-| S46 | Transcript, poglavja | SP `transcript-read-along/v2` | open | 9 | P6 |
+| S45 | Lyrics | SP `color-lyrics/v2` (vrstice s časi) | implemented in live_verified (Ctrl+Shift+Y v predvajalniku: Spotifyjeva časovno usklajena besedila, vir "Spotify lyrics, Musixmatch"; brez njih Apricotovi viri) | 3 | P6 |
+| S46 | Transcript, poglavja | SP `transcript-read-along/v2` | open (Spotify transcript-read-along za preizkušeno epizodo vrne 404; poglavja ni v adapterju) | 9 | P6 |
 | S47 | Cover, credits, explicit | PF `getAlbum` (copyright, coverArt), LS metadata | live_verified | 3 | P4 |
-| S48 | Preview | LS `get_audio_preview` | source_verified | 1 | P6 |
-| S49 | Lokalne datoteke | LS local_file_directories; Connect jih zavrne | source_verified (omejitev) | 9 | P6 |
+| S48 | Preview | LS `get_audio_preview` | open (ni v obsegu brez odločitve: predogled ni nadomestilo polnega predvajanja) | 1 | P6 |
+| S49 | Lokalne datoteke | LS local_file_directories; Connect jih zavrne | service_unsupported (Connect zavrne lokalne datoteke, P0) | 9 | P6 |
 | S50 | URI, open.spotify.com URL | AP parser | implemented (`SpotifyRef`; Direct link predvaja povezave skladb in epizod, druge vrste v naslednjih fazah) | - | P1 |
-| S51 | Favorites, zgodovina, mešani playlisti | AP | open | - | P6 |
+| S51 | Favorites, zgodovina, mešani playlisti | AP | implemented in live_verified (Ctrl+F doda Spotify skladbo ali album med Apricotove priljubljene, Enter predvaja skladbo od začetka oziroma cel album; zgodovina in Apricotovi seznami uporabljajo isto postavko); open (mešana Apricot zaporedja s Spotify autoplay, R16) | - | P6 |
 | S52 | Background player, tray, media keys | AP | open | - | P2 |
-| S53 | Cache, offline, čiščenje | LS Cache (limit), AP ločitev credentials | source_verified | 1 | P6 |
-| S54 | Diagnostika brez skrivnosti | AP (redakcija kot v evidenci P0) | source_verified (orodje) | uvod | P6 |
+| S53 | Cache, offline, čiščenje | LS Cache (limit), AP ločitev credentials | implemented (LibreSpot zvočni predpomnilnik je izklopljen, ker bi poverilnice shranil v čistem besedilu; ostane samo predpomnilnik imen operacij `spotify/pathfinder.json`); čiščenje open | 1 | P6 |
+| S54 | Diagnostika brez skrivnosti | AP (redakcija kot v evidenci P0) | implemented (diagnostično poročilo: razdelek Spotify brez imen, žetonov in povezav ter rep spotify.log) | uvod | P6 |
 | S55 | Tipkovnica, NVDA, meniji, lokalizacija | AP | implemented za hub, račune in prijavo (dve dejanji z bližnjicama, kontekstni meni, Action Finder, 27 jezikov); ostalo po fazah | - | P1-P7 |
 
 ## Meje (razdelek 3.5 plana)
@@ -89,3 +89,4 @@ Wrapped: `open`, brez znanega vmesnika v P0.
 | SD-8 | 1. 10. 2026 | P3b: naprave so modalni dialog kot vrsta. Popravek `librespot-connect` objavi seznam naprav iz vsakega prejetega clusterja in samo glasnost, ki jo nastavi druga naprava, zato Apricot sledi telefonu brez zanke; telefon nad 100 % (Apricotov boost) vidi 100 %. |
 | SD-9 | 1. 10. 2026 | P4: Spotify seznami so en zaslon glavnega okna s skladom okvirjev (iskanje, knjižnica, albumi, playlisti, izvajalci, oddaje), Escape gre en nivo nazaj na isto vrstico. Iskanje je dialog (poizvedba in vrsta). Skladba se predvaja v kontekstu svojega seznama; v playlistu po uid (Connect ga pozna), v albumu, oddaji in pri izvajalcu po URI, ker pathfinder uid tam ni Connectov. Urh je 1. 10. 2026 dovolil spremembe računa; vse so bile preizkušene v živo in razveljavljene. |
 | SD-10 | 1. 10. 2026 | P5: Domov, Daily Mixes, Nedavno predvajano, Tvoji najbolj poslušani in Brskanje so seznami v istem skladu okvirjev; razdelki so vrstice z imenom in številom elementov. Skladba v osebnem miksu se začne po URI, ne po uid, ker Connect mix sestavi znova z drugimi uid. |
+| SD-11 | 2. 10. 2026 | P6: nastavitve Spotify (kakovost 96/160/320, izenačevanje glasnosti, samodejno predvajanje: nastavitev računa, vklop, izklop) so dialog v Spotify meniju, shranjene v `spotify/settings.json`; veljajo ob povezavi, brez predvajanja Spotify se račun takoj znova poveže. Spotify album ali seznam med Apricotovimi priljubljenimi se predvaja cel. |

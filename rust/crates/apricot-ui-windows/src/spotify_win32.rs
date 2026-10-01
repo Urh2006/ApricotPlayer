@@ -86,6 +86,11 @@ pub(super) const fn is_view(view: MainView) -> bool {
 }
 
 impl SpotifyState {
+    /// The session runtime once it started.
+    pub(super) const fn service_ref(&self) -> Option<&Arc<SpotifyService>> {
+        self.service.as_ref()
+    }
+
     /// A request stamp of the current account.
     pub(super) fn epochs_begin(&mut self) -> SpotifyStamp {
         self.epochs.begin()
@@ -276,6 +281,10 @@ pub(super) unsafe fn activate(window: HWND) {
             Some(entry @ SpotifyHubEntry::Top) => {
                 remember_hub_entry(window, entry);
                 show_top(window);
+            }
+            Some(entry @ SpotifyHubEntry::Settings) => {
+                remember_hub_entry(window, entry);
+                show_settings(window);
             }
             Some(entry @ SpotifyHubEntry::Browse) => {
                 remember_hub_entry(window, entry);
@@ -920,6 +929,108 @@ pub(super) unsafe fn show_liked_songs(window: HWND) {
         super::spotify_browse::Source::LikedSongs,
         "spotify_liked_songs",
     );
+}
+
+/// Spotify settings: quality, normalisation and autoplay. They apply when
+/// the session connects; with nothing of Spotify playing it reconnects now.
+unsafe fn show_settings(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let texts = catalog(state);
+    let settings_texts = crate::spotify_settings_win32::SettingsTexts {
+        title: texts.text("spotify_settings"),
+        quality: texts.text("spotify_quality"),
+        qualities: [
+            texts.text("spotify_quality_normal"),
+            texts.text("spotify_quality_high"),
+            texts.text("spotify_quality_very_high"),
+        ],
+        normalisation: texts.text("spotify_normalisation"),
+        autoplay: texts.text("spotify_autoplay"),
+        autoplays: [
+            texts.text("spotify_autoplay_account"),
+            texts.text("spotify_autoplay_on"),
+            texts.text("spotify_autoplay_off"),
+        ],
+        ok: texts.text("ok"),
+        cancel: texts.text("cancel"),
+    };
+    // The service sets the settings folder when it starts.
+    let _ = service(window);
+    let current = apricot_spotify::settings::load();
+    if let Some(state) = state_mut(window) {
+        state.modal_open = true;
+    }
+    let result = crate::spotify_settings_win32::show(window, &settings_texts, current);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state.modal_open = false;
+    resume_deferred_window_work(window);
+    let _ = SetFocus(Some(super::active_primary_control(state)));
+    let chosen = match result {
+        Ok(Some(chosen)) => chosen,
+        Ok(None) => return,
+        Err(error) => {
+            show_error_message(window, &format!("Spotify settings did not open: {error}"));
+            return;
+        }
+    };
+    if chosen == current {
+        return;
+    }
+    if let Err(error) = apricot_spotify::settings::save(&chosen) {
+        let text = texts
+            .text("spotify_error_storage")
+            .replace("{error}", &error);
+        announce(window, &text);
+        return;
+    }
+    let session = state.application.player_session();
+    let spotify_plays = session.is_open()
+        && session
+            .current_item()
+            .is_some_and(|item| item.source == apricot_core::MediaSource::Spotify);
+    let key = if spotify_plays {
+        "spotify_settings_saved_later"
+    } else {
+        "spotify_settings_saved"
+    };
+    let text = texts.text(key).to_owned();
+    if !spotify_plays
+        && state
+            .spotify
+            .service_ref()
+            .is_some_and(|service| service.connected_account().is_some())
+    {
+        autoconnect(window);
+    }
+    announce(window, &text);
+}
+
+/// The Spotify part of the diagnostic report: no names, tokens or links.
+pub(super) unsafe fn diagnostic_section(
+    window: HWND,
+) -> apricot_app::diagnostic_report::DiagnosticSection {
+    let accounts = accounts(window);
+    let connected = state(window)
+        .and_then(|state| state.spotify.service_ref())
+        .and_then(|service| service.connected_account())
+        .is_some();
+    let active = apricot_app::spotify::active_account(&accounts);
+    let settings = apricot_spotify::settings::load();
+    apricot_app::diagnostic_report::DiagnosticSection::new("## Spotify")
+        .line("Saved accounts", accounts.accounts.len().to_string())
+        .line("Active account logged in", active.is_some())
+        .line(
+            "Premium",
+            active.is_some_and(apricot_spotify::SpotifyAccount::is_premium),
+        )
+        .line("Connected", connected)
+        .line("Quality kbps", settings.quality.kbps().to_string())
+        .line("Normalisation", settings.normalisation)
+        .line("Autoplay", format!("{:?}", settings.autoplay))
 }
 
 /// The account's top tracks and artists for three periods.

@@ -534,10 +534,7 @@ pub async fn top_content(
     titles: [&str; 6],
 ) -> Result<Vec<Section>, ApiError> {
     let mut sections = Vec::new();
-    for (period, range) in ["SHORT_TERM", "MID_TERM", "LONG_TERM"]
-        .iter()
-        .enumerate()
-    {
+    for (period, range) in ["SHORT_TERM", "MID_TERM", "LONG_TERM"].iter().enumerate() {
         let input = json!({ "offset": 0, "limit": 50, "sortBy": "AFFINITY", "timeRange": range });
         let data = api
             .pathfinder(
@@ -572,6 +569,67 @@ pub async fn top_content(
         }
     }
     Ok(sections)
+}
+
+/// Spotify's lyrics of a track as LRC text (`[mm:ss.cc]line` when Spotify
+/// times the lines) and the lyrics provider; `None` when Spotify has none.
+pub async fn lyrics(
+    api: &Api,
+    session: &Session,
+    uri: &str,
+) -> Result<Option<(String, String)>, ApiError> {
+    let Some(id) = uri.strip_prefix("spotify:track:") else {
+        return Ok(None);
+    };
+    let answer = match api
+        .spclient(
+            session,
+            reqwest::Method::GET,
+            &format!(
+                "/color-lyrics/v2/track/{id}?format=json&vocalRemoval=false&market=from_token"
+            ),
+            None,
+        )
+        .await
+    {
+        Err(ApiError::Status(404)) => return Ok(None),
+        other => other?,
+    };
+    Ok(lyrics_text(&answer))
+}
+
+/// LRC text and provider of a `color-lyrics` answer.
+pub fn lyrics_text(answer: &Value) -> Option<(String, String)> {
+    let lyrics = answer.get("lyrics")?;
+    let synced = text(lyrics, "/syncType") == "LINE_SYNCED";
+    let lines: Vec<String> = lyrics
+        .get("lines")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|line| {
+            let words = text(line, "/words").trim();
+            if words.is_empty() || words == "\u{266a}" {
+                return None;
+            }
+            if !synced {
+                return Some(words.to_owned());
+            }
+            let start: u64 = text(line, "/startTimeMs").parse().ok()?;
+            let (minutes, seconds, hundredths) =
+                (start / 60_000, (start / 1000) % 60, (start % 1000) / 10);
+            Some(format!(
+                "[{minutes:02}:{seconds:02}.{hundredths:02}]{words}"
+            ))
+        })
+        .collect();
+    (!lines.is_empty()).then(|| {
+        let provider = lyrics
+            .get("providerDisplayName")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        (lines.join("\n"), provider)
+    })
 }
 
 /// Spotify's radio for a track, artist, album or playlist: the URI of the
@@ -1198,6 +1256,25 @@ mod tests {
         assert_eq!(sections[0].items[0].format, "daily-mix");
         assert_eq!(sections[1].items[0].kind, ItemKind::Page);
         assert_eq!(sections[1].items[0].name, "Music");
+    }
+
+    #[test]
+    fn synced_lyrics_become_lrc_lines() {
+        let answer = json!({ "lyrics": {
+            "syncType": "LINE_SYNCED",
+            "providerDisplayName": "Musixmatch",
+            "lines": [
+                { "startTimeMs": "140", "words": "Is this the real life?" },
+                { "startTimeMs": "65230", "words": "\u{266a}" },
+                { "startTimeMs": "125990", "words": "Mama" }
+            ]
+        }});
+        let (text, provider) = lyrics_text(&answer).unwrap();
+        assert_eq!(text, "[00:00.14]Is this the real life?\n[02:05.99]Mama");
+        assert_eq!(provider, "Musixmatch");
+        let plain = json!({ "lyrics": { "syncType": "UNSYNCED", "lines": [{ "words": "Line" }] } });
+        assert_eq!(lyrics_text(&plain).unwrap().0, "Line");
+        assert_eq!(lyrics_text(&json!({})), None);
     }
 
     #[test]

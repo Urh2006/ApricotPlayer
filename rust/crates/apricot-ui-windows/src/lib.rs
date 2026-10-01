@@ -64,6 +64,8 @@ mod spotify_queue_win32;
 #[cfg(windows)]
 mod spotify_search_win32;
 #[cfg(windows)]
+mod spotify_settings_win32;
+#[cfg(windows)]
 mod update_win32;
 #[cfg(windows)]
 mod win32;

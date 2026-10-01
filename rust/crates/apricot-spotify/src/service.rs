@@ -255,6 +255,7 @@ impl SpotifyService {
     pub fn new(app_data: &Path, notify: Notify) -> (Self, Receiver<SpotifyEvent>) {
         install_tls_provider();
         crate::diagnostics::install(app_data);
+        crate::settings::set_folder(app_data);
         let (sender, receiver) = mpsc::channel();
         (
             Self {
@@ -464,6 +465,19 @@ impl SpotifyService {
     pub fn liked_songs_context(&self) -> Option<String> {
         self.active_session()
             .map(|session| format!("spotify:user:{}:collection", session.username()))
+    }
+
+    /// Spotify's lyrics of `uri` (LRC text and provider). Blocks: call it
+    /// on a worker thread, never on the UI thread.
+    pub fn lyrics_blocking(&self, uri: &str) -> Option<(String, String)> {
+        let session = self.active_session()?;
+        let api = self.api.clone();
+        let uri = uri.to_owned();
+        self.runtime()
+            .block_on(async move { crate::catalog::lyrics(&api, &session, &uri).await })
+            .inspect_err(|error| log::warn!("lyrics failed: {error:?}"))
+            .ok()
+            .flatten()
     }
 
     /// Reads a list or collection; the answer is `SpotifyEvent::Catalog`.
@@ -832,16 +846,23 @@ async fn open_session(
         mixer::{Mixer, NoOpVolume},
         player::Player,
     };
+    let settings = crate::settings::load();
     let config = SessionConfig {
         device_id,
+        autoplay: settings.autoplay.session_value(),
         ..SessionConfig::default()
     };
     // No LibreSpot cache: it would write credentials in plain text.
     let session = Session::new(config, None);
-    let (playback, shared) = SpotifyPlayback::new(320, notify.clone());
+    let (playback, shared) = SpotifyPlayback::new(settings.quality.kbps(), notify.clone());
     let sink_events = Arc::new(Mutex::new(None));
     let player_config = PlayerConfig {
-        bitrate: Bitrate::Bitrate320,
+        bitrate: match settings.quality {
+            crate::settings::Quality::Normal => Bitrate::Bitrate96,
+            crate::settings::Quality::High => Bitrate::Bitrate160,
+            crate::settings::Quality::VeryHigh => Bitrate::Bitrate320,
+        },
+        normalisation: settings.normalisation,
         gapless: true,
         ..PlayerConfig::default()
     };
