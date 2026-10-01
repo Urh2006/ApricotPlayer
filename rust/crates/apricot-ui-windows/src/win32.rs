@@ -2377,7 +2377,15 @@ unsafe fn execute_context_command(
         | C::SpotifyAddToQueue
         | C::SpotifyGoToAlbum
         | C::SpotifyGoToArtist
-        | C::SpotifyCopyLink => spotify_browse::command(window, command),
+        | C::SpotifyCopyLink
+        | C::SpotifyToggleSaved
+        | C::SpotifyAddToPlaylist
+        | C::SpotifyRemoveFromPlaylist
+        | C::SpotifyMoveUp
+        | C::SpotifyMoveDown
+        | C::SpotifyCreatePlaylist
+        | C::SpotifyRenamePlaylist
+        | C::SpotifyHide => spotify_browse::command(window, command),
         C::Play | C::OpenUserPlaylist => activate_selection(window),
         C::DownloadAudio => start_active_download(window, DownloadChoice::Audio),
         C::DownloadVideo => start_active_download(window, DownloadChoice::Video),
@@ -13100,13 +13108,25 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "copy_stream_url" => copy_active_stream_url(window),
         "add_favorite" => add_active_favorite(window),
         "remove_favorite" => remove_active_favorite(window),
+        "create_playlist"
+            if state(window).is_some_and(|state| state.view == MainView::SpotifyBrowse) =>
+        {
+            spotify_browse::create_playlist(window);
+        }
         "create_playlist" => create_user_playlist(window, None),
+        "spotify_toggle_saved" => spotify_browse::toggle_saved(window),
+        "spotify_dislike" => spotify_browse::toggle_hidden(window),
         "add_to_playlist" => add_active_item_to_user_playlist(window),
         "remove_from_playlist" => remove_active_item_from_user_playlist(window),
         "remove_selected"
             if state(window).is_some_and(|state| state.view == MainView::SpotifyAccounts) =>
         {
             spotify::remove_selected(window);
+        }
+        "remove_selected"
+            if state(window).is_some_and(|state| state.view == MainView::SpotifyBrowse) =>
+        {
+            spotify_browse::remove_selected(window);
         }
         "remove_selected" => remove_selected_collection_item(window),
         "subscribe_channel" => subscribe_active_channel(window),

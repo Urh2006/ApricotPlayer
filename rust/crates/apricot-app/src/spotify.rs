@@ -376,9 +376,14 @@ pub fn duration_text(milliseconds: u64) -> String {
 }
 
 /// Row text: the name first, then the type (always for collections, for
-/// tracks and episodes only in mixed lists), artists or owner, length and
-/// "unavailable" when it cannot be played.
-pub fn item_label(catalog: &TranslationCatalog, item: &CatalogItem, mixed: bool) -> String {
+/// tracks and episodes only in mixed lists), artists or owner, length,
+/// "liked" (outside Liked Songs) and "unavailable" when it cannot be played.
+pub fn item_label(
+    catalog: &TranslationCatalog,
+    item: &CatalogItem,
+    mixed: bool,
+    show_liked: bool,
+) -> String {
     if item.kind == ItemKind::Unavailable {
         return if item.name.is_empty() {
             catalog.text("spotify_unavailable_item").to_owned()
@@ -402,6 +407,9 @@ pub fn item_label(catalog: &TranslationCatalog, item: &CatalogItem, mixed: bool)
     }
     if let Some(duration) = item.duration_ms.filter(|_| item.kind.is_playable_item()) {
         parts.push(duration_text(duration));
+    }
+    if show_liked && item.kind.is_playable_item() && item.saved == Some(true) {
+        parts.push(catalog.text("spotify_liked").to_owned());
     }
     if !item.playable && item.kind.is_playable_item() {
         parts.push(catalog.text("spotify_unavailable").to_owned());
@@ -519,6 +527,7 @@ mod tests {
             uid: None,
             saved: None,
             count: None,
+            editable: false,
         }
     }
 
@@ -527,29 +536,42 @@ mod tests {
         let catalog = english_catalog();
         let track = catalog_item(ItemKind::Track, "Bohemian Rhapsody", "Queen");
         assert_eq!(
-            item_label(&catalog, &track, false),
+            item_label(&catalog, &track, false, true),
             "Bohemian Rhapsody, Queen, 5:55"
         );
         assert_eq!(
-            item_label(&catalog, &track, true),
+            item_label(&catalog, &track, true, true),
             "Bohemian Rhapsody, track, Queen, 5:55"
+        );
+        let mut liked_track = track.clone();
+        liked_track.saved = Some(true);
+        assert_eq!(
+            item_label(&catalog, &liked_track, false, true),
+            "Bohemian Rhapsody, Queen, 5:55, liked"
+        );
+        assert_eq!(
+            item_label(&catalog, &liked_track, false, false),
+            "Bohemian Rhapsody, Queen, 5:55"
         );
         let album = catalog_item(ItemKind::Album, "A Night at the Opera", "Queen");
         assert_eq!(
-            item_label(&catalog, &album, false),
+            item_label(&catalog, &album, false, true),
             "A Night at the Opera, album, Queen"
         );
         let mut liked = catalog_item(ItemKind::LikedSongs, "Liked Songs", "");
         liked.count = Some(12);
         assert_eq!(
-            item_label(&catalog, &liked, false),
+            item_label(&catalog, &liked, false, true),
             "Liked Songs, playlist, 12 songs"
         );
         let mut gone = catalog_item(ItemKind::Track, "Old", "X");
         gone.playable = false;
-        assert!(item_label(&catalog, &gone, false).ends_with(", unavailable"));
+        assert!(item_label(&catalog, &gone, false, true).ends_with(", unavailable"));
         let restricted = catalog_item(ItemKind::Unavailable, "", "");
-        assert_eq!(item_label(&catalog, &restricted, false), "Unavailable item");
+        assert_eq!(
+            item_label(&catalog, &restricted, false, true),
+            "Unavailable item"
+        );
         assert_eq!(duration_text(3_725_000), "1:02:05");
     }
 

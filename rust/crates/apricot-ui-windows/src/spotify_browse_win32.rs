@@ -80,6 +80,7 @@ impl Source {
     }
 }
 
+#[allow(clippy::struct_excessive_bools)]
 struct Frame {
     source: Source,
     /// Accessible name of the list.
@@ -95,6 +96,34 @@ struct Frame {
     error: Option<String>,
     /// Search over all types: rows say their type.
     mixed: bool,
+    /// A playlist the account may edit (items) and rename.
+    can_edit: bool,
+    can_rename: bool,
+    /// A personal mix, where Spotify offers "Hide song".
+    personalised: bool,
+}
+
+/// A change waiting for Spotify's answer.
+enum Pending {
+    Saved,
+    Add {
+        name: String,
+    },
+    Remove {
+        uid: String,
+    },
+    Move {
+        uid: String,
+        other_uid: String,
+    },
+    Create {
+        then_add: Option<Vec<String>>,
+    },
+    Rename,
+    /// The editable playlists load for "Add to playlist" with these items.
+    Playlists {
+        uris: Vec<String>,
+    },
 }
 
 #[derive(Default)]
@@ -103,6 +132,12 @@ pub(super) struct BrowseState {
     /// The last search, offered again by the search dialog.
     pub(super) last_query: String,
     pub(super) last_kind: usize,
+    pending: Option<(SpotifyStamp, Pending)>,
+    /// Playlists the account may add to, read once per session.
+    playlists: Option<Vec<CatalogItem>>,
+    /// Songs the account hid, read when the first personal mix opens.
+    hidden: Option<std::collections::HashSet<String>>,
+    hidden_load: Option<SpotifyStamp>,
 }
 
 pub(super) const fn is_view(view: MainView) -> bool {
@@ -151,6 +186,9 @@ pub(super) unsafe fn open(window: HWND, source: Source, title: String) {
         loaded: false,
         error: None,
         mixed,
+        can_edit: false,
+        can_rename: false,
+        personalised: false,
     });
     state.view = MainView::SpotifyBrowse;
     request(window, 0);
@@ -193,6 +231,33 @@ pub(super) unsafe fn loaded(
         return;
     };
     let texts = super::spotify::catalog(state);
+    if let Some((wanted, Pending::Playlists { uris })) = state.spotify_browse.pending.take() {
+        if wanted == stamp {
+            match result {
+                Ok(CatalogResult::Playlists(playlists)) => {
+                    state.spotify_browse.playlists = Some(playlists);
+                    choose_playlist(window, uris);
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    let text = apricot_app::spotify::error_text(&texts, &error);
+                    set_status(state, &text, true);
+                }
+            }
+            return;
+        }
+        state.spotify_browse.pending = Some((wanted, Pending::Playlists { uris }));
+    }
+    if state.spotify_browse.hidden_load == Some(stamp) {
+        state.spotify_browse.hidden_load = None;
+        if let Ok(CatalogResult::HiddenSongs(uris)) = result {
+            state.spotify_browse.hidden = Some(uris.into_iter().collect());
+            if state.view == MainView::SpotifyBrowse {
+                render(window, false);
+            }
+        }
+        return;
+    }
     let Some(index) = state
         .spotify_browse
         .frames
@@ -229,9 +294,14 @@ pub(super) unsafe fn loaded(
                 .collect::<Vec<_>>()
                 .join(", ");
             }
+            frame.can_edit = collection.can_edit_items;
+            frame.can_rename = collection.can_edit_metadata;
+            frame.personalised = apricot_spotify::catalog::PERSONALISED_FORMATS
+                .contains(&collection.format.as_str());
             frame.items.extend(collection.page.items);
             frame.next_offset = collection.page.next_offset;
         }
+        Ok(CatalogResult::Playlists(_) | CatalogResult::HiddenSongs(_)) => {}
         Err(error) => {
             let text = apricot_app::spotify::error_text(&texts, &error);
             if first_page {
@@ -239,6 +309,14 @@ pub(super) unsafe fn loaded(
             }
             set_status(state, &text, true);
         }
+    }
+    let needs_hidden = state.spotify_browse.frames[index].personalised
+        && state.spotify_browse.hidden.is_none()
+        && state.spotify_browse.hidden_load.is_none();
+    if needs_hidden && let Some(service) = super::spotify::service(window) {
+        let stamp = state.spotify.epochs_begin();
+        state.spotify_browse.hidden_load = Some(stamp);
+        service.load_catalog(stamp, CatalogRequest::HiddenSongs);
     }
     if is_top && state.view == MainView::SpotifyBrowse {
         render(window, false);
@@ -259,7 +337,24 @@ unsafe fn render(window: HWND, focus: bool) {
         frame
             .items
             .iter()
-            .map(|item| item_label(&texts, item, frame.mixed))
+            .map(|item| {
+                let mut label = item_label(
+                    &texts,
+                    item,
+                    frame.mixed,
+                    !matches!(frame.source, Source::LikedSongs),
+                );
+                if state
+                    .spotify_browse
+                    .hidden
+                    .as_ref()
+                    .is_some_and(|hidden| hidden.contains(&item.uri))
+                {
+                    label.push_str(", ");
+                    label.push_str(texts.text("spotify_hidden"));
+                }
+                label
+            })
             .collect()
     } else if let Some(error) = &frame.error {
         vec![error.clone()]
@@ -310,8 +405,20 @@ pub(super) unsafe fn selection_changed(window: HWND) {
     }
 }
 
+/// The row to come back to from the player or a nested list.
+unsafe fn remember_selection(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let selected = usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok();
+    if let (Some(frame), Some(selected)) = (state.spotify_browse.frames.last_mut(), selected) {
+        frame.selected = selected;
+    }
+}
+
 /// Enter: a track or episode plays in its list's context, a collection opens.
 pub(super) unsafe fn activate(window: HWND) {
+    remember_selection(window);
     let Some(item) = state(window).and_then(|state| selected_item(state).cloned()) else {
         return;
     };
@@ -480,6 +587,15 @@ pub(super) fn row_menu(state: &WindowState) -> Option<apricot_app::context_menu:
             | ItemKind::Folder
             | ItemKind::LikedSongs
     );
+    let frame = top(state)?;
+    let editable = frame.can_edit && matches!(frame.source, Source::Playlist(_));
+    // SAFETY: Reads the selection of this thread's list.
+    let index = usize::try_from(unsafe { SendMessageW(state.list, LB_GETCURSEL, None, None).0 })
+        .unwrap_or(0);
+    let has_uid = |at: Option<usize>| {
+        at.and_then(|at| frame.items.get(at))
+            .is_some_and(|item| item.uid.is_some())
+    };
     Some(apricot_app::context_menu::SpotifyRowMenu {
         playable_item: item.kind.is_playable_item() && item.playable,
         collection,
@@ -487,12 +603,465 @@ pub(super) fn row_menu(state: &WindowState) -> Option<apricot_app::context_menu:
         album: !item.album_uri.is_empty(),
         artist: !item.artist_uri.is_empty(),
         link: apricot_core::SpotifyRef::parse(&item.uri).is_some(),
+        saved: item.saved,
+        is_artist: item.kind == ItemKind::Artist,
+        in_editable_playlist: editable && item.uid.is_some(),
+        move_up: editable && has_uid(index.checked_sub(1)),
+        move_down: editable && has_uid(Some(index + 1)),
+        rename: item.kind == ItemKind::Playlist && item.editable,
+        create_playlist: matches!(frame.source, Source::Library { .. }),
+        hide: frame.personalised && item.kind == ItemKind::Track,
+        hidden: state
+            .spotify_browse
+            .hidden
+            .as_ref()
+            .is_some_and(|hidden| hidden.contains(&item.uri)),
     })
+}
+
+/// `spotify_dislike` (Ctrl+Shift+H): Spotify's "Hide song" in a personal
+/// mix, or showing the song again. Elsewhere it says where it works.
+pub(super) unsafe fn toggle_hidden(window: HWND) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    let frame = top(state).filter(|_| state.view == MainView::SpotifyBrowse);
+    let target = frame.filter(|frame| frame.personalised).and_then(|frame| {
+        let context = match &frame.source {
+            Source::Playlist(uri) => uri.clone(),
+            _ => return None,
+        };
+        selected_item(state)
+            .filter(|item| item.kind == ItemKind::Track)
+            .map(|item| (item.uri.clone(), context))
+    });
+    let Some((uri, context)) = target else {
+        let text = super::spotify::catalog(state)
+            .text("spotify_hide_unavailable")
+            .to_owned();
+        set_status(state, &text, true);
+        return;
+    };
+    let hidden = state
+        .spotify_browse
+        .hidden
+        .as_ref()
+        .is_some_and(|hidden| hidden.contains(&uri));
+    begin_edit(
+        window,
+        apricot_spotify::LibraryEdit::Hide {
+            uri,
+            context,
+            hidden: !hidden,
+        },
+        Pending::Saved,
+    );
+}
+
+unsafe fn begin_edit(window: HWND, edit: apricot_spotify::LibraryEdit, pending: Pending) {
+    let Some(service) = super::spotify::service(window) else {
+        return;
+    };
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let stamp = state.spotify.epochs_begin();
+    state.spotify_browse.pending = Some((stamp, pending));
+    service.edit(stamp, edit);
+}
+
+/// `spotify_toggle_saved` (Ctrl+Shift+I): like or unlike the selected track
+/// or the one that plays; save or remove a collection; follow an artist.
+pub(super) unsafe fn toggle_saved(window: HWND) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    let uri = selected_item(state)
+        .filter(|item| item.kind != ItemKind::Unavailable && item.kind != ItemKind::Folder)
+        .map(|item| item.uri.clone())
+        .or_else(|| {
+            let session = state.application.player_session();
+            session
+                .current_item()
+                .filter(|item| item.source == apricot_core::MediaSource::Spotify)
+                .map(|item| item.id.0.clone())
+                .filter(|uri| !uri.contains(":album:") && !uri.contains(":playlist:"))
+        });
+    let Some(uri) = uri else {
+        return;
+    };
+    let uri = if uri == "spotify:collection:tracks" {
+        return;
+    } else {
+        uri
+    };
+    begin_edit(
+        window,
+        apricot_spotify::LibraryEdit::ToggleSaved { uri },
+        Pending::Saved,
+    );
+}
+
+/// Delete in an editable playlist: removes exactly the selected occurrence.
+pub(super) unsafe fn remove_selected(window: HWND) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    let Some(frame) = top(state) else {
+        return;
+    };
+    let Source::Playlist(playlist) = &frame.source else {
+        return;
+    };
+    if !frame.can_edit {
+        return;
+    }
+    let Some(uid) = selected_item(state).and_then(|item| item.uid.clone()) else {
+        return;
+    };
+    let playlist = playlist.clone();
+    begin_edit(
+        window,
+        apricot_spotify::LibraryEdit::RemoveFromPlaylist {
+            playlist,
+            uids: vec![uid.clone()],
+        },
+        Pending::Remove { uid },
+    );
+}
+
+unsafe fn move_selected(window: HWND, up: bool) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    let Some(frame) = top(state) else {
+        return;
+    };
+    let Source::Playlist(playlist) = &frame.source else {
+        return;
+    };
+    let index = usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).unwrap_or(0);
+    let other = if up {
+        index.checked_sub(1)
+    } else {
+        Some(index + 1)
+    };
+    let (Some(uid), Some(other_uid)) = (
+        frame.items.get(index).and_then(|item| item.uid.clone()),
+        other
+            .and_then(|other| frame.items.get(other))
+            .and_then(|item| item.uid.clone()),
+    ) else {
+        return;
+    };
+    let playlist = playlist.clone();
+    begin_edit(
+        window,
+        apricot_spotify::LibraryEdit::MoveInPlaylist {
+            playlist,
+            uid: uid.clone(),
+            before: up,
+            other_uid: other_uid.clone(),
+        },
+        Pending::Move { uid, other_uid },
+    );
+}
+
+/// Asks for a name; `None` after Cancel or an empty name.
+unsafe fn ask_name(window: HWND, title_key: &str, initial: &str) -> Option<String> {
+    let state = state_mut(window)?;
+    let texts = super::spotify::catalog(state);
+    state.modal_open = true;
+    let result = crate::playlist_dialog_win32::prompt_name_with_initial(
+        window,
+        texts.text(title_key),
+        texts.text("playlist_name"),
+        initial,
+        texts.text("ok"),
+        texts.text("cancel"),
+    );
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
+    super::resume_deferred_window_work(window);
+    result
+        .ok()
+        .flatten()
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty())
+}
+
+/// `create_playlist` in Spotify lists: a new playlist, first in the library.
+pub(super) unsafe fn create_playlist(window: HWND) {
+    create_playlist_then_add(window, None);
+}
+
+unsafe fn create_playlist_then_add(window: HWND, then_add: Option<Vec<String>>) {
+    let Some(name) = ask_name(window, "spotify_create_playlist", "") else {
+        restore_focus(window);
+        return;
+    };
+    begin_edit(
+        window,
+        apricot_spotify::LibraryEdit::CreatePlaylist { name: name.clone() },
+        Pending::Create { then_add },
+    );
+    restore_focus(window);
+}
+
+unsafe fn rename_selected(window: HWND) {
+    let Some(item) = state(window).and_then(|state| selected_item(state).cloned()) else {
+        return;
+    };
+    let Some(name) = ask_name(window, "spotify_rename_playlist", &item.name) else {
+        restore_focus(window);
+        return;
+    };
+    begin_edit(
+        window,
+        apricot_spotify::LibraryEdit::RenamePlaylist {
+            uri: item.uri.clone(),
+            name: name.clone(),
+        },
+        Pending::Rename,
+    );
+    restore_focus(window);
+}
+
+unsafe fn restore_focus(window: HWND) {
+    if let Some(state) = state(window) {
+        let _ = SetFocus(Some(super::active_primary_control(state)));
+    }
+}
+
+/// "Add to Spotify playlist": the playlists the account may edit, with
+/// New playlist first. They are read once and then kept for the session.
+unsafe fn add_to_playlist(window: HWND, uris: Vec<String>) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    if state.spotify_browse.playlists.is_some() {
+        choose_playlist(window, uris);
+        return;
+    }
+    let Some(service) = super::spotify::service(window) else {
+        return;
+    };
+    let texts = super::spotify::catalog(state);
+    let text = texts.text("spotify_loading").to_owned();
+    set_status(state, &text, true);
+    let stamp = state.spotify.epochs_begin();
+    state.spotify_browse.pending = Some((stamp, Pending::Playlists { uris }));
+    service.load_catalog(stamp, CatalogRequest::EditablePlaylists);
+}
+
+unsafe fn choose_playlist(window: HWND, uris: Vec<String>) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let texts = super::spotify::catalog(state);
+    let playlists = state.spotify_browse.playlists.clone().unwrap_or_default();
+    let mut choices = vec![texts.text("spotify_new_playlist").to_owned()];
+    choices.extend(playlists.iter().map(|playlist| playlist.name.clone()));
+    state.modal_open = true;
+    let chosen = crate::playlist_dialog_win32::choose(
+        window,
+        texts.text("spotify_add_to_playlist"),
+        texts.text("spotify_add_to_playlist"),
+        &choices,
+        texts.text("ok"),
+        texts.text("cancel"),
+    );
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
+    super::resume_deferred_window_work(window);
+    match chosen.ok().flatten() {
+        Some(0) => create_playlist_then_add(window, Some(uris)),
+        Some(index) => {
+            if let Some(playlist) = playlists.get(index - 1) {
+                begin_edit(
+                    window,
+                    apricot_spotify::LibraryEdit::AddToPlaylist {
+                        playlist: playlist.uri.clone(),
+                        uris,
+                    },
+                    Pending::Add {
+                        name: playlist.name.clone(),
+                    },
+                );
+            }
+            restore_focus(window);
+        }
+        None => restore_focus(window),
+    }
+}
+
+/// Spotify's answer to a change: one announcement, and the open lists show
+/// the confirmed state without moving the focus.
+#[allow(clippy::too_many_lines)]
+pub(super) unsafe fn edited(
+    window: HWND,
+    stamp: SpotifyStamp,
+    result: Result<apricot_spotify::EditOutcome, SpotifyError>,
+) {
+    use apricot_spotify::EditOutcome as O;
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let texts = super::spotify::catalog(state);
+    let Some((wanted, pending)) = state.spotify_browse.pending.take() else {
+        return;
+    };
+    if wanted != stamp {
+        state.spotify_browse.pending = Some((wanted, pending));
+        return;
+    }
+    let outcome = match result {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let text = apricot_app::spotify::error_text(&texts, &error);
+            set_status(state, &text, true);
+            return;
+        }
+    };
+    let mut follow_up = None;
+    let text = match (&outcome, pending) {
+        (O::Saved { uri, saved }, _) => {
+            let kind = ItemKind::from_uri_public(uri);
+            for frame in &mut state.spotify_browse.frames {
+                for item in frame.items.iter_mut().filter(|item| item.uri == *uri) {
+                    item.saved = Some(*saved);
+                }
+                if !*saved && matches!(frame.source, Source::LikedSongs) {
+                    frame.items.retain(|item| item.uri != *uri);
+                }
+            }
+            let key = match (kind, *saved) {
+                (Some(ItemKind::Track | ItemKind::Episode), true) => "spotify_liked_done",
+                (Some(ItemKind::Track | ItemKind::Episode), false) => "spotify_unliked_done",
+                (Some(ItemKind::Artist), true) => "spotify_followed_done",
+                (Some(ItemKind::Artist), false) => "spotify_unfollowed_done",
+                (_, true) => "spotify_saved_done",
+                (_, false) => "spotify_unsaved_done",
+            };
+            texts.text(key).to_owned()
+        }
+        (O::AddedToPlaylist { .. }, Pending::Add { name }) => texts
+            .text("spotify_added_to_playlist")
+            .replace("{name}", &name),
+        (O::RemovedFromPlaylist { .. }, Pending::Remove { uid }) => {
+            if let Some(frame) = state.spotify_browse.frames.last_mut() {
+                frame
+                    .items
+                    .retain(|item| item.uid.as_deref() != Some(uid.as_str()));
+            }
+            texts.text("spotify_removed_from_playlist").to_owned()
+        }
+        (O::Moved { .. }, Pending::Move { uid, other_uid }) => {
+            if let Some(frame) = state.spotify_browse.frames.last_mut() {
+                let position = |wanted: &str| {
+                    frame
+                        .items
+                        .iter()
+                        .position(|item| item.uid.as_deref() == Some(wanted))
+                };
+                if let (Some(from), Some(to)) = (position(&uid), position(&other_uid)) {
+                    frame.items.swap(from, to);
+                    frame.selected = to;
+                    // SAFETY: Moves the selection of this thread's list.
+                    SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(to)), None);
+                }
+            }
+            texts.text("spotify_playlist_updated").to_owned()
+        }
+        (O::Created { uri, name }, Pending::Create { then_add, .. }) => {
+            let created = CatalogItem {
+                kind: ItemKind::Playlist,
+                uri: uri.clone(),
+                name: name.clone(),
+                subtitle: String::new(),
+                album: String::new(),
+                album_uri: String::new(),
+                artist_uri: String::new(),
+                duration_ms: None,
+                playable: true,
+                explicit: false,
+                uid: None,
+                saved: Some(true),
+                count: None,
+                editable: true,
+            };
+            if let Some(playlists) = &mut state.spotify_browse.playlists {
+                playlists.insert(0, created.clone());
+            }
+            for frame in &mut state.spotify_browse.frames {
+                if matches!(frame.source, Source::Library { folder: None, .. }) && frame.loaded {
+                    frame.items.insert(0, created.clone());
+                }
+            }
+            if let Some(uris) = then_add {
+                follow_up = Some((
+                    apricot_spotify::LibraryEdit::AddToPlaylist {
+                        playlist: uri.clone(),
+                        uris,
+                    },
+                    Pending::Add { name: name.clone() },
+                ));
+            }
+            texts
+                .text("spotify_playlist_created")
+                .replace("{name}", name)
+        }
+        (O::Hidden { uri, hidden }, _) => {
+            let set = state.spotify_browse.hidden.get_or_insert_default();
+            if *hidden {
+                set.insert(uri.clone());
+            } else {
+                set.remove(uri);
+            }
+            texts
+                .text(if *hidden {
+                    "spotify_hidden_done"
+                } else {
+                    "spotify_unhidden_done"
+                })
+                .to_owned()
+        }
+        (O::Renamed { uri, name }, _) => {
+            for frame in &mut state.spotify_browse.frames {
+                for item in frame.items.iter_mut().filter(|item| item.uri == *uri) {
+                    item.name.clone_from(name);
+                }
+            }
+            if let Some(playlists) = &mut state.spotify_browse.playlists {
+                for playlist in playlists.iter_mut().filter(|playlist| playlist.uri == *uri) {
+                    playlist.name.clone_from(name);
+                }
+            }
+            texts
+                .text("spotify_playlist_renamed")
+                .replace("{name}", name)
+        }
+        _ => texts.text("spotify_playlist_updated").to_owned(),
+    };
+    set_status(state, &text, true);
+    if state.view == MainView::SpotifyBrowse {
+        render(window, false);
+    }
+    if let Some((edit, pending)) = follow_up {
+        begin_edit(window, edit, pending);
+    }
 }
 
 /// A context menu command on the selected row.
 pub(super) unsafe fn command(window: HWND, command: apricot_app::context_menu::ContextCommand) {
     use apricot_app::context_menu::ContextCommand as C;
+    remember_selection(window);
+    if command == C::SpotifyCreatePlaylist {
+        create_playlist(window);
+        return;
+    }
     let Some(item) = state(window).and_then(|state| selected_item(state).cloned()) else {
         return;
     };
@@ -522,6 +1091,13 @@ pub(super) unsafe fn command(window: HWND, command: apricot_app::context_menu::C
                 super::copy_text_and_announce(window, &link, "url_copied");
             }
         }
+        C::SpotifyToggleSaved => toggle_saved(window),
+        C::SpotifyAddToPlaylist => add_to_playlist(window, vec![item.uri.clone()]),
+        C::SpotifyRemoveFromPlaylist => remove_selected(window),
+        C::SpotifyMoveUp => move_selected(window, true),
+        C::SpotifyMoveDown => move_selected(window, false),
+        C::SpotifyRenamePlaylist => rename_selected(window),
+        C::SpotifyHide => toggle_hidden(window),
         _ => {}
     }
 }

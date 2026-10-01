@@ -69,6 +69,14 @@ pub enum ContextCommand {
     SpotifyGoToAlbum,
     SpotifyGoToArtist,
     SpotifyCopyLink,
+    SpotifyToggleSaved,
+    SpotifyAddToPlaylist,
+    SpotifyRemoveFromPlaylist,
+    SpotifyMoveUp,
+    SpotifyMoveDown,
+    SpotifyCreatePlaylist,
+    SpotifyRenamePlaylist,
+    SpotifyHide,
 }
 
 /// One row of a context menu.
@@ -385,6 +393,21 @@ pub struct SpotifyRowMenu {
     pub album: bool,
     pub artist: bool,
     pub link: bool,
+    /// Liked (track) or saved (collection) state, when known.
+    pub saved: Option<bool>,
+    /// An artist: saving is following.
+    pub is_artist: bool,
+    /// The open list is a playlist the account may edit.
+    pub in_editable_playlist: bool,
+    pub move_up: bool,
+    pub move_down: bool,
+    /// A playlist row the account may rename.
+    pub rename: bool,
+    /// The open list is the library or its playlists.
+    pub create_playlist: bool,
+    /// A track in a personal mix: Spotify's "Hide song" applies.
+    pub hide: bool,
+    pub hidden: bool,
 }
 
 /// Spotify lists: Play or Open first, then Shuffle play, Add to Spotify
@@ -409,6 +432,63 @@ pub fn spotify_browse_context_menu(
             entries.push(context.command("play", C::SpotifyPlay));
             entries.push(context.command("spotify_shuffle_play", C::SpotifyShufflePlay));
         }
+    }
+    if menu.playable_item {
+        let key = if menu.saved == Some(true) {
+            "spotify_unlike"
+        } else {
+            "spotify_like"
+        };
+        entries.push(context.command_with_shortcut(
+            key,
+            "spotify_toggle_saved",
+            C::SpotifyToggleSaved,
+        ));
+        entries.push(context.command("spotify_add_to_playlist", C::SpotifyAddToPlaylist));
+    }
+    if menu.hide {
+        let key = if menu.hidden {
+            "spotify_unhide_song"
+        } else {
+            "spotify_hide_song"
+        };
+        entries.push(context.command_with_shortcut(key, "spotify_dislike", C::SpotifyHide));
+    }
+    if menu.collection_plays {
+        let key = match (menu.is_artist, menu.saved == Some(true)) {
+            (true, true) => "spotify_unfollow",
+            (true, false) => "spotify_follow",
+            (false, true) => "spotify_remove_library",
+            (false, false) => "spotify_save_library",
+        };
+        entries.push(context.command_with_shortcut(
+            key,
+            "spotify_toggle_saved",
+            C::SpotifyToggleSaved,
+        ));
+    }
+    if menu.in_editable_playlist {
+        if menu.move_up {
+            entries.push(context.command("move_up", C::SpotifyMoveUp));
+        }
+        if menu.move_down {
+            entries.push(context.command("move_down", C::SpotifyMoveDown));
+        }
+        entries.push(context.command_with_shortcut(
+            "spotify_remove_from_playlist",
+            "remove_selected",
+            C::SpotifyRemoveFromPlaylist,
+        ));
+    }
+    if menu.rename {
+        entries.push(context.command("spotify_rename_playlist", C::SpotifyRenamePlaylist));
+    }
+    if menu.create_playlist {
+        entries.push(context.command_with_shortcut(
+            "spotify_create_playlist",
+            "create_playlist",
+            C::SpotifyCreatePlaylist,
+        ));
     }
     if menu.album {
         entries.push(context.command("spotify_go_to_album", C::SpotifyGoToAlbum));

@@ -320,6 +320,45 @@ impl Api {
         }
     }
 
+    /// A `collection/v2` protobuf request (`write`, `paging`), which has
+    /// no JSON form for writing; the answer is read as JSON.
+    pub async fn collection(
+        &self,
+        session: &Session,
+        path: &str,
+        body: Vec<u8>,
+    ) -> Result<Value, ApiError> {
+        let base = session
+            .spclient()
+            .base_url()
+            .await
+            .map_err(|error| ApiError::Network(error.kind.to_string()))?;
+        let (token, client_token) = Self::tokens(session).await?;
+        let response = self
+            .http
+            .post(format!("{base}{path}"))
+            .bearer_auth(token)
+            .header("client-token", client_token)
+            .header(
+                "content-type",
+                "application/vnd.collection-v2.spotify.proto",
+            )
+            .header("accept", "application/json")
+            .body(body)
+            .send()
+            .await
+            .map_err(|error| ApiError::Network(error.to_string()))?;
+        let status = response.status().as_u16();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|error| ApiError::Network(error.to_string()))?;
+        if !(200..300).contains(&status) {
+            return Err(ApiError::Status(status));
+        }
+        Ok(serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    }
+
     /// An spclient JSON request; `path` starts with `/`.
     pub async fn spclient(
         &self,
@@ -381,9 +420,44 @@ impl Api {
     }
 }
 
+/// Minimal protobuf writing for `collection2v2` messages.
+pub mod proto {
+    pub fn varint(buffer: &mut Vec<u8>, mut value: u64) {
+        loop {
+            let byte = u8::try_from(value & 0x7f).unwrap_or(0);
+            value >>= 7;
+            if value == 0 {
+                buffer.push(byte);
+                return;
+            }
+            buffer.push(byte | 0x80);
+        }
+    }
+
+    pub fn bytes(buffer: &mut Vec<u8>, field: u32, value: &[u8]) {
+        varint(buffer, u64::from(field << 3 | 2));
+        varint(buffer, value.len() as u64);
+        buffer.extend_from_slice(value);
+    }
+
+    pub fn int(buffer: &mut Vec<u8>, field: u32, value: u64) {
+        varint(buffer, u64::from(field << 3));
+        varint(buffer, value);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn protobuf_fields_are_tagged_and_length_prefixed() {
+        let mut buffer = Vec::new();
+        proto::bytes(&mut buffer, 1, b"ab");
+        proto::int(&mut buffer, 3, 1);
+        proto::int(&mut buffer, 4, 300);
+        assert_eq!(buffer, [0x0a, 2, b'a', b'b', 0x18, 1, 0x20, 0xac, 0x02]);
+    }
 
     #[test]
     fn chunk_names_come_from_the_two_maps() {

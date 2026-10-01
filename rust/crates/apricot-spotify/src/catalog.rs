@@ -34,6 +34,11 @@ impl ItemKind {
         matches!(self, Self::Track | Self::Episode)
     }
 
+    /// The kind a Spotify URI names.
+    pub fn from_uri_public(uri: &str) -> Option<Self> {
+        Self::from_uri(uri)
+    }
+
     /// The kind a URI names, for answers without `__typename`.
     fn from_uri(uri: &str) -> Option<Self> {
         let mut parts = uri.split(':');
@@ -97,6 +102,8 @@ pub struct CatalogItem {
     pub saved: Option<bool>,
     /// Number of items (Liked Songs, folders), when known.
     pub count: Option<u64>,
+    /// A playlist the account may add to and remove from.
+    pub editable: bool,
 }
 
 impl CatalogItem {
@@ -115,6 +122,7 @@ impl CatalogItem {
             uid: None,
             saved: None,
             count: None,
+            editable: false,
         }
     }
 }
@@ -141,6 +149,8 @@ pub struct Collection {
     pub can_edit_metadata: bool,
     /// The account saved (follows) it.
     pub saved: Option<bool>,
+    /// Spotify's playlist format (`daily-mix`, `discover-weekly`, ...).
+    pub format: String,
     pub revision: String,
     pub page: CatalogPage,
 }
@@ -303,6 +313,10 @@ pub fn parse_item(value: &Value) -> CatalogItem {
         uid,
         saved: node.get("saved").and_then(Value::as_bool),
         count: node.get("count").and_then(Value::as_u64),
+        editable: node
+            .pointer("/currentUserCapabilities/canEditItems")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     }
 }
 
@@ -465,6 +479,36 @@ pub async fn library(
     folder: Option<&str>,
     offset: u64,
 ) -> Result<CatalogPage, ApiError> {
+    library_page(api, session, filter, folder, offset, false).await
+}
+
+/// Playlists the account may add tracks to, from all folders, newest first.
+pub async fn editable_playlists(
+    api: &Api,
+    session: &Session,
+) -> Result<Vec<CatalogItem>, ApiError> {
+    let mut playlists = Vec::new();
+    let mut offset = Some(0);
+    while let Some(start) = offset.filter(|start| *start < 2000) {
+        let page = library_page(api, session, LibraryFilter::Playlists, None, start, true).await?;
+        playlists.extend(
+            page.items
+                .into_iter()
+                .filter(|item| item.kind == ItemKind::Playlist && item.editable),
+        );
+        offset = page.next_offset;
+    }
+    Ok(playlists)
+}
+
+async fn library_page(
+    api: &Api,
+    session: &Session,
+    filter: LibraryFilter,
+    folder: Option<&str>,
+    offset: u64,
+    flatten: bool,
+) -> Result<CatalogPage, ApiError> {
     let filters: Vec<&str> = filter.id().into_iter().collect();
     let data = api
         .pathfinder(
@@ -477,7 +521,7 @@ pub async fn library(
                 "features": ["LIKED_SONGS", "YOUR_EPISODES", "PRERELEASES"],
                 "limit": PAGE,
                 "offset": offset,
-                "flatten": false,
+                "flatten": flatten,
                 "expandedFolders": [],
                 "folderUri": folder,
                 "includeFoldersWhenFlattening": true,
@@ -545,6 +589,7 @@ pub async fn album(api: &Api, session: &Session, uri: &str) -> Result<Collection
         can_edit_metadata: false,
         saved: album.get("saved").and_then(Value::as_bool),
         revision: String::new(),
+        format: String::new(),
         page,
     })
 }
@@ -580,6 +625,7 @@ pub async fn playlist(
         can_edit_items: capability("canEditItems"),
         can_edit_metadata: capability("canEditMetadata"),
         saved: playlist.get("following").and_then(Value::as_bool),
+        format: text(playlist, "/format").to_owned(),
         revision: text(playlist, "/revisionId").to_owned(),
         page: parse_page(&playlist["content"], offset),
     })
@@ -630,6 +676,7 @@ pub async fn artist(api: &Api, session: &Session, uri: &str) -> Result<Collectio
         can_edit_metadata: false,
         saved: artist.pointer("/saved").and_then(Value::as_bool),
         revision: String::new(),
+        format: String::new(),
         page: CatalogPage {
             items,
             total: None,
@@ -663,8 +710,53 @@ pub async fn show(
         can_edit_metadata: false,
         saved: None,
         revision: String::new(),
+        format: String::new(),
         page: parse_page(&show["episodesV2"], offset),
     })
+}
+
+/// Formats of personalised playlists, where Spotify offers "Hide song"
+/// (P0 evidence 7).
+pub const PERSONALISED_FORMATS: [&str; 12] = [
+    "artistsets",
+    "artist-mix-reader",
+    "blend",
+    "daily-mix",
+    "daylist",
+    "discover-weekly",
+    "descripto",
+    "inspiredby-mix",
+    "on-repeat",
+    "release-radar",
+    "repeat-rewind",
+    "topic-mix",
+];
+
+/// Songs the account hid ("ban" collection, kept without context).
+pub async fn hidden_songs(api: &Api, session: &Session) -> Result<Vec<String>, ApiError> {
+    let mut body = Vec::new();
+    crate::api::proto::bytes(&mut body, 1, session.username().as_bytes());
+    crate::api::proto::bytes(&mut body, 2, b"ban");
+    crate::api::proto::int(&mut body, 4, 2000);
+    let answer = api
+        .collection(session, "/collection/v2/paging", body)
+        .await?;
+    Ok(answer
+        .get("items")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| {
+                    !item
+                        .get("isRemoved")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                })
+                .filter_map(|item| item.get("uri").and_then(Value::as_str).map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default())
 }
 
 /// Saved state of `uris` (Liked Songs for tracks, the library for others).

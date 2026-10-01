@@ -121,6 +121,11 @@ pub enum SpotifyEvent {
         stamp: SpotifyStamp,
         result: Result<CatalogResult, SpotifyError>,
     },
+    /// A change of the account's data, as Spotify confirms it.
+    Edited {
+        stamp: SpotifyStamp,
+        result: Result<crate::library_edit::EditOutcome, SpotifyError>,
+    },
     /// Spotify accepted (or refused) moving playback to another device.
     Transferred {
         stamp: SpotifyStamp,
@@ -177,12 +182,48 @@ pub enum CatalogRequest {
         uri: String,
         offset: u64,
     },
+    /// Playlists the account may add to, for "Add to playlist".
+    EditablePlaylists,
+    /// Songs the account hid.
+    HiddenSongs,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CatalogResult {
     Page(crate::catalog::CatalogPage),
     Collection(crate::catalog::Collection),
+    Playlists(Vec<crate::catalog::CatalogItem>),
+    HiddenSongs(Vec<String>),
+}
+
+/// Liked state of the tracks and episodes Spotify did not mark, so rows
+/// can say "liked".
+async fn fill_saved(
+    api: &crate::api::Api,
+    session: &Session,
+    items: &mut [crate::catalog::CatalogItem],
+) {
+    let unknown: Vec<String> = items
+        .iter()
+        .filter(|item| item.saved.is_none() && item.kind.is_playable_item())
+        .map(|item| item.uri.clone())
+        .collect();
+    if unknown.is_empty() {
+        return;
+    }
+    let Ok(states) = crate::catalog::saved(api, session, &unknown).await else {
+        return;
+    };
+    let known: std::collections::HashMap<&str, bool> = unknown
+        .iter()
+        .map(String::as_str)
+        .zip(states.iter().copied())
+        .collect();
+    for item in items {
+        if item.saved.is_none() {
+            item.saved = known.get(item.uri.as_str()).copied();
+        }
+    }
 }
 
 impl From<crate::api::ApiError> for SpotifyError {
@@ -413,7 +454,9 @@ impl SpotifyService {
     pub fn load_catalog(&self, stamp: SpotifyStamp, request: CatalogRequest) {
         use crate::catalog;
         let session = self.active_session();
+        let session_for_saved = session.clone();
         let api = self.api.clone();
+        let api_for_saved = self.api.clone();
         let sender = self.sender.clone();
         let notify = self.notify.clone();
         self.runtime().spawn(async move {
@@ -421,6 +464,12 @@ impl SpotifyService {
                 let session = session.ok_or(SpotifyError::NoCredentials)?;
                 let api = api.as_ref();
                 Ok(match request {
+                    CatalogRequest::EditablePlaylists => {
+                        CatalogResult::Playlists(catalog::editable_playlists(api, &session).await?)
+                    }
+                    CatalogRequest::HiddenSongs => {
+                        CatalogResult::HiddenSongs(catalog::hidden_songs(api, &session).await?)
+                    }
                     CatalogRequest::Search {
                         query,
                         kind,
@@ -456,7 +505,38 @@ impl SpotifyService {
             if let Err(error) = &result {
                 log::warn!("catalog request failed: {error:?}");
             }
+            let mut result = result;
+            if let (Ok(answer), Some(session)) = (&mut result, &session_for_saved) {
+                match answer {
+                    CatalogResult::Page(page) => {
+                        fill_saved(&api_for_saved, session, &mut page.items).await;
+                    }
+                    CatalogResult::Collection(collection) => {
+                        fill_saved(&api_for_saved, session, &mut collection.page.items).await;
+                    }
+                    CatalogResult::Playlists(_) | CatalogResult::HiddenSongs(_) => {}
+                }
+            }
             Self::emit(&sender, &notify, SpotifyEvent::Catalog { stamp, result });
+        });
+    }
+
+    /// Changes the account's data; the answer is `SpotifyEvent::Edited`.
+    pub fn edit(&self, stamp: SpotifyStamp, edit: crate::library_edit::LibraryEdit) {
+        let session = self.active_session();
+        let api = self.api.clone();
+        let sender = self.sender.clone();
+        let notify = self.notify.clone();
+        self.runtime().spawn(async move {
+            let result = async {
+                let session = session.ok_or(SpotifyError::NoCredentials)?;
+                Ok(crate::library_edit::apply(&api, &session, edit).await?)
+            }
+            .await;
+            if let Err(error) = &result {
+                log::warn!("library change failed: {error:?}");
+            }
+            Self::emit(&sender, &notify, SpotifyEvent::Edited { stamp, result });
         });
     }
 

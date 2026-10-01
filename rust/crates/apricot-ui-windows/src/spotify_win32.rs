@@ -749,6 +749,9 @@ unsafe fn handle_event(window: HWND, event: SpotifyEvent) {
         SpotifyEvent::Catalog { stamp, result } => {
             super::spotify_browse::loaded(window, stamp, result);
         }
+        SpotifyEvent::Edited { stamp, result } => {
+            super::spotify_browse::edited(window, stamp, result);
+        }
         SpotifyEvent::Transferred { stamp, result } => {
             let Some((wanted, name)) = state.spotify.transfer.take() else {
                 return;
