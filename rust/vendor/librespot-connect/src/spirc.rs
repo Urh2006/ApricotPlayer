@@ -18,9 +18,9 @@ use crate::{
     },
     protocol::{
         connect::{Cluster, ClusterUpdate, LogoutCommand, SetVolumeCommand},
-        player::{PlayerState, ProvidedTrack},
         context::Context,
         explicit_content_pubsub::UserAttributesUpdate,
+        player::{PlayerState, ProvidedTrack},
         playlist4_external::PlaylistModificationInfo,
         social_connect_v2::SessionUpdate,
         transfer_state::TransferState,
@@ -90,6 +90,10 @@ struct SpircTask {
     play_request_id: Option<u64>,
     play_status: SpircPlayStatus,
 
+    /// A skip at the end waits for the authoritative context resolver.
+    pending_next: bool,
+    pending_next_at_end: bool,
+
     connection_id_update: BoxedStreamResult<String>,
     connect_state_update: BoxedStreamResult<ClusterUpdate>,
     connect_state_volume_update: BoxedStreamResult<SetVolumeCommand>,
@@ -124,6 +128,224 @@ struct SpircTask {
 
 static SPIRC_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+#[cfg(test)]
+mod transport_regressions {
+    use super::*;
+    use crate::playback::{
+        audio_backend::{Sink, SinkResult},
+        config::PlayerConfig,
+        convert::Converter,
+        decoder::AudioPacket,
+        mixer::{MixerConfig, softmixer::SoftMixer},
+    };
+    use crate::protocol::context_track::ContextTrack;
+
+    const FIRST: &str = "spotify:track:0000000000000000000001";
+    const SECOND: &str = "spotify:track:0000000000000000000002";
+    struct SilentSink;
+    impl Sink for SilentSink {
+        fn write(&mut self, _: AudioPacket, _: &mut Converter) -> SinkResult<()> {
+            Ok(())
+        }
+    }
+    fn task(autoplay: bool) -> SpircTask {
+        let session = Session::new(
+            crate::core::SessionConfig {
+                autoplay: Some(autoplay),
+                ..Default::default()
+            },
+            None,
+        );
+        let mixer = Arc::new(SoftMixer::open(MixerConfig::default()).unwrap());
+        let player = Player::new(
+            PlayerConfig::default(),
+            session.clone(),
+            mixer.get_soft_volume(),
+            || Box::new(SilentSink),
+        );
+        SpircTask {
+            state_tx: watch::channel(PlayerState::default()).0,
+            devices_tx: watch::channel(ConnectDevices::default()).0,
+            remote_volume_tx: watch::channel(None).0,
+            player,
+            mixer,
+            connect_state: ConnectState::new(ConnectConfig::default(), &session),
+            connect_established: false,
+            play_request_id: None,
+            play_status: SpircPlayStatus::LoadingPlay { position_ms: 0 },
+            connection_id_update: Box::pin(futures_util::stream::empty()),
+            connect_state_update: Box::pin(futures_util::stream::empty()),
+            connect_state_volume_update: Box::pin(futures_util::stream::empty()),
+            connect_state_logout_request: Box::pin(futures_util::stream::empty()),
+            playlist_update: Box::pin(futures_util::stream::empty()),
+            session_update: Box::pin(futures_util::stream::empty()),
+            connect_state_command: Box::pin(futures_util::stream::empty()),
+            user_attributes_update: Box::pin(futures_util::stream::empty()),
+            user_attributes_mutation: Box::pin(futures_util::stream::empty()),
+            commands: None,
+            player_events: None,
+            context_resolver: ContextResolver::new(session.clone()),
+            session,
+            shutdown: false,
+            transfer_state: None,
+            update_volume: false,
+            update_state: false,
+            spirc_id: 0,
+            pending_next: false,
+            pending_next_at_end: false,
+        }
+    }
+    fn first_track(task: &mut SpircTask) {
+        task.load_context_from_tracks(vec![FIRST.to_owned()])
+            .unwrap();
+        task.connect_state.set_current_track(0).unwrap();
+        task.connect_state
+            .reset_playback_to_position(Some(0))
+            .unwrap();
+        task.connect_state.set_status(&task.play_status);
+    }
+    #[tokio::test]
+    async fn previous_at_first_track_keeps_current_and_queue_after_repeated_presses() {
+        let mut task = task(false);
+        first_track(&mut task);
+        task.connect_state.add_to_queue(
+            ProvidedTrack {
+                uri: SECOND.into(),
+                ..Default::default()
+            },
+            true,
+        );
+        let upcoming = task.connect_state.player().next_tracks.clone();
+        for _ in 0..3 {
+            task.handle_prev().unwrap();
+            assert_eq!(task.connect_state.player().track.uri, FIRST);
+            assert_eq!(
+                task.connect_state.player().next_tracks,
+                upcoming,
+                "Previous at the boundary must preserve the upcoming queue"
+            );
+            assert!(matches!(
+                task.play_status,
+                SpircPlayStatus::LoadingPlay { .. }
+            ));
+        }
+    }
+    #[tokio::test]
+    async fn next_waits_for_autoplay_then_plays_resolved_recommendation() {
+        let mut task = task(true);
+        first_track(&mut task);
+        assert_eq!(
+            task.connect_state.context_uri(),
+            FIRST,
+            "autoplay must use the actual song as its seed"
+        );
+        task.add_autoplay_resolving_when_required();
+        task.handle_next(None).unwrap();
+        task.handle_next(None).unwrap();
+        assert_eq!(
+            task.connect_state.player().track.uri,
+            FIRST,
+            "waiting for autoplay must not stop the current stream"
+        );
+        task.handle_next_context(Ok(Context {
+            uri: Some("spotify:station:track:0000000000000000000001".into()),
+            pages: vec![ContextPage {
+                tracks: vec![ContextTrack {
+                    uri: Some(SECOND.into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+        assert_eq!(task.connect_state.player().track.uri, SECOND);
+        assert!(matches!(
+            task.play_status,
+            SpircPlayStatus::LoadingPlay { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn previous_cancels_pending_skip_without_stopping_or_losing_current() {
+        let mut task = task(true);
+        first_track(&mut task);
+        task.handle_next(None).unwrap();
+        assert!(task.pending_next);
+        task.handle_prev().unwrap();
+        assert!(!task.pending_next);
+        assert_eq!(task.connect_state.player().track.uri, FIRST);
+    }
+
+    #[tokio::test]
+    async fn new_load_cancels_old_pending_skip_and_uses_new_seed() {
+        let mut task = task(true);
+        first_track(&mut task);
+        task.handle_next(None).unwrap();
+        task.handle_load(
+            LoadRequest::from_tracks(
+                vec![SECOND.into()],
+                LoadRequestOptions {
+                    start_playing: false,
+                    ..Default::default()
+                },
+            ),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(!task.pending_next);
+        assert_eq!(task.connect_state.context_uri(), SECOND);
+        assert_eq!(task.connect_state.player().track.uri, SECOND);
+        assert!(matches!(
+            task.play_status,
+            SpircPlayStatus::LoadingPause { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn failed_autoplay_resolve_cancels_pending_skip_and_keeps_stream() {
+        let mut task = task(true);
+        first_track(&mut task);
+        task.handle_next(None).unwrap();
+        task.handle_next_context(Err(Error::unavailable("offline test")));
+        assert!(!task.pending_next);
+        assert_eq!(task.connect_state.player().track.uri, FIRST);
+        assert!(matches!(
+            task.play_status,
+            SpircPlayStatus::LoadingPlay { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn explicit_autoplay_off_does_not_wait_for_recommendations() {
+        let mut task = task(false);
+        first_track(&mut task);
+        task.handle_next(None).unwrap();
+        assert!(!task.pending_next);
+        assert!(!task.context_resolver.has_next());
+    }
+
+    #[tokio::test]
+    async fn natural_end_also_waits_for_autoplay_instead_of_stopping() {
+        let mut task = task(true);
+        first_track(&mut task);
+        task.play_request_id = Some(7);
+        task.handle_player_event(PlayerEvent::EndOfTrack {
+            track_id: SpotifyUri::from_uri(FIRST).unwrap(),
+            play_request_id: 7,
+        })
+        .unwrap();
+        assert!(task.pending_next);
+        assert!(task.pending_next_at_end);
+        assert_eq!(task.connect_state.player().track.uri, FIRST);
+        assert!(task.context_resolver.has_next());
+        task.handle_next_context(Err(Error::unavailable("offline test")));
+        assert!(!task.pending_next);
+        assert!(!task.pending_next_at_end);
+    }
+}
+
 #[derive(Debug)]
 enum SpircCommand {
     Play,
@@ -137,7 +359,9 @@ enum SpircCommand {
     Shuffle(bool),
     Repeat(bool),
     RepeatTrack(bool),
-    Disconnect { pause: bool },
+    Disconnect {
+        pause: bool,
+    },
     SetPosition(u32),
     SetVolume(u16),
     Activate,
@@ -270,6 +494,8 @@ impl Spirc {
 
             play_request_id: None,
             play_status: SpircPlayStatus::Stopped,
+            pending_next: false,
+            pending_next_at_end: false,
 
             connection_id_update,
             connect_state_update,
@@ -669,6 +895,14 @@ impl SpircTask {
             Err(why) => {
                 self.context_resolver.mark_next_unavailable();
                 self.context_resolver.remove_used_and_invalid();
+                if !self.context_resolver.has_next() {
+                    let ended = self.pending_next && self.pending_next_at_end;
+                    self.pending_next = false;
+                    self.pending_next_at_end = false;
+                    if ended {
+                        self.handle_stop();
+                    }
+                }
                 error!("{why}");
                 return false;
             }
@@ -702,6 +936,23 @@ impl SpircTask {
         };
 
         self.context_resolver.remove_used_and_invalid();
+        if self.pending_next && self.connect_state.has_playable_next_track() {
+            self.pending_next = false;
+            self.pending_next_at_end = false;
+            if let Err(why) = self.handle_next(None) {
+                error!("could not continue after context resolving: {why}");
+            }
+            return true;
+        }
+        if !self.context_resolver.has_next() {
+            let ended = self.pending_next && self.pending_next_at_end;
+            self.pending_next = false;
+            self.pending_next_at_end = false;
+            if ended {
+                self.handle_stop();
+                return true;
+            }
+        }
         update_state
     }
 
@@ -818,7 +1069,8 @@ impl SpircTask {
                     .repeat_track()
                     .then(|| self.connect_state.current_track(|t| t.uri.clone()));
 
-                self.handle_next(next_track)?
+                self.handle_next(next_track)?;
+                self.pending_next_at_end = self.pending_next;
             }
             PlayerEvent::Loading { .. } => match self.play_status {
                 SpircPlayStatus::LoadingPlay { position_ms } => {
@@ -1194,6 +1446,8 @@ impl SpircTask {
     }
 
     fn handle_transfer(&mut self, mut transfer: TransferState) -> Result<(), Error> {
+        self.pending_next = false;
+        self.pending_next_at_end = false;
         let mut ctx_uri = match transfer.current_session.context.uri {
             None => Err(SpircError::NoUri("transfer context"))?,
             // can apparently happen when a state is transferred and was started with "uris" via the api
@@ -1316,6 +1570,8 @@ impl SpircTask {
     }
 
     async fn handle_disconnect(&mut self) -> Result<(), Error> {
+        self.pending_next = false;
+        self.pending_next_at_end = false;
         self.context_resolver.clear();
 
         self.play_status = SpircPlayStatus::Stopped {};
@@ -1334,6 +1590,8 @@ impl SpircTask {
     }
 
     fn handle_stop(&mut self) {
+        self.pending_next = false;
+        self.pending_next_at_end = false;
         self.player.stop();
         self.connect_state.update_position(0, self.now_ms());
         self.connect_state.clear_next_tracks();
@@ -1378,6 +1636,8 @@ impl SpircTask {
         page: Option<ContextPage>,
         fallback_index: Option<usize>,
     ) -> Result<(), Error> {
+        self.pending_next = false;
+        self.pending_next_at_end = false;
         self.connect_state
             .reset_context(if let PlayContext::Uri(ref uri) = cmd.context {
                 ResetContext::WhenDifferent(uri)
@@ -1526,11 +1786,25 @@ impl SpircTask {
 
     fn load_context_from_tracks(&mut self, tracks: impl Into<ContextPage>) -> Result<(), Error> {
         const WEB_API_URI: &str = "spotify:web-api";
+        self.context_resolver.clear();
+        let page = tracks.into();
+        // A single search/direct-link song is the seed for Spotify autoplay.
+        // The synthetic web-api context cannot be resolved by that endpoint.
+        let uri = if page.tracks.len() == 1 {
+            page.tracks[0]
+                .uri
+                .as_deref()
+                .filter(|uri| uri.starts_with("spotify:track:"))
+                .unwrap_or(WEB_API_URI)
+        } else {
+            WEB_API_URI
+        }
+        .to_owned();
         let ctx = Context {
             // by providing values for uri/url the player in the official client's isn't frozen
-            uri: Some(WEB_API_URI.into()),
-            url: Some(format!("context://{WEB_API_URI}")),
-            pages: vec![tracks.into()],
+            url: Some(format!("context://{uri}")),
+            uri: Some(uri),
+            pages: vec![page],
             ..Default::default()
         };
 
@@ -1716,6 +1990,18 @@ impl SpircTask {
     fn handle_next(&mut self, track_uri: Option<String>) -> Result<(), Error> {
         let continue_playing = self.connect_state.is_playing();
 
+        let repeating_current = matches!(track_uri.as_ref(), Some(uri)
+            if self.connect_state.current_track(|track| &track.uri) == uri);
+        if !repeating_current && !self.connect_state.has_playable_next_track() {
+            self.add_autoplay_resolving_when_required();
+            if self.context_resolver.has_next() {
+                self.pending_next = true;
+                return Ok(());
+            }
+        }
+        self.pending_next = false;
+        self.pending_next_at_end = false;
+
         let current_uri = self.connect_state.current_track(|t| &t.uri);
         let mut has_next_track =
             matches!(track_uri, Some(ref track_uri) if current_uri == track_uri);
@@ -1744,6 +2030,8 @@ impl SpircTask {
     }
 
     fn handle_prev(&mut self) -> Result<(), Error> {
+        self.pending_next = false;
+        self.pending_next_at_end = false;
         // Previous behaves differently based on the position
         // Under 3s it goes to the previous song (starts playing)
         // Over 3s it seeks to zero (retains previous play status)
@@ -1752,8 +2040,9 @@ impl SpircTask {
             match self.connect_state.prev_track()? {
                 None if repeat_context => self.connect_state.reset_playback_to_position(None)?,
                 None => {
-                    self.connect_state.reset_playback_to_position(None)?;
-                    self.handle_stop()
+                    // At the beginning Previous restarts the current song;
+                    // it must not send Stop or discard the authoritative queue.
+                    self.handle_seek(0);
                 }
                 Some(_) => self.load_track(self.connect_state.is_playing(), 0)?,
             }

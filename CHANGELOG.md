@@ -1,3 +1,11 @@
+# v2.0.0-beta.3 - One-Step Back and Spotify Queue Boundaries
+
+## Fixed
+- Escape and Back return to the source list while keeping background playback and restoring selection/navigation hierarchy.
+- Spotify Previous at the start restarts the current song without Stop or clearing the queue.
+- Standalone Spotify songs seed autoplay correctly; pending recommendations/context pages continue after Next or natural completion.
+- Previous, new loads, transfer and disconnect cancel pending skips; explicit Autoplay Off remains respected.
+
 # v2.0.0-beta.2 - Background Playback and Spotify Recovery
 
 ## Fixed

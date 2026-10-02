@@ -4552,7 +4552,7 @@ unsafe fn activate_player_control(window: HWND, activation: PlayerControlActivat
             leave_player_to_main_menu(window, false);
         }
         PlayerControlActivation::Action("player_back_keep_playing") => {
-            leave_player_to_main_menu(window, true);
+            navigate_back_preserving_player(window);
         }
         PlayerControlActivation::Action("player_fullscreen_back_to_results") => {
             exit_fullscreen_to_results(window);
@@ -7697,8 +7697,16 @@ unsafe fn activate_user_playlist_item(window: HWND) {
     }
 }
 
-#[allow(clippy::too_many_lines)]
 unsafe fn navigate_back(window: HWND) {
+    navigate_back_impl(window, false);
+}
+
+unsafe fn navigate_back_preserving_player(window: HWND) {
+    navigate_back_impl(window, true);
+}
+
+#[allow(clippy::too_many_lines)]
+unsafe fn navigate_back_impl(window: HWND, keep_playing: bool) {
     stop_controlled_repeat(window);
     if state(window).is_some_and(|state| audiovault::is_view(state.view)) {
         // Python `back_from_audiovault`.
@@ -7716,7 +7724,14 @@ unsafe fn navigate_back(window: HWND) {
     cancel_local_folder_scan(window, state);
     let leaving_youtube_collection = state.view == MainView::YoutubeCollection;
     if state.view == MainView::Player {
-        close_player_runtime(window, state);
+        if keep_playing && state.application.settings().enable_background_playback {
+            state
+                .application
+                .set_player_toggle(SessionToggle::Fullscreen, false);
+            state.application.keep_player_previous_frame();
+        } else {
+            close_player_runtime(window, state);
+        }
     }
     if leaving_youtube_collection {
         let _ = state.application.pop_youtube_collection();
@@ -12913,7 +12928,7 @@ unsafe fn hide_player_details_for_back(window: HWND) -> bool {
 
 /// Python `player_back`: on the player page Escape hides the details, then
 /// leaves full screen, and then leaves the player. From the player and its
-/// buttons it returns to the main menu and continues playback when background
+/// buttons it returns one screen and continues playback when background
 /// playback is on. Otherwise it preserves the original stop/back behavior.
 unsafe fn player_back_shortcut(window: HWND) {
     if handle_player_back_in_place(window) {
@@ -12926,19 +12941,11 @@ unsafe fn player_back_shortcut(window: HWND) {
         navigate_back(window);
         return;
     }
-    let focus = GetFocus();
     let background = state.application.settings().enable_background_playback;
     if background {
-        leave_player_to_main_menu(window, true);
-        return;
-    }
-    let closes_playback = focus != state.list
-        && (state.player_controls.is_action_control(focus)
-            || (!background && state.player_controls.is_navigation_control(focus)));
-    if closes_playback {
-        navigate_back(window);
+        navigate_back_preserving_player(window);
     } else {
-        leave_player_to_main_menu(window, true);
+        navigate_back(window);
     }
 }
 

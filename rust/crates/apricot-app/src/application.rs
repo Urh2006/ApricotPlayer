@@ -1026,13 +1026,25 @@ impl Application {
         self.background_return_frame = None;
     }
 
+    /// A one-step Back keeps the source frame, including collections that
+    /// are still open. Unlike Main menu, it does not clear their ancestors.
+    pub fn keep_player_previous_frame(&mut self) {
+        if self.current_route() == Route::Player {
+            self.background_return_frame =
+                Some(self.state.navigation.player_return_frame().clone());
+        }
+    }
+
     /// Python `show_player_page`: the player returns to the screen it was
     /// opened from, and a background player to the screen it was started from.
     pub fn navigate_to_player(&mut self) {
         if self.state.navigation.current().route == Route::Player {
             return;
         }
-        if let Some(frame) = self.background_return_frame.take() {
+        if let Some(frame) = self.background_return_frame.take()
+            && (self.state.navigation.current().route != frame.route
+                || self.state.navigation.current().parameters != frame.parameters)
+        {
             self.state.navigation.reset();
             self.state.navigation.push(frame);
         }
@@ -4261,5 +4273,31 @@ mod tests {
             app.navigate_back().map(|frame| frame.route),
             Some(Route::History)
         );
+    }
+
+    #[test]
+    fn one_step_player_back_keeps_collection_focus_and_ancestors_on_reopen() {
+        for route in [
+            Route::UserPlaylistItems,
+            Route::PlaylistResults,
+            Route::SpotifyBrowse,
+        ] {
+            let root = tempdir().unwrap();
+            let mut app = application(root.path());
+            app.navigate_to(RouteFrame::new(Route::UserPlaylists));
+            let mut frame = RouteFrame::new(route);
+            frame.selected_index = 7;
+            frame.selected_item_id = Some("played-occurrence".into());
+            frame
+                .parameters
+                .insert("index".into(), serde_json::json!(7));
+            app.navigate_to(frame.clone());
+            app.navigate_to_player();
+            app.keep_player_previous_frame();
+            assert_eq!(app.navigate_back(), Some(frame.clone()));
+            app.navigate_to_player();
+            assert_eq!(app.navigate_back(), Some(frame));
+            assert_eq!(app.navigate_back().unwrap().route, Route::UserPlaylists);
+        }
     }
 }

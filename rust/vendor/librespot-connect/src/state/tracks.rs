@@ -250,6 +250,15 @@ impl<'ct> ConnectState {
     /// to next tracks (when from the context) and fills up the prev tracks from the
     /// current context
     pub fn prev_track(&mut self) -> Result<Option<&MessageField<ProvidedTrack>>, Error> {
+        // Do not remove the current occurrence or insert a duplicate when
+        // there is no previous song (a trailing repeat delimiter is not one).
+        if !self
+            .prev_tracks()
+            .iter()
+            .any(|track| !track.uid.starts_with(IDENTIFIER_DELIMITER))
+        {
+            return Ok(None);
+        }
         let old_track = self.player_mut().track.take();
 
         if let Some(old_track) = old_track {
@@ -461,6 +470,12 @@ impl<'ct> ConnectState {
         } else {
             !self.next_tracks().is_empty()
         }
+    }
+
+    pub fn has_playable_next_track(&self) -> bool {
+        self.next_tracks()
+            .iter()
+            .any(|track| !track.uid.starts_with(IDENTIFIER_DELIMITER) && !track.is_unavailable())
     }
 
     pub fn recent_track_uris(&self) -> Vec<String> {

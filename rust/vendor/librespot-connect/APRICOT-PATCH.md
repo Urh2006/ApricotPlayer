@@ -25,6 +25,14 @@ and queue/history functions in `src/state/tracks.rs`:
 * `ConnectState::next_track` and `prev_track`: smart shuffle recommendations
   participate in playback history, so Previous reaches the recommendation
   between two original playlist tracks and Next retains that occurrence.
+* At the beginning of playback history, Previous seeks to zero without Stop
+  or a destructive queue reset. `prev_track` leaves the current occurrence
+  and next tracks intact when history contains no preceding song.
+* Single-track loads retain the song URI as the autoplay seed instead of the
+  synthetic web-api URI. Next and natural completion wait for pending context
+  pages/recommendations and perform the skip after the authoritative resolver
+  has filled the queue. Previous, new loads, transfer and disconnect cancel a
+  pending skip. Autoplay Off remains respected.
 
 Upstream: `dev` has `Spirc::add_to_queue` and `clear_queue` and a `SetQueue`
 player event without `uid`; a pull request with the confirmed state and the

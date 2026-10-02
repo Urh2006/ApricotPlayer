@@ -304,12 +304,12 @@ fn navigation_controls(
         )];
     }
     if settings.enable_background_playback {
-        // Python `leave_player_to_main_menu(force_keep_playing=True)`.
+        // Escape returns to the source list without stopping playback.
         return vec![button_for(
             catalog,
             settings,
             "back",
-            "back",
+            "back_results",
             "player_back_keep_playing",
             "player_back",
         )];
@@ -670,7 +670,7 @@ mod tests {
         );
         assert!(model.embedded_results);
         assert_eq!(model.controls[0].id, "back");
-        assert_eq!(model.controls[0].label, "Back to main menu Escape");
+        assert_eq!(model.controls[0].label, "Back to results Escape");
         assert_eq!(
             model.controls[0].action_id,
             Some("player_back_keep_playing")

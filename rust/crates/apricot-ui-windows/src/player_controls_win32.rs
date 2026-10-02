@@ -341,20 +341,6 @@ impl PlayerControls {
         order
     }
 
-    /// Python `player_escape_stop_controls` without the navigation row.
-    pub fn is_action_control(&self, window: HWND) -> bool {
-        window == self.video_host
-            || self.controls[NAVIGATION_SPECS.len()..]
-                .iter()
-                .any(|control| control.active && control.window == window)
-    }
-
-    pub fn is_navigation_control(&self, window: HWND) -> bool {
-        self.controls[..NAVIGATION_SPECS.len()]
-            .iter()
-            .any(|control| control.active && control.window == window)
-    }
-
     pub unsafe fn layout(&self, width: i32, height: i32, margin: i32, status_height: i32) {
         self.layout_below(width, height, margin, status_height, 0);
     }
