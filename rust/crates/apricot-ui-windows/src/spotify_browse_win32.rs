@@ -651,7 +651,7 @@ pub(super) unsafe fn selection_changed(window: HWND) {
         .filter(|_| at_end && frame.loading.is_none())
     {
         let message = super::catalog_text(&state.application, "loading_more_results");
-        set_status(state, &message, true);
+        set_status(state, &message, false);
         request(window, offset);
     }
 }
@@ -1248,7 +1248,7 @@ unsafe fn add_to_playlist(window: HWND, uris: Vec<String>) {
     };
     let texts = super::spotify::catalog(state);
     let text = texts.text("spotify_loading").to_owned();
-    set_status(state, &text, true);
+    set_status(state, &text, false);
     let stamp = state.spotify.epochs_begin();
     state.spotify_browse.pending = Some((stamp, Pending::Playlists { uris }));
     service.load_catalog(stamp, CatalogRequest::EditablePlaylists);
@@ -1583,7 +1583,7 @@ unsafe fn load_for(window: HWND, request: CatalogRequest, pending: Pending) {
     };
     let texts = super::spotify::catalog(state);
     let text = texts.text("spotify_loading").to_owned();
-    set_status(state, &text, true);
+    set_status(state, &text, false);
     let stamp = state.spotify.epochs_begin();
     state.spotify_browse.pending = Some((stamp, pending));
     service.load_catalog(stamp, request);

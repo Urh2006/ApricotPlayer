@@ -3921,7 +3921,7 @@ unsafe fn open_youtube_collection(
                     "loading_playlist"
                 };
                 let message = catalog.text(key).replace("{title}", &title);
-                set_status(state, &message, true);
+                set_status(state, &message, false);
                 work
             }
             Err(error) => {
@@ -3969,7 +3969,7 @@ unsafe fn play_youtube_playlist(window: HWND, item: &apricot_core::MediaItem, sh
             ));
             let message = catalog_text(&state.application, "loading_playlist")
                 .replace("{title}", &item.title);
-            set_status(state, &message, true);
+            set_status(state, &message, false);
             let _ = SetTimer(
                 Some(window),
                 YOUTUBE_TIMER_ID,
@@ -5139,7 +5139,7 @@ unsafe fn load_trending_results(window: HWND) {
     let message = catalog_text(&state.application, "trending_loading_official")
         .replace("{country}", country_label)
         .replace("{category}", &category_label);
-    set_status(state, &message, true);
+    set_status(state, &message, false);
     start_youtube_trending_work(window, work);
 }
 
@@ -5503,7 +5503,7 @@ unsafe fn open_selected_rss_feed(window: HWND) {
     state.view = MainView::RssItems;
     set_open_button_label(state, "play_episode");
     set_control_text(state, state.rss_refresh, "refresh_feed");
-    refresh_rss_items(state, true, true);
+    refresh_rss_items(state, true, false);
     layout_controls_state(window, state);
     if refresh_legacy {
         refresh_rss_feed_background(window, index);
@@ -5596,7 +5596,7 @@ unsafe fn maybe_extend_rss_items(window: HWND) {
         let added = state.rss_visible_item_count.saturating_sub(before);
         let message = catalog_text(&state.application, "podcast_more_episodes_loaded")
             .replace("{count}", &added.to_string());
-        set_status(state, &message, true);
+        set_status(state, &message, false);
     }
 }
 
@@ -6101,7 +6101,7 @@ unsafe fn poll_podcast_work(window: HWND) {
                     .application
                     .navigate_to(RouteFrame::new(Route::PodcastSearchResults));
                 state.view = MainView::PodcastSearchResults;
-                refresh_podcast_directory_results(state, true, true);
+                refresh_podcast_directory_results(state, true);
                 layout_controls_state(window, state);
             }
             Err(error) => {
@@ -6121,7 +6121,7 @@ unsafe fn poll_podcast_work(window: HWND) {
                     .navigate_to(RouteFrame::new(Route::PodcastSearchResults));
                 state.view = MainView::PodcastSearchResults;
                 set_open_button_label(state, "open");
-                refresh_podcast_directory_results(state, true, true);
+                refresh_podcast_directory_results(state, true);
                 layout_controls_state(window, state);
             }
             Err(error) => {
@@ -6153,11 +6153,7 @@ unsafe fn poll_podcast_work(window: HWND) {
     stop_youtube_timer(window);
 }
 
-unsafe fn refresh_podcast_directory_results(
-    state: &mut WindowState,
-    focus: bool,
-    announce_status: bool,
-) {
+unsafe fn refresh_podcast_directory_results(state: &mut WindowState, focus: bool) {
     SendMessageW(state.list, LB_RESETCONTENT, None, None);
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
     let name = if state.view == MainView::PodcastCategories {
@@ -6169,7 +6165,7 @@ unsafe fn refresh_podcast_directory_results(
     if state.podcast_search_results.is_empty() {
         add_list_string(state.list, catalog.text("podcast_search_empty"));
         SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
-        set_status(state, catalog.text("podcast_search_empty"), announce_status);
+        set_status(state, catalog.text("podcast_search_empty"), false);
     } else {
         for item in &state.podcast_search_results {
             add_list_string(state.list, &podcast_directory_label(item, &catalog));
@@ -6180,7 +6176,7 @@ unsafe fn refresh_podcast_directory_results(
             &catalog
                 .text("podcast_search_done")
                 .replace("{count}", &state.podcast_search_results.len().to_string()),
-            announce_status,
+            false,
         );
     }
     if focus {
@@ -7667,7 +7663,7 @@ unsafe fn show_user_playlist_items(window: HWND, playlist_index: usize, push_rou
         state.application.navigate_to(frame);
     }
     state.view = MainView::UserPlaylistItems;
-    refresh_user_playlist_items(state, true, true);
+    refresh_user_playlist_items(state, true, false);
     layout_controls_state(window, state);
 }
 
@@ -7799,7 +7795,7 @@ unsafe fn navigate_back(window: HWND) {
         }
         Route::PodcastSearchResults => {
             state.view = MainView::PodcastSearchResults;
-            refresh_podcast_directory_results(state, true, false);
+            refresh_podcast_directory_results(state, true);
             select_list_index(state.list, saved_index);
             layout_controls_state(window, state);
         }
@@ -7938,7 +7934,7 @@ unsafe fn submit_search(window: HWND) {
     };
     let message = catalog_text(&state.application, "searching")
         .replace("{query}", state.application.search_session().query());
-    set_status(state, &message, true);
+    set_status(state, &message, false);
     start_youtube_work(window, work);
 }
 
@@ -8079,7 +8075,7 @@ unsafe fn show_download_queue(window: HWND) {
             .navigate_to(RouteFrame::new(Route::DownloadQueue));
     }
     state.view = MainView::DownloadQueue;
-    refresh_download_queue(state, true, true);
+    refresh_download_queue(state, true, false);
     layout_controls_state(window, state);
 }
 
@@ -8525,16 +8521,23 @@ unsafe fn poll_clip_exports(window: HWND) {
             }
         });
     for result in completed {
-        let message = match result {
-            Ok(path) => catalog_text(&state.application, "clip_export_done").replace(
-                "{title}",
-                &path.file_name().unwrap_or_default().to_string_lossy(),
-            ),
-            Err(error) => {
-                catalog_text(&state.application, "clip_export_failed").replace("{error}", &error)
+        match result {
+            Ok(path) => {
+                let message = catalog_text(&state.application, "clip_export_done").replace(
+                    "{title}",
+                    &path.file_name().unwrap_or_default().to_string_lossy(),
+                );
+                set_status(state, &message, true);
             }
-        };
-        set_status(state, &message, true);
+            // Python `export_marked_clip_worker` shows the failure in a
+            // message box.
+            Err(error) => {
+                let message = catalog_text(&state.application, "clip_export_failed")
+                    .replace("{error}", &error);
+                set_status(state, &message, false);
+                show_error_message(window, &message);
+            }
+        }
     }
     if !state.clip_exports.is_empty() {
         let _ = SetTimer(
@@ -8773,7 +8776,7 @@ unsafe fn start_download_item(
                 set_status(
                     state,
                     &catalog_text(&state.application, "download_cancelled"),
-                    true,
+                    false,
                 );
             }
             return;
@@ -8879,7 +8882,7 @@ unsafe fn confirm_download(
             set_status(
                 state,
                 &catalog_text(&state.application, "download_cancelled"),
-                true,
+                false,
             );
         }
         return false;
@@ -9021,7 +9024,7 @@ unsafe fn start_all_queued_downloads(window: HWND, requested_choice: DownloadCho
                 set_status(
                     state,
                     &catalog_text(&state.application, "download_cancelled"),
-                    true,
+                    false,
                 );
             }
             return;
@@ -9640,7 +9643,13 @@ unsafe fn apply_download_update(window: HWND, update: DownloadWorkerUpdate) {
                     catalog_text(&state.application, "download_failed").replace("{error}", &error)
                 }
             };
-            set_status(state, &message, true);
+            // Python shows a cancelled download on the status line only and
+            // a failed one in a message box.
+            let failed = !succeeded && !cancelled;
+            set_status(state, &message, succeeded);
+            if failed {
+                show_error_message(window, &message);
+            }
             if succeeded {
                 let history_action = match task.kind {
                     DownloadTaskKind::Single if task.choice == DownloadChoice::Audio => {
@@ -11297,7 +11306,7 @@ unsafe fn result_selection_changed(window: HWND) {
     if let Some(work) = work {
         if let Some(state) = state_mut(window) {
             let message = catalog_text(&state.application, "loading_more_results");
-            set_status(state, &message, true);
+            set_status(state, &message, false);
         }
         match work {
             PendingYoutubeListWork::Search(work) => start_youtube_work(window, work),
@@ -11344,7 +11353,7 @@ unsafe fn refresh_results(state: &mut WindowState, focus: bool) {
     if items.is_empty() {
         add_list_string(state.list, catalog.text("no_results"));
         SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
-        set_status(state, catalog.text("no_results"), true);
+        set_status(state, catalog.text("no_results"), false);
     } else {
         for item in items {
             add_list_string(
@@ -11361,7 +11370,7 @@ unsafe fn refresh_results(state: &mut WindowState, focus: bool) {
         let found = catalog
             .text("found")
             .replace("{count}", &items.len().to_string());
-        set_status(state, &found, true);
+        set_status(state, &found, false);
     }
     if focus {
         let _ = SetFocus(Some(state.list));
@@ -11394,7 +11403,7 @@ unsafe fn refresh_youtube_collection(state: &mut WindowState, focus: bool) {
     if collection.items().is_empty() {
         add_list_string(state.list, catalog.text("no_results"));
         SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
-        set_status(state, catalog.text("no_results"), true);
+        set_status(state, catalog.text("no_results"), false);
     } else {
         for item in collection.items() {
             add_list_string(
@@ -11409,7 +11418,7 @@ unsafe fn refresh_youtube_collection(state: &mut WindowState, focus: bool) {
         let found = catalog
             .text("found")
             .replace("{count}", &collection.items().len().to_string());
-        set_status(state, &found, true);
+        set_status(state, &found, false);
     }
     if focus {
         let _ = SetFocus(Some(state.list));
@@ -11819,7 +11828,7 @@ unsafe fn append_results(state: &mut WindowState, added: usize) {
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
     let items = state.application.search_session().items();
     if added == 0 {
-        set_status(state, catalog.text("no_more_results"), true);
+        set_status(state, catalog.text("no_more_results"), false);
         return;
     }
     let first_new = items.len().saturating_sub(added);
@@ -11838,7 +11847,7 @@ unsafe fn append_results(state: &mut WindowState, added: usize) {
     let loaded = catalog
         .text("search_more_loaded")
         .replace("{count}", &items.len().to_string());
-    set_status(state, &loaded, true);
+    set_status(state, &loaded, false);
 }
 
 unsafe fn append_youtube_collection_results(state: &mut WindowState, added: usize) {
@@ -11847,7 +11856,7 @@ unsafe fn append_youtube_collection_results(state: &mut WindowState, added: usiz
         return;
     };
     if added == 0 {
-        set_status(state, catalog.text("no_more_results"), true);
+        set_status(state, catalog.text("no_more_results"), false);
         return;
     }
     let first_new = collection.items().len().saturating_sub(added);
@@ -11864,7 +11873,7 @@ unsafe fn append_youtube_collection_results(state: &mut WindowState, added: usiz
     let loaded = catalog
         .text("search_more_loaded")
         .replace("{count}", &collection.items().len().to_string());
-    set_status(state, &loaded, true);
+    set_status(state, &loaded, false);
 }
 
 /// Python's `result_line` for online results, with the download queue marker
@@ -13412,7 +13421,7 @@ unsafe fn navigate_player_relative_from(window: HWND, delta: i32, after_end: boo
             };
             state.pending_player_navigation = Some(delta);
             let message = catalog_text(&state.application, "loading_more_results");
-            set_status(state, &message, true);
+            set_status(state, &message, false);
             start_youtube_work(window, work);
         }
         PlayerNavigationOutcome::LoadingMoreCollection(work) => {
@@ -13421,7 +13430,7 @@ unsafe fn navigate_player_relative_from(window: HWND, delta: i32, after_end: boo
             };
             state.pending_player_navigation = Some(delta);
             let message = catalog_text(&state.application, "loading_more_results");
-            set_status(state, &message, true);
+            set_status(state, &message, false);
             start_youtube_collection_work(window, work);
         }
         PlayerNavigationOutcome::Unavailable => {
@@ -17952,7 +17961,7 @@ unsafe fn poll_local_folder_scan(window: HWND) {
                 .application
                 .navigate_to(RouteFrame::new(Route::LocalFolder));
             state.view = MainView::LocalFolder;
-            refresh_local_folder(state, true, true);
+            refresh_local_folder(state, true, false);
             layout_controls_state(window, state);
         }
         Ok(_) => {
@@ -18172,7 +18181,7 @@ unsafe fn open_settings(window: HWND) {
         MainView::RssFeeds => refresh_rss_feeds(state, false, None),
         MainView::RssItems => refresh_rss_items(state, false, false),
         MainView::PodcastSearchResults => {
-            refresh_podcast_directory_results(state, false, false);
+            refresh_podcast_directory_results(state, false);
         }
         MainView::PodcastCategories => refresh_podcast_categories(state, false),
         MainView::UserPlaylists => refresh_user_playlists(state, false),

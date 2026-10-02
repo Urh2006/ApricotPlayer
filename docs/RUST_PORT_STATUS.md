@@ -1616,3 +1616,14 @@ Urhove zahteve z dne 2. 10. 2026:
   znova odpre `ApricotPlayer.exe --updated-relaunch`. Namestitveni program je Pythonov
   (isti AppId) in pobriše `_internal`. Podatki ostanejo v `%APPDATA%\ApricotPlayer`.
   Prenosna 1.x verzija zip 2.0 zavrne (pričakuje `_internal`), zato jo je treba prenesti znova.
+- Parity zgovornosti (Urh, 2. 10. 2026): popisanih je bilo 289 izgovorjenih besedil vrstice stanja
+  in primerjanih s Pythonom (`announce_player` in `speak_text` govorita, `set_status` samo
+  prikaže). Utišanih je 40 mest, ki jih Python samo prikaže: iskanje ("Searching", "Found
+  results", "No results"), nalaganje naslednjih rezultatov, nalaganje playlista, kanala, trendov,
+  epizod in podcastov, AudioVault prijava, odjava, nalaganje, iskanje in napredek prenosa,
+  preklican prenos, odpiranje zaslonov RSS epizod, uporabniškega playlista, prenosov in lokalne
+  mape. Neuspel prenos in neuspel izvoz izseka sta, kot v Pythonu, v sporočilnem oknu. Pri
+  Spotifyju so vmesna stanja ("Connecting", "Searching", "Loading") samo prikazana, rezultati
+  dejanj in napake se izgovorijo. Preizkus z nadomestnim NVDA odjemalcem: iskanje in nalaganje
+  več rezultatov ne izgovorita ničesar, Enter na rezultatu samo "Playing: naslov". Možnost
+  zgovornosti v nastavitvah sledi v beta.2 (Urh).

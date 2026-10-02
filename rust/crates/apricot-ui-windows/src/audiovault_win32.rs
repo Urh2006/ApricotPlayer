@@ -356,6 +356,13 @@ unsafe fn announce(window: HWND, key: &str, replacements: &[(&str, &str)]) {
     }
 }
 
+/// Python `set_status`: shown on the status line, not spoken.
+unsafe fn show_status(window: HWND, key: &str, replacements: &[(&str, &str)]) {
+    if let Some(state) = state(window) {
+        set_status(state, &keyed(state, key, replacements), false);
+    }
+}
+
 unsafe fn message(window: HWND, key: &str, error: &AudiovaultError) {
     let Some(state) = state(window) else {
         return;
@@ -440,7 +447,7 @@ unsafe fn ensure_login(window: HWND, after: AfterLogin) -> bool {
     let email = settings_email(state);
     let password = unprotect_password(&state.application.settings().audiovault_password_protected);
     if !email.is_empty() && !password.is_empty() {
-        set_status(state, &text(state, "audiovault_logging_in"), true);
+        set_status(state, &text(state, "audiovault_logging_in"), false);
         start_login(window, email, password, after, false);
     } else {
         show_login(window, after, None);
@@ -495,7 +502,7 @@ unsafe fn show_login(window: HWND, after: AfterLogin, owner: Option<HWND>) -> bo
         }
         return false;
     }
-    announce(window, "audiovault_logging_in", &[]);
+    show_status(window, "audiovault_logging_in", &[]);
     start_login(window, address, secret, after, true);
     true
 }
@@ -557,7 +564,7 @@ unsafe fn finish_login(
             if let Err(error) = saved {
                 show_error_message(window, &error.to_string());
             }
-            announce(window, "audiovault_logged_in", &[]);
+            show_status(window, "audiovault_logged_in", &[]);
             run_after_login(window, after);
         }
         Err(error) => {
@@ -619,7 +626,7 @@ pub(super) unsafe fn settings_request(window: HWND, request: usize, owner: HWND)
         show_error_message(window, &error.to_string());
         return;
     }
-    announce(window, "audiovault_logged_out", &[]);
+    show_status(window, "audiovault_logged_out", &[]);
 }
 
 // ---------------------------------------------------------------------------
@@ -773,7 +780,7 @@ unsafe fn show_recent(window: HWND, mode: AudiovaultMode, allow_retry: bool) {
     state.audiovault.results_generation += 1;
     let generation = state.audiovault.results_generation;
     show_results_screen(window, &title, View::Recent(mode));
-    announce(window, "audiovault_loading_recent", &[]);
+    show_status(window, "audiovault_loading_recent", &[]);
     spawn(window, move |client, _| {
         let result = client
             .fetch_page(&format!("{AUDIOVAULT_BASE_URL}/"))
@@ -834,7 +841,7 @@ pub(super) unsafe fn search(window: HWND) {
         AudiovaultMode::Shows
     };
     state.audiovault.mode = mode;
-    announce(window, "searching", &[("query", &query)]);
+    show_status(window, "searching", &[("query", &query)]);
     start_search(window, query, mode, true);
 }
 
@@ -876,7 +883,7 @@ unsafe fn show_results(window: HWND, results: Vec<MediaItem>) {
         .text("found")
         .replace("{count}", &results.len().to_string());
     state.audiovault.results = results;
-    set_status(state, &found, true);
+    set_status(state, &found, false);
     if GetFocus() != state.list {
         let _ = SetFocus(Some(state.list));
     }
@@ -976,7 +983,7 @@ unsafe fn prepare_show(window: HWND, item: MediaItem, download_after: bool, allo
         "audiovault_loading_episodes",
         &[("title", &item.title)],
     );
-    set_status(state, &loading, true);
+    set_status(state, &loading, false);
     if state.audiovault.manifest_loading.contains(&key) {
         return;
     }
@@ -1121,7 +1128,7 @@ unsafe fn show_episodes(window: HWND, show: &MediaItem, episodes: Vec<MediaItem>
         .replace("{count}", &episodes.len().to_string())
         .replace("{title}", &show.title);
     state.audiovault.results = episodes;
-    set_status(state, &loaded, true);
+    set_status(state, &loaded, false);
     if GetFocus() != state.list {
         let _ = SetFocus(Some(state.list));
     }
@@ -1140,7 +1147,7 @@ unsafe fn start_progress(window: HWND, title: &str) -> u64 {
         "audiovault_progress_downloading",
         &[("title", title), ("percent", "0")],
     );
-    set_status(state, &message, true);
+    set_status(state, &message, false);
     task
 }
 
@@ -1272,7 +1279,7 @@ pub(super) unsafe fn prepare_remote_episode(
             "audiovault_episode_preparing",
             &[("title", &item.title)],
         );
-        set_status(state, &message, true);
+        set_status(state, &message, false);
         return;
     }
     state.audiovault.episode_loading.insert(key);
@@ -1684,7 +1691,7 @@ unsafe fn download_item(window: HWND, mut item: MediaItem, allow_retry: bool) {
             }
             super::resume_deferred_window_work(window);
             let Some(chosen) = chosen else {
-                announce(window, "download_cancelled", &[]);
+                show_status(window, "download_cancelled", &[]);
                 return;
             };
             item.metadata.insert(

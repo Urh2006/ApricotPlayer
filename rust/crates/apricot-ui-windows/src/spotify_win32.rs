@@ -415,7 +415,7 @@ unsafe fn use_account(window: HWND, key: &str) {
     let stamp = state.spotify.epochs.begin();
     state.spotify.connect = Some(stamp);
     let text = catalog(state).text("spotify_connecting").to_owned();
-    set_status(state, &text, true);
+    set_status(state, &text, false);
     connect_account(&mut state.spotify, &service, stamp, key);
     refresh_accounts(window, Some(key));
 }
@@ -933,7 +933,7 @@ pub(super) unsafe fn show_search(window: HWND) {
             state.spotify_browse.last_kind = kind;
             let title = super::spotify_browse::search_title(state, &query);
             let searching = texts.text("spotify_searching").replace("{query}", &query);
-            set_status(state, &searching, true);
+            set_status(state, &searching, false);
             let kind = apricot_spotify::SearchKind::ALL
                 .get(kind)
                 .copied()
@@ -1261,7 +1261,7 @@ pub(super) unsafe fn play_link(window: HWND, text: &str, action: &str) -> bool {
         let stamp = state.spotify.epochs.begin();
         state.spotify.connect = None;
         let text = texts.text("spotify_connecting").to_owned();
-        set_status(state, &text, true);
+        set_status(state, &text, false);
         connect_account(&mut state.spotify, &service, stamp, &key);
     }
     true
