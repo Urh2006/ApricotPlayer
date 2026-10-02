@@ -1,3 +1,15 @@
+# v2.0.0-beta.4 - Focus-Aware Player Shortcuts
+
+## Fixed
+- Player controls and the Player area take priority over conflicting global shortcuts, including custom shortcut assignments. Menus keep their normal shortcuts and letter navigation.
+- Spotify Like/Unlike and radio target the playing song from the player area, instead of a selected row behind it. Hide/Unhide also targets the playing track when its personal mix is known.
+- Spotify rows keep their own actions when a global shortcut uses the same keys.
+
+## Performance and verification
+- Cache immutable embedded translations lazily to avoid repeated JSON parsing during startup and screen updates.
+- Verified Spotify is already available in Customize main menu and can be hidden without disabling Ctrl+Alt+C.
+- Reviewed YouTube stream caching, prefetch and warm extraction; retained the existing playback path.
+
 # v2.0.0-beta.3 - One-Step Back and Spotify Queue Boundaries
 
 ## Fixed

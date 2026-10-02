@@ -118,8 +118,22 @@ pub fn action_for_shortcut(
     chord: ShortcutChord,
     context: ShortcutContext,
 ) -> Option<&'static ActionDefinition> {
-    resolve_pass(shortcuts, chord, context, true)
-        .or_else(|| resolve_pass(shortcuts, chord, context, false))
+    // The focused player owns its keys, including user-configured collisions.
+    // Menus and text fields retain their existing global action priority.
+    let global_first = context.scope != ActionScope::Player;
+    resolve_pass(shortcuts, chord, context, global_first)
+        .or_else(|| resolve_pass(shortcuts, chord, context, !global_first))
+}
+
+/// A focused media surface owns its scoped actions before global shortcuts.
+/// Callers use this for Spotify rows; ordinary menus keep global priority.
+pub fn focused_action_for_shortcut(
+    shortcuts: &BTreeMap<String, String>,
+    chord: ShortcutChord,
+    context: ShortcutContext,
+) -> Option<&'static ActionDefinition> {
+    resolve_pass(shortcuts, chord, context, false)
+        .or_else(|| resolve_pass(shortcuts, chord, context, true))
 }
 
 /// Transport shortcuts available while the player is outside its own page.
@@ -226,8 +240,32 @@ mod tests {
 
     use super::{
         ShortcutChord, ShortcutContext, ShortcutKey, action_for_shortcut,
-        background_player_action_for_shortcut,
+        background_player_action_for_shortcut, focused_action_for_shortcut,
     };
+
+    #[test]
+    fn focused_spotify_rows_like_the_selection_despite_a_global_collision() {
+        let shortcuts = BTreeMap::from([(
+            "new_subscription_videos".to_owned(),
+            "Ctrl+Shift+I".to_owned(),
+        )]);
+        let chord = ShortcutChord::parse("Ctrl+Shift+I").unwrap();
+        let context = ShortcutContext::new(ActionScope::List, false);
+        assert_eq!(
+            focused_action_for_shortcut(&shortcuts, chord, context)
+                .unwrap()
+                .id
+                .as_str(),
+            "spotify_toggle_saved"
+        );
+        assert_eq!(
+            action_for_shortcut(&shortcuts, chord, context)
+                .unwrap()
+                .id
+                .as_str(),
+            "new_subscription_videos"
+        );
+    }
 
     #[test]
     fn background_transport_works_in_menus_and_results() {
@@ -361,10 +399,41 @@ mod tests {
         let action = action_for_shortcut(
             &shortcuts,
             ShortcutChord::parse("Ctrl+F").expect("chord"),
-            ShortcutContext::new(ActionScope::Player, false),
+            ShortcutContext::new(ActionScope::List, false),
         )
         .expect("action");
         assert_eq!(action.id.as_str(), "open_search");
+    }
+
+    #[test]
+    fn player_zone_prioritizes_all_player_actions_over_global_collisions() {
+        for player_action in ACTIONS.iter().filter(|action| {
+            !action.scopes.contains(&ActionScope::Global)
+                && action.scopes.contains(&ActionScope::Player)
+        }) {
+            let key = player_action.default_windows_shortcut;
+            let shortcuts =
+                BTreeMap::from([("new_subscription_videos".to_owned(), key.to_owned())]);
+            let action = action_for_shortcut(
+                &shortcuts,
+                ShortcutChord::parse(key).unwrap(),
+                ShortcutContext::new(ActionScope::Player, false),
+            )
+            .unwrap();
+            assert_eq!(action.id, player_action.id, "player zone: {key}");
+            assert_eq!(
+                action_for_shortcut(
+                    &shortcuts,
+                    ShortcutChord::parse(key).unwrap(),
+                    ShortcutContext::new(ActionScope::List, false)
+                )
+                .unwrap()
+                .id
+                .as_str(),
+                "new_subscription_videos",
+                "menu/list retains global routing: {key}"
+            );
+        }
     }
 
     #[test]

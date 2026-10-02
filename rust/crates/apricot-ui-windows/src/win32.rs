@@ -41,6 +41,7 @@ use apricot_core::{
     action::{ActionScope, RepeatPolicy},
     shortcut::{
         ShortcutContext, ShortcutKey, action_for_shortcut, background_player_action_for_shortcut,
+        focused_action_for_shortcut,
     },
 };
 use apricot_media::{
@@ -12758,7 +12759,12 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
         view_shortcut_scope(state.view)
     };
     let context = ShortcutContext::new(scope, accepts_text);
-    let Some(action) = action_for_shortcut(shortcuts, chord, context).or_else(|| {
+    let resolve = if state.view == MainView::SpotifyBrowse && focus == state.list {
+        focused_action_for_shortcut
+    } else {
+        action_for_shortcut
+    };
+    let Some(action) = resolve(shortcuts, chord, context).or_else(|| {
         (state.background_player.is_visible() && !background_focus && focus != state.search_edit)
             .then(|| background_player_action_for_shortcut(shortcuts, chord, context))
             .flatten()

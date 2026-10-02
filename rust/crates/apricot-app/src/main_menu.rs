@@ -3,6 +3,7 @@
 use std::{
     collections::{BTreeMap, HashSet},
     fmt::Write as _,
+    sync::OnceLock,
 };
 
 use apricot_core::{
@@ -132,10 +133,20 @@ pub fn english_catalog() -> TranslationCatalog {
 /// Panics only when a repository locale stops being a valid string map. The
 /// locale qualification tests reject that condition before packaging.
 pub fn embedded_catalog(requested_code: &str) -> TranslationCatalog {
-    let selected_code = LANGUAGES
+    // Parse each immutable embedded catalog on first use, not at every UI
+    // projection. Unused languages do not add startup work.
+    static CATALOGS: [OnceLock<TranslationCatalog>; LANGUAGES.len()] =
+        [const { OnceLock::new() }; LANGUAGES.len()];
+    let index = LANGUAGES
         .iter()
-        .find(|language| language.code == requested_code)
-        .map_or("en", |language| language.code);
+        .position(|language| language.code == requested_code)
+        .unwrap_or(0);
+    CATALOGS[index]
+        .get_or_init(|| build_embedded_catalog(LANGUAGES[index].code))
+        .clone()
+}
+
+fn build_embedded_catalog(selected_code: &str) -> TranslationCatalog {
     let rust_strings = rust_only_strings();
     let mut english = parse_embedded_locale(locale_source("en"));
     add_rust_only_strings(&mut english, &rust_strings, "en");
@@ -322,6 +333,33 @@ mod tests {
         assert!(model.items.iter().any(|item| item.id == "settings"));
         assert!(model.items.iter().any(|item| item.id == "exit"));
         assert!(model.items.iter().all(|item| !item.label.contains('\t')));
+    }
+
+    #[test]
+    fn hiding_spotify_keeps_its_global_shortcut_available() {
+        let model = MainMenuModel::build(
+            &english_catalog(),
+            MainMenuAvailability::default(),
+            &["spotify".to_owned()],
+            true,
+            &BTreeMap::new(),
+        );
+        assert!(
+            super::CUSTOMIZABLE_MAIN_MENU
+                .iter()
+                .any(|item| item.action_id == "spotify")
+        );
+        assert!(model.items.iter().all(|item| item.id != "spotify"));
+        let action = apricot_core::shortcut::action_for_shortcut(
+            &BTreeMap::new(),
+            apricot_core::shortcut::ShortcutChord::parse("Ctrl+Alt+C").unwrap(),
+            apricot_core::shortcut::ShortcutContext::new(
+                apricot_core::action::ActionScope::List,
+                false,
+            ),
+        )
+        .unwrap();
+        assert_eq!(action.id.as_str(), "open_spotify");
     }
 
     #[test]

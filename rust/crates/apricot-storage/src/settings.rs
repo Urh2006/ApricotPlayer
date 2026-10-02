@@ -644,7 +644,7 @@ mod tests {
             "replaygain_mode": "song",
             "global_equalizer_gains": {"31": 99.0},
             "keyboard_shortcuts": {"open_search": "Ctrl+F"},
-            "main_menu_hidden_actions": ["search", "settings", "not-real"]
+            "main_menu_hidden_actions": ["search", "spotify", "settings", "not-real"]
         });
         let document =
             SettingsDocument::from_value_with_defaults(&input, SettingsDocument::default())
@@ -660,7 +660,7 @@ mod tests {
             apricot_core::action::ACTIONS.len()
         );
         assert_eq!(document.keyboard_shortcuts["open_search"], "Ctrl+F");
-        assert_eq!(document.main_menu_hidden_actions, ["search"]);
+        assert_eq!(document.main_menu_hidden_actions, ["search", "spotify"]);
     }
 
     #[test]

@@ -998,23 +998,23 @@ pub(super) unsafe fn radio(window: HWND) {
     let Some(state) = state(window) else {
         return;
     };
-    let target = selected_item(state)
+    let selected = selected_item(state)
         .filter(|item| {
             matches!(
                 item.kind,
                 ItemKind::Track | ItemKind::Artist | ItemKind::Album | ItemKind::Playlist
             )
         })
-        .map(|item| (item.uri.clone(), item.name.clone()))
-        .or_else(|| {
-            state
-                .application
-                .player_session()
-                .current_item()
-                .filter(|item| item.source == apricot_core::MediaSource::Spotify)
-                .filter(|item| item.id.0.starts_with("spotify:track:"))
-                .map(|item| (item.id.0.clone(), item.title.clone()))
-        });
+        .map(|item| (item.uri.clone(), item.name.clone()));
+    let target = shortcut_target(super::focus_in_background_player(state), selected, || {
+        state
+            .application
+            .player_session()
+            .current_item()
+            .filter(|item| item.source == apricot_core::MediaSource::Spotify)
+            .filter(|item| item.id.0.starts_with("spotify:track:"))
+            .map(|item| (item.id.0.clone(), item.title.clone()))
+    });
     let Some((seed, name)) = target else {
         return;
     };
@@ -1031,7 +1031,7 @@ pub(super) unsafe fn toggle_hidden(window: HWND) {
         return;
     };
     let frame = top(state).filter(|_| state.view == MainView::SpotifyBrowse);
-    let target = frame.filter(|frame| frame.personalised).and_then(|frame| {
+    let selected = frame.filter(|frame| frame.personalised).and_then(|frame| {
         let context = match &frame.source {
             Source::Playlist(uri) => uri.clone(),
             _ => return None,
@@ -1039,6 +1039,21 @@ pub(super) unsafe fn toggle_hidden(window: HWND) {
         selected_item(state)
             .filter(|item| item.kind == ItemKind::Track)
             .map(|item| (item.uri.clone(), context))
+    });
+    let target = shortcut_target(super::focus_in_background_player(state), selected, || {
+        let item = state.application.player_session().current_item()?;
+        if item.source != apricot_core::MediaSource::Spotify
+            || !item.id.0.starts_with("spotify:track:")
+        {
+            return None;
+        }
+        let context = item.metadata.get("spotify_context")?.as_str()?;
+        state
+            .spotify_browse
+            .frames
+            .iter()
+            .any(|frame| frame.personalised && frame.source.context() == Some(context))
+            .then(|| (item.id.0.clone(), context.to_owned()))
     });
     let Some((uri, context)) = target else {
         let text = super::spotify::catalog(state)
@@ -1085,7 +1100,7 @@ pub(super) unsafe fn toggle_saved(window: HWND) {
         Source::Profile { uri, .. } => Some(uri.clone()),
         _ => None,
     });
-    let uri = selected_item(state)
+    let selected = selected_item(state)
         .filter(|item| item.kind != ItemKind::Unavailable && item.kind != ItemKind::Folder)
         .and_then(|item| {
             if item.kind == ItemKind::Section {
@@ -1094,15 +1109,15 @@ pub(super) unsafe fn toggle_saved(window: HWND) {
             } else {
                 Some(item.uri.clone())
             }
-        })
-        .or_else(|| {
-            let session = state.application.player_session();
-            session
-                .current_item()
-                .filter(|item| item.source == apricot_core::MediaSource::Spotify)
-                .map(|item| item.id.0.clone())
-                .filter(|uri| !uri.contains(":album:") && !uri.contains(":playlist:"))
         });
+    let uri = shortcut_target(super::focus_in_background_player(state), selected, || {
+        let session = state.application.player_session();
+        session
+            .current_item()
+            .filter(|item| item.source == apricot_core::MediaSource::Spotify)
+            .map(|item| item.id.0.clone())
+            .filter(|uri| !uri.contains(":album:") && !uri.contains(":playlist:"))
+    });
     let Some(uri) = uri else {
         return;
     };
@@ -1116,6 +1131,19 @@ pub(super) unsafe fn toggle_saved(window: HWND) {
         apricot_spotify::LibraryEdit::ToggleSaved { uri },
         Pending::Saved,
     );
+}
+
+/// Player focus must never edit a row selected in the list behind it.
+fn shortcut_target<T>(
+    player_focus: bool,
+    selected: Option<T>,
+    playing: impl FnOnce() -> Option<T>,
+) -> Option<T> {
+    if player_focus {
+        playing()
+    } else {
+        selected.or_else(playing)
+    }
 }
 
 /// Delete in an editable playlist: removes exactly the selected occurrence.
@@ -1673,6 +1701,29 @@ unsafe fn play_preview(window: HWND, name: &str, url: Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spotify_player_actions_target_playing_track_instead_of_background_selection() {
+        let selected = "spotify:album:selected";
+        let playing = "spotify:track:recommended";
+        assert_eq!(
+            shortcut_target(true, Some(selected), || Some(playing)),
+            Some(playing)
+        );
+        assert_eq!(
+            shortcut_target(false, Some(selected), || Some(playing)),
+            Some(selected)
+        );
+        assert_eq!(
+            shortcut_target(true, Some(selected), || None),
+            None,
+            "a non-Spotify player must not edit the background Spotify row"
+        );
+        assert_eq!(
+            shortcut_target(false, None, || Some(playing)),
+            Some(playing)
+        );
+    }
 
     #[test]
     fn account_change_drops_private_caches_and_pending_answers() {

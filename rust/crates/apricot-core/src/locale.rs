@@ -1,6 +1,6 @@
 //! Shipped language identities and platform-neutral translation lookup.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LanguageDefinition {
@@ -122,8 +122,8 @@ pub const LANGUAGES: &[LanguageDefinition] = &[
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TranslationCatalog {
     selected_code: String,
-    english: BTreeMap<String, String>,
-    selected: BTreeMap<String, String>,
+    english: Arc<BTreeMap<String, String>>,
+    selected: Arc<BTreeMap<String, String>>,
 }
 
 impl TranslationCatalog {
@@ -134,8 +134,8 @@ impl TranslationCatalog {
     ) -> Self {
         Self {
             selected_code: selected_code.into(),
-            english,
-            selected,
+            english: Arc::new(english),
+            selected: Arc::new(selected),
         }
     }
 
