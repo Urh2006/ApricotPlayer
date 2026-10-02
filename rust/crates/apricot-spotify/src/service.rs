@@ -131,6 +131,12 @@ pub enum SpotifyEvent {
         stamp: SpotifyStamp,
         result: Result<(), SpotifyError>,
     },
+    /// Recommendations for smart shuffle of `playlist`.
+    SmartShuffle {
+        stamp: SpotifyStamp,
+        playlist: String,
+        result: Result<Vec<crate::smart_shuffle::SmartTrack>, SpotifyError>,
+    },
 }
 
 /// The locally active account: its session, Connect device and PCM source.
@@ -610,6 +616,43 @@ impl SpotifyService {
                 }
             }
             Self::emit(&sender, &notify, SpotifyEvent::Catalog { stamp, result });
+        });
+    }
+
+    /// Recommended tracks for smart shuffle of `playlist`, without the
+    /// tracks in `skip`; the answer is `SpotifyEvent::SmartShuffle`.
+    pub fn smart_shuffle(&self, stamp: SpotifyStamp, playlist: String, skip: Vec<String>) {
+        let session = self.active_session();
+        let api = self.api.clone();
+        let sender = self.sender.clone();
+        let notify = self.notify.clone();
+        self.runtime().spawn(async move {
+            let body = crate::smart_shuffle::request(&playlist, &skip);
+            let result = async {
+                let session = session.ok_or(SpotifyError::NoCredentials)?;
+                let answer = api
+                    .spclient(
+                        &session,
+                        reqwest::Method::POST,
+                        "/playlistextender/extendp/",
+                        Some(body),
+                    )
+                    .await?;
+                Ok(crate::smart_shuffle::parse(&answer))
+            }
+            .await;
+            if let Err(error) = &result {
+                log::warn!("smart shuffle recommendations failed: {error:?}");
+            }
+            Self::emit(
+                &sender,
+                &notify,
+                SpotifyEvent::SmartShuffle {
+                    stamp,
+                    playlist,
+                    result,
+                },
+            );
         });
     }
 

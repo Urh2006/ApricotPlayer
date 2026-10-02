@@ -15,7 +15,10 @@ pub use release::{
     APP_PACKAGE, PackageNames, RUST_BETA_PACKAGE, Release, ReleaseAsset, STABLE_PACKAGE,
     release_changelog_text,
 };
-pub use version::{is_component_version_newer, is_newer_version, parse_version};
+pub use version::{
+    is_component_version_newer, is_newer_version, migrated_update_settings, parse_version,
+    version_is_prerelease,
+};
 
 /// This build's channel: a local Rust beta is `LocalOnly` (D-011); the
 /// distributed 2.0 beta is built with the `release-beta` feature.

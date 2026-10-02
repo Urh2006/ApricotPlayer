@@ -291,6 +291,7 @@ pub fn queue_rows(catalog: &TranslationCatalog, queue: &SpotifyQueue) -> Vec<Spo
             QueueSection::Manual => "spotify_queue_manual",
             QueueSection::Context => "spotify_queue_context",
             QueueSection::Autoplay => "spotify_queue_autoplay",
+            QueueSection::SmartShuffle => "spotify_queue_smart_shuffle",
         });
         SpotifyQueueRow::Entry {
             uid: entry.uid.clone(),

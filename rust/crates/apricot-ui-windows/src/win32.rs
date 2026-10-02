@@ -12549,8 +12549,18 @@ fn catalog_text(application: &Application, key: &str) -> String {
 /// "Playing: title" when an item starts; a Spotify item also names its
 /// artist (Urh, 2026-10-02).
 fn playing_message(application: &Application, item: &apricot_core::MediaItem) -> String {
+    let smart = item
+        .metadata
+        .get("spotify_smart_shuffle")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
     let title = if item.source == apricot_core::MediaSource::Spotify && !item.channel.is_empty() {
-        catalog_text(application, "spotify_playing_by")
+        let key = if smart {
+            "spotify_playing_by_smart"
+        } else {
+            "spotify_playing_by"
+        };
+        catalog_text(application, key)
             .replace("{title}", &item.title)
             .replace("{artist}", &item.channel)
     } else {

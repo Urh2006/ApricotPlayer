@@ -79,6 +79,11 @@ pub(super) struct SpotifyState {
     /// A new connection replaced the running session, whose end is not a
     /// disconnection the user needs to hear.
     replacing_session: bool,
+    /// The pending request for smart shuffle recommendations, when the last
+    /// one started, and the tracks already recommended in this smart shuffle.
+    smart_request: Option<SpotifyStamp>,
+    smart_requested_at: Option<std::time::Instant>,
+    smart_used: Vec<String>,
 }
 
 /// Connects `key`, replacing the running session.
@@ -804,6 +809,42 @@ unsafe fn handle_event(window: HWND, event: SpotifyEvent) {
         SpotifyEvent::Edited { stamp, result } => {
             super::spotify_browse::edited(window, stamp, result);
         }
+        SpotifyEvent::SmartShuffle {
+            stamp,
+            playlist,
+            result,
+        } => {
+            if state.spotify.smart_request != Some(stamp) {
+                return;
+            }
+            state.spotify.smart_request = None;
+            let Some(playback) = state.spotify.service.as_ref().and_then(|s| s.playback()) else {
+                return;
+            };
+            if playback.smart_shuffle().as_deref() != Some(playlist.as_str()) {
+                return;
+            }
+            let used = &state.spotify.smart_used;
+            let tracks: Vec<_> = result
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|track| !used.contains(&track.uri))
+                .collect();
+            if tracks.is_empty() {
+                // Nothing for this playlist at all: shuffle stays on.
+                if state.spotify.smart_used.is_empty() {
+                    playback.set_smart_shuffle(None);
+                    let text = texts.text("spotify_smart_shuffle_unavailable").to_owned();
+                    announce(window, &text);
+                }
+                return;
+            }
+            state
+                .spotify
+                .smart_used
+                .extend(tracks.iter().map(|track| track.uri.clone()));
+            playback.add_smart_tracks(&tracks);
+        }
         SpotifyEvent::Transferred { stamp, result } => {
             let Some((wanted, name)) = state.spotify.transfer.take() else {
                 return;
@@ -1310,6 +1351,7 @@ unsafe fn handle_notice(window: HWND, notice: PlaybackNotice) {
             if state.spotify.queue_dialog.is_some() {
                 reload_queue(window);
             }
+            follow_smart_shuffle(window);
         }
         PlaybackNotice::DevicesChanged => {
             if let Some(dialog) = state.spotify.devices_dialog {
@@ -1560,6 +1602,12 @@ unsafe fn continue_spotify_item(window: HWND, track: &SpotifyTrack) -> bool {
                 "spotify_uid".to_owned(),
                 serde_json::Value::String(current.uid.clone()),
             );
+            if apricot_spotify::smart_shuffle::is_smart(current) {
+                item.metadata.insert(
+                    "spotify_smart_shuffle".to_owned(),
+                    serde_json::Value::Bool(true),
+                );
+            }
         }
     }
     if !state.application.replace_current_player_item(item.clone()) {
@@ -1611,6 +1659,7 @@ pub(super) unsafe fn transport(window: HWND, action_id: &str) -> bool {
         return false;
     };
     let player = playback.player_state().unwrap_or_default();
+    let mut smart_start = None;
     let key = match action_id {
         "player_next" => {
             playback.next();
@@ -1620,10 +1669,26 @@ pub(super) unsafe fn transport(window: HWND, action_id: &str) -> bool {
             playback.previous();
             None
         }
+        // Off, on, smart shuffle (playlists only), off: the order of the
+        // Spotify apps.
         "player_shuffle" => {
-            let shuffle = !apricot_spotify::queue::shuffle(&player);
-            playback.set_shuffle(shuffle);
-            Some(if shuffle { "shuffle_on" } else { "shuffle_off" })
+            let shuffle = apricot_spotify::queue::shuffle(&player);
+            let smart = shuffle
+                && playback
+                    .smart_shuffle()
+                    .is_some_and(|playlist| playlist == player.context_uri);
+            if !shuffle {
+                playback.set_shuffle(true);
+                Some("shuffle_on")
+            } else if !smart && player.context_uri.starts_with("spotify:playlist:") {
+                playback.set_smart_shuffle(Some(player.context_uri.clone()));
+                smart_start = Some(player.context_uri.clone());
+                Some("spotify_smart_shuffle_on")
+            } else {
+                playback.set_smart_shuffle(None);
+                playback.set_shuffle(false);
+                Some("shuffle_off")
+            }
         }
         _ => {
             let (mode, key) = match apricot_spotify::queue::repeat_mode(&player) {
@@ -1639,7 +1704,62 @@ pub(super) unsafe fn transport(window: HWND, action_id: &str) -> bool {
         let text = catalog(state).text(key).to_owned();
         announce(window, &text);
     }
+    if let Some(playlist) = smart_start {
+        if let Some(state) = state_mut(window) {
+            state.spotify.smart_used.clear();
+            state.spotify.smart_request = None;
+            state.spotify.smart_requested_at = None;
+        }
+        request_smart_tracks(window, playlist);
+    }
     true
+}
+
+/// Asks for recommendations for smart shuffle of `playlist`, at most every
+/// few seconds and one request at a time.
+unsafe fn request_smart_tracks(window: HWND, playlist: String) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let Some(service) = state.spotify.service.clone() else {
+        return;
+    };
+    if state.spotify.smart_request.is_some()
+        || state
+            .spotify
+            .smart_requested_at
+            .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(5))
+    {
+        return;
+    }
+    let stamp = state.spotify.epochs.begin();
+    state.spotify.smart_request = Some(stamp);
+    state.spotify.smart_requested_at = Some(std::time::Instant::now());
+    service.smart_shuffle(stamp, playlist, state.spotify.smart_used.clone());
+}
+
+/// The upcoming tracks changed: smart shuffle ends with its playlist or
+/// with shuffle, and asks for more recommendations when none is left.
+unsafe fn follow_smart_shuffle(window: HWND) {
+    let Some(playback) = state(window)
+        .and_then(|state| state.spotify.service.as_ref())
+        .and_then(|service| service.playback())
+    else {
+        return;
+    };
+    let Some(playlist) = playback.smart_shuffle() else {
+        return;
+    };
+    let Some(player) = playback.player_state() else {
+        return;
+    };
+    if player.context_uri != playlist || !apricot_spotify::queue::shuffle(&player) {
+        playback.set_smart_shuffle(None);
+        return;
+    }
+    if apricot_spotify::smart_shuffle::needs_more(&player.next_tracks) {
+        request_smart_tracks(window, playlist);
+    }
 }
 
 /// Ctrl+Shift+Q on a Spotify track or episode (the active item: the

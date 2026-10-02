@@ -23,6 +23,8 @@ pub enum QueueSection {
     Context,
     /// Spotify continues with similar music after the context.
     Autoplay,
+    /// Recommended by smart shuffle.
+    SmartShuffle,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -66,6 +68,7 @@ fn section(track: &ProvidedTrack) -> QueueSection {
     match track.provider.as_str() {
         PROVIDER_QUEUE => QueueSection::Manual,
         PROVIDER_AUTOPLAY => QueueSection::Autoplay,
+        crate::smart_shuffle::PROVIDER => QueueSection::SmartShuffle,
         _ => QueueSection::Context,
     }
 }

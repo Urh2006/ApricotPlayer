@@ -1595,3 +1595,24 @@ Urhove zahteve z dne 2. 10. 2026:
   poskusi). Meritev Enter do "Playing:" na ločenem namizju, prazen predpomnilnik tokov:
   beta.12 povprečno 4,3 s (8 začetkov), nova različica 3,8 s; prvi začetek iz Direct link
   4,7 s proti 3,8 s. Zagon programa do vidnega okna ostaja okoli 0,3 s, zato ga nisem spreminjal.
+
+### Smart shuffle, posodobitev iz 1.0.21 in 2.0.0-beta.1 (2. 10. 2026)
+
+- **O-22.** Shift+S pri Spotify playlistu preklaplja off, on, smart shuffle, off (vrstni red
+  aplikacij Spotify). Smart shuffle vzame priporočila iz `/playlistextender/extendp/` (vir
+  Spotifyjevih "Recommended" pesmi playlista) in jih vstavi med prihodnje skladbe, eno za vsakimi
+  tremi, s ponudnikom `smart_shuffle`. Taka skladba se oglasi "Playing: naslov by izvajalec from
+  smart shuffle", v Spotify čakalni vrsti pa "from smart shuffle". Ko priporočil zmanjka, se
+  naložijo nova; smart shuffle se konča z drugim kontekstom ali z izklopom shuffla. Albumi
+  nimajo smart shuffla. Automix ni izveden: zahteva hkratno dekodiranje dveh skladb s prehodi,
+  ki jih LibreSpot ne podpira.
+- Python `load_settings` prestavi kanal posodobitev stable na beta, kadar je nameščena
+  predizdaja, in pozabi preskočeno verzijo, ki ni novejša. Rust tega ni delal; zdaj to naredi ob
+  zagonu (`apricot_updater::migrated_update_settings`), zato uporabnik 1.0.21 po prehodu na
+  2.0 beta dobiva naslednje bete.
+- Prehod 1.0.21 na 2.0 z namestitvenim programom (preverjeno v kodi Python posodobilnika):
+  Python vidi predizdajo samo na kanalu Beta, prenese `ApricotPlayerSetup.exe`, preveri
+  GitHubov SHA-256, zažene ga z `/VERYSILENT ... /TASKS=desktopicon,mediaassoc /DIR=...` in
+  znova odpre `ApricotPlayer.exe --updated-relaunch`. Namestitveni program je Pythonov
+  (isti AppId) in pobriše `_internal`. Podatki ostanejo v `%APPDATA%\ApricotPlayer`.
+  Prenosna 1.x verzija zip 2.0 zavrne (pričakuje `_internal`), zato jo je treba prenesti znova.

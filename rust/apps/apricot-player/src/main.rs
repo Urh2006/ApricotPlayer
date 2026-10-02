@@ -39,6 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let settings_file_existed = settings_paths.primary.exists();
     let first_run_without_settings = !settings_file_existed && !settings_paths.legacy.exists();
     let mut settings = SettingsController::load(settings_paths, defaults);
+    migrate_update_settings(&mut settings);
     let startup_file = startup_file_argument(&arguments);
     // Python `mark_update_relaunch_window` and
     // `suppress_already_open_for_update`.
@@ -131,6 +132,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     apricot_ui_windows::run_application(application, env!("CARGO_PKG_VERSION"), start_hidden)
         .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
+}
+
+/// Python `load_settings`: settings of Python 1.0 on the stable channel move
+/// to beta while this build is a pre-release; the change is saved at once.
+fn migrate_update_settings(settings: &mut SettingsController) {
+    let current = settings.current();
+    let (channel, skipped) = apricot_updater::migrated_update_settings(
+        env!("CARGO_PKG_VERSION"),
+        &current.update_channel,
+        &current.skipped_update_version,
+    );
+    if channel == current.update_channel && skipped == current.skipped_update_version {
+        return;
+    }
+    let applied = settings.set_values([
+        (SettingId::UpdateChannel, serde_json::json!(channel)),
+        (SettingId::SkippedUpdateVersion, serde_json::json!(skipped)),
+    ]);
+    if applied.is_ok() && !settings.save_is_blocked() {
+        let _ = settings.save();
+    }
 }
 
 fn unix_timestamp() -> f64 {

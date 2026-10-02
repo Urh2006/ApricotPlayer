@@ -14,6 +14,7 @@ pub mod playback;
 pub mod queue;
 pub mod service;
 pub mod settings;
+pub mod smart_shuffle;
 
 pub use accounts::{AccountStore, SpotifyAccount, SpotifyAccounts};
 pub use catalog::{CatalogItem, CatalogPage, Collection, ItemKind, LibraryFilter, SearchKind};

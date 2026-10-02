@@ -458,6 +458,10 @@ pub struct SpotifyPlayback {
     spirc: Mutex<Option<Spirc>>,
     /// Playback needs Premium; known once the session attributes arrived.
     premium: AtomicBool,
+    /// The playlist that plays in smart shuffle, and the number of the next
+    /// recommendation's UID.
+    smart: Mutex<Option<String>>,
+    next_smart_uid: AtomicU64,
 }
 
 impl SpotifyPlayback {
@@ -479,6 +483,8 @@ impl SpotifyPlayback {
                 shared: shared.clone(),
                 spirc: Mutex::new(None),
                 premium: AtomicBool::new(false),
+                smart: Mutex::new(None),
+                next_smart_uid: AtomicU64::new(1),
             }),
             shared,
         )
@@ -520,6 +526,53 @@ impl SpotifyPlayback {
         self.with_spirc(|spirc| {
             let _ = spirc.shuffle(shuffle);
         });
+    }
+
+    /// The playlist in smart shuffle, if any.
+    pub fn smart_shuffle(&self) -> Option<String> {
+        self.smart.lock().ok()?.clone()
+    }
+
+    /// Turns smart shuffle on for `playlist`, or off with `None`; off removes
+    /// the recommendations from the upcoming tracks.
+    pub fn set_smart_shuffle(&self, playlist: Option<String>) {
+        let off = playlist.is_none();
+        if let Ok(mut smart) = self.smart.lock() {
+            *smart = playlist;
+        }
+        if !off {
+            return;
+        }
+        let Some(state) = self.player_state() else {
+            return;
+        };
+        if let Some(next_tracks) = crate::smart_shuffle::without_smart(&state.next_tracks) {
+            self.with_spirc(|spirc| {
+                let _ = spirc.set_queue(next_tracks, state.queue_revision.clone());
+            });
+        }
+    }
+
+    /// Mixes recommendations into the upcoming tracks; `false` when the
+    /// queue could not take them.
+    pub fn add_smart_tracks(&self, tracks: &[crate::smart_shuffle::SmartTrack]) -> bool {
+        let Some(state) = self.player_state() else {
+            return false;
+        };
+        let first = self
+            .next_smart_uid
+            .fetch_add(tracks.len() as u64, Ordering::Relaxed);
+        let next_tracks = crate::smart_shuffle::interleave(&state.next_tracks, tracks, first);
+        if next_tracks.len() == state.next_tracks.len() {
+            return false;
+        }
+        let mut sent = false;
+        self.with_spirc(|spirc| {
+            sent = spirc
+                .set_queue(next_tracks, state.queue_revision.clone())
+                .is_ok();
+        });
+        sent
     }
 
     /// Repeat off, the context, or the current track (plan 5.3).

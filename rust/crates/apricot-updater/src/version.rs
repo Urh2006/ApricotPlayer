@@ -63,6 +63,31 @@ pub fn is_newer_version(remote: &str, current: &str) -> bool {
     parse_version(remote) > parse_version(current)
 }
 
+/// Python `version_is_prerelease`.
+#[must_use]
+pub fn version_is_prerelease(value: &str) -> bool {
+    parse(value.trim()).is_some_and(|version| version[4] < 4)
+}
+
+/// Python `load_settings` for a running `version`: a pre-release build
+/// moves the stable channel to beta, because no stable build exists to
+/// update to, and a skipped version that is not newer is forgotten.
+/// Returns the channel and the skipped version to keep.
+#[must_use]
+pub fn migrated_update_settings(version: &str, channel: &str, skipped: &str) -> (String, String) {
+    let channel = if version_is_prerelease(version) && channel == "stable" {
+        "beta"
+    } else {
+        channel
+    };
+    let skipped = if !skipped.is_empty() && !is_newer_version(skipped, version) {
+        ""
+    } else {
+        skipped
+    };
+    (channel.to_owned(), skipped.to_owned())
+}
+
 /// Python `is_component_version_newer`: compares up to four digit groups.
 #[must_use]
 pub fn is_component_version_newer(remote: &str, current: &str) -> bool {
@@ -86,7 +111,32 @@ fn component_parts(value: &str) -> Vec<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_component_version_newer, is_newer_version, parse_version};
+    use super::{
+        is_component_version_newer, is_newer_version, migrated_update_settings, parse_version,
+        version_is_prerelease,
+    };
+
+    #[test]
+    fn a_prerelease_build_moves_python_stable_settings_to_beta() {
+        assert!(version_is_prerelease("2.0.0-beta.1"));
+        assert!(!version_is_prerelease("1.0.21"));
+        let migrated = |version, channel, skipped| {
+            let (channel, skipped) = migrated_update_settings(version, channel, skipped);
+            (channel, skipped)
+        };
+        assert_eq!(
+            migrated("2.0.0-beta.1", "stable", "1.0.20"),
+            ("beta".to_owned(), String::new())
+        );
+        assert_eq!(
+            migrated("2.0.0-beta.1", "beta", "2.0.0-beta.2"),
+            ("beta".to_owned(), "2.0.0-beta.2".to_owned())
+        );
+        assert_eq!(
+            migrated("2.0.0", "stable", ""),
+            ("stable".to_owned(), String::new())
+        );
+    }
 
     #[test]
     fn versions_parse_like_python() {
