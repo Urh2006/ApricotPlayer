@@ -195,6 +195,8 @@ pub(super) struct BrowseState {
     /// Songs the account hid, read when the first personal mix opens.
     hidden: Option<std::collections::HashSet<String>>,
     hidden_load: Option<SpotifyStamp>,
+    /// Verified personal mix contexts remain known after their list closes.
+    personalised_contexts: std::collections::HashSet<String>,
 }
 
 impl BrowseState {
@@ -408,6 +410,16 @@ pub(super) unsafe fn loaded(
             frame.can_rename = collection.can_edit_metadata;
             frame.personalised = apricot_spotify::catalog::PERSONALISED_FORMATS
                 .contains(&collection.format.as_str());
+            if let Source::Playlist(uri) = &frame.source {
+                if frame.personalised {
+                    state
+                        .spotify_browse
+                        .personalised_contexts
+                        .insert(uri.clone());
+                } else {
+                    state.spotify_browse.personalised_contexts.remove(uri);
+                }
+            }
             frame.items.extend(collection.page.items);
             frame.next_offset = collection.page.next_offset;
         }
@@ -1050,9 +1062,8 @@ pub(super) unsafe fn toggle_hidden(window: HWND) {
         let context = item.metadata.get("spotify_context")?.as_str()?;
         state
             .spotify_browse
-            .frames
-            .iter()
-            .any(|frame| frame.personalised && frame.source.context() == Some(context))
+            .personalised_contexts
+            .contains(context)
             .then(|| (item.id.0.clone(), context.to_owned()))
     });
     let Some((uri, context)) = target else {
@@ -1733,6 +1744,7 @@ mod tests {
             hidden_load: Some(SpotifyStamp::default()),
             pending: Some((SpotifyStamp::default(), Pending::Saved)),
             last_query: "private search".to_owned(),
+            personalised_contexts: ["spotify:playlist:personal".to_owned()].into(),
             ..BrowseState::default()
         };
         browse.clear_account();
@@ -1742,6 +1754,7 @@ mod tests {
         assert!(browse.pending.is_none());
         assert!(browse.frames.is_empty());
         assert!(browse.last_query.is_empty());
+        assert!(browse.personalised_contexts.is_empty());
     }
 
     #[test]
