@@ -667,6 +667,9 @@ struct WindowState {
     player_results_source: Option<MainView>,
     // Python `show_player=False`: the next start keeps the current screen.
     background_start: bool,
+    // Python `play_url` shows the player page before the stream is
+    // resolved: the generation of that page while nothing plays yet.
+    preparing_player_generation: Option<u64>,
     audiovault_controls: audiovault::Controls,
     audiovault: audiovault::AudiovaultState,
     spotify: spotify::SpotifyState,
@@ -2076,6 +2079,7 @@ unsafe fn create_controls(
         embedded_results: None,
         player_results_source: None,
         background_start: false,
+        preparing_player_generation: None,
         audiovault_controls,
         audiovault: audiovault::AudiovaultState::default(),
         spotify: spotify::SpotifyState::default(),
@@ -4278,7 +4282,7 @@ unsafe fn start_youtube_resolve_with_options(
         .start_resolve(backend, &components, config, token, url, preference)
     {
         Ok(()) => {
-            state.pending_youtube_resolve = Some(PendingYoutubeResolve {
+            let pending = PendingYoutubeResolve {
                 token,
                 purpose,
                 original_item: item.clone(),
@@ -4286,12 +4290,9 @@ unsafe fn start_youtube_resolve_with_options(
                 preserve_sequence,
                 start_position_seconds,
                 background,
-            });
-            set_status(
-                state,
-                &catalog_text(&state.application, "resolving_stream_url"),
-                true,
-            );
+            };
+            show_resolve_start(window, state, &pending);
+            state.pending_youtube_resolve = Some(pending);
             let _ = SetTimer(
                 Some(window),
                 YOUTUBE_TIMER_ID,
@@ -4523,6 +4524,7 @@ unsafe fn report_youtube_resolve_start_error(
 ) {
     if purpose == YoutubeResolvePurpose::Playback {
         state.pending_queued_start = None;
+        fail_preparing_player(state, message);
     }
     let visible_message = if purpose == YoutubeResolvePurpose::CopyStreamUrl {
         catalog_text(&state.application, "stream_url_failed").replace("{error}", message)
@@ -4631,13 +4633,131 @@ unsafe fn finish_youtube_resolve(
         .external_audio_index
         .and_then(|index| formats.get(index))
         .and_then(|format| format.url.parse().ok());
-    start_player_at(
+    start_resolved_player(
         window,
         item,
         pending.session_shuffle,
         pending.start_position_seconds,
         pending.background,
     );
+}
+
+/// Python `play_url` shows "Preparing playback" on the status line without
+/// speaking it and opens the player page before the stream is resolved; a
+/// copied stream link says that it is being resolved.
+unsafe fn show_resolve_start(
+    window: HWND,
+    state: &mut WindowState,
+    pending: &PendingYoutubeResolve,
+) {
+    if pending.purpose == YoutubeResolvePurpose::CopyStreamUrl {
+        let status = catalog_text(&state.application, "resolving_stream_url");
+        set_status(state, &status, true);
+        return;
+    }
+    let item = &pending.original_item;
+    let status =
+        catalog_text(&state.application, "preparing_stream").replace("{title}", &item.title);
+    set_status(state, &status, false);
+    if !pending.background {
+        show_preparing_player(
+            window,
+            state,
+            item.clone(),
+            pending.session_shuffle,
+            pending.start_position_seconds,
+        );
+    }
+}
+
+/// Starts a resolved stream, unless the player page that waited for it was
+/// closed or replaced meanwhile.
+unsafe fn start_resolved_player(
+    window: HWND,
+    item: apricot_core::MediaItem,
+    session_shuffle: Option<bool>,
+    start_position_seconds: Option<f64>,
+    background: bool,
+) {
+    let Some(background) =
+        state_mut(window).and_then(|state| preparing_player_start(state, background))
+    else {
+        return;
+    };
+    start_player_at(
+        window,
+        item,
+        session_shuffle,
+        start_position_seconds,
+        background,
+    );
+}
+
+/// Python `play_url` before `resolve_and_start_player`: the previous item
+/// stops, and the player page shows the new item while its stream is being
+/// resolved. Nothing is spoken; "Playing" follows when mpv starts.
+unsafe fn show_preparing_player(
+    window: HWND,
+    state: &mut WindowState,
+    item: apricot_core::MediaItem,
+    session_shuffle: Option<bool>,
+    start_position_seconds: Option<f64>,
+) {
+    persist_current_playback_position(state);
+    let session = state.application.player_session();
+    if session.is_open()
+        && let Some(playback) = state.playback.as_ref()
+    {
+        let _ = playback.execute(session.generation(), PlaybackCommand::SetPaused(true));
+    }
+    state.application.forget_player_return_frame();
+    let generation = state.application.start_player_item_with_shuffle_at(
+        item,
+        session_shuffle,
+        start_position_seconds,
+    );
+    state.preparing_player_generation = Some(generation);
+    if state.view != MainView::Player {
+        state.player_results_source = matches!(
+            state.view,
+            MainView::Results
+                | MainView::Trending
+                | MainView::YoutubeCollection
+                | MainView::LocalFolder
+        )
+        .then_some(state.view);
+    }
+    state.application.navigate_to_player();
+    state.view = MainView::Player;
+    refresh_player(window, state, true, false);
+}
+
+/// Whether a resolved stream still starts: `None` when the player page that
+/// waited for it was closed or replaced, otherwise whether the start keeps
+/// the current screen because the page was left with the player running.
+fn preparing_player_start(state: &mut WindowState, background: bool) -> Option<bool> {
+    let Some(generation) = state.preparing_player_generation else {
+        return Some(background);
+    };
+    let session = state.application.player_session();
+    if !session.is_open() || session.generation() != generation {
+        state.preparing_player_generation = None;
+        return None;
+    }
+    Some(background || state.view != MainView::Player)
+}
+
+/// The stream of the waiting player page could not be resolved: the page
+/// stays, as in Python, with the player failed.
+fn fail_preparing_player(state: &mut WindowState, message: &str) {
+    let Some(generation) = state.preparing_player_generation.take() else {
+        return;
+    };
+    if state.application.player_session().generation() == generation {
+        let _ = state
+            .application
+            .apply_playback_event(generation, PlaybackEvent::Failed(message.to_owned()));
+    }
 }
 
 unsafe fn start_player_at(
@@ -4666,6 +4786,12 @@ unsafe fn start_player_at(
         state.application.forget_player_return_frame();
     }
     persist_current_playback_position(state);
+    // The player page already shows this item and has the focus.
+    let prepared = state
+        .preparing_player_generation
+        .take()
+        .is_some_and(|generation| generation == state.application.player_session().generation())
+        && state.view == MainView::Player;
     let podcast_speed =
         metadata_number(&item, "podcast_speed_preset").filter(|speed| (0.25..=4.0).contains(speed));
     state.clip_preview = None;
@@ -4719,6 +4845,8 @@ unsafe fn start_player_at(
         {
             let _ = SetFocus(Some(focused));
         }
+    } else if prepared {
+        refresh_player(window, state, false, true);
     } else {
         if state.view != MainView::Player {
             // Python `play_selected` keeps `return_all_results` of the result
@@ -5097,6 +5225,20 @@ unsafe fn show_direct_link(window: HWND) {
     set_status(state, &catalog_text(&state.application, "ready"), false);
     layout_controls_state(window, state);
     let _ = SetFocus(Some(state.search_edit));
+    prewarm_playback_resolver(state);
+}
+
+/// The Enter that follows will most likely play a link: yt-dlp starts now,
+/// while the link is typed or pasted.
+fn prewarm_playback_resolver(state: &mut WindowState) {
+    let Some(components) = application_directory().map(|path| path.join("components")) else {
+        return;
+    };
+    let executable = apricot_platform::app_update::preferred_ytdlp_executable(&components);
+    let config = youtube_session_config(state);
+    std::thread::spawn(move || {
+        apricot_platform::ytdlp_youtube::prewarm_playback_resolver(&executable, config);
+    });
 }
 
 unsafe fn show_media_collection(window: HWND, view: MainView) {
@@ -10207,6 +10349,10 @@ unsafe fn poll_playback_runtime(window: HWND) {
         let Some(state) = state_mut(window) else {
             return;
         };
+        // mpv reports its pause state while the item loads; Python announces
+        // play and pause only when they change afterwards.
+        let loading = state.application.player_session().phase()
+            == apricot_app::player_session::PlaybackPhase::Starting;
         if !state
             .application
             .apply_playback_event(update.generation, update.event.clone())
@@ -10217,7 +10363,6 @@ unsafe fn poll_playback_runtime(window: HWND) {
             PlaybackEvent::Started => {
                 confirm_pending_queued_start(window, state);
                 let current_item = state.application.player_session().current_item().cloned();
-                let title = current_item.as_ref().map_or("", |item| item.title.as_str());
                 // A Spotify album or playlist started as a whole: the track
                 // Spotify chose is announced when it plays.
                 let collection = current_item.as_ref().is_some_and(|item| {
@@ -10226,9 +10371,8 @@ unsafe fn poll_playback_runtime(window: HWND) {
                         .and_then(serde_json::Value::as_bool)
                         .unwrap_or(false)
                 });
-                if !collection {
-                    let message =
-                        catalog_text(&state.application, "playing").replace("{title}", title);
+                if !collection && let Some(item) = current_item.as_ref() {
+                    let message = playing_message(&state.application, item);
                     set_status(state, &message, true);
                 }
                 if let Some(item) = current_item {
@@ -10261,7 +10405,9 @@ unsafe fn poll_playback_runtime(window: HWND) {
                     set_status(
                         state,
                         &catalog_text(&state.application, key),
-                        state.application.settings().announce_play_pause && !focused_play_pause,
+                        state.application.settings().announce_play_pause
+                            && !focused_play_pause
+                            && !loading,
                     );
                 }
                 refresh_player(window, state, false, true);
@@ -10612,8 +10758,10 @@ unsafe fn finish_youtube_error(window: HWND, generation: u64, message: &str) {
                 state.pending_queued_start = None;
             }
             if direct_fallback {
+                // Python `resolve_stream_url` falls back to the link itself
+                // without a word.
                 let fallback_message = catalog_text(&state.application, "direct_link_fallback");
-                set_status(state, &fallback_message, true);
+                set_status(state, &fallback_message, false);
                 Some((
                     pending.original_item,
                     pending.session_shuffle,
@@ -10623,6 +10771,9 @@ unsafe fn finish_youtube_error(window: HWND, generation: u64, message: &str) {
             } else {
                 let visible_message =
                     resolve_failure_message(&state.application, pending.purpose, message);
+                if pending.purpose == YoutubeResolvePurpose::Playback {
+                    fail_preparing_player(state, &visible_message);
+                }
                 let settings = state.application.settings();
                 if pending.purpose == YoutubeResolvePurpose::Playback
                     && settings.enable_age_restricted_videos
@@ -10653,7 +10804,7 @@ unsafe fn finish_youtube_error(window: HWND, generation: u64, message: &str) {
         return;
     }
     if let Some((item, session_shuffle, start_position_seconds, background)) = direct_fallback {
-        start_player_at(
+        start_resolved_player(
             window,
             item,
             session_shuffle,
@@ -12393,6 +12544,19 @@ fn catalog_text(application: &Application, key: &str) -> String {
     apricot_app::embedded_catalog(&application.settings().language)
         .text(key)
         .to_owned()
+}
+
+/// "Playing: title" when an item starts; a Spotify item also names its
+/// artist (Urh, 2026-10-02).
+fn playing_message(application: &Application, item: &apricot_core::MediaItem) -> String {
+    let title = if item.source == apricot_core::MediaSource::Spotify && !item.channel.is_empty() {
+        catalog_text(application, "spotify_playing_by")
+            .replace("{title}", &item.title)
+            .replace("{artist}", &item.channel)
+    } else {
+        item.title.clone()
+    };
+    catalog_text(application, "playing").replace("{title}", &title)
 }
 
 unsafe fn set_status(state: &WindowState, message: &str, announce: bool) {
@@ -17575,6 +17739,11 @@ unsafe fn close_player_runtime(window: HWND, state: &mut WindowState) {
 }
 
 unsafe fn persist_current_playback_position(state: &mut WindowState) {
+    // The waiting player page has not played: its position is only the
+    // start position and must not replace or clear the saved one.
+    if state.preparing_player_generation == Some(state.application.player_session().generation()) {
+        return;
+    }
     if let Err(error) = state.application.save_current_playback_position() {
         set_status(
             state,
@@ -17951,6 +18120,7 @@ unsafe fn announce_unavailable_feature(window: HWND, feature: &str) {
 unsafe fn open_settings(window: HWND) {
     remember_menu_item(window, "settings");
     stop_controlled_repeat(window);
+    let spotify_before;
     let settings_result = {
         let Some(state) = state_mut(window) else {
             return;
@@ -17958,6 +18128,7 @@ unsafe fn open_settings(window: HWND) {
         if state.settings_open {
             return;
         }
+        spotify_before = state.application.saved_spotify_settings();
         state.settings_open = true;
         state.modal_open = true;
         crate::settings_win32::show(window, &mut state.application)
@@ -17968,6 +18139,10 @@ unsafe fn open_settings(window: HWND) {
     state.settings_open = false;
     state.modal_open = false;
     resume_deferred_window_work(window);
+    spotify::settings_window_closed(window, spotify_before);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
     match state.view {
         MainView::MainMenu => refresh_main_menu(state, MainMenuSelection::LastActivated),
         MainView::Results => refresh_results(state, false),

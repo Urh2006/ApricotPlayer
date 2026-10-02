@@ -6,6 +6,7 @@ use apricot_core::{
     CUSTOMIZABLE_MAIN_MENU, SETTINGS_SECTIONS, SettingId, SettingsSection, TranslationCatalog,
     action::ACTIONS, audio::EQUALIZER_BANDS, locale::LANGUAGES,
 };
+use apricot_spotify::settings::{Autoplay, LibraryOrder, Quality, SpotifySettings};
 use apricot_storage::SettingsDocument;
 
 use crate::equalizer::EqualizerSettings;
@@ -139,6 +140,48 @@ pub enum SettingsControl {
         command: SettingsCommand,
         label: String,
     },
+    /// One of the Spotify choices, stored in `spotify/settings.json`.
+    SpotifyChoice {
+        field: SpotifyField,
+        label: String,
+        selected: usize,
+        options: Vec<String>,
+    },
+    /// Spotify volume normalisation.
+    SpotifyNormalisation { label: String, checked: bool },
+}
+
+/// The Spotify choices of the Spotify section, in the order of the options
+/// of `apricot_spotify::settings`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SpotifyField {
+    Quality,
+    Autoplay,
+    LibraryOrder,
+}
+
+impl SpotifyField {
+    /// Applies the option at `index` to `settings`; an unknown index changes
+    /// nothing.
+    pub fn apply(self, settings: &mut SpotifySettings, index: usize) {
+        match self {
+            Self::Quality => {
+                if let Some(value) = Quality::ALL.get(index) {
+                    settings.quality = *value;
+                }
+            }
+            Self::Autoplay => {
+                if let Some(value) = Autoplay::ALL.get(index) {
+                    settings.autoplay = *value;
+                }
+            }
+            Self::LibraryOrder => {
+                if let Some(value) = LibraryOrder::ALL.get(index) {
+                    settings.library_order = *value;
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -210,6 +253,22 @@ impl SettingsScreenModel {
         settings_file: &Path,
         selected_section: SettingsSection,
     ) -> Self {
+        Self::build_with_spotify(
+            catalog,
+            settings,
+            settings_file,
+            selected_section,
+            SpotifySettings::default(),
+        )
+    }
+
+    pub fn build_with_spotify(
+        catalog: &TranslationCatalog,
+        settings: &SettingsDocument,
+        settings_file: &Path,
+        selected_section: SettingsSection,
+        spotify: SpotifySettings,
+    ) -> Self {
         let sections = SETTINGS_SECTIONS
             .iter()
             .map(|definition| SettingsSectionItem {
@@ -228,6 +287,7 @@ impl SettingsScreenModel {
             SettingsSection::Notifications => notification_controls(catalog, settings),
             SettingsSection::Cookies => cookie_controls(catalog, settings),
             SettingsSection::Audiovault => audiovault_controls(catalog, settings),
+            SettingsSection::Spotify => spotify_controls(catalog, spotify),
             SettingsSection::Shortcuts => shortcut_controls(catalog, settings),
         };
         let section_label = SETTINGS_SECTIONS
@@ -1299,6 +1359,65 @@ fn audiovault_controls(
     ]
 }
 
+/// The fields of the Spotify settings dialog, in its order.
+fn spotify_controls(
+    catalog: &TranslationCatalog,
+    spotify: SpotifySettings,
+) -> Vec<SettingsControl> {
+    let texts = |keys: &[&str]| -> Vec<String> {
+        keys.iter()
+            .map(|key| catalog.text(key).to_owned())
+            .collect()
+    };
+    vec![
+        SettingsControl::SpotifyChoice {
+            field: SpotifyField::Quality,
+            label: catalog.text("spotify_quality").to_owned(),
+            selected: Quality::ALL
+                .iter()
+                .position(|value| *value == spotify.quality)
+                .unwrap_or_default(),
+            options: texts(&[
+                "spotify_quality_normal",
+                "spotify_quality_high",
+                "spotify_quality_very_high",
+            ]),
+        },
+        SettingsControl::SpotifyNormalisation {
+            label: catalog.text("spotify_normalisation").to_owned(),
+            checked: spotify.normalisation,
+        },
+        SettingsControl::SpotifyChoice {
+            field: SpotifyField::Autoplay,
+            label: catalog.text("spotify_autoplay").to_owned(),
+            selected: Autoplay::ALL
+                .iter()
+                .position(|value| *value == spotify.autoplay)
+                .unwrap_or_default(),
+            options: texts(&[
+                "spotify_autoplay_account",
+                "spotify_autoplay_on",
+                "spotify_autoplay_off",
+            ]),
+        },
+        SettingsControl::SpotifyChoice {
+            field: SpotifyField::LibraryOrder,
+            label: catalog.text("spotify_library_order").to_owned(),
+            selected: LibraryOrder::ALL
+                .iter()
+                .position(|value| *value == spotify.library_order)
+                .unwrap_or_default(),
+            options: texts(&[
+                "spotify_order_recents",
+                "spotify_order_recently_added",
+                "spotify_order_alphabetical",
+                "spotify_order_creator",
+                "spotify_order_custom",
+            ]),
+        },
+    ]
+}
+
 fn shortcut_controls(
     catalog: &TranslationCatalog,
     settings: &SettingsDocument,
@@ -1482,7 +1601,7 @@ mod tests {
             Path::new(r"C:\Profile\settings.json"),
             SettingsSection::General,
         );
-        assert_eq!(model.sections.len(), 11);
+        assert_eq!(model.sections.len(), 12);
         assert_eq!(model.sections[0].section, SettingsSection::General);
         assert_eq!(model.sections[1].section, SettingsSection::MainMenu);
         assert_eq!(model.selected_section, SettingsSection::General);
@@ -1569,6 +1688,63 @@ mod tests {
     }
 
     #[test]
+    fn spotify_section_shows_and_applies_the_spotify_settings() {
+        use apricot_spotify::settings::{Autoplay, LibraryOrder, Quality, SpotifySettings};
+
+        let spotify = SpotifySettings {
+            quality: Quality::High,
+            normalisation: true,
+            autoplay: Autoplay::Off,
+            library_order: LibraryOrder::Alphabetical,
+        };
+        let model = SettingsScreenModel::build_with_spotify(
+            &english_catalog(),
+            &SettingsDocument::default(),
+            Path::new("settings.json"),
+            SettingsSection::Spotify,
+            spotify,
+        );
+        let selections: Vec<_> = model
+            .controls
+            .iter()
+            .filter_map(|control| match control {
+                SettingsControl::SpotifyChoice {
+                    field,
+                    selected,
+                    options,
+                    ..
+                } => Some((*field, *selected, options.len())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            selections,
+            [
+                (super::SpotifyField::Quality, 1, 3),
+                (super::SpotifyField::Autoplay, 2, 3),
+                (super::SpotifyField::LibraryOrder, 2, 5),
+            ]
+        );
+        assert!(model.controls.iter().any(|control| matches!(
+            control,
+            SettingsControl::SpotifyNormalisation { checked: true, .. }
+        )));
+        assert!(matches!(
+            model.controls.last(),
+            Some(SettingsControl::Command {
+                command: super::SettingsCommand::ResetSection,
+                ..
+            })
+        ));
+
+        let mut changed = spotify;
+        super::SpotifyField::Quality.apply(&mut changed, 2);
+        super::SpotifyField::LibraryOrder.apply(&mut changed, 9);
+        assert_eq!(changed.quality, Quality::VeryHigh);
+        assert_eq!(changed.library_order, LibraryOrder::Alphabetical);
+    }
+
+    #[test]
     fn implemented_sections_preserve_complete_control_counts() {
         let settings = SettingsDocument::default();
         let expected = [
@@ -1583,6 +1759,7 @@ mod tests {
             (SettingsSection::Notifications, 5),
             (SettingsSection::Cookies, 13),
             (SettingsSection::Audiovault, 5),
+            (SettingsSection::Spotify, 5),
             (SettingsSection::Shortcuts, 3),
         ];
         for (section, count) in expected {

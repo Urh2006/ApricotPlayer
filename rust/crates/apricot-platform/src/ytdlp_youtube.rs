@@ -5,10 +5,10 @@ use std::{
     cmp::Reverse,
     collections::BTreeMap,
     ffi::{OsStr, OsString},
-    io::{self, Read},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
-    sync::mpsc,
+    sync::{Mutex, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -401,12 +401,27 @@ impl YtDlpYoutubeEngine {
             OsString::from("--"),
             OsString::from(media_url),
         ]);
-        let output = match run_with_cookie_retry(
-            &self.executable,
-            &self.config,
-            &arguments,
-            CookieRetry::Playback { media_url },
-        ) {
+        // A batch file line holds one plain ASCII URL.
+        let warm_output = media_url
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic())
+            .then(|| take_warm_resolver(&self.executable, &self.warm_resolve_arguments()))
+            .flatten()
+            .and_then(|child| run_warm_resolver(child, media_url).ok());
+        self.prewarm_resolver();
+        let first = match warm_output {
+            Some(output) => Ok(output),
+            None => run_executable(&self.executable, &arguments),
+        };
+        let output = match first.and_then(|output| {
+            cookie_retry_after(
+                &self.executable,
+                &self.config,
+                &arguments,
+                CookieRetry::Playback { media_url },
+                output,
+            )
+        }) {
             Ok(output) => output,
             // Python `resolve_stream_url`: recoverable YouTube extraction
             // errors retry once with the web_safari player client.
@@ -550,6 +565,28 @@ impl YtDlpYoutubeEngine {
         Ok(collection_response(&items, limit))
     }
 
+    /// The resolve arguments without the URL, which a warm process reads
+    /// from standard input.
+    fn warm_resolve_arguments(&self) -> Vec<OsString> {
+        let mut arguments = self.base_arguments();
+        arguments.extend([
+            OsString::from("--no-playlist"),
+            OsString::from("--skip-download"),
+            OsString::from("--dump-single-json"),
+            OsString::from("--batch-file"),
+            OsString::from("-"),
+        ]);
+        arguments
+    }
+
+    /// Starts a yt-dlp process for the next playback start, unless one with
+    /// the same arguments already waits.
+    fn prewarm_resolver(&self) {
+        if WARM_RESOLVER_ENABLED {
+            spawn_warm_resolver(&self.executable, self.warm_resolve_arguments());
+        }
+    }
+
     fn base_arguments(&self) -> Vec<OsString> {
         let mut arguments = vec![
             OsString::from("--ignore-config"),
@@ -620,6 +657,17 @@ fn run_with_cookie_retry(
     retry: CookieRetry<'_>,
 ) -> Result<ProcessOutput, YtDlpError> {
     let output = run_executable(executable, arguments)?;
+    cookie_retry_after(executable, config, arguments, retry, output)
+}
+
+/// The cookie retries of [`run_with_cookie_retry`] after its first run.
+fn cookie_retry_after(
+    executable: &Path,
+    config: &YoutubeSessionConfig,
+    arguments: &[OsString],
+    retry: CookieRetry<'_>,
+    output: ProcessOutput,
+) -> Result<ProcessOutput, YtDlpError> {
     if output.status.success() {
         return Ok(output);
     }
@@ -697,6 +745,92 @@ where
     let mut child = command
         .spawn()
         .map_err(|error| YtDlpError::Launch(error.to_string()))?;
+    collect_process_output(&mut child, OPERATION_TIMEOUT)
+}
+
+/// Starting yt-dlp.exe costs about a second before it does any work (measured
+/// 1.15 s for `--version`). A process started in advance with
+/// `--batch-file -` has paid that and waits for its URL on standard input;
+/// a playback start through it measured 0.6 to 1 s faster. When Apricot
+/// exits, the pipe closes and the waiting process ends without work.
+const WARM_RESOLVER_ENABLED: bool = cfg!(not(test));
+
+struct WarmResolver {
+    executable: PathBuf,
+    arguments: Vec<OsString>,
+    child: Child,
+}
+
+static WARM_RESOLVER: Mutex<Option<WarmResolver>> = Mutex::new(None);
+
+/// Starts a waiting yt-dlp for the next playback start, as a search does.
+pub fn prewarm_playback_resolver(executable: &Path, config: YoutubeSessionConfig) {
+    if let Ok(mut engine) = YtDlpYoutubeEngine::new(executable)
+        && engine.configure(config).is_ok()
+    {
+        engine.prewarm_resolver();
+    }
+}
+
+fn take_warm_resolver(executable: &Path, arguments: &[OsString]) -> Option<Child> {
+    if !WARM_RESOLVER_ENABLED {
+        return None;
+    }
+    let mut slot = WARM_RESOLVER.lock().ok()?;
+    let mut warm = slot.take()?;
+    if warm.executable != executable || warm.arguments != arguments {
+        stop_child(&mut warm.child);
+        return None;
+    }
+    // A process that ended on its own is of no use.
+    if !matches!(warm.child.try_wait(), Ok(None)) {
+        return None;
+    }
+    Some(warm.child)
+}
+
+fn spawn_warm_resolver(executable: &Path, arguments: Vec<OsString>) {
+    let Ok(mut slot) = WARM_RESOLVER.lock() else {
+        return;
+    };
+    if let Some(warm) = slot.as_mut() {
+        if warm.executable == executable
+            && warm.arguments == arguments
+            && matches!(warm.child.try_wait(), Ok(None))
+        {
+            return;
+        }
+        stop_child(&mut warm.child);
+        *slot = None;
+    }
+    let mut command = Command::new(executable);
+    command
+        .args(&arguments)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    if let Ok(child) = command.spawn() {
+        *slot = Some(WarmResolver {
+            executable: executable.to_owned(),
+            arguments,
+            child,
+        });
+    }
+}
+
+fn run_warm_resolver(mut child: Child, media_url: &str) -> Result<ProcessOutput, YtDlpError> {
+    let written = child.stdin.take().map(|mut stdin| {
+        // The URL was validated: one line without line breaks.
+        stdin.write_all(format!("{media_url}\n").as_bytes())
+    });
+    if !matches!(written, Some(Ok(()))) {
+        stop_child(&mut child);
+        return Err(YtDlpError::Launch(
+            "the waiting yt-dlp process did not take the URL".to_owned(),
+        ));
+    }
     collect_process_output(&mut child, OPERATION_TIMEOUT)
 }
 
@@ -902,6 +1036,10 @@ impl YoutubeEngine for YtDlpYoutubeEngine {
             YoutubeCommand::Resolve { url, preference } => self.resolve(&url, preference),
             YoutubeCommand::Shutdown => Ok(YoutubeResponsePayload::ShuttingDown),
         };
+        // A list was shown: the next Enter will most likely play from it.
+        if matches!(result, Ok(YoutubeResponsePayload::SearchResults { .. })) {
+            self.prewarm_resolver();
+        }
         result.map_err(|error| map_engine_error(&error, &self.config))
     }
 }

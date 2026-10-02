@@ -1566,3 +1566,32 @@ oba pa ohranita tuje vnose. Pred zagonom yt-dlp se preveri predpomnilnik (predva
 stream URL), po uspešnem razreševanju se tok shrani. Ob začetku predvajanja se, kot Python
 `schedule_next_stream_prefetch`, naslednji element seznama (ali prvi v čakalni vrsti) razreši v
 ozadju z ločenim yt-dlp procesom in shrani v predpomnilnik.
+
+### Popravki pred prvo beto (2. 10. 2026)
+
+Urhove zahteve z dne 2. 10. 2026:
+
+- **O-20.** Settings ima razdelek Spotify (za AudioVault, pred bližnjicami) s kakovostjo,
+  normalizacijo glasnosti, samodejnim nadaljevanjem in vrstnim redom knjižnice. Nastavitve ostanejo
+  v `spotify/settings.json`; razdelek se obnaša kot drugi (Save shrani, Back ohrani uporabljene
+  spremembe v pomnilniku, ponastavitev razdelka in Restore defaults ponastavita tudi Spotify).
+  Dialog v meniju Spotify ostane. Spremenjene nastavitve predvajanja ob zaprtju Settings tiho
+  ponovno povežejo Spotify, če Spotify ne predvaja.
+- **O-21.** Pri Spotify elementih se ob začetku in ob Ctrl+PageUp ali Ctrl+PageDown oglasi
+  "Playing: naslov by izvajalec" (ključ `spotify_playing_by`, 27 jezikov). Drugi viri ostanejo
+  "Playing: naslov".
+- Parity z zgovornostjo Pythona: pri predvajanju YouTube in drugih povezav se "Resolving direct
+  media URL." in "The YouTube component could not extract this link..." ne izgovorita več (Python
+  `set_status` ni govoril); vrstica stanja pokaže "Preparing playback: naslov". Stran
+  predvajalnika se odpre takoj ob Enter (Python `play_url`), prejšnji posnetek se ustavi, ob
+  dejanskem začetku se oglasi samo "Playing: naslov". Če uporabnik med pripravo stran zapusti ali
+  zažene drug posnetek, se pripravljeni tok zavrže; napaka pusti stran odprto, kot v Pythonu.
+  Začetno stanje mpv (pause ob nalaganju) se ne oglasi več kot "Playing.", saj Python play in
+  pause oglasi samo ob spremembi. AudioVault "Preparing playback" se prav tako ne izgovori.
+  Zamenjana Spotify seja ob ponovni povezavi ne oglasi "Spotify disconnected.".
+- Hitrost začetka predvajanja: zagon yt-dlp.exe sam stane 1,15 s. Po iskanju, ob odprtju Direct
+  link in po vsakem razreševanju zato čaka en yt-dlp proces z `--batch-file -`, ki prebere URL s
+  standardnega vhoda (samo ASCII URL, sicer običajna pot; ob napaki običajni piškotni ponovni
+  poskusi). Meritev Enter do "Playing:" na ločenem namizju, prazen predpomnilnik tokov:
+  beta.12 povprečno 4,3 s (8 začetkov), nova različica 3,8 s; prvi začetek iz Direct link
+  4,7 s proti 3,8 s. Zagon programa do vidnega okna ostaja okoli 0,3 s, zato ga nisem spreminjal.

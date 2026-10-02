@@ -76,6 +76,9 @@ pub struct Application {
     /// Python `audio_device_options_cache`: the last device probe and when it
     /// finished.
     audio_device_options: Option<(Instant, Vec<crate::SettingsChoiceOption>)>,
+    /// Spotify settings changed in the Settings window and not saved yet;
+    /// like the other sections they stay applied until the next save.
+    spotify_settings_draft: Option<apricot_spotify::settings::SpotifySettings>,
     /// Python `cookie_source_refresh_error`.
     cookie_source_refresh_error: String,
     /// Python `pending_app_update_version()`: a found update that waits in
@@ -99,6 +102,7 @@ impl Application {
             related_seen_ids: HashSet::new(),
             background_return_frame: None,
             audio_device_options: None,
+            spotify_settings_draft: None,
             cookie_source_refresh_error: String::new(),
             pending_app_update_version: None,
             state: AppState::default(),
@@ -2284,11 +2288,17 @@ impl Application {
 
     pub fn settings_model(&self, section: SettingsSection) -> SettingsScreenModel {
         let settings = self.settings.current();
-        let mut model = SettingsScreenModel::build(
+        let spotify = if section == SettingsSection::Spotify {
+            self.spotify_settings()
+        } else {
+            apricot_spotify::settings::SpotifySettings::default()
+        };
+        let mut model = SettingsScreenModel::build_with_spotify(
             &embedded_catalog(&settings.language),
             settings,
             &self.settings.settings_file(),
             section,
+            spotify,
         );
         if let Some((probed_at, options)) = &self.audio_device_options
             && probed_at.elapsed() < AUDIO_DEVICE_OPTIONS_FRESH
@@ -2509,6 +2519,10 @@ impl Application {
         section: SettingsSection,
     ) -> Result<(), SettingsControllerError> {
         self.settings.reset_section(section)?;
+        if section == SettingsSection::Spotify {
+            self.spotify_settings_draft =
+                Some(apricot_spotify::settings::SpotifySettings::default());
+        }
         // Python `reset_settings_section` also forgets the cached cookies.
         if section == SettingsSection::Cookies {
             let _ = std::fs::remove_file(self.cached_cookies_file());
@@ -2520,7 +2534,42 @@ impl Application {
     /// cookies.
     pub fn reset_all_settings(&mut self) {
         self.settings.reset_all();
+        self.spotify_settings_draft = Some(apricot_spotify::settings::SpotifySettings::default());
         let _ = std::fs::remove_file(self.cached_cookies_file());
+    }
+
+    /// The Spotify settings the Settings window shows: the unsaved changes,
+    /// else the saved file.
+    pub fn spotify_settings(&self) -> apricot_spotify::settings::SpotifySettings {
+        self.spotify_settings_draft
+            .unwrap_or_else(|| self.saved_spotify_settings())
+    }
+
+    /// `spotify/settings.json` next to the settings file.
+    pub fn saved_spotify_settings(&self) -> apricot_spotify::settings::SpotifySettings {
+        if let Some(folder) = self.settings.settings_file().parent() {
+            apricot_spotify::settings::set_folder(folder);
+        }
+        apricot_spotify::settings::load()
+    }
+
+    /// Applies one visible Spotify control to the unsaved changes.
+    pub fn set_spotify_choice(&mut self, field: crate::SpotifyField, index: usize) {
+        let mut settings = self.spotify_settings();
+        field.apply(&mut settings, index);
+        self.spotify_settings_draft = Some(settings);
+    }
+
+    pub fn set_spotify_normalisation(&mut self, checked: bool) {
+        let mut settings = self.spotify_settings();
+        settings.normalisation = checked;
+        self.spotify_settings_draft = Some(settings);
+    }
+
+    /// The Spotify dialog saved its own settings: they replace any unsaved
+    /// change of the Settings window.
+    pub fn forget_spotify_settings_draft(&mut self) {
+        self.spotify_settings_draft = None;
     }
 
     pub fn cancel_settings(&mut self) {
@@ -2579,6 +2628,13 @@ impl Application {
     /// Returns an error without committing the draft if persistence fails.
     pub fn save_settings(&mut self) -> Result<(), SettingsControllerError> {
         let _ = self.settings.save()?;
+        if let Some(spotify) = self.spotify_settings_draft {
+            if spotify != self.saved_spotify_settings() {
+                apricot_spotify::settings::save(&spotify)
+                    .map_err(SettingsControllerError::Spotify)?;
+            }
+            self.spotify_settings_draft = None;
+        }
         Ok(())
     }
 

@@ -22,6 +22,8 @@ pub enum SettingsControllerError {
     ShortcutConflict { shortcut: String, action: String },
     #[error("unknown shortcut action {0}")]
     UnknownShortcutAction(String),
+    #[error("{0}")]
+    Spotify(String),
 }
 
 #[derive(Debug)]

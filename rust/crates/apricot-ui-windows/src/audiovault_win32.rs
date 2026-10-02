@@ -1451,7 +1451,14 @@ pub(super) unsafe fn play_remote(window: HWND, item: MediaItem, allow_retry: boo
     let Some(request) = state_mut(window).map(new_play_request) else {
         return;
     };
-    announce(window, "preparing_stream", &[("title", &item.title)]);
+    // Python `set_status`: shown, not spoken.
+    if let Some(state) = state(window) {
+        set_status(
+            state,
+            &keyed(state, "preparing_stream", &[("title", &item.title)]),
+            false,
+        );
+    }
     spawn(window, move |client, _| {
         let url = item
             .url

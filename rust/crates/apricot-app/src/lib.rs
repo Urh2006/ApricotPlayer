@@ -98,7 +98,7 @@ pub use search_session::{
 pub use settings_controller::{SettingsController, SettingsControllerError};
 pub use settings_model::{
     SettingsChoiceOption, SettingsCommand, SettingsControl, SettingsScreenModel,
-    SettingsSectionItem, SettingsValueType, ShortcutActionItem,
+    SettingsSectionItem, SettingsValueType, ShortcutActionItem, SpotifyField,
 };
 pub use settings_session::{SettingsDraft, SettingsDraftError};
 pub use subscription_controller::{

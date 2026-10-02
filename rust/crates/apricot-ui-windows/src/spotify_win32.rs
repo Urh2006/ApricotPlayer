@@ -76,6 +76,20 @@ pub(super) struct SpotifyState {
     /// The transfer the user asked for and the device's name.
     transfer: Option<(SpotifyStamp, String)>,
     polling: bool,
+    /// A new connection replaced the running session, whose end is not a
+    /// disconnection the user needs to hear.
+    replacing_session: bool,
+}
+
+/// Connects `key`, replacing the running session.
+fn connect_account(
+    spotify: &mut SpotifyState,
+    service: &SpotifyService,
+    stamp: SpotifyStamp,
+    key: &str,
+) {
+    spotify.replacing_session |= service.connected_account().is_some();
+    service.connect(stamp, key);
 }
 
 pub(super) const fn is_view(view: MainView) -> bool {
@@ -397,7 +411,7 @@ unsafe fn use_account(window: HWND, key: &str) {
     state.spotify.connect = Some(stamp);
     let text = catalog(state).text("spotify_connecting").to_owned();
     set_status(state, &text, true);
-    service.connect(stamp, key);
+    connect_account(&mut state.spotify, &service, stamp, key);
     refresh_accounts(window, Some(key));
 }
 
@@ -758,7 +772,8 @@ unsafe fn handle_event(window: HWND, event: SpotifyEvent) {
         }
         SpotifyEvent::Disconnected => {
             let text = texts.text("spotify_disconnected").to_owned();
-            set_status(state, &text, true);
+            let replaced = std::mem::take(&mut state.spotify.replacing_session);
+            set_status(state, &text, !replaced);
         }
         SpotifyEvent::Resolved { stamp, result } => {
             if state.spotify.resolve != Some(stamp) {
@@ -997,30 +1012,56 @@ unsafe fn show_settings(window: HWND) {
         announce(window, &text);
         return;
     }
+    state.application.forget_spotify_settings_draft();
     if chosen.playback() == current.playback() {
         announce(window, texts.text("spotify_settings_saved"));
         return;
     }
+    let key = if apply_playback_settings(window) {
+        "spotify_settings_saved"
+    } else {
+        "spotify_settings_saved_later"
+    };
+    announce(window, texts.text(key));
+}
+
+/// Changed playback settings apply when the session connects: with nothing
+/// of Spotify playing, the connected account reconnects now. Returns false
+/// when Spotify plays and the change waits for the next connection.
+unsafe fn apply_playback_settings(window: HWND) -> bool {
+    let Some(state) = state(window) else {
+        return true;
+    };
     let session = state.application.player_session();
     let spotify_plays = session.is_open()
         && session
             .current_item()
             .is_some_and(|item| item.source == apricot_core::MediaSource::Spotify);
-    let key = if spotify_plays {
-        "spotify_settings_saved_later"
-    } else {
-        "spotify_settings_saved"
-    };
-    let text = texts.text(key).to_owned();
-    if !spotify_plays
-        && state
-            .spotify
-            .service_ref()
-            .is_some_and(|service| service.connected_account().is_some())
+    if spotify_plays {
+        return false;
+    }
+    if state
+        .spotify
+        .service_ref()
+        .is_some_and(|service| service.connected_account().is_some())
     {
         autoconnect(window);
     }
-    announce(window, &text);
+    true
+}
+
+/// The Settings window saved the Spotify section; Settings already said
+/// "Settings saved", so this stays silent.
+pub(super) unsafe fn settings_window_closed(
+    window: HWND,
+    before: apricot_spotify::settings::SpotifySettings,
+) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    if state.application.saved_spotify_settings().playback() != before.playback() {
+        let _ = apply_playback_settings(window);
+    }
 }
 
 /// The Spotify part of the diagnostic report: no names, tokens or links.
@@ -1125,7 +1166,7 @@ pub(super) unsafe fn autoconnect(window: HWND) {
         state.spotify.epochs.next_account();
         let stamp = state.spotify.epochs.begin();
         state.spotify.connect = None;
-        service.connect(stamp, &key);
+        connect_account(&mut state.spotify, &service, stamp, &key);
     }
 }
 
@@ -1180,7 +1221,7 @@ pub(super) unsafe fn play_link(window: HWND, text: &str, action: &str) -> bool {
         state.spotify.connect = None;
         let text = texts.text("spotify_connecting").to_owned();
         set_status(state, &text, true);
-        service.connect(stamp, &key);
+        connect_account(&mut state.spotify, &service, stamp, &key);
     }
     true
 }
@@ -1524,8 +1565,7 @@ unsafe fn continue_spotify_item(window: HWND, track: &SpotifyTrack) -> bool {
     if !state.application.replace_current_player_item(item.clone()) {
         return false;
     }
-    let message =
-        super::catalog_text(&state.application, "playing").replace("{title}", &item.title);
+    let message = super::playing_message(&state.application, &item);
     set_status(state, &message, true);
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

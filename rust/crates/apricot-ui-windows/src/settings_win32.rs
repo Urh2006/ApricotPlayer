@@ -136,6 +136,8 @@ enum ControlBinding {
     ShortcutActionList(Vec<ShortcutActionItem>),
     ShortcutCapture(String),
     Command(SettingsCommand),
+    SpotifyChoice(apricot_app::SpotifyField),
+    SpotifyNormalisation,
 }
 
 #[derive(Clone, Debug)]
@@ -814,6 +816,32 @@ unsafe fn create_bound_control(
         SettingsControl::Command { command, label } => {
             let control = button(parent, instance, &label, id, false)?;
             (None, control, ControlBinding::Command(command))
+        }
+        SettingsControl::SpotifyChoice {
+            field,
+            label,
+            selected,
+            options,
+        } => {
+            let label = static_label(parent, instance, &label)?;
+            let control = create_control(
+                parent,
+                instance,
+                w!("COMBOBOX"),
+                PCWSTR::null(),
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(CBS_DROPDOWNLIST as u32),
+                WINDOW_EX_STYLE::default(),
+                id,
+            )?;
+            for option in &options {
+                add_combo_string(control, option);
+            }
+            SendMessageW(control, CB_SETCURSEL, Some(WPARAM(selected)), None);
+            (Some(label), control, ControlBinding::SpotifyChoice(field))
+        }
+        SettingsControl::SpotifyNormalisation { label, checked } => {
+            let control = checkbox(parent, instance, &label, id, checked)?;
+            (None, control, ControlBinding::SpotifyNormalisation)
         }
     };
     if let Some(label) = label {
@@ -2041,6 +2069,17 @@ unsafe fn sync_bound_control(
         ControlBinding::ShortcutCapture(action_id) => {
             app.set_keyboard_shortcut(action_id, &window_text(bound.control))
         }
+        ControlBinding::SpotifyChoice(field) => {
+            let selected = SendMessageW(bound.control, CB_GETCURSEL, None, None).0;
+            if let Ok(index) = usize::try_from(selected) {
+                app.set_spotify_choice(*field, index);
+            }
+            Ok(())
+        }
+        ControlBinding::SpotifyNormalisation => {
+            app.set_spotify_normalisation(checkbox_is_checked(bound.control));
+            Ok(())
+        }
     }
 }
 
@@ -2441,7 +2480,9 @@ unsafe fn layout(window: HWND) {
 
 fn control_window_height(binding: &ControlBinding) -> i32 {
     match binding {
-        ControlBinding::Choice { .. } | ControlBinding::EqualizerDevicePreset { .. } => 420,
+        ControlBinding::Choice { .. }
+        | ControlBinding::EqualizerDevicePreset { .. }
+        | ControlBinding::SpotifyChoice(_) => 420,
         ControlBinding::ShortcutActionList(_) => 260,
         _ => 30,
     }
