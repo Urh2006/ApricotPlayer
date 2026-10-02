@@ -76,25 +76,11 @@ pub(super) struct SpotifyState {
     /// The transfer the user asked for and the device's name.
     transfer: Option<(SpotifyStamp, String)>,
     polling: bool,
-    /// A new connection replaced the running session, whose end is not a
-    /// disconnection the user needs to hear.
-    replacing_session: bool,
     /// The pending request for smart shuffle recommendations, when the last
     /// one started, and the tracks already recommended in this smart shuffle.
     smart_request: Option<SpotifyStamp>,
     smart_requested_at: Option<std::time::Instant>,
     smart_used: Vec<String>,
-}
-
-/// Connects `key`, replacing the running session.
-fn connect_account(
-    spotify: &mut SpotifyState,
-    service: &SpotifyService,
-    stamp: SpotifyStamp,
-    key: &str,
-) {
-    spotify.replacing_session |= service.connected_account().is_some();
-    service.connect(stamp, key);
 }
 
 pub(super) const fn is_view(view: MainView) -> bool {
@@ -114,6 +100,22 @@ impl SpotifyState {
     pub(super) fn epochs_begin(&mut self) -> SpotifyStamp {
         self.epochs.begin()
     }
+
+    pub(super) const fn is_current_account(&self, stamp: SpotifyStamp) -> bool {
+        self.epochs.is_current_account(stamp)
+    }
+}
+
+fn next_account(state: &mut WindowState) {
+    state.spotify.epochs.next_account();
+    state.spotify.resolve = None;
+    state.spotify.pending_play = None;
+    state.spotify.queue_load = None;
+    state.spotify.transfer = None;
+    state.spotify.smart_request = None;
+    state.spotify.smart_requested_at = None;
+    state.spotify.smart_used.clear();
+    state.spotify_browse.clear_account();
 }
 
 pub(super) fn catalog(state: &WindowState) -> TranslationCatalog {
@@ -411,12 +413,12 @@ unsafe fn use_account(window: HWND, key: &str) {
     let Some(state) = state_mut(window) else {
         return;
     };
-    state.spotify.epochs.next_account();
+    next_account(state);
     let stamp = state.spotify.epochs.begin();
     state.spotify.connect = Some(stamp);
     let text = catalog(state).text("spotify_connecting").to_owned();
     set_status(state, &text, false);
-    connect_account(&mut state.spotify, &service, stamp, key);
+    service.connect(stamp, key);
     refresh_accounts(window, Some(key));
 }
 
@@ -435,7 +437,7 @@ pub(super) unsafe fn log_out_selected(window: HWND) {
     };
     let name = display_name(&service.accounts(), &key);
     if let Some(state) = state_mut(window) {
-        state.spotify.epochs.next_account();
+        next_account(state);
         state.spotify.connect = None;
     }
     match service.logout(&key) {
@@ -484,7 +486,7 @@ pub(super) unsafe fn remove_selected(window: HWND) {
         return;
     }
     if let Some(state) = state_mut(window) {
-        state.spotify.epochs.next_account();
+        next_account(state);
         state.spotify.connect = None;
     }
     match service.remove(&key) {
@@ -641,7 +643,7 @@ unsafe fn log_in(window: HWND, return_to: ReturnTo) {
             });
             if let Some(state) = state_mut(window) {
                 // The new login is the active session.
-                state.spotify.epochs.next_account();
+                next_account(state);
                 state.spotify.connect = None;
                 state.spotify.hub_selected = Some(SpotifyHubEntry::Accounts);
             }
@@ -775,13 +777,20 @@ unsafe fn handle_event(window: HWND, event: SpotifyEvent) {
                 resolve(window, &uri);
             }
         }
-        SpotifyEvent::Disconnected => {
+        SpotifyEvent::Disconnected { session_id } => {
+            if state
+                .spotify
+                .service
+                .as_ref()
+                .is_none_or(|service| !service.is_current_session(session_id))
+            {
+                return;
+            }
             let text = texts.text("spotify_disconnected").to_owned();
-            let replaced = std::mem::take(&mut state.spotify.replacing_session);
-            set_status(state, &text, !replaced);
+            set_status(state, &text, true);
         }
         SpotifyEvent::Resolved { stamp, result } => {
-            if state.spotify.resolve != Some(stamp) {
+            if !state.spotify.is_current_account(stamp) || state.spotify.resolve != Some(stamp) {
                 return;
             }
             state.spotify.resolve = None;
@@ -814,7 +823,9 @@ unsafe fn handle_event(window: HWND, event: SpotifyEvent) {
             playlist,
             result,
         } => {
-            if state.spotify.smart_request != Some(stamp) {
+            if !state.spotify.is_current_account(stamp)
+                || state.spotify.smart_request != Some(stamp)
+            {
                 return;
             }
             state.spotify.smart_request = None;
@@ -846,6 +857,9 @@ unsafe fn handle_event(window: HWND, event: SpotifyEvent) {
             playback.add_smart_tracks(&tracks);
         }
         SpotifyEvent::Transferred { stamp, result } => {
+            if !state.spotify.is_current_account(stamp) {
+                return;
+            }
             let Some((wanted, name)) = state.spotify.transfer.take() else {
                 return;
             };
@@ -860,7 +874,7 @@ unsafe fn handle_event(window: HWND, event: SpotifyEvent) {
             announce(window, &text);
         }
         SpotifyEvent::Queue { stamp, queue } => {
-            if state.spotify.queue_load != Some(stamp) {
+            if !state.spotify.is_current_account(stamp) || state.spotify.queue_load != Some(stamp) {
                 return;
             }
             state.spotify.queue_load = None;
@@ -1204,10 +1218,10 @@ pub(super) unsafe fn autoconnect(window: HWND) {
         return;
     };
     if let Some(state) = state_mut(window) {
-        state.spotify.epochs.next_account();
+        next_account(state);
         let stamp = state.spotify.epochs.begin();
         state.spotify.connect = None;
-        connect_account(&mut state.spotify, &service, stamp, &key);
+        service.connect(stamp, &key);
     }
 }
 
@@ -1233,6 +1247,10 @@ pub(super) unsafe fn play_link(window: HWND, text: &str, action: &str) -> bool {
             | SpotifyEntityKind::Episode
             | SpotifyEntityKind::Album
             | SpotifyEntityKind::Playlist
+            | SpotifyEntityKind::Artist
+            | SpotifyEntityKind::Show
+            | SpotifyEntityKind::User
+            | SpotifyEntityKind::LikedSongs
     ) {
         let text = texts.text("spotify_link_kind_unsupported").to_owned();
         show_error_message(window, &text);
@@ -1256,18 +1274,34 @@ pub(super) unsafe fn play_link(window: HWND, text: &str, action: &str) -> bool {
         return true;
     };
     if let (Some(service), Some(state)) = (service(window), state_mut(window)) {
+        next_account(state);
         state.spotify.pending_play = Some(uri);
-        state.spotify.epochs.next_account();
         let stamp = state.spotify.epochs.begin();
         state.spotify.connect = None;
         let text = texts.text("spotify_connecting").to_owned();
         set_status(state, &text, false);
-        connect_account(&mut state.spotify, &service, stamp, &key);
+        service.connect(stamp, &key);
     }
     true
 }
 
 unsafe fn resolve(window: HWND, uri: &str) {
+    if let Some(reference) = SpotifyRef::parse(uri)
+        && let Some(state) = state(window)
+    {
+        use super::spotify_browse::Source;
+        let source = match reference.kind {
+            SpotifyEntityKind::Artist => Some(Source::Artist(uri.to_owned())),
+            SpotifyEntityKind::Show => Some(Source::Show(uri.to_owned())),
+            SpotifyEntityKind::User => Some(super::spotify_browse::profile_source(state, uri)),
+            SpotifyEntityKind::LikedSongs => Some(Source::LikedSongs),
+            _ => None,
+        };
+        if let Some(source) = source {
+            super::spotify_browse::open_root(window, source, uri.to_owned());
+            return;
+        }
+    }
     let Some(service) = service(window) else {
         return;
     };

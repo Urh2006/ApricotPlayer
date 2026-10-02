@@ -307,6 +307,16 @@ impl Shared {
         }
     }
 
+    /// mpv has stopped consuming this stream. Release a decoder waiting for
+    /// ring space before it can handle the next transport command.
+    fn close_current(&self) {
+        if let Ok(current) = self.current.lock()
+            && let Some((_, generation)) = current.as_ref()
+        {
+            generation.close();
+        }
+    }
+
     fn push_event(&self, event: PcmSourceEvent) {
         if let Ok(mut events) = self.events.lock() {
             events.push_back(event);
@@ -365,7 +375,13 @@ impl BridgeSink {
                     play_request_id,
                     position_ms,
                     ..
-                } if self.request_id != Some(play_request_id) => {
+                } if self.request_id != Some(play_request_id)
+                    || self.shared.current.lock().is_ok_and(|current| {
+                        current
+                            .as_ref()
+                            .is_some_and(|(_, generation)| generation.is_closed())
+                    }) =>
+                {
                     self.request_id = Some(play_request_id);
                     let continuing = self
                         .shared
@@ -609,8 +625,8 @@ impl SpotifyPlayback {
         sent
     }
 
-    /// Plays an upcoming track now: a manually added one is moved first and
-    /// skipped to, a context track starts its context at that occurrence
+    /// Plays an upcoming track now: a manual track or smart recommendation
+    /// is moved first and skipped to; a context track starts at its occurrence
     /// (the manual queue stays, plan D16).
     pub fn play_queue_entry(&self, uid: &str) -> bool {
         let Some(state) = self.player_state() else {
@@ -619,7 +635,7 @@ impl SpotifyPlayback {
         let Some(track) = state.next_tracks.iter().find(|track| track.uid == uid) else {
             return false;
         };
-        if track.provider == "queue" {
+        if track.provider == "queue" || crate::smart_shuffle::is_smart(track) {
             let edit = crate::queue::QueueEdit::ToFront(uid.to_owned());
             if !self.edit_queue(&edit) {
                 return false;
@@ -783,10 +799,12 @@ impl SpotifyPlayback {
                     position_ms,
                     ..
                 } => {
-                    if paused {
-                        paused = false;
-                        shared.push_event(PcmSourceEvent::Paused(false));
-                    }
+                    // mpv can pause itself at the EOF of a replaced PCM
+                    // generation while LibreSpot still considers playback
+                    // active. Always synchronize its confirmed Playing state,
+                    // including Next/Previous and a resumed generation.
+                    paused = false;
+                    shared.push_event(PcmSourceEvent::Paused(false));
                     if request_id != Some(play_request_id) {
                         request_id = Some(play_request_id);
                         let track = shared.track.lock().ok().and_then(|track| track.clone());
@@ -906,12 +924,11 @@ impl PcmSource for SpotifyPlayback {
         if !self.premium.load(Ordering::SeqCst) {
             return Err("spotify_premium_required".to_owned());
         }
-        let current = self
-            .shared
-            .current
-            .lock()
-            .ok()
-            .and_then(|current| current.as_ref().map(|(id, _)| *id));
+        let current = self.shared.current.lock().ok().and_then(|current| {
+            current
+                .as_ref()
+                .and_then(|(id, generation)| (!generation.is_closed()).then_some(*id))
+        });
         if attach {
             // The Connect device already plays it: load its current generation.
             if let Some(id) = current {
@@ -945,6 +962,10 @@ impl PcmSource for SpotifyPlayback {
         self.shared.requested.store(true, Ordering::SeqCst);
         log::info!("start requested at {position_ms} ms, paused {paused}");
         let request = load_request(item, uri, position_ms, paused);
+        self.shared.close_current();
+        if let Ok(mut pending) = self.shared.pending.lock() {
+            *pending = None;
+        }
         let mut result = Err("spotify_not_connected".to_owned());
         self.with_spirc(|spirc| {
             result = spirc
@@ -968,6 +989,7 @@ impl PcmSource for SpotifyPlayback {
     }
 
     fn stop(&self) {
+        self.shared.close_current();
         self.with_spirc(|spirc| {
             let _ = spirc.pause();
         });
@@ -1066,6 +1088,98 @@ mod tests {
         assert!(!writer.is_finished());
         shared.close_all();
         writer.join().unwrap();
+    }
+
+    #[test]
+    fn stopping_playback_releases_the_decoder_when_mpv_stops_reading() {
+        let (playback, shared) = SpotifyPlayback::new(320, Arc::new(|| {}));
+        shared.open_generation(1, 0, None);
+        let generation = shared.current.lock().unwrap().clone().unwrap().1;
+        generation.push(&vec![0; RING_BYTES]);
+        let (done, received) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            generation.push(&[0; 4]);
+            done.send(()).unwrap();
+        });
+        playback.stop();
+        let released = received
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .is_ok();
+        shared.close_all();
+        writer.join().unwrap();
+        assert!(
+            released,
+            "stop must release the decoder before another track can load"
+        );
+    }
+
+    #[test]
+    fn resuming_a_stopped_request_opens_a_fresh_pcm_generation() {
+        let (playback, shared) = SpotifyPlayback::new(320, Arc::new(|| {}));
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let mut sink = SpotifyPlayback::sink(shared.clone(), Arc::new(Mutex::new(Some(receiver))));
+        let playing = |position_ms| PlayerEvent::Playing {
+            play_request_id: 1,
+            track_id: librespot_core::SpotifyUri::from_uri("spotify:track:4u7EnebtmKWzUH433cf5Qv")
+                .unwrap(),
+            position_ms,
+        };
+        sender.send(playing(0)).unwrap();
+        sink.fence();
+        assert_eq!(shared.pending.lock().unwrap().take().unwrap().id, 1);
+        playback.stop();
+        sender.send(playing(500)).unwrap();
+        sink.fence();
+        let resumed = shared
+            .pending
+            .lock()
+            .unwrap()
+            .take()
+            .expect("resume must not reuse the closed stream");
+        assert_eq!(resumed.id, 2);
+        assert_eq!(resumed.base_ms, 500);
+        assert!(
+            !shared
+                .current
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .1
+                .is_closed()
+        );
+    }
+
+    #[tokio::test]
+    async fn every_playing_event_resynchronizes_mpv_after_its_automatic_eof_pause() {
+        let shared = shared();
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let track_id =
+            librespot_core::SpotifyUri::from_uri("spotify:track:4u7EnebtmKWzUH433cf5Qv").unwrap();
+        // First track, Next, then Previous: mpv may have applied its own EOF
+        // pause between generations without LibreSpot reporting Paused.
+        for play_request_id in [1, 2, 3] {
+            sender
+                .send(PlayerEvent::Playing {
+                    play_request_id,
+                    track_id: track_id.clone(),
+                    position_ms: 0,
+                })
+                .unwrap();
+        }
+        drop(sender);
+        SpotifyPlayback::listen(shared.clone(), receiver).await;
+        let events = shared.events.lock().unwrap();
+        assert_eq!(
+            events.len(),
+            3,
+            "every confirmed Playing must clear mpv's own EOF pause"
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| matches!(event, PcmSourceEvent::Paused(false)))
+        );
     }
 
     #[test]

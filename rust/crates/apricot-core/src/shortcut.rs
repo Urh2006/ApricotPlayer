@@ -122,6 +122,32 @@ pub fn action_for_shortcut(
         .or_else(|| resolve_pass(shortcuts, chord, context, false))
 }
 
+/// Transport shortcuts available while the player is outside its own page.
+/// The focused screen keeps its actions, typing and native navigation.
+pub fn background_player_action_for_shortcut(
+    shortcuts: &BTreeMap<String, String>,
+    chord: ShortcutChord,
+    context: ShortcutContext,
+) -> Option<&'static ActionDefinition> {
+    if context.accepts_text
+        || !(chord.control || chord.alt || matches!(chord.key, ShortcutKey::Function(_)))
+        || action_for_shortcut(shortcuts, chord, context).is_some()
+    {
+        return None;
+    }
+    action_for_shortcut(
+        shortcuts,
+        chord,
+        ShortcutContext::new(ActionScope::Player, false),
+    )
+    .filter(|action| {
+        matches!(
+            action.id.as_str(),
+            "player_previous" | "player_next" | "player_next_related" | "player_fullscreen"
+        )
+    })
+}
+
 fn resolve_pass(
     shortcuts: &BTreeMap<String, String>,
     chord: ShortcutChord,
@@ -198,7 +224,60 @@ mod tests {
 
     use crate::action::{ACTIONS, ActionScope};
 
-    use super::{ShortcutChord, ShortcutContext, ShortcutKey, action_for_shortcut};
+    use super::{
+        ShortcutChord, ShortcutContext, ShortcutKey, action_for_shortcut,
+        background_player_action_for_shortcut,
+    };
+
+    #[test]
+    fn background_transport_works_in_menus_and_results() {
+        for (key, expected) in [
+            ("Ctrl+PageUp", "player_previous"),
+            ("Ctrl+PageDown", "player_next"),
+        ] {
+            let action = background_player_action_for_shortcut(
+                &BTreeMap::new(),
+                ShortcutChord::parse(key).unwrap(),
+                ShortcutContext::new(ActionScope::List, false),
+            )
+            .expect("background transport");
+            assert_eq!(action.id.as_str(), expected);
+        }
+    }
+
+    #[test]
+    fn background_transport_preserves_typing_navigation_and_route_actions() {
+        let context = ShortcutContext::new(ActionScope::List, false);
+        for key in ["T", "Shift+T", "PageUp", "Down", "Space"] {
+            let shortcuts = BTreeMap::from([("player_previous".to_owned(), key.to_owned())]);
+            assert!(
+                background_player_action_for_shortcut(
+                    &shortcuts,
+                    ShortcutChord::parse(key).unwrap(),
+                    context
+                )
+                .is_none(),
+                "{key}"
+            );
+        }
+        let shortcuts = BTreeMap::from([("open_search".to_owned(), "Ctrl+PageDown".to_owned())]);
+        assert!(
+            background_player_action_for_shortcut(
+                &shortcuts,
+                ShortcutChord::parse("Ctrl+PageDown").unwrap(),
+                context
+            )
+            .is_none()
+        );
+        assert!(
+            background_player_action_for_shortcut(
+                &BTreeMap::new(),
+                ShortcutChord::parse("Ctrl+PageDown").unwrap(),
+                ShortcutContext::new(ActionScope::Dialog, true)
+            )
+            .is_none()
+        );
+    }
 
     #[test]
     fn every_default_shortcut_parses() {

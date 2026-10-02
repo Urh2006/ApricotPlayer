@@ -1,3 +1,14 @@
+# v2.0.0-beta.2 - Background Playback and Spotify Recovery
+
+## Fixed
+- Escape keeps playing when Background playback is enabled; next/previous shortcuts work from menus and results without taking plain-letter navigation.
+- Fixed Spotify decoder buffer stalls, stale end-of-track events, pause synchronization, dead Connect sessions and late account/login responses.
+- Isolated account-specific browse caches and fixed pagination after unlike/playlist removal, library folder identity, Smart Shuffle history/queue playback and large album pagination.
+- Supported Spotify artist/show/profile direct links open their existing lists.
+
+## Verification and limits
+- Added deterministic Spotify lifecycle, audio bridge, queue/history and actual libmpv regressions. See `docs/SPOTIFY_AUDIT_BETA2.md` for findings and remaining acceptance work.
+
 # v1.0.21 - Playback Recovery and Identical Pitch Export
 
 ## Added

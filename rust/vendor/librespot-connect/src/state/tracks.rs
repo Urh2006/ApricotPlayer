@@ -11,6 +11,85 @@ use crate::{
 use protobuf::MessageField;
 use rand::Rng;
 
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+    use crate::protocol::{connect::Device, connect::PutStateRequest, player::PlayerState};
+    use crate::state::context::StateContext;
+
+    fn state() -> ConnectState {
+        let tracks: Vec<_> = (0..3)
+            .map(|index| ProvidedTrack {
+                uri: format!("spotify:track:track{index}"),
+                uid: format!("item{index}"),
+                provider: "context".to_owned(),
+                ..Default::default()
+            })
+            .collect();
+        ConnectState {
+            request: PutStateRequest {
+                device: MessageField::some(Device {
+                    player_state: MessageField::some(PlayerState::default()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            context: Some(StateContext {
+                tracks: tracks.into(),
+                metadata: Default::default(),
+                restrictions: None,
+                index: Default::default(),
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn next_then_previous_restores_first_playlist_occurrence() {
+        let mut state = state();
+        state.set_current_track(0).unwrap();
+        state.reset_playback_to_position(Some(0)).unwrap();
+        assert!(state.next_track().unwrap().is_some());
+        assert_eq!(state.player().track.uid, "item1");
+        assert!(state.prev_track().unwrap().is_some());
+        assert_eq!(state.player().track.uid, "item0");
+        assert_eq!(state.player().next_tracks[0].uid, "item1");
+    }
+
+    #[test]
+    fn previous_keeps_smart_shuffle_recommendations_in_playback_history() {
+        let mut state = state();
+        state.set_current_track(0).unwrap();
+        state.reset_playback_to_position(Some(0)).unwrap();
+        state.player_mut().next_tracks.insert(
+            0,
+            ProvidedTrack {
+                uri: "spotify:track:recommendation".to_owned(),
+                uid: "smart1".to_owned(),
+                provider: "smart_shuffle".to_owned(),
+                ..Default::default()
+            },
+        );
+        state.next_track().unwrap();
+        assert_eq!(state.player().track.uid, "smart1");
+        state.next_track().unwrap();
+        assert_eq!(state.player().track.uid, "item1");
+        state.prev_track().unwrap();
+        assert_eq!(
+            state.player().track.uid,
+            "smart1",
+            "Previous must return to the track actually played before this one"
+        );
+        state.prev_track().unwrap();
+        assert_eq!(state.player().track.uid, "item0");
+        assert_eq!(
+            state.player().next_tracks[0].uid,
+            "smart1",
+            "Next must retain the recommendation after going back"
+        );
+    }
+}
+
 // identifier used as part of the uid
 pub const IDENTIFIER_DELIMITER: &str = "delimiter";
 
@@ -112,7 +191,10 @@ impl<'ct> ConnectState {
 
         if let Some(old_track) = old_track {
             // only add songs from our context to our previous tracks
-            if old_track.is_context() || old_track.is_autoplay() {
+            if old_track.is_context()
+                || old_track.is_autoplay()
+                || old_track.provider == "smart_shuffle"
+            {
                 self.push_prev(old_track)
             }
         }
@@ -171,7 +253,10 @@ impl<'ct> ConnectState {
         let old_track = self.player_mut().track.take();
 
         if let Some(old_track) = old_track {
-            if old_track.is_context() || old_track.is_autoplay() {
+            if old_track.is_context()
+                || old_track.is_autoplay()
+                || old_track.provider == "smart_shuffle"
+            {
                 // todo: O(n)
                 self.next_tracks_mut().insert(0, old_track);
             }

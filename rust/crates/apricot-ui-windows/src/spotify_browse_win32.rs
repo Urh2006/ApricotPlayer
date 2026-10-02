@@ -94,7 +94,10 @@ impl Source {
                 offset,
             },
             Self::LikedSongs => CatalogRequest::LikedSongs { offset },
-            Self::Album(uri) => CatalogRequest::Album(uri.clone()),
+            Self::Album(uri) => CatalogRequest::Album {
+                uri: uri.clone(),
+                offset,
+            },
             Self::Playlist(uri) => CatalogRequest::Playlist {
                 uri: uri.clone(),
                 offset,
@@ -192,6 +195,29 @@ pub(super) struct BrowseState {
     /// Songs the account hid, read when the first personal mix opens.
     hidden: Option<std::collections::HashSet<String>>,
     hidden_load: Option<SpotifyStamp>,
+}
+
+impl BrowseState {
+    pub(super) fn clear_account(&mut self) {
+        *self = Self::default();
+    }
+}
+
+impl Frame {
+    fn remove_items(&mut self, keep: impl FnMut(&CatalogItem) -> bool) {
+        let before = self.items.len();
+        self.items.retain(keep);
+        let removed = before - self.items.len();
+        if removed > 0 {
+            self.next_offset = self
+                .next_offset
+                .map(|offset| offset.saturating_sub(removed as u64));
+            // Responses read before the edit use the old server offsets.
+            self.loading = None;
+            self.refresh = None;
+            self.selected = self.selected.min(self.items.len().saturating_sub(1));
+        }
+    }
 }
 
 pub(super) const fn is_view(view: MainView) -> bool {
@@ -297,6 +323,9 @@ pub(super) unsafe fn loaded(
     let Some(state) = state_mut(window) else {
         return;
     };
+    if !state.spotify.is_current_account(stamp) {
+        return;
+    }
     let texts = super::spotify::catalog(state);
     let pending_load = matches!(
         state.spotify_browse.pending,
@@ -1308,6 +1337,9 @@ pub(super) unsafe fn edited(
     let Some(state) = state_mut(window) else {
         return;
     };
+    if !state.spotify.is_current_account(stamp) {
+        return;
+    }
     let texts = super::spotify::catalog(state);
     let Some((wanted, pending)) = state.spotify_browse.pending.take() else {
         return;
@@ -1336,7 +1368,7 @@ pub(super) unsafe fn edited(
                     frame.following = Some(*saved);
                 }
                 if !*saved && matches!(frame.source, Source::LikedSongs) {
-                    frame.items.retain(|item| item.uri != *uri);
+                    frame.remove_items(|item| item.uri != *uri);
                 }
             }
             let key = match (kind, *saved) {
@@ -1354,9 +1386,7 @@ pub(super) unsafe fn edited(
             .replace("{name}", &name),
         (O::RemovedFromPlaylist { .. }, Pending::Remove { uid }) => {
             if let Some(frame) = state.spotify_browse.frames.last_mut() {
-                frame
-                    .items
-                    .retain(|item| item.uid.as_deref() != Some(uid.as_str()));
+                frame.remove_items(|item| item.uid.as_deref() != Some(uid.as_str()));
             }
             texts.text("spotify_removed_from_playlist").to_owned()
         }
@@ -1645,6 +1675,68 @@ mod tests {
     use super::*;
 
     #[test]
+    fn account_change_drops_private_caches_and_pending_answers() {
+        let mut browse = BrowseState {
+            playlists: Some(Vec::new()),
+            hidden: Some(["spotify:track:a".to_owned()].into()),
+            hidden_load: Some(SpotifyStamp::default()),
+            pending: Some((SpotifyStamp::default(), Pending::Saved)),
+            last_query: "private search".to_owned(),
+            ..BrowseState::default()
+        };
+        browse.clear_account();
+        assert!(browse.playlists.is_none());
+        assert!(browse.hidden.is_none());
+        assert!(browse.hidden_load.is_none());
+        assert!(browse.pending.is_none());
+        assert!(browse.frames.is_empty());
+        assert!(browse.last_query.is_empty());
+    }
+
+    #[test]
+    fn deleting_loaded_track_keeps_first_unread_track_in_next_page() {
+        let row = |index: usize| {
+            section_row(&apricot_spotify::catalog::Section {
+                uri: format!("track-{index}"),
+                title: index.to_string(),
+                items: Vec::new(),
+            })
+        };
+        let mut frame = Frame {
+            source: Source::LikedSongs,
+            title: String::new(),
+            items: (0..50).map(row).collect(),
+            next_offset: Some(50),
+            selected: 49,
+            loading: Some(SpotifyStamp::default()),
+            refresh: Some(SpotifyStamp::default()),
+            loaded: true,
+            error: None,
+            mixed: false,
+            can_edit: false,
+            can_rename: false,
+            personalised: false,
+            following: None,
+            sections: Vec::new(),
+        };
+        frame.remove_items(|item| item.uri != "track-0");
+        // The same server deletion shifts track 50 to index 49.
+        let server_rows: Vec<_> = (1..100).map(row).collect();
+        let offset = usize::try_from(frame.next_offset.unwrap()).unwrap();
+        assert_eq!(server_rows[offset].uri, "track-50");
+        assert_eq!(
+            frame.source.request(offset as u64),
+            Some(CatalogRequest::LikedSongs { offset: 49 })
+        );
+        assert!(
+            frame.loading.is_none(),
+            "page response before deletion must be discarded"
+        );
+        assert!(frame.refresh.is_none());
+        assert_eq!(frame.selected, 48);
+    }
+
+    #[test]
     fn tracks_play_in_the_context_of_their_collection() {
         assert_eq!(
             Source::Album("spotify:album:a".into()).context(),
@@ -1663,6 +1755,13 @@ mod tests {
 
     #[test]
     fn requests_continue_at_the_offset() {
+        assert_eq!(
+            Source::Album("spotify:album:a".into()).request(300),
+            Some(CatalogRequest::Album {
+                uri: "spotify:album:a".into(),
+                offset: 300
+            })
+        );
         assert_eq!(
             Source::Playlist("spotify:playlist:p".into()).request(50),
             Some(CatalogRequest::Playlist {

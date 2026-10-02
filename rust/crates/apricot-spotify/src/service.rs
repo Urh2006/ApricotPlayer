@@ -103,7 +103,7 @@ pub enum SpotifyEvent {
         result: Result<SpotifyAccount, SpotifyError>,
     },
     /// The Connect device of the active session lost its connection.
-    Disconnected,
+    Disconnected { session_id: u64 },
     /// Metadata of a track or episode link, for playback from Apricot.
     /// `context` is the album or playlist URI when the link was one; the
     /// track is then its first playable track.
@@ -144,6 +144,35 @@ pub struct ActiveSession {
     session: Session,
     playback: Arc<SpotifyPlayback>,
     shared: Arc<Shared>,
+    session_id: u64,
+    ended: Arc<AtomicBool>,
+}
+
+/// Serializes invalidation with persistence and installation. UI request
+/// stamps alone cannot undo a stale worker's changes to the active session.
+#[derive(Default)]
+struct SessionLifecycle {
+    generation: u64,
+    disconnected: Option<u64>,
+}
+
+impl SessionLifecycle {
+    fn begin(&mut self) -> u64 {
+        self.generation += 1;
+        self.disconnected = None;
+        self.generation
+    }
+
+    fn commit<T>(&self, generation: u64, install: impl FnOnce() -> T) -> Option<T> {
+        (self.generation == generation).then(install)
+    }
+}
+
+#[derive(Clone)]
+struct SessionAttempt {
+    id: u64,
+    lifecycle: Arc<Mutex<SessionLifecycle>>,
+    slot: Arc<Mutex<Option<(String, ActiveSession)>>>,
 }
 
 type Notify = Arc<dyn Fn() + Send + Sync>;
@@ -156,6 +185,7 @@ pub struct SpotifyService {
     login_cancel: Mutex<Option<Arc<AtomicBool>>>,
     /// The locally active session and its account key.
     session: Arc<Mutex<Option<(String, ActiveSession)>>>,
+    lifecycle: Arc<Mutex<SessionLifecycle>>,
     /// Title and artists by URI, for the queue view.
     titles: Arc<Mutex<std::collections::HashMap<String, (String, String)>>>,
     /// Spotify's internal web interfaces (pathfinder, spclient).
@@ -178,7 +208,10 @@ pub enum CatalogRequest {
     LikedSongs {
         offset: u64,
     },
-    Album(String),
+    Album {
+        uri: String,
+        offset: u64,
+    },
     Playlist {
         uri: String,
         offset: u64,
@@ -285,6 +318,7 @@ impl SpotifyService {
                 notify,
                 login_cancel: Mutex::new(None),
                 session: Arc::default(),
+                lifecycle: Arc::default(),
                 titles: Arc::default(),
                 api: Arc::new(crate::api::Api::new(Some(
                     app_data.join("spotify").join("pathfinder.json"),
@@ -304,6 +338,22 @@ impl SpotifyService {
             .lock()
             .ok()
             .and_then(|session| session.as_ref().map(|(key, _)| key.clone()))
+    }
+
+    /// Whether a disconnect belongs to the newest local session attempt.
+    pub fn is_current_session(&self, session_id: u64) -> bool {
+        self.lifecycle.lock().is_ok_and(|state| {
+            state.generation == session_id || state.disconnected == Some(session_id)
+        })
+    }
+
+    fn begin_session_attempt(&self) -> SessionAttempt {
+        let id = self.lifecycle.lock().expect("Spotify lifecycle").begin();
+        SessionAttempt {
+            id,
+            lifecycle: self.lifecycle.clone(),
+            slot: self.session.clone(),
+        }
     }
 
     /// Reads the title, artists and length of `uri` (track or episode) with
@@ -580,9 +630,9 @@ impl SpotifyService {
                     CatalogRequest::LikedSongs { offset } => {
                         CatalogResult::Page(catalog::liked_songs(api, &session, offset).await?)
                     }
-                    CatalogRequest::Album(uri) => {
-                        CatalogResult::Collection(catalog::album(api, &session, &uri).await?)
-                    }
+                    CatalogRequest::Album { uri, offset } => CatalogResult::Collection(
+                        catalog::album(api, &session, &uri, offset).await?,
+                    ),
                     CatalogRequest::Playlist { uri, offset } => CatalogResult::Collection(
                         catalog::playlist(api, &session, &uri, offset).await?,
                     ),
@@ -703,6 +753,7 @@ impl SpotifyService {
     /// Starts a browser login. A previous pending login is cancelled.
     pub fn begin_login(&self, login: u64, page: CallbackPage) {
         self.cancel_login();
+        let session_attempt = self.begin_session_attempt();
         let cancel = Arc::new(AtomicBool::new(false));
         if let Ok(mut slot) = self.login_cancel.lock() {
             *slot = Some(cancel.clone());
@@ -710,7 +761,6 @@ impl SpotifyService {
         let store = self.store.clone();
         let sender = self.sender.clone();
         let notify = self.notify.clone();
-        let session_slot = self.session.clone();
         let handle = self.runtime().handle().clone();
         std::thread::Builder::new()
             .name("apricot-spotify-login".into())
@@ -738,11 +788,9 @@ impl SpotifyService {
                         Credentials::with_access_token(token),
                         notify.clone(),
                         sender.clone(),
+                        session_attempt.clone(),
                     ))?;
-                    store
-                        .upsert_active(account.clone())
-                        .map_err(SpotifyError::Storage)?;
-                    replace_session(&session_slot, Some((account.key.clone(), session)));
+                    commit_session(&session_attempt, &store, &account, session)?;
                     Ok(account)
                 });
                 // A panic must end the login with an error, never leave the
@@ -763,6 +811,7 @@ impl SpotifyService {
         if let Ok(mut slot) = self.login_cancel.lock()
             && let Some(cancel) = slot.take()
         {
+            let _ = self.lifecycle.lock().map(|mut state| state.begin());
             cancel.store(true, std::sync::atomic::Ordering::SeqCst);
         }
     }
@@ -773,6 +822,8 @@ impl SpotifyService {
     /// decrypts or that Spotify rejects is forgotten, so the account shows
     /// as logged out and offers a new login.
     pub fn connect(&self, stamp: SpotifyStamp, key: &str) {
+        self.cancel_login();
+        let session_attempt = self.begin_session_attempt();
         let accounts = self.store.load();
         let account = accounts.accounts.iter().find(|a| a.key == key).cloned();
         let key = key.to_owned();
@@ -780,36 +831,39 @@ impl SpotifyService {
         let store = self.store.clone();
         let sender = self.sender.clone();
         let notify = self.notify.clone();
-        let session_slot = self.session.clone();
         self.runtime().spawn(async move {
-            let result =
-                async {
-                    let account = account.ok_or(SpotifyError::NoCredentials)?;
-                    let credentials = unprotect_credentials(&account.credentials)
-                        .and_then(|blob| serde_json::from_slice::<Credentials>(&blob).ok());
-                    let Some(credentials) = credentials else {
-                        let _ = store.logout(&key);
+            let result = async {
+                let account = account.ok_or(SpotifyError::NoCredentials)?;
+                let credentials = unprotect_credentials(&account.credentials)
+                    .and_then(|blob| serde_json::from_slice::<Credentials>(&blob).ok());
+                let Some(credentials) = credentials else {
+                    if let Ok(guard) = session_attempt.lifecycle.lock() {
+                        let _ = guard.commit(session_attempt.id, || store.logout(&key));
+                    }
+                    return Err(SpotifyError::NoCredentials);
+                };
+                let device_id = store.device_id().map_err(SpotifyError::Storage)?;
+                let (fresh, session) = match open_session(
+                    device_id,
+                    credentials,
+                    notify.clone(),
+                    sender.clone(),
+                    session_attempt.clone(),
+                )
+                .await
+                {
+                    Err(SpotifyError::Rejected) => {
+                        if let Ok(guard) = session_attempt.lifecycle.lock() {
+                            let _ = guard.commit(session_attempt.id, || store.logout(&key));
+                        }
                         return Err(SpotifyError::NoCredentials);
-                    };
-                    let device_id = store.device_id().map_err(SpotifyError::Storage)?;
-                    let (fresh, session) =
-                        match open_session(device_id, credentials, notify.clone(), sender.clone())
-                            .await
-                        {
-                            Err(SpotifyError::Rejected) => {
-                                let _ = store.logout(&key);
-                                return Err(SpotifyError::NoCredentials);
-                            }
-                            other => other?,
-                        };
-                    let updated = store
-                        .upsert_active(fresh.clone())
-                        .map_err(SpotifyError::Storage)?;
-                    drop(updated);
-                    replace_session(&session_slot, Some((fresh.key.clone(), session)));
-                    Ok(fresh)
-                }
-                .await;
+                    }
+                    other => other?,
+                };
+                commit_session(&session_attempt, &store, &fresh, session)?;
+                Ok(fresh)
+            }
+            .await;
             Self::emit(&sender, &notify, SpotifyEvent::Connected { stamp, result });
         });
     }
@@ -820,6 +874,8 @@ impl SpotifyService {
     ///
     /// Returns the storage error.
     pub fn logout(&self, key: &str) -> Result<SpotifyAccounts, SpotifyError> {
+        self.cancel_login();
+        let _ = self.begin_session_attempt();
         self.close_if(key);
         self.store.logout(key).map_err(SpotifyError::Storage)
     }
@@ -830,6 +886,8 @@ impl SpotifyService {
     ///
     /// Returns the storage error.
     pub fn remove(&self, key: &str) -> Result<SpotifyAccounts, SpotifyError> {
+        self.cancel_login();
+        let _ = self.begin_session_attempt();
         self.close_if(key);
         self.store.remove(key).map_err(SpotifyError::Storage)
     }
@@ -856,6 +914,7 @@ impl SpotifyService {
     /// Closes the local session (application exit).
     pub fn shutdown(&self) {
         self.cancel_login();
+        let _ = self.begin_session_attempt();
         replace_session(&self.session, None);
     }
 }
@@ -879,10 +938,64 @@ fn replace_session(
         .and_then(|mut guard| std::mem::replace(&mut *guard, next));
     apricot_playback::pcm_source::set_pcm_source(installed);
     if let Some((_, active)) = previous {
-        active.shared.close_all();
-        active.playback.set_spirc(None);
-        active.session.shutdown();
+        close_session(active);
     }
+}
+
+fn close_session(active: ActiveSession) {
+    active.shared.close_all();
+    active.playback.set_spirc(None);
+    active.session.shutdown();
+    drop(active);
+}
+
+fn commit_session(
+    attempt: &SessionAttempt,
+    store: &AccountStore,
+    account: &SpotifyAccount,
+    session: ActiveSession,
+) -> Result<(), SpotifyError> {
+    let guard = attempt
+        .lifecycle
+        .lock()
+        .map_err(|_| SpotifyError::Cancelled)?;
+    if session.ended.load(std::sync::atomic::Ordering::SeqCst) {
+        close_session(session);
+        return Err(SpotifyError::Network("connection closed".into()));
+    }
+    let mut opened = Some(session);
+    let committed = guard.commit(attempt.id, || {
+        store
+            .upsert_active(account.clone())
+            .map_err(SpotifyError::Storage)?;
+        replace_session(
+            &attempt.slot,
+            Some((account.key.clone(), opened.take().expect("opened session"))),
+        );
+        Ok(())
+    });
+    if let Some(obsolete) = opened {
+        close_session(obsolete);
+    }
+    committed.unwrap_or(Err(SpotifyError::Cancelled))
+}
+
+/// A task ending clears only its own installed session. The shared lifecycle
+/// lock orders this against a simultaneous install/cancellation.
+fn finish_session(attempt: &SessionAttempt) -> bool {
+    let Ok(mut guard) = attempt.lifecycle.lock() else {
+        return false;
+    };
+    let matching = attempt.slot.lock().is_ok_and(|slot| {
+        slot.as_ref()
+            .is_some_and(|(_, active)| active.session_id == attempt.id)
+    });
+    if !matching {
+        return false;
+    }
+    guard.disconnected = Some(attempt.id);
+    replace_session(&attempt.slot, None);
+    true
 }
 
 fn fill_titles(
@@ -906,6 +1019,7 @@ async fn open_session(
     credentials: Credentials,
     notify: Notify,
     sender: Sender<SpotifyEvent>,
+    attempt: SessionAttempt,
 ) -> Result<(SpotifyAccount, ActiveSession), SpotifyError> {
     use librespot_connect::{ConnectConfig, Spirc};
     use librespot_core::config::DeviceType;
@@ -972,10 +1086,16 @@ async fn open_session(
                 kind => SpotifyError::LoginFailed(kind.to_string()),
             }
         })?;
+    let ended = Arc::new(AtomicBool::new(false));
+    let task_ended = ended.clone();
+    let session_id = attempt.id;
     tokio::spawn(async move {
         task.await;
-        let _ = sender.send(SpotifyEvent::Disconnected);
-        notify();
+        task_ended.store(true, std::sync::atomic::Ordering::SeqCst);
+        if finish_session(&attempt) {
+            let _ = sender.send(SpotifyEvent::Disconnected { session_id });
+            notify();
+        }
     });
     tokio::spawn(SpotifyPlayback::listen(shared.clone(), listener));
     tokio::spawn(SpotifyPlayback::watch_state(
@@ -1028,12 +1148,122 @@ async fn open_session(
             session,
             playback,
             shared,
+            session_id,
+            ended,
         },
     ))
 }
 
 #[cfg(test)]
 mod live_tests {
+    fn unopened_session(id: u64) -> super::ActiveSession {
+        let (playback, shared) = super::SpotifyPlayback::new(320, std::sync::Arc::new(|| {}));
+        super::ActiveSession {
+            session: librespot_core::Session::new(librespot_core::SessionConfig::default(), None),
+            playback,
+            shared,
+            session_id: id,
+            ended: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    #[test]
+    fn stale_login_cannot_recreate_removed_account_or_replace_current_session() {
+        super::install_tls_provider();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let temp = tempfile::tempdir().unwrap();
+        let store = super::AccountStore::new(temp.path());
+        let attempt = super::SessionAttempt {
+            id: 1,
+            lifecycle: std::sync::Arc::new(std::sync::Mutex::new(super::SessionLifecycle {
+                generation: 2,
+                disconnected: None,
+            })),
+            slot: std::sync::Arc::new(std::sync::Mutex::new(Some((
+                "new".into(),
+                unopened_session(2),
+            )))),
+        };
+        let account = super::SpotifyAccount {
+            key: "removed".into(),
+            credentials: "protected".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            super::commit_session(&attempt, &store, &account, unopened_session(1)),
+            Err(super::SpotifyError::Cancelled)
+        );
+        assert!(!store.file().exists());
+        assert_eq!(attempt.slot.lock().unwrap().as_ref().unwrap().0, "new");
+        assert!(!super::finish_session(&attempt));
+        let current = super::SessionAttempt {
+            id: 2,
+            ..attempt.clone()
+        };
+        assert!(super::finish_session(&current));
+        assert!(attempt.slot.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn session_ending_before_install_is_never_persisted_as_connected() {
+        super::install_tls_provider();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let temp = tempfile::tempdir().unwrap();
+        let store = super::AccountStore::new(temp.path());
+        let attempt = super::SessionAttempt {
+            id: 1,
+            lifecycle: std::sync::Arc::new(std::sync::Mutex::new(super::SessionLifecycle {
+                generation: 1,
+                disconnected: None,
+            })),
+            slot: std::sync::Arc::default(),
+        };
+        let session = unopened_session(1);
+        session
+            .ended
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let account = super::SpotifyAccount::default();
+        assert!(matches!(
+            super::commit_session(&attempt, &store, &account, session),
+            Err(super::SpotifyError::Network(_))
+        ));
+        assert!(!store.file().exists());
+        assert!(attempt.slot.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn superseded_connection_cannot_commit_its_account_or_session() {
+        let mut lifecycle = super::SessionLifecycle::default();
+        let old = lifecycle.begin();
+        let current = lifecycle.begin();
+        let mut installed = None;
+        assert!(
+            lifecycle
+                .commit(current, || installed = Some("new"))
+                .is_some()
+        );
+        assert!(lifecycle.commit(old, || installed = Some("old")).is_none());
+        assert_eq!(installed, Some("new"));
+    }
+
+    #[test]
+    fn cancel_during_session_open_prevents_late_login_commit() {
+        let mut lifecycle = super::SessionLifecycle::default();
+        let pending_login = lifecycle.begin();
+        // The network worker is inside open_session when Cancel/Remove/Exit
+        // invalidates its attempt. No credential persistence may occur later.
+        lifecycle.begin();
+        let mut persisted = false;
+        assert!(
+            lifecycle
+                .commit(pending_login, || persisted = true)
+                .is_none()
+        );
+        assert!(!persisted);
+    }
+
     #[test]
     #[ignore = "network"]
     fn connecting_with_a_bogus_token_fails_without_panicking() {
@@ -1045,6 +1275,11 @@ mod live_tests {
             librespot_core::authentication::Credentials::with_access_token("bogus"),
             std::sync::Arc::new(|| {}),
             sender,
+            super::SessionAttempt {
+                id: 1,
+                lifecycle: std::sync::Arc::default(),
+                slot: std::sync::Arc::default(),
+            },
         ));
         eprintln!("open_session: {:?}", result.err());
     }

@@ -39,7 +39,9 @@ use apricot_app::{
 use apricot_core::{
     Route, RouteFrame,
     action::{ActionScope, RepeatPolicy},
-    shortcut::{ShortcutContext, ShortcutKey, action_for_shortcut},
+    shortcut::{
+        ShortcutContext, ShortcutKey, action_for_shortcut, background_player_action_for_shortcut,
+    },
 };
 use apricot_media::{
     PodcastDirectoryItem, YoutubeBackend, YoutubeFormat, YoutubeSessionConfig,
@@ -12696,26 +12698,6 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
         return false;
     }
     let shortcuts = &state.application.settings().keyboard_shortcuts;
-    if state.background_player.is_visible()
-        && !background_focus
-        && focus != state.search_edit
-        && !(focus == state.list && view_list_holds_results(state.view))
-        && let Some(action) = action_for_shortcut(
-            shortcuts,
-            chord,
-            ShortcutContext::new(ActionScope::Player, false),
-        )
-        && matches!(
-            action.id.as_str(),
-            "player_previous" | "player_next" | "player_next_related" | "player_fullscreen"
-        )
-    {
-        // Python `handle_active_player_global_shortcut_event`.
-        if !crate::shortcut_win32::is_repeat(message) {
-            activate_action(window, action.id.as_str());
-        }
-        return true;
-    }
     let embedded_list_focus =
         state.view == MainView::Player && state.embedded_results.is_some() && focus == state.list;
     if embedded_list_focus {
@@ -12760,9 +12742,12 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
     } else {
         view_shortcut_scope(state.view)
     };
-    let Some(action) =
-        action_for_shortcut(shortcuts, chord, ShortcutContext::new(scope, accepts_text))
-    else {
+    let context = ShortcutContext::new(scope, accepts_text);
+    let Some(action) = action_for_shortcut(shortcuts, chord, context).or_else(|| {
+        (state.background_player.is_visible() && !background_focus && focus != state.search_edit)
+            .then(|| background_player_action_for_shortcut(shortcuts, chord, context))
+            .flatten()
+    }) else {
         return false;
     };
     let is_global = action.scopes.contains(&ActionScope::Global);
@@ -12773,6 +12758,7 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
         && !is_global
         && state.view == MainView::MainMenu
         && action.id.as_str() != "open_selected"
+        && !action.scopes.contains(&ActionScope::Player)
     {
         return false;
     }
@@ -12827,17 +12813,6 @@ const fn plain_list_key(chord: apricot_core::shortcut::ShortcutChord) -> bool {
                 | ShortcutKey::LeftBracket
                 | ShortcutKey::RightBracket
         )
-}
-
-/// Python `results_list`: the screens whose list is the result list.
-const fn view_list_holds_results(view: MainView) -> bool {
-    matches!(
-        view,
-        MainView::Results
-            | MainView::Trending
-            | MainView::YoutubeCollection
-            | MainView::LocalFolder
-    )
 }
 
 /// The focused push button of the main window, if any.
@@ -12938,9 +12913,8 @@ unsafe fn hide_player_details_for_back(window: HWND) -> bool {
 
 /// Python `player_back`: on the player page Escape hides the details, then
 /// leaves full screen, and then leaves the player. From the player and its
-/// buttons it stops playback and returns to the previous screen; from the
-/// embedded results or the Back button it goes to the main menu, and there
-/// playback continues when background playback is on.
+/// buttons it returns to the main menu and continues playback when background
+/// playback is on. Otherwise it preserves the original stop/back behavior.
 unsafe fn player_back_shortcut(window: HWND) {
     if handle_player_back_in_place(window) {
         return;
@@ -12954,6 +12928,10 @@ unsafe fn player_back_shortcut(window: HWND) {
     }
     let focus = GetFocus();
     let background = state.application.settings().enable_background_playback;
+    if background {
+        leave_player_to_main_menu(window, true);
+        return;
+    }
     let closes_playback = focus != state.list
         && (state.player_controls.is_action_control(focus)
             || (!background && state.player_controls.is_navigation_control(focus)));
