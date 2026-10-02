@@ -931,8 +931,10 @@ pub(super) unsafe fn show_liked_songs(window: HWND) {
     );
 }
 
-/// Spotify settings: quality, normalisation and autoplay. They apply when
-/// the session connects; with nothing of Spotify playing it reconnects now.
+/// Spotify settings: quality, normalisation, autoplay and the library
+/// order. The playback settings apply when the session connects; with
+/// nothing of Spotify playing it reconnects now. The order applies the next
+/// time the library opens.
 unsafe fn show_settings(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
@@ -952,6 +954,14 @@ unsafe fn show_settings(window: HWND) {
             texts.text("spotify_autoplay_account"),
             texts.text("spotify_autoplay_on"),
             texts.text("spotify_autoplay_off"),
+        ],
+        order: texts.text("spotify_library_order"),
+        orders: [
+            texts.text("spotify_order_recents"),
+            texts.text("spotify_order_recently_added"),
+            texts.text("spotify_order_alphabetical"),
+            texts.text("spotify_order_creator"),
+            texts.text("spotify_order_custom"),
         ],
         ok: texts.text("ok"),
         cancel: texts.text("cancel"),
@@ -985,6 +995,10 @@ unsafe fn show_settings(window: HWND) {
             .text("spotify_error_storage")
             .replace("{error}", &error);
         announce(window, &text);
+        return;
+    }
+    if chosen.playback() == current.playback() {
+        announce(window, texts.text("spotify_settings_saved"));
         return;
     }
     let session = state.application.player_session();
@@ -1462,6 +1476,24 @@ unsafe fn continue_spotify_item(window: HWND, track: &SpotifyTrack) -> bool {
         .is_some_and(|item| item.source == apricot_core::MediaSource::Spotify);
     if !running {
         return false;
+    }
+    // An Apricot playlist has priority: when Spotify's own autoplay would
+    // continue after a Spotify item of that playlist, Apricot's playlist
+    // goes on instead (Urh, 2. 10. 2026).
+    let in_apricot_sequence = session
+        .current_item()
+        .is_some_and(|item| state.application.player_sequence_contains(item));
+    let spotify_autoplay = state
+        .spotify
+        .service
+        .as_ref()
+        .and_then(|service| service.playback())
+        .and_then(|playback| playback.player_state())
+        .and_then(|player| player.track.as_ref().map(|track| track.provider.clone()))
+        .is_some_and(|provider| provider == "autoplay");
+    if in_apricot_sequence && spotify_autoplay {
+        super::finish_current_item(window);
+        return true;
     }
     let mut item = track.media_item();
     // The context and occurrence, so Play from the start keeps the context.

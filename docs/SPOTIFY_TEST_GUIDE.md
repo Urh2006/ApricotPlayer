@@ -1,6 +1,6 @@
 # Vodič za testiranje Spotify v ApricotPlayerju 2.0
 
-Verzija: 2.0.0-beta.11 (nameščena v C:\Program Files\ApricotPlayer).
+Verzija: 2.0.0-beta.12 (nameščena v C:\Program Files\ApricotPlayer).
 Tvoj ApricotPlayer je v angleščini, zato so imena v aplikaciji napisana v angleščini. Vse se dela s tipkovnico. Pri vsakem koraku piše, kaj mora NVDA prebrati.
 Če se kaj obnaša drugače, mi napiši številko koraka in kaj si slišal.
 
@@ -114,12 +114,47 @@ piše pri koraku.
 1. V iskanju na skladbi pritisni Ctrl+F: "Added to favorites.". Enako na
    albumu. Ctrl+Alt+F odpre priljubljene, Enter na skladbi jo predvaja od
    začetka, Enter na albumu predvaja cel album.
-2. Skladbo lahko s Ctrl+P dodaš tudi na Apricotov seznam predvajanja.
+2. Skladbo lahko s Ctrl+P dodaš tudi na Apricotov seznam predvajanja. Na
+   Apricotov seznam dodaj eno Spotify skladbo in za njo kakšno drugo
+   postavko. V Ctrl+Alt+P odpri seznam in na Spotify skladbi pritisni Enter.
+   Če je vklopljen Autoplay next, po koncu skladbe sledi naslednja postavka
+   tvojega seznama, ne Spotifyjev samodejni izbor. Ctrl+PageDown med
+   predvajanjem gre na naslednjo postavko seznama.
 3. V Spotify meniju odpri Spotify settings. Polja so Streaming quality,
-   Normalize volume in When an album or playlist ends. Escape
-   prekliče.
+   Normalize volume, When an album or playlist ends in Sort library by.
+   Escape prekliče. Izberi Sort library by Alphabetical in OK: NVDA prebere
+   "Spotify settings saved.", Ctrl+Alt+Shift+L pokaže knjižnico po abecedi.
+   Vrni na Recents.
 
-## 8. Napake
+## 8. Profili, opis, javnost, osveževanje, prepisi (spremeni račun)
+
+1. Ctrl+Alt+Shift+Y, napiši spotify, Type Profiles, Enter. Vrstice se
+   berejo kot "Spotify, profile". Kontekstni meni ponudi Open, Follow in Copy
+   link.
+2. Enter na profilu. Seznam se imenuje na primer "Spotify, profile,
+   12151917 followers", vrstice so Public playlists, Following in Followers
+   s številom. Ctrl+Shift+I: "Following.", še enkrat: "No longer
+   following.".
+3. Enter na Public playlists odpre javne sezname, na koncu pride naslednja
+   stran. Escape te vrne na profil.
+4. V iskanju na kateremkoli playlistu v kontekstnem meniju izberi Go to
+   owner's profile. Odpre se profil lastnika.
+5. Na svojem testnem seznamu predvajanja (korak 4.2) v kontekstnem meniju
+   izberi Edit description. Dialog Edit description ima polje Description
+   z dosedanjim opisom. Napiši opis in Enter: "Description saved.".
+6. Na istem seznamu izberi Make public or private: "Private: ime.", še
+   enkrat: "Public: ime.".
+7. Odpri testni seznam v ApricotPlayerju in na telefonu vanj dodaj skladbo.
+   V približno 15 sekundah se pojavi v seznamu, fokus ostane na isti
+   vrstici, NVDA ne reče ničesar.
+8. Predvajaj epizodo podcasta, ki ima prepis (na primer The Joe Rogan
+   Experience) in pritisni Ctrl+Shift+Y. Okno se imenuje Spotify transcript,
+   vrstice so stavki, pred prvim stavkom vsake izmenjave piše govorec.
+9. Na epizodi v kontekstnem meniju izberi Play preview. Predvaja se kratek
+   predogled z naslovom "Preview: ime epizode".
+10. Pospravi: testni seznam odstrani iz knjižnice s Ctrl+Shift+I.
+
+## 9. Napake
 
 1. Prilepi v Direct link povezavo do izvajalca na Spotifyju in pritisni Enter.
    NVDA pove, katere povezave lahko predvaja.

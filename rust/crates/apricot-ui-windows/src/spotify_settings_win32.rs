@@ -1,12 +1,13 @@
 //! Spotify settings dialog (`docs/SPOTIFY_PLAN.md` 9.2): streaming quality,
-//! volume normalisation and autoplay, then OK and Cancel. Each control has
+//! volume normalisation, autoplay and the library order, then OK and
+//! Cancel. Each control has
 //! its label as its accessible name; Escape cancels.
 
 #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
 use std::{ffi::c_void, mem::size_of};
 
-use apricot_spotify::settings::{Autoplay, Quality, SpotifySettings};
+use apricot_spotify::settings::{Autoplay, LibraryOrder, Quality, SpotifySettings};
 use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
@@ -35,6 +36,7 @@ const ID_NORMALISATION: usize = 2202;
 const ID_AUTOPLAY: usize = 2203;
 const ID_OK: usize = 2204;
 const ID_CANCEL: usize = 2205;
+const ID_ORDER: usize = 2206;
 const IDOK_COMMAND: usize = 1;
 const IDCANCEL_COMMAND: usize = 2;
 const CB_ADDSTRING: u32 = 0x0143;
@@ -53,6 +55,9 @@ pub struct SettingsTexts<'a> {
     pub autoplay: &'a str,
     /// Labels in `Autoplay::ALL` order.
     pub autoplays: [&'a str; 3],
+    pub order: &'a str,
+    /// Labels in `LibraryOrder::ALL` order.
+    pub orders: [&'a str; 5],
     pub ok: &'a str,
     pub cancel: &'a str,
 }
@@ -62,6 +67,7 @@ struct DialogState {
     quality: HWND,
     normalisation: HWND,
     autoplay: HWND,
+    order: HWND,
     result: Option<SpotifySettings>,
 }
 
@@ -116,7 +122,7 @@ unsafe fn show_win32(
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         460,
-        240,
+        272,
         Some(owner),
         None,
         Some(instance),
@@ -151,6 +157,8 @@ unsafe fn show_win32(
         )?;
         let autoplay_label = create(w!("STATIC"), texts.autoplay, WINDOW_STYLE(0), 0)?;
         let autoplay = create(w!("COMBOBOX"), "", combo, ID_AUTOPLAY)?;
+        let order_label = create(w!("STATIC"), texts.order, WINDOW_STYLE(0), 0)?;
+        let order = create(w!("COMBOBOX"), "", combo, ID_ORDER)?;
         let ok = create(
             w!("BUTTON"),
             texts.ok,
@@ -165,12 +173,15 @@ unsafe fn show_win32(
                 normalisation,
                 autoplay_label,
                 autoplay,
+                order_label,
+                order,
                 ok,
                 cancel,
             ],
             quality,
             normalisation,
             autoplay,
+            order,
             result: None,
         })
     })();
@@ -218,6 +229,14 @@ unsafe fn show_win32(
             .position(|autoplay| *autoplay == current.autoplay)
             .unwrap_or(0),
     );
+    fill(
+        state.order,
+        &texts.orders,
+        LibraryOrder::ALL
+            .iter()
+            .position(|order| *order == current.library_order)
+            .unwrap_or(0),
+    );
     SendMessageW(
         state.normalisation,
         BM_SETCHECK,
@@ -226,6 +245,7 @@ unsafe fn show_win32(
     );
     crate::accessibility_win32::annotate_control_name(state.quality, texts.quality);
     crate::accessibility_win32::annotate_control_name(state.autoplay, texts.autoplay);
+    crate::accessibility_win32::annotate_control_name(state.order, texts.order);
     let initial_focus = state.quality;
     let pointer = Box::into_raw(Box::new(state));
     SetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0), pointer as isize);
@@ -248,7 +268,7 @@ unsafe fn show_win32(
             break;
         }
         let inside = message.hwnd == window || IsChild(window, message.hwnd).as_bool();
-        let dropped = [(*pointer).quality, (*pointer).autoplay]
+        let dropped = [(*pointer).quality, (*pointer).autoplay, (*pointer).order]
             .iter()
             .any(|combo| SendMessageW(*combo, CB_GETDROPPEDSTATE, None, None).0 != 0);
         if inside
@@ -321,6 +341,10 @@ unsafe fn accept(window: HWND) {
             .get(selected(state.autoplay))
             .copied()
             .unwrap_or(Autoplay::Account),
+        library_order: LibraryOrder::ALL
+            .get(selected(state.order))
+            .copied()
+            .unwrap_or_default(),
     });
     let _ = DestroyWindow(window);
 }
@@ -334,7 +358,7 @@ unsafe fn layout(window: HWND) {
         return;
     }
     let width = (bounds.right - bounds.left).max(360);
-    let height = (bounds.bottom - bounds.top).max(180);
+    let height = (bounds.bottom - bounds.top).max(212);
     let margin = 10;
     let label_width = 140;
     let row = 32;
@@ -346,6 +370,8 @@ unsafe fn layout(window: HWND) {
         normalisation,
         autoplay_label,
         autoplay,
+        order_label,
+        order,
         ok,
         cancel,
     ] = state.controls[..]
@@ -371,6 +397,15 @@ unsafe fn layout(window: HWND) {
         true,
     );
     let _ = MoveWindow(autoplay, field_x, margin + row * 2, field_width, 200, true);
+    let _ = MoveWindow(
+        order_label,
+        margin,
+        margin + row * 3 + 4,
+        label_width,
+        26,
+        true,
+    );
+    let _ = MoveWindow(order, field_x, margin + row * 3, field_width, 200, true);
     let button_y = height - 30 - margin;
     let _ = MoveWindow(ok, width - margin - 206, button_y, 100, 30, true);
     let _ = MoveWindow(cancel, width - margin - 100, button_y, 100, 30, true);

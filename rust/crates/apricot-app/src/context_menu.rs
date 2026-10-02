@@ -78,6 +78,10 @@ pub enum ContextCommand {
     SpotifyRenamePlaylist,
     SpotifyHide,
     SpotifyRadio,
+    SpotifyGoToOwner,
+    SpotifyEditDescription,
+    SpotifyToggleVisibility,
+    SpotifyPlayPreview,
 }
 
 /// One row of a context menu.
@@ -398,11 +402,18 @@ pub struct SpotifyRowMenu {
     pub saved: Option<bool>,
     /// An artist: saving is following.
     pub is_artist: bool,
+    /// A profile (or a section of an open profile): Follow or Unfollow.
+    pub profile: bool,
+    /// A playlist whose owner's profile opens.
+    pub owner: bool,
+    /// An episode with Spotify's short audio preview.
+    pub preview: bool,
     /// The open list is a playlist the account may edit.
     pub in_editable_playlist: bool,
     pub move_up: bool,
     pub move_down: bool,
-    /// A playlist row the account may rename.
+    /// A playlist row the account may rename, describe and make public or
+    /// private.
     pub rename: bool,
     /// The open list is the library or its playlists.
     pub create_playlist: bool,
@@ -415,6 +426,7 @@ pub struct SpotifyRowMenu {
 
 /// Spotify lists: Play or Open first, then Shuffle play, Add to Spotify
 /// queue, Go to album, Go to artist and Copy link where they apply.
+#[allow(clippy::too_many_lines)] // One flat list of entries in menu order.
 pub fn spotify_browse_context_menu(
     context: &ContextMenuContext<'_>,
     menu: SpotifyRowMenu,
@@ -449,6 +461,9 @@ pub fn spotify_browse_context_menu(
         ));
         entries.push(context.command("spotify_add_to_playlist", C::SpotifyAddToPlaylist));
     }
+    if menu.preview {
+        entries.push(context.command("spotify_play_preview", C::SpotifyPlayPreview));
+    }
     if menu.hide {
         let key = if menu.hidden {
             "spotify_unhide_song"
@@ -456,6 +471,18 @@ pub fn spotify_browse_context_menu(
             "spotify_hide_song"
         };
         entries.push(context.command_with_shortcut(key, "spotify_dislike", C::SpotifyHide));
+    }
+    if menu.profile {
+        let key = if menu.saved == Some(true) {
+            "spotify_unfollow"
+        } else {
+            "spotify_follow"
+        };
+        entries.push(context.command_with_shortcut(
+            key,
+            "spotify_toggle_saved",
+            C::SpotifyToggleSaved,
+        ));
     }
     if menu.collection_plays {
         let key = match (menu.is_artist, menu.saved == Some(true)) {
@@ -485,6 +512,8 @@ pub fn spotify_browse_context_menu(
     }
     if menu.rename {
         entries.push(context.command("spotify_rename_playlist", C::SpotifyRenamePlaylist));
+        entries.push(context.command("spotify_edit_description", C::SpotifyEditDescription));
+        entries.push(context.command("spotify_toggle_visibility", C::SpotifyToggleVisibility));
     }
     if menu.create_playlist {
         entries.push(context.command_with_shortcut(
@@ -505,6 +534,9 @@ pub fn spotify_browse_context_menu(
     }
     if menu.artist {
         entries.push(context.command("spotify_go_to_artist", C::SpotifyGoToArtist));
+    }
+    if menu.owner {
+        entries.push(context.command("spotify_go_to_owner", C::SpotifyGoToOwner));
     }
     if menu.link {
         entries.push(context.command("copy_link", C::SpotifyCopyLink));
@@ -831,9 +863,9 @@ mod tests {
     use apricot_storage::SettingsDocument;
 
     use super::{
-        ContextCommand, ContextMenuContext, ContextMenuEntry, browser_url, favorites_context_menu,
-        history_context_menu, player_context_menu, results_context_menu,
-        user_playlist_items_context_menu, user_playlists_context_menu,
+        ContextCommand, ContextMenuContext, ContextMenuEntry, SpotifyRowMenu, browser_url,
+        favorites_context_menu, history_context_menu, player_context_menu, results_context_menu,
+        spotify_browse_context_menu, user_playlist_items_context_menu, user_playlists_context_menu,
         youtube_channel_item_for_video,
     };
     use crate::embedded_catalog;
@@ -956,6 +988,43 @@ mod tests {
             };
             build(&context)
         }
+    }
+
+    #[test]
+    fn spotify_profiles_owners_previews_and_own_playlists() {
+        let fixture = Fixture::new();
+        let menu = |menu: SpotifyRowMenu| {
+            fixture.with(|context| labels(&spotify_browse_context_menu(context, menu)))
+        };
+        assert_eq!(
+            menu(SpotifyRowMenu {
+                collection: true,
+                profile: true,
+                saved: Some(true),
+                link: true,
+                ..SpotifyRowMenu::default()
+            }),
+            ["Open", "Unfollow", "Copy link"]
+        );
+        let playlist = menu(SpotifyRowMenu {
+            collection: true,
+            collection_plays: true,
+            rename: true,
+            owner: true,
+            ..SpotifyRowMenu::default()
+        });
+        assert!(playlist.ends_with(&[
+            "Rename playlist".to_owned(),
+            "Edit description".to_owned(),
+            "Make public or private".to_owned(),
+            "Go to owner's profile".to_owned(),
+        ]));
+        let episode = menu(SpotifyRowMenu {
+            playable_item: true,
+            preview: true,
+            ..SpotifyRowMenu::default()
+        });
+        assert!(episode.contains(&"Play preview".to_owned()));
     }
 
     #[test]

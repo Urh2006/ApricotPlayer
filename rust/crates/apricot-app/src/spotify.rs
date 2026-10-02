@@ -449,6 +449,7 @@ pub fn search_kind_labels(catalog: &TranslationCatalog) -> Vec<String> {
                     SearchKind::Playlists => "spotify_search_playlists",
                     SearchKind::Shows => "spotify_search_shows",
                     SearchKind::Episodes => "spotify_search_episodes",
+                    SearchKind::Profiles => "spotify_search_profiles",
                     SearchKind::Audiobooks => "spotify_search_audiobooks",
                 })
                 .to_owned()

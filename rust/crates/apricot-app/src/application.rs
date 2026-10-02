@@ -915,7 +915,22 @@ impl Application {
     ) -> Option<MediaItem> {
         let playlist = self.state.user_playlists.playlists().get(playlist_index)?;
         let item = playlist.items.get(item_index)?.clone();
-        self.state.player_sequence.clear();
+        // Python `play_selected_user_playlist_item` returns to the playlist
+        // and `relative_player_item` goes on with its next and previous
+        // items.
+        let items: Vec<_> = playlist
+            .items
+            .iter()
+            .filter(|item| item.is_playable())
+            .cloned()
+            .collect();
+        if !self.state.player_sequence.set(
+            PlaybackSequenceSource::UserPlaylist { playlist_index },
+            &items,
+            &item,
+        ) {
+            self.state.player_sequence.clear();
+        }
         Some(item)
     }
 
@@ -3738,7 +3753,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_user_playlist_item_is_standalone_and_durable() {
+    fn selected_user_playlist_item_continues_in_its_playlist_and_is_durable() {
         let root = tempfile::tempdir().expect("temporary directory");
         let mut app = application(root.path());
         let playlist_path = root.path().join("beta/playlists.json");
@@ -3762,14 +3777,12 @@ mod tests {
             .prepare_user_playlist_item_playback(0, 1)
             .expect("second item");
         assert_eq!(second.id.0, "second");
-        assert_eq!(
-            app.request_relative_player_item(-1),
-            PlayerNavigationOutcome::Unavailable
-        );
-        assert_eq!(
-            app.request_relative_player_item(1),
-            PlayerNavigationOutcome::Unavailable
-        );
+        let neighbour = |outcome| match outcome {
+            PlayerNavigationOutcome::Item { item, .. } => item.id.0,
+            other => panic!("expected an item, got {other:?}"),
+        };
+        assert_eq!(neighbour(app.request_relative_player_item(-1)), "first");
+        assert_eq!(neighbour(app.request_relative_player_item(1)), "third");
         assert_eq!(
             UserPlaylistFile::new(playlist_path)
                 .load()

@@ -1180,6 +1180,10 @@ unsafe extern "system" fn window_proc(
             start_app_update_check(window, false, true, false);
             LRESULT(0)
         }
+        WM_TIMER if wparam.0 == spotify_browse::REFRESH_TIMER_ID => {
+            spotify_browse::refresh_tick(window);
+            LRESULT(0)
+        }
         WM_TIMER if wparam.0 == APP_UPDATE_TIMER_ID => {
             // Python `on_app_update_timer`.
             start_app_update_check(window, false, false, true);
@@ -2387,7 +2391,11 @@ unsafe fn execute_context_command(
         | C::SpotifyCreatePlaylist
         | C::SpotifyRenamePlaylist
         | C::SpotifyHide
-        | C::SpotifyRadio => spotify_browse::command(window, command),
+        | C::SpotifyRadio
+        | C::SpotifyGoToOwner
+        | C::SpotifyEditDescription
+        | C::SpotifyToggleVisibility
+        | C::SpotifyPlayPreview => spotify_browse::command(window, command),
         C::Play | C::OpenUserPlaylist => activate_selection(window),
         C::DownloadAudio => start_active_download(window, DownloadChoice::Audio),
         C::DownloadVideo => start_active_download(window, DownloadChoice::Video),
@@ -7544,7 +7552,8 @@ unsafe fn activate_user_playlist_item(window: HWND) {
             .prepare_user_playlist_item_playback(playlist_index, item_index)
     });
     if let Some(item) = item {
-        start_media_item(window, item, None);
+        // The playlist stays the sequence, so Next and autoplay go on in it.
+        start_sequence_media_item(window, item, None);
     }
 }
 
@@ -13166,6 +13175,31 @@ unsafe fn navigate_player_relative(window: HWND, delta: i32) {
 
 /// Python `handle_player_eof` and `play_next_standard_fallback`: without a
 /// next item the end of playback is announced as finished.
+/// The current item is over although its source plays on (Spotify's
+/// autoplay after an item of an Apricot playlist): it pauses, and Apricot's
+/// playlist continues exactly as at the end of an item.
+unsafe fn finish_current_item(window: HWND) {
+    let _ = execute_player_command(window, PlaybackCommand::SetPaused(true));
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let autoplay_next = state
+        .application
+        .player_session()
+        .enabled_toggles()
+        .contains(&SessionToggle::AutoplayNext);
+    if autoplay_next {
+        navigate_player_relative_after_end(window);
+        return;
+    }
+    set_status(
+        state,
+        &catalog_text(&state.application, "playback_finished"),
+        state.application.settings().announce_playback_finished,
+    );
+    refresh_player(window, state, false, true);
+}
+
 unsafe fn navigate_player_relative_after_end(window: HWND) {
     navigate_player_relative_from(window, 1, true);
 }
@@ -16631,8 +16665,16 @@ unsafe fn show_player_lyrics(window: HWND) {
         return;
     };
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    // A Spotify episode shows Spotify's transcript in the same timed view.
+    let transcript = item.source == apricot_core::MediaSource::Spotify
+        && item.id.0.starts_with("spotify:episode:");
+    let transcript_source = catalog.text("lyrics_source_spotify_transcript").to_owned();
     let labels = crate::details_win32::DetailsDialogLabels {
-        title: catalog.text("lyrics").to_owned(),
+        title: if transcript {
+            transcript_source.clone()
+        } else {
+            catalog.text("lyrics").to_owned()
+        },
         copy: catalog.text("copy_lyrics").to_owned(),
         copied: catalog.text("lyrics_copied").to_owned(),
         back: catalog.text("back").to_owned(),
@@ -16655,7 +16697,11 @@ unsafe fn show_player_lyrics(window: HWND) {
             .as_ref()
             .and_then(|service| service.lyrics_blocking(&item.id.0))
         {
-            let source = spotify_source.replace("{provider}", &provider);
+            let source = if transcript {
+                transcript_source
+            } else {
+                spotify_source.replace("{provider}", &provider)
+            };
             let _ = sender.send(Some(apricot_media::lyrics::LyricsDocument::parse(
                 &text,
                 source.trim_end_matches([',', ' ']),

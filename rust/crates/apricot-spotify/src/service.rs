@@ -195,6 +195,18 @@ pub enum CatalogRequest {
     Radio(String),
     /// Top tracks and artists; the six section titles.
     Top([String; 6]),
+    /// A profile with its section titles (public playlists, following,
+    /// followers).
+    Profile {
+        uri: String,
+        titles: [String; 3],
+    },
+    ProfilePlaylists {
+        uri: String,
+        offset: u64,
+    },
+    /// The address of an episode's audio preview.
+    Preview(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -210,6 +222,8 @@ pub enum CatalogResult {
     },
     /// The station playlist of a radio.
     Radio(String),
+    Profile(crate::catalog::Profile),
+    Preview(Option<String>),
 }
 
 /// Liked state of the tracks and episodes Spotify did not mark, so rows
@@ -533,6 +547,16 @@ impl SpotifyService {
                             sections: catalog::top_content(api, &session, titles).await?,
                         }
                     }
+                    CatalogRequest::Profile { uri, titles } => {
+                        let titles = titles.each_ref().map(String::as_str);
+                        CatalogResult::Profile(catalog::profile(api, &session, &uri, titles).await?)
+                    }
+                    CatalogRequest::ProfilePlaylists { uri, offset } => CatalogResult::Page(
+                        catalog::profile_playlists(api, &session, &uri, offset).await?,
+                    ),
+                    CatalogRequest::Preview(uri) => {
+                        CatalogResult::Preview(catalog::preview(api, &session, &uri).await?)
+                    }
                     CatalogRequest::Search {
                         query,
                         kind,
@@ -580,6 +604,8 @@ impl SpotifyService {
                     CatalogResult::Playlists(_)
                     | CatalogResult::HiddenSongs(_)
                     | CatalogResult::Sections { .. }
+                    | CatalogResult::Profile(_)
+                    | CatalogResult::Preview(_)
                     | CatalogResult::Radio(_) => {}
                 }
             }

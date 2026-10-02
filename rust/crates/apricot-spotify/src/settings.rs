@@ -1,7 +1,8 @@
 //! Spotify settings of this installation (`docs/SPOTIFY_PLAN.md` 9.2):
-//! streaming quality, volume normalisation and autoplay, in
-//! `spotify/settings.json` of the Apricot data folder. They apply when the
-//! session connects; changing them reconnects the active account.
+//! streaming quality, volume normalisation, autoplay and the order of the
+//! library, in `spotify/settings.json` of the Apricot data folder. The
+//! playback settings apply when the session connects; changing them
+//! reconnects the active account.
 
 use std::{
     path::{Path, PathBuf},
@@ -55,12 +56,53 @@ impl Autoplay {
     }
 }
 
+/// How My library is sorted (`libraryV3` `availableSortOrders`).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LibraryOrder {
+    #[default]
+    Recents,
+    RecentlyAdded,
+    Alphabetical,
+    Creator,
+    Custom,
+}
+
+impl LibraryOrder {
+    pub const ALL: [Self; 5] = [
+        Self::Recents,
+        Self::RecentlyAdded,
+        Self::Alphabetical,
+        Self::Creator,
+        Self::Custom,
+    ];
+
+    /// Spotify's name of the order.
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Recents => "Recents",
+            Self::RecentlyAdded => "Recently Added",
+            Self::Alphabetical => "Alphabetical",
+            Self::Creator => "Creator",
+            Self::Custom => "Custom Order",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SpotifySettings {
     pub quality: Quality,
     pub normalisation: bool,
     pub autoplay: Autoplay,
+    pub library_order: LibraryOrder,
+}
+
+impl SpotifySettings {
+    /// The settings the session uses: a change reconnects.
+    pub const fn playback(self) -> (Quality, bool, Autoplay) {
+        (self.quality, self.normalisation, self.autoplay)
+    }
 }
 
 impl Default for SpotifySettings {
@@ -69,6 +111,7 @@ impl Default for SpotifySettings {
             quality: Quality::VeryHigh,
             normalisation: false,
             autoplay: Autoplay::Account,
+            library_order: LibraryOrder::Recents,
         }
     }
 }
@@ -111,6 +154,10 @@ mod tests {
         let partial: SpotifySettings = serde_json::from_str(r#"{"quality":"high"}"#).unwrap();
         assert_eq!(partial.quality, Quality::High);
         assert_eq!(partial.autoplay, Autoplay::Account);
+        assert_eq!(partial.library_order, LibraryOrder::Recents);
+        let sorted: SpotifySettings =
+            serde_json::from_str(r#"{"library_order":"recently_added"}"#).unwrap();
+        assert_eq!(sorted.library_order.id(), "Recently Added");
         assert!(!partial.normalisation);
         assert_eq!(Quality::VeryHigh.kbps(), 320);
         assert_eq!(Autoplay::Off.session_value(), Some(false));

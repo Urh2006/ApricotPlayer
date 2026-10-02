@@ -97,6 +97,7 @@ pub struct CatalogItem {
     pub subtitle: String,
     pub album: String,
     pub album_uri: String,
+    /// The first artist; for a playlist its owner (`spotify:user:`).
     pub artist_uri: String,
     pub duration_ms: Option<u64>,
     pub playable: bool,
@@ -313,6 +314,7 @@ pub fn parse_item(value: &Value) -> CatalogItem {
         album_uri: text(node, "/albumOfTrack/uri").to_owned(),
         artist_uri: node
             .pointer("/artists/items/0/uri")
+            .or_else(|| node.pointer("/ownerV2/data/uri"))
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned(),
@@ -578,6 +580,9 @@ pub async fn lyrics(
     session: &Session,
     uri: &str,
 ) -> Result<Option<(String, String)>, ApiError> {
+    if let Some(id) = uri.strip_prefix("spotify:episode:") {
+        return transcript(api, session, id).await;
+    }
     let Some(id) = uri.strip_prefix("spotify:track:") else {
         return Ok(None);
     };
@@ -629,6 +634,242 @@ pub fn lyrics_text(answer: &Value) -> Option<(String, String)> {
             .unwrap_or("")
             .to_owned();
         (lines.join("\n"), provider)
+    })
+}
+
+/// Spotify's transcript of an episode as LRC text, one timed line per
+/// sentence, the speaker before the first sentence of each turn; the
+/// provider is empty. `None` when the episode has none.
+async fn transcript(
+    api: &Api,
+    session: &Session,
+    id: &str,
+) -> Result<Option<(String, String)>, ApiError> {
+    let answer = match api
+        .spclient(
+            session,
+            reqwest::Method::GET,
+            &format!("/transcript-read-along/v2/episode/{id}?format=json"),
+            None,
+        )
+        .await
+    {
+        Err(ApiError::Status(404)) => return Ok(None),
+        other => other?,
+    };
+    Ok(transcript_text(&answer).map(|text| (text, String::new())))
+}
+
+/// LRC text of a `transcript-read-along` answer.
+pub fn transcript_text(answer: &Value) -> Option<String> {
+    let mut lines = Vec::new();
+    let mut speaker = String::new();
+    for section in answer.get("section").and_then(Value::as_array)? {
+        if let Some(title) = section.pointer("/title/title").and_then(Value::as_str) {
+            title.clone_into(&mut speaker);
+            continue;
+        }
+        let (words, closed_caption) = match section
+            .pointer("/text/sentence/text")
+            .and_then(Value::as_str)
+        {
+            Some(words) => (words, false),
+            None => match section
+                .pointer("/musicClosedCaption/text")
+                .or_else(|| section.pointer("/fallback/sentence/text"))
+                .and_then(Value::as_str)
+            {
+                Some(words) => (words, true),
+                None => continue,
+            },
+        };
+        let words = words.trim();
+        if words.is_empty() {
+            continue;
+        }
+        let start = section.get("startMs").and_then(Value::as_u64).unwrap_or(0);
+        let (minutes, seconds, hundredths) =
+            (start / 60_000, (start / 1000) % 60, (start % 1000) / 10);
+        let words = if closed_caption {
+            format!("({words})")
+        } else if speaker.is_empty() {
+            words.to_owned()
+        } else {
+            format!("{}: {words}", std::mem::take(&mut speaker))
+        };
+        lines.push(format!(
+            "[{minutes:02}:{seconds:02}.{hundredths:02}]{words}"
+        ));
+    }
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+/// The address of Spotify's short audio preview of an episode, when it has
+/// one.
+pub async fn preview(api: &Api, session: &Session, uri: &str) -> Result<Option<String>, ApiError> {
+    if !uri.starts_with("spotify:episode:") {
+        return Ok(None);
+    }
+    let data = api
+        .pathfinder(session, "getEpisodeOrChapter", json!({ "uri": uri }))
+        .await?;
+    Ok(data
+        .pointer("/episodeUnionV2/previewPlayback/audioPreview/cdnUrl")
+        .and_then(Value::as_str)
+        .filter(|url| url.starts_with("https://"))
+        .map(str::to_owned))
+}
+
+/// Another account's profile: name, followers, whether this account
+/// follows it, and its public playlists, the profiles and artists it
+/// follows and its followers as sections.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Profile {
+    pub uri: String,
+    pub name: String,
+    pub followers: Option<u64>,
+    pub following: Option<bool>,
+    /// All public playlists; the first section lists only the first ones.
+    pub playlists_total: u64,
+    pub sections: Vec<Section>,
+}
+
+/// A playlist, profile or artist of a profile answer, which has no
+/// `__typename`.
+fn profile_row(value: &Value) -> Option<CatalogItem> {
+    let uri = text(value, "/uri");
+    let kind = ItemKind::from_uri(uri)?;
+    let playlist = kind == ItemKind::Playlist;
+    let owner = |pointer| {
+        if playlist {
+            text(value, pointer).to_owned()
+        } else {
+            String::new()
+        }
+    };
+    Some(CatalogItem {
+        kind,
+        name: text(value, "/name").to_owned(),
+        subtitle: owner("/owner_name"),
+        artist_uri: owner("/owner_uri"),
+        playable: true,
+        saved: value.get("is_following").and_then(Value::as_bool),
+        ..CatalogItem::unavailable(uri.to_owned())
+    })
+}
+
+fn profile_rows(answer: &Value, key: &str) -> Vec<CatalogItem> {
+    answer
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|items| items.iter().filter_map(profile_row).collect())
+        .unwrap_or_default()
+}
+
+fn user_name(uri: &str) -> Result<&str, ApiError> {
+    uri.strip_prefix("spotify:user:")
+        .filter(|name| !name.is_empty() && !name.contains(':'))
+        .ok_or_else(|| ApiError::Shape(format!("not a profile: {uri}")))
+}
+
+/// A profile and its sections, titled `titles` (public playlists,
+/// following, followers); empty sections are left out.
+pub async fn profile(
+    api: &Api,
+    session: &Session,
+    uri: &str,
+    titles: [&str; 3],
+) -> Result<Profile, ApiError> {
+    let name = user_name(uri)?;
+    let base = format!("/user-profile-view/v3/profile/{name}");
+    let answer = api
+        .spclient(
+            session,
+            reqwest::Method::GET,
+            &format!(
+                "{base}?playlist_limit={PAGE}&artist_limit=0&episode_limit=0&market=from_token"
+            ),
+            None,
+        )
+        .await?;
+    let lists = |path: &'static str| {
+        let path = format!("{base}/{path}?market=from_token");
+        async move {
+            api.spclient(session, reqwest::Method::GET, &path, None)
+                .await
+                .map(|answer| profile_rows(&answer, "profiles"))
+                .unwrap_or_default()
+        }
+    };
+    let following_list = lists("following").await;
+    let followers_list = lists("followers").await;
+    let following = api
+        .pathfinder(session, "isFollowingUsers", json!({ "uris": [uri] }))
+        .await
+        .ok()
+        .and_then(|data| data.pointer("/users/0/following").and_then(Value::as_bool));
+    let playlists = profile_rows(&answer, "public_playlists");
+    let playlists_total = answer
+        .get("total_public_playlists_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(playlists.len() as u64);
+    let sections = [
+        ("playlists", playlists),
+        ("following", following_list),
+        ("followers", followers_list),
+    ]
+    .into_iter()
+    .zip(titles)
+    .filter(|((_, items), _)| !items.is_empty())
+    .map(|((key, items), title)| Section {
+        uri: profile_section_uri(uri, key),
+        title: title.to_owned(),
+        items,
+    })
+    .collect();
+    Ok(Profile {
+        uri: uri.to_owned(),
+        name: text(&answer, "/name").to_owned(),
+        followers: answer.get("followers_count").and_then(Value::as_u64),
+        following,
+        playlists_total,
+        sections,
+    })
+}
+
+/// The URI of a profile's section row (`playlists`, `following`,
+/// `followers`).
+pub fn profile_section_uri(profile: &str, key: &str) -> String {
+    format!("apricot:{profile}:{key}")
+}
+
+/// A page of a profile's public playlists.
+pub async fn profile_playlists(
+    api: &Api,
+    session: &Session,
+    uri: &str,
+    offset: u64,
+) -> Result<CatalogPage, ApiError> {
+    let name = user_name(uri)?;
+    let answer = api
+        .spclient(
+            session,
+            reqwest::Method::GET,
+            &format!(
+                "/user-profile-view/v3/profile/{name}/playlists?offset={offset}&limit={PAGE}&market=from_token"
+            ),
+            None,
+        )
+        .await?;
+    let items = profile_rows(&answer, "public_playlists");
+    let total = answer
+        .get("total_public_playlists_count")
+        .and_then(Value::as_u64);
+    let next = offset + items.len() as u64;
+    Ok(CatalogPage {
+        next_offset: (!items.is_empty() && total.is_some_and(|total| next < total)).then_some(next),
+        total,
+        items,
     })
 }
 
@@ -685,11 +926,12 @@ pub enum SearchKind {
     Playlists,
     Shows,
     Episodes,
+    Profiles,
     Audiobooks,
 }
 
 impl SearchKind {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::All,
         Self::Tracks,
         Self::Artists,
@@ -697,6 +939,7 @@ impl SearchKind {
         Self::Playlists,
         Self::Shows,
         Self::Episodes,
+        Self::Profiles,
         Self::Audiobooks,
     ];
 
@@ -709,6 +952,7 @@ impl SearchKind {
             Self::Playlists => ("searchPlaylists", "/searchV2/playlists"),
             Self::Shows => ("searchPodcasts", "/searchV2/podcasts"),
             Self::Episodes => ("searchFullEpisodes", "/searchV2/episodes"),
+            Self::Profiles => ("searchUsers", "/searchV2/users"),
             Self::Audiobooks => ("searchAudiobooks", "/searchV2/audiobooks"),
         }
     }
@@ -847,7 +1091,7 @@ async fn library_page(
             "libraryV3",
             json!({
                 "filters": filters,
-                "order": null,
+                "order": (!flatten).then(|| crate::settings::load().library_order.id()),
                 "textFilter": "",
                 "features": ["LIKED_SONGS", "YOUR_EPISODES", "PRERELEASES"],
                 "limit": PAGE,
@@ -863,6 +1107,10 @@ async fn library_page(
         .pointer("/me/libraryV3")
         .ok_or_else(|| ApiError::Shape("libraryV3".into()))?;
     let mut page = parse_page(list, offset);
+    // Spotify keeps expired mixes and albums without a name in the library;
+    // they cannot be opened and only show first when sorted by name.
+    page.items
+        .retain(|item| !item.name.is_empty() || item.kind == ItemKind::Unavailable);
     // Everything listed is in the library.
     for item in &mut page.items {
         if item.saved.is_none() && !item.kind.is_playable_item() {
@@ -1275,6 +1523,62 @@ mod tests {
         let plain = json!({ "lyrics": { "syncType": "UNSYNCED", "lines": [{ "words": "Line" }] } });
         assert_eq!(lyrics_text(&plain).unwrap().0, "Line");
         assert_eq!(lyrics_text(&json!({})), None);
+    }
+
+    #[test]
+    fn transcripts_are_timed_lines_with_the_speaker_of_each_turn() {
+        let answer = json!({ "section": [
+            { "startMs": 0, "fallback": { "sentence": { "text": "Music playing" } }, "musicClosedCaption": { "text": "Music playing" } },
+            { "startMs": 13840, "title": { "title": "Speaker 1" } },
+            { "startMs": 13840, "text": { "sentence": { "text": "What's going on?" } } },
+            { "startMs": 75200, "text": { "sentence": { "text": "Good." } } }
+        ]});
+        assert_eq!(
+            transcript_text(&answer).as_deref(),
+            Some(
+                "[00:00.00](Music playing)
+[00:13.84]Speaker 1: What's going on?
+[01:15.20]Good."
+            )
+        );
+        assert_eq!(transcript_text(&json!({ "section": [] })), None);
+    }
+
+    #[test]
+    fn profile_rows_are_playlists_with_owner_and_followed_accounts() {
+        let answer = json!({ "public_playlists": [
+            { "uri": "spotify:playlist:p", "name": "Mix", "owner_name": "Ana", "owner_uri": "spotify:user:ana", "is_following": true }
+        ], "profiles": [
+            { "uri": "spotify:artist:a", "name": "Queen" },
+            { "uri": "spotify:user:bob", "name": "Bob" },
+            { "uri": "spotify:unknown:x", "name": "?" }
+        ]});
+        let playlists = profile_rows(&answer, "public_playlists");
+        assert_eq!(playlists[0].kind, ItemKind::Playlist);
+        assert_eq!(playlists[0].subtitle, "Ana");
+        assert_eq!(playlists[0].artist_uri, "spotify:user:ana");
+        assert_eq!(playlists[0].saved, Some(true));
+        let following = profile_rows(&answer, "profiles");
+        let kinds: Vec<_> = following
+            .iter()
+            .map(|item| (item.kind, item.name.as_str()))
+            .collect();
+        assert_eq!(
+            kinds,
+            [(ItemKind::Artist, "Queen"), (ItemKind::User, "Bob")]
+        );
+        assert_eq!(user_name("spotify:user:bob").unwrap(), "bob");
+        assert!(user_name("spotify:user:bob:collection").is_err());
+    }
+
+    #[test]
+    fn playlist_rows_name_their_owner() {
+        let row = parse_item(&json!({ "data": {
+            "__typename": "Playlist", "uri": "spotify:playlist:p", "name": "P",
+            "ownerV2": { "data": { "__typename": "User", "name": "Ana", "uri": "spotify:user:ana" } }
+        }}));
+        assert_eq!(row.subtitle, "Ana");
+        assert_eq!(row.artist_uri, "spotify:user:ana");
     }
 
     #[test]

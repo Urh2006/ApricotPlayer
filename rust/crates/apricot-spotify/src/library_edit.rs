@@ -20,8 +20,8 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LibraryEdit {
     /// Like or unlike a track or episode, save or remove an album,
-    /// playlist, show, or follow or unfollow an artist: the opposite of the
-    /// current state.
+    /// playlist, show, or follow or unfollow an artist or a profile: the
+    /// opposite of the current state.
     ToggleSaved {
         uri: String,
     },
@@ -47,6 +47,15 @@ pub enum LibraryEdit {
         uri: String,
         name: String,
     },
+    /// A new playlist description; empty removes it.
+    DescribePlaylist {
+        uri: String,
+        description: String,
+    },
+    /// Private (only the owner sees it) or public, the opposite of now.
+    ToggleVisibility {
+        uri: String,
+    },
     /// Spotify's "Hide song" (or showing it again), from a personalised
     /// playlist `context`; Spotify keeps it for the whole account.
     Hide {
@@ -65,6 +74,8 @@ pub enum EditOutcome {
     Moved { playlist: String },
     Created { uri: String, name: String },
     Renamed { uri: String, name: String },
+    Described { uri: String },
+    Visibility { uri: String, private: bool },
     Hidden { uri: String, hidden: bool },
 }
 
@@ -96,6 +107,7 @@ pub async fn set_saved(
         .ok_or_else(|| ApiError::Shape("no saved state".into()))
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn apply(
     api: &Api,
     session: &Session,
@@ -104,6 +116,10 @@ pub async fn apply(
     match edit {
         LibraryEdit::ToggleSaved { uri } if uri.starts_with("spotify:playlist:") => {
             let saved = toggle_playlist_in_library(api, session, &uri).await?;
+            Ok(EditOutcome::Saved { uri, saved })
+        }
+        LibraryEdit::ToggleSaved { uri } if uri.starts_with("spotify:user:") => {
+            let saved = toggle_following(api, session, &uri).await?;
             Ok(EditOutcome::Saved { uri, saved })
         }
         LibraryEdit::ToggleSaved { uri } => {
@@ -172,6 +188,14 @@ pub async fn apply(
             rename_playlist(api, session, &uri, &name).await?;
             Ok(EditOutcome::Renamed { uri, name })
         }
+        LibraryEdit::DescribePlaylist { uri, description } => {
+            describe_playlist(api, session, &uri, &description).await?;
+            Ok(EditOutcome::Described { uri })
+        }
+        LibraryEdit::ToggleVisibility { uri } => {
+            let private = toggle_visibility(api, session, &uri).await?;
+            Ok(EditOutcome::Visibility { uri, private })
+        }
         LibraryEdit::Hide {
             uri,
             context,
@@ -198,6 +222,85 @@ pub async fn apply(
             })
         }
     }
+}
+
+/// Follows or unfollows a profile, the opposite of now; whether this
+/// account follows it afterwards.
+async fn toggle_following(api: &Api, session: &Session, uri: &str) -> Result<bool, ApiError> {
+    let following = |data: &Value| {
+        data.pointer("/users/0/following")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| ApiError::Shape("isFollowingUsers".into()))
+    };
+    let now = following(
+        &api.pathfinder(session, "isFollowingUsers", json!({ "uris": [uri] }))
+            .await?,
+    )?;
+    let username = uri.trim_start_matches("spotify:user:");
+    let operation = if now { "unfollowUsers" } else { "followUsers" };
+    api.pathfinder(session, operation, json!({ "usernames": [username] }))
+        .await?;
+    following(
+        &api.pathfinder(session, "isFollowingUsers", json!({ "uris": [uri] }))
+            .await?,
+    )
+}
+
+/// The description change the web player sends; an empty description is
+/// removed.
+async fn describe_playlist(
+    api: &Api,
+    session: &Session,
+    uri: &str,
+    description: &str,
+) -> Result<(), ApiError> {
+    let id = playlist_id(uri)?;
+    let current = catalog::playlist(api, session, uri, 0).await?;
+    if !current.can_edit_metadata {
+        return Err(ApiError::Status(403));
+    }
+    let attributes = if description.trim().is_empty() {
+        json!({
+            "values": { "formatAttributes": [], "pictureSize": [] },
+            "noValue": ["LIST_DESCRIPTION"]
+        })
+    } else {
+        json!({
+            "values": { "description": description.trim(), "formatAttributes": [], "pictureSize": [] },
+            "noValue": []
+        })
+    };
+    let ops = json!([{
+        "kind": "UPDATE_LIST_ATTRIBUTES",
+        "updateListAttributes": { "newAttributes": attributes }
+    }]);
+    api.spclient(
+        session,
+        reqwest::Method::POST,
+        &format!("/playlist/v2/playlist/{id}/changes"),
+        Some(rootlist_change(&ops, Some(&current.revision))),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Spotify's "Make private" and "Make public": the base permission of the
+/// playlist becomes `BLOCKED` (only the owner) or `VIEWER`. Returns
+/// whether it is private afterwards.
+async fn toggle_visibility(api: &Api, session: &Session, uri: &str) -> Result<bool, ApiError> {
+    let id = playlist_id(uri)?;
+    let path = format!("/playlist-permission/v1/playlist/{id}/permission/base");
+    let mut base = api
+        .spclient(session, reqwest::Method::GET, &path, None)
+        .await?;
+    let private = base.get("permissionLevel").and_then(Value::as_str) == Some("BLOCKED");
+    base["permissionLevel"] = json!(if private { "VIEWER" } else { "BLOCKED" });
+    api.spclient(session, reqwest::Method::POST, &path, Some(base))
+        .await?;
+    let now = api
+        .spclient(session, reqwest::Method::GET, &path, None)
+        .await?;
+    Ok(now.get("permissionLevel").and_then(Value::as_str) == Some("BLOCKED"))
 }
 
 /// The attribute change the web player sends for a new or renamed playlist.
