@@ -16,7 +16,7 @@ pub const STREAM_URL_CACHE_FILE: &str = "stream_url_cache.json";
 /// Python `STREAM_FORMAT_PROFILE`, with a Rust marker: the Rust stream
 /// selection differs, so Python entries never match a Rust key and the other
 /// way around. Both keep each other's entries in the shared file.
-const STREAM_FORMAT_PROFILE: &str = "apricot-rust-2";
+const STREAM_FORMAT_PROFILE: &str = "apricot-rust-2-original-audio";
 const MAX_ENTRIES: usize = 120;
 const TRIMMED_ENTRIES: usize = 100;
 /// Python: `minutes <= 0` keeps an entry for a year unless the URL expires.
@@ -290,6 +290,21 @@ mod tests {
         assert_eq!(cache_key("u", &settings), cache_key("u", &settings));
         assert_ne!(cache_key("u", &settings), cache_key("u", &other));
         assert_ne!(cache_key("u", &settings), cache_key("v", &settings));
+    }
+
+    #[test]
+    fn original_audio_policy_does_not_reuse_an_old_cached_dub() {
+        let folder = tempfile::tempdir().expect("folder");
+        let path = folder.path().join("stream_url_cache.json");
+        let key = cache_key("u", &StreamKeySettings::default());
+        let old_key = key.replace("apricot-rust-2-original-audio", "apricot-rust-2");
+        assert_ne!(key, old_key);
+        let now = 1_000_000.0;
+        let mut cache = StreamUrlCache::load(path.clone(), now);
+        assert!(cache.insert(&old_key, &stream(1_000_600), 360, now));
+        let mut reloaded = StreamUrlCache::load(path, now);
+        assert!(reloaded.get(&key, now).is_none());
+        assert!(reloaded.get(&old_key, now).is_some());
     }
 
     #[test]

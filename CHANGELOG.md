@@ -1,3 +1,13 @@
+# v2.0.0-beta.5 - Original YouTube Audio and Spotify Playback
+
+## Fixed
+- YouTube playback selects the original audio before quality sorting, instead of an account-default dubbed track. Old cached selections are invalidated without deleting user data.
+- Opening a new Spotify track after pausing starts playback immediately. A delayed decoder pause acknowledgement can no longer become the new track's initial state.
+- Spotify Next and Previous start the selected track even when the previous track was paused, including recommendations that arrive asynchronously. Seeking within the current track and explicitly requested paused loads keep their existing behavior.
+
+## Verification
+- All three failures were reproduced with regression tests before their fixes, including a test using the actual libmpv runtime.
+
 # v2.0.0-beta.4 - Focus-Aware Player Shortcuts
 
 ## Fixed

@@ -1,8 +1,6 @@
 use crate::{
-    LoadContextOptions, LoadRequestOptions, PlayContext,
     context_resolver::{ContextAction, ContextResolver, ResolveContext},
     core::{
-        Error, Session, SpotifyUri,
         authentication::Credentials,
         dealer::{
             manager::{BoxedStream, BoxedStreamResult, Reply, RequestReply},
@@ -10,6 +8,7 @@ use crate::{
         },
         session::UserAttributes,
         spclient::TransferRequest,
+        Error, Session, SpotifyUri,
     },
     model::{LoadRequest, PlayingTrack, SpircPlayStatus},
     playback::{
@@ -31,14 +30,15 @@ use crate::{
         provider::IsProvider,
         {ConnectConfig, ConnectState},
     },
+    LoadContextOptions, LoadRequestOptions, PlayContext,
 };
 use futures_util::StreamExt;
 use librespot_protocol::context_page::ContextPage;
 use protobuf::MessageField;
 use std::{
     future::Future,
-    sync::Arc,
     sync::atomic::{AtomicUsize, Ordering},
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
@@ -136,7 +136,7 @@ mod transport_regressions {
         config::PlayerConfig,
         convert::Converter,
         decoder::AudioPacket,
-        mixer::{MixerConfig, softmixer::SoftMixer},
+        mixer::{softmixer::SoftMixer, MixerConfig},
     };
     use crate::protocol::context_track::ContextTrack;
 
@@ -204,6 +204,75 @@ mod transport_regressions {
             .unwrap();
         task.connect_state.set_status(&task.play_status);
     }
+    #[tokio::test]
+    async fn next_from_paused_starts_the_next_track() {
+        let mut task = task(false);
+        first_track(&mut task);
+        task.play_status = SpircPlayStatus::LoadingPause { position_ms: 0 };
+        task.connect_state.set_status(&task.play_status);
+        task.connect_state.add_to_queue(
+            ProvidedTrack {
+                uri: SECOND.into(),
+                ..Default::default()
+            },
+            true,
+        );
+        task.handle_next(None).unwrap();
+        assert_eq!(task.connect_state.player().track.uri, SECOND);
+        assert!(matches!(
+            task.play_status,
+            SpircPlayStatus::LoadingPlay { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn previous_from_paused_starts_the_previous_track() {
+        let mut task = task(false);
+        first_track(&mut task);
+        task.connect_state.add_to_queue(
+            ProvidedTrack {
+                uri: SECOND.into(),
+                ..Default::default()
+            },
+            true,
+        );
+        task.handle_next(None).unwrap();
+        task.play_status = SpircPlayStatus::LoadingPause { position_ms: 0 };
+        task.connect_state.set_status(&task.play_status);
+        task.handle_prev().unwrap();
+        assert_eq!(task.connect_state.player().track.uri, FIRST);
+        assert!(matches!(
+            task.play_status,
+            SpircPlayStatus::LoadingPlay { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn next_from_paused_waits_for_autoplay_then_starts_recommendation() {
+        let mut task = task(true);
+        first_track(&mut task);
+        task.play_status = SpircPlayStatus::LoadingPause { position_ms: 0 };
+        task.connect_state.set_status(&task.play_status);
+        task.handle_next(None).unwrap();
+        assert!(task.pending_next);
+        task.handle_next_context(Ok(Context {
+            uri: Some("spotify:station:track:0000000000000000000001".into()),
+            pages: vec![ContextPage {
+                tracks: vec![ContextTrack {
+                    uri: Some(SECOND.into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+        assert_eq!(task.connect_state.player().track.uri, SECOND);
+        assert!(matches!(
+            task.play_status,
+            SpircPlayStatus::LoadingPlay { .. }
+        ));
+    }
+
     #[tokio::test]
     async fn previous_at_first_track_keeps_current_and_queue_after_repeated_presses() {
         let mut task = task(false);
@@ -1988,7 +2057,9 @@ impl SpircTask {
     }
 
     fn handle_next(&mut self, track_uri: Option<String>) -> Result<(), Error> {
-        let continue_playing = self.connect_state.is_playing();
+        // Selecting another track is a play request, even after a manual pause.
+        // Explicit Load/Transfer requests still retain their start_playing option.
+        let continue_playing = true;
 
         let repeating_current = matches!(track_uri.as_ref(), Some(uri)
             if self.connect_state.current_track(|track| &track.uri) == uri);
@@ -2044,7 +2115,7 @@ impl SpircTask {
                     // it must not send Stop or discard the authoritative queue.
                     self.handle_seek(0);
                 }
-                Some(_) => self.load_track(self.connect_state.is_playing(), 0)?,
+                Some(_) => self.load_track(true, 0)?,
             }
         } else {
             self.handle_seek(0);

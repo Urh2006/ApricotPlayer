@@ -426,6 +426,8 @@ pub struct LibMpvEngine {
     ended_reported: bool,
     /// The item plays as PCM from the installed [`crate::pcm_source`].
     pcm: Option<PcmPlayback>,
+    /// Latest requested state, independent of delayed PCM pause acknowledgements.
+    requested_paused: bool,
 }
 
 /// A PCM item: mpv positions are relative to the loaded generation.
@@ -502,6 +504,7 @@ impl LibMpvEngine {
             current_entry: None,
             ended_reported: false,
             pcm: None,
+            requested_paused: options.initial_playback_state == InitialPlaybackState::Paused,
         })
     }
 
@@ -883,7 +886,7 @@ impl LibMpvEngine {
             let position_ms = start_position_seconds
                 .filter(|value| value.is_finite() && *value >= 0.0)
                 .map_or(0, seconds_to_ms);
-            let paused = self.api.property_flag(self.handle(), "pause") == Some(true);
+            let paused = self.requested_paused;
             let attach = item
                 .metadata
                 .get("spotify_attach")
@@ -1047,6 +1050,9 @@ unsafe fn probe_devices(
 
 impl PlaybackEngine for LibMpvEngine {
     fn execute(&mut self, command: PlaybackCommand) -> Result<(), PlaybackError> {
+        if let PlaybackCommand::SetPaused(paused) = &command {
+            self.requested_paused = *paused;
+        }
         if unsafe { self.execute_pcm(&command)? } {
             if matches!(&command, PlaybackCommand::Load { .. }) {
                 self.media_info = PlaybackMediaInfo::default();
@@ -2117,6 +2123,98 @@ mod tests {
         assert!(
             event.is_none(),
             "old EOF must not finish the replacement: {event:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires APRICOT_TEST_MPV"]
+    fn real_libmpv_new_pcm_track_does_not_inherit_acknowledged_pause() {
+        use crate::{
+            PlaybackEngine,
+            pcm_source::{PcmGeneration, PcmSource, PcmSourceEvent, PcmStream, set_pcm_source},
+        };
+        use std::sync::{Arc, Mutex};
+        #[derive(Default)]
+        struct Source {
+            starts: Mutex<Vec<bool>>,
+        }
+        impl PcmSource for Source {
+            fn start(&self, _: &MediaItem, _: u32, paused: bool, _: bool) -> Result<(), String> {
+                self.starts.lock().unwrap().push(paused);
+                Ok(())
+            }
+            fn set_paused(&self, _: bool) {}
+            fn seek(&self, _: u32) {}
+            fn stop(&self) {}
+            fn take_generation(&self) -> Option<PcmGeneration> {
+                None
+            }
+            fn open(&self, _: u64) -> Option<Arc<dyn PcmStream>> {
+                None
+            }
+            fn poll_event(&self) -> Option<PcmSourceEvent> {
+                None
+            }
+            fn format(&self) -> (String, Option<f64>) {
+                ("Test PCM".into(), None)
+            }
+        }
+        let source = Arc::new(Source::default());
+        set_pcm_source(Some(source.clone()));
+        let mut engine = short_engine(true);
+        engine.pcm = Some(super::PcmPlayback {
+            base_ms: 0,
+            offset: 0.0,
+            started: true,
+            loaded: true,
+            boundaries: std::collections::VecDeque::default(),
+        });
+        engine.execute(PlaybackCommand::SetPaused(false)).unwrap();
+        let track = MediaItem {
+            id: MediaId("spotify:track:0000000000000000000002".into()),
+            source: MediaSource::Spotify,
+            kind: MediaKind::Audio,
+            title: "Second".into(),
+            url: None,
+            stream_url: None,
+            external_audio_url: None,
+            local_path: None,
+            channel: String::new(),
+            duration_seconds: None,
+            metadata: BTreeMap::new(),
+        };
+        engine
+            .execute(PlaybackCommand::Load {
+                item: Box::new(track),
+                start_position_seconds: None,
+            })
+            .unwrap();
+        engine.execute(PlaybackCommand::SetPaused(true)).unwrap();
+        let paused_track = MediaItem {
+            id: MediaId("spotify:track:0000000000000000000003".into()),
+            source: MediaSource::Spotify,
+            kind: MediaKind::Audio,
+            title: "Explicitly paused".into(),
+            url: None,
+            stream_url: None,
+            external_audio_url: None,
+            local_path: None,
+            channel: String::new(),
+            duration_seconds: None,
+            metadata: BTreeMap::new(),
+        };
+        engine
+            .execute(PlaybackCommand::Load {
+                item: Box::new(paused_track),
+                start_position_seconds: None,
+            })
+            .unwrap();
+        let starts = source.starts.lock().unwrap().clone();
+        set_pcm_source(None);
+        assert_eq!(
+            starts,
+            [false, true],
+            "a new play request must beat the old mpv pause flag"
         );
     }
 
