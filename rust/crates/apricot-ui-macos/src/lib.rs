@@ -19,8 +19,12 @@ mod controls;
 pub mod keys;
 #[cfg(target_os = "macos")]
 mod language;
+#[cfg(target_os = "macos")]
+mod player_page;
 #[cfg(all(target_os = "macos", debug_assertions))]
 mod self_test;
+#[cfg(target_os = "macos")]
+mod video;
 #[cfg(target_os = "macos")]
 mod window;
 

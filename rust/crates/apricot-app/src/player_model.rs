@@ -484,13 +484,27 @@ fn label_with_shortcut(label: &str, action_id: &str, settings: &SettingsDocument
     if shortcut.is_empty() {
         label.to_owned()
     } else {
-        format!("{label} {shortcut}")
+        format!(
+            "{label} {}",
+            apricot_core::shortcut::display_shortcut(shortcut)
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+
+    /// A label with its shortcut as this platform shows it.
+    fn shown(windows_label: &str) -> String {
+        if cfg!(target_os = "macos") {
+            windows_label
+                .replace("Ctrl+", "Command+")
+                .replace("Alt+", "Option+")
+        } else {
+            windows_label.to_owned()
+        }
+    }
 
     use apricot_core::{MediaId, MediaKind, MediaSource};
     use apricot_storage::SettingsDocument;
@@ -565,7 +579,10 @@ mod tests {
             .iter()
             .find(|control| control.id == "audio_normalization")
             .expect("audio normalization button");
-        assert_eq!(button.label, "Audio normalization: Album Ctrl+Shift+G");
+        assert_eq!(
+            button.label,
+            shown("Audio normalization: Album Ctrl+Shift+G")
+        );
         assert_eq!(button.action_id, Some("player_replaygain"));
         let ids: Vec<_> = model.controls.iter().map(|control| control.id).collect();
         let position = |id| ids.iter().position(|candidate| *candidate == id);
@@ -712,7 +729,10 @@ mod tests {
             &PlayerViewState::default(),
         );
         assert_eq!(control(&model, "play_pause").label, "Pause");
-        assert_eq!(control(&model, "previous").label, "Previous Ctrl+PageUp");
+        assert_eq!(
+            control(&model, "previous").label,
+            shown("Previous Ctrl+PageUp")
+        );
     }
 
     #[test]
@@ -730,7 +750,7 @@ mod tests {
             .map(|button| button.label.as_str())
             .collect();
         assert_eq!(labels.len(), 13);
-        assert_eq!(labels[0], "Previous Ctrl+PageUp");
+        assert_eq!(labels[0], shown("Previous Ctrl+PageUp"));
         assert_eq!(labels[1], "Play");
         assert_eq!(labels[12], "Close Escape");
         let actions: Vec<_> = model

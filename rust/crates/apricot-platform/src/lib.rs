@@ -42,7 +42,7 @@ pub use download::{
 };
 pub use local_edit::{LocalEditJob, LocalEditRender, run_ffmpeg_conversion, save_local_edit};
 pub use local_media::{
-    LocalMediaError, scan_local_media_folder, scan_local_media_folder_with_cancel,
+    LocalMediaError, MEDIA_EXTENSIONS, scan_local_media_folder, scan_local_media_folder_with_cancel,
 };
 pub use paths::{
     PathDiscoveryError, discover_app_paths, discover_windows_beta_paths, discover_windows_paths,
@@ -101,6 +101,45 @@ pub fn computer_name() -> String {
         .unwrap_or_default();
     #[cfg(not(target_os = "macos"))]
     std::env::var("COMPUTERNAME").unwrap_or_default()
+}
+
+/// The bundled mpv: its executable (for the working directory and the
+/// external-process fallback) and the libmpv library the player loads.
+/// Windows needs both files in `mpv` next to the application (Windows
+/// `playback_launch_options`). macOS uses `mpv/libmpv.2.dylib` next to the
+/// executable, in a development build also Homebrew's libmpv.
+#[must_use]
+pub fn mpv_locations() -> Option<(PathBuf, PathBuf)> {
+    let directory = std::env::current_exe().ok()?.parent()?.join("mpv");
+    #[cfg(windows)]
+    {
+        let executable = directory.join("mpv.exe");
+        let library = directory.join("libmpv-2.dll");
+        (executable.is_file() && library.is_file()).then_some((executable, library))
+    }
+    #[cfg(not(windows))]
+    {
+        let bundled = directory.join(if cfg!(target_os = "macos") {
+            "libmpv.2.dylib"
+        } else {
+            "libmpv.so.2"
+        });
+        let library = std::iter::once(bundled)
+            .chain(
+                cfg!(debug_assertions)
+                    .then(|| {
+                        [
+                            PathBuf::from("/opt/homebrew/lib/libmpv.2.dylib"),
+                            PathBuf::from("/usr/local/lib/libmpv.2.dylib"),
+                        ]
+                    })
+                    .into_iter()
+                    .flatten(),
+            )
+            .find(|path| path.is_file())?;
+        let executable = library.with_file_name(executable_name("mpv"));
+        Some((executable, library))
+    }
 }
 
 /// The file name of a bundled or `PATH` program: `name.exe` on Windows and

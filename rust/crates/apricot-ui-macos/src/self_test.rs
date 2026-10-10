@@ -12,6 +12,7 @@ use objc2_app_kit::{NSApplication, NSEvent, NSEventModifierFlags, NSEventType, N
 use objc2_foundation::{NSPoint, NSString};
 
 /// One scripted key press: key code, typed text and modifiers.
+#[derive(Clone, Copy)]
 pub struct Key {
     pub code: u16,
     pub text: &'static str,

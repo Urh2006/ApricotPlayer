@@ -312,3 +312,17 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   mora uporabiti `display_shortcut`, ko ti zasloni pridejo na Mac.
 - **Preverjeno.** macOS `cargo test --workspace` 636 uspešnih, clippy čist na
   macOS in za Windows (mingw), `cargo fmt --check` čist.
+
+### M4a: predvajalnik za lokalne datoteke (11. 10. 2026, delno)
+
+- `apricot-shell`: zagon predvajanja, osveževanje strani predvajalnika,
+  dogodki libmpv, premor in nadaljevanje, iskanje po času, čas, glasnost,
+  hitrost, višina tona, ponastavitev, ponavljanje, prejšnji in naslednji,
+  Escape nazaj, zadrževane tipke, kot v `win32.rs`.
+- `apricot-ui-macos`: stran predvajalnika s fokusno površino "Player" (video
+  prek render API), gumbi in potrditvenimi polji v vrstnem redu modela,
+  Play file z odpiralnim oknom, odpiranje datotek iz Finderja.
+- Samodejni preizkus (`APRICOT_MACOS_SELF_TEST=player`) s pravim mpv: video
+  teče, T, Space, D, Command+0, R, puščice, V, Tab in Escape delujejo.
+- Odprto: VoiceOver preizkus, Play folder, druga instanca naj preda datoteko
+  prvi (zdaj se tiho konča), sistemski trki bližnjic (F11, Command+puščice).

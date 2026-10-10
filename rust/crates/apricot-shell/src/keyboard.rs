@@ -8,6 +8,21 @@ use apricot_core::{
 
 use crate::{Shell, View};
 
+/// What has keyboard focus when a key is pressed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FocusKind {
+    /// The screen's list.
+    List,
+    /// The player surface (Windows video host).
+    PlayerSurface,
+    /// A push button of the player page.
+    PlayerButton,
+    /// A check box of the player page.
+    PlayerCheckbox,
+    /// Anything else.
+    Other,
+}
+
 /// What the UI does with a key press.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KeyRoute {
@@ -18,15 +33,30 @@ pub enum KeyRoute {
     Consumed,
     /// The key runs this action through [`Shell::activate_action`].
     Run(&'static str),
+    /// The key starts a held-key repeat through [`Shell::start_key_repeat`].
+    Hold(&'static str, ShortcutChord),
 }
 
 impl Shell {
-    /// The route of a key press with the screen's list focused.
+    /// The route of a key press; `repeat` is the system's auto-repeat.
     #[must_use]
-    pub fn route_key(&self, chord: ShortcutChord, repeat: bool) -> KeyRoute {
+    pub fn route_key(&self, chord: ShortcutChord, repeat: bool, focus: FocusKind) -> KeyRoute {
         let plain = !chord.control && !chord.shift && !chord.alt;
         if plain && chord.key == ShortcutKey::Escape && self.view != View::MainMenu {
-            return KeyRoute::Run("player_back");
+            return if repeat {
+                KeyRoute::Consumed
+            } else {
+                KeyRoute::Run("player_back")
+            };
+        }
+        // Python `activate_focused_button_from_key` and the native Space of
+        // buttons and check boxes: the focused control acts itself.
+        if plain
+            && ((chord.key == ShortcutKey::Enter && focus == FocusKind::PlayerButton)
+                || (chord.key == ShortcutKey::Space
+                    && matches!(focus, FocusKind::PlayerButton | FocusKind::PlayerCheckbox)))
+        {
+            return KeyRoute::Unhandled;
         }
         let shortcuts = &self.application.settings().keyboard_shortcuts;
         let (scope, accepts_text) = view_shortcut_scope(self.view);
@@ -39,10 +69,11 @@ impl Shell {
         if !is_global && self.view == View::MainMenu && action.id.as_str() != "open_selected" {
             return KeyRoute::Unhandled;
         }
-        if repeat && action.repeat == RepeatPolicy::None {
-            return KeyRoute::Consumed;
+        match action.repeat {
+            RepeatPolicy::None | RepeatPolicy::Controlled if repeat => KeyRoute::Consumed,
+            RepeatPolicy::Controlled => KeyRoute::Hold(action.id.as_str(), chord),
+            _ => KeyRoute::Run(action.id.as_str()),
         }
-        KeyRoute::Run(action.id.as_str())
     }
 }
 
@@ -50,5 +81,6 @@ impl Shell {
 const fn view_shortcut_scope(view: View) -> (ActionScope, bool) {
     match view {
         View::MainMenu => (ActionScope::List, false),
+        View::Player => (ActionScope::Player, false),
     }
 }

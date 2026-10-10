@@ -12,7 +12,7 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
     NSApplicationTerminateReply, NSMenu, NSMenuItem,
 };
-use objc2_foundation::{NSNotification, NSObject, NSObjectProtocol, NSString};
+use objc2_foundation::{NSArray, NSNotification, NSObject, NSObjectProtocol, NSString, NSURL};
 
 use crate::window::MainWindowController;
 
@@ -22,6 +22,8 @@ pub struct DelegateIvars {
     start_hidden: bool,
     prompt_language: bool,
     controller: RefCell<Option<Retained<MainWindowController>>>,
+    /// Files opened from Finder before the window exists.
+    pending_files: RefCell<Vec<std::path::PathBuf>>,
 }
 
 define_class!(
@@ -52,10 +54,40 @@ define_class!(
             let controller = MainWindowController::new(mtm, application);
             controller.show(&self.ivars().title, self.ivars().start_hidden);
             #[cfg(debug_assertions)]
-            if std::env::var_os("APRICOT_MACOS_SELF_TEST").is_some() {
-                controller.run_self_test();
+            match std::env::var("APRICOT_MACOS_SELF_TEST").as_deref() {
+                Ok("player") => {
+                    if let Some(media) = std::env::var_os("APRICOT_MACOS_SELF_TEST_MEDIA") {
+                        controller.run_player_self_test(media.into());
+                    }
+                }
+                Ok(_) => controller.run_self_test(),
+                Err(_) => {}
+            }
+            let pending = std::mem::take(&mut *self.ivars().pending_files.borrow_mut());
+            for path in pending {
+                controller.open_file(path);
             }
             *self.ivars().controller.borrow_mut() = Some(controller);
+        }
+
+        /// Files opened from Finder or dropped on the Dock icon (Windows
+        /// `ActivationRequest::OpenFile`).
+        #[unsafe(method(application:openURLs:))]
+        fn open_urls(&self, _app: &NSApplication, urls: &NSArray<NSURL>) {
+            let paths: Vec<_> = urls
+                .iter()
+                .filter_map(|url| url.path())
+                .map(|path| std::path::PathBuf::from(path.to_string()))
+                .collect();
+            let controller = self.ivars().controller.borrow().clone();
+            match controller {
+                Some(controller) => {
+                    for path in paths {
+                        controller.open_file(path);
+                    }
+                }
+                None => self.ivars().pending_files.borrow_mut().extend(paths),
+            }
         }
 
         /// The Dock icon of a running application with a hidden window.
@@ -73,6 +105,7 @@ define_class!(
         fn should_terminate(&self, _app: &NSApplication) -> NSApplicationTerminateReply {
             if let Some(controller) = self.ivars().controller.borrow().as_ref() {
                 controller.mark_exiting();
+                controller.shutdown();
             }
             NSApplicationTerminateReply::TerminateNow
         }
@@ -104,6 +137,7 @@ impl Delegate {
             start_hidden,
             prompt_language,
             controller: RefCell::new(None),
+            pending_files: RefCell::new(Vec::new()),
         });
         // SAFETY: `init` of NSObject.
         unsafe { msg_send![super(this), init] }

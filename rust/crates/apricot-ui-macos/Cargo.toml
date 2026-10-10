@@ -14,9 +14,16 @@ apricot-platform.workspace = true
 apricot-shell.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
+apricot-playback.workspace = true
+dispatch2 = "0.3.1"
+libloading.workspace = true
 objc2 = "0.6.5"
 objc2-app-kit = "0.3.2"
+objc2-core-foundation = "0.3.2"
+objc2-core-video = "0.3.2"
 objc2-foundation = "0.3.2"
+objc2-open-gl = "0.3.2"
+objc2-quartz-core = { version = "0.3.2", features = ["objc2-open-gl", "objc2-core-video"] }
 
 [lints]
 workspace = true

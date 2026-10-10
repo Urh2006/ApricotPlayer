@@ -7,7 +7,7 @@ use super::{TypeAhead, last_activated_index, preserved_index};
 mod keyboard {
     use apricot_core::shortcut::ShortcutChord;
 
-    use crate::{KeyRoute, Shell};
+    use crate::{FocusKind, KeyRoute, Shell};
 
     fn shell() -> Shell {
         let directory = std::env::temp_dir().join(format!(
@@ -36,21 +36,24 @@ mod keyboard {
         let shell = shell();
         let chord = |text: &str| ShortcutChord::parse(text).expect("chord");
         assert_eq!(
-            shell.route_key(chord("Enter"), false),
+            shell.route_key(chord("Enter"), false, FocusKind::List),
             KeyRoute::Run("open_selected")
         );
         assert_eq!(
-            shell.route_key(chord("Ctrl+Alt+Y"), false),
+            shell.route_key(chord("Ctrl+Alt+Y"), false, FocusKind::List),
             KeyRoute::Run("open_search")
         );
         assert_eq!(
-            shell.route_key(chord("Ctrl+Alt+Y"), true),
+            shell.route_key(chord("Ctrl+Alt+Y"), true, FocusKind::List),
             KeyRoute::Consumed
         );
-        assert_eq!(shell.route_key(chord("Escape"), false), KeyRoute::Unhandled);
+        assert_eq!(
+            shell.route_key(chord("Escape"), false, FocusKind::List),
+            KeyRoute::Unhandled
+        );
         // A list action is not a main menu action.
         assert_eq!(
-            shell.route_key(chord("Ctrl+Shift+A"), false),
+            shell.route_key(chord("Ctrl+Shift+A"), false, FocusKind::List),
             KeyRoute::Unhandled
         );
     }

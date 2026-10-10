@@ -204,7 +204,10 @@ version = "2.0.0-beta.1"
 dependencies = [
  "apricot-app",
  "apricot-core",
+ "apricot-platform",
+ "apricot-playback",
  "apricot-storage",
+ "serde_json",
 ]
 
 [[package]]
@@ -258,10 +261,17 @@ dependencies = [
  "apricot-app",
  "apricot-core",
  "apricot-platform",
+ "apricot-playback",
  "apricot-shell",
+ "dispatch2",
+ "libloading",
  "objc2",
  "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-core-video",
  "objc2-foundation",
+ "objc2-open-gl",
+ "objc2-quartz-core",
 ]
 
 [[package]]
