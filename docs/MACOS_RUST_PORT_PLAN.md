@@ -275,3 +275,39 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   ponovljeni črki kroži med vrsticami na to črko, več različnih črk (na primer
   "pl") pa išče po začetku. To vedenje dobi lastna obdelava začetnic v
   seznamih macOS vmesnika (M3/M4), z enotskim testom.
+
+### M3: skupni koordinator in prvo Mac okno (11. 10. 2026)
+
+- **`apricot-shell`** (nov crate brez Win32 in AppKita): `Shell` z izbiro
+  vrstice glavnega menija (`last_activated_index`, `preserved_index`, kot na
+  Windows), aktivacijo vrstic (Exit konča program, ostale do svojih macOS
+  zaslonov povedo `rust_feature_unavailable`), usmerjanjem tipk po pravilih
+  Windows `handle_shortcut_message` (v glavnem meniju samo globalna dejanja in
+  `open_selected`, ponovljena tipka brez ponovitve dejanja) in `TypeAhead`, ki
+  posnema začetnice Windows seznama: ista črka kroži med vrsticami, različne
+  črke iščejo po začetku, druga tipka začne novo iskanje. To popravi edino
+  napako iz Urhovega M2 preizkusa. Enotski testi tečejo na obeh platformah.
+- **`apricot-ui-macos`** (nov crate): aplikacija z menijsko vrstico (Settings
+  s Command+vejica, Hide, Quit, Edit za besedilna polja), glavno okno 760x600
+  z naslovom kot na Windows, seznam "Main menu", gumb Open in statusna
+  vrstica, Tab vrstni red seznam, Open. Zapiranje okna z nastavitvijo "close
+  to tray" okno skrije (klik na Dock ga vrne), sicer konča program. Izbira
+  jezika ob prvem zagonu kot `first_run_language_win32.rs`. Tipke gredo prek
+  okna v shell pred fokusirano kontrolo, kot na Windows prek sporočilne zanke.
+- **Bližnjice na macOS.** `apricot_core::shortcut::display_shortcut` pokaže
+  shranjeni `Ctrl` kot Command in `Alt` kot Option; razčlenjevalnik sprejme
+  tudi "Command"/"Cmd". Tipka Control ni Apricot bližnjica (ostane sistemu).
+  Shift+F10 odpre kontekstni meni.
+- **Samodejni preizkus.** `APRICOT_MACOS_SELF_TEST=1` v razvojni gradnji
+  pošlje oknu prave tipke in izpiše fokus, izbrano vrstico in stanje:
+  P, P, P kroži (Play folder, Play file, Playlists), puščica in H skočita na
+  History, Enter pove nedosegljivost, Tab gre na Open in nazaj,
+  Command+Option+Y pove nedosegljivo iskanje, Escape ne naredi ničesar.
+- **Za kasneje.** Besedila menijske vrstice (Hide, Quit, Edit) so angleška,
+  ker jih Python nima; prevod pride z nastavitvami. Nekatere privzete
+  bližnjice s Command+Option trčijo s sistemskimi (na primer Command+Option+D
+  za Dock); pregled in macOS privzete vrednosti v enoti za bližnjice.
+  Prikaz bližnjic v predvajalniku, iskalniku dejanj in urejevalniku bližnjic
+  mora uporabiti `display_shortcut`, ko ti zasloni pridejo na Mac.
+- **Preverjeno.** macOS `cargo test --workspace` 636 uspešnih, clippy čist na
+  macOS in za Windows (mingw), `cargo fmt --check` čist.

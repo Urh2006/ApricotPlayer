@@ -8,10 +8,12 @@ members = [
     "crates/apricot-core",
     "crates/apricot-media",
     "crates/apricot-platform",
+    "crates/apricot-shell",
     "crates/apricot-playback",
     "crates/apricot-spotify",
     "crates/apricot-storage",
     "crates/apricot-test-support",
+    "crates/apricot-ui-macos",
     "crates/apricot-ui-windows",
     "crates/apricot-updater",
     "tools/media-process-spike",
@@ -32,10 +34,12 @@ apricot-app = { path = "crates/apricot-app" }
 apricot-core = { path = "crates/apricot-core" }
 apricot-media = { path = "crates/apricot-media" }
 apricot-platform = { path = "crates/apricot-platform" }
+apricot-shell = { path = "crates/apricot-shell" }
 apricot-playback = { path = "crates/apricot-playback" }
 apricot-spotify = { path = "crates/apricot-spotify" }
 apricot-storage = { path = "crates/apricot-storage" }
 apricot-test-support = { path = "crates/apricot-test-support" }
+apricot-ui-macos = { path = "crates/apricot-ui-macos" }
 apricot-ui-windows = { path = "crates/apricot-ui-windows" }
 apricot-updater = { path = "crates/apricot-updater" }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }

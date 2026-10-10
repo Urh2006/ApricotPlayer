@@ -16,6 +16,9 @@ apricot-ui-windows.workspace = true
 apricot-updater.workspace = true
 serde_json.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+apricot-ui-macos.workspace = true
+
 [features]
 release-beta = ["apricot-updater/release-beta"]
 stable-identity = ["apricot-platform/stable-identity"]

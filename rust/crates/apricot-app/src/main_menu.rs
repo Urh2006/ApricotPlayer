@@ -77,11 +77,11 @@ impl MainMenuModel {
                 && let Some(action) = action_by_id(shortcut_action)
             {
                 label.push('\t');
-                label.push_str(
+                label.push_str(&apricot_core::shortcut::display_shortcut(
                     shortcuts
                         .get(shortcut_action)
                         .map_or(action.default_windows_shortcut, String::as_str),
-                );
+                ));
             }
             items.push(MainMenuItem {
                 id: definition.action_id,
@@ -92,11 +92,11 @@ impl MainMenuModel {
         let mut settings_label = catalog.text("settings").to_owned();
         if show_shortcuts && let Some(action) = action_by_id("open_settings") {
             settings_label.push('\t');
-            settings_label.push_str(
+            settings_label.push_str(&apricot_core::shortcut::display_shortcut(
                 shortcuts
                     .get("open_settings")
                     .map_or(action.default_windows_shortcut, String::as_str),
-            );
+            ));
         }
         items.push(MainMenuItem {
             id: "settings",
@@ -294,7 +294,11 @@ mod tests {
         // 16 Python items plus Spotify.
         assert_eq!(model.items.len(), 18);
         assert_eq!(model.items[0].id, "search");
-        assert!(model.items[0].label.ends_with("Ctrl+Alt+Y"));
+        assert!(
+            model.items[0]
+                .label
+                .ends_with(&apricot_core::shortcut::display_shortcut("Ctrl+Alt+Y"))
+        );
         assert_eq!(model.items[model.items.len() - 2].id, "settings");
         assert_eq!(model.items.last().expect("exit").id, "exit");
     }
@@ -360,7 +364,11 @@ mod tests {
             true,
             &shortcuts,
         );
-        assert!(model.items[0].label.ends_with("Ctrl+F8"));
+        assert!(
+            model.items[0]
+                .label
+                .ends_with(&apricot_core::shortcut::display_shortcut("Ctrl+F8"))
+        );
     }
 
     #[test]

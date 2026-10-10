@@ -70,7 +70,8 @@ impl ShortcutChord {
             .filter(|part| !part.is_empty())
         {
             match normalize(part).as_str() {
-                "ctrl" | "control" | "strg" => control = true,
+                // Command is the macOS name of the logical primary modifier.
+                "ctrl" | "control" | "strg" | "command" | "cmd" => control = true,
                 "shift" | "shft" => shift = true,
                 "alt" | "option" => alt = true,
                 _ => key_parts.push(part),
@@ -143,6 +144,41 @@ fn resolve_pass(
     })
 }
 
+/// How a stored shortcut is shown to the user. Shortcuts are stored with the
+/// Windows names; on macOS the logical primary modifier `Ctrl` is Command and
+/// `Alt` is Option (`docs/MACOS_PORT_PLAN.md`, keyboard shortcut parity).
+pub fn display_shortcut(stored: &str) -> String {
+    if cfg!(target_os = "macos") {
+        macos_shortcut_display(stored)
+    } else {
+        stored.to_owned()
+    }
+}
+
+/// The macOS spelling of a stored shortcut: `Ctrl+Alt+Y` reads
+/// `Command+Option+Y`; other keys and the `A | B` layout stay as stored.
+pub fn macos_shortcut_display(stored: &str) -> String {
+    stored
+        .split('|')
+        .map(|alternative| {
+            alternative
+                .split('+')
+                .map(|part| {
+                    let trimmed = part.trim();
+                    let name = match normalize(trimmed).as_str() {
+                        "ctrl" | "control" | "strg" => "Command",
+                        "alt" | "option" => "Option",
+                        _ => return part.to_owned(),
+                    };
+                    part.replacen(trimmed, name, 1)
+                })
+                .collect::<Vec<_>>()
+                .join("+")
+        })
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
 fn parse_key(value: &str) -> Option<ShortcutKey> {
     let normalized = normalize(value);
     let key = match normalized.as_str() {
@@ -195,6 +231,22 @@ fn normalize(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+
+    #[test]
+    fn macos_display_names_the_primary_modifier_command_and_alt_option() {
+        use super::macos_shortcut_display;
+        assert_eq!(macos_shortcut_display("Ctrl+Alt+Y"), "Command+Option+Y");
+        assert_eq!(macos_shortcut_display("Ctrl+Shift+F"), "Command+Shift+F");
+        assert_eq!(macos_shortcut_display("F8"), "F8");
+        assert_eq!(
+            macos_shortcut_display("Ctrl+Up | Alt+Up"),
+            "Command+Up | Option+Up"
+        );
+        assert_eq!(
+            super::ShortcutChord::parse("Command+Option+Y"),
+            super::ShortcutChord::parse("Ctrl+Alt+Y")
+        );
+    }
 
     use crate::action::{ACTIONS, ActionScope};
 

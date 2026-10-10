@@ -123,6 +123,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         LastPlayerSessionFile::new(paths.app_data.join("last_player_session.json")),
         &LastPlayerSessionFile::new(paths.legacy_app_data.join("last_player_session.json")),
     );
+    // macOS asks inside its own run loop; see `run_application` below.
+    #[cfg(target_os = "macos")]
+    let prompt_language =
+        application.initial_language_prompt_due(first_run_without_settings, start_hidden);
     if application.initial_language_prompt_due(first_run_without_settings, start_hidden) {
         #[cfg(windows)]
         {
@@ -134,6 +138,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(path) = startup_file {
         application.enqueue_activation(ActivationRequest::OpenFile(path));
     }
+    #[cfg(target_os = "macos")]
+    return apricot_ui_macos::run_application(
+        application,
+        env!("CARGO_PKG_VERSION"),
+        start_hidden,
+        prompt_language,
+    )
+    .map_err(Into::into);
+    #[cfg(not(target_os = "macos"))]
     apricot_ui_windows::run_application(application, env!("CARGO_PKG_VERSION"), start_hidden)
         .map_err(Into::into)
 }
