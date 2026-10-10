@@ -434,6 +434,8 @@ fn append_update_log(
 }
 
 #[cfg(test)]
+// Some tests use Windows paths and run only on Windows.
+#[cfg_attr(not(windows), allow(unused_imports))]
 mod tests {
     use std::{fs, path::Path};
 
@@ -462,6 +464,8 @@ mod tests {
         assert_eq!(powershell_literal("it's"), "'it''s'");
     }
 
+    // Windows paths and tools; macOS equivalents belong to the macOS units.
+    #[cfg(windows)]
     #[test]
     fn portable_script_backs_up_every_packaged_item_and_relaunches() {
         let folder = Path::new("C:\\Apps\\O'Neil");
@@ -510,6 +514,8 @@ mod tests {
         assert!(!script.contains("'ApricotPlayer.exe'"));
     }
 
+    // Windows paths and tools; macOS equivalents belong to the macOS units.
+    #[cfg(windows)]
     #[test]
     fn scripts_are_written_with_a_byte_order_mark_and_launched_hidden() {
         let path = write_update_script("Log 'x'", "apricotplayer-test-").expect("script");

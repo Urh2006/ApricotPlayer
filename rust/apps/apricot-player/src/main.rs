@@ -59,6 +59,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ) {
                 return Ok(());
             }
+            #[cfg(windows)]
             if let Some(path) = startup_file {
                 apricot_ui_windows::forward_to_existing(&ActivationRequest::OpenFile(path))?;
             } else if settings.current().close_to_tray {
@@ -123,15 +124,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &LastPlayerSessionFile::new(paths.legacy_app_data.join("last_player_session.json")),
     );
     if application.initial_language_prompt_due(first_run_without_settings, start_hidden) {
-        let selected =
-            apricot_ui_windows::choose_initial_language(&application.settings().language)?;
-        application.complete_initial_language(selected)?;
+        #[cfg(windows)]
+        {
+            let selected =
+                apricot_ui_windows::choose_initial_language(&application.settings().language)?;
+            application.complete_initial_language(selected)?;
+        }
     }
     if let Some(path) = startup_file {
         application.enqueue_activation(ActivationRequest::OpenFile(path));
     }
     apricot_ui_windows::run_application(application, env!("CARGO_PKG_VERSION"), start_hidden)
-        .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
+        .map_err(Into::into)
 }
 
 /// Python `load_settings`: settings of Python 1.0 on the stable channel move
@@ -244,12 +248,17 @@ fn run_qualification(arguments: &[std::ffi::OsString]) -> Result<bool, Box<dyn s
         .iter()
         .any(|argument| argument == "--qualification-playback")
     {
+        #[cfg(windows)]
         qualify_packaged_playback()?;
+        #[cfg(not(windows))]
+        return Err("packaged playback qualification currently requires Windows".into());
+        #[cfg(windows)]
         return Ok(true);
     }
     Ok(false)
 }
 
+#[cfg(windows)]
 fn qualify_packaged_playback() -> Result<(), Box<dyn std::error::Error>> {
     use std::{
         collections::BTreeMap,
@@ -320,6 +329,7 @@ fn qualify_packaged_playback() -> Result<(), Box<dyn std::error::Error>> {
     result
 }
 
+#[cfg(windows)]
 fn write_silent_wav(path: &std::path::Path) -> std::io::Result<()> {
     use std::io::Write;
 

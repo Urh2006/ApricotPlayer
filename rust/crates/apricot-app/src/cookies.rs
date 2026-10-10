@@ -1719,6 +1719,8 @@ mod tests {
         assert!(settings.cookies_source_signature.is_empty());
     }
 
+    // Windows paths and tools; macOS equivalents belong to the macOS units.
+    #[cfg(windows)]
     #[test]
     fn profile_choices_and_candidates_follow_python() {
         let discovered = vec![

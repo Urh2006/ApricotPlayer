@@ -63,11 +63,15 @@ fn discover_windows_paths_for_identity(
 }
 
 #[cfg(test)]
+// Some tests use Windows paths and run only on Windows.
+#[cfg_attr(not(windows), allow(unused_imports))]
 mod tests {
     use std::path::Path;
 
     use crate::{ApplicationIdentity, PlatformPaths};
 
+    // Windows paths and tools; macOS equivalents belong to the macOS units.
+    #[cfg(windows)]
     #[test]
     fn windows_paths_match_the_python_layout() {
         let paths = PlatformPaths::from_windows_roots(
@@ -91,6 +95,8 @@ mod tests {
         );
     }
 
+    // Windows paths and tools; macOS equivalents belong to the macOS units.
+    #[cfg(windows)]
     #[test]
     fn rust_beta_is_side_by_side_and_reads_stable_only_as_migration_source() {
         let paths = PlatformPaths::from_windows_roots_for_identity(

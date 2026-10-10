@@ -64,6 +64,7 @@ fn acquire_named(name: &str) -> Result<SingleInstanceOutcome, PlatformError> {
 }
 
 #[cfg(not(windows))]
+#[allow(clippy::unnecessary_wraps)] // Same signature as the Windows implementation.
 fn acquire_named(_name: &str) -> Result<SingleInstanceOutcome, PlatformError> {
     Ok(SingleInstanceOutcome::Primary(SingleInstanceGuard {}))
 }

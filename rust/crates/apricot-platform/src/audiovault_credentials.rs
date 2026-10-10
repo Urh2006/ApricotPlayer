@@ -5,6 +5,7 @@
 #![cfg_attr(windows, allow(unsafe_code))]
 
 const ENTROPY: &[u8] = b"ApricotPlayer AudioVault credentials v1";
+#[cfg(windows)]
 const CRYPTPROTECT_UI_FORBIDDEN: u32 = 0x1;
 
 /// Python `protect_audiovault_password`: base64 of the DPAPI blob, or an
@@ -163,6 +164,7 @@ unsafe fn copy_blob(blob: &windows::Win32::Security::Cryptography::CRYPT_INTEGER
 }
 
 #[cfg(not(windows))]
+#[allow(clippy::unnecessary_wraps)] // Same signature as the Windows implementation.
 fn protect(_data: &[u8], _entropy: &[u8], _description: &str) -> Result<Vec<u8>, String> {
     Ok(Vec::new())
 }
@@ -174,7 +176,9 @@ fn unprotect(_data: &[u8], _entropy: &[u8]) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{base64_decode, protect_password, unprotect_password};
+    #[cfg(windows)]
+    use super::protect_password;
+    use super::{base64_decode, unprotect_password};
 
     #[test]
     fn decodes_strict_base64_like_python() {

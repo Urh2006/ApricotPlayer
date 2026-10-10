@@ -17,6 +17,8 @@ apricot-updater.workspace = true
 chrono.workspace = true
 serde_json.workspace = true
 url.workspace = true
+
+[target.'cfg(windows)'.dependencies]
 windows.workspace = true
 
 [lints]

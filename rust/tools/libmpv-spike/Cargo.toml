@@ -9,6 +9,8 @@ publish.workspace = true
 apricot-core.workspace = true
 apricot-playback.workspace = true
 libloading = "0.8"
+
+[target.'cfg(windows)'.dependencies]
 windows.workspace = true
 
 [lints]

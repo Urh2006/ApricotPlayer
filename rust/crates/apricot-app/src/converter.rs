@@ -875,6 +875,8 @@ mod tests {
         );
     }
 
+    // Windows paths and tools; macOS equivalents belong to the macOS units.
+    #[cfg(windows)]
     #[test]
     fn unique_paths_skip_existing_files_and_the_source() {
         let folder = tempfile::tempdir().expect("folder");

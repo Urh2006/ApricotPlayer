@@ -18,6 +18,8 @@ serde_json.workspace = true
 thiserror.workspace = true
 tempfile = "3"
 url.workspace = true
+
+[target.'cfg(windows)'.dependencies]
 windows.workspace = true
 
 [features]

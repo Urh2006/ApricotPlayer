@@ -749,6 +749,8 @@ pub fn show_download_target(download_folder: &str, show: &MediaItem) -> PathBuf 
 }
 
 #[cfg(test)]
+// Some tests use Windows paths and run only on Windows.
+#[cfg_attr(not(windows), allow(unused_imports))]
 mod tests {
     use std::path::Path;
 
@@ -816,6 +818,8 @@ mod tests {
         assert_eq!(result_line(&shows[1], &catalog), "A Show | TV show");
     }
 
+    // Windows paths and tools; macOS equivalents belong to the macOS units.
+    #[cfg(windows)]
     #[test]
     fn builds_python_addresses_and_names() {
         assert_eq!(

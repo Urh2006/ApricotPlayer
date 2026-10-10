@@ -162,4 +162,31 @@ spodaj. Po vsaki enoti se ustavim in počakam na "nadaljuj".
 
 ## 6. Dnevnik enot
 
-(prazno)
+### Odločitve (10. 10. 2026)
+
+Urh je prijavljen v GitHub. Windows delo na `win32.rs` med M2 miruje. Po vsakem
+koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
+
+### M0: gradnja celotnega delovnega prostora na macOS (10. 10. 2026)
+
+- Odvisnost `windows` je v `apricot-platform`, `apricot-ui-windows` in obeh
+  Windows spikih samo še za `cfg(windows)`. Windows koda se ni spremenila.
+- `spotify_login_win32` je dobil manjkajoči `cfg(windows)`; dve Windows konstanti
+  in nadomestne funkcije za druge sisteme ne sprožajo več opozoril.
+- `apps/apricot-player`: posredovanje drugi instanci, izbira jezika ob prvem
+  zagonu in preizkus pakiranega predvajanja so samo za Windows. Na macOS se
+  program prevede, `--qualification-smoke` uspe, navaden zagon pa se ustavi pri
+  manjkajočem `APPDATA`, ker macOS poti pridejo v M1.
+- 13 testov, ki preverjajo Windows poti, registry in PowerShell, teče samo na
+  Windows: AudioVault naslovi, pretvornik (enolične poti), piškotki (profili),
+  `paths`, tri registracijski testi in dva testa updater skripte. macOS
+  ustreznice pridejo v M1, M9, M12 in M16.
+- Opozorilo za pozneje: na macOS shranjevanje AudioVault gesla še ne deluje
+  (nadomestna funkcija vrne prazno). Keychain pride v M1 oziroma M12.
+- Preverjeno: macOS `cargo build`, `cargo test --workspace` (602 uspešnih,
+  0 neuspešnih, 17 izključenih), `cargo clippy --workspace --all-targets` brez
+  opozoril; `cargo clippy --workspace --all-targets --target
+  x86_64-pc-windows-gnu` brez opozoril; `git diff --check`.
+- Na Windows naj Urh požene `cargo test --workspace` in `cargo clippy
+  --workspace --all-targets`; vedenje programa se ni spremenilo, zato NVDA
+  preizkus ni potreben.

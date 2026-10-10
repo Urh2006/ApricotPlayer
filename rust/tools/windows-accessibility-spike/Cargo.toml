@@ -6,6 +6,8 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+
+[target.'cfg(windows)'.dependencies]
 windows.workspace = true
 
 [lints]

@@ -123,6 +123,7 @@ fn registry_result(
 }
 
 #[cfg(not(windows))]
+#[allow(clippy::unnecessary_wraps)] // Same signature as the Windows implementation.
 fn sync_startup_registration_platform(
     _value_name: &str,
     _command: &str,
@@ -417,6 +418,7 @@ fn read_registry_text(root: RegistryRoot, _subkey: &str, _name: &str) -> Option<
     match root {}
 }
 
+#[cfg(windows)]
 const WINDOWS_VERSION_KEY: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
 
 /// Python `platform.platform()` on Windows, for example
@@ -531,6 +533,7 @@ fn register_media_associations_platform(writes: &[RegistryWrite]) -> Result<(), 
 }
 
 #[cfg(not(windows))]
+#[allow(clippy::unnecessary_wraps)] // Same signature as the Windows implementation.
 fn register_media_associations_platform(_writes: &[RegistryWrite]) -> Result<(), PlatformError> {
     Ok(())
 }
@@ -586,6 +589,8 @@ fn wide(value: &str) -> Vec<u16> {
 }
 
 #[cfg(test)]
+// Some tests use Windows paths and run only on Windows.
+#[cfg_attr(not(windows), allow(unused_imports))]
 mod tests {
     #[test]
     fn platform_description_matches_python_platform() {
@@ -616,6 +621,8 @@ mod tests {
         );
     }
 
+    // Windows paths and tools; macOS equivalents belong to the macOS units.
+    #[cfg(windows)]
     #[test]
     fn startup_command_is_absolute_and_quoted() {
         let command = startup_command(Path::new(r"C:\Program Files\Apricot\Apricot.exe"))
@@ -624,6 +631,8 @@ mod tests {
         assert!(startup_command(Path::new("Apricot.exe")).is_err());
     }
 
+    // Windows paths and tools; macOS equivalents belong to the macOS units.
+    #[cfg(windows)]
     #[test]
     fn beta_media_registration_never_touches_stable_keys() {
         assert_ne!(
@@ -644,6 +653,8 @@ mod tests {
         }));
     }
 
+    // Windows paths and tools; macOS equivalents belong to the macOS units.
+    #[cfg(windows)]
     #[test]
     fn media_registration_follows_python_layout() {
         let executable = Path::new(r"C:\Program Files\Apricot\Apricot.exe");
