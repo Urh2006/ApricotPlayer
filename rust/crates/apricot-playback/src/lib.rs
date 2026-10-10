@@ -11,6 +11,7 @@ mod libmpv;
 mod mpv_ipc;
 mod mpv_process;
 pub mod pcm_source;
+mod render;
 mod runtime;
 
 pub use audio_chain::{
@@ -28,6 +29,7 @@ pub use mpv_process::{
     InitialPlaybackState, MpvCacheConfig, MpvLaunchOptions, MpvProcessEngine, MpvVideoMode,
     RepeatMode,
 };
+pub use render::{GetProcAddress, MpvRenderHost, UpdateCallback};
 pub use runtime::{PlaybackPositionReader, PlaybackRuntime, PlaybackRuntimeError, PlaybackUpdate};
 
 #[derive(Clone, Debug, PartialEq)]

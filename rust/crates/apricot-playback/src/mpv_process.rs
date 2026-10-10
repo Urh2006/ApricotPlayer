@@ -53,6 +53,10 @@ impl MpvCacheConfig {
 pub enum MpvVideoMode {
     Detached,
     Embedded(isize),
+    /// libmpv draws through its render API into the
+    /// [`crate::MpvRenderHost`] with this id (macOS). The external mpv
+    /// process cannot do this and shows its own window instead.
+    RenderApi(u64),
     AudioOnly,
 }
 

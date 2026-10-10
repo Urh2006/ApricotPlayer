@@ -94,24 +94,25 @@ spodaj. Po vsaki enoti se ustavim in počakam na "nadaljuj".
   zagon ob prijavi, povezave datotek, obvestila in zaganjanje pomožnih procesov.
   Windows izvedba je dobesedno premaknjena obstoječa koda. macOS izvedba za poti,
   Keychain in odpiranje je narejena takoj, ostalo v M14.
-- **M2. Izločitev aplikacijske logike iz `win32.rs`.** Po korakih, vsak korak
-  posebej preverjen:
-  M2a predvajanje (razreševanje, stream cache, prefetch, začetek iz vrste,
-  ozadje), M2b prenosi, pretvorbe, posodobitve in diagnostika, M2c YouTube
-  seznami, metapodatki, naročnine, podcasti, M2d pogledi, navigacija in fokus
-  (model `MainView`, povratne poti, Tab vrstni red kot podatek), M2e AudioVault in
-  Spotify stanje. Win32 ostane enak po vedenju; testi se premaknejo v skupni
-  crate, da jih poganja tudi macOS. Pri tej enoti potrebujem Urhov kratek NVDA
-  preizkus na Windows po vsakem koraku.
-
-### Del B: dokaz najtežjih macOS poti
-
-- **M3. AppKit in VoiceOver spike.** Majhno okno: seznam z začetnicami, gumbi,
+- **M2. AppKit in VoiceOver spike.** Majhno okno: seznam z začetnicami, gumbi,
   polje za iskanje, potrditveno polje, drsnik, meni, kontekstni meni na Shift+F10
   in VO+Shift+M, oglas, obnova fokusa po dialogu, ter libmpv zvok in video v
   `NSView`. Vrata: Urh potrdi z VoiceOverjem, da so imena, vloge in oglasi
   pravilni, in da video deluje. Če AppKit prek `objc2` ne izpolni pogodbe, se
   ustavim in predlagam alternativo.
+- **M3. Skupni koordinator `apricot-shell`.** Logika, ki je danes v `win32.rs`
+  (razreševanje in začetek predvajanja, delo v ozadju, prenosi, pogovorna okna v
+  pravem vrstnem redu, besedila stanja), se prenese v crate brez Win32 in brez
+  AppKita. UI ga kliče in mu ponudi vmesnik `ShellUi` za vrstico stanja,
+  sporočila, potrditve, izbire, datotečna okna, obvestila in osvežitev pogledov.
+  Prenos poteka po sklopih skupaj z macOS zasloni v enotah M4 do M14, vsak sklop
+  z enotskimi testi na Macu.
+
+Sprememba (11. 10. 2026): prvotni M2 je predvideval, da se ta logika najprej
+izloči iz `win32.rs` in Windows takoj preklopi nanjo. Ker Urh Windows testira
+šele na koncu, bi to pomenilo dolgo obdobje predelanega, a nepreizkušenega
+Windows vmesnika. Zato macOS vmesnik prvi uporablja `apricot-shell`, `win32.rs`
+pa ostane nespremenjen do enote W1, ko Urh lahko sproti preizkuša z NVDA.
 
 ### Del C: zasloni in funkcije na macOS
 
@@ -142,6 +143,11 @@ spodaj. Po vsaki enoti se ustavim in počakam na "nadaljuj".
 
 ### Del D: izdaja
 
+- **W1. Windows na skupnem koordinatorju.** Ko je macOS vmesnik končan, se
+  `win32.rs` preklopi na `apricot-shell`, da obe platformi uporabljata isto
+  logiko. To enoto delava, ko je Urh pri Windows računalniku, z NVDA
+  preizkusom po vsakem sklopu.
+
 - **M15. Paket.** `.app` s pribitimi dylibi (libmpv, FFmpeg in odvisnosti),
   yt-dlp, Node, yt-dlp-ejs, ikona, ad-hoc podpis, DMG, skripta za lokalno gradnjo.
 - **M16. Posodobitve.** Izbira DMG sredstva za arm64 in kanal, preverjanje
@@ -149,7 +155,8 @@ spodaj. Po vsaki enoti se ustavim in počakam na "nadaljuj".
   yt-dlp in pomočnika.
 - **M17. Uvoz podatkov z Windows.** Uvoz mape ali ZIP-a Python ali Rust Windows
   podatkov, brez strojno vezanih poti, naprav in DPAPI poverilnic.
-- **M18. CI in prevzem.** GitHub Actions za Windows in macOS (test, clippy),
+- **M18. CI in prevzem.** GitHub Actions za Windows in macOS (test, clippy; že
+  aktivno od 11. 10. 2026),
   celoten prehod manifesta z VoiceOverjem na Urhovem MacBooku, beta DMG.
 
 ## 5. Odprta vprašanja za Urha

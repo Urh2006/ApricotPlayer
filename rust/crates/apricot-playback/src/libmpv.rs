@@ -426,6 +426,8 @@ pub struct LibMpvEngine {
     ended_reported: bool,
     /// The item plays as PCM from the installed [`crate::pcm_source`].
     pcm: Option<PcmPlayback>,
+    /// The video surface of [`MpvVideoMode::RenderApi`].
+    render: Option<crate::render::RenderAttachment>,
 }
 
 /// A PCM item: mpv positions are relative to the loaded generation.
@@ -485,10 +487,19 @@ impl LibMpvEngine {
                     "could not request libmpv log messages",
                 )
             });
-        if let Err(error) = result {
-            (api.terminate_destroy)(handle);
-            return Err(error);
-        }
+        let result = result.and_then(|()| match options.video_mode {
+            MpvVideoMode::RenderApi(id) => {
+                crate::render::RenderAttachment::attach(id, library_path, handle).map(Some)
+            }
+            _ => Ok(None),
+        });
+        let render = match result {
+            Ok(render) => render,
+            Err(error) => {
+                (api.terminate_destroy)(handle);
+                return Err(error);
+            }
+        };
         Ok(Self {
             api,
             handle: handle as usize,
@@ -502,6 +513,7 @@ impl LibMpvEngine {
             current_entry: None,
             ended_reported: false,
             pcm: None,
+            render,
         })
     }
 
@@ -1073,11 +1085,24 @@ impl PlaybackEngine for LibMpvEngine {
 
 impl Drop for LibMpvEngine {
     fn drop(&mut self) {
+        // libmpv must not destroy a client whose render context still exists;
+        // when the surface does not free it in time the client is leaked
+        // rather than crashing the application.
+        if let Some(render) = self.render.take()
+            && !render.detach(RENDER_DETACH_TIMEOUT)
+        {
+            log::error!("the video surface did not release libmpv in time");
+            return;
+        }
         unsafe {
             (self.api.terminate_destroy)(self.handle());
         }
     }
 }
+
+/// How long closing a player waits for the video surface to free libmpv's
+/// render context.
+const RENDER_DETACH_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The file name and extension of the libmpv 2 shared library.
 #[cfg(windows)]
@@ -1175,6 +1200,10 @@ fn configure_video(values: &mut Vec<(&'static str, String)>, mode: MpvVideoMode)
         MpvVideoMode::Embedded(window) => {
             values.push(("force-window", "no".to_owned()));
             values.push(("wid", window.to_string()));
+        }
+        MpvVideoMode::RenderApi(_) => {
+            values.push(("force-window", "no".to_owned()));
+            values.push(("vo", "libmpv".to_owned()));
         }
         MpvVideoMode::AudioOnly => {
             values.push(("force-window", "no".to_owned()));
