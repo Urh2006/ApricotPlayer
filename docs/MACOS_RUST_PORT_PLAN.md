@@ -116,12 +116,13 @@ pa ostane nespremenjen do enote W1, ko Urh lahko sproti preizkuša z NVDA.
 
 ### Del C: zasloni in funkcije na macOS
 
-- **M4. Ogrodje `apricot-ui-macos`.** Življenjski cikel aplikacije, glavno okno,
-  glavni meni, menijska vrstica macOS, izbira jezika ob prvem zagonu, preslikava
-  bližnjic, zadrževane tipke, Action Finder.
-- **M5. Predvajalnik.** Zvok in vgrajen video, celozaslonski način, izhodne
-  naprave, glasnost, hitrost, višina tona, EQ, ReplayGain, BPM, iskanje po času,
-  ozadno predvajanje, oglasi predvajalnika.
+- **M4. Predvajalnik.** Zvok in vgrajen video (render API iz M2), celozaslonski
+  način, izhodne naprave, glasnost, hitrost, višina tona, EQ, ReplayGain, BPM,
+  iskanje po času, zadrževane tipke, ozadno predvajanje, oglasi predvajalnika;
+  odpiranje datoteke in mape iz glavnega menija kot prvi vir. Ogrodje
+  (aplikacija, glavno okno, menijska vrstica, izbira jezika, preslikava
+  bližnjic) je bilo narejeno že v M3; Action Finder pride z nastavitvami (M10).
+- **M5.** (združeno v M4)
 - **M6. Iskanje in odkrivanje.** YouTube, SoundCloud, Trending, kanali,
   playlisti, Shorts, dinamično nalaganje, stolpci rezultatov, neposredna povezava.
 - **M7. Knjižnica.** Priljubljeni, zgodovina, zaznamki, playlisti, vrsta
