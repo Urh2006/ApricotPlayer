@@ -269,3 +269,9 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
 - **Čaka na Urha.** VoiceOver preizkus po `docs/MACOS_M2_VOICEOVER_TEST.md`
   (imena in vloge, začetnice, Enter in obnova fokusa po oknu, kontekstni meni
   s Shift+F10 in VO+Shift+M, oglasi, video na zaslonu).
+- **Rezultat Urhovega VoiceOver preizkusa (11. 10. 2026).** Vseh 13 točk deluje,
+  razen ponovljene začetnice: drugi P ne skoči vedno na naslednjo vrstico na P,
+  ker AppKit črke v kratkem času združi v iskanje "pp". Windows seznam ob isti
+  ponovljeni črki kroži med vrsticami na to črko, več različnih črk (na primer
+  "pl") pa išče po začetku. To vedenje dobi lastna obdelava začetnic v
+  seznamih macOS vmesnika (M3/M4), z enotskim testom.
