@@ -1,6 +1,10 @@
 //! The remembered `AudioVault` password, protected with Windows DPAPI exactly
 //! as Python `protect_audiovault_password` stores it, so the Python version's
 //! saved password keeps working.
+//!
+//! On macOS the secret itself is a Keychain item and the stored text is only
+//! a reference to it ([`KEYCHAIN_PREFIX`]). A DPAPI blob copied from Windows
+//! does not decrypt there, exactly like a blob of another Windows user.
 
 #![cfg_attr(windows, allow(unsafe_code))]
 
@@ -27,12 +31,17 @@ pub fn protect_password(password: &str) -> Result<String, String> {
 /// # Errors
 ///
 /// Returns the Windows error when DPAPI refuses the data.
+#[cfg(not(target_os = "macos"))]
 pub fn protect_data(data: &[u8], entropy: &[u8], description: &str) -> Result<String, String> {
     protect(data, entropy, description).map(|blob| crate::browser_cookies::base64_encode(&blob))
 }
 
 /// Reverses [`protect_data`]; `None` for anything that does not decrypt.
 pub fn unprotect_data(value: &str, entropy: &[u8]) -> Option<Vec<u8>> {
+    #[cfg(target_os = "macos")]
+    if let Some(account) = value.strip_prefix(KEYCHAIN_PREFIX) {
+        return keychain::read(account, entropy);
+    }
     unprotect(&base64_decode(value)?, entropy)
 }
 
@@ -42,10 +51,7 @@ pub fn unprotect_password(value: &str) -> String {
     if value.is_empty() {
         return String::new();
     }
-    let Some(encrypted) = base64_decode(value) else {
-        return String::new();
-    };
-    unprotect(&encrypted, ENTROPY)
+    unprotect_data(value, ENTROPY)
         .and_then(|data| String::from_utf8(data).ok())
         .unwrap_or_default()
 }
@@ -163,7 +169,90 @@ unsafe fn copy_blob(blob: &windows::Win32::Security::Cryptography::CRYPT_INTEGER
         .to_vec()
 }
 
-#[cfg(not(windows))]
+/// The start of a stored value that names a Keychain item.
+#[cfg(target_os = "macos")]
+pub const KEYCHAIN_PREFIX: &str = "keychain-v1:";
+
+/// macOS: the protected value is a reference to a Keychain item; see
+/// [`keychain`].
+///
+/// # Errors
+///
+/// Returns the Keychain error when the item cannot be saved.
+#[cfg(target_os = "macos")]
+pub fn protect_data(data: &[u8], entropy: &[u8], description: &str) -> Result<String, String> {
+    keychain::store(data, entropy, description).map(|account| format!("{KEYCHAIN_PREFIX}{account}"))
+}
+
+/// Removes the Keychain item a protected value refers to, after the
+/// application has forgotten that value. Values that are not Keychain
+/// references are ignored.
+pub fn forget_protected(value: &str) {
+    #[cfg(target_os = "macos")]
+    if let Some(account) = value.strip_prefix(KEYCHAIN_PREFIX) {
+        keychain::delete(account);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = value;
+}
+
+#[cfg(target_os = "macos")]
+mod keychain {
+    use security_framework::passwords::{
+        delete_generic_password, get_generic_password, set_generic_password,
+    };
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+
+    /// One Keychain service per application identity, so the beta never
+    /// reads or replaces the stable version's secrets.
+    fn service() -> &'static str {
+        crate::BUILD_IDENTITY.folder_names().0
+    }
+
+    /// The item name: the description and a digest of the purpose (entropy)
+    /// and the data, so saving the same secret again reuses its item and
+    /// different accounts never share one.
+    fn account_name(data: &[u8], entropy: &[u8], description: &str) -> String {
+        let mut digest = Sha256::new();
+        digest.update(entropy);
+        digest.update([0]);
+        digest.update(data);
+        let digest = digest.finalize();
+        let mut name = description.replace(':', " ");
+        name.push(' ');
+        for byte in &digest[..12] {
+            let _ = write!(name, "{byte:02x}");
+        }
+        name
+    }
+
+    /// The digest in the item name binds it to `entropy`, as DPAPI's entropy
+    /// does; a reference used with another purpose does not resolve.
+    fn entropy_matches(account: &str, data: &[u8], entropy: &[u8]) -> bool {
+        let description = account.rsplit_once(' ').map_or("", |(prefix, _)| prefix);
+        account_name(data, entropy, description) == account
+    }
+
+    pub(super) fn store(data: &[u8], entropy: &[u8], description: &str) -> Result<String, String> {
+        let account = account_name(data, entropy, description);
+        set_generic_password(service(), &account, data)
+            .map(|()| account)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(super) fn read(account: &str, entropy: &[u8]) -> Option<Vec<u8>> {
+        get_generic_password(service(), account)
+            .ok()
+            .filter(|data| entropy_matches(account, data, entropy))
+    }
+
+    pub(super) fn delete(account: &str) {
+        let _ = delete_generic_password(service(), account);
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 #[allow(clippy::unnecessary_wraps)] // Same signature as the Windows implementation.
 fn protect(_data: &[u8], _entropy: &[u8], _description: &str) -> Result<Vec<u8>, String> {
     Ok(Vec::new())
@@ -188,6 +277,23 @@ mod tests {
         assert_eq!(base64_decode("Zm9v!mFy"), None);
         assert_eq!(base64_decode("Zg="), None);
         assert_eq!(base64_decode("Zg==Zg=="), None);
+    }
+
+    /// Writes, reads and removes a real item in the login Keychain.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "uses the login Keychain, which may ask for permission"]
+    fn keychain_references_round_trip_and_are_bound_to_their_purpose() {
+        let protected = super::protect_data(b"secret", b"test entropy", "ApricotPlayer Test")
+            .expect("Keychain item");
+        assert!(protected.starts_with(super::KEYCHAIN_PREFIX));
+        assert_eq!(
+            super::unprotect_data(&protected, b"test entropy").as_deref(),
+            Some(&b"secret"[..])
+        );
+        assert_eq!(super::unprotect_data(&protected, b"other purpose"), None);
+        super::forget_protected(&protected);
+        assert_eq!(super::unprotect_data(&protected, b"test entropy"), None);
     }
 
     #[cfg(windows)]

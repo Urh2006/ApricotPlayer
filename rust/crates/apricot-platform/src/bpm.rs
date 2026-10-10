@@ -36,16 +36,12 @@ pub fn ffmpeg_executable(
     configured: &str,
     application_directory: Option<&Path>,
 ) -> Option<PathBuf> {
-    let file_name = if cfg!(windows) {
-        "ffmpeg.exe"
-    } else {
-        "ffmpeg"
-    };
+    let file_name = crate::executable_name("ffmpeg");
     let configured = configured.trim();
     if !configured.is_empty() {
         let path = PathBuf::from(configured);
         if path.is_dir() {
-            let candidate = path.join(file_name);
+            let candidate = path.join(&file_name);
             if candidate.exists() {
                 return Some(candidate);
             }
@@ -54,14 +50,14 @@ pub fn ffmpeg_executable(
         }
     }
     if let Some(bundled) = application_directory
-        .map(|directory| directory.join("ffmpeg").join("ffmpeg.exe"))
+        .map(|directory| directory.join("ffmpeg").join(&file_name))
         .filter(|candidate| candidate.exists())
     {
         return Some(bundled);
     }
     std::env::var_os("PATH").and_then(|paths| {
         std::env::split_paths(&paths)
-            .map(|directory| directory.join(file_name))
+            .map(|directory| directory.join(&file_name))
             .find(|candidate| candidate.is_file())
     })
 }

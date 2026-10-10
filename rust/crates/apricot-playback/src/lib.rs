@@ -7,14 +7,10 @@ use thiserror::Error;
 mod audio_chain;
 mod audio_filters;
 mod equalizer;
-#[cfg(windows)]
 mod libmpv;
-#[cfg(windows)]
 mod mpv_ipc;
-#[cfg(windows)]
 mod mpv_process;
 pub mod pcm_source;
-#[cfg(windows)]
 mod runtime;
 
 pub use audio_chain::{
@@ -26,16 +22,12 @@ pub use equalizer::{
     EQUALIZER_FILTER_ALT_LABEL, EQUALIZER_FILTER_LABEL, equalizer_filter_graph, equalizer_filters,
     tagged_equalizer_filter,
 };
-#[cfg(windows)]
 pub use libmpv::{LibMpvEngine, probe_audio_output_devices};
-#[cfg(windows)]
 pub use mpv_ipc::{MpvIpcClient, make_unique_ipc_path};
-#[cfg(windows)]
 pub use mpv_process::{
     InitialPlaybackState, MpvCacheConfig, MpvLaunchOptions, MpvProcessEngine, MpvVideoMode,
     RepeatMode,
 };
-#[cfg(windows)]
 pub use runtime::{PlaybackPositionReader, PlaybackRuntime, PlaybackRuntimeError, PlaybackUpdate};
 
 #[derive(Clone, Debug, PartialEq)]

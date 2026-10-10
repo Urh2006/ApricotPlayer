@@ -22,6 +22,10 @@ url.workspace = true
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7"
+sha2.workspace = true
+
 [features]
 # ApricotPlayer 2.0 in place of the Python version (same folders and names).
 stable-identity = ["apricot-updater/stable-identity"]

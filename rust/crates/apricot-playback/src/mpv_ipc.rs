@@ -1,11 +1,17 @@
-//! Bounded Windows named-pipe transport for mpv JSON IPC.
+//! Bounded mpv JSON IPC transport: a named pipe on Windows and a Unix-domain
+//! socket elsewhere.
 
-#![allow(unsafe_code)]
+#![cfg_attr(windows, allow(unsafe_code))]
 
+#[cfg(windows)]
 use std::{
     fs::{File, OpenOptions},
-    io::{Read, Write},
     os::windows::io::AsRawHandle,
+};
+#[cfg(unix)]
+use std::{io::ErrorKind, os::unix::net::UnixStream};
+use std::{
+    io::{Read as _, Write},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -15,6 +21,7 @@ use std::{
 };
 
 use serde_json::{Value, json};
+#[cfg(windows)]
 use windows::Win32::{Foundation::HANDLE, System::Pipes::PeekNamedPipe};
 
 use crate::PlaybackError;
@@ -24,6 +31,13 @@ pub(crate) const MAX_READ_CHUNK_BYTES: usize = 64 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
 static PIPE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+/// One open connection to mpv's IPC server.
+#[cfg(windows)]
+pub(crate) type IpcStream = File;
+/// One open connection to mpv's IPC server.
+#[cfg(unix)]
+pub(crate) type IpcStream = UnixStream;
 
 #[derive(Clone, Debug)]
 pub struct MpvIpcClient {
@@ -70,20 +84,16 @@ impl MpvIpcClient {
             .map_err(|error| PlaybackError::Operation(format!("mpv IPC write failed: {error}")))?;
 
         let mut response_buffer = Vec::new();
+        let mut chunk = vec![0_u8; MAX_READ_CHUNK_BYTES];
         loop {
             if Instant::now() >= deadline {
                 return Err(PlaybackError::Timeout);
             }
-            let available = available_bytes(&pipe)?;
-            if available == 0 {
+            let bytes_read = read_available(&mut pipe, &mut chunk)?;
+            if bytes_read == 0 {
                 thread::sleep(POLL_INTERVAL);
                 continue;
             }
-            let read_size = available.min(MAX_READ_CHUNK_BYTES);
-            let mut chunk = vec![0_u8; read_size];
-            let bytes_read = pipe.read(&mut chunk).map_err(|error| {
-                PlaybackError::Operation(format!("mpv IPC read failed: {error}"))
-            })?;
             response_buffer.extend_from_slice(&chunk[..bytes_read]);
             if response_buffer.len() > MAX_RESPONSE_BYTES {
                 return Err(PlaybackError::InvalidData(
@@ -96,13 +106,9 @@ impl MpvIpcClient {
         }
     }
 
-    fn open_before(&self, deadline: Instant) -> Result<File, PlaybackError> {
+    fn open_before(&self, deadline: Instant) -> Result<IpcStream, PlaybackError> {
         loop {
-            match OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(&self.pipe_path)
-            {
+            match open_ipc_stream(&self.pipe_path) {
                 Ok(pipe) => return Ok(pipe),
                 Err(error) if Instant::now() >= deadline => {
                     return Err(PlaybackError::Operation(format!(
@@ -129,13 +135,74 @@ pub fn make_unique_ipc_path() -> String {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
-    format!(
-        r"\\.\pipe\apricotplayer-rust-{}-{timestamp:x}-{sequence:x}",
+    let name = format!(
+        "apricotplayer-rust-{}-{timestamp:x}-{sequence:x}",
         std::process::id()
-    )
+    );
+    #[cfg(windows)]
+    return format!(r"\\.\pipe\{name}");
+    // Socket paths are limited to about 100 bytes, so the short temporary
+    // folder is used rather than a per-user cache folder.
+    #[cfg(unix)]
+    return std::env::temp_dir()
+        .join(format!("{name}.sock"))
+        .to_string_lossy()
+        .into_owned();
 }
 
-pub(crate) fn available_bytes(pipe: &File) -> Result<usize, PlaybackError> {
+/// Opens a connection to the IPC server at `path`.
+#[cfg(windows)]
+pub(crate) fn open_ipc_stream(path: &str) -> std::io::Result<IpcStream> {
+    OpenOptions::new().read(true).write(true).open(path)
+}
+
+/// Opens a non-blocking connection to the IPC server at `path`, so
+/// [`read_available`] never waits.
+#[cfg(unix)]
+pub(crate) fn open_ipc_stream(path: &str) -> std::io::Result<IpcStream> {
+    let stream = UnixStream::connect(path)?;
+    stream.set_nonblocking(true)?;
+    Ok(stream)
+}
+
+/// Reads whatever the server has sent, at most `buffer.len()` bytes, without
+/// waiting; `Ok(0)` means nothing is available yet.
+#[cfg(unix)]
+pub(crate) fn read_available(
+    stream: &mut IpcStream,
+    buffer: &mut [u8],
+) -> Result<usize, PlaybackError> {
+    match stream.read(buffer) {
+        // The server closed the socket, as a broken pipe does on Windows.
+        Ok(0) => Err(PlaybackError::Operation(
+            "mpv IPC read failed: the connection was closed".to_owned(),
+        )),
+        Ok(read) => Ok(read),
+        Err(error) if error.kind() == ErrorKind::WouldBlock => Ok(0),
+        Err(error) => Err(PlaybackError::Operation(format!(
+            "mpv IPC read failed: {error}"
+        ))),
+    }
+}
+
+/// Reads whatever the server has sent, at most `buffer.len()` bytes, without
+/// waiting; `Ok(0)` means nothing is available yet.
+#[cfg(windows)]
+pub(crate) fn read_available(
+    pipe: &mut IpcStream,
+    buffer: &mut [u8],
+) -> Result<usize, PlaybackError> {
+    let available = available_bytes(pipe)?;
+    if available == 0 {
+        return Ok(0);
+    }
+    let read_size = available.min(buffer.len());
+    pipe.read(&mut buffer[..read_size])
+        .map_err(|error| PlaybackError::Operation(format!("mpv IPC read failed: {error}")))
+}
+
+#[cfg(windows)]
+fn available_bytes(pipe: &IpcStream) -> Result<usize, PlaybackError> {
     let mut available = 0_u32;
     // SAFETY: `pipe` owns a live Windows file handle for this call. The only
     // output pointer references `available`, which remains valid and writable.
@@ -178,6 +245,43 @@ mod tests {
     use serde_json::json;
 
     use super::take_matching_response;
+
+    /// A real mpv answers over the platform transport (named pipe or Unix
+    /// socket) and a closed server is reported instead of waited for.
+    #[test]
+    #[ignore = "requires APRICOT_TEST_MPV_EXECUTABLE"]
+    fn real_mpv_answers_over_the_platform_transport() {
+        let executable = std::env::var_os("APRICOT_TEST_MPV_EXECUTABLE").expect("mpv");
+        let path = super::make_unique_ipc_path();
+        let mut mpv = std::process::Command::new(executable)
+            .args(["--idle=yes", "--no-config", "--no-video", "--ao=null"])
+            .arg(format!("--input-ipc-server={path}"))
+            .spawn()
+            .expect("start mpv");
+        let client = super::MpvIpcClient::new(path.clone());
+        let response = client
+            .request(
+                json!(["get_property", "idle-active"]),
+                std::time::Duration::from_secs(10),
+            )
+            .expect("response");
+        assert_eq!(response["data"], json!(true));
+        let mut stream = super::open_ipc_stream(&path).expect("second connection");
+        mpv.kill().expect("stop mpv");
+        mpv.wait().expect("mpv exit");
+        let mut buffer = [0_u8; 64];
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let closed = loop {
+            match super::read_available(&mut stream, &mut buffer) {
+                Err(_) => break true,
+                Ok(_) if std::time::Instant::now() >= deadline => break false,
+                Ok(_) => std::thread::sleep(std::time::Duration::from_millis(10)),
+            }
+        };
+        assert!(closed, "a closed mpv was not reported");
+        #[cfg(unix)]
+        let _ = std::fs::remove_file(&path);
+    }
 
     #[test]
     fn ignores_events_and_returns_only_the_matching_response() {

@@ -1175,11 +1175,11 @@ pub fn spawn_youtube_runtime(
     }))
 }
 
-const fn component_executable(backend: YoutubeBackend) -> &'static str {
-    match backend {
-        YoutubeBackend::YtDlp => "yt-dlp.exe",
-        YoutubeBackend::RustyYtdl => "apricot-youtube-helper.exe",
-    }
+fn component_executable(backend: YoutubeBackend) -> String {
+    crate::executable_name(match backend {
+        YoutubeBackend::YtDlp => "yt-dlp",
+        YoutubeBackend::RustyYtdl => "apricot-youtube-helper",
+    })
 }
 
 fn validate_config(config: &YoutubeSessionConfig) -> Result<(), YtDlpError> {
@@ -1274,18 +1274,19 @@ fn is_youtube_recoverable_error(message: &str) -> bool {
 /// Python `bundled_node_executable`: the Node.js runtime next to the
 /// application, otherwise one on `PATH`.
 fn node_executable() -> Option<PathBuf> {
+    let file_name = crate::executable_name("node");
     let bundled = std::env::current_exe()
         .ok()
         .and_then(|executable| {
             executable
                 .parent()
-                .map(|parent| parent.join("node").join("node.exe"))
+                .map(|parent| parent.join("node").join(&file_name))
         })
         .filter(|path| path.is_file());
     bundled.or_else(|| {
         std::env::var_os("PATH").and_then(|paths| {
             std::env::split_paths(&paths)
-                .map(|directory| directory.join("node.exe"))
+                .map(|directory| directory.join(&file_name))
                 .find(|path| path.is_file())
         })
     })
@@ -1968,10 +1969,14 @@ mod tests {
 
     #[test]
     fn backend_selection_uses_packaged_component_names() {
-        assert_eq!(component_executable(YoutubeBackend::YtDlp), "yt-dlp.exe");
+        let suffix = if cfg!(windows) { ".exe" } else { "" };
+        assert_eq!(
+            component_executable(YoutubeBackend::YtDlp),
+            format!("yt-dlp{suffix}")
+        );
         assert_eq!(
             component_executable(YoutubeBackend::RustyYtdl),
-            "apricot-youtube-helper.exe"
+            format!("apricot-youtube-helper{suffix}")
         );
     }
 

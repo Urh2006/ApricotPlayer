@@ -949,7 +949,7 @@ async fn open_session(
     }
     let listener = player.get_player_event_channel();
     let mixer: Arc<dyn Mixer> = Arc::new(crate::playback::KeptVolumeMixer::default());
-    let computer = std::env::var("COMPUTERNAME").unwrap_or_default();
+    let computer = apricot_platform::computer_name();
     let connect = ConnectConfig {
         name: if computer.is_empty() {
             "ApricotPlayer".to_owned()

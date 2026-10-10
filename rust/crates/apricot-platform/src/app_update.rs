@@ -297,10 +297,11 @@ pub fn user_components_directory() -> Option<PathBuf> {
 /// `components` folder wins over the bundled one.
 #[must_use]
 pub fn preferred_ytdlp_executable(bundled_components: &Path) -> PathBuf {
+    let file_name = crate::executable_name("yt-dlp");
     user_components_directory()
-        .map(|folder| folder.join("yt-dlp.exe"))
+        .map(|folder| folder.join(&file_name))
         .filter(|path| path.is_file())
-        .unwrap_or_else(|| bundled_components.join("yt-dlp.exe"))
+        .unwrap_or_else(|| bundled_components.join(&file_name))
 }
 
 /// Python `is_installed_build`: an installer left `unins000.exe`, or the app

@@ -1,4 +1,5 @@
-//! Per-user Windows single-instance ownership.
+//! Per-user single-instance ownership: a named mutex on Windows and an
+//! exclusive lock on a per-user file elsewhere.
 
 #![cfg_attr(windows, allow(unsafe_code))]
 
@@ -21,6 +22,10 @@ pub enum SingleInstanceOutcome {
 pub struct SingleInstanceGuard {
     #[cfg(windows)]
     handle: HANDLE,
+    /// The locked file; the lock ends when the file is closed, also when the
+    /// process ends abnormally.
+    #[cfg(unix)]
+    _lock: std::fs::File,
 }
 
 /// Acquires the process-lifetime mutex for one `ApricotPlayer` identity.
@@ -63,10 +68,27 @@ fn acquire_named(name: &str) -> Result<SingleInstanceOutcome, PlatformError> {
     }
 }
 
-#[cfg(not(windows))]
-#[allow(clippy::unnecessary_wraps)] // Same signature as the Windows implementation.
-fn acquire_named(_name: &str) -> Result<SingleInstanceOutcome, PlatformError> {
-    Ok(SingleInstanceOutcome::Primary(SingleInstanceGuard {}))
+/// The lock file lives in the per-user temporary folder (`$TMPDIR` on macOS),
+/// so different users never see each other's instance.
+#[cfg(unix)]
+fn acquire_named(name: &str) -> Result<SingleInstanceOutcome, PlatformError> {
+    let file_name = name.strip_prefix(r"Local\").unwrap_or(name);
+    let path = std::env::temp_dir().join(format!("{file_name}.lock"));
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|error| PlatformError::Operation(format!("single-instance lock: {error}")))?;
+    match file.try_lock() {
+        Ok(()) => Ok(SingleInstanceOutcome::Primary(SingleInstanceGuard {
+            _lock: file,
+        })),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(SingleInstanceOutcome::Secondary),
+        Err(std::fs::TryLockError::Error(error)) => Err(PlatformError::Operation(format!(
+            "single-instance lock: {error}"
+        ))),
+    }
 }
 
 #[cfg(windows)]
@@ -79,13 +101,10 @@ impl Drop for SingleInstanceGuard {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(windows)]
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[cfg(windows)]
     use super::{SingleInstanceOutcome, acquire_named};
 
-    #[cfg(windows)]
     #[test]
     fn a_named_mutex_has_exactly_one_primary_owner() {
         let nonce = SystemTime::now()

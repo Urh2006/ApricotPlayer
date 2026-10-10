@@ -1079,20 +1079,30 @@ impl Drop for LibMpvEngine {
     }
 }
 
+/// The file name and extension of the libmpv 2 shared library.
+#[cfg(windows)]
+const LIBRARY: (&str, &str) = ("libmpv-2.dll", "dll");
+#[cfg(target_os = "macos")]
+const LIBRARY: (&str, &str) = ("libmpv.2.dylib", "dylib");
+#[cfg(all(unix, not(target_os = "macos")))]
+const LIBRARY: (&str, &str) = ("libmpv.so.2", "so");
+const LIBRARY_NAME: &str = LIBRARY.0;
+const LIBRARY_EXTENSION: &str = LIBRARY.1;
+
 fn library_path(options: &MpvLaunchOptions) -> PathBuf {
     if let Some(path) = &options.library {
         return path.clone();
     }
-    if options
-        .executable
-        .extension()
-        .is_some_and(|extension| extension.to_string_lossy().eq_ignore_ascii_case("dll"))
-    {
+    if options.executable.extension().is_some_and(|extension| {
+        extension
+            .to_string_lossy()
+            .eq_ignore_ascii_case(LIBRARY_EXTENSION)
+    }) {
         return options.executable.clone();
     }
     options.executable.parent().map_or_else(
-        || PathBuf::from("libmpv-2.dll"),
-        |parent| parent.join("libmpv-2.dll"),
+        || PathBuf::from(LIBRARY_NAME),
+        |parent| parent.join(LIBRARY_NAME),
     )
 }
 
@@ -1456,10 +1466,12 @@ mod tests {
         let chapter_media = folder.path().join("chapters.mka");
         let plain_media = folder.path().join("plain.wav");
         for (output, with_chapters) in [(&chapter_media, true), (&plain_media, false)] {
+            #[cfg(windows)]
             use std::os::windows::process::CommandExt;
             let mut command = std::process::Command::new(
                 std::env::var_os("APRICOT_TEST_FFMPEG").expect("FFmpeg"),
             );
+            #[cfg(windows)]
             command.creation_flags(0x0800_0000);
             command.args([
                 "-nostdin",
@@ -1660,11 +1672,19 @@ mod tests {
 
     #[test]
     fn library_defaults_to_the_runtime_directory() {
-        let options = MpvLaunchOptions::new(Path::new(r"C:\Apricot\mpv\mpv.exe"));
-        assert_eq!(
-            library_path(&options),
-            Path::new(r"C:\Apricot\mpv\libmpv-2.dll")
-        );
+        #[cfg(windows)]
+        {
+            let options = MpvLaunchOptions::new(Path::new(r"C:\Apricot\mpv\mpv.exe"));
+            assert_eq!(
+                library_path(&options),
+                Path::new(r"C:\Apricot\mpv\libmpv-2.dll")
+            );
+        }
+        let folder = Path::new("apricot").join("mpv");
+        let options = MpvLaunchOptions::new(folder.join("mpv"));
+        assert_eq!(library_path(&options), folder.join(super::LIBRARY_NAME));
+        let library = folder.join(super::LIBRARY_NAME);
+        assert_eq!(library_path(&MpvLaunchOptions::new(&library)), library);
     }
 
     #[test]
@@ -1986,10 +2006,12 @@ mod tests {
     }
 
     fn short_fixture(folder: &Path) -> MediaItem {
+        #[cfg(windows)]
         use std::os::windows::process::CommandExt;
         let wav = folder.join("short.wav");
         let mut command =
             std::process::Command::new(std::env::var_os("APRICOT_TEST_FFMPEG").expect("FFmpeg"));
+        #[cfg(windows)]
         command.creation_flags(0x0800_0000);
         command
             .args([

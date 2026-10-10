@@ -6,7 +6,7 @@ use crate::{ApplicationIdentity, PlatformPaths};
 
 #[derive(Debug, Error)]
 pub enum PathDiscoveryError {
-    #[error("required Windows environment variable {0} is missing")]
+    #[error("required environment variable {0} is missing")]
     MissingEnvironment(&'static str),
     #[error("current executable path is unavailable: {0}")]
     CurrentExecutable(#[from] io::Error),
@@ -41,7 +41,34 @@ pub fn discover_windows_beta_paths() -> Result<PlatformPaths, PathDiscoveryError
 /// Returns [`PathDiscoveryError`] when required environment values or the
 /// executable directory are unavailable.
 pub fn discover_app_paths() -> Result<PlatformPaths, PathDiscoveryError> {
+    #[cfg(target_os = "macos")]
+    return discover_macos_paths_for_identity(crate::BUILD_IDENTITY);
+    #[cfg(not(target_os = "macos"))]
     discover_windows_paths_for_identity(crate::BUILD_IDENTITY)
+}
+
+/// The macOS folders under the user's `Library`, named like the Windows
+/// app-data folders.
+#[cfg(target_os = "macos")]
+fn discover_macos_paths_for_identity(
+    identity: ApplicationIdentity,
+) -> Result<PlatformPaths, PathDiscoveryError> {
+    let home = env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or(PathDiscoveryError::MissingEnvironment("HOME"))?;
+    Ok(PlatformPaths::from_macos_home_for_identity(
+        &home,
+        runtime_directory()?.as_path(),
+        identity,
+    ))
+}
+
+fn runtime_directory() -> Result<PathBuf, PathDiscoveryError> {
+    let executable = env::current_exe()?;
+    executable
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .ok_or(PathDiscoveryError::MissingRuntimeParent(executable))
 }
 
 fn discover_windows_paths_for_identity(
@@ -53,12 +80,9 @@ fn discover_windows_paths_for_identity(
     let user_home = env::var_os("USERPROFILE")
         .map(PathBuf::from)
         .ok_or(PathDiscoveryError::MissingEnvironment("USERPROFILE"))?;
-    let executable = env::current_exe()?;
-    let runtime = executable
-        .parent()
-        .ok_or_else(|| PathDiscoveryError::MissingRuntimeParent(executable.clone()))?;
+    let runtime = runtime_directory()?;
     Ok(PlatformPaths::from_windows_roots_for_identity(
-        &roaming, &user_home, runtime, identity,
+        &roaming, &user_home, &runtime, identity,
     ))
 }
 
@@ -69,6 +93,33 @@ mod tests {
     use std::path::Path;
 
     use crate::{ApplicationIdentity, PlatformPaths};
+
+    #[test]
+    fn macos_paths_use_the_library_folders_with_the_windows_names() {
+        let home = Path::new("/Users/tester");
+        let runtime = Path::new("/Applications/ApricotPlayer.app/Contents/MacOS");
+        let stable =
+            PlatformPaths::from_macos_home_for_identity(home, runtime, ApplicationIdentity::Stable);
+        let support = home.join("Library").join("Application Support");
+        assert_eq!(stable.app_data, support.join("ApricotPlayer"));
+        assert_eq!(
+            stable.legacy_app_data,
+            support.join("UrhasaurusYouTubePlayer")
+        );
+        assert_eq!(stable.cache, home.join("Library/Caches/ApricotPlayer"));
+        assert_eq!(stable.logs, home.join("Library/Logs/ApricotPlayer"));
+        assert_eq!(stable.downloads, home.join("Downloads/ApricotPlayer"));
+        assert_eq!(stable.runtime, runtime);
+        let beta = PlatformPaths::from_macos_home_for_identity(
+            home,
+            runtime,
+            ApplicationIdentity::RustBeta,
+        );
+        assert_eq!(beta.app_data, support.join("ApricotPlayer2Beta"));
+        assert_eq!(beta.legacy_app_data, support.join("ApricotPlayer"));
+        assert_eq!(beta.cache, home.join("Library/Caches/ApricotPlayer2Beta"));
+        assert_eq!(beta.downloads, stable.downloads);
+    }
 
     // Windows paths and tools; macOS equivalents belong to the macOS units.
     #[cfg(windows)]

@@ -190,3 +190,41 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
 - Na Windows naj Urh požene `cargo test --workspace` in `cargo clippy
   --workspace --all-targets`; vedenje programa se ni spremenilo, zato NVDA
   preizkus ni potreben.
+
+### M1: platformne storitve za macOS (11. 10. 2026)
+
+- **Predvajanje.** `libmpv`, predvajalni čas (`PlaybackRuntime`) in rezervna
+  pot z zunanjim mpv se zdaj prevedejo tudi na macOS. Ime knjižnice je
+  odvisno od platforme (`libmpv-2.dll`, `libmpv.2.dylib`). Rezervni mpv IPC na
+  macOS uporablja Unix socket v začasni mapi; na Windows ostane named pipe z
+  enakim imenom kot prej. Branje gre zdaj prek skupne `read_available`; edina
+  vidna razlika na Windows je besedilo napake rezervne poti ("mpv IPC read
+  failed" namesto "mpv event read failed").
+- **Poti.** macOS uporablja `~/Library/Application Support/<ime>`,
+  `~/Library/Caches/<ime>` in `~/Library/Logs/<ime>`, mapa za prenose je
+  `~/Downloads/ApricotPlayer`. Imena map in pravilo, da beta bere stabilno
+  verzijo le kot vir migracije, so enaki kot na Windows
+  (`ApplicationIdentity::folder_names`).
+- **Pomožni programi.** `executable_name` doda `.exe` samo na Windows; ffmpeg,
+  yt-dlp, pomočnik in Node se iščejo z njim. Windows imena so nespremenjena.
+- **Skrivnosti.** Na macOS je geslo AudioVault in Spotify poverilnice shranjen
+  Keychain element (storitev po identiteti aplikacije); v nastavitvah ostane
+  le sklic `keychain-v1:...`. DPAPI blob z Windows se na Macu ne dešifrira, kot
+  je zahtevano. `forget_protected` odstrani element; UI ga začne klicati v M12
+  in M13.
+- **Enojna instanca.** Na macOS zaklepanje datoteke v uporabniški začasni
+  mapi; test, ki je bil prej samo za Windows, zdaj teče na obeh.
+- **Ostalo.** `shell::open_url` in `shell::open_path` (Explorer na Windows,
+  `open` na macOS) za AppKit UI; ime Spotify naprave na macOS je ime
+  računalnika iz `scutil`.
+- **Preverjeno na macOS.** `cargo test --workspace`: 627 uspešnih, 0
+  neuspešnih, 27 izključenih. Pravi testi z Homebrew libmpv 0.41: 8 od 9
+  uspešnih; pravi IPC test z mpv prek Unix socketa uspešen; Keychain test
+  uspešen. Clippy brez opozoril na macOS in za `x86_64-pc-windows-gnu`,
+  `cargo fmt --check` čist.
+- **Odprto za M5 in M13.** `real_libmpv_plays_a_pcm_source_across_a_seek_to_its_end`
+  (pot Spotify PCM) na macOS ne uspe: po iskanju na 1,5 s ni več položajev,
+  samo konec. Na Windows je test uspešen. Razlog še ni znan.
+- **Na Windows ob koncu.** `cargo test --workspace`, `cargo clippy
+  --workspace --all-targets`, pravi libmpv testi in kratek preizkus
+  predvajanja (predvajanje, premik, naslednji posnetek).

@@ -2,8 +2,8 @@
 
 use std::{
     ffi::OsString,
-    fs::{File, OpenOptions},
-    io::{Read, Write},
+    fs::File,
+    io::Write,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
@@ -23,13 +23,16 @@ use serde_json::{Value, json};
 
 use crate::{
     MpvIpcClient, PlaybackCommand, PlaybackEngine, PlaybackError, PlaybackEvent, PlaybackMediaInfo,
-    mpv_ipc::{MAX_READ_CHUNK_BYTES, MAX_RESPONSE_BYTES, available_bytes},
+    mpv_ipc::{
+        IpcStream, MAX_READ_CHUNK_BYTES, MAX_RESPONSE_BYTES, open_ipc_stream, read_available,
+    },
 };
 
 const IPC_START_TIMEOUT: Duration = Duration::from_secs(4);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(1);
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const EVENT_CHANNEL_CAPACITY: usize = 128;
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -553,16 +556,9 @@ fn event_monitor_inner(
     let mut elapsed = 0.0;
     let mut duration = None;
     let mut media_info = PlaybackMediaInfo::default();
+    let mut chunk = vec![0_u8; MAX_READ_CHUNK_BYTES];
     while !stop.load(Ordering::Acquire) {
-        let available = available_bytes(&pipe)?;
-        if available == 0 {
-            thread::sleep(EVENT_POLL_INTERVAL);
-            continue;
-        }
-        let mut chunk = vec![0_u8; available.min(MAX_READ_CHUNK_BYTES)];
-        let read = pipe
-            .read(&mut chunk)
-            .map_err(|error| PlaybackError::Operation(format!("mpv event read failed: {error}")))?;
+        let read = read_available(&mut pipe, &mut chunk)?;
         if read == 0 {
             thread::sleep(EVENT_POLL_INTERVAL);
             continue;
@@ -587,9 +583,9 @@ fn event_monitor_inner(
     Ok(())
 }
 
-fn open_event_pipe(path: &str, deadline: Instant) -> Result<File, PlaybackError> {
+fn open_event_pipe(path: &str, deadline: Instant) -> Result<IpcStream, PlaybackError> {
     loop {
-        match OpenOptions::new().read(true).write(true).open(path) {
+        match open_ipc_stream(path) {
             Ok(pipe) => return Ok(pipe),
             Err(error) if Instant::now() >= deadline => {
                 return Err(PlaybackError::Operation(format!(

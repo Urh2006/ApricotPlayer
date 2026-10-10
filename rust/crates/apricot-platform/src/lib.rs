@@ -18,6 +18,7 @@ pub mod lyrics;
 pub mod paths;
 pub mod podcast_directory;
 pub mod rss_client;
+pub mod shell;
 pub mod single_instance;
 pub mod soundcloud_search;
 pub mod transcript;
@@ -86,6 +87,33 @@ pub const fn product_name() -> &'static str {
     }
 }
 
+/// The computer's name as the user sees it: `COMPUTERNAME` on Windows and the
+/// Sharing name (`scutil --get ComputerName`) on macOS; empty when unknown.
+#[must_use]
+pub fn computer_name() -> String {
+    #[cfg(target_os = "macos")]
+    return std::process::Command::new("/usr/sbin/scutil")
+        .args(["--get", "ComputerName"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .unwrap_or_default();
+    #[cfg(not(target_os = "macos"))]
+    std::env::var("COMPUTERNAME").unwrap_or_default()
+}
+
+/// The file name of a bundled or `PATH` program: `name.exe` on Windows and
+/// `name` elsewhere.
+#[must_use]
+pub fn executable_name(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_owned()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlatformPaths {
     pub app_data: PathBuf,
@@ -112,10 +140,7 @@ impl PlatformPaths {
         runtime: &Path,
         identity: ApplicationIdentity,
     ) -> Self {
-        let (app_name, legacy_name) = match identity {
-            ApplicationIdentity::Stable => ("ApricotPlayer", "UrhasaurusYouTubePlayer"),
-            ApplicationIdentity::RustBeta => ("ApricotPlayer2Beta", "ApricotPlayer"),
-        };
+        let (app_name, legacy_name) = identity.folder_names();
         let app_data = roaming_app_data.join(app_name);
         Self {
             legacy_app_data: roaming_app_data.join(legacy_name),
@@ -124,6 +149,37 @@ impl PlatformPaths {
             downloads: user_home.join("Downloads").join("ApricotPlayer"),
             runtime: runtime.to_owned(),
             app_data,
+        }
+    }
+
+    /// The macOS layout: durable data in `Application Support`, cache in
+    /// `Caches` and logs in `Logs`, each folder named as on Windows.
+    pub fn from_macos_home_for_identity(
+        home: &Path,
+        runtime: &Path,
+        identity: ApplicationIdentity,
+    ) -> Self {
+        let (app_name, legacy_name) = identity.folder_names();
+        let library = home.join("Library");
+        let support = library.join("Application Support");
+        Self {
+            app_data: support.join(app_name),
+            legacy_app_data: support.join(legacy_name),
+            cache: library.join("Caches").join(app_name),
+            logs: library.join("Logs").join(app_name),
+            downloads: home.join("Downloads").join("ApricotPlayer"),
+            runtime: runtime.to_owned(),
+        }
+    }
+}
+
+impl ApplicationIdentity {
+    /// The app-data folder name and the folder this identity migrates from.
+    #[must_use]
+    pub const fn folder_names(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Stable => ("ApricotPlayer", "UrhasaurusYouTubePlayer"),
+            Self::RustBeta => ("ApricotPlayer2Beta", "ApricotPlayer"),
         }
     }
 }
