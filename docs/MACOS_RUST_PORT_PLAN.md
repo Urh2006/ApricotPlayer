@@ -235,3 +235,37 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
 - **Na Windows ob koncu.** `cargo test --workspace`, `cargo clippy
   --workspace --all-targets`, pravi libmpv testi in kratek preizkus
   predvajanja (predvajanje, premik, naslednji posnetek).
+
+### M2: AppKit in VoiceOver spike (11. 10. 2026)
+
+- **Okolje za Windows teste.** Rosetta 2 je nameščena. Wine ni na voljo, ker ga
+  je Homebrew 1. 9. 2026 onemogočil (ne prestane Gatekeeperja). Namesto tega
+  `.github/workflows/rust-ci.yml` ob vsakem pushu na `rust-2.0` požene fmt,
+  clippy (`-D warnings`) in teste na Windows in macOS GitHub runnerjih;
+  repozitorij je javen, zato je brezplačno. Prvi zagon: Windows 697 uspešnih,
+  macOS 627 uspešnih, 0 neuspešnih.
+- **Spike** (`rust/tools/macos-accessibility-spike`, zagon s
+  `rust/scripts/run_macos_spike.sh`, navodila v
+  `docs/MACOS_M2_VOICEOVER_TEST.md`): AppKit prek `objc2` 0.6 in
+  `objc2-app-kit` 0.3 deluje iz Rusta. Samodejno preverjeno (`--self-test`):
+  izrecni vrstni red Tab in Shift+Tab gre točno skozi vse kontrole, kar zahteva
+  lastno obdelavo Tab v podrazredih gumbov, pojavnega menija, drsnika in
+  seznama (privzeto macOS brez "Full Keyboard Access" gumbov ne vključi v Tab);
+  seznam ima ime "Main menu" in vlogo `AXTable`; drsnik ima opis vrednosti
+  "50 percent".
+- **Video.** libmpv na macOS ne zna risati v tuj `NSView` prek `wid` (odpre
+  svoje okno). Zato ima `apricot-playback` zdaj OpenGL render API
+  (`MpvVideoMode::RenderApi`, `MpvRenderHost`, modul `render.rs`): UI riše v
+  `CAOpenGLLayer` na glavni niti, motor ostane na svoji niti, ob zapiranju pa
+  motor počaka (največ 2 s), da UI sprosti render kontekst, preden uniči
+  odjemalca. Samodejno preverjeno: približno 30 slik na sekundo v oknu
+  aplikacije, brez dodatnega mpv okna. Windows pot (`Embedded`) je
+  nespremenjena.
+- **Opažanje.** Pravi libmpv testi na Macu niso vedno stabilni: pri zaporednih
+  zagonih občasno ne uspe po en test (`starting_paused`,
+  `plays_a_pcm_source_across_a_seek_to_its_end`,
+  `reports_the_end_when_the_source_closes_a_waiting_generation`), naslednji
+  zagon pa je uspešen. Gre za časovno občutljivost; razčistim v M5.
+- **Čaka na Urha.** VoiceOver preizkus po `docs/MACOS_M2_VOICEOVER_TEST.md`
+  (imena in vloge, začetnice, Enter in obnova fokusa po oknu, kontekstni meni
+  s Shift+F10 in VO+Shift+M, oglasi, video na zaslonu).
