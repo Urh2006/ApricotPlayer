@@ -189,13 +189,15 @@ pub fn choose_from_list(mtm: MainThreadMarker, request: &ChoiceRequest<'_>) -> O
     dialog.ivars().selected.get()
 }
 
-/// Windows `prompt_name`: the prompt, a text field (focused) with OK and
+/// Windows `prompt_name_with_initial`: the prompt, a text field (focused,
+/// holding `initial` selected) with OK and
 /// Cancel. Return accepts, Escape and closing cancel; `None` when cancelled.
 /// The text is returned as typed.
 pub fn prompt_text(
     mtm: MainThreadMarker,
     title: &str,
     prompt: &str,
+    initial: &str,
     ok: &str,
     cancel: &str,
 ) -> Option<String> {
@@ -241,6 +243,13 @@ pub fn prompt_text(
         ),
     );
     field.setAccessibilityLabel(Some(&NSString::from_str(prompt)));
+    field.setStringValue(&NSString::from_str(initial));
+    // Return in the field accepts, as the Windows edit subclass does.
+    // SAFETY: the dialog outlives the field.
+    unsafe {
+        field.setTarget(Some(target));
+        field.setAction(Some(sel!(accept:)));
+    }
     content.addSubview(&field);
 
     let ok = Button::new(mtm, ok, target, sel!(accept:));
@@ -248,8 +257,6 @@ pub fn prompt_text(
         NSPoint::new(width - MARGIN - BUTTON_WIDTH * 2.0 - 8.0, MARGIN),
         NSSize::new(BUTTON_WIDTH, BUTTON_HEIGHT),
     ));
-    // Return in the field presses OK, as the Windows edit subclass does.
-    ok.setKeyEquivalent(&NSString::from_str("\r"));
     content.addSubview(&ok);
     let cancel = Button::new(mtm, cancel, target, sel!(cancel:));
     cancel.setFrame(NSRect::new(

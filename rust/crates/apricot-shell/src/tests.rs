@@ -169,6 +169,9 @@ mod equalizer {
     #[derive(Default)]
     pub(super) struct Ui {
         pub(super) announcements: Vec<String>,
+        pub(super) bookmarks: Option<crate::BookmarkDialog>,
+        /// What a text prompt returns; `None` cancels.
+        pub(super) prompt_answer: Option<String>,
     }
 
     impl ShellUi for Ui {
@@ -189,6 +192,19 @@ mod equalizer {
             None
         }
         fn open_equalizer(&mut self) {}
+        fn open_bookmarks(&mut self, dialog: crate::BookmarkDialog) {
+            self.bookmarks = Some(dialog);
+        }
+        fn prompt_text(
+            &mut self,
+            _title: &str,
+            _prompt: &str,
+            _initial: &str,
+            _ok: &str,
+            _cancel: &str,
+        ) -> Option<String> {
+            self.prompt_answer.clone()
+        }
         fn copy_text(&mut self, _text: &str) -> bool {
             true
         }
@@ -453,6 +469,73 @@ mod player_tools {
                 shell.text("no_selection"),
                 shell.text("no_selection"),
             ]
+        );
+    }
+}
+
+mod bookmarks {
+    use super::equalizer::Ui;
+    use crate::{BookmarkRequest, BookmarkResponse};
+
+    #[test]
+    fn the_bookmarks_window_opens_from_the_main_menu_and_is_empty() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell.activate_action(&mut ui, "open_bookmarks");
+        let dialog = ui.bookmarks.take().expect("bookmarks window");
+        assert!(dialog.entries.is_empty());
+        assert!(!dialog.can_add, "nothing plays");
+        assert!(!dialog.current_only && !dialog.return_on_close);
+        assert_eq!(dialog.empty, shell.text("bookmarks_empty"));
+        shell.activate_action(&mut ui, "player_add_bookmark");
+        assert_eq!(ui.announcements, [shell.text("no_player")]);
+    }
+
+    #[test]
+    fn rename_and_delete_refresh_the_list() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        let bookmark = shell
+            .application
+            .add_bookmark(
+                "Start",
+                65.0,
+                crate::local_file_item(std::path::Path::new("/tmp/a.mp3")),
+                1.0,
+            )
+            .expect("saved")
+            .expect("added");
+        ui.prompt_answer = Some("Chorus".to_owned());
+        let response =
+            shell.bookmark_request(&mut ui, false, BookmarkRequest::Rename(bookmark.id.clone()));
+        let BookmarkResponse::Refresh {
+            entries,
+            selected_id,
+        } = response
+        else {
+            panic!("rename refreshes the list");
+        };
+        assert_eq!(selected_id.as_deref(), Some(bookmark.id.as_str()));
+        assert!(
+            entries[0].label.starts_with("1. 1:05 | Chorus"),
+            "{entries:?}"
+        );
+        assert_eq!(
+            ui.announcements.last(),
+            Some(&shell.text("bookmark_renamed").replace("{name}", "Chorus"))
+        );
+
+        let response = shell.bookmark_request(&mut ui, false, BookmarkRequest::Delete(bookmark.id));
+        assert_eq!(
+            response,
+            BookmarkResponse::Refresh {
+                entries: Vec::new(),
+                selected_id: None
+            }
+        );
+        assert_eq!(
+            ui.announcements.last(),
+            Some(&shell.text("bookmark_deleted"))
         );
     }
 }

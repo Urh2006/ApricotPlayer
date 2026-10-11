@@ -95,3 +95,113 @@ pub fn focused_value(window: &NSWindow) -> String {
             .unwrap_or_default()
     }
 }
+
+/// The steps of `APRICOT_MACOS_SELF_TEST=tools`: name, key and whether the
+/// key opens a modal window that `modalSelfTestKeys:` answers.
+#[allow(clippy::too_many_lines)] // One line per scripted key.
+pub fn tools_steps() -> Vec<(&'static str, Option<Key>, bool)> {
+    use crate::keys;
+    use objc2_app_kit::NSEventModifierFlags as Flags;
+    let with = |code, text, flags| Some(Key { code, text, flags });
+    let plain = |code, text| Some(key(code, text));
+    let command_shift = Flags::Command | Flags::Shift;
+    vec![
+        ("opened", None, false),
+        (
+            "Option+Right (next chapter)",
+            with(keys::KEY_RIGHT, "\u{f703}", Flags::Option),
+            false,
+        ),
+        (
+            "Option+Right (next chapter)",
+            with(keys::KEY_RIGHT, "\u{f703}", Flags::Option),
+            false,
+        ),
+        (
+            "Option+Left (previous chapter)",
+            with(keys::KEY_LEFT, "\u{f702}", Flags::Option),
+            false,
+        ),
+        (
+            "Command+Shift+G (ReplayGain)",
+            with(5, "G", command_shift),
+            false,
+        ),
+        ("B (BPM)", plain(11, "b"), false),
+        ("waiting for BPM", None, false),
+        ("waiting for BPM", None, false),
+        ("L (copy path)", plain(37, "l"), false),
+        (
+            "Command+Shift+L (timestamp link)",
+            with(37, "L", command_shift),
+            false,
+        ),
+        (
+            "Command+D (stream URL)",
+            with(2, "d", Flags::Command),
+            false,
+        ),
+        (
+            "Command+Shift+C (chapter list)",
+            with(8, "C", command_shift),
+            true,
+        ),
+        ("after the chapter list", None, false),
+        ("[ (clip start)", plain(keys::KEY_LEFT_BRACKET, "["), false),
+        (
+            "Option+Left (previous chapter)",
+            with(keys::KEY_LEFT, "\u{f702}", Flags::Option),
+            false,
+        ),
+        (
+            "] (clip end before start)",
+            plain(keys::KEY_RIGHT_BRACKET, "]"),
+            false,
+        ),
+        ("P (preview)", plain(35, "p"), false),
+        (
+            "[ (clear clip start)",
+            plain(keys::KEY_LEFT_BRACKET, "["),
+            false,
+        ),
+        ("[ (clip start)", plain(keys::KEY_LEFT_BRACKET, "["), false),
+        (
+            "Option+Right (next chapter)",
+            with(keys::KEY_RIGHT, "\u{f703}", Flags::Option),
+            false,
+        ),
+        ("] (clip end)", plain(keys::KEY_RIGHT_BRACKET, "]"), false),
+        (
+            "Option+Left (previous chapter)",
+            with(keys::KEY_LEFT, "\u{f702}", Flags::Option),
+            false,
+        ),
+        ("P (preview)", plain(35, "p"), false),
+        ("waiting for the preview", None, false),
+        ("E (edit mode)", plain(14, "e"), false),
+        ("D (speed up)", plain(2, "d"), false),
+        ("Command+S (save copy)", with(1, "s", Flags::Command), false),
+        ("waiting for the save", None, false),
+        ("waiting for the save", None, false),
+        ("waiting for the save", None, false),
+        ("E (edit mode off)", plain(14, "e"), false),
+        (
+            "Command+Shift+B (add bookmark)",
+            with(11, "B", command_shift),
+            true,
+        ),
+        ("after the name prompt", None, false),
+        (
+            "Command+Shift+B (add bookmark, Escape)",
+            with(11, "B", command_shift),
+            true,
+        ),
+        ("after the cancelled prompt", None, false),
+        (
+            "Command+Shift+K (bookmarks)",
+            with(40, "K", command_shift),
+            true,
+        ),
+        ("after the bookmarks", None, false),
+    ]
+}

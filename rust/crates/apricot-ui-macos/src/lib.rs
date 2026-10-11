@@ -15,6 +15,8 @@ mod announce;
 #[cfg(target_os = "macos")]
 mod app;
 #[cfg(target_os = "macos")]
+mod bookmarks;
+#[cfg(target_os = "macos")]
 mod controls;
 #[cfg(target_os = "macos")]
 mod equalizer;

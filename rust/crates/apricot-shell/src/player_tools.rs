@@ -50,7 +50,7 @@ impl Drop for PlayerTools {
 }
 
 /// Windows `application_directory`: the folder of the executable.
-fn application_directory() -> Option<std::path::PathBuf> {
+pub(crate) fn application_directory() -> Option<std::path::PathBuf> {
     std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(std::path::Path::to_path_buf))
@@ -112,7 +112,12 @@ impl Shell {
     }
 
     /// Windows `copy_text_and_announce`.
-    fn copy_text_and_announce(&self, ui: &mut dyn ShellUi, text: &str, success_key: &str) {
+    pub(crate) fn copy_text_and_announce(
+        &self,
+        ui: &mut dyn ShellUi,
+        text: &str,
+        success_key: &str,
+    ) {
         if ui.copy_text(text) {
             ui.set_status(&self.text(success_key), true);
         } else {
@@ -182,7 +187,8 @@ impl Shell {
     }
 
     /// Windows `seek_player_chapter`.
-    fn seek_player_chapter(&self, ui: &mut dyn ShellUi, seconds: f64) -> bool {
+    fn seek_player_chapter(&mut self, ui: &mut dyn ShellUi, seconds: f64) -> bool {
+        self.player.clip_preview = None;
         self.execute_player_command(
             ui,
             PlaybackCommand::SeekAbsolute {

@@ -8,10 +8,12 @@
 //! the result. Windows moves onto this crate in unit W1
 //! (`docs/MACOS_RUST_PORT_PLAN.md`).
 
+mod bookmarks;
 mod equalizer_dialog;
 mod keyboard;
 mod main_menu;
 mod player;
+mod player_edit;
 mod player_extras;
 mod player_tools;
 mod repeat;
@@ -19,6 +21,7 @@ mod screens;
 mod type_ahead;
 mod ui;
 
+pub use bookmarks::{BookmarkDialog, BookmarkEntry, BookmarkRequest, BookmarkResponse};
 pub use equalizer_dialog::{EQUALIZER_BUTTONS, EqualizerButton, EqualizerLabels, EqualizerView};
 pub use keyboard::{FocusKind, KeyRoute};
 pub use player::{format_duration, local_file_item};
@@ -55,6 +58,7 @@ pub struct Shell {
     /// The open equalizer dialog (Windows `DialogState`).
     equalizer: Option<equalizer_dialog::EqualizerDialogState>,
     tools: player_tools::PlayerTools,
+    edit_saves: player_edit::EditSaves,
 }
 
 impl Shell {
@@ -71,6 +75,7 @@ impl Shell {
             extras: player_extras::PlayerExtras::default(),
             equalizer: None,
             tools: player_tools::PlayerTools::default(),
+            edit_saves: player_edit::EditSaves::default(),
         }
     }
 
@@ -197,6 +202,10 @@ impl Shell {
                 self.open_media_folder(ui);
                 return;
             }
+            "bookmarks" => {
+                self.show_bookmarks_dialog(ui, false, false);
+                return;
+            }
             _ => {}
         }
         // Every other destination arrives with its macOS screen; until then
@@ -228,6 +237,10 @@ impl Shell {
             }
             "open_play_from_folder" => {
                 self.open_media_folder(ui);
+                return;
+            }
+            "open_bookmarks" => {
+                self.show_bookmarks_dialog(ui, false, false);
                 return;
             }
             _ => {}
@@ -278,6 +291,16 @@ impl Shell {
             "player_copy_link" => self.copy_active_location(ui),
             "player_copy_timestamp_link" => self.copy_current_timestamp_link(ui),
             "copy_stream_url" => self.copy_active_stream_url(ui),
+            "player_edit_mode" => self.toggle_player_edit_mode(ui),
+            "player_save_edit_copy" => self.save_edited_local_file(ui, false),
+            "player_replace_edit_original" => self.save_edited_local_file(ui, true),
+            "player_marker_start" => self.toggle_player_clip_marker(ui, true),
+            "player_marker_end" => self.toggle_player_clip_marker(ui, false),
+            "player_preview_marked_clip" => self.preview_marked_clip(ui),
+            "player_add_bookmark" => {
+                let _ = self.prompt_add_current_bookmark(ui);
+            }
+            "player_bookmarks" => self.show_bookmarks_dialog(ui, true, false),
             "player_back_keep_playing" => self.leave_player_to_main_menu(ui, true),
             "player_previous" => self.navigate_player_relative(ui, -1, false),
             "player_next" => self.navigate_player_relative(ui, 1, false),

@@ -417,3 +417,28 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   ReplayGain, "120 BPM.", kopiranje poti, sporočili za časovno povezavo in
   tok lokalne datoteke, seznam poglavij (fokus na seznamu, Down, Return
   skoči na poglavje, fokus nazaj na predvajalnik).
+
+### M4e: način urejanja, oznake izseka in zaznamki (11. 10. 2026)
+
+- `player_edit.rs`: način urejanja (E), shranjevanje kopije (Command+S) in
+  zamenjava izvirnika (Command+R) v ozadju z mpv in ffmpeg kot na Windows,
+  oznaki začetka in konca izseka ([ in ]) ter predogled izseka (P), ki se
+  ustavi ob premiku, pavzi ali novem posnetku.
+- `bookmarks.rs` v jedru in okno zaznamkov na Macu: dodajanje s privzetim
+  imenom po času (Command+Shift+B), okno zaznamkov iz predvajalnika
+  (Command+Shift+K, samo trenutni posnetek) in iz glavnega menija (vsi),
+  seznam s praznim besedilom, gumbi Add, Play, Rename, Delete, Copy
+  timestamp link in Back v vrstnem redu Windows, Enter predvaja, Delete
+  izbriše, Escape zapre, Shift+F10 odpre kontekstni meni z enakimi
+  ukazi. Play zaznamka drugega posnetka odpre predvajalnik na poziciji,
+  Escape iz njega vrne v okno zaznamkov.
+- Novo v `ShellUi`: `prompt_text` (Windows `prompt_name_with_initial`).
+  Return v polju za ime zdaj pritisne OK tudi v izenačevalniku.
+- Odprto za paket (M15): Mac paket mora vključiti ukaz mpv poleg libmpv,
+  sicer shranjevanje urejanja uporabi samo ffmpeg (tako kot Windows brez
+  mpv.exe).
+- Preverjeno samodejno (`APRICOT_MACOS_SELF_TEST=tools`): oznake in
+  sporočila o neveljavnem izseku, način urejanja, shranjena kopija
+  "beats - edited.m4a", dodajanje zaznamka z Return, preklic z Escape,
+  okno zaznamkov (fokus na seznamu, Tab na Add in Play, Escape, fokus nazaj
+  na predvajalnik).

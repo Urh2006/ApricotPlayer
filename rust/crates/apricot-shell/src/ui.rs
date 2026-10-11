@@ -76,6 +76,24 @@ pub trait ShellUi {
     /// its control changes and ends with [`crate::Shell::equalizer_finish`].
     fn open_equalizer(&mut self);
 
+    /// Opens the bookmarks window after the current event, modal over the
+    /// window, with focus on its list. Its requests go to
+    /// [`crate::Shell::bookmark_request`]; when it closed and focus is back
+    /// where it was, it calls [`crate::Shell::bookmarks_closed`].
+    fn open_bookmarks(&mut self, dialog: crate::BookmarkDialog);
+
+    /// Windows `prompt_name_with_initial`: a modal text prompt with
+    /// `initial` in the field; `None` when cancelled. The text is returned
+    /// as typed.
+    fn prompt_text(
+        &mut self,
+        title: &str,
+        prompt: &str,
+        initial: &str,
+        ok: &str,
+        cancel: &str,
+    ) -> Option<String>;
+
     /// Copies text to the clipboard; `true` on success.
     fn copy_text(&mut self, text: &str) -> bool;
 

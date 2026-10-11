@@ -165,7 +165,8 @@ impl Shell {
         let device = self.poll_saved_audio_device_check(ui);
         let chapters = self.poll_external_chapters(ui);
         let bpm = self.poll_bpm_analyses(ui);
-        folder || device || chapters || bpm
+        let edits = self.poll_edit_saves(ui);
+        folder || device || chapters || bpm || edits
     }
 
     fn poll_folder_scan(&mut self, ui: &mut dyn ShellUi) -> bool {
@@ -314,6 +315,11 @@ impl Shell {
             Route::Player => {
                 self.view = View::Player;
                 self.refresh_player(ui, crate::PlayerFocus::Preserve);
+            }
+            Route::Bookmarks => {
+                self.view = View::MainMenu;
+                self.refresh_main_menu(ui, MainMenuSelection::LastActivated, None, true);
+                self.show_bookmarks_dialog(ui, false, true);
             }
             _ => {
                 self.application.navigate_main_menu();

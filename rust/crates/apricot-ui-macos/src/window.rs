@@ -58,6 +58,8 @@ pub struct ControllerIvars {
     self_test_step: Cell<usize>,
     /// Activation requests waiting for the shell.
     activations: RefCell<Vec<apricot_app::ActivationRequest>>,
+    /// The bookmarks window waiting to open after the current event.
+    pending_bookmarks: RefCell<Option<apricot_shell::BookmarkDialog>>,
 }
 
 define_class!(
@@ -136,6 +138,14 @@ define_class!(
         #[unsafe(method(openEqualizer:))]
         fn open_equalizer(&self, _sender: Option<&AnyObject>) {
             crate::equalizer::run(self);
+        }
+
+        #[unsafe(method(openBookmarks:))]
+        fn open_bookmarks(&self, _sender: Option<&AnyObject>) {
+            let dialog = self.ivars().pending_bookmarks.borrow_mut().take();
+            if let Some(dialog) = dialog {
+                crate::bookmarks::run(self, dialog);
+            }
         }
 
         #[unsafe(method(drainActivations:))]
@@ -220,6 +230,7 @@ impl MainWindowController {
             exiting: Cell::new(false),
             self_test_step: Cell::new(0),
             activations: RefCell::new(Vec::new()),
+            pending_bookmarks: RefCell::new(None),
         });
         // SAFETY: `init` of NSObject.
         unsafe { msg_send![super(this), init] }
@@ -649,49 +660,15 @@ impl MainWindowController {
 
     #[cfg(debug_assertions)]
     fn tools_self_test_step(&self, index: usize) -> bool {
-        use crate::self_test::{Key, focus, key, send};
-        use objc2_app_kit::NSEventModifierFlags as Flags;
+        use crate::self_test::{focus, send};
         let Some(window) = self.window() else {
             return false;
         };
-        let with = |code, text, flags| Key { code, text, flags };
-        let steps: [(&str, Option<Key>); 13] = [
-            ("opened", None),
-            (
-                "Option+Right (next chapter)",
-                Some(with(keys::KEY_RIGHT, "\u{f703}", Flags::Option)),
-            ),
-            (
-                "Option+Right (next chapter)",
-                Some(with(keys::KEY_RIGHT, "\u{f703}", Flags::Option)),
-            ),
-            (
-                "Option+Left (previous chapter)",
-                Some(with(keys::KEY_LEFT, "\u{f702}", Flags::Option)),
-            ),
-            (
-                "Command+Shift+G (ReplayGain)",
-                Some(with(5, "G", Flags::Command | Flags::Shift)),
-            ),
-            ("B (BPM)", Some(key(11, "b"))),
-            ("waiting for BPM", None),
-            ("waiting for BPM", None),
-            ("L (copy path)", Some(key(37, "l"))),
-            (
-                "Command+Shift+L (timestamp link)",
-                Some(with(37, "L", Flags::Command | Flags::Shift)),
-            ),
-            ("Command+D (stream URL)", Some(with(2, "d", Flags::Command))),
-            (
-                "Command+Shift+C (chapters, Down, Return)",
-                Some(with(8, "C", Flags::Command | Flags::Shift)),
-            ),
-            ("after the chapter list", None),
-        ];
-        let Some((name, key)) = steps.get(index) else {
+        let steps = crate::self_test::tools_steps();
+        let Some((name, key, modal)) = steps.get(index) else {
             return false;
         };
-        if index == 11 {
+        if *modal {
             // The list is modal; answer it from the modal run loop.
             let modes = NSArray::from_slice(&[
                 // SAFETY: AppKit's static run loop mode name.
@@ -725,21 +702,45 @@ impl MainWindowController {
         true
     }
 
+    /// Answers the modal window a tools step opened: the chapter list,
+    /// the bookmark name prompt or the bookmarks window.
     #[cfg(debug_assertions)]
     fn modal_self_test_keys(&self) {
-        use crate::self_test::{focus, key, send};
+        use crate::self_test::{Key, focus, key, send};
         let Some(window) = NSApplication::sharedApplication(self.mtm()).modalWindow() else {
-            println!("tools-test chapter list: no modal window");
+            println!("tools-test modal: no modal window");
             return;
         };
-        println!(
-            "tools-test chapter list: focus={} title={:?}",
-            focus(&window),
-            window.title().to_string()
-        );
-        send(&window, &key(keys::KEY_DOWN, "\u{f701}"));
-        println!("tools-test chapter list Down: focus={}", focus(&window));
-        send(&window, &key(keys::KEY_RETURN, "\r"));
+        let print = |name: &str| {
+            println!(
+                "tools-test   {name}: window={:?} focus={}",
+                window.title().to_string(),
+                focus(&window)
+            );
+        };
+        let escape = key(keys::KEY_ESCAPE, "\u{1b}");
+        let plan: Vec<(&str, Key)> = match window.title().to_string().as_str() {
+            "Chapters" => vec![
+                ("Down", key(keys::KEY_DOWN, "\u{f701}")),
+                ("Return", key(keys::KEY_RETURN, "\r")),
+            ],
+            "Bookmarks" => vec![
+                ("Down", key(keys::KEY_DOWN, "\u{f701}")),
+                ("Tab", key(keys::KEY_TAB, "\t")),
+                ("Tab", key(keys::KEY_TAB, "\t")),
+                ("Escape", escape),
+            ],
+            // The first name prompt is accepted, the second cancelled.
+            _ if self.ivars().self_test_step.get() == 231 => {
+                vec![("Return", key(keys::KEY_RETURN, "\r"))]
+            }
+            _ => vec![("Escape", escape)],
+        };
+        print("opened");
+        for (name, key) in plan {
+            send(&window, &key);
+            print(name);
+        }
     }
 
     #[cfg(debug_assertions)]
@@ -1161,6 +1162,30 @@ impl ShellUi for MacUi<'_> {
                 afterDelay: 0.0_f64
             ];
         }
+    }
+
+    fn open_bookmarks(&mut self, dialog: apricot_shell::BookmarkDialog) {
+        *self.controller.ivars().pending_bookmarks.borrow_mut() = Some(dialog);
+        // SAFETY: `openBookmarks:` exists on the controller.
+        unsafe {
+            let _: () = msg_send![
+                self.controller,
+                performSelector: sel!(openBookmarks:),
+                withObject: Option::<&AnyObject>::None,
+                afterDelay: 0.0_f64
+            ];
+        }
+    }
+
+    fn prompt_text(
+        &mut self,
+        title: &str,
+        prompt: &str,
+        initial: &str,
+        ok: &str,
+        cancel: &str,
+    ) -> Option<String> {
+        crate::language::prompt_text(self.controller.mtm(), title, prompt, initial, ok, cancel)
     }
 
     fn copy_text(&mut self, text: &str) -> bool {

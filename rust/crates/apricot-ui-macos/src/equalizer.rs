@@ -417,7 +417,7 @@ impl EqualizerView for MacEqualizerView<'_> {
     }
 
     fn prompt_name(&mut self, title: &str, prompt: &str, ok: &str, cancel: &str) -> Option<String> {
-        crate::language::prompt_text(self.mtm(), title, prompt, ok, cancel)
+        crate::language::prompt_text(self.mtm(), title, prompt, "", ok, cancel)
     }
 
     fn choose(&mut self, dialog: &ChoiceDialog) -> Option<usize> {
@@ -514,6 +514,14 @@ fn create_controls(
     let name_label = label(mtm, &document, &labels.name);
     let name = NSTextField::initWithFrame(NSTextField::alloc(mtm), NSRect::ZERO);
     name.setAccessibilityLabel(Some(&NSString::from_str(&labels.name)));
+    // Return in the name presses OK (`IDOK`): tag 0 is OK in
+    // `EQUALIZER_BUTTONS`.
+    // SAFETY: the dialog outlives the field.
+    unsafe {
+        name.setTarget(Some(target));
+        name.setAction(Some(sel!(dialogButton:)));
+    }
+    name.setTag(0);
     document.addSubview(&name);
     let mut band_labels = Vec::with_capacity(labels.bands.len());
     let mut sliders = Vec::with_capacity(labels.bands.len());

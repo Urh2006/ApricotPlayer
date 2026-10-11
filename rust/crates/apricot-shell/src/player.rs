@@ -31,10 +31,12 @@ pub(crate) struct PendingQueuedStart {
 /// The playback state the shell keeps beside the application's session.
 #[derive(Default)]
 pub(crate) struct PlayerRuntime {
-    playback: Option<PlaybackRuntime>,
+    pub(crate) playback: Option<PlaybackRuntime>,
     /// Python `restart_current_playback` announces only the restart.
     quiet_next_resume: bool,
     pending_queued_start: Option<PendingQueuedStart>,
+    /// Windows `clip_preview`: the generation of a running clip preview.
+    pub(crate) clip_preview: Option<u64>,
 }
 
 /// Python `format_rate_for_speech`.
@@ -176,6 +178,18 @@ impl Shell {
         self.start_player_at(ui, item, None, start_position_seconds);
     }
 
+    /// Windows `start_media_item_at`: a standalone item from `position`.
+    pub(crate) fn start_media_item_at(
+        &mut self,
+        ui: &mut dyn ShellUi,
+        item: MediaItem,
+        start_position_seconds: f64,
+    ) {
+        self.application.prepare_standalone_playback();
+        self.player.pending_queued_start = None;
+        self.start_player_at(ui, item, None, Some(start_position_seconds.max(0.0)));
+    }
+
     /// Windows `start_sequence_media_item` and `start_media_item_with_shuffle`:
     /// an item of a list that keeps its playback sequence.
     pub(crate) fn start_sequence_media_item(
@@ -211,6 +225,7 @@ impl Shell {
         // A player opened from a screen returns there.
         self.application.forget_player_return_frame();
         self.persist_current_playback_position(ui);
+        self.player.clip_preview = None;
         let podcast_speed = item
             .metadata
             .get("podcast_speed_preset")
@@ -478,9 +493,22 @@ impl Shell {
                 }
                 PlaybackEvent::Position { .. }
                 | PlaybackEvent::MediaInfo(_)
-                | PlaybackEvent::AudioDevices(_)
-                | PlaybackEvent::PreviewFinished => {}
+                | PlaybackEvent::AudioDevices(_) => {}
+                PlaybackEvent::PreviewFinished => {
+                    if self.player.clip_preview == Some(update.generation) {
+                        self.player.clip_preview = None;
+                        ui.set_status(&self.text("clip_preview_finished"), true);
+                    }
+                    if self.view == View::Player {
+                        self.refresh_player(ui, PlayerFocus::Preserve);
+                    }
+                }
                 PlaybackEvent::Ended => {
+                    if self.player.clip_preview.take().is_some() {
+                        let _ = self.execute_player_command(ui, PlaybackCommand::SetPaused(true));
+                        ui.set_status(&self.text("clip_preview_finished"), true);
+                        continue;
+                    }
                     let autoplay_next = self
                         .application
                         .player_session()
@@ -499,6 +527,7 @@ impl Shell {
                     }
                 }
                 PlaybackEvent::Failed(error) => {
+                    self.player.clip_preview = None;
                     self.player.pending_queued_start = None;
                     let message = self.player_failed_message(&error);
                     ui.set_status(&message, true);
@@ -563,6 +592,7 @@ impl Shell {
 
     /// Windows `toggle_player_pause`.
     pub(crate) fn toggle_player_pause(&mut self, ui: &mut dyn ShellUi) {
+        self.player.clip_preview = None;
         if !self.application.player_session().is_open() {
             return;
         }
@@ -601,6 +631,7 @@ impl Shell {
 
     /// Windows `seek_player`.
     pub(crate) fn seek_player(&mut self, ui: &mut dyn ShellUi, seconds: f64) {
+        self.player.clip_preview = None;
         let _ = self.execute_player_command(
             ui,
             PlaybackCommand::SeekRelative {
@@ -612,6 +643,7 @@ impl Shell {
 
     /// Windows `seek_player_absolute`.
     fn seek_player_absolute(&mut self, ui: &mut dyn ShellUi, seconds: f64, key: &str) {
+        self.player.clip_preview = None;
         if self.execute_player_command(
             ui,
             PlaybackCommand::SeekAbsolute {
@@ -903,6 +935,7 @@ impl Shell {
 
     /// Windows `close_player_runtime`.
     pub(crate) fn close_player_runtime(&mut self, ui: &mut dyn ShellUi) {
+        self.player.clip_preview = None;
         self.stop_key_repeat(ui);
         let generation = self.application.player_session().generation();
         if let Some(runtime) = self.player.playback.as_ref() {

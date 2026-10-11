@@ -78,6 +78,8 @@ pub struct ListIvars {
     type_ahead: RefCell<TypeAhead>,
     /// Sent to the target on Enter and on a double click.
     activate: Cell<Option<Sel>>,
+    /// Sent to the target on Delete (Windows `VK_DELETE` in a list).
+    delete: Cell<Option<Sel>>,
 }
 
 define_class!(
@@ -140,6 +142,14 @@ define_class!(
             let plain = !modifiers.command && !modifiers.option && !modifiers.control;
             if plain && !modifiers.shift && matches!(code, keys::KEY_RETURN | keys::KEY_KEYPAD_ENTER) {
                 self.activate();
+                return;
+            }
+            if plain
+                && !modifiers.shift
+                && matches!(code, keys::KEY_DELETE | keys::KEY_FORWARD_DELETE)
+                && let Some(action) = self.ivars().delete.get()
+            {
+                self.send(action);
                 return;
             }
             if keys::is_context_menu_key(code, modifiers) {
@@ -230,12 +240,21 @@ impl List {
         }
     }
 
+    /// The selector sent to the target on Delete.
+    pub fn set_delete_action(&self, action: Sel) {
+        self.ivars().delete.set(Some(action));
+    }
+
     fn activate(&self) {
         if let Some(action) = self.ivars().activate.get() {
-            // SAFETY: the action exists on the target set with it.
-            unsafe {
-                let _: bool = msg_send![self, sendAction: action, to: self.target().as_deref()];
-            }
+            self.send(action);
+        }
+    }
+
+    fn send(&self, action: Sel) {
+        // SAFETY: the action exists on the target set with it.
+        unsafe {
+            let _: bool = msg_send![self, sendAction: action, to: self.target().as_deref()];
         }
     }
 
