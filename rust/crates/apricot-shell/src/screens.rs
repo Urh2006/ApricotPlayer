@@ -113,6 +113,8 @@ impl Shell {
             "add_folder_to_queue" => self.add_current_local_folder_to_queue(ui),
             "folder_playback_queue" => self.activate_action(ui, "open_playback_queue"),
             "load_trending" => self.load_trending_results(ui),
+            "collection_remove" => self.remove_selected_collection_item(ui),
+            "history_clear" => self.clear_history(ui),
             "direct_play" => self.activate_direct_link(ui, "play"),
             "direct_download_audio" => self.activate_direct_link(ui, "download_audio"),
             "direct_download_video" => self.activate_direct_link(ui, "download_video"),
@@ -136,6 +138,7 @@ impl Shell {
             View::LocalFolder => self.activate_local_folder_row(ui, row),
             View::Results | View::Trending => self.activate_result_selection(ui),
             View::Collection => self.activate_collection_selection(ui),
+            View::Favorites | View::History => self.activate_library_selection(ui),
             View::Search | View::DirectLink | View::Player => {}
         }
     }
@@ -355,6 +358,19 @@ impl Shell {
                 self.refresh_results(ui, true);
             }
             Route::Trending => self.restore_trending_view(ui, &frame),
+            Route::Favorites | Route::History => {
+                self.view = if frame.route == Route::History {
+                    View::History
+                } else {
+                    View::Favorites
+                };
+                let saved = frame
+                    .parameters
+                    .get("index")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok());
+                self.refresh_media_collection(ui, true, saved);
+            }
             Route::DirectLink => self.restore_direct_link(ui),
             Route::ChannelResults | Route::PlaylistResults => {
                 self.view = View::Collection;

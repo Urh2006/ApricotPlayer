@@ -13,6 +13,7 @@ mod collections;
 mod comments;
 mod equalizer_dialog;
 mod keyboard;
+mod library;
 mod lyrics;
 mod main_menu;
 mod player;
@@ -35,6 +36,7 @@ pub use bookmarks::{BookmarkDialog, BookmarkEntry, BookmarkRequest, BookmarkResp
 pub use comments::{CommentsCommand, CommentsDialog, CommentsEffect};
 pub use equalizer_dialog::{EQUALIZER_BUTTONS, EqualizerButton, EqualizerLabels, EqualizerView};
 pub use keyboard::{FocusKind, KeyRoute};
+pub use library::media_collection_label;
 pub use lyrics::{LyricsDialog, LyricsHighlight, LyricsLoaded};
 pub use player::{format_duration, local_file_item};
 pub use player_extras::DetailsLabels;
@@ -66,6 +68,8 @@ pub enum View {
     Trending,
     /// The direct link screen (Windows `MainView::DirectLink`).
     DirectLink,
+    Favorites,
+    History,
     LocalFolder,
     Player,
 }
@@ -246,6 +250,14 @@ impl Shell {
                 self.show_trending(ui);
                 return;
             }
+            "favorites" => {
+                self.show_media_collection(ui, View::Favorites);
+                return;
+            }
+            "history" => {
+                self.show_media_collection(ui, View::History);
+                return;
+            }
             "direct_link" => {
                 self.show_direct_link(ui);
                 return;
@@ -293,6 +305,26 @@ impl Shell {
             }
             "open_search" => {
                 self.show_search(ui);
+                return;
+            }
+            "open_favorites" => {
+                self.show_media_collection(ui, View::Favorites);
+                return;
+            }
+            "open_history" => {
+                self.show_media_collection(ui, View::History);
+                return;
+            }
+            "add_favorite" => {
+                self.add_active_favorite(ui);
+                return;
+            }
+            "remove_favorite" => {
+                self.remove_active_favorite(ui);
+                return;
+            }
+            "remove_selected" => {
+                self.remove_selected_collection_item(ui);
                 return;
             }
             "open_trending" => {

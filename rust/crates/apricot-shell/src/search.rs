@@ -381,7 +381,12 @@ impl Shell {
                 }
             }
             View::Collection => self.collection_selection_changed(ui, index),
-            View::MainMenu | View::Search | View::DirectLink | View::Player => {}
+            View::MainMenu
+            | View::Search
+            | View::DirectLink
+            | View::Favorites
+            | View::History
+            | View::Player => {}
         }
     }
 
@@ -414,9 +419,12 @@ impl Shell {
             }
             "search_download_audio" => "download_audio",
             "search_download_video" => "download_video",
-            _ => "add_favorite",
+            _ => {
+                self.add_active_favorite(ui);
+                return;
+            }
         };
-        // Downloads and favorites arrive with their units (M7 and M9).
+        // Downloads arrive with their unit (M9).
         let message = apricot_app::unavailable_feature_message(&self.catalog(), &self.text(key));
         ui.set_status(&message, true);
     }

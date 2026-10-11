@@ -1132,70 +1132,11 @@ impl MainWindowController {
 
     #[cfg(debug_assertions)]
     fn folder_self_test_step(&self, index: usize) -> bool {
-        use crate::self_test::{focus, key, send};
+        use crate::self_test::{focus, send};
         let Some(window) = self.window() else {
             return false;
         };
-        let command_shift = objc2_app_kit::NSEventModifierFlags::Command
-            | objc2_app_kit::NSEventModifierFlags::Shift;
-        let with = |code, text, flags| Some(crate::self_test::Key { code, text, flags });
-        let steps: [(&str, Option<crate::self_test::Key>); 18] = [
-            ("loaded", None),
-            ("Down", Some(key(keys::KEY_DOWN, "\u{f701}"))),
-            ("Enter (play)", Some(key(keys::KEY_RETURN, "\r"))),
-            (
-                "Escape (back to folder)",
-                Some(key(keys::KEY_ESCAPE, "\u{1b}")),
-            ),
-            (
-                "Command+Shift+Q (add to queue)",
-                with(12, "Q", command_shift),
-            ),
-            ("Up", Some(key(keys::KEY_UP, "\u{f700}"))),
-            (
-                "Command+Shift+Q (add to queue)",
-                with(12, "Q", command_shift),
-            ),
-            (
-                "Command+Shift+Q (already added)",
-                with(12, "Q", command_shift),
-            ),
-            (
-                "Shift+F10 (context menu: Remove from playback queue)",
-                with(
-                    keys::KEY_F10,
-                    "\u{f70d}",
-                    objc2_app_kit::NSEventModifierFlags::Shift,
-                ),
-            ),
-            (
-                "Command+Shift+Q (add to queue)",
-                with(12, "Q", command_shift),
-            ),
-            (
-                "Command+Option+Q (playback queue)",
-                with(
-                    12,
-                    "q",
-                    objc2_app_kit::NSEventModifierFlags::Command
-                        | objc2_app_kit::NSEventModifierFlags::Option,
-                ),
-            ),
-            ("Tab", Some(key(keys::KEY_TAB, "\t"))),
-            ("Tab", Some(key(keys::KEY_TAB, "\t"))),
-            ("Tab", Some(key(keys::KEY_TAB, "\t"))),
-            ("Tab", Some(key(keys::KEY_TAB, "\t"))),
-            (
-                "Shift+Tab",
-                Some(crate::self_test::Key {
-                    code: keys::KEY_TAB,
-                    text: "\t",
-                    flags: objc2_app_kit::NSEventModifierFlags::Shift,
-                }),
-            ),
-            ("Space on Add to queue? no: focus report", None),
-            ("Escape (main menu)", Some(key(keys::KEY_ESCAPE, "\u{1b}"))),
-        ];
+        let steps = crate::self_test::folder_steps();
         let Some((name, key)) = steps.get(index) else {
             return false;
         };

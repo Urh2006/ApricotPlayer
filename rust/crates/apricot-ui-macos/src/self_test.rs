@@ -266,3 +266,97 @@ pub fn youtube_extras_steps() -> Vec<(String, Option<Key>)> {
     }
     steps
 }
+
+/// The steps of `APRICOT_MACOS_SELF_TEST=folder`.
+#[allow(clippy::too_many_lines)] // One entry per scripted key.
+pub fn folder_steps() -> Vec<(&'static str, Option<Key>)> {
+    use crate::keys;
+    let command_shift =
+        objc2_app_kit::NSEventModifierFlags::Command | objc2_app_kit::NSEventModifierFlags::Shift;
+    let with = |code, text, flags| Some(crate::self_test::Key { code, text, flags });
+    vec![
+        ("loaded", None),
+        ("Down", Some(key(keys::KEY_DOWN, "\u{f701}"))),
+        ("Enter (play)", Some(key(keys::KEY_RETURN, "\r"))),
+        (
+            "Escape (back to folder)",
+            Some(key(keys::KEY_ESCAPE, "\u{1b}")),
+        ),
+        (
+            "Command+Shift+Q (add to queue)",
+            with(12, "Q", command_shift),
+        ),
+        ("Up", Some(key(keys::KEY_UP, "\u{f700}"))),
+        (
+            "Command+Shift+Q (add to queue)",
+            with(12, "Q", command_shift),
+        ),
+        (
+            "Command+Shift+Q (already added)",
+            with(12, "Q", command_shift),
+        ),
+        (
+            "Shift+F10 (context menu: Remove from playback queue)",
+            with(
+                keys::KEY_F10,
+                "\u{f70d}",
+                objc2_app_kit::NSEventModifierFlags::Shift,
+            ),
+        ),
+        (
+            "Command+Shift+Q (add to queue)",
+            with(12, "Q", command_shift),
+        ),
+        (
+            "Command+Option+Q (playback queue)",
+            with(
+                12,
+                "q",
+                objc2_app_kit::NSEventModifierFlags::Command
+                    | objc2_app_kit::NSEventModifierFlags::Option,
+            ),
+        ),
+        (
+            "Command+F (add favorite)",
+            with(3, "f", objc2_app_kit::NSEventModifierFlags::Command),
+        ),
+        (
+            "Command+F (already a favorite)",
+            with(3, "f", objc2_app_kit::NSEventModifierFlags::Command),
+        ),
+        (
+            "Command+Option+F (favorites)",
+            with(
+                3,
+                "f",
+                objc2_app_kit::NSEventModifierFlags::Command
+                    | objc2_app_kit::NSEventModifierFlags::Option,
+            ),
+        ),
+        ("Tab (Play)", Some(key(keys::KEY_TAB, "\t"))),
+        (
+            "Shift+Tab (list)",
+            with(
+                keys::KEY_TAB,
+                "\t",
+                objc2_app_kit::NSEventModifierFlags::Shift,
+            ),
+        ),
+        ("Delete (remove)", Some(key(keys::KEY_DELETE, "\u{7f}"))),
+        ("Escape (main menu)", Some(key(keys::KEY_ESCAPE, "\u{1b}"))),
+        ("Tab", Some(key(keys::KEY_TAB, "\t"))),
+        ("Tab", Some(key(keys::KEY_TAB, "\t"))),
+        ("Tab", Some(key(keys::KEY_TAB, "\t"))),
+        ("Tab", Some(key(keys::KEY_TAB, "\t"))),
+        (
+            "Shift+Tab",
+            Some(crate::self_test::Key {
+                code: keys::KEY_TAB,
+                text: "\t",
+                flags: objc2_app_kit::NSEventModifierFlags::Shift,
+            }),
+        ),
+        ("Space on Add to queue? no: focus report", None),
+        ("Escape (main menu)", Some(key(keys::KEY_ESCAPE, "\u{1b}"))),
+    ]
+}

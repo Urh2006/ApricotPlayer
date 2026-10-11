@@ -119,6 +119,14 @@ impl Shell {
                         .and_then(|collection| collection.items().get(index))
                 })
                 .cloned(),
+            View::Favorites => ui
+                .selected_row()
+                .and_then(|index| self.application.favorites().get(index))
+                .cloned(),
+            View::History => ui
+                .selected_row()
+                .and_then(|index| self.application.history().get(index))
+                .cloned(),
             View::MainMenu | View::Search | View::DirectLink => None,
         }
     }

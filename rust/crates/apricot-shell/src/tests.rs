@@ -172,6 +172,10 @@ mod equalizer {
         pub(super) bookmarks: Option<crate::BookmarkDialog>,
         /// What a text prompt returns; `None` cancels.
         pub(super) prompt_answer: Option<String>,
+        /// The list's selected row.
+        pub(super) selected: Option<usize>,
+        /// The list screens shown, last last.
+        pub(super) screens: Vec<crate::ListScreen>,
     }
 
     impl ShellUi for Ui {
@@ -181,7 +185,10 @@ mod equalizer {
             }
         }
         fn show_error(&mut self, _message: &str) {}
-        fn show_list_screen(&mut self, _screen: &ListScreen) {}
+        fn show_list_screen(&mut self, screen: &ListScreen) {
+            self.screens.push(screen.clone());
+            self.selected = screen.selected;
+        }
         fn show_player(&mut self, _model: &PlayerScreenModel, _focus: PlayerFocus) {}
         fn show_player_details(&mut self, _labels: &DetailsLabels, _text: &str) {}
         fn hide_player_details(&mut self) {}
@@ -229,7 +236,7 @@ mod equalizer {
         }
         fn set_window_title(&mut self, _title: &str) {}
         fn selected_row(&self) -> Option<usize> {
-            None
+            self.selected
         }
         fn focused_player_control(&self) -> Option<&'static str> {
             None
@@ -555,6 +562,66 @@ mod bookmarks {
         assert_eq!(
             ui.announcements.last(),
             Some(&shell.text("bookmark_deleted"))
+        );
+    }
+}
+
+mod library {
+    use super::equalizer::Ui;
+    use crate::ScreenControl;
+
+    #[test]
+    fn favorites_add_play_order_and_remove_with_delete() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell.activate_action(&mut ui, "open_favorites");
+        let screen = ui.screens.last().expect("favorites screen").clone();
+        assert_eq!(screen.rows, [shell.text("favorites_empty")]);
+        assert_eq!(screen.list_name, shell.text("favorites"));
+        let ids: Vec<_> = screen
+            .controls
+            .iter()
+            .map(|control| match control {
+                ScreenControl::List => "list",
+                ScreenControl::Button { id, .. } => id,
+                _ => "field",
+            })
+            .collect();
+        assert_eq!(ids, ["list", "open", "back", "collection_remove"]);
+
+        let item = crate::local_file_item(std::path::Path::new("/tmp/Song.mp3"));
+        shell.application.add_favorite(item).expect("added");
+        shell.activate_action(&mut ui, "open_favorites");
+        assert_eq!(ui.screens.last().expect("screen").rows, ["Song"]);
+        ui.selected = Some(0);
+        shell.activate_action(&mut ui, "remove_selected");
+        assert_eq!(
+            ui.announcements.last(),
+            Some(&shell.text("favorite_removed"))
+        );
+        assert_eq!(
+            ui.screens.last().expect("screen").rows,
+            [shell.text("favorites_empty")]
+        );
+    }
+
+    #[test]
+    fn history_has_clear_and_says_cleared() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell.activate_action(&mut ui, "open_history");
+        let screen = ui.screens.last().expect("history screen");
+        assert!(screen.controls.iter().any(|control| matches!(
+            control,
+            ScreenControl::Button {
+                id: "history_clear",
+                ..
+            }
+        )));
+        shell.activate_screen_button(&mut ui, "history_clear");
+        assert_eq!(
+            ui.announcements.last(),
+            Some(&shell.text("history_cleared"))
         );
     }
 }

@@ -578,3 +578,21 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   in pokaže sporočilo YouTube o omejitvi, komentarji se naložijo (fokus v
   polju, Tab na razvrščanje in seznam, vrstice s komentarji, Tab na Open,
   Escape), sorodni video začne naslednji posnetek.
+
+### M7a: priljubljeni in zgodovina (11. 10. 2026)
+
+- `apricot-shell/src/library.rs`: zaslona Favorites in History (Windows
+  `show_media_collection`, `refresh_media_collection`) s seznamom, Play,
+  Back, Remove in pri zgodovini Clear history v vrstnem redu Windows; vrstice
+  zgodovine s časom in dejanjem; Enter predvaja (kanal in seznam
+  predvajanja odpreta svoje videe); Command+F doda med priljubljene,
+  Command+Shift+F odstrani, Delete odstrani izbrano vrstico; kontekstna
+  menija priljubljenih in zgodovine; Back iz predvajalnika vrne na zaslon.
+  Gumb Add to favorites na iskalnem zaslonu zdaj deluje.
+- Tipka Delete na Macu (nad Return) deluje kot Windows Delete v seznamih;
+  v besedilnih poljih še vedno briše znake.
+- Preverjeno: enotska testa (vrstni red kontrol, dodajanje, Delete,
+  počisti zgodovino) in samodejni preizkus na Macu (Command+F, sporočilo
+  "already in favorites", Command+Option+F odpre priljubljene, Tab na Play,
+  Shift+Tab na seznam, Delete odstrani, Escape v glavni meni na vrstico
+  Favorites).

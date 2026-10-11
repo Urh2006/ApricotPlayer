@@ -318,6 +318,8 @@ impl Shell {
             | View::Collection
             | View::Trending => Some(context_menu::results_context_menu(&context, item)),
             View::Player => Some(context_menu::player_context_menu(&context, item?)),
+            View::Favorites => Some(context_menu::favorites_context_menu(&context, item)),
+            View::History => Some(context_menu::history_context_menu(&context, item)),
             View::MainMenu | View::DirectLink => None,
         }
     }
@@ -356,6 +358,10 @@ impl Shell {
             C::PlayerAction(action_id) => self.activate_action(ui, action_id),
             C::ClosePlayer => self.close_current_player(ui),
             C::OpenChannel => self.open_item_channel(ui),
+            C::AddFavorite => self.add_active_favorite(ui),
+            C::RemoveFavorite => self.remove_active_favorite(ui),
+            C::RemoveSelected => self.remove_selected_collection_item(ui),
+            C::ClearHistory => self.clear_history(ui),
             C::ChannelOptions => {
                 if let Some(item) = item {
                     self.show_channel_options(ui, &item);

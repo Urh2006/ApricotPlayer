@@ -92,8 +92,10 @@ fn special_key(key_code: u16) -> Option<ShortcutKey> {
         KEY_RETURN | KEY_KEYPAD_ENTER => ShortcutKey::Enter,
         KEY_SPACE => ShortcutKey::Space,
         KEY_ESCAPE => ShortcutKey::Escape,
-        KEY_FORWARD_DELETE => ShortcutKey::Delete,
-        KEY_DELETE => ShortcutKey::Backspace,
+        // The Mac's Delete key does what Windows Delete does in lists
+        // (remove the item); text fields keep it, as shortcuts that are not
+        // global stay with a focused field.
+        KEY_FORWARD_DELETE | KEY_DELETE => ShortcutKey::Delete,
         KEY_HELP_INSERT => ShortcutKey::Insert,
         KEY_HOME => ShortcutKey::Home,
         KEY_END => ShortcutKey::End,

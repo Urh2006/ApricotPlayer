@@ -129,6 +129,8 @@ const fn view_shortcut_scope(view: View) -> (ActionScope, bool) {
         | View::Results
         | View::Collection
         | View::Trending
+        | View::Favorites
+        | View::History
         | View::LocalFolder => (ActionScope::List, false),
         View::Player => (ActionScope::Player, false),
     }

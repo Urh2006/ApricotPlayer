@@ -208,6 +208,7 @@ dependencies = [
  "apricot-platform",
  "apricot-playback",
  "apricot-storage",
+ "chrono",
  "serde_json",
  "url",
 ]
