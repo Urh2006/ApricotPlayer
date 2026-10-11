@@ -269,6 +269,40 @@ impl Shell {
         };
         ui.set_window_title(&model.window_title);
         ui.show_player(&model, focus);
+        self.refresh_player_details(ui, focus);
+        self.sync_window_fullscreen(ui);
+    }
+
+    pub(crate) const fn has_playback(&self) -> bool {
+        self.player.playback.is_some()
+    }
+
+    /// A player command without the failure announcement.
+    pub(crate) fn execute_player_command_result(
+        &self,
+        command: PlaybackCommand,
+    ) -> Result<(), String> {
+        let generation = self.application.player_session().generation();
+        self.player
+            .playback
+            .as_ref()
+            .ok_or_else(|| "player is not running".to_owned())?
+            .execute(generation, command)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Windows `apply_global_player_equalizer`: a player that follows the
+    /// global equalizer gets the current graph.
+    pub(crate) fn apply_global_player_equalizer(&self, ui: &mut dyn ShellUi) {
+        let follows_global = self
+            .application
+            .player_session()
+            .audio()
+            .is_some_and(|audio| audio.equalizer.is_none());
+        if follows_global && self.application.player_session().is_open() && self.has_playback() {
+            let graph = self.application.player_equalizer_graph(None);
+            let _ = self.execute_player_command(ui, PlaybackCommand::SetEqualizerFilter(graph));
+        }
     }
 
     /// Windows `playback_launch_options`.
@@ -666,6 +700,7 @@ impl Shell {
             return false;
         }
         self.application.set_player_speed(speed);
+        self.sync_player_details(ui);
         true
     }
 
@@ -688,6 +723,7 @@ impl Shell {
             return false;
         }
         self.application.set_player_pitch(pitch);
+        self.sync_player_details(ui);
         if mode == PitchMode::LinkedSpeed
             && let Some(delta) = speed_delta
             && let Some(current) = self
@@ -699,6 +735,7 @@ impl Shell {
             let speed = clamp_rate(current + delta, 0.25, 4.0);
             if self.execute_player_command(ui, PlaybackCommand::SetSpeed(speed)) {
                 self.application.set_player_speed(speed);
+                self.sync_player_details(ui);
             }
         }
         true
@@ -870,6 +907,10 @@ impl Shell {
         self.persist_current_playback_position(ui);
         self.application.close_player_session();
         self.player.pending_queued_start = None;
+        if self.extras.details_visible {
+            self.extras.details_visible = false;
+            ui.hide_player_details();
+        }
         ui.set_playback_polling(false);
         ui.set_window_title(apricot_platform::product_name());
     }
@@ -879,6 +920,9 @@ impl Shell {
     /// and its buttons Escape stops playback and returns to the previous
     /// screen, from the Back buttons to the main menu.
     pub(crate) fn player_back(&mut self, ui: &mut dyn ShellUi) {
+        if self.handle_player_back_in_place(ui) {
+            return;
+        }
         if self.view != View::Player {
             self.navigate_back(ui);
             return;

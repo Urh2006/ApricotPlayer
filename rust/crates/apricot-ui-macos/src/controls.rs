@@ -336,3 +336,57 @@ impl Button {
         button
     }
 }
+
+define_class!(
+    /// A read-only multi-line text (the player details) whose Tab moves
+    /// focus on like every other control (Windows `handle_details_tab_message`).
+    // SAFETY: NSTextView may be subclassed; no Drop impl.
+    #[unsafe(super(
+        objc2_app_kit::NSTextView,
+        objc2_app_kit::NSText,
+        NSView,
+        NSResponder,
+        objc2_foundation::NSObject
+    ))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "ApricotReadOnlyText"]
+    pub struct ReadOnlyText;
+
+    impl ReadOnlyText {
+        #[unsafe(method(keyDown:))]
+        fn key_down(&self, event: &NSEvent) {
+            if !handle_tab(self, event) {
+                // SAFETY: forwarding the unhandled event to NSTextView.
+                unsafe {
+                    let _: () = msg_send![super(self), keyDown: event];
+                }
+            }
+        }
+    }
+);
+
+impl ReadOnlyText {
+    pub fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(());
+        // SAFETY: `initWithFrame:` of NSTextView.
+        let text: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: NSRect::ZERO] };
+        text.setEditable(false);
+        text.setSelectable(true);
+        text.setRichText(false);
+        text
+    }
+
+    /// Replaces the text and puts the caret at the start, unless it is
+    /// unchanged (Windows `set_details_text` keeps the reading position).
+    pub fn set_text(&self, value: &str) {
+        if self.string().to_string() == value {
+            return;
+        }
+        self.setString(&NSString::from_str(value));
+        self.setSelectedRange(objc2_foundation::NSRange::new(0, 0));
+    }
+
+    pub fn set_label(&self, label: &str) {
+        self.setAccessibilityLabel(Some(&NSString::from_str(label)));
+    }
+}

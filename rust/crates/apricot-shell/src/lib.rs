@@ -11,6 +11,7 @@
 mod keyboard;
 mod main_menu;
 mod player;
+mod player_extras;
 mod repeat;
 mod screens;
 mod type_ahead;
@@ -18,12 +19,13 @@ mod ui;
 
 pub use keyboard::{FocusKind, KeyRoute};
 pub use player::{format_duration, local_file_item};
+pub use player_extras::DetailsLabels;
 pub use repeat::KeyRelease;
 pub use screens::{ListScreen, ScreenControl, local_folder_result_label};
 
 pub use main_menu::{MainMenuSelection, last_activated_index, preserved_index};
 pub use type_ahead::TypeAhead;
-pub use ui::{PlayerFocus, ShellUi};
+pub use ui::{ChoiceDialog, PlayerFocus, ShellUi};
 
 use apricot_app::{Application, MainMenuModel};
 use apricot_core::TranslationCatalog;
@@ -46,6 +48,7 @@ pub struct Shell {
     player: player::PlayerRuntime,
     key_repeat: Option<repeat::KeyRepeat>,
     screens: screens::ScreenState,
+    extras: player_extras::PlayerExtras,
 }
 
 impl Shell {
@@ -59,6 +62,7 @@ impl Shell {
             player: player::PlayerRuntime::default(),
             key_repeat: None,
             screens: screens::ScreenState::default(),
+            extras: player_extras::PlayerExtras::default(),
         }
     }
 
@@ -145,6 +149,7 @@ impl Shell {
 
     /// The main menu as a list screen: the list, then Open.
     fn show_main_menu_screen(&self, ui: &mut dyn ShellUi, selected: usize, focus: bool) {
+        self.sync_window_fullscreen(ui);
         ui.show_list_screen(&ListScreen {
             list_name: self.model.accessible_name.clone(),
             rows: self
@@ -226,6 +231,16 @@ impl Shell {
         }
     }
 
+    /// A button or check box of the player page (Windows
+    /// `activate_player_control`): the Full screen check box keeps focus.
+    pub fn activate_player_control(&mut self, ui: &mut dyn ShellUi, action_id: &str) {
+        if action_id == "player_fullscreen" {
+            self.toggle_player_fullscreen(ui, true, true);
+        } else {
+            self.activate_action(ui, action_id);
+        }
+    }
+
     /// The player actions of Windows `activate_action`; `true` when
     /// `action_id` is one of them.
     fn activate_player_action(&mut self, ui: &mut dyn ShellUi, action_id: &str) -> bool {
@@ -235,7 +250,17 @@ impl Shell {
             "close_player" => self.close_current_player(ui),
             "player_back" => self.player_back(ui),
             // The player page's Back buttons (`player_model` navigation row).
-            "player_back_to_results" | "player_back_to_main_menu" => self.navigate_back(ui),
+            // Windows `activate_player_control`.
+            "player_back_to_results" => self.navigate_back(ui),
+            "player_back_to_main_menu" => self.leave_player_to_main_menu(ui, false),
+            "player_fullscreen_back_to_results" => {
+                self.set_player_fullscreen(ui, false, false, false);
+            }
+            "player_fullscreen" => self.toggle_player_fullscreen(ui, false, true),
+            "player_details" => self.show_player_details(ui),
+            "details_copy" => self.copy_player_details(ui),
+            "details_back" => self.hide_player_details(ui),
+            "player_output_devices" => self.show_output_devices(ui),
             "player_back_keep_playing" => self.leave_player_to_main_menu(ui, true),
             "player_previous" => self.navigate_player_relative(ui, -1, false),
             "player_next" => self.navigate_player_relative(ui, 1, false),

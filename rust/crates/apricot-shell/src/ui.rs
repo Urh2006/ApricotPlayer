@@ -17,6 +17,19 @@ pub enum PlayerFocus {
     Preserve,
 }
 
+/// A modal list choice (Windows `playlist_dialog_win32::choose`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChoiceDialog {
+    pub title: String,
+    pub prompt: String,
+    /// The list's accessible name.
+    pub list_name: String,
+    pub choices: Vec<String>,
+    pub initial: usize,
+    pub ok: String,
+    pub cancel: String,
+}
+
 /// The native side of the main window. Every method runs on the UI thread.
 pub trait ShellUi {
     /// Windows `set_status`: shows `message` on the status line and, when
@@ -36,6 +49,30 @@ pub trait ShellUi {
     /// Windows `PlayerControls::sync` and `layout_controls_state` for the
     /// player page.
     fn show_player(&mut self, model: &PlayerScreenModel, focus: PlayerFocus);
+
+    /// Windows `PlayerControls::show_details`: the details label, read-only
+    /// text (caret at the start, focused) and the Copy and Back buttons below
+    /// the player controls, in Tab order after them.
+    fn show_player_details(&mut self, labels: &crate::DetailsLabels, text: &str);
+
+    /// Hides the details; focus goes to the player surface.
+    fn hide_player_details(&mut self);
+
+    /// Replaces the details text when it changed, keeping the reading
+    /// position otherwise (Windows `set_details_text`).
+    fn set_player_details_text(&mut self, text: &str);
+
+    /// Focus on the player control `id`.
+    fn focus_player_control(&mut self, id: &str);
+
+    /// The window fills the screen (Windows `apply_window_fullscreen`).
+    fn set_window_fullscreen(&mut self, fullscreen: bool);
+
+    /// A modal list choice; `None` when cancelled.
+    fn choose(&mut self, dialog: &ChoiceDialog) -> Option<usize>;
+
+    /// Copies text to the clipboard; `true` on success.
+    fn copy_text(&mut self, text: &str) -> bool;
 
     /// The window title (Windows `SetWindowTextW` on the main window).
     fn set_window_title(&mut self, title: &str);

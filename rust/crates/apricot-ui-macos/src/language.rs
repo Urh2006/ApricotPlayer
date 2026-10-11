@@ -1,7 +1,9 @@
-//! The one-time language choice before the main window
-//! (`first_run_language_win32.rs`): a window "Language" with the prompt, the
-//! language list (focused, current language selected), OK and Cancel. Enter
-//! and a double click accept, Escape cancels.
+//! Modal list choices: the one-time language choice before the main window
+//! (`first_run_language_win32.rs`) and the list picker of
+//! `playlist_dialog_win32.rs` (output devices and other choices). A window
+//! with the prompt, the list (focused, the initial row selected), OK and
+//! Cancel. Enter and a double click accept, Escape and closing cancel, and
+//! focus returns to the control that had it.
 
 #![allow(unsafe_code)]
 
@@ -19,8 +21,6 @@ use objc2_foundation::{NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSSt
 
 use crate::controls::{self, Button, List};
 
-const WIDTH: f64 = 520.0;
-const HEIGHT: f64 = 560.0;
 const MARGIN: f64 = 12.0;
 const PROMPT_HEIGHT: f64 = 28.0;
 const BUTTON_HEIGHT: f64 = 34.0;
@@ -36,7 +36,7 @@ define_class!(
     // SAFETY: NSObject has no subclassing requirements; no Drop impl.
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
-    #[name = "ApricotLanguageDialog"]
+    #[name = "ApricotChoiceDialog"]
     #[ivars = DialogIvars]
     struct Dialog;
 
@@ -72,9 +72,28 @@ impl Dialog {
     }
 }
 
-/// Shows the language choice and returns the chosen language code, or
-/// `None` when it was cancelled or closed (the current language stays).
-pub fn choose(mtm: MainThreadMarker, current_language: &str) -> Option<&'static str> {
+/// One list choice.
+pub struct ChoiceRequest<'a> {
+    pub title: &'a str,
+    pub prompt: &'a str,
+    /// The list's accessible name (Windows uses the prompt).
+    pub list_name: &'a str,
+    pub choices: &'a [String],
+    pub initial: usize,
+    pub ok: &'a str,
+    pub cancel: &'a str,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// Shows the choice modally; `None` when cancelled or closed.
+pub fn choose_from_list(mtm: MainThreadMarker, request: &ChoiceRequest<'_>) -> Option<usize> {
+    let (width, height) = (request.width, request.height);
+    let app = NSApplication::sharedApplication(mtm);
+    let previous_window = app.keyWindow();
+    let previous_focus = previous_window
+        .as_ref()
+        .and_then(|window| window.firstResponder());
     let dialog: Retained<Dialog> = {
         let this = Dialog::alloc(mtm).set_ivars(DialogIvars::default());
         // SAFETY: `init` of NSObject.
@@ -85,7 +104,7 @@ pub fn choose(mtm: MainThreadMarker, current_language: &str) -> Option<&'static 
     let window = unsafe {
         NSWindow::initWithContentRect_styleMask_backing_defer(
             NSWindow::alloc(mtm),
-            NSRect::new(NSPoint::new(300.0, 200.0), NSSize::new(WIDTH, HEIGHT)),
+            NSRect::new(NSPoint::new(300.0, 200.0), NSSize::new(width, height)),
             NSWindowStyleMask::Titled | NSWindowStyleMask::Closable,
             NSBackingStoreType::Buffered,
             false,
@@ -93,32 +112,19 @@ pub fn choose(mtm: MainThreadMarker, current_language: &str) -> Option<&'static 
     };
     // SAFETY: the window is released by its last owner, this function.
     unsafe { window.setReleasedWhenClosed(false) };
-    window.setTitle(&NSString::from_str("Language"));
+    window.setTitle(&NSString::from_str(request.title));
     window.setDelegate(Some(ProtocolObject::from_ref(&*dialog)));
     let content = window.contentView().expect("a window has a content view");
 
-    let prompt = NSTextField::labelWithString(
-        &NSString::from_str("Choose the language for ApricotPlayer."),
-        mtm,
-    );
+    let prompt = NSTextField::labelWithString(&NSString::from_str(request.prompt), mtm);
     prompt.setFrame(NSRect::new(
-        NSPoint::new(MARGIN, HEIGHT - MARGIN - PROMPT_HEIGHT),
-        NSSize::new(WIDTH - 2.0 * MARGIN, PROMPT_HEIGHT),
+        NSPoint::new(MARGIN, height - MARGIN - PROMPT_HEIGHT),
+        NSSize::new(width - 2.0 * MARGIN, PROMPT_HEIGHT),
     ));
     content.addSubview(&prompt);
 
-    let list = List::new(mtm, "Language");
-    let selected = LANGUAGES
-        .iter()
-        .position(|language| language.code == current_language)
-        .unwrap_or(0);
-    list.set_rows(
-        LANGUAGES
-            .iter()
-            .map(|language| language.name.to_owned())
-            .collect(),
-        Some(selected),
-    );
+    let list = List::new(mtm, request.list_name);
+    list.set_rows(request.choices.to_vec(), Some(request.initial));
     list.set_activate_action(target, sel!(accept:));
     let list_bottom = MARGIN * 2.0 + BUTTON_HEIGHT;
     let scroll = NSScrollView::initWithFrame(
@@ -126,8 +132,8 @@ pub fn choose(mtm: MainThreadMarker, current_language: &str) -> Option<&'static 
         NSRect::new(
             NSPoint::new(MARGIN, list_bottom),
             NSSize::new(
-                WIDTH - 2.0 * MARGIN,
-                HEIGHT - MARGIN - PROMPT_HEIGHT - list_bottom,
+                width - 2.0 * MARGIN,
+                height - MARGIN - PROMPT_HEIGHT - list_bottom,
             ),
         ),
     );
@@ -135,15 +141,15 @@ pub fn choose(mtm: MainThreadMarker, current_language: &str) -> Option<&'static 
     scroll.setHasVerticalScroller(true);
     content.addSubview(&scroll);
 
-    let ok = Button::new(mtm, "OK", target, sel!(accept:));
+    let ok = Button::new(mtm, request.ok, target, sel!(accept:));
     ok.setFrame(NSRect::new(
-        NSPoint::new(WIDTH - MARGIN - BUTTON_WIDTH * 2.0 - 8.0, MARGIN),
+        NSPoint::new(width - MARGIN - BUTTON_WIDTH * 2.0 - 8.0, MARGIN),
         NSSize::new(BUTTON_WIDTH, BUTTON_HEIGHT),
     ));
     content.addSubview(&ok);
-    let cancel = Button::new(mtm, "Cancel", target, sel!(cancel:));
+    let cancel = Button::new(mtm, request.cancel, target, sel!(cancel:));
     cancel.setFrame(NSRect::new(
-        NSPoint::new(WIDTH - MARGIN - BUTTON_WIDTH, MARGIN),
+        NSPoint::new(width - MARGIN - BUTTON_WIDTH, MARGIN),
         NSSize::new(BUTTON_WIDTH, BUTTON_HEIGHT),
     ));
     // Escape presses Cancel, as IDCANCEL does on Windows.
@@ -155,7 +161,6 @@ pub fn choose(mtm: MainThreadMarker, current_language: &str) -> Option<&'static 
     window.setInitialFirstResponder(Some(&list));
     *dialog.ivars().list.borrow_mut() = Some(list.clone());
 
-    let app = NSApplication::sharedApplication(mtm);
     app.activate();
     window.center();
     window.makeKeyAndOrderFront(None);
@@ -163,13 +168,43 @@ pub fn choose(mtm: MainThreadMarker, current_language: &str) -> Option<&'static 
     let response = app.runModalForWindow(&window);
     window.setDelegate(None);
     window.orderOut(None);
+    if let Some(previous) = previous_window {
+        previous.makeKeyAndOrderFront(None);
+        if let Some(focus) = previous_focus {
+            previous.makeFirstResponder(Some(&focus));
+        }
+    }
     if response != NSModalResponseOK {
         return None;
     }
-    dialog
-        .ivars()
-        .selected
-        .get()
-        .and_then(|index| LANGUAGES.get(index))
-        .map(|language| language.code)
+    dialog.ivars().selected.get()
+}
+
+/// Shows the language choice and returns the chosen language code, or
+/// `None` when it was cancelled or closed (the current language stays).
+pub fn choose(mtm: MainThreadMarker, current_language: &str) -> Option<&'static str> {
+    let choices: Vec<String> = LANGUAGES
+        .iter()
+        .map(|language| language.name.to_owned())
+        .collect();
+    let initial = LANGUAGES
+        .iter()
+        .position(|language| language.code == current_language)
+        .unwrap_or(0);
+    choose_from_list(
+        mtm,
+        &ChoiceRequest {
+            title: "Language",
+            prompt: "Choose the language for ApricotPlayer.",
+            list_name: "Language",
+            choices: &choices,
+            initial,
+            ok: "OK",
+            cancel: "Cancel",
+            width: 520.0,
+            height: 560.0,
+        },
+    )
+    .and_then(|index| LANGUAGES.get(index))
+    .map(|language| language.code)
 }

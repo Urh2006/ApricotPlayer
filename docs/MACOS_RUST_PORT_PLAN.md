@@ -351,3 +351,21 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   Escape v glavni meni.
 - Odprto: zaslon Playback queue (gumb in Command+Option+Q zaenkrat povesta
   nedosegljivost), kontekstni meni rezultatov.
+
+### M4b, drugi del: izhodne naprave, podrobnosti, celozaslonski način (11. 10. 2026)
+
+- Izhodne naprave (O): izbirno okno s seznamom (`playlist_dialog_win32::choose`
+  na Macu kot skupno modalno okno, ki ga uporablja tudi izbira jezika),
+  `SetAudioDevice`, oglas `output_device_set`. Preverjanje shranjene naprave
+  6,5 s po vidnem zagonu z vprašanjem za novo privzeto napravo, kot na Windows.
+- Podrobnosti (F7): oznaka, besedilo samo za branje (puščice, Home, End,
+  PageUp, PageDown, Command+C in Command+A ostanejo v besedilu), Copy details,
+  Back, v Tab vrstnem redu za kontrolami; Escape najprej skrije podrobnosti,
+  nato zapusti celozaslonski način, šele nato predvajalnik.
+  `show_video_details_by_default` odpre podrobnosti ob odprtju predvajalnika.
+- Celozaslonski način (F11 in potrditveno polje): nativni macOS full screen
+  okna, kadar je odprta stran predvajalnika v tem načinu.
+- Popravek: gumb "Back to main menu" v predvajalniku zdaj ustavi predvajanje
+  in gre v glavni meni (Windows `leave_player_to_main_menu(false)`).
+- Preverjeno samodejno s pravim mpv: F7, puščica v podrobnostih, Escape skrije,
+  F11, Escape zapusti celozaslonski način, Escape v glavni meni.

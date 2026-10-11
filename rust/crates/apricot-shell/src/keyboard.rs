@@ -21,6 +21,8 @@ pub enum FocusKind {
     PlayerCheckbox,
     /// A push button of a list screen (Open, Back, ...).
     Button,
+    /// The read-only text of the player details.
+    DetailsText,
     /// Anything else.
     Other,
 }
@@ -61,6 +63,11 @@ impl Shell {
         {
             return KeyRoute::Unhandled;
         }
+        // Python `details_text_navigation_key`: reading keys stay in the
+        // details text instead of seeking or changing volume.
+        if focus == FocusKind::DetailsText && details_text_navigation_key(chord) {
+            return KeyRoute::Unhandled;
+        }
         let shortcuts = &self.application.settings().keyboard_shortcuts;
         let (scope, accepts_text) = view_shortcut_scope(self.view);
         let Some(action) =
@@ -78,6 +85,21 @@ impl Shell {
             _ => KeyRoute::Run(action.id.as_str()),
         }
     }
+}
+
+/// Windows `details_text_navigation_key`.
+const fn details_text_navigation_key(chord: ShortcutChord) -> bool {
+    matches!(
+        chord.key,
+        ShortcutKey::Up
+            | ShortcutKey::Down
+            | ShortcutKey::Left
+            | ShortcutKey::Right
+            | ShortcutKey::Home
+            | ShortcutKey::End
+            | ShortcutKey::PageUp
+            | ShortcutKey::PageDown
+    ) || (chord.control && matches!(chord.key, ShortcutKey::Character('c' | 'C' | 'a' | 'A')))
 }
 
 /// Windows `view_shortcut_scope`.

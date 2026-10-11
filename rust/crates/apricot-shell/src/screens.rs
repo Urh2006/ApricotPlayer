@@ -161,6 +161,12 @@ impl Shell {
     /// Windows `poll_local_folder_scan` and the other background timers;
     /// returns `false` when nothing is left to poll.
     pub fn poll_background(&mut self, ui: &mut dyn ShellUi) -> bool {
+        let folder = self.poll_folder_scan(ui);
+        let device = self.poll_saved_audio_device_check(ui);
+        folder || device
+    }
+
+    fn poll_folder_scan(&mut self, ui: &mut dyn ShellUi) -> bool {
         let Some(pending) = self.screens.pending_scan.as_ref() else {
             return false;
         };
@@ -206,6 +212,7 @@ impl Shell {
         focus: bool,
         announce_status: bool,
     ) {
+        self.sync_window_fullscreen(ui);
         let catalog = self.catalog();
         let session = self.application.local_folder_session();
         let (rows, selected, message) = if session.is_empty() {

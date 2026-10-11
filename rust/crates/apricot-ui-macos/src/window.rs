@@ -113,7 +113,7 @@ define_class!(
                     .and_then(|page| page.activation(tag))
             });
             if let Some(action) = action {
-                self.with_shell(|shell, ui| shell.activate_action(ui, action));
+                self.with_shell(|shell, ui| shell.activate_player_control(ui, action));
             }
         }
 
@@ -310,6 +310,7 @@ impl MainWindowController {
         };
         match page.control_id(responder) {
             Some("video_host") => FocusKind::PlayerSurface,
+            Some("details_text") => FocusKind::DetailsText,
             Some(id) if page.is_checkbox(id) => FocusKind::PlayerCheckbox,
             Some(_) => FocusKind::PlayerButton,
             None => FocusKind::Other,
@@ -429,6 +430,9 @@ impl MainWindowController {
             window.makeKeyAndOrderFront(None);
             window.makeFirstResponder(Some(&list));
             NSApplication::sharedApplication(mtm).activate();
+        }
+        if !start_hidden {
+            self.with_shell(|shell, ui| shell.schedule_saved_audio_device_check(ui));
         }
         // Windows `process_pending_activations` after the window is shown.
         self.with_shell(|shell, ui| shell.process_activations(ui));
@@ -696,7 +700,7 @@ impl MainWindowController {
             return;
         };
         let command = objc2_app_kit::NSEventModifierFlags::Command;
-        let steps: [(&str, Option<Key>); 13] = [
+        let steps: [(&str, Option<Key>); 18] = [
             ("opened", None),
             ("T (time)", Some(key(17, "t"))),
             ("Space (pause)", Some(key(keys::KEY_SPACE, " "))),
@@ -715,6 +719,17 @@ impl MainWindowController {
             ("V (volume)", Some(key(9, "v"))),
             ("Down (volume)", Some(key(keys::KEY_DOWN, "\u{f701}"))),
             ("V (volume)", Some(key(9, "v"))),
+            ("F7 (details)", Some(key(98, "\u{f70a}"))),
+            ("Down in details", Some(key(keys::KEY_DOWN, "\u{f701}"))),
+            (
+                "Escape (hide details)",
+                Some(key(keys::KEY_ESCAPE, "\u{1b}")),
+            ),
+            ("F11 (full screen)", Some(key(103, "\u{f70e}"))),
+            (
+                "Escape (leave full screen)",
+                Some(key(keys::KEY_ESCAPE, "\u{1b}")),
+            ),
             ("Tab", Some(key(keys::KEY_TAB, "\t"))),
             ("Escape", Some(key(keys::KEY_ESCAPE, "\u{1b}"))),
         ];
@@ -924,6 +939,88 @@ impl ShellUi for MacUi<'_> {
         if let (Some(target), Some(window)) = (target, self.controller.window()) {
             window.makeFirstResponder(Some(target));
         }
+    }
+
+    fn show_player_details(&mut self, labels: &apricot_shell::DetailsLabels, text: &str) {
+        let mut page = self.controller.ivars().page.borrow_mut();
+        let Some(page) = page.as_mut() else {
+            return;
+        };
+        page.show_details(labels, text);
+        if let Some(window) = self.controller.window() {
+            window.makeFirstResponder(Some(page.details_text()));
+        }
+    }
+
+    fn hide_player_details(&mut self) {
+        let mut page = self.controller.ivars().page.borrow_mut();
+        let Some(page) = page.as_mut() else {
+            return;
+        };
+        let had_focus = self
+            .controller
+            .window()
+            .and_then(|window| window.firstResponder())
+            .is_some_and(|responder| page.control_id(responder.as_ref()).is_some());
+        page.hide_details();
+        if had_focus
+            && let (Some(window), Some(surface)) =
+                (self.controller.window(), page.view_for("video_host"))
+        {
+            window.makeFirstResponder(Some(surface));
+        }
+    }
+
+    fn set_player_details_text(&mut self, text: &str) {
+        if let Some(page) = self.controller.ivars().page.borrow().as_ref() {
+            page.set_details_text(text);
+        }
+    }
+
+    fn focus_player_control(&mut self, id: &str) {
+        let page = self.controller.ivars().page.borrow();
+        if let (Some(window), Some(view)) = (
+            self.controller.window(),
+            page.as_ref().and_then(|page| page.view_for(id)),
+        ) {
+            window.makeFirstResponder(Some(view));
+        }
+    }
+
+    fn set_window_fullscreen(&mut self, fullscreen: bool) {
+        let Some(window) = self.controller.window() else {
+            return;
+        };
+        let current = window.styleMask().contains(NSWindowStyleMask::FullScreen);
+        if current != fullscreen {
+            window.toggleFullScreen(None);
+        }
+    }
+
+    fn choose(&mut self, dialog: &apricot_shell::ChoiceDialog) -> Option<usize> {
+        crate::language::choose_from_list(
+            self.controller.mtm(),
+            &crate::language::ChoiceRequest {
+                title: &dialog.title,
+                prompt: &dialog.prompt,
+                list_name: &dialog.list_name,
+                choices: &dialog.choices,
+                initial: dialog.initial,
+                ok: &dialog.ok,
+                cancel: &dialog.cancel,
+                width: 540.0,
+                height: 470.0,
+            },
+        )
+    }
+
+    fn copy_text(&mut self, text: &str) -> bool {
+        let pasteboard = objc2_app_kit::NSPasteboard::generalPasteboard();
+        pasteboard.clearContents();
+        // SAFETY: `NSPasteboardTypeString` is AppKit's static string type.
+        pasteboard.setString_forType(&NSString::from_str(text), unsafe {
+            objc2_app_kit::NSPasteboardTypeString
+        })
     }
 
     fn set_window_title(&mut self, title: &str) {
