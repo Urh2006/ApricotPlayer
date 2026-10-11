@@ -47,6 +47,13 @@ pub fn run_application(
     app::run(application, version, start_hidden, prompt_language)
 }
 
+/// A second launch without a file while the first instance keeps its
+/// window (Windows `show_already_open`): a message in this process.
+#[cfg(target_os = "macos")]
+pub fn show_already_open(message: &str) {
+    app::show_already_open(message);
+}
+
 /// Rejects the macOS UI on other systems.
 ///
 /// # Errors

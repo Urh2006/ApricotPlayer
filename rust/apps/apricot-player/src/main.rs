@@ -69,6 +69,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let message = catalog.text("already_open");
                 apricot_ui_windows::show_already_open(message);
             }
+            #[cfg(target_os = "macos")]
+            {
+                use apricot_platform::activation::{ActivationMessage, forward};
+                if let Some(path) = startup_file {
+                    forward(
+                        apricot_platform::BUILD_IDENTITY,
+                        &ActivationMessage::OpenFile(path),
+                    )?;
+                } else if settings.current().close_to_tray {
+                    forward(apricot_platform::BUILD_IDENTITY, &ActivationMessage::Show)?;
+                } else {
+                    let catalog = apricot_app::embedded_catalog(&settings.current().language);
+                    apricot_ui_macos::show_already_open(catalog.text("already_open"));
+                }
+            }
             return Ok(());
         }
     };

@@ -54,6 +54,8 @@ pub struct ControllerIvars {
     exiting: Cell<bool>,
     /// The next step of the development self-test.
     self_test_step: Cell<usize>,
+    /// Activation requests waiting for the shell.
+    activations: RefCell<Vec<apricot_app::ActivationRequest>>,
 }
 
 define_class!(
@@ -127,6 +129,11 @@ define_class!(
             self.with_shell(|shell, ui| shell.key_repeat_tick(ui));
         }
 
+        #[unsafe(method(drainActivations:))]
+        fn drain_activations_selector(&self, _sender: Option<&AnyObject>) {
+            self.drain_activations();
+        }
+
         #[unsafe(method(playerSelfTestStep:))]
         fn player_self_test_step_selector(&self, _sender: Option<&AnyObject>) {
             #[cfg(debug_assertions)]
@@ -171,6 +178,7 @@ impl MainWindowController {
             held_modifiers: Cell::new(keys::Modifiers::default()),
             exiting: Cell::new(false),
             self_test_step: Cell::new(0),
+            activations: RefCell::new(Vec::new()),
         });
         // SAFETY: `init` of NSObject.
         unsafe { msg_send![super(this), init] }
@@ -386,12 +394,41 @@ impl MainWindowController {
 
     /// A file opened from Finder or a second launch (Windows `WM_COPYDATA`).
     pub fn open_file(&self, path: PathBuf) {
-        self.with_shell(|shell, ui| {
-            shell
-                .application
-                .enqueue_activation(apricot_app::ActivationRequest::OpenFile(path));
+        self.enqueue_activation(apricot_app::ActivationRequest::OpenFile(path));
+    }
+
+    /// A request of Finder, the Dock or a second launch. While a modal
+    /// window keeps the shell busy it waits, as Windows defers
+    /// `WM_PROCESS_ACTIVATION` while `modal_open` is set.
+    pub fn enqueue_activation(&self, request: apricot_app::ActivationRequest) {
+        self.ivars().activations.borrow_mut().push(request);
+        self.drain_activations();
+    }
+
+    fn drain_activations(&self) {
+        let requests = std::mem::take(&mut *self.ivars().activations.borrow_mut());
+        if requests.is_empty() {
+            return;
+        }
+        let handled = self.with_shell(|shell, ui| {
+            for request in requests.iter().cloned() {
+                shell.application.enqueue_activation(request);
+            }
             shell.process_activations(ui);
         });
+        if handled.is_none() {
+            self.ivars().activations.borrow_mut().splice(0..0, requests);
+            // SAFETY: `drainActivations:` exists on this controller; the
+            // delay runs in the default run loop mode, after a modal window.
+            unsafe {
+                let _: () = msg_send![
+                    self,
+                    performSelector: sel!(drainActivations:),
+                    withObject: Option::<&AnyObject>::None,
+                    afterDelay: 0.2_f64
+                ];
+            }
+        }
     }
 
     fn window(&self) -> Option<Retained<MainWindow>> {
@@ -570,6 +607,7 @@ impl MainWindowController {
         if let Some(window) = self.ivars().window.borrow().as_ref() {
             window.makeKeyAndOrderFront(None);
         }
+        NSApplication::sharedApplication(self.mtm()).activate();
     }
 
     /// An action from the menu bar.

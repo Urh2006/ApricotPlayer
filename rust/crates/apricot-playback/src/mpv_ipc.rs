@@ -144,10 +144,16 @@ pub fn make_unique_ipc_path() -> String {
     // Socket paths are limited to about 100 bytes, so the short temporary
     // folder is used rather than a per-user cache folder.
     #[cfg(unix)]
-    return std::env::temp_dir()
-        .join(format!("{name}.sock"))
-        .to_string_lossy()
-        .into_owned();
+    {
+        let path = std::env::temp_dir().join(format!("{name}.sock"));
+        // A Unix socket path is limited to about 104 bytes.
+        let path = if path.as_os_str().len() < 100 {
+            path
+        } else {
+            std::path::PathBuf::from("/tmp").join(format!("{name}.sock"))
+        };
+        path.to_string_lossy().into_owned()
+    }
 }
 
 /// Opens a connection to the IPC server at `path`.

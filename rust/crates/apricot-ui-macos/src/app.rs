@@ -24,6 +24,8 @@ pub struct DelegateIvars {
     controller: RefCell<Option<Retained<MainWindowController>>>,
     /// Files opened from Finder before the window exists.
     pending_files: RefCell<Vec<std::path::PathBuf>>,
+    /// Requests of second launches (Windows `WM_COPYDATA`).
+    activation_listener: RefCell<Option<apricot_platform::activation::ActivationListener>>,
 }
 
 define_class!(
@@ -67,6 +69,7 @@ define_class!(
             for path in pending {
                 controller.open_file(path);
             }
+            self.listen_for_activations(mtm, &controller);
             *self.ivars().controller.borrow_mut() = Some(controller);
         }
 
@@ -124,6 +127,37 @@ define_class!(
 );
 
 impl Delegate {
+    /// Requests of second launches reach the controller on the main thread.
+    fn listen_for_activations(
+        &self,
+        mtm: MainThreadMarker,
+        controller: &Retained<MainWindowController>,
+    ) {
+        use apricot_platform::activation::{ActivationMessage, listen};
+        let controller =
+            std::sync::Arc::new(dispatch2::MainThreadBound::new(controller.clone(), mtm));
+        let listener = listen(apricot_platform::BUILD_IDENTITY, move |message| {
+            let controller = std::sync::Arc::clone(&controller);
+            dispatch2::DispatchQueue::main().exec_async(move || {
+                let Some(mtm) = MainThreadMarker::new() else {
+                    return;
+                };
+                let request = match message {
+                    ActivationMessage::Show => apricot_app::ActivationRequest::Show,
+                    ActivationMessage::OpenSettings => apricot_app::ActivationRequest::OpenSettings,
+                    ActivationMessage::OpenFile(path) => {
+                        apricot_app::ActivationRequest::OpenFile(path)
+                    }
+                };
+                controller.get(mtm).enqueue_activation(request);
+            });
+        });
+        match listener {
+            Ok(listener) => *self.ivars().activation_listener.borrow_mut() = Some(listener),
+            Err(error) => eprintln!("A second launch cannot reach this instance: {error}"),
+        }
+    }
+
     fn new(
         mtm: MainThreadMarker,
         application: Application,
@@ -138,6 +172,7 @@ impl Delegate {
             prompt_language,
             controller: RefCell::new(None),
             pending_files: RefCell::new(Vec::new()),
+            activation_listener: RefCell::new(None),
         });
         // SAFETY: `init` of NSObject.
         unsafe { msg_send![super(this), init] }
@@ -229,4 +264,18 @@ pub fn run(
     app.run();
     drop(delegate);
     Ok(())
+}
+
+/// Windows `show_already_open` for a second launch.
+pub fn show_already_open(message: &str) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+    app.activate();
+    let alert = objc2_app_kit::NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(message));
+    alert.addButtonWithTitle(&NSString::from_str("OK"));
+    alert.runModal();
 }

@@ -326,3 +326,11 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   teče, T, Space, D, Command+0, R, puščice, V, Tab in Escape delujejo.
 - Odprto: VoiceOver preizkus, Play folder, druga instanca naj preda datoteko
   prvi (zdaj se tiho konča), sistemski trki bližnjic (F11, Command+puščice).
+- **Dopolnitev M4a (11. 10. 2026).** Drugi zagon preda datoteko oziroma prikaz
+  okna prvi instanci prek Unix socketa ob zaklepu (`apricot_platform::
+  activation`, ekvivalent Windows `WM_COPYDATA`); brez datoteke in brez
+  "close to tray" drugi zagon pokaže "already open", kot na Windows. Zahteve
+  med modalnim oknom počakajo. Preverjeno samodejno: drugi zagon z datoteko,
+  prva instanca jo predvaja in zapiše v zgodovino. VoiceOver navodila:
+  `docs/MACOS_M4A_VOICEOVER_TEST.md`. Play folder pride v M4b skupaj s
+  seznamom datotek mape.

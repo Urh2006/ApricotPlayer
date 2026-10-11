@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+#[cfg(unix)]
+pub mod activation;
 pub mod app_update;
 pub mod audiovault;
 pub mod audiovault_credentials;
