@@ -176,6 +176,8 @@ mod equalizer {
         pub(super) selected: Option<usize>,
         /// The list screens shown, last last.
         pub(super) screens: Vec<crate::ListScreen>,
+        /// The RSS timer interval, `None` when stopped.
+        pub(super) rss_timer: Option<f64>,
     }
 
     impl ShellUi for Ui {
@@ -254,6 +256,20 @@ mod equalizer {
         }
         fn choose_folder(&mut self, _title: &str) -> Option<PathBuf> {
             None
+        }
+        fn choose_open_file(&mut self, _title: &str, _extensions: &[&str]) -> Option<PathBuf> {
+            None
+        }
+        fn choose_save_file(
+            &mut self,
+            _title: &str,
+            _default_name: &str,
+            _extensions: &[&str],
+        ) -> Option<PathBuf> {
+            None
+        }
+        fn set_rss_timer(&mut self, interval_seconds: Option<f64>) {
+            self.rss_timer = interval_seconds;
         }
         fn set_background_polling(&mut self, _active: bool) {}
         fn restore(&mut self) {}
@@ -694,5 +710,118 @@ mod playlists {
         let screen = ui.screens.last().expect("empty items").clone();
         assert_eq!(screen.rows, [shell.text("playlist_empty")]);
         assert_eq!(ids(&screen), ["back", "list"]);
+    }
+}
+
+mod podcasts {
+    use super::equalizer::Ui;
+    use crate::{ListScreen, ScreenControl};
+
+    fn ids(screen: &ListScreen) -> Vec<&'static str> {
+        screen
+            .controls
+            .iter()
+            .map(|control| match control {
+                ScreenControl::List => "list",
+                ScreenControl::Button { id, .. } => id,
+                _ => "field",
+            })
+            .collect()
+    }
+
+    fn episode(title: &str) -> apricot_core::MediaItem {
+        let mut item = crate::local_file_item(std::path::Path::new(&format!("/tmp/{title}.mp3")));
+        item.kind = apricot_core::MediaKind::PodcastEpisode;
+        item
+    }
+
+    #[test]
+    fn the_feed_list_has_the_windows_tab_order_and_says_it_is_empty() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell.activate_action(&mut ui, "open_podcasts_rss");
+        let screen = ui.screens.last().expect("feeds screen");
+        assert_eq!(screen.list_name, shell.text("rss_feeds"));
+        assert_eq!(screen.rows, [shell.text("rss_feeds_empty")]);
+        assert_eq!(
+            ids(screen),
+            [
+                "back",
+                "rss_search",
+                "rss_categories",
+                "rss_add",
+                "rss_refresh",
+                "open",
+                "collection_remove",
+                "rss_filter",
+                "rss_set_category",
+                "rss_import",
+                "rss_export",
+                "list"
+            ]
+        );
+        shell.activate_screen_button(&mut ui, "rss_refresh");
+        assert_eq!(
+            ui.announcements.last(),
+            Some(&shell.text("rss_feeds_empty"))
+        );
+    }
+
+    #[test]
+    fn a_feed_opens_its_episodes_marks_them_played_and_goes_back() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        let mut feed = apricot_app::RssFeed::new(
+            "Show",
+            "https://example.com/feed.xml",
+            "",
+            vec![episode("One"), episode("Two")],
+            1.0,
+        );
+        feed.items_complete = Some(true);
+        let _ = shell.application.add_rss_feed(feed).expect("added");
+        shell.activate_action(&mut ui, "open_podcasts_rss");
+        let row = ui.screens.last().expect("feeds").rows[0].clone();
+        assert!(row.starts_with("Show | "), "{row}");
+        ui.selected = Some(0);
+        shell.activate_screen_button(&mut ui, "open");
+        let screen = ui.screens.last().expect("episodes").clone();
+        assert_eq!(screen.list_name, shell.text("rss_feed_items"));
+        assert_eq!(
+            ids(&screen),
+            [
+                "back",
+                "rss_refresh",
+                "open",
+                "rss_download_episode",
+                "rss_download_feed",
+                "list"
+            ]
+        );
+        assert!(screen.rows[1].starts_with("Two | "), "{:?}", screen.rows);
+        ui.selected = Some(1);
+        shell.activate_action(&mut ui, "toggle_podcast_played");
+        let screen = ui.screens.last().expect("episodes");
+        assert!(
+            screen.rows[1].contains(&shell.text("played_marker")),
+            "{:?}",
+            screen.rows
+        );
+        assert_eq!(screen.selected, Some(1));
+        shell.activate_screen_button(&mut ui, "back");
+        let screen = ui.screens.last().expect("feeds");
+        assert_eq!(screen.list_name, shell.text("rss_feeds"));
+        assert!(screen.rows[0].contains("Show"));
+    }
+
+    #[test]
+    fn the_refresh_timer_follows_the_settings() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell.start(&mut ui);
+        let settings = shell.application.settings();
+        let expected = (settings.enable_podcasts_rss && settings.rss_auto_refresh_enabled)
+            .then(|| settings.rss_refresh_interval_hours.clamp(0.5, 168.0) * 3600.0);
+        assert_eq!(ui.rss_timer, expected);
     }
 }

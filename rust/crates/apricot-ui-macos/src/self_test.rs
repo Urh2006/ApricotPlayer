@@ -395,3 +395,69 @@ pub fn folder_steps() -> Vec<(&'static str, Option<Key>)> {
         ("Escape (main menu)", Some(key(keys::KEY_ESCAPE, "\u{1b}"))),
     ]
 }
+
+/// The steps of `APRICOT_MACOS_SELF_TEST=podcasts`: adding the feed
+/// `APRICOT_MACOS_SELF_TEST_QUERY`, opening it, the played state, playing an
+/// episode and going back.
+pub fn podcast_steps() -> Vec<(String, Option<Key>)> {
+    use crate::keys;
+    let command_shift =
+        objc2_app_kit::NSEventModifierFlags::Command | objc2_app_kit::NSEventModifierFlags::Shift;
+    let named = |name: &str, key: Option<Key>| (name.to_owned(), key);
+    let mut steps = vec![
+        named("open podcasts", None),
+        named("Add feed (prompt)", None),
+    ];
+    for _ in 0..12 {
+        steps.push(named("waiting for the feed", None));
+    }
+    steps.push(named(
+        "Return (open feed)",
+        Some(key(keys::KEY_RETURN, "\r")),
+    ));
+    for _ in 0..4 {
+        steps.push(named("waiting for the episodes", None));
+    }
+    steps.push(named("Down", Some(key(keys::KEY_DOWN, "\u{f701}"))));
+    steps.push(named(
+        "Command+Shift+X (played)",
+        Some(Key {
+            code: 7,
+            text: "X",
+            flags: command_shift,
+        }),
+    ));
+    steps.push(named(
+        "Command+Shift+X (unplayed)",
+        Some(Key {
+            code: 7,
+            text: "X",
+            flags: command_shift,
+        }),
+    ));
+    steps.push(named("Up", Some(key(keys::KEY_UP, "\u{f700}"))));
+    steps.push(named(
+        "Return (play episode)",
+        Some(key(keys::KEY_RETURN, "\r")),
+    ));
+    for _ in 0..12 {
+        steps.push(named("waiting for playback", None));
+    }
+    steps.push(named(
+        "Escape (episodes)",
+        Some(key(keys::KEY_ESCAPE, "\u{1b}")),
+    ));
+    steps.push(named(
+        "End (more episodes)",
+        Some(key(keys::KEY_END, "\u{f72b}")),
+    ));
+    steps.push(named(
+        "Escape (feeds)",
+        Some(key(keys::KEY_ESCAPE, "\u{1b}")),
+    ));
+    steps.push(named(
+        "Escape (main menu)",
+        Some(key(keys::KEY_ESCAPE, "\u{1b}")),
+    ));
+    steps
+}

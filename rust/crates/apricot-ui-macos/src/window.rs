@@ -49,6 +49,7 @@ pub struct ControllerIvars {
     status: RefCell<Option<Retained<NSTextField>>>,
     page: RefCell<Option<PlayerPage>>,
     poll_timer: RefCell<Option<Retained<NSTimer>>>,
+    rss_timer: RefCell<Option<Retained<NSTimer>>>,
     /// The key code of a held player key (Windows `ControlledRepeatState`).
     held_key: Cell<Option<u16>>,
     /// The modifiers held at the last key event, to see which one went up.
@@ -247,6 +248,18 @@ define_class!(
             self.with_shell(|shell, ui| shell.list_selection_changed(ui));
         }
 
+        /// End, or Down at the last row (Windows `rss_list_subclass_proc`).
+        #[unsafe(method(listEndReached:))]
+        fn list_end_reached(&self, _sender: Option<&AnyObject>) {
+            self.with_shell(|shell, ui| shell.list_end_reached(ui));
+        }
+
+        /// Windows `RSS_REFRESH_TIMER_ID`.
+        #[unsafe(method(rssTimer:))]
+        fn rss_timer(&self, _timer: Option<&AnyObject>) {
+            self.with_shell(|shell, ui| shell.refresh_all_rss_feeds_background(ui));
+        }
+
         #[unsafe(method(screenButton:))]
         fn screen_button(&self, sender: Option<&AnyObject>) {
             let tag = sender
@@ -296,6 +309,7 @@ impl MainWindowController {
             status: RefCell::new(None),
             page: RefCell::new(None),
             poll_timer: RefCell::new(None),
+            rss_timer: RefCell::new(None),
             held_key: Cell::new(None),
             held_modifiers: Cell::new(keys::Modifiers::default()),
             exiting: Cell::new(false),
@@ -501,6 +515,7 @@ impl MainWindowController {
         content.addSubview(&scroll);
 
         list.set_selection_action(sel!(listSelectionChanged:));
+        list.set_end_action(sel!(listEndReached:));
         let fields = crate::screen_fields::ScreenFields::new(
             mtm,
             self.as_ref(),
@@ -794,6 +809,21 @@ impl MainWindowController {
     /// Trending chart, playing from it and back, then the direct link
     /// `APRICOT_MACOS_SELF_TEST_QUERY`.
     #[cfg(debug_assertions)]
+    pub fn run_podcast_self_test(&self) {
+        self.ivars().self_test_step.set(500);
+        // SAFETY: `playerSelfTestStep:` exists on this controller.
+        unsafe {
+            let _: () = msg_send![
+                self,
+                performSelector: sel!(playerSelfTestStep:),
+                withObject: Option::<&AnyObject>::None,
+                afterDelay: 1.0_f64
+            ];
+        }
+    }
+
+    /// Development builds with `APRICOT_MACOS_SELF_TEST=trending`.
+    #[cfg(debug_assertions)]
     pub fn run_trending_self_test(&self) {
         self.ivars().self_test_step.set(400);
         // SAFETY: `playerSelfTestStep:` exists on this controller.
@@ -886,6 +916,51 @@ impl MainWindowController {
                 focused_value(&window),
                 window.title().to_string(),
                 crate::video::frames_drawn()
+            );
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+        }
+        true
+    }
+
+    #[cfg(debug_assertions)]
+    fn podcast_self_test_step(&self, index: usize) -> bool {
+        use crate::self_test::{focus, focused_value, send};
+        let Some(window) = self.window() else {
+            return false;
+        };
+        let steps = crate::self_test::podcast_steps();
+        let Some((name, key)) = steps.get(index) else {
+            return false;
+        };
+        if index == 0 {
+            self.run_action("open_podcasts_rss");
+        }
+        if name.starts_with("Add feed") {
+            self.schedule_modal_self_test_keys();
+            self.with_shell(|shell, ui| shell.activate_screen_button(ui, "rss_add"));
+        }
+        if name.starts_with("waiting") || name.starts_with("Return") {
+            // A failure shows a message; it is printed and answered.
+            self.schedule_modal_self_test_keys_after(2.0);
+        }
+        if let Some(key) = key {
+            send(&window, key);
+        }
+        let status = self
+            .ivars()
+            .status
+            .borrow()
+            .as_ref()
+            .map(|status| status.stringValue().to_string())
+            .unwrap_or_default();
+        let row = self.list().and_then(|list| list.selected());
+        let count = self.list().map_or(0, |list| list.numberOfRows());
+        if !name.starts_with("waiting") || index.is_multiple_of(4) {
+            let value: String = focused_value(&window).chars().take(160).collect();
+            println!(
+                "podcast-test {name}: focus={} value={value:?} row={row:?} rows={count} title={:?} status={status:?}",
+                focus(&window),
+                window.title().to_string(),
             );
             let _ = std::io::Write::flush(&mut std::io::stdout());
         }
@@ -1109,6 +1184,19 @@ impl MainWindowController {
                 ("Return (move up)", key(keys::KEY_RETURN, "\r")),
                 ("Escape", escape),
             ],
+            "Add feed" => {
+                let url = std::env::var("APRICOT_MACOS_SELF_TEST_QUERY")
+                    .unwrap_or_else(|_| "feeds.npr.org/510289/podcast.xml".to_owned());
+                let url: &'static str = Box::leak(url.into_boxed_str());
+                let mut plan: Vec<(&str, Key)> = url
+                    .char_indices()
+                    .map(|(offset, character)| {
+                        ("type", key(0, &url[offset..offset + character.len_utf8()]))
+                    })
+                    .collect();
+                plan.push(("Return", key(keys::KEY_RETURN, "\r")));
+                plan
+            }
             "Create playlist" => vec![
                 ("type M", key(0, "M")),
                 ("type i", key(0, "i")),
@@ -1173,7 +1261,9 @@ impl MainWindowController {
         use crate::self_test::{Key, focus, key, send};
         let step = self.ivars().self_test_step.get();
         if step >= 100 {
-            let more = if step >= 400 {
+            let more = if step >= 500 {
+                self.podcast_self_test_step(step - 500)
+            } else if step >= 400 {
                 self.trending_self_test_step(step - 400)
             } else if step >= 300 {
                 self.search_self_test_step(step - 300)
@@ -1308,6 +1398,20 @@ fn default_reached_sound_path() -> Option<PathBuf> {
 
 /// Windows timers keep firing while a dialog runs its modal loop; AppKit
 /// timers only do so in the common run loop modes.
+/// Limits an open or save panel to `extensions`.
+fn set_allowed_extensions(panel: &objc2_app_kit::NSSavePanel, extensions: &[&str]) {
+    let extensions: Vec<Retained<NSString>> = extensions
+        .iter()
+        .map(|extension| NSString::from_str(extension))
+        .collect();
+    let extensions = NSArray::from_retained_slice(&extensions);
+    // SAFETY: `setAllowedFileTypes:` takes an array of extensions; it is
+    // deprecated in favor of content types but keeps the Windows filter.
+    unsafe {
+        let _: () = msg_send![panel, setAllowedFileTypes: &*extensions];
+    }
+}
+
 fn run_in_modal_loops(timer: &NSTimer) {
     // SAFETY: AppKit's static run loop mode name.
     unsafe {
@@ -1468,6 +1572,66 @@ impl ShellUi for MacUi<'_> {
             .URL()
             .and_then(|url| url.path())
             .map(|path| PathBuf::from(path.to_string()))
+    }
+
+    fn choose_open_file(&mut self, title: &str, extensions: &[&str]) -> Option<PathBuf> {
+        let panel = NSOpenPanel::openPanel(self.controller.mtm());
+        panel.setTitle(Some(&NSString::from_str(title)));
+        panel.setMessage(Some(&NSString::from_str(title)));
+        panel.setCanChooseFiles(true);
+        panel.setCanChooseDirectories(false);
+        panel.setAllowsMultipleSelection(false);
+        set_allowed_extensions(&panel, extensions);
+        if panel.runModal() != NSModalResponseOK {
+            return None;
+        }
+        panel
+            .URL()
+            .and_then(|url| url.path())
+            .map(|path| PathBuf::from(path.to_string()))
+    }
+
+    fn choose_save_file(
+        &mut self,
+        title: &str,
+        default_name: &str,
+        extensions: &[&str],
+    ) -> Option<PathBuf> {
+        let panel = objc2_app_kit::NSSavePanel::savePanel(self.controller.mtm());
+        panel.setTitle(Some(&NSString::from_str(title)));
+        panel.setMessage(Some(&NSString::from_str(title)));
+        panel.setNameFieldStringValue(&NSString::from_str(default_name));
+        set_allowed_extensions(&panel, extensions);
+        if panel.runModal() != NSModalResponseOK {
+            return None;
+        }
+        panel
+            .URL()
+            .and_then(|url| url.path())
+            .map(|path| PathBuf::from(path.to_string()))
+    }
+
+    fn set_rss_timer(&mut self, interval_seconds: Option<f64>) {
+        let mut timer = self.controller.ivars().rss_timer.borrow_mut();
+        if let Some(timer) = timer.take() {
+            timer.invalidate();
+        }
+        let Some(interval) = interval_seconds else {
+            return;
+        };
+        // SAFETY: the controller implements `rssTimer:` and outlives the
+        // timer, which is invalidated when it is replaced.
+        let rss = unsafe {
+            NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
+                interval,
+                self.controller.as_ref(),
+                sel!(rssTimer:),
+                None,
+                true,
+            )
+        };
+        run_in_modal_loops(&rss);
+        *timer = Some(rss);
     }
 
     fn set_background_polling(&mut self, active: bool) {

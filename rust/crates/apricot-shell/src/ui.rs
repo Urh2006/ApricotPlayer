@@ -188,6 +188,24 @@ pub trait ShellUi {
     /// Windows `choose_media_folder`: a folder dialog, `None` when cancelled.
     fn choose_folder(&mut self, title: &str) -> Option<PathBuf>;
 
+    /// Windows `GetOpenFileNameW` with a filter: one existing file with one
+    /// of `extensions`, `None` when cancelled.
+    fn choose_open_file(&mut self, title: &str, extensions: &[&str]) -> Option<PathBuf>;
+
+    /// Windows `GetSaveFileNameW`: a save dialog starting with
+    /// `default_name`, `None` when cancelled.
+    fn choose_save_file(
+        &mut self,
+        title: &str,
+        default_name: &str,
+        extensions: &[&str],
+    ) -> Option<PathBuf>;
+
+    /// Windows `RSS_REFRESH_TIMER_ID`: calls
+    /// [`crate::Shell::refresh_all_rss_feeds_background`] every
+    /// `interval_seconds`, or stops with `None`.
+    fn set_rss_timer(&mut self, interval_seconds: Option<f64>);
+
     /// Starts or stops polling [`crate::Shell::poll_background`] (Windows
     /// `LOCAL_FOLDER_TIMER_ID` and the other work timers).
     fn set_background_polling(&mut self, active: bool);

@@ -133,7 +133,9 @@ impl Shell {
             | "search_download_audio"
             | "search_download_video"
             | "search_add_favorite" => self.activate_search_button(ui, id),
-            _ => {}
+            _ => {
+                let _ = self.podcast_command(ui, id);
+            }
         }
     }
 
@@ -149,6 +151,10 @@ impl Shell {
             View::Collection => self.activate_collection_selection(ui),
             View::Favorites | View::History => self.activate_library_selection(ui),
             View::UserPlaylists | View::UserPlaylistItems => self.activate_playlist_selection(ui),
+            View::RssFeeds
+            | View::RssItems
+            | View::PodcastSearchResults
+            | View::PodcastCategories => self.activate_podcast_selection(ui),
             // Python `play_selected` on the empty result list.
             View::Search => ui.show_error(&self.text("no_selection")),
             View::DirectLink | View::Player => {}
@@ -212,7 +218,8 @@ impl Shell {
         let chapters = self.poll_external_chapters(ui);
         let bpm = self.poll_bpm_analyses(ui);
         let edits = self.poll_edit_saves(ui);
-        youtube || related || folder || device || chapters || bpm || edits
+        let podcasts = self.poll_podcast_work(ui);
+        youtube || related || folder || device || chapters || bpm || edits || podcasts
     }
 
     fn poll_folder_scan(&mut self, ui: &mut dyn ShellUi) -> bool {
@@ -403,6 +410,17 @@ impl Shell {
             Route::Player => {
                 self.view = View::Player;
                 self.refresh_player(ui, crate::PlayerFocus::Preserve);
+            }
+            Route::RssFeeds
+            | Route::RssItems
+            | Route::PodcastSearchResults
+            | Route::PodcastCategories => {
+                let saved = frame
+                    .parameters
+                    .get("index")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok());
+                self.restore_podcast_view(ui, frame.route, saved);
             }
             Route::Bookmarks => {
                 self.view = View::MainMenu;

@@ -137,7 +137,14 @@ impl Shell {
                         .get(index)
                 })
                 .cloned(),
-            View::MainMenu | View::Search | View::DirectLink | View::UserPlaylists => None,
+            View::RssItems => self.selected_rss_episode(ui),
+            View::MainMenu
+            | View::Search
+            | View::DirectLink
+            | View::UserPlaylists
+            | View::RssFeeds
+            | View::PodcastSearchResults
+            | View::PodcastCategories => None,
         }
     }
 

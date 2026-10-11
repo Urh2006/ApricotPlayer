@@ -21,6 +21,8 @@ mod player_edit;
 mod player_extras;
 mod player_tools;
 mod playlists;
+mod podcast_work;
+mod podcasts;
 mod queue;
 mod related;
 mod repeat;
@@ -41,6 +43,7 @@ pub use library::media_collection_label;
 pub use lyrics::{LyricsDialog, LyricsHighlight, LyricsLoaded};
 pub use player::{format_duration, local_file_item};
 pub use player_extras::DetailsLabels;
+pub use podcasts::{rss_episode_label, rss_feed_label};
 pub use queue::{QueueChange, QueueDialog};
 pub use repeat::KeyRelease;
 pub use screens::{ListScreen, ScreenControl, local_folder_result_label};
@@ -74,6 +77,10 @@ pub enum View {
     UserPlaylists,
     UserPlaylistItems,
     LocalFolder,
+    RssFeeds,
+    RssItems,
+    PodcastSearchResults,
+    PodcastCategories,
     Player,
 }
 
@@ -96,6 +103,7 @@ pub struct Shell {
     youtube: youtube::YoutubeState,
     related: Option<related::PendingRelated>,
     playlists: playlists::PlaylistState,
+    podcasts: podcasts::PodcastState,
 }
 
 impl Shell {
@@ -117,6 +125,7 @@ impl Shell {
             youtube: youtube::YoutubeState::default(),
             related: None,
             playlists: playlists::PlaylistState::default(),
+            podcasts: podcasts::PodcastState::default(),
         }
     }
 
@@ -157,6 +166,15 @@ impl Shell {
         if let Some(key) = self.application.take_startup_announcement() {
             let message = self.text(key);
             ui.set_status(&message, true);
+        }
+        self.start_rss(ui);
+    }
+
+    /// End, or Down at the last row of the list (Windows
+    /// `rss_list_subclass_proc`): the episode list loads more.
+    pub fn list_end_reached(&mut self, ui: &mut dyn ShellUi) {
+        if self.view == View::RssItems {
+            self.maybe_extend_rss_items(ui);
         }
     }
 
@@ -267,6 +285,10 @@ impl Shell {
                 self.show_media_collection(ui, View::History);
                 return;
             }
+            "rss_feeds" => {
+                self.show_rss_feeds(ui);
+                return;
+            }
             "direct_link" => {
                 self.show_direct_link(ui);
                 return;
@@ -288,7 +310,7 @@ impl Shell {
     /// `activate_action`).
     pub fn activate_action(&mut self, ui: &mut dyn ShellUi, action_id: &str) {
         self.leave_player_for_global_navigation(ui, action_id);
-        if self.activate_player_action(ui, action_id) {
+        if self.activate_player_action(ui, action_id) || self.podcast_action(ui, action_id) {
             return;
         }
         match action_id {

@@ -324,7 +324,10 @@ impl Shell {
             View::UserPlaylistItems => Some(context_menu::user_playlist_items_context_menu(
                 &context, item,
             )),
-            View::MainMenu | View::DirectLink => None,
+            View::RssFeeds | View::RssItems | View::PodcastSearchResults => {
+                self.podcast_context_entries()
+            }
+            View::MainMenu | View::DirectLink | View::PodcastCategories => None,
         }
     }
 
@@ -357,9 +360,16 @@ impl Shell {
             C::AddToPlaybackQueue => self.add_active_item_to_playback_queue(ui),
             C::RemoveFromPlaybackQueue => self.remove_active_item_from_playback_queue(ui),
             C::CopyStreamUrl => self.copy_active_stream_url(ui),
-            C::CopyLocation => self.copy_active_location(ui),
+            C::CopyLocation => match self.podcast_copy_location(ui) {
+                Some(url) => self.copy_text_and_announce(ui, &url, "url_copied"),
+                None => self.copy_active_location(ui),
+            },
             C::CopyTimestampLink => self.copy_current_timestamp_link(ui),
-            C::PlayerAction(action_id) => self.activate_action(ui, action_id),
+            C::PlayerAction(action_id) => {
+                if !self.podcast_command(ui, action_id) {
+                    self.activate_action(ui, action_id);
+                }
+            }
             C::ClosePlayer => self.close_current_player(ui),
             C::OpenChannel => self.open_item_channel(ui),
             C::AddFavorite => self.add_active_favorite(ui),

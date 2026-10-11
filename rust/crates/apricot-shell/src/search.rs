@@ -387,11 +387,14 @@ impl Shell {
             View::UserPlaylists | View::UserPlaylistItems => {
                 self.playlist_selection_changed(index);
             }
+            View::RssFeeds | View::RssItems => self.podcast_selection_changed(index),
             View::MainMenu
             | View::Search
             | View::DirectLink
             | View::Favorites
             | View::History
+            | View::PodcastSearchResults
+            | View::PodcastCategories
             | View::Player => {}
         }
     }

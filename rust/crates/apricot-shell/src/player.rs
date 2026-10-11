@@ -455,6 +455,42 @@ impl Shell {
     }
 
     /// Windows `poll_playback_runtime`; returns `false` when polling can stop.
+    /// Windows `PlaybackEvent::Ended` after a clip preview: a podcast
+    /// episode is marked played, then the next item plays (`Some` with
+    /// whether a player still runs) or "Playback finished" is said.
+    fn playback_ended(&mut self, ui: &mut dyn ShellUi) -> Option<bool> {
+        self.mark_current_podcast_episode_played(ui);
+        let autoplay_next = self
+            .application
+            .player_session()
+            .enabled_toggles()
+            .contains(&SessionToggle::AutoplayNext);
+        if autoplay_next {
+            // Python `handle_player_eof`: with "autoplay related" a related
+            // YouTube video plays instead of the next.
+            let related = self.application.settings().autoplay_related
+                && self
+                    .application
+                    .player_session()
+                    .current_item()
+                    .is_some_and(|item| item.youtube_video_id().is_some());
+            if related {
+                self.play_related_video(ui, false);
+            } else {
+                self.navigate_player_relative(ui, 1, true);
+            }
+            return Some(self.player.playback.is_some());
+        }
+        ui.set_status(
+            &self.text("playback_finished"),
+            self.application.settings().announce_playback_finished,
+        );
+        if self.view == View::Player {
+            self.refresh_player(ui, PlayerFocus::Preserve);
+        }
+        None
+    }
+
     pub fn poll_playback(&mut self, ui: &mut dyn ShellUi) -> bool {
         loop {
             let Some(runtime) = self.player.playback.as_ref() else {
@@ -520,33 +556,8 @@ impl Shell {
                         ui.set_status(&self.text("clip_preview_finished"), true);
                         continue;
                     }
-                    let autoplay_next = self
-                        .application
-                        .player_session()
-                        .enabled_toggles()
-                        .contains(&SessionToggle::AutoplayNext);
-                    if autoplay_next {
-                        // Python `handle_player_eof`: with "autoplay related"
-                        // a related YouTube video plays instead of the next.
-                        let related = self.application.settings().autoplay_related
-                            && self
-                                .application
-                                .player_session()
-                                .current_item()
-                                .is_some_and(|item| item.youtube_video_id().is_some());
-                        if related {
-                            self.play_related_video(ui, false);
-                        } else {
-                            self.navigate_player_relative(ui, 1, true);
-                        }
-                        return self.player.playback.is_some();
-                    }
-                    ui.set_status(
-                        &self.text("playback_finished"),
-                        self.application.settings().announce_playback_finished,
-                    );
-                    if self.view == View::Player {
-                        self.refresh_player(ui, PlayerFocus::Preserve);
+                    if let Some(running) = self.playback_ended(ui) {
+                        return running;
                     }
                 }
                 PlaybackEvent::Failed(error) => {
@@ -972,6 +983,13 @@ impl Shell {
         }
         if let Err(error) = self.application.save_current_playback_position() {
             ui.set_status(&format!("Playback position was not saved: {error}"), false);
+        }
+        let session = self.application.player_session();
+        let near_end = session.duration_seconds().is_some_and(|duration| {
+            duration > 0.0 && session.position_seconds() >= (duration - 8.0).max(5.0)
+        });
+        if near_end {
+            self.mark_current_podcast_episode_played(ui);
         }
     }
 

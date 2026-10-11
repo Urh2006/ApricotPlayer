@@ -618,3 +618,29 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   Mix z vnosom imena, drugi Command+P, Command+Option+P odpre sezname,
   Return odpre seznam, Delete odstrani posnetek, Shift+Tab na Back, Escape
   na sezname, Delete odstrani seznam).
+
+### M8 podcasti in RSS (opravljeno)
+
+- `apricot-shell/src/podcasts.rs` in `podcast_work.rs` (zaenkrat kopija
+  Windows `podcast_win32.rs`, podvojitev odpravi W1): zasloni Podcasts and
+  RSS feeds, Feed items, Podcast search results in Podcast categories z
+  vrstnim redom Tab Windows; dodajanje feeda (povezava brez sheme dobi
+  https://), iskanje v imeniku, kategorije, osvežitev enega ali vseh feedov,
+  odstranjevanje (gumb, Delete, kontekstni meni), filter in nastavitev
+  kategorije, prednastavljena hitrost, označitev predvajanega
+  (Command+Shift+X), brisanje napredka (Command+Shift+R), shranjevanje
+  hitrosti (Command+Shift+E), uvoz in izvoz OPML (okni za odpiranje in
+  shranjevanje, privzeto ime apricot_feeds.opml), odpiranje v brskalniku in
+  kopiranje URL feeda.
+- Epizoda se označi kot predvajana ob koncu in ob zaprtju blizu konca kot
+  na Windows; nove epizode gredo v center obvestil (sistemsko obvestilo
+  pride z M14).
+- Časovnik samodejne osvežitve (0,5 do 168 ur) in osvežitev ob zagonu.
+- End ali Down na zadnji vrstici naloži naslednji paket epizod.
+- Splošen popravek seznamov na Macu: Home, End, Page Up in Page Down zdaj
+  premaknejo izbiro kot v seznamu Windows (NSTableView je samo drsel).
+- Prenosi epizod in feedov pridejo z M9.
+- Preverjeno: enotski testi (vrstni red kontrol, odpiranje, označitev,
+  nazaj, časovnik) in samodejni preizkus na Macu z resničnim feedom Planet
+  Money (dodajanje, 100 od 355 epizod, označitev in odznačitev, predvajanje
+  epizode z mpv, End naloži še 100 in izbere zadnjo vrstico, Escape nazaj).

@@ -85,6 +85,9 @@ pub struct ListIvars {
     /// Sent to the target when the selected row changes
     /// (Windows `LBN_SELCHANGE`).
     selection: Cell<Option<Sel>>,
+    /// Sent to the target on End, or Down at the last row, before the list
+    /// moves (Windows `rss_list_subclass_proc`).
+    end: Cell<Option<Sel>>,
 }
 
 define_class!(
@@ -191,6 +194,19 @@ define_class!(
                 self.show_context_menu();
                 return;
             }
+            if plain
+                && let Some(action) = self.ivars().end.get()
+                && let Ok(count) = usize::try_from(self.numberOfRows())
+                && count > 0
+                && (code == keys::KEY_END
+                    || (code == keys::KEY_DOWN && self.selected() == Some(count - 1)))
+            {
+                self.send(action);
+            }
+            if plain && !modifiers.shift && self.move_by_page_key(code) {
+                self.ivars().type_ahead.borrow_mut().reset();
+                return;
+            }
             if plain && self.type_letter(event) {
                 return;
             }
@@ -284,6 +300,49 @@ impl List {
     /// The selector sent to the target when the selection changes.
     pub fn set_selection_action(&self, action: Sel) {
         self.ivars().selection.set(Some(action));
+    }
+
+    /// Home, End, Page Up and Page Down move the selection as in a Windows
+    /// list box (`NSTableView` only scrolls); `true` when `code` was one.
+    fn move_by_page_key(&self, code: u16) -> bool {
+        if !matches!(
+            code,
+            keys::KEY_HOME | keys::KEY_END | keys::KEY_PAGE_UP | keys::KEY_PAGE_DOWN
+        ) {
+            return false;
+        }
+        let Ok(count) = usize::try_from(self.numberOfRows()) else {
+            return true;
+        };
+        if count == 0 {
+            return true;
+        }
+        let row_height = self.rowHeight() + self.intercellSpacing().height;
+        let visible = self.visibleRect().size.height;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let page = if row_height > 0.0 {
+            ((visible / row_height).floor() as usize)
+                .saturating_sub(1)
+                .max(1)
+        } else {
+            1
+        };
+        let current = self.selected().unwrap_or_default();
+        let target = match code {
+            keys::KEY_HOME => 0,
+            keys::KEY_END => count - 1,
+            keys::KEY_PAGE_UP => current.saturating_sub(page),
+            _ => (current + page).min(count - 1),
+        };
+        if Some(target) != self.selected() {
+            self.select(target);
+        }
+        true
+    }
+
+    /// The selector sent to the target on End or Down at the last row.
+    pub fn set_end_action(&self, action: Sel) {
+        self.ivars().end.set(Some(action));
     }
 
     /// The selector sent to the target on Delete.
