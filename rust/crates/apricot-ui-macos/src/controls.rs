@@ -261,6 +261,12 @@ impl List {
         self.scrollRowToVisible(index);
     }
 
+    /// The text of the selected row.
+    pub fn selected_text(&self) -> Option<String> {
+        let index = self.selected()?;
+        self.ivars().rows.borrow().get(index).cloned()
+    }
+
     pub fn selected(&self) -> Option<usize> {
         usize::try_from(self.selectedRow()).ok()
     }

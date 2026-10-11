@@ -526,7 +526,19 @@ impl Shell {
                         .enabled_toggles()
                         .contains(&SessionToggle::AutoplayNext);
                     if autoplay_next {
-                        self.navigate_player_relative(ui, 1, true);
+                        // Python `handle_player_eof`: with "autoplay related"
+                        // a related YouTube video plays instead of the next.
+                        let related = self.application.settings().autoplay_related
+                            && self
+                                .application
+                                .player_session()
+                                .current_item()
+                                .is_some_and(|item| item.youtube_video_id().is_some());
+                        if related {
+                            self.play_related_video(ui, false);
+                        } else {
+                            self.navigate_player_relative(ui, 1, true);
+                        }
                         return self.player.playback.is_some();
                     }
                     ui.set_status(

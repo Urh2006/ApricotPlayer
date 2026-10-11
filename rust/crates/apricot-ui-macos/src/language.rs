@@ -81,6 +81,34 @@ impl Dialog {
     }
 }
 
+define_class!(
+    /// Ends the running modal window when its button is pressed.
+    // SAFETY: NSObject has no subclassing requirements; no Drop impl.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "ApricotModalStopper"]
+    pub struct ModalStopper;
+
+    impl ModalStopper {
+        #[unsafe(method(stop:))]
+        fn stop(&self, _sender: Option<&AnyObject>) {
+            NSApplication::sharedApplication(MainThreadMarker::from(self)).stopModal();
+        }
+    }
+);
+
+impl ModalStopper {
+    pub fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(());
+        // SAFETY: `init` of NSObject.
+        unsafe { msg_send![super(this), init] }
+    }
+
+    pub fn target(&self) -> &AnyObject {
+        self.as_ref()
+    }
+}
+
 /// One list choice.
 pub struct ChoiceRequest<'a> {
     pub title: &'a str,

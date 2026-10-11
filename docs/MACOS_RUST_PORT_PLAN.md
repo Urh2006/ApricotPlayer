@@ -557,3 +557,24 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   Command+Option+L odpre Direct link s fokusom v polju, Return predvaja
   povezavo prek yt-dlp, Escape vrne na zaslon z ohranjeno povezavo, Tab na
   Back, Escape v glavni meni; nedosegljiv video pokaže napako yt-dlp.
+
+### M6d: prepis, komentarji in sorodni videi (11. 10. 2026)
+
+- Prepis (Command+Shift+T, Windows `show_player_transcript` s
+  `transcript_win32.rs`): iskalno polje s fokusom, seznam vrstic, Play,
+  Copy line, Copy transcript, Copy timestamp link in Back; Enter v polju ali
+  na seznamu skoči na vrstico, tipkanje filtrira, prepis se naloži v ozadju
+  (lokalni podnapisi ali YouTube prek yt-dlp) in se shrani za sejo, omejitev
+  YouTube (429) se pokaže kot pri Windows. `transcript_loader.rs` je kopija
+  Windows datoteke in se v W1 preseli v jedro.
+- Komentarji (Command+Shift+M, Windows `show_player_comments` s
+  `comments_win32.rs`): iskanje, razvrščanje, seznam, Open (okno s
+  podrobnostmi), Copy, Copy visible, Author channel, Load more in Back,
+  kontekstni meni, strani prek YouTube Data API ali yt-dlp.
+- Sorodni video (Command+Shift+Page Down) in samodejni sorodni video na
+  koncu posnetka z nastavitvijo `autoplay_related`.
+- Preverjeno samodejno s pravim yt-dlp (`APRICOT_MACOS_SELF_TEST=trending`,
+  `APRICOT_MACOS_SELF_TEST_KIND=extras`): prepis se odpre s fokusom v polju
+  in pokaže sporočilo YouTube o omejitvi, komentarji se naložijo (fokus v
+  polju, Tab na razvrščanje in seznam, vrstice s komentarji, Tab na Open,
+  Escape), sorodni video začne naslednji posnetek.

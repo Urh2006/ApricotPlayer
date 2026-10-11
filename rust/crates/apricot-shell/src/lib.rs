@@ -10,6 +10,7 @@
 
 mod bookmarks;
 mod collections;
+mod comments;
 mod equalizer_dialog;
 mod keyboard;
 mod lyrics;
@@ -19,15 +20,19 @@ mod player_edit;
 mod player_extras;
 mod player_tools;
 mod queue;
+mod related;
 mod repeat;
 mod screens;
 mod search;
+mod transcript;
+mod transcript_loader;
 mod trending;
 mod type_ahead;
 mod ui;
 mod youtube;
 
 pub use bookmarks::{BookmarkDialog, BookmarkEntry, BookmarkRequest, BookmarkResponse};
+pub use comments::{CommentsCommand, CommentsDialog, CommentsEffect};
 pub use equalizer_dialog::{EQUALIZER_BUTTONS, EqualizerButton, EqualizerLabels, EqualizerView};
 pub use keyboard::{FocusKind, KeyRoute};
 pub use lyrics::{LyricsDialog, LyricsHighlight, LyricsLoaded};
@@ -37,6 +42,7 @@ pub use queue::{QueueChange, QueueDialog};
 pub use repeat::KeyRelease;
 pub use screens::{ListScreen, ScreenControl, local_folder_result_label};
 pub use search::result_label;
+pub use transcript::{TranscriptButton, TranscriptDialog, TranscriptRows};
 
 pub use main_menu::{MainMenuSelection, last_activated_index, preserved_index};
 pub use type_ahead::TypeAhead;
@@ -81,6 +87,7 @@ pub struct Shell {
     edit_saves: player_edit::EditSaves,
     search: search::SearchState,
     youtube: youtube::YoutubeState,
+    related: Option<related::PendingRelated>,
 }
 
 impl Shell {
@@ -100,6 +107,7 @@ impl Shell {
             edit_saves: player_edit::EditSaves::default(),
             search: search::SearchState::default(),
             youtube: youtube::YoutubeState::default(),
+            related: None,
         }
     }
 
@@ -374,6 +382,9 @@ impl Shell {
             }
             "player_bookmarks" => self.show_bookmarks_dialog(ui, true, false),
             "player_lyrics" => self.show_player_lyrics(ui),
+            "player_transcript" => self.show_player_transcript(ui),
+            "player_comments" => self.show_player_comments(ui),
+            "player_next_related" => self.play_related_video(ui, true),
             "player_back_keep_playing" => self.leave_player_to_main_menu(ui, true),
             "player_previous" => self.navigate_player_relative(ui, -1, false),
             "player_next" => self.navigate_player_relative(ui, 1, false),

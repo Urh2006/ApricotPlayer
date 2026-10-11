@@ -212,7 +212,7 @@ impl Shell {
     }
 
     /// Windows `seek_player_chapter`.
-    fn seek_player_chapter(&mut self, ui: &mut dyn ShellUi, seconds: f64) -> bool {
+    pub(crate) fn seek_player_chapter(&mut self, ui: &mut dyn ShellUi, seconds: f64) -> bool {
         self.player.clip_preview = None;
         self.execute_player_command(
             ui,

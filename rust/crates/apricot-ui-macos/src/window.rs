@@ -65,6 +65,10 @@ pub struct ControllerIvars {
     pending_lyrics: RefCell<Option<apricot_shell::LyricsDialog>>,
     /// The playback queue window waiting to open after the current event.
     pending_queue: RefCell<Option<apricot_shell::QueueDialog>>,
+    /// The transcript window waiting to open after the current event.
+    pending_transcript: RefCell<Option<apricot_shell::TranscriptDialog>>,
+    /// The comments window waiting to open after the current event.
+    pending_comments: RefCell<Option<apricot_shell::CommentsDialog>>,
 }
 
 define_class!(
@@ -176,6 +180,22 @@ define_class!(
             self.with_shell(|shell, ui| shell.activate_action(ui, "context_menu"));
         }
 
+        #[unsafe(method(openTranscript:))]
+        fn open_transcript(&self, _sender: Option<&AnyObject>) {
+            let dialog = self.ivars().pending_transcript.borrow_mut().take();
+            if let Some(dialog) = dialog {
+                crate::transcript::run(self, dialog);
+            }
+        }
+
+        #[unsafe(method(openComments:))]
+        fn open_comments(&self, _sender: Option<&AnyObject>) {
+            let dialog = self.ivars().pending_comments.borrow_mut().take();
+            if let Some(dialog) = dialog {
+                crate::comments::run(self, dialog);
+            }
+        }
+
         #[unsafe(method(drainActivations:))]
         fn drain_activations_selector(&self, _sender: Option<&AnyObject>) {
             self.drain_activations();
@@ -284,6 +304,8 @@ impl MainWindowController {
             pending_bookmarks: RefCell::new(None),
             pending_lyrics: RefCell::new(None),
             pending_queue: RefCell::new(None),
+            pending_transcript: RefCell::new(None),
+            pending_comments: RefCell::new(None),
         });
         // SAFETY: `init` of NSObject.
         unsafe { msg_send![super(this), init] }
@@ -821,6 +843,9 @@ impl MainWindowController {
         for _ in 0..10 {
             steps.push(("waiting for playback".to_owned(), None));
         }
+        if std::env::var("APRICOT_MACOS_SELF_TEST_KIND").as_deref() == Ok("extras") {
+            steps.extend(crate::self_test::youtube_extras_steps());
+        }
         steps.push(("Escape (direct link)".to_owned(), escape()));
         steps.push(("Tab".to_owned(), Some(key(keys::KEY_TAB, "\t"))));
         steps.push(("Escape (main menu)".to_owned(), escape()));
@@ -830,6 +855,12 @@ impl MainWindowController {
         if index == 0 {
             self.schedule_modal_self_test_keys();
             self.run_action("open_trending");
+        }
+        if name.starts_with("Command+Shift+T") {
+            self.schedule_modal_self_test_keys_after(9.0);
+        }
+        if name.starts_with("Command+Shift+M") {
+            self.schedule_modal_self_test_keys_after(11.0);
         }
         if name.starts_with("Return (play)") || name.starts_with("waiting for playback") {
             // A failed playback shows a message; it is printed and answered.
@@ -995,6 +1026,12 @@ impl MainWindowController {
     /// The next modal window is answered from the modal run loop.
     #[cfg(debug_assertions)]
     fn schedule_modal_self_test_keys(&self) {
+        self.schedule_modal_self_test_keys_after(0.6);
+    }
+
+    /// [`Self::schedule_modal_self_test_keys`] after `seconds`.
+    #[cfg(debug_assertions)]
+    fn schedule_modal_self_test_keys_after(&self, seconds: f64) {
         let modes = NSArray::from_slice(&[
             // SAFETY: AppKit's static run loop mode name.
             unsafe { objc2_foundation::NSRunLoopCommonModes },
@@ -1005,7 +1042,7 @@ impl MainWindowController {
                 self,
                 performSelector: sel!(modalSelfTestKeys:),
                 withObject: Option::<&AnyObject>::None,
-                afterDelay: 0.6_f64,
+                afterDelay: seconds,
                 inModes: &*modes
             ];
         }
@@ -1027,17 +1064,38 @@ impl MainWindowController {
             println!("tools-test modal texts: {alert:?}");
         }
         let print = |name: &str| {
+            let row = window
+                .firstResponder()
+                .and_then(|responder| Retained::downcast::<List>(responder).ok())
+                .and_then(|list| list.selected_text())
+                .unwrap_or_default();
+            let row: String = row.chars().take(120).collect();
             println!(
-                "tools-test   {name}: window={:?} focus={}",
+                "tools-test   {name}: window={:?} focus={} row={row:?}",
                 window.title().to_string(),
                 focus(&window)
             );
+            let _ = std::io::Write::flush(&mut std::io::stdout());
         };
         let escape = key(keys::KEY_ESCAPE, "\u{1b}");
         let plan: Vec<(&str, Key)> = match window.title().to_string().as_str() {
             "Chapters" => vec![
                 ("Down", key(keys::KEY_DOWN, "\u{f701}")),
                 ("Return", key(keys::KEY_RETURN, "\r")),
+            ],
+            "Transcript" => vec![
+                ("Tab (list)", key(keys::KEY_TAB, "\t")),
+                ("Down", key(keys::KEY_DOWN, "\u{f701}")),
+                ("Down", key(keys::KEY_DOWN, "\u{f701}")),
+                ("Return (play the line)", key(keys::KEY_RETURN, "\r")),
+                ("Escape", escape),
+            ],
+            "Comments" => vec![
+                ("Tab (sort)", key(keys::KEY_TAB, "\t")),
+                ("Tab (list)", key(keys::KEY_TAB, "\t")),
+                ("Down", key(keys::KEY_DOWN, "\u{f701}")),
+                ("Tab (Open)", key(keys::KEY_TAB, "\t")),
+                ("Escape", escape),
             ],
             "Lyrics" => vec![
                 ("Tab", key(keys::KEY_TAB, "\t")),
@@ -1639,6 +1697,32 @@ impl ShellUi for MacUi<'_> {
             let _: () = msg_send![
                 self.controller,
                 performSelector: sel!(openLyrics:),
+                withObject: Option::<&AnyObject>::None,
+                afterDelay: 0.0_f64
+            ];
+        }
+    }
+
+    fn open_transcript(&mut self, dialog: apricot_shell::TranscriptDialog) {
+        *self.controller.ivars().pending_transcript.borrow_mut() = Some(dialog);
+        // SAFETY: `openTranscript:` exists on the controller.
+        unsafe {
+            let _: () = msg_send![
+                self.controller,
+                performSelector: sel!(openTranscript:),
+                withObject: Option::<&AnyObject>::None,
+                afterDelay: 0.0_f64
+            ];
+        }
+    }
+
+    fn open_comments(&mut self, dialog: apricot_shell::CommentsDialog) {
+        *self.controller.ivars().pending_comments.borrow_mut() = Some(dialog);
+        // SAFETY: `openComments:` exists on the controller.
+        unsafe {
+            let _: () = msg_send![
+                self.controller,
+                performSelector: sel!(openComments:),
                 withObject: Option::<&AnyObject>::None,
                 afterDelay: 0.0_f64
             ];

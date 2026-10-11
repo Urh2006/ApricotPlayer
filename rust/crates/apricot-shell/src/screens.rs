@@ -191,12 +191,13 @@ impl Shell {
     /// returns `false` when nothing is left to poll.
     pub fn poll_background(&mut self, ui: &mut dyn ShellUi) -> bool {
         let youtube = self.poll_youtube(ui);
+        let related = self.poll_related_videos(ui);
         let folder = self.poll_folder_scan(ui);
         let device = self.poll_saved_audio_device_check(ui);
         let chapters = self.poll_external_chapters(ui);
         let bpm = self.poll_bpm_analyses(ui);
         let edits = self.poll_edit_saves(ui);
-        youtube || folder || device || chapters || bpm || edits
+        youtube || related || folder || device || chapters || bpm || edits
     }
 
     fn poll_folder_scan(&mut self, ui: &mut dyn ShellUi) -> bool {

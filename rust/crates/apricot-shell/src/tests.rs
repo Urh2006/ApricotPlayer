@@ -202,6 +202,8 @@ mod equalizer {
         fn set_list_rows(&mut self, _rows: Vec<String>, _selected: usize) {}
         fn open_equalizer(&mut self) {}
         fn open_lyrics(&mut self, _dialog: crate::LyricsDialog) {}
+        fn open_transcript(&mut self, _dialog: crate::TranscriptDialog) {}
+        fn open_comments(&mut self, _dialog: crate::CommentsDialog) {}
         fn open_playback_queue(&mut self, _dialog: crate::QueueDialog) {}
         fn show_context_menu(
             &mut self,

@@ -209,6 +209,7 @@ dependencies = [
  "apricot-playback",
  "apricot-storage",
  "serde_json",
+ "url",
 ]
 
 [[package]]

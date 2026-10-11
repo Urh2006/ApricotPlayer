@@ -223,3 +223,46 @@ pub fn texts(view: &objc2_app_kit::NSView) -> Vec<String> {
     }
     texts
 }
+
+/// The transcript, comments and related video steps of
+/// `APRICOT_MACOS_SELF_TEST_KIND=extras`.
+pub fn youtube_extras_steps() -> Vec<(String, Option<Key>)> {
+    use crate::keys;
+    use objc2_app_kit::NSEventModifierFlags as Flags;
+    let mut steps = Vec::new();
+    let command_shift = Flags::Command | Flags::Shift;
+    steps.push((
+        "Command+Shift+T (transcript)".to_owned(),
+        Some(Key {
+            code: 17,
+            text: "T",
+            flags: command_shift,
+        }),
+    ));
+    for _ in 0..14 {
+        steps.push(("waiting in the transcript".to_owned(), None));
+    }
+    steps.push((
+        "Command+Shift+M (comments)".to_owned(),
+        Some(Key {
+            code: 46,
+            text: "M",
+            flags: command_shift,
+        }),
+    ));
+    for _ in 0..16 {
+        steps.push(("waiting in the comments".to_owned(), None));
+    }
+    steps.push((
+        "Command+Shift+Page Down (related video)".to_owned(),
+        Some(Key {
+            code: keys::KEY_PAGE_DOWN,
+            text: "\u{f72d}",
+            flags: command_shift,
+        }),
+    ));
+    for _ in 0..12 {
+        steps.push(("waiting for the related video".to_owned(), None));
+    }
+    steps
+}

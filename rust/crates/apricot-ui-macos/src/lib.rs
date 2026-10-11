@@ -17,6 +17,8 @@ mod app;
 #[cfg(target_os = "macos")]
 mod bookmarks;
 #[cfg(target_os = "macos")]
+mod comments;
+#[cfg(target_os = "macos")]
 mod context_menu;
 #[cfg(target_os = "macos")]
 mod controls;
@@ -39,6 +41,8 @@ mod screen_buttons;
 mod screen_fields;
 #[cfg(all(target_os = "macos", debug_assertions))]
 mod self_test;
+#[cfg(target_os = "macos")]
+mod transcript;
 #[cfg(target_os = "macos")]
 mod video;
 #[cfg(target_os = "macos")]

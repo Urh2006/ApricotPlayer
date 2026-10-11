@@ -118,6 +118,21 @@ pub trait ShellUi {
         entries: &[apricot_app::context_menu::ContextMenuEntry],
     ) -> Option<apricot_app::context_menu::ContextCommand>;
 
+    /// Opens the transcript window after the current event, modal over the
+    /// window: the search field (focused), the cue list and its buttons. It
+    /// polls [`crate::TranscriptDialog`], sends its buttons to
+    /// [`crate::Shell::transcript_button`] and ends with
+    /// [`crate::Shell::transcript_closed`].
+    fn open_transcript(&mut self, dialog: crate::TranscriptDialog);
+
+    /// Opens the comments window after the current event, modal over the
+    /// window: the search field (focused), the sort choice, the list and its
+    /// buttons; it starts the first page with
+    /// [`crate::CommentsDialog::load_more`], sends its commands to
+    /// [`crate::Shell::comments_command`] and ends with
+    /// [`crate::Shell::comments_closed`].
+    fn open_comments(&mut self, dialog: crate::CommentsDialog);
+
     /// Windows `prompt_name_with_initial`: a modal text prompt with
     /// `initial` in the field; `None` when cancelled. The text is returned
     /// as typed.
