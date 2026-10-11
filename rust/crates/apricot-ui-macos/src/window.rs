@@ -62,6 +62,8 @@ pub struct ControllerIvars {
     pending_bookmarks: RefCell<Option<apricot_shell::BookmarkDialog>>,
     /// The lyrics window waiting to open after the current event.
     pending_lyrics: RefCell<Option<apricot_shell::LyricsDialog>>,
+    /// The playback queue window waiting to open after the current event.
+    pending_queue: RefCell<Option<apricot_shell::QueueDialog>>,
 }
 
 define_class!(
@@ -158,6 +160,21 @@ define_class!(
             }
         }
 
+        #[unsafe(method(openPlaybackQueue:))]
+        fn open_playback_queue(&self, _sender: Option<&AnyObject>) {
+            let dialog = self.ivars().pending_queue.borrow_mut().take();
+            if let Some(dialog) = dialog {
+                crate::queue::run(self, dialog);
+            }
+        }
+
+        /// Shift+F10, the context menu key and VoiceOver's menu command on
+        /// the list (Windows `WM_CONTEXTMENU`).
+        #[unsafe(method(contextMenu:))]
+        fn context_menu(&self, _sender: Option<&AnyObject>) {
+            self.with_shell(|shell, ui| shell.activate_action(ui, "context_menu"));
+        }
+
         #[unsafe(method(drainActivations:))]
         fn drain_activations_selector(&self, _sender: Option<&AnyObject>) {
             self.drain_activations();
@@ -242,6 +259,7 @@ impl MainWindowController {
             activations: RefCell::new(Vec::new()),
             pending_bookmarks: RefCell::new(None),
             pending_lyrics: RefCell::new(None),
+            pending_queue: RefCell::new(None),
         });
         // SAFETY: `init` of NSObject.
         unsafe { msg_send![super(this), init] }
@@ -253,6 +271,10 @@ impl MainWindowController {
             .charactersIgnoringModifiers()
             .map(|text| text.to_string())
             .unwrap_or_default();
+        if keys::is_context_menu_key(event.keyCode(), modifiers) {
+            self.with_shell(|shell, ui| shell.activate_action(ui, "context_menu"));
+            return true;
+        }
         let Some(chord) = keys::chord(event.keyCode(), &characters, modifiers) else {
             return false;
         };
@@ -401,6 +423,7 @@ impl MainWindowController {
             .with_shell(|shell, _| shell.catalog())
             .expect("the shell is free while the window is built");
         let list = List::new(mtm, catalog.text("main_menu"));
+        list.set_context_menu_action(sel!(contextMenu:));
         list.set_activate_action(self.as_ref(), sel!(openSelected:));
         let list_top = bounds.size.height - MARGIN;
         let list_bottom = MARGIN * 3.0 + BUTTON_HEIGHT + STATUS_HEIGHT;
@@ -680,21 +703,7 @@ impl MainWindowController {
             return false;
         };
         if *modal {
-            // The list is modal; answer it from the modal run loop.
-            let modes = NSArray::from_slice(&[
-                // SAFETY: AppKit's static run loop mode name.
-                unsafe { objc2_foundation::NSRunLoopCommonModes },
-            ]);
-            // SAFETY: `modalSelfTestKeys:` exists on this controller.
-            unsafe {
-                let _: () = msg_send![
-                    self,
-                    performSelector: sel!(modalSelfTestKeys:),
-                    withObject: Option::<&AnyObject>::None,
-                    afterDelay: 0.6_f64,
-                    inModes: &*modes
-                ];
-            }
+            self.schedule_modal_self_test_keys();
         }
         if let Some(key) = key {
             send(&window, key);
@@ -711,6 +720,25 @@ impl MainWindowController {
             focus(&window)
         );
         true
+    }
+
+    /// The next modal window is answered from the modal run loop.
+    #[cfg(debug_assertions)]
+    fn schedule_modal_self_test_keys(&self) {
+        let modes = NSArray::from_slice(&[
+            // SAFETY: AppKit's static run loop mode name.
+            unsafe { objc2_foundation::NSRunLoopCommonModes },
+        ]);
+        // SAFETY: `modalSelfTestKeys:` exists on this controller.
+        unsafe {
+            let _: () = msg_send![
+                self,
+                performSelector: sel!(modalSelfTestKeys:),
+                withObject: Option::<&AnyObject>::None,
+                afterDelay: 0.6_f64,
+                inModes: &*modes
+            ];
+        }
     }
 
     /// Answers the modal window a tools step opened: the chapter list,
@@ -740,6 +768,13 @@ impl MainWindowController {
                 ("Return (copy)", key(keys::KEY_RETURN, "\r")),
                 ("Escape", escape),
             ],
+            "Playback queue" => vec![
+                ("Down", key(keys::KEY_DOWN, "\u{f701}")),
+                ("Tab", key(keys::KEY_TAB, "\t")),
+                ("Tab", key(keys::KEY_TAB, "\t")),
+                ("Return (move up)", key(keys::KEY_RETURN, "\r")),
+                ("Escape", escape),
+            ],
             "Bookmarks" => vec![
                 ("Down", key(keys::KEY_DOWN, "\u{f701}")),
                 ("Tab", key(keys::KEY_TAB, "\t")),
@@ -765,13 +800,50 @@ impl MainWindowController {
         let Some(window) = self.window() else {
             return false;
         };
-        let steps: [(&str, Option<crate::self_test::Key>); 11] = [
+        let command_shift = objc2_app_kit::NSEventModifierFlags::Command
+            | objc2_app_kit::NSEventModifierFlags::Shift;
+        let with = |code, text, flags| Some(crate::self_test::Key { code, text, flags });
+        let steps: [(&str, Option<crate::self_test::Key>); 18] = [
             ("loaded", None),
             ("Down", Some(key(keys::KEY_DOWN, "\u{f701}"))),
             ("Enter (play)", Some(key(keys::KEY_RETURN, "\r"))),
             (
                 "Escape (back to folder)",
                 Some(key(keys::KEY_ESCAPE, "\u{1b}")),
+            ),
+            (
+                "Command+Shift+Q (add to queue)",
+                with(12, "Q", command_shift),
+            ),
+            ("Up", Some(key(keys::KEY_UP, "\u{f700}"))),
+            (
+                "Command+Shift+Q (add to queue)",
+                with(12, "Q", command_shift),
+            ),
+            (
+                "Command+Shift+Q (already added)",
+                with(12, "Q", command_shift),
+            ),
+            (
+                "Shift+F10 (context menu: Remove from playback queue)",
+                with(
+                    keys::KEY_F10,
+                    "\u{f70d}",
+                    objc2_app_kit::NSEventModifierFlags::Shift,
+                ),
+            ),
+            (
+                "Command+Shift+Q (add to queue)",
+                with(12, "Q", command_shift),
+            ),
+            (
+                "Command+Option+Q (playback queue)",
+                with(
+                    12,
+                    "q",
+                    objc2_app_kit::NSEventModifierFlags::Command
+                        | objc2_app_kit::NSEventModifierFlags::Option,
+                ),
             ),
             ("Tab", Some(key(keys::KEY_TAB, "\t"))),
             ("Tab", Some(key(keys::KEY_TAB, "\t"))),
@@ -791,6 +863,9 @@ impl MainWindowController {
         let Some((name, key)) = steps.get(index) else {
             return false;
         };
+        if name.starts_with("Command+Option+Q") {
+            self.schedule_modal_self_test_keys();
+        }
         if let Some(key) = key {
             send(&window, key);
         }
@@ -1204,6 +1279,27 @@ impl ShellUi for MacUi<'_> {
                 afterDelay: 0.0_f64
             ];
         }
+    }
+
+    fn open_playback_queue(&mut self, dialog: apricot_shell::QueueDialog) {
+        *self.controller.ivars().pending_queue.borrow_mut() = Some(dialog);
+        // SAFETY: `openPlaybackQueue:` exists on the controller.
+        unsafe {
+            let _: () = msg_send![
+                self.controller,
+                performSelector: sel!(openPlaybackQueue:),
+                withObject: Option::<&AnyObject>::None,
+                afterDelay: 0.0_f64
+            ];
+        }
+    }
+
+    fn show_context_menu(
+        &mut self,
+        entries: &[apricot_app::context_menu::ContextMenuEntry],
+    ) -> Option<apricot_app::context_menu::ContextCommand> {
+        let window = self.controller.window()?;
+        crate::context_menu::show(&window, entries)
     }
 
     fn prompt_text(

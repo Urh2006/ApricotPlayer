@@ -193,6 +193,13 @@ mod equalizer {
         }
         fn open_equalizer(&mut self) {}
         fn open_lyrics(&mut self, _dialog: crate::LyricsDialog) {}
+        fn open_playback_queue(&mut self, _dialog: crate::QueueDialog) {}
+        fn show_context_menu(
+            &mut self,
+            _entries: &[apricot_app::context_menu::ContextMenuEntry],
+        ) -> Option<apricot_app::context_menu::ContextCommand> {
+            None
+        }
         fn open_bookmarks(&mut self, dialog: crate::BookmarkDialog) {
             self.bookmarks = Some(dialog);
         }

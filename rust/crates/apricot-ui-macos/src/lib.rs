@@ -17,6 +17,8 @@ mod app;
 #[cfg(target_os = "macos")]
 mod bookmarks;
 #[cfg(target_os = "macos")]
+mod context_menu;
+#[cfg(target_os = "macos")]
 mod controls;
 #[cfg(target_os = "macos")]
 mod equalizer;
@@ -29,6 +31,8 @@ mod language;
 mod lyrics;
 #[cfg(target_os = "macos")]
 mod player_page;
+#[cfg(target_os = "macos")]
+mod queue;
 #[cfg(target_os = "macos")]
 mod screen_buttons;
 #[cfg(all(target_os = "macos", debug_assertions))]

@@ -21,6 +21,7 @@ use crate::{PlayerFocus, Shell, ShellUi, View};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum QueueStartMode {
     Front,
+    Matching,
 }
 
 pub(crate) struct PendingQueuedStart {
@@ -545,6 +546,9 @@ impl Shell {
             let result = match pending.mode {
                 QueueStartMode::Front => {
                     self.application.confirm_queued_item_started(&pending.item)
+                }
+                QueueStartMode::Matching => {
+                    self.application.remove_from_playback_queue(&pending.item)
                 }
             };
             if let Err(error) = result {

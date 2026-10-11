@@ -459,3 +459,27 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   samodejni preizkus s pravim predvajanjem in lokalno .lrc datoteko
   (fokus na besedilu, Tab na Copy lyrics, Return kopira, Escape zapre,
   fokus nazaj na predvajalnik).
+
+### M5a: Playback queue in kontekstni meniji (11. 10. 2026)
+
+- `apricot-shell/src/queue.rs`: okno Playback queue (Windows
+  `show_playback_queue` s `playback_queue_win32.rs`): navodila, seznam s
+  številko, kanalom in vrsto, Play, Move up, Move down, Remove, Clear in
+  Back v vrstnem redu Windows, Enter predvaja, Escape zapre, kontekstni
+  meni z enakimi ukazi, okno se zapre, ko je vrsta prazna; spremenjena
+  vrsta se shrani, izbrani posnetek se predvaja in odstrani iz vrste
+  (`QueueStartMode::Matching`). Dodajanje in odstranjevanje aktivnega
+  posnetka (Command+Shift+Q, Command+Shift+Delete) z oglasi Windows.
+- Kontekstni meniji seznamov in predvajalnika iz `apricot_app::context_menu`
+  (Shift+F10, VoiceOver ukaz za meni, desni klik na seznamu); bližnjice v
+  oznakah menijev so na Macu prikazane s Command in Option. Ukazi, ki
+  pridejo s poznejšimi enotami (prenosi, priljubljeni, seznami predvajanja,
+  kanali), povedo, da še niso na voljo.
+- Odprto: predvajanje v ozadju z vrstico predvajalnika na drugih zaslonih
+  (Windows `background_player`, nastavitev `enable_background_playback`,
+  privzeto izklopljena) pride v posebni enoti; do takrat se izbrani
+  posnetek iz vrste vedno odpre v predvajalniku.
+- Preverjeno samodejno (`APRICOT_MACOS_SELF_TEST=folder`): dodajanje v
+  vrsto, sporočilo "already in the playback queue", kontekstni meni z
+  vsebino in izvedbo "Remove from playback queue", okno vrste (fokus na
+  seznamu, Down, Tab na Play in Move up, Return premakne, Escape zapre).

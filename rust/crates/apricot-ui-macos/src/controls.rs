@@ -80,6 +80,8 @@ pub struct ListIvars {
     activate: Cell<Option<Sel>>,
     /// Sent to the target on Delete (Windows `VK_DELETE` in a list).
     delete: Cell<Option<Sel>>,
+    /// Sent to the target for the context menu instead of showing `menu`.
+    context: Cell<Option<Sel>>,
 }
 
 define_class!(
@@ -132,6 +134,29 @@ define_class!(
     }
 
     impl List {
+        /// VoiceOver's "show menu" (VO+Shift+M).
+        #[unsafe(method(accessibilityPerformShowMenu))]
+        fn accessibility_show_menu(&self) -> bool {
+            self.show_context_menu();
+            true
+        }
+
+        /// A right click selects the row under the pointer and opens the
+        /// shell's menu when the list has a context action.
+        #[unsafe(method_id(menuForEvent:))]
+        fn menu_for_event(&self, event: &NSEvent) -> Option<Retained<objc2_app_kit::NSMenu>> {
+            if self.ivars().context.get().is_some() {
+                let point = self.convertPoint_fromView(event.locationInWindow(), None);
+                if let Ok(row) = usize::try_from(self.rowAtPoint(point)) {
+                    self.select(row);
+                }
+                self.show_context_menu();
+                None
+            } else {
+                self.menu()
+            }
+        }
+
         #[unsafe(method(keyDown:))]
         fn key_down(&self, event: &NSEvent) {
             if handle_tab(self, event) {
@@ -258,7 +283,17 @@ impl List {
         }
     }
 
+    /// The selector sent to the target for the context menu (Shift+F10,
+    /// VoiceOver's menu command and a right click).
+    pub fn set_context_menu_action(&self, action: Sel) {
+        self.ivars().context.set(Some(action));
+    }
+
     fn show_context_menu(&self) {
+        if let Some(action) = self.ivars().context.get() {
+            self.send(action);
+            return;
+        }
         let Some(menu) = self.menu() else {
             return;
         };

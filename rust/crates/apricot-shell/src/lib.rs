@@ -17,6 +17,7 @@ mod player;
 mod player_edit;
 mod player_extras;
 mod player_tools;
+mod queue;
 mod repeat;
 mod screens;
 mod type_ahead;
@@ -28,6 +29,7 @@ pub use keyboard::{FocusKind, KeyRoute};
 pub use lyrics::{LyricsDialog, LyricsHighlight, LyricsLoaded};
 pub use player::{format_duration, local_file_item};
 pub use player_extras::DetailsLabels;
+pub use queue::{QueueChange, QueueDialog};
 pub use repeat::KeyRelease;
 pub use screens::{ListScreen, ScreenControl, local_folder_result_label};
 
@@ -208,6 +210,10 @@ impl Shell {
                 self.show_bookmarks_dialog(ui, false, false);
                 return;
             }
+            "playback_queue" => {
+                self.show_playback_queue(ui);
+                return;
+            }
             _ => {}
         }
         // Every other destination arrives with its macOS screen; until then
@@ -243,6 +249,22 @@ impl Shell {
             }
             "open_bookmarks" => {
                 self.show_bookmarks_dialog(ui, false, false);
+                return;
+            }
+            "open_playback_queue" => {
+                self.show_playback_queue(ui);
+                return;
+            }
+            "add_to_playback_queue" => {
+                self.add_active_item_to_playback_queue(ui);
+                return;
+            }
+            "remove_from_playback_queue" => {
+                self.remove_active_item_from_playback_queue(ui);
+                return;
+            }
+            "context_menu" => {
+                self.show_context_menu_for_active_view(ui);
                 return;
             }
             _ => {}

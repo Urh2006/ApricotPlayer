@@ -100,7 +100,7 @@ impl Shell {
     }
 
     /// Windows `active_media_item` for the screens the shell shows.
-    fn active_media_item(&self, ui: &dyn ShellUi) -> Option<MediaItem> {
+    pub(crate) fn active_media_item(&self, ui: &dyn ShellUi) -> Option<MediaItem> {
         match self.view {
             View::Player => self.application.player_session().current_item().cloned(),
             View::LocalFolder => ui

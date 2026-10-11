@@ -160,7 +160,11 @@ impl ContextMenuContext<'_> {
         if shortcut.is_empty() {
             label
         } else {
-            format!("{label}\t{shortcut}")
+            // Stored with Windows names, shown with Command and Option on macOS.
+            format!(
+                "{label}\t{}",
+                apricot_core::shortcut::display_shortcut(&shortcut)
+            )
         }
     }
 
@@ -1069,15 +1073,21 @@ mod tests {
         let mut fixture = Fixture::new();
         fixture.settings = settings(true);
         let entries = fixture.with(|context| results_context_menu(context, Some(&local_file())));
+        let shown = |label: &str, shortcut: &str| {
+            format!(
+                "{label}\t{}",
+                apricot_core::shortcut::display_shortcut(shortcut)
+            )
+        };
         assert_eq!(
             labels(&entries),
             [
-                "Play",
-                "Add to playback queue\tCtrl+Shift+Q",
-                "Remove from playback queue\tCtrl+Shift+Delete",
-                "Remove from playlist\tCtrl+Shift+P",
-                "Copy path\tCtrl+L",
-                "Add to playlist\tCtrl+P",
+                "Play".to_owned(),
+                shown("Add to playback queue", "Ctrl+Shift+Q"),
+                shown("Remove from playback queue", "Ctrl+Shift+Delete"),
+                shown("Remove from playlist", "Ctrl+Shift+P"),
+                shown("Copy path", "Ctrl+L"),
+                shown("Add to playlist", "Ctrl+P"),
             ]
         );
     }

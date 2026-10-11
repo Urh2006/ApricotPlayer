@@ -88,6 +88,20 @@ pub trait ShellUi {
     /// after it closed.
     fn open_lyrics(&mut self, dialog: crate::LyricsDialog);
 
+    /// Opens the playback queue window after the current event, modal over
+    /// the window: instructions, the list (focused, first row selected) and
+    /// its buttons. Its keys and buttons call the [`crate::QueueDialog`]
+    /// methods; after it closed it calls
+    /// [`crate::Shell::playback_queue_closed`].
+    fn open_playback_queue(&mut self, dialog: crate::QueueDialog);
+
+    /// Shows a context menu at the focused control and returns the chosen
+    /// command; focus returns to the control when it closes.
+    fn show_context_menu(
+        &mut self,
+        entries: &[apricot_app::context_menu::ContextMenuEntry],
+    ) -> Option<apricot_app::context_menu::ContextCommand>;
+
     /// Windows `prompt_name_with_initial`: a modal text prompt with
     /// `initial` in the field; `None` when cancelled. The text is returned
     /// as typed.
