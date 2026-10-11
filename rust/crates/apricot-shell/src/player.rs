@@ -25,8 +25,8 @@ pub(crate) enum QueueStartMode {
 }
 
 pub(crate) struct PendingQueuedStart {
-    item: MediaItem,
-    mode: QueueStartMode,
+    pub(crate) item: MediaItem,
+    pub(crate) mode: QueueStartMode,
 }
 
 /// The playback state the shell keeps beside the application's session.
@@ -165,21 +165,14 @@ impl Shell {
         self.start_media_item(ui, local_file_item(path), None);
     }
 
-    /// Windows `start_media_item_with_options` for items that play without
-    /// resolving a stream first (local files and queue items of them).
+    /// Windows `start_media_item`: a standalone item.
     pub(crate) fn start_media_item(
         &mut self,
         ui: &mut dyn ShellUi,
         item: MediaItem,
         queue_mode: Option<QueueStartMode>,
     ) {
-        let start_position_seconds = self.application.playback_resume_position(&item);
-        self.application.prepare_standalone_playback();
-        self.player.pending_queued_start = queue_mode.map(|mode| PendingQueuedStart {
-            item: item.clone(),
-            mode,
-        });
-        self.start_player_at(ui, item, None, start_position_seconds);
+        self.start_media_item_with_options(ui, item, queue_mode, None, false, None);
     }
 
     /// Windows `start_media_item_at`: a standalone item from `position`.
@@ -189,9 +182,14 @@ impl Shell {
         item: MediaItem,
         start_position_seconds: f64,
     ) {
-        self.application.prepare_standalone_playback();
-        self.player.pending_queued_start = None;
-        self.start_player_at(ui, item, None, Some(start_position_seconds.max(0.0)));
+        self.start_media_item_with_options(
+            ui,
+            item,
+            None,
+            None,
+            false,
+            Some(start_position_seconds.max(0.0)),
+        );
     }
 
     /// Windows `start_sequence_media_item` and `start_media_item_with_shuffle`:
@@ -202,9 +200,7 @@ impl Shell {
         item: MediaItem,
         session_shuffle: Option<bool>,
     ) {
-        let start_position_seconds = self.application.playback_resume_position(&item);
-        self.player.pending_queued_start = None;
-        self.start_player_at(ui, item, session_shuffle, start_position_seconds);
+        self.start_media_item_with_options(ui, item, None, session_shuffle, true, None);
     }
 
     /// Windows `start_player_at`.

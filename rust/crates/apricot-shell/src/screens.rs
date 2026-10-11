@@ -130,6 +130,7 @@ impl Shell {
             View::MainMenu => self.activate_main_menu_row(ui, row),
             View::LocalFolder => self.activate_local_folder_row(ui, row),
             View::Results => self.activate_result_selection(ui),
+            View::Collection => self.activate_collection_selection(ui),
             View::Search | View::Player => {}
         }
     }
@@ -325,8 +326,12 @@ impl Shell {
         self.stop_key_repeat(ui);
         self.cancel_youtube_work();
         self.cancel_local_folder_scan();
+        let leaving_collection = self.view == View::Collection;
         if self.view == View::Player {
             self.close_player_runtime(ui);
+        }
+        if leaving_collection {
+            let _ = self.application.pop_youtube_collection();
         }
         let frame = self
             .application
@@ -342,6 +347,10 @@ impl Shell {
             Route::Results => {
                 self.view = View::Results;
                 self.refresh_results(ui, true);
+            }
+            Route::ChannelResults | Route::PlaylistResults => {
+                self.view = View::Collection;
+                self.refresh_youtube_collection(ui, true);
             }
             Route::LocalFolder => {
                 self.view = View::LocalFolder;

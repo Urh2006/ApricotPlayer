@@ -74,7 +74,8 @@ impl Shell {
         // plain keys stay with the control. Its result list takes every list
         // shortcut.
         let search_field_focus =
-            matches!(self.view, View::Search | View::Results) && focus != FocusKind::List;
+            matches!(self.view, View::Search | View::Results | View::Collection)
+                && focus != FocusKind::List;
         let entry_focus = search_field_focus && !(chord.control || chord.alt);
         let (scope, accepts_text) = if entry_focus {
             (ActionScope::Dialog, true)
@@ -121,7 +122,7 @@ const fn details_text_navigation_key(chord: ShortcutChord) -> bool {
 /// Windows `view_shortcut_scope`.
 const fn view_shortcut_scope(view: View) -> (ActionScope, bool) {
     match view {
-        View::MainMenu | View::Search | View::Results | View::LocalFolder => {
+        View::MainMenu | View::Search | View::Results | View::Collection | View::LocalFolder => {
             (ActionScope::List, false)
         }
         View::Player => (ActionScope::Player, false),

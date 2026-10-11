@@ -203,7 +203,9 @@ impl Shell {
     /// Windows `search_provider_changed`: the type list follows the
     /// provider and starts at its first type.
     pub fn screen_choice_changed(&mut self, ui: &mut dyn ShellUi, id: &str) {
-        if id == "search_provider" && matches!(self.view, View::Search | View::Results) {
+        if id == "search_provider"
+            && matches!(self.view, View::Search | View::Results | View::Collection)
+        {
             self.search.provider = ui.screen_choice("search_provider").unwrap_or(0);
             let labels = self.search_kind_labels(self.search.provider);
             ui.set_screen_choices("search_type", &labels, 0);
@@ -212,7 +214,9 @@ impl Shell {
 
     /// Return in a text field of a screen (Windows `submit_primary_text`).
     pub fn screen_text_submitted(&mut self, ui: &mut dyn ShellUi, id: &str) {
-        if id == "search_query" && matches!(self.view, View::Search | View::Results) {
+        if id == "search_query"
+            && matches!(self.view, View::Search | View::Results | View::Collection)
+        {
             self.submit_search(ui);
         }
     }
@@ -260,11 +264,10 @@ impl Shell {
         items: Vec<MediaItem>,
         continuation: Option<String>,
     ) {
-        let work_kind = self
-            .youtube
-            .pending_search
-            .take()
-            .map(|work| work.work_kind);
+        let work_kind = match self.youtube.pending_list.take() {
+            Some(crate::youtube::PendingList::Search(work)) => Some(work.work_kind),
+            _ => None,
+        };
         let outcome = self
             .application
             .apply_search_results(generation, items, continuation);
@@ -353,6 +356,7 @@ impl Shell {
                     self.start_youtube_search(ui, work);
                 }
             }
+            View::Collection => self.collection_selection_changed(ui, index),
             View::MainMenu | View::Search | View::Player => {}
         }
     }
@@ -366,18 +370,6 @@ impl Shell {
             return;
         };
         self.activate_youtube_item(ui, item);
-    }
-
-    /// Windows `activate_youtube_item`: channels and playlists open their
-    /// videos (unit M6b); other items play with shuffle off.
-    fn activate_youtube_item(&mut self, ui: &mut dyn ShellUi, item: MediaItem) {
-        if matches!(item.kind, MediaKind::Channel | MediaKind::Playlist) {
-            let feature = item.title.clone();
-            let message = apricot_app::unavailable_feature_message(&self.catalog(), &feature);
-            ui.set_status(&message, true);
-            return;
-        }
-        self.start_media_item_with_options(ui, item, Some(false), true, None);
     }
 
     /// Windows `activate_search_button`: without a selected result each

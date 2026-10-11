@@ -9,6 +9,7 @@
 //! (`docs/MACOS_RUST_PORT_PLAN.md`).
 
 mod bookmarks;
+mod collections;
 mod equalizer_dialog;
 mod keyboard;
 mod lyrics;
@@ -51,6 +52,9 @@ pub enum View {
     Search,
     /// The search screen with results (Windows `MainView::Results`).
     Results,
+    /// Channel or playlist contents on the search screen (Windows
+    /// `MainView::YoutubeCollection`).
+    Collection,
     LocalFolder,
     Player,
 }
@@ -268,6 +272,10 @@ impl Shell {
             }
             "open_search" => {
                 self.show_search(ui);
+                return;
+            }
+            "open_channel" => {
+                self.open_item_channel(ui);
                 return;
             }
             "open_playback_queue" => {

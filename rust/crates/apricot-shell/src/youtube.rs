@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 
 use apricot_app::{
-    SearchWork,
+    SearchWork, YoutubeCollectionWork,
     stream_url_cache::{CachedStream, StreamKeySettings, StreamUrlCache},
 };
 use apricot_core::{MediaItem, MediaSource};
@@ -20,6 +20,7 @@ use apricot_media::{
 use apricot_platform::{YoutubeSearchService, YoutubeSearchServiceUpdate};
 use apricot_playback::PlaybackEvent;
 
+use crate::player::{PendingQueuedStart, QueueStartMode};
 use crate::{PlayerFocus, Shell, ShellUi, View};
 
 /// Windows `YOUTUBE_BACKEND`.
@@ -43,14 +44,44 @@ struct PendingResolve {
     start_position_seconds: Option<f64>,
 }
 
+/// Windows `PendingYoutubeListWork` (Trending arrives in unit M6c).
+#[derive(Clone, Debug)]
+pub(crate) enum PendingList {
+    Search(SearchWork),
+    Collection(YoutubeCollectionWork),
+    /// Python `play_playlist`: every video of a playlist, then play.
+    PlaylistPlayback {
+        token: u64,
+        shuffle: bool,
+    },
+}
+
+impl PendingList {
+    pub(crate) const fn token(&self) -> u64 {
+        match self {
+            Self::Search(work) => work.generation,
+            Self::Collection(work) => work.generation,
+            Self::PlaylistPlayback { token, .. } => *token,
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct YoutubeState {
     pub(crate) search: YoutubeSearchService,
-    /// Windows `pending_youtube_work` (searches only so far).
-    pub(crate) pending_search: Option<SearchWork>,
+    /// Windows `pending_youtube_work`.
+    pub(crate) pending_list: Option<PendingList>,
     pending_resolve: Option<PendingResolve>,
     next_token: u64,
     stream_cache: Option<StreamUrlCache>,
+}
+
+impl YoutubeState {
+    /// Windows `next_youtube_operation_token`.
+    pub(crate) fn next_token(&mut self) -> u64 {
+        self.next_token = self.next_token.wrapping_add(1).max(1);
+        self.next_token
+    }
 }
 
 fn unix_now() -> f64 {
@@ -146,7 +177,7 @@ impl Shell {
     pub(crate) fn start_youtube_search(&mut self, ui: &mut dyn ShellUi, work: SearchWork) {
         let generation = work.generation;
         let (query, kind, limit) = (work.query.clone(), work.kind, work.limit);
-        self.youtube.pending_search = Some(work);
+        self.youtube.pending_list = Some(PendingList::Search(work));
         let Some(components) = components_directory() else {
             self.finish_youtube_error_state(ui, generation, "Application path is unavailable");
             return;
@@ -178,12 +209,7 @@ impl Shell {
                         .pending_resolve
                         .as_ref()
                         .map(|pending| pending.token)
-                        .or_else(|| {
-                            self.youtube
-                                .pending_search
-                                .as_ref()
-                                .map(|work| work.generation)
-                        })
+                        .or_else(|| self.youtube.pending_list.as_ref().map(PendingList::token))
                         .unwrap_or_default();
                     self.finish_youtube_error(ui, token, &error.to_string());
                     break;
@@ -194,16 +220,7 @@ impl Shell {
                     token,
                     items,
                     continuation,
-                } => {
-                    if self
-                        .youtube
-                        .pending_search
-                        .as_ref()
-                        .is_some_and(|work| work.generation == token)
-                    {
-                        self.finish_youtube_search(ui, token, items, continuation);
-                    }
-                }
+                } => self.finish_youtube_list(ui, token, items, continuation),
                 YoutubeSearchServiceUpdate::Resolved {
                     token,
                     item,
@@ -220,14 +237,20 @@ impl Shell {
 
     /// Windows `cancel_youtube_work`.
     pub(crate) fn cancel_youtube_work(&mut self) {
-        if self.youtube.pending_search.is_none()
+        if self.youtube.pending_list.is_none()
             && self.youtube.pending_resolve.is_none()
             && !self.youtube.search.is_pending()
         {
             return;
         }
-        if self.youtube.pending_search.take().is_some() {
-            let _ = self.application.cancel_pending_search();
+        match self.youtube.pending_list.take() {
+            Some(PendingList::Search(_)) => {
+                let _ = self.application.cancel_pending_search();
+            }
+            Some(PendingList::Collection(_)) => {
+                let _ = self.application.cancel_pending_youtube_collection();
+            }
+            Some(PendingList::PlaylistPlayback { .. }) | None => {}
         }
         self.youtube.pending_resolve = None;
         self.player.pending_queued_start = None;
@@ -241,7 +264,17 @@ impl Shell {
             .pending_resolve
             .take_if(|pending| pending.token == token)
         else {
+            let return_from_collection = matches!(
+                self.youtube.pending_list,
+                Some(PendingList::Collection(YoutubeCollectionWork {
+                    work_kind: apricot_app::YoutubeCollectionWorkKind::Initial,
+                    ..
+                }))
+            );
             self.finish_youtube_error_state(ui, token, message);
+            if return_from_collection {
+                self.navigate_back(ui);
+            }
             return;
         };
         let direct_fallback = pending.purpose == ResolvePurpose::Playback
@@ -293,17 +326,26 @@ impl Shell {
         message: &str,
     ) {
         self.player.pending_queued_start = None;
-        let was_initial = match self.youtube.pending_search.take() {
-            Some(work) => {
+        let (was_initial, search_focus) = match self.youtube.pending_list.take() {
+            Some(PendingList::Search(work)) => {
                 let _ = self.application.fail_search(generation, message);
-                work.work_kind == apricot_app::SearchWorkKind::Initial
+                (work.work_kind == apricot_app::SearchWorkKind::Initial, true)
             }
-            None => true,
+            Some(PendingList::Collection(work)) => {
+                let _ = self
+                    .application
+                    .fail_youtube_collection(generation, message);
+                (
+                    work.work_kind == apricot_app::YoutubeCollectionWorkKind::Initial,
+                    false,
+                )
+            }
+            Some(PendingList::PlaylistPlayback { .. }) | None => (true, false),
         };
         ui.set_status(message, true);
         if was_initial {
             ui.show_error(message);
-            if matches!(self.view, View::Search | View::Results) {
+            if search_focus {
                 ui.focus_screen_control("search_query");
             } else {
                 ui.focus_primary_control();
@@ -311,12 +353,13 @@ impl Shell {
         }
     }
 
-    /// Windows `start_media_item_with_options` for streamed sources, which
-    /// are resolved first; other items start at once.
+    /// Windows `start_media_item_with_options`: streamed sources are
+    /// resolved first, other items start at once.
     pub(crate) fn start_media_item_with_options(
         &mut self,
         ui: &mut dyn ShellUi,
         item: MediaItem,
+        queue_mode: Option<QueueStartMode>,
         session_shuffle: Option<bool>,
         preserve_sequence: bool,
         start_position_seconds: Option<f64>,
@@ -327,7 +370,10 @@ impl Shell {
         if !preserve_sequence {
             self.application.prepare_standalone_playback();
         }
-        self.player.pending_queued_start = None;
+        self.player.pending_queued_start = queue_mode.map(|mode| PendingQueuedStart {
+            item: item.clone(),
+            mode,
+        });
         if !matches!(
             item.source,
             MediaSource::Youtube | MediaSource::Soundcloud | MediaSource::Direct
@@ -448,8 +494,7 @@ impl Shell {
                 return;
             }
         }
-        self.youtube.next_token = self.youtube.next_token.wrapping_add(1).max(1);
-        let token = self.youtube.next_token;
+        let token = self.youtube.next_token();
         let backend = media_resolve_backend(item);
         let Some(components) = components_directory() else {
             self.report_resolve_start_error(ui, purpose, "Application path is unavailable");

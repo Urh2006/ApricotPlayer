@@ -794,25 +794,45 @@ impl MainWindowController {
                 &query[offset..offset + query[offset..].chars().next().map_or(1, char::len_utf8)];
             steps.push((format!("type {text:?}"), Some(key(0, text))));
         }
-        steps.push((
-            "Return (search)".to_owned(),
-            Some(key(keys::KEY_RETURN, "\r")),
-        ));
+        let tab = || Some(key(keys::KEY_TAB, "\t"));
+        let down = || Some(key(keys::KEY_DOWN, "\u{f701}"));
+        let enter = || Some(key(keys::KEY_RETURN, "\r"));
+        let playlists = std::env::var("APRICOT_MACOS_SELF_TEST_KIND").as_deref() == Ok("playlist");
+        if playlists {
+            // Type: All, Video, Playlist; then the Search button.
+            steps.push(("Tab (provider)".to_owned(), tab()));
+            steps.push(("Tab (type)".to_owned(), tab()));
+            steps.push(("Down (video)".to_owned(), down()));
+            steps.push(("Down (playlist)".to_owned(), down()));
+            steps.push(("Tab (Search button)".to_owned(), tab()));
+            steps.push(("Return (search)".to_owned(), enter()));
+        } else {
+            steps.push(("Return (search)".to_owned(), enter()));
+        }
         for _ in 0..14 {
             steps.push(("waiting for results".to_owned(), None));
         }
-        steps.push(("Down".to_owned(), Some(key(keys::KEY_DOWN, "\u{f701}"))));
-        steps.push((
-            "Return (play)".to_owned(),
-            Some(key(keys::KEY_RETURN, "\r")),
-        ));
+        if playlists {
+            steps.push(("Return (open playlist)".to_owned(), enter()));
+            for _ in 0..12 {
+                steps.push(("waiting for the playlist".to_owned(), None));
+            }
+        }
+        steps.push(("Down".to_owned(), down()));
+        steps.push(("Return (play)".to_owned(), enter()));
         for _ in 0..12 {
             steps.push(("waiting for playback".to_owned(), None));
         }
         steps.push((
-            "Escape (results)".to_owned(),
+            "Escape (list)".to_owned(),
             Some(key(keys::KEY_ESCAPE, "\u{1b}")),
         ));
+        if playlists {
+            steps.push((
+                "Escape (results)".to_owned(),
+                Some(key(keys::KEY_ESCAPE, "\u{1b}")),
+            ));
+        }
         steps.push((
             "Shift+Tab".to_owned(),
             Some(Key {

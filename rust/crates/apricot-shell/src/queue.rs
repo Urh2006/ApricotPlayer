@@ -312,7 +312,7 @@ impl Shell {
             queued_download_count: self.application.downloads().queued().len(),
         };
         match self.view {
-            View::LocalFolder | View::Search | View::Results => {
+            View::LocalFolder | View::Search | View::Results | View::Collection => {
                 Some(context_menu::results_context_menu(&context, item))
             }
             View::Player => Some(context_menu::player_context_menu(&context, item?)),
@@ -353,6 +353,37 @@ impl Shell {
             C::CopyTimestampLink => self.copy_current_timestamp_link(ui),
             C::PlayerAction(action_id) => self.activate_action(ui, action_id),
             C::ClosePlayer => self.close_current_player(ui),
+            C::OpenChannel => self.open_item_channel(ui),
+            C::ChannelOptions => {
+                if let Some(item) = item {
+                    self.show_channel_options(ui, &item);
+                }
+            }
+            C::ChannelVideos | C::ChannelPopular | C::ChannelPlaylists | C::ChannelStreams => {
+                if let Some(item) = item {
+                    let kind = match command {
+                        C::ChannelVideos => apricot_app::YoutubeCollectionKind::ChannelVideos,
+                        C::ChannelPopular => apricot_app::YoutubeCollectionKind::ChannelPopular,
+                        C::ChannelPlaylists => apricot_app::YoutubeCollectionKind::ChannelPlaylists,
+                        _ => apricot_app::YoutubeCollectionKind::ChannelStreams,
+                    };
+                    self.open_youtube_collection(ui, &item, kind);
+                }
+            }
+            C::PlayPlaylist | C::ShufflePlaylist => {
+                if let Some(item) = item.as_ref() {
+                    self.play_youtube_playlist(ui, item, command == C::ShufflePlaylist);
+                }
+            }
+            C::OpenPlaylistVideos => {
+                if let Some(item) = item {
+                    self.open_youtube_collection(
+                        ui,
+                        &item,
+                        apricot_app::YoutubeCollectionKind::PlaylistVideos,
+                    );
+                }
+            }
             C::OpenInBrowser => {
                 let Some(item) = item else {
                     return;

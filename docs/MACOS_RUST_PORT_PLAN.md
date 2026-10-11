@@ -512,3 +512,23 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   "Found results: 20" s fokusom na seznamu, Down in Return predvaja
   (video sličice tečejo), Escape nazaj na rezultate z isto vrstico,
   Shift+Tab na Add to favorites, Escape v glavni meni.
+
+### M6b: kanali in seznami predvajanja (11. 10. 2026)
+
+- `apricot-shell/src/collections.rs`: vsebina kanala ali seznama
+  predvajanja na iskalnem zaslonu (Windows `open_youtube_collection`,
+  `refresh_youtube_collection`, nalaganje več na zadnji vrstici), možnosti
+  kanala (videi, seznami predvajanja, prenosi v živo, priljubljeni), izvajalci
+  SoundClouda odprejo svoje skladbe, Open channel, Play playlist in Shuffle
+  playlist iz kontekstnega menija. Escape iz zbirke vrne na rezultate, napaka
+  pri prvem nalaganju tudi. Vsi začetki predvajanja zdaj gredo skozi Windows
+  `start_media_item_with_options`, zato tudi naslednji in prejšnji posnetek
+  na seznamu YouTube razrešita tok.
+- Odstopanje od Windows (napaka v Windows, popraviti v W1): Windows ob
+  nalaganju več vrstic zbirke na sklad poti doda isto pot še enkrat, zato
+  bi Escape potreboval dva pritiska; Mac jo doda samo ob prvem nalaganju.
+- Preverjeno samodejno s pravim yt-dlp (`APRICOT_MACOS_SELF_TEST=search`,
+  `APRICOT_MACOS_SELF_TEST_KIND=playlist`): Tab na ponudnika in vrsto,
+  puščice izberejo Playlist, gumb Search, Return odpre seznam predvajanja,
+  Down in Return predvajata, Escape nazaj na seznam, Escape na rezultate,
+  Escape v glavni meni.
