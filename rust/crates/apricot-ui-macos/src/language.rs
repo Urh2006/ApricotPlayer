@@ -14,8 +14,8 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSBackingStoreType, NSModalResponseCancel, NSModalResponseOK, NSScrollView,
-    NSTextField, NSWindow, NSWindowDelegate, NSWindowStyleMask,
+    NSAccessibility, NSApplication, NSBackingStoreType, NSModalResponseCancel, NSModalResponseOK,
+    NSScrollView, NSTextField, NSWindow, NSWindowDelegate, NSWindowStyleMask,
 };
 use objc2_foundation::{NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
 
@@ -30,6 +30,8 @@ const BUTTON_WIDTH: f64 = 110.0;
 pub struct DialogIvars {
     list: RefCell<Option<Retained<List>>>,
     selected: Cell<Option<usize>>,
+    field: RefCell<Option<Retained<NSTextField>>>,
+    text: RefCell<Option<String>>,
 }
 
 define_class!(
@@ -55,6 +57,13 @@ define_class!(
         #[unsafe(method(accept:))]
         fn accept(&self, _sender: Option<&AnyObject>) {
             let selected = self.ivars().list.borrow().as_ref().and_then(|list| list.selected());
+            let text = self
+                .ivars()
+                .field
+                .borrow()
+                .as_ref()
+                .map(|field| field.stringValue().to_string());
+            *self.ivars().text.borrow_mut() = text;
             self.finish(selected, NSModalResponseOK);
         }
 
@@ -178,6 +187,100 @@ pub fn choose_from_list(mtm: MainThreadMarker, request: &ChoiceRequest<'_>) -> O
         return None;
     }
     dialog.ivars().selected.get()
+}
+
+/// Windows `prompt_name`: the prompt, a text field (focused) with OK and
+/// Cancel. Return accepts, Escape and closing cancel; `None` when cancelled.
+/// The text is returned as typed.
+pub fn prompt_text(
+    mtm: MainThreadMarker,
+    title: &str,
+    prompt: &str,
+    ok: &str,
+    cancel: &str,
+) -> Option<String> {
+    let (width, height) = (520.0, 170.0);
+    let app = NSApplication::sharedApplication(mtm);
+    let previous_window = app.keyWindow();
+    let previous_focus = previous_window
+        .as_ref()
+        .and_then(|window| window.firstResponder());
+    let dialog: Retained<Dialog> = {
+        let this = Dialog::alloc(mtm).set_ivars(DialogIvars::default());
+        // SAFETY: `init` of NSObject.
+        unsafe { msg_send![super(this), init] }
+    };
+    let target: &AnyObject = dialog.as_ref();
+    // SAFETY: a standard titled window with a buffered backing.
+    let window = unsafe {
+        NSWindow::initWithContentRect_styleMask_backing_defer(
+            NSWindow::alloc(mtm),
+            NSRect::new(NSPoint::new(300.0, 200.0), NSSize::new(width, height)),
+            NSWindowStyleMask::Titled | NSWindowStyleMask::Closable,
+            NSBackingStoreType::Buffered,
+            false,
+        )
+    };
+    // SAFETY: the window is released by its last owner, this function.
+    unsafe { window.setReleasedWhenClosed(false) };
+    window.setTitle(&NSString::from_str(title));
+    window.setDelegate(Some(ProtocolObject::from_ref(&*dialog)));
+    let content = window.contentView().expect("a window has a content view");
+
+    let label = NSTextField::labelWithString(&NSString::from_str(prompt), mtm);
+    label.setFrame(NSRect::new(
+        NSPoint::new(MARGIN, height - MARGIN - PROMPT_HEIGHT),
+        NSSize::new(width - 2.0 * MARGIN, PROMPT_HEIGHT),
+    ));
+    content.addSubview(&label);
+    let field = NSTextField::initWithFrame(
+        NSTextField::alloc(mtm),
+        NSRect::new(
+            NSPoint::new(MARGIN, height - MARGIN - PROMPT_HEIGHT - 30.0),
+            NSSize::new(width - 2.0 * MARGIN, 26.0),
+        ),
+    );
+    field.setAccessibilityLabel(Some(&NSString::from_str(prompt)));
+    content.addSubview(&field);
+
+    let ok = Button::new(mtm, ok, target, sel!(accept:));
+    ok.setFrame(NSRect::new(
+        NSPoint::new(width - MARGIN - BUTTON_WIDTH * 2.0 - 8.0, MARGIN),
+        NSSize::new(BUTTON_WIDTH, BUTTON_HEIGHT),
+    ));
+    // Return in the field presses OK, as the Windows edit subclass does.
+    ok.setKeyEquivalent(&NSString::from_str("\r"));
+    content.addSubview(&ok);
+    let cancel = Button::new(mtm, cancel, target, sel!(cancel:));
+    cancel.setFrame(NSRect::new(
+        NSPoint::new(width - MARGIN - BUTTON_WIDTH, MARGIN),
+        NSSize::new(BUTTON_WIDTH, BUTTON_HEIGHT),
+    ));
+    cancel.setKeyEquivalent(&NSString::from_str("\u{1b}"));
+    content.addSubview(&cancel);
+
+    controls::set_tab_order(&[&field, &ok, &cancel]);
+    window.setAutorecalculatesKeyViewLoop(false);
+    window.setInitialFirstResponder(Some(&field));
+    *dialog.ivars().field.borrow_mut() = Some(field.clone());
+
+    app.activate();
+    window.center();
+    window.makeKeyAndOrderFront(None);
+    window.makeFirstResponder(Some(&field));
+    let response = app.runModalForWindow(&window);
+    window.setDelegate(None);
+    window.orderOut(None);
+    if let Some(previous) = previous_window {
+        previous.makeKeyAndOrderFront(None);
+        if let Some(focus) = previous_focus {
+            previous.makeFirstResponder(Some(&focus));
+        }
+    }
+    if response != NSModalResponseOK {
+        return None;
+    }
+    dialog.ivars().text.borrow_mut().take()
 }
 
 /// Shows the language choice and returns the chosen language code, or

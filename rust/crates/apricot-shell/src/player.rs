@@ -544,7 +544,11 @@ impl Shell {
     }
 
     /// Windows `execute_player_command`.
-    fn execute_player_command(&self, ui: &mut dyn ShellUi, command: PlaybackCommand) -> bool {
+    pub(crate) fn execute_player_command(
+        &self,
+        ui: &mut dyn ShellUi,
+        command: PlaybackCommand,
+    ) -> bool {
         let generation = self.application.player_session().generation();
         let Some(runtime) = self.player.playback.as_ref() else {
             return false;

@@ -131,6 +131,13 @@ define_class!(
             self.with_shell(|shell, ui| shell.key_repeat_tick(ui));
         }
 
+        /// Opens the equalizer after the event that asked for it, so the
+        /// shell is free while the dialog runs.
+        #[unsafe(method(openEqualizer:))]
+        fn open_equalizer(&self, _sender: Option<&AnyObject>) {
+            crate::equalizer::run(self);
+        }
+
         #[unsafe(method(drainActivations:))]
         fn drain_activations_selector(&self, _sender: Option<&AnyObject>) {
             self.drain_activations();
@@ -338,7 +345,10 @@ impl MainWindowController {
 
     /// Runs `action` with the shell and this window as its UI. Returns `None`
     /// when the shell is already in use (a nested call during a modal alert).
-    fn with_shell<R>(&self, action: impl FnOnce(&mut Shell, &mut dyn ShellUi) -> R) -> Option<R> {
+    pub(crate) fn with_shell<R>(
+        &self,
+        action: impl FnOnce(&mut Shell, &mut dyn ShellUi) -> R,
+    ) -> Option<R> {
         let mut shell = self.ivars().shell.try_borrow_mut().ok()?;
         let shell = shell.as_mut()?;
         let mut ui = MacUi { controller: self };
@@ -700,7 +710,7 @@ impl MainWindowController {
             return;
         };
         let command = objc2_app_kit::NSEventModifierFlags::Command;
-        let steps: [(&str, Option<Key>); 18] = [
+        let steps: [(&str, Option<Key>); 20] = [
             ("opened", None),
             ("T (time)", Some(key(17, "t"))),
             ("Space (pause)", Some(key(keys::KEY_SPACE, " "))),
@@ -730,6 +740,8 @@ impl MainWindowController {
                 "Escape (leave full screen)",
                 Some(key(keys::KEY_ESCAPE, "\u{1b}")),
             ),
+            ("F4 (equalizer)", Some(key(118, "\u{f707}"))),
+            ("after the equalizer", None),
             ("Tab", Some(key(keys::KEY_TAB, "\t"))),
             ("Escape", Some(key(keys::KEY_ESCAPE, "\u{1b}"))),
         ];
@@ -800,6 +812,16 @@ fn default_reached_sound_path() -> Option<PathBuf> {
     let repository =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../assets/default_reached.wav");
     (cfg!(debug_assertions) && repository.is_file()).then_some(repository)
+}
+
+/// Windows timers keep firing while a dialog runs its modal loop; AppKit
+/// timers only do so in the common run loop modes.
+fn run_in_modal_loops(timer: &NSTimer) {
+    // SAFETY: AppKit's static run loop mode name.
+    unsafe {
+        objc2_foundation::NSRunLoop::currentRunLoop()
+            .addTimer_forMode(timer, objc2_foundation::NSRunLoopCommonModes);
+    }
 }
 
 /// The shell's view of the macOS main window.
@@ -887,7 +909,7 @@ impl ShellUi for MacUi<'_> {
         }
         // SAFETY: the controller implements `pollBackground:` and outlives
         // the timer, which is invalidated when polling stops.
-        *timer = Some(unsafe {
+        let background = unsafe {
             NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
                 0.05,
                 self.controller.as_ref(),
@@ -895,7 +917,9 @@ impl ShellUi for MacUi<'_> {
                 None,
                 true,
             )
-        });
+        };
+        run_in_modal_loops(&background);
+        *timer = Some(background);
     }
 
     fn selected_row(&self) -> Option<usize> {
@@ -1014,6 +1038,18 @@ impl ShellUi for MacUi<'_> {
         )
     }
 
+    fn open_equalizer(&mut self) {
+        // SAFETY: `openEqualizer:` exists on the controller.
+        unsafe {
+            let _: () = msg_send![
+                self.controller,
+                performSelector: sel!(openEqualizer:),
+                withObject: Option::<&AnyObject>::None,
+                afterDelay: 0.0_f64
+            ];
+        }
+    }
+
     fn copy_text(&mut self, text: &str) -> bool {
         let pasteboard = objc2_app_kit::NSPasteboard::generalPasteboard();
         pasteboard.clearContents();
@@ -1086,6 +1122,7 @@ impl ShellUi for MacUi<'_> {
                 true,
             )
         };
+        run_in_modal_loops(&timer);
         *self.controller.ivars().poll_timer.borrow_mut() = Some(timer);
     }
 

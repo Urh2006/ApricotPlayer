@@ -57,6 +57,11 @@ pub fn handle_tab(view: &NSView, event: &NSEvent) -> bool {
     true
 }
 
+/// Scrolls a focused control into view inside a scrolling dialog.
+pub fn scroll_into_view(view: &NSView) {
+    view.scrollRectToVisible(view.bounds());
+}
+
 /// Declares the Tab order: each view's next key view is the following one,
 /// and the last wraps to the first.
 pub fn set_tab_order(views: &[&NSView]) {
@@ -288,9 +293,18 @@ define_class!(
             true
         }
 
+        /// Disabled and hidden buttons are skipped, as `WS_TABSTOP` controls
+        /// are on Windows.
         #[unsafe(method(canBecomeKeyView))]
         fn can_become_key_view(&self) -> bool {
-            true
+            self.isEnabled() && !self.isHiddenOrHasHiddenAncestor()
+        }
+
+        #[unsafe(method(becomeFirstResponder))]
+        fn become_first_responder(&self) -> bool {
+            scroll_into_view(self);
+            // SAFETY: forwarding to NSButton.
+            unsafe { msg_send![super(self), becomeFirstResponder] }
         }
 
         #[unsafe(method(keyDown:))]

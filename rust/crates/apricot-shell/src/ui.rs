@@ -71,6 +71,11 @@ pub trait ShellUi {
     /// A modal list choice; `None` when cancelled.
     fn choose(&mut self, dialog: &ChoiceDialog) -> Option<usize>;
 
+    /// Opens the equalizer dialog after the current event, modal over the
+    /// window. The dialog calls [`crate::Shell::equalizer_begin`], forwards
+    /// its control changes and ends with [`crate::Shell::equalizer_finish`].
+    fn open_equalizer(&mut self);
+
     /// Copies text to the clipboard; `true` on success.
     fn copy_text(&mut self, text: &str) -> bool;
 

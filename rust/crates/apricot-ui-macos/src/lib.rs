@@ -16,6 +16,10 @@ mod announce;
 mod app;
 #[cfg(target_os = "macos")]
 mod controls;
+#[cfg(target_os = "macos")]
+mod equalizer;
+#[cfg(target_os = "macos")]
+mod form_controls;
 pub mod keys;
 #[cfg(target_os = "macos")]
 mod language;

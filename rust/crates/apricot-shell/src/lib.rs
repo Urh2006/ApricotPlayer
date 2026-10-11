@@ -8,6 +8,7 @@
 //! the result. Windows moves onto this crate in unit W1
 //! (`docs/MACOS_RUST_PORT_PLAN.md`).
 
+mod equalizer_dialog;
 mod keyboard;
 mod main_menu;
 mod player;
@@ -17,6 +18,7 @@ mod screens;
 mod type_ahead;
 mod ui;
 
+pub use equalizer_dialog::{EQUALIZER_BUTTONS, EqualizerButton, EqualizerLabels, EqualizerView};
 pub use keyboard::{FocusKind, KeyRoute};
 pub use player::{format_duration, local_file_item};
 pub use player_extras::DetailsLabels;
@@ -49,6 +51,8 @@ pub struct Shell {
     key_repeat: Option<repeat::KeyRepeat>,
     screens: screens::ScreenState,
     extras: player_extras::PlayerExtras,
+    /// The open equalizer dialog (Windows `DialogState`).
+    equalizer: Option<equalizer_dialog::EqualizerDialogState>,
 }
 
 impl Shell {
@@ -63,6 +67,7 @@ impl Shell {
             key_repeat: None,
             screens: screens::ScreenState::default(),
             extras: player_extras::PlayerExtras::default(),
+            equalizer: None,
         }
     }
 
@@ -261,6 +266,7 @@ impl Shell {
             "details_copy" => self.copy_player_details(ui),
             "details_back" => self.hide_player_details(ui),
             "player_output_devices" => self.show_output_devices(ui),
+            "player_equalizer" => self.show_player_equalizer(ui),
             "player_back_keep_playing" => self.leave_player_to_main_menu(ui, true),
             "player_previous" => self.navigate_player_relative(ui, -1, false),
             "player_next" => self.navigate_player_relative(ui, 1, false),

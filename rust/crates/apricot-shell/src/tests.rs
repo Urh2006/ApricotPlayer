@@ -9,7 +9,7 @@ mod keyboard {
 
     use crate::{FocusKind, KeyRoute, Shell};
 
-    fn shell() -> Shell {
+    pub(super) fn shell() -> Shell {
         let directory = std::env::temp_dir().join(format!(
             "apricot-shell-test-{}-{}",
             std::process::id(),
@@ -152,4 +152,264 @@ fn main_menu_returns_to_the_last_opened_row_or_keeps_the_label() {
         0
     );
     assert_eq!(preserved_index(&labels, None, Some(9)), 2);
+}
+
+mod equalizer {
+    use std::path::PathBuf;
+
+    use apricot_app::PlayerScreenModel;
+    use apricot_playback::MpvVideoMode;
+
+    use crate::{
+        ChoiceDialog, DetailsLabels, EqualizerButton, EqualizerView, ListScreen, PlayerFocus,
+        ShellUi,
+    };
+
+    #[derive(Default)]
+    struct Ui {
+        announcements: Vec<String>,
+    }
+
+    impl ShellUi for Ui {
+        fn set_status(&mut self, message: &str, announce: bool) {
+            if announce {
+                self.announcements.push(message.to_owned());
+            }
+        }
+        fn show_error(&mut self, _message: &str) {}
+        fn show_list_screen(&mut self, _screen: &ListScreen) {}
+        fn show_player(&mut self, _model: &PlayerScreenModel, _focus: PlayerFocus) {}
+        fn show_player_details(&mut self, _labels: &DetailsLabels, _text: &str) {}
+        fn hide_player_details(&mut self) {}
+        fn set_player_details_text(&mut self, _text: &str) {}
+        fn focus_player_control(&mut self, _id: &str) {}
+        fn set_window_fullscreen(&mut self, _fullscreen: bool) {}
+        fn choose(&mut self, _dialog: &ChoiceDialog) -> Option<usize> {
+            None
+        }
+        fn open_equalizer(&mut self) {}
+        fn copy_text(&mut self, _text: &str) -> bool {
+            true
+        }
+        fn set_window_title(&mut self, _title: &str) {}
+        fn selected_row(&self) -> Option<usize> {
+            None
+        }
+        fn focused_player_control(&self) -> Option<&'static str> {
+            None
+        }
+        fn focus_primary_control(&mut self) {}
+        fn video_mode(&self) -> MpvVideoMode {
+            MpvVideoMode::AudioOnly
+        }
+        fn set_playback_polling(&mut self, _active: bool) {}
+        fn schedule_key_repeat(&mut self, _delay_ms: u32) {}
+        fn cancel_key_repeat(&mut self) {}
+        fn play_default_reached_sound(&mut self) {}
+        fn choose_media_file(&mut self, _title: &str) -> Result<Option<PathBuf>, String> {
+            Ok(None)
+        }
+        fn choose_folder(&mut self, _title: &str) -> Option<PathBuf> {
+            None
+        }
+        fn set_background_polling(&mut self, _active: bool) {}
+        fn restore(&mut self) {}
+        fn exit(&mut self) {}
+    }
+
+    /// The dialog controls as the shell left them.
+    #[derive(Default)]
+    struct View {
+        presets: Vec<String>,
+        preset: usize,
+        range: usize,
+        name: String,
+        name_visible: bool,
+        /// Per band: limit, position, label, value text, spoken.
+        sliders: Vec<(i32, i32, String, String, bool)>,
+        scheduled: Option<u32>,
+        closed: bool,
+        prompt_answer: Option<String>,
+        message_answer: usize,
+        messages: Vec<String>,
+    }
+
+    impl EqualizerView for View {
+        fn set_presets(&mut self, labels: &[String], selected: usize) {
+            self.presets = labels.to_vec();
+            self.preset = selected;
+        }
+        fn selected_preset(&self) -> Option<usize> {
+            Some(self.preset)
+        }
+        fn set_range(&mut self, index: usize) {
+            self.range = index;
+        }
+        fn selected_range(&self) -> Option<usize> {
+            Some(self.range)
+        }
+        fn set_name(&mut self, text: &str) {
+            text.clone_into(&mut self.name);
+        }
+        fn name(&self) -> String {
+            self.name.clone()
+        }
+        fn set_name_visible(&mut self, visible: bool) {
+            self.name_visible = visible;
+        }
+        fn set_slider(
+            &mut self,
+            index: usize,
+            limit: i32,
+            tenths: i32,
+            label: &str,
+            value: &str,
+            notify: bool,
+        ) {
+            if self.sliders.len() <= index {
+                self.sliders.resize(index + 1, Default::default());
+            }
+            self.sliders[index] = (limit, tenths, label.to_owned(), value.to_owned(), notify);
+        }
+        fn schedule_apply(&mut self, delay_ms: u32) {
+            self.scheduled = Some(delay_ms);
+        }
+        fn cancel_apply(&mut self) {
+            self.scheduled = None;
+        }
+        fn close(&mut self) {
+            self.closed = true;
+        }
+        fn message(&mut self, _title: &str, message: &str, _buttons: &[&str]) -> usize {
+            self.messages.push(message.to_owned());
+            self.message_answer
+        }
+        fn prompt_name(
+            &mut self,
+            _title: &str,
+            _prompt: &str,
+            _ok: &str,
+            _cancel: &str,
+        ) -> Option<String> {
+            self.prompt_answer.clone()
+        }
+        fn choose(&mut self, _dialog: &ChoiceDialog) -> Option<usize> {
+            None
+        }
+        fn choose_json_file(&mut self, _title: &str, _type_label: &str) -> Option<PathBuf> {
+            None
+        }
+        fn save_json_file(
+            &mut self,
+            _title: &str,
+            _file_name: &str,
+            _type_label: &str,
+        ) -> Option<PathBuf> {
+            None
+        }
+    }
+
+    #[test]
+    fn the_dialog_opens_with_the_saved_preset_range_and_flat_sliders() {
+        let mut shell = super::keyboard::shell();
+        let mut view = View::default();
+        shell.equalizer_begin(&mut view);
+        assert!(!view.presets.is_empty());
+        assert_eq!(view.range, 1, "12 dB is the second range option");
+        assert!(!view.name_visible, "a factory preset has no name field");
+        assert_eq!(
+            view.sliders.len(),
+            apricot_core::audio::EQUALIZER_BANDS.len()
+        );
+        for (limit, position, label, value, spoken) in &view.sliders {
+            assert_eq!((*limit, *position, *spoken), (120, 0, false));
+            assert!(!label.is_empty() && !value.is_empty());
+        }
+        assert_eq!(view.scheduled, None, "opening applies nothing");
+    }
+
+    #[test]
+    fn a_slider_change_is_spoken_and_applied_after_the_delay() {
+        let mut shell = super::keyboard::shell();
+        let mut view = View::default();
+        shell.equalizer_begin(&mut view);
+        shell.equalizer_slider_changed(&mut view, 2, 30);
+        let (_, position, _, value, spoken) = &view.sliders[2];
+        assert_eq!((*position, *spoken), (30, true));
+        assert_eq!(value, &apricot_app::equalizer::slider_value_text(30));
+        assert_eq!(view.scheduled, Some(apricot_app::equalizer::APPLY_DELAY_MS));
+    }
+
+    #[test]
+    fn a_smaller_range_limits_the_sliders() {
+        let mut shell = super::keyboard::shell();
+        let mut view = View::default();
+        shell.equalizer_begin(&mut view);
+        shell.equalizer_slider_changed(&mut view, 0, 110);
+        view.range = 0;
+        shell.equalizer_range_changed(&mut view);
+        assert_eq!(view.sliders[0].0, 60);
+        assert_eq!(view.sliders[0].1, 60);
+    }
+
+    #[test]
+    fn ok_keeps_the_range_and_cancel_restores_it() {
+        let mut ui = Ui::default();
+        let mut shell = super::keyboard::shell();
+        let mut view = View::default();
+        shell.equalizer_begin(&mut view);
+        view.range = 3;
+        shell.equalizer_range_changed(&mut view);
+        shell.equalizer_button(&mut ui, &mut view, EqualizerButton::Ok);
+        assert!(view.closed);
+        shell.equalizer_finish(&mut ui);
+        assert_eq!(shell.application.equalizer_settings().db_range(), 24);
+        assert_eq!(
+            ui.announcements.last(),
+            Some(&shell.text("equalizer_saved"))
+        );
+
+        let mut view = View::default();
+        shell.equalizer_begin(&mut view);
+        assert_eq!(view.range, 3, "the saved range is shown");
+        view.range = 0;
+        shell.equalizer_range_changed(&mut view);
+        shell.equalizer_button(&mut ui, &mut view, EqualizerButton::Cancel);
+        assert!(view.closed);
+        shell.equalizer_finish(&mut ui);
+        assert_eq!(shell.application.equalizer_settings().db_range(), 24);
+        assert_eq!(
+            ui.announcements.last(),
+            Some(&shell.text("equalizer_closed"))
+        );
+    }
+
+    #[test]
+    fn a_new_profile_is_selected_named_and_deleted_only_after_yes() {
+        let mut ui = Ui::default();
+        let mut shell = super::keyboard::shell();
+        let mut view = View::default();
+        shell.equalizer_begin(&mut view);
+        view.prompt_answer = Some("Mine".to_owned());
+        shell.equalizer_button(&mut ui, &mut view, EqualizerButton::AddProfile);
+        assert_eq!(view.presets[view.preset], "Mine");
+        assert_eq!(view.name, "Mine");
+        assert!(view.name_visible);
+        assert_eq!(
+            ui.announcements.last(),
+            Some(&shell.text("equalizer_profile_saved"))
+        );
+
+        view.message_answer = 1;
+        shell.equalizer_button(&mut ui, &mut view, EqualizerButton::DeleteProfile);
+        assert_eq!(view.presets[view.preset], "Mine", "No keeps the profile");
+        view.message_answer = 0;
+        shell.equalizer_button(&mut ui, &mut view, EqualizerButton::DeleteProfile);
+        assert!(!view.presets.contains(&"Mine".to_owned()));
+        assert!(!view.name_visible);
+        assert_eq!(
+            ui.announcements.last(),
+            Some(&shell.text("equalizer_profile_deleted"))
+        );
+    }
 }

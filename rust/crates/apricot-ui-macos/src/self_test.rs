@@ -65,3 +65,33 @@ pub fn focus(window: &NSWindow) -> String {
         )
     }
 }
+
+/// The accessibility value of the window's focused control: its value
+/// description when it has one (sliders), else its value.
+pub fn focused_value(window: &NSWindow) -> String {
+    let Some(responder) = window.firstResponder() else {
+        return String::new();
+    };
+    let responder: Retained<AnyObject> = Retained::into_super(Retained::into_super(responder));
+    // SAFETY: NSView answers these NSAccessibility getters.
+    unsafe {
+        let description: Option<Retained<NSString>> =
+            msg_send![&*responder, accessibilityValueDescription];
+        if let Some(description) = description {
+            return description.to_string();
+        }
+        if let Some(popup) = responder.downcast_ref::<objc2_app_kit::NSPopUpButton>() {
+            return popup
+                .titleOfSelectedItem()
+                .map(|title| title.to_string())
+                .unwrap_or_default();
+        }
+        let value: Option<Retained<AnyObject>> = msg_send![&*responder, accessibilityValue];
+        value
+            .map(|value| {
+                let text: Retained<NSString> = msg_send![&*value, description];
+                text.to_string()
+            })
+            .unwrap_or_default()
+    }
+}

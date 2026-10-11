@@ -369,3 +369,31 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   in gre v glavni meni (Windows `leave_player_to_main_menu(false)`).
 - Preverjeno samodejno s pravim mpv: F7, puščica v podrobnostih, Escape skrije,
   F11, Escape zapusti celozaslonski način, Escape v glavni meni.
+
+### M4c: izenačevalnik predvajalnika F4 (11. 10. 2026)
+
+- Logika okna `equalizer_win32.rs` je zdaj v `apricot-shell`
+  (`equalizer_dialog.rs`, vmesnik `EqualizerView`), tako da jo bo v W1
+  uporabil tudi Windows. Vsebina in vedenje sta kot na Windows: prednastavitev,
+  razpon v dB, ime lastne prednastavitve (vidno samo za lasten profil, takrat
+  je omogočen tudi Delete profile), drsnik za vsak pas z imenom pasu in
+  vrednostjo v dB, enajst gumbov v vrstnem redu Windows, sprotna uporaba po
+  160 ms, Compare, profili (dodaj, izbriši z Da/Ne, uvoz in izvoz JSON),
+  privzeto za napravo. OK shrani ime in razpon, Cancel, Escape in zaprtje
+  vrnejo prejšnji izenačevalnik; oglasi `equalizer_saved` ali
+  `equalizer_closed`.
+- macOS okno: `PopUp` se obnaša kot spustni seznam Windows (puščice, Home,
+  End in črke takoj zamenjajo izbiro, preslednica odpre seznam), `Slider` kot
+  trackbar (korak 1 dB, Page Up in Page Down 3 dB, Home in End do roba,
+  VoiceOverjevo povečanje in zmanjšanje po 1 dB). Odobrena prilagoditev za
+  Mac: puščica gor in desno povečata vrednost, kot pri drsnikih macOS.
+  Return pritisne OK, Escape Cancel, kot `IDOK` in `IDCANCEL`. Onemogočeni in
+  skriti gumbi niso več v Tab vrstnem redu (velja za vse gumbe).
+- Novo skupno okno za vnos imena (`prompt_text`, Windows `prompt_name`) in
+  besedili `yes` ter `no` za vprašanja (Windows uporabi sistemska gumba).
+- Časovnika predvajanja in dela v ozadju tečeta tudi med modalnimi okni,
+  kot na Windows.
+- Preverjeno: enotski testi okna v `apricot-shell` ter samodejni preizkus s
+  pravim mpv (`APRICOT_MACOS_SELF_TEST=player`): F4, puščice v
+  prednastavitvi, Tab na razpon in prvi pas, gor in Page Up, Tab in
+  Shift+Tab, Escape, fokus nazaj na predvajalnik in oglas "Equalizer closed".
