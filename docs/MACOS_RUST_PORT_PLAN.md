@@ -483,3 +483,32 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   vrsto, sporočilo "already in the playback queue", kontekstni meni z
   vsebino in izvedbo "Remove from playback queue", okno vrste (fokus na
   seznamu, Down, Tab na Play in Move up, Return premakne, Escape zapre).
+
+### M6a: iskalni zaslon, rezultati in predvajanje prek yt-dlp (11. 10. 2026)
+
+- `apricot-shell/src/search.rs` in `youtube.rs`: iskalni zaslon (Windows
+  `show_search`) s poljem za iskanje, ponudnikom (YouTube, SoundCloud) in
+  vrsto, gumbi Search, Play, Download audio, Download video in Add to
+  favorites ter seznamom rezultatov v vrstnem redu Tab kot na Windows
+  (Back, iskanje, ponudnik, vrsta, gumbi, seznam). Return v polju išče,
+  Escape gre nazaj, na polju in gumbih navadne tipke ostanejo kontroli,
+  Command in Option bližnjice delujejo na izbranem rezultatu
+  (Python `on_char_hook`). Rezultati z vrsticami Windows `result_label`,
+  "Found results", nalaganje več rezultatov na zadnji vrstici, napake z
+  oknom in fokusom nazaj na polje.
+- Predvajanje rezultata: razreševanje toka prek yt-dlp v ozadju s
+  predpomnilnikom tokov, stran predvajalnika takoj ("Preparing playback"),
+  nato predvajanje; Copy stream URL za YouTube in SoundCloud; prijazna
+  sporočila o napakah. Escape iz predvajalnika vrne na rezultate.
+- macOS: polja zaslona (`screen_fields.rs`) z oznako nad kontrolo, seznam
+  sporoča spremembo izbire. Razvojne različice uporabijo Homebrew yt-dlp,
+  paket (M15) mora vključiti yt-dlp v mapo components.
+- Odprto za M6b: dopolnjevanje metapodatkov rezultatov, kanali in seznami
+  predvajanja (zdaj povedo, da še niso na voljo), možnosti kanala, Trending,
+  Direct link, prepis, komentarji, sorodni videi, vnaprejšnje razreševanje
+  naslednjega toka, vprašanje za osvežitev piškotkov (M12).
+- Preverjeno samodejno s pravim yt-dlp (`APRICOT_MACOS_SELF_TEST=search`):
+  Command+Option+Y odpre iskanje s fokusom v polju, tipkanje, Return,
+  "Found results: 20" s fokusom na seznamu, Down in Return predvaja
+  (video sličice tečejo), Escape nazaj na rezultate z isto vrstico,
+  Shift+Tab na Add to favorites, Escape v glavni meni.

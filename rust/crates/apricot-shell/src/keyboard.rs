@@ -69,13 +69,29 @@ impl Shell {
             return KeyRoute::Unhandled;
         }
         let shortcuts = &self.application.settings().keyboard_shortcuts;
-        let (scope, accepts_text) = view_shortcut_scope(self.view);
+        // Python `on_char_hook`: on the search screen's field, choices and
+        // buttons Ctrl and Alt shortcuts act on the selected result, while
+        // plain keys stay with the control. Its result list takes every list
+        // shortcut.
+        let search_field_focus =
+            matches!(self.view, View::Search | View::Results) && focus != FocusKind::List;
+        let entry_focus = search_field_focus && !(chord.control || chord.alt);
+        let (scope, accepts_text) = if entry_focus {
+            (ActionScope::Dialog, true)
+        } else if search_field_focus {
+            (ActionScope::List, false)
+        } else {
+            view_shortcut_scope(self.view)
+        };
         let Some(action) =
             action_for_shortcut(shortcuts, chord, ShortcutContext::new(scope, accepts_text))
         else {
             return KeyRoute::Unhandled;
         };
         let is_global = action.scopes.contains(&ActionScope::Global);
+        if !is_global && entry_focus {
+            return KeyRoute::Unhandled;
+        }
         if !is_global && self.view == View::MainMenu && action.id.as_str() != "open_selected" {
             return KeyRoute::Unhandled;
         }
@@ -105,7 +121,9 @@ const fn details_text_navigation_key(chord: ShortcutChord) -> bool {
 /// Windows `view_shortcut_scope`.
 const fn view_shortcut_scope(view: View) -> (ActionScope, bool) {
     match view {
-        View::MainMenu | View::LocalFolder => (ActionScope::List, false),
+        View::MainMenu | View::Search | View::Results | View::LocalFolder => {
+            (ActionScope::List, false)
+        }
         View::Player => (ActionScope::Player, false),
     }
 }

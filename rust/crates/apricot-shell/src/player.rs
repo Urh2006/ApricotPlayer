@@ -35,9 +35,12 @@ pub(crate) struct PlayerRuntime {
     pub(crate) playback: Option<PlaybackRuntime>,
     /// Python `restart_current_playback` announces only the restart.
     quiet_next_resume: bool,
-    pending_queued_start: Option<PendingQueuedStart>,
+    pub(crate) pending_queued_start: Option<PendingQueuedStart>,
     /// Windows `clip_preview`: the generation of a running clip preview.
     pub(crate) clip_preview: Option<u64>,
+    /// Windows `preparing_player_generation`: the player page shows an item
+    /// whose stream is still being resolved.
+    pub(crate) preparing_generation: Option<u64>,
 }
 
 /// Python `format_rate_for_speech`.
@@ -226,6 +229,13 @@ impl Shell {
         // A player opened from a screen returns there.
         self.application.forget_player_return_frame();
         self.persist_current_playback_position(ui);
+        // The player page already shows this item and has the focus.
+        let prepared = self
+            .player
+            .preparing_generation
+            .take()
+            .is_some_and(|generation| generation == self.application.player_session().generation())
+            && self.view == View::Player;
         self.player.clip_preview = None;
         let podcast_speed = item
             .metadata
@@ -270,11 +280,15 @@ impl Shell {
             ui.show_error(&message);
             return;
         }
-        if self.view != View::Player {
-            self.application.navigate_to_player();
-            self.view = View::Player;
+        if prepared {
+            self.refresh_player(ui, PlayerFocus::Preserve);
+        } else {
+            if self.view != View::Player {
+                self.application.navigate_to_player();
+                self.view = View::Player;
+            }
+            self.refresh_player(ui, PlayerFocus::Initial);
         }
-        self.refresh_player(ui, PlayerFocus::Initial);
         ui.set_playback_polling(true);
     }
 
@@ -399,7 +413,7 @@ impl Shell {
     }
 
     /// Windows `player_failed_message`.
-    fn player_failed_message(&self, error: &str) -> String {
+    pub(crate) fn player_failed_message(&self, error: &str) -> String {
         if let Some(start) = error.find("spotify_") {
             let key: String = error[start..]
                 .chars()
@@ -931,7 +945,13 @@ impl Shell {
     }
 
     /// Windows `persist_current_playback_position`.
-    fn persist_current_playback_position(&mut self, ui: &mut dyn ShellUi) {
+    pub(crate) fn persist_current_playback_position(&mut self, ui: &mut dyn ShellUi) {
+        // The waiting player page has not played: its position is only the
+        // start position and must not replace or clear the saved one.
+        if self.player.preparing_generation == Some(self.application.player_session().generation())
+        {
+            return;
+        }
         if let Err(error) = self.application.save_current_playback_position() {
             ui.set_status(&format!("Playback position was not saved: {error}"), false);
         }

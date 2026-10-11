@@ -298,10 +298,24 @@ pub fn user_components_directory() -> Option<PathBuf> {
 #[must_use]
 pub fn preferred_ytdlp_executable(bundled_components: &Path) -> PathBuf {
     let file_name = crate::executable_name("yt-dlp");
+    let bundled = bundled_components.join(&file_name);
     user_components_directory()
         .map(|folder| folder.join(&file_name))
         .filter(|path| path.is_file())
-        .unwrap_or_else(|| bundled_components.join(&file_name))
+        .or_else(|| development_ytdlp(&bundled))
+        .unwrap_or(bundled)
+}
+
+/// Development builds outside Windows have no bundled components folder;
+/// they use a Homebrew `yt-dlp`, as they use Homebrew's libmpv.
+fn development_ytdlp(bundled: &Path) -> Option<PathBuf> {
+    if cfg!(windows) || !cfg!(debug_assertions) || bundled.is_file() {
+        return None;
+    }
+    ["/opt/homebrew/bin/yt-dlp", "/usr/local/bin/yt-dlp"]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|path| path.is_file())
 }
 
 /// Python `is_installed_build`: an installer left `unins000.exe`, or the app

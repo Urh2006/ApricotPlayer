@@ -68,6 +68,7 @@ define_class!(
                         controller.start_tools_self_test();
                     }
                 }
+                Ok("search") => controller.run_search_self_test(),
                 Ok("folder") => {
                     if let Some(media) = std::env::var_os("APRICOT_MACOS_SELF_TEST_MEDIA") {
                         controller.run_folder_self_test(media.into());

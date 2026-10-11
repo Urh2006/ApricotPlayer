@@ -35,6 +35,8 @@ mod player_page;
 mod queue;
 #[cfg(target_os = "macos")]
 mod screen_buttons;
+#[cfg(target_os = "macos")]
+mod screen_fields;
 #[cfg(all(target_os = "macos", debug_assertions))]
 mod self_test;
 #[cfg(target_os = "macos")]

@@ -43,6 +43,7 @@ pub struct ControllerIvars {
     window: RefCell<Option<Retained<MainWindow>>>,
     list: RefCell<Option<Retained<List>>>,
     buttons: RefCell<Option<ScreenButtons>>,
+    fields: RefCell<Option<crate::screen_fields::ScreenFields>>,
     background_timer: RefCell<Option<Retained<NSTimer>>>,
     scroll: RefCell<Option<Retained<NSScrollView>>>,
     status: RefCell<Option<Retained<NSTextField>>>,
@@ -204,6 +205,28 @@ define_class!(
         }
 
         /// A button of a list screen.
+        /// Return in a screen's text field.
+        #[unsafe(method(screenField:))]
+        fn screen_field(&self, sender: Option<&AnyObject>) {
+            if let Some(id) = self.field_id(sender) {
+                self.with_shell(|shell, ui| shell.screen_text_submitted(ui, id));
+            }
+        }
+
+        /// A screen's drop-down list changed (Windows `CBN_SELCHANGE`).
+        #[unsafe(method(screenChoice:))]
+        fn screen_choice(&self, sender: Option<&AnyObject>) {
+            if let Some(id) = self.field_id(sender) {
+                self.with_shell(|shell, ui| shell.screen_choice_changed(ui, id));
+            }
+        }
+
+        /// The list's selected row changed (Windows `LBN_SELCHANGE`).
+        #[unsafe(method(listSelectionChanged:))]
+        fn list_selection_changed(&self, _sender: Option<&AnyObject>) {
+            self.with_shell(|shell, ui| shell.list_selection_changed(ui));
+        }
+
         #[unsafe(method(screenButton:))]
         fn screen_button(&self, sender: Option<&AnyObject>) {
             let tag = sender
@@ -247,6 +270,7 @@ impl MainWindowController {
             window: RefCell::new(None),
             list: RefCell::new(None),
             buttons: RefCell::new(None),
+            fields: RefCell::new(None),
             background_timer: RefCell::new(None),
             scroll: RefCell::new(None),
             status: RefCell::new(None),
@@ -385,6 +409,18 @@ impl MainWindowController {
         self.with_shell(|shell, ui| shell.shutdown(ui));
     }
 
+    /// The id of the screen field that sent an action.
+    fn field_id(&self, sender: Option<&AnyObject>) -> Option<&'static str> {
+        let tag = sender
+            .and_then(|sender| sender.downcast_ref::<objc2_app_kit::NSControl>())
+            .map(objc2_app_kit::NSControl::tag)?;
+        self.ivars()
+            .fields
+            .borrow()
+            .as_ref()
+            .and_then(|fields| fields.id_for_tag(tag))
+    }
+
     fn mtm(&self) -> MainThreadMarker {
         MainThreadMarker::from(self)
     }
@@ -442,6 +478,17 @@ impl MainWindowController {
         );
         content.addSubview(&scroll);
 
+        list.set_selection_action(sel!(listSelectionChanged:));
+        let fields = crate::screen_fields::ScreenFields::new(
+            mtm,
+            self.as_ref(),
+            sel!(screenField:),
+            sel!(screenChoice:),
+        );
+        fields.view().setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin,
+        );
+        content.addSubview(fields.view());
         let buttons = ScreenButtons::new(mtm, self.as_ref(), sel!(screenButton:));
         buttons.view().setFrame(NSRect::new(
             NSPoint::new(MARGIN, MARGIN * 2.0 + STATUS_HEIGHT),
@@ -481,6 +528,7 @@ impl MainWindowController {
 
         *self.ivars().list.borrow_mut() = Some(list.clone());
         *self.ivars().buttons.borrow_mut() = Some(buttons);
+        *self.ivars().fields.borrow_mut() = Some(fields);
         *self.ivars().scroll.borrow_mut() = Some(scroll);
         *self.ivars().status.borrow_mut() = Some(status);
         *self.ivars().page.borrow_mut() = Some(page);
@@ -550,6 +598,9 @@ impl MainWindowController {
         if let Some(buttons) = self.ivars().buttons.borrow().as_ref() {
             buttons.set_hidden(player);
         }
+        if let Some(fields) = self.ivars().fields.borrow().as_ref() {
+            fields.set_hidden(player);
+        }
         if let Some(page) = self.ivars().page.borrow().as_ref() {
             page.set_visible(player);
         }
@@ -557,7 +608,7 @@ impl MainWindowController {
 
     /// Windows `layout_controls_state` for a list screen: the buttons above
     /// the status line, the list above them.
-    fn layout_list_screen(&self, button_count: usize) {
+    fn layout_list_screen(&self, button_count: usize, field_count: usize) {
         let (Some(window), Some(scroll)) = (self.window(), self.ivars().scroll.borrow().clone())
         else {
             return;
@@ -575,9 +626,17 @@ impl MainWindowController {
             ));
         }
         let list_bottom = MARGIN * 3.0 + STATUS_HEIGHT + buttons_height;
+        let fields_height = crate::screen_fields::ScreenFields::height_for(field_count);
+        if let Some(fields) = self.ivars().fields.borrow().as_ref() {
+            fields.view().setFrame(NSRect::new(
+                NSPoint::new(MARGIN, bounds.size.height - MARGIN - fields_height),
+                NSSize::new(width, fields_height),
+            ));
+        }
+        let list_top = bounds.size.height - MARGIN - fields_height;
         scroll.setFrame(NSRect::new(
             NSPoint::new(MARGIN, list_bottom),
-            NSSize::new(width, bounds.size.height - MARGIN - list_bottom),
+            NSSize::new(width, (list_top - list_bottom).max(60.0)),
         ));
     }
 
@@ -690,6 +749,104 @@ impl MainWindowController {
     #[cfg(debug_assertions)]
     pub fn start_tools_self_test(&self) {
         self.ivars().self_test_step.set(200);
+    }
+
+    /// Development builds with `APRICOT_MACOS_SELF_TEST=search`: the search
+    /// screen, a real yt-dlp search for `APRICOT_MACOS_SELF_TEST_QUERY`,
+    /// playing the second result and going back.
+    #[cfg(debug_assertions)]
+    pub fn run_search_self_test(&self) {
+        self.ivars().self_test_step.set(300);
+        // SAFETY: `playerSelfTestStep:` exists on this controller.
+        unsafe {
+            let _: () = msg_send![
+                self,
+                performSelector: sel!(playerSelfTestStep:),
+                withObject: Option::<&AnyObject>::None,
+                afterDelay: 1.0_f64
+            ];
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    fn search_self_test_step(&self, index: usize) -> bool {
+        use crate::self_test::{Key, focus, focused_value, key, send};
+        use objc2_app_kit::NSEventModifierFlags as Flags;
+        let Some(window) = self.window() else {
+            return false;
+        };
+        let query =
+            std::env::var("APRICOT_MACOS_SELF_TEST_QUERY").unwrap_or_else(|_| "apricot".to_owned());
+        let query: &'static str = Box::leak(query.into_boxed_str());
+        let mut steps: Vec<(String, Option<Key>)> = vec![
+            ("opened".to_owned(), None),
+            (
+                "Command+Option+Y (search)".to_owned(),
+                Some(Key {
+                    code: 16,
+                    text: "y",
+                    flags: Flags::Command | Flags::Option,
+                }),
+            ),
+        ];
+        for (offset, _) in query.char_indices() {
+            let text =
+                &query[offset..offset + query[offset..].chars().next().map_or(1, char::len_utf8)];
+            steps.push((format!("type {text:?}"), Some(key(0, text))));
+        }
+        steps.push((
+            "Return (search)".to_owned(),
+            Some(key(keys::KEY_RETURN, "\r")),
+        ));
+        for _ in 0..14 {
+            steps.push(("waiting for results".to_owned(), None));
+        }
+        steps.push(("Down".to_owned(), Some(key(keys::KEY_DOWN, "\u{f701}"))));
+        steps.push((
+            "Return (play)".to_owned(),
+            Some(key(keys::KEY_RETURN, "\r")),
+        ));
+        for _ in 0..12 {
+            steps.push(("waiting for playback".to_owned(), None));
+        }
+        steps.push((
+            "Escape (results)".to_owned(),
+            Some(key(keys::KEY_ESCAPE, "\u{1b}")),
+        ));
+        steps.push((
+            "Shift+Tab".to_owned(),
+            Some(Key {
+                code: keys::KEY_TAB,
+                text: "\t",
+                flags: Flags::Shift,
+            }),
+        ));
+        steps.push((
+            "Escape (main menu)".to_owned(),
+            Some(key(keys::KEY_ESCAPE, "\u{1b}")),
+        ));
+        let Some((name, key)) = steps.get(index) else {
+            return false;
+        };
+        if let Some(key) = key {
+            send(&window, key);
+        }
+        let status = self
+            .ivars()
+            .status
+            .borrow()
+            .as_ref()
+            .map(|status| status.stringValue().to_string())
+            .unwrap_or_default();
+        let row = self.list().and_then(|list| list.selected());
+        println!(
+            "search-test {name}: focus={} value={:?} row={row:?} title={:?} status={status:?} frames={}",
+            focus(&window),
+            focused_value(&window),
+            window.title().to_string(),
+            crate::video::frames_drawn()
+        );
+        true
     }
 
     #[cfg(debug_assertions)]
@@ -890,7 +1047,9 @@ impl MainWindowController {
         use crate::self_test::{Key, focus, key, send};
         let step = self.ivars().self_test_step.get();
         if step >= 100 {
-            let more = if step >= 200 {
+            let more = if step >= 300 {
+                self.search_self_test_step(step - 300)
+            } else if step >= 200 {
                 self.tools_self_test_step(step - 200)
             } else {
                 self.folder_self_test_step(step - 100)
@@ -1045,6 +1204,7 @@ impl ShellUi for MacUi<'_> {
     }
 
     fn show_list_screen(&mut self, screen: &apricot_shell::ListScreen) {
+        use crate::screen_fields::{FieldControl, FieldSpec};
         self.controller.show_screen(false);
         let Some(list) = self.controller.list() else {
             return;
@@ -1056,15 +1216,43 @@ impl ShellUi for MacUi<'_> {
             .iter()
             .filter_map(|control| match control {
                 ScreenControl::Button { id, label } => Some((*id, label.as_str())),
-                ScreenControl::List => None,
+                _ => None,
             })
             .collect();
-        self.controller.layout_list_screen(buttons.len());
+        let fields: Vec<FieldSpec<'_>> = screen
+            .controls
+            .iter()
+            .filter_map(|control| match control {
+                ScreenControl::TextField { id, label, value } => Some(FieldSpec::Text {
+                    id,
+                    label,
+                    value: value.as_deref(),
+                }),
+                ScreenControl::Choice {
+                    id,
+                    label,
+                    options,
+                    selected,
+                } => Some(FieldSpec::Choice {
+                    id,
+                    label,
+                    options,
+                    selected: *selected,
+                }),
+                _ => None,
+            })
+            .collect();
+        self.controller
+            .layout_list_screen(buttons.len(), fields.len());
+        if let Some(screen_fields) = self.controller.ivars().fields.borrow_mut().as_mut() {
+            screen_fields.sync(&fields);
+        }
         if let Some(screen_buttons) = self.controller.ivars().buttons.borrow_mut().as_mut() {
             screen_buttons.sync(&buttons);
         }
         {
             let screen_buttons = self.controller.ivars().buttons.borrow();
+            let screen_fields = self.controller.ivars().fields.borrow();
             let views: Vec<&NSView> = screen
                 .controls
                 .iter()
@@ -1074,6 +1262,12 @@ impl ShellUi for MacUi<'_> {
                         .as_ref()
                         .and_then(|buttons| buttons.button(id))
                         .map(|button| button as &NSView),
+                    ScreenControl::TextField { id, .. } | ScreenControl::Choice { id, .. } => {
+                        screen_fields
+                            .as_ref()
+                            .and_then(|fields| fields.control(id))
+                            .map(FieldControl::view)
+                    }
                 })
                 .collect();
             controls::set_tab_order(&views);
@@ -1082,6 +1276,47 @@ impl ShellUi for MacUi<'_> {
             && let Some(window) = self.controller.window()
         {
             window.makeFirstResponder(Some(&list));
+        }
+    }
+
+    fn screen_text(&self, id: &str) -> String {
+        self.controller
+            .ivars()
+            .fields
+            .borrow()
+            .as_ref()
+            .map(|fields| fields.text(id))
+            .unwrap_or_default()
+    }
+
+    fn screen_choice(&self, id: &str) -> Option<usize> {
+        self.controller
+            .ivars()
+            .fields
+            .borrow()
+            .as_ref()
+            .and_then(|fields| fields.choice(id))
+    }
+
+    fn set_screen_choices(&mut self, id: &str, options: &[String], selected: usize) {
+        if let Some(fields) = self.controller.ivars().fields.borrow().as_ref() {
+            fields.set_choices(id, options, selected);
+        }
+    }
+
+    fn focus_screen_control(&mut self, id: &str) {
+        let Some(window) = self.controller.window() else {
+            return;
+        };
+        let fields = self.controller.ivars().fields.borrow();
+        if let Some(control) = fields.as_ref().and_then(|fields| fields.control(id)) {
+            window.makeFirstResponder(Some(control.view()));
+        }
+    }
+
+    fn set_list_rows(&mut self, rows: Vec<String>, selected: usize) {
+        if let Some(list) = self.controller.list() {
+            list.set_rows(rows, Some(selected));
         }
     }
 

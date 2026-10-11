@@ -20,8 +20,10 @@ mod player_tools;
 mod queue;
 mod repeat;
 mod screens;
+mod search;
 mod type_ahead;
 mod ui;
+mod youtube;
 
 pub use bookmarks::{BookmarkDialog, BookmarkEntry, BookmarkRequest, BookmarkResponse};
 pub use equalizer_dialog::{EQUALIZER_BUTTONS, EqualizerButton, EqualizerLabels, EqualizerView};
@@ -32,6 +34,7 @@ pub use player_extras::DetailsLabels;
 pub use queue::{QueueChange, QueueDialog};
 pub use repeat::KeyRelease;
 pub use screens::{ListScreen, ScreenControl, local_folder_result_label};
+pub use search::result_label;
 
 pub use main_menu::{MainMenuSelection, last_activated_index, preserved_index};
 pub use type_ahead::TypeAhead;
@@ -44,6 +47,10 @@ use apricot_core::TranslationCatalog;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum View {
     MainMenu,
+    /// The search screen before a search (Windows `MainView::Search`).
+    Search,
+    /// The search screen with results (Windows `MainView::Results`).
+    Results,
     LocalFolder,
     Player,
 }
@@ -63,6 +70,8 @@ pub struct Shell {
     equalizer: Option<equalizer_dialog::EqualizerDialogState>,
     tools: player_tools::PlayerTools,
     edit_saves: player_edit::EditSaves,
+    search: search::SearchState,
+    youtube: youtube::YoutubeState,
 }
 
 impl Shell {
@@ -80,6 +89,8 @@ impl Shell {
             equalizer: None,
             tools: player_tools::PlayerTools::default(),
             edit_saves: player_edit::EditSaves::default(),
+            search: search::SearchState::default(),
+            youtube: youtube::YoutubeState::default(),
         }
     }
 
@@ -210,6 +221,10 @@ impl Shell {
                 self.show_bookmarks_dialog(ui, false, false);
                 return;
             }
+            "search" => {
+                self.show_search(ui);
+                return;
+            }
             "playback_queue" => {
                 self.show_playback_queue(ui);
                 return;
@@ -249,6 +264,10 @@ impl Shell {
             }
             "open_bookmarks" => {
                 self.show_bookmarks_dialog(ui, false, false);
+                return;
+            }
+            "open_search" => {
+                self.show_search(ui);
                 return;
             }
             "open_playback_queue" => {

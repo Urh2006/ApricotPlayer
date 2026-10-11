@@ -82,6 +82,9 @@ pub struct ListIvars {
     delete: Cell<Option<Sel>>,
     /// Sent to the target for the context menu instead of showing `menu`.
     context: Cell<Option<Sel>>,
+    /// Sent to the target when the selected row changes
+    /// (Windows `LBN_SELCHANGE`).
+    selection: Cell<Option<Sel>>,
 }
 
 define_class!(
@@ -120,6 +123,13 @@ define_class!(
     }
 
     unsafe impl NSTableViewDelegate for List {
+        #[unsafe(method(tableViewSelectionDidChange:))]
+        fn selection_did_change(&self, _notification: &objc2_foundation::NSNotification) {
+            if let Some(action) = self.ivars().selection.get() {
+                self.send(action);
+            }
+        }
+
         /// Letters are handled in `keyDown:`; AppKit's type select would
         /// search for "pp" on a repeated P.
         #[unsafe(method(tableView:shouldTypeSelectForEvent:withCurrentSearchString:))]
@@ -263,6 +273,11 @@ impl List {
             self.setTarget(Some(target));
             self.setDoubleAction(Some(action));
         }
+    }
+
+    /// The selector sent to the target when the selection changes.
+    pub fn set_selection_action(&self, action: Sel) {
+        self.ivars().selection.set(Some(action));
     }
 
     /// The selector sent to the target on Delete.

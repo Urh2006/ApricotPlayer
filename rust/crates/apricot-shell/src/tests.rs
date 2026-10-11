@@ -191,6 +191,15 @@ mod equalizer {
         fn choose(&mut self, _dialog: &ChoiceDialog) -> Option<usize> {
             None
         }
+        fn screen_text(&self, _id: &str) -> String {
+            String::new()
+        }
+        fn screen_choice(&self, _id: &str) -> Option<usize> {
+            None
+        }
+        fn set_screen_choices(&mut self, _id: &str, _options: &[String], _selected: usize) {}
+        fn focus_screen_control(&mut self, _id: &str) {}
+        fn set_list_rows(&mut self, _rows: Vec<String>, _selected: usize) {}
         fn open_equalizer(&mut self) {}
         fn open_lyrics(&mut self, _dialog: crate::LyricsDialog) {}
         fn open_playback_queue(&mut self, _dialog: crate::QueueDialog) {}

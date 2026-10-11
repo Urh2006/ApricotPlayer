@@ -24,6 +24,23 @@ pub enum ScreenControl {
     /// A push button; pressing it calls [`Shell::activate_screen_button`]
     /// with `id`.
     Button { id: &'static str, label: String },
+    /// A labelled one-line text field; Return calls
+    /// [`Shell::screen_text_submitted`]. `value` replaces the text, `None`
+    /// keeps what was typed.
+    TextField {
+        id: &'static str,
+        label: String,
+        value: Option<String>,
+    },
+    /// A labelled drop-down list; a change calls
+    /// [`Shell::screen_choice_changed`]. `selected` replaces the selection,
+    /// `None` keeps it.
+    Choice {
+        id: &'static str,
+        label: String,
+        options: Vec<String>,
+        selected: Option<usize>,
+    },
 }
 
 /// What a list screen shows.
@@ -95,6 +112,11 @@ impl Shell {
             "shuffle_folder" => self.play_current_local_folder(ui, true),
             "add_folder_to_queue" => self.add_current_local_folder_to_queue(ui),
             "folder_playback_queue" => self.activate_action(ui, "open_playback_queue"),
+            "search"
+            | "search_play"
+            | "search_download_audio"
+            | "search_download_video"
+            | "search_add_favorite" => self.activate_search_button(ui, id),
             _ => {}
         }
     }
@@ -107,7 +129,8 @@ impl Shell {
         match self.view {
             View::MainMenu => self.activate_main_menu_row(ui, row),
             View::LocalFolder => self.activate_local_folder_row(ui, row),
-            View::Player => {}
+            View::Results => self.activate_result_selection(ui),
+            View::Search | View::Player => {}
         }
     }
 
@@ -161,12 +184,13 @@ impl Shell {
     /// Windows `poll_local_folder_scan` and the other background timers;
     /// returns `false` when nothing is left to poll.
     pub fn poll_background(&mut self, ui: &mut dyn ShellUi) -> bool {
+        let youtube = self.poll_youtube(ui);
         let folder = self.poll_folder_scan(ui);
         let device = self.poll_saved_audio_device_check(ui);
         let chapters = self.poll_external_chapters(ui);
         let bpm = self.poll_bpm_analyses(ui);
         let edits = self.poll_edit_saves(ui);
-        folder || device || chapters || bpm || edits
+        youtube || folder || device || chapters || bpm || edits
     }
 
     fn poll_folder_scan(&mut self, ui: &mut dyn ShellUi) -> bool {
@@ -299,6 +323,7 @@ impl Shell {
     /// the previous screen returns with focus on its list.
     pub(crate) fn navigate_back(&mut self, ui: &mut dyn ShellUi) {
         self.stop_key_repeat(ui);
+        self.cancel_youtube_work();
         self.cancel_local_folder_scan();
         if self.view == View::Player {
             self.close_player_runtime(ui);
@@ -308,6 +333,16 @@ impl Shell {
             .navigate_back()
             .unwrap_or_else(|| RouteFrame::new(Route::MainMenu));
         match frame.route {
+            Route::Search => {
+                self.view = View::Search;
+                let screen = self.search_screen(vec![self.text("search_results_empty")], 0, false);
+                ui.show_list_screen(&screen);
+                ui.focus_screen_control("search_query");
+            }
+            Route::Results => {
+                self.view = View::Results;
+                self.refresh_results(ui, true);
+            }
             Route::LocalFolder => {
                 self.view = View::LocalFolder;
                 self.refresh_local_folder(ui, true, false);

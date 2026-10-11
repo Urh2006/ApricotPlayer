@@ -107,7 +107,11 @@ impl Shell {
                 .selected_row()
                 .and_then(|index| self.application.local_folder_session().items().get(index))
                 .cloned(),
-            View::MainMenu => None,
+            View::Results => ui
+                .selected_row()
+                .and_then(|index| self.application.search_session().items().get(index))
+                .cloned(),
+            View::MainMenu | View::Search => None,
         }
     }
 
@@ -158,9 +162,8 @@ impl Shell {
         self.copy_text_and_announce(ui, url.as_ref(), "timestamp_url_copied");
     }
 
-    /// Windows `copy_active_stream_url`. Items of streaming services are
-    /// resolved first; they arrive with search (unit M6).
-    pub(crate) fn copy_active_stream_url(&self, ui: &mut dyn ShellUi) {
+    /// Windows `copy_active_stream_url`: streamed items are resolved first.
+    pub(crate) fn copy_active_stream_url(&mut self, ui: &mut dyn ShellUi) {
         let Some(item) = self.active_media_item(ui) else {
             ui.set_status(&self.text("no_selection"), true);
             return;
@@ -171,6 +174,20 @@ impl Shell {
         }
         if let Some(stream_url) = item.stream_url.as_ref() {
             self.copy_text_and_announce(ui, stream_url.as_str(), "stream_url_copied");
+            return;
+        }
+        if matches!(
+            item.source,
+            apricot_core::MediaSource::Youtube | apricot_core::MediaSource::Soundcloud
+        ) {
+            self.start_youtube_resolve(
+                ui,
+                &item,
+                crate::youtube::ResolvePurpose::CopyStreamUrl,
+                None,
+                false,
+                None,
+            );
             return;
         }
         if item.source == apricot_core::MediaSource::Direct

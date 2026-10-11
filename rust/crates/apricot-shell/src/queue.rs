@@ -312,7 +312,9 @@ impl Shell {
             queued_download_count: self.application.downloads().queued().len(),
         };
         match self.view {
-            View::LocalFolder => Some(context_menu::results_context_menu(&context, item)),
+            View::LocalFolder | View::Search | View::Results => {
+                Some(context_menu::results_context_menu(&context, item))
+            }
             View::Player => Some(context_menu::player_context_menu(&context, item?)),
             View::MainMenu => None,
         }

@@ -71,6 +71,22 @@ pub trait ShellUi {
     /// A modal list choice; `None` when cancelled.
     fn choose(&mut self, dialog: &ChoiceDialog) -> Option<usize>;
 
+    /// The text of a screen's text field.
+    fn screen_text(&self, id: &str) -> String;
+
+    /// The selected row of a screen's drop-down list.
+    fn screen_choice(&self, id: &str) -> Option<usize>;
+
+    /// Replaces the rows of a screen's drop-down list.
+    fn set_screen_choices(&mut self, id: &str, options: &[String], selected: usize);
+
+    /// Moves focus to a field or choice of the screen.
+    fn focus_screen_control(&mut self, id: &str);
+
+    /// Replaces the rows of the screen's list without moving focus
+    /// (Windows `LB_ADDSTRING` and `LB_SETCURSEL`).
+    fn set_list_rows(&mut self, rows: Vec<String>, selected: usize);
+
     /// Opens the equalizer dialog after the current event, modal over the
     /// window. The dialog calls [`crate::Shell::equalizer_begin`], forwards
     /// its control changes and ends with [`crate::Shell::equalizer_finish`].
