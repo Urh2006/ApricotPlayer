@@ -143,6 +143,12 @@ define_class!(
             self.drain_activations();
         }
 
+        #[unsafe(method(modalSelfTestKeys:))]
+        fn modal_self_test_keys_selector(&self, _sender: Option<&AnyObject>) {
+            #[cfg(debug_assertions)]
+            self.modal_self_test_keys();
+        }
+
         #[unsafe(method(playerSelfTestStep:))]
         fn player_self_test_step_selector(&self, _sender: Option<&AnyObject>) {
             #[cfg(debug_assertions)]
@@ -634,6 +640,108 @@ impl MainWindowController {
         }
     }
 
+    /// Development builds with `APRICOT_MACOS_SELF_TEST=tools`: chapters,
+    /// replay gain, BPM and the copy actions on a file with chapters.
+    #[cfg(debug_assertions)]
+    pub fn start_tools_self_test(&self) {
+        self.ivars().self_test_step.set(200);
+    }
+
+    #[cfg(debug_assertions)]
+    fn tools_self_test_step(&self, index: usize) -> bool {
+        use crate::self_test::{Key, focus, key, send};
+        use objc2_app_kit::NSEventModifierFlags as Flags;
+        let Some(window) = self.window() else {
+            return false;
+        };
+        let with = |code, text, flags| Key { code, text, flags };
+        let steps: [(&str, Option<Key>); 13] = [
+            ("opened", None),
+            (
+                "Option+Right (next chapter)",
+                Some(with(keys::KEY_RIGHT, "\u{f703}", Flags::Option)),
+            ),
+            (
+                "Option+Right (next chapter)",
+                Some(with(keys::KEY_RIGHT, "\u{f703}", Flags::Option)),
+            ),
+            (
+                "Option+Left (previous chapter)",
+                Some(with(keys::KEY_LEFT, "\u{f702}", Flags::Option)),
+            ),
+            (
+                "Command+Shift+G (ReplayGain)",
+                Some(with(5, "G", Flags::Command | Flags::Shift)),
+            ),
+            ("B (BPM)", Some(key(11, "b"))),
+            ("waiting for BPM", None),
+            ("waiting for BPM", None),
+            ("L (copy path)", Some(key(37, "l"))),
+            (
+                "Command+Shift+L (timestamp link)",
+                Some(with(37, "L", Flags::Command | Flags::Shift)),
+            ),
+            ("Command+D (stream URL)", Some(with(2, "d", Flags::Command))),
+            (
+                "Command+Shift+C (chapters, Down, Return)",
+                Some(with(8, "C", Flags::Command | Flags::Shift)),
+            ),
+            ("after the chapter list", None),
+        ];
+        let Some((name, key)) = steps.get(index) else {
+            return false;
+        };
+        if index == 11 {
+            // The list is modal; answer it from the modal run loop.
+            let modes = NSArray::from_slice(&[
+                // SAFETY: AppKit's static run loop mode name.
+                unsafe { objc2_foundation::NSRunLoopCommonModes },
+            ]);
+            // SAFETY: `modalSelfTestKeys:` exists on this controller.
+            unsafe {
+                let _: () = msg_send![
+                    self,
+                    performSelector: sel!(modalSelfTestKeys:),
+                    withObject: Option::<&AnyObject>::None,
+                    afterDelay: 0.6_f64,
+                    inModes: &*modes
+                ];
+            }
+        }
+        if let Some(key) = key {
+            send(&window, key);
+        }
+        let status = self
+            .ivars()
+            .status
+            .borrow()
+            .as_ref()
+            .map(|status| status.stringValue().to_string())
+            .unwrap_or_default();
+        println!(
+            "tools-test {name}: focus={} status={status:?}",
+            focus(&window)
+        );
+        true
+    }
+
+    #[cfg(debug_assertions)]
+    fn modal_self_test_keys(&self) {
+        use crate::self_test::{focus, key, send};
+        let Some(window) = NSApplication::sharedApplication(self.mtm()).modalWindow() else {
+            println!("tools-test chapter list: no modal window");
+            return;
+        };
+        println!(
+            "tools-test chapter list: focus={} title={:?}",
+            focus(&window),
+            window.title().to_string()
+        );
+        send(&window, &key(keys::KEY_DOWN, "\u{f701}"));
+        println!("tools-test chapter list Down: focus={}", focus(&window));
+        send(&window, &key(keys::KEY_RETURN, "\r"));
+    }
+
     #[cfg(debug_assertions)]
     fn folder_self_test_step(&self, index: usize) -> bool {
         use crate::self_test::{focus, key, send};
@@ -690,7 +798,12 @@ impl MainWindowController {
         use crate::self_test::{Key, focus, key, send};
         let step = self.ivars().self_test_step.get();
         if step >= 100 {
-            if self.folder_self_test_step(step - 100) {
+            let more = if step >= 200 {
+                self.tools_self_test_step(step - 200)
+            } else {
+                self.folder_self_test_step(step - 100)
+            };
+            if more {
                 self.ivars().self_test_step.set(step + 1);
                 // SAFETY: `playerSelfTestStep:` exists on this controller.
                 unsafe {

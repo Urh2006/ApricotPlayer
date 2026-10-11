@@ -397,3 +397,23 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   pravim mpv (`APRICOT_MACOS_SELF_TEST=player`): F4, puščice v
   prednastavitvi, Tab na razpon in prvi pas, gor in Page Up, Tab in
   Shift+Tab, Escape, fokus nazaj na predvajalnik in oglas "Equalizer closed".
+
+### M4d: poglavja, BPM, ReplayGain in kopiranje povezav (11. 10. 2026)
+
+- `apricot-shell/src/player_tools.rs`: Windows `cycle_player_replaygain`,
+  `copy_active_location` (L), `copy_current_timestamp_link`,
+  `copy_active_stream_url`, `seek_relative_player_chapter` (Option+levo in
+  Option+desno), `show_player_chapters` (seznam poglavij s trenutnim
+  poglavjem izbranim, Play in Back), prenos poglavij iz `chapters_url` v
+  ozadju in analiza BPM (B) s ffmpeg v ozadju; rezultat, ki ne velja več
+  (drug posnetek, hitrost ali višina), se zavrže kot na Windows.
+- Odprto: razreševanje toka za YouTube in SoundCloud pri Copy stream URL
+  pride z iskanjem (M6). Seznam poglavij sprejme Enter in Escape; po meri
+  nastavljeni bližnjici za `open_selected` in `player_back` (Windows
+  `PickerBehavior`) pridejo z urejevalnikom bližnjic (M10). Paket za Mac
+  (M15) mora vključiti ffmpeg, ker zagon iz Finderja nima Homebrew poti.
+- Preverjeno samodejno (`APRICOT_MACOS_SELF_TEST=tools` z datoteko s tremi
+  poglavji in ritmom 120 BPM): naslednje in prejšnje poglavje z oglasom,
+  ReplayGain, "120 BPM.", kopiranje poti, sporočili za časovno povezavo in
+  tok lokalne datoteke, seznam poglavij (fokus na seznamu, Down, Return
+  skoči na poglavje, fokus nazaj na predvajalnik).

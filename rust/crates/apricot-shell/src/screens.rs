@@ -163,7 +163,9 @@ impl Shell {
     pub fn poll_background(&mut self, ui: &mut dyn ShellUi) -> bool {
         let folder = self.poll_folder_scan(ui);
         let device = self.poll_saved_audio_device_check(ui);
-        folder || device
+        let chapters = self.poll_external_chapters(ui);
+        let bpm = self.poll_bpm_analyses(ui);
+        folder || device || chapters || bpm
     }
 
     fn poll_folder_scan(&mut self, ui: &mut dyn ShellUi) -> bool {

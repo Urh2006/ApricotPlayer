@@ -13,6 +13,7 @@ mod keyboard;
 mod main_menu;
 mod player;
 mod player_extras;
+mod player_tools;
 mod repeat;
 mod screens;
 mod type_ahead;
@@ -53,6 +54,7 @@ pub struct Shell {
     extras: player_extras::PlayerExtras,
     /// The open equalizer dialog (Windows `DialogState`).
     equalizer: Option<equalizer_dialog::EqualizerDialogState>,
+    tools: player_tools::PlayerTools,
 }
 
 impl Shell {
@@ -68,6 +70,7 @@ impl Shell {
             screens: screens::ScreenState::default(),
             extras: player_extras::PlayerExtras::default(),
             equalizer: None,
+            tools: player_tools::PlayerTools::default(),
         }
     }
 
@@ -267,6 +270,14 @@ impl Shell {
             "details_back" => self.hide_player_details(ui),
             "player_output_devices" => self.show_output_devices(ui),
             "player_equalizer" => self.show_player_equalizer(ui),
+            "player_replaygain" => self.cycle_player_replaygain(ui),
+            "player_bpm" => self.announce_bpm(ui),
+            "player_previous_chapter" => self.seek_relative_player_chapter(ui, false),
+            "player_next_chapter" => self.seek_relative_player_chapter(ui, true),
+            "player_chapters" => self.show_player_chapters(ui),
+            "player_copy_link" => self.copy_active_location(ui),
+            "player_copy_timestamp_link" => self.copy_current_timestamp_link(ui),
+            "copy_stream_url" => self.copy_active_stream_url(ui),
             "player_back_keep_playing" => self.leave_player_to_main_menu(ui, true),
             "player_previous" => self.navigate_player_relative(ui, -1, false),
             "player_next" => self.navigate_player_relative(ui, 1, false),

@@ -165,9 +165,10 @@ mod equalizer {
         ShellUi,
     };
 
+    /// A main window that records announcements.
     #[derive(Default)]
-    struct Ui {
-        announcements: Vec<String>,
+    pub(super) struct Ui {
+        pub(super) announcements: Vec<String>,
     }
 
     impl ShellUi for Ui {
@@ -410,6 +411,48 @@ mod equalizer {
         assert_eq!(
             ui.announcements.last(),
             Some(&shell.text("equalizer_profile_deleted"))
+        );
+    }
+}
+
+mod player_tools {
+    use super::equalizer::Ui;
+
+    #[test]
+    fn replaygain_cycles_saves_and_announces_without_a_player() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        let before = shell.application.settings().replaygain_mode.clone();
+        shell.activate_action(&mut ui, "player_replaygain");
+        let after = shell.application.settings().replaygain_mode.clone();
+        assert_ne!(before, after);
+        let label = shell.text(apricot_app::player_model::replaygain_mode_key(&after));
+        assert_eq!(
+            ui.announcements,
+            [shell
+                .text("audio_normalization_changed")
+                .replace("{mode}", &label)]
+        );
+    }
+
+    #[test]
+    fn player_tools_without_a_player_say_why() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell.activate_action(&mut ui, "player_bpm");
+        shell.activate_action(&mut ui, "player_chapters");
+        shell.activate_action(&mut ui, "player_copy_timestamp_link");
+        shell.copy_active_location(&mut ui);
+        shell.copy_active_stream_url(&mut ui);
+        assert_eq!(
+            ui.announcements,
+            [
+                shell.text("bpm_not_available"),
+                shell.text("no_player"),
+                shell.text("timestamp_url_unavailable"),
+                shell.text("no_selection"),
+                shell.text("no_selection"),
+            ]
         );
     }
 }

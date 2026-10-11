@@ -62,6 +62,12 @@ define_class!(
                         controller.run_player_self_test(media.into());
                     }
                 }
+                Ok("tools") => {
+                    if let Some(media) = std::env::var_os("APRICOT_MACOS_SELF_TEST_MEDIA") {
+                        controller.run_player_self_test(media.into());
+                        controller.start_tools_self_test();
+                    }
+                }
                 Ok("folder") => {
                     if let Some(media) = std::env::var_os("APRICOT_MACOS_SELF_TEST_MEDIA") {
                         controller.run_folder_self_test(media.into());
