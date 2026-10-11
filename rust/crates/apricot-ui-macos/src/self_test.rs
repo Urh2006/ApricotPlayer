@@ -211,3 +211,15 @@ pub fn tools_steps() -> Vec<(&'static str, Option<Key>, bool)> {
         ("after the lyrics", None, false),
     ]
 }
+
+/// The texts of the labels in `view` (to print a message window).
+pub fn texts(view: &objc2_app_kit::NSView) -> Vec<String> {
+    let mut texts = Vec::new();
+    for child in &view.subviews() {
+        if let Some(field) = child.downcast_ref::<objc2_app_kit::NSTextField>() {
+            texts.push(field.stringValue().to_string());
+        }
+        texts.extend(self::texts(&child));
+    }
+    texts
+}

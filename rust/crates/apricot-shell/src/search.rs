@@ -203,6 +203,11 @@ impl Shell {
     /// Windows `search_provider_changed`: the type list follows the
     /// provider and starts at its first type.
     pub fn screen_choice_changed(&mut self, ui: &mut dyn ShellUi, id: &str) {
+        // Windows `CBN_SELCHANGE` of the Trending choices loads the chart.
+        if matches!(id, "trending_country" | "trending_category") && self.view == View::Trending {
+            self.load_trending_results(ui);
+            return;
+        }
         if id == "search_provider"
             && matches!(self.view, View::Search | View::Results | View::Collection)
         {
@@ -214,6 +219,10 @@ impl Shell {
 
     /// Return in a text field of a screen (Windows `submit_primary_text`).
     pub fn screen_text_submitted(&mut self, ui: &mut dyn ShellUi, id: &str) {
+        if id == "direct_link" && self.view == View::DirectLink {
+            self.submit_direct_link(ui);
+            return;
+        }
         if id == "search_query"
             && matches!(self.view, View::Search | View::Results | View::Collection)
         {
@@ -301,6 +310,17 @@ impl Shell {
     /// Windows `refresh_results`: the rows, the selected result and "Found"
     /// on the status line; the query and choices stay as typed.
     pub(crate) fn refresh_results(&mut self, ui: &mut dyn ShellUi, focus: bool) {
+        self.refresh_results_with(ui, focus, None);
+    }
+
+    /// [`Shell::refresh_results`] on the search or the Trending screen;
+    /// `trending_choices` restores the country and category.
+    pub(crate) fn refresh_results_with(
+        &mut self,
+        ui: &mut dyn ShellUi,
+        focus: bool,
+        trending_choices: Option<(usize, usize)>,
+    ) {
         let session = self.application.search_session();
         let count = session.items().len();
         let (rows, selected, status) = if count == 0 {
@@ -313,7 +333,11 @@ impl Shell {
                 self.text("found").replace("{count}", &count.to_string()),
             )
         };
-        let mut screen = self.search_screen(rows, selected, false);
+        let mut screen = if self.view == View::Trending {
+            self.trending_screen(rows, selected, trending_choices)
+        } else {
+            self.search_screen(rows, selected, false)
+        };
         screen.focus_list = focus;
         ui.show_list_screen(&screen);
         ui.set_status(&status, false);
@@ -345,7 +369,7 @@ impl Shell {
             View::LocalFolder => {
                 let _ = self.application.select_local_folder_item(index);
             }
-            View::Results => {
+            View::Results | View::Trending => {
                 if !self.application.select_search_result(index) {
                     return;
                 }
@@ -357,7 +381,7 @@ impl Shell {
                 }
             }
             View::Collection => self.collection_selection_changed(ui, index),
-            View::MainMenu | View::Search | View::Player => {}
+            View::MainMenu | View::Search | View::DirectLink | View::Player => {}
         }
     }
 

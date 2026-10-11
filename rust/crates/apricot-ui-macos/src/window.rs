@@ -768,6 +768,99 @@ impl MainWindowController {
         }
     }
 
+    /// Development builds with `APRICOT_MACOS_SELF_TEST=trending`: the
+    /// Trending chart, playing from it and back, then the direct link
+    /// `APRICOT_MACOS_SELF_TEST_QUERY`.
+    #[cfg(debug_assertions)]
+    pub fn run_trending_self_test(&self) {
+        self.ivars().self_test_step.set(400);
+        // SAFETY: `playerSelfTestStep:` exists on this controller.
+        unsafe {
+            let _: () = msg_send![
+                self,
+                performSelector: sel!(playerSelfTestStep:),
+                withObject: Option::<&AnyObject>::None,
+                afterDelay: 1.0_f64
+            ];
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    fn trending_self_test_step(&self, index: usize) -> bool {
+        use crate::self_test::{Key, focus, focused_value, key, send};
+        use objc2_app_kit::NSEventModifierFlags as Flags;
+        let Some(window) = self.window() else {
+            return false;
+        };
+        let link = std::env::var("APRICOT_MACOS_SELF_TEST_QUERY")
+            .unwrap_or_else(|_| "youtu.be/jfKfPfyJRdk".to_owned());
+        let link: &'static str = Box::leak(link.into_boxed_str());
+        let escape = || Some(key(keys::KEY_ESCAPE, "\u{1b}"));
+        // Without a YouTube Data API key the default category has no public
+        // chart: the message is answered with Return and the main menu shows.
+        let mut steps: Vec<(String, Option<Key>)> = vec![
+            ("open Trending".to_owned(), None),
+            ("after the message".to_owned(), None),
+        ];
+        steps.push((
+            "Command+Option+L (direct link)".to_owned(),
+            Some(Key {
+                code: 37,
+                text: "l",
+                flags: Flags::Command | Flags::Option,
+            }),
+        ));
+        for (offset, character) in link.char_indices() {
+            let text = &link[offset..offset + character.len_utf8()];
+            steps.push((format!("type {text:?}"), Some(key(0, text))));
+        }
+        steps.push((
+            "Return (play)".to_owned(),
+            Some(key(keys::KEY_RETURN, "\r")),
+        ));
+        for _ in 0..10 {
+            steps.push(("waiting for playback".to_owned(), None));
+        }
+        steps.push(("Escape (direct link)".to_owned(), escape()));
+        steps.push(("Tab".to_owned(), Some(key(keys::KEY_TAB, "\t"))));
+        steps.push(("Escape (main menu)".to_owned(), escape()));
+        let Some((name, key)) = steps.get(index) else {
+            return false;
+        };
+        if index == 0 {
+            self.schedule_modal_self_test_keys();
+            self.run_action("open_trending");
+        }
+        if name.starts_with("Return (play)") || name.starts_with("waiting for playback") {
+            // A failed playback shows a message; it is printed and answered.
+            self.schedule_modal_self_test_keys();
+        }
+        if let Some(key) = key {
+            send(&window, key);
+        }
+        let status = self
+            .ivars()
+            .status
+            .borrow()
+            .as_ref()
+            .map(|status| status.stringValue().to_string())
+            .unwrap_or_default();
+        let row = self.list().and_then(|list| list.selected());
+        let quiet =
+            name.starts_with("type ") || (name.starts_with("waiting") && !index.is_multiple_of(4));
+        if !quiet {
+            println!(
+                "trending-test {name}: focus={} value={:?} row={row:?} title={:?} status={status:?} frames={}",
+                focus(&window),
+                focused_value(&window),
+                window.title().to_string(),
+                crate::video::frames_drawn()
+            );
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+        }
+        true
+    }
+
     #[cfg(debug_assertions)]
     fn search_self_test_step(&self, index: usize) -> bool {
         use crate::self_test::{Key, focus, focused_value, key, send};
@@ -927,6 +1020,12 @@ impl MainWindowController {
             println!("tools-test modal: no modal window");
             return;
         };
+        if let Some(alert) = window
+            .contentView()
+            .map(|view| crate::self_test::texts(&view))
+        {
+            println!("tools-test modal texts: {alert:?}");
+        }
         let print = |name: &str| {
             println!(
                 "tools-test   {name}: window={:?} focus={}",
@@ -959,7 +1058,9 @@ impl MainWindowController {
                 ("Escape", escape),
             ],
             // The first name prompt is accepted, the second cancelled.
-            _ if self.ivars().self_test_step.get() == 231 => {
+            _ if self.ivars().self_test_step.get() == 231
+                || self.ivars().self_test_step.get() >= 400 =>
+            {
                 vec![("Return", key(keys::KEY_RETURN, "\r"))]
             }
             _ => vec![("Escape", escape)],
@@ -1067,7 +1168,9 @@ impl MainWindowController {
         use crate::self_test::{Key, focus, key, send};
         let step = self.ivars().self_test_step.get();
         if step >= 100 {
-            let more = if step >= 300 {
+            let more = if step >= 400 {
+                self.trending_self_test_step(step - 400)
+            } else if step >= 300 {
                 self.search_self_test_step(step - 300)
             } else if step >= 200 {
                 self.tools_self_test_step(step - 200)
@@ -1264,6 +1367,12 @@ impl ShellUi for MacUi<'_> {
             .collect();
         self.controller
             .layout_list_screen(buttons.len(), fields.len());
+        // A screen without a list (the direct link) hides it, as Windows
+        // `set_view_visibility` does.
+        let has_list = screen.controls.contains(&ScreenControl::List);
+        if let Some(scroll) = self.controller.ivars().scroll.borrow().as_ref() {
+            scroll.setHidden(!has_list);
+        }
         if let Some(screen_fields) = self.controller.ivars().fields.borrow_mut().as_mut() {
             screen_fields.sync(&fields);
         }

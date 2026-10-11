@@ -225,6 +225,9 @@ impl Shell {
                 self.finish_youtube_search(ui, token, items, continuation);
             }
             Some(PendingList::Collection(_)) => self.finish_youtube_collection(ui, token, items),
+            Some(PendingList::Trending(_)) => {
+                self.finish_youtube_trending(ui, token, items, false);
+            }
             Some(PendingList::PlaylistPlayback { shuffle, .. }) => {
                 let shuffle = *shuffle;
                 self.finish_playlist_playback(ui, token, items, shuffle);

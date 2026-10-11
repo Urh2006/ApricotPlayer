@@ -76,7 +76,8 @@ impl Shell {
         let search_field_focus =
             matches!(self.view, View::Search | View::Results | View::Collection)
                 && focus != FocusKind::List;
-        let entry_focus = search_field_focus && !(chord.control || chord.alt);
+        let entry_focus =
+            self.view == View::DirectLink || (search_field_focus && !(chord.control || chord.alt));
         let (scope, accepts_text) = if entry_focus {
             (ActionScope::Dialog, true)
         } else if search_field_focus {
@@ -122,9 +123,13 @@ const fn details_text_navigation_key(chord: ShortcutChord) -> bool {
 /// Windows `view_shortcut_scope`.
 const fn view_shortcut_scope(view: View) -> (ActionScope, bool) {
     match view {
-        View::MainMenu | View::Search | View::Results | View::Collection | View::LocalFolder => {
-            (ActionScope::List, false)
-        }
+        View::DirectLink => (ActionScope::Dialog, true),
+        View::MainMenu
+        | View::Search
+        | View::Results
+        | View::Collection
+        | View::Trending
+        | View::LocalFolder => (ActionScope::List, false),
         View::Player => (ActionScope::Player, false),
     }
 }

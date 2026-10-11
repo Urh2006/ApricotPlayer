@@ -44,7 +44,7 @@ struct PendingResolve {
     start_position_seconds: Option<f64>,
 }
 
-/// Windows `PendingYoutubeListWork` (Trending arrives in unit M6c).
+/// Windows `PendingYoutubeListWork`.
 #[derive(Clone, Debug)]
 pub(crate) enum PendingList {
     Search(SearchWork),
@@ -54,6 +54,7 @@ pub(crate) enum PendingList {
         token: u64,
         shuffle: bool,
     },
+    Trending(crate::trending::PendingTrending),
 }
 
 impl PendingList {
@@ -62,6 +63,7 @@ impl PendingList {
             Self::Search(work) => work.generation,
             Self::Collection(work) => work.generation,
             Self::PlaylistPlayback { token, .. } => *token,
+            Self::Trending(pending) => pending.work.generation,
         }
     }
 }
@@ -71,6 +73,8 @@ pub(crate) struct YoutubeState {
     pub(crate) search: YoutubeSearchService,
     /// Windows `pending_youtube_work`.
     pub(crate) pending_list: Option<PendingList>,
+    /// Windows `pending_youtube_trending_api`.
+    pub(crate) pending_trending_api: Option<crate::trending::PendingTrendingApi>,
     pending_resolve: Option<PendingResolve>,
     next_token: u64,
     stream_cache: Option<StreamUrlCache>,
@@ -199,6 +203,7 @@ impl Shell {
 
     /// Windows `poll_youtube_runtime`; `true` while work runs.
     pub(crate) fn poll_youtube(&mut self, ui: &mut dyn ShellUi) -> bool {
+        let api = self.poll_youtube_trending_api(ui);
         loop {
             let update = match self.youtube.search.poll() {
                 Ok(Some(update)) => update,
@@ -232,19 +237,20 @@ impl Shell {
                 }
             }
         }
-        self.youtube.search.is_pending()
+        api || self.youtube.search.is_pending() || self.youtube.pending_trending_api.is_some()
     }
 
     /// Windows `cancel_youtube_work`.
     pub(crate) fn cancel_youtube_work(&mut self) {
         if self.youtube.pending_list.is_none()
             && self.youtube.pending_resolve.is_none()
+            && self.youtube.pending_trending_api.is_none()
             && !self.youtube.search.is_pending()
         {
             return;
         }
         match self.youtube.pending_list.take() {
-            Some(PendingList::Search(_)) => {
+            Some(PendingList::Search(_) | PendingList::Trending(_)) => {
                 let _ = self.application.cancel_pending_search();
             }
             Some(PendingList::Collection(_)) => {
@@ -253,6 +259,7 @@ impl Shell {
             Some(PendingList::PlaylistPlayback { .. }) | None => {}
         }
         self.youtube.pending_resolve = None;
+        self.youtube.pending_trending_api = None;
         self.player.pending_queued_start = None;
         let _ = self.youtube.search.cancel();
     }
@@ -264,6 +271,13 @@ impl Shell {
             .pending_resolve
             .take_if(|pending| pending.token == token)
         else {
+            if matches!(
+                self.youtube.pending_list.as_ref(),
+                Some(PendingList::Trending(pending)) if pending.work.generation == token
+            ) {
+                self.finish_youtube_trending_error(ui, token, message);
+                return;
+            }
             let return_from_collection = matches!(
                 self.youtube.pending_list,
                 Some(PendingList::Collection(YoutubeCollectionWork {
@@ -339,6 +353,10 @@ impl Shell {
                     work.work_kind == apricot_app::YoutubeCollectionWorkKind::Initial,
                     false,
                 )
+            }
+            Some(PendingList::Trending(_)) => {
+                let _ = self.application.fail_search(generation, message);
+                (true, false)
             }
             Some(PendingList::PlaylistPlayback { .. }) | None => (true, false),
         };

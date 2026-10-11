@@ -112,6 +112,11 @@ impl Shell {
             "shuffle_folder" => self.play_current_local_folder(ui, true),
             "add_folder_to_queue" => self.add_current_local_folder_to_queue(ui),
             "folder_playback_queue" => self.activate_action(ui, "open_playback_queue"),
+            "load_trending" => self.load_trending_results(ui),
+            "direct_play" => self.activate_direct_link(ui, "play"),
+            "direct_download_audio" => self.activate_direct_link(ui, "download_audio"),
+            "direct_download_video" => self.activate_direct_link(ui, "download_video"),
+            "direct_copy_stream" => self.activate_direct_link(ui, "copy_stream_url"),
             "search"
             | "search_play"
             | "search_download_audio"
@@ -129,9 +134,9 @@ impl Shell {
         match self.view {
             View::MainMenu => self.activate_main_menu_row(ui, row),
             View::LocalFolder => self.activate_local_folder_row(ui, row),
-            View::Results => self.activate_result_selection(ui),
+            View::Results | View::Trending => self.activate_result_selection(ui),
             View::Collection => self.activate_collection_selection(ui),
-            View::Search | View::Player => {}
+            View::Search | View::DirectLink | View::Player => {}
         }
     }
 
@@ -348,6 +353,8 @@ impl Shell {
                 self.view = View::Results;
                 self.refresh_results(ui, true);
             }
+            Route::Trending => self.restore_trending_view(ui, &frame),
+            Route::DirectLink => self.restore_direct_link(ui),
             Route::ChannelResults | Route::PlaylistResults => {
                 self.view = View::Collection;
                 self.refresh_youtube_collection(ui, true);

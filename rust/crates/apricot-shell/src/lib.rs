@@ -22,6 +22,7 @@ mod queue;
 mod repeat;
 mod screens;
 mod search;
+mod trending;
 mod type_ahead;
 mod ui;
 mod youtube;
@@ -55,6 +56,10 @@ pub enum View {
     /// Channel or playlist contents on the search screen (Windows
     /// `MainView::YoutubeCollection`).
     Collection,
+    /// The Trending screen (Windows `MainView::Trending`).
+    Trending,
+    /// The direct link screen (Windows `MainView::DirectLink`).
+    DirectLink,
     LocalFolder,
     Player,
 }
@@ -229,6 +234,14 @@ impl Shell {
                 self.show_search(ui);
                 return;
             }
+            "trending" => {
+                self.show_trending(ui);
+                return;
+            }
+            "direct_link" => {
+                self.show_direct_link(ui);
+                return;
+            }
             "playback_queue" => {
                 self.show_playback_queue(ui);
                 return;
@@ -272,6 +285,14 @@ impl Shell {
             }
             "open_search" => {
                 self.show_search(ui);
+                return;
+            }
+            "open_trending" => {
+                self.show_trending(ui);
+                return;
+            }
+            "open_direct_link" => {
+                self.show_direct_link(ui);
                 return;
             }
             "open_channel" => {

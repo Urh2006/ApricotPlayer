@@ -107,7 +107,7 @@ impl Shell {
                 .selected_row()
                 .and_then(|index| self.application.local_folder_session().items().get(index))
                 .cloned(),
-            View::Results => ui
+            View::Results | View::Trending => ui
                 .selected_row()
                 .and_then(|index| self.application.search_session().items().get(index))
                 .cloned(),
@@ -119,7 +119,7 @@ impl Shell {
                         .and_then(|collection| collection.items().get(index))
                 })
                 .cloned(),
-            View::MainMenu | View::Search => None,
+            View::MainMenu | View::Search | View::DirectLink => None,
         }
     }
 

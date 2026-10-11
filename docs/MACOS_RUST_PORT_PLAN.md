@@ -532,3 +532,28 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   puščice izberejo Playlist, gumb Search, Return odpre seznam predvajanja,
   Down in Return predvajata, Escape nazaj na seznam, Escape na rezultate,
   Escape v glavni meni.
+
+### M6c: Trending in Direct link (11. 10. 2026)
+
+- `apricot-shell/src/trending.rs`: zaslon Trending (Windows `show_trending`)
+  z državo in kategorijo, seznamom, Back in Load trending v vrstnem redu
+  Tab Windows; sprememba države ali kategorije takoj naloži lestvico;
+  uradni YouTube Data API s ključem, sicer javna lestvica prek yt-dlp,
+  napaka z oknom in vrnitvijo v glavni meni; Back iz predvajalnika obnovi
+  izbiro države in kategorije. Zaslon Direct link (Windows
+  `show_direct_link`) s poljem za povezavo, Back, Play, Download audio,
+  Download video in Copy stream URL, Return izvede nastavljeno dejanje
+  (`direct_link_enter_action`), povezava brez sheme dobi `https://`,
+  yt-dlp se zažene vnaprej med tipkanjem. Zaslon brez seznama skrije
+  seznam.
+- Ugotovitev (velja tudi za Windows): brez ključa YouTube Data API javne
+  lestvice za kategorijo All ni; za Music YouTube stran
+  `charts.youtube.com/charts/TrendingVideos` zdaj vrne 404, zato Trending v
+  praksi deluje samo s ključem API. Predlog za popravek v obeh verzijah.
+- Prenosi in Spotifyjeve povezave na zaslonu Direct link pridejo s svojima
+  enotama (M9, M13).
+- Preverjeno samodejno (`APRICOT_MACOS_SELF_TEST=trending`): Trending brez
+  ključa pokaže sporočilo, Return ga zapre, glavni meni z vrstico Trending;
+  Command+Option+L odpre Direct link s fokusom v polju, Return predvaja
+  povezavo prek yt-dlp, Escape vrne na zaslon z ohranjeno povezavo, Tab na
+  Back, Escape v glavni meni; nedosegljiv video pokaže napako yt-dlp.
