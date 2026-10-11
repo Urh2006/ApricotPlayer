@@ -625,3 +625,74 @@ mod library {
         );
     }
 }
+
+mod playlists {
+    use super::equalizer::Ui;
+    use crate::{ListScreen, ScreenControl};
+
+    fn ids(screen: &ListScreen) -> Vec<&'static str> {
+        screen
+            .controls
+            .iter()
+            .map(|control| match control {
+                ScreenControl::List => "list",
+                ScreenControl::Button { id, .. } => id,
+                _ => "field",
+            })
+            .collect()
+    }
+
+    #[test]
+    fn playlists_are_created_opened_and_emptied() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell.activate_action(&mut ui, "open_playlists");
+        let screen = ui.screens.last().expect("playlists").clone();
+        assert_eq!(screen.rows, [shell.text("no_playlists")]);
+        assert_eq!(
+            ids(&screen),
+            [
+                "back",
+                "playlist_create",
+                "open",
+                "playlist_download",
+                "collection_remove",
+                "list"
+            ]
+        );
+        ui.prompt_answer = Some("Mix".to_owned());
+        shell.activate_screen_button(&mut ui, "playlist_create");
+        assert_eq!(
+            ui.announcements.last(),
+            Some(&shell.text("playlist_created").replace("{title}", "Mix"))
+        );
+        let item = crate::local_file_item(std::path::Path::new("/tmp/Song.mp3"));
+        shell
+            .application
+            .add_item_to_user_playlist(0, item, 1.0)
+            .expect("added");
+        shell.activate_action(&mut ui, "open_playlists");
+        ui.selected = Some(0);
+        shell.activate_action(&mut ui, "open_selected");
+        let screen = ui.screens.last().expect("items").clone();
+        assert_eq!(screen.rows, ["Song"]);
+        assert_eq!(
+            ids(&screen),
+            [
+                "back",
+                "open",
+                "playlist_download",
+                "collection_remove",
+                "list"
+            ]
+        );
+        shell.activate_action(&mut ui, "remove_selected");
+        assert_eq!(
+            ui.announcements.last(),
+            Some(&shell.text("removed_from_playlist"))
+        );
+        let screen = ui.screens.last().expect("empty items").clone();
+        assert_eq!(screen.rows, [shell.text("playlist_empty")]);
+        assert_eq!(ids(&screen), ["back", "list"]);
+    }
+}

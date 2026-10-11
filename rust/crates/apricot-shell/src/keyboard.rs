@@ -131,6 +131,8 @@ const fn view_shortcut_scope(view: View) -> (ActionScope, bool) {
         | View::Trending
         | View::Favorites
         | View::History
+        | View::UserPlaylists
+        | View::UserPlaylistItems
         | View::LocalFolder => (ActionScope::List, false),
         View::Player => (ActionScope::Player, false),
     }

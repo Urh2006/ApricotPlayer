@@ -217,6 +217,14 @@ impl Shell {
                 self.application.remove_history_item(index),
                 "history_removed",
             ),
+            View::UserPlaylists => {
+                self.remove_selected_user_playlist(ui);
+                return;
+            }
+            View::UserPlaylistItems => {
+                self.remove_selected_user_playlist_item(ui);
+                return;
+            }
             _ => return,
         };
         self.finish_collection_removal(ui, result, key);

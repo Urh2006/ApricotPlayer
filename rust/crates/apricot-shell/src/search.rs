@@ -295,6 +295,9 @@ impl Shell {
             }
             _ => {}
         }
+        if let Some(delta) = self.youtube.pending_navigation.take() {
+            self.navigate_player_relative(ui, delta, false);
+        }
     }
 
     fn result_rows(&self) -> Vec<String> {
@@ -381,6 +384,9 @@ impl Shell {
                 }
             }
             View::Collection => self.collection_selection_changed(ui, index),
+            View::UserPlaylists | View::UserPlaylistItems => {
+                self.playlist_selection_changed(index);
+            }
             View::MainMenu
             | View::Search
             | View::DirectLink

@@ -261,6 +261,9 @@ impl Shell {
             ) => self.append_collection_results(ui, added),
             _ => {}
         }
+        if let Some(delta) = self.youtube.pending_navigation.take() {
+            self.navigate_player_relative(ui, delta, false);
+        }
     }
 
     fn collection_rows(&self) -> Vec<String> {

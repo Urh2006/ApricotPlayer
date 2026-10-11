@@ -320,6 +320,10 @@ impl Shell {
             View::Player => Some(context_menu::player_context_menu(&context, item?)),
             View::Favorites => Some(context_menu::favorites_context_menu(&context, item)),
             View::History => Some(context_menu::history_context_menu(&context, item)),
+            View::UserPlaylists => Some(context_menu::user_playlists_context_menu(&context)),
+            View::UserPlaylistItems => Some(context_menu::user_playlist_items_context_menu(
+                &context, item,
+            )),
             View::MainMenu | View::DirectLink => None,
         }
     }
@@ -349,7 +353,7 @@ impl Shell {
     ) {
         use ContextCommand as C;
         match command {
-            C::Play => self.activate_selection(ui),
+            C::Play | C::OpenUserPlaylist => self.activate_selection(ui),
             C::AddToPlaybackQueue => self.add_active_item_to_playback_queue(ui),
             C::RemoveFromPlaybackQueue => self.remove_active_item_from_playback_queue(ui),
             C::CopyStreamUrl => self.copy_active_stream_url(ui),
@@ -362,6 +366,11 @@ impl Shell {
             C::RemoveFavorite => self.remove_active_favorite(ui),
             C::RemoveSelected => self.remove_selected_collection_item(ui),
             C::ClearHistory => self.clear_history(ui),
+            C::CreatePlaylist => self.create_user_playlist(ui, None),
+            C::AddToPlaylist => self.add_active_item_to_user_playlist(ui),
+            C::AddToUserPlaylist(index) => self.add_active_item_to_chosen_user_playlist(ui, index),
+            C::RemoveFromPlaylist => self.remove_active_item_from_user_playlist(ui),
+            C::RemoveUserPlaylist => self.remove_selected_user_playlist(ui),
             C::ChannelOptions => {
                 if let Some(item) = item {
                     self.show_channel_options(ui, &item);

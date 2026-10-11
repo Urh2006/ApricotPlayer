@@ -317,6 +317,14 @@ pub fn folder_steps() -> Vec<(&'static str, Option<Key>)> {
             ),
         ),
         (
+            "Command+P (add to a new playlist)",
+            with(35, "p", objc2_app_kit::NSEventModifierFlags::Command),
+        ),
+        (
+            "Command+P (already in the playlist)",
+            with(35, "p", objc2_app_kit::NSEventModifierFlags::Command),
+        ),
+        (
             "Command+F (add favorite)",
             with(3, "f", objc2_app_kit::NSEventModifierFlags::Command),
         ),
@@ -344,6 +352,33 @@ pub fn folder_steps() -> Vec<(&'static str, Option<Key>)> {
         ),
         ("Delete (remove)", Some(key(keys::KEY_DELETE, "\u{7f}"))),
         ("Escape (main menu)", Some(key(keys::KEY_ESCAPE, "\u{1b}"))),
+        (
+            "Command+Option+P (playlists)",
+            with(
+                35,
+                "p",
+                objc2_app_kit::NSEventModifierFlags::Command
+                    | objc2_app_kit::NSEventModifierFlags::Option,
+            ),
+        ),
+        ("Return (open playlist)", Some(key(keys::KEY_RETURN, "\r"))),
+        (
+            "Delete (remove from playlist)",
+            Some(key(keys::KEY_DELETE, "\u{7f}")),
+        ),
+        (
+            "Shift+Tab (Back)",
+            with(
+                keys::KEY_TAB,
+                "\t",
+                objc2_app_kit::NSEventModifierFlags::Shift,
+            ),
+        ),
+        ("Escape (playlists)", Some(key(keys::KEY_ESCAPE, "\u{1b}"))),
+        (
+            "Delete (remove playlist)",
+            Some(key(keys::KEY_DELETE, "\u{7f}")),
+        ),
         ("Tab", Some(key(keys::KEY_TAB, "\t"))),
         ("Tab", Some(key(keys::KEY_TAB, "\t"))),
         ("Tab", Some(key(keys::KEY_TAB, "\t"))),

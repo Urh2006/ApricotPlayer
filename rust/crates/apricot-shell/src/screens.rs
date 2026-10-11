@@ -115,6 +115,15 @@ impl Shell {
             "load_trending" => self.load_trending_results(ui),
             "collection_remove" => self.remove_selected_collection_item(ui),
             "history_clear" => self.clear_history(ui),
+            "playlist_create" => self.create_user_playlist(ui, None),
+            "playlist_download" => {
+                // Downloads arrive with their unit (M9).
+                let message = apricot_app::unavailable_feature_message(
+                    &self.catalog(),
+                    &self.text("download_user_playlist"),
+                );
+                ui.set_status(&message, true);
+            }
             "direct_play" => self.activate_direct_link(ui, "play"),
             "direct_download_audio" => self.activate_direct_link(ui, "download_audio"),
             "direct_download_video" => self.activate_direct_link(ui, "download_video"),
@@ -139,7 +148,10 @@ impl Shell {
             View::Results | View::Trending => self.activate_result_selection(ui),
             View::Collection => self.activate_collection_selection(ui),
             View::Favorites | View::History => self.activate_library_selection(ui),
-            View::Search | View::DirectLink | View::Player => {}
+            View::UserPlaylists | View::UserPlaylistItems => self.activate_playlist_selection(ui),
+            // Python `play_selected` on the empty result list.
+            View::Search => ui.show_error(&self.text("no_selection")),
+            View::DirectLink | View::Player => {}
         }
     }
 
@@ -358,6 +370,14 @@ impl Shell {
                 self.refresh_results(ui, true);
             }
             Route::Trending => self.restore_trending_view(ui, &frame),
+            Route::UserPlaylists => {
+                self.view = View::UserPlaylists;
+                self.refresh_user_playlists(ui, true);
+            }
+            Route::UserPlaylistItems => {
+                self.view = View::UserPlaylistItems;
+                self.refresh_user_playlist_items(ui, true, false);
+            }
             Route::Favorites | Route::History => {
                 self.view = if frame.route == Route::History {
                     View::History

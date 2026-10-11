@@ -73,6 +73,9 @@ pub(crate) struct YoutubeState {
     pub(crate) search: YoutubeSearchService,
     /// Windows `pending_youtube_work`.
     pub(crate) pending_list: Option<PendingList>,
+    /// Windows `pending_player_navigation`: next or previous waits for more
+    /// results.
+    pub(crate) pending_navigation: Option<i32>,
     /// Windows `pending_youtube_trending_api`.
     pub(crate) pending_trending_api: Option<crate::trending::PendingTrendingApi>,
     pending_resolve: Option<PendingResolve>,
@@ -81,6 +84,11 @@ pub(crate) struct YoutubeState {
 }
 
 impl YoutubeState {
+    /// Whether a stream is being resolved (Windows `pending_youtube_resolve`).
+    pub(crate) const fn resolving(&self) -> bool {
+        self.pending_resolve.is_some()
+    }
+
     /// Windows `next_youtube_operation_token`.
     pub(crate) fn next_token(&mut self) -> u64 {
         self.next_token = self.next_token.wrapping_add(1).max(1);
@@ -260,6 +268,7 @@ impl Shell {
         }
         self.youtube.pending_resolve = None;
         self.youtube.pending_trending_api = None;
+        self.youtube.pending_navigation = None;
         self.player.pending_queued_start = None;
         let _ = self.youtube.search.cancel();
     }
@@ -360,6 +369,7 @@ impl Shell {
             }
             Some(PendingList::PlaylistPlayback { .. }) | None => (true, false),
         };
+        self.youtube.pending_navigation = None;
         ui.set_status(message, true);
         if was_initial {
             ui.show_error(message);

@@ -127,7 +127,17 @@ impl Shell {
                 .selected_row()
                 .and_then(|index| self.application.history().get(index))
                 .cloned(),
-            View::MainMenu | View::Search | View::DirectLink => None,
+            View::UserPlaylistItems => ui
+                .selected_row()
+                .and_then(|index| {
+                    self.application
+                        .user_playlists()
+                        .get(self.playlists.playlist)?
+                        .items
+                        .get(index)
+                })
+                .cloned(),
+            View::MainMenu | View::Search | View::DirectLink | View::UserPlaylists => None,
         }
     }
 

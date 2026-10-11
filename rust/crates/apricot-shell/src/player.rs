@@ -920,8 +920,12 @@ impl Shell {
         delta: i32,
         after_end: bool,
     ) {
+        if self.youtube.pending_navigation.is_some() || self.youtube.resolving() {
+            return;
+        }
         match self.application.request_relative_player_item(delta) {
             PlayerNavigationOutcome::Item { item, origin } => {
+                self.sync_user_playlist_item_selection(&item);
                 let queue_mode =
                     (origin == PlayerNavigationOrigin::Queue).then_some(QueueStartMode::Front);
                 if origin == PlayerNavigationOrigin::Sequence {
@@ -930,11 +934,17 @@ impl Shell {
                     self.start_media_item(ui, *item, queue_mode);
                 }
             }
-            // Loading more search or channel results arrives with those
-            // screens; a local item never needs it.
-            PlayerNavigationOutcome::LoadingMore(_)
-            | PlayerNavigationOutcome::LoadingMoreCollection(_)
-            | PlayerNavigationOutcome::Unavailable => {
+            PlayerNavigationOutcome::LoadingMore(work) => {
+                self.youtube.pending_navigation = Some(delta);
+                ui.set_status(&self.text("loading_more_results"), false);
+                self.start_youtube_search(ui, work);
+            }
+            PlayerNavigationOutcome::LoadingMoreCollection(work) => {
+                self.youtube.pending_navigation = Some(delta);
+                ui.set_status(&self.text("loading_more_results"), false);
+                self.start_youtube_collection_work(ui, work);
+            }
+            PlayerNavigationOutcome::Unavailable => {
                 if after_end {
                     ui.set_status(
                         &self.text("playback_finished"),

@@ -1109,6 +1109,12 @@ impl MainWindowController {
                 ("Return (move up)", key(keys::KEY_RETURN, "\r")),
                 ("Escape", escape),
             ],
+            "Create playlist" => vec![
+                ("type M", key(0, "M")),
+                ("type i", key(0, "i")),
+                ("type x", key(0, "x")),
+                ("Return", key(keys::KEY_RETURN, "\r")),
+            ],
             "Bookmarks" => vec![
                 ("Down", key(keys::KEY_DOWN, "\u{f701}")),
                 ("Tab", key(keys::KEY_TAB, "\t")),
@@ -1140,7 +1146,7 @@ impl MainWindowController {
         let Some((name, key)) = steps.get(index) else {
             return false;
         };
-        if name.starts_with("Command+Option+Q") {
+        if name.starts_with("Command+Option+Q") || name.starts_with("Command+P (add to a new") {
             self.schedule_modal_self_test_keys();
         }
         if let Some(key) = key {

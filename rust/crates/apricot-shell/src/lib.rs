@@ -20,6 +20,7 @@ mod player;
 mod player_edit;
 mod player_extras;
 mod player_tools;
+mod playlists;
 mod queue;
 mod related;
 mod repeat;
@@ -70,6 +71,8 @@ pub enum View {
     DirectLink,
     Favorites,
     History,
+    UserPlaylists,
+    UserPlaylistItems,
     LocalFolder,
     Player,
 }
@@ -92,6 +95,7 @@ pub struct Shell {
     search: search::SearchState,
     youtube: youtube::YoutubeState,
     related: Option<related::PendingRelated>,
+    playlists: playlists::PlaylistState,
 }
 
 impl Shell {
@@ -112,6 +116,7 @@ impl Shell {
             search: search::SearchState::default(),
             youtube: youtube::YoutubeState::default(),
             related: None,
+            playlists: playlists::PlaylistState::default(),
         }
     }
 
@@ -250,6 +255,10 @@ impl Shell {
                 self.show_trending(ui);
                 return;
             }
+            "playlists" => {
+                self.show_user_playlists(ui);
+                return;
+            }
             "favorites" => {
                 self.show_media_collection(ui, View::Favorites);
                 return;
@@ -305,6 +314,22 @@ impl Shell {
             }
             "open_search" => {
                 self.show_search(ui);
+                return;
+            }
+            "open_playlists" => {
+                self.show_user_playlists(ui);
+                return;
+            }
+            "create_playlist" => {
+                self.create_user_playlist(ui, None);
+                return;
+            }
+            "add_to_playlist" => {
+                self.add_active_item_to_user_playlist(ui);
+                return;
+            }
+            "remove_from_playlist" => {
+                self.remove_active_item_from_user_playlist(ui);
                 return;
             }
             "open_favorites" => {

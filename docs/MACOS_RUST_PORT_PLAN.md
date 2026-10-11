@@ -596,3 +596,25 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   "already in favorites", Command+Option+F odpre priljubljene, Tab na Play,
   Shift+Tab na seznam, Delete odstrani, Escape v glavni meni na vrstico
   Favorites).
+
+### M7b: seznami predvajanja (11. 10. 2026)
+
+- `apricot-shell/src/playlists.rs`: zaslona Playlists in Playlist items
+  (Windows `show_user_playlists`, `show_user_playlist_items`) z vrstnim
+  redom Tab Windows (Back, Create playlist, Open playlist, Download
+  playlist, Remove playlist, seznam; vsebina: Back, Play, Download
+  playlist, Remove from playlist, seznam, pri praznem seznamu samo Back in
+  seznam); ustvarjanje z imenom (Command+Shift+N), dodajanje aktivnega
+  posnetka (Command+P: nov seznam, edini seznam ali izbira), odstranjevanje
+  (Command+Shift+P, Delete), podmeni Add to playlist v kontekstnem meniju,
+  predvajanje v zaporedju seznama z označitvijo trenutne vrstice.
+- Naslednji in prejšnji posnetek na koncu naloženih rezultatov iskanja ali
+  zbirke zdaj počakata na naslednjo stran in nadaljujeta (Windows
+  `pending_player_navigation`).
+- Enter na praznem iskalnem zaslonu pove "no selection" kot na Windows.
+- Prenos seznama pride s prenosi (M9).
+- Preverjeno: enotski test (vrstni red kontrol, ustvarjanje, odpiranje,
+  odstranjevanje) in samodejni preizkus na Macu (Command+P ustvari seznam
+  Mix z vnosom imena, drugi Command+P, Command+Option+P odpre sezname,
+  Return odpre seznam, Delete odstrani posnetek, Shift+Tab na Back, Escape
+  na sezname, Delete odstrani seznam).
