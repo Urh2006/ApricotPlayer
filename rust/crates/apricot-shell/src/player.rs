@@ -176,6 +176,19 @@ impl Shell {
         self.start_player_at(ui, item, None, start_position_seconds);
     }
 
+    /// Windows `start_sequence_media_item` and `start_media_item_with_shuffle`:
+    /// an item of a list that keeps its playback sequence.
+    pub(crate) fn start_sequence_media_item(
+        &mut self,
+        ui: &mut dyn ShellUi,
+        item: MediaItem,
+        session_shuffle: Option<bool>,
+    ) {
+        let start_position_seconds = self.application.playback_resume_position(&item);
+        self.player.pending_queued_start = None;
+        self.start_player_at(ui, item, session_shuffle, start_position_seconds);
+    }
+
     /// Windows `start_player_at`.
     pub(crate) fn start_player_at(
         &mut self,
@@ -813,8 +826,7 @@ impl Shell {
                 let queue_mode =
                     (origin == PlayerNavigationOrigin::Queue).then_some(QueueStartMode::Front);
                 if origin == PlayerNavigationOrigin::Sequence {
-                    let start = self.application.playback_resume_position(&item);
-                    self.start_player_at(ui, *item, None, start);
+                    self.start_sequence_media_item(ui, *item, None);
                 } else {
                     self.start_media_item(ui, *item, queue_mode);
                 }
@@ -880,17 +892,6 @@ impl Shell {
         } else {
             self.leave_player_to_main_menu(ui, true);
         }
-    }
-
-    /// Windows `navigate_back` from the player: playback stops and the
-    /// previous screen (the main menu in this unit) returns.
-    pub(crate) fn navigate_back(&mut self, ui: &mut dyn ShellUi) {
-        self.stop_key_repeat(ui);
-        if self.view == View::Player {
-            self.close_player_runtime(ui);
-        }
-        let _ = self.application.navigate_back();
-        self.show_main_menu(ui);
     }
 
     /// Windows `leave_player_to_main_menu`.

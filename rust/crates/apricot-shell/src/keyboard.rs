@@ -19,6 +19,8 @@ pub enum FocusKind {
     PlayerButton,
     /// A check box of the player page.
     PlayerCheckbox,
+    /// A push button of a list screen (Open, Back, ...).
+    Button,
     /// Anything else.
     Other,
 }
@@ -52,7 +54,8 @@ impl Shell {
         // Python `activate_focused_button_from_key` and the native Space of
         // buttons and check boxes: the focused control acts itself.
         if plain
-            && ((chord.key == ShortcutKey::Enter && focus == FocusKind::PlayerButton)
+            && ((chord.key == ShortcutKey::Enter
+                && matches!(focus, FocusKind::PlayerButton | FocusKind::Button))
                 || (chord.key == ShortcutKey::Space
                     && matches!(focus, FocusKind::PlayerButton | FocusKind::PlayerCheckbox)))
         {
@@ -80,7 +83,7 @@ impl Shell {
 /// Windows `view_shortcut_scope`.
 const fn view_shortcut_scope(view: View) -> (ActionScope, bool) {
     match view {
-        View::MainMenu => (ActionScope::List, false),
+        View::MainMenu | View::LocalFolder => (ActionScope::List, false),
         View::Player => (ActionScope::Player, false),
     }
 }

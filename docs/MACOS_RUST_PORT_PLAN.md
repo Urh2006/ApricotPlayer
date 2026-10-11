@@ -334,3 +334,20 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   prva instanca jo predvaja in zapiše v zgodovino. VoiceOver navodila:
   `docs/MACOS_M4A_VOICEOVER_TEST.md`. Play folder pride v M4b skupaj s
   seznamom datotek mape.
+
+### M4b, prvi del: Play folder (11. 10. 2026)
+
+- `apricot-shell` dobi seznamske zaslone (`ListScreen`, `ScreenControl`) s
+  seznamom, gumbi v Tab vrstnem redu Windows in dejanji gumbov; glavni meni
+  je zdaj tak zaslon. Nov zaslon mape (Windows `LocalFolder`): pregled mape v
+  ozadju ("Loading folder..."), seznam "Play from folder" z vrsticami
+  `local_file_result_line`, gumbi Play, Back, Play folder, Shuffle folder,
+  Add folder to queue in Playback queue, Enter predvaja v zaporedju mape,
+  Escape iz predvajalnika vrne na mapo, Escape z mape v glavni meni.
+  `navigate_back` sledi Windows poti (mapa, predvajalnik, privzeto glavni
+  meni brez spremembe statusa).
+- Preverjeno samodejno (`APRICOT_MACOS_SELF_TEST=folder`): nalaganje, puščice,
+  Enter, Escape nazaj na mapo z isto vrstico, Tab in Shift+Tab po gumbih,
+  Escape v glavni meni.
+- Odprto: zaslon Playback queue (gumb in Command+Option+Q zaenkrat povesta
+  nedosegljivost), kontekstni meni rezultatov.

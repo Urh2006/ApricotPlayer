@@ -21,6 +21,8 @@ pub mod keys;
 mod language;
 #[cfg(target_os = "macos")]
 mod player_page;
+#[cfg(target_os = "macos")]
+mod screen_buttons;
 #[cfg(all(target_os = "macos", debug_assertions))]
 mod self_test;
 #[cfg(target_os = "macos")]

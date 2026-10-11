@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use apricot_app::{MainMenuModel, PlayerScreenModel};
+use apricot_app::PlayerScreenModel;
 use apricot_playback::MpvVideoMode;
 
 /// Where focus goes when the player page is shown (Windows `refresh_player`
@@ -27,17 +27,11 @@ pub trait ShellUi {
     /// control that had it.
     fn show_error(&mut self, message: &str);
 
-    /// Windows `refresh_main_menu` and `layout_controls_state` for the main
-    /// menu: the list gets the model's accessible name and rows, the row
-    /// `selected` is selected, and the list gets focus when `focus` is set.
-    /// `open_label` is the Open button's text (Windows `set_open_button_label`).
-    fn show_main_menu(
-        &mut self,
-        model: &MainMenuModel,
-        open_label: &str,
-        selected: usize,
-        focus: bool,
-    );
+    /// A list screen (Windows `refresh_main_menu`, `refresh_local_folder`
+    /// and `layout_controls_state`): the list with its name and rows, the
+    /// row `selected`, the screen's buttons in Tab order; the list gets focus
+    /// when `focus_list` is set.
+    fn show_list_screen(&mut self, screen: &crate::ListScreen);
 
     /// Windows `PlayerControls::sync` and `layout_controls_state` for the
     /// player page.
@@ -79,6 +73,13 @@ pub trait ShellUi {
     ///
     /// Returns a message when the dialog cannot be shown.
     fn choose_media_file(&mut self, title: &str) -> Result<Option<PathBuf>, String>;
+
+    /// Windows `choose_media_folder`: a folder dialog, `None` when cancelled.
+    fn choose_folder(&mut self, title: &str) -> Option<PathBuf>;
+
+    /// Starts or stops polling [`crate::Shell::poll_background`] (Windows
+    /// `LOCAL_FOLDER_TIMER_ID` and the other work timers).
+    fn set_background_polling(&mut self, active: bool);
 
     /// Windows `restore_from_tray`: shows and activates the window.
     fn restore(&mut self);

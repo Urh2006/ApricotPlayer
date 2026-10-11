@@ -12,12 +12,14 @@ mod keyboard;
 mod main_menu;
 mod player;
 mod repeat;
+mod screens;
 mod type_ahead;
 mod ui;
 
 pub use keyboard::{FocusKind, KeyRoute};
 pub use player::{format_duration, local_file_item};
 pub use repeat::KeyRelease;
+pub use screens::{ListScreen, ScreenControl, local_folder_result_label};
 
 pub use main_menu::{MainMenuSelection, last_activated_index, preserved_index};
 pub use type_ahead::TypeAhead;
@@ -30,6 +32,7 @@ use apricot_core::TranslationCatalog;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum View {
     MainMenu,
+    LocalFolder,
     Player,
 }
 
@@ -42,6 +45,7 @@ pub struct Shell {
     last_activated_menu_item: Option<&'static str>,
     player: player::PlayerRuntime,
     key_repeat: Option<repeat::KeyRepeat>,
+    screens: screens::ScreenState,
 }
 
 impl Shell {
@@ -54,6 +58,7 @@ impl Shell {
             last_activated_menu_item: None,
             player: player::PlayerRuntime::default(),
             key_repeat: None,
+            screens: screens::ScreenState::default(),
         }
     }
 
@@ -89,7 +94,7 @@ impl Shell {
     /// (`take_startup_announcement`, spoken by `announce_player_text`).
     pub fn start(&mut self, ui: &mut dyn ShellUi) {
         self.model = self.application.main_menu_model();
-        ui.show_main_menu(&self.model, &self.text("open"), 0, true);
+        self.show_main_menu_screen(ui, 0, true);
         ui.set_status(&self.text("ready"), false);
         if let Some(key) = self.application.take_startup_announcement() {
             let message = self.text(key);
@@ -101,6 +106,7 @@ impl Shell {
     /// selected, "Ready" on the status line, focus on the list.
     pub fn show_main_menu(&mut self, ui: &mut dyn ShellUi) {
         self.stop_key_repeat(ui);
+        self.cancel_local_folder_scan();
         self.application.navigate_main_menu();
         self.view = View::MainMenu;
         self.refresh_main_menu(ui, MainMenuSelection::LastActivated, None, true);
@@ -134,7 +140,29 @@ impl Shell {
                 preserved_index(&labels, old_label.as_deref(), current)
             }
         };
-        ui.show_main_menu(&self.model, &self.text("open"), selected, focus);
+        self.show_main_menu_screen(ui, selected, focus);
+    }
+
+    /// The main menu as a list screen: the list, then Open.
+    fn show_main_menu_screen(&self, ui: &mut dyn ShellUi, selected: usize, focus: bool) {
+        ui.show_list_screen(&ListScreen {
+            list_name: self.model.accessible_name.clone(),
+            rows: self
+                .model
+                .items
+                .iter()
+                .map(|item| item.label.clone())
+                .collect(),
+            selected: Some(selected),
+            controls: vec![
+                ScreenControl::List,
+                ScreenControl::Button {
+                    id: "open",
+                    label: self.text("open"),
+                },
+            ],
+            focus_list: focus,
+        });
     }
 
     /// Windows `activate_main_menu_selection` for the row at `index`.
@@ -150,6 +178,10 @@ impl Shell {
             }
             "play_file" => {
                 self.open_media_file(ui);
+                return;
+            }
+            "play_folder" => {
+                self.open_media_folder(ui);
                 return;
             }
             _ => {}
@@ -174,15 +206,15 @@ impl Shell {
                 return;
             }
             "open_selected" => {
-                if self.view == View::MainMenu
-                    && let Some(row) = ui.selected_row()
-                {
-                    self.activate_main_menu_row(ui, row);
-                }
+                self.activate_selection(ui);
                 return;
             }
             "open_play_file" => {
                 self.open_media_file(ui);
+                return;
+            }
+            "open_play_from_folder" => {
+                self.open_media_folder(ui);
                 return;
             }
             _ => {}

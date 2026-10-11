@@ -8,24 +8,25 @@ use std::cell::{Cell, RefCell};
 
 use std::path::PathBuf;
 
-use apricot_app::{Application, MainMenuModel, PlayerScreenModel};
+use apricot_app::{Application, PlayerScreenModel};
 use apricot_playback::MpvVideoMode;
-use apricot_shell::{FocusKind, KeyRoute, PlayerFocus, Shell, ShellUi};
+use apricot_shell::{FocusKind, KeyRoute, PlayerFocus, ScreenControl, Shell, ShellUi};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSAlert, NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType, NSEvent, NSEventType,
-    NSModalResponseOK, NSOpenPanel, NSResponder, NSScrollView, NSSound, NSTextField, NSWindow,
-    NSWindowDelegate, NSWindowStyleMask,
+    NSModalResponseOK, NSOpenPanel, NSResponder, NSScrollView, NSSound, NSTextField, NSView,
+    NSWindow, NSWindowDelegate, NSWindowStyleMask,
 };
 use objc2_foundation::{
     NSArray, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSTimer,
 };
 
-use crate::controls::{self, Button, List};
+use crate::controls::{self, List};
 use crate::keys;
 use crate::player_page::PlayerPage;
+use crate::screen_buttons::ScreenButtons;
 
 /// Windows `PLAYBACK_TIMER_INTERVAL_MS`.
 const PLAYBACK_POLL_SECONDS: f64 = 0.025;
@@ -41,7 +42,8 @@ pub struct ControllerIvars {
     shell: RefCell<Option<Shell>>,
     window: RefCell<Option<Retained<MainWindow>>>,
     list: RefCell<Option<Retained<List>>>,
-    open: RefCell<Option<Retained<Button>>>,
+    buttons: RefCell<Option<ScreenButtons>>,
+    background_timer: RefCell<Option<Retained<NSTimer>>>,
     scroll: RefCell<Option<Retained<NSScrollView>>>,
     status: RefCell<Option<Retained<NSTextField>>>,
     page: RefCell<Option<PlayerPage>>,
@@ -145,12 +147,37 @@ define_class!(
         fn handle_key_release(&self, event: &NSEvent) {
             self.key_release(event);
         }
-        /// The Open button and Enter in the list (Windows `ID_OPEN`).
+        /// Enter or a double click in the list (Windows `ID_OPEN`).
         #[unsafe(method(openSelected:))]
         fn open_selected(&self, _sender: Option<&AnyObject>) {
-            let row = self.list().and_then(|list| list.selected());
-            if let Some(row) = row {
-                self.with_shell(|shell, ui| shell.activate_main_menu_row(ui, row));
+            self.with_shell(|shell, ui| shell.activate_screen_button(ui, "open"));
+        }
+
+        /// A button of a list screen.
+        #[unsafe(method(screenButton:))]
+        fn screen_button(&self, sender: Option<&AnyObject>) {
+            let tag = sender
+                .and_then(|sender| sender.downcast_ref::<objc2_app_kit::NSControl>())
+                .map(objc2_app_kit::NSControl::tag);
+            let id = tag.and_then(|tag| {
+                self.ivars()
+                    .buttons
+                    .borrow()
+                    .as_ref()
+                    .and_then(|buttons| buttons.id_for_tag(tag))
+            });
+            if let Some(id) = id {
+                self.with_shell(|shell, ui| shell.activate_screen_button(ui, id));
+            }
+        }
+
+        /// Windows `LOCAL_FOLDER_TIMER_ID` and the other work timers.
+        #[unsafe(method(pollBackground:))]
+        fn poll_background(&self, _timer: Option<&AnyObject>) {
+            if self.with_shell(|shell, ui| shell.poll_background(ui)) == Some(false)
+                && let Some(timer) = self.ivars().background_timer.borrow_mut().take()
+            {
+                timer.invalidate();
             }
         }
 
@@ -169,7 +196,8 @@ impl MainWindowController {
             shell: RefCell::new(Some(Shell::new(application))),
             window: RefCell::new(None),
             list: RefCell::new(None),
-            open: RefCell::new(None),
+            buttons: RefCell::new(None),
+            background_timer: RefCell::new(None),
             scroll: RefCell::new(None),
             status: RefCell::new(None),
             page: RefCell::new(None),
@@ -258,6 +286,24 @@ impl MainWindowController {
         {
             return FocusKind::List;
         }
+        let on_screen_button = self
+            .ivars()
+            .buttons
+            .borrow()
+            .as_ref()
+            .is_some_and(|buttons| {
+                responder
+                    .downcast_ref::<crate::controls::Button>()
+                    .is_some_and(|button| {
+                        buttons
+                            .id_for_tag(button.tag())
+                            .and_then(|id| buttons.button(id))
+                            .is_some_and(|shown| std::ptr::eq(shown, button))
+                    })
+            });
+        if on_screen_button {
+            return FocusKind::Button;
+        }
         let page = self.ivars().page.borrow();
         let Some(page) = page.as_ref() else {
             return FocusKind::Other;
@@ -334,18 +380,15 @@ impl MainWindowController {
         );
         content.addSubview(&scroll);
 
-        let open = Button::new(
-            mtm,
-            catalog.text("open"),
-            self.as_ref(),
-            sel!(openSelected:),
-        );
-        open.setFrame(NSRect::new(
+        let buttons = ScreenButtons::new(mtm, self.as_ref(), sel!(screenButton:));
+        buttons.view().setFrame(NSRect::new(
             NSPoint::new(MARGIN, MARGIN * 2.0 + STATUS_HEIGHT),
-            NSSize::new(160.0, BUTTON_HEIGHT),
+            NSSize::new(bounds.size.width - 2.0 * MARGIN, BUTTON_HEIGHT),
         ));
-        open.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMaxYMargin);
-        content.addSubview(&open);
+        buttons.view().setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMaxYMargin,
+        );
+        content.addSubview(buttons.view());
 
         let status = NSTextField::labelWithString(&NSString::from_str(catalog.text("ready")), mtm);
         status.setFrame(NSRect::new(
@@ -371,12 +414,11 @@ impl MainWindowController {
         );
         content.addSubview(page.view());
 
-        controls::set_tab_order(&[&list, &open]);
         window.setAutorecalculatesKeyViewLoop(false);
         window.setInitialFirstResponder(Some(&list));
 
         *self.ivars().list.borrow_mut() = Some(list.clone());
-        *self.ivars().open.borrow_mut() = Some(open);
+        *self.ivars().buttons.borrow_mut() = Some(buttons);
         *self.ivars().scroll.borrow_mut() = Some(scroll);
         *self.ivars().status.borrow_mut() = Some(status);
         *self.ivars().page.borrow_mut() = Some(page);
@@ -435,22 +477,43 @@ impl MainWindowController {
         self.ivars().window.borrow().clone()
     }
 
-    /// Shows the main menu controls or the player page.
+    /// Shows the list screen controls or the player page.
     fn show_screen(&self, player: bool) {
         if let Some(scroll) = self.ivars().scroll.borrow().as_ref() {
             scroll.setHidden(player);
         }
-        if let Some(open) = self.ivars().open.borrow().as_ref() {
-            open.setHidden(player);
+        if let Some(buttons) = self.ivars().buttons.borrow().as_ref() {
+            buttons.set_hidden(player);
         }
         if let Some(page) = self.ivars().page.borrow().as_ref() {
             page.set_visible(player);
         }
-        if !player
-            && let (Some(list), Some(open)) = (self.list(), self.ivars().open.borrow().clone())
-        {
-            controls::set_tab_order(&[&list, &open]);
+    }
+
+    /// Windows `layout_controls_state` for a list screen: the buttons above
+    /// the status line, the list above them.
+    fn layout_list_screen(&self, button_count: usize) {
+        let (Some(window), Some(scroll)) = (self.window(), self.ivars().scroll.borrow().clone())
+        else {
+            return;
+        };
+        let Some(content) = window.contentView() else {
+            return;
+        };
+        let bounds = content.bounds();
+        let width = bounds.size.width - 2.0 * MARGIN;
+        let buttons_height = ScreenButtons::height_for(button_count, width);
+        if let Some(buttons) = self.ivars().buttons.borrow().as_ref() {
+            buttons.view().setFrame(NSRect::new(
+                NSPoint::new(MARGIN, MARGIN * 2.0 + STATUS_HEIGHT),
+                NSSize::new(width, buttons_height),
+            ));
         }
+        let list_bottom = MARGIN * 3.0 + STATUS_HEIGHT + buttons_height;
+        scroll.setFrame(NSRect::new(
+            NSPoint::new(MARGIN, list_bottom),
+            NSSize::new(width, bounds.size.height - MARGIN - list_bottom),
+        ));
     }
 
     /// Development builds: the scripted keyboard check of
@@ -539,9 +602,96 @@ impl MainWindowController {
         }
     }
 
+    /// Development builds: a scripted folder check when
+    /// `APRICOT_MACOS_SELF_TEST=folder` and `APRICOT_MACOS_SELF_TEST_MEDIA`
+    /// name a folder with media files.
+    #[cfg(debug_assertions)]
+    pub fn run_folder_self_test(&self, folder: PathBuf) {
+        self.with_shell(|shell, ui| shell.start_local_folder_scan(ui, folder));
+        self.ivars().self_test_step.set(100);
+        // SAFETY: `playerSelfTestStep:` exists on this controller.
+        unsafe {
+            let _: () = msg_send![
+                self,
+                performSelector: sel!(playerSelfTestStep:),
+                withObject: Option::<&AnyObject>::None,
+                afterDelay: 1.5_f64
+            ];
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    fn folder_self_test_step(&self, index: usize) -> bool {
+        use crate::self_test::{focus, key, send};
+        let Some(window) = self.window() else {
+            return false;
+        };
+        let steps: [(&str, Option<crate::self_test::Key>); 11] = [
+            ("loaded", None),
+            ("Down", Some(key(keys::KEY_DOWN, "\u{f701}"))),
+            ("Enter (play)", Some(key(keys::KEY_RETURN, "\r"))),
+            (
+                "Escape (back to folder)",
+                Some(key(keys::KEY_ESCAPE, "\u{1b}")),
+            ),
+            ("Tab", Some(key(keys::KEY_TAB, "\t"))),
+            ("Tab", Some(key(keys::KEY_TAB, "\t"))),
+            ("Tab", Some(key(keys::KEY_TAB, "\t"))),
+            ("Tab", Some(key(keys::KEY_TAB, "\t"))),
+            (
+                "Shift+Tab",
+                Some(crate::self_test::Key {
+                    code: keys::KEY_TAB,
+                    text: "\t",
+                    flags: objc2_app_kit::NSEventModifierFlags::Shift,
+                }),
+            ),
+            ("Space on Add to queue? no: focus report", None),
+            ("Escape (main menu)", Some(key(keys::KEY_ESCAPE, "\u{1b}"))),
+        ];
+        let Some((name, key)) = steps.get(index) else {
+            return false;
+        };
+        if let Some(key) = key {
+            send(&window, key);
+        }
+        let row = self.list().and_then(|list| list.selected());
+        let status = self
+            .ivars()
+            .status
+            .borrow()
+            .as_ref()
+            .map(|status| status.stringValue().to_string())
+            .unwrap_or_default();
+        println!(
+            "folder-test {name}: focus={} row={row:?} title={:?} status={status:?}",
+            focus(&window),
+            window.title().to_string()
+        );
+        true
+    }
+
     #[cfg(debug_assertions)]
     fn player_self_test_step(&self) {
         use crate::self_test::{Key, focus, key, send};
+        let step = self.ivars().self_test_step.get();
+        if step >= 100 {
+            if self.folder_self_test_step(step - 100) {
+                self.ivars().self_test_step.set(step + 1);
+                // SAFETY: `playerSelfTestStep:` exists on this controller.
+                unsafe {
+                    let _: () = msg_send![
+                        self,
+                        performSelector: sel!(playerSelfTestStep:),
+                        withObject: Option::<&AnyObject>::None,
+                        afterDelay: 0.8_f64
+                    ];
+                }
+            } else {
+                NSApplication::sharedApplication(self.mtm()).terminate(None);
+            }
+            return;
+        }
         let Some(window) = self.window() else {
             return;
         };
@@ -652,28 +802,85 @@ impl ShellUi for MacUi<'_> {
         }
     }
 
-    fn show_main_menu(
-        &mut self,
-        model: &MainMenuModel,
-        open_label: &str,
-        selected: usize,
-        focus: bool,
-    ) {
+    fn show_list_screen(&mut self, screen: &apricot_shell::ListScreen) {
         self.controller.show_screen(false);
         let Some(list) = self.controller.list() else {
             return;
         };
-        list.set_label(&model.accessible_name);
-        list.set_rows(
-            model.items.iter().map(|item| item.label.clone()).collect(),
-            Some(selected),
-        );
-        if let Some(open) = self.controller.ivars().open.borrow().as_ref() {
-            open.setTitle(&NSString::from_str(open_label));
+        list.set_label(&screen.list_name);
+        list.set_rows(screen.rows.clone(), screen.selected);
+        let buttons: Vec<(&'static str, &str)> = screen
+            .controls
+            .iter()
+            .filter_map(|control| match control {
+                ScreenControl::Button { id, label } => Some((*id, label.as_str())),
+                ScreenControl::List => None,
+            })
+            .collect();
+        self.controller.layout_list_screen(buttons.len());
+        if let Some(screen_buttons) = self.controller.ivars().buttons.borrow_mut().as_mut() {
+            screen_buttons.sync(&buttons);
         }
-        if focus && let Some(window) = self.controller.ivars().window.borrow().as_ref() {
+        {
+            let screen_buttons = self.controller.ivars().buttons.borrow();
+            let views: Vec<&NSView> = screen
+                .controls
+                .iter()
+                .filter_map(|control| match control {
+                    ScreenControl::List => Some(&**list as &NSView),
+                    ScreenControl::Button { id, .. } => screen_buttons
+                        .as_ref()
+                        .and_then(|buttons| buttons.button(id))
+                        .map(|button| button as &NSView),
+                })
+                .collect();
+            controls::set_tab_order(&views);
+        }
+        if screen.focus_list
+            && let Some(window) = self.controller.window()
+        {
             window.makeFirstResponder(Some(&list));
         }
+    }
+
+    fn choose_folder(&mut self, title: &str) -> Option<PathBuf> {
+        let panel = NSOpenPanel::openPanel(self.controller.mtm());
+        panel.setTitle(Some(&NSString::from_str(title)));
+        panel.setMessage(Some(&NSString::from_str(title)));
+        panel.setCanChooseFiles(false);
+        panel.setCanChooseDirectories(true);
+        panel.setAllowsMultipleSelection(false);
+        if panel.runModal() != NSModalResponseOK {
+            return None;
+        }
+        panel
+            .URL()
+            .and_then(|url| url.path())
+            .map(|path| PathBuf::from(path.to_string()))
+    }
+
+    fn set_background_polling(&mut self, active: bool) {
+        let mut timer = self.controller.ivars().background_timer.borrow_mut();
+        if !active {
+            if let Some(timer) = timer.take() {
+                timer.invalidate();
+            }
+            return;
+        }
+        if timer.is_some() {
+            return;
+        }
+        // SAFETY: the controller implements `pollBackground:` and outlives
+        // the timer, which is invalidated when polling stops.
+        *timer = Some(unsafe {
+            NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
+                0.05,
+                self.controller.as_ref(),
+                sel!(pollBackground:),
+                None,
+                true,
+            )
+        });
     }
 
     fn selected_row(&self) -> Option<usize> {
