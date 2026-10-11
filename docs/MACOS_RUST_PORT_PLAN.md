@@ -442,3 +442,20 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   "beats - edited.m4a", dodajanje zaznamka z Return, preklic z Escape,
   okno zaznamkov (fokus na seznamu, Tab na Add in Play, Escape, fokus nazaj
   na predvajalnik).
+
+### M4f: besedila pesmi (11. 10. 2026)
+
+- `apricot-shell/src/lyrics.rs` in okno besedil na Macu (Windows
+  `show_player_lyrics` z `details_win32::show_async`): besedilo samo za
+  branje s fokusom, Copy lyrics, Back in statusna vrstica; najprej
+  "Fetching lyrics", nato lokalna datoteka (.lrc, .txt) ali spletni vir
+  lrclib, oglas naslova ali "No lyrics available", sprotno označena časovna
+  vrstica (samo vizualno, kot na Windows). Escape in zaprtje vrneta fokus v
+  predvajalnik. Kopirano besedilo ima na Macu vrstice LF.
+- Prestavljeno: prepis (Command+Shift+T) in komentarji (Command+Shift+M)
+  potrebujeta YouTube in yt-dlp, zato prideta z iskanjem (M6); Spotifyjeva
+  besedila in prepisi epizod pridejo s Spotifyjem (M13).
+- Preverjeno: enotski testi nalaganja, kopiranja in obsegov časovnih vrstic;
+  samodejni preizkus s pravim predvajanjem in lokalno .lrc datoteko
+  (fokus na besedilu, Tab na Copy lyrics, Return kopira, Escape zapre,
+  fokus nazaj na predvajalnik).

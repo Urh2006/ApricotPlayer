@@ -192,6 +192,7 @@ mod equalizer {
             None
         }
         fn open_equalizer(&mut self) {}
+        fn open_lyrics(&mut self, _dialog: crate::LyricsDialog) {}
         fn open_bookmarks(&mut self, dialog: crate::BookmarkDialog) {
             self.bookmarks = Some(dialog);
         }

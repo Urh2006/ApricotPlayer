@@ -231,7 +231,7 @@ impl Shell {
     }
 
     /// Windows `ensure_player_for_auxiliary_view`.
-    fn ensure_player_for_auxiliary_view(&mut self, ui: &mut dyn ShellUi) -> bool {
+    pub(crate) fn ensure_player_for_auxiliary_view(&mut self, ui: &mut dyn ShellUi) -> bool {
         let session = self.application.player_session();
         if self.view == View::Player && session.current_item().is_some() {
             return true;

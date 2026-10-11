@@ -60,6 +60,8 @@ pub struct ControllerIvars {
     activations: RefCell<Vec<apricot_app::ActivationRequest>>,
     /// The bookmarks window waiting to open after the current event.
     pending_bookmarks: RefCell<Option<apricot_shell::BookmarkDialog>>,
+    /// The lyrics window waiting to open after the current event.
+    pending_lyrics: RefCell<Option<apricot_shell::LyricsDialog>>,
 }
 
 define_class!(
@@ -148,6 +150,14 @@ define_class!(
             }
         }
 
+        #[unsafe(method(openLyrics:))]
+        fn open_lyrics(&self, _sender: Option<&AnyObject>) {
+            let dialog = self.ivars().pending_lyrics.borrow_mut().take();
+            if let Some(dialog) = dialog {
+                crate::lyrics::run(self, dialog);
+            }
+        }
+
         #[unsafe(method(drainActivations:))]
         fn drain_activations_selector(&self, _sender: Option<&AnyObject>) {
             self.drain_activations();
@@ -231,6 +241,7 @@ impl MainWindowController {
             self_test_step: Cell::new(0),
             activations: RefCell::new(Vec::new()),
             pending_bookmarks: RefCell::new(None),
+            pending_lyrics: RefCell::new(None),
         });
         // SAFETY: `init` of NSObject.
         unsafe { msg_send![super(this), init] }
@@ -724,6 +735,11 @@ impl MainWindowController {
                 ("Down", key(keys::KEY_DOWN, "\u{f701}")),
                 ("Return", key(keys::KEY_RETURN, "\r")),
             ],
+            "Lyrics" => vec![
+                ("Tab", key(keys::KEY_TAB, "\t")),
+                ("Return (copy)", key(keys::KEY_RETURN, "\r")),
+                ("Escape", escape),
+            ],
             "Bookmarks" => vec![
                 ("Down", key(keys::KEY_DOWN, "\u{f701}")),
                 ("Tab", key(keys::KEY_TAB, "\t")),
@@ -1171,6 +1187,19 @@ impl ShellUi for MacUi<'_> {
             let _: () = msg_send![
                 self.controller,
                 performSelector: sel!(openBookmarks:),
+                withObject: Option::<&AnyObject>::None,
+                afterDelay: 0.0_f64
+            ];
+        }
+    }
+
+    fn open_lyrics(&mut self, dialog: apricot_shell::LyricsDialog) {
+        *self.controller.ivars().pending_lyrics.borrow_mut() = Some(dialog);
+        // SAFETY: `openLyrics:` exists on the controller.
+        unsafe {
+            let _: () = msg_send![
+                self.controller,
+                performSelector: sel!(openLyrics:),
                 withObject: Option::<&AnyObject>::None,
                 afterDelay: 0.0_f64
             ];

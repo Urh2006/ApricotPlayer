@@ -82,6 +82,12 @@ pub trait ShellUi {
     /// where it was, it calls [`crate::Shell::bookmarks_closed`].
     fn open_bookmarks(&mut self, dialog: crate::BookmarkDialog);
 
+    /// Opens the lyrics window after the current event, modal over the
+    /// window: the loading text focused, Copy and Back. The window polls
+    /// [`crate::LyricsDialog`] and calls [`crate::Shell::lyrics_closed`]
+    /// after it closed.
+    fn open_lyrics(&mut self, dialog: crate::LyricsDialog);
+
     /// Windows `prompt_name_with_initial`: a modal text prompt with
     /// `initial` in the field; `None` when cancelled. The text is returned
     /// as typed.

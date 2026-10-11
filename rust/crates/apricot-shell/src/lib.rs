@@ -11,6 +11,7 @@
 mod bookmarks;
 mod equalizer_dialog;
 mod keyboard;
+mod lyrics;
 mod main_menu;
 mod player;
 mod player_edit;
@@ -24,6 +25,7 @@ mod ui;
 pub use bookmarks::{BookmarkDialog, BookmarkEntry, BookmarkRequest, BookmarkResponse};
 pub use equalizer_dialog::{EQUALIZER_BUTTONS, EqualizerButton, EqualizerLabels, EqualizerView};
 pub use keyboard::{FocusKind, KeyRoute};
+pub use lyrics::{LyricsDialog, LyricsHighlight, LyricsLoaded};
 pub use player::{format_duration, local_file_item};
 pub use player_extras::DetailsLabels;
 pub use repeat::KeyRelease;
@@ -301,6 +303,7 @@ impl Shell {
                 let _ = self.prompt_add_current_bookmark(ui);
             }
             "player_bookmarks" => self.show_bookmarks_dialog(ui, true, false),
+            "player_lyrics" => self.show_player_lyrics(ui),
             "player_back_keep_playing" => self.leave_player_to_main_menu(ui, true),
             "player_previous" => self.navigate_player_relative(ui, -1, false),
             "player_next" => self.navigate_player_relative(ui, 1, false),

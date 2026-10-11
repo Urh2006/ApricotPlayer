@@ -203,5 +203,11 @@ pub fn tools_steps() -> Vec<(&'static str, Option<Key>, bool)> {
             true,
         ),
         ("after the bookmarks", None, false),
+        (
+            "Command+Shift+Y (lyrics)",
+            with(16, "Y", command_shift),
+            true,
+        ),
+        ("after the lyrics", None, false),
     ]
 }

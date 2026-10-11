@@ -204,6 +204,7 @@ version = "2.0.0-beta.1"
 dependencies = [
  "apricot-app",
  "apricot-core",
+ "apricot-media",
  "apricot-platform",
  "apricot-playback",
  "apricot-storage",

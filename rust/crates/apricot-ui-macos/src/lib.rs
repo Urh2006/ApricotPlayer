@@ -26,6 +26,8 @@ pub mod keys;
 #[cfg(target_os = "macos")]
 mod language;
 #[cfg(target_os = "macos")]
+mod lyrics;
+#[cfg(target_os = "macos")]
 mod player_page;
 #[cfg(target_os = "macos")]
 mod screen_buttons;
