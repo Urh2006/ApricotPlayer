@@ -523,6 +523,14 @@ impl SpotifyPlayback {
     }
 
     pub fn set_shuffle(&self, shuffle: bool) {
+        // Beta 6 check (plan 4a.3): which context Spotify reports when the
+        // user changes shuffle, e.g. Liked Songs from the menu or Library.
+        log::info!(
+            "shuffle {shuffle} in context {}",
+            self.player_state()
+                .map(|state| state.context_uri)
+                .unwrap_or_default()
+        );
         self.with_spirc(|spirc| {
             let _ = spirc.shuffle(shuffle);
         });
@@ -536,6 +544,7 @@ impl SpotifyPlayback {
     /// Turns smart shuffle on for `playlist`, or off with `None`; off removes
     /// the recommendations from the upcoming tracks.
     pub fn set_smart_shuffle(&self, playlist: Option<String>) {
+        log::info!("smart shuffle {playlist:?}");
         let off = playlist.is_none();
         if let Ok(mut smart) = self.smart.lock() {
             *smart = playlist;
@@ -871,6 +880,7 @@ fn load_request(item: &MediaItem, uri: String, position_ms: u32, paused: bool) -
             .get("spotify_shuffle")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
+        log::info!("load context {context} (whole {whole}, shuffle {shuffle})");
         LoadRequest::from_context_uri(
             context,
             LoadRequestOptions {
