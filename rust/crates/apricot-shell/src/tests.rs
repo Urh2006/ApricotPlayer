@@ -334,8 +334,13 @@ mod equalizer {
         ) -> Option<(String, usize)> {
             None
         }
-        fn spotify_queue_update(&mut self, _rows: Vec<apricot_app::spotify::SpotifyQueueRow>) {}
-        fn spotify_devices_update(&mut self, _rows: Vec<(String, String)>) {}
+        fn open_spotify_dialog(&mut self, _dialog: crate::SpotifyListDialog) {}
+        fn spotify_dialog_update(
+            &mut self,
+            _rows: Vec<crate::SpotifyDialogRow>,
+            _selected: Option<usize>,
+        ) {
+        }
         fn settings_cookie_source(&mut self, _path: &str, _browser_index: usize) {}
         fn open_action_finder(&mut self, _model: apricot_app::ActionFinderModel) {}
         fn show_conversion_progress(&mut self, _title: &str, _message: &str, _total: usize) {}

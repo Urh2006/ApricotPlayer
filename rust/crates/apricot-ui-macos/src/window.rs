@@ -67,6 +67,7 @@ pub struct ControllerIvars {
     pending_lyrics: RefCell<Option<apricot_shell::LyricsDialog>>,
     /// The playback queue window waiting to open after the current event.
     pending_queue: RefCell<Option<apricot_shell::QueueDialog>>,
+    pending_spotify_dialog: RefCell<Option<apricot_shell::SpotifyListDialog>>,
     /// The transcript window waiting to open after the current event.
     pending_transcript: RefCell<Option<apricot_shell::TranscriptDialog>>,
     pending_converter: RefCell<Option<apricot_shell::ConverterDialog>>,
@@ -168,6 +169,14 @@ define_class!(
             let dialog = self.ivars().pending_lyrics.borrow_mut().take();
             if let Some(dialog) = dialog {
                 crate::lyrics::run(self, dialog);
+            }
+        }
+
+        #[unsafe(method(openSpotifyDialog:))]
+        fn open_spotify_dialog(&self, _sender: Option<&AnyObject>) {
+            let dialog = self.ivars().pending_spotify_dialog.borrow_mut().take();
+            if let Some(dialog) = dialog {
+                crate::spotify_panels::run(self, &dialog);
             }
         }
 
@@ -353,6 +362,7 @@ impl MainWindowController {
             pending_bookmarks: RefCell::new(None),
             pending_lyrics: RefCell::new(None),
             pending_queue: RefCell::new(None),
+            pending_spotify_dialog: RefCell::new(None),
             pending_transcript: RefCell::new(None),
             pending_converter: RefCell::new(None),
             pending_spotify_login: RefCell::new(None),
@@ -1061,6 +1071,13 @@ impl MainWindowController {
                 );
                 "Spotify search dialog"
             }
+            0 if std::env::var("APRICOT_MACOS_SELF_TEST_KIND").as_deref()
+                == Ok("spotify_queue") =>
+            {
+                self.schedule_modal_self_test_keys_after(1.0);
+                self.with_shell(|shell, ui| shell.spotify_queue_dialog_self_test(ui));
+                "Spotify queue dialog"
+            }
             0 if std::env::var("APRICOT_MACOS_SELF_TEST_KIND").as_deref() == Ok("audiovault") => {
                 self.schedule_modal_self_test_keys_after(1.0);
                 self.run_action("open_audiovault");
@@ -1425,6 +1442,7 @@ impl MainWindowController {
             ],
             "Settings" => crate::self_test::settings_plan(),
             "Search Spotify" => crate::self_test::spotify_search_plan(),
+            "Spotify queue" => crate::self_test::spotify_queue_plan(),
             title @ ("File converter" | "Folder converter") => {
                 crate::self_test::converter_plan(title == "File converter")
             }
@@ -1996,9 +2014,26 @@ impl ShellUi for MacUi<'_> {
         crate::spotify_dialogs::run_search(self.controller.mtm(), texts, query, kind)
     }
 
-    fn spotify_queue_update(&mut self, _rows: Vec<apricot_app::spotify::SpotifyQueueRow>) {}
+    fn open_spotify_dialog(&mut self, dialog: apricot_shell::SpotifyListDialog) {
+        *self.controller.ivars().pending_spotify_dialog.borrow_mut() = Some(dialog);
+        // SAFETY: `openSpotifyDialog:` exists on the controller.
+        unsafe {
+            let _: () = msg_send![
+                self.controller,
+                performSelector: sel!(openSpotifyDialog:),
+                withObject: Option::<&AnyObject>::None,
+                afterDelay: 0.0_f64
+            ];
+        }
+    }
 
-    fn spotify_devices_update(&mut self, _rows: Vec<(String, String)>) {}
+    fn spotify_dialog_update(
+        &mut self,
+        rows: Vec<apricot_shell::SpotifyDialogRow>,
+        selected: Option<usize>,
+    ) {
+        crate::spotify_panels::update(rows, selected);
+    }
 
     fn open_settings(&mut self) {
         // SAFETY: `openSettings:` exists on the controller.

@@ -285,12 +285,21 @@ pub trait ShellUi {
         kind: usize,
     ) -> Option<(String, usize)>;
 
-    /// Windows `spotify_queue_win32::update` of an open queue dialog.
-    fn spotify_queue_update(&mut self, rows: Vec<apricot_app::spotify::SpotifyQueueRow>);
+    /// Windows `spotify_queue_win32::show` and `spotify_devices_win32::show`
+    /// over the current screen, after the current event; its buttons and
+    /// keys go to `Shell::spotify_dialog_action`, its context menu comes
+    /// from `Shell::spotify_dialog_menu`, and closing it calls
+    /// `Shell::spotify_dialog_closed`.
+    fn open_spotify_dialog(&mut self, dialog: crate::SpotifyListDialog);
 
-    /// Windows `spotify_devices_win32::update` of an open device list:
-    /// (device ID, label) rows.
-    fn spotify_devices_update(&mut self, rows: Vec<(String, String)>);
+    /// New rows of the open Spotify dialog: `selected`, or with `None` the
+    /// row with the same key as the selected one (the same position when
+    /// it is gone). Focus stays where it is.
+    fn spotify_dialog_update(
+        &mut self,
+        rows: Vec<crate::SpotifyDialogRow>,
+        selected: Option<usize>,
+    );
 
     /// Focus on the screen's list unless it has it.
     fn focus_list(&mut self);

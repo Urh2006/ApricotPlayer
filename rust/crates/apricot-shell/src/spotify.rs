@@ -133,6 +133,8 @@ pub(crate) struct SpotifyState {
     pub(crate) devices_open: bool,
     /// The open Spotify lists (Windows `BrowseState`).
     pub(crate) browse: crate::spotify_lists::BrowseState,
+    /// The rows of the open queue or device dialog.
+    pub(crate) dialog_rows: crate::spotify_panels::DialogRows,
 }
 
 /// Connects `key`, replacing the running session.
@@ -716,9 +718,7 @@ impl Shell {
                     return;
                 }
                 self.spotify.queue_load = None;
-                if self.spotify.queue_open {
-                    ui.spotify_queue_update(apricot_app::spotify::queue_rows(&texts, &queue));
-                }
+                self.spotify_queue_arrived(ui, apricot_app::spotify::queue_rows(&texts, &queue));
             }
         }
     }
@@ -1077,10 +1077,7 @@ impl Shell {
                 self.spotify_follow_smart_shuffle();
             }
             PlaybackNotice::DevicesChanged => {
-                if self.spotify.devices_open {
-                    let rows = self.spotify_device_rows();
-                    ui.spotify_devices_update(rows);
-                }
+                self.spotify_devices_changed(ui);
             }
             PlaybackNotice::Volume(volume) => self.spotify_apply_connect_volume(ui, volume),
         }

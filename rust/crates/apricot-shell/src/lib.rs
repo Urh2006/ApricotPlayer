@@ -36,6 +36,7 @@ mod search;
 mod settings_window;
 mod spotify;
 mod spotify_lists;
+mod spotify_panels;
 mod transcript;
 mod transcript_loader;
 mod trending;
@@ -68,6 +69,9 @@ pub use spotify::{
     SpotifyLoginAction, SpotifyLoginTexts, SpotifyLoginUpdate, SpotifySettingsTexts,
 };
 pub use spotify_lists::SpotifySearchTexts;
+pub use spotify_panels::{
+    SpotifyDialogAction, SpotifyDialogKind, SpotifyDialogRow, SpotifyListDialog,
+};
 pub use transcript::{TranscriptButton, TranscriptDialog, TranscriptRows};
 
 pub use main_menu::{MainMenuSelection, last_activated_index, preserved_index};

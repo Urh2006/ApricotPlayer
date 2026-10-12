@@ -4,9 +4,7 @@
 //! profiles. Every opened list is a frame on a stack, so Escape goes back one
 //! level to the same row. Lists load in pages; reaching the last row loads
 //! the next page. Answers that arrive late are dropped. Focus moves only
-//! when the user opens or leaves a list. Also the queue and the device list
-//! (Windows `spotify_queue_win32.rs` and `spotify_devices_win32.rs`), which
-//! arrive with unit M13c.
+//! when the user opens or leaves a list.
 
 use std::time::{Duration, Instant};
 
@@ -1671,25 +1669,6 @@ impl Shell {
         };
         ui.set_status(&self.text(key), true);
         true
-    }
-
-    pub(crate) fn show_spotify_queue(&mut self, ui: &mut dyn ShellUi) {
-        let message =
-            apricot_app::unavailable_feature_message(&self.catalog(), &self.text("spotify_queue"));
-        ui.set_status(&message, true);
-    }
-
-    pub(crate) fn show_spotify_devices(&mut self, ui: &mut dyn ShellUi) {
-        let message = apricot_app::unavailable_feature_message(
-            &self.catalog(),
-            &self.text("spotify_devices"),
-        );
-        ui.set_status(&message, true);
-    }
-
-    #[allow(clippy::unused_self)] // Until the device list arrives (M13c).
-    pub(crate) fn spotify_device_rows(&self) -> Vec<(String, String)> {
-        Vec::new()
     }
 }
 

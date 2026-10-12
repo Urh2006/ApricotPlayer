@@ -626,6 +626,34 @@ pub fn spotify_search_plan() -> Vec<(&'static str, Key)> {
     ]
 }
 
+/// `APRICOT_MACOS_SELF_TEST=settings` with `KIND=spotify_queue`: rows, the
+/// buttons in Tab order, the context menu (Remove, which fails without a
+/// session and says the queue changed) and Escape.
+pub fn spotify_queue_plan() -> Vec<(&'static str, Key)> {
+    use crate::keys;
+    let tab = || key(keys::KEY_TAB, "\t");
+    vec![
+        ("Down", key(keys::KEY_DOWN, "\u{f701}")),
+        ("Up", key(keys::KEY_UP, "\u{f700}")),
+        ("Tab (Play)", tab()),
+        ("Tab (Move up)", tab()),
+        ("Tab (Move down)", tab()),
+        ("Tab (Remove)", tab()),
+        ("Tab (Clear)", tab()),
+        ("Tab (Back)", tab()),
+        ("Tab (list)", tab()),
+        (
+            "Shift+F10 (menu, Remove)",
+            Key {
+                code: keys::KEY_F10,
+                text: "\u{f70d}",
+                flags: objc2_app_kit::NSEventModifierFlags::Shift,
+            },
+        ),
+        ("Escape", key(keys::KEY_ESCAPE, "\u{1b}")),
+    ]
+}
+
 /// The Settings keys of `APRICOT_MACOS_SELF_TEST=settings`: the second
 /// section, Tab into it, two controls, Shift+Tab and Back.
 pub fn settings_plan() -> Vec<(&'static str, Key)> {

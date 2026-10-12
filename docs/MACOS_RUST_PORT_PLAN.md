@@ -883,3 +883,25 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   samodejni preizkus okna za iskanje (Return na praznem ostane, vnos, Tab
   vrstni red polje, vrsta, Search, Cancel, rezultat). Pravih Spotify
   seznamov nisem preizkusil, ker potrebujejo prijavo v tvoj račun.
+
+### M13c: Spotify vrsta in naprave (12. 10. 2026)
+
+- `apricot-shell/src/spotify_panels.rs` (Windows `show_queue`,
+  `show_devices`, `spotify_queue_win32.rs`, `spotify_devices_win32.rs`):
+  vrsta s predvajanjem izbrane pojavitve, premikom gor in dol (samo med
+  ročno dodanimi), odstranitvijo, brisanjem ročno dodanih in sporočilom
+  "The Spotify queue changed meanwhile", kadar urejanje ne uspe. Naprave s
+  "Play here", ki ostane odprto in pove zakaj, kadar nič ne igra ali naprava
+  že igra. Potrjena vrsta in spremembe naprav posodobijo odprto okno;
+  nespremenjen seznam se ne osveži, izbrana ostane ista pojavitev ali
+  naprava.
+- `apricot-ui-macos/src/spotify_panels.rs`: modalno okno z navodili,
+  seznamom (fokus) in gumbi, Back zadnji z Escape. Enter izvede prvi gumb,
+  Delete odstrani v vrsti, Shift+F10 odpre meni samo z ukazi, ki jih izbrana
+  vrstica podpira. Po zaprtju se fokus vrne na prejšnjo kontrolo.
+- Preverjeno: samodejni preizkus vrste z izmišljenimi vrsticami (začetni
+  izbor prva naslednja skladba, Tab vrstni red seznam, Play, Move up, Move
+  down, Remove, Clear, Back, meni prve ročno dodane skladbe brez Move up,
+  Remove brez seje pove, da se je vrsta spremenila, Escape zapre in vrne
+  fokus na glavni meni). Prave vrste in naprav nisem preizkusil, ker
+  potrebujeta prijavo v tvoj Spotify račun.
