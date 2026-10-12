@@ -678,7 +678,10 @@ impl Shell {
         requested_choice: DownloadChoice,
         remove_queued: bool,
     ) {
-        // AudioVault downloads arrive with their unit (M12).
+        // Python `start_download`: AudioVault items have audio only.
+        if self.audiovault_start_download(ui, item, requested_choice == DownloadChoice::Audio) {
+            return;
+        }
         if item.is_local_media() {
             ui.set_status(&self.text("no_selection"), true);
             return;

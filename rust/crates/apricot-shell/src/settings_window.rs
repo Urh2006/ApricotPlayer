@@ -806,7 +806,12 @@ impl Shell {
                 screen.focus_list = false;
                 ui.show_list_screen(&screen);
             }
-            View::DirectLink | View::PodcastSearchResults | View::PodcastCategories => {}
+            View::DirectLink
+            | View::PodcastSearchResults
+            | View::PodcastCategories
+            | View::AudiovaultMenu
+            | View::AudiovaultSearch
+            | View::AudiovaultResults => {}
         }
         ui.focus_primary_control();
         self.configure_rss_timer(ui);

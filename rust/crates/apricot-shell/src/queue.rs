@@ -328,9 +328,15 @@ impl Shell {
             View::RssFeeds | View::RssItems | View::PodcastSearchResults => {
                 self.podcast_context_entries()
             }
-            View::MainMenu | View::DirectLink | View::PodcastCategories | View::DownloadQueue => {
-                None
-            }
+            // Python `open_audiovault_context_menu` opens only on an item.
+            View::AudiovaultSearch | View::AudiovaultResults => Some(
+                context_menu::audiovault_results_context_menu(&context, item?),
+            ),
+            View::MainMenu
+            | View::DirectLink
+            | View::PodcastCategories
+            | View::DownloadQueue
+            | View::AudiovaultMenu => None,
         }
     }
 

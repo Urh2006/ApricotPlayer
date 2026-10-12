@@ -785,3 +785,25 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
 - Preverjeno: enotski test uvoza datoteke s prijavo, testi platforme.
   Pravega izvoza iz brskalnika na tem Macu nisem poganjal, ker bi bral
   piškotke iz Urhovih brskalnikov in sprožil vprašanje Keychaina.
+
+### M12b: AudioVault (12. 10. 2026)
+
+- `apricot-shell/src/audiovault.rs` (Windows `audiovault_win32.rs`):
+  prijava (shranjeno geslo v Keychainu prek obstoječega
+  `audiovault_credentials`, sicer okno za prijavo), meni (Search, Recent TV
+  shows, Recent movies), iskanje (Back, iskalno polje, vrsta, Search, Play,
+  Download audio, seznam; Return v polju išče), nedavni naslovi, epizode
+  oddaj (manifest arhiva, celoten prenos, kadar strežnik ne podpira
+  razponov), predvajanje filmov in epizod (s predpomnilnikom in njegovim
+  obrezovanjem), prenosi filmov, epizod in celih oddaj, ponovna prijava ob
+  potekli seji, vrnitev iz predvajalnika na isti zaslon, kontekstni meni
+  (Open, Download), nastavitve Log in, Log out in Register.
+- `apricot-ui-macos/src/audiovault_login.rs`: okno za prijavo (Email s
+  fokusom, Password, Register, OK, Cancel; Return v polju je OK).
+- Razlika: naslov nad seznamom rezultatov (statično besedilo na Windows) ni
+  prikazan posebej; seznam ima naslov kot ime.
+- Preverjeno: enotski test (brez prijave se pokaže okno za prijavo in
+  zaslon ostane na glavnem meniju), samodejni preizkus okna za prijavo na
+  Macu (fokus na Email, Tab na Password, Register in OK, Escape zapre,
+  fokus se vrne na glavni meni). Prave prijave in predvajanja nisem mogel
+  preizkusiti, ker na Macu ni računa AudioVault.

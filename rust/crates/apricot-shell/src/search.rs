@@ -228,6 +228,9 @@ impl Shell {
         {
             self.submit_search(ui);
         }
+        if id == "audiovault_query" && self.view == View::AudiovaultSearch {
+            self.audiovault_search(ui);
+        }
     }
 
     /// Windows `selected_search_kind`.
@@ -399,6 +402,9 @@ impl Shell {
             | View::PodcastSearchResults
             | View::PodcastCategories
             | View::DownloadQueue
+            | View::AudiovaultMenu
+            | View::AudiovaultSearch
+            | View::AudiovaultResults
             | View::Player => {}
         }
     }

@@ -105,6 +105,9 @@ impl Shell {
 
     /// A button of a list screen was pressed (Windows `handle_window_command`).
     pub fn activate_screen_button(&mut self, ui: &mut dyn ShellUi, id: &str) {
+        if self.audiovault_command(ui, id) {
+            return;
+        }
         match id {
             "open" => self.activate_selection(ui),
             "back" => self.navigate_back(ui),
@@ -150,6 +153,9 @@ impl Shell {
             | View::PodcastSearchResults
             | View::PodcastCategories => self.activate_podcast_selection(ui),
             View::DownloadQueue => self.start_selected_queued_download(ui, None),
+            View::AudiovaultMenu | View::AudiovaultSearch | View::AudiovaultResults => {
+                self.audiovault_activate(ui);
+            }
             // Python `play_selected` on the empty result list.
             View::Search => ui.show_error(&self.text("no_selection")),
             View::DirectLink | View::Player => {}
@@ -215,7 +221,7 @@ impl Shell {
         let edits = self.poll_edit_saves(ui);
         let podcasts = self.poll_podcast_work(ui);
         let downloads = self.poll_downloads(ui) | self.poll_conversions(ui);
-        let cookies = self.poll_cookie_events(ui);
+        let cookies = self.poll_cookie_events(ui) | self.poll_audiovault(ui);
         youtube
             || related
             || folder
@@ -358,6 +364,11 @@ impl Shell {
     /// the previous screen returns with focus on its list.
     pub(crate) fn navigate_back(&mut self, ui: &mut dyn ShellUi) {
         self.stop_key_repeat(ui);
+        if crate::audiovault::is_view(self.view) {
+            // Python `back_from_audiovault`.
+            self.audiovault_back(ui);
+            return;
+        }
         self.cancel_youtube_work();
         self.cancel_local_folder_scan();
         let leaving_collection = self.view == View::Collection;
@@ -428,6 +439,10 @@ impl Shell {
                     .and_then(|value| usize::try_from(value).ok());
                 self.restore_podcast_view(ui, frame.route, saved);
             }
+            Route::AudiovaultMenu
+            | Route::AudiovaultSearch
+            | Route::AudiovaultResults
+            | Route::AudiovaultEpisodes => self.audiovault_restore_after_player(ui),
             Route::DownloadQueue => {
                 self.view = View::DownloadQueue;
                 self.refresh_download_queue(ui, true, false);

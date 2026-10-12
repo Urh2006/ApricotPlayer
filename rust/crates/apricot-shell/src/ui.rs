@@ -252,6 +252,15 @@ pub trait ShellUi {
     /// was when the window had it.
     fn close_conversion_progress(&mut self);
 
+    /// The `AudioVault` login dialog (Windows `audiovault_login_win32`):
+    /// Email (focused), Password, Register, OK and Cancel; Return in a field
+    /// is OK. The address and password, `None` when cancelled; focus
+    /// returns where it was.
+    fn audiovault_login(&mut self, login: &crate::AudiovaultLogin) -> Option<(String, String)>;
+
+    /// Focus on the screen's list unless it has it.
+    fn focus_list(&mut self);
+
     /// Replaces one row of the screen's list, keeping the selection
     /// (Windows `LB_DELETESTRING` and `LB_INSERTSTRING`).
     fn set_list_row(&mut self, index: usize, label: &str);

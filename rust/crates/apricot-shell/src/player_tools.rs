@@ -101,6 +101,9 @@ impl Shell {
 
     /// Windows `active_media_item` for the screens the shell shows.
     pub(crate) fn active_media_item(&self, ui: &dyn ShellUi) -> Option<MediaItem> {
+        if crate::audiovault::is_view(self.view) {
+            return self.audiovault_selected_item(ui);
+        }
         match self.view {
             View::Player => self.application.player_session().current_item().cloned(),
             View::LocalFolder => ui
@@ -145,7 +148,10 @@ impl Shell {
             | View::RssFeeds
             | View::PodcastSearchResults
             | View::PodcastCategories
-            | View::DownloadQueue => None,
+            | View::DownloadQueue
+            | View::AudiovaultMenu
+            | View::AudiovaultSearch
+            | View::AudiovaultResults => None,
         }
     }
 

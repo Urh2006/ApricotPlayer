@@ -1023,6 +1023,11 @@ impl MainWindowController {
             return false;
         };
         let name = match index {
+            0 if std::env::var("APRICOT_MACOS_SELF_TEST_KIND").as_deref() == Ok("audiovault") => {
+                self.schedule_modal_self_test_keys_after(1.0);
+                self.run_action("open_audiovault");
+                "open AudioVault"
+            }
             0 => {
                 self.schedule_modal_self_test_keys_after(1.0);
                 self.run_action("open_action_finder");
@@ -1364,6 +1369,12 @@ impl MainWindowController {
                 ("Escape", escape),
             ],
             "Action finder" => crate::self_test::action_finder_plan(),
+            "Log in to AudioVault" => vec![
+                ("Tab (password)", key(keys::KEY_TAB, "\t")),
+                ("Tab (Register)", key(keys::KEY_TAB, "\t")),
+                ("Tab (OK)", key(keys::KEY_TAB, "\t")),
+                ("Escape", escape),
+            ],
             "Settings" => crate::self_test::settings_plan(),
             title @ ("File converter" | "Folder converter") => {
                 crate::self_test::converter_plan(title == "File converter")
@@ -1874,6 +1885,27 @@ impl ShellUi for MacUi<'_> {
             .take();
         if let Some(window) = window {
             window.destroy();
+        }
+    }
+
+    fn audiovault_login(
+        &mut self,
+        login: &apricot_shell::AudiovaultLogin,
+    ) -> Option<(String, String)> {
+        crate::audiovault_login::show(self.controller.mtm(), login)
+    }
+
+    fn focus_list(&mut self) {
+        if let (Some(window), Some(list)) = (self.controller.window(), self.controller.list()) {
+            let focused = window.firstResponder().is_some_and(|responder| {
+                std::ptr::eq(
+                    Retained::as_ptr(&responder).cast::<u8>(),
+                    Retained::as_ptr(&list).cast::<u8>(),
+                )
+            });
+            if !focused {
+                window.makeFirstResponder(Some(&list));
+            }
         }
     }
 

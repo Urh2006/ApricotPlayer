@@ -400,6 +400,11 @@ impl Shell {
         preserve_sequence: bool,
         start_position_seconds: Option<f64>,
     ) {
+        // Python plays AudioVault movies from their resolved stream and TV
+        // show episodes from the playback cache.
+        if self.audiovault_intercept_start(ui, &item) {
+            return;
+        }
         self.cancel_youtube_work();
         let start_position_seconds =
             start_position_seconds.or_else(|| self.application.playback_resume_position(&item));

@@ -8,6 +8,7 @@
 //! the result. Windows moves onto this crate in unit W1
 //! (`docs/MACOS_RUST_PORT_PLAN.md`).
 
+mod audiovault;
 mod bookmarks;
 mod collections;
 mod comments;
@@ -40,6 +41,7 @@ mod type_ahead;
 mod ui;
 mod youtube;
 
+pub use audiovault::AudiovaultLogin;
 pub use bookmarks::{BookmarkDialog, BookmarkEntry, BookmarkRequest, BookmarkResponse};
 pub use comments::{CommentsCommand, CommentsDialog, CommentsEffect};
 pub use converter::{ConverterDialog, ConverterOptions, ConverterStart, ConverterView};
@@ -94,6 +96,9 @@ pub enum View {
     PodcastSearchResults,
     PodcastCategories,
     DownloadQueue,
+    AudiovaultMenu,
+    AudiovaultSearch,
+    AudiovaultResults,
     Player,
 }
 
@@ -121,6 +126,7 @@ pub struct Shell {
     conversions: converter::ConversionState,
     settings_window: settings_window::SettingsState,
     cookies: cookies::CookieState,
+    audiovault: audiovault::AudiovaultState,
     /// A Settings browser export runs.
     settings_cookie_export_running: bool,
 }
@@ -149,6 +155,7 @@ impl Shell {
             conversions: converter::ConversionState::default(),
             settings_window: settings_window::SettingsState::default(),
             cookies: cookies::CookieState::default(),
+            audiovault: audiovault::AudiovaultState::default(),
             settings_cookie_export_running: false,
         }
     }
@@ -322,6 +329,10 @@ impl Shell {
                 self.open_settings(ui);
                 return;
             }
+            "audiovault" => {
+                self.show_audiovault_menu(ui);
+                return;
+            }
             "file_converter" | "folder_converter" => {
                 self.show_converter(ui, item.id == "folder_converter");
                 return;
@@ -350,6 +361,10 @@ impl Shell {
             || self.podcast_action(ui, action_id)
             || self.download_action(ui, action_id)
             || self.settings_action(ui, action_id)
+            || (action_id == "open_audiovault" && {
+                self.show_audiovault_menu(ui);
+                true
+            })
     }
 
     /// An action chosen by its shortcut or from a menu (Windows

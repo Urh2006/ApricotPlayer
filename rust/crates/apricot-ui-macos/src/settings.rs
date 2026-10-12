@@ -1239,6 +1239,21 @@ impl SettingsWindow {
                 }
             }
             SettingsCommand::ChooseCookiesFile => self.choose_cookies_file(),
+            SettingsCommand::AudiovaultLogin => {
+                if let Err(error) = self.sync_all() {
+                    self.show_error(&error);
+                    return;
+                }
+                self.with_shell(|shell, ui| shell.audiovault_settings_login(ui));
+            }
+            SettingsCommand::AudiovaultLogout => {
+                self.with_shell(|shell, ui| shell.audiovault_settings_logout(ui));
+            }
+            SettingsCommand::AudiovaultRegister => {
+                let _ = apricot_platform::shell::open_url(
+                    apricot_platform::audiovault::AUDIOVAULT_REGISTER_URL,
+                );
+            }
             SettingsCommand::OpenYoutubeLoginProfile => {
                 if let Err(error) = self.sync_all() {
                     self.show_error(&error);

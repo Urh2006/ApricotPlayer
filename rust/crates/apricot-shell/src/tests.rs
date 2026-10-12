@@ -310,6 +310,13 @@ mod equalizer {
         }
         fn open_converter(&mut self, _dialog: crate::ConverterDialog) {}
         fn open_settings(&mut self) {}
+        fn audiovault_login(
+            &mut self,
+            _login: &crate::AudiovaultLogin,
+        ) -> Option<(String, String)> {
+            None
+        }
+        fn focus_list(&mut self) {}
         fn settings_cookie_source(&mut self, _path: &str, _browser_index: usize) {}
         fn open_action_finder(&mut self, _model: apricot_app::ActionFinderModel) {}
         fn show_conversion_progress(&mut self, _title: &str, _message: &str, _total: usize) {}
@@ -1029,5 +1036,18 @@ mod cookies {
         assert_eq!(announce.len(), 2, "{announce:?}");
         assert!(warning.is_none());
         let _ = std::fs::remove_dir_all(&folder);
+    }
+}
+
+mod audiovault {
+    use super::equalizer::Ui;
+
+    #[test]
+    fn audiovault_without_a_login_asks_for_one_and_stays_on_the_menu() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell.activate_action(&mut ui, "open_audiovault");
+        assert_eq!(shell.view(), crate::View::MainMenu);
+        assert!(ui.screens.is_empty());
     }
 }

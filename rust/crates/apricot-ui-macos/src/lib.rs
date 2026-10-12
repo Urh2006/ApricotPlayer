@@ -17,6 +17,8 @@ mod announce;
 #[cfg(target_os = "macos")]
 mod app;
 #[cfg(target_os = "macos")]
+mod audiovault_login;
+#[cfg(target_os = "macos")]
 mod bookmarks;
 #[cfg(target_os = "macos")]
 mod comments;

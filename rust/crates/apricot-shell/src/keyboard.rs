@@ -73,9 +73,10 @@ impl Shell {
         // buttons Ctrl and Alt shortcuts act on the selected result, while
         // plain keys stay with the control. Its result list takes every list
         // shortcut.
-        let search_field_focus =
-            matches!(self.view, View::Search | View::Results | View::Collection)
-                && focus != FocusKind::List;
+        let search_field_focus = matches!(
+            self.view,
+            View::Search | View::Results | View::Collection | View::AudiovaultSearch
+        ) && focus != FocusKind::List;
         let entry_focus =
             self.view == View::DirectLink || (search_field_focus && !(chord.control || chord.alt));
         let (scope, accepts_text) = if entry_focus {
@@ -138,7 +139,10 @@ const fn view_shortcut_scope(view: View) -> (ActionScope, bool) {
         | View::RssItems
         | View::PodcastSearchResults
         | View::PodcastCategories
-        | View::DownloadQueue => (ActionScope::List, false),
+        | View::DownloadQueue
+        | View::AudiovaultMenu
+        | View::AudiovaultSearch
+        | View::AudiovaultResults => (ActionScope::List, false),
         View::Player => (ActionScope::Player, false),
     }
 }
