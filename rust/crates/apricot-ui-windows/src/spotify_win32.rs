@@ -79,6 +79,8 @@ pub(super) struct SpotifyState {
     /// A new connection replaced the running session, whose end is not a
     /// disconnection the user needs to hear.
     replacing_session: bool,
+    /// The last automatic reconnection after a lost session (beta 6, 4a.1).
+    reconnected_at: Option<std::time::Instant>,
     /// The pending request for smart shuffle recommendations, when the last
     /// one started, and the tracks already recommended in this smart shuffle.
     smart_request: Option<SpotifyStamp>,
@@ -784,6 +786,12 @@ unsafe fn handle_event(window: HWND, event: SpotifyEvent) {
             let text = texts.text("spotify_disconnected").to_owned();
             let replaced = std::mem::take(&mut state.spotify.replacing_session);
             set_status(state, &text, !replaced);
+            // A session lost while idle (network change, sleep) connects
+            // again on its own, at most once a minute, so the account does
+            // not stay "not logged in" until a restart.
+            if !replaced && reconnect_due(&mut state.spotify.reconnected_at) {
+                autoconnect(window);
+            }
         }
         SpotifyEvent::Resolved { stamp, result } => {
             if state.spotify.resolve != Some(stamp) {
@@ -1213,6 +1221,15 @@ pub(super) unsafe fn shutdown(window: HWND) {
 
 /// At start-up the active account connects in the background, so its
 /// Connect device is there for the phone. Nothing is announced.
+/// Whether an automatic reconnection may start now; records it.
+fn reconnect_due(last: &mut Option<std::time::Instant>) -> bool {
+    let due = last.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(60));
+    if due {
+        *last = Some(std::time::Instant::now());
+    }
+    due
+}
+
 pub(super) unsafe fn autoconnect(window: HWND) {
     let accounts = accounts(window);
     let Some(key) = apricot_app::spotify::active_account(&accounts).map(|a| a.key.clone()) else {

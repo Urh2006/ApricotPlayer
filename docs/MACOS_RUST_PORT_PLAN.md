@@ -181,6 +181,11 @@ podporo in temi popravki skupaj (Urh, 12. 10. 2026).
    programa je vse delovalo. Najprej ugotovi, ali gre za napako (na primer
    izgubljena povezava ali žeton seje Spotify, ki se ne obnovi), nato jo
    popravi za obe platformi.
+   Stanje (12. 10. 2026): verjeten vzrok je, da se seja librespot med
+   mirovanjem prekine (omrežje, spanje), program pa je pove samo kot
+   "disconnected" in se ne poveže znova. Zdaj se na obeh platformah po
+   izgubljeni seji sam znova poveže z aktivnim računom (največ enkrat na
+   minuto). S pravim računom še ni preizkušeno.
 2. Kolekcija "More" na Windows dvakrat doda pot (glej M6, popravi v W1).
 3. **Liked songs brez smart shuffle.** Popravek Urha (12. 10. 2026):
    smart shuffle deluje, ko Liked songs odpre prek Library, ne pa prek

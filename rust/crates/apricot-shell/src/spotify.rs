@@ -120,6 +120,8 @@ pub(crate) struct SpotifyState {
     /// A new connection replaced the running session, whose end is not a
     /// disconnection the user needs to hear.
     replacing_session: bool,
+    /// The last automatic reconnection after a lost session (beta 6, 4a.1).
+    reconnected_at: Option<std::time::Instant>,
     /// The pending request for smart shuffle recommendations, when the
     /// last one started, and the tracks already recommended.
     smart_request: Option<SpotifyStamp>,
@@ -135,6 +137,15 @@ pub(crate) struct SpotifyState {
     pub(crate) browse: crate::spotify_lists::BrowseState,
     /// The rows of the open queue or device dialog.
     pub(crate) dialog_rows: crate::spotify_panels::DialogRows,
+}
+
+/// Whether an automatic reconnection may start now; records it.
+fn reconnect_due(last: &mut Option<std::time::Instant>) -> bool {
+    let due = last.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(60));
+    if due {
+        *last = Some(std::time::Instant::now());
+    }
+    due
 }
 
 /// Connects `key`, replacing the running session.
@@ -667,6 +678,12 @@ impl Shell {
             SpotifyEvent::Disconnected => {
                 let replaced = std::mem::take(&mut self.spotify.replacing_session);
                 ui.set_status(texts.text("spotify_disconnected"), !replaced);
+                // A session lost while idle (network change, sleep) connects
+                // again on its own, at most once a minute, so the account
+                // does not stay "not logged in" until a restart.
+                if !replaced && reconnect_due(&mut self.spotify.reconnected_at) {
+                    self.spotify_autoconnect();
+                }
             }
             SpotifyEvent::Resolved { stamp, result } => {
                 if self.spotify.resolve != Some(stamp) {
