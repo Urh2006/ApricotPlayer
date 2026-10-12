@@ -830,6 +830,7 @@ impl Shell {
         }
         ui.focus_primary_control();
         self.configure_subscription_timer(ui);
+        self.configure_app_update_timer(ui);
         self.check_subscriptions_if_due(ui);
         self.configure_rss_timer(ui);
         self.process_activations(ui);

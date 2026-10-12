@@ -1268,6 +1268,21 @@ impl SettingsWindow {
             }
             SettingsCommand::ExportBrowserCookies => self.export_browser_cookies(),
             SettingsCommand::SetDefaultPlayer => self.set_default_player(),
+            // Python `manual_ytdlp_update_check` applies the visible
+            // controls; `manual_app_update_check` also saves them.
+            SettingsCommand::CheckYtdlpUpdates | SettingsCommand::CheckAppUpdates => {
+                if let Err(error) = self.sync_all() {
+                    self.show_error(&error);
+                    return;
+                }
+                if command == SettingsCommand::CheckYtdlpUpdates {
+                    self.with_shell(|shell, ui| shell.manual_ytdlp_update_check(ui));
+                } else {
+                    self.with_shell(|shell, ui| {
+                        shell.start_app_update_check(ui, true, true, false);
+                    });
+                }
+            }
             // Python checks with the saved settings, without applying the
             // visible controls; the result is spoken while they stay open.
             SettingsCommand::CheckSubscriptions => {
@@ -1283,24 +1298,6 @@ impl SettingsWindow {
                     Some(Err(error)) => self.show_error(&error),
                     None => {}
                 }
-            }
-            _ => {
-                // The update checks arrive with unit M16.
-                let label = self
-                    .ivars()
-                    .controls
-                    .borrow()
-                    .iter()
-                    .find(|bound| bound.binding == SettingsBinding::Command(command))
-                    .and_then(|bound| match &bound.kind {
-                        ControlKind::Button(button) => Some(button.title().to_string()),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-                let message = self
-                    .with_shell(|shell, _| shell.settings_command_unavailable(&label))
-                    .unwrap_or_default();
-                self.announce(&message, true);
             }
         }
     }

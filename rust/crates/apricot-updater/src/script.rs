@@ -175,6 +175,111 @@ pub fn portable_zip_update_script(input: &UpdateScriptInput<'_>) -> String {
     lines.join("\n")
 }
 
+/// A single-quoted `sh` word.
+#[must_use]
+pub fn shell_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// The macOS counterpart of `portable_zip_update_script`, for `/bin/sh`:
+/// wait for the application to quit, check the package again, extract it
+/// with `ditto`, check the new bundle's signature, move the old bundle
+/// aside, put the new one in its place and start it. Any failure puts the
+/// old bundle back.
+#[must_use]
+pub fn macos_update_script(input: &UpdateScriptInput<'_>) -> String {
+    // `target_dir` is Contents/MacOS; the bundle is two folders up.
+    let bundle = input
+        .target_dir
+        .parent()
+        .and_then(Path::parent)
+        .unwrap_or(input.target_dir);
+    let mut lines = vec![
+        "#!/bin/sh".to_owned(),
+        format!("source={}", shell_literal(&text(input.downloaded_path))),
+        format!("bundle={}", shell_literal(&text(bundle))),
+        format!("log={}", shell_literal(&text(input.log_path))),
+        format!("pid={}", input.process_id),
+        format!("restart={}", u8::from(input.restart)),
+        format!(
+            "expected={}",
+            shell_literal(&input.expected_sha256.to_lowercase())
+        ),
+        format!("root={}", shell_literal(input.package.portable_root)),
+        format!("executable={}", shell_literal(input.package.executable)),
+        format!("relaunch={}", shell_literal(UPDATE_RELAUNCH_ARG)),
+    ];
+    lines.extend(
+        [
+            r#"log_line() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >> "$log"; }"#,
+            r#"mkdir -p "$(dirname "$log")""#,
+            r"log_line 'Starting ApricotPlayer macOS update'",
+            r#"log_line "Source: $source""#,
+            r#"log_line "Target bundle: $bundle""#,
+            "sleep 1",
+            "waited=0",
+            // Never 0 or negative: kill would reach a whole process group.
+            r#"if [ "$pid" -gt 1 ]; then"#,
+            r#"    while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 30 ]; do sleep 0.5; waited=$((waited + 1)); done"#,
+            r#"    if kill -0 "$pid" 2>/dev/null; then log_line 'ApricotPlayer did not exit; forcing shutdown'; kill -9 "$pid" 2>/dev/null; sleep 1; fi"#,
+            "fi",
+            r#"extract=$(mktemp -d "${TMPDIR:-/tmp}/apricotplayer-update.XXXXXX") || exit 1"#,
+            r#"backup="$bundle.update-backup-$$""#,
+            "fail() {",
+            r#"    log_line "macOS update failed: $1""#,
+            r#"    if [ -d "$backup" ]; then"#,
+            r#"        rm -rf "$bundle""#,
+            r#"        if mv "$backup" "$bundle"; then log_line 'Restored the previous version'; else log_line "Rollback kept the backup in $backup"; fi"#,
+            "    fi",
+            r#"    rm -rf "$extract""#,
+            "    exit 1",
+            "}",
+            r#"actual=$(shasum -a 256 "$source" | cut -d' ' -f1)"#,
+            r#"[ "$actual" = "$expected" ] || fail 'Update package changed after verification.'"#,
+            r#"ditto -x -k "$source" "$extract" || fail 'The update package could not be extracted.'"#,
+            r#"[ -f "$extract/$root/$executable" ] || fail "$executable was not found in the update package.""#,
+            r#"codesign --verify --deep --strict "$extract/$root" >/dev/null 2>&1 || fail 'The signature of the new version is not valid.'"#,
+            r#"xattr -dr com.apple.quarantine "$extract/$root" 2>/dev/null"#,
+            r#"mv "$bundle" "$backup" || fail 'The current version could not be moved aside.'"#,
+            r#"mv "$extract/$root" "$bundle" || fail 'The new version could not be put in place.'"#,
+            r#"rm -rf "$backup" "$extract""#,
+            r#"rm -f "$source""#,
+            r#"if [ "$restart" = 1 ]; then log_line 'Restarting ApricotPlayer'; open "$bundle" --args "$relaunch" || log_line 'Restart warning: open failed'; fi"#,
+            r"log_line 'Update complete'",
+            r#"rm -f "$0""#,
+        ]
+        .iter()
+        .map(|line| (*line).to_owned()),
+    );
+    lines.join("\n") + "\n"
+}
+
+/// Writes the macOS script and starts it with `/bin/sh`, detached from
+/// the application, which then quits.
+///
+/// # Errors
+/// The write or spawn error.
+pub fn launch_macos_update_script(script: &str) -> Result<PathBuf, String> {
+    let file = tempfile::Builder::new()
+        .prefix("apricotplayer-update-")
+        .suffix(".sh")
+        .tempfile()
+        .map_err(|error| error.to_string())?;
+    let (mut handle, path) = file.keep().map_err(|error| error.to_string())?;
+    handle
+        .write_all(script.as_bytes())
+        .map_err(|error| error.to_string())?;
+    drop(handle);
+    std::process::Command::new("/bin/sh")
+        .arg(&path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| path)
+        .map_err(|error| error.to_string())
+}
+
 /// Python `write_installer_update_script`, with the executable and uninstall
 /// display name of this build.
 #[must_use]
@@ -554,5 +659,94 @@ mod tests {
         assert!(text.starts_with("Older update log entries were truncated.\naaa"));
         assert!(text.ends_with("a2026-09-29T18:00:00.000000+00:00 next\n"));
         assert_eq!(text.len(), 41 + 512 * 1024 + 38);
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_tests {
+    use std::{fs, path::Path, process::Command};
+
+    use super::{UpdateScriptInput, macos_update_script, shell_literal};
+    use crate::release::MACOS_BETA_PACKAGE;
+
+    fn bundle(root: &Path, marker: &str) -> std::path::PathBuf {
+        let app = root.join(MACOS_BETA_PACKAGE.portable_root);
+        let macos = app.join("Contents/MacOS");
+        fs::create_dir_all(&macos).expect("bundle");
+        fs::write(
+            app.join("Contents/Info.plist"),
+            format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>\
+                 <key>CFBundleIdentifier</key><string>com.apricotplayer.test</string>\
+                 <key>CFBundleExecutable</key><string>ApricotPlayer2Beta</string>\
+                 <key>CFBundleShortVersionString</key><string>{marker}</string>\
+                 </dict></plist>\n"
+            ),
+        )
+        .expect("plist");
+        fs::copy("/usr/bin/true", macos.join("ApricotPlayer2Beta")).expect("executable");
+        assert!(
+            Command::new("codesign")
+                .args(["--force", "--sign", "-"])
+                .arg(&app)
+                .status()
+                .expect("codesign")
+                .success()
+        );
+        app
+    }
+
+    #[test]
+    fn quoting_keeps_single_quotes() {
+        assert_eq!(shell_literal("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn the_script_replaces_the_bundle_and_keeps_it_on_failure() {
+        let folder = tempfile::tempdir().expect("folder");
+        let installed = bundle(&folder.path().join("Applications"), "old");
+        let new = bundle(&folder.path().join("new"), "new");
+        let zip = folder.path().join("ApricotPlayer2Beta-macos-arm64.zip");
+        assert!(
+            Command::new("ditto")
+                .args(["-c", "-k", "--keepParent"])
+                .arg(&new)
+                .arg(&zip)
+                .status()
+                .expect("ditto")
+                .success()
+        );
+        let sha = crate::package::file_sha256(&zip).expect("sha");
+        let log = folder.path().join("updater.log");
+        let run = |expected: &str| {
+            let input = UpdateScriptInput {
+                package: &MACOS_BETA_PACKAGE,
+                downloaded_path: &zip,
+                target_dir: &installed.join("Contents/MacOS"),
+                process_id: 0,
+                log_path: &log,
+                restart: false,
+                expected_sha256: expected,
+            };
+            let script = folder.path().join("update.sh");
+            fs::write(&script, macos_update_script(&input)).expect("script");
+            Command::new("/bin/sh").arg(&script).status().expect("sh")
+        };
+        let plist = || fs::read_to_string(installed.join("Contents/Info.plist")).expect("plist");
+        // A changed package leaves the installed version alone.
+        assert!(!run(&"0".repeat(64)).success());
+        assert!(plist().contains("old"));
+        assert!(run(&sha).success());
+        assert!(
+            plist().contains("new"),
+            "{}",
+            fs::read_to_string(&log).unwrap()
+        );
+        assert!(!zip.exists());
+        let leftovers: Vec<_> = fs::read_dir(installed.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(leftovers.len(), 1, "{leftovers:?}");
     }
 }

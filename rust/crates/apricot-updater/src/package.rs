@@ -189,7 +189,14 @@ pub fn validate_update_package(package: &PackageNames, path: &Path) -> Result<()
         let entries = read_zip_entries(path)
             .map_err(|_| "downloaded portable update is not a valid zip file".to_owned())?;
         validate_zip_entries(&entries)?;
-        return validate_portable_layout(package, &entries);
+        return if package.is_app_bundle() {
+            validate_bundle_layout(package, &entries)
+        } else {
+            validate_portable_layout(package, &entries)
+        };
+    }
+    if package.is_app_bundle() {
+        return Err("downloaded update is not a valid package".to_owned());
     }
     let mut header = [0_u8; 2];
     let mut file = File::open(path).map_err(|error| error.to_string())?;
@@ -368,6 +375,40 @@ const PORTABLE_ITEMS: [&str; 7] = [
     "package-manifest.json",
 ];
 
+/// A macOS package: one `.app` folder with the executable, its tools and
+/// nothing beside it.
+fn validate_bundle_layout(package: &PackageNames, entries: &[ZipEntry]) -> Result<(), String> {
+    let root = package.portable_root;
+    let names: Vec<String> = entries
+        .iter()
+        .map(|entry| entry.name.replace('\\', "/").trim_matches('/').to_owned())
+        .collect();
+    if names
+        .iter()
+        .any(|name| name != root && !name.starts_with(&format!("{root}/")))
+    {
+        return Err("downloaded update contains an unexpected file layout".to_owned());
+    }
+    let executable = format!("{root}/{}", package.executable);
+    if !names.contains(&executable) {
+        return Err(format!("downloaded update does not contain {executable}"));
+    }
+    for required in [
+        "Contents/Info.plist",
+        "Contents/MacOS/components",
+        "Contents/MacOS/mpv",
+    ] {
+        let path = format!("{root}/{required}");
+        if !names
+            .iter()
+            .any(|name| *name == path || name.starts_with(&format!("{path}/")))
+        {
+            return Err(format!("downloaded update does not contain {path}"));
+        }
+    }
+    Ok(())
+}
+
 fn validate_portable_layout(package: &PackageNames, entries: &[ZipEntry]) -> Result<(), String> {
     let root = package.portable_root.to_lowercase();
     let executable = format!("{root}/{}", package.executable.to_lowercase());
@@ -525,6 +566,41 @@ mod tests {
             verify_release_asset_file(&asset, &path),
             Err("downloaded file checksum did not match the published SHA-256 digest".to_owned())
         );
+    }
+
+    #[test]
+    fn macos_packages_need_one_bundle_with_its_tools() {
+        use crate::release::MACOS_BETA_PACKAGE;
+        let folder = tempfile::tempdir().expect("folder");
+        let path = folder.path().join("ApricotPlayer2Beta-macos-arm64.zip");
+        let big = vec![b'M'; 1024 * 1024];
+        let root = "ApricotPlayer 2 Beta.app";
+        let member = |rest: &str| format!("{root}/{rest}");
+        let good = [
+            member("Contents/Info.plist"),
+            member("Contents/MacOS/ApricotPlayer2Beta"),
+            member("Contents/MacOS/components/yt-dlp"),
+            member("Contents/MacOS/mpv/libmpv.2.dylib"),
+        ];
+        let entries: Vec<(&str, &[u8])> = good
+            .iter()
+            .map(|name| (name.as_str(), big.as_slice()))
+            .collect();
+        fs::write(&path, zip_bytes(&entries)).expect("zip");
+        assert_eq!(validate_update_package(&MACOS_BETA_PACKAGE, &path), Ok(()));
+        let mut odd = entries.clone();
+        odd.push(("evil.dylib", b"x"));
+        fs::write(&path, zip_bytes(&odd)).expect("zip");
+        assert_eq!(
+            validate_update_package(&MACOS_BETA_PACKAGE, &path),
+            Err("downloaded update contains an unexpected file layout".to_owned())
+        );
+        fs::write(&path, zip_bytes(&entries[..3])).expect("zip");
+        assert!(validate_update_package(&MACOS_BETA_PACKAGE, &path).is_err());
+        // A macOS package is never an installer.
+        let exe = folder.path().join("ApricotPlayer2BetaSetup.exe");
+        fs::write(&exe, &big).expect("exe");
+        assert!(validate_update_package(&MACOS_BETA_PACKAGE, &exe).is_err());
     }
 
     #[test]

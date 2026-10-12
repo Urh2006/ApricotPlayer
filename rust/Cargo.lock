@@ -209,6 +209,7 @@ dependencies = [
  "apricot-playback",
  "apricot-spotify",
  "apricot-storage",
+ "apricot-updater",
  "chrono",
  "serde_json",
  "url",

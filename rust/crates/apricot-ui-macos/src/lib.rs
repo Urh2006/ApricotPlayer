@@ -64,6 +64,8 @@ mod status_item;
 #[cfg(target_os = "macos")]
 mod transcript;
 #[cfg(target_os = "macos")]
+mod update_prompt;
+#[cfg(target_os = "macos")]
 mod video;
 #[cfg(target_os = "macos")]
 mod window;

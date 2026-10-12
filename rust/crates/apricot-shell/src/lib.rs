@@ -43,6 +43,7 @@ mod transcript_loader;
 mod trending;
 mod type_ahead;
 mod ui;
+mod updates;
 mod youtube;
 
 pub use audiovault::AudiovaultLogin;
@@ -74,6 +75,7 @@ pub use spotify_panels::{
     SpotifyDialogAction, SpotifyDialogKind, SpotifyDialogRow, SpotifyListDialog,
 };
 pub use transcript::{TranscriptButton, TranscriptDialog, TranscriptRows};
+pub use updates::UpdatePrompt;
 
 pub use main_menu::{MainMenuSelection, last_activated_index, preserved_index};
 pub use type_ahead::TypeAhead;
@@ -144,6 +146,7 @@ pub struct Shell {
     conversions: converter::ConversionState,
     settings_window: settings_window::SettingsState,
     subscriptions: subscriptions::SubscriptionState,
+    updates: updates::UpdateState,
     cookies: cookies::CookieState,
     audiovault: audiovault::AudiovaultState,
     spotify: spotify::SpotifyState,
@@ -175,6 +178,7 @@ impl Shell {
             conversions: converter::ConversionState::default(),
             settings_window: settings_window::SettingsState::default(),
             subscriptions: subscriptions::SubscriptionState::default(),
+            updates: updates::UpdateState::default(),
             cookies: cookies::CookieState::default(),
             audiovault: audiovault::AudiovaultState::default(),
             spotify: spotify::SpotifyState::default(),
@@ -225,6 +229,8 @@ impl Shell {
         self.configure_subscription_timer(ui);
         self.check_subscriptions_if_due(ui);
         self.start_rss(ui);
+        self.configure_app_update_timer(ui);
+        self.schedule_startup_update_checks(ui);
         if self.spotify.service_running() {
             ui.set_background_polling(true);
         }
@@ -311,6 +317,10 @@ impl Shell {
         match item.id {
             "exit" => {
                 ui.exit();
+                return;
+            }
+            "app_update" => {
+                self.open_pending_app_update(ui);
                 return;
             }
             "play_file" => {

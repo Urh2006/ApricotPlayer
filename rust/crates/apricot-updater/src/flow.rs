@@ -30,7 +30,18 @@ pub const YTDLP_LATEST_RELEASE_API_URL: &str =
     "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest";
 /// Python `YTDLP_WHEEL_MAX_BYTES`, also the limit for `yt-dlp.exe`.
 pub const YTDLP_MAX_BYTES: u64 = 64 * 1024 * 1024;
-pub const YTDLP_ASSET_NAME: &str = "yt-dlp.exe";
+/// The standalone yt-dlp of this platform in the release and its name in
+/// the components folder.
+pub const YTDLP_ASSET_NAME: &str = if cfg!(target_os = "macos") {
+    "yt-dlp_macos"
+} else {
+    "yt-dlp.exe"
+};
+pub const YTDLP_INSTALLED_NAME: &str = if cfg!(target_os = "macos") {
+    "yt-dlp"
+} else {
+    "yt-dlp.exe"
+};
 const YTDLP_CHECKSUMS_ASSET_NAME: &str = "SHA2-256SUMS";
 
 /// Hosts GitHub metadata and downloads may come from.
@@ -316,7 +327,7 @@ pub fn update_ytdlp_component(
         .assets
         .iter()
         .find(|asset| asset.name == YTDLP_ASSET_NAME)
-        .ok_or_else(|| "Could not find yt-dlp.exe in the latest yt-dlp release".to_owned())?;
+        .ok_or_else(|| format!("Could not find {YTDLP_ASSET_NAME} in the latest yt-dlp release"))?;
     if asset.browser_download_url.is_empty() {
         return Err("yt-dlp download URL is empty".to_owned());
     }
@@ -355,24 +366,40 @@ pub fn update_ytdlp_component(
         );
     }
     verify_file_sha256(&downloaded, &digest)?;
-    let mut header = [0_u8; 2];
+    let mut header = [0_u8; 4];
     fs::File::open(&downloaded)
         .and_then(|mut file| file.read_exact(&mut header))
         .map_err(|error| error.to_string())?;
-    if &header != b"MZ" {
-        return Err("downloaded yt-dlp is not a Windows executable".to_owned());
+    if !is_platform_executable(header) {
+        return Err(if cfg!(target_os = "macos") {
+            "downloaded yt-dlp is not a macOS program".to_owned()
+        } else {
+            "downloaded yt-dlp is not a Windows executable".to_owned()
+        });
     }
-    install_component(&downloaded, &components_dir.join(YTDLP_ASSET_NAME))?;
+    install_component(&downloaded, &components_dir.join(YTDLP_INSTALLED_NAME))?;
     Ok(YtdlpUpdate::Updated(latest))
 }
 
-/// The `SHA2-256SUMS` line for `yt-dlp.exe` when the API has no digest.
+/// A Windows executable (`MZ`), or on macOS a Mach-O program (64-bit or
+/// universal).
+fn is_platform_executable(header: [u8; 4]) -> bool {
+    if cfg!(target_os = "macos") {
+        matches!(header, [0xcf, 0xfa, 0xed, 0xfe] | [0xca, 0xfe, 0xba, 0xbe])
+    } else {
+        header.starts_with(b"MZ")
+    }
+}
+
+/// The `SHA2-256SUMS` line for the yt-dlp program when the API has no
+/// digest.
 fn published_checksum(
     transport: &mut dyn UpdateTransport,
     release: &Release,
     folder: &Path,
 ) -> Result<String, String> {
-    let missing = || "GitHub did not publish a valid SHA-256 digest for yt-dlp.exe".to_owned();
+    let missing =
+        || format!("GitHub did not publish a valid SHA-256 digest for {YTDLP_ASSET_NAME}");
     let asset = release
         .assets
         .iter()
@@ -397,6 +424,21 @@ fn published_checksum(
         .ok_or_else(missing)
 }
 
+/// A copied program keeps its executable permission outside Windows.
+#[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))] // Same signature on every platform.
+fn make_executable(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
 /// Python's rename-aside replacement of the component package: the old copy
 /// comes back when the new one cannot be put in place.
 fn install_component(source: &Path, target: &Path) -> Result<(), String> {
@@ -410,7 +452,8 @@ fn install_component(source: &Path, target: &Path) -> Result<(), String> {
     } else {
         false
     };
-    if let Err(error) = fs::copy(source, target) {
+    let copied = fs::copy(source, target).and_then(|_| make_executable(target));
+    if let Err(error) = copied {
         let _ = fs::remove_file(target);
         if renamed_old && old.exists() {
             let _ = fs::rename(&old, target);
@@ -635,21 +678,28 @@ mod tests {
     fn ytdlp_update_replaces_the_component_only_when_newer_and_verified() {
         let folder = tempfile::tempdir().expect("folder");
         let components = folder.path().join("components");
-        let exe = b"MZ new yt-dlp".to_vec();
-        let url = "https://github.com/yt-dlp/yt-dlp/releases/download/2026.09.20/yt-dlp.exe";
+        let header: &[u8] = if cfg!(target_os = "macos") {
+            &[0xcf, 0xfa, 0xed, 0xfe]
+        } else {
+            b"MZ"
+        };
+        let program = |text: &[u8]| [header, text].concat();
+        let exe = program(b" new yt-dlp");
+        let (asset, installed) = (super::YTDLP_ASSET_NAME, super::YTDLP_INSTALLED_NAME);
+        let url = &format!("https://github.com/yt-dlp/yt-dlp/releases/download/2026.09.20/{asset}");
         let sums = "https://github.com/yt-dlp/yt-dlp/releases/download/2026.09.20/SHA2-256SUMS";
         let mut github = FakeGithub::default();
         github.json.insert(
             super::YTDLP_LATEST_RELEASE_API_URL.to_owned(),
             json!({"tag_name": "2026.09.20", "assets": [
-                {"name": "yt-dlp.exe", "size": exe.len(), "browser_download_url": url},
+                {"name": asset, "size": exe.len(), "browser_download_url": url},
                 {"name": "SHA2-256SUMS", "browser_download_url": sums},
             ]}),
         );
-        github.files.insert(url.to_owned(), exe.clone());
+        github.files.insert(url.clone(), exe.clone());
         github.files.insert(
             sums.to_owned(),
-            format!("{}  yt-dlp\n{}  yt-dlp.exe\n", "0".repeat(64), sha(&exe)).into_bytes(),
+            format!("{}  yt-dlp\n{}  {asset}\n", "0".repeat(64), sha(&exe)).into_bytes(),
         );
         let mut updating = 0;
         assert_eq!(
@@ -659,19 +709,19 @@ mod tests {
         );
         assert_eq!(updating, 0);
         fs::create_dir_all(&components).expect("components");
-        fs::write(components.join("yt-dlp.exe"), b"MZ old").expect("old");
+        fs::write(components.join(installed), program(b" old")).expect("old");
         assert_eq!(
             update_ytdlp_component(&mut github, "2026.08.19", &components, &mut || updating +=
                 1),
             Ok(YtdlpUpdate::Updated("2026.09.20".to_owned()))
         );
         assert_eq!(updating, 1);
-        assert_eq!(fs::read(components.join("yt-dlp.exe")).expect("new"), exe);
+        assert_eq!(fs::read(components.join(installed)).expect("new"), exe);
         assert!(!components.join("yt-dlp.exe.old").exists());
 
-        github.files.insert(url.to_owned(), b"MZ tampered".to_vec());
+        github.files.insert(url.clone(), program(b" tampered"));
         let result = update_ytdlp_component(&mut github, "2026.08.19", &components, &mut || {});
         assert!(result.is_err());
-        assert_eq!(fs::read(components.join("yt-dlp.exe")).expect("kept"), exe);
+        assert_eq!(fs::read(components.join(installed)).expect("kept"), exe);
     }
 }

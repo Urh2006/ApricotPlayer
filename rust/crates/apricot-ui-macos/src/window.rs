@@ -51,6 +51,7 @@ pub struct ControllerIvars {
     poll_timer: RefCell<Option<Retained<NSTimer>>>,
     rss_timer: RefCell<Option<Retained<NSTimer>>>,
     subscription_timer: RefCell<Option<Retained<NSTimer>>>,
+    app_update_timer: RefCell<Option<Retained<NSTimer>>>,
     /// Windows `tray_icon_added`: the menu bar item.
     status_item: RefCell<Option<crate::status_item::StatusItem>>,
     download_progress: RefCell<Option<Retained<crate::download_progress::ProgressWindow>>>,
@@ -304,6 +305,24 @@ define_class!(
         }
 
         /// Windows `RSS_REFRESH_TIMER_ID`.
+        /// Windows `APP_UPDATE_TIMER_ID`.
+        #[unsafe(method(appUpdateTimer:))]
+        fn app_update_timer(&self, _timer: Option<&AnyObject>) {
+            self.with_shell(|shell, ui| shell.app_update_timer_fired(ui));
+        }
+
+        /// Windows `YTDLP_STARTUP_TIMER_ID`.
+        #[unsafe(method(startupYtdlpCheck:))]
+        fn startup_ytdlp_check(&self, _sender: Option<&AnyObject>) {
+            self.with_shell(|shell, ui| shell.startup_ytdlp_update_check(ui));
+        }
+
+        /// Windows `APP_UPDATE_STARTUP_TIMER_ID`.
+        #[unsafe(method(startupAppCheck:))]
+        fn startup_app_check(&self, _sender: Option<&AnyObject>) {
+            self.with_shell(|shell, ui| shell.startup_app_update_check(ui));
+        }
+
         /// Windows `SUBSCRIPTION_TIMER_ID`.
         #[unsafe(method(subscriptionTimer:))]
         fn subscription_timer(&self, _timer: Option<&AnyObject>) {
@@ -366,6 +385,7 @@ impl MainWindowController {
             poll_timer: RefCell::new(None),
             rss_timer: RefCell::new(None),
             subscription_timer: RefCell::new(None),
+            app_update_timer: RefCell::new(None),
             status_item: RefCell::new(None),
             download_progress: RefCell::new(None),
             held_key: Cell::new(None),
@@ -1094,6 +1114,22 @@ impl MainWindowController {
                 self.schedule_modal_self_test_keys_after(1.0);
                 self.with_shell(|shell, ui| shell.spotify_queue_dialog_self_test(ui));
                 "Spotify queue dialog"
+            }
+            index if std::env::var("APRICOT_MACOS_SELF_TEST_KIND").as_deref() == Ok("updates") => {
+                match index {
+                    0 => {
+                        self.with_shell(|shell, ui| shell.manual_ytdlp_update_check(ui));
+                        "Check yt-dlp updates"
+                    }
+                    41 => {
+                        self.with_shell(|shell, ui| {
+                            shell.start_app_update_check(ui, true, true, false);
+                        });
+                        "Check app updates"
+                    }
+                    1..=40 | 42..=50 => "waiting",
+                    _ => return false,
+                }
             }
             index
                 if std::env::var("APRICOT_MACOS_SELF_TEST_KIND").as_deref() == Ok("background") =>
@@ -2251,6 +2287,52 @@ impl ShellUi for MacUi<'_> {
         };
         run_in_modal_loops(&subscriptions);
         *timer = Some(subscriptions);
+    }
+
+    fn set_app_update_timer(&mut self, interval_seconds: Option<f64>) {
+        let mut timer = self.controller.ivars().app_update_timer.borrow_mut();
+        if let Some(timer) = timer.take() {
+            timer.invalidate();
+        }
+        let Some(interval) = interval_seconds else {
+            return;
+        };
+        // SAFETY: the controller implements `appUpdateTimer:` and outlives
+        // the timer, which is invalidated when it is replaced.
+        let updates = unsafe {
+            NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
+                interval,
+                self.controller.as_ref(),
+                sel!(appUpdateTimer:),
+                None,
+                true,
+            )
+        };
+        run_in_modal_loops(&updates);
+        *timer = Some(updates);
+    }
+
+    fn schedule_startup_update_checks(&mut self, ytdlp: Option<f64>, app: Option<f64>) {
+        for (delay, selector) in [
+            (ytdlp, sel!(startupYtdlpCheck:)),
+            (app, sel!(startupAppCheck:)),
+        ] {
+            if let Some(delay) = delay {
+                // SAFETY: both selectors exist on the controller.
+                unsafe {
+                    let _: () = msg_send![
+                        self.controller,
+                        performSelector: selector,
+                        withObject: Option::<&AnyObject>::None,
+                        afterDelay: delay
+                    ];
+                }
+            }
+        }
+    }
+
+    fn update_prompt(&mut self, prompt: &apricot_shell::UpdatePrompt) -> bool {
+        crate::update_prompt::run(self.controller.mtm(), prompt)
     }
 
     fn show_system_notification(&mut self, title: &str, message: &str) {

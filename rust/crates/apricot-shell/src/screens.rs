@@ -224,7 +224,8 @@ impl Shell {
         let chapters = self.poll_external_chapters(ui);
         let bpm = self.poll_bpm_analyses(ui);
         let edits = self.poll_edit_saves(ui);
-        let podcasts = self.poll_podcast_work(ui) | self.poll_subscription_check(ui);
+        let podcasts =
+            self.poll_podcast_work(ui) | self.poll_subscription_check(ui) | self.poll_updates(ui);
         let downloads = self.poll_downloads(ui) | self.poll_conversions(ui);
         let cookies =
             self.poll_cookie_events(ui) | self.poll_audiovault(ui) | self.poll_spotify(ui);

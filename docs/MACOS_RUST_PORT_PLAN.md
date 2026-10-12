@@ -182,14 +182,19 @@ podporo in temi popravki skupaj (Urh, 12. 10. 2026).
    izgubljena povezava ali žeton seje Spotify, ki se ne obnovi), nato jo
    popravi za obe platformi.
 2. Kolekcija "More" na Windows dvakrat doda pot (glej M6, popravi v W1).
-3. **Liked songs brez smart shuffle.** V Liked songs Shift+S preklaplja samo
-   shuffle vklop in izklop, drugje tudi smart shuffle (koda pozna smart
-   shuffle samo za konteksta `spotify:playlist:`). Preveri in popravi.
+3. **Liked songs brez smart shuffle.** Popravek Urha (12. 10. 2026):
+   smart shuffle deluje, ko Liked songs odpre prek Library, ne pa prek
+   vrstice Liked songs v Spotify meniju (tam samo shuffle vklop in izklop).
+   Vrstica v meniju naj odpre natanko isti seznam kot Liked songs v
+   Library (isti vir, isti kontekst), ne posebnega Apricotovega seznama.
+   Obe platformi.
 4. **Pitch in hitrost se ohranita med predmeti.** Kot glasnost in bass
    boost naj se pitch in hitrost ohranita, ko z Escape zapustim predvajalnik
    in predvajam nekaj drugega; na privzeto se vrneta samo ob izrecnem
-   zaprtju predvajalnika (Close). Pri prev/next se pitch že ohrani. Obe
-   platformi.
+   zaprtju predvajalnika (Close). Pri prev/next se pitch že ohrani. Enako
+   naj se ohrani način shuffle (tudi Spotify shuffle in smart shuffle), ko
+   je vklopljeno predvajanje v ozadju in predvajalnik ni zaprt z gumbom
+   Close. Obe platformi.
 5. **Izbira več skladb v Spotifyju za dodajanje na seznam.** Predlagaj
    sistem pred implementacijo (na primer Ctrl+A izbere vse rezultate, nato
    izbira seznama) in opozorilo, ko je skladba že na seznamu, da ne nastanejo
@@ -991,3 +996,34 @@ obvestila, odpiranje iz Finderja, zagon ob prijavi, privzeti predvajalnik).
 - Preverjeno: gradnja, podpis, DMG se priklopi s paketom in bližnjico,
   zapakiran program s praznim PATH predvaja zvočno datoteko z
   vgrajenim libmpv (lsof: 50 knjižnic iz paketa, 0 iz Homebrew).
+
+### M16: posodobitve na Macu (12. 10. 2026)
+
+- `apricot-shell/src/updates.rs` (Windows `start_ytdlp_update_check`,
+  `start_app_update_check`, `offer_app_update`, `begin_app_update_install`,
+  `finish_app_update_install`): preverjanje ob zagonu (yt-dlp po 3,5 s,
+  program po 5,5 s), časovnik za program (0,5 do 24 ur), ročna preverjanja
+  v nastavitvah, vrstica "Update available" v glavnem meniju, obvestilo v
+  ozadju, okno "Update available" (besedilo sprememb s fokusom na vrhu,
+  Update now, Skip this version z Escape), napredek prenosa, preskočena
+  različica in dnevnik `updater.log`.
+- Posodabljalnik pozna paket za Mac (`ApricotPlayer2Beta-macos-arm64.zip`
+  z enim paketom `.app`, brez namestitvenega programa) in yt-dlp za Mac
+  (`yt-dlp_macos` iz uradne izdaje, preverjen SHA-256 in Mach-O glava,
+  shranjen kot `components/yt-dlp` z dovoljenjem za zagon).
+- Namestitev: skripta `/bin/sh` počaka, da se program zapre, znova preveri
+  SHA-256, razširi zip z `ditto`, preveri podpis novega paketa, odmakne
+  stari paket, postavi novega in ga zažene z `--updated-relaunch`; ob
+  napaki vrne stari paket. Iz razvojne gradnje izven paketa namestitve ne
+  zažene.
+- Za izdajo beta 6: različica v `Cargo.toml` mora biti 2.0.0-beta.6, izdaja
+  na GitHubu mora poleg Windows sredstev imeti
+  `ApricotPlayer2Beta-macos-arm64.zip` (posodobitve) in DMG (prva
+  namestitev).
+- Preverjeno: enotni testi (izbira sredstva in postavitev zipa za Mac,
+  posodobitev yt-dlp, skripta zamenja paket in ob spremenjenem paketu
+  pusti starega) ter celoten preizkus z zapakiranim programom in lokalnim
+  virom izdaj: ob zagonu se je odprlo okno "Update available" s fokusom na
+  besedilu sprememb, klik na Update now je prenesel in preveril paket,
+  program se je zaprl, skripta je zamenjala paket in ga znova zagnala.
+  Ročno preverjanje yt-dlp proti GitHubu pove, da je 2026.08.19 najnovejši.

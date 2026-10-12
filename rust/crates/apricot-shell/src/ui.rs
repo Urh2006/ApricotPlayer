@@ -322,6 +322,20 @@ pub trait ShellUi {
     /// `None` stops it.
     fn set_subscription_timer(&mut self, interval_seconds: Option<f64>);
 
+    /// Windows `APP_UPDATE_TIMER_ID`: calls
+    /// [`crate::Shell::app_update_timer_fired`] every `interval_seconds`;
+    /// `None` stops it.
+    fn set_app_update_timer(&mut self, interval_seconds: Option<f64>);
+
+    /// Windows `YTDLP_STARTUP_TIMER_ID` and `APP_UPDATE_STARTUP_TIMER_ID`:
+    /// calls [`crate::Shell::startup_ytdlp_update_check`] and
+    /// [`crate::Shell::startup_app_update_check`] once after these delays.
+    fn schedule_startup_update_checks(&mut self, ytdlp: Option<f64>, app: Option<f64>);
+
+    /// Windows `show_update_prompt`: `true` for Update now; Skip this
+    /// version, Escape and closing skip. Focus returns where it was.
+    fn update_prompt(&mut self, prompt: &crate::UpdatePrompt) -> bool;
+
     /// Windows `show_tray_notification`: a system notification with
     /// `title` and `message`.
     fn show_system_notification(&mut self, title: &str, message: &str);

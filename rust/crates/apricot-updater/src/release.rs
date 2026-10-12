@@ -304,12 +304,32 @@ pub const STABLE_PACKAGE: PackageNames = PackageNames {
     display_name: "ApricotPlayer",
 };
 
-/// This build's package names.
-pub const APP_PACKAGE: PackageNames = if cfg!(feature = "stable-identity") {
-    STABLE_PACKAGE
-} else {
-    RUST_BETA_PACKAGE
+/// The macOS beta: a zip of the application bundle, with no installer.
+pub const MACOS_BETA_PACKAGE: PackageNames = PackageNames {
+    installer: "",
+    portable: &["ApricotPlayer2Beta-macos-arm64.zip"],
+    portable_root: "ApricotPlayer 2 Beta.app",
+    executable: "Contents/MacOS/ApricotPlayer2Beta",
+    display_name: "ApricotPlayer 2 Beta",
 };
+
+/// `ApricotPlayer` 2.0 on macOS.
+pub const MACOS_STABLE_PACKAGE: PackageNames = PackageNames {
+    installer: "",
+    portable: &["ApricotPlayer-macos-arm64.zip"],
+    portable_root: "ApricotPlayer.app",
+    executable: "Contents/MacOS/ApricotPlayer",
+    display_name: "ApricotPlayer",
+};
+
+/// This build's package names.
+pub const APP_PACKAGE: PackageNames =
+    match (cfg!(target_os = "macos"), cfg!(feature = "stable-identity")) {
+        (true, true) => MACOS_STABLE_PACKAGE,
+        (true, false) => MACOS_BETA_PACKAGE,
+        (false, true) => STABLE_PACKAGE,
+        (false, false) => RUST_BETA_PACKAGE,
+    };
 
 impl PackageNames {
     /// Python `find_release_asset`.
@@ -327,6 +347,7 @@ impl PackageNames {
             preferred.extend(self.portable);
             preferred.push(self.installer);
         }
+        preferred.retain(|name| !name.is_empty());
         preferred
             .into_iter()
             .find_map(|name| release.assets.iter().find(|asset| asset.name == name))
@@ -343,7 +364,9 @@ impl PackageNames {
             .next()
             .unwrap_or_default()
             .to_owned();
-        if name == self.installer || self.portable.contains(&name.as_str()) {
+        if (!self.installer.is_empty() && name == self.installer)
+            || self.portable.contains(&name.as_str())
+        {
             Ok(name)
         } else {
             let shown = if name.is_empty() { "missing" } else { &name };
@@ -351,13 +374,23 @@ impl PackageNames {
         }
     }
 
+    /// A macOS package, a zip of the application bundle.
+    #[must_use]
+    pub fn is_app_bundle(&self) -> bool {
+        std::path::Path::new(self.portable_root)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("app"))
+    }
+
     /// Python `is_installer_asset`.
     #[must_use]
     pub fn is_installer_asset(&self, name: &str) -> bool {
         let name = file_name(name).to_lowercase();
-        name == self.installer.to_lowercase()
-            || name.contains("setup")
-            || name.contains("installer")
+        // A macOS package has no installer.
+        !self.installer.is_empty()
+            && (name == self.installer.to_lowercase()
+                || name.contains("setup")
+                || name.contains("installer"))
     }
 
     /// Python `is_portable_zip_asset`.
