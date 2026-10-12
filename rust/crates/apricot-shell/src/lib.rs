@@ -11,6 +11,7 @@
 mod bookmarks;
 mod collections;
 mod comments;
+mod converter;
 mod download_work;
 mod downloads;
 mod equalizer_dialog;
@@ -39,6 +40,7 @@ mod youtube;
 
 pub use bookmarks::{BookmarkDialog, BookmarkEntry, BookmarkRequest, BookmarkResponse};
 pub use comments::{CommentsCommand, CommentsDialog, CommentsEffect};
+pub use converter::{ConverterDialog, ConverterOptions, ConverterStart, ConverterView};
 pub use downloads::{DownloadProgress, safe_path_component};
 pub use equalizer_dialog::{EQUALIZER_BUTTONS, EqualizerButton, EqualizerLabels, EqualizerView};
 pub use keyboard::{FocusKind, KeyRoute};
@@ -109,6 +111,7 @@ pub struct Shell {
     playlists: playlists::PlaylistState,
     podcasts: podcasts::PodcastState,
     downloads: downloads::DownloadState,
+    conversions: converter::ConversionState,
 }
 
 impl Shell {
@@ -132,6 +135,7 @@ impl Shell {
             playlists: playlists::PlaylistState::default(),
             podcasts: podcasts::PodcastState::default(),
             downloads: downloads::DownloadState::default(),
+            conversions: converter::ConversionState::default(),
         }
     }
 
@@ -297,6 +301,10 @@ impl Shell {
             }
             "current_downloads" => {
                 self.show_download_queue(ui);
+                return;
+            }
+            "file_converter" | "folder_converter" => {
+                self.show_converter(ui, item.id == "folder_converter");
                 return;
             }
             "direct_link" => {

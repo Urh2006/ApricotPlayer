@@ -214,7 +214,7 @@ impl Shell {
         let bpm = self.poll_bpm_analyses(ui);
         let edits = self.poll_edit_saves(ui);
         let podcasts = self.poll_podcast_work(ui);
-        let downloads = self.poll_downloads(ui);
+        let downloads = self.poll_downloads(ui) | self.poll_conversions(ui);
         youtube || related || folder || device || chapters || bpm || edits || podcasts || downloads
     }
 

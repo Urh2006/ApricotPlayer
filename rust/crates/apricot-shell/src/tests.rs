@@ -308,6 +308,10 @@ mod equalizer {
         fn app_is_active(&self) -> bool {
             true
         }
+        fn open_converter(&mut self, _dialog: crate::ConverterDialog) {}
+        fn show_conversion_progress(&mut self, _title: &str, _message: &str, _total: usize) {}
+        fn update_conversion_progress(&mut self, _converted: usize, _message: &str) {}
+        fn close_conversion_progress(&mut self) {}
         fn set_rss_timer(&mut self, interval_seconds: Option<f64>) {
             self.rss_timer = interval_seconds;
         }

@@ -341,3 +341,87 @@ impl Slider {
         true
     }
 }
+
+define_class!(
+    /// A check box that is always in the Tab order while shown, as a
+    /// Windows `BS_AUTOCHECKBOX`; Space toggles it, Return and Escape go to
+    /// the window's buttons.
+    // SAFETY: NSButton may be subclassed; no Drop impl.
+    #[unsafe(super(NSButton, NSControl, NSView, NSResponder, objc2_foundation::NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "ApricotCheckBox"]
+    pub struct CheckBox;
+
+    impl CheckBox {
+        #[unsafe(method(acceptsFirstResponder))]
+        fn accepts_first_responder(&self) -> bool {
+            true
+        }
+
+        #[unsafe(method(canBecomeKeyView))]
+        fn can_become_key_view(&self) -> bool {
+            self.isEnabled() && !self.isHiddenOrHasHiddenAncestor()
+        }
+
+        #[unsafe(method(becomeFirstResponder))]
+        fn become_first_responder(&self) -> bool {
+            scroll_into_view(self);
+            // SAFETY: forwarding to NSButton.
+            unsafe { msg_send![super(self), becomeFirstResponder] }
+        }
+
+        #[unsafe(method(keyDown:))]
+        fn key_down(&self, event: &NSEvent) {
+            if handle_tab(self, event) || dialog_key(self, event) {
+                return;
+            }
+            let modifiers = modifiers(event);
+            if event.keyCode() == keys::KEY_SPACE
+                && !modifiers.command
+                && !modifiers.option
+                && !modifiers.control
+            {
+                // SAFETY: a click with no sender toggles and sends the action.
+                unsafe { self.performClick(None) };
+                return;
+            }
+            // SAFETY: forwarding the unhandled event to NSButton.
+            unsafe {
+                let _: () = msg_send![super(self), keyDown: event];
+            }
+        }
+    }
+);
+
+impl CheckBox {
+    pub fn new(
+        mtm: MainThreadMarker,
+        title: &str,
+        target: &AnyObject,
+        action: Sel,
+    ) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(());
+        // SAFETY: the designated initializer of NSButton.
+        let check: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: NSRect::ZERO] };
+        check.setButtonType(objc2_app_kit::NSButtonType::Switch);
+        check.setTitle(&NSString::from_str(title));
+        // SAFETY: the target outlives the check box (it owns the dialog).
+        unsafe {
+            check.setTarget(Some(target));
+            check.setAction(Some(action));
+        }
+        check
+    }
+
+    pub fn checked(&self) -> bool {
+        self.state() == objc2_app_kit::NSControlStateValueOn
+    }
+
+    pub fn set_checked(&self, checked: bool) {
+        self.setState(if checked {
+            objc2_app_kit::NSControlStateValueOn
+        } else {
+            objc2_app_kit::NSControlStateValueOff
+        });
+    }
+}

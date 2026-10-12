@@ -558,3 +558,32 @@ fn playlist_download_steps() -> Vec<(String, Option<Key>)> {
     ));
     steps
 }
+
+/// The keys for the converter of `APRICOT_MACOS_SELF_TEST=converter`: the
+/// path, the next format, Replace and Convert.
+pub fn converter_plan(file: bool) -> Vec<(&'static str, Key)> {
+    use crate::keys;
+    let variable = if file {
+        "APRICOT_MACOS_SELF_TEST_MEDIA"
+    } else {
+        "APRICOT_MACOS_SELF_TEST_FOLDER"
+    };
+    let path = std::env::var(variable).unwrap_or_default();
+    let path: &'static str = Box::leak(path.into_boxed_str());
+    let mut plan: Vec<(&str, Key)> = path
+        .char_indices()
+        .map(|(offset, character)| ("type", key(0, &path[offset..offset + character.len_utf8()])))
+        .collect();
+    let tab = || key(keys::KEY_TAB, "\t");
+    plan.extend([
+        ("Tab (Browse)", tab()),
+        ("Tab (format)", tab()),
+        ("Down (next format)", key(keys::KEY_DOWN, "\u{f701}")),
+        ("Tab", tab()),
+        ("Tab", tab()),
+        ("Space (replace)", key(keys::KEY_SPACE, " ")),
+        ("Tab", tab()),
+        ("Return (convert)", key(keys::KEY_RETURN, "\r")),
+    ]);
+    plan
+}

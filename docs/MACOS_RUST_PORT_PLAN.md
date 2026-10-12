@@ -169,6 +169,19 @@ pa ostane nespremenjen do enote W1, ko Urh lahko sproti preizkuša z NVDA.
   aktivno od 11. 10. 2026),
   celoten prehod manifesta z VoiceOverjem na Urhovem MacBooku, beta DMG.
 
+## 4a. Napake za odpravo pred izdajo beta 8
+
+Beta 8 bo izšla z macOS podporo in temi popravki skupaj (Urh, 12. 10. 2026).
+
+1. **Spotify po premoru izgubi prijavo (Windows, 12. 10. 2026).** Urh je
+   predvajal prek Spotifyja, dal na pavzo in šel za nekaj minut stran. Ob
+   vrnitvi je bilo prikazano sporočilo v smislu "pmc server not found",
+   nato je predvajanje javilo "Spotify not logged in". Po ponovnem zagonu
+   programa je vse delovalo. Najprej ugotovi, ali gre za napako (na primer
+   izgubljena povezava ali žeton seje Spotify, ki se ne obnovi), nato jo
+   popravi za obe platformi.
+2. Kolekcija "More" na Windows dvakrat doda pot (glej M6, popravi v W1).
+
 ## 5. Odprta vprašanja za Urha
 
 1. Prijava v GitHub (`gh auth login`), da lahko pushnem na vejo.
@@ -685,3 +698,30 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   music/Mix, okno napredka se je odprlo, posodabljalo in zaprlo. Fokusa v
   oknu napredka med preizkusom ni bilo mogoče preveriti, ker aplikacija
   ni bila v ospredju.
+
+### M9b: pretvornik in izvoz izseka (12. 10. 2026)
+
+- `apricot-shell/src/converter.rs`: odločitve pretvornika datotek in map
+  (Windows `converter_win32.rs`: posodabljanje formatov ob spremembi poti z
+  ohranitvijo izbire, prikaz možnosti zvok v video, pari potrditvenih polj,
+  preverjanja in sporočila), zagon pretvorbe, napredek pretvorbe mape,
+  sporočila ob koncu (`popup_when_conversion_complete`) in izvoz označenega
+  izseka iz predvajalnika (Command+Shift+A ali D z oznakama) v mapo clips
+  z enakim poimenovanjem kot na Windows.
+- `apricot-ui-macos/src/converter.rs`: modalno okno pretvornika z vrstnim
+  redom Tab Windows (pot, Browse, format, Add image, Dark background, pot
+  slike, Choose image, Create new, Replace, Convert, Back), skrite vrstice
+  se umaknejo iz postavitve, Escape je Back, opozorila vrnejo fokus na
+  kontrolo; novo potrditveno polje `CheckBox` (Space preklopi). Okno
+  napredka pretvorbe mape brez gumbov, ki se ne da zapreti, s pretečenim,
+  ocenjenim in preostalim časom.
+- Razlika: macOS okna za izbiro datoteke nimajo seznama filtrov, zato
+  dovolijo samo prvi filter (predstavnostne datoteke ali slike); "All
+  files" ni na voljo. Brez najdenega FFmpeg izvoz izseka takoj javi napako.
+- Preverjeno: enotski testi (formati, opozorilo brez datoteke, preklicano
+  shranjevanje, zamenjava izvirnika) in samodejni preizkus na Macu s
+  pravim ffmpeg: pretvorba datoteke z Replace, pretvorba mape z dvema
+  datotekama, izvoz izseka 0:00 do 0:02 iz predvajalnika (drugič z
+  "(2)"); fokus se po zaprtju pretvornika vrne na glavni meni. Okna
+  napredka pretvorbe mape preizkus ni ujel, ker je bila pretvorba
+  prehitra.

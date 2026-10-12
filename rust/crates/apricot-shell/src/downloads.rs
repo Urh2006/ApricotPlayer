@@ -245,7 +245,7 @@ fn nonempty(value: &str) -> Option<String> {
 }
 
 /// Windows `normalized_audio_format`.
-fn normalized_audio_format(value: &str) -> String {
+pub(crate) fn normalized_audio_format(value: &str) -> String {
     match value.trim().to_ascii_lowercase().as_str() {
         "m4a" | "opus" | "wav" | "flac" => value.trim().to_ascii_lowercase(),
         _ => "mp3".to_owned(),
@@ -325,7 +325,7 @@ fn root_name(root: &Path) -> String {
 }
 
 /// Windows `download_folder_for_item`.
-fn download_folder_for_item(
+pub(crate) fn download_folder_for_item(
     settings: &apricot_storage::SettingsDocument,
     item: &MediaItem,
     collection: bool,
@@ -570,6 +570,8 @@ impl Shell {
             "download_audio" => self.start_download_shortcut(ui, DownloadChoice::Audio),
             "download_video" => self.start_download_shortcut(ui, DownloadChoice::Video),
             "queue_audio" => self.toggle_active_download_queue(ui),
+            "file_converter" => self.show_converter(ui, false),
+            "folder_converter" => self.show_converter(ui, true),
             _ => return false,
         }
         true
@@ -651,12 +653,7 @@ impl Shell {
         if self.view == View::Player
             && (session.clip_start_seconds().is_some() || session.clip_end_seconds().is_some())
         {
-            // Clip export arrives with the converters (unit M9b).
-            let message = apricot_app::unavailable_feature_message(
-                &self.catalog(),
-                &self.text("export_clip"),
-            );
-            ui.set_status(&message, true);
+            self.start_clip_export(ui, choice);
             return;
         }
         if self.view == View::DownloadQueue {

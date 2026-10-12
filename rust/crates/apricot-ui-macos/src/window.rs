@@ -69,6 +69,8 @@ pub struct ControllerIvars {
     pending_queue: RefCell<Option<apricot_shell::QueueDialog>>,
     /// The transcript window waiting to open after the current event.
     pending_transcript: RefCell<Option<apricot_shell::TranscriptDialog>>,
+    pending_converter: RefCell<Option<apricot_shell::ConverterDialog>>,
+    conversion_progress: RefCell<Option<Retained<crate::converter::ConversionProgress>>>,
     /// The comments window waiting to open after the current event.
     pending_comments: RefCell<Option<apricot_shell::CommentsDialog>>,
 }
@@ -187,6 +189,14 @@ define_class!(
             let dialog = self.ivars().pending_transcript.borrow_mut().take();
             if let Some(dialog) = dialog {
                 crate::transcript::run(self, dialog);
+            }
+        }
+
+        #[unsafe(method(openConverter:))]
+        fn open_converter(&self, _sender: Option<&AnyObject>) {
+            let dialog = self.ivars().pending_converter.borrow_mut().take();
+            if let Some(dialog) = dialog {
+                crate::converter::run(self, dialog);
             }
         }
 
@@ -321,6 +331,8 @@ impl MainWindowController {
             pending_lyrics: RefCell::new(None),
             pending_queue: RefCell::new(None),
             pending_transcript: RefCell::new(None),
+            pending_converter: RefCell::new(None),
+            conversion_progress: RefCell::new(None),
             pending_comments: RefCell::new(None),
         });
         // SAFETY: `init` of NSObject.
@@ -925,6 +937,85 @@ impl MainWindowController {
     }
 
     #[cfg(debug_assertions)]
+    fn converter_self_test_step(&self, index: usize) -> bool {
+        use crate::self_test::focus;
+        let Some(window) = self.window() else {
+            return false;
+        };
+        if index > 48 {
+            return false;
+        }
+        let name = match index {
+            0 => {
+                self.schedule_modal_self_test_keys_after(1.0);
+                self.run_action("file_converter");
+                "open the file converter"
+            }
+            18 => {
+                self.schedule_modal_self_test_keys_after(1.0);
+                self.run_action("folder_converter");
+                "open the folder converter"
+            }
+            37 => {
+                if let Some(clip) = std::env::var_os("APRICOT_MACOS_SELF_TEST_CLIP") {
+                    self.open_file(clip.into());
+                }
+                "open the clip source"
+            }
+            39 => {
+                self.run_action("player_marker_start");
+                "clip start marker"
+            }
+            41 => {
+                self.run_action("player_marker_end");
+                "clip end marker"
+            }
+            42 => {
+                self.run_action("download_audio");
+                "export the clip as audio"
+            }
+            _ => {
+                // A message at the end is printed and answered.
+                self.schedule_modal_self_test_keys_after(0.5);
+                "waiting for the conversion"
+            }
+        };
+        let status = self
+            .ivars()
+            .status
+            .borrow()
+            .as_ref()
+            .map(|status| status.stringValue().to_string())
+            .unwrap_or_default();
+        let windows: Vec<String> = NSApplication::sharedApplication(self.mtm())
+            .windows()
+            .iter()
+            .filter(|window| window.isVisible())
+            .map(|window| window.title().to_string())
+            .collect();
+        println!(
+            "converter-test {name}: focus={} windows={windows:?} status={status:?}",
+            focus(&window)
+        );
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        true
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn run_converter_self_test(&self) {
+        self.ivars().self_test_step.set(600);
+        // SAFETY: `playerSelfTestStep:` exists on this controller.
+        unsafe {
+            let _: () = msg_send![
+                self,
+                performSelector: sel!(playerSelfTestStep:),
+                withObject: Option::<&AnyObject>::None,
+                afterDelay: 1.0_f64
+            ];
+        }
+    }
+
+    #[cfg(debug_assertions)]
     fn podcast_self_test_step(&self, index: usize) -> bool {
         use crate::self_test::{focus, focused_value, send};
         let Some(window) = self.window() else {
@@ -1207,6 +1298,9 @@ impl MainWindowController {
                 ("Return (move up)", key(keys::KEY_RETURN, "\r")),
                 ("Escape", escape),
             ],
+            title @ ("File converter" | "Folder converter") => {
+                crate::self_test::converter_plan(title == "File converter")
+            }
             "Add feed" => {
                 let url = std::env::var("APRICOT_MACOS_SELF_TEST_QUERY")
                     .unwrap_or_else(|_| "feeds.npr.org/510289/podcast.xml".to_owned());
@@ -1284,7 +1378,9 @@ impl MainWindowController {
         use crate::self_test::{Key, focus, key, send};
         let step = self.ivars().self_test_step.get();
         if step >= 100 {
-            let more = if step >= 500 {
+            let more = if step >= 600 {
+                self.converter_self_test_step(step - 600)
+            } else if step >= 500 {
                 self.podcast_self_test_step(step - 500)
             } else if step >= 400 {
                 self.trending_self_test_step(step - 400)
@@ -1704,6 +1800,57 @@ impl ShellUi for MacUi<'_> {
             .take();
         if let Some(window) = window {
             window.destroy();
+        }
+    }
+
+    fn open_converter(&mut self, dialog: apricot_shell::ConverterDialog) {
+        *self.controller.ivars().pending_converter.borrow_mut() = Some(dialog);
+        // SAFETY: `openConverter:` exists on the controller.
+        unsafe {
+            let _: () = msg_send![
+                self.controller,
+                performSelector: sel!(openConverter:),
+                withObject: Option::<&AnyObject>::None,
+                afterDelay: 0.0_f64
+            ];
+        }
+    }
+
+    fn show_conversion_progress(&mut self, title: &str, message: &str, total: usize) {
+        let progress =
+            crate::converter::ConversionProgress::new(self.controller.mtm(), title, message, total);
+        let previous = self
+            .controller
+            .ivars()
+            .conversion_progress
+            .borrow_mut()
+            .replace(progress);
+        if let Some(previous) = previous {
+            previous.destroy();
+        }
+    }
+
+    fn update_conversion_progress(&mut self, converted: usize, message: &str) {
+        if let Some(progress) = self
+            .controller
+            .ivars()
+            .conversion_progress
+            .borrow()
+            .as_ref()
+        {
+            progress.update(converted, message);
+        }
+    }
+
+    fn close_conversion_progress(&mut self) {
+        let progress = self
+            .controller
+            .ivars()
+            .conversion_progress
+            .borrow_mut()
+            .take();
+        if let Some(progress) = progress {
+            progress.destroy();
         }
     }
 

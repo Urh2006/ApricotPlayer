@@ -222,6 +222,22 @@ pub trait ShellUi {
     /// Windows `DownloadProgressWindow::destroy`.
     fn close_download_progress(&mut self);
 
+    /// Opens the file or folder converter after the current event, modal
+    /// over the window; when it closed and focus is back where it was, it
+    /// calls [`crate::Shell::converter_closed`].
+    fn open_converter(&mut self, dialog: crate::ConverterDialog);
+
+    /// Windows `ConversionProgressWindow::create`: the folder conversion
+    /// progress with `total` files, which cannot be closed.
+    fn show_conversion_progress(&mut self, title: &str, message: &str, total: usize);
+
+    /// Windows `ConversionProgressWindow::update`.
+    fn update_conversion_progress(&mut self, converted: usize, message: &str);
+
+    /// Windows `ConversionProgressWindow::destroy`: focus returns where it
+    /// was when the window had it.
+    fn close_conversion_progress(&mut self);
+
     /// Replaces one row of the screen's list, keeping the selection
     /// (Windows `LB_DELETESTRING` and `LB_INSERTSTRING`).
     fn set_list_row(&mut self, index: usize, label: &str);
