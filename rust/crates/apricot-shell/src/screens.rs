@@ -129,7 +129,7 @@ impl Shell {
             | "search_download_video"
             | "search_add_favorite" => self.activate_search_button(ui, id),
             _ => {
-                if !self.download_command(ui, id) {
+                if !self.download_command(ui, id) && !self.subscription_command(ui, id) {
                     let _ = self.podcast_command(ui, id);
                 }
             }
@@ -158,6 +158,9 @@ impl Shell {
             }
             View::SpotifyHub | View::SpotifyAccounts => self.spotify_activate(ui),
             View::SpotifyBrowse => self.spotify_browse_activate(ui),
+            View::Subscriptions | View::NotificationCenter => {
+                self.activate_subscription_selection(ui);
+            }
             // Python `play_selected` on the empty result list.
             View::Search => ui.show_error(&self.text("no_selection")),
             View::DirectLink | View::Player => {}
@@ -221,7 +224,7 @@ impl Shell {
         let chapters = self.poll_external_chapters(ui);
         let bpm = self.poll_bpm_analyses(ui);
         let edits = self.poll_edit_saves(ui);
-        let podcasts = self.poll_podcast_work(ui);
+        let podcasts = self.poll_podcast_work(ui) | self.poll_subscription_check(ui);
         let downloads = self.poll_downloads(ui) | self.poll_conversions(ui);
         let cookies =
             self.poll_cookie_events(ui) | self.poll_audiovault(ui) | self.poll_spotify(ui);
@@ -454,6 +457,19 @@ impl Shell {
             Route::SpotifyHub => self.show_spotify_hub(ui),
             Route::SpotifyBrowse => self.spotify_browse_restore(ui),
             Route::SpotifyAccounts => self.show_spotify_accounts(ui, None),
+            Route::Subscriptions => {
+                self.view = View::Subscriptions;
+                self.refresh_subscriptions(ui, true, None);
+            }
+            Route::NotificationCenter => {
+                let saved = frame
+                    .parameters
+                    .get("index")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok());
+                self.view = View::NotificationCenter;
+                self.refresh_notification_center(ui, true, false, saved);
+            }
             Route::DownloadQueue => {
                 self.view = View::DownloadQueue;
                 self.refresh_download_queue(ui, true, false);

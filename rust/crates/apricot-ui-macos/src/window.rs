@@ -50,6 +50,7 @@ pub struct ControllerIvars {
     page: RefCell<Option<PlayerPage>>,
     poll_timer: RefCell<Option<Retained<NSTimer>>>,
     rss_timer: RefCell<Option<Retained<NSTimer>>>,
+    subscription_timer: RefCell<Option<Retained<NSTimer>>>,
     download_progress: RefCell<Option<Retained<crate::download_progress::ProgressWindow>>>,
     /// The key code of a held player key (Windows `ControlledRepeatState`).
     held_key: Cell<Option<u16>>,
@@ -298,6 +299,12 @@ define_class!(
         }
 
         /// Windows `RSS_REFRESH_TIMER_ID`.
+        /// Windows `SUBSCRIPTION_TIMER_ID`.
+        #[unsafe(method(subscriptionTimer:))]
+        fn subscription_timer(&self, _timer: Option<&AnyObject>) {
+            self.with_shell(|shell, ui| shell.check_subscriptions_if_due(ui));
+        }
+
         #[unsafe(method(rssTimer:))]
         fn rss_timer(&self, _timer: Option<&AnyObject>) {
             self.with_shell(|shell, ui| shell.refresh_all_rss_feeds_background(ui));
@@ -353,6 +360,7 @@ impl MainWindowController {
             page: RefCell::new(None),
             poll_timer: RefCell::new(None),
             rss_timer: RefCell::new(None),
+            subscription_timer: RefCell::new(None),
             download_progress: RefCell::new(None),
             held_key: Cell::new(None),
             held_modifiers: Cell::new(keys::Modifiers::default()),
@@ -1077,6 +1085,28 @@ impl MainWindowController {
                 self.schedule_modal_self_test_keys_after(1.0);
                 self.with_shell(|shell, ui| shell.spotify_queue_dialog_self_test(ui));
                 "Spotify queue dialog"
+            }
+            index if std::env::var("APRICOT_MACOS_SELF_TEST_KIND").as_deref()
+                == Ok("subscriptions") =>
+            {
+                match index {
+                    0 => {
+                        self.run_action("open_subscriptions");
+                        "open the subscriptions"
+                    }
+                    1 => {
+                        self.with_shell(|shell, ui| {
+                            shell.activate_screen_button(ui, "subscription_check");
+                        });
+                        "Check now"
+                    }
+                    2..=40 => "waiting",
+                    41 => {
+                        self.run_action("new_subscription_videos");
+                        "open the notification center"
+                    }
+                    _ => return false,
+                }
             }
             0 if std::env::var("APRICOT_MACOS_SELF_TEST_KIND").as_deref() == Ok("audiovault") => {
                 self.schedule_modal_self_test_keys_after(1.0);
@@ -2142,6 +2172,33 @@ impl ShellUi for MacUi<'_> {
         };
         run_in_modal_loops(&rss);
         *timer = Some(rss);
+    }
+
+    fn set_subscription_timer(&mut self, interval_seconds: Option<f64>) {
+        let mut timer = self.controller.ivars().subscription_timer.borrow_mut();
+        if let Some(timer) = timer.take() {
+            timer.invalidate();
+        }
+        let Some(interval) = interval_seconds else {
+            return;
+        };
+        // SAFETY: the controller implements `subscriptionTimer:` and outlives
+        // the timer, which is invalidated when it is replaced.
+        let subscriptions = unsafe {
+            NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
+                interval,
+                self.controller.as_ref(),
+                sel!(subscriptionTimer:),
+                None,
+                true,
+            )
+        };
+        run_in_modal_loops(&subscriptions);
+        *timer = Some(subscriptions);
+    }
+
+    fn show_system_notification(&mut self, _title: &str, _message: &str) {
+        // The macOS notification arrives with unit M14b.
     }
 
     fn set_background_polling(&mut self, active: bool) {

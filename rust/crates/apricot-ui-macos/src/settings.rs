@@ -1195,6 +1195,7 @@ impl SettingsWindow {
     }
 
     /// Windows `handle_settings_command`.
+    #[allow(clippy::too_many_lines)] // One arm per command, as on Windows.
     fn handle_command(&self, command: SettingsCommand) {
         match command {
             SettingsCommand::ResetSection => self.reset_section(),
@@ -1266,6 +1267,11 @@ impl SettingsWindow {
                 }
             }
             SettingsCommand::ExportBrowserCookies => self.export_browser_cookies(),
+            // Python checks with the saved settings, without applying the
+            // visible controls; the result is spoken while they stay open.
+            SettingsCommand::CheckSubscriptions => {
+                self.with_shell(|shell, ui| shell.check_subscriptions(ui, true));
+            }
             SettingsCommand::ObtainYoutubeApiKey => {
                 if let Err(error) = self.sync_all() {
                     self.show_error(&error);
@@ -1278,8 +1284,8 @@ impl SettingsWindow {
                 }
             }
             _ => {
-                // Cookies, AudioVault, updates, subscriptions and the default
-                // player arrive with their units (M12, M14, M16).
+                // Updates and the default
+                // player arrive with their units (M14b, M16).
                 let label = self
                     .ivars()
                     .controls

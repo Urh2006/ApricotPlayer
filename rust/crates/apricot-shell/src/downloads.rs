@@ -1543,9 +1543,14 @@ impl Shell {
         let popup = app_has_focus && settings.popup_when_download_complete && succeeded;
         let open_folder =
             settings.open_folder_after_download && succeeded && output_directory.is_dir();
-        // The system notification when the window is in the background
-        // arrives with the notifications (unit M14).
+        let notify = !app_has_focus
+            && settings.download_notifications
+            && settings.windows_notifications
+            && succeeded;
         self.refresh_download_projection(ui, true);
+        if notify {
+            ui.show_system_notification(&self.text("notification_download_title"), &message);
+        }
         if popup {
             ui.show_error(&message);
         }

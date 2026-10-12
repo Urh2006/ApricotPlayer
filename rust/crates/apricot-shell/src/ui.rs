@@ -317,6 +317,15 @@ pub trait ShellUi {
     /// `interval_seconds`, or stops with `None`.
     fn set_rss_timer(&mut self, interval_seconds: Option<f64>);
 
+    /// Windows `SUBSCRIPTION_TIMER_ID`: calls
+    /// [`crate::Shell::check_subscriptions_if_due`] every `interval_seconds`;
+    /// `None` stops it.
+    fn set_subscription_timer(&mut self, interval_seconds: Option<f64>);
+
+    /// Windows `show_tray_notification`: a system notification with
+    /// `title` and `message`.
+    fn show_system_notification(&mut self, title: &str, message: &str);
+
     /// Starts or stops polling [`crate::Shell::poll_background`] (Windows
     /// `LOCAL_FOLDER_TIMER_ID` and the other work timers).
     fn set_background_polling(&mut self, active: bool);

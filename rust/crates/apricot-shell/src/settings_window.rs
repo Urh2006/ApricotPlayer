@@ -787,6 +787,10 @@ impl Shell {
     /// Windows `open_settings` after the window closed: the shown screen is
     /// refreshed in the new language without moving focus, then focus goes
     /// to its primary control and a chosen global action runs.
+    pub(crate) const fn settings_window_open(&self) -> bool {
+        self.settings_window.open
+    }
+
     pub fn settings_closed(&mut self, ui: &mut dyn ShellUi, deferred_action: Option<&'static str>) {
         self.settings_window.open = false;
         if let Some(before) = self.settings_window.spotify_before.take() {
@@ -805,6 +809,8 @@ impl Shell {
             View::UserPlaylists => self.refresh_user_playlists(ui, false),
             View::UserPlaylistItems => self.refresh_user_playlist_items(ui, false, false),
             View::DownloadQueue => self.refresh_download_queue(ui, false, false),
+            View::Subscriptions => self.refresh_subscriptions(ui, false, None),
+            View::NotificationCenter => self.refresh_notification_center(ui, false, false, None),
             View::Player => self.refresh_player(ui, PlayerFocus::Keep),
             View::Search => {
                 let mut screen =
@@ -823,6 +829,8 @@ impl Shell {
             | View::SpotifyBrowse => {}
         }
         ui.focus_primary_control();
+        self.configure_subscription_timer(ui);
+        self.check_subscriptions_if_due(ui);
         self.configure_rss_timer(ui);
         self.process_activations(ui);
         if let Some(action_id) = deferred_action {

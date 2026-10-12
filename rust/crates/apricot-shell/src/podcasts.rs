@@ -58,7 +58,7 @@ fn unix_timestamp() -> f64 {
 }
 
 /// Windows `format_timestamp`.
-fn format_timestamp(timestamp: f64) -> Option<String> {
+pub(crate) fn format_timestamp(timestamp: f64) -> Option<String> {
     std::time::Duration::try_from_secs_f64(timestamp)
         .ok()
         .and_then(|duration| i64::try_from(duration.as_secs()).ok())
@@ -764,8 +764,9 @@ impl Shell {
                                     timestamp,
                                 ),
                             );
-                            // The system notification arrives with the menu
-                            // bar and notifications (unit M14).
+                            if self.application.settings().windows_notifications {
+                                ui.show_system_notification(catalog.text("rss_feeds"), &message);
+                            }
                         }
                         if !silent {
                             let message = if summary.failures == 0 {

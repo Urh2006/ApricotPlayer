@@ -905,3 +905,31 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   Remove brez seje pove, da se je vrsta spremenila, Escape zapre in vrne
   fokus na glavni meni). Prave vrste in naprav nisem preizkusil, ker
   potrebujeta prijavo v tvoj Spotify račun.
+
+### M14a: naročnine in center obvestil (12. 10. 2026)
+
+M14 je razdeljen na dva dela: M14a (naročnine in center obvestil, skupna
+logika) in M14b (macOS sistem: element v menijski vrstici, sistemska
+obvestila, odpiranje iz Finderja, zagon ob prijavi, privzeti predvajalnik).
+
+- `apricot-shell/src/subscriptions.rs` (Windows `show_subscriptions`,
+  `refresh_subscriptions`, preverjanje naročnin, `show_notification_center`):
+  zaslon naročnin z vrstnim redom Tab Windows (Back, Check now, Open videos,
+  New videos, Remove, Filter category, Set category, seznam), ohranjanje
+  izbrane naročnine po osvežitvi, kontekstni meni, Delete, filter in
+  kategorija, naročanje in odjava na rezultatih. Preverjanje naročnin na
+  lastnem yt-dlp izvajalniku (pet najnovejših videov na kanal), časovnik
+  (0,5 do 168 ur), preverjanje ob zagonu in po zaprtju nastavitev, ko je
+  čas, "Check subscriptions now" v nastavitvah. Novi videi gredo v center
+  obvestil, vsak kanal se oglasi s številom novih, ročno preverjanje pove
+  izid.
+- Center obvestil: Back, Play, Clear notifications, seznam; Enter predvaja,
+  Delete odstrani in ohrani vrstico, kontekstni meni.
+- Klici sistemskih obvestil za nove videe, nove epizode in končan prenos v
+  ozadju so povezani; prikaz na Macu pride z M14b.
+- Preverjeno: enotni testi (vrstni red kontrol, ohranitev izbire, Delete,
+  center obvestil) in samodejni preizkus na Macu z resničnim kanalom NPR
+  Music prek yt-dlp: samodejno preverjanje ob zagonu je dodalo nove videe v
+  center obvestil, "Check now" je povedal "Checking subscriptions" in nato
+  "No new subscription videos", po umetno odstranjenem videu pa
+  "Subscription check complete" z novim obvestilom.

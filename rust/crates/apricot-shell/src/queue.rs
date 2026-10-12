@@ -332,6 +332,7 @@ impl Shell {
             View::RssFeeds | View::RssItems | View::PodcastSearchResults => {
                 self.podcast_context_entries()
             }
+            View::Subscriptions | View::NotificationCenter => self.subscription_context_entries(),
             // Python `open_audiovault_context_menu` opens only on an item.
             View::AudiovaultSearch | View::AudiovaultResults => Some(
                 context_menu::audiovault_results_context_menu(&context, item?),
@@ -415,6 +416,7 @@ impl Shell {
             C::CopyTimestampLink => self.copy_current_timestamp_link(ui),
             C::PlayerAction(action_id) => {
                 if !self.podcast_command(ui, action_id)
+                    && !self.subscription_command(ui, action_id)
                     && !self.download_context_command(ui, action_id)
                 {
                     self.activate_action(ui, action_id);
@@ -437,6 +439,8 @@ impl Shell {
             C::AddFavorite => self.add_active_favorite(ui),
             C::RemoveFavorite => self.remove_active_favorite(ui),
             C::RemoveSelected => self.remove_selected_collection_item(ui),
+            C::SubscribeChannel => self.subscribe_active_channel(ui),
+            C::UnsubscribeChannel => self.unsubscribe_active_channel(ui),
             C::ClearHistory => self.clear_history(ui),
             C::CreatePlaylist => self.create_user_playlist(ui, None),
             C::AddToPlaylist => self.add_active_item_to_user_playlist(ui),

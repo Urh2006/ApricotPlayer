@@ -346,6 +346,8 @@ mod equalizer {
         fn show_conversion_progress(&mut self, _title: &str, _message: &str, _total: usize) {}
         fn update_conversion_progress(&mut self, _converted: usize, _message: &str) {}
         fn close_conversion_progress(&mut self) {}
+        fn set_subscription_timer(&mut self, _interval_seconds: Option<f64>) {}
+        fn show_system_notification(&mut self, _title: &str, _message: &str) {}
         fn set_rss_timer(&mut self, interval_seconds: Option<f64>) {
             self.rss_timer = interval_seconds;
         }
@@ -1212,5 +1214,106 @@ mod spotify_lists {
             media.metadata.get("spotify_uid").and_then(|v| v.as_str()),
             Some("u2")
         );
+    }
+}
+
+mod subscriptions {
+    use super::equalizer::Ui;
+    use crate::{ScreenControl, View};
+
+    fn channel(title: &str) -> apricot_core::MediaItem {
+        let url = format!("https://www.youtube.com/@{title}");
+        apricot_core::MediaItem {
+            id: apricot_core::MediaId(url.clone()),
+            source: apricot_core::MediaSource::Youtube,
+            kind: apricot_core::MediaKind::Channel,
+            title: title.to_owned(),
+            url: Some(url.parse().unwrap()),
+            stream_url: None,
+            external_audio_url: None,
+            local_path: None,
+            channel: title.to_owned(),
+            duration_seconds: None,
+            metadata: std::collections::BTreeMap::new(),
+        }
+    }
+
+    fn button_ids(screen: &crate::ListScreen) -> Vec<&str> {
+        screen
+            .controls
+            .iter()
+            .map(|control| match control {
+                ScreenControl::Button { id, .. } => *id,
+                ScreenControl::List => "list",
+                _ => "other",
+            })
+            .collect()
+    }
+
+    #[test]
+    fn subscriptions_follow_the_windows_tab_order_and_keep_the_channel() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell.activate_action(&mut ui, "open_subscriptions");
+        assert_eq!(shell.view(), View::Subscriptions);
+        let screen = ui.screens.last().unwrap();
+        assert_eq!(screen.rows.len(), 1);
+        assert_eq!(
+            button_ids(screen),
+            [
+                "back",
+                "subscription_check",
+                "open",
+                "subscription_new",
+                "collection_remove",
+                "subscription_filter",
+                "subscription_set_category",
+                "list"
+            ]
+        );
+        for title in ["Beta", "Alpha"] {
+            shell
+                .application
+                .subscribe_to_item(&channel(title), 1.0)
+                .unwrap();
+        }
+        shell.refresh_subscriptions(&mut ui, false, None);
+        let rows = ui.screens.last().unwrap().rows.clone();
+        assert_eq!(rows.len(), 2);
+        ui.selected = Some(1);
+        let selected_title = rows[1].split(" | ").next().unwrap().to_owned();
+        shell.refresh_subscriptions(&mut ui, false, None);
+        let screen = ui.screens.last().unwrap();
+        assert!(screen.rows[screen.selected.unwrap()].starts_with(&selected_title));
+        assert!(!screen.focus_list);
+    }
+
+    #[test]
+    fn delete_removes_the_selected_subscription() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell
+            .application
+            .subscribe_to_item(&channel("Alpha"), 1.0)
+            .unwrap();
+        shell.activate_action(&mut ui, "open_subscriptions");
+        ui.selected = Some(0);
+        shell.activate_action(&mut ui, "remove_selected");
+        assert!(shell.application.subscriptions().is_empty());
+        assert!(ui.announcements.last().unwrap().contains("Alpha"));
+    }
+
+    #[test]
+    fn the_notification_center_has_back_play_and_clear() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell.activate_action(&mut ui, "new_subscription_videos");
+        assert_eq!(shell.view(), View::NotificationCenter);
+        let screen = ui.screens.last().unwrap();
+        assert_eq!(
+            button_ids(screen),
+            ["back", "open", "notification_clear", "list"]
+        );
+        assert!(screen.focus_list);
     }
 }

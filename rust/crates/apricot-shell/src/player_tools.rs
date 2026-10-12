@@ -155,6 +155,7 @@ impl Shell {
             | View::SpotifyHub
             | View::SpotifyAccounts => None,
             View::SpotifyBrowse => self.spotify_selected_media(ui),
+            View::Subscriptions | View::NotificationCenter => self.subscription_selected_media(ui),
         }
     }
 

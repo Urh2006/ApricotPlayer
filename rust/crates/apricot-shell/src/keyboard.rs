@@ -145,7 +145,9 @@ const fn view_shortcut_scope(view: View) -> (ActionScope, bool) {
         | View::AudiovaultResults
         | View::SpotifyHub
         | View::SpotifyAccounts
-        | View::SpotifyBrowse => (ActionScope::List, false),
+        | View::SpotifyBrowse
+        | View::Subscriptions
+        | View::NotificationCenter => (ActionScope::List, false),
         View::Player => (ActionScope::Player, false),
     }
 }

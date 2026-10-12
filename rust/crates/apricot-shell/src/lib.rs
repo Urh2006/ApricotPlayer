@@ -37,6 +37,7 @@ mod settings_window;
 mod spotify;
 mod spotify_lists;
 mod spotify_panels;
+mod subscriptions;
 mod transcript;
 mod transcript_loader;
 mod trending;
@@ -112,6 +113,10 @@ pub enum View {
     SpotifyHub,
     SpotifyAccounts,
     SpotifyBrowse,
+    /// Channel subscriptions (Windows `MainView::Subscriptions`).
+    Subscriptions,
+    /// New videos and episodes (Windows `MainView::NotificationCenter`).
+    NotificationCenter,
     Player,
 }
 
@@ -138,6 +143,7 @@ pub struct Shell {
     downloads: downloads::DownloadState,
     conversions: converter::ConversionState,
     settings_window: settings_window::SettingsState,
+    subscriptions: subscriptions::SubscriptionState,
     cookies: cookies::CookieState,
     audiovault: audiovault::AudiovaultState,
     spotify: spotify::SpotifyState,
@@ -168,6 +174,7 @@ impl Shell {
             downloads: downloads::DownloadState::default(),
             conversions: converter::ConversionState::default(),
             settings_window: settings_window::SettingsState::default(),
+            subscriptions: subscriptions::SubscriptionState::default(),
             cookies: cookies::CookieState::default(),
             audiovault: audiovault::AudiovaultState::default(),
             spotify: spotify::SpotifyState::default(),
@@ -213,9 +220,11 @@ impl Shell {
             let message = self.text(key);
             ui.set_status(&message, true);
         }
-        self.start_rss(ui);
         self.install_cookie_repairer();
         self.spotify_autoconnect();
+        self.configure_subscription_timer(ui);
+        self.check_subscriptions_if_due(ui);
+        self.start_rss(ui);
         if self.spotify.service_running() {
             ui.set_background_polling(true);
         }
@@ -340,6 +349,14 @@ impl Shell {
                 self.show_rss_feeds(ui);
                 return;
             }
+            "subscriptions" => {
+                self.show_subscriptions(ui);
+                return;
+            }
+            "notification_center" => {
+                self.show_notification_center(ui);
+                return;
+            }
             "current_downloads" => {
                 self.show_download_queue(ui);
                 return;
@@ -427,6 +444,22 @@ impl Shell {
             }
             "open_playlists" => {
                 self.show_user_playlists(ui);
+                return;
+            }
+            "open_subscriptions" => {
+                self.show_subscriptions(ui);
+                return;
+            }
+            "new_subscription_videos" => {
+                self.show_notification_center(ui);
+                return;
+            }
+            "subscribe_channel" => {
+                self.subscribe_active_channel(ui);
+                return;
+            }
+            "unsubscribe_channel" => {
+                self.unsubscribe_active_channel(ui);
                 return;
             }
             "create_playlist" if self.view == View::SpotifyBrowse => {
