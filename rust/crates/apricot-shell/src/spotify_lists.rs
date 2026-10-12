@@ -294,6 +294,13 @@ impl Shell {
                 },
                 "spotify_playlists",
             ),
+            SpotifyHubEntry::FollowedArtists => (
+                Source::Library {
+                    filter: LibraryFilter::Artists,
+                    folder: None,
+                },
+                "spotify_followed_artists",
+            ),
             SpotifyHubEntry::Home => (Source::Home, "spotify_home"),
             SpotifyHubEntry::DailyMixes => (Source::DailyMixes, "spotify_daily_mixes"),
             SpotifyHubEntry::RecentlyPlayed => (Source::RecentlyPlayed, "spotify_recently_played"),

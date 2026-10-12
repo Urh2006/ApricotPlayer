@@ -20,6 +20,8 @@ pub enum SpotifyHubEntry {
     Library,
     LikedSongs,
     Playlists,
+    /// The artists the account follows (S1, not in Python).
+    FollowedArtists,
     Home,
     DailyMixes,
     RecentlyPlayed,
@@ -91,6 +93,7 @@ impl SpotifyHubModel {
                 (SpotifyHubEntry::Library, "spotify_library"),
                 (SpotifyHubEntry::LikedSongs, "spotify_liked_songs"),
                 (SpotifyHubEntry::Playlists, "spotify_playlists"),
+                (SpotifyHubEntry::FollowedArtists, "spotify_followed_artists"),
                 (SpotifyHubEntry::Home, "spotify_home"),
                 (SpotifyHubEntry::DailyMixes, "spotify_daily_mixes"),
                 (SpotifyHubEntry::RecentlyPlayed, "spotify_recently_played"),
@@ -519,6 +522,7 @@ mod tests {
                 SpotifyHubEntry::Library,
                 SpotifyHubEntry::LikedSongs,
                 SpotifyHubEntry::Playlists,
+                SpotifyHubEntry::FollowedArtists,
                 SpotifyHubEntry::Home,
                 SpotifyHubEntry::DailyMixes,
                 SpotifyHubEntry::RecentlyPlayed,
@@ -532,12 +536,13 @@ mod tests {
         );
         assert_eq!(model.items[0].label, "Search\tCtrl+Alt+Shift+Y");
         assert_eq!(model.items[2].label, "Liked Songs\tCtrl+Alt+Shift+F");
-        assert_eq!(model.items[4].label, "Home");
-        assert_eq!(model.items[5].label, "Daily Mixes\tCtrl+Alt+Shift+M");
-        assert_eq!(model.items[9].label, "Spotify queue\tCtrl+Alt+Shift+Q");
-        assert_eq!(model.items[10].label, "Spotify devices\tCtrl+Alt+Shift+O");
-        assert_eq!(model.items[11].label, "Spotify settings");
-        assert!(model.items[12].label.ends_with("\tCtrl+Alt+Shift+C"));
+        assert_eq!(model.items[4].label, "Followed artists");
+        assert_eq!(model.items[5].label, "Home");
+        assert_eq!(model.items[6].label, "Daily Mixes\tCtrl+Alt+Shift+M");
+        assert_eq!(model.items[10].label, "Spotify queue\tCtrl+Alt+Shift+Q");
+        assert_eq!(model.items[11].label, "Spotify devices\tCtrl+Alt+Shift+O");
+        assert_eq!(model.items[12].label, "Spotify settings");
+        assert!(model.items[13].label.ends_with("\tCtrl+Alt+Shift+C"));
     }
 
     fn catalog_item(kind: ItemKind, name: &str, subtitle: &str) -> CatalogItem {

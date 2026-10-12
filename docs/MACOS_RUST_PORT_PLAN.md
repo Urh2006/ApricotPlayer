@@ -1052,3 +1052,15 @@ obvestila, odpiranje iz Finderja, zagon ob prijavi, privzeti predvajalnik).
   ne zamenja ničesar, ZIP najde mapo s podatki) in število kontrol v
   nastavitvah na obeh platformah. Okna za izbiro na Macu nisem preizkusil s
   pravimi podatki iz Windows, ker jih tu ni.
+
+### M18 in S1 (12. 10. 2026)
+
+- M18: delovni tok `Rust macOS package` zgradi paket, DMG in zip z
+  `build_macos_app.sh` na GitHubovem Macu in ju shrani kot artefakt; teče
+  ob spremembi pakiranja ali ročno, ničesar ne objavi. Prevzem z
+  VoiceOverjem na Urhovem MacBooku ostaja zanj.
+- S1: vrstica "Followed artists" v Spotify meniju takoj pod Playlists, na
+  Windows in Macu. Odpre izvajalce iz knjižnice (to so izvajalci, ki jim
+  račun sledi) kot vsak drug Spotify seznam; Enter odpre izvajalca.
+  Besedilo v 27 jezikih. Preverjeno z enotnim testom vrstnega reda menija;
+  s pravim računom ni preizkušeno.

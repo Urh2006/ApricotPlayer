@@ -250,6 +250,7 @@ unsafe fn selected_index(state: &WindowState) -> Option<usize> {
 }
 
 /// Enter and Open.
+#[allow(clippy::too_many_lines)] // One arm per hub row.
 pub(super) unsafe fn activate(window: HWND) {
     let Some(state) = state(window) else {
         return;
@@ -280,6 +281,10 @@ pub(super) unsafe fn activate(window: HWND) {
             Some(entry @ SpotifyHubEntry::Playlists) => {
                 remember_hub_entry(window, entry);
                 show_playlists(window);
+            }
+            Some(entry @ SpotifyHubEntry::FollowedArtists) => {
+                remember_hub_entry(window, entry);
+                show_followed_artists(window);
             }
             Some(entry @ SpotifyHubEntry::Home) => {
                 remember_hub_entry(window, entry);
@@ -1158,6 +1163,19 @@ pub(super) unsafe fn show_daily_mixes(window: HWND) {
         window,
         super::spotify_browse::Source::DailyMixes,
         "spotify_daily_mixes",
+    );
+}
+
+/// Followed artists (S1): the library's artists, the ones the account
+/// follows.
+unsafe fn show_followed_artists(window: HWND) {
+    show_list(
+        window,
+        super::spotify_browse::Source::Library {
+            filter: apricot_spotify::LibraryFilter::Artists,
+            folder: None,
+        },
+        "spotify_followed_artists",
     );
 }
 
