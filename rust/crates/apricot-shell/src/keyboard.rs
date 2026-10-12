@@ -46,6 +46,20 @@ impl Shell {
     #[must_use]
     pub fn route_key(&self, chord: ShortcutChord, repeat: bool, focus: FocusKind) -> KeyRoute {
         let plain = !chord.control && !chord.shift && !chord.alt;
+        // Ctrl+A (Command+A) in a Spotify list marks the whole list.
+        if self.view == View::SpotifyBrowse
+            && focus == FocusKind::List
+            && chord.control
+            && !chord.shift
+            && !chord.alt
+            && matches!(chord.key, ShortcutKey::Character('a' | 'A'))
+        {
+            return if repeat {
+                KeyRoute::Consumed
+            } else {
+                KeyRoute::Run("spotify_mark_all")
+            };
+        }
         if plain && chord.key == ShortcutKey::Escape && self.view != View::MainMenu {
             return if repeat {
                 KeyRoute::Consumed

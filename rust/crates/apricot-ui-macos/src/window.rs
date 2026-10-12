@@ -298,6 +298,12 @@ define_class!(
             self.with_shell(|shell, ui| shell.list_selection_changed(ui));
         }
 
+        /// Command+A on the screen's list: a Spotify list marks every song.
+        #[unsafe(method(listSelectAll:))]
+        fn list_select_all(&self, _sender: Option<&AnyObject>) {
+            self.with_shell(|shell, ui| shell.activate_action(ui, "spotify_mark_all"));
+        }
+
         /// End, or Down at the last row (Windows `rss_list_subclass_proc`).
         #[unsafe(method(listEndReached:))]
         fn list_end_reached(&self, _sender: Option<&AnyObject>) {
@@ -599,6 +605,7 @@ impl MainWindowController {
 
         list.set_selection_action(sel!(listSelectionChanged:));
         list.set_end_action(sel!(listEndReached:));
+        list.set_select_all_action(sel!(listSelectAll:));
         let fields = crate::screen_fields::ScreenFields::new(
             mtm,
             self.as_ref(),

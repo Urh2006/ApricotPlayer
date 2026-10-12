@@ -215,6 +215,16 @@ podporo in temi popravki skupaj (Urh, 12. 10. 2026).
    izbira seznama) in opozorilo, ko je skladba že na seznamu, da ne nastanejo
    dvojniki. Preveri, ali Shift+A za posamezne skladbe deluje, kot je prej.
    Obe platformi, na koncu rewrita.
+   Narejeno (12. 10. 2026, Urhova odločitev): v Spotify seznamu Shift+A
+   (dejanje `queue_audio`, uporabnik ga lahko prestavi) označi ali odznači
+   skladbo in pove število označenih; Spotify skladbe ne gredo več v vrsto
+   prenosov. Ctrl+A (na Macu Command+A) najprej naloži preostale strani in
+   označi vse skladbe celotnega seznama. Označene vrstice imajo na koncu
+   "marked". Add to Spotify playlist doda označene (sicer izbrano vrstico);
+   za obstoječi seznam ga prej v celoti prebere in, če so nekatere skladbe
+   že tam, vpraša: dodaj samo nove ali dodaj vse. Po potrditvi Spotifyja se
+   oznake počistijo. Obe platformi; enotni test na Macu, s pravim računom
+   ni preizkušeno.
 6. **Posodabljanje librespot.** librespot je v programu preveden kot
    knjižnica, zato se ga ne da posodobiti kot yt-dlp; nova verzija pride z
    novo izdajo programa. Pred objavo preveri, ali je potrebna novejša

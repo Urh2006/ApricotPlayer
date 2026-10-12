@@ -145,6 +145,8 @@ struct Frame {
     following: Option<bool>,
     /// Home and browse pages: the sections behind the section rows.
     sections: Vec<apricot_spotify::catalog::Section>,
+    /// Ctrl+A waits for the remaining pages, then marks every song.
+    mark_all: bool,
 }
 
 /// A change waiting for Spotify's answer.
@@ -152,6 +154,14 @@ enum Pending {
     Saved,
     Add {
         name: String,
+        count: usize,
+    },
+    /// The whole target playlist loads to find songs already in it.
+    Duplicates {
+        playlist: String,
+        name: String,
+        uris: Vec<String>,
+        existing: Vec<String>,
     },
     Remove {
         uid: String,
@@ -192,6 +202,8 @@ pub(super) struct BrowseState {
     /// Songs the account hid, read when the first personal mix opens.
     hidden: Option<std::collections::HashSet<String>>,
     hidden_load: Option<SpotifyStamp>,
+    /// Songs marked with Shift+A or Ctrl+A for "Add to Spotify playlist".
+    marks: apricot_app::spotify::SpotifyMarks,
 }
 
 pub(super) const fn is_view(view: MainView) -> bool {
@@ -246,6 +258,7 @@ pub(super) unsafe fn open(window: HWND, source: Source, title: String) {
         personalised: false,
         following: None,
         sections: Vec::new(),
+        mark_all: false,
     });
     if let Some(frame) = state.spotify_browse.frames.last_mut()
         && let Source::Section(items) = &frame.source
@@ -300,8 +313,13 @@ pub(super) unsafe fn loaded(
     let texts = super::spotify::catalog(state);
     let pending_load = matches!(
         state.spotify_browse.pending,
-        Some((wanted, Pending::Playlists { .. } | Pending::Describe { .. } | Pending::Preview { .. }))
-            if wanted == stamp
+        Some((
+            wanted,
+            Pending::Playlists { .. }
+                | Pending::Describe { .. }
+                | Pending::Preview { .. }
+                | Pending::Duplicates { .. }
+        )) if wanted == stamp
     );
     if pending_load && let Some((_, pending)) = state.spotify_browse.pending.take() {
         match (pending, result) {
@@ -314,6 +332,33 @@ pub(super) unsafe fn loaded(
             }
             (Pending::Preview { name }, Ok(CatalogResult::Preview(url))) => {
                 play_preview(window, &name, url.as_deref());
+            }
+            (
+                Pending::Duplicates {
+                    playlist,
+                    name,
+                    uris,
+                    mut existing,
+                },
+                Ok(CatalogResult::Collection(collection)),
+            ) => {
+                existing.extend(collection.page.items.into_iter().map(|item| item.uri));
+                match collection.page.next_offset {
+                    Some(offset) => load_for(
+                        window,
+                        CatalogRequest::Playlist {
+                            uri: playlist.clone(),
+                            offset,
+                        },
+                        Pending::Duplicates {
+                            playlist,
+                            name,
+                            uris,
+                            existing,
+                        },
+                    ),
+                    None => add_without_duplicates(window, playlist, &name, &uris, &existing),
+                }
             }
             (_, Err(error)) => {
                 let text = apricot_app::spotify::error_text(&texts, &error);
@@ -450,8 +495,166 @@ pub(super) unsafe fn loaded(
         service.load_catalog(stamp, CatalogRequest::HiddenSongs);
     }
     if is_top && state.view == MainView::SpotifyBrowse {
+        if top(state).is_some_and(|frame| frame.mark_all) {
+            continue_mark_all(window);
+        }
         render(window, false);
     }
+}
+
+/// Ctrl+A: every song of the open list, also the pages not loaded yet, is
+/// marked for "Add to Spotify playlist".
+pub(super) unsafe fn mark_all(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    if state.view != MainView::SpotifyBrowse {
+        return;
+    }
+    let texts = super::spotify::catalog(state);
+    let Some(frame) = state.spotify_browse.frames.last_mut() else {
+        return;
+    };
+    frame.mark_all = true;
+    if frame.next_offset.is_some() || frame.loading.is_some() {
+        super::spotify::announce(window, texts.text("spotify_marking_all"));
+    }
+    continue_mark_all(window);
+    render(window, false);
+}
+
+/// Loads the next page for Ctrl+A, or marks the songs when all are in.
+unsafe fn continue_mark_all(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let Some(frame) = state.spotify_browse.frames.last_mut() else {
+        return;
+    };
+    if frame.loading.is_some() {
+        return;
+    }
+    if let Some(offset) = frame.next_offset {
+        request(window, offset);
+        return;
+    }
+    frame.mark_all = false;
+    let songs: Vec<String> = frame
+        .items
+        .iter()
+        .filter(|item| item.kind.is_playable_item() && item.playable)
+        .map(|item| item.uri.clone())
+        .collect();
+    let count = songs.len();
+    state.spotify_browse.marks.mark_all(songs);
+    let texts = super::spotify::catalog(state);
+    let text = texts
+        .text("spotify_marked_all")
+        .replace("{count}", &count.to_string());
+    super::spotify::announce(window, &text);
+}
+
+/// Shift+A in a Spotify list: marks or unmarks the selected song; Spotify
+/// songs never go into the download queue.
+pub(super) unsafe fn toggle_mark(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let texts = super::spotify::catalog(state);
+    let Some(uri) = selected_item(state)
+        .filter(|item| item.kind.is_playable_item() && item.playable)
+        .map(|item| item.uri.clone())
+    else {
+        super::spotify::announce(window, texts.text("no_selection"));
+        return;
+    };
+    let marked = state.spotify_browse.marks.toggle(&uri);
+    let key = if marked {
+        "spotify_marked"
+    } else {
+        "spotify_unmarked"
+    };
+    let text = texts
+        .text(key)
+        .replace("{count}", &state.spotify_browse.marks.len().to_string());
+    super::spotify::announce(window, &text);
+    render(window, false);
+}
+
+/// The songs "Add to Spotify playlist" adds: the marked ones, or the
+/// selected row.
+fn songs_to_add(state: &WindowState, selected: &str) -> Vec<String> {
+    if state.spotify_browse.marks.is_empty() {
+        vec![selected.to_owned()]
+    } else {
+        state.spotify_browse.marks.uris().to_vec()
+    }
+}
+
+/// The whole playlist is in: songs already there are left out, or added
+/// anyway, as the user chooses.
+unsafe fn add_without_duplicates(
+    window: HWND,
+    playlist: String,
+    name: &str,
+    uris: &[String],
+    existing: &[String],
+) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let texts = super::spotify::catalog(state);
+    let (new, duplicates) = apricot_app::spotify::split_duplicates(uris, existing);
+    let uris = if duplicates == 0 {
+        uris.to_vec()
+    } else {
+        let question = texts
+            .text("spotify_duplicates_question")
+            .replace("{count}", &duplicates.to_string())
+            .replace("{total}", &uris.len().to_string())
+            .replace("{name}", name);
+        let choices = [
+            texts.text("spotify_add_new_only").to_owned(),
+            texts.text("spotify_add_all_anyway").to_owned(),
+        ];
+        state.modal_open = true;
+        let chosen = crate::playlist_dialog_win32::choose(
+            window,
+            texts.text("spotify_add_to_playlist"),
+            &question,
+            &choices,
+            texts.text("ok"),
+            texts.text("cancel"),
+        );
+        if let Some(state) = state_mut(window) {
+            state.modal_open = false;
+        }
+        super::resume_deferred_window_work(window);
+        restore_focus(window);
+        match chosen.ok().flatten() {
+            Some(0) if new.is_empty() => {
+                let text = texts.text("spotify_nothing_new").replace("{name}", name);
+                if let Some(state) = state_mut(window) {
+                    state.spotify_browse.marks.clear();
+                }
+                super::spotify::announce(window, &text);
+                render(window, false);
+                return;
+            }
+            Some(0) => new,
+            Some(_) => uris.to_vec(),
+            None => return,
+        }
+    };
+    let count = uris.len();
+    begin_edit(
+        window,
+        apricot_spotify::LibraryEdit::AddToPlaylist { playlist, uris },
+        Pending::Add {
+            name: name.to_owned(),
+            count,
+        },
+    );
 }
 
 /// Refills the list. `focus` puts the focus on it (opening, going back);
@@ -483,6 +686,10 @@ unsafe fn render(window: HWND, focus: bool) {
                 {
                     label.push_str(", ");
                     label.push_str(texts.text("spotify_hidden"));
+                }
+                if state.spotify_browse.marks.contains(&item.uri) {
+                    label.push_str(", ");
+                    label.push_str(texts.text("spotify_marked_row"));
                 }
                 label
             })
@@ -1278,19 +1485,29 @@ unsafe fn choose_playlist(window: HWND, uris: Vec<String>) {
     match chosen.ok().flatten() {
         Some(0) => create_playlist_then_add(window, Some(uris)),
         Some(index) => {
+            restore_focus(window);
             if let Some(playlist) = playlists.get(index - 1) {
-                begin_edit(
+                // The whole playlist loads first, to find duplicates.
+                if let Some(state) = super::state(window) {
+                    let text = texts
+                        .text("spotify_checking_duplicates")
+                        .replace("{name}", &playlist.name);
+                    set_status(state, &text, false);
+                }
+                load_for(
                     window,
-                    apricot_spotify::LibraryEdit::AddToPlaylist {
-                        playlist: playlist.uri.clone(),
-                        uris,
+                    CatalogRequest::Playlist {
+                        uri: playlist.uri.clone(),
+                        offset: 0,
                     },
-                    Pending::Add {
+                    Pending::Duplicates {
+                        playlist: playlist.uri.clone(),
                         name: playlist.name.clone(),
+                        uris,
+                        existing: Vec::new(),
                     },
                 );
             }
-            restore_focus(window);
         }
         None => restore_focus(window),
     }
@@ -1349,9 +1566,20 @@ pub(super) unsafe fn edited(
             };
             texts.text(key).to_owned()
         }
-        (O::AddedToPlaylist { .. }, Pending::Add { name }) => texts
-            .text("spotify_added_to_playlist")
-            .replace("{name}", &name),
+        (O::AddedToPlaylist { .. }, Pending::Add { name, count }) => {
+            // The marks are used up once Spotify confirmed them.
+            state.spotify_browse.marks.clear();
+            if count > 1 {
+                texts
+                    .text("spotify_added_count")
+                    .replace("{count}", &count.to_string())
+                    .replace("{name}", &name)
+            } else {
+                texts
+                    .text("spotify_added_to_playlist")
+                    .replace("{name}", &name)
+            }
+        }
         (O::RemovedFromPlaylist { .. }, Pending::Remove { uid }) => {
             if let Some(frame) = state.spotify_browse.frames.last_mut() {
                 frame
@@ -1404,12 +1632,16 @@ pub(super) unsafe fn edited(
                 }
             }
             if let Some(uris) = then_add {
+                let count = uris.len();
                 follow_up = Some((
                     apricot_spotify::LibraryEdit::AddToPlaylist {
                         playlist: uri.clone(),
                         uris,
                     },
-                    Pending::Add { name: name.clone() },
+                    Pending::Add {
+                        name: name.clone(),
+                        count,
+                    },
                 ));
             }
             texts
@@ -1513,7 +1745,13 @@ pub(super) unsafe fn command(window: HWND, command: apricot_app::context_menu::C
             }
         }
         C::SpotifyToggleSaved => toggle_saved(window),
-        C::SpotifyAddToPlaylist => add_to_playlist(window, vec![item.uri.clone()]),
+        C::SpotifyAddToPlaylist => {
+            let songs = super::state(window).map_or_else(
+                || vec![item.uri.clone()],
+                |state| songs_to_add(state, &item.uri),
+            );
+            add_to_playlist(window, songs);
+        }
         C::SpotifyRemoveFromPlaylist => remove_selected(window),
         C::SpotifyMoveUp => move_selected(window, true),
         C::SpotifyMoveDown => move_selected(window, false),

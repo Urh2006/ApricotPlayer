@@ -474,8 +474,91 @@ pub fn named(catalog: &TranslationCatalog, key: &str, name: &str) -> String {
     catalog.text(key).replace("{name}", name)
 }
 
+/// Songs marked for "Add to Spotify playlist" with Shift+A or, for the
+/// whole list, Ctrl+A (Urh's beta 6 request); in marking order.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SpotifyMarks {
+    uris: Vec<String>,
+}
+
+impl SpotifyMarks {
+    /// Marks or unmarks `uri`; `true` when it is marked now.
+    pub fn toggle(&mut self, uri: &str) -> bool {
+        if let Some(position) = self.uris.iter().position(|marked| marked == uri) {
+            self.uris.remove(position);
+            false
+        } else {
+            self.uris.push(uri.to_owned());
+            true
+        }
+    }
+
+    /// Marks every one of `uris` that is not marked yet.
+    pub fn mark_all(&mut self, uris: impl IntoIterator<Item = String>) {
+        for uri in uris {
+            if !self.uris.contains(&uri) {
+                self.uris.push(uri);
+            }
+        }
+    }
+
+    pub fn contains(&self, uri: &str) -> bool {
+        self.uris.iter().any(|marked| marked == uri)
+    }
+
+    pub const fn len(&self) -> usize {
+        self.uris.len()
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.uris.is_empty()
+    }
+
+    pub fn uris(&self) -> &[String] {
+        &self.uris
+    }
+
+    pub fn clear(&mut self) {
+        self.uris.clear();
+    }
+}
+
+/// The songs of `adding` that `existing` does not have yet, in order, and
+/// how many of `adding` are already there.
+pub fn split_duplicates(adding: &[String], existing: &[String]) -> (Vec<String>, usize) {
+    let existing: std::collections::HashSet<&str> = existing.iter().map(String::as_str).collect();
+    let new: Vec<String> = adding
+        .iter()
+        .filter(|uri| !existing.contains(uri.as_str()))
+        .cloned()
+        .collect();
+    let duplicates = adding.len() - new.len();
+    (new, duplicates)
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn marks_toggle_and_mark_all_keep_the_order() {
+        let mut marks = super::SpotifyMarks::default();
+        assert!(marks.toggle("a"));
+        assert!(marks.toggle("b"));
+        assert!(!marks.toggle("a"));
+        marks.mark_all(["c".to_owned(), "b".to_owned(), "a".to_owned()]);
+        assert_eq!(marks.uris(), ["b", "c", "a"]);
+        assert!(marks.contains("c"));
+    }
+
+    #[test]
+    fn duplicates_are_counted_and_left_out() {
+        let adding = ["a", "b", "c"].map(str::to_owned);
+        let existing = ["b".to_owned()];
+        assert_eq!(
+            super::split_duplicates(&adding, &existing),
+            (vec!["a".to_owned(), "c".to_owned()], 1)
+        );
+    }
     use super::*;
     use crate::main_menu::english_catalog;
 

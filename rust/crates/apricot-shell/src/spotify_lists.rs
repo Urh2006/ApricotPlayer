@@ -138,6 +138,8 @@ struct Frame {
     following: Option<bool>,
     /// Home and browse pages: the sections behind the section rows.
     sections: Vec<apricot_spotify::catalog::Section>,
+    /// Ctrl+A waits for the remaining pages, then marks every song.
+    mark_all: bool,
 }
 
 /// A change waiting for Spotify's answer (Windows `Pending`).
@@ -145,6 +147,14 @@ enum Pending {
     Saved,
     Add {
         name: String,
+        count: usize,
+    },
+    /// The whole target playlist loads to find songs already in it.
+    Duplicates {
+        playlist: String,
+        name: String,
+        uris: Vec<String>,
+        existing: Vec<String>,
     },
     Remove {
         uid: String,
@@ -188,6 +198,8 @@ pub(crate) struct BrowseState {
     hidden_load: Option<SpotifyStamp>,
     /// When the open playlist was last checked.
     refreshed_at: Option<Instant>,
+    /// Songs marked with Shift+A or Ctrl+A for "Add to Spotify playlist".
+    marks: apricot_app::spotify::SpotifyMarks,
 }
 
 /// The Spotify search dialog's texts (Windows `SearchTexts`).
@@ -390,6 +402,7 @@ impl Shell {
             personalised: false,
             following: None,
             sections: Vec::new(),
+            mark_all: false,
         };
         if let Source::Section(items) = &frame.source {
             frame.items.clone_from(items);
@@ -437,7 +450,13 @@ impl Shell {
         let texts = self.catalog();
         let pending_load = matches!(
             self.spotify.browse.pending,
-            Some((wanted, Pending::Playlists { .. } | Pending::Describe { .. } | Pending::Preview { .. }))
+            Some((
+                wanted,
+                Pending::Playlists { .. }
+                    | Pending::Describe { .. }
+                    | Pending::Preview { .. }
+                    | Pending::Duplicates { .. }
+            ))
                 if wanted == stamp
         );
         if pending_load && let Some((_, pending)) = self.spotify.browse.pending.take() {
@@ -451,6 +470,34 @@ impl Shell {
                 }
                 (Pending::Preview { name }, Ok(CatalogResult::Preview(url))) => {
                     self.browse_play_preview(ui, &name, url.as_deref());
+                }
+                (
+                    Pending::Duplicates {
+                        playlist,
+                        name,
+                        uris,
+                        mut existing,
+                    },
+                    Ok(CatalogResult::Collection(collection)),
+                ) => {
+                    existing.extend(collection.page.items.into_iter().map(|item| item.uri));
+                    match collection.page.next_offset {
+                        Some(offset) => self.browse_load_for(
+                            ui,
+                            CatalogRequest::Playlist {
+                                uri: playlist.clone(),
+                                offset,
+                            },
+                            Pending::Duplicates {
+                                playlist,
+                                name,
+                                uris,
+                                existing,
+                            },
+                        ),
+                        None => self
+                            .browse_add_without_duplicates(ui, playlist, &name, &uris, &existing),
+                    }
                 }
                 (_, Err(error)) => {
                     ui.set_status(&apricot_app::spotify::error_text(&texts, &error), true);
@@ -586,8 +633,149 @@ impl Shell {
             service.load_catalog(stamp, CatalogRequest::HiddenSongs);
         }
         if is_top && self.view == View::SpotifyBrowse {
+            if self.spotify.browse.frames[index].mark_all {
+                self.browse_continue_mark_all(ui);
+            }
             self.browse_render(ui, false);
         }
+    }
+
+    /// Ctrl+A: every song of the open list, also the pages not loaded yet,
+    /// is marked for "Add to Spotify playlist".
+    pub(crate) fn spotify_mark_all(&mut self, ui: &mut dyn ShellUi) {
+        if self.view != View::SpotifyBrowse {
+            return;
+        }
+        let Some(frame) = self.spotify.browse.frames.last_mut() else {
+            return;
+        };
+        frame.mark_all = true;
+        let more = frame.next_offset.is_some() || frame.loading.is_some();
+        if more {
+            ui.set_status(&self.text("spotify_marking_all"), true);
+        }
+        self.browse_continue_mark_all(ui);
+        self.browse_render(ui, false);
+    }
+
+    /// Loads the next page for Ctrl+A, or marks the songs when all are in.
+    fn browse_continue_mark_all(&mut self, ui: &mut dyn ShellUi) {
+        let Some(frame) = self.spotify.browse.frames.last() else {
+            return;
+        };
+        if frame.loading.is_some() {
+            return;
+        }
+        if let Some(offset) = frame.next_offset {
+            self.browse_request(offset);
+            return;
+        }
+        let songs: Vec<String> = frame
+            .items
+            .iter()
+            .filter(|item| item.kind.is_playable_item() && item.playable)
+            .map(|item| item.uri.clone())
+            .collect();
+        let count = songs.len();
+        if let Some(frame) = self.spotify.browse.frames.last_mut() {
+            frame.mark_all = false;
+        }
+        self.spotify.browse.marks.mark_all(songs);
+        ui.set_status(
+            &self
+                .text("spotify_marked_all")
+                .replace("{count}", &count.to_string()),
+            true,
+        );
+    }
+
+    /// Shift+A in a Spotify list: marks or unmarks the selected song.
+    pub(crate) fn spotify_toggle_mark(&mut self, ui: &mut dyn ShellUi) {
+        let Some(uri) = self
+            .browse_selected_item(ui)
+            .filter(|item| item.kind.is_playable_item() && item.playable)
+            .map(|item| item.uri.clone())
+        else {
+            ui.set_status(&self.text("no_selection"), true);
+            return;
+        };
+        let marked = self.spotify.browse.marks.toggle(&uri);
+        let key = if marked {
+            "spotify_marked"
+        } else {
+            "spotify_unmarked"
+        };
+        let count = self.spotify.browse.marks.len().to_string();
+        ui.set_status(&self.text(key).replace("{count}", &count), true);
+        self.browse_render(ui, false);
+    }
+
+    /// The songs "Add to Spotify playlist" adds: the marked ones, or the
+    /// selected row.
+    fn browse_songs_to_add(&self, selected: &str) -> Vec<String> {
+        if self.spotify.browse.marks.is_empty() {
+            vec![selected.to_owned()]
+        } else {
+            self.spotify.browse.marks.uris().to_vec()
+        }
+    }
+
+    /// The whole playlist is in: songs already there are left out, or
+    /// added anyway, as the user chooses.
+    fn browse_add_without_duplicates(
+        &mut self,
+        ui: &mut dyn ShellUi,
+        playlist: String,
+        name: &str,
+        uris: &[String],
+        existing: &[String],
+    ) {
+        let (new, duplicates) = apricot_app::spotify::split_duplicates(uris, existing);
+        let uris = if duplicates == 0 {
+            uris.to_vec()
+        } else {
+            let question = self
+                .text("spotify_duplicates_question")
+                .replace("{count}", &duplicates.to_string())
+                .replace("{total}", &uris.len().to_string())
+                .replace("{name}", name);
+            let title = self.text("spotify_add_to_playlist");
+            let chosen = ui.choose(&ChoiceDialog {
+                title,
+                list_name: question.clone(),
+                prompt: question,
+                choices: vec![
+                    self.text("spotify_add_new_only"),
+                    self.text("spotify_add_all_anyway"),
+                ],
+                initial: 0,
+                ok: self.text("ok"),
+                cancel: self.text("cancel"),
+            });
+            ui.focus_primary_control();
+            match chosen {
+                Some(0) if new.is_empty() => {
+                    ui.set_status(
+                        &self.text("spotify_nothing_new").replace("{name}", name),
+                        true,
+                    );
+                    self.spotify.browse.marks.clear();
+                    self.browse_render(ui, false);
+                    return;
+                }
+                Some(0) => new,
+                Some(_) => uris.to_vec(),
+                None => return,
+            }
+        };
+        let count = uris.len();
+        self.browse_begin_edit(
+            LibraryEdit::AddToPlaylist { playlist, uris },
+            Pending::Add {
+                name: name.to_owned(),
+                count,
+            },
+        );
     }
 
     /// Refills the list. `focus` puts the focus on it (opening, going
@@ -618,6 +806,10 @@ impl Shell {
                     {
                         label.push_str(", ");
                         label.push_str(texts.text("spotify_hidden"));
+                    }
+                    if self.spotify.browse.marks.contains(&item.uri) {
+                        label.push_str(", ");
+                        label.push_str(texts.text("spotify_marked_row"));
                     }
                     label
                 })
@@ -1310,18 +1502,29 @@ impl Shell {
         match chosen {
             Some(0) => self.browse_create_playlist_then_add(ui, Some(uris)),
             Some(index) => {
+                ui.focus_primary_control();
                 if let Some(playlist) = playlists.get(index - 1) {
-                    self.browse_begin_edit(
-                        LibraryEdit::AddToPlaylist {
-                            playlist: playlist.uri.clone(),
-                            uris,
+                    // The whole playlist loads first, to find duplicates.
+                    ui.set_status(
+                        &self
+                            .text("spotify_checking_duplicates")
+                            .replace("{name}", &playlist.name),
+                        false,
+                    );
+                    self.browse_load_for(
+                        ui,
+                        CatalogRequest::Playlist {
+                            uri: playlist.uri.clone(),
+                            offset: 0,
                         },
-                        Pending::Add {
+                        Pending::Duplicates {
+                            playlist: playlist.uri.clone(),
                             name: playlist.name.clone(),
+                            uris,
+                            existing: Vec::new(),
                         },
                     );
                 }
-                ui.focus_primary_control();
             }
             None => ui.focus_primary_control(),
         }
@@ -1379,9 +1582,20 @@ impl Shell {
                 };
                 texts.text(key).to_owned()
             }
-            (O::AddedToPlaylist { .. }, Pending::Add { name }) => texts
-                .text("spotify_added_to_playlist")
-                .replace("{name}", &name),
+            (O::AddedToPlaylist { .. }, Pending::Add { name, count }) => {
+                // The marks are used up once Spotify confirmed them.
+                self.spotify.browse.marks.clear();
+                if count > 1 {
+                    texts
+                        .text("spotify_added_count")
+                        .replace("{count}", &count.to_string())
+                        .replace("{name}", &name)
+                } else {
+                    texts
+                        .text("spotify_added_to_playlist")
+                        .replace("{name}", &name)
+                }
+            }
             (O::RemovedFromPlaylist { .. }, Pending::Remove { uid }) => {
                 if let Some(frame) = self.spotify.browse.frames.last_mut() {
                     frame
@@ -1434,12 +1648,16 @@ impl Shell {
                     }
                 }
                 if let Some(uris) = then_add {
+                    let count = uris.len();
                     follow_up = Some((
                         LibraryEdit::AddToPlaylist {
                             playlist: uri.clone(),
                             uris,
                         },
-                        Pending::Add { name: name.clone() },
+                        Pending::Add {
+                            name: name.clone(),
+                            count,
+                        },
                     ));
                 }
                 texts
@@ -1547,7 +1765,10 @@ impl Shell {
                 }
             }
             C::SpotifyToggleSaved => self.spotify_toggle_saved(ui),
-            C::SpotifyAddToPlaylist => self.browse_add_to_playlist(ui, vec![item.uri.clone()]),
+            C::SpotifyAddToPlaylist => {
+                let songs = self.browse_songs_to_add(&item.uri);
+                self.browse_add_to_playlist(ui, songs);
+            }
             C::SpotifyRemoveFromPlaylist => self.spotify_browse_remove_selected(ui),
             C::SpotifyMoveUp => self.browse_move_selected(ui, true),
             C::SpotifyMoveDown => self.browse_move_selected(ui, false),
@@ -1706,6 +1927,7 @@ impl Shell {
             personalised: false,
             following: None,
             sections: Vec::new(),
+            mark_all: false,
         });
         self.view = View::SpotifyBrowse;
         self.browse_render(ui, true);

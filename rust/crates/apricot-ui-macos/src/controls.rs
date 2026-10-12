@@ -90,6 +90,8 @@ pub struct ListIvars {
     end: Cell<Option<Sel>>,
     /// Sent instead of moving focus on Tab (the settings section list).
     tab: Cell<Option<Sel>>,
+    /// Sent on Select All (Command+A, the Edit menu).
+    select_all: Cell<Option<Sel>>,
 }
 
 define_class!(
@@ -149,6 +151,14 @@ define_class!(
     }
 
     impl List {
+        /// Command+A reaches the list through the Edit menu's Select All.
+        #[unsafe(method(selectAll:))]
+        fn select_all(&self, _sender: Option<&AnyObject>) {
+            if let Some(action) = self.ivars().select_all.get() {
+                self.send(action);
+            }
+        }
+
         /// VoiceOver's "show menu" (VO+Shift+M).
         #[unsafe(method(accessibilityPerformShowMenu))]
         fn accessibility_show_menu(&self) -> bool {
@@ -367,6 +377,11 @@ impl List {
     }
 
     /// The selector sent instead of moving focus on Tab.
+    /// The selector sent to the target on Select All (Command+A).
+    pub fn set_select_all_action(&self, action: Sel) {
+        self.ivars().select_all.set(Some(action));
+    }
+
     pub fn set_tab_action(&self, action: Sel) {
         self.ivars().tab.set(Some(action));
     }

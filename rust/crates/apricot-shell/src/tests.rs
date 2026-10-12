@@ -1126,6 +1126,45 @@ mod spotify_lists {
     }
 
     #[test]
+    fn shift_a_marks_one_song_and_ctrl_a_marks_the_whole_list() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell.spotify_browse_test_open(
+            &mut ui,
+            Source::Album("spotify:album:a".into()),
+            "Album",
+            vec![track("one", "u1"), track("two", "u2"), track("three", "u3")],
+            false,
+        );
+        ui.selected = Some(1);
+        shell.activate_action(&mut ui, "queue_audio");
+        assert_eq!(
+            ui.announcements.last().unwrap(),
+            "Marked for a Spotify playlist, 1 marked."
+        );
+        let rows = &ui.screens.last().unwrap().rows;
+        assert!(rows[1].ends_with(", marked"));
+        assert!(!rows[0].ends_with(", marked"));
+        // Nothing went into the download queue.
+        assert!(shell.application.downloads().queued().is_empty());
+        shell.activate_action(&mut ui, "spotify_mark_all");
+        assert_eq!(
+            ui.announcements.last().unwrap(),
+            "All 3 songs marked for a Spotify playlist."
+        );
+        assert!(
+            ui.screens
+                .last()
+                .unwrap()
+                .rows
+                .iter()
+                .all(|row| row.ends_with(", marked"))
+        );
+        shell.activate_action(&mut ui, "queue_audio");
+        assert_eq!(ui.announcements.last().unwrap(), "Unmarked, 2 marked.");
+    }
+
+    #[test]
     fn a_list_is_named_by_its_title_with_open_and_back() {
         let mut shell = super::keyboard::shell();
         let mut ui = Ui::default();

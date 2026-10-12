@@ -12721,6 +12721,17 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
         return false;
     };
     let focus = GetFocus();
+    // Ctrl+A in a Spotify list marks the whole list.
+    if state.view == MainView::SpotifyBrowse
+        && focus == state.list
+        && chord.control
+        && !chord.shift
+        && !chord.alt
+        && matches!(chord.key, ShortcutKey::Character('a' | 'A'))
+    {
+        spotify_browse::mark_all(window);
+        return true;
+    }
     let background_focus = focus_in_background_player(state);
     if plain
         && chord.key == ShortcutKey::Space
@@ -13376,6 +13387,13 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "open_current_downloads" => show_download_queue(window),
         "download_audio" => start_download_shortcut(window, DownloadChoice::Audio),
         "download_video" => start_download_shortcut(window, DownloadChoice::Video),
+        // Spotify songs are never downloaded: Shift+A marks them for
+        // "Add to Spotify playlist".
+        "queue_audio"
+            if state(window).is_some_and(|state| state.view == MainView::SpotifyBrowse) =>
+        {
+            spotify_browse::toggle_mark(window);
+        }
         "queue_audio" => toggle_active_download_queue(window),
         "toggle_podcast_played" => toggle_selected_rss_played(window),
         "clear_podcast_progress" => clear_selected_rss_progress(window),

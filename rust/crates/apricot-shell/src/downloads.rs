@@ -569,6 +569,9 @@ impl Shell {
             "open_current_downloads" => self.show_download_queue(ui),
             "download_audio" => self.start_download_shortcut(ui, DownloadChoice::Audio),
             "download_video" => self.start_download_shortcut(ui, DownloadChoice::Video),
+            // Spotify songs are never downloaded: Shift+A marks them for
+            // "Add to Spotify playlist".
+            "queue_audio" if self.view == View::SpotifyBrowse => self.spotify_toggle_mark(ui),
             "queue_audio" => self.toggle_active_download_queue(ui),
             "file_converter" => self.show_converter(ui, false),
             "folder_converter" => self.show_converter(ui, true),

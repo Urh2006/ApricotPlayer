@@ -796,6 +796,10 @@ impl Shell {
                 self.show_spotify_devices(ui);
                 return true;
             }
+            "spotify_mark_all" => {
+                self.spotify_mark_all(ui);
+                return true;
+            }
             "spotify_toggle_saved" => {
                 self.spotify_toggle_saved(ui);
                 return true;
