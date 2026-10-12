@@ -258,6 +258,30 @@ pub trait ShellUi {
     /// returns where it was.
     fn audiovault_login(&mut self, login: &crate::AudiovaultLogin) -> Option<(String, String)>;
 
+    /// Windows `spotify_login_win32::show`: the login dialog after the
+    /// current event, with focus on its read-only status; its buttons call
+    /// [`crate::Shell::spotify_login_action`] and closing calls
+    /// [`crate::Shell::spotify_login_closed`].
+    fn open_spotify_login(&mut self, texts: &crate::SpotifyLoginTexts);
+
+    /// Windows `spotify_login_win32::update` of an open login dialog.
+    fn spotify_login_update(&mut self, update: &crate::SpotifyLoginUpdate);
+
+    /// Windows `spotify_settings_win32::show`: quality, normalisation,
+    /// autoplay and library order; `None` when cancelled.
+    fn spotify_settings(
+        &mut self,
+        texts: &crate::SpotifySettingsTexts,
+        current: apricot_spotify::settings::SpotifySettings,
+    ) -> Option<apricot_spotify::settings::SpotifySettings>;
+
+    /// Windows `spotify_queue_win32::update` of an open queue dialog.
+    fn spotify_queue_update(&mut self, rows: Vec<apricot_app::spotify::SpotifyQueueRow>);
+
+    /// Windows `spotify_devices_win32::update` of an open device list:
+    /// (device ID, label) rows.
+    fn spotify_devices_update(&mut self, rows: Vec<(String, String)>);
+
     /// Focus on the screen's list unless it has it.
     fn focus_list(&mut self);
 

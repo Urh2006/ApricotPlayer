@@ -317,6 +317,17 @@ mod equalizer {
             None
         }
         fn focus_list(&mut self) {}
+        fn open_spotify_login(&mut self, _texts: &crate::SpotifyLoginTexts) {}
+        fn spotify_login_update(&mut self, _update: &crate::SpotifyLoginUpdate) {}
+        fn spotify_settings(
+            &mut self,
+            _texts: &crate::SpotifySettingsTexts,
+            _current: apricot_spotify::settings::SpotifySettings,
+        ) -> Option<apricot_spotify::settings::SpotifySettings> {
+            None
+        }
+        fn spotify_queue_update(&mut self, _rows: Vec<apricot_app::spotify::SpotifyQueueRow>) {}
+        fn spotify_devices_update(&mut self, _rows: Vec<(String, String)>) {}
         fn settings_cookie_source(&mut self, _path: &str, _browser_index: usize) {}
         fn open_action_finder(&mut self, _model: apricot_app::ActionFinderModel) {}
         fn show_conversion_progress(&mut self, _title: &str, _message: &str, _total: usize) {}

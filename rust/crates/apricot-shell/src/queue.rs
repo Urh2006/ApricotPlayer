@@ -336,7 +336,10 @@ impl Shell {
             | View::DirectLink
             | View::PodcastCategories
             | View::DownloadQueue
-            | View::AudiovaultMenu => None,
+            | View::AudiovaultMenu
+            | View::SpotifyHub
+            | View::SpotifyAccounts
+            | View::SpotifyBrowse => None,
         }
     }
 
@@ -346,6 +349,21 @@ impl Shell {
         let item = self.active_media_item(ui);
         let entries = if self.view == View::DownloadQueue {
             self.download_queue_context_entries(ui)
+        } else if self.view == View::SpotifyAccounts {
+            let account = self.spotify_selected_account(ui);
+            let catalog = self.catalog();
+            let titles = Vec::new();
+            account.map(|account| {
+                context_menu::spotify_accounts_context_menu(
+                    &ContextMenuContext {
+                        catalog: &catalog,
+                        settings: self.application.settings(),
+                        user_playlist_titles: &titles,
+                        queued_download_count: self.application.downloads().queued().len(),
+                    },
+                    account.menu_account(),
+                )
+            })
         } else {
             self.context_entries(item.as_ref())
         };
@@ -386,6 +404,10 @@ impl Shell {
                     self.activate_action(ui, action_id);
                 }
             }
+            C::SpotifyUseAccount => self.spotify_use_selected_account(ui),
+            C::SpotifyLogIn => self.spotify_log_in_from_accounts(ui),
+            C::SpotifyLogOut => self.spotify_log_out_selected(ui),
+            C::SpotifyRemoveAccount => self.spotify_remove_selected(ui),
             C::DownloadAudio => self.start_active_download(ui, DownloadChoice::Audio),
             C::DownloadVideo => self.start_active_download(ui, DownloadChoice::Video),
             C::DownloadAllAudio => self.start_all_queued_downloads(ui, DownloadChoice::Audio),

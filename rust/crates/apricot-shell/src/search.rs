@@ -405,6 +405,9 @@ impl Shell {
             | View::AudiovaultMenu
             | View::AudiovaultSearch
             | View::AudiovaultResults
+            | View::SpotifyHub
+            | View::SpotifyAccounts
+            | View::SpotifyBrowse
             | View::Player => {}
         }
     }

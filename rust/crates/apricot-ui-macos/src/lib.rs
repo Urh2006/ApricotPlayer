@@ -52,6 +52,8 @@ mod self_test;
 #[cfg(target_os = "macos")]
 mod settings;
 #[cfg(target_os = "macos")]
+mod spotify_dialogs;
+#[cfg(target_os = "macos")]
 mod transcript;
 #[cfg(target_os = "macos")]
 mod video;

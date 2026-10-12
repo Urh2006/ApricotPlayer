@@ -13,6 +13,7 @@ apricot-app.workspace = true
 apricot-core.workspace = true
 apricot-media.workspace = true
 apricot-platform.workspace = true
+apricot-spotify.workspace = true
 apricot-storage.workspace = true
 chrono.workspace = true
 apricot-playback.workspace = true

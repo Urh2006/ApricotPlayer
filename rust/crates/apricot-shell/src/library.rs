@@ -221,6 +221,10 @@ impl Shell {
                 self.remove_selected_user_playlist(ui);
                 return;
             }
+            View::SpotifyAccounts => {
+                self.spotify_remove_selected(ui);
+                return;
+            }
             View::UserPlaylistItems => {
                 self.remove_selected_user_playlist_item(ui);
                 return;

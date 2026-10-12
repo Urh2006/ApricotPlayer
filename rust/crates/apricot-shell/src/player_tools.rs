@@ -151,7 +151,10 @@ impl Shell {
             | View::DownloadQueue
             | View::AudiovaultMenu
             | View::AudiovaultSearch
-            | View::AudiovaultResults => None,
+            | View::AudiovaultResults
+            | View::SpotifyHub
+            | View::SpotifyAccounts
+            | View::SpotifyBrowse => None,
         }
     }
 

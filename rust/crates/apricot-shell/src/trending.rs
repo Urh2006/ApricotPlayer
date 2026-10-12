@@ -452,7 +452,9 @@ impl Shell {
             ui.show_error(&self.text("no_selection"));
             return;
         }
-        // Spotify links arrive with Spotify (unit M13).
+        if self.spotify_play_link(ui, &text, action) {
+            return;
+        }
         let Some(item) = MediaItem::from_direct_link(&direct_link_with_scheme(&text)) else {
             ui.set_status(&self.text("direct_link_invalid"), true);
             ui.focus_screen_control("direct_link");

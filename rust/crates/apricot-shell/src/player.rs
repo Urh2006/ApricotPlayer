@@ -424,7 +424,7 @@ impl Shell {
     }
 
     /// Windows `playing_message`.
-    fn playing_message(&self, item: &MediaItem) -> String {
+    pub(crate) fn playing_message(&self, item: &MediaItem) -> String {
         let smart = item
             .metadata
             .get("spotify_smart_shuffle")
@@ -761,6 +761,7 @@ impl Shell {
         let volume = (audio.volume + delta).clamp(0.0, maximum);
         if self.execute_player_command(ui, PlaybackCommand::SetVolume(volume)) {
             self.application.set_player_volume(volume);
+            self.spotify_volume_changed(volume);
         }
     }
 
@@ -917,11 +918,32 @@ impl Shell {
         self.application.set_player_toggle(toggle, enabled);
         if let Some(volume) = clamped_volume {
             self.application.set_player_volume(volume);
+            self.spotify_volume_changed(volume);
         }
         ui.set_status(&self.text(session_toggle_key(toggle, enabled)), true);
         if self.view == View::Player {
             self.refresh_player(ui, PlayerFocus::Preserve);
         }
+    }
+
+    /// Windows `finish_current_item`: the item ends here (Spotify's
+    /// autoplay inside an Apricot playlist).
+    pub(crate) fn finish_current_item(&mut self, ui: &mut dyn ShellUi) {
+        let _ = self.execute_player_command(ui, PlaybackCommand::SetPaused(true));
+        let autoplay_next = self
+            .application
+            .player_session()
+            .enabled_toggles()
+            .contains(&SessionToggle::AutoplayNext);
+        if autoplay_next {
+            self.navigate_player_relative(ui, 1, true);
+            return;
+        }
+        ui.set_status(
+            &self.text("playback_finished"),
+            self.application.settings().announce_playback_finished,
+        );
+        self.refresh_player(ui, PlayerFocus::Preserve);
     }
 
     /// Windows `navigate_player_relative_from`.
@@ -1087,6 +1109,7 @@ impl Shell {
         if self.application.player_session().is_open() {
             self.close_player_runtime(ui);
         }
+        self.spotify_shutdown();
     }
 }
 

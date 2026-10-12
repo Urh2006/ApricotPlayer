@@ -70,6 +70,7 @@ pub struct ControllerIvars {
     /// The transcript window waiting to open after the current event.
     pending_transcript: RefCell<Option<apricot_shell::TranscriptDialog>>,
     pending_converter: RefCell<Option<apricot_shell::ConverterDialog>>,
+    pending_spotify_login: RefCell<Option<apricot_shell::SpotifyLoginTexts>>,
     pending_action_finder: RefCell<Option<apricot_app::ActionFinderModel>>,
     conversion_progress: RefCell<Option<Retained<crate::converter::ConversionProgress>>>,
     /// The comments window waiting to open after the current event.
@@ -203,6 +204,14 @@ define_class!(
             let model = self.ivars().pending_action_finder.borrow_mut().take();
             if let Some(model) = model {
                 crate::action_finder::run(self, model);
+            }
+        }
+
+        #[unsafe(method(openSpotifyLogin:))]
+        fn open_spotify_login(&self, _sender: Option<&AnyObject>) {
+            let texts = self.ivars().pending_spotify_login.borrow_mut().take();
+            if let Some(texts) = texts {
+                crate::spotify_dialogs::run_login(self, &texts);
             }
         }
 
@@ -346,6 +355,7 @@ impl MainWindowController {
             pending_queue: RefCell::new(None),
             pending_transcript: RefCell::new(None),
             pending_converter: RefCell::new(None),
+            pending_spotify_login: RefCell::new(None),
             pending_action_finder: RefCell::new(None),
             conversion_progress: RefCell::new(None),
             pending_comments: RefCell::new(None),
@@ -1023,6 +1033,15 @@ impl MainWindowController {
             return false;
         };
         let name = match index {
+            0 if std::env::var("APRICOT_MACOS_SELF_TEST_KIND").as_deref() == Ok("spotify") => {
+                self.run_action("open_spotify");
+                "open the Spotify hub"
+            }
+            1 if std::env::var("APRICOT_MACOS_SELF_TEST_KIND").as_deref() == Ok("spotify") => {
+                self.schedule_modal_self_test_keys_after(1.0);
+                self.run_action("open_selected");
+                "Return on the first hub row"
+            }
             0 if std::env::var("APRICOT_MACOS_SELF_TEST_KIND").as_deref() == Ok("audiovault") => {
                 self.schedule_modal_self_test_keys_after(1.0);
                 self.run_action("open_audiovault");
@@ -1369,6 +1388,16 @@ impl MainWindowController {
                 ("Escape", escape),
             ],
             "Action finder" => crate::self_test::action_finder_plan(),
+            "Spotify login" => vec![
+                ("Tab (Open browser)", key(keys::KEY_TAB, "\t")),
+                ("Tab (Copy link)", key(keys::KEY_TAB, "\t")),
+                (
+                    "Tab (Cancel, Try again is disabled)",
+                    key(keys::KEY_TAB, "\t"),
+                ),
+                ("Tab (status)", key(keys::KEY_TAB, "\t")),
+                ("Escape", escape),
+            ],
             "Log in to AudioVault" => vec![
                 ("Tab (password)", key(keys::KEY_TAB, "\t")),
                 ("Tab (Register)", key(keys::KEY_TAB, "\t")),
@@ -1912,6 +1941,35 @@ impl ShellUi for MacUi<'_> {
     fn settings_cookie_source(&mut self, path: &str, browser_index: usize) {
         crate::settings::cookie_source_exported(path, browser_index);
     }
+
+    fn open_spotify_login(&mut self, texts: &apricot_shell::SpotifyLoginTexts) {
+        *self.controller.ivars().pending_spotify_login.borrow_mut() = Some(texts.clone());
+        // SAFETY: `openSpotifyLogin:` exists on the controller.
+        unsafe {
+            let _: () = msg_send![
+                self.controller,
+                performSelector: sel!(openSpotifyLogin:),
+                withObject: Option::<&AnyObject>::None,
+                afterDelay: 0.0_f64
+            ];
+        }
+    }
+
+    fn spotify_login_update(&mut self, update: &apricot_shell::SpotifyLoginUpdate) {
+        crate::spotify_dialogs::login_update(update);
+    }
+
+    fn spotify_settings(
+        &mut self,
+        texts: &apricot_shell::SpotifySettingsTexts,
+        current: apricot_spotify::settings::SpotifySettings,
+    ) -> Option<apricot_spotify::settings::SpotifySettings> {
+        crate::spotify_dialogs::run_settings(self.controller.mtm(), texts, current)
+    }
+
+    fn spotify_queue_update(&mut self, _rows: Vec<apricot_app::spotify::SpotifyQueueRow>) {}
+
+    fn spotify_devices_update(&mut self, _rows: Vec<(String, String)>) {}
 
     fn open_settings(&mut self) {
         // SAFETY: `openSettings:` exists on the controller.

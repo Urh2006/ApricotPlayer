@@ -156,9 +156,10 @@ impl Shell {
             View::AudiovaultMenu | View::AudiovaultSearch | View::AudiovaultResults => {
                 self.audiovault_activate(ui);
             }
+            View::SpotifyHub | View::SpotifyAccounts => self.spotify_activate(ui),
             // Python `play_selected` on the empty result list.
             View::Search => ui.show_error(&self.text("no_selection")),
-            View::DirectLink | View::Player => {}
+            View::DirectLink | View::Player | View::SpotifyBrowse => {}
         }
     }
 
@@ -221,7 +222,8 @@ impl Shell {
         let edits = self.poll_edit_saves(ui);
         let podcasts = self.poll_podcast_work(ui);
         let downloads = self.poll_downloads(ui) | self.poll_conversions(ui);
-        let cookies = self.poll_cookie_events(ui) | self.poll_audiovault(ui);
+        let cookies =
+            self.poll_cookie_events(ui) | self.poll_audiovault(ui) | self.poll_spotify(ui);
         youtube
             || related
             || folder
@@ -369,6 +371,10 @@ impl Shell {
             self.audiovault_back(ui);
             return;
         }
+        if crate::spotify::is_view(self.view) {
+            self.spotify_back(ui);
+            return;
+        }
         self.cancel_youtube_work();
         self.cancel_local_folder_scan();
         let leaving_collection = self.view == View::Collection;
@@ -443,6 +449,8 @@ impl Shell {
             | Route::AudiovaultSearch
             | Route::AudiovaultResults
             | Route::AudiovaultEpisodes => self.audiovault_restore_after_player(ui),
+            Route::SpotifyHub | Route::SpotifyBrowse => self.show_spotify_hub(ui),
+            Route::SpotifyAccounts => self.show_spotify_accounts(ui, None),
             Route::DownloadQueue => {
                 self.view = View::DownloadQueue;
                 self.refresh_download_queue(ui, true, false);

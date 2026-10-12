@@ -264,6 +264,8 @@ fn cookie_profile_options(
 #[derive(Default)]
 pub(crate) struct SettingsState {
     open: bool,
+    /// Windows `saved_spotify_settings` when the window opened.
+    spotify_before: Option<apricot_spotify::settings::SpotifySettings>,
 }
 
 impl Shell {
@@ -275,6 +277,7 @@ impl Shell {
             return;
         }
         self.settings_window.open = true;
+        self.settings_window.spotify_before = Some(self.application.saved_spotify_settings());
         ui.open_settings();
     }
 
@@ -786,6 +789,9 @@ impl Shell {
     /// to its primary control and a chosen global action runs.
     pub fn settings_closed(&mut self, ui: &mut dyn ShellUi, deferred_action: Option<&'static str>) {
         self.settings_window.open = false;
+        if let Some(before) = self.settings_window.spotify_before.take() {
+            self.spotify_settings_window_closed(before);
+        }
         match self.view {
             View::MainMenu => {
                 self.refresh_main_menu(ui, MainMenuSelection::LastActivated, None, false);
@@ -811,7 +817,10 @@ impl Shell {
             | View::PodcastCategories
             | View::AudiovaultMenu
             | View::AudiovaultSearch
-            | View::AudiovaultResults => {}
+            | View::AudiovaultResults
+            | View::SpotifyHub
+            | View::SpotifyAccounts
+            | View::SpotifyBrowse => {}
         }
         ui.focus_primary_control();
         self.configure_rss_timer(ui);

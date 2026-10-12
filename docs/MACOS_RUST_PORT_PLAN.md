@@ -169,9 +169,10 @@ pa ostane nespremenjen do enote W1, ko Urh lahko sproti preizkuša z NVDA.
   aktivno od 11. 10. 2026),
   celoten prehod manifesta z VoiceOverjem na Urhovem MacBooku, beta DMG.
 
-## 4a. Napake za odpravo pred izdajo beta 8
+## 4a. Napake in želje za odpravo pred izdajo beta 6
 
-Beta 8 bo izšla z macOS podporo in temi popravki skupaj (Urh, 12. 10. 2026).
+Beta 6 (zadnja izdana je beta 5) bo izšla za Windows in macOS z macOS
+podporo in temi popravki skupaj (Urh, 12. 10. 2026).
 
 1. **Spotify po premoru izgubi prijavo (Windows, 12. 10. 2026).** Urh je
    predvajal prek Spotifyja, dal na pavzo in šel za nekaj minut stran. Ob
@@ -181,6 +182,29 @@ Beta 8 bo izšla z macOS podporo in temi popravki skupaj (Urh, 12. 10. 2026).
    izgubljena povezava ali žeton seje Spotify, ki se ne obnovi), nato jo
    popravi za obe platformi.
 2. Kolekcija "More" na Windows dvakrat doda pot (glej M6, popravi v W1).
+3. **Liked songs brez smart shuffle.** V Liked songs Shift+S preklaplja samo
+   shuffle vklop in izklop, drugje tudi smart shuffle (koda pozna smart
+   shuffle samo za konteksta `spotify:playlist:`). Preveri in popravi.
+4. **Pitch in hitrost se ohranita med predmeti.** Kot glasnost in bass
+   boost naj se pitch in hitrost ohranita, ko z Escape zapustim predvajalnik
+   in predvajam nekaj drugega; na privzeto se vrneta samo ob izrecnem
+   zaprtju predvajalnika (Close). Pri prev/next se pitch že ohrani. Obe
+   platformi.
+5. **Izbira več skladb v Spotifyju za dodajanje na seznam.** Predlagaj
+   sistem pred implementacijo (na primer Ctrl+A izbere vse rezultate, nato
+   izbira seznama) in opozorilo, ko je skladba že na seznamu, da ne nastanejo
+   dvojniki. Preveri, ali Shift+A za posamezne skladbe deluje, kot je prej.
+   Obe platformi, na koncu rewrita.
+6. **Posodabljanje librespot.** librespot je v programu preveden kot
+   knjižnica, zato se ga ne da posodobiti kot yt-dlp; nova verzija pride z
+   novo izdajo programa. Pred objavo preveri, ali je potrebna novejša
+   verzija (0.8.0 je pripeta), in o tem obvesti Urha.
+7. **Fokus po vrnitvi v okno.** Ko z Alt+Tab ali Shift+Tab preklopim v drugo
+   okno in nazaj, bralnik pove samo ime okna; fokus naj se vrne na zadnjo
+   kontrolo. Obe platformi.
+8. **Enter v iskalnem polju Spotify** na Windows še enkrat pove
+   ApricotPlayer in list, preden so rezultati. Popravi, če je vzrok jasen,
+   sicer ne posegaj.
 
 ## 5. Odprta vprašanja za Urha
 
@@ -807,3 +831,28 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   Macu (fokus na Email, Tab na Password, Register in OK, Escape zapre,
   fokus se vrne na glavni meni). Prave prijave in predvajanja nisem mogel
   preizkusiti, ker na Macu ni računa AudioVault.
+
+### M13a: Spotify jedro (12. 10. 2026)
+
+- `apricot-shell/src/spotify.rs` (Windows `spotify_win32.rs`): središče
+  (vrstni red Tab Windows: seznam, Open, Back), računi (uporabi, prijava,
+  odjava, odstranitev z vprašanjem, Delete), prijava prek brskalnika z
+  oknom za prijavo, samodejna povezava aktivnega računa ob zagonu, dogodki
+  seje (povezava, prekinitev, prijava, odprta povezava), Spotify povezave v
+  neposredni povezavi, Connect obvestila (predvajanje z drugih naprav,
+  nadaljevanje na naslednjo skladbo, nedosegljiva skladba), prenos
+  glasnosti v obe smeri, Command+PageUp/PageDown, Shift+S (tudi smart
+  shuffle) in R prek Connect, nastavitve Spotify (kakovost, normalizacija,
+  samodejno predvajanje, vrstni red knjižnice) in uporaba sprememb iz okna
+  nastavitev, zaustavitev seje ob izhodu.
+- `apricot-ui-macos/src/spotify_dialogs.rs`: okno za prijavo (fokus na
+  stanju, Open browser again, Copy login link, Try again samo po napaki,
+  Cancel z Escape) in okno nastavitev Spotify.
+- Seznami (iskanje, knjižnica, Liked songs, seznami, Home, Daily Mixes,
+  nedavno, Top, Browse all) pridejo z M13b, vrsta in naprave z M13c; do
+  takrat povedo, da še niso na voljo.
+- Preverjeno: samodejni preizkus na Macu (središče z vrstico Log in, Return
+  odpre okno za prijavo s fokusom na stanju, Tab čez Open browser, Copy
+  link, Cancel, Try again je onemogočen, Escape zapre in pove "Spotify login
+  cancelled"). Prave prijave nisem preizkusil, ker potrebuje brskalnik in
+  tvoj račun.

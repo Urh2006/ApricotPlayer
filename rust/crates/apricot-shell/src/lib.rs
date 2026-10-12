@@ -34,6 +34,8 @@ mod repeat;
 mod screens;
 mod search;
 mod settings_window;
+mod spotify;
+mod spotify_lists;
 mod transcript;
 mod transcript_loader;
 mod trending;
@@ -61,6 +63,9 @@ pub use search::result_label;
 pub use settings_window::{
     SettingsBinding, SettingsInput, ShortcutCapture, settings_binding, shortcut_action_label,
     shortcut_text,
+};
+pub use spotify::{
+    SpotifyLoginAction, SpotifyLoginTexts, SpotifyLoginUpdate, SpotifySettingsTexts,
 };
 pub use transcript::{TranscriptButton, TranscriptDialog, TranscriptRows};
 
@@ -99,6 +104,9 @@ pub enum View {
     AudiovaultMenu,
     AudiovaultSearch,
     AudiovaultResults,
+    SpotifyHub,
+    SpotifyAccounts,
+    SpotifyBrowse,
     Player,
 }
 
@@ -127,6 +135,7 @@ pub struct Shell {
     settings_window: settings_window::SettingsState,
     cookies: cookies::CookieState,
     audiovault: audiovault::AudiovaultState,
+    spotify: spotify::SpotifyState,
     /// A Settings browser export runs.
     settings_cookie_export_running: bool,
 }
@@ -156,6 +165,7 @@ impl Shell {
             settings_window: settings_window::SettingsState::default(),
             cookies: cookies::CookieState::default(),
             audiovault: audiovault::AudiovaultState::default(),
+            spotify: spotify::SpotifyState::default(),
             settings_cookie_export_running: false,
         }
     }
@@ -200,6 +210,10 @@ impl Shell {
         }
         self.start_rss(ui);
         self.install_cookie_repairer();
+        self.spotify_autoconnect();
+        if self.spotify.service_running() {
+            ui.set_background_polling(true);
+        }
     }
 
     /// End, or Down at the last row of the list (Windows
@@ -333,6 +347,10 @@ impl Shell {
                 self.show_audiovault_menu(ui);
                 return;
             }
+            "spotify" => {
+                self.show_spotify_hub(ui);
+                return;
+            }
             "file_converter" | "folder_converter" => {
                 self.show_converter(ui, item.id == "folder_converter");
                 return;
@@ -357,7 +375,9 @@ impl Shell {
     /// The player, podcast and download actions; `true` when `action_id`
     /// is one.
     fn feature_action(&mut self, ui: &mut dyn ShellUi, action_id: &str) -> bool {
-        self.activate_player_action(ui, action_id)
+        self.spotify_transport(ui, action_id)
+            || self.spotify_action(ui, action_id)
+            || self.activate_player_action(ui, action_id)
             || self.podcast_action(ui, action_id)
             || self.download_action(ui, action_id)
             || self.settings_action(ui, action_id)
