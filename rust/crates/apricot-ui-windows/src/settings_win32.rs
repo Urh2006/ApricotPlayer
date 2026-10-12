@@ -1130,6 +1130,8 @@ unsafe fn handle_settings_command(window: HWND, command: SettingsCommand) {
         SettingsCommand::ResetSection => reset_section(window),
         SettingsCommand::BrowseDownloadFolder => browse_download_folder(window),
         SettingsCommand::SetDefaultPlayer => set_default_player(window),
+        // Shown only on macOS.
+        SettingsCommand::ImportWindowsData => {}
         SettingsCommand::ResetEqualizerPreset => reset_equalizer_preset(window),
         SettingsCommand::AddEqualizerProfile => add_equalizer_profile(window),
         SettingsCommand::ImportEqualizerProfile => import_equalizer_profile(window),

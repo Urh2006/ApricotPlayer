@@ -348,6 +348,9 @@ mod equalizer {
         fn close_conversion_progress(&mut self) {}
         fn set_subscription_timer(&mut self, _interval_seconds: Option<f64>) {}
         fn set_app_update_timer(&mut self, _interval_seconds: Option<f64>) {}
+        fn choose_import_source(&mut self, _title: &str) -> Option<std::path::PathBuf> {
+            None
+        }
         fn schedule_startup_update_checks(&mut self, _ytdlp: Option<f64>, _app: Option<f64>) {}
         fn update_prompt(&mut self, _prompt: &crate::UpdatePrompt) -> bool {
             false

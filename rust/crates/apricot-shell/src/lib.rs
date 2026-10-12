@@ -44,6 +44,7 @@ mod trending;
 mod type_ahead;
 mod ui;
 mod updates;
+mod windows_import;
 mod youtube;
 
 pub use audiovault::AudiovaultLogin;

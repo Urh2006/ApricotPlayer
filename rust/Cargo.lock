@@ -212,6 +212,7 @@ dependencies = [
  "apricot-updater",
  "chrono",
  "serde_json",
+ "tempfile",
  "url",
 ]
 

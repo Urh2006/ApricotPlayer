@@ -192,6 +192,10 @@ pub trait ShellUi {
     /// of `extensions`, `None` when cancelled.
     fn choose_open_file(&mut self, title: &str, extensions: &[&str]) -> Option<PathBuf>;
 
+    /// macOS: an open panel for a folder or a ZIP file (the Windows data
+    /// to import), `None` when cancelled.
+    fn choose_import_source(&mut self, title: &str) -> Option<PathBuf>;
+
     /// Windows `GetSaveFileNameW`: a save dialog in `directory` starting
     /// with `default_name`, `None` when cancelled.
     fn choose_save_file(

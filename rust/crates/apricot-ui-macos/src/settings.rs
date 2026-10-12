@@ -1268,6 +1268,9 @@ impl SettingsWindow {
             }
             SettingsCommand::ExportBrowserCookies => self.export_browser_cookies(),
             SettingsCommand::SetDefaultPlayer => self.set_default_player(),
+            SettingsCommand::ImportWindowsData => {
+                self.with_shell(|shell, ui| shell.import_windows_data(ui));
+            }
             // Python `manual_ytdlp_update_check` applies the visible
             // controls; `manual_app_update_check` also saves them.
             SettingsCommand::CheckYtdlpUpdates | SettingsCommand::CheckAppUpdates => {

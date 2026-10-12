@@ -38,6 +38,8 @@ impl SettingsChoiceOption {
 pub enum SettingsCommand {
     BrowseDownloadFolder,
     SetDefaultPlayer,
+    /// macOS only: import the data of the Windows version.
+    ImportWindowsData,
     CheckYtdlpUpdates,
     CheckAppUpdates,
     CheckSubscriptions,
@@ -349,7 +351,7 @@ fn general_controls(
         })
         .collect();
 
-    vec![
+    let mut controls = vec![
         SettingsControl::Choice {
             setting: SettingId::Language,
             label: catalog.text("language").to_owned(),
@@ -455,7 +457,28 @@ fn general_controls(
             settings.tray_notification,
             catalog,
         ),
-    ]
+    ];
+    // The Windows data a Mac user brings along (plan unit M17).
+    if cfg!(target_os = "macos")
+        && let Some(position) = controls.iter().position(|control| {
+            matches!(
+                control,
+                SettingsControl::Command {
+                    command: SettingsCommand::SetDefaultPlayer,
+                    ..
+                }
+            )
+        })
+    {
+        controls.insert(
+            position + 1,
+            SettingsControl::Command {
+                command: SettingsCommand::ImportWindowsData,
+                label: catalog.text("import_windows_data").to_owned(),
+            },
+        );
+    }
+    controls
 }
 
 fn main_menu_controls(
@@ -1621,7 +1644,9 @@ mod tests {
             Path::new(r"C:\Profile\settings.json"),
             SettingsSection::General,
         );
-        assert_eq!(model.controls.len(), 18);
+        // macOS adds "Import data from Windows" after "Set default player".
+        let mac = usize::from(cfg!(target_os = "macos"));
+        assert_eq!(model.controls.len(), 18 + mac);
         assert!(matches!(
             &model.controls[0],
             SettingsControl::Choice {
@@ -1632,7 +1657,7 @@ mod tests {
             } if value == "sl" && options.len() == 27
         ));
         assert!(matches!(
-            &model.controls[5],
+            &model.controls[5 + mac],
             SettingsControl::Choice {
                 setting: SettingId::ResultsLimit,
                 value,
@@ -1640,7 +1665,7 @@ mod tests {
             } if value == "50"
         ));
         assert!(matches!(
-            &model.controls[8],
+            &model.controls[8 + mac],
             SettingsControl::Checkbox {
                 setting: SettingId::AutoUpdateYtdlp,
                 label,
@@ -1748,7 +1773,10 @@ mod tests {
     fn implemented_sections_preserve_complete_control_counts() {
         let settings = SettingsDocument::default();
         let expected = [
-            (SettingsSection::General, 18),
+            (
+                SettingsSection::General,
+                18 + usize::from(cfg!(target_os = "macos")),
+            ),
             // 19 Python items, Spotify and the reset button.
             (SettingsSection::MainMenu, 21),
             (SettingsSection::Playback, 35),

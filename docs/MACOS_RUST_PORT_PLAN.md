@@ -1027,3 +1027,28 @@ obvestila, odpiranje iz Finderja, zagon ob prijavi, privzeti predvajalnik).
   besedilu sprememb, klik na Update now je prenesel in preveril paket,
   program se je zaprl, skripta je zamenjala paket in ga znova zagnala.
   Ročno preverjanje yt-dlp proti GitHubu pove, da je 2026.08.19 najnovejši.
+
+### M17: uvoz podatkov iz Windows (12. 10. 2026)
+
+- Nastavitve, General, takoj za "Set default player" (samo na Macu):
+  "Import data from Windows". Odpre okno za izbiro mape s podatki
+  (`%APPDATA%\ApricotPlayer` Python verzije ali `ApricotPlayer2Beta` Rust
+  bete, lahko tudi mapa nad njima) ali ZIP z njimi, vpraša za potrditev,
+  shrani trenutne podatke Maca v `backup-before-windows-import-<čas>` v
+  mapi podatkov, uvozi in program zapre, da ob naslednjem zagonu prebere
+  uvožene datoteke.
+- Uvoz vzame trajne uporabniške datoteke iz manifesta podatkov
+  (nastavitve, priljubljeni, zaznamki, zgodovina, naročnine, podcasti,
+  seznami, obvestila, položaji, vrsta, zadnja seja, arhiv prenosov). Iz
+  nastavitev odstrani vse, kar velja samo za računalnik z Windows (mapo
+  prenosov in predpomnilnika, zvočno napravo, datoteke in profile piškotkov,
+  pot do FFmpeg ter vsako vrednost, ki je pot Windows), zato se uporabijo
+  privzete vrednosti Maca. Poverilnic, zaščitenih z Windows (Spotify,
+  AudioVault), ne uvozi. Če katera datoteka JSON ni veljavna, ne zamenja
+  ničesar.
+- Besedila v vseh 27 jezikih.
+- Preverjeno: enotni testi (odstranitev poti in naprave iz nastavitev,
+  uvoz iz mape z varnostno kopijo in brez poverilnic, poškodovana datoteka
+  ne zamenja ničesar, ZIP najde mapo s podatki) in število kontrol v
+  nastavitvah na obeh platformah. Okna za izbiro na Macu nisem preizkusil s
+  pravimi podatki iz Windows, ker jih tu ni.

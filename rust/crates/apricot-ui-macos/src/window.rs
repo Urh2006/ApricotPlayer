@@ -1984,6 +1984,23 @@ impl ShellUi for MacUi<'_> {
             .map(|path| PathBuf::from(path.to_string()))
     }
 
+    fn choose_import_source(&mut self, title: &str) -> Option<PathBuf> {
+        let panel = NSOpenPanel::openPanel(self.controller.mtm());
+        panel.setTitle(Some(&NSString::from_str(title)));
+        panel.setMessage(Some(&NSString::from_str(title)));
+        panel.setCanChooseFiles(true);
+        panel.setCanChooseDirectories(true);
+        panel.setAllowsMultipleSelection(false);
+        set_allowed_extensions(&panel, &["zip"]);
+        if panel.runModal() != NSModalResponseOK {
+            return None;
+        }
+        panel
+            .URL()
+            .and_then(|url| url.path())
+            .map(|path| PathBuf::from(path.to_string()))
+    }
+
     fn choose_save_file(
         &mut self,
         title: &str,
