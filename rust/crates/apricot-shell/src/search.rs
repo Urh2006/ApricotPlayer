@@ -228,6 +228,9 @@ impl Shell {
         {
             self.submit_search(ui);
         }
+        if id == "spotify_search_query" && self.view == View::SpotifyBrowse {
+            self.spotify_search_submit(ui);
+        }
         if id == "audiovault_query" && self.view == View::AudiovaultSearch {
             self.audiovault_search(ui);
         }

@@ -116,6 +116,7 @@ impl Shell {
             "add_folder_to_queue" => self.add_current_local_folder_to_queue(ui),
             "folder_playback_queue" => self.activate_action(ui, "open_playback_queue"),
             "load_trending" => self.load_trending_results(ui),
+            "spotify_search_run" => self.spotify_search_submit(ui),
             "collection_remove" => self.remove_selected_collection_item(ui),
             "history_clear" => self.clear_history(ui),
             "playlist_create" => self.create_user_playlist(ui, None),

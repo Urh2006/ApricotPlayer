@@ -71,7 +71,6 @@ pub use settings_window::{
 pub use spotify::{
     SpotifyLoginAction, SpotifyLoginTexts, SpotifyLoginUpdate, SpotifySettingsTexts,
 };
-pub use spotify_lists::SpotifySearchTexts;
 pub use spotify_panels::{
     SpotifyDialogAction, SpotifyDialogKind, SpotifyDialogRow, SpotifyListDialog,
 };

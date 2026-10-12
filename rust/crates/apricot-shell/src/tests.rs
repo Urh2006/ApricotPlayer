@@ -326,14 +326,6 @@ mod equalizer {
         ) -> Option<apricot_spotify::settings::SpotifySettings> {
             None
         }
-        fn spotify_search(
-            &mut self,
-            _texts: &crate::SpotifySearchTexts,
-            _query: &str,
-            _kind: usize,
-        ) -> Option<(String, usize)> {
-            None
-        }
         fn open_spotify_dialog(&mut self, _dialog: crate::SpotifyListDialog) {}
         fn spotify_dialog_update(
             &mut self,
@@ -1123,6 +1115,37 @@ mod spotify_lists {
                 ContextMenuEntry::Disabled { .. } => Vec::new(),
             })
             .collect()
+    }
+
+    #[test]
+    fn the_search_screen_has_the_query_type_and_results_like_youtube() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell.browse_open_search_screen(&mut ui);
+        let screen = ui.screens.last().unwrap();
+        let ids: Vec<&str> = screen
+            .controls
+            .iter()
+            .map(|control| match control {
+                ScreenControl::Button { id, .. }
+                | ScreenControl::TextField { id, .. }
+                | ScreenControl::Choice { id, .. } => *id,
+                ScreenControl::List => "list",
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                "back",
+                "spotify_search_query",
+                "spotify_search_type",
+                "spotify_search_run",
+                "open",
+                "list"
+            ]
+        );
+        assert!(!screen.focus_list);
+        assert_eq!(screen.rows, ["No search results."]);
     }
 
     #[test]

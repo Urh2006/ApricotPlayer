@@ -279,16 +279,6 @@ pub trait ShellUi {
         current: apricot_spotify::settings::SpotifySettings,
     ) -> Option<apricot_spotify::settings::SpotifySettings>;
 
-    /// Windows `spotify_search_win32::show`: the query and the type index;
-    /// `None` when cancelled. Accepting does not put the focus back where
-    /// it was, because the results list takes it.
-    fn spotify_search(
-        &mut self,
-        texts: &crate::SpotifySearchTexts,
-        query: &str,
-        kind: usize,
-    ) -> Option<(String, usize)>;
-
     /// Windows `spotify_queue_win32::show` and `spotify_devices_win32::show`
     /// over the current screen, after the current event; its buttons and
     /// keys go to `Shell::spotify_dialog_action`, its context menu comes

@@ -140,6 +140,13 @@ struct Frame {
     sections: Vec<apricot_spotify::catalog::Section>,
     /// Ctrl+A waits for the remaining pages, then marks every song.
     mark_all: bool,
+    /// The search screen: query field, type and Search above the results,
+    /// as the search of the main menu (Urh's beta 6 request).
+    search_screen: bool,
+    /// The query the field shows when the screen is first drawn.
+    field_value: Option<String>,
+    /// The first page of a new search takes the focus, as in that search.
+    focus_results: bool,
 }
 
 /// A change waiting for Spotify's answer (Windows `Pending`).
@@ -200,17 +207,6 @@ pub(crate) struct BrowseState {
     refreshed_at: Option<Instant>,
     /// Songs marked with Shift+A or Ctrl+A for "Add to Spotify playlist".
     marks: apricot_app::spotify::SpotifyMarks,
-}
-
-/// The Spotify search dialog's texts (Windows `SearchTexts`).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SpotifySearchTexts {
-    pub title: String,
-    pub query: String,
-    pub kind: String,
-    pub kinds: Vec<String>,
-    pub search: String,
-    pub cancel: String,
 }
 
 /// The context commands of a Spotify list row.
@@ -337,36 +333,88 @@ impl Shell {
 
     /// `spotify_search`: the search dialog, then the results list.
     fn spotify_show_search(&mut self, ui: &mut dyn ShellUi) {
-        if !self.spotify_ready_for_lists(ui) {
+        if self.spotify_ready_for_lists(ui) {
+            self.browse_open_search_screen(ui);
+        }
+    }
+
+    /// The search screen with the last query, focus in its field.
+    pub(crate) fn browse_open_search_screen(&mut self, ui: &mut dyn ShellUi) {
+        let kind = SearchKind::ALL
+            .get(self.spotify.browse.last_kind)
+            .copied()
+            .unwrap_or(SearchKind::All);
+        self.spotify.browse.frames.clear();
+        self.spotify_prepare_screen(ui, View::SpotifyBrowse, Route::SpotifyBrowse);
+        self.spotify.browse.frames.push(Frame {
+            source: Source::Search {
+                query: String::new(),
+                kind,
+            },
+            title: self.text("result_list"),
+            items: Vec::new(),
+            next_offset: None,
+            selected: 0,
+            loading: None,
+            loaded: true,
+            refresh: None,
+            error: None,
+            mixed: kind == SearchKind::All,
+            can_edit: false,
+            can_rename: false,
+            personalised: false,
+            following: None,
+            sections: Vec::new(),
+            mark_all: false,
+            search_screen: true,
+            field_value: Some(self.spotify.browse.last_query.clone()),
+            focus_results: false,
+        });
+        self.view = View::SpotifyBrowse;
+        self.browse_render(ui, false);
+        ui.focus_screen_control("spotify_search_query");
+    }
+
+    /// Return in the query field and Search: the results load into the
+    /// list below and take the focus when they arrive.
+    pub(crate) fn spotify_search_submit(&mut self, ui: &mut dyn ShellUi) {
+        let query = ui.screen_text("spotify_search_query").trim().to_owned();
+        if query.is_empty() {
+            ui.show_error(&self.text("enter_query"));
+            ui.focus_screen_control("spotify_search_query");
             return;
         }
-        let catalog = self.catalog();
-        let texts = SpotifySearchTexts {
-            title: catalog.text("spotify_search_dialog").to_owned(),
-            query: catalog.text("spotify_search_query").to_owned(),
-            kind: catalog.text("spotify_search_type").to_owned(),
-            kinds: apricot_app::spotify::search_kind_labels(&catalog),
-            search: catalog.text("search").to_owned(),
-            cancel: catalog.text("cancel").to_owned(),
-        };
-        let query = self.spotify.browse.last_query.clone();
-        let kind = self.spotify.browse.last_kind;
-        let Some((query, kind)) = ui.spotify_search(&texts, &query, kind) else {
-            ui.focus_primary_control();
-            return;
-        };
+        let kind_index = ui.screen_choice("spotify_search_type").unwrap_or(0);
+        let kind = SearchKind::ALL
+            .get(kind_index)
+            .copied()
+            .unwrap_or(SearchKind::All);
         self.spotify.browse.last_query.clone_from(&query);
-        self.spotify.browse.last_kind = kind;
+        self.spotify.browse.last_kind = kind_index;
         let title = self
             .text("spotify_search_results")
             .replace("{query}", &query);
-        let searching = self.text("spotify_searching").replace("{query}", &query);
-        ui.set_status(&searching, false);
-        let kind = SearchKind::ALL
-            .get(kind)
-            .copied()
-            .unwrap_or(SearchKind::All);
-        self.browse_open_root(ui, Source::Search { query, kind }, title);
+        ui.set_status(
+            &self.text("spotify_searching").replace("{query}", &query),
+            true,
+        );
+        // A search from a nested list starts over at the search screen.
+        self.spotify.browse.frames.truncate(1);
+        let Some(frame) = self.spotify.browse.frames.first_mut() else {
+            return;
+        };
+        frame.source = Source::Search { query, kind };
+        frame.title = title;
+        frame.items.clear();
+        frame.next_offset = None;
+        frame.selected = 0;
+        frame.loaded = false;
+        frame.error = None;
+        frame.mixed = kind == SearchKind::All;
+        frame.mark_all = false;
+        frame.focus_results = true;
+        self.browse_request(0);
+        self.browse_render(ui, false);
     }
 
     /// Opens a new list on top of the current one and loads its first
@@ -403,6 +451,9 @@ impl Shell {
             following: None,
             sections: Vec::new(),
             mark_all: false,
+            search_screen: false,
+            field_value: None,
+            focus_results: false,
         };
         if let Source::Section(items) = &frame.source {
             frame.items.clone_from(items);
@@ -533,6 +584,7 @@ impl Shell {
         frame.loading = None;
         let first_page = !frame.loaded;
         frame.loaded = true;
+        let focus_results = std::mem::take(&mut frame.focus_results) && first_page;
         match result {
             Ok(CatalogResult::Page(page)) => {
                 frame.items.extend(page.items);
@@ -636,7 +688,7 @@ impl Shell {
             if self.spotify.browse.frames[index].mark_all {
                 self.browse_continue_mark_all(ui);
             }
-            self.browse_render(ui, false);
+            self.browse_render(ui, focus_results);
         }
     }
 
@@ -818,6 +870,8 @@ impl Shell {
             vec![error.clone()]
         } else if !frame.loaded {
             vec![texts.text("spotify_loading").to_owned()]
+        } else if matches!(&frame.source, Source::Search { query, .. } if query.is_empty()) {
+            vec![texts.text("search_results_empty").to_owned()]
         } else if matches!(frame.source, Source::Search { .. }) {
             vec![texts.text("spotify_no_results").to_owned()]
         } else {
@@ -828,18 +882,52 @@ impl Shell {
             id,
             label: texts.text(key).to_owned(),
         };
+        let controls = if frame.search_screen {
+            // The YouTube search screen's order: Back, the query, the type,
+            // Search, Open and the results.
+            let kind = match &frame.source {
+                Source::Search { kind, .. } => {
+                    SearchKind::ALL.iter().position(|known| known == kind)
+                }
+                _ => None,
+            };
+            vec![
+                button("back", "back"),
+                ScreenControl::TextField {
+                    id: "spotify_search_query",
+                    label: texts.text("spotify_search_query").to_owned(),
+                    value: frame.field_value.clone(),
+                },
+                ScreenControl::Choice {
+                    id: "spotify_search_type",
+                    label: texts.text("spotify_search_type").to_owned(),
+                    options: apricot_app::spotify::search_kind_labels(&texts),
+                    selected: frame.field_value.as_ref().and(kind),
+                },
+                button("spotify_search_run", "search"),
+                button("open", "open"),
+                ScreenControl::List,
+            ]
+        } else {
+            vec![
+                ScreenControl::List,
+                button("open", "open"),
+                button("back", "back"),
+            ]
+        };
         let screen = ListScreen {
             list_name: frame.title.clone(),
             rows,
             selected: Some(selected),
-            controls: vec![
-                ScreenControl::List,
-                button("open", "open"),
-                button("back", "back"),
-            ],
+            controls,
             focus_list: focus,
         };
-        if matches!(frame.source, Source::Playlist(_)) {
+        let playlist = matches!(frame.source, Source::Playlist(_));
+        // The field keeps what the user typed after the first drawing.
+        if let Some(frame) = self.spotify.browse.frames.last_mut() {
+            frame.field_value = None;
+        }
+        if playlist {
             self.spotify
                 .browse
                 .refreshed_at
@@ -1928,6 +2016,9 @@ impl Shell {
             following: None,
             sections: Vec::new(),
             mark_all: false,
+            search_screen: false,
+            field_value: None,
+            focus_results: false,
         });
         self.view = View::SpotifyBrowse;
         self.browse_render(ui, true);
