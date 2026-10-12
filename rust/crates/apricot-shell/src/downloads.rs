@@ -1636,8 +1636,9 @@ mod tests {
 
     #[test]
     fn folders_follow_the_python_layout() {
+        let root = std::env::temp_dir().join("Apricot");
         let settings = apricot_storage::SettingsDocument::with_platform_defaults(
-            "/Users/me/Downloads/Apricot",
+            root.to_string_lossy().into_owned(),
             "/tmp/cache",
             "beta",
         );
@@ -1646,14 +1647,14 @@ mod tests {
         episode.channel = "Show: One".to_owned();
         assert_eq!(
             download_folder_for_item(&settings, &episode, false).expect("folder"),
-            PathBuf::from("/Users/me/Downloads/Apricot/podcasts/Show_ One")
+            root.join("podcasts").join("Show_ One")
         );
         let mut playlist = crate::local_file_item(Path::new("/tmp/b.mp3"));
         playlist.kind = MediaKind::Playlist;
         playlist.title = "Mix".to_owned();
         assert_eq!(
             download_folder_for_item(&settings, &playlist, true).expect("folder"),
-            PathBuf::from("/Users/me/Downloads/Apricot/music/Mix")
+            root.join("music").join("Mix")
         );
         assert_eq!(safe_path_component(" con.txt "), "_con.txt");
         assert_eq!(safe_path_component("..."), "download");
