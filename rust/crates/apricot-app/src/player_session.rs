@@ -210,9 +210,10 @@ impl PlayerSession {
     }
 
     /// Starts or replaces media. Existing open sessions retain volume, output
-    /// device, equalizer and toggle state, while speed and pitch return to the
-    /// configured start values for every item as in Python `start_mpv`. A
-    /// genuinely new session receives all current defaults.
+    /// device, equalizer, toggle state, speed and pitch until the player is
+    /// closed (Urh's beta 6 decision; Python `start_mpv` reset speed and
+    /// pitch for every item). A genuinely new session receives all current
+    /// defaults.
     pub fn start_item(&mut self, item: MediaItem, defaults: PlayerSessionDefaults) -> u64 {
         self.start_item_at(item, defaults, None)
     }
@@ -224,12 +225,7 @@ impl PlayerSession {
         defaults: PlayerSessionDefaults,
         initial_position_seconds: Option<f64>,
     ) -> u64 {
-        if self.is_open()
-            && let Some(audio) = self.audio.as_mut()
-        {
-            audio.speed = defaults.audio.speed;
-            audio.pitch = defaults.audio.pitch;
-        } else {
+        if !self.is_open() || self.audio.is_none() {
             self.audio = Some(defaults.audio);
             self.enabled_toggles = defaults.enabled_toggles;
         }
@@ -481,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn replacement_resets_speed_and_pitch_like_a_fresh_python_mpv_process() {
+    fn replacement_keeps_speed_and_pitch_until_the_player_closes() {
         let mut session = PlayerSession::default();
         session.start_item(item("first"), defaults());
         session.set_speed(1.7);
@@ -498,14 +494,27 @@ mod tests {
         session.start_item(item("second"), next_defaults);
 
         let audio = session.audio().expect("open audio session");
-        assert!((audio.speed - 1.25).abs() < f64::EPSILON);
-        assert!((audio.pitch - 1.0).abs() < f64::EPSILON);
+        assert!((audio.speed - 1.7).abs() < f64::EPSILON);
+        assert!((audio.pitch - 0.8).abs() < f64::EPSILON);
         assert_eq!(
             audio.equalizer.as_ref(),
             Some(&player_equalizer),
             "session equalizer stays for the session"
         );
         assert!((audio.volume - 80.0).abs() < f64::EPSILON);
+
+        // Close starts the next item with the configured values again.
+        session.close();
+        session.start_item(item("third"), next_defaults_after_close());
+        let audio = session.audio().expect("new audio session");
+        assert!((audio.speed - 1.25).abs() < f64::EPSILON);
+        assert!((audio.pitch - 1.0).abs() < f64::EPSILON);
+    }
+
+    fn next_defaults_after_close() -> PlayerSessionDefaults {
+        let mut next = defaults();
+        next.audio.speed = 1.25;
+        next
     }
 
     #[test]

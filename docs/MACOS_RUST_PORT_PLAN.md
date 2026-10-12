@@ -188,6 +188,11 @@ podporo in temi popravki skupaj (Urh, 12. 10. 2026).
    Vrstica v meniju naj odpre natanko isti seznam kot Liked songs v
    Library (isti vir, isti kontekst), ne posebnega Apricotovega seznama.
    Obe platformi.
+   Stanje: v kodi obeh platform vrstica v meniju in vrstica v Library že
+   odpreta isti vir (`Source::LikedSongs`) z istim kontekstom
+   (`spotify:user:<id>:collection`), smart shuffle pa je dovoljen samo za
+   `spotify:playlist:`. Razlike brez pravega računa ne morem ponoviti;
+   preveri z Urhom (kateri kontekst Spotify sporoči v obeh primerih).
 4. **Pitch in hitrost se ohranita med predmeti.** Kot glasnost in bass
    boost naj se pitch in hitrost ohranita, ko z Escape zapustim predvajalnik
    in predvajam nekaj drugega; na privzeto se vrneta samo ob izrecnem
@@ -195,6 +200,11 @@ podporo in temi popravki skupaj (Urh, 12. 10. 2026).
    naj se ohrani način shuffle (tudi Spotify shuffle in smart shuffle), ko
    je vklopljeno predvajanje v ozadju in predvajalnik ni zaprt z gumbom
    Close. Obe platformi.
+   Stanje (12. 10. 2026): pitch in hitrost sta narejena v skupnem
+   `PlayerSession` (obe platformi): ostaneta, dokler je predvajalnik odprt,
+   Close ju vrne na nastavljene vrednosti. Ohranjanje Spotify shuffle in
+   smart shuffle čaka na preizkus s pravim računom, ker je odvisno od
+   Spotify Connect.
 5. **Izbira več skladb v Spotifyju za dodajanje na seznam.** Predlagaj
    sistem pred implementacijo (na primer Ctrl+A izbere vse rezultate, nato
    izbira seznama) in opozorilo, ko je skladba že na seznamu, da ne nastanejo
