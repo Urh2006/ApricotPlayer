@@ -1,0 +1,50 @@
+name: Rust macOS package
+
+# Builds the macOS application bundle, its DMG and its updater zip with
+# rust/scripts/build_macos_app.sh and keeps them as a workflow artifact.
+# It runs when the packaging itself changes or when started by hand, and
+# never publishes a release.
+on:
+  push:
+    branches: [rust-2.0]
+    paths:
+      - "rust/scripts/build_macos_app.sh"
+      - "rust/packaging/macos/**"
+      - ".github/workflows/rust-macos-package.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: macOS package
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: rust
+    env:
+      CARGO_TERM_COLOR: always
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+
+      - name: Install mpv, FFmpeg and dylibbundler
+        run: brew install mpv ffmpeg dylibbundler
+
+      - name: Build the package
+        run: ./scripts/build_macos_app.sh
+
+      - name: Keep the package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: apricotplayer-macos-arm64
+          path: |
+            rust/local-dist/macos/*/ApricotPlayer2Beta-macos-arm64.dmg
+            rust/local-dist/macos/*/ApricotPlayer2Beta-macos-arm64.zip
+            rust/local-dist/macos/*/SHA256SUMS.txt
+          if-no-files-found: error
