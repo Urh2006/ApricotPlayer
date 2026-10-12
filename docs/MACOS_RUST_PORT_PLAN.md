@@ -250,6 +250,12 @@ podporo in temi popravki skupaj (Urh, 12. 10. 2026).
    vmesne kontrole. Na Windows nisem posegal; za popravek bi bilo treba
    iskanje Spotify spremeniti v iskalni zaslon brez pogovornega okna, kot
    je iskanje YouTube. Odloči Urh.
+   Narejeno (Urhova odločitev): iskanje Spotify je na obeh platformah
+   zaslon kot iskanje YouTube: Back, polje za iskanje (fokus, z zadnjim
+   iskanjem), vrsta (vse vrste kot prej), Search, Open in rezultati. Enter v
+   polju ali na vrsti išče, prvi rezultati dobijo fokus, prazno iskanje
+   pove "enter_query". Pogovorno okno je odstranjeno. Windows z NVDA še ni
+   preizkušen.
 
 ## 5. Odprta vprašanja za Urha
 

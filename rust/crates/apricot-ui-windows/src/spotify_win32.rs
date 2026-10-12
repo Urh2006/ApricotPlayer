@@ -916,54 +916,8 @@ unsafe fn ready_for_lists(window: HWND) -> bool {
 /// `spotify_search`: the search dialog, then the results list.
 pub(super) unsafe fn show_search(window: HWND) {
     stop_controlled_repeat(window);
-    if !ready_for_lists(window) {
-        return;
-    }
-    let Some(state) = state_mut(window) else {
-        return;
-    };
-    let texts = catalog(state);
-    let kinds = apricot_app::spotify::search_kind_labels(&texts);
-    let search_texts = crate::spotify_search_win32::SearchTexts {
-        title: texts.text("spotify_search_dialog"),
-        query: texts.text("spotify_search_query"),
-        kind: texts.text("spotify_search_type"),
-        search: texts.text("search"),
-        cancel: texts.text("cancel"),
-    };
-    let query = state.spotify_browse.last_query.clone();
-    let kind = state.spotify_browse.last_kind;
-    state.modal_open = true;
-    let result = crate::spotify_search_win32::show(window, &search_texts, &query, &kinds, kind);
-    let Some(state) = state_mut(window) else {
-        return;
-    };
-    state.modal_open = false;
-    resume_deferred_window_work(window);
-    match result {
-        Ok(Some((query, kind))) => {
-            state.spotify_browse.last_query.clone_from(&query);
-            state.spotify_browse.last_kind = kind;
-            let title = super::spotify_browse::search_title(state, &query);
-            let searching = texts.text("spotify_searching").replace("{query}", &query);
-            set_status(state, &searching, false);
-            let kind = apricot_spotify::SearchKind::ALL
-                .get(kind)
-                .copied()
-                .unwrap_or(apricot_spotify::SearchKind::All);
-            super::spotify_browse::open_root(
-                window,
-                super::spotify_browse::Source::Search { query, kind },
-                title,
-            );
-        }
-        Ok(None) => {
-            let _ = SetFocus(Some(super::active_primary_control(state)));
-        }
-        Err(error) => {
-            let message = format!("Spotify search did not open: {error}");
-            show_error_message(window, &message);
-        }
+    if ready_for_lists(window) {
+        super::spotify_browse::show_search_screen(window);
     }
 }
 

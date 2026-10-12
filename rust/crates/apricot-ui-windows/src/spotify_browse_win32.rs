@@ -12,19 +12,322 @@ use apricot_spotify::{
     CatalogItem, CatalogRequest, CatalogResult, ItemKind, LibraryFilter, SearchKind, SpotifyError,
     SpotifyTrack,
 };
-use windows::Win32::{
-    Foundation::{HWND, WPARAM},
-    UI::{
-        Input::KeyboardAndMouse::SetFocus,
-        WindowsAndMessaging::{
-            KillTimer, LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL, SendMessageW, SetTimer,
+use windows::{
+    Win32::{
+        Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
+        UI::{
+            Input::KeyboardAndMouse::SetFocus,
+            WindowsAndMessaging::{
+                CB_ADDSTRING, CB_GETCURSEL, CB_RESETCONTENT, CB_SETCURSEL, CBS_DROPDOWNLIST,
+                ES_AUTOHSCROLL, GetWindowTextLengthW, GetWindowTextW, KillTimer, LB_GETCURSEL,
+                LB_RESETCONTENT, LB_SETCURSEL, MoveWindow, SW_HIDE, SW_SHOW, SendMessageW,
+                SetTimer, SetWindowTextW, ShowWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD,
+                WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VSCROLL,
+            },
         },
     },
+    core::{PCWSTR, w},
 };
 
 use super::{
-    MainView, WindowState, add_list_string, layout_controls_state, set_status, state, state_mut,
+    MainView, WindowState, add_list_string, create_control, layout_button_row,
+    layout_controls_state, set_status, show_error_message, state, state_mut, wide,
 };
+
+const ID_SPOTIFY_QUERY: usize = 1062;
+const ID_SPOTIFY_TYPE: usize = 1063;
+
+/// The fields of the Spotify search screen (Urh's beta 6 request: a screen
+/// like the `YouTube` search instead of a dialog).
+pub(super) struct SearchControls {
+    query_label: HWND,
+    query: HWND,
+    type_label: HWND,
+    kind: HWND,
+}
+
+impl SearchControls {
+    pub(super) const fn windows(&self) -> [HWND; 4] {
+        [self.query_label, self.query, self.type_label, self.kind]
+    }
+}
+
+pub(super) unsafe fn create_search_controls(
+    parent: HWND,
+    instance: HINSTANCE,
+    catalog: &apricot_core::TranslationCatalog,
+) -> windows::core::Result<SearchControls> {
+    let query_text = wide(catalog.text("spotify_search_query"));
+    let query_label = create_control(
+        parent,
+        instance,
+        w!("STATIC"),
+        PCWSTR(query_text.as_ptr()),
+        WS_CHILD,
+        WINDOW_EX_STYLE::default(),
+        0,
+    )?;
+    let query = create_control(
+        parent,
+        instance,
+        w!("EDIT"),
+        PCWSTR::null(),
+        WS_CHILD | WS_TABSTOP | WINDOW_STYLE(ES_AUTOHSCROLL as u32),
+        WS_EX_CLIENTEDGE,
+        ID_SPOTIFY_QUERY,
+    )?;
+    crate::accessibility_win32::annotate_control_name(query, catalog.text("spotify_search_query"));
+    let type_text = wide(catalog.text("spotify_search_type"));
+    let type_label = create_control(
+        parent,
+        instance,
+        w!("STATIC"),
+        PCWSTR(type_text.as_ptr()),
+        WS_CHILD,
+        WINDOW_EX_STYLE::default(),
+        0,
+    )?;
+    let kind = create_control(
+        parent,
+        instance,
+        w!("COMBOBOX"),
+        PCWSTR::null(),
+        WS_CHILD | WS_TABSTOP | WINDOW_STYLE(CBS_DROPDOWNLIST as u32) | WS_VSCROLL,
+        WINDOW_EX_STYLE::default(),
+        ID_SPOTIFY_TYPE,
+    )?;
+    crate::accessibility_win32::annotate_control_name(kind, catalog.text("spotify_search_type"));
+    Ok(SearchControls {
+        query_label,
+        query,
+        type_label,
+        kind,
+    })
+}
+
+/// The open list is the search screen.
+pub(super) fn search_screen(state: &WindowState) -> bool {
+    state.view == MainView::SpotifyBrowse && top(state).is_some_and(|frame| frame.search_screen)
+}
+
+/// The search screen with the last query, focus in its field.
+pub(super) unsafe fn show_search_screen(window: HWND) {
+    super::spotify::prepare_screen(window, MainView::SpotifyBrowse, Route::SpotifyBrowse);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let texts = super::spotify::catalog(state);
+    let kind_index = state.spotify_browse.last_kind;
+    let kind = SearchKind::ALL
+        .get(kind_index)
+        .copied()
+        .unwrap_or(SearchKind::All);
+    state.spotify_browse.frames.clear();
+    state.spotify_browse.frames.push(Frame {
+        source: Source::Search {
+            query: String::new(),
+            kind,
+        },
+        title: texts.text("result_list").to_owned(),
+        items: Vec::new(),
+        next_offset: None,
+        selected: 0,
+        loading: None,
+        loaded: true,
+        refresh: None,
+        error: None,
+        mixed: kind == SearchKind::All,
+        can_edit: false,
+        can_rename: false,
+        personalised: false,
+        following: None,
+        sections: Vec::new(),
+        mark_all: false,
+        search_screen: true,
+        focus_results: false,
+    });
+    state.view = MainView::SpotifyBrowse;
+    // The labels follow the language; the field offers the last query.
+    let controls = &state.spotify_search_controls;
+    let label = |control: HWND, key: &str| {
+        let text = wide(texts.text(key));
+        let _ = SetWindowTextW(control, PCWSTR(text.as_ptr()));
+    };
+    label(controls.query_label, "spotify_search_query");
+    label(controls.type_label, "spotify_search_type");
+    let query = wide(&state.spotify_browse.last_query);
+    let _ = SetWindowTextW(controls.query, PCWSTR(query.as_ptr()));
+    SendMessageW(controls.kind, CB_RESETCONTENT, None, None);
+    for kind in apricot_app::spotify::search_kind_labels(&texts) {
+        let kind = wide(&kind);
+        SendMessageW(
+            controls.kind,
+            CB_ADDSTRING,
+            None,
+            Some(LPARAM(kind.as_ptr() as isize)),
+        );
+    }
+    SendMessageW(controls.kind, CB_SETCURSEL, Some(WPARAM(kind_index)), None);
+    let query_control = controls.query;
+    render(window, false);
+    let _ = SetFocus(Some(query_control));
+    // The whole last query is selected, so typing replaces it.
+    SendMessageW(query_control, 0x00B1, Some(WPARAM(0)), Some(LPARAM(-1)));
+}
+
+/// Enter in the query field or on the type, and Search.
+pub(super) fn handles_enter(state: &WindowState, target: HWND) -> bool {
+    search_screen(state)
+        && (target == state.spotify_search_controls.query
+            || target == state.spotify_search_controls.kind)
+}
+
+/// Runs the search: the results load into the list below and take the
+/// focus when they arrive, as on the `YouTube` search screen.
+pub(super) unsafe fn submit_search(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let texts = super::spotify::catalog(state);
+    let controls = &state.spotify_search_controls;
+    let query = window_text(controls.query).trim().to_owned();
+    if query.is_empty() {
+        let query_control = controls.query;
+        show_error_message(window, texts.text("enter_query"));
+        let _ = SetFocus(Some(query_control));
+        return;
+    }
+    let kind_index =
+        usize::try_from(SendMessageW(controls.kind, CB_GETCURSEL, None, None).0).unwrap_or(0);
+    let kind = SearchKind::ALL
+        .get(kind_index)
+        .copied()
+        .unwrap_or(SearchKind::All);
+    state.spotify_browse.last_query.clone_from(&query);
+    state.spotify_browse.last_kind = kind_index;
+    let title = search_title(state, &query);
+    let searching = texts.text("spotify_searching").replace("{query}", &query);
+    set_status(state, &searching, true);
+    // A search from a nested list starts over at the search screen.
+    state.spotify_browse.frames.truncate(1);
+    let Some(frame) = state.spotify_browse.frames.first_mut() else {
+        return;
+    };
+    frame.source = Source::Search { query, kind };
+    frame.title = title;
+    frame.items.clear();
+    frame.next_offset = None;
+    frame.selected = 0;
+    frame.loaded = false;
+    frame.error = None;
+    frame.mixed = kind == SearchKind::All;
+    frame.mark_all = false;
+    frame.focus_results = true;
+    request(window, 0);
+    render(window, false);
+}
+
+unsafe fn window_text(control: HWND) -> String {
+    let length = GetWindowTextLengthW(control);
+    let mut buffer = vec![0_u16; usize::try_from(length).unwrap_or_default() + 1];
+    let copied = GetWindowTextW(control, &mut buffer);
+    String::from_utf16_lossy(&buffer[..usize::try_from(copied).unwrap_or_default()])
+}
+
+/// Visibility of the search fields and the shared buttons they use.
+pub(super) unsafe fn sync_search_visibility(state: &WindowState) {
+    let search = search_screen(state);
+    for control in state.spotify_search_controls.windows() {
+        let _ = ShowWindow(control, if search { SW_SHOW } else { SW_HIDE });
+    }
+    if search {
+        let _ = ShowWindow(state.search, SW_SHOW);
+    }
+}
+
+/// The `YouTube` search screen's order: Back, the query, the type, Search
+/// and Open, then the results.
+pub(super) unsafe fn layout_search(
+    state: &WindowState,
+    width: i32,
+    height: i32,
+    margin: i32,
+    button_height: i32,
+    status_height: i32,
+) {
+    if !search_screen(state) {
+        return;
+    }
+    let label_height = 22;
+    let field_height = 30;
+    let field_width = width - margin * 2;
+    let mut y = margin;
+    let _ = MoveWindow(state.back, margin, y, 180, button_height, true);
+    y += button_height + margin;
+    let controls = &state.spotify_search_controls;
+    for (label, field, box_height) in [
+        (controls.query_label, controls.query, field_height),
+        (controls.type_label, controls.kind, 200),
+    ] {
+        let _ = MoveWindow(label, margin, y, field_width, label_height, true);
+        let _ = MoveWindow(
+            field,
+            margin,
+            y + label_height,
+            field_width,
+            box_height,
+            true,
+        );
+        y += label_height + field_height + margin;
+    }
+    layout_button_row(&[state.search, state.open], width, y, margin, button_height);
+    y += button_height + margin;
+    let status_y = height - status_height - margin;
+    let _ = MoveWindow(
+        state.status,
+        margin,
+        status_y,
+        field_width,
+        status_height,
+        true,
+    );
+    let _ = MoveWindow(
+        state.list,
+        margin,
+        y,
+        field_width,
+        (status_y - margin - y).max(40),
+        true,
+    );
+}
+
+/// The Tab order of the search screen.
+pub(super) fn search_tab_controls(state: &WindowState) -> Option<Vec<HWND>> {
+    search_screen(state).then(|| {
+        vec![
+            state.back,
+            state.spotify_search_controls.query,
+            state.spotify_search_controls.kind,
+            state.search,
+            state.open,
+            state.list,
+        ]
+    })
+}
+
+/// The query field until results arrive, then the list.
+pub(super) fn primary_control(state: &WindowState) -> HWND {
+    if search_screen(state)
+        && top(state).is_some_and(|frame| {
+            frame.items.is_empty()
+                && matches!(&frame.source, Source::Search { query, .. } if query.is_empty())
+        })
+    {
+        state.spotify_search_controls.query
+    } else {
+        state.list
+    }
+}
 
 /// Where a list comes from.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -147,6 +450,10 @@ struct Frame {
     sections: Vec<apricot_spotify::catalog::Section>,
     /// Ctrl+A waits for the remaining pages, then marks every song.
     mark_all: bool,
+    /// The search screen: query, type and Search above the results.
+    search_screen: bool,
+    /// The first page of a new search takes the focus.
+    focus_results: bool,
 }
 
 /// A change waiting for Spotify's answer.
@@ -259,6 +566,8 @@ pub(super) unsafe fn open(window: HWND, source: Source, title: String) {
         following: None,
         sections: Vec::new(),
         mark_all: false,
+        search_screen: false,
+        focus_results: false,
     });
     if let Some(frame) = state.spotify_browse.frames.last_mut()
         && let Source::Section(items) = &frame.source
@@ -397,6 +706,7 @@ pub(super) unsafe fn loaded(
     frame.loading = None;
     let first_page = !frame.loaded;
     frame.loaded = true;
+    let focus_results = std::mem::take(&mut frame.focus_results) && first_page;
     match result {
         Ok(CatalogResult::Page(page)) => {
             frame.items.extend(page.items);
@@ -498,7 +808,7 @@ pub(super) unsafe fn loaded(
         if top(state).is_some_and(|frame| frame.mark_all) {
             continue_mark_all(window);
         }
-        render(window, false);
+        render(window, focus_results);
     }
 }
 
@@ -698,6 +1008,8 @@ unsafe fn render(window: HWND, focus: bool) {
         vec![error.clone()]
     } else if !frame.loaded {
         vec![texts.text("spotify_loading").to_owned()]
+    } else if matches!(&frame.source, Source::Search { query, .. } if query.is_empty()) {
+        vec![texts.text("search_results_empty").to_owned()]
     } else if matches!(frame.source, Source::Search { .. }) {
         vec![texts.text("spotify_no_results").to_owned()]
     } else {

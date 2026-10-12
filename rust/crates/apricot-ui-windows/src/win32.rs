@@ -674,6 +674,7 @@ struct WindowState {
     // resolved: the generation of that page while nothing plays yet.
     preparing_player_generation: Option<u64>,
     audiovault_controls: audiovault::Controls,
+    spotify_search_controls: spotify_browse::SearchControls,
     audiovault: audiovault::AudiovaultState,
     spotify: spotify::SpotifyState,
     spotify_browse: spotify_browse::BrowseState,
@@ -698,7 +699,6 @@ unsafe fn register_secondary_window_classes() -> Result<()> {
     crate::spotify_login_win32::register()?;
     crate::spotify_queue_win32::register()?;
     crate::spotify_devices_win32::register()?;
-    crate::spotify_search_win32::register()?;
     crate::spotify_settings_win32::register()?;
     crate::download_progress_win32::register()
 }
@@ -829,6 +829,10 @@ unsafe fn handle_text_entry_enter(window: HWND, message: &MSG) -> bool {
     }
     if state(window).is_some_and(|state| audiovault::handles_enter(state, message.hwnd)) {
         audiovault::search(window);
+        return true;
+    }
+    if state(window).is_some_and(|state| spotify_browse::handles_enter(state, message.hwnd)) {
+        spotify_browse::submit_search(window);
         return true;
     }
     if !state(window).is_some_and(|state| {
@@ -1012,6 +1016,7 @@ fn explicit_view_tab_controls(state: &WindowState) -> Option<Vec<HWND>> {
         MainView::AudiovaultMenu | MainView::AudiovaultSearch | MainView::AudiovaultResults => {
             return audiovault::tab_controls(state);
         }
+        MainView::SpotifyBrowse => return spotify_browse::search_tab_controls(state),
         _ => return None,
     })
 }
@@ -1314,6 +1319,8 @@ unsafe fn handle_window_command(window: HWND, wparam: WPARAM) {
         && notification == usize::try_from(LBN_SELCHANGE).expect("notification fits")
     {
         result_selection_changed(window);
+    } else if command == ID_SEARCH && state(window).is_some_and(spotify_browse::search_screen) {
+        spotify_browse::submit_search(window);
     } else if command == ID_SEARCH {
         submit_search(window);
     } else if command == ID_SEARCH_PROVIDER
@@ -1981,6 +1988,11 @@ unsafe fn create_controls(
     for control in audiovault_controls.windows() {
         SendMessageW(control, WM_SETFONT, font_param, Some(LPARAM(1)));
     }
+    let spotify_search_controls =
+        spotify_browse::create_search_controls(parent, instance, &catalog)?;
+    for control in spotify_search_controls.windows() {
+        SendMessageW(control, WM_SETFONT, font_param, Some(LPARAM(1)));
+    }
     let (download_sender, download_receiver) = mpsc::sync_channel(256);
     let (stream_prefetch_sender, stream_prefetch_receiver) = mpsc::channel();
     Ok(WindowState {
@@ -2116,6 +2128,7 @@ unsafe fn create_controls(
         background_start: false,
         preparing_player_generation: None,
         audiovault_controls,
+        spotify_search_controls,
         audiovault: audiovault::AudiovaultState::default(),
         spotify: spotify::SpotifyState::default(),
         spotify_browse: spotify_browse::BrowseState::default(),
@@ -2836,6 +2849,7 @@ unsafe fn layout_controls_state(window: HWND, state: &mut WindowState) {
         layout_search_screen(state, width, height, margin, button_height, status_height);
     }
     audiovault::layout(state, width, height, margin, button_height, status_height);
+    spotify_browse::layout_search(state, width, height, margin, button_height, status_height);
 }
 
 /// Python `show_search`: query, provider and type fields, the Search button
@@ -3374,6 +3388,7 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
         let _ = ShowWindow(control, if visible { SW_SHOW } else { SW_HIDE });
     }
     audiovault::sync_visibility(state);
+    spotify_browse::sync_search_visibility(state);
     let background = if state.view == MainView::Player {
         None
     } else {
@@ -18406,8 +18421,8 @@ fn active_primary_control(state: &WindowState) -> HWND {
         | MainView::UserPlaylistItems
         | MainView::DownloadQueue
         | MainView::SpotifyHub
-        | MainView::SpotifyAccounts
-        | MainView::SpotifyBrowse => state.list,
+        | MainView::SpotifyAccounts => state.list,
+        MainView::SpotifyBrowse => spotify_browse::primary_control(state),
         MainView::AudiovaultMenu | MainView::AudiovaultSearch | MainView::AudiovaultResults => {
             audiovault::primary_control(state)
         }
