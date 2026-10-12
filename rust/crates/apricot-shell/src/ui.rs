@@ -232,6 +232,10 @@ pub trait ShellUi {
     /// [`crate::Shell::action_finder_closed`].
     fn open_action_finder(&mut self, model: apricot_app::ActionFinderModel);
 
+    /// Windows `browser_cookies_exported`: an open Settings window shows
+    /// the cookies file `path` and the browser choice `browser_index`.
+    fn settings_cookie_source(&mut self, path: &str, browser_index: usize);
+
     /// Opens the file or folder converter after the current event, modal
     /// over the window; when it closed and focus is back where it was, it
     /// calls [`crate::Shell::converter_closed`].

@@ -45,7 +45,32 @@ fn env_path(name: &str, fallback: &str) -> PathBuf {
     std::env::var_os(name).map_or_else(|| PathBuf::from(fallback), PathBuf::from)
 }
 
+/// The macOS `~/Library/Application Support` folder.
+#[cfg(target_os = "macos")]
+fn application_support() -> PathBuf {
+    env_path("HOME", "/")
+        .join("Library")
+        .join("Application Support")
+}
+
+/// Python `cookie_browser_root` with the macOS profile folders.
+#[cfg(target_os = "macos")]
+#[must_use]
+pub fn cookie_browser_root(browser: &str) -> Option<PathBuf> {
+    let support = application_support();
+    Some(match browser.to_lowercase().as_str() {
+        "brave" => support.join("BraveSoftware").join("Brave-Browser"),
+        "chrome" => support.join("Google").join("Chrome"),
+        "chromium" => support.join("Chromium"),
+        "edge" => support.join("Microsoft Edge"),
+        "vivaldi" => support.join("Vivaldi"),
+        "opera" => support.join("com.operasoftware.Opera"),
+        _ => return None,
+    })
+}
+
 /// Python `cookie_browser_root`.
+#[cfg(not(target_os = "macos"))]
 #[must_use]
 pub fn cookie_browser_root(browser: &str) -> Option<PathBuf> {
     let local = env_path("LOCALAPPDATA", "");
@@ -83,6 +108,9 @@ fn file_name(path: &Path) -> String {
 pub fn discover_cookie_profiles(browser: &str) -> Vec<(String, String)> {
     let browser = browser.to_lowercase();
     if browser == "firefox" {
+        #[cfg(target_os = "macos")]
+        let roots = [application_support().join("Firefox").join("Profiles")];
+        #[cfg(not(target_os = "macos"))]
         let roots = [
             env_path("APPDATA", "").join(r"Mozilla\Firefox\Profiles"),
             env_path("LOCALAPPDATA", "").join(
@@ -156,7 +184,42 @@ fn profile_sort_key(name: &str) -> (u8, String) {
     (2, name.to_lowercase())
 }
 
+/// The application bundle name of a browser on macOS.
+#[cfg(target_os = "macos")]
+fn macos_browser_application(browser: &str) -> Option<&'static str> {
+    Some(match browser.to_lowercase().as_str() {
+        "brave" => "Brave Browser",
+        "chrome" => "Google Chrome",
+        "chromium" => "Chromium",
+        "edge" => "Microsoft Edge",
+        "vivaldi" => "Vivaldi",
+        "opera" => "Opera",
+        "firefox" => "Firefox",
+        _ => return None,
+    })
+}
+
+/// Python `cookie_browser_executable`: the program inside the browser's
+/// application bundle on macOS.
+#[cfg(target_os = "macos")]
+#[must_use]
+pub fn cookie_browser_executable(browser: &str) -> Option<PathBuf> {
+    let name = macos_browser_application(browser)?;
+    let home = env_path("HOME", "/");
+    [PathBuf::from("/Applications"), home.join("Applications")]
+        .into_iter()
+        .map(|folder| {
+            folder
+                .join(format!("{name}.app"))
+                .join("Contents")
+                .join("MacOS")
+                .join(name)
+        })
+        .find(|candidate| candidate.exists())
+}
+
 /// Python `cookie_browser_executable`.
+#[cfg(not(target_os = "macos"))]
 #[must_use]
 pub fn cookie_browser_executable(browser: &str) -> Option<PathBuf> {
     let program_files = env_path("ProgramFiles", r"C:\Program Files");
@@ -199,6 +262,7 @@ pub fn cookie_browser_executable(browser: &str) -> Option<PathBuf> {
 }
 
 /// Python `windows_system_executable`.
+#[cfg(not(target_os = "macos"))]
 fn windows_system_executable(name: &str) -> Option<PathBuf> {
     let root = std::env::var_os("SystemRoot").or_else(|| std::env::var_os("WINDIR"))?;
     let path = PathBuf::from(root).join("System32").join(name);
@@ -216,7 +280,38 @@ fn hidden_command(executable: &Path) -> Command {
     command
 }
 
+/// Python `cookie_browser_is_running`: `pgrep` finds the browser's
+/// application process on macOS.
+#[cfg(target_os = "macos")]
+#[must_use]
+pub fn cookie_browser_is_running(browser: &str) -> bool {
+    let Some(name) = macos_browser_application(browser) else {
+        return false;
+    };
+    output_with_timeout(
+        hidden_command(Path::new("/usr/bin/pgrep")).args(["-x", name]),
+        Duration::from_secs(2),
+    )
+    .is_some_and(|(stdout, _)| !stdout.trim().is_empty())
+}
+
+/// Python `close_cookie_browser_processes`: macOS asks the browser to quit.
+#[cfg(target_os = "macos")]
+pub fn close_cookie_browser_processes(browser: &str) -> bool {
+    let Some(name) = macos_browser_application(browser) else {
+        return false;
+    };
+    let _ = output_with_timeout(
+        hidden_command(Path::new("/usr/bin/osascript"))
+            .args(["-e", &format!("tell application \"{name}\" to quit")]),
+        Duration::from_secs(5),
+    );
+    std::thread::sleep(Duration::from_secs(1));
+    !cookie_browser_is_running(browser)
+}
+
 /// Python `cookie_browser_is_running`.
+#[cfg(not(target_os = "macos"))]
 #[must_use]
 pub fn cookie_browser_is_running(browser: &str) -> bool {
     if !cfg!(windows) {
@@ -236,6 +331,7 @@ pub fn cookie_browser_is_running(browser: &str) -> bool {
 }
 
 /// Python `close_cookie_browser_processes`.
+#[cfg(not(target_os = "macos"))]
 pub fn close_cookie_browser_processes(browser: &str) -> bool {
     if !cfg!(windows) {
         return false;
@@ -817,7 +913,11 @@ mod tests {
             chromium_profile_launch_args("brave", None, true).expect("arguments");
         assert_eq!(label, "Default");
         assert!(arguments[0].starts_with("--user-data-dir="));
-        assert!(arguments[0].ends_with(r"BraveSoftware\Brave-Browser\User Data"));
+        if cfg!(target_os = "macos") {
+            assert!(arguments[0].ends_with("BraveSoftware/Brave-Browser"));
+        } else {
+            assert!(arguments[0].ends_with(r"BraveSoftware\Brave-Browser\User Data"));
+        }
         assert_eq!(arguments[7], "--headless=new");
         assert_eq!(arguments[8], "--profile-directory=Default");
         let (_, window) =

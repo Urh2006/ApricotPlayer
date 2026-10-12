@@ -215,7 +215,17 @@ impl Shell {
         let edits = self.poll_edit_saves(ui);
         let podcasts = self.poll_podcast_work(ui);
         let downloads = self.poll_downloads(ui) | self.poll_conversions(ui);
-        youtube || related || folder || device || chapters || bpm || edits || podcasts || downloads
+        let cookies = self.poll_cookie_events(ui);
+        youtube
+            || related
+            || folder
+            || device
+            || chapters
+            || bpm
+            || edits
+            || podcasts
+            || downloads
+            || cookies
     }
 
     fn poll_folder_scan(&mut self, ui: &mut dyn ShellUi) -> bool {

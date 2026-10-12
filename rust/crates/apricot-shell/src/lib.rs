@@ -12,6 +12,7 @@ mod bookmarks;
 mod collections;
 mod comments;
 mod converter;
+mod cookies;
 mod download_work;
 mod downloads;
 mod equalizer_dialog;
@@ -42,6 +43,7 @@ mod youtube;
 pub use bookmarks::{BookmarkDialog, BookmarkEntry, BookmarkRequest, BookmarkResponse};
 pub use comments::{CommentsCommand, CommentsDialog, CommentsEffect};
 pub use converter::{ConverterDialog, ConverterOptions, ConverterStart, ConverterView};
+pub use cookies::CookieCommandResult;
 pub use downloads::{DownloadProgress, safe_path_component};
 pub use equalizer_dialog::{EQUALIZER_BUTTONS, EqualizerButton, EqualizerLabels, EqualizerView};
 pub use keyboard::{FocusKind, KeyRoute};
@@ -118,6 +120,9 @@ pub struct Shell {
     downloads: downloads::DownloadState,
     conversions: converter::ConversionState,
     settings_window: settings_window::SettingsState,
+    cookies: cookies::CookieState,
+    /// A Settings browser export runs.
+    settings_cookie_export_running: bool,
 }
 
 impl Shell {
@@ -143,6 +148,8 @@ impl Shell {
             downloads: downloads::DownloadState::default(),
             conversions: converter::ConversionState::default(),
             settings_window: settings_window::SettingsState::default(),
+            cookies: cookies::CookieState::default(),
+            settings_cookie_export_running: false,
         }
     }
 
@@ -185,6 +192,7 @@ impl Shell {
             ui.set_status(&message, true);
         }
         self.start_rss(ui);
+        self.install_cookie_repairer();
     }
 
     /// End, or Down at the last row of the list (Windows

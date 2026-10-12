@@ -310,6 +310,7 @@ mod equalizer {
         }
         fn open_converter(&mut self, _dialog: crate::ConverterDialog) {}
         fn open_settings(&mut self) {}
+        fn settings_cookie_source(&mut self, _path: &str, _browser_index: usize) {}
         fn open_action_finder(&mut self, _model: apricot_app::ActionFinderModel) {}
         fn show_conversion_progress(&mut self, _title: &str, _message: &str, _total: usize) {}
         fn update_conversion_progress(&mut self, _converted: usize, _message: &str) {}
@@ -996,5 +997,37 @@ mod settings {
             matches!(outcome, ShortcutCapture::Captured { ref shortcut, .. } if shortcut == "Ctrl+Alt+F12"),
             "{outcome:?}"
         );
+    }
+}
+
+mod cookies {
+    use crate::CookieCommandResult;
+
+    #[test]
+    fn an_imported_cookies_file_fills_the_field_and_says_the_login_was_found() {
+        let mut shell = super::keyboard::shell();
+        let folder = std::env::temp_dir().join(format!("apricot-cookies-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).expect("folder");
+        let file = folder.join("cookies.txt");
+        std::fs::write(
+            &file,
+            "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t4102444800\tSAPISID\tabc\n.youtube.com\tTRUE\t/\tTRUE\t4102444800\tLOGIN_INFO\txyz\n",
+        )
+        .expect("written");
+        let result = shell.settings_import_cookies_file(&file);
+        let CookieCommandResult::Source {
+            path,
+            browser_index,
+            announce,
+            warning,
+        } = result
+        else {
+            panic!("{result:?}");
+        };
+        assert_eq!(path, file.to_string_lossy());
+        assert_eq!(browser_index, 0);
+        assert_eq!(announce.len(), 2, "{announce:?}");
+        assert!(warning.is_none());
+        let _ = std::fs::remove_dir_all(&folder);
     }
 }

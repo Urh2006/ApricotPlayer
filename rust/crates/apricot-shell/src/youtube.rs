@@ -35,8 +35,8 @@ pub(crate) enum ResolvePurpose {
 
 /// Windows `PendingYoutubeResolve`.
 #[derive(Clone, Debug)]
-struct PendingResolve {
-    token: u64,
+pub(crate) struct PendingResolve {
+    pub(crate) token: u64,
     purpose: ResolvePurpose,
     original_item: MediaItem,
     session_shuffle: Option<bool>,
@@ -162,6 +162,7 @@ fn nonempty(value: &str) -> Option<String> {
 impl Shell {
     /// Windows `effective_cookies_file`, as an existing file for yt-dlp.
     pub(crate) fn effective_cookies_file(&mut self) -> Option<PathBuf> {
+        crate::cookies::update_repair_settings(self.application.settings());
         let path = self
             .application
             .effective_cookies_file(&documents_folders());
@@ -332,8 +333,15 @@ impl Shell {
         if pending.purpose == ResolvePurpose::Playback {
             self.fail_preparing_player(&visible);
         }
-        // The cookie refresh prompt of Python arrives with the cookie
-        // settings (unit M12).
+        let settings = self.application.settings();
+        if pending.purpose == ResolvePurpose::Playback
+            && settings.enable_age_restricted_videos
+            && apricot_media::cookie_errors::is_cookie_auth_error(message)
+            && !apricot_app::cookies::normalized_cookies_browser(settings).is_empty()
+        {
+            self.prompt_cookie_refresh_for_playback(ui, pending, &visible);
+            return;
+        }
         ui.set_status(&visible, true);
         if pending.purpose == ResolvePurpose::Playback {
             ui.show_error(&visible);
@@ -640,6 +648,19 @@ impl Shell {
             ui,
             item,
             pending.session_shuffle,
+            pending.start_position_seconds,
+        );
+    }
+
+    /// Windows `handle_cookie_event` for a playback that waited for fresh
+    /// cookies: the resolve starts again.
+    pub(crate) fn retry_cookie_playback(&mut self, ui: &mut dyn ShellUi, pending: &PendingResolve) {
+        self.start_youtube_resolve(
+            ui,
+            &pending.original_item,
+            pending.purpose,
+            pending.session_shuffle,
+            pending.preserve_sequence,
             pending.start_position_seconds,
         );
     }

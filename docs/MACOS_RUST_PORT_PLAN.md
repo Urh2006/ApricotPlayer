@@ -761,3 +761,27 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   Keyboard shortcuts, izbira dejanja, zajem Command+Shift+J javi, da je
   že dodeljena Action finderju, Escape zapre okno, fokus se vrne na seznam
   priljubljenih).
+
+### M12a: piškotki (12. 10. 2026)
+
+- `apricot-platform/src/browser_cookies.rs`: na Macu mape profilov
+  brskalnikov v `~/Library/Application Support` (Chrome, Brave, Edge,
+  Chromium, Vivaldi, Opera, Firefox), programi v `/Applications`, ali brskalnik
+  teče (`pgrep`) in zapiranje (`osascript ... quit`). Windows poti
+  nespremenjene.
+- `apricot-shell/src/cookies.rs` (kopija nevtralnih delov Windows
+  `cookies_win32.rs`): izvoz piškotkov iz brskalnika prek yt-dlp ali
+  `DevTools`, samodejna obnova ob napaki prijave v delavcih yt-dlp s
+  petminutnim premorom po neuspehu, ponovni poskus predvajanja po vprašanju
+  "osveži piškotke" (Da/Ne), uvoz datoteke s piškotki, odpiranje prijave v
+  YouTube v profilu brskalnika.
+- Nastavitve: Choose cookies file, Open YouTube login profile in Export
+  browser cookies (z vprašanjem za zaprtje odprtega brskalnika) zdaj
+  delujejo; polje in izbira brskalnika se po izvozu posodobita tudi, če je
+  okno nastavitev odprto.
+- Odprto vprašanje: Safari ni na seznamu brskalnikov (enako kot na
+  Windows). yt-dlp ga podpira (`--cookies-from-browser safari`, potreben je
+  Full Disk Access); dodati ga je mogoče samo za Mac, če Urh želi.
+- Preverjeno: enotski test uvoza datoteke s prijavo, testi platforme.
+  Pravega izvoza iz brskalnika na tem Macu nisem poganjal, ker bi bral
+  piškotke iz Urhovih brskalnikov in sprožil vprašanje Keychaina.

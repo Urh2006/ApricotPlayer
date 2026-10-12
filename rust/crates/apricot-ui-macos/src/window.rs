@@ -1877,6 +1877,10 @@ impl ShellUi for MacUi<'_> {
         }
     }
 
+    fn settings_cookie_source(&mut self, path: &str, browser_index: usize) {
+        crate::settings::cookie_source_exported(path, browser_index);
+    }
+
     fn open_settings(&mut self) {
         // SAFETY: `openSettings:` exists on the controller.
         unsafe {

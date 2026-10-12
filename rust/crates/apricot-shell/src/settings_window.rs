@@ -673,6 +673,7 @@ impl Shell {
     /// Returns the message when the settings were not saved.
     pub fn settings_restore_defaults(&mut self) -> Result<String, String> {
         self.application.reset_all_settings();
+        crate::cookies::reset_repair_suppression();
         self.settings_save_and_register()?;
         Ok(self.text("defaults_restored"))
     }
@@ -686,6 +687,9 @@ impl Shell {
         self.application
             .reset_settings_section(section)
             .map_err(|error| error.to_string())?;
+        if section == SettingsSection::Cookies {
+            crate::cookies::reset_repair_suppression();
+        }
         self.settings_save_and_register()?;
         let label = self
             .application

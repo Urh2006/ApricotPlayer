@@ -159,6 +159,8 @@ impl ShortcutField {
 }
 
 thread_local! {
+    /// The open Settings window, for results that arrive while it is shown.
+    static OPEN: RefCell<Option<Retained<SettingsWindow>>> = const { RefCell::new(None) };
     /// The chord the capture field just reported.
     static CAPTURED: Cell<Option<apricot_core::shortcut::ShortcutChord>> = const { Cell::new(None) };
 }
@@ -1236,6 +1238,19 @@ impl SettingsWindow {
                     self.rerender_and_focus(SettingId::GlobalEqualizerPreset);
                 }
             }
+            SettingsCommand::ChooseCookiesFile => self.choose_cookies_file(),
+            SettingsCommand::OpenYoutubeLoginProfile => {
+                if let Err(error) = self.sync_all() {
+                    self.show_error(&error);
+                    return;
+                }
+                if let Some(result) =
+                    self.with_shell(|shell, _| shell.settings_open_youtube_login())
+                {
+                    self.show_cookie_result(result);
+                }
+            }
+            SettingsCommand::ExportBrowserCookies => self.export_browser_cookies(),
             SettingsCommand::ObtainYoutubeApiKey => {
                 if let Err(error) = self.sync_all() {
                     self.show_error(&error);
@@ -1266,6 +1281,135 @@ impl SettingsWindow {
                     .unwrap_or_default();
                 self.announce(&message, true);
             }
+        }
+    }
+
+    /// Shows what a cookie command did.
+    fn show_cookie_result(&self, result: apricot_shell::CookieCommandResult) {
+        use apricot_shell::CookieCommandResult as R;
+        match result {
+            R::None => {}
+            R::Announce(text) => self.announce(&text, true),
+            R::Message {
+                title,
+                text,
+                announce,
+            } => {
+                self.message(title.as_deref(), &text);
+                if let Some(announce) = announce {
+                    self.announce(&announce, true);
+                }
+            }
+            R::Source {
+                path,
+                browser_index,
+                announce,
+                warning,
+            } => {
+                self.show_cookie_source(&path, browser_index);
+                for (index, text) in announce.iter().enumerate() {
+                    self.announce(text, index == 0);
+                }
+                if let Some(warning) = warning {
+                    self.message(None, &warning);
+                }
+            }
+        }
+    }
+
+    /// Windows `show_cookie_source`: the cookies field and the browser
+    /// choice after an import or an export; an import also puts the profile
+    /// back on Auto.
+    fn show_cookie_source(&self, path: &str, browser_index: usize) {
+        for bound in self.ivars().controls.borrow().iter() {
+            match (&bound.binding, &bound.kind) {
+                (SettingsBinding::Text(SettingId::CookiesFile), ControlKind::Field(field)) => {
+                    field.setStringValue(&NSString::from_str(path));
+                }
+                (
+                    SettingsBinding::Choice {
+                        setting: SettingId::CookiesFromBrowser,
+                        ..
+                    },
+                    ControlKind::Choice(popup),
+                ) => popup.select(browser_index),
+                (
+                    SettingsBinding::Choice {
+                        setting: SettingId::CookiesBrowserProfile,
+                        ..
+                    },
+                    ControlKind::Choice(popup),
+                ) if browser_index == 0 => popup.select(0),
+                _ => {}
+            }
+        }
+    }
+
+    /// Windows `choose_cookies_file`.
+    fn choose_cookies_file(&self) {
+        let title = self
+            .with_shell(|shell, _| shell.text("choose_cookies_file"))
+            .unwrap_or_default();
+        let panel = NSOpenPanel::openPanel(self.mtm());
+        panel.setTitle(Some(&NSString::from_str(&title)));
+        panel.setMessage(Some(&NSString::from_str(&title)));
+        panel.setCanChooseFiles(true);
+        panel.setCanChooseDirectories(false);
+        let chosen = self.run_panel(&panel);
+        if let Some(path) = chosen
+            && let Some(result) =
+                self.with_shell(|shell, _| shell.settings_import_cookies_file(&path))
+        {
+            self.show_cookie_result(result);
+        }
+        self.focus_command(SettingsCommand::ChooseCookiesFile);
+    }
+
+    /// Windows `export_browser_cookies`.
+    fn export_browser_cookies(&self) {
+        if let Err(error) = self.sync_all() {
+            self.show_error(&error);
+            return;
+        }
+        let Some(start) = self.with_shell(|shell, _| shell.settings_cookie_export_browser()) else {
+            return;
+        };
+        let (browser, prompt) = match start {
+            Ok(start) => start,
+            Err(result) => {
+                self.show_cookie_result(result);
+                return;
+            }
+        };
+        let mut close = false;
+        if let Some((title, message)) = prompt {
+            let (yes, no) = self
+                .with_shell(|shell, _| (shell.text("yes"), shell.text("no")))
+                .unwrap_or_default();
+            let window = self.window();
+            let previous = window.as_ref().and_then(|window| window.firstResponder());
+            let alert = NSAlert::new(self.mtm());
+            alert.setMessageText(&NSString::from_str(&message));
+            alert.window().setTitle(&NSString::from_str(&title));
+            alert.addButtonWithTitle(&NSString::from_str(&yes));
+            alert
+                .addButtonWithTitle(&NSString::from_str(&no))
+                .setKeyEquivalent(&NSString::from_str("\u{1b}"));
+            let answer = alert.runModal();
+            if let (Some(window), Some(previous)) = (window, previous) {
+                window.makeKeyAndOrderFront(None);
+                window.makeFirstResponder(Some(&previous));
+            }
+            if answer != NSAlertFirstButtonReturn {
+                return;
+            }
+            close = true;
+        }
+        let announcements = self
+            .with_shell(|shell, ui| shell.settings_start_cookie_export(ui, browser, close))
+            .unwrap_or_default();
+        for text in announcements {
+            self.announce(&text, true);
         }
     }
 
@@ -1828,6 +1972,7 @@ pub fn run(controller: &MainWindowController) {
     *this.ivars().scroll.borrow_mut() = Some(scroll);
     *this.ivars().document.borrow_mut() = Some(document);
     this.render_controls();
+    OPEN.with(|open| *open.borrow_mut() = Some(this.clone()));
     window.setAutorecalculatesKeyViewLoop(false);
     window.setInitialFirstResponder(Some(&sections));
     app.activate();
@@ -1867,6 +2012,7 @@ pub fn run(controller: &MainWindowController) {
     }
     window.setDelegate(None);
     window.orderOut(None);
+    OPEN.with(|open| *open.borrow_mut() = None);
     let deferred = this.ivars().deferred_action.get();
     this.ivars().controls.borrow_mut().clear();
     if let Some(previous) = previous_window {
@@ -1876,4 +2022,12 @@ pub fn run(controller: &MainWindowController) {
         }
     }
     controller.with_shell(|shell, ui| shell.settings_closed(ui, deferred));
+}
+
+/// Windows `browser_cookies_exported` for an open Settings window.
+pub fn cookie_source_exported(path: &str, browser_index: usize) {
+    let open = OPEN.with(|open| open.borrow().clone());
+    if let Some(dialog) = open {
+        dialog.show_cookie_source(path, browser_index);
+    }
 }
