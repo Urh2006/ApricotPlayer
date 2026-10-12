@@ -436,6 +436,14 @@ pub fn podcast_steps() -> Vec<(String, Option<Key>)> {
         }),
     ));
     steps.push(named("Up", Some(key(keys::KEY_UP, "\u{f700}"))));
+    if std::env::var("APRICOT_MACOS_SELF_TEST_KIND").as_deref() == Ok("download") {
+        steps.extend(download_steps());
+        return steps;
+    }
+    if std::env::var("APRICOT_MACOS_SELF_TEST_KIND").as_deref() == Ok("playlist_download") {
+        steps.extend(playlist_download_steps());
+        return steps;
+    }
     steps.push(named(
         "Return (play episode)",
         Some(key(keys::KEY_RETURN, "\r")),
@@ -455,6 +463,95 @@ pub fn podcast_steps() -> Vec<(String, Option<Key>)> {
         "Escape (feeds)",
         Some(key(keys::KEY_ESCAPE, "\u{1b}")),
     ));
+    steps.push(named(
+        "Escape (main menu)",
+        Some(key(keys::KEY_ESCAPE, "\u{1b}")),
+    ));
+    steps
+}
+
+/// The download steps of `APRICOT_MACOS_SELF_TEST=podcasts` with
+/// `APRICOT_MACOS_SELF_TEST_KIND=download`: queue the selected episode, open
+/// the downloads, download it and wait.
+fn download_steps() -> Vec<(String, Option<Key>)> {
+    use crate::keys;
+    use objc2_app_kit::NSEventModifierFlags as Flags;
+    let named = |name: &str, key: Option<Key>| (name.to_owned(), key);
+    let mut steps = vec![
+        named(
+            "Shift+A (queue)",
+            Some(Key {
+                code: 0,
+                text: "A",
+                flags: Flags::Shift,
+            }),
+        ),
+        named(
+            "Command+Option+D (downloads)",
+            Some(Key {
+                code: 2,
+                text: "d",
+                flags: Flags::Command | Flags::Option,
+            }),
+        ),
+        named(
+            "Shift+Tab",
+            Some(Key {
+                code: keys::KEY_TAB,
+                text: "\t",
+                flags: Flags::Shift,
+            }),
+        ),
+        named("Tab (list)", Some(key(keys::KEY_TAB, "\t"))),
+        named("Return (download)", Some(key(keys::KEY_RETURN, "\r"))),
+    ];
+    for _ in 0..40 {
+        steps.push(named("waiting for the download", None));
+    }
+    steps.push(named(
+        "Escape (main menu)",
+        Some(key(keys::KEY_ESCAPE, "\u{1b}")),
+    ));
+    steps
+}
+
+/// `APRICOT_MACOS_SELF_TEST_KIND=playlist_download`: the episode goes into
+/// a new playlist, which is downloaded with the progress window.
+fn playlist_download_steps() -> Vec<(String, Option<Key>)> {
+    use crate::keys;
+    use objc2_app_kit::NSEventModifierFlags as Flags;
+    let named = |name: &str, key: Option<Key>| (name.to_owned(), key);
+    let shift_tab = || {
+        Some(Key {
+            code: keys::KEY_TAB,
+            text: "\t",
+            flags: Flags::Shift,
+        })
+    };
+    let mut steps = vec![
+        named(
+            "Command+P (add to a new playlist)",
+            Some(Key {
+                code: 35,
+                text: "p",
+                flags: Flags::Command,
+            }),
+        ),
+        named(
+            "Command+Option+P (playlists)",
+            Some(Key {
+                code: 35,
+                text: "p",
+                flags: Flags::Command | Flags::Option,
+            }),
+        ),
+        named("Shift+Tab", shift_tab()),
+        named("Shift+Tab (Download playlist)", shift_tab()),
+        named("Return (download)", Some(key(keys::KEY_RETURN, "\r"))),
+    ];
+    for _ in 0..40 {
+        steps.push(named("waiting for the download", None));
+    }
     steps.push(named(
         "Escape (main menu)",
         Some(key(keys::KEY_ESCAPE, "\u{1b}")),

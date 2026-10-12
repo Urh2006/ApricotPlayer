@@ -92,7 +92,7 @@ fn result_label_parts(item: &MediaItem, catalog: &TranslationCatalog) -> Vec<Str
 }
 
 /// Windows `queued_marker_key`.
-const fn queued_marker_key(queued: &apricot_app::QueuedDownload) -> &'static str {
+pub(crate) const fn queued_marker_key(queued: &apricot_app::QueuedDownload) -> &'static str {
     use apricot_app::DownloadChoice;
     match (queued.item.kind, queued.choice) {
         (MediaKind::PodcastEpisode, _) => "podcast_audio_queued_marker",
@@ -368,6 +368,9 @@ impl Shell {
         let Some(index) = ui.selected_row() else {
             return;
         };
+        if matches!(self.view, View::Results | View::Trending | View::Collection) {
+            self.apply_deferred_result_rows(ui, index);
+        }
         match self.view {
             View::LocalFolder => {
                 let _ = self.application.select_local_folder_item(index);
@@ -395,6 +398,7 @@ impl Shell {
             | View::History
             | View::PodcastSearchResults
             | View::PodcastCategories
+            | View::DownloadQueue
             | View::Player => {}
         }
     }
@@ -421,21 +425,16 @@ impl Shell {
             ui.show_error(&self.text("no_selection"));
             return;
         }
-        let key = match id {
-            "search_play" => {
-                self.activate_selection(ui);
-                return;
+        match id {
+            "search_play" => self.activate_selection(ui),
+            "search_download_audio" => {
+                self.start_active_download(ui, apricot_app::DownloadChoice::Audio);
             }
-            "search_download_audio" => "download_audio",
-            "search_download_video" => "download_video",
-            _ => {
-                self.add_active_favorite(ui);
-                return;
+            "search_download_video" => {
+                self.start_active_download(ui, apricot_app::DownloadChoice::Video);
             }
-        };
-        // Downloads arrive with their unit (M9).
-        let message = apricot_app::unavailable_feature_message(&self.catalog(), &self.text(key));
-        ui.set_status(&message, true);
+            _ => self.add_active_favorite(ui),
+        }
     }
 }
 

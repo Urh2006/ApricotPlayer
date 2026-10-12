@@ -5,6 +5,7 @@
 //! lists and the player (`show_context_menu_for_active_view`,
 //! `execute_context_command`).
 
+use apricot_app::DownloadChoice;
 use apricot_app::context_menu::{self, ContextCommand, ContextMenuContext, ContextMenuEntry};
 use apricot_core::{MediaItem, MediaKind, TranslationCatalog};
 
@@ -327,7 +328,9 @@ impl Shell {
             View::RssFeeds | View::RssItems | View::PodcastSearchResults => {
                 self.podcast_context_entries()
             }
-            View::MainMenu | View::DirectLink | View::PodcastCategories => None,
+            View::MainMenu | View::DirectLink | View::PodcastCategories | View::DownloadQueue => {
+                None
+            }
         }
     }
 
@@ -335,7 +338,12 @@ impl Shell {
     /// the player for the active item; the chosen entry runs.
     pub(crate) fn show_context_menu_for_active_view(&mut self, ui: &mut dyn ShellUi) {
         let item = self.active_media_item(ui);
-        let Some(entries) = self.context_entries(item.as_ref()) else {
+        let entries = if self.view == View::DownloadQueue {
+            self.download_queue_context_entries(ui)
+        } else {
+            self.context_entries(item.as_ref())
+        };
+        let Some(entries) = entries else {
             return;
         };
         self.stop_key_repeat(ui);
@@ -366,10 +374,17 @@ impl Shell {
             },
             C::CopyTimestampLink => self.copy_current_timestamp_link(ui),
             C::PlayerAction(action_id) => {
-                if !self.podcast_command(ui, action_id) {
+                if !self.podcast_command(ui, action_id)
+                    && !self.download_context_command(ui, action_id)
+                {
                     self.activate_action(ui, action_id);
                 }
             }
+            C::DownloadAudio => self.start_active_download(ui, DownloadChoice::Audio),
+            C::DownloadVideo => self.start_active_download(ui, DownloadChoice::Video),
+            C::DownloadAllAudio => self.start_all_queued_downloads(ui, DownloadChoice::Audio),
+            C::DownloadAllVideo => self.start_all_queued_downloads(ui, DownloadChoice::Video),
+            C::DownloadUserPlaylist => self.download_current_user_playlist(ui),
             C::ClosePlayer => self.close_current_player(ui),
             C::OpenChannel => self.open_item_channel(ui),
             C::AddFavorite => self.add_active_favorite(ui),

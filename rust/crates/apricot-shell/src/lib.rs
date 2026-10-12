@@ -11,6 +11,8 @@
 mod bookmarks;
 mod collections;
 mod comments;
+mod download_work;
+mod downloads;
 mod equalizer_dialog;
 mod keyboard;
 mod library;
@@ -37,6 +39,7 @@ mod youtube;
 
 pub use bookmarks::{BookmarkDialog, BookmarkEntry, BookmarkRequest, BookmarkResponse};
 pub use comments::{CommentsCommand, CommentsDialog, CommentsEffect};
+pub use downloads::{DownloadProgress, safe_path_component};
 pub use equalizer_dialog::{EQUALIZER_BUTTONS, EqualizerButton, EqualizerLabels, EqualizerView};
 pub use keyboard::{FocusKind, KeyRoute};
 pub use library::media_collection_label;
@@ -81,6 +84,7 @@ pub enum View {
     RssItems,
     PodcastSearchResults,
     PodcastCategories,
+    DownloadQueue,
     Player,
 }
 
@@ -104,6 +108,7 @@ pub struct Shell {
     related: Option<related::PendingRelated>,
     playlists: playlists::PlaylistState,
     podcasts: podcasts::PodcastState,
+    downloads: downloads::DownloadState,
 }
 
 impl Shell {
@@ -126,6 +131,7 @@ impl Shell {
             related: None,
             playlists: playlists::PlaylistState::default(),
             podcasts: podcasts::PodcastState::default(),
+            downloads: downloads::DownloadState::default(),
         }
     }
 
@@ -289,6 +295,10 @@ impl Shell {
                 self.show_rss_feeds(ui);
                 return;
             }
+            "current_downloads" => {
+                self.show_download_queue(ui);
+                return;
+            }
             "direct_link" => {
                 self.show_direct_link(ui);
                 return;
@@ -306,11 +316,19 @@ impl Shell {
         ui.set_status(&message, true);
     }
 
+    /// The player, podcast and download actions; `true` when `action_id`
+    /// is one.
+    fn feature_action(&mut self, ui: &mut dyn ShellUi, action_id: &str) -> bool {
+        self.activate_player_action(ui, action_id)
+            || self.podcast_action(ui, action_id)
+            || self.download_action(ui, action_id)
+    }
+
     /// An action chosen by its shortcut or from a menu (Windows
     /// `activate_action`).
     pub fn activate_action(&mut self, ui: &mut dyn ShellUi, action_id: &str) {
         self.leave_player_for_global_navigation(ui, action_id);
-        if self.activate_player_action(ui, action_id) || self.podcast_action(ui, action_id) {
+        if self.feature_action(ui, action_id) {
             return;
         }
         match action_id {
@@ -550,6 +568,13 @@ impl Shell {
             self.show_main_menu(ui);
         }
     }
+}
+
+/// Seconds since the Unix epoch.
+pub(crate) fn unix_timestamp() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |duration| duration.as_secs_f64())
 }
 
 #[cfg(test)]

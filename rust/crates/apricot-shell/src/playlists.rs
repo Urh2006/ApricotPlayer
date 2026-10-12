@@ -201,6 +201,15 @@ impl Shell {
     }
 
     /// Enter or Open on a playlist screen.
+    /// Windows `current_user_playlist_index`.
+    pub(crate) const fn current_user_playlist_index(&self) -> usize {
+        self.playlists.playlist
+    }
+
+    pub(crate) const fn set_current_user_playlist_index(&mut self, index: usize) {
+        self.playlists.playlist = index;
+    }
+
     pub(crate) fn activate_playlist_selection(&mut self, ui: &mut dyn ShellUi) {
         if self.view == View::UserPlaylists {
             self.open_selected_user_playlist(ui);

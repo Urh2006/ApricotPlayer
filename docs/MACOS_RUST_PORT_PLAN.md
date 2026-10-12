@@ -149,6 +149,15 @@ pa ostane nespremenjen do enote W1, ko Urh lahko sproti preizkuša z NVDA.
   logiko. To enoto delava, ko je Urh pri Windows računalniku, z NVDA
   preizkusom po vsakem sklopu.
 
+- **S1. Spotify: Followed artists (nova funkcija, Urhova zahteva 12. 10. 2026).**
+  Po koncu macOS porta, za Windows in macOS hkrati: nova vrstica "Followed
+  artists" v Spotify meniju takoj pod Playlists (`SpotifyHubEntry` v
+  `apricot-app/src/spotify.rs`), seznam vseh izvajalcev, ki jim račun sledi
+  (Spotify Web API `GET /me/following?type=artist` s straničenjem prek
+  `after`, potreben obseg `user-follow-read`), Enter odpre izvajalca kot
+  drugje. Besedila v vseh jezikih, test in kratek preizkus z NVDA in
+  VoiceOverjem. To je zavestna razlika od Python verzije.
+
 - **M15. Paket.** `.app` s pribitimi dylibi (libmpv, FFmpeg in odvisnosti),
   yt-dlp, Node, yt-dlp-ejs, ikona, ad-hoc podpis, DMG, skripta za lokalno gradnjo.
 - **M16. Posodobitve.** Izbira DMG sredstva za arm64 in kanal, preverjanje
@@ -619,7 +628,7 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   Return odpre seznam, Delete odstrani posnetek, Shift+Tab na Back, Escape
   na sezname, Delete odstrani seznam).
 
-### M8 podcasti in RSS (opravljeno)
+### M8: podcasti in RSS (11. 10. 2026)
 
 - `apricot-shell/src/podcasts.rs` in `podcast_work.rs` (zaenkrat kopija
   Windows `podcast_win32.rs`, podvojitev odpravi W1): zasloni Podcasts and
@@ -644,3 +653,35 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   nazaj, časovnik) in samodejni preizkus na Macu z resničnim feedom Planet
   Money (dodajanje, 100 od 355 epizod, označitev in odznačitev, predvajanje
   epizode z mpv, End naloži še 100 in izbere zadnjo vrstico, Escape nazaj).
+
+### M9a: prenosi (12. 10. 2026)
+
+- `apricot-shell/src/downloads.rs` in `download_work.rs` (kopija Windows
+  `download_win32.rs` do W1): zaslon Current downloads z vrstnim redom Tab
+  Windows (Back, pri čakajočih Download selected, Download all as audio in
+  video, pri aktivnih Cancel in Cancel all, seznam), oznake vrstic,
+  kontekstni meni po vrsti, Command+Shift+A in Command+Shift+D (z zaščito
+  pred dvojnim pritiskom 0,35 s), Shift+A doda ali odstrani iz vrste,
+  izbira zvok ali video pri izbranih, potrditev pred prenosom (Da/Ne),
+  izbira mape ali datoteke, kadar je vklopljeno spraševanje, mape po
+  Python razporedu (music, podcasts, ime feeda ali zbirke), ponovni
+  poskus s piškotki, prenos vseh čakajočih, prenos seznama predvajanja in
+  feeda, preklic enega ali vseh, zgodovina prenosov, sporočilo ob koncu
+  in odpiranje mape.
+- Okno napredka (`apricot-ui-macos/src/download_progress.rs`): sporočilo,
+  vrstica napredka, Hide (privzeti gumb s fokusom) in Details, ki odpre
+  zaslon prenosov; zapiranje ga samo skrije, kot na Windows.
+- Gumbi za prenos na iskalnem zaslonu, v neposredni povezavi, pri seznamih
+  in podcastih so zdaj povezani; oznaka vrste na vrstici rezultata se
+  osveži, ko se izbira premakne, kot na Windows.
+- Delete na seznamu feedov ne odstrani več feeda (na Windows tega ni bilo).
+- Izvoz izseka iz predvajalnika pride z M9b skupaj s pretvornikom;
+  sistemsko obvestilo ob koncu prenosa v ozadju pride z M14.
+- Preverjeno: enotski testi (zaslon in vrsta prenosov, zavrnjena potrditev,
+  mape, napredek, zaščita bližnjice) in samodejna preizkusa na Macu z
+  resničnim yt-dlp: epizoda Planet Money dodana v vrsto s Shift+A, odprt
+  zaslon prenosov, Return prenese datoteko v mapo podcasts/Planet Money;
+  seznam Mix s to epizodo prenesen z gumbom Download playlist v
+  music/Mix, okno napredka se je odprlo, posodabljalo in zaprlo. Fokusa v
+  oknu napredka med preizkusom ni bilo mogoče preveriti, ker aplikacija
+  ni bila v ospredju.

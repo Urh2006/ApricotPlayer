@@ -13,13 +13,11 @@ apricot-app.workspace = true
 apricot-core.workspace = true
 apricot-media.workspace = true
 apricot-platform.workspace = true
+apricot-storage.workspace = true
 chrono.workspace = true
 apricot-playback.workspace = true
 serde_json.workspace = true
 url.workspace = true
-
-[dev-dependencies]
-apricot-storage.workspace = true
 
 [lints]
 workspace = true

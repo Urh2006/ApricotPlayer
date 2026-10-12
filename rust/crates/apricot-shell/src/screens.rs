@@ -116,14 +116,6 @@ impl Shell {
             "collection_remove" => self.remove_selected_collection_item(ui),
             "history_clear" => self.clear_history(ui),
             "playlist_create" => self.create_user_playlist(ui, None),
-            "playlist_download" => {
-                // Downloads arrive with their unit (M9).
-                let message = apricot_app::unavailable_feature_message(
-                    &self.catalog(),
-                    &self.text("download_user_playlist"),
-                );
-                ui.set_status(&message, true);
-            }
             "direct_play" => self.activate_direct_link(ui, "play"),
             "direct_download_audio" => self.activate_direct_link(ui, "download_audio"),
             "direct_download_video" => self.activate_direct_link(ui, "download_video"),
@@ -134,7 +126,9 @@ impl Shell {
             | "search_download_video"
             | "search_add_favorite" => self.activate_search_button(ui, id),
             _ => {
-                let _ = self.podcast_command(ui, id);
+                if !self.download_command(ui, id) {
+                    let _ = self.podcast_command(ui, id);
+                }
             }
         }
     }
@@ -155,6 +149,7 @@ impl Shell {
             | View::RssItems
             | View::PodcastSearchResults
             | View::PodcastCategories => self.activate_podcast_selection(ui),
+            View::DownloadQueue => self.start_selected_queued_download(ui, None),
             // Python `play_selected` on the empty result list.
             View::Search => ui.show_error(&self.text("no_selection")),
             View::DirectLink | View::Player => {}
@@ -219,7 +214,8 @@ impl Shell {
         let bpm = self.poll_bpm_analyses(ui);
         let edits = self.poll_edit_saves(ui);
         let podcasts = self.poll_podcast_work(ui);
-        youtube || related || folder || device || chapters || bpm || edits || podcasts
+        let downloads = self.poll_downloads(ui);
+        youtube || related || folder || device || chapters || bpm || edits || podcasts || downloads
     }
 
     fn poll_folder_scan(&mut self, ui: &mut dyn ShellUi) -> bool {
@@ -421,6 +417,10 @@ impl Shell {
                     .and_then(serde_json::Value::as_u64)
                     .and_then(|value| usize::try_from(value).ok());
                 self.restore_podcast_view(ui, frame.route, saved);
+            }
+            Route::DownloadQueue => {
+                self.view = View::DownloadQueue;
+                self.refresh_download_queue(ui, true, false);
             }
             Route::Bookmarks => {
                 self.view = View::MainMenu;

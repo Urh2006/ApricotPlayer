@@ -137,7 +137,8 @@ const fn view_shortcut_scope(view: View) -> (ActionScope, bool) {
         | View::RssFeeds
         | View::RssItems
         | View::PodcastSearchResults
-        | View::PodcastCategories => (ActionScope::List, false),
+        | View::PodcastCategories
+        | View::DownloadQueue => (ActionScope::List, false),
         View::Player => (ActionScope::Player, false),
     }
 }

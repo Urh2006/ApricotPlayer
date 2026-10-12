@@ -161,7 +161,7 @@ fn nonempty(value: &str) -> Option<String> {
 
 impl Shell {
     /// Windows `effective_cookies_file`, as an existing file for yt-dlp.
-    fn effective_cookies_file(&mut self) -> Option<PathBuf> {
+    pub(crate) fn effective_cookies_file(&mut self) -> Option<PathBuf> {
         let path = self
             .application
             .effective_cookies_file(&documents_folders());

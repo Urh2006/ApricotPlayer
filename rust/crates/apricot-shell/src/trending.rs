@@ -469,15 +469,11 @@ impl Shell {
                     None,
                 );
             }
-            "download_audio" | "download_video" => {
-                // Downloads arrive with their unit (M9).
-                let label = self.text(if action == "download_audio" {
-                    "download_direct_audio"
-                } else {
-                    "download_direct_video"
-                });
-                let message = apricot_app::unavailable_feature_message(&self.catalog(), &label);
-                ui.set_status(&message, true);
+            "download_audio" => {
+                self.start_download_item(ui, &item, apricot_app::DownloadChoice::Audio, false);
+            }
+            "download_video" => {
+                self.start_download_item(ui, &item, apricot_app::DownloadChoice::Video, false);
             }
             _ => {
                 self.application.prepare_standalone_playback();

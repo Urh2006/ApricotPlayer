@@ -50,6 +50,7 @@ pub struct ControllerIvars {
     page: RefCell<Option<PlayerPage>>,
     poll_timer: RefCell<Option<Retained<NSTimer>>>,
     rss_timer: RefCell<Option<Retained<NSTimer>>>,
+    download_progress: RefCell<Option<Retained<crate::download_progress::ProgressWindow>>>,
     /// The key code of a held player key (Windows `ControlledRepeatState`).
     held_key: Cell<Option<u16>>,
     /// The modifiers held at the last key event, to see which one went up.
@@ -310,6 +311,7 @@ impl MainWindowController {
             page: RefCell::new(None),
             poll_timer: RefCell::new(None),
             rss_timer: RefCell::new(None),
+            download_progress: RefCell::new(None),
             held_key: Cell::new(None),
             held_modifiers: Cell::new(keys::Modifiers::default()),
             exiting: Cell::new(false),
@@ -623,7 +625,7 @@ impl MainWindowController {
         }
     }
 
-    fn window(&self) -> Option<Retained<MainWindow>> {
+    pub(crate) fn window(&self) -> Option<Retained<MainWindow>> {
         self.ivars().window.borrow().clone()
     }
 
@@ -943,6 +945,9 @@ impl MainWindowController {
             // A failure shows a message; it is printed and answered.
             self.schedule_modal_self_test_keys_after(2.0);
         }
+        if name.starts_with("Command+P") {
+            self.schedule_modal_self_test_keys();
+        }
         if let Some(key) = key {
             send(&window, key);
         }
@@ -957,8 +962,26 @@ impl MainWindowController {
         let count = self.list().map_or(0, |list| list.numberOfRows());
         if !name.starts_with("waiting") || index.is_multiple_of(4) {
             let value: String = focused_value(&window).chars().take(160).collect();
+            let app = NSApplication::sharedApplication(self.mtm());
+            let key_window = app
+                .keyWindow()
+                .map(|key| key.title().to_string())
+                .unwrap_or_default();
+            let visible: Vec<String> = app
+                .windows()
+                .iter()
+                .filter(|window| window.isVisible())
+                .map(|window| {
+                    let texts = window
+                        .contentView()
+                        .map(|view| crate::self_test::texts(&view))
+                        .unwrap_or_default();
+                    format!("{} {texts:?}", window.title())
+                })
+                .collect();
+            let key_window = format!("{key_window} active={} windows={visible:?}", app.isActive());
             println!(
-                "podcast-test {name}: focus={} value={value:?} row={row:?} rows={count} title={:?} status={status:?}",
+                "podcast-test {name}: focus={} value={value:?} row={row:?} rows={count} title={:?} key={key_window:?} status={status:?}",
                 focus(&window),
                 window.title().to_string(),
             );
@@ -1594,6 +1617,7 @@ impl ShellUi for MacUi<'_> {
     fn choose_save_file(
         &mut self,
         title: &str,
+        directory: Option<&std::path::Path>,
         default_name: &str,
         extensions: &[&str],
     ) -> Option<PathBuf> {
@@ -1601,6 +1625,11 @@ impl ShellUi for MacUi<'_> {
         panel.setTitle(Some(&NSString::from_str(title)));
         panel.setMessage(Some(&NSString::from_str(title)));
         panel.setNameFieldStringValue(&NSString::from_str(default_name));
+        if let Some(directory) = directory {
+            panel.setDirectoryURL(Some(&objc2_foundation::NSURL::fileURLWithPath(
+                &NSString::from_str(&directory.to_string_lossy()),
+            )));
+        }
         set_allowed_extensions(&panel, extensions);
         if panel.runModal() != NSModalResponseOK {
             return None;
@@ -1609,6 +1638,83 @@ impl ShellUi for MacUi<'_> {
             .URL()
             .and_then(|url| url.path())
             .map(|path| PathBuf::from(path.to_string()))
+    }
+
+    fn choose_download_folder(
+        &mut self,
+        title: &str,
+        initial: &std::path::Path,
+    ) -> Option<PathBuf> {
+        let panel = NSOpenPanel::openPanel(self.controller.mtm());
+        panel.setTitle(Some(&NSString::from_str(title)));
+        panel.setMessage(Some(&NSString::from_str(title)));
+        panel.setCanChooseFiles(false);
+        panel.setCanChooseDirectories(true);
+        panel.setCanCreateDirectories(true);
+        panel.setAllowsMultipleSelection(false);
+        panel.setDirectoryURL(Some(&objc2_foundation::NSURL::fileURLWithPath(
+            &NSString::from_str(&initial.to_string_lossy()),
+        )));
+        if panel.runModal() != NSModalResponseOK {
+            return None;
+        }
+        panel
+            .URL()
+            .and_then(|url| url.path())
+            .map(|path| PathBuf::from(path.to_string()))
+    }
+
+    fn ask_yes_no(&mut self, message: &str, yes: &str, no: &str) -> bool {
+        let window = self.controller.window();
+        let previous = window.as_ref().and_then(|window| window.firstResponder());
+        let alert = NSAlert::new(self.controller.mtm());
+        alert.setMessageText(&NSString::from_str(message));
+        alert.addButtonWithTitle(&NSString::from_str(yes));
+        alert.addButtonWithTitle(&NSString::from_str(no));
+        let answer = alert.runModal();
+        if let (Some(window), Some(previous)) = (window, previous) {
+            window.makeFirstResponder(Some(&previous));
+        }
+        answer == objc2_app_kit::NSAlertFirstButtonReturn
+    }
+
+    fn show_download_progress(&mut self, progress: &apricot_shell::DownloadProgress) {
+        let existing = self.controller.ivars().download_progress.borrow().clone();
+        if let Some(window) = existing {
+            window.set_progress(progress.percent, &progress.message);
+            window.show();
+            return;
+        }
+        let window = crate::download_progress::ProgressWindow::new(self.controller, progress);
+        *self.controller.ivars().download_progress.borrow_mut() = Some(window);
+    }
+
+    fn update_download_progress(&mut self, percent: u32, message: &str) {
+        if let Some(window) = self.controller.ivars().download_progress.borrow().as_ref() {
+            window.set_progress(percent, message);
+        }
+    }
+
+    fn close_download_progress(&mut self) {
+        let window = self
+            .controller
+            .ivars()
+            .download_progress
+            .borrow_mut()
+            .take();
+        if let Some(window) = window {
+            window.destroy();
+        }
+    }
+
+    fn set_list_row(&mut self, index: usize, label: &str) {
+        if let Some(list) = self.controller.list() {
+            list.set_row(index, label);
+        }
+    }
+
+    fn app_is_active(&self) -> bool {
+        NSApplication::sharedApplication(self.controller.mtm()).isActive()
     }
 
     fn set_rss_timer(&mut self, interval_seconds: Option<f64>) {

@@ -269,6 +269,21 @@ impl List {
         }
     }
 
+    /// Replaces one row, keeping the selection.
+    pub fn set_row(&self, index: usize, label: &str) {
+        {
+            let mut rows = self.ivars().rows.borrow_mut();
+            let Some(row) = rows.get_mut(index) else {
+                return;
+            };
+            *row = label.replace('\t', "  ");
+        }
+        self.reloadDataForRowIndexes_columnIndexes(
+            &NSIndexSet::indexSetWithIndex(index),
+            &NSIndexSet::indexSetWithIndex(0),
+        );
+    }
+
     pub fn select(&self, row: usize) {
         let Ok(index) = NSInteger::try_from(row) else {
             return;

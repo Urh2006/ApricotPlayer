@@ -23,6 +23,8 @@ mod context_menu;
 #[cfg(target_os = "macos")]
 mod controls;
 #[cfg(target_os = "macos")]
+mod download_progress;
+#[cfg(target_os = "macos")]
 mod equalizer;
 #[cfg(target_os = "macos")]
 mod form_controls;

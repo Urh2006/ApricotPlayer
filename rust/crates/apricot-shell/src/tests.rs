@@ -178,6 +178,10 @@ mod equalizer {
         pub(super) screens: Vec<crate::ListScreen>,
         /// The RSS timer interval, `None` when stopped.
         pub(super) rss_timer: Option<f64>,
+        /// The yes or no questions asked, and the answer given.
+        pub(super) questions: Vec<String>,
+        pub(super) answer_yes: bool,
+        pub(super) progress: Option<crate::DownloadProgress>,
     }
 
     impl ShellUi for Ui {
@@ -263,10 +267,46 @@ mod equalizer {
         fn choose_save_file(
             &mut self,
             _title: &str,
+            _directory: Option<&std::path::Path>,
             _default_name: &str,
             _extensions: &[&str],
         ) -> Option<PathBuf> {
             None
+        }
+        fn choose_download_folder(
+            &mut self,
+            _title: &str,
+            _initial: &std::path::Path,
+        ) -> Option<PathBuf> {
+            None
+        }
+        fn ask_yes_no(&mut self, message: &str, _yes: &str, _no: &str) -> bool {
+            self.questions.push(message.to_owned());
+            self.answer_yes
+        }
+        fn show_download_progress(&mut self, progress: &crate::DownloadProgress) {
+            self.progress = Some(progress.clone());
+        }
+        fn update_download_progress(&mut self, percent: u32, message: &str) {
+            if let Some(progress) = self.progress.as_mut() {
+                progress.percent = percent;
+                message.clone_into(&mut progress.message);
+            }
+        }
+        fn close_download_progress(&mut self) {
+            self.progress = None;
+        }
+        fn set_list_row(&mut self, index: usize, label: &str) {
+            if let Some(row) = self
+                .screens
+                .last_mut()
+                .and_then(|screen| screen.rows.get_mut(index))
+            {
+                label.clone_into(row);
+            }
+        }
+        fn app_is_active(&self) -> bool {
+            true
         }
         fn set_rss_timer(&mut self, interval_seconds: Option<f64>) {
             self.rss_timer = interval_seconds;
@@ -823,5 +863,97 @@ mod podcasts {
         let expected = (settings.enable_podcasts_rss && settings.rss_auto_refresh_enabled)
             .then(|| settings.rss_refresh_interval_hours.clamp(0.5, 168.0) * 3600.0);
         assert_eq!(ui.rss_timer, expected);
+    }
+}
+
+mod downloads {
+    use super::equalizer::Ui;
+    use crate::{ListScreen, ScreenControl};
+
+    fn ids(screen: &ListScreen) -> Vec<&'static str> {
+        screen
+            .controls
+            .iter()
+            .map(|control| match control {
+                ScreenControl::List => "list",
+                ScreenControl::Button { id, .. } => id,
+                _ => "field",
+            })
+            .collect()
+    }
+
+    fn remote(title: &str) -> apricot_core::MediaItem {
+        let mut item =
+            apricot_core::MediaItem::from_direct_link(&format!("https://example.com/{title}.mp3"))
+                .expect("item");
+        item.title = title.to_owned();
+        item.kind = apricot_core::MediaKind::PodcastEpisode;
+        item
+    }
+
+    #[test]
+    fn the_download_screen_shows_the_queue_and_its_buttons() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell.activate_action(&mut ui, "open_current_downloads");
+        let screen = ui.screens.last().expect("downloads");
+        assert_eq!(screen.list_name, shell.text("current_downloads"));
+        assert_eq!(screen.rows, [shell.text("no_queued_downloads")]);
+        assert_eq!(ids(screen), ["back", "list"]);
+
+        let _ = shell
+            .application
+            .downloads_mut()
+            .queue_item(remote("Episode"), apricot_app::DownloadChoice::Audio);
+        shell.activate_action(&mut ui, "open_current_downloads");
+        let screen = ui.screens.last().expect("downloads");
+        assert_eq!(
+            ids(screen),
+            [
+                "back",
+                "open",
+                "download_all_audio",
+                "download_all_video",
+                "list"
+            ]
+        );
+        assert!(
+            screen.rows[0].starts_with("Episode | "),
+            "{:?}",
+            screen.rows
+        );
+        ui.selected = Some(0);
+        shell.activate_action(&mut ui, "context_menu");
+        shell.activate_screen_button(&mut ui, "download_remove_queued");
+        assert!(
+            ui.announcements
+                .last()
+                .is_some_and(|message| message.contains("Episode")),
+            "{:?}",
+            ui.announcements
+        );
+        assert_eq!(
+            ui.screens.last().expect("downloads").rows,
+            [shell.text("no_queued_downloads")]
+        );
+    }
+
+    #[test]
+    fn a_declined_confirmation_cancels_the_download() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell
+            .application
+            .set_boolean_setting(apricot_core::SettingId::ConfirmBeforeDownload, true)
+            .expect("set");
+        shell.start_download_item(
+            &mut ui,
+            &remote("Episode"),
+            apricot_app::DownloadChoice::Audio,
+            false,
+        );
+        assert_eq!(ui.questions.len(), 1);
+        assert!(ui.questions[0].contains("Episode"));
+        assert!(shell.application.downloads().active().is_empty());
     }
 }

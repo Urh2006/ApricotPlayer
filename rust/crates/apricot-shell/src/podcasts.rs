@@ -350,6 +350,30 @@ impl Shell {
         }
     }
 
+    /// The open feed (Windows `current_rss_feed_index`).
+    pub(crate) const fn current_rss_feed_index(&self) -> usize {
+        self.podcasts.feed
+    }
+
+    /// The selected or playing episode (Windows `active_rss_episode`).
+    pub(crate) fn active_rss_item(&self, ui: &dyn ShellUi) -> Option<MediaItem> {
+        self.active_rss_episode(ui).map(|(_, _, item)| item)
+    }
+
+    /// The label of a shown episode row (Windows `refresh_rss_episode_line`).
+    pub(crate) fn rss_episode_row_label(&self, index: usize) -> Option<String> {
+        if index >= self.podcasts.visible_items {
+            return None;
+        }
+        let item = self
+            .application
+            .rss_feeds()
+            .get(self.podcasts.feed)?
+            .items
+            .get(index)?;
+        Some(self.rss_episode_row(item, &self.catalog()))
+    }
+
     fn rss_episode_row(&self, item: &MediaItem, catalog: &TranslationCatalog) -> String {
         rss_episode_label(
             item,
@@ -1315,9 +1339,12 @@ impl Shell {
             ui.set_status(&self.text("opml_no_feeds"), true);
             return;
         }
-        let Some(path) =
-            ui.choose_save_file(&self.text("export_opml"), "apricot_feeds.opml", &["opml"])
-        else {
+        let Some(path) = ui.choose_save_file(
+            &self.text("export_opml"),
+            None,
+            "apricot_feeds.opml",
+            &["opml"],
+        ) else {
             return;
         };
         let result = apricot_media::write_opml(&feeds)
@@ -1395,17 +1422,6 @@ impl Shell {
             "rss_remove" => self.remove_selected_rss_feed(ui),
             "podcast_add" => self.add_selected_podcast_result(ui),
             "open_browser" => self.open_selected_podcast_in_browser(ui),
-            "rss_download_episode" | "rss_download_feed" | "rss_queue_episode" => {
-                // Downloads arrive with their unit (M9).
-                let key = match id {
-                    "rss_download_episode" => "download_episode_audio",
-                    "rss_queue_episode" => "queue_episode_audio",
-                    _ => "download_feed",
-                };
-                let message =
-                    apricot_app::unavailable_feature_message(&self.catalog(), &self.text(key));
-                ui.set_status(&message, true);
-            }
             _ => return false,
         }
         true

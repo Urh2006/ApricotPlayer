@@ -192,14 +192,43 @@ pub trait ShellUi {
     /// of `extensions`, `None` when cancelled.
     fn choose_open_file(&mut self, title: &str, extensions: &[&str]) -> Option<PathBuf>;
 
-    /// Windows `GetSaveFileNameW`: a save dialog starting with
-    /// `default_name`, `None` when cancelled.
+    /// Windows `GetSaveFileNameW`: a save dialog in `directory` starting
+    /// with `default_name`, `None` when cancelled.
     fn choose_save_file(
         &mut self,
         title: &str,
+        directory: Option<&std::path::Path>,
         default_name: &str,
         extensions: &[&str],
     ) -> Option<PathBuf>;
+
+    /// Windows `choose_download_folder`: a folder dialog starting in
+    /// `initial`, `None` when cancelled.
+    fn choose_download_folder(&mut self, title: &str, initial: &std::path::Path)
+    -> Option<PathBuf>;
+
+    /// Windows `MessageBoxW` with Yes and No: `true` for Yes. Focus returns
+    /// to the control that had it.
+    fn ask_yes_no(&mut self, message: &str, yes: &str, no: &str) -> bool;
+
+    /// Windows `DownloadProgressWindow::create` or `show`: the modeless
+    /// progress window, in front with focus on Hide. Details calls
+    /// [`crate::Shell::download_progress_details`].
+    fn show_download_progress(&mut self, progress: &crate::DownloadProgress);
+
+    /// Windows `DownloadProgressWindow::set_progress`, without moving focus.
+    fn update_download_progress(&mut self, percent: u32, message: &str);
+
+    /// Windows `DownloadProgressWindow::destroy`.
+    fn close_download_progress(&mut self);
+
+    /// Replaces one row of the screen's list, keeping the selection
+    /// (Windows `LB_DELETESTRING` and `LB_INSERTSTRING`).
+    fn set_list_row(&mut self, index: usize, label: &str);
+
+    /// Whether a window of the application is in front (Windows
+    /// `GetForegroundWindow` belongs to the application).
+    fn app_is_active(&self) -> bool;
 
     /// Windows `RSS_REFRESH_TIMER_ID`: calls
     /// [`crate::Shell::refresh_all_rss_feeds_background`] every

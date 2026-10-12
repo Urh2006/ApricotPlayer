@@ -144,7 +144,8 @@ impl Shell {
             | View::UserPlaylists
             | View::RssFeeds
             | View::PodcastSearchResults
-            | View::PodcastCategories => None,
+            | View::PodcastCategories
+            | View::DownloadQueue => None,
         }
     }
 

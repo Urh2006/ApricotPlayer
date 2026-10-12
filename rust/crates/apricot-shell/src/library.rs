@@ -225,10 +225,6 @@ impl Shell {
                 self.remove_selected_user_playlist_item(ui);
                 return;
             }
-            View::RssFeeds => {
-                self.remove_selected_rss_feed(ui);
-                return;
-            }
             _ => return,
         };
         self.finish_collection_removal(ui, result, key);
