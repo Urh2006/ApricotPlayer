@@ -45,7 +45,102 @@ pub fn sync_startup_registration(
     enabled: bool,
 ) -> Result<(), PlatformError> {
     let command = startup_command(executable)?;
+    #[cfg(target_os = "macos")]
+    {
+        let _ = command;
+        macos_login::sync(startup_value_name(identity), executable, enabled)
+    }
+    #[cfg(not(target_os = "macos"))]
     sync_startup_registration_platform(startup_value_name(identity), &command, enabled)
+}
+
+/// macOS "Start at login": a per-user launch agent in
+/// `~/Library/LaunchAgents` that opens the application bundle (or runs the
+/// executable of a development build) when the user logs in.
+#[cfg(target_os = "macos")]
+mod macos_login {
+    use std::path::{Path, PathBuf};
+
+    use crate::PlatformError;
+
+    /// The launch agent label, for example `com.apricotplayer.ApricotPlayer2Beta`.
+    pub(super) fn label(value_name: &str) -> String {
+        let name: String = value_name
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .collect();
+        format!("com.apricotplayer.{name}")
+    }
+
+    /// The `.app` folder that contains `executable`, when it runs from one.
+    pub(super) fn bundle_of(executable: &Path) -> Option<PathBuf> {
+        let macos = executable.parent()?;
+        let contents = macos.parent()?;
+        let bundle = contents.parent()?;
+        (macos.file_name()? == "MacOS"
+            && contents.file_name()? == "Contents"
+            && bundle.extension()? == "app")
+            .then(|| bundle.to_path_buf())
+    }
+
+    fn escape(text: &str) -> String {
+        text.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+    }
+
+    pub(super) fn plist(label: &str, executable: &Path) -> String {
+        let arguments: Vec<String> = match bundle_of(executable) {
+            Some(bundle) => vec![
+                "/usr/bin/open".to_owned(),
+                "-a".to_owned(),
+                bundle.to_string_lossy().into_owned(),
+            ],
+            None => vec![executable.to_string_lossy().into_owned()],
+        };
+        let arguments = arguments.iter().fold(String::new(), |mut text, argument| {
+            text.push_str("        <string>");
+            text.push_str(&escape(argument));
+            text.push_str("</string>\n");
+            text
+        });
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
+             \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+             <plist version=\"1.0\">\n<dict>\n\
+             \x20   <key>Label</key>\n    <string>{}</string>\n\
+             \x20   <key>ProgramArguments</key>\n    <array>\n{arguments}    </array>\n\
+             \x20   <key>RunAtLoad</key>\n    <true/>\n\
+             </dict>\n</plist>\n",
+            escape(label)
+        )
+    }
+
+    pub(super) fn sync(
+        value_name: &str,
+        executable: &Path,
+        enabled: bool,
+    ) -> Result<(), PlatformError> {
+        let home = std::env::var_os("HOME")
+            .ok_or_else(|| PlatformError::Operation("HOME is not set".to_owned()))?;
+        let label = label(value_name);
+        let folder = PathBuf::from(home).join("Library").join("LaunchAgents");
+        let path = folder.join(format!("{label}.plist"));
+        let failed = |error: std::io::Error| PlatformError::Operation(error.to_string());
+        if !enabled {
+            return match std::fs::remove_file(&path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(failed(error)),
+                _ => Ok(()),
+            };
+        }
+        std::fs::create_dir_all(&folder).map_err(failed)?;
+        let content = plist(&label, executable);
+        if std::fs::read_to_string(&path).is_ok_and(|current| current == content) {
+            return Ok(());
+        }
+        std::fs::write(&path, content).map_err(failed)
+    }
 }
 
 #[cfg(windows)]
@@ -122,7 +217,7 @@ fn registry_result(
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "macos")))]
 #[allow(clippy::unnecessary_wraps)] // Same signature as the Windows implementation.
 fn sync_startup_registration_platform(
     _value_name: &str,
@@ -687,5 +782,32 @@ mod tests {
             .filter(|write| write.subkey.ends_with(r"\FileAssociations"))
             .count();
         assert_eq!(associations, 53);
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_login_tests {
+    use std::path::Path;
+
+    use super::macos_login::{bundle_of, label, plist};
+
+    #[test]
+    fn the_agent_opens_the_bundle_and_runs_at_login() {
+        assert_eq!(
+            label("ApricotPlayer 2 Beta"),
+            "com.apricotplayer.ApricotPlayer2Beta"
+        );
+        let executable = Path::new("/Applications/ApricotPlayer.app/Contents/MacOS/apricot-player");
+        assert_eq!(
+            bundle_of(executable).as_deref(),
+            Some(Path::new("/Applications/ApricotPlayer.app"))
+        );
+        let text = plist("com.apricotplayer.X", executable);
+        assert!(text.contains("<string>/usr/bin/open</string>"));
+        assert!(text.contains("<string>/Applications/ApricotPlayer.app</string>"));
+        assert!(text.contains("<key>RunAtLoad</key>\n    <true/>"));
+        let development = plist("com.apricotplayer.X", Path::new("/tmp/a&b/apricot-player"));
+        assert!(development.contains("<string>/tmp/a&amp;b/apricot-player</string>"));
+        assert!(!development.contains("/usr/bin/open"));
     }
 }

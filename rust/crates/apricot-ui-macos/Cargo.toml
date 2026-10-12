@@ -25,6 +25,8 @@ objc2-core-video = "0.3.2"
 objc2-foundation = "0.3.2"
 objc2-open-gl = "0.3.2"
 objc2-quartz-core = { version = "0.3.2", features = ["objc2-open-gl", "objc2-core-video"] }
+block2 = "0.6.2"
+objc2-user-notifications = "0.3.2"
 
 [lints]
 workspace = true

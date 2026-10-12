@@ -933,3 +933,34 @@ obvestila, odpiranje iz Finderja, zagon ob prijavi, privzeti predvajalnik).
   center obvestil, "Check now" je povedal "Checking subscriptions" in nato
   "No new subscription videos", po umetno odstranjenem videu pa
   "Subscription check complete" z novim obvestilom.
+
+### M14b: menijska vrstica, obvestila, zagon ob prijavi, privzeti predvajalnik (12. 10. 2026)
+
+- Element v menijski vrstici (`apricot-ui-macos/src/status_item.rs`, Windows
+  ikona v pladnju) ostane celo sejo: Show ApricotPlayer, Settings, Check
+  subscriptions in Exit ApricotPlayer, besedila v trenutnem jeziku. VoiceOver
+  ga doseže z VO+M dvakrat.
+- Zapiranje okna (gumb ali novi Command+W v meniju Window) z vklopljeno
+  nastavitvijo skrije okno in pove "ApricotPlayer is still running in the
+  menu bar."; z nastavitvijo za obvestilo pokaže še sistemsko obvestilo.
+  Show vrne okno s fokusom tam, kjer je bil.
+- Sistemska obvestila (`notifications.rs`, User Notifications): novi videi,
+  nove epizode, končan prenos v ozadju in skrivanje v menijsko vrstico;
+  macOS ob prvem obvestilu vpraša za dovoljenje. Delujejo samo iz paketa
+  `.app` (M15), razvojni zagon iz terminala jih ne pokaže.
+- Zagon ob prijavi: agent v `~/Library/LaunchAgents/com.apricotplayer.*.plist`,
+  ki odpre paket `.app`, ob shranjevanju nastavitev kot na Windows.
+- Privzeti predvajalnik (`default_player.rs`): Launch Services nastavi
+  ApricotPlayer kot pregledovalnik za pogoste zvočne in video vrste; deluje
+  samo iz paketa, vrste mora paket razglasiti v `Info.plist` (M15).
+- Besedila, ki na Windows omenjajo pladenj, Windows ali Ctrl, imajo na Macu
+  svojo različico (`ključ@macos` v `rust_strings.json`, vseh 27 jezikov):
+  menijska vrstica, obvestila macOS, zagon ob prijavi, Command namesto Ctrl
+  v navodilih vrste prenosov, Keychain v namigu za piškotke. Windows
+  besedila ostanejo nespremenjena.
+- Preverjeno: enotni testi (besedila po platformah, agent za zagon) in
+  samodejni preizkus na Macu (Command+W skrije okno in pove besedilo za
+  menijsko vrstico, meni elementa ima pravilne vnose, Show vrne okno s
+  fokusom na glavnem meniju). Sistemskih obvestil, zagona ob prijavi in
+  privzetega predvajalnika iz paketa nisem mogel preizkusiti, ker paket še
+  ne obstaja (M15).

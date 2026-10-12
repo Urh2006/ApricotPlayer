@@ -29,6 +29,8 @@ mod controls;
 #[cfg(target_os = "macos")]
 mod converter;
 #[cfg(target_os = "macos")]
+mod default_player;
+#[cfg(target_os = "macos")]
 mod download_progress;
 #[cfg(target_os = "macos")]
 mod equalizer;
@@ -39,6 +41,8 @@ pub mod keys;
 mod language;
 #[cfg(target_os = "macos")]
 mod lyrics;
+#[cfg(target_os = "macos")]
+mod notifications;
 #[cfg(target_os = "macos")]
 mod player_page;
 #[cfg(target_os = "macos")]
@@ -55,6 +59,8 @@ mod settings;
 mod spotify_dialogs;
 #[cfg(target_os = "macos")]
 mod spotify_panels;
+#[cfg(target_os = "macos")]
+mod status_item;
 #[cfg(target_os = "macos")]
 mod transcript;
 #[cfg(target_os = "macos")]

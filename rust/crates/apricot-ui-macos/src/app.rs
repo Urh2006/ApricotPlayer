@@ -213,8 +213,8 @@ fn menu_item(
     }
 }
 
-/// The macOS menu bar: the application menu (Settings, Hide, Quit) and the
-/// Edit menu that text fields need for copy and paste.
+/// The macOS menu bar: the application menu (Settings, Hide, Quit), the
+/// Edit menu that text fields need for copy and paste and the Window menu.
 fn menu_bar(
     mtm: MainThreadMarker,
     delegate: &Delegate,
@@ -262,6 +262,14 @@ fn menu_bar(
     let edit_item = NSMenuItem::new(mtm);
     edit_item.setSubmenu(Some(&edit_menu));
     bar.addItem(&edit_item);
+
+    // Command+W closes the key window, the macOS Alt+F4: the main window
+    // goes to the menu bar or quits, a dialog closes as with Escape.
+    let window_menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str("Window"));
+    window_menu.addItem(&menu_item(mtm, "Close", Some(sel!(performClose:)), "w"));
+    let window_item = NSMenuItem::new(mtm);
+    window_item.setSubmenu(Some(&window_menu));
+    bar.addItem(&window_item);
     bar
 }
 

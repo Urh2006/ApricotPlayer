@@ -51,6 +51,8 @@ pub struct ControllerIvars {
     poll_timer: RefCell<Option<Retained<NSTimer>>>,
     rss_timer: RefCell<Option<Retained<NSTimer>>>,
     subscription_timer: RefCell<Option<Retained<NSTimer>>>,
+    /// Windows `tray_icon_added`: the menu bar item.
+    status_item: RefCell<Option<crate::status_item::StatusItem>>,
     download_progress: RefCell<Option<Retained<crate::download_progress::ProgressWindow>>>,
     /// The key code of a held player key (Windows `ControlledRepeatState`).
     held_key: Cell<Option<u16>>,
@@ -102,6 +104,8 @@ define_class!(
                 if let Some(window) = self.ivars().window.borrow().as_ref() {
                     window.orderOut(None);
                 }
+                // Windows `hide_to_tray` with `announce_tray_state`.
+                self.with_shell(|shell, ui| shell.announce_background_state(ui));
             } else {
                 NSApplication::sharedApplication(self.mtm()).terminate(None);
             }
@@ -361,6 +365,7 @@ impl MainWindowController {
             poll_timer: RefCell::new(None),
             rss_timer: RefCell::new(None),
             subscription_timer: RefCell::new(None),
+            status_item: RefCell::new(None),
             download_progress: RefCell::new(None),
             held_key: Cell::new(None),
             held_modifiers: Cell::new(keys::Modifiers::default()),
@@ -628,6 +633,8 @@ impl MainWindowController {
         *self.ivars().page.borrow_mut() = Some(page);
         *self.ivars().window.borrow_mut() = Some(window.clone());
 
+        // Python `setup_taskbar_icon`: the item stays for the whole session.
+        *self.ivars().status_item.borrow_mut() = Some(crate::status_item::install(self));
         self.with_shell(|shell, ui| shell.start(ui));
         if !start_hidden {
             window.makeKeyAndOrderFront(None);
@@ -1045,6 +1052,7 @@ impl MainWindowController {
     }
 
     #[cfg(debug_assertions)]
+    #[allow(clippy::too_many_lines)] // The development self-test plans.
     fn settings_self_test_step(&self, index: usize) -> bool {
         use crate::self_test::focus;
         let Some(window) = self.window() else {
@@ -1086,8 +1094,51 @@ impl MainWindowController {
                 self.with_shell(|shell, ui| shell.spotify_queue_dialog_self_test(ui));
                 "Spotify queue dialog"
             }
-            index if std::env::var("APRICOT_MACOS_SELF_TEST_KIND").as_deref()
-                == Ok("subscriptions") =>
+            index
+                if std::env::var("APRICOT_MACOS_SELF_TEST_KIND").as_deref() == Ok("background") =>
+            {
+                let status_menu = |entry: Option<isize>| {
+                    self.ivars()
+                        .status_item
+                        .borrow()
+                        .as_ref()
+                        .map(|item| item.self_test(entry))
+                        .unwrap_or_default()
+                };
+                match index {
+                    0 => {
+                        crate::self_test::send(
+                            &window,
+                            &crate::self_test::Key {
+                                code: 13,
+                                text: "w",
+                                flags: objc2_app_kit::NSEventModifierFlags::Command,
+                            },
+                        );
+                        "Command+W"
+                    }
+                    1 => {
+                        println!(
+                            "settings-test window visible={} menu={:?}",
+                            window.isVisible(),
+                            status_menu(None)
+                        );
+                        "menu bar item"
+                    }
+                    2 => {
+                        status_menu(Some(0));
+                        "Show from the menu bar"
+                    }
+                    3 => {
+                        println!("settings-test window visible={}", window.isVisible());
+                        "shown"
+                    }
+                    _ => return false,
+                }
+            }
+            index
+                if std::env::var("APRICOT_MACOS_SELF_TEST_KIND").as_deref()
+                    == Ok("subscriptions") =>
             {
                 match index {
                     0 => {
@@ -2197,8 +2248,8 @@ impl ShellUi for MacUi<'_> {
         *timer = Some(subscriptions);
     }
 
-    fn show_system_notification(&mut self, _title: &str, _message: &str) {
-        // The macOS notification arrives with unit M14b.
+    fn show_system_notification(&mut self, title: &str, message: &str) {
+        crate::notifications::notify(self.controller.mtm(), title, message);
     }
 
     fn set_background_polling(&mut self, active: bool) {

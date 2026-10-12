@@ -1267,6 +1267,7 @@ impl SettingsWindow {
                 }
             }
             SettingsCommand::ExportBrowserCookies => self.export_browser_cookies(),
+            SettingsCommand::SetDefaultPlayer => self.set_default_player(),
             // Python checks with the saved settings, without applying the
             // visible controls; the result is spoken while they stay open.
             SettingsCommand::CheckSubscriptions => {
@@ -1284,8 +1285,7 @@ impl SettingsWindow {
                 }
             }
             _ => {
-                // Updates and the default
-                // player arrive with their units (M14b, M16).
+                // The update checks arrive with unit M16.
                 let label = self
                     .ivars()
                     .controls
@@ -1302,6 +1302,21 @@ impl SettingsWindow {
                     .unwrap_or_default();
                 self.announce(&message, true);
             }
+        }
+    }
+
+    /// Windows `set_default_player`.
+    fn set_default_player(&self) {
+        let Some(catalog) = self.with_shell(|shell, _| shell.catalog()) else {
+            return;
+        };
+        match crate::default_player::set() {
+            Ok(()) => self.announce(catalog.text("default_player_settings_opened"), true),
+            Err(error) => self.show_error(
+                &catalog
+                    .text("default_player_settings_failed")
+                    .replace("{error}", &error),
+            ),
         }
     }
 

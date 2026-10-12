@@ -606,6 +606,17 @@ impl Shell {
         }
     }
 
+    /// Windows `announce_tray_state`: the window went to the background
+    /// (the tray on Windows, the menu bar on macOS).
+    pub fn announce_background_state(&self, ui: &mut dyn ShellUi) {
+        let message = self.text("tray_still_running");
+        ui.set_status(&message, true);
+        let settings = self.application.settings();
+        if settings.tray_notification && settings.windows_notifications {
+            ui.show_system_notification(apricot_platform::product_name(), &message);
+        }
+    }
+
     /// Windows `configure_subscription_timer`.
     pub(crate) fn configure_subscription_timer(&self, ui: &mut dyn ShellUi) {
         let settings = self.application.settings();

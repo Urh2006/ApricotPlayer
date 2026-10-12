@@ -171,11 +171,29 @@ fn add_rust_only_strings(
     code: &str,
 ) {
     for (key, translations) in strings {
-        if let Some(text) = translations.get(code) {
-            locale.entry(key.clone()).or_insert_with(|| text.clone());
+        let Some(text) = translations.get(code) else {
+            continue;
+        };
+        match key.split_once('@') {
+            None => {
+                locale.entry(key.clone()).or_insert_with(|| text.clone());
+            }
+            // A platform's own wording replaces the shared text there, for
+            // example "menu bar" instead of "system tray" on macOS.
+            Some((base, platform)) if platform == CURRENT_PLATFORM => {
+                locale.insert(base.to_owned(), text.clone());
+            }
+            Some(_) => {}
         }
     }
 }
+
+/// The suffix of the platform texts that apply to this build.
+const CURRENT_PLATFORM: &str = if cfg!(target_os = "macos") {
+    "macos"
+} else {
+    "windows"
+};
 
 macro_rules! locale_json {
     ($code:literal) => {
@@ -386,10 +404,16 @@ mod tests {
     fn rust_only_strings_cover_every_language_without_replacing_python_texts() {
         let python_english = super::parse_embedded_locale(super::locale_source("en"));
         for (key, translations) in super::rust_only_strings() {
-            assert!(
-                !python_english.contains_key(&key),
-                "{key} must not replace a Python text"
-            );
+            let platform = key.split_once('@');
+            if let Some((base, _)) = platform {
+                // A platform's wording of a Python text, never a new key.
+                assert!(python_english.contains_key(base), "{key} has no base text");
+            } else {
+                assert!(
+                    !python_english.contains_key(&key),
+                    "{key} must not replace a Python text"
+                );
+            }
             let english = translations.get("en").expect("English text");
             let placeholders = |text: &str| {
                 text.split('{')
@@ -407,7 +431,13 @@ mod tests {
                     "{key}/{}",
                     language.code
                 );
-                assert_eq!(embedded_catalog(language.code).text(&key), text);
+                match platform {
+                    None => assert_eq!(embedded_catalog(language.code).text(&key), text),
+                    Some((base, name)) if name == super::CURRENT_PLATFORM => {
+                        assert_eq!(embedded_catalog(language.code).text(base), text);
+                    }
+                    Some(_) => {}
+                }
             }
         }
     }

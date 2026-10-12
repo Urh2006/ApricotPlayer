@@ -268,6 +268,7 @@ dependencies = [
  "apricot-playback",
  "apricot-shell",
  "apricot-spotify",
+ "block2",
  "dispatch2",
  "libloading",
  "objc2",
@@ -277,6 +278,7 @@ dependencies = [
  "objc2-foundation",
  "objc2-open-gl",
  "objc2-quartz-core",
+ "objc2-user-notifications",
 ]
 
 [[package]]
@@ -2562,6 +2564,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-core-location"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca347214e24bc973fc025fd0d36ebb179ff30536ed1f80252706db19ee452009"
+dependencies = [
+ "objc2",
+ "objc2-foundation",
+]
+
+[[package]]
 name = "objc2-core-text"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2665,6 +2677,19 @@ dependencies = [
  "objc2-foundation",
  "objc2-metal",
  "objc2-open-gl",
+]
+
+[[package]]
+name = "objc2-user-notifications"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9df9128cbbfef73cda168416ccf7f837b62737d748333bfe9ab71c245d76613e"
+dependencies = [
+ "bitflags 2.13.1",
+ "block2",
+ "objc2",
+ "objc2-core-location",
+ "objc2-foundation",
 ]
 
 [[package]]
