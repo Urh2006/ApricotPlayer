@@ -586,6 +586,9 @@ struct WindowState {
     settings_open: bool,
     modal_open: bool,
     tray_icon_added: bool,
+    /// The control that had focus when the window was deactivated (Alt+Tab),
+    /// given back on activation (beta 6, 4a.7).
+    focus_before_deactivation: HWND,
     last_activated_menu_item: Option<&'static str>,
     lifecycle: WindowLifecycle,
     taskbar_created_message: u32,
@@ -1061,6 +1064,37 @@ unsafe extern "system" fn window_proc(
         WM_COMMAND => {
             handle_window_command(window, wparam);
             LRESULT(0)
+        }
+        // Alt+Tab or Shift+Tab away and back: the control the keyboard was on
+        // gets focus again, so the screen reader reads it, not only the
+        // window's name (the default puts focus on the window itself).
+        windows::Win32::UI::WindowsAndMessaging::WM_ACTIVATE => {
+            // `WA_INACTIVE` in the low word.
+            if wparam.0.trailing_zeros() >= 16 {
+                let focus = GetFocus();
+                if let Some(state) = state_mut(window)
+                    && IsChild(window, focus).as_bool()
+                {
+                    state.focus_before_deactivation = focus;
+                }
+            } else if from_other_application(lparam)
+                && let Some(state) = state(window)
+            {
+                let saved = state.focus_before_deactivation;
+                let target = if !saved.is_invalid()
+                    && windows::Win32::UI::WindowsAndMessaging::IsWindow(Some(saved)).as_bool()
+                    && windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(saved).as_bool()
+                    && IsChild(window, saved).as_bool()
+                {
+                    saved
+                } else {
+                    active_primary_control(state)
+                };
+                let _ = SetFocus(Some(target));
+                return LRESULT(0);
+            }
+            // Our own dialogs set focus themselves when they close.
+            DefWindowProcW(window, message, wparam, lparam)
         }
         WM_CLOSE => {
             if state(window).is_some_and(|state| {
@@ -2014,6 +2048,7 @@ unsafe fn create_controls(
         settings_open: false,
         modal_open: false,
         tray_icon_added: false,
+        focus_before_deactivation: HWND::default(),
         last_activated_menu_item: None,
         lifecycle: WindowLifecycle::Visible,
         taskbar_created_message: RegisterWindowMessageW(w!("TaskbarCreated")),
@@ -18315,6 +18350,22 @@ fn main_menu_preserved_index(
     old_selection
         .unwrap_or_default()
         .min(labels.len().saturating_sub(1))
+}
+
+/// `WM_ACTIVATE`'s `lparam` is the window that lost activation: none, or
+/// one of another process, means the user came back from another
+/// application.
+unsafe fn from_other_application(lparam: LPARAM) -> bool {
+    let other = HWND(lparam.0 as *mut std::ffi::c_void);
+    if other.is_invalid() {
+        return true;
+    }
+    let mut process = 0_u32;
+    windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(
+        other,
+        Some(&raw mut process),
+    );
+    process != std::process::id()
 }
 
 fn active_primary_control(state: &WindowState) -> HWND {

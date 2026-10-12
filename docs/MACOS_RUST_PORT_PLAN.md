@@ -219,12 +219,27 @@ podporo in temi popravki skupaj (Urh, 12. 10. 2026).
    knjižnica, zato se ga ne da posodobiti kot yt-dlp; nova verzija pride z
    novo izdajo programa. Pred objavo preveri, ali je potrebna novejša
    verzija (0.8.0 je pripeta), in o tem obvesti Urha.
+   Stanje (12. 10. 2026): na crates.io je 0.8.0 še vedno najnovejša
+   različica, posodobitev ni potrebna.
 7. **Fokus po vrnitvi v okno.** Ko z Alt+Tab ali Shift+Tab preklopim v drugo
    okno in nazaj, bralnik pove samo ime okna; fokus naj se vrne na zadnjo
    kontrolo. Obe platformi.
+   Stanje: Windows zdaj ob vrnitvi iz drugega programa (`WM_ACTIVATE`, ko
+   je bilo prej aktivno okno drugega procesa) da fokus kontroli, ki ga je
+   imela ob odhodu, sicer glavni kontroli zaslona; ob zaprtju lastnih
+   pogovornih oken ostane kot prej. Mac to že dela (okno obdrži fokus,
+   preverjeno s samodejnim preizkusom skrivanja in prikaza). Na Windows z
+   NVDA še ni preizkušeno.
 8. **Enter v iskalnem polju Spotify** na Windows še enkrat pove
    ApricotPlayer in list, preden so rezultati. Popravi, če je vzrok jasen,
    sicer ne posegaj.
+   Stanje: vzrok ni povsem jasen. Iskanje Spotify je edino iskanje z
+   ločenim pogovornim oknom; ko se zapre, Windows vrne aktivnost glavnemu
+   oknu (NVDA pove ime okna), nato dobi fokus seznam, ki ima do prihoda
+   rezultatov samo vrstico "Loading". Na Macu seznam dobi fokus brez
+   vmesne kontrole. Na Windows nisem posegal; za popravek bi bilo treba
+   iskanje Spotify spremeniti v iskalni zaslon brez pogovornega okna, kot
+   je iskanje YouTube. Odloči Urh.
 
 ## 5. Odprta vprašanja za Urha
 
