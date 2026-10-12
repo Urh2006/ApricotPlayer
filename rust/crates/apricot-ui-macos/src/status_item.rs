@@ -113,6 +113,7 @@ impl StatusMenu {
 }
 
 /// The menu bar item with its menu; both live until the application ends.
+#[cfg_attr(not(debug_assertions), allow(dead_code))] // Development self-tests.
 pub struct StatusItem {
     item: Retained<NSStatusItem>,
     menu: Retained<StatusMenu>,
@@ -163,8 +164,5 @@ pub fn install(controller: &MainWindowController) -> StatusItem {
     menu.setDelegate(Some(ProtocolObject::from_ref(&*target)));
     target.fill(&menu);
     item.setMenu(Some(&menu));
-    StatusItem {
-        item,
-        menu: target,
-    }
+    StatusItem { item, menu: target }
 }

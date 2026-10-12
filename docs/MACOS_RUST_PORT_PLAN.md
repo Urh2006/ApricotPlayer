@@ -964,3 +964,30 @@ obvestila, odpiranje iz Finderja, zagon ob prijavi, privzeti predvajalnik).
   fokusom na glavnem meniju). Sistemskih obvestil, zagona ob prijavi in
   privzetega predvajalnika iz paketa nisem mogel preizkusiti, ker paket še
   ne obstaja (M15).
+
+### M15: paket .app in DMG (12. 10. 2026)
+
+- `rust/scripts/build_macos_app.sh` zgradi `ApricotPlayer 2 Beta.app` za
+  Apple silicon v `rust/local-dist/macos/<verzija>`: izvršljiva datoteka
+  `ApricotPlayer2Beta`, `mpv/` (libmpv, ukaz mpv in vse knjižnice Homebrew,
+  prevezane z dylibbundler na `@loader_path`, brez sklicev na Homebrew),
+  `ffmpeg/ffmpeg`, `components/yt-dlp` (uradni yt-dlp_macos 2026.08.19,
+  preverjen SHA-256), `components/apricot-youtube-helper`, `node/node`
+  (Node.js v24.21.0 LTS, preverjen SHA-256), zvok in `build-info.json` v
+  `Contents/Resources` (podatki ne smejo biti ob podpisani kodi).
+- `rust/packaging/macos/Info.plist`: identiteta
+  `com.apricotplayer.ApricotPlayer2Beta`, vrste dokumentov za zvok in video
+  (vloga Viewer, Alternate), uvožene vrste za ogg, opus, mkv in webm, opis
+  za Apple Events (zapiranje brskalnika pred kopiranjem piškotkov),
+  najmanj macOS 12.
+- Ad hoc podpis vsake knjižnice in paketa (`codesign --verify --strict`
+  gre skozi), preizkus zagona (`--qualification-smoke`,
+  `--qualification-ytdlp`, ffmpeg in mpv), nato DMG z bližnjico do
+  Applications, zip za posodobitve (M16) in `SHA256SUMS.txt`.
+- Ker podpis ni Applov, macOS ob prvem odprtju prenesenega paketa opozori;
+  odpre se z desnim klikom in Open ali v System Settings, Privacy &
+  Security, Open Anyway. To mora pisati v navodilih za izdajo.
+- Ikone še ni (repozitorij nima izvorne slike); paket ima privzeto ikono.
+- Preverjeno: gradnja, podpis, DMG se priklopi s paketom in bližnjico,
+  zapakiran program s praznim PATH predvaja zvočno datoteko z
+  vgrajenim libmpv (lsof: 50 knjižnic iz paketa, 0 iz Homebrew).

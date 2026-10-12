@@ -61,6 +61,7 @@ pub struct ControllerIvars {
     /// Windows `WindowLifecycle::Exiting`: Exit quits even with close to tray.
     exiting: Cell<bool>,
     /// The next step of the development self-test.
+    #[cfg_attr(not(debug_assertions), allow(dead_code))] // Development self-tests.
     self_test_step: Cell<usize>,
     /// Activation requests waiting for the shell.
     activations: RefCell<Vec<apricot_app::ActivationRequest>>,
@@ -1732,16 +1733,20 @@ impl MainWindowController {
     }
 }
 
-/// Python `DEFAULT_REACHED_SOUND`: `assets/default_reached.wav` next to the
-/// executable, in a development build the repository's copy.
+/// Python `DEFAULT_REACHED_SOUND`: `assets/default_reached.wav` in the
+/// bundle's `Contents/Resources` (data may not sit beside signed code), next
+/// to the executable, and in a development build the repository's copy.
 fn default_reached_sound_path() -> Option<PathBuf> {
-    let bundled = std::env::current_exe()
-        .ok()?
-        .parent()?
-        .join("assets")
-        .join("default_reached.wav");
-    if bundled.is_file() {
-        return Some(bundled);
+    let executable_directory = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let bundled = [
+        executable_directory.join("../Resources/assets"),
+        executable_directory.join("assets"),
+    ]
+    .into_iter()
+    .map(|directory| directory.join("default_reached.wav"))
+    .find(|path| path.is_file());
+    if bundled.is_some() {
+        return bundled;
     }
     let repository =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../assets/default_reached.wav");

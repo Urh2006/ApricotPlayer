@@ -259,7 +259,7 @@ fn run_qualification(arguments: &[std::ffi::OsString]) -> Result<bool, Box<dyn s
             .parent()
             .ok_or("application executable has no parent directory")?
             .join("components")
-            .join("yt-dlp.exe");
+            .join(apricot_platform::executable_name("yt-dlp"));
         let mut engine = YtDlpYoutubeEngine::new(&ytdlp_path)?;
         let response = engine.execute(YoutubeCommand::Hello)?;
         assert!(matches!(

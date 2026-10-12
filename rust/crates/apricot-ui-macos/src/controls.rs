@@ -303,6 +303,7 @@ impl List {
     }
 
     /// The text of the selected row.
+    #[cfg_attr(not(debug_assertions), allow(dead_code))] // Development self-tests.
     pub fn selected_text(&self) -> Option<String> {
         let index = self.selected()?;
         self.ivars().rows.borrow().get(index).cloned()

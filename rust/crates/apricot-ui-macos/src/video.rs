@@ -27,6 +27,7 @@ use objc2_quartz_core::{CALayer, CAOpenGLLayer};
 static FRAMES_DRAWN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// How many video frames libmpv has drawn into a surface.
+#[cfg_attr(not(debug_assertions), allow(dead_code))] // Development self-tests.
 pub fn frames_drawn() -> u64 {
     FRAMES_DRAWN.load(std::sync::atomic::Ordering::Relaxed)
 }

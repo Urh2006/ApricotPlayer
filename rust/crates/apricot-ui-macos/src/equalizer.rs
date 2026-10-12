@@ -69,6 +69,7 @@ struct Controls {
 pub struct DialogIvars {
     controller: Retained<MainWindowController>,
     /// The next step of the development self-test.
+    #[cfg_attr(not(debug_assertions), allow(dead_code))] // Development self-tests.
     self_test: std::cell::Cell<usize>,
     window: RefCell<Option<Retained<NSWindow>>>,
     controls: RefCell<Option<Controls>>,
