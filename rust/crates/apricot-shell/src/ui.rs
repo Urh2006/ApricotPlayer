@@ -222,6 +222,16 @@ pub trait ShellUi {
     /// Windows `DownloadProgressWindow::destroy`.
     fn close_download_progress(&mut self);
 
+    /// Opens the Settings window after the current event, modal over the
+    /// window, with focus on its section list. It calls the shell's
+    /// `settings_*` methods and ends with [`crate::Shell::settings_closed`].
+    fn open_settings(&mut self);
+
+    /// Opens the Action Finder after the current event, modal over the
+    /// window, with focus on its search field; when it closed it calls
+    /// [`crate::Shell::action_finder_closed`].
+    fn open_action_finder(&mut self, model: apricot_app::ActionFinderModel);
+
     /// Opens the file or folder converter after the current event, modal
     /// over the window; when it closed and focus is back where it was, it
     /// calls [`crate::Shell::converter_closed`].

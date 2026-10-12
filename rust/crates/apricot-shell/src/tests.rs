@@ -309,6 +309,8 @@ mod equalizer {
             true
         }
         fn open_converter(&mut self, _dialog: crate::ConverterDialog) {}
+        fn open_settings(&mut self) {}
+        fn open_action_finder(&mut self, _model: apricot_app::ActionFinderModel) {}
         fn show_conversion_progress(&mut self, _title: &str, _message: &str, _total: usize) {}
         fn update_conversion_progress(&mut self, _converted: usize, _message: &str) {}
         fn close_conversion_progress(&mut self) {}
@@ -959,5 +961,40 @@ mod downloads {
         assert_eq!(ui.questions.len(), 1);
         assert!(ui.questions[0].contains("Episode"));
         assert!(shell.application.downloads().active().is_empty());
+    }
+}
+
+mod settings {
+    use apricot_core::SettingId;
+    use apricot_core::shortcut::ShortcutChord;
+
+    use crate::{SettingsBinding, SettingsInput, ShortcutCapture};
+
+    #[test]
+    fn a_checkbox_applies_and_a_used_shortcut_is_refused() {
+        let mut shell = super::keyboard::shell();
+        let binding = SettingsBinding::Checkbox(SettingId::ConfirmBeforeDownload);
+        shell
+            .settings_apply(
+                &binding,
+                &SettingsInput::Checked(true),
+                &std::collections::BTreeMap::default(),
+            )
+            .expect("applied");
+        assert!(shell.application.settings().confirm_before_download);
+
+        let chord = ShortcutChord::parse("Ctrl+Shift+J").expect("chord");
+        let outcome =
+            shell.settings_capture_shortcut("open_search", chord, &|_| "Action finder".to_owned());
+        assert!(
+            matches!(outcome, ShortcutCapture::Conflict { ref message, .. } if message.contains("Action finder")),
+            "{outcome:?}"
+        );
+        let chord = ShortcutChord::parse("Ctrl+Alt+F12").expect("chord");
+        let outcome = shell.settings_capture_shortcut("open_search", chord, &|id| id.to_owned());
+        assert!(
+            matches!(outcome, ShortcutCapture::Captured { ref shortcut, .. } if shortcut == "Ctrl+Alt+F12"),
+            "{outcome:?}"
+        );
     }
 }

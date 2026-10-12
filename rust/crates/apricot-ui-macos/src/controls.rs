@@ -88,6 +88,8 @@ pub struct ListIvars {
     /// Sent to the target on End, or Down at the last row, before the list
     /// moves (Windows `rss_list_subclass_proc`).
     end: Cell<Option<Sel>>,
+    /// Sent instead of moving focus on Tab (the settings section list).
+    tab: Cell<Option<Sel>>,
 }
 
 define_class!(
@@ -172,12 +174,20 @@ define_class!(
 
         #[unsafe(method(keyDown:))]
         fn key_down(&self, event: &NSEvent) {
-            if handle_tab(self, event) {
-                return;
-            }
             let code = event.keyCode();
             let modifiers = modifiers(event);
             let plain = !modifiers.command && !modifiers.option && !modifiers.control;
+            if plain
+                && !modifiers.shift
+                && code == keys::KEY_TAB
+                && let Some(action) = self.ivars().tab.get()
+            {
+                self.send(action);
+                return;
+            }
+            if handle_tab(self, event) {
+                return;
+            }
             if plain && !modifiers.shift && matches!(code, keys::KEY_RETURN | keys::KEY_KEYPAD_ENTER) {
                 self.activate();
                 return;
@@ -353,6 +363,11 @@ impl List {
             self.select(target);
         }
         true
+    }
+
+    /// The selector sent instead of moving focus on Tab.
+    pub fn set_tab_action(&self, action: Sel) {
+        self.ivars().tab.set(Some(action));
     }
 
     /// The selector sent to the target on End or Down at the last row.

@@ -606,7 +606,7 @@ impl Shell {
     }
 
     /// Windows `create_profile_with_prompt`.
-    fn create_profile_with_prompt(
+    pub(crate) fn create_profile_with_prompt(
         &mut self,
         ui: &mut dyn ShellUi,
         view: &mut dyn EqualizerView,
@@ -667,7 +667,7 @@ impl Shell {
     }
 
     /// Windows `import_profile_with_prompt`.
-    fn import_profile_with_prompt(
+    pub(crate) fn import_profile_with_prompt(
         &mut self,
         ui: &mut dyn ShellUi,
         view: &mut dyn EqualizerView,
@@ -713,7 +713,7 @@ impl Shell {
     }
 
     /// Windows `export_profile_with_prompt`.
-    fn export_profile_with_prompt(
+    pub(crate) fn export_profile_with_prompt(
         &mut self,
         ui: &mut dyn ShellUi,
         view: &mut dyn EqualizerView,
@@ -752,7 +752,7 @@ impl Shell {
     }
 
     /// Windows `delete_profile_with_prompt`.
-    fn delete_profile_with_prompt(
+    pub(crate) fn delete_profile_with_prompt(
         &mut self,
         ui: &mut dyn ShellUi,
         view: &mut dyn EqualizerView,

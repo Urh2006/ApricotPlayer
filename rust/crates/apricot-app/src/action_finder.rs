@@ -61,7 +61,10 @@ impl Labels<'_> {
         if shortcut.is_empty() {
             label
         } else {
-            format!("{label}, {shortcut}")
+            format!(
+                "{label}, {}",
+                apricot_core::shortcut::display_shortcut(&shortcut)
+            )
         }
     }
 
@@ -330,10 +333,14 @@ mod tests {
             &settings,
             ActionFinderContext::default(),
         );
-        assert_eq!(model.items[0].label, "Main menu, Ctrl+Alt+M");
+        let shown = apricot_core::shortcut::display_shortcut;
+        assert_eq!(
+            model.items[0].label,
+            format!("Main menu, {}", shown("Ctrl+Alt+M"))
+        );
         assert_eq!(
             model.items[1].label,
-            "Search YouTube / SoundCloud, Ctrl+Alt+Y"
+            format!("Search YouTube / SoundCloud, {}", shown("Ctrl+Alt+Y"))
         );
         let converter = model
             .items
@@ -440,7 +447,13 @@ mod tests {
             &SettingsDocument::default(),
             ActionFinderContext::default(),
         );
-        let filtered = model.filtered_items("search ctrl");
+        // The primary modifier as the labels spell it.
+        let query = if cfg!(target_os = "macos") {
+            "search command"
+        } else {
+            "search ctrl"
+        };
+        let filtered = model.filtered_items(query);
         // Spotify search (not in Python) matches too, after the Python items.
         let ids: Vec<_> = filtered.iter().map(|item| item.action_id).collect();
         assert_eq!(ids, ["open_search", "spotify_search"]);

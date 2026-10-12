@@ -70,6 +70,7 @@ pub struct ControllerIvars {
     /// The transcript window waiting to open after the current event.
     pending_transcript: RefCell<Option<apricot_shell::TranscriptDialog>>,
     pending_converter: RefCell<Option<apricot_shell::ConverterDialog>>,
+    pending_action_finder: RefCell<Option<apricot_app::ActionFinderModel>>,
     conversion_progress: RefCell<Option<Retained<crate::converter::ConversionProgress>>>,
     /// The comments window waiting to open after the current event.
     pending_comments: RefCell<Option<apricot_shell::CommentsDialog>>,
@@ -189,6 +190,19 @@ define_class!(
             let dialog = self.ivars().pending_transcript.borrow_mut().take();
             if let Some(dialog) = dialog {
                 crate::transcript::run(self, dialog);
+            }
+        }
+
+        #[unsafe(method(openSettings:))]
+        fn open_settings(&self, _sender: Option<&AnyObject>) {
+            crate::settings::run(self);
+        }
+
+        #[unsafe(method(openActionFinder:))]
+        fn open_action_finder(&self, _sender: Option<&AnyObject>) {
+            let model = self.ivars().pending_action_finder.borrow_mut().take();
+            if let Some(model) = model {
+                crate::action_finder::run(self, model);
             }
         }
 
@@ -332,6 +346,7 @@ impl MainWindowController {
             pending_queue: RefCell::new(None),
             pending_transcript: RefCell::new(None),
             pending_converter: RefCell::new(None),
+            pending_action_finder: RefCell::new(None),
             conversion_progress: RefCell::new(None),
             pending_comments: RefCell::new(None),
         });
@@ -1002,6 +1017,55 @@ impl MainWindowController {
     }
 
     #[cfg(debug_assertions)]
+    fn settings_self_test_step(&self, index: usize) -> bool {
+        use crate::self_test::focus;
+        let Some(window) = self.window() else {
+            return false;
+        };
+        let name = match index {
+            0 => {
+                self.schedule_modal_self_test_keys_after(1.0);
+                self.run_action("open_action_finder");
+                "open the Action Finder"
+            }
+            3 => {
+                self.schedule_modal_self_test_keys_after(1.5);
+                self.run_action("open_settings");
+                "open the settings"
+            }
+            1 | 2 | 4..=8 => "waiting",
+            _ => return false,
+        };
+        let status = self
+            .ivars()
+            .status
+            .borrow()
+            .as_ref()
+            .map(|status| status.stringValue().to_string())
+            .unwrap_or_default();
+        println!(
+            "settings-test {name}: focus={} status={status:?}",
+            focus(&window)
+        );
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        true
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn run_settings_self_test(&self) {
+        self.ivars().self_test_step.set(700);
+        // SAFETY: `playerSelfTestStep:` exists on this controller.
+        unsafe {
+            let _: () = msg_send![
+                self,
+                performSelector: sel!(playerSelfTestStep:),
+                withObject: Option::<&AnyObject>::None,
+                afterDelay: 1.0_f64
+            ];
+        }
+    }
+
+    #[cfg(debug_assertions)]
     pub fn run_converter_self_test(&self) {
         self.ivars().self_test_step.set(600);
         // SAFETY: `playerSelfTestStep:` exists on this controller.
@@ -1240,6 +1304,7 @@ impl MainWindowController {
     /// Answers the modal window a tools step opened: the chapter list,
     /// the bookmark name prompt or the bookmarks window.
     #[cfg(debug_assertions)]
+    #[allow(clippy::too_many_lines)] // One plan per scripted window.
     fn modal_self_test_keys(&self) {
         use crate::self_test::{Key, focus, key, send};
         let Some(window) = NSApplication::sharedApplication(self.mtm()).modalWindow() else {
@@ -1298,6 +1363,8 @@ impl MainWindowController {
                 ("Return (move up)", key(keys::KEY_RETURN, "\r")),
                 ("Escape", escape),
             ],
+            "Action finder" => crate::self_test::action_finder_plan(),
+            "Settings" => crate::self_test::settings_plan(),
             title @ ("File converter" | "Folder converter") => {
                 crate::self_test::converter_plan(title == "File converter")
             }
@@ -1336,6 +1403,10 @@ impl MainWindowController {
         };
         print("opened");
         for (name, key) in plan {
+            if name.ends_with("(capture)") {
+                // A conflict shows a message, answered from its own loop.
+                self.schedule_modal_self_test_keys_after(1.0);
+            }
             send(&window, &key);
             print(name);
         }
@@ -1374,11 +1445,14 @@ impl MainWindowController {
     }
 
     #[cfg(debug_assertions)]
+    #[allow(clippy::too_many_lines)] // The scripted player keys.
     fn player_self_test_step(&self) {
         use crate::self_test::{Key, focus, key, send};
         let step = self.ivars().self_test_step.get();
         if step >= 100 {
-            let more = if step >= 600 {
+            let more = if step >= 700 {
+                self.settings_self_test_step(step - 700)
+            } else if step >= 600 {
                 self.converter_self_test_step(step - 600)
             } else if step >= 500 {
                 self.podcast_self_test_step(step - 500)
@@ -1800,6 +1874,31 @@ impl ShellUi for MacUi<'_> {
             .take();
         if let Some(window) = window {
             window.destroy();
+        }
+    }
+
+    fn open_settings(&mut self) {
+        // SAFETY: `openSettings:` exists on the controller.
+        unsafe {
+            let _: () = msg_send![
+                self.controller,
+                performSelector: sel!(openSettings:),
+                withObject: Option::<&AnyObject>::None,
+                afterDelay: 0.0_f64
+            ];
+        }
+    }
+
+    fn open_action_finder(&mut self, model: apricot_app::ActionFinderModel) {
+        *self.controller.ivars().pending_action_finder.borrow_mut() = Some(model);
+        // SAFETY: `openActionFinder:` exists on the controller.
+        unsafe {
+            let _: () = msg_send![
+                self.controller,
+                performSelector: sel!(openActionFinder:),
+                withObject: Option::<&AnyObject>::None,
+                afterDelay: 0.0_f64
+            ];
         }
     }
 

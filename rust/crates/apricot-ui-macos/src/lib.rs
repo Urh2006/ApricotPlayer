@@ -11,6 +11,8 @@
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
 #[cfg(target_os = "macos")]
+mod action_finder;
+#[cfg(target_os = "macos")]
 mod announce;
 #[cfg(target_os = "macos")]
 mod app;
@@ -45,6 +47,8 @@ mod screen_buttons;
 mod screen_fields;
 #[cfg(all(target_os = "macos", debug_assertions))]
 mod self_test;
+#[cfg(target_os = "macos")]
+mod settings;
 #[cfg(target_os = "macos")]
 mod transcript;
 #[cfg(target_os = "macos")]

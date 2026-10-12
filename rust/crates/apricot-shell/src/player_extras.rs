@@ -15,7 +15,7 @@ use crate::{ChoiceDialog, PlayerFocus, Shell, ShellUi, View};
 
 /// Windows `AUDIO_DEVICE_CHECK_DELAY_MS` and `AUDIO_DEVICE_PROBE_TIMEOUT`.
 const AUDIO_DEVICE_CHECK_DELAY: Duration = Duration::from_millis(6_500);
-const AUDIO_DEVICE_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const AUDIO_DEVICE_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The labels of the details panel.
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -587,3 +587,77 @@ pub fn converter_plan(file: bool) -> Vec<(&'static str, Key)> {
     ]);
     plan
 }
+
+/// The Action Finder keys of `APRICOT_MACOS_SELF_TEST=settings`: search
+/// "favor" and run the first match.
+pub fn action_finder_plan() -> Vec<(&'static str, Key)> {
+    use crate::keys;
+    vec![
+        ("type f", key(0, "f")),
+        ("type a", key(0, "a")),
+        ("type v", key(0, "v")),
+        ("type o", key(0, "o")),
+        ("type r", key(0, "r")),
+        ("Down (list)", key(keys::KEY_DOWN, "\u{f701}")),
+        ("Return (run)", key(keys::KEY_RETURN, "\r")),
+    ]
+}
+
+/// The Settings keys of `APRICOT_MACOS_SELF_TEST=settings`: the second
+/// section, Tab into it, two controls, Shift+Tab and Back.
+pub fn settings_plan() -> Vec<(&'static str, Key)> {
+    use crate::keys;
+    let tab = || key(keys::KEY_TAB, "\t");
+    vec![
+        ("Down (section)", key(keys::KEY_DOWN, "\u{f701}")),
+        ("Tab (into the section)", tab()),
+        ("Tab", tab()),
+        ("Tab", tab()),
+        (
+            "Shift+Tab",
+            Key {
+                code: keys::KEY_TAB,
+                text: "\t",
+                flags: objc2_app_kit::NSEventModifierFlags::Shift,
+            },
+        ),
+        (
+            "Shift+Tab",
+            Key {
+                code: keys::KEY_TAB,
+                text: "\t",
+                flags: objc2_app_kit::NSEventModifierFlags::Shift,
+            },
+        ),
+        (
+            "Shift+Tab (sections)",
+            Key {
+                code: keys::KEY_TAB,
+                text: "\t",
+                flags: objc2_app_kit::NSEventModifierFlags::Shift,
+            },
+        ),
+        ("End (Shortcuts)", key(keys::KEY_END, "\u{f72b}")),
+        ("Tab (actions)", tab()),
+        ("Down (next action)", key(keys::KEY_DOWN, "\u{f701}")),
+        ("Tab (capture)", tab()),
+        (
+            "Command+Shift+J (capture)",
+            Key {
+                code: 38,
+                text: "j",
+                flags: objc2_app_kit::NSEventModifierFlags::Command
+                    | objc2_app_kit::NSEventModifierFlags::Shift,
+            },
+        ),
+        (
+            "Shift+Tab",
+            Key {
+                code: keys::KEY_TAB,
+                text: "\t",
+                flags: objc2_app_kit::NSEventModifierFlags::Shift,
+            },
+        ),
+        ("Escape (Back)", key(keys::KEY_ESCAPE, "\u{1b}")),
+    ]
+}

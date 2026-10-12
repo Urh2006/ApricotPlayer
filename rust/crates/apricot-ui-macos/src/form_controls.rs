@@ -287,6 +287,15 @@ impl Slider {
         slider
     }
 
+    /// Windows `TBM_SETRANGEMIN` and `TBM_SETRANGEMAX` with any bounds.
+    pub fn set_bounds(&self, minimum: i64, maximum: i64) {
+        #[allow(clippy::cast_precision_loss)]
+        {
+            self.setMinValue(minimum as f64);
+            self.setMaxValue(maximum as f64);
+        }
+    }
+
     /// Windows `TBM_SETRANGEMIN`/`TBM_SETRANGEMAX`.
     pub fn set_range(&self, limit: i32) {
         self.setMinValue(f64::from(-limit));
@@ -342,6 +351,13 @@ impl Slider {
     }
 }
 
+#[derive(Default)]
+pub struct CheckBoxIvars {
+    /// Sent with the check box as sender on Up, Down, Home and End
+    /// (Windows `focus_adjacent_menu_checkbox`).
+    arrows: Cell<Option<Sel>>,
+}
+
 define_class!(
     /// A check box that is always in the Tab order while shown, as a
     /// Windows `BS_AUTOCHECKBOX`; Space toggles it, Return and Escape go to
@@ -350,6 +366,7 @@ define_class!(
     #[unsafe(super(NSButton, NSControl, NSView, NSResponder, objc2_foundation::NSObject))]
     #[thread_kind = MainThreadOnly]
     #[name = "ApricotCheckBox"]
+    #[ivars = CheckBoxIvars]
     pub struct CheckBox;
 
     impl CheckBox {
@@ -385,6 +402,22 @@ define_class!(
                 unsafe { self.performClick(None) };
                 return;
             }
+            if !modifiers.command
+                && !modifiers.option
+                && !modifiers.control
+                && !modifiers.shift
+                && matches!(
+                    event.keyCode(),
+                    keys::KEY_UP | keys::KEY_DOWN | keys::KEY_HOME | keys::KEY_END
+                )
+                && let Some(action) = self.ivars().arrows.get()
+            {
+                // SAFETY: the action exists on the target.
+                unsafe {
+                    let _: bool = msg_send![self, sendAction: action, to: self.target().as_deref()];
+                }
+                return;
+            }
             // SAFETY: forwarding the unhandled event to NSButton.
             unsafe {
                 let _: () = msg_send![super(self), keyDown: event];
@@ -400,7 +433,7 @@ impl CheckBox {
         target: &AnyObject,
         action: Sel,
     ) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(());
+        let this = Self::alloc(mtm).set_ivars(CheckBoxIvars::default());
         // SAFETY: the designated initializer of NSButton.
         let check: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: NSRect::ZERO] };
         check.setButtonType(objc2_app_kit::NSButtonType::Switch);
@@ -411,6 +444,11 @@ impl CheckBox {
             check.setAction(Some(action));
         }
         check
+    }
+
+    /// The selector sent on Up, Down, Home and End.
+    pub fn set_arrow_action(&self, action: Sel) {
+        self.ivars().arrows.set(Some(action));
     }
 
     pub fn checked(&self) -> bool {

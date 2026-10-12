@@ -72,6 +72,7 @@ define_class!(
                 Ok("trending") => controller.run_trending_self_test(),
                 Ok("podcasts") => controller.run_podcast_self_test(),
                 Ok("converter") => controller.run_converter_self_test(),
+                Ok("settings") => controller.run_settings_self_test(),
                 Ok("folder") => {
                     if let Some(media) = std::env::var_os("APRICOT_MACOS_SELF_TEST_MEDIA") {
                         controller.run_folder_self_test(media.into());

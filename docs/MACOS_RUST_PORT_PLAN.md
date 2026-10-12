@@ -725,3 +725,39 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   "(2)"); fokus se po zaprtju pretvornika vrne na glavni meni. Okna
   napredka pretvorbe mape preizkus ni ujel, ker je bila pretvorba
   prehitra.
+
+### M10: nastavitve, Action Finder in bližnjice (12. 10. 2026)
+
+- `apricot-shell/src/settings_window.rs`: odločitve okna nastavitev
+  (Windows `settings_win32.rs`): vezave kontrol na nastavitve, uporaba
+  vidnih vrednosti, Save (z jezikovno spremembo okno zgradi znova), Restore
+  to defaults, ponastavitev razdelka, izbira mape za prenose, izenačevalnik
+  (predogled drsnikov, ponastavitev, profili prek istih pozivov kot okno
+  F4), naprave za predvajanje (sondiranje v ozadju in zamenjava izbire na
+  mestu), zajem bližnjic z opozorilom ob spopadu in osvežitev glavnega
+  okna po zaprtju z odloženim globalnim dejanjem.
+- `apricot-ui-macos/src/settings.rs`: modalno okno z vrstnim redom Tab
+  Windows (Back, Save, Restore to defaults, seznam razdelkov, kontrole
+  razdelka), Return shrani, Escape je Back, puščice v seznamu razdelkov
+  pokažejo razdelek po 140 ms, Tab ali Return ga pokaže takoj in premakne
+  fokus vanj, Shift+Tab s prve kontrole nazaj na seznam, puščice med
+  potrditvenimi polji menija, polje za zajem bližnjic zajame vse tipke
+  razen Tab (tudi Command), globalne bližnjice zaprejo okno in se izvedejo
+  v glavnem oknu, Action Finder se odpre nad nastavitvami.
+- `apricot-ui-macos/src/action_finder.rs`: Action Finder z iskalnim
+  poljem, seznamom, Open in Cancel; puščici iz polja v seznam, Return
+  izvede, Escape zapre. Oznake bližnjic v Action Finderju so na Macu
+  Command in Option (na Windows nespremenjeno).
+- Na Macu pridejo kasneje (sporočilo, da funkcija še ni na voljo):
+  piškotki in AudioVault (M12), privzeti predvajalnik in naročnine (M14),
+  preverjanje posodobitev (M16).
+- Opomba: na začetku modalne seje AppKit premakne fokus na Back, zato ga
+  okno po 0,3 s vrne na seznam razdelkov, če ga uporabnik še ni premaknil.
+- Preverjeno: enotski testi (vezava potrditvenega polja, spopad in zajem
+  bližnjice, zapis bližnjic, odvisni razdelki, Action Finder) in
+  samodejni preizkus na Macu: Action Finder ("favor", puščica dol, Return
+  odpre priljubljene), nastavitve (fokus na seznamu razdelkov, puščica dol
+  na Customize main menu, Tab v razdelek, Shift+Tab nazaj, End na
+  Keyboard shortcuts, izbira dejanja, zajem Command+Shift+J javi, da je
+  že dodeljena Action finderju, Escape zapre okno, fokus se vrne na seznam
+  priljubljenih).

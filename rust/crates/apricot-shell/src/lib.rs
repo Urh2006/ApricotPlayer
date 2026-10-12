@@ -31,6 +31,7 @@ mod related;
 mod repeat;
 mod screens;
 mod search;
+mod settings_window;
 mod transcript;
 mod transcript_loader;
 mod trending;
@@ -53,6 +54,10 @@ pub use queue::{QueueChange, QueueDialog};
 pub use repeat::KeyRelease;
 pub use screens::{ListScreen, ScreenControl, local_folder_result_label};
 pub use search::result_label;
+pub use settings_window::{
+    SettingsBinding, SettingsInput, ShortcutCapture, settings_binding, shortcut_action_label,
+    shortcut_text,
+};
 pub use transcript::{TranscriptButton, TranscriptDialog, TranscriptRows};
 
 pub use main_menu::{MainMenuSelection, last_activated_index, preserved_index};
@@ -112,6 +117,7 @@ pub struct Shell {
     podcasts: podcasts::PodcastState,
     downloads: downloads::DownloadState,
     conversions: converter::ConversionState,
+    settings_window: settings_window::SettingsState,
 }
 
 impl Shell {
@@ -136,6 +142,7 @@ impl Shell {
             podcasts: podcasts::PodcastState::default(),
             downloads: downloads::DownloadState::default(),
             conversions: converter::ConversionState::default(),
+            settings_window: settings_window::SettingsState::default(),
         }
     }
 
@@ -303,6 +310,10 @@ impl Shell {
                 self.show_download_queue(ui);
                 return;
             }
+            "settings" => {
+                self.open_settings(ui);
+                return;
+            }
             "file_converter" | "folder_converter" => {
                 self.show_converter(ui, item.id == "folder_converter");
                 return;
@@ -330,6 +341,7 @@ impl Shell {
         self.activate_player_action(ui, action_id)
             || self.podcast_action(ui, action_id)
             || self.download_action(ui, action_id)
+            || self.settings_action(ui, action_id)
     }
 
     /// An action chosen by its shortcut or from a menu (Windows
