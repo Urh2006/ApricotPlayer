@@ -275,6 +275,16 @@ pub trait ShellUi {
         current: apricot_spotify::settings::SpotifySettings,
     ) -> Option<apricot_spotify::settings::SpotifySettings>;
 
+    /// Windows `spotify_search_win32::show`: the query and the type index;
+    /// `None` when cancelled. Accepting does not put the focus back where
+    /// it was, because the results list takes it.
+    fn spotify_search(
+        &mut self,
+        texts: &crate::SpotifySearchTexts,
+        query: &str,
+        kind: usize,
+    ) -> Option<(String, usize)>;
+
     /// Windows `spotify_queue_win32::update` of an open queue dialog.
     fn spotify_queue_update(&mut self, rows: Vec<apricot_app::spotify::SpotifyQueueRow>);
 

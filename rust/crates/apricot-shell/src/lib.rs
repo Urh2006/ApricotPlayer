@@ -67,6 +67,7 @@ pub use settings_window::{
 pub use spotify::{
     SpotifyLoginAction, SpotifyLoginTexts, SpotifyLoginUpdate, SpotifySettingsTexts,
 };
+pub use spotify_lists::SpotifySearchTexts;
 pub use transcript::{TranscriptButton, TranscriptDialog, TranscriptRows};
 
 pub use main_menu::{MainMenuSelection, last_activated_index, preserved_index};
@@ -389,6 +390,7 @@ impl Shell {
 
     /// An action chosen by its shortcut or from a menu (Windows
     /// `activate_action`).
+    #[allow(clippy::too_many_lines)] // One arm per action, as on Windows.
     pub fn activate_action(&mut self, ui: &mut dyn ShellUi, action_id: &str) {
         self.leave_player_for_global_navigation(ui, action_id);
         if self.feature_action(ui, action_id) {
@@ -423,6 +425,10 @@ impl Shell {
                 self.show_user_playlists(ui);
                 return;
             }
+            "create_playlist" if self.view == View::SpotifyBrowse => {
+                self.spotify_create_playlist(ui);
+                return;
+            }
             "create_playlist" => {
                 self.create_user_playlist(ui, None);
                 return;
@@ -449,6 +455,10 @@ impl Shell {
             }
             "remove_favorite" => {
                 self.remove_active_favorite(ui);
+                return;
+            }
+            "remove_selected" if self.view == View::SpotifyBrowse => {
+                self.spotify_browse_remove_selected(ui);
                 return;
             }
             "remove_selected" => {

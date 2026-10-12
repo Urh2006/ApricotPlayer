@@ -153,8 +153,8 @@ impl Shell {
             | View::AudiovaultSearch
             | View::AudiovaultResults
             | View::SpotifyHub
-            | View::SpotifyAccounts
-            | View::SpotifyBrowse => None,
+            | View::SpotifyAccounts => None,
+            View::SpotifyBrowse => self.spotify_selected_media(ui),
         }
     }
 

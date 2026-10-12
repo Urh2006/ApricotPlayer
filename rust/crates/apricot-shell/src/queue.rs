@@ -246,6 +246,10 @@ impl Shell {
 
     /// Windows `add_active_item_to_playback_queue`.
     pub(crate) fn add_active_item_to_playback_queue(&mut self, ui: &mut dyn ShellUi) {
+        // A Spotify track goes to the Spotify queue (`docs/SPOTIFY_PLAN.md` 5.3).
+        if self.spotify_add_to_queue(ui) {
+            return;
+        }
         let Some(item) = self.active_media_item(ui) else {
             return;
         };
@@ -364,6 +368,18 @@ impl Shell {
                     account.menu_account(),
                 )
             })
+        } else if self.view == View::SpotifyBrowse {
+            let catalog = self.catalog();
+            let titles = Vec::new();
+            self.spotify_browse_context_entries(
+                ui,
+                &ContextMenuContext {
+                    catalog: &catalog,
+                    settings: self.application.settings(),
+                    user_playlist_titles: &titles,
+                    queued_download_count: self.application.downloads().queued().len(),
+                },
+            )
         } else {
             self.context_entries(item.as_ref())
         };
@@ -408,6 +424,9 @@ impl Shell {
             C::SpotifyLogIn => self.spotify_log_in_from_accounts(ui),
             C::SpotifyLogOut => self.spotify_log_out_selected(ui),
             C::SpotifyRemoveAccount => self.spotify_remove_selected(ui),
+            command if crate::spotify_lists::is_browse_command(command) => {
+                self.spotify_browse_command(ui, command);
+            }
             C::DownloadAudio => self.start_active_download(ui, DownloadChoice::Audio),
             C::DownloadVideo => self.start_active_download(ui, DownloadChoice::Video),
             C::DownloadAllAudio => self.start_all_queued_downloads(ui, DownloadChoice::Audio),

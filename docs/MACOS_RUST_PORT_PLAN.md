@@ -856,3 +856,30 @@ koraku M1 in M2 Urh na Windows požene `cargo test` in kratek NVDA preizkus.
   link, Cancel, Try again je onemogočen, Escape zapre in pove "Spotify login
   cancelled"). Prave prijave nisem preizkusil, ker potrebuje brskalnik in
   tvoj račun.
+
+### M13b: Spotify seznami (12. 10. 2026)
+
+- `apricot-shell/src/spotify_lists.rs` (Windows `spotify_browse_win32.rs`):
+  iskanje, knjižnica in mape, Liked Songs, seznami predvajanja, albumi,
+  izvajalci, oddaje, Home in njeni razdelki, Daily Mixes, nedavno
+  predvajano, Top, Browse all, radio in profili. Vsak odprt seznam je nova
+  raven; Escape in Back se vrneta na isto vrstico prejšnje ravni. Seznam
+  se nalaga po straneh, zadnja vrstica naloži naslednjo z "Loading more
+  results". Odprt seznam predvajanja se vsakih 15 sekund preveri za
+  spremembe od drugod, izbrana pojavitev ostane izbrana in fokus se ne
+  premakne. Kontekstni meni z vsemi ukazi Windows (predvajaj, premešaj,
+  odpri, dodaj v vrsto, album, izvajalec, kopiraj povezavo, všečkaj ali
+  shrani, dodaj v Spotify seznam z New playlist na vrhu, odstrani, premakni
+  gor in dol, preimenuj, ustvari, skrij pesem, radio, lastnik, opis,
+  vidnost, predogled). Delete odstrani izbrano pojavitev v urejljivem
+  seznamu, Command+Shift+Q doda v Spotify vrsto, izbrana vrstica je
+  aktivni element za priljubljene in Apricot sezname.
+- Okno za iskanje (`spotify_dialogs.rs`): polje, vrsta iskanja, Search,
+  Cancel. Prazno iskanje pusti okno odprto s fokusom v polju. Po iskanju se
+  fokus ne vrne na prejšnjo kontrolo, ampak ga prevzame seznam rezultatov,
+  da bralnik ne prebere vmesne kontrole (točka 4a.8 na Macu).
+- Preverjeno: enotni testi (ime seznama in kontrole, vrnitev na isto
+  vrstico, meni urejljivega seznama, kontekst in uid predvajanja) in
+  samodejni preizkus okna za iskanje (Return na praznem ostane, vnos, Tab
+  vrstni red polje, vrsta, Search, Cancel, rezultat). Pravih Spotify
+  seznamov nisem preizkusil, ker potrebujejo prijavo v tvoj račun.

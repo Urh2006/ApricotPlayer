@@ -157,9 +157,10 @@ impl Shell {
                 self.audiovault_activate(ui);
             }
             View::SpotifyHub | View::SpotifyAccounts => self.spotify_activate(ui),
+            View::SpotifyBrowse => self.spotify_browse_activate(ui),
             // Python `play_selected` on the empty result list.
             View::Search => ui.show_error(&self.text("no_selection")),
-            View::DirectLink | View::Player | View::SpotifyBrowse => {}
+            View::DirectLink | View::Player => {}
         }
     }
 
@@ -364,6 +365,7 @@ impl Shell {
 
     /// Windows `navigate_back`: playback stops when leaving the player and
     /// the previous screen returns with focus on its list.
+    #[allow(clippy::too_many_lines)] // One arm per screen, as on Windows.
     pub(crate) fn navigate_back(&mut self, ui: &mut dyn ShellUi) {
         self.stop_key_repeat(ui);
         if crate::audiovault::is_view(self.view) {
@@ -449,7 +451,8 @@ impl Shell {
             | Route::AudiovaultSearch
             | Route::AudiovaultResults
             | Route::AudiovaultEpisodes => self.audiovault_restore_after_player(ui),
-            Route::SpotifyHub | Route::SpotifyBrowse => self.show_spotify_hub(ui),
+            Route::SpotifyHub => self.show_spotify_hub(ui),
+            Route::SpotifyBrowse => self.spotify_browse_restore(ui),
             Route::SpotifyAccounts => self.show_spotify_accounts(ui, None),
             Route::DownloadQueue => {
                 self.view = View::DownloadQueue;

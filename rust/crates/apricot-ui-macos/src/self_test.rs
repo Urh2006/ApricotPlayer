@@ -603,6 +603,29 @@ pub fn action_finder_plan() -> Vec<(&'static str, Key)> {
     ]
 }
 
+/// `APRICOT_MACOS_SELF_TEST=settings` with `KIND=spotify_search`: an empty
+/// query keeps the dialog open, then a query is typed and searched.
+pub fn spotify_search_plan() -> Vec<(&'static str, Key)> {
+    use crate::keys;
+    vec![
+        ("Return (empty, stays open)", key(keys::KEY_RETURN, "\r")),
+        ("type", key(0, "a")),
+        ("type", key(0, "b")),
+        ("Tab (type)", key(keys::KEY_TAB, "\t")),
+        ("Tab (Search)", key(keys::KEY_TAB, "\t")),
+        ("Tab (Cancel)", key(keys::KEY_TAB, "\t")),
+        (
+            "Shift+Tab (Search)",
+            Key {
+                code: keys::KEY_TAB,
+                text: "\t",
+                flags: objc2_app_kit::NSEventModifierFlags::Shift,
+            },
+        ),
+        ("Return (search)", key(keys::KEY_RETURN, "\r")),
+    ]
+}
+
 /// The Settings keys of `APRICOT_MACOS_SELF_TEST=settings`: the second
 /// section, Tab into it, two controls, Shift+Tab and Back.
 pub fn settings_plan() -> Vec<(&'static str, Key)> {

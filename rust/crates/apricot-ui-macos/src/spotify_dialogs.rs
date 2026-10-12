@@ -1,20 +1,23 @@
 //! The Spotify login dialog (`spotify_login_win32.rs`: the read-only status
 //! with focus, Open browser again, Copy login link, Try again and Cancel)
 //! and the Spotify settings dialog (`spotify_settings_win32.rs`: quality,
-//! normalisation, autoplay, library order, OK and Cancel), modal over the
-//! main window.
+//! normalisation, autoplay, library order, OK and Cancel) and the Spotify
+//! search dialog (`spotify_search_win32.rs`: query, type, Search and
+//! Cancel), modal over the main window.
 
 #![allow(unsafe_code)]
 
 use std::cell::{Cell, RefCell};
 
 use apricot_shell::{
-    SpotifyLoginAction, SpotifyLoginTexts, SpotifyLoginUpdate, SpotifySettingsTexts,
+    SpotifyLoginAction, SpotifyLoginTexts, SpotifyLoginUpdate, SpotifySearchTexts,
+    SpotifySettingsTexts,
 };
 use apricot_spotify::settings::{Autoplay, LibraryOrder, Quality, SpotifySettings};
 use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
+use objc2_app_kit::NSAccessibility;
 use objc2_app_kit::{
     NSApplication, NSBackingStoreType, NSScrollView, NSTextField, NSView, NSWindow,
     NSWindowDelegate, NSWindowStyleMask,
@@ -439,4 +442,161 @@ pub fn run_settings(
         .and_then(|index| LibraryOrder::ALL.get(index).copied())
         .unwrap_or(current.library_order);
     Some(chosen)
+}
+
+pub struct SearchIvars {
+    accepted: Cell<bool>,
+    field: RefCell<Option<Retained<NSTextField>>>,
+}
+
+define_class!(
+    // SAFETY: NSObject has no subclassing requirements; no Drop impl.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "ApricotSpotifySearch"]
+    #[ivars = SearchIvars]
+    struct SearchDialog;
+
+    unsafe impl NSObjectProtocol for SearchDialog {}
+
+    unsafe impl NSWindowDelegate for SearchDialog {
+        #[unsafe(method(windowShouldClose:))]
+        fn window_should_close(&self, _sender: &NSWindow) -> bool {
+            NSApplication::sharedApplication(self.mtm()).stopModal();
+            false
+        }
+    }
+
+    impl SearchDialog {
+        /// An empty query keeps the dialog open with the focus in the field.
+        #[unsafe(method(accept:))]
+        fn accept(&self, _sender: Option<&AnyObject>) {
+            let field = self.ivars().field.borrow().clone();
+            if let Some(field) = field
+                && field.stringValue().to_string().trim().is_empty()
+            {
+                if let Some(window) = field.window() {
+                    window.makeFirstResponder(Some(&field));
+                }
+                return;
+            }
+            self.ivars().accepted.set(true);
+            NSApplication::sharedApplication(self.mtm()).stopModal();
+        }
+
+        #[unsafe(method(cancel:))]
+        fn cancel(&self, _sender: Option<&AnyObject>) {
+            NSApplication::sharedApplication(self.mtm()).stopModal();
+        }
+
+        #[unsafe(method(changed:))]
+        fn changed(&self, _sender: Option<&AnyObject>) {}
+    }
+);
+
+/// Windows `spotify_search_win32::show`: the query and the type index,
+/// `None` when cancelled. Cancel puts the focus back where it was; after
+/// Search the results list takes it, so VoiceOver does not first read the
+/// control the dialog was opened from.
+pub fn run_search(
+    mtm: MainThreadMarker,
+    texts: &SpotifySearchTexts,
+    query: &str,
+    kind: usize,
+) -> Option<(String, usize)> {
+    let (width, height) = (460.0, 150.0);
+    let app = NSApplication::sharedApplication(mtm);
+    let previous_window = app.keyWindow();
+    let previous_focus = previous_window
+        .as_ref()
+        .and_then(|window| window.firstResponder());
+    let this: Retained<SearchDialog> = {
+        let this = SearchDialog::alloc(mtm).set_ivars(SearchIvars {
+            accepted: Cell::new(false),
+            field: RefCell::new(None),
+        });
+        // SAFETY: `init` of NSObject.
+        unsafe { msg_send![super(this), init] }
+    };
+    let target: &AnyObject = this.as_ref();
+    let window = standard_window(mtm, &texts.title, width, height);
+    window.setDelegate(Some(ProtocolObject::from_ref(&*this)));
+    let content = window.contentView().expect("a window has a content view");
+    let label_width = 120.0;
+    let field_x = MARGIN + label_width + 8.0;
+    let field_width = width - field_x - MARGIN;
+    let mut y = height - MARGIN - 28.0;
+    let label = NSTextField::labelWithString(&NSString::from_str(&texts.query), mtm);
+    label.setFrame(NSRect::new(
+        NSPoint::new(MARGIN, y + 4.0),
+        NSSize::new(label_width, 22.0),
+    ));
+    content.addSubview(&label);
+    let field = NSTextField::initWithFrame(
+        NSTextField::alloc(mtm),
+        NSRect::new(NSPoint::new(field_x, y), NSSize::new(field_width, 26.0)),
+    );
+    field.setAccessibilityLabel(Some(&NSString::from_str(&texts.query)));
+    field.setStringValue(&NSString::from_str(query));
+    // Return in the field searches, as the Windows default button does.
+    // SAFETY: the dialog outlives the field.
+    unsafe {
+        field.setTarget(Some(target));
+        field.setAction(Some(sel!(accept:)));
+    }
+    content.addSubview(&field);
+    *this.ivars().field.borrow_mut() = Some(field.clone());
+    y -= 36.0;
+    let label = NSTextField::labelWithString(&NSString::from_str(&texts.kind), mtm);
+    label.setFrame(NSRect::new(
+        NSPoint::new(MARGIN, y + 4.0),
+        NSSize::new(label_width, 22.0),
+    ));
+    content.addSubview(&label);
+    let kinds = PopUp::new(mtm, &texts.kind, target, sel!(changed:));
+    kinds.set_items(&texts.kinds, kind.min(texts.kinds.len().saturating_sub(1)));
+    kinds.setFrame(NSRect::new(
+        NSPoint::new(field_x, y),
+        NSSize::new(field_width, 28.0),
+    ));
+    content.addSubview(&kinds);
+    let search = Button::new(mtm, &texts.search, target, sel!(accept:));
+    search.setFrame(NSRect::new(
+        NSPoint::new(width - MARGIN - 2.0 * 110.0 - 8.0, MARGIN),
+        NSSize::new(110.0, BUTTON_HEIGHT),
+    ));
+    // Windows `BS_DEFPUSHBUTTON`.
+    search.setKeyEquivalent(&NSString::from_str("\r"));
+    content.addSubview(&search);
+    let cancel = Button::new(mtm, &texts.cancel, target, sel!(cancel:));
+    cancel.setFrame(NSRect::new(
+        NSPoint::new(width - MARGIN - 110.0, MARGIN),
+        NSSize::new(110.0, BUTTON_HEIGHT),
+    ));
+    cancel.setKeyEquivalent(&NSString::from_str("\u{1b}"));
+    content.addSubview(&cancel);
+    controls::set_tab_order(&[&*field as &NSView, &kinds, &search, &cancel]);
+    window.setAutorecalculatesKeyViewLoop(false);
+    window.setInitialFirstResponder(Some(&field));
+    app.activate();
+    window.center();
+    window.makeKeyAndOrderFront(None);
+    // The previous query stays; a text field selects it on focus, as
+    // `EM_SETSEL` does on Windows.
+    window.makeFirstResponder(Some(&field));
+    app.runModalForWindow(&window);
+    window.setDelegate(None);
+    window.orderOut(None);
+    let accepted = this.ivars().accepted.get();
+    if let Some(previous) = previous_window {
+        previous.makeKeyAndOrderFront(None);
+        if !accepted && let Some(focus) = previous_focus {
+            previous.makeFirstResponder(Some(&focus));
+        }
+    }
+    if !accepted {
+        return None;
+    }
+    let query = field.stringValue().to_string().trim().to_owned();
+    Some((query, kinds.selected().unwrap_or(0)))
 }

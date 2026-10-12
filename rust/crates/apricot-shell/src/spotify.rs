@@ -131,6 +131,8 @@ pub(crate) struct SpotifyState {
     pub(crate) queue_open: bool,
     pub(crate) queue_load: Option<SpotifyStamp>,
     pub(crate) devices_open: bool,
+    /// The open Spotify lists (Windows `BrowseState`).
+    pub(crate) browse: crate::spotify_lists::BrowseState,
 }
 
 /// Connects `key`, replacing the running session.
@@ -185,6 +187,11 @@ impl Shell {
             self.spotify.receiver = Some(receiver);
         }
         self.spotify.service.clone()
+    }
+
+    /// The runtime when it already runs.
+    pub(crate) fn spotify_service_ref(&self) -> Option<&SpotifyService> {
+        self.spotify.service.as_deref()
     }
 
     fn spotify_accounts(&mut self) -> SpotifyAccounts {
@@ -573,6 +580,7 @@ impl Shell {
         if self.spotify.polling {
             return true;
         }
+        self.spotify_browse_refresh_tick();
         loop {
             let event = self
                 .spotify
@@ -769,6 +777,18 @@ impl Shell {
             }
             "spotify_devices" => {
                 self.show_spotify_devices(ui);
+                return true;
+            }
+            "spotify_toggle_saved" => {
+                self.spotify_toggle_saved(ui);
+                return true;
+            }
+            "spotify_dislike" => {
+                self.spotify_toggle_hidden(ui);
+                return true;
+            }
+            "spotify_radio" => {
+                self.spotify_radio(ui);
                 return true;
             }
             "spotify_search" => SpotifyHubEntry::Search,

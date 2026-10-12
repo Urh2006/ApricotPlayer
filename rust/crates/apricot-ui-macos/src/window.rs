@@ -1042,6 +1042,25 @@ impl MainWindowController {
                 self.run_action("open_selected");
                 "Return on the first hub row"
             }
+            0 if std::env::var("APRICOT_MACOS_SELF_TEST_KIND").as_deref()
+                == Ok("spotify_search") =>
+            {
+                self.schedule_modal_self_test_keys_after(1.0);
+                let texts = apricot_shell::SpotifySearchTexts {
+                    title: "Search Spotify".to_owned(),
+                    query: "Search for".to_owned(),
+                    kind: "Type".to_owned(),
+                    kinds: vec!["All".to_owned(), "Tracks".to_owned()],
+                    search: "Search".to_owned(),
+                    cancel: "Cancel".to_owned(),
+                };
+                let result = self.with_shell(|_, ui| ui.spotify_search(&texts, "", 1));
+                println!(
+                    "settings-test search result={result:?} focus={}",
+                    focus(&window)
+                );
+                "Spotify search dialog"
+            }
             0 if std::env::var("APRICOT_MACOS_SELF_TEST_KIND").as_deref() == Ok("audiovault") => {
                 self.schedule_modal_self_test_keys_after(1.0);
                 self.run_action("open_audiovault");
@@ -1405,6 +1424,7 @@ impl MainWindowController {
                 ("Escape", escape),
             ],
             "Settings" => crate::self_test::settings_plan(),
+            "Search Spotify" => crate::self_test::spotify_search_plan(),
             title @ ("File converter" | "Folder converter") => {
                 crate::self_test::converter_plan(title == "File converter")
             }
@@ -1965,6 +1985,15 @@ impl ShellUi for MacUi<'_> {
         current: apricot_spotify::settings::SpotifySettings,
     ) -> Option<apricot_spotify::settings::SpotifySettings> {
         crate::spotify_dialogs::run_settings(self.controller.mtm(), texts, current)
+    }
+
+    fn spotify_search(
+        &mut self,
+        texts: &apricot_shell::SpotifySearchTexts,
+        query: &str,
+        kind: usize,
+    ) -> Option<(String, usize)> {
+        crate::spotify_dialogs::run_search(self.controller.mtm(), texts, query, kind)
     }
 
     fn spotify_queue_update(&mut self, _rows: Vec<apricot_app::spotify::SpotifyQueueRow>) {}

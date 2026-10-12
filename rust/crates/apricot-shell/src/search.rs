@@ -407,8 +407,8 @@ impl Shell {
             | View::AudiovaultResults
             | View::SpotifyHub
             | View::SpotifyAccounts
-            | View::SpotifyBrowse
             | View::Player => {}
+            View::SpotifyBrowse => self.spotify_browse_selection_changed(ui),
         }
     }
 

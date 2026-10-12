@@ -326,6 +326,14 @@ mod equalizer {
         ) -> Option<apricot_spotify::settings::SpotifySettings> {
             None
         }
+        fn spotify_search(
+            &mut self,
+            _texts: &crate::SpotifySearchTexts,
+            _query: &str,
+            _kind: usize,
+        ) -> Option<(String, usize)> {
+            None
+        }
         fn spotify_queue_update(&mut self, _rows: Vec<apricot_app::spotify::SpotifyQueueRow>) {}
         fn spotify_devices_update(&mut self, _rows: Vec<(String, String)>) {}
         fn settings_cookie_source(&mut self, _path: &str, _browser_index: usize) {}
@@ -1060,5 +1068,144 @@ mod audiovault {
         shell.activate_action(&mut ui, "open_audiovault");
         assert_eq!(shell.view(), crate::View::MainMenu);
         assert!(ui.screens.is_empty());
+    }
+}
+
+mod spotify_lists {
+    use apricot_app::context_menu::{ContextCommand, ContextMenuContext, ContextMenuEntry};
+    use apricot_spotify::{CatalogItem, ItemKind};
+
+    use super::equalizer::Ui;
+    use crate::ScreenControl;
+    use crate::spotify_lists::Source;
+
+    fn track(name: &str, uid: &str) -> CatalogItem {
+        CatalogItem {
+            kind: ItemKind::Track,
+            uri: format!("spotify:track:{name:0>22}"),
+            name: name.to_owned(),
+            subtitle: "Artist".to_owned(),
+            album: "Album".to_owned(),
+            album_uri: "spotify:album:a".to_owned(),
+            artist_uri: "spotify:artist:b".to_owned(),
+            duration_ms: Some(180_000),
+            playable: true,
+            explicit: false,
+            uid: Some(uid.to_owned()),
+            saved: Some(false),
+            count: None,
+            editable: false,
+            format: String::new(),
+        }
+    }
+
+    fn commands(entries: &[ContextMenuEntry]) -> Vec<ContextCommand> {
+        entries
+            .iter()
+            .flat_map(|entry| match entry {
+                ContextMenuEntry::Command { command, .. } => vec![*command],
+                ContextMenuEntry::Submenu { entries, .. } => commands(entries),
+                ContextMenuEntry::Disabled { .. } => Vec::new(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_list_is_named_by_its_title_with_open_and_back() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell.spotify_browse_test_open(
+            &mut ui,
+            Source::Playlist("spotify:playlist:p".into()),
+            "Mix",
+            vec![track("one", "u1"), track("two", "u2")],
+            true,
+        );
+        let screen = ui.screens.last().unwrap();
+        assert_eq!(screen.list_name, "Mix");
+        assert_eq!(screen.rows.len(), 2);
+        assert!(screen.focus_list);
+        assert!(matches!(screen.controls[0], ScreenControl::List));
+        assert_eq!(screen.controls.len(), 3);
+    }
+
+    #[test]
+    fn back_returns_to_the_same_row_of_the_previous_list() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell.spotify_browse_test_open(
+            &mut ui,
+            Source::Album("spotify:album:a".into()),
+            "Album",
+            vec![track("one", "u1"), track("two", "u2"), track("three", "u3")],
+            false,
+        );
+        ui.selected = Some(2);
+        shell.list_selection_changed(&mut ui);
+        shell.spotify_browse_test_open(
+            &mut ui,
+            Source::Album("spotify:album:c".into()),
+            "Other",
+            vec![track("four", "u4")],
+            false,
+        );
+        shell.spotify_browse_back(&mut ui);
+        let screen = ui.screens.last().unwrap();
+        assert_eq!(screen.list_name, "Album");
+        assert_eq!(screen.selected, Some(2));
+        assert!(screen.focus_list);
+    }
+
+    #[test]
+    fn an_editable_playlist_offers_remove_and_only_possible_moves() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell.spotify_browse_test_open(
+            &mut ui,
+            Source::Playlist("spotify:playlist:p".into()),
+            "Mine",
+            vec![track("one", "u1"), track("two", "u2")],
+            true,
+        );
+        ui.selected = Some(0);
+        let catalog = shell.catalog();
+        let titles = Vec::new();
+        let context = ContextMenuContext {
+            catalog: &catalog,
+            settings: shell.application.settings(),
+            user_playlist_titles: &titles,
+            queued_download_count: 0,
+        };
+        let entries = commands(&shell.spotify_browse_context_entries(&ui, &context).unwrap());
+        assert!(entries.contains(&ContextCommand::SpotifyRemoveFromPlaylist));
+        assert!(entries.contains(&ContextCommand::SpotifyMoveDown));
+        assert!(!entries.contains(&ContextCommand::SpotifyMoveUp));
+    }
+
+    #[test]
+    fn a_playlist_track_plays_in_its_playlist_by_occurrence() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell.spotify_browse_test_open(
+            &mut ui,
+            Source::Playlist("spotify:playlist:p".into()),
+            "Mine",
+            vec![track("one", "u1"), track("two", "u2")],
+            true,
+        );
+        ui.selected = Some(1);
+        let media = shell.active_media_item(&ui).unwrap();
+        assert_eq!(media.id.0, format!("spotify:track:{:0>22}", "two"));
+        assert_eq!(
+            media
+                .metadata
+                .get("spotify_context")
+                .and_then(|v| v.as_str()),
+            Some("spotify:playlist:p")
+        );
+        assert_eq!(
+            media.metadata.get("spotify_uid").and_then(|v| v.as_str()),
+            Some("u2")
+        );
     }
 }
