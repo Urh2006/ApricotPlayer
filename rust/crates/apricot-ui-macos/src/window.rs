@@ -448,6 +448,35 @@ impl MainWindowController {
         }
     }
 
+    /// `NSApplication` never sends the window the key-up of a key pressed
+    /// with Command, so a held Command chord (pitch, speed) would repeat
+    /// until Command itself went up. A local monitor sees those key-ups
+    /// before the application drops them.
+    fn watch_command_key_releases(&self) {
+        let controller = objc2::rc::Weak::from(self);
+        let block = block2::RcBlock::new(move |event: std::ptr::NonNull<NSEvent>| {
+            // SAFETY: AppKit passes a valid event for the call.
+            let reference = unsafe { event.as_ref() };
+            if reference
+                .modifierFlags()
+                .contains(objc2_app_kit::NSEventModifierFlags::Command)
+                && let Some(controller) = controller.load()
+            {
+                controller.key_release(reference);
+            }
+            event.as_ptr()
+        });
+        // SAFETY: the handler returns the event unchanged; the monitor
+        // lives as long as the application.
+        let monitor = unsafe {
+            NSEvent::addLocalMonitorForEventsMatchingMask_handler(
+                objc2_app_kit::NSEventMask::KeyUp,
+                &block,
+            )
+        };
+        std::mem::forget(monitor);
+    }
+
     /// Windows `handle_controlled_repeat_release`: the held key or one of
     /// its modifiers went up.
     fn key_release(&self, event: &NSEvent) {
@@ -575,6 +604,7 @@ impl MainWindowController {
             NSSize::new(WINDOW_WIDTH, WINDOW_HEIGHT),
         );
         let window = MainWindow::new(mtm, frame, self);
+        self.watch_command_key_releases();
         window.setTitle(&NSString::from_str(title));
         window.setDelegate(Some(ProtocolObject::from_ref(self)));
         let content = window.contentView().expect("a window has a content view");

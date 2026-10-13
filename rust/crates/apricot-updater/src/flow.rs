@@ -28,17 +28,24 @@ pub const UPDATE_PROGRESS_MIN_INTERVAL: Duration = Duration::from_millis(350);
 /// The official standalone `yt-dlp` releases.
 pub const YTDLP_LATEST_RELEASE_API_URL: &str =
     "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest";
-/// Python `YTDLP_WHEEL_MAX_BYTES`, also the limit for `yt-dlp.exe`.
-pub const YTDLP_MAX_BYTES: u64 = 64 * 1024 * 1024;
+/// Python `YTDLP_WHEEL_MAX_BYTES`, also the limit for `yt-dlp.exe`; the
+/// macOS folder build is a larger ZIP.
+pub const YTDLP_MAX_BYTES: u64 = if cfg!(target_os = "macos") {
+    160 * 1024 * 1024
+} else {
+    64 * 1024 * 1024
+};
 /// The standalone yt-dlp of this platform in the release and its name in
-/// the components folder.
+/// the components folder. On macOS it is the folder build: the one-file
+/// `yt-dlp_macos` unpacks itself on every start, which made each search
+/// about four seconds slower than on Windows.
 pub const YTDLP_ASSET_NAME: &str = if cfg!(target_os = "macos") {
-    "yt-dlp_macos"
+    "yt-dlp_macos.zip"
 } else {
     "yt-dlp.exe"
 };
 pub const YTDLP_INSTALLED_NAME: &str = if cfg!(target_os = "macos") {
-    "yt-dlp"
+    "yt-dlp_macos"
 } else {
     "yt-dlp.exe"
 };
@@ -366,6 +373,10 @@ pub fn update_ytdlp_component(
         );
     }
     verify_file_sha256(&downloaded, &digest)?;
+    if cfg!(target_os = "macos") {
+        install_component_folder(&downloaded, &components_dir.join(YTDLP_INSTALLED_NAME))?;
+        return Ok(YtdlpUpdate::Updated(latest));
+    }
     let mut header = [0_u8; 4];
     fs::File::open(&downloaded)
         .and_then(|mut file| file.read_exact(&mut header))
@@ -379,6 +390,52 @@ pub fn update_ytdlp_component(
     }
     install_component(&downloaded, &components_dir.join(YTDLP_INSTALLED_NAME))?;
     Ok(YtdlpUpdate::Updated(latest))
+}
+
+/// The macOS folder build: the ZIP is unpacked next to the current folder,
+/// checked and then swapped in, so a failed update keeps the working copy.
+fn install_component_folder(zip: &Path, target: &Path) -> Result<(), String> {
+    let parent = target
+        .parent()
+        .ok_or_else(|| "components folder has no parent".to_owned())?;
+    let name = target
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let fresh = parent.join(format!("{name}.new"));
+    let old = parent.join(format!("{name}.old"));
+    let _ = fs::remove_dir_all(&fresh);
+    let _ = fs::remove_dir_all(&old);
+    let extracted = std::process::Command::new("ditto")
+        .arg("-x")
+        .arg("-k")
+        .arg(zip)
+        .arg(&fresh)
+        .status()
+        .map_err(|error| error.to_string())?;
+    let program = fresh.join(&name);
+    let mut header = [0_u8; 4];
+    let valid = extracted.success()
+        && fresh.join("_internal").is_dir()
+        && fs::File::open(&program)
+            .and_then(|mut file| file.read_exact(&mut header))
+            .is_ok()
+        && is_platform_executable(header);
+    if !valid {
+        let _ = fs::remove_dir_all(&fresh);
+        return Err("downloaded yt-dlp is not a macOS program".to_owned());
+    }
+    make_executable(&program).map_err(|error| error.to_string())?;
+    if target.exists() {
+        fs::rename(target, &old).map_err(|error| error.to_string())?;
+    }
+    if let Err(error) = fs::rename(&fresh, target) {
+        let _ = fs::rename(&old, target);
+        return Err(error.to_string());
+    }
+    // A running search may still use the old copy; it goes next time.
+    let _ = fs::remove_dir_all(&old);
+    Ok(())
 }
 
 /// A Windows executable (`MZ`), or on macOS a Mach-O program (64-bit or
@@ -675,14 +732,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn ytdlp_update_replaces_the_component_only_when_newer_and_verified() {
         let folder = tempfile::tempdir().expect("folder");
         let components = folder.path().join("components");
-        let header: &[u8] = if cfg!(target_os = "macos") {
-            &[0xcf, 0xfa, 0xed, 0xfe]
-        } else {
-            b"MZ"
-        };
+        let header: &[u8] = b"MZ";
         let program = |text: &[u8]| [header, text].concat();
         let exe = program(b" new yt-dlp");
         let (asset, installed) = (super::YTDLP_ASSET_NAME, super::YTDLP_INSTALLED_NAME);
@@ -723,5 +777,70 @@ mod tests {
         let result = update_ytdlp_component(&mut github, "2026.08.19", &components, &mut || {});
         assert!(result.is_err());
         assert_eq!(fs::read(components.join(installed)).expect("kept"), exe);
+    }
+
+    /// The macOS folder build: a ZIP with `yt-dlp_macos` and `_internal`.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_ytdlp_update_swaps_in_the_folder_build() {
+        let folder = tempfile::tempdir().expect("folder");
+        let components = folder.path().join("components");
+        let zip_of = |program: &[u8]| {
+            let source = tempfile::tempdir().expect("source");
+            fs::write(source.path().join("yt-dlp_macos"), program).expect("program");
+            fs::create_dir_all(source.path().join("_internal")).expect("internal");
+            fs::write(source.path().join("_internal/base_library.zip"), b"x").expect("data");
+            let zip = folder.path().join("build.zip");
+            let status = std::process::Command::new("ditto")
+                .args(["-c", "-k"])
+                .arg(source.path())
+                .arg(&zip)
+                .status()
+                .expect("ditto");
+            assert!(status.success());
+            fs::read(&zip).expect("zip")
+        };
+        let new = zip_of(&[0xcf, 0xfa, 0xed, 0xfe, b'n']);
+        let asset = super::YTDLP_ASSET_NAME;
+        let url = &format!("https://github.com/yt-dlp/yt-dlp/releases/download/2026.09.20/{asset}");
+        let mut github = FakeGithub::default();
+        github.json.insert(
+            super::YTDLP_LATEST_RELEASE_API_URL.to_owned(),
+            json!({"tag_name": "2026.09.20", "assets": [
+                {"name": asset, "size": new.len(), "browser_download_url": url,
+                 "digest": format!("sha256:{}", sha(&new))},
+            ]}),
+        );
+        github.files.insert(url.clone(), new);
+        let installed = components.join("yt-dlp_macos");
+        fs::create_dir_all(&installed).expect("old");
+        fs::write(installed.join("yt-dlp_macos"), b"old").expect("old");
+        assert_eq!(
+            update_ytdlp_component(&mut github, "2026.08.19", &components, &mut || {}),
+            Ok(YtdlpUpdate::Updated("2026.09.20".to_owned()))
+        );
+        assert_eq!(
+            fs::read(installed.join("yt-dlp_macos")).expect("new"),
+            [0xcf, 0xfa, 0xed, 0xfe, b'n']
+        );
+        assert!(installed.join("_internal/base_library.zip").is_file());
+        assert!(!components.join("yt-dlp_macos.old").exists());
+
+        // Not a macOS program: the working copy stays.
+        let bad = zip_of(b"text");
+        github.json.insert(
+            super::YTDLP_LATEST_RELEASE_API_URL.to_owned(),
+            json!({"tag_name": "2026.09.21", "assets": [
+                {"name": asset, "size": bad.len(), "browser_download_url": url,
+                 "digest": format!("sha256:{}", sha(&bad))},
+            ]}),
+        );
+        github.files.insert(url.clone(), bad);
+        assert!(update_ytdlp_component(&mut github, "2026.09.20", &components, &mut || {}).is_err());
+        assert_eq!(
+            fs::read(installed.join("yt-dlp_macos")).expect("kept"),
+            [0xcf, 0xfa, 0xed, 0xfe, b'n']
+        );
+        assert!(!components.join("yt-dlp_macos.new").exists());
     }
 }

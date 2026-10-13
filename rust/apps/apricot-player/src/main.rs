@@ -255,11 +255,12 @@ fn run_qualification(arguments: &[std::ffi::OsString]) -> Result<bool, Box<dyn s
         .any(|argument| argument == "--qualification-ytdlp")
     {
         let executable = std::env::current_exe()?;
-        let ytdlp_path = executable
-            .parent()
-            .ok_or("application executable has no parent directory")?
-            .join("components")
-            .join(apricot_platform::executable_name("yt-dlp"));
+        let ytdlp_path = apricot_platform::app_update::preferred_ytdlp_executable(
+            &executable
+                .parent()
+                .ok_or("application executable has no parent directory")?
+                .join("components"),
+        );
         let mut engine = YtDlpYoutubeEngine::new(&ytdlp_path)?;
         let response = engine.execute(YoutubeCommand::Hello)?;
         assert!(matches!(

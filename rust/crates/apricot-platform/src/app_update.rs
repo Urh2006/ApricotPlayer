@@ -297,13 +297,39 @@ pub fn user_components_directory() -> Option<PathBuf> {
 /// `components` folder wins over the bundled one.
 #[must_use]
 pub fn preferred_ytdlp_executable(bundled_components: &Path) -> PathBuf {
-    let file_name = crate::executable_name("yt-dlp");
-    let bundled = bundled_components.join(&file_name);
+    let bundled = bundled_ytdlp(bundled_components);
     user_components_directory()
-        .map(|folder| folder.join(&file_name))
+        .map(|folder| installed_ytdlp(&folder))
         .filter(|path| path.is_file())
         .or_else(|| development_ytdlp(&bundled))
         .unwrap_or(bundled)
+}
+
+/// The yt-dlp program inside a components folder: `yt-dlp.exe` on Windows,
+/// the program of the macOS folder build (`yt-dlp_macos/yt-dlp_macos`).
+fn installed_ytdlp(components: &Path) -> PathBuf {
+    let installed = components.join(apricot_updater::YTDLP_INSTALLED_NAME);
+    if cfg!(target_os = "macos") {
+        installed.join(apricot_updater::YTDLP_INSTALLED_NAME)
+    } else {
+        installed
+    }
+}
+
+/// The bundled yt-dlp. The macOS folder build carries data files, which
+/// code signing accepts only in `Contents/Resources`, so it lives there and
+/// not in `Contents/MacOS/components`.
+fn bundled_ytdlp(bundled_components: &Path) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        let resources = bundled_components
+            .parent()
+            .and_then(Path::parent)
+            .map(|contents| contents.join("Resources"));
+        if let Some(resources) = resources.filter(|folder| folder.is_dir()) {
+            return installed_ytdlp(&resources);
+        }
+    }
+    bundled_components.join(crate::executable_name("yt-dlp"))
 }
 
 /// Development builds outside Windows have no bundled components folder;
@@ -473,5 +499,23 @@ mod tests {
         assert!(suppress_already_open_for_update(folder.path(), 145.0));
         assert!(!suppress_already_open_for_update(folder.path(), 146.0));
         assert!(!folder.path().join("updated-relaunch.json").exists());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn the_bundled_macos_ytdlp_is_the_folder_build_in_resources() {
+        let folder = tempfile::tempdir().expect("folder");
+        let contents = folder.path().join("ApricotPlayer.app/Contents");
+        let components = contents.join("MacOS/components");
+        fs::create_dir_all(&components).expect("components");
+        fs::create_dir_all(contents.join("Resources/yt-dlp_macos")).expect("resources");
+        assert_eq!(
+            super::bundled_ytdlp(&components),
+            contents.join("Resources/yt-dlp_macos/yt-dlp_macos")
+        );
+        assert_eq!(
+            super::installed_ytdlp(folder.path()),
+            folder.path().join("yt-dlp_macos/yt-dlp_macos")
+        );
     }
 }

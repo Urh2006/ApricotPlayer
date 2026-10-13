@@ -8,7 +8,8 @@ pub mod script;
 pub mod version;
 
 pub use flow::{
-    AppUpdateCheck, DownloadedUpdate, GithubReleaseFeed, UpdateTransport, YtdlpUpdate,
+    AppUpdateCheck, DownloadedUpdate, GithubReleaseFeed, UpdateTransport, YTDLP_INSTALLED_NAME,
+    YtdlpUpdate,
     check_app_update, download_app_update, update_ytdlp_component,
 };
 pub use release::{

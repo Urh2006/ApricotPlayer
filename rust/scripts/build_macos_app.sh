@@ -46,7 +46,9 @@ FEATURES=""
 [ "$CHANNEL" = beta ] && FEATURES="apricot-player/release-beta"
 [ "$STABLE" = true ] && FEATURES="${FEATURES:+$FEATURES,}apricot-player/stable-identity"
 YTDLP_VERSION="2026.08.19"
-YTDLP_SHA256="0f192b7ec147ab6288885d6351d9ab67367640029b4377576ef46dd79cf7b202"
+# The folder build of yt-dlp: the one-file yt-dlp_macos unpacks itself on
+# every start, about four seconds per search.
+YTDLP_SHA256="07e54b0865303c864006925913bce2604f8ee8cc6f18699bac9c309f9328a6d8"
 NODE_VERSION="v24.21.0"
 NODE_SHA256="bed7eea5325e1108f32ce5228ddd6a5f0f08a499ee42aa7442aea583702f6057"
 BREW_PREFIX=$(brew --prefix)
@@ -83,8 +85,8 @@ fetch() { # url file sha256
         mv "$CACHE/$2.part" "$CACHE/$2"
     fi
 }
-fetch "https://github.com/yt-dlp/yt-dlp/releases/download/$YTDLP_VERSION/yt-dlp_macos" \
-    "yt-dlp_macos-$YTDLP_VERSION" "$YTDLP_SHA256"
+fetch "https://github.com/yt-dlp/yt-dlp/releases/download/$YTDLP_VERSION/yt-dlp_macos.zip" \
+    "yt-dlp_macos-$YTDLP_VERSION.zip" "$YTDLP_SHA256"
 NODE_ARCHIVE="node-$NODE_VERSION-darwin-arm64.tar.gz"
 fetch "https://nodejs.org/dist/$NODE_VERSION/$NODE_ARCHIVE" "$NODE_ARCHIVE" "$NODE_SHA256"
 
@@ -98,7 +100,9 @@ MACOS="$APP/Contents/MacOS"
 cp target/release/apricot-player "$MACOS/$EXECUTABLE"
 mkdir -p "$MACOS/components" "$MACOS/mpv" "$MACOS/ffmpeg" "$MACOS/node" \
     "$APP/Contents/Resources/assets"
-cp "$CACHE/yt-dlp_macos-$YTDLP_VERSION" "$MACOS/components/yt-dlp"
+# yt-dlp carries data files, so it lives in Resources (see the comment
+# below); the application looks for it there.
+ditto -x -k "$CACHE/yt-dlp_macos-$YTDLP_VERSION.zip" "$APP/Contents/Resources/yt-dlp_macos"
 cp target/release/apricot-youtube-helper "$MACOS/components/apricot-youtube-helper"
 tar -xzf "$CACHE/$NODE_ARCHIVE" -C "$STAGING" "node-$NODE_VERSION-darwin-arm64/bin/node"
 mv "$STAGING/node-$NODE_VERSION-darwin-arm64/bin/node" "$MACOS/node/node"
@@ -154,7 +158,7 @@ cat > "$APP/Contents/Resources/build-info.json" <<EOF
     "mpv": "mpv/mpv",
     "libmpv": "mpv/libmpv.2.dylib",
     "rusty_ytdl_helper": "components/apricot-youtube-helper",
-    "yt_dlp": "components/yt-dlp",
+    "yt_dlp": "../Resources/yt-dlp_macos/yt-dlp_macos",
     "yt_dlp_version": "$YTDLP_VERSION",
     "ffmpeg": "ffmpeg/ffmpeg",
     "node": "node/node",
