@@ -2,9 +2,11 @@
 
 ## Fixed
 - Start the first YouTube item after Spotify background playback by clearing the old PCM pause state in mpv.
+- Stop the owned Spotify decoder/Connect source when its player is actually closed.
 - macOS: use Spotify's timed lyrics and episode transcripts before generic providers.
 - Shuffle stays enabled or disabled across new tracks and Escape until the player area is closed. Spotify loads carry that state and preserve repeat in an open session.
 - macOS: keep accessible player controls beside the previous screen during background playback; register the background play/pause shortcut.
+- macOS: use Command+Shift+Space consistently, migrate the old background shortcut default, retain disabled bindings and resolve custom character hotkeys through the active keyboard layout.
 - macOS: implement Resume last session, Copy link, diagnostics and result-column shortcuts, YouTube metadata hydration and next-stream prefetch.
 - macOS: preserve native editing/submission in Spotify search fields and target the playing item from player-focused actions and context menus.
 - macOS: make Windows-data import validated and transactional, with rollback and protection against old controllers overwriting imported data.

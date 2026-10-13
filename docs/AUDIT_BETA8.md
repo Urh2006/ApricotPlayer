@@ -24,6 +24,10 @@ excluded; fixes require a concrete failing path or an identified missing route.
    positions using the old in-memory state. Playback is stopped and persisted
    before committing; after a successful import, polling, actions and shutdown
    persistence are suppressed until the application exits.
+5. **Disabled shortcuts re-enabled at reload.** Normalization discarded empty
+   bindings and substituted defaults. A saved disabled background shortcut
+   loaded as Ctrl+Space in a failing Windows regression. Explicitly unbound
+   actions now remain unbound on both platforms.
 
 The highest-risk Standards findings concern loss of imported user data. Tests
 inject wrong shapes and a failure after an earlier replacement, and verify the
@@ -52,6 +56,12 @@ original bytes remain intact.
    player model alongside the previous screen, retaining list focus.
 8. **Global play/pause.** The macOS action existed without native global-key
    registration. The adapter now registers the configured background shortcut.
+   Its default is consistently Command+Shift+Space in settings and routing.
+   Canonical beta 6/7 Ctrl+Space values migrate to the new macOS default;
+   those releases did not distinguish a saved default from an identical custom
+   value. Other custom bindings and explicitly unbound actions stay intact.
+   Character hotkeys resolve through the active keyboard layout rather than
+   hardcoded ANSI positions, and registration refreshes when that layout changes.
 9. **Player-focused targets and context menus.** Actions could act on a row
    behind the background player. Playing-item priority now applies to generic
    actions, Spotify Like/Unlike, radio, eligible Hide operations and Shift+F10.
@@ -80,6 +90,11 @@ selectors without making account mutations.
   Shuffle now retains both manual On and Off until the player area is closed.
   Escape and item replacement preserve it. An explicit Shuffle playlist command
   can enable it; stale saved-item metadata cannot override the current choice.
+- Closing a Spotify player destroyed the mpv client without stopping the PCM
+  source. Its decoder could keep writing into a bounded stream without a
+  consumer. Engine teardown now stops its owned source before destroying mpv;
+  explicit Stop and transitions to ordinary media do not stop it twice. A
+  real-libmpv teardown regression observed zero stop calls before the fix.
 - Single-track Spotify load requests discarded shuffle. Requests now carry the
   retained mode and preserve confirmed repeat during an open PCM session;
   remote attachment follows the confirmed Connect state.

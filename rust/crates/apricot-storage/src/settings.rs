@@ -613,7 +613,6 @@ mod tests {
     use super::{SettingsDocument, SettingsLoadError};
 
     #[cfg(target_os = "macos")]
-    #[cfg(target_os = "macos")]
     #[test]
     fn beta7_serialized_default_map_migrates_background_binding() {
         let old: std::collections::BTreeMap<_, _> = apricot_core::action::ACTIONS
@@ -631,6 +630,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn macos_background_default_and_explicit_unbound_are_coherent() {
         let defaults = SettingsDocument::default();
