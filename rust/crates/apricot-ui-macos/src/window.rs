@@ -13,11 +13,11 @@ use apricot_playback::MpvVideoMode;
 use apricot_shell::{FocusKind, KeyRoute, PlayerFocus, ScreenControl, Shell, ShellUi};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSAlert, NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType, NSEvent, NSEventType,
-    NSModalResponseOK, NSOpenPanel, NSResponder, NSScrollView, NSSound, NSTextField, NSView,
-    NSWindow, NSWindowDelegate, NSWindowStyleMask,
+    NSModalResponseOK, NSOpenPanel, NSResponder, NSScrollView, NSSound, NSTextField, NSTextView,
+    NSView, NSWindow, NSWindowDelegate, NSWindowStyleMask,
 };
 use objc2_foundation::{
     NSArray, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSTimer,
@@ -48,6 +48,14 @@ pub struct ControllerIvars {
     scroll: RefCell<Option<Retained<NSScrollView>>>,
     status: RefCell<Option<Retained<NSTextField>>>,
     page: RefCell<Option<PlayerPage>>,
+    background_player: RefCell<Option<crate::background_player::BackgroundPlayer>>,
+    global_hotkey: RefCell<Option<crate::global_hotkey::GlobalHotKey>>,
+    global_chord: RefCell<Option<String>>,
+    pending_global_pause: Cell<bool>,
+    #[cfg(debug_assertions)]
+    audit_mode: Cell<bool>,
+    screen_counts: Cell<(usize, usize)>,
+    screen_order: RefCell<Vec<Retained<NSView>>>,
     poll_timer: RefCell<Option<Retained<NSTimer>>>,
     rss_timer: RefCell<Option<Retained<NSTimer>>>,
     subscription_timer: RefCell<Option<Retained<NSTimer>>>,
@@ -139,6 +147,23 @@ define_class!(
             });
             if let Some(action) = action {
                 self.with_shell(|shell, ui| shell.activate_player_control(ui, action));
+            }
+        }
+
+        #[unsafe(method(backgroundControl:))]
+        fn background_control(&self, sender: Option<&AnyObject>) {
+            let action = sender.and_then(|sender| sender.downcast_ref::<objc2_app_kit::NSControl>()).and_then(|button| {
+                self.ivars().background_player.borrow().as_ref().and_then(|player| player.activation(button.tag()))
+            });
+            if let Some(action) = action {
+                self.with_shell(|shell, ui| shell.activate_player_control(ui, action));
+            }
+        }
+
+        #[unsafe(method(globalPlayPause:))]
+        fn global_play_pause(&self, _sender: Option<&AnyObject>) {
+            if self.with_shell(|shell, ui| shell.activate_player_control(ui, "background_play_pause")).is_none() {
+                self.ivars().pending_global_pause.set(true);
             }
         }
 
@@ -388,6 +413,14 @@ impl MainWindowController {
             scroll: RefCell::new(None),
             status: RefCell::new(None),
             page: RefCell::new(None),
+            background_player: RefCell::new(None),
+            global_hotkey: RefCell::new(None),
+            global_chord: RefCell::new(None),
+            pending_global_pause: Cell::new(false),
+            #[cfg(debug_assertions)]
+            audit_mode: Cell::new(false),
+            screen_counts: Cell::new((1, 0)),
+            screen_order: RefCell::new(Vec::new()),
             poll_timer: RefCell::new(None),
             rss_timer: RefCell::new(None),
             subscription_timer: RefCell::new(None),
@@ -516,6 +549,24 @@ impl MainWindowController {
             return FocusKind::Other;
         };
         let responder: &AnyObject = responder.as_ref();
+        if responder
+            .downcast_ref::<NSTextField>()
+            .is_some_and(NSTextField::isEditable)
+            || responder
+                .downcast_ref::<NSTextView>()
+                .is_some_and(NSTextView::isEditable)
+        {
+            return FocusKind::TextEntry;
+        }
+        if self
+            .ivars()
+            .background_player
+            .borrow()
+            .as_ref()
+            .is_some_and(|player| player.control_id(responder).is_some())
+        {
+            return FocusKind::PlayerButton;
+        }
         if let Some(list) = self.list()
             && std::ptr::eq(responder, std::ptr::from_ref::<AnyObject>(list.as_ref()))
         {
@@ -560,7 +611,9 @@ impl MainWindowController {
 
     /// Saves the player position before the application ends.
     pub fn shutdown(&self) {
+        self.ivars().global_hotkey.borrow_mut().take();
         self.with_shell(|shell, ui| shell.shutdown(ui));
+        self.ivars().global_hotkey.borrow_mut().take();
     }
 
     /// The id of the screen field that sent an action.
@@ -592,7 +645,13 @@ impl MainWindowController {
         let mut shell = self.ivars().shell.try_borrow_mut().ok()?;
         let shell = shell.as_mut()?;
         let mut ui = MacUi { controller: self };
-        Some(action(shell, &mut ui))
+        let result = action(shell, &mut ui);
+        if self.ivars().pending_global_pause.replace(false) {
+            shell.activate_player_control(&mut ui, "background_play_pause");
+        }
+        self.sync_background_player(shell);
+        self.sync_global_hotkey(shell);
+        Some(result)
     }
 
     /// Windows `run_win32`: creates the window and its controls and shows
@@ -689,11 +748,12 @@ impl MainWindowController {
         *self.ivars().scroll.borrow_mut() = Some(scroll);
         *self.ivars().status.borrow_mut() = Some(status);
         *self.ivars().page.borrow_mut() = Some(page);
+        self.install_background_player(&content);
         *self.ivars().window.borrow_mut() = Some(window.clone());
 
         // Python `setup_taskbar_icon`: the item stays for the whole session.
         *self.ivars().status_item.borrow_mut() = Some(crate::status_item::install(self));
-        self.with_shell(|shell, ui| shell.start(ui));
+        self.start_shell();
         if !start_hidden {
             window.makeKeyAndOrderFront(None);
             window.makeFirstResponder(Some(&list));
@@ -704,6 +764,29 @@ impl MainWindowController {
         }
         // Windows `process_pending_activations` after the window is shown.
         self.with_shell(|shell, ui| shell.process_activations(ui));
+    }
+
+    fn start_shell(&self) {
+        self.with_shell(|shell, ui| {
+            // The native probe must not discover or auto-connect accounts
+            // from the production profile, nor schedule automatic updates.
+            #[cfg(debug_assertions)]
+            if self.ivars().audit_mode.get() {
+                shell.show_main_menu(ui);
+                return;
+            }
+            shell.start(ui);
+        });
+    }
+
+    fn install_background_player(&self, content: &NSView) {
+        let background = crate::background_player::BackgroundPlayer::new(
+            self.mtm(),
+            self.as_ref(),
+            sel!(backgroundControl:),
+        );
+        content.addSubview(background.view());
+        *self.ivars().background_player.borrow_mut() = Some(background);
     }
 
     /// A file opened from Finder or a second launch (Windows `WM_COPYDATA`).
@@ -767,7 +850,58 @@ impl MainWindowController {
 
     /// Windows `layout_controls_state` for a list screen: the buttons above
     /// the status line, the list above them.
+    fn sync_global_hotkey(&self, shell: &Shell) {
+        let configured = shell
+            .application
+            .settings()
+            .keyboard_shortcuts
+            .get("background_play_pause")
+            .cloned()
+            .unwrap_or_default();
+        if self.ivars().global_chord.borrow().as_ref() == Some(&configured) {
+            return;
+        }
+        self.ivars().global_hotkey.borrow_mut().take();
+        *self.ivars().global_chord.borrow_mut() = Some(configured.clone());
+        if configured.trim().is_empty() {
+            return;
+        }
+        let Some(mut chord) = apricot_core::shortcut::ShortcutChord::parse(&configured) else {
+            return;
+        };
+        if configured == "Ctrl+Space" {
+            chord.shift = true;
+        }
+        match crate::global_hotkey::GlobalHotKey::install(self.as_ref(), chord) {
+            Ok(registration) => *self.ivars().global_hotkey.borrow_mut() = Some(registration),
+            Err(error) => eprintln!("{error}; in-app play/pause remains available"),
+        }
+    }
+
+    fn sync_background_player(&self, shell: &Shell) {
+        let model = (shell.view() != apricot_shell::View::Player)
+            .then(|| shell.application.background_player_model())
+            .flatten();
+        if let Some(background) = self.ivars().background_player.borrow_mut().as_mut() {
+            background.sync(model);
+        }
+        if shell.view() != apricot_shell::View::Player {
+            let (buttons, fields) = self.ivars().screen_counts.get();
+            self.layout_list_screen(buttons, fields);
+            let order = self.ivars().screen_order.borrow();
+            let background = self.ivars().background_player.borrow();
+            let mut views: Vec<&NSView> = order.iter().map(|view| &**view).collect();
+            if let Some(background) = background.as_ref() {
+                views.extend(background.controls());
+            }
+            if !views.is_empty() {
+                controls::set_tab_order(&views);
+            }
+        }
+    }
+
     fn layout_list_screen(&self, button_count: usize, field_count: usize) {
+        self.ivars().screen_counts.set((button_count, field_count));
         let (Some(window), Some(scroll)) = (self.window(), self.ivars().scroll.borrow().clone())
         else {
             return;
@@ -784,7 +918,20 @@ impl MainWindowController {
                 NSSize::new(width, buttons_height),
             ));
         }
-        let list_bottom = MARGIN * 3.0 + STATUS_HEIGHT + buttons_height;
+        let background_height = self
+            .ivars()
+            .background_player
+            .borrow()
+            .as_ref()
+            .map_or(0.0, |background| background.height(width));
+        if let Some(background) = self.ivars().background_player.borrow_mut().as_mut() {
+            background.view().setFrame(NSRect::new(
+                NSPoint::new(MARGIN, MARGIN * 3.0 + STATUS_HEIGHT + buttons_height),
+                NSSize::new(width, background_height),
+            ));
+            background.layout();
+        }
+        let list_bottom = MARGIN * 3.0 + STATUS_HEIGHT + buttons_height + background_height;
         let fields_height = crate::screen_fields::ScreenFields::height_for(field_count);
         if let Some(fields) = self.ivars().fields.borrow().as_ref() {
             fields.view().setFrame(NSRect::new(
@@ -1918,6 +2065,8 @@ impl ShellUi for MacUi<'_> {
                     }
                 })
                 .collect();
+            *self.controller.ivars().screen_order.borrow_mut() =
+                views.iter().map(|view| (*view).retain()).collect();
             controls::set_tab_order(&views);
         }
         if screen.focus_list
@@ -2620,7 +2769,13 @@ impl ShellUi for MacUi<'_> {
     fn focused_player_control(&self) -> Option<&'static str> {
         let responder = self.controller.window()?.firstResponder()?;
         let page = self.controller.ivars().page.borrow();
-        page.as_ref()?.control_id(responder.as_ref())
+        self.controller
+            .ivars()
+            .background_player
+            .borrow()
+            .as_ref()
+            .and_then(|background| background.control_id(responder.as_ref()))
+            .or_else(|| page.as_ref()?.control_id(responder.as_ref()))
     }
 
     fn focus_primary_control(&mut self) {
@@ -2824,4 +2979,156 @@ impl MainWindow {
         unsafe { window.setReleasedWhenClosed(false) };
         window
     }
+}
+
+/// Isolated native probe. The caller supplies an Application with scratch
+/// settings and no credentials; this bypasses the production single-instance
+/// and activation listener entirely.
+///
+/// # Errors
+/// Returns an error when the probe cannot create or find its native controls.
+///
+/// # Panics
+/// Panics when a required background-player regression check fails.
+#[cfg(debug_assertions)]
+#[allow(clippy::too_many_lines)] // One ordered native regression scenario.
+pub fn audit_background(application: Application, media: &std::path::Path) -> Result<(), String> {
+    use objc2_app_kit::{NSAccessibility, NSApplicationActivationPolicy, NSEventMask};
+    use objc2_foundation::{NSDate, NSDefaultRunLoopMode};
+    let mtm = MainThreadMarker::new().ok_or("probe must run on main thread")?;
+    let app = NSApplication::sharedApplication(mtm);
+    app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+    app.finishLaunching();
+    let controller = MainWindowController::new(mtm, application);
+    controller.ivars().audit_mode.set(true);
+    controller.show("ApricotPlayer isolated background probe", false);
+    controller.with_shell(|shell, ui| shell.play_local_file(ui, media));
+    let pump = || {
+        if let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(
+            NSEventMask::Any,
+            Some(&NSDate::dateWithTimeIntervalSinceNow(0.5)),
+            unsafe { NSDefaultRunLoopMode },
+            true,
+        ) {
+            app.sendEvent(&event);
+        }
+        controller.with_shell(|shell, ui| shell.poll_playback(ui));
+    };
+    for _ in 0..4 {
+        pump();
+    }
+    let playing = controller.with_shell(|shell, _| shell.application.player_session().phase());
+    println!("native-probe phase before Escape={playing:?}");
+    controller.run_action("player_back");
+    let list = controller.list().ok_or("missing list")?;
+    let window = controller.window().ok_or("missing window")?;
+    let responder = window.firstResponder().ok_or("missing focus")?;
+    assert!(std::ptr::eq(
+        responder.as_ref(),
+        std::ptr::from_ref::<NSResponder>(&list)
+    ));
+    {
+        let background = controller.ivars().background_player.borrow();
+        let background = background.as_ref().ok_or("missing background player")?;
+        assert!(
+            !background.view().isHidden(),
+            "Escape removed the background controls"
+        );
+        let buttons = background.controls();
+        assert_eq!(buttons.len(), 13);
+        println!(
+            "native-probe Escape: list focused, background controls={} visible",
+            buttons.len()
+        );
+        for view in buttons {
+            let button = view
+                .downcast_ref::<crate::controls::Button>()
+                .ok_or("not a native button")?;
+            println!(
+                "native-probe AX role={:?} title={}",
+                button.accessibilityRole(),
+                button.title()
+            );
+            assert!(!button.title().is_empty());
+            assert_eq!(button.accessibilityRole().unwrap().to_string(), "AXButton");
+            window.makeFirstResponder(Some(button));
+            let ui = MacUi {
+                controller: &controller,
+            };
+            assert!(
+                ui.focused_player_control().is_some(),
+                "background button must identify playing source"
+            );
+            assert_eq!(controller.focus_kind(), FocusKind::PlayerButton);
+        }
+    }
+    window.makeFirstResponder(Some(&list));
+    let field = NSTextField::initWithFrame(NSTextField::alloc(mtm), NSRect::ZERO);
+    field.setEditable(true);
+    window.contentView().unwrap().addSubview(&field);
+    window.makeFirstResponder(Some(&field));
+    assert_eq!(controller.focus_kind(), FocusKind::TextEntry);
+    field.removeFromSuperview();
+    window.makeFirstResponder(Some(&list));
+    controller.run_action("background_play_pause");
+    for _ in 0..2 {
+        pump();
+    }
+    let paused = controller.with_shell(|shell, _| shell.application.player_session().phase());
+    println!("native-probe background pause={paused:?}");
+    assert!(matches!(paused, Some(apricot_app::PlaybackPhase::Paused)));
+    let responder = window.firstResponder().ok_or("missing focus")?;
+    assert!(std::ptr::eq(
+        responder.as_ref(),
+        std::ptr::from_ref::<NSResponder>(&list)
+    ));
+    if std::env::var_os("APRICOT_AUDIT_GLOBAL_WAIT").is_some() {
+        controller.run_action("background_play_pause");
+        for _ in 0..2 {
+            pump();
+        }
+        assert!(
+            controller.ivars().global_hotkey.borrow().is_some(),
+            "global hotkey must register"
+        );
+        let configured = controller.ivars().global_chord.borrow().clone().unwrap();
+        let mut chord = apricot_core::shortcut::ShortcutChord::parse(&configured).unwrap();
+        if configured == "Ctrl+Space" {
+            chord.shift = true;
+        }
+        println!(
+            "native-probe WAIT_GLOBAL: configured={configured} effective={:?} carbon={:?}; press Command+Shift+Space from Finder",
+            chord,
+            crate::global_hotkey::carbon_chord(chord)
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+        while std::time::Instant::now() < deadline {
+            pump();
+            if controller.with_shell(|shell, _| shell.application.player_session().phase())
+                == Some(apricot_app::PlaybackPhase::Paused)
+            {
+                println!("native-probe GLOBAL_PASS: inactive-app native hotkey paused playback");
+                break;
+            }
+        }
+        assert_eq!(
+            controller.with_shell(|shell, _| shell.application.player_session().phase()),
+            Some(apricot_app::PlaybackPhase::Paused)
+        );
+    }
+    controller.run_action("close_player");
+    assert!(
+        controller
+            .ivars()
+            .background_player
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .view()
+            .isHidden()
+    );
+    controller.shutdown();
+    window.orderOut(None);
+    println!("native-probe PASS: Escape, AX buttons, pause, focus preservation, Close");
+    Ok(())
 }
