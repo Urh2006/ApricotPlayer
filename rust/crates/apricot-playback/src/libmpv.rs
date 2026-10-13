@@ -2412,7 +2412,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires APRICOT_TEST_MPV and APRICOT_TEST_FFMPEG"]
-    fn real_libmpv_starting_paused_reports_the_pause_before_started() {
+    fn real_libmpv_starting_paused_keeps_pause_without_progress() {
         use crate::{PlaybackEngine, PlaybackEvent};
         let folder = tempfile::tempdir().expect("fixture folder");
         let item = short_fixture(folder.path());
@@ -2423,10 +2423,68 @@ mod tests {
                 start_position_seconds: None,
             })
             .expect("load fixture");
-        let events = collect_events(&mut engine, std::time::Duration::from_millis(1500));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+        let mut events = Vec::new();
+        while std::time::Instant::now() < deadline {
+            // SAFETY: the engine owns a live handle; both output buffers use
+            // the exact types requested by libmpv's property API.
+            let (paused, position) = unsafe {
+                let mut position = 0.0_f64;
+                let status = (engine.api.get_property)(
+                    engine.handle(),
+                    c"time-pos".as_ptr(),
+                    super::MPV_FORMAT_DOUBLE,
+                    (&raw mut position).cast(),
+                );
+                (
+                    engine.api.property_flag(engine.handle(), "pause"),
+                    (status >= 0).then_some(position),
+                )
+            };
+            assert_eq!(
+                paused,
+                Some(true),
+                "mpv must stay paused throughout startup"
+            );
+            if let Some(position) = position {
+                assert!(
+                    position.abs() <= 0.01,
+                    "paused media advanced to {position}"
+                );
+            }
+            match engine.poll_event().expect("poll real library") {
+                Some(PlaybackEvent::Position { elapsed, .. }) => assert!(
+                    elapsed.abs() <= 0.01,
+                    "reported progress while paused: {elapsed}"
+                ),
+                Some(PlaybackEvent::MediaInfo(_) | PlaybackEvent::AudioDevices(_)) => {}
+                Some(event) => events.push(event),
+                None => std::thread::sleep(std::time::Duration::from_millis(5)),
+            }
+        }
+        // FILE_LOADED and the initial pause observation can arrive in either
+        // order. The contract is one startup, a paused engine, and no playback.
         assert_eq!(
-            events,
-            vec![PlaybackEvent::Paused(true), PlaybackEvent::Started]
+            events
+                .iter()
+                .filter(|event| **event == PlaybackEvent::Started)
+                .count(),
+            1,
+            "{events:?}"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| **event == PlaybackEvent::Paused(true))
+                .count(),
+            1,
+            "{events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| matches!(event, PlaybackEvent::Started | PlaybackEvent::Paused(true))),
+            "unexpected transport event: {events:?}"
         );
     }
 
