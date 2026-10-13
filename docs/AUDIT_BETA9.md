@@ -31,6 +31,11 @@ names. CI exercises the archived application and bundled libmpv, not merely the
 unpackaged build. The package's actual OS requirement is derived from bundled
 Mach-O load commands rather than inferred from the host OS or SDK.
 
+The beta 9 Actions run stayed queued without a runner and was cancelled after
+the user explicitly chose a local Mac build instead. The new workflow steps
+have not completed on Actions; final package qualification runs locally on the
+Mac. The workflow capability is prepared, not certified by this release.
+
 ## Limits
 
 No real profile or installation is changed by the CI qualification. This review
