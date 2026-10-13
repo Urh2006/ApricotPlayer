@@ -615,6 +615,16 @@ mod tests {
     }
 
     #[test]
+    fn stored_disabled_shortcut_survives_settings_reload() {
+        let document = SettingsDocument::from_value_with_defaults(
+            &json!({"language": "en", "keyboard_shortcuts": {"background_play_pause": ""}}),
+            SettingsDocument::default(),
+        )
+        .expect("load saved disabled shortcut");
+        assert_eq!(document.keyboard_shortcuts["background_play_pause"], "");
+    }
+
+    #[test]
     fn unknown_python_settings_survive_normalized_round_trip() {
         let input = json!({
             "language": "sl",
