@@ -58,7 +58,7 @@ fn with_shortcut(
         label.push_str(
             shortcuts
                 .get(action_id)
-                .map_or(action.default_windows_shortcut, String::as_str),
+                .map_or(action.default_shortcut(), String::as_str),
         );
     }
     label

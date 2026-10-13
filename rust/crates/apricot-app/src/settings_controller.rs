@@ -132,7 +132,7 @@ impl SettingsController {
             .ok_or_else(|| SettingsControllerError::UnknownShortcutAction(action_id.to_owned()))?;
         let shortcut = shortcut.trim();
         let shortcut = if shortcut.is_empty() {
-            action.default_windows_shortcut
+            action.default_shortcut()
         } else {
             shortcut
         };

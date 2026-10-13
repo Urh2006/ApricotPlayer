@@ -33,6 +33,18 @@ pub struct ActionDefinition {
     pub repeat: RepeatPolicy,
 }
 
+impl ActionDefinition {
+    /// The platform's default logical chord. Explicit custom values remain
+    /// separate; macOS stores Command with the logical Ctrl name.
+    pub fn default_shortcut(&self) -> &'static str {
+        if cfg!(target_os = "macos") && self.id.as_str() == "background_play_pause" {
+            "Ctrl+Shift+Space"
+        } else {
+            self.default_windows_shortcut
+        }
+    }
+}
+
 const GLOBAL: &[ActionScope] = &[ActionScope::Global];
 const LIST: &[ActionScope] = &[ActionScope::List];
 const PLAYER: &[ActionScope] = &[ActionScope::Player];
