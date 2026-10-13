@@ -456,7 +456,7 @@ fn validate_portable_layout(package: &PackageNames, entries: &[ZipEntry]) -> Res
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::{fs, io::Write};
 
     use super::{
