@@ -1061,8 +1061,12 @@ obvestila, odpiranje iz Finderja, zagon ob prijavi, privzeti predvajalnik).
   različica in dnevnik `updater.log`.
 - Posodabljalnik pozna paket za Mac (`ApricotPlayer2Beta-macos-arm64.zip`
   z enim paketom `.app`, brez namestitvenega programa) in yt-dlp za Mac
-  (`yt-dlp_macos` iz uradne izdaje, preverjen SHA-256 in Mach-O glava,
-  shranjen kot `components/yt-dlp` z dovoljenjem za zagon).
+  (od bete 7 `yt-dlp_macos.zip` iz uradne izdaje, razpakirana različica,
+  preverjen SHA-256, razširjena z `ditto` v `components/yt-dlp_macos` in
+  preverjena Mach-O glava; v paketu je v `Contents/Resources/yt-dlp_macos`,
+  ker podpis v `Contents/MacOS` ne sprejme podatkovnih datotek. Enodatotečni
+  `yt-dlp_macos` se je ob vsakem zagonu razpakiral, kar je iskanje
+  podaljšalo za okoli 4 sekunde).
 - Namestitev: skripta `/bin/sh` počaka, da se program zapre, znova preveri
   SHA-256, razširi zip z `ditto`, preveri podpis novega paketa, odmakne
   stari paket, postavi novega in ga zažene z `--updated-relaunch`; ob

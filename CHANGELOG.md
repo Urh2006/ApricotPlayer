@@ -1,3 +1,13 @@
+# v2.0.0-beta.7 - macOS fixes
+
+## Fixed
+- macOS: a held Command shortcut for pitch or speed stops when the key is released.
+- macOS: YouTube search is about four seconds faster; the bundled yt-dlp and its updates use the unpacked yt-dlp_macos build.
+
+## Known issues
+- Spotify login on macOS: Safari may warn that the connection to the app is not secure; choose Visit Website.
+- Spotify Liked songs: smart shuffle does not turn on, and a second open from Library may not start playback.
+
 # v2.0.0-beta.6 - ApricotPlayer for macOS
 
 ## Added
