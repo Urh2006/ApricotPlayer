@@ -34,12 +34,14 @@ if [ "$STABLE" = true ]; then
     EXECUTABLE="ApricotPlayer"
     BUNDLE_ID="com.apricotplayer.ApricotPlayer"
     ASSET="ApricotPlayer-macos-arm64"
+    DMG_ASSET="ApricotPlayer-macOS-arm64"
     APP_DATA="ApricotPlayer"
 else
     PRODUCT="ApricotPlayer 2 Beta"
     EXECUTABLE="ApricotPlayer2Beta"
     BUNDLE_ID="com.apricotplayer.ApricotPlayer2Beta"
     ASSET="ApricotPlayer2Beta-macos-arm64"
+    DMG_ASSET="$ASSET"
     APP_DATA="ApricotPlayer2Beta"
 fi
 FEATURES=""
@@ -182,9 +184,9 @@ codesign --verify --deep --strict "$APP"
 ditto -c -k --keepParent "$APP" "$OUTPUT/$ASSET.zip"
 ln -s /Applications "$STAGING/Applications"
 hdiutil create -quiet -volname "$PRODUCT" -srcfolder "$STAGING" -ov -format UDZO \
-    "$OUTPUT/$ASSET.dmg"
+    "$OUTPUT/$DMG_ASSET.dmg"
 rm "$STAGING/Applications"
 mv "$APP" "$OUTPUT/"
 rmdir "$STAGING"
-(cd "$OUTPUT" && shasum -a 256 $ASSET.dmg $ASSET.zip > SHA256SUMS.txt)
+(cd "$OUTPUT" && shasum -a 256 "$DMG_ASSET.dmg" "$ASSET.zip" > SHA256SUMS.txt)
 echo "MACOS_APP_READY=$OUTPUT"

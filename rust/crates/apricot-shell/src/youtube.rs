@@ -191,6 +191,32 @@ mod parity_tests {
         assert!(ui.row_updates[0].1.contains(&count), "{:?}", ui.row_updates);
         assert_eq!(ui.selected, Some(1));
     }
+
+    #[test]
+    fn metadata_batch_prioritizes_selected_result_beyond_the_first_batch() {
+        let mut shell = shell();
+        let mut ui = Ui::default();
+        let work = shell
+            .application
+            .begin_youtube_search("test", apricot_media::YoutubeSearchKind::Video)
+            .unwrap();
+        shell
+            .application
+            .apply_search_results(work.generation, (0..10).map(video).collect(), None);
+        shell.view = View::Results;
+        ui.selected = Some(8);
+        shell.schedule_metadata(&mut ui);
+        let pending = shell
+            .youtube
+            .metadata
+            .as_ref()
+            .expect("metadata batch scheduled");
+        assert_eq!(pending.urls.len(), 5);
+        assert_eq!(pending.urls[0], video(8).url.unwrap().to_string());
+        let unique: HashSet<_> = pending.urls.iter().collect();
+        assert_eq!(unique.len(), pending.urls.len());
+        assert_eq!(ui.selected, Some(8));
+    }
 }
 
 /// Windows `YOUTUBE_BACKEND`.
@@ -498,14 +524,22 @@ impl Shell {
             .trim()
             .to_owned();
         let api = !api_key.is_empty() && !self.youtube.metadata_api_disabled.contains(&scope);
-        let candidates: Vec<_> = self
-            .metadata_items(scope)
-            .iter()
+        let items = self.metadata_items(scope);
+        let selected = ui.selected_row().and_then(|index| items.get(index));
+        let mut seen = HashSet::new();
+        let candidates: Vec<_> = selected
+            .into_iter()
+            .chain(items.iter())
             .filter(|item| item_needs_metadata(item))
             .filter(|item| {
                 item.url
                     .as_ref()
                     .is_some_and(|url| !self.youtube.metadata_attempted.contains(url.as_str()))
+            })
+            .filter(|item| {
+                item.url
+                    .as_ref()
+                    .is_some_and(|url| seen.insert(url.as_str()))
             })
             .take(if api { 50 } else { 5 })
             .cloned()

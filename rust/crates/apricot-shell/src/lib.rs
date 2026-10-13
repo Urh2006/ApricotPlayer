@@ -319,6 +319,7 @@ impl Shell {
     }
 
     /// Windows `activate_main_menu_selection` for the row at `index`.
+    #[allow(clippy::too_many_lines)] // One branch per main-menu destination.
     pub fn activate_main_menu_row(&mut self, ui: &mut dyn ShellUi, index: usize) {
         if self.windows_import_committed {
             return;
