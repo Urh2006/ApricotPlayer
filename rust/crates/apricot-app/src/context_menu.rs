@@ -227,7 +227,7 @@ pub(crate) fn shortcut_for(settings: &SettingsDocument, action_id: &str) -> Stri
         .get(action_id)
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
-        .or_else(|| action_by_id(action_id).map(|action| action.default_windows_shortcut))
+        .or_else(|| action_by_id(action_id).map(apricot_core::ActionDefinition::default_shortcut))
         .unwrap_or_default()
         .to_owned()
 }

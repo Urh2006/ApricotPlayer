@@ -81,7 +81,7 @@ impl MainMenuModel {
                 label.push_str(&apricot_core::shortcut::display_shortcut(
                     shortcuts
                         .get(shortcut_action)
-                        .map_or(action.default_windows_shortcut, String::as_str),
+                        .map_or(action.default_shortcut(), String::as_str),
                 ));
             }
             items.push(MainMenuItem {
@@ -96,7 +96,7 @@ impl MainMenuModel {
             settings_label.push_str(&apricot_core::shortcut::display_shortcut(
                 shortcuts
                     .get("open_settings")
-                    .map_or(action.default_windows_shortcut, String::as_str),
+                    .map_or(action.default_shortcut(), String::as_str),
             ));
         }
         items.push(MainMenuItem {

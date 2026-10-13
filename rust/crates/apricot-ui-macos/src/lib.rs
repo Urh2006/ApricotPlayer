@@ -40,6 +40,8 @@ mod equalizer;
 mod form_controls;
 #[cfg(target_os = "macos")]
 mod global_hotkey;
+#[cfg(target_os = "macos")]
+mod keyboard_layout;
 pub mod keys;
 #[cfg(target_os = "macos")]
 mod language;

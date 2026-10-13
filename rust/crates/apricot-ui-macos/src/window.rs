@@ -51,9 +51,12 @@ pub struct ControllerIvars {
     background_player: RefCell<Option<crate::background_player::BackgroundPlayer>>,
     global_hotkey: RefCell<Option<crate::global_hotkey::GlobalHotKey>>,
     global_chord: RefCell<Option<String>>,
+    layout_observer: Cell<bool>,
     pending_global_pause: Cell<bool>,
     #[cfg(debug_assertions)]
     audit_mode: Cell<bool>,
+    #[cfg(debug_assertions)]
+    audit_hotkey_actions: Cell<usize>,
     screen_counts: Cell<(usize, usize)>,
     screen_order: RefCell<Vec<Retained<NSView>>>,
     poll_timer: RefCell<Option<Retained<NSTimer>>>,
@@ -160,8 +163,16 @@ define_class!(
             }
         }
 
+        #[unsafe(method(keyboardLayoutChanged:))]
+        fn keyboard_layout_changed(&self, _notification: &NSNotification) {
+            self.ivars().global_chord.borrow_mut().take();
+            self.with_shell(|_, _| ());
+        }
+
         #[unsafe(method(globalPlayPause:))]
         fn global_play_pause(&self, _sender: Option<&AnyObject>) {
+            #[cfg(debug_assertions)]
+            if self.ivars().audit_mode.get() { self.ivars().audit_hotkey_actions.set(self.ivars().audit_hotkey_actions.get() + 1); }
             if self.with_shell(|shell, ui| shell.activate_player_control(ui, "background_play_pause")).is_none() {
                 self.ivars().pending_global_pause.set(true);
             }
@@ -416,9 +427,12 @@ impl MainWindowController {
             background_player: RefCell::new(None),
             global_hotkey: RefCell::new(None),
             global_chord: RefCell::new(None),
+            layout_observer: Cell::new(false),
             pending_global_pause: Cell::new(false),
             #[cfg(debug_assertions)]
             audit_mode: Cell::new(false),
+            #[cfg(debug_assertions)]
+            audit_hotkey_actions: Cell::new(0),
             screen_counts: Cell::new((1, 0)),
             screen_order: RefCell::new(Vec::new()),
             poll_timer: RefCell::new(None),
@@ -611,6 +625,17 @@ impl MainWindowController {
 
     /// Saves the player position before the application ends.
     pub fn shutdown(&self) {
+        if self.ivars().layout_observer.replace(false) {
+            // SAFETY: unregister the exact notification installed by this controller.
+            unsafe {
+                objc2_foundation::NSDistributedNotificationCenter::defaultCenter()
+                    .removeObserver_name_object(
+                        self.as_ref(),
+                        Some(crate::keyboard_layout::notification_name()),
+                        None,
+                    );
+            }
+        }
         self.ivars().global_hotkey.borrow_mut().take();
         self.with_shell(|shell, ui| shell.shutdown(ui));
         self.ivars().global_hotkey.borrow_mut().take();
@@ -753,6 +778,7 @@ impl MainWindowController {
 
         // Python `setup_taskbar_icon`: the item stays for the whole session.
         *self.ivars().status_item.borrow_mut() = Some(crate::status_item::install(self));
+        self.install_layout_observer();
         self.start_shell();
         if !start_hidden {
             window.makeKeyAndOrderFront(None);
@@ -764,6 +790,23 @@ impl MainWindowController {
         }
         // Windows `process_pending_activations` after the window is shown.
         self.with_shell(|shell, ui| shell.process_activations(ui));
+    }
+
+    fn install_layout_observer(&self) {
+        if self.ivars().layout_observer.replace(true) {
+            return;
+        }
+        // SAFETY: the selector exists on this controller; notifications arrive
+        // on its run loop, and shutdown removes the observer before destruction.
+        unsafe {
+            objc2_foundation::NSDistributedNotificationCenter::defaultCenter()
+                .addObserver_selector_name_object(
+                    self.as_ref(),
+                    sel!(keyboardLayoutChanged:),
+                    Some(crate::keyboard_layout::notification_name()),
+                    None,
+                );
+        }
     }
 
     fn start_shell(&self) {
@@ -866,12 +909,9 @@ impl MainWindowController {
         if configured.trim().is_empty() {
             return;
         }
-        let Some(mut chord) = apricot_core::shortcut::ShortcutChord::parse(&configured) else {
+        let Some(chord) = apricot_core::shortcut::ShortcutChord::parse(&configured) else {
             return;
         };
-        if configured == "Ctrl+Space" {
-            chord.shift = true;
-        }
         match crate::global_hotkey::GlobalHotKey::install(self.as_ref(), chord) {
             Ok(registration) => *self.ivars().global_hotkey.borrow_mut() = Some(registration),
             Err(error) => eprintln!("{error}; in-app play/pause remains available"),
@@ -3017,6 +3057,42 @@ pub fn audit_background(application: Application, media: &std::path::Path) -> Re
     for _ in 0..4 {
         pump();
     }
+    if std::env::var_os("APRICOT_AUDIT_REQUIRE_HOTKEY").is_some() {
+        assert!(
+            controller.ivars().global_hotkey.borrow().is_some(),
+            "configured custom chord must own a native registration"
+        );
+        let configured = controller.ivars().global_chord.borrow().clone().unwrap();
+        println!("native-probe configured custom hotkey {configured} registration owned");
+    }
+    if std::env::var_os("APRICOT_AUDIT_REPEAT_HOTKEY").is_some() {
+        crate::global_hotkey::audit_event(5)?;
+        crate::global_hotkey::audit_event(5)?;
+        for _ in 0..3 {
+            pump();
+        }
+        assert_eq!(
+            controller.ivars().audit_hotkey_actions.get(),
+            1,
+            "repeated pressed events must activate once until release"
+        );
+        assert_eq!(
+            controller.with_shell(|shell, _| shell.application.player_session().phase()),
+            Some(apricot_app::PlaybackPhase::Paused)
+        );
+        crate::global_hotkey::audit_event(6)?;
+        crate::global_hotkey::audit_event(5)?;
+        for _ in 0..3 {
+            pump();
+        }
+        assert_eq!(controller.ivars().audit_hotkey_actions.get(), 2);
+        assert_eq!(
+            controller.with_shell(|shell, _| shell.application.player_session().phase()),
+            Some(apricot_app::PlaybackPhase::Playing)
+        );
+        crate::global_hotkey::audit_event(6)?;
+        println!("native-probe PASS: hotkey press/release edges suppress repeats");
+    }
     let playing = controller.with_shell(|shell, _| shell.application.player_session().phase());
     println!("native-probe phase before Escape={playing:?}");
     controller.run_action("player_back");
@@ -3092,10 +3168,7 @@ pub fn audit_background(application: Application, media: &std::path::Path) -> Re
             "global hotkey must register"
         );
         let configured = controller.ivars().global_chord.borrow().clone().unwrap();
-        let mut chord = apricot_core::shortcut::ShortcutChord::parse(&configured).unwrap();
-        if configured == "Ctrl+Space" {
-            chord.shift = true;
-        }
+        let chord = apricot_core::shortcut::ShortcutChord::parse(&configured).unwrap();
         println!(
             "native-probe WAIT_GLOBAL: configured={configured} effective={:?} carbon={:?}; press Command+Shift+Space from Finder",
             chord,

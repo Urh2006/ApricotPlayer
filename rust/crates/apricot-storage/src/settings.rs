@@ -404,7 +404,7 @@ fn default_keyboard_shortcuts() -> BTreeMap<String, String> {
         .map(|action| {
             (
                 action.id.as_str().to_owned(),
-                action.default_windows_shortcut.to_owned(),
+                action.default_shortcut().to_owned(),
             )
         })
         .collect()
@@ -416,9 +416,19 @@ fn normalize_shortcuts(input: &BTreeMap<String, String>) -> BTreeMap<String, Str
         .map(|action| {
             let value = input
                 .get(action.id.as_str())
-                .map(|value| value.trim())
-                .filter(|value| !value.is_empty())
-                .unwrap_or(action.default_windows_shortcut);
+                .map_or(action.default_shortcut(), |value| value.trim());
+            // Beta6/7 serialized the Windows default in full maps. It cannot
+            // be distinguished from an explicit identical override, and
+            // Command+Space is reserved by Spotlight. Normalize this one
+            // canonical legacy binding consistently for editor and routing.
+            let value = if cfg!(target_os = "macos")
+                && action.id.as_str() == "background_play_pause"
+                && value == "Ctrl+Space"
+            {
+                action.default_shortcut()
+            } else {
+                value
+            };
             (action.id.as_str().to_owned(), value.to_owned())
         })
         .collect()
@@ -601,6 +611,38 @@ mod tests {
     use serde_json::json;
 
     use super::{SettingsDocument, SettingsLoadError};
+
+    #[cfg(target_os = "macos")]
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn beta7_serialized_default_map_migrates_background_binding() {
+        let old: std::collections::BTreeMap<_, _> = apricot_core::action::ACTIONS
+            .iter()
+            .map(|action| (action.id.as_str(), action.default_windows_shortcut))
+            .collect();
+        let settings = SettingsDocument::from_value_with_defaults(
+            &serde_json::json!({"language":"en", "keyboard_shortcuts":old}),
+            SettingsDocument::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            settings.keyboard_shortcuts["background_play_pause"],
+            "Ctrl+Shift+Space"
+        );
+    }
+
+    #[test]
+    fn macos_background_default_and_explicit_unbound_are_coherent() {
+        let defaults = SettingsDocument::default();
+        assert_eq!(
+            defaults.keyboard_shortcuts["background_play_pause"],
+            "Ctrl+Shift+Space"
+        );
+        for stored in ["Ctrl+Shift+K", ""] {
+            let settings = SettingsDocument::from_value_with_defaults(&serde_json::json!({"language":"en", "keyboard_shortcuts":{"background_play_pause":stored}}), defaults.clone()).unwrap();
+            assert_eq!(settings.keyboard_shortcuts["background_play_pause"], stored);
+        }
+    }
 
     #[test]
     fn typed_schema_serializes_exactly_all_117_known_settings() {

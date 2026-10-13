@@ -482,7 +482,7 @@ fn label_with_shortcut(label: &str, action_id: &str, settings: &SettingsDocument
         .keyboard_shortcuts
         .get(action_id)
         .map(String::as_str)
-        .or_else(|| action_by_id(action_id).map(|action| action.default_windows_shortcut))
+        .or_else(|| action_by_id(action_id).map(apricot_core::ActionDefinition::default_shortcut))
         .unwrap_or_default();
     if shortcut.is_empty() {
         label.to_owned()

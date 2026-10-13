@@ -1453,7 +1453,7 @@ fn shortcut_controls(
                 .keyboard_shortcuts
                 .get(action_id)
                 .cloned()
-                .unwrap_or_else(|| action.default_windows_shortcut.to_owned());
+                .unwrap_or_else(|| action.default_shortcut().to_owned());
             ShortcutActionItem {
                 action_id: action_id.to_owned(),
                 label: catalog.text(action.label_key).to_owned(),

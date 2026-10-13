@@ -179,7 +179,7 @@ fn resolve_pass(
         }
         let configured = shortcuts
             .get(action.id.as_str())
-            .map_or(action.default_windows_shortcut, String::as_str);
+            .map_or(action.default_shortcut(), String::as_str);
         chord.matches_configured(configured)
     })
 }
@@ -373,10 +373,10 @@ mod tests {
     fn every_default_shortcut_parses() {
         for action in ACTIONS {
             assert!(
-                ShortcutChord::parse(action.default_windows_shortcut).is_some(),
+                ShortcutChord::parse(action.default_shortcut()).is_some(),
                 "{}: {}",
                 action.id.as_str(),
-                action.default_windows_shortcut
+                action.default_shortcut()
             );
         }
     }
@@ -463,7 +463,7 @@ mod tests {
             !action.scopes.contains(&ActionScope::Global)
                 && action.scopes.contains(&ActionScope::Player)
         }) {
-            let key = player_action.default_windows_shortcut;
+            let key = player_action.default_shortcut();
             let shortcuts =
                 BTreeMap::from([("new_subscription_videos".to_owned(), key.to_owned())]);
             let action = action_for_shortcut(
