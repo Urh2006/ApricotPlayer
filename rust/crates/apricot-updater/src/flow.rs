@@ -426,6 +426,7 @@ fn install_component_folder(zip: &Path, target: &Path) -> Result<(), String> {
         return Err("downloaded yt-dlp is not a macOS program".to_owned());
     }
     make_executable(&program).map_err(|error| error.to_string())?;
+    validate_component_start(&program)?;
     if target.exists() {
         fs::rename(target, &old).map_err(|error| error.to_string())?;
     }
@@ -435,6 +436,43 @@ fn install_component_folder(zip: &Path, target: &Path) -> Result<(), String> {
     }
     // A running search may still use the old copy; it goes next time.
     let _ = fs::remove_dir_all(&old);
+    Ok(())
+}
+
+/// Validate the unpacked executable and its bundled runtime before replacing
+/// the working component. A Mach-O magic alone also accepts truncated files.
+fn validate_component_start(program: &Path) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(program)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("updated yt-dlp could not start: {error}"))?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("updated yt-dlp version check timed out".to_owned());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let mut output = String::new();
+    if let Some(stdout) = child.stdout.take() {
+        stdout.take(4096).read_to_string(&mut output).map_err(|error| error.to_string())?;
+    }
+    let version = output.trim();
+    let parts = version.split('.').collect::<Vec<_>>();
+    if !status.success() || !(3..=4).contains(&parts.len())
+        || !parts.iter().all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        return Err("updated yt-dlp did not report a valid version".to_owned());
+    }
     Ok(())
 }
 
@@ -817,7 +855,14 @@ mod tests {
             assert!(status.success());
             fs::read(&zip).expect("zip")
         };
-        let new = zip_of(&[0xcf, 0xfa, 0xed, 0xfe, b'n']);
+        let source = folder.path().join("version.c");
+        let executable = folder.path().join("version-test");
+        fs::write(&source, "#include <stdio.h>\nint main(void) { puts(\"2026.09.20\"); return 0; }\n")
+            .expect("fixture source");
+        assert!(std::process::Command::new("cc").arg(&source).arg("-o").arg(&executable)
+            .status().expect("compile fixture").success());
+        let new_program = fs::read(&executable).expect("Mach-O fixture");
+        let new = zip_of(&new_program);
         let asset = super::YTDLP_ASSET_NAME;
         let url = &format!("https://github.com/yt-dlp/yt-dlp/releases/download/2026.09.20/{asset}");
         let mut github = FakeGithub::default();
@@ -838,7 +883,7 @@ mod tests {
         );
         assert_eq!(
             fs::read(installed.join("yt-dlp_macos")).expect("new"),
-            [0xcf, 0xfa, 0xed, 0xfe, b'n']
+            new_program
         );
         assert!(installed.join("_internal/base_library.zip").is_file());
         assert!(!components.join("yt-dlp_macos.old").exists());
@@ -856,7 +901,7 @@ mod tests {
         assert!(update_ytdlp_component(&mut github, "2026.09.20", &components, &mut || {}).is_err());
         assert_eq!(
             fs::read(installed.join("yt-dlp_macos")).expect("kept"),
-            [0xcf, 0xfa, 0xed, 0xfe, b'n']
+            new_program
         );
         assert!(!components.join("yt-dlp_macos.new").exists());
     }

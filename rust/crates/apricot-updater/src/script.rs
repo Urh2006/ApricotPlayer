@@ -242,6 +242,7 @@ pub fn macos_update_script(input: &UpdateScriptInput<'_>) -> String {
             r#"xattr -dr com.apple.quarantine "$extract/$root" 2>/dev/null"#,
             r#"mv "$bundle" "$backup" || fail 'The current version could not be moved aside.'"#,
             r#"mv "$extract/$root" "$bundle" || fail 'The new version could not be put in place.'"#,
+            r#""$bundle/$executable" --qualification-smoke >/dev/null 2>&1 || fail 'The new version could not start; restoring the previous version.'"#,
             r#"rm -rf "$backup" "$extract""#,
             r#"rm -f "$source""#,
             r#"if [ "$restart" = 1 ]; then log_line 'Restarting ApricotPlayer'; open "$bundle" --args "$relaunch" || log_line 'Restart warning: open failed'; fi"#,
