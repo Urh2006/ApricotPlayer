@@ -38,3 +38,11 @@ does not establish complete screen-reader speech, physical global-key delivery,
 Spotify Smart Shuffle, or the beta 7 account-dependent Liked Songs report.
 An online GitHub runner also cannot reproduce the user's actual Spotify account
 and local audio-device environment.
+
+The reported VoiceOver progress tones were traced to the app-update window's
+native `NSProgressIndicator` in `ConversionProgress`. Updates set its numeric
+value and message; this path has no sound playback or `NSBeep` call and does not
+force per-percent speech. The sole `NSBeep` fallback in the Mac UI belongs to
+the unrelated player default-value feedback. No obvious cause of ignoring the
+user's VoiceOver speech preference was established, so no speculative change
+was made. Actual VoiceOver reproduction remains necessary.

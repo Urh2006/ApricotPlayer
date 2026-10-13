@@ -31,62 +31,6 @@ pub(crate) struct PlayerExtras {
     pending_device_check: Option<Receiver<Option<Vec<AudioOutputDevice>>>>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_disconnected_device_probe_keeps_the_saved_output() {
-        let mut shell = crate::tests::keyboard::shell();
-        shell
-            .application
-            .set_default_audio_output_device("saved-device")
-            .unwrap();
-        let (sender, receiver) = mpsc::channel();
-        shell.extras.pending_device_check = Some(receiver);
-        drop(sender);
-        let mut ui = crate::tests::equalizer::Ui::default();
-        assert!(!shell.poll_saved_audio_device_check(&mut ui));
-        assert_eq!(
-            shell.application.settings().audio_output_device,
-            "saved-device"
-        );
-    }
-
-    #[test]
-    fn a_failed_device_probe_keeps_the_saved_output() {
-        let mut shell = crate::tests::keyboard::shell();
-        shell
-            .application
-            .set_default_audio_output_device("saved-device")
-            .unwrap();
-        let (sender, receiver) = mpsc::channel();
-        shell.extras.pending_device_check = Some(receiver);
-        sender.send(None).unwrap();
-        let mut ui = crate::tests::equalizer::Ui::default();
-        assert!(!shell.poll_saved_audio_device_check(&mut ui));
-        assert_eq!(
-            shell.application.settings().audio_output_device,
-            "saved-device"
-        );
-    }
-
-    #[test]
-    fn a_successful_probe_still_handles_a_missing_device() {
-        let mut shell = crate::tests::keyboard::shell();
-        shell
-            .application
-            .set_default_audio_output_device("saved-device")
-            .unwrap();
-        let (sender, receiver) = mpsc::channel();
-        shell.extras.pending_device_check = Some(receiver);
-        sender.send(Some(Vec::new())).unwrap();
-        let mut ui = crate::tests::equalizer::Ui::default();
-        assert!(!shell.poll_saved_audio_device_check(&mut ui));
-        assert_eq!(shell.application.settings().audio_output_device, "auto");
-    }
-}
-
 impl Shell {
     fn details_labels(&self) -> DetailsLabels {
         DetailsLabels {
@@ -380,5 +324,61 @@ impl Shell {
                 .enabled_toggles()
                 .contains(&SessionToggle::Fullscreen);
         ui.set_window_fullscreen(wanted);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_disconnected_device_probe_keeps_the_saved_output() {
+        let mut shell = crate::tests::keyboard::shell();
+        shell
+            .application
+            .set_default_audio_output_device("saved-device")
+            .unwrap();
+        let (sender, receiver) = mpsc::channel();
+        shell.extras.pending_device_check = Some(receiver);
+        drop(sender);
+        let mut ui = crate::tests::equalizer::Ui::default();
+        assert!(!shell.poll_saved_audio_device_check(&mut ui));
+        assert_eq!(
+            shell.application.settings().audio_output_device,
+            "saved-device"
+        );
+    }
+
+    #[test]
+    fn a_failed_device_probe_keeps_the_saved_output() {
+        let mut shell = crate::tests::keyboard::shell();
+        shell
+            .application
+            .set_default_audio_output_device("saved-device")
+            .unwrap();
+        let (sender, receiver) = mpsc::channel();
+        shell.extras.pending_device_check = Some(receiver);
+        sender.send(None).unwrap();
+        let mut ui = crate::tests::equalizer::Ui::default();
+        assert!(!shell.poll_saved_audio_device_check(&mut ui));
+        assert_eq!(
+            shell.application.settings().audio_output_device,
+            "saved-device"
+        );
+    }
+
+    #[test]
+    fn a_successful_probe_still_handles_a_missing_device() {
+        let mut shell = crate::tests::keyboard::shell();
+        shell
+            .application
+            .set_default_audio_output_device("saved-device")
+            .unwrap();
+        let (sender, receiver) = mpsc::channel();
+        shell.extras.pending_device_check = Some(receiver);
+        sender.send(Some(Vec::new())).unwrap();
+        let mut ui = crate::tests::equalizer::Ui::default();
+        assert!(!shell.poll_saved_audio_device_check(&mut ui));
+        assert_eq!(shell.application.settings().audio_output_device, "auto");
     }
 }
