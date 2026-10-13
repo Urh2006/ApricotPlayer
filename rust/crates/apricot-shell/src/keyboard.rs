@@ -26,6 +26,8 @@ pub enum FocusKind {
     Button,
     /// The read-only text of the player details.
     DetailsText,
+    /// An editable text field, including AppKit's shared field editor.
+    TextEntry,
     /// Anything else.
     Other,
 }
@@ -92,10 +94,15 @@ impl Shell {
         // shortcut.
         let search_field_focus = matches!(
             self.view,
-            View::Search | View::Results | View::Collection | View::AudiovaultSearch
+            View::Search
+                | View::Results
+                | View::Collection
+                | View::AudiovaultSearch
+                | View::SpotifyBrowse
         ) && focus != FocusKind::List;
-        let entry_focus =
-            self.view == View::DirectLink || (search_field_focus && !(chord.control || chord.alt));
+        let entry_focus = focus == FocusKind::TextEntry
+            || self.view == View::DirectLink
+            || (search_field_focus && !(chord.control || chord.alt));
         let (scope, accepts_text) = if entry_focus {
             (ActionScope::Dialog, true)
         } else if search_field_focus {
@@ -183,5 +190,87 @@ const fn view_shortcut_scope(view: View) -> (ActionScope, bool) {
         | View::Subscriptions
         | View::NotificationCenter => (ActionScope::List, false),
         View::Player => (ActionScope::Player, false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shell() -> Shell {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = apricot_storage::SettingsPaths::for_app_data(
+            directory.path(),
+            &directory.path().join("legacy"),
+        );
+        let settings = apricot_app::SettingsController::load(
+            paths,
+            apricot_storage::SettingsDocument::default(),
+        );
+        Shell::new(apricot_app::Application::new(
+            settings,
+            apricot_app::MainMenuAvailability::default(),
+        ))
+    }
+
+    #[test]
+    fn spotify_search_field_keeps_native_submit_delete_and_typing() {
+        let mut shell = shell();
+        shell.view = View::SpotifyBrowse;
+        for key in ["Enter", "Delete", "Shift+A"] {
+            assert_eq!(
+                shell.route_key(ShortcutChord::parse(key).unwrap(), false, FocusKind::Other),
+                KeyRoute::Unhandled,
+                "{key} belongs to the search field"
+            );
+        }
+    }
+
+    #[test]
+    fn editable_fields_keep_native_keys_and_allow_global_navigation() {
+        let mut shell = shell();
+        shell.view = View::SpotifyBrowse;
+        for key in [
+            "Enter",
+            "Delete",
+            "Shift+A",
+            "Ctrl+A",
+            "Ctrl+Left",
+            "Ctrl+Shift+I",
+        ] {
+            assert_eq!(
+                shell.route_key(
+                    ShortcutChord::parse(key).unwrap(),
+                    false,
+                    FocusKind::TextEntry
+                ),
+                KeyRoute::Unhandled,
+                "{key} belongs to the editable field"
+            );
+        }
+        assert_eq!(
+            shell.route_key(
+                ShortcutChord::parse("Ctrl+Alt+Y").unwrap(),
+                false,
+                FocusKind::TextEntry
+            ),
+            KeyRoute::Run("open_search")
+        );
+        assert_eq!(
+            shell.route_key(
+                ShortcutChord::parse("Escape").unwrap(),
+                false,
+                FocusKind::TextEntry
+            ),
+            KeyRoute::Run("player_back")
+        );
+        assert_eq!(
+            shell.route_key(
+                ShortcutChord::parse("Shift+A").unwrap(),
+                false,
+                FocusKind::List
+            ),
+            KeyRoute::Run("queue_audio")
+        );
     }
 }

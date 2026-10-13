@@ -1517,3 +1517,11 @@ impl Shell {
         }
     }
 }
+
+impl Shell {
+    pub(crate) fn restore_resumed_podcast_selection(&mut self, feed: usize, item: usize) {
+        self.podcasts.feed = feed;
+        self.podcasts.item = item;
+        self.podcasts.visible_items = item.saturating_add(1);
+    }
+}

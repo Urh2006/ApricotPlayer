@@ -34,6 +34,7 @@ mod repeat;
 mod screens;
 mod search;
 mod settings_window;
+mod shell_actions;
 mod spotify;
 mod spotify_lists;
 mod spotify_panels;
@@ -152,9 +153,16 @@ pub struct Shell {
     spotify: spotify::SpotifyState,
     /// A Settings browser export runs.
     settings_cookie_export_running: bool,
+    actions: shell_actions::ActionState,
+    pub(crate) windows_import_committed: bool,
 }
 
 impl Shell {
+    /// Prevents background work from overwriting a newly imported profile.
+    pub(crate) fn finish_windows_import(&mut self) {
+        self.windows_import_committed = true;
+    }
+
     pub fn new(application: Application) -> Self {
         let model = application.main_menu_model();
         Self {
@@ -183,6 +191,8 @@ impl Shell {
             audiovault: audiovault::AudiovaultState::default(),
             spotify: spotify::SpotifyState::default(),
             settings_cookie_export_running: false,
+            actions: shell_actions::ActionState::default(),
+            windows_import_committed: false,
         }
     }
 
@@ -310,11 +320,22 @@ impl Shell {
 
     /// Windows `activate_main_menu_selection` for the row at `index`.
     pub fn activate_main_menu_row(&mut self, ui: &mut dyn ShellUi, index: usize) {
+        if self.windows_import_committed {
+            return;
+        }
         let Some(item) = self.model.items.get(index).cloned() else {
             return;
         };
         self.last_activated_menu_item = Some(item.id);
         match item.id {
+            "resume_last_session" => {
+                self.resume_last_player_session(ui);
+                return;
+            }
+            "diagnostic_report" => {
+                self.copy_diagnostic_report(ui);
+                return;
+            }
             "exit" => {
                 ui.exit();
                 return;
@@ -423,11 +444,30 @@ impl Shell {
     /// `activate_action`).
     #[allow(clippy::too_many_lines)] // One arm per action, as on Windows.
     pub fn activate_action(&mut self, ui: &mut dyn ShellUi, action_id: &str) {
+        if self.windows_import_committed {
+            return;
+        }
         self.leave_player_for_global_navigation(ui, action_id);
         if self.feature_action(ui, action_id) {
             return;
         }
         match action_id {
+            "resume_last_session" => {
+                self.resume_last_player_session(ui);
+                return;
+            }
+            "copy_diagnostic_report" => {
+                self.copy_diagnostic_report(ui);
+                return;
+            }
+            "copy_link" => {
+                self.copy_active_location(ui);
+                return;
+            }
+            "result_column_previous" | "result_column_next" => {
+                self.announce_active_media_column(ui, action_id == "result_column_next");
+                return;
+            }
             "open_main_menu" => {
                 self.show_main_menu(ui);
                 return;

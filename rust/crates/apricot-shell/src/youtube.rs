@@ -6,7 +6,11 @@
 //! `start_youtube_resolve_with_options`, `finish_youtube_resolve`,
 //! `show_preparing_player`, the stream URL cache).
 
-use std::path::PathBuf;
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::mpsc::{self, Receiver, TryRecvError},
+};
 
 use apricot_app::{
     SearchWork, YoutubeCollectionWork,
@@ -22,6 +26,172 @@ use apricot_playback::PlaybackEvent;
 
 use crate::player::{PendingQueuedStart, QueueStartMode};
 use crate::{PlayerFocus, Shell, ShellUi, View};
+
+#[cfg(test)]
+mod parity_tests {
+    use super::*;
+    use crate::tests::{equalizer::Ui, keyboard::shell};
+    fn video(number: u32) -> MediaItem {
+        let mut item = crate::local_file_item(std::path::Path::new("/tmp/video.mp4"));
+        item.id = apricot_core::MediaId(number.to_string());
+        item.source = MediaSource::Youtube;
+        item.local_path = None;
+        item.url = Some(
+            format!("https://www.youtube.com/watch?v=aaaaaaaaaa{number}")
+                .parse()
+                .unwrap(),
+        );
+        item
+    }
+    #[test]
+    fn hydrated_metadata_updates_matching_generation_without_moving_selection() {
+        let mut shell = shell();
+        let mut ui = Ui::default();
+        let work = shell
+            .application
+            .begin_youtube_search("test", apricot_media::YoutubeSearchKind::Video)
+            .unwrap();
+        shell
+            .application
+            .apply_search_results(work.generation, vec![video(1), video(2)], None);
+        shell.view = View::Results;
+        ui.selected = Some(1);
+        let mut hydrated = video(1);
+        hydrated
+            .metadata
+            .insert("views".to_owned(), serde_json::json!(1234));
+        shell.apply_metadata_items(
+            &mut ui,
+            MetadataScope::Search(work.generation),
+            &[hydrated.clone()],
+        );
+        assert_eq!(
+            shell.application.search_session().items()[0]
+                .metadata
+                .get("views"),
+            Some(&serde_json::json!(1234))
+        );
+        assert_eq!(ui.selected, Some(1));
+        assert_eq!(ui.row_updates.len(), 1);
+        assert_eq!(ui.row_updates[0].0, 0);
+        hydrated
+            .metadata
+            .insert("views".to_owned(), serde_json::json!(9999));
+        shell.apply_metadata_items(
+            &mut ui,
+            MetadataScope::Search(work.generation + 1),
+            &[hydrated],
+        );
+        assert_eq!(
+            shell.application.search_session().items()[0]
+                .metadata
+                .get("views"),
+            Some(&serde_json::json!(1234))
+        );
+    }
+    #[test]
+    fn enabled_prefetch_schedules_the_actual_next_sequence_item_once() {
+        let mut shell = shell();
+        let mut ui = Ui::default();
+        shell
+            .application
+            .set_boolean_setting(apricot_core::SettingId::PrefetchNextStreamUrl, true)
+            .unwrap();
+        shell
+            .application
+            .set_boolean_setting(apricot_core::SettingId::EnableStreamUrlCache, true)
+            .unwrap();
+        let work = shell
+            .application
+            .begin_youtube_search("test", apricot_media::YoutubeSearchKind::Video)
+            .unwrap();
+        shell
+            .application
+            .apply_search_results(work.generation, vec![video(1), video(2)], None);
+        let first = shell.application.prepare_search_playback(0).unwrap();
+        shell.application.start_player_item(first);
+        shell.schedule_stream_prefetch(&mut ui);
+        assert_eq!(shell.youtube.prefetches.len(), 1);
+        let next_key = shell.stream_cache_key(video(2).url.as_ref().unwrap().as_str());
+        assert!(shell.youtube.prefetches.contains_key(&next_key));
+        shell.schedule_stream_prefetch(&mut ui);
+        assert_eq!(shell.youtube.prefetches.len(), 1);
+    }
+
+    #[test]
+    fn prefetch_results_populate_the_cache_and_disabled_cache_discards_results() {
+        let mut shell = shell();
+        let next = video(2);
+        let url = next.url.as_ref().unwrap().to_string();
+        let key = shell.stream_cache_key(&url);
+        let stream = CachedStream {
+            item: next,
+            stream_url: "https://example.test/media".to_owned(),
+            external_audio_url: None,
+        };
+        let (sender, receiver) = mpsc::channel();
+        sender.send(Some(stream.clone())).unwrap();
+        shell.youtube.prefetches.insert(key.clone(), receiver);
+        shell
+            .application
+            .set_boolean_setting(apricot_core::SettingId::EnableStreamUrlCache, false)
+            .unwrap();
+        assert!(!shell.poll_stream_prefetches());
+        assert!(!shell.stream_cache().contains(&key, unix_now()));
+        shell
+            .application
+            .set_boolean_setting(apricot_core::SettingId::EnableStreamUrlCache, true)
+            .unwrap();
+        let (sender, receiver) = mpsc::channel();
+        sender.send(Some(stream)).unwrap();
+        shell.youtube.prefetches.insert(key.clone(), receiver);
+        assert!(!shell.poll_stream_prefetches());
+        assert_eq!(
+            shell.cached_stream(&url).unwrap().stream_url,
+            "https://example.test/media"
+        );
+    }
+
+    #[test]
+    fn metadata_updates_the_focused_row_only_after_selection_moves() {
+        let mut shell = shell();
+        let mut ui = Ui::default();
+        let work = shell
+            .application
+            .begin_youtube_search("test", apricot_media::YoutubeSearchKind::Video)
+            .unwrap();
+        shell
+            .application
+            .apply_search_results(work.generation, vec![video(1), video(2)], None);
+        shell.view = View::Results;
+        ui.selected = Some(0);
+        let mut hydrated = video(1);
+        hydrated
+            .metadata
+            .insert("views".to_owned(), serde_json::json!(1234));
+        let (sender, receiver) = mpsc::channel();
+        sender.send(Ok(vec![hydrated])).unwrap();
+        shell.youtube.metadata = Some(PendingMetadata {
+            scope: MetadataScope::Search(work.generation),
+            urls: vec![],
+            api: false,
+            receiver,
+        });
+        shell.poll_metadata(&mut ui);
+        assert!(ui.row_updates.is_empty());
+        assert!(shell.downloads.deferred_rows.contains(&0));
+        ui.selected = Some(1);
+        shell.apply_deferred_result_rows(&mut ui, 1);
+        assert_eq!(ui.row_updates[0].0, 0);
+        let count = apricot_app::player_information::display_count(
+            &shell.application.search_session().items()[0].metadata,
+            "views",
+        )
+        .unwrap();
+        assert!(ui.row_updates[0].1.contains(&count), "{:?}", ui.row_updates);
+        assert_eq!(ui.selected, Some(1));
+    }
+}
 
 /// Windows `YOUTUBE_BACKEND`.
 const YOUTUBE_BACKEND: YoutubeBackend = YoutubeBackend::YtDlp;
@@ -81,6 +251,22 @@ pub(crate) struct YoutubeState {
     pending_resolve: Option<PendingResolve>,
     next_token: u64,
     stream_cache: Option<StreamUrlCache>,
+    metadata: Option<PendingMetadata>,
+    metadata_attempted: HashSet<String>,
+    metadata_api_disabled: HashSet<MetadataScope>,
+    prefetches: HashMap<String, Receiver<Option<CachedStream>>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+enum MetadataScope {
+    Search(u64),
+    Collection(u64),
+}
+struct PendingMetadata {
+    scope: MetadataScope,
+    urls: Vec<String>,
+    api: bool,
+    receiver: Receiver<Result<Vec<MediaItem>, String>>,
 }
 
 impl YoutubeState {
@@ -159,7 +345,280 @@ fn nonempty(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_owned())
 }
 
+fn item_needs_metadata(item: &MediaItem) -> bool {
+    if item.source != MediaSource::Youtube
+        || item.url.is_none()
+        || !matches!(
+            item.kind,
+            apricot_core::MediaKind::Video | apricot_core::MediaKind::LiveStream
+        )
+    {
+        return false;
+    }
+    let present = |keys: &[&str]| {
+        keys.iter().any(|key| {
+            item.metadata
+                .get(*key)
+                .is_some_and(|v| !v.is_null() && v.as_str().is_none_or(|s| !s.trim().is_empty()))
+        })
+    };
+    !present(&["views", "view_count"])
+        || !present(&[
+            "age",
+            "timestamp",
+            "release_timestamp",
+            "upload_date",
+            "uploaded_at",
+            "publish_date",
+        ])
+}
+
 impl Shell {
+    /// Resolve the next item off the UI thread, using the Windows cache policy.
+    pub(crate) fn schedule_stream_prefetch(&mut self, ui: &mut dyn ShellUi) {
+        let settings = self.application.settings();
+        if !settings.prefetch_next_stream_url || !settings.enable_stream_url_cache {
+            return;
+        }
+        let Some(item) = self.application.prefetch_candidate() else {
+            return;
+        };
+        if !matches!(
+            item.source,
+            MediaSource::Youtube | MediaSource::Soundcloud | MediaSource::Direct
+        ) || apricot_app::audiovault::item_kind(&item).is_some()
+        {
+            return;
+        }
+        let Some(url) = item.url.as_ref().map(ToString::to_string) else {
+            return;
+        };
+        let key = self.stream_cache_key(&url);
+        if self.youtube.prefetches.contains_key(&key)
+            || self.stream_cache().contains(&key, unix_now())
+        {
+            return;
+        }
+        let Some(components) = components_directory() else {
+            return;
+        };
+        let executable = apricot_platform::app_update::preferred_ytdlp_executable(&components);
+        let config = self.youtube_session_config();
+        let preference = stream_preference(&self.application.settings().stream_format_preference);
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            use apricot_media::{YoutubeCommand, YoutubeEngine, YoutubeResponsePayload};
+            let resolved = apricot_platform::YtDlpYoutubeEngine::new(&executable)
+                .ok()
+                .and_then(|mut engine| {
+                    engine.execute(YoutubeCommand::Configure { config }).ok()?;
+                    let YoutubeResponsePayload::Resolved { item, formats } = engine
+                        .execute(YoutubeCommand::Resolve { url, preference })
+                        .ok()?
+                    else {
+                        return None;
+                    };
+                    let selected = select_youtube_playback_formats(&formats, preference)?;
+                    let primary = formats.get(selected.primary_index)?;
+                    Some(CachedStream {
+                        item: *item,
+                        stream_url: primary.url.clone(),
+                        external_audio_url: selected
+                            .external_audio_index
+                            .and_then(|i| formats.get(i))
+                            .map(|f| f.url.clone()),
+                    })
+                });
+            let _ = sender.send(resolved);
+        });
+        self.youtube.prefetches.insert(key, receiver);
+        ui.set_background_polling(true);
+    }
+
+    fn poll_stream_prefetches(&mut self) -> bool {
+        let keys: Vec<_> = self.youtube.prefetches.keys().cloned().collect();
+        for key in keys {
+            let result = self.youtube.prefetches[&key].try_recv();
+            if matches!(result, Err(TryRecvError::Empty)) {
+                continue;
+            }
+            self.youtube.prefetches.remove(&key);
+            if let Ok(Some(stream)) = result {
+                let settings = self.application.settings();
+                if settings.enable_stream_url_cache {
+                    let minutes = settings.stream_url_cache_minutes;
+                    self.stream_cache()
+                        .insert(&key, &stream, minutes, unix_now());
+                }
+            }
+        }
+        !self.youtube.prefetches.is_empty()
+    }
+
+    fn metadata_scope(&self) -> Option<MetadataScope> {
+        match self.view {
+            View::Results | View::Trending => Some(MetadataScope::Search(
+                self.application.search_session().generation(),
+            )),
+            View::Collection => self
+                .application
+                .youtube_collection()
+                .map(|c| MetadataScope::Collection(c.generation())),
+            _ => None,
+        }
+    }
+
+    fn metadata_items(&self, scope: MetadataScope) -> &[MediaItem] {
+        match scope {
+            MetadataScope::Search(generation)
+                if generation == self.application.search_session().generation() =>
+            {
+                self.application.search_session().items()
+            }
+            MetadataScope::Collection(generation) => self
+                .application
+                .youtube_collection()
+                .filter(|c| c.generation() == generation)
+                .map_or(&[], |c| c.items()),
+            MetadataScope::Search(_) => &[],
+        }
+    }
+
+    fn schedule_metadata(&mut self, ui: &mut dyn ShellUi) {
+        if self.youtube.metadata.is_some() {
+            return;
+        }
+        let Some(scope) = self.metadata_scope() else {
+            return;
+        };
+        let api_key = self
+            .application
+            .settings()
+            .youtube_data_api_key
+            .trim()
+            .to_owned();
+        let api = !api_key.is_empty() && !self.youtube.metadata_api_disabled.contains(&scope);
+        let candidates: Vec<_> = self
+            .metadata_items(scope)
+            .iter()
+            .filter(|item| item_needs_metadata(item))
+            .filter(|item| {
+                item.url
+                    .as_ref()
+                    .is_some_and(|url| !self.youtube.metadata_attempted.contains(url.as_str()))
+            })
+            .take(if api { 50 } else { 5 })
+            .cloned()
+            .collect();
+        if candidates.is_empty() {
+            return;
+        }
+        let Some(components) = components_directory() else {
+            return;
+        };
+        let executable = apricot_platform::app_update::preferred_ytdlp_executable(&components);
+        let urls: Vec<_> = candidates
+            .iter()
+            .filter_map(|item| item.url.as_ref().map(ToString::to_string))
+            .collect();
+        let worker_urls = urls.clone();
+        let config = self.youtube_session_config();
+        let proxy = nonempty(&self.application.settings().proxy);
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            use apricot_media::{YoutubeCommand, YoutubeEngine, YoutubeResponsePayload};
+            let result = if api {
+                apricot_platform::YoutubeDataApiClient::new(proxy.as_deref())
+                    .and_then(|client| client.fetch_metadata(&api_key, &candidates))
+                    .map_err(|e| e.to_string())
+            } else {
+                apricot_platform::YtDlpYoutubeEngine::new(&executable)
+                    .map_err(|e| e.to_string())
+                    .and_then(|mut engine| {
+                        engine
+                            .execute(YoutubeCommand::Configure { config })
+                            .map_err(|e| e.to_string())?;
+                        match engine
+                            .execute(YoutubeCommand::Metadata { urls: worker_urls })
+                            .map_err(|e| e.to_string())?
+                        {
+                            YoutubeResponsePayload::Hydrated { items } => Ok(items),
+                            _ => Err("Unexpected metadata response".to_owned()),
+                        }
+                    })
+            };
+            let _ = sender.send(result);
+        });
+        self.youtube.metadata_attempted.extend(urls.iter().cloned());
+        self.youtube.metadata = Some(PendingMetadata {
+            scope,
+            urls,
+            api,
+            receiver,
+        });
+        ui.set_background_polling(true);
+    }
+
+    fn poll_metadata(&mut self, ui: &mut dyn ShellUi) -> bool {
+        if let Some(pending) = self.youtube.metadata.as_ref() {
+            let result = pending.receiver.try_recv();
+            if matches!(result, Err(TryRecvError::Empty)) {
+                return true;
+            }
+            let pending = self.youtube.metadata.take().expect("pending metadata");
+            match result {
+                Ok(Ok(items)) => self.apply_metadata_items(ui, pending.scope, &items),
+                _ if pending.api => {
+                    self.youtube.metadata_api_disabled.insert(pending.scope);
+                    for url in pending.urls {
+                        self.youtube.metadata_attempted.remove(&url);
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.schedule_metadata(ui);
+        self.youtube.metadata.is_some()
+    }
+
+    fn apply_metadata_items(
+        &mut self,
+        ui: &mut dyn ShellUi,
+        scope: MetadataScope,
+        items: &[MediaItem],
+    ) {
+        let visible = self.metadata_scope() == Some(scope);
+        let catalog = self.catalog();
+        for item in items {
+            let index = item.stable_identity().and_then(|identity| {
+                self.metadata_items(scope)
+                    .iter()
+                    .position(|candidate| candidate.stable_identity().as_ref() == Some(&identity))
+            });
+            let changed = match scope {
+                MetadataScope::Search(generation) => {
+                    self.application.apply_search_metadata(generation, item)
+                }
+                MetadataScope::Collection(generation) => self
+                    .application
+                    .apply_youtube_collection_metadata(generation, item),
+            };
+            if changed
+                && visible
+                && let Some(index) = index
+            {
+                if ui.selected_row() == Some(index) {
+                    self.downloads.deferred_rows.insert(index);
+                } else if let Some(updated) = self.metadata_items(scope).get(index) {
+                    ui.set_list_row(
+                        index,
+                        &crate::result_label(updated, &catalog, self.application.downloads()),
+                    );
+                }
+            }
+        }
+    }
+
     /// Windows `effective_cookies_file`, as an existing file for yt-dlp.
     pub(crate) fn effective_cookies_file(&mut self) -> Option<PathBuf> {
         crate::cookies::update_repair_settings(self.application.settings());
@@ -246,11 +705,19 @@ impl Shell {
                 }
             }
         }
-        api || self.youtube.search.is_pending() || self.youtube.pending_trending_api.is_some()
+        let metadata = self.poll_metadata(ui);
+        let prefetch = self.poll_stream_prefetches();
+        api || metadata
+            || prefetch
+            || self.youtube.search.is_pending()
+            || self.youtube.pending_trending_api.is_some()
     }
 
     /// Windows `cancel_youtube_work`.
     pub(crate) fn cancel_youtube_work(&mut self) {
+        self.youtube.metadata = None;
+        self.youtube.metadata_attempted.clear();
+        self.youtube.metadata_api_disabled.clear();
         if self.youtube.pending_list.is_none()
             && self.youtube.pending_resolve.is_none()
             && self.youtube.pending_trending_api.is_none()

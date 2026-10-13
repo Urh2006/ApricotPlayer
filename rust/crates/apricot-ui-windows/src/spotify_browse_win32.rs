@@ -1346,7 +1346,12 @@ pub(super) unsafe fn play(window: HWND, item: &CatalogItem, shuffle: bool) {
         set_status(state, &text, true);
         return;
     }
-    if let Some(media) = media_for(state, item, shuffle) {
+    if let Some(mut media) = media_for(state, item, shuffle) {
+        if shuffle {
+            media
+                .metadata
+                .insert("spotify_shuffle_explicit".to_owned(), true.into());
+        }
         super::spotify::play_track(window, media);
     }
 }

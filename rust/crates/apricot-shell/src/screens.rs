@@ -218,6 +218,10 @@ impl Shell {
     /// Windows `poll_local_folder_scan` and the other background timers;
     /// returns `false` when nothing is left to poll.
     pub fn poll_background(&mut self, ui: &mut dyn ShellUi) -> bool {
+        if self.windows_import_committed {
+            return false;
+        }
+        let diagnostics = self.poll_diagnostic_report(ui);
         let youtube = self.poll_youtube(ui);
         let related = self.poll_related_videos(ui);
         let folder = self.poll_folder_scan(ui);
@@ -240,6 +244,7 @@ impl Shell {
             || podcasts
             || downloads
             || cookies
+            || diagnostics
     }
 
     fn poll_folder_scan(&mut self, ui: &mut dyn ShellUi) -> bool {

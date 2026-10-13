@@ -302,7 +302,11 @@ impl Shell {
     }
 
     /// Windows `model_context_entries` for the screens the shell shows.
-    fn context_entries(&self, item: Option<&MediaItem>) -> Option<Vec<ContextMenuEntry>> {
+    fn context_entries(
+        &self,
+        item: Option<&MediaItem>,
+        view: View,
+    ) -> Option<Vec<ContextMenuEntry>> {
         let catalog = self.catalog();
         let titles = self
             .application
@@ -316,7 +320,7 @@ impl Shell {
             user_playlist_titles: &titles,
             queued_download_count: self.application.downloads().queued().len(),
         };
-        match self.view {
+        match view {
             View::LocalFolder
             | View::Search
             | View::Results
@@ -352,7 +356,9 @@ impl Shell {
     /// the player for the active item; the chosen entry runs.
     pub(crate) fn show_context_menu_for_active_view(&mut self, ui: &mut dyn ShellUi) {
         let item = self.active_media_item(ui);
-        let entries = if self.view == View::DownloadQueue {
+        let entries = if ui.focused_player_control().is_some() {
+            self.context_entries(item.as_ref(), View::Player)
+        } else if self.view == View::DownloadQueue {
             self.download_queue_context_entries(ui)
         } else if self.view == View::SpotifyAccounts {
             let account = self.spotify_selected_account(ui);
@@ -382,7 +388,7 @@ impl Shell {
                 },
             )
         } else {
-            self.context_entries(item.as_ref())
+            self.context_entries(item.as_ref(), self.view)
         };
         let Some(entries) = entries else {
             return;

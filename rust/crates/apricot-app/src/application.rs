@@ -1842,10 +1842,53 @@ impl Application {
 
     pub fn start_player_item_with_shuffle_at(
         &mut self,
-        item: MediaItem,
+        mut item: MediaItem,
         shuffle: Option<bool>,
         initial_position_seconds: Option<f64>,
     ) -> u64 {
+        let attach = item
+            .metadata
+            .get("spotify_attach")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true);
+        let explicit_shuffle = shuffle == Some(true)
+            || item
+                .metadata
+                .remove("spotify_shuffle_explicit")
+                .and_then(|value| value.as_bool())
+                == Some(true);
+        let requested = if explicit_shuffle {
+            Some(true)
+        } else if attach {
+            shuffle.or_else(|| {
+                item.metadata
+                    .get("spotify_shuffle")
+                    .and_then(serde_json::Value::as_bool)
+            })
+        } else {
+            shuffle
+        };
+        // Ordinary list playback supplies false; it is the initial mode of
+        // a new player, not permission to reset an existing session. A
+        // deliberate Shuffle playlist command still enables shuffle.
+        let shuffle = if !attach && self.state.player.is_open() && !explicit_shuffle {
+            Some(
+                self.state
+                    .player
+                    .enabled_toggles()
+                    .contains(&SessionToggle::Shuffle),
+            )
+        } else {
+            requested
+        };
+        // Both native UIs hand this stored item to the engine. Connect must
+        // receive the same retained mode rather than the row's old default.
+        if item.source == apricot_core::MediaSource::Spotify && !attach {
+            item.metadata.insert(
+                "spotify_shuffle".to_owned(),
+                shuffle.unwrap_or(false).into(),
+            );
+        }
         let generation = self.start_player_item_at(item, initial_position_seconds);
         if let Some(enabled) = shuffle {
             self.state
@@ -2160,6 +2203,22 @@ impl Application {
 
     pub fn set_player_toggle(&mut self, toggle: SessionToggle, enabled: bool) {
         self.state.player.set_toggle(toggle, enabled);
+    }
+
+    /// Mirror a confirmed Connect mode without changing another source's
+    /// open session or sending a command back to the remote device.
+    pub fn sync_spotify_shuffle(&mut self, enabled: bool) {
+        if self.state.player.is_open()
+            && self
+                .state
+                .player
+                .current_item()
+                .is_some_and(|item| item.source == apricot_core::MediaSource::Spotify)
+        {
+            self.state
+                .player
+                .set_toggle(SessionToggle::Shuffle, enabled);
+        }
     }
 
     /// See [`PlayerSession::replace_current_item`].
@@ -3918,7 +3977,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_shuffle_choice_survives_a_fresh_or_continuing_session_start() {
+    fn shuffle_start_choice_initializes_a_new_session_and_does_not_reset_an_open_one() {
         let root = tempfile::tempdir().expect("temporary directory");
         let mut app = application(root.path());
 
@@ -3930,6 +3989,125 @@ mod tests {
         );
 
         app.start_player_item_with_shuffle(media_item("second"), Some(false));
+        assert!(
+            app.player_session()
+                .enabled_toggles()
+                .contains(&SessionToggle::Shuffle)
+        );
+    }
+
+    #[test]
+    fn replacing_a_track_keeps_manual_shuffle_until_the_player_closes() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = application(root.path());
+        app.start_player_item_with_shuffle(media_item("first"), Some(false));
+        app.set_player_toggle(SessionToggle::Shuffle, true);
+        // The ordinary YouTube/list activation path supplies false.
+        app.start_player_item_with_shuffle(media_item("second"), Some(false));
+        assert!(
+            app.player_session()
+                .enabled_toggles()
+                .contains(&SessionToggle::Shuffle)
+        );
+        app.close_player_session();
+        app.start_player_item_with_shuffle(media_item("third"), Some(false));
+        assert!(
+            !app.player_session()
+                .enabled_toggles()
+                .contains(&SessionToggle::Shuffle)
+        );
+    }
+
+    #[test]
+    fn spotify_replacement_passes_retained_shuffle_to_the_actual_engine_item() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = application(root.path());
+        app.start_player_item(media_item("first"));
+        app.set_player_toggle(SessionToggle::Shuffle, true);
+        let mut track = media_item("spotify:track:4uLU6hMCjMI75M1A2tKUQC");
+        track.source = MediaSource::Spotify;
+        track.metadata.insert(
+            "spotify_context".into(),
+            "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M".into(),
+        );
+        track
+            .metadata
+            .insert("spotify_shuffle".into(), false.into());
+        app.start_player_item_with_shuffle(track, None);
+        assert_eq!(
+            app.player_session()
+                .current_item()
+                .unwrap()
+                .metadata
+                .get("spotify_shuffle"),
+            Some(&serde_json::Value::Bool(true))
+        );
+    }
+
+    #[test]
+    fn saved_spotify_metadata_cannot_override_a_manual_shuffle_off_choice() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = application(root.path());
+        app.start_player_item_with_shuffle(media_item("first"), Some(true));
+        app.set_player_toggle(SessionToggle::Shuffle, false);
+        let mut track = media_item("spotify:track:4uLU6hMCjMI75M1A2tKUQC");
+        track.source = MediaSource::Spotify;
+        track.metadata.insert("spotify_shuffle".into(), true.into());
+        app.start_player_item_with_shuffle(track.clone(), None);
+        assert!(
+            !app.player_session()
+                .enabled_toggles()
+                .contains(&SessionToggle::Shuffle)
+        );
+        assert_eq!(
+            app.player_session().current_item().unwrap().metadata["spotify_shuffle"],
+            false
+        );
+        // The actual Shuffle playlist command is a fresh explicit action.
+        track
+            .metadata
+            .insert("spotify_shuffle_explicit".into(), true.into());
+        app.start_player_item_with_shuffle(track, None);
+        assert!(
+            app.player_session()
+                .enabled_toggles()
+                .contains(&SessionToggle::Shuffle)
+        );
+        assert!(
+            !app.player_session()
+                .current_item()
+                .unwrap()
+                .metadata
+                .contains_key("spotify_shuffle_explicit")
+        );
+    }
+
+    #[test]
+    fn a_remote_spotify_attach_keeps_the_confirmed_remote_shuffle_mode() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = application(root.path());
+        app.start_player_item_with_shuffle(media_item("first"), Some(true));
+        let mut track = media_item("spotify:track:4uLU6hMCjMI75M1A2tKUQC");
+        track.source = MediaSource::Spotify;
+        track.metadata.insert("spotify_attach".into(), true.into());
+        track
+            .metadata
+            .insert("spotify_shuffle".into(), false.into());
+        app.start_player_item_with_shuffle(track, None);
+        assert!(
+            !app.player_session()
+                .enabled_toggles()
+                .contains(&SessionToggle::Shuffle)
+        );
+        app.sync_spotify_shuffle(true);
+        assert!(
+            app.player_session()
+                .enabled_toggles()
+                .contains(&SessionToggle::Shuffle)
+        );
+        app.close_player_session();
+        app.start_player_item(media_item("local"));
+        app.sync_spotify_shuffle(true);
         assert!(
             !app.player_session()
                 .enabled_toggles()

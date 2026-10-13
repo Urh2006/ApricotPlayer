@@ -43,6 +43,7 @@ enum UpdateMessage {
 #[derive(Default)]
 pub(crate) struct UpdateState {
     workers: Vec<Receiver<UpdateMessage>>,
+    ytdlp_check_running: bool,
     app_check_running: bool,
     pending_app_update: Option<(Release, ReleaseAsset)>,
     progress_open: bool,
@@ -130,9 +131,13 @@ impl Shell {
 
     /// Python `start_ytdlp_update_check` and `update_ytdlp_worker`.
     fn start_ytdlp_update_check(&mut self, ui: &mut dyn ShellUi, manual: bool) {
+        if self.updates.ytdlp_check_running {
+            return;
+        }
         let Some(bundled) = crate::youtube::components_directory() else {
             return;
         };
+        self.updates.ytdlp_check_running = true;
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
             let executable = apricot_platform::app_update::preferred_ytdlp_executable(&bundled);
@@ -246,24 +251,30 @@ impl Shell {
     fn handle_update_message(&mut self, ui: &mut dyn ShellUi, message: UpdateMessage) {
         let catalog = self.catalog();
         match message {
-            UpdateMessage::YtdlpMissing => ui.set_status(catalog.text("missing_ytdlp"), true),
+            UpdateMessage::YtdlpMissing => {
+                self.updates.ytdlp_check_running = false;
+                ui.set_status(catalog.text("missing_ytdlp"), true);
+            }
             UpdateMessage::YtdlpUpdating => {
                 ui.set_status(catalog.text("components_updating"), true);
             }
-            UpdateMessage::YtdlpFinished { manual, result } => match result {
-                Ok(YtdlpUpdate::Updated(_)) => {
-                    ui.set_status(catalog.text("components_updated"), true);
-                }
-                Ok(YtdlpUpdate::Current) => {
-                    if manual {
-                        ui.set_status(catalog.text("updates_ok"), true);
+            UpdateMessage::YtdlpFinished { manual, result } => {
+                self.updates.ytdlp_check_running = false;
+                match result {
+                    Ok(YtdlpUpdate::Updated(_)) => {
+                        ui.set_status(catalog.text("components_updated"), true);
+                    }
+                    Ok(YtdlpUpdate::Current) => {
+                        if manual {
+                            ui.set_status(catalog.text("updates_ok"), true);
+                        }
+                    }
+                    Err(error) => {
+                        let text = catalog.text("updates_failed").replace("{error}", &error);
+                        ui.set_status(&text, true);
                     }
                 }
-                Err(error) => {
-                    let text = catalog.text("updates_failed").replace("{error}", &error);
-                    ui.set_status(&text, true);
-                }
-            },
+            }
             UpdateMessage::AppChecked {
                 manual,
                 prompt,
@@ -637,4 +648,16 @@ fn launch_install(downloaded: &DownloadedUpdate, version: &str) -> Result<PathBu
     ));
     script::launch_update_script(&script_path)?;
     Ok(log_path)
+}
+
+#[cfg(test)]
+mod regressions {
+    #[test]
+    fn simultaneous_component_checks_share_one_worker() {
+        let mut shell = crate::tests::keyboard::shell();
+        let mut ui = crate::tests::equalizer::Ui::default();
+        shell.start_ytdlp_update_check(&mut ui, false);
+        shell.start_ytdlp_update_check(&mut ui, true);
+        assert_eq!(shell.updates.workers.len(), 1);
+    }
 }
