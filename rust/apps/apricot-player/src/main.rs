@@ -216,7 +216,7 @@ fn run_qualification(arguments: &[std::ffi::OsString]) -> Result<bool, Box<dyn s
             .parent()
             .ok_or("application executable has no parent directory")?
             .join("components")
-            .join("apricot-youtube-helper.exe");
+            .join(apricot_platform::executable_name("apricot-youtube-helper"));
         let helper = YoutubeHelperProcess::start(&helper_path)?;
         assert!(!helper.helper_version().is_empty());
         assert!(!helper.backend_revision().is_empty());
@@ -277,17 +277,12 @@ fn run_qualification(arguments: &[std::ffi::OsString]) -> Result<bool, Box<dyn s
         .iter()
         .any(|argument| argument == "--qualification-playback")
     {
-        #[cfg(windows)]
         qualify_packaged_playback()?;
-        #[cfg(not(windows))]
-        return Err("packaged playback qualification currently requires Windows".into());
-        #[cfg(windows)]
         return Ok(true);
     }
     Ok(false)
 }
 
-#[cfg(windows)]
 fn qualify_packaged_playback() -> Result<(), Box<dyn std::error::Error>> {
     use std::{
         collections::BTreeMap,
@@ -310,8 +305,17 @@ fn qualify_packaged_playback() -> Result<(), Box<dyn std::error::Error>> {
     ));
     write_silent_wav(&fixture)?;
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
-        let mut options = MpvLaunchOptions::new(root.join("mpv").join("mpv.exe"));
-        options.library = Some(root.join("mpv").join("libmpv-2.dll"));
+        let mut options = MpvLaunchOptions::new(
+            root.join("mpv")
+                .join(apricot_platform::executable_name("mpv")),
+        );
+        #[cfg(windows)]
+        let library_name = "libmpv-2.dll";
+        #[cfg(target_os = "macos")]
+        let library_name = "libmpv.2.dylib";
+        #[cfg(not(any(windows, target_os = "macos")))]
+        let library_name = "libmpv.so.2";
+        options.library = Some(root.join("mpv").join(library_name));
         options.video_mode = MpvVideoMode::AudioOnly;
         options.audio_driver = Some("null".to_owned());
         let item = MediaItem {
@@ -358,7 +362,6 @@ fn qualify_packaged_playback() -> Result<(), Box<dyn std::error::Error>> {
     result
 }
 
-#[cfg(windows)]
 fn write_silent_wav(path: &std::path::Path) -> std::io::Result<()> {
     use std::io::Write;
 

@@ -12,6 +12,11 @@ on:
       - "rust/packaging/macos/**"
       - ".github/workflows/rust-macos-package.yml"
   workflow_dispatch:
+    inputs:
+      release_identity:
+        description: "Build the public ApricotPlayer identity and beta updater"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -36,15 +41,61 @@ jobs:
       - name: Install mpv, FFmpeg and dylibbundler
         run: brew install mpv ffmpeg dylibbundler
 
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: rust
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Qualify real playback
+        env:
+          APRICOT_TEST_MPV: /opt/homebrew/lib/mpv
+          APRICOT_TEST_FFMPEG: /opt/homebrew/bin/ffmpeg
+        run: cargo test -p apricot-playback real_libmpv --locked -- --ignored --test-threads=1
+
       - name: Build the package
-        run: ./scripts/build_macos_app.sh
+        env:
+          RELEASE_IDENTITY: ${{ inputs.release_identity }}
+        run: |
+          test "$(uname -m)" = arm64
+          if [ "$RELEASE_IDENTITY" = true ]; then
+            ./scripts/build_macos_app.sh --stable --channel beta
+          else
+            ./scripts/build_macos_app.sh
+          fi
+
+      - name: Verify the archived application
+        run: |
+          VERSION=$(cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "apricot-player"))')
+          OUTPUT="$PWD/local-dist/macos/$VERSION"
+          VERIFY=$(mktemp -d /private/tmp/apricot-ci-verify.XXXXXX)
+          trap 'rm -rf "$VERIFY"' EXIT
+          ditto -x -k "$OUTPUT/"*.zip "$VERIFY"
+          APP=$(find "$VERIFY" -maxdepth 1 -name '*.app' -print)
+          codesign --verify --deep --strict "$APP"
+          EXE=$(python3 -c 'import plistlib,sys; print(plistlib.load(open(sys.argv[1],"rb"))["CFBundleExecutable"])' "$APP/Contents/Info.plist")
+          "$APP/Contents/MacOS/$EXE" --qualification-smoke
+          "$APP/Contents/MacOS/$EXE" --qualification-ytdlp
+          "$APP/Contents/MacOS/$EXE" --qualification-youtube-helper
+          "$APP/Contents/MacOS/$EXE" --qualification-playback
+          hdiutil verify "$OUTPUT/"*.dmg
+          cp "$APP/Contents/Resources/build-info.json" "$OUTPUT/build-info.json"
+          python3 - "$OUTPUT/build-info.json" "$GITHUB_SHA" <<'PY'
+          import json, sys
+          info = json.load(open(sys.argv[1]))
+          assert info["commit"] == sys.argv[2] and info["dirty"] is False, info
+          print(json.dumps(info, indent=2))
+          PY
 
       - name: Keep the package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: apricotplayer-macos-arm64
           path: |
-            rust/local-dist/macos/*/ApricotPlayer2Beta-macos-arm64.dmg
-            rust/local-dist/macos/*/ApricotPlayer2Beta-macos-arm64.zip
+            rust/local-dist/macos/*/*.dmg
+            rust/local-dist/macos/*/*.zip
             rust/local-dist/macos/*/SHA256SUMS.txt
+            rust/local-dist/macos/*/build-info.json
           if-no-files-found: error

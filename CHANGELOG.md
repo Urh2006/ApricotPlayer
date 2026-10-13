@@ -1,3 +1,13 @@
+# v2.0.0-beta.9 - Preserve audio settings and build macOS packages in CI
+
+## Fixed
+- Windows and macOS: a failed or interrupted startup audio-device probe no longer treats the saved device as missing and resets it to auto.
+- macOS package qualification now locates the native YouTube helper and exercises the packaged libmpv instead of using Windows-only paths.
+
+## Packaging
+- GitHub Actions can build the public beta identity, DMG and updater ZIP from the same clean commit as Windows. The workflow checks formatting, locked tests and Clippy, real libmpv, archive signatures, bundled tools, DMG integrity and build provenance.
+- Public macOS builds refuse a dirty tracked tree and use the committed dependency lockfile.
+
 # v2.0.0-beta.8 - Functional parity and reliable playback state
 
 ## Fixed

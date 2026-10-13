@@ -28,7 +28,63 @@ pub struct DetailsLabels {
 #[derive(Default)]
 pub(crate) struct PlayerExtras {
     pub(crate) details_visible: bool,
-    pending_device_check: Option<Receiver<Vec<AudioOutputDevice>>>,
+    pending_device_check: Option<Receiver<Option<Vec<AudioOutputDevice>>>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_disconnected_device_probe_keeps_the_saved_output() {
+        let mut shell = crate::tests::keyboard::shell();
+        shell
+            .application
+            .set_default_audio_output_device("saved-device")
+            .unwrap();
+        let (sender, receiver) = mpsc::channel();
+        shell.extras.pending_device_check = Some(receiver);
+        drop(sender);
+        let mut ui = crate::tests::equalizer::Ui::default();
+        assert!(!shell.poll_saved_audio_device_check(&mut ui));
+        assert_eq!(
+            shell.application.settings().audio_output_device,
+            "saved-device"
+        );
+    }
+
+    #[test]
+    fn a_failed_device_probe_keeps_the_saved_output() {
+        let mut shell = crate::tests::keyboard::shell();
+        shell
+            .application
+            .set_default_audio_output_device("saved-device")
+            .unwrap();
+        let (sender, receiver) = mpsc::channel();
+        shell.extras.pending_device_check = Some(receiver);
+        sender.send(None).unwrap();
+        let mut ui = crate::tests::equalizer::Ui::default();
+        assert!(!shell.poll_saved_audio_device_check(&mut ui));
+        assert_eq!(
+            shell.application.settings().audio_output_device,
+            "saved-device"
+        );
+    }
+
+    #[test]
+    fn a_successful_probe_still_handles_a_missing_device() {
+        let mut shell = crate::tests::keyboard::shell();
+        shell
+            .application
+            .set_default_audio_output_device("saved-device")
+            .unwrap();
+        let (sender, receiver) = mpsc::channel();
+        shell.extras.pending_device_check = Some(receiver);
+        sender.send(Some(Vec::new())).unwrap();
+        let mut ui = crate::tests::equalizer::Ui::default();
+        assert!(!shell.poll_saved_audio_device_check(&mut ui));
+        assert_eq!(shell.application.settings().audio_output_device, "auto");
+    }
 }
 
 impl Shell {
@@ -196,16 +252,14 @@ impl Shell {
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
             std::thread::sleep(AUDIO_DEVICE_CHECK_DELAY);
-            let devices = library
-                .and_then(|library| {
-                    apricot_playback::probe_audio_output_devices(
-                        &library,
-                        None,
-                        AUDIO_DEVICE_PROBE_TIMEOUT,
-                    )
-                    .ok()
-                })
-                .unwrap_or_default();
+            let devices = library.and_then(|library| {
+                apricot_playback::probe_audio_output_devices(
+                    &library,
+                    None,
+                    AUDIO_DEVICE_PROBE_TIMEOUT,
+                )
+                .ok()
+            });
             let _ = sender.send(devices);
         });
         self.extras.pending_device_check = Some(receiver);
@@ -218,9 +272,12 @@ impl Shell {
             return false;
         };
         let devices = match pending.try_recv() {
-            Ok(devices) => devices,
+            Ok(Some(devices)) => devices,
             Err(TryRecvError::Empty) => return true,
-            Err(TryRecvError::Disconnected) => Vec::new(),
+            Ok(None) | Err(TryRecvError::Disconnected) => {
+                self.extras.pending_device_check = None;
+                return false;
+            }
         };
         self.extras.pending_device_check = None;
         let options = self.application.store_probed_audio_devices(&devices);

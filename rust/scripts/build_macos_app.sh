@@ -65,15 +65,19 @@ import json, sys
 print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "apricot-player"))')
 COMMIT=$(git rev-parse HEAD)
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then DIRTY=true; else DIRTY=false; fi
+if [ "$STABLE" = true ] && [ "$DIRTY" = true ]; then
+    echo "Commit the changes first; a release is built from a clean tree" >&2
+    exit 1
+fi
 
 if [ "$SKIP_CHECKS" != true ]; then
-    cargo test --workspace --quiet
-    cargo clippy --workspace --all-targets --quiet -- -D warnings
+    cargo test --workspace --locked --quiet
+    cargo clippy --workspace --all-targets --locked --quiet -- -D warnings
 fi
 if [ -n "$FEATURES" ]; then
-    cargo build --release -p apricot-player -p apricot-youtube-helper --features "$FEATURES"
+    cargo build --release --locked -p apricot-player -p apricot-youtube-helper --features "$FEATURES"
 else
-    cargo build --release -p apricot-player -p apricot-youtube-helper
+    cargo build --release --locked -p apricot-player -p apricot-youtube-helper
 fi
 
 # Downloads, checked by SHA-256 and kept for the next build.
