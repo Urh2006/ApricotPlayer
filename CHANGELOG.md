@@ -1,3 +1,23 @@
+# v2.0.0-beta.6 - ApricotPlayer for macOS
+
+## Added
+- Native macOS version for Apple silicon with VoiceOver support, the menu bar item, notifications, start at login, the default player setting, app and yt-dlp updates, and data import from Windows. It is not signed by Apple yet; open it the first time with Open Anyway in System Settings, Privacy & Security.
+- Spotify Followed artists in the Spotify menu on Windows and macOS.
+- Spotify songs can be marked with Shift+A and Ctrl+A and added to a playlist; songs already in the playlist are skipped.
+
+## Changed
+- Spotify search is a screen like the YouTube search instead of a separate window.
+- Spotify reconnects automatically after a lost session.
+- Speed and pitch are kept until the player is closed.
+- Spotify logs the play context and shuffle changes to spotify.log for diagnostics.
+
+## Fixed
+- Windows: focus returns to the last control after Alt+Tab.
+- Translations keep placeholder order in the new Spotify texts.
+
+## Known issues
+- Spotify Liked songs: smart shuffle does not turn on, and a second open from Library may not start playback. Planned for beta 7.
+
 # v2.0.0-beta.5 - Original YouTube Audio and Spotify Playback
 
 ## Fixed
