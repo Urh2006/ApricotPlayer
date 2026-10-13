@@ -1,3 +1,20 @@
+# v2.0.0-beta.8 - Functional parity and reliable playback state
+
+## Fixed
+- Start the first YouTube item after Spotify background playback by clearing the old PCM pause state in mpv.
+- macOS: use Spotify's timed lyrics and episode transcripts before generic providers.
+- Shuffle stays enabled or disabled across new tracks and Escape until the player area is closed. Spotify loads carry that state and preserve repeat in an open session.
+- macOS: keep accessible player controls beside the previous screen during background playback; register the background play/pause shortcut.
+- macOS: implement Resume last session, Copy link, diagnostics and result-column shortcuts, YouTube metadata hydration and next-stream prefetch.
+- macOS: preserve native editing/submission in Spotify search fields and target the playing item from player-focused actions and context menus.
+- macOS: make Windows-data import validated and transactional, with rollback and protection against old controllers overwriting imported data.
+- macOS: reject a yt-dlp update that cannot run and restore the previous application when a signed update fails its startup check.
+- Prevent overlapping component checks and redact macOS personal folders in diagnostics.
+
+## Review
+- Detailed findings and verification limits are recorded in `docs/AUDIT_BETA8.md`. LibreSpot is embedded in ApricotPlayer and must be updated with the application, not as a separately downloaded component.
+- The account-dependent Liked Songs reopening report and Spotify Smart Shuffle are not claimed fixed by offline transport tests.
+
 # v2.0.0-beta.7 - macOS fixes
 
 ## Fixed

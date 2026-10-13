@@ -1062,6 +1062,9 @@ unsafe fn probe_devices(
 
 impl PlaybackEngine for LibMpvEngine {
     fn execute(&mut self, command: PlaybackCommand) -> Result<(), PlaybackError> {
+        let leaving_pcm = self.pcm.is_some()
+            && matches!(&command, PlaybackCommand::Load { item, .. }
+                if !crate::pcm_source::is_pcm_item(item));
         if let PlaybackCommand::SetPaused(paused) = &command {
             self.requested_paused = *paused;
         }
@@ -1086,6 +1089,19 @@ impl PlaybackEngine for LibMpvEngine {
                 // `loadfile replace` leaves only the new entry in the playlist.
                 self.expected_entry = self.api.property_i64(self.handle(), "playlist/0/id");
                 self.ended_reported = false;
+                if leaving_pcm {
+                    // The per-item pause reset was routed to the old PCM source.
+                    // Its confirmed pause/EOF can leave mpv paused independently;
+                    // apply the new request to mpv after replacing that stream.
+                    self.api.run_command(
+                        self.handle(),
+                        &[
+                            "set".to_owned(),
+                            "pause".to_owned(),
+                            yes_no(self.requested_paused).to_owned(),
+                        ],
+                    )?;
+                }
             }
         }
         Ok(())
@@ -2266,6 +2282,67 @@ mod tests {
             starts,
             [false, true],
             "a new play request must beat the old mpv pause flag"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires APRICOT_TEST_MPV and APRICOT_TEST_FFMPEG"]
+    fn real_libmpv_pcm_to_regular_media_starts_on_first_load() {
+        use crate::{
+            PlaybackEngine, PlaybackEvent,
+            pcm_source::{PcmGeneration, PcmSource, PcmSourceEvent, PcmStream, set_pcm_source},
+        };
+        use std::sync::{Arc, Mutex};
+        struct Source(Mutex<Option<PcmSourceEvent>>);
+        impl PcmSource for Source {
+            fn start(&self, _: &MediaItem, _: u32, _: bool, _: bool) -> Result<(), String> {
+                Ok(())
+            }
+            fn set_paused(&self, _: bool) {}
+            fn seek(&self, _: u32) {}
+            fn stop(&self) {}
+            fn take_generation(&self) -> Option<PcmGeneration> {
+                None
+            }
+            fn open(&self, _: u64) -> Option<Arc<dyn PcmStream>> {
+                None
+            }
+            fn poll_event(&self) -> Option<PcmSourceEvent> {
+                self.0.lock().unwrap().take()
+            }
+            fn format(&self) -> (String, Option<f64>) {
+                ("Test PCM".into(), None)
+            }
+        }
+        let source = Arc::new(Source(Mutex::new(Some(PcmSourceEvent::Paused(true)))));
+        set_pcm_source(Some(source));
+        let mut engine = short_engine(false);
+        engine.pcm = Some(super::PcmPlayback {
+            base_ms: 0,
+            offset: 0.0,
+            started: true,
+            loaded: true,
+            boundaries: std::collections::VecDeque::default(),
+        });
+        // Confirmed PCM pause reaches mpv; a new play request resets the old
+        // item through the same command used by the runtime before Load.
+        unsafe {
+            engine.poll_pcm().unwrap();
+        }
+        engine.execute(PlaybackCommand::SetPaused(false)).unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        engine
+            .execute(PlaybackCommand::Load {
+                item: Box::new(short_fixture(folder.path())),
+                start_position_seconds: None,
+            })
+            .unwrap();
+        let events = collect_events(&mut engine, std::time::Duration::from_millis(1600));
+        set_pcm_source(None);
+        assert!(events.contains(&PlaybackEvent::Started), "{events:?}");
+        assert!(
+            events.contains(&PlaybackEvent::Ended),
+            "first regular item must play through: {events:?}"
         );
     }
 
