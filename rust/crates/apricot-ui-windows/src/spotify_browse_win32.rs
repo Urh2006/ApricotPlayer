@@ -142,7 +142,6 @@ pub(super) unsafe fn show_search_screen(window: HWND) {
         personalised: false,
         following: None,
         sections: Vec::new(),
-        mark_all: false,
         search_screen: true,
         focus_results: false,
     });
@@ -203,6 +202,13 @@ pub(super) unsafe fn submit_search(window: HWND) {
         .get(kind_index)
         .copied()
         .unwrap_or(SearchKind::All);
+    state.spotify_browse.marks.clear();
+    if matches!(
+        state.spotify_browse.pending,
+        Some((_, Pending::Selection { .. } | Pending::CheckSaved { .. }))
+    ) {
+        state.spotify_browse.pending = None;
+    }
     state.spotify_browse.last_query.clone_from(&query);
     state.spotify_browse.last_kind = kind_index;
     let title = search_title(state, &query);
@@ -221,7 +227,6 @@ pub(super) unsafe fn submit_search(window: HWND) {
     frame.loaded = false;
     frame.error = None;
     frame.mixed = kind == SearchKind::All;
-    frame.mark_all = false;
     frame.focus_results = true;
     request(window, 0);
     render(window, false);
@@ -451,8 +456,6 @@ struct Frame {
     following: Option<bool>,
     /// Home and browse pages: the sections behind the section rows.
     sections: Vec<apricot_spotify::catalog::Section>,
-    /// Ctrl+A waits for the remaining pages, then marks every song.
-    mark_all: bool,
     /// The search screen: query, type and Search above the results.
     search_screen: bool,
     /// The first page of a new search takes the focus.
@@ -461,6 +464,13 @@ struct Frame {
 
 /// A change waiting for Spotify's answer.
 enum Pending {
+    Selection {
+        save: Option<bool>,
+        marks: apricot_app::spotify::SpotifyMarks,
+    },
+    CheckSaved {
+        uris: Vec<String>,
+    },
     Saved,
     Add {
         name: String,
@@ -566,6 +576,13 @@ pub(super) unsafe fn open(window: HWND, source: Source, title: String) {
     let Some(state) = state_mut(window) else {
         return;
     };
+    state.spotify_browse.marks.clear();
+    if matches!(
+        state.spotify_browse.pending,
+        Some((_, Pending::Selection { .. } | Pending::CheckSaved { .. }))
+    ) {
+        state.spotify_browse.pending = None;
+    }
     let mixed = matches!(
         source,
         Source::Search {
@@ -593,7 +610,6 @@ pub(super) unsafe fn open(window: HWND, source: Source, title: String) {
         personalised: false,
         following: None,
         sections: Vec::new(),
-        mark_all: false,
         search_screen: false,
         focus_results: false,
     });
@@ -651,6 +667,23 @@ pub(super) unsafe fn loaded(
         return;
     }
     let texts = super::spotify::catalog(state);
+    if let Ok(CatalogResult::SelectionProgress(count)) = &result {
+        if state
+            .spotify_browse
+            .pending
+            .as_ref()
+            .is_some_and(|(wanted, pending)| {
+                *wanted == stamp && matches!(pending, Pending::Selection { .. })
+            })
+        {
+            set_status(
+                state,
+                &format!("{} ({count})", texts.text("spotify_loading")),
+                false,
+            );
+        }
+        return;
+    }
     let pending_load = matches!(
         state.spotify_browse.pending,
         Some((
@@ -659,10 +692,28 @@ pub(super) unsafe fn loaded(
                 | Pending::Describe { .. }
                 | Pending::Preview { .. }
                 | Pending::Duplicates { .. }
+                | Pending::Selection { .. }
+                | Pending::CheckSaved { .. }
         )) if wanted == stamp
     );
     if pending_load && let Some((_, pending)) = state.spotify_browse.pending.take() {
         match (pending, result) {
+            (Pending::Selection { save, marks }, Ok(CatalogResult::TrackUris(uris))) => {
+                let uris = marks.resolve(uris);
+                bulk_action(window, uris, save);
+            }
+            (Pending::CheckSaved { uris }, Ok(CatalogResult::SavedStates(states))) => {
+                save_checked(window, uris, &states);
+            }
+            (
+                Pending::Duplicates {
+                    playlist,
+                    name,
+                    uris,
+                    ..
+                },
+                Ok(CatalogResult::TrackUris(existing)),
+            ) => add_without_duplicates(window, playlist, &name, &uris, &existing),
             (Pending::Playlists { uris }, Ok(CatalogResult::Playlists(playlists))) => {
                 state.spotify_browse.playlists = Some(playlists);
                 choose_playlist(window, uris);
@@ -827,7 +878,12 @@ pub(super) unsafe fn loaded(
             return;
         }
         Ok(
-            CatalogResult::Playlists(_) | CatalogResult::HiddenSongs(_) | CatalogResult::Preview(_),
+            CatalogResult::SelectionProgress(_)
+            | CatalogResult::TrackUris(_)
+            | CatalogResult::SavedStates(_)
+            | CatalogResult::Playlists(_)
+            | CatalogResult::HiddenSongs(_)
+            | CatalogResult::Preview(_),
         ) => {}
         Err(error) => {
             let text = apricot_app::spotify::error_text(&texts, &error);
@@ -846,15 +902,11 @@ pub(super) unsafe fn loaded(
         service.load_catalog(stamp, CatalogRequest::HiddenSongs);
     }
     if is_top && state.view == MainView::SpotifyBrowse {
-        if top(state).is_some_and(|frame| frame.mark_all) {
-            continue_mark_all(window);
-        }
         render(window, focus_results);
     }
 }
 
-/// Ctrl+A: every song of the open list, also the pages not loaded yet, is
-/// marked for "Add to Spotify playlist".
+/// Ctrl+A selects the list without materializing its remaining rows.
 pub(super) unsafe fn mark_all(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
@@ -863,46 +915,190 @@ pub(super) unsafe fn mark_all(window: HWND) {
         return;
     }
     let texts = super::spotify::catalog(state);
-    let Some(frame) = state.spotify_browse.frames.last_mut() else {
+    let Some(frame) = top(state) else {
         return;
     };
-    frame.mark_all = true;
-    if frame.next_offset.is_some() || frame.loading.is_some() {
-        super::spotify::announce(window, texts.text("spotify_marking_all"));
-    }
-    continue_mark_all(window);
-    render(window, false);
-}
-
-/// Loads the next page for Ctrl+A, or marks the songs when all are in.
-unsafe fn continue_mark_all(window: HWND) {
-    let Some(state) = state_mut(window) else {
-        return;
-    };
-    let Some(frame) = state.spotify_browse.frames.last_mut() else {
-        return;
-    };
-    if frame.loading.is_some() {
-        return;
-    }
-    if let Some(offset) = frame.next_offset {
-        request(window, offset);
-        return;
-    }
-    frame.mark_all = false;
-    let songs: Vec<String> = frame
+    let more = frame.next_offset.is_some() || frame.loading.is_some();
+    let uris: Vec<String> = frame
         .items
         .iter()
         .filter(|item| item.kind.is_playable_item() && item.playable)
         .map(|item| item.uri.clone())
         .collect();
-    let count = songs.len();
-    state.spotify_browse.marks.mark_all(songs);
-    let texts = super::spotify::catalog(state);
-    let text = texts
-        .text("spotify_marked_all")
-        .replace("{count}", &count.to_string());
+    let count = uris.len();
+    if more {
+        state.spotify_browse.marks.mark_entire_list();
+    } else {
+        state.spotify_browse.marks.clear();
+        state.spotify_browse.marks.mark_all(uris);
+    }
+    let text = if more {
+        texts.text("spotify_selected_entire_list").to_owned()
+    } else {
+        texts
+            .text("spotify_marked_all")
+            .replace("{count}", &count.to_string())
+    };
     super::spotify::announce(window, &text);
+    render(window, false);
+}
+
+fn selection_saved(state: &WindowState) -> Option<bool> {
+    let frame = top(state)?;
+    let marks = &state.spotify_browse.marks;
+    if marks.is_empty() {
+        return None;
+    }
+    if matches!(frame.source, Source::LikedSongs) {
+        return Some(true);
+    }
+    if marks.is_all() && (frame.next_offset.is_some() || frame.loading.is_some()) {
+        return Some(false);
+    }
+    let selected: Vec<_> = frame
+        .items
+        .iter()
+        .filter(|item| marks.contains(&item.uri) && item.kind.is_playable_item())
+        .collect();
+    Some(
+        !selected.is_empty()
+            && selected.len() >= marks.len()
+            && selected.iter().all(|item| item.saved == Some(true)),
+    )
+}
+
+unsafe fn begin_selection(window: HWND, selected: &str, save: Option<bool>) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    if state.spotify_browse.pending.is_some() {
+        return;
+    }
+    if state.spotify_browse.marks.is_all()
+        && let Some(request) = top(state).and_then(|frame| frame.source.request(0))
+    {
+        load_for(
+            window,
+            CatalogRequest::CollectTracks(Box::new(request)),
+            Pending::Selection {
+                save,
+                marks: state.spotify_browse.marks.clone(),
+            },
+        );
+        return;
+    }
+    bulk_action(window, songs_to_add(state, selected), save);
+}
+
+unsafe fn bulk_choice(
+    window: HWND,
+    title: &str,
+    prompt: &str,
+    choices: &[String],
+) -> Option<usize> {
+    let state = state_mut(window)?;
+    let texts = super::spotify::catalog(state);
+    state.modal_open = true;
+    let chosen = crate::playlist_dialog_win32::choose(
+        window,
+        title,
+        prompt,
+        choices,
+        texts.text("ok"),
+        texts.text("cancel"),
+    );
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
+    super::resume_deferred_window_work(window);
+    restore_focus(window);
+    chosen.ok().flatten()
+}
+
+unsafe fn bulk_action(window: HWND, uris: Vec<String>, save: Option<bool>) {
+    if uris.is_empty() {
+        return;
+    }
+    match save {
+        None => add_to_playlist(window, uris),
+        Some(true) => load_for(
+            window,
+            CatalogRequest::SavedStates(uris.clone()),
+            Pending::CheckSaved { uris },
+        ),
+        Some(false) => {
+            let Some(state) = state(window) else {
+                return;
+            };
+            let texts = super::spotify::catalog(state);
+            let question = format!("{} ({})?", texts.text("spotify_unlike"), uris.len());
+            if bulk_choice(
+                window,
+                texts.text("spotify_unlike"),
+                &question,
+                &[texts.text("yes").to_owned()],
+            ) == Some(0)
+            {
+                begin_edit(
+                    window,
+                    apricot_spotify::LibraryEdit::SetSaved { uris, saved: false },
+                    Pending::Saved,
+                );
+            }
+        }
+    }
+}
+
+unsafe fn save_checked(window: HWND, uris: Vec<String>, states: &[bool]) {
+    if states.len() != uris.len() {
+        return;
+    }
+    let Some(state) = state(window) else {
+        return;
+    };
+    let texts = super::spotify::catalog(state);
+    let duplicates = states.iter().filter(|saved| **saved).count();
+    let uris = if duplicates == 0 {
+        uris
+    } else {
+        let question = texts
+            .text("spotify_duplicates_question")
+            .replace("{count}", &duplicates.to_string())
+            .replace("{total}", &uris.len().to_string())
+            .replace("{name}", texts.text("spotify_liked_songs"));
+        let choice = bulk_choice(
+            window,
+            texts.text("spotify_like"),
+            &question,
+            &[
+                texts.text("spotify_add_new_only").to_owned(),
+                texts.text("spotify_add_all_anyway").to_owned(),
+            ],
+        );
+        match choice {
+            Some(0) => uris
+                .into_iter()
+                .zip(states)
+                .filter_map(|(uri, saved)| (!saved).then_some(uri))
+                .collect(),
+            Some(_) => uris,
+            None => return,
+        }
+    };
+    if uris.is_empty() {
+        super::spotify::announce(
+            window,
+            &texts
+                .text("spotify_nothing_new")
+                .replace("{name}", texts.text("spotify_liked_songs")),
+        );
+        return;
+    }
+    begin_edit(
+        window,
+        apricot_spotify::LibraryEdit::SetSaved { uris, saved: true },
+        Pending::Saved,
+    );
 }
 
 /// Shift+A in a Spotify list: marks or unmarks the selected song; Spotify
@@ -925,9 +1121,19 @@ pub(super) unsafe fn toggle_mark(window: HWND) {
     } else {
         "spotify_unmarked"
     };
-    let text = texts
-        .text(key)
-        .replace("{count}", &state.spotify_browse.marks.len().to_string());
+    let text = if state.spotify_browse.marks.is_all() {
+        texts
+            .text(if marked {
+                "spotify_marked_row"
+            } else {
+                "spotify_unmarked_row"
+            })
+            .to_owned()
+    } else {
+        texts
+            .text(key)
+            .replace("{count}", &state.spotify_browse.marks.len().to_string())
+    };
     super::spotify::announce(window, &text);
     render(window, false);
 }
@@ -1434,6 +1640,13 @@ pub(super) unsafe fn back(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
     };
+    state.spotify_browse.marks.clear();
+    if matches!(
+        state.spotify_browse.pending,
+        Some((_, Pending::Selection { .. } | Pending::CheckSaved { .. }))
+    ) {
+        state.spotify_browse.pending = None;
+    }
     state.spotify_browse.frames.pop();
     if state.spotify_browse.frames.is_empty() {
         super::spotify::show_hub(window);
@@ -1502,6 +1715,8 @@ pub(super) fn row_menu(state: &WindowState) -> Option<apricot_app::context_menu:
         link: apricot_core::SpotifyRef::parse(&item.uri).is_some(),
         saved: if profile_section {
             frame.following
+        } else if item.kind.is_playable_item() {
+            selection_saved(state).or(item.saved)
         } else {
             item.saved
         },
@@ -1661,11 +1876,18 @@ pub(super) unsafe fn toggle_saved(window: HWND) {
     } else {
         uri
     };
-    begin_edit(
-        window,
-        apricot_spotify::LibraryEdit::ToggleSaved { uri },
-        Pending::Saved,
-    );
+    if state.view == MainView::SpotifyBrowse
+        && !super::focus_in_background_player(state)
+        && !state.spotify_browse.marks.is_empty()
+    {
+        begin_selection(window, &uri, Some(selection_saved(state) != Some(true)));
+    } else {
+        begin_edit(
+            window,
+            apricot_spotify::LibraryEdit::ToggleSaved { uri },
+            Pending::Saved,
+        );
+    }
 }
 
 /// Player focus must never edit a row selected in the list behind it.
@@ -1881,10 +2103,10 @@ unsafe fn choose_playlist(window: HWND, uris: Vec<String>) {
                 }
                 load_for(
                     window,
-                    CatalogRequest::Playlist {
+                    CatalogRequest::CollectTracks(Box::new(CatalogRequest::Playlist {
                         uri: playlist.uri.clone(),
                         offset: 0,
-                    },
+                    })),
                     Pending::Duplicates {
                         playlist: playlist.uri.clone(),
                         name: playlist.name.clone(),
@@ -1931,6 +2153,27 @@ pub(super) unsafe fn edited(
     };
     let mut follow_up = None;
     let text = match (&outcome, pending) {
+        (O::SavedBatch { uris, saved }, _) => {
+            let changed: std::collections::HashSet<_> = uris.iter().collect();
+            for frame in &mut state.spotify_browse.frames {
+                for item in &mut frame.items {
+                    if changed.contains(&item.uri) {
+                        item.saved = Some(*saved);
+                    }
+                }
+                if !saved && matches!(frame.source, Source::LikedSongs) {
+                    frame.remove_items(|item| !changed.contains(&item.uri));
+                }
+            }
+            state.spotify_browse.marks.clear();
+            texts
+                .text(if *saved {
+                    "spotify_liked_done"
+                } else {
+                    "spotify_unliked_done"
+                })
+                .replace("{count}", &uris.len().to_string())
+        }
         (O::Saved { uri, saved }, _) => {
             let kind = ItemKind::from_uri_public(uri);
             for frame in &mut state.spotify_browse.frames {
@@ -2132,11 +2375,7 @@ pub(super) unsafe fn command(window: HWND, command: apricot_app::context_menu::C
         }
         C::SpotifyToggleSaved => toggle_saved(window),
         C::SpotifyAddToPlaylist => {
-            let songs = super::state(window).map_or_else(
-                || vec![item.uri.clone()],
-                |state| songs_to_add(state, &item.uri),
-            );
-            add_to_playlist(window, songs);
+            begin_selection(window, &item.uri, None);
         }
         C::SpotifyRemoveFromPlaylist => remove_selected(window),
         C::SpotifyMoveUp => move_selected(window, true),
@@ -2337,7 +2576,6 @@ mod tests {
             personalised: false,
             following: None,
             sections: Vec::new(),
-            mark_all: false,
             search_screen: false,
             focus_results: false,
         };

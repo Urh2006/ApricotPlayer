@@ -1,3 +1,11 @@
+# v2.0.0-beta.10 - Large Spotify selections and bulk Liked Songs
+
+## Fixed
+- Ctrl+A selects an entire Spotify list immediately without loading every remaining row into the native list. URI pages are read on the worker only when adding or saving the selection, with progress and support for excluding individual songs.
+- Materialized selections use a hash index instead of quadratic duplicate checks. Playlist additions and Liked Songs edits send bounded batches of 100 URIs.
+- The Liked Songs context command uses the whole marked selection: remove when every selected song is known liked, otherwise save. Mixed selections can save only new songs or all selected songs; bulk removal asks for confirmation.
+- Windows and macOS share selection and Spotify worker behavior. Leaving the list ignores unfinished selection reads.
+
 # v2.0.0-beta.9 - Preserve audio settings and build macOS packages in CI
 
 ## Fixed

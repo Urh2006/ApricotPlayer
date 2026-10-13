@@ -1313,6 +1313,79 @@ mod spotify_lists {
     }
 
     #[test]
+    fn select_all_in_large_liked_songs_keeps_only_loaded_rows_and_can_exclude_one() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell.spotify_browse_test_open(
+            &mut ui,
+            Source::LikedSongs,
+            "13500 liked songs",
+            vec![track("one", "u1"), track("two", "u2")],
+            false,
+        );
+        shell.spotify_browse_test_next_page(50);
+        shell.activate_action(&mut ui, "spotify_mark_all");
+        assert_eq!(ui.screens.last().unwrap().rows.len(), 2);
+        assert_eq!(
+            ui.announcements.last().unwrap(),
+            "All songs selected. Remaining songs will be read when you add or save them."
+        );
+        assert!(
+            shell.spotify_service_ref().is_none(),
+            "Ctrl+A must not start network collection"
+        );
+        ui.selected = Some(0);
+        shell.activate_action(&mut ui, "queue_audio");
+        let rows = &ui.screens.last().unwrap().rows;
+        assert!(!rows[0].ends_with(", marked"));
+        assert!(rows[1].ends_with(", marked"));
+    }
+
+    #[test]
+    fn liked_menu_uses_all_marked_songs_instead_of_the_focused_song() {
+        for (saved, expected) in [
+            (vec![true, false], "Save to Liked Songs"),
+            (vec![true, true], "Remove from Liked Songs"),
+            (vec![false, false], "Save to Liked Songs"),
+        ] {
+            let mut shell = super::keyboard::shell();
+            let mut ui = Ui::default();
+            let mut tracks = vec![track("one", "u1"), track("two", "u2")];
+            for (item, saved) in tracks.iter_mut().zip(saved) {
+                item.saved = Some(saved);
+            }
+            shell.spotify_browse_test_open(
+                &mut ui,
+                Source::Playlist("spotify:playlist:p".into()),
+                "Playlist",
+                tracks,
+                false,
+            );
+            shell.activate_action(&mut ui, "spotify_mark_all");
+            let catalog = shell.catalog();
+            let titles = Vec::new();
+            let context = ContextMenuContext {
+                catalog: &catalog,
+                settings: shell.application.settings(),
+                user_playlist_titles: &titles,
+                queued_download_count: 0,
+            };
+            let menu = shell.spotify_browse_context_entries(&ui, &context).unwrap();
+            let label = menu
+                .iter()
+                .find_map(|entry| match entry {
+                    ContextMenuEntry::Command {
+                        label,
+                        command: ContextCommand::SpotifyToggleSaved,
+                    } => Some(label),
+                    _ => None,
+                })
+                .unwrap();
+            assert!(label.starts_with(expected), "{label}");
+        }
+    }
+
+    #[test]
     fn a_list_is_named_by_its_title_with_open_and_back() {
         let mut shell = super::keyboard::shell();
         let mut ui = Ui::default();

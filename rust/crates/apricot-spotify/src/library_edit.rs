@@ -19,6 +19,10 @@ use crate::{
 /// One change the UI asks for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LibraryEdit {
+    SetSaved {
+        uris: Vec<String>,
+        saved: bool,
+    },
     /// Like or unlike a track or episode, save or remove an album,
     /// playlist, show, or follow or unfollow an artist or a profile: the
     /// opposite of the current state.
@@ -68,6 +72,7 @@ pub enum LibraryEdit {
 /// What a change did, as Spotify confirms it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EditOutcome {
+    SavedBatch { uris: Vec<String>, saved: bool },
     Saved { uri: String, saved: bool },
     AddedToPlaylist { playlist: String, count: usize },
     RemovedFromPlaylist { playlist: String, count: usize },
@@ -114,6 +119,24 @@ pub async fn apply(
     edit: LibraryEdit,
 ) -> Result<EditOutcome, ApiError> {
     match edit {
+        LibraryEdit::SetSaved { uris, saved } => {
+            let operation = if saved {
+                "addToLibrary"
+            } else {
+                "removeFromLibrary"
+            };
+            for chunk in uris.chunks(100) {
+                api.pathfinder(session, operation, json!({ "libraryItemUris": chunk }))
+                    .await?;
+                let confirmed = catalog::saved(api, session, chunk).await?;
+                if confirmed.len() != chunk.len() || confirmed.iter().any(|state| *state != saved) {
+                    return Err(ApiError::Shape(
+                        "Spotify did not confirm the requested saved state".into(),
+                    ));
+                }
+            }
+            Ok(EditOutcome::SavedBatch { uris, saved })
+        }
         LibraryEdit::ToggleSaved { uri } if uri.starts_with("spotify:playlist:") => {
             let saved = toggle_playlist_in_library(api, session, &uri).await?;
             Ok(EditOutcome::Saved { uri, saved })
@@ -132,16 +155,18 @@ pub async fn apply(
             Ok(EditOutcome::Saved { uri, saved })
         }
         LibraryEdit::AddToPlaylist { playlist, uris } => {
-            api.pathfinder(
-                session,
-                "addToPlaylist",
-                json!({
-                    "playlistUri": playlist,
-                    "playlistItemUris": uris,
-                    "newPosition": { "moveType": "BOTTOM_OF_PLAYLIST", "fromUid": null },
-                }),
-            )
-            .await?;
+            for chunk in uris.chunks(100) {
+                api.pathfinder(
+                    session,
+                    "addToPlaylist",
+                    json!({
+                        "playlistUri": playlist,
+                        "playlistItemUris": chunk,
+                        "newPosition": { "moveType": "BOTTOM_OF_PLAYLIST", "fromUid": null },
+                    }),
+                )
+                .await?;
+            }
             Ok(EditOutcome::AddedToPlaylist {
                 playlist,
                 count: uris.len(),

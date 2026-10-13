@@ -195,6 +195,9 @@ pub struct SpotifyService {
 /// What the UI asks to read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CatalogRequest {
+    /// Reads URI pages on the worker without hydrating or rendering rows.
+    CollectTracks(Box<CatalogRequest>),
+    SavedStates(Vec<String>),
     Search {
         query: String,
         kind: crate::catalog::SearchKind,
@@ -250,6 +253,9 @@ pub enum CatalogRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CatalogResult {
+    TrackUris(Vec<String>),
+    SelectionProgress(usize),
+    SavedStates(Vec<bool>),
     Page(crate::catalog::CatalogPage),
     Collection(crate::catalog::Collection),
     Playlists(Vec<crate::catalog::CatalogItem>),
@@ -263,6 +269,69 @@ pub enum CatalogResult {
     Radio(String),
     Profile(crate::catalog::Profile),
     Preview(Option<String>),
+}
+
+/// The list is consumed page by page off the UI thread; only distinct URIs survive.
+async fn collect_track_uris(
+    api: &crate::api::Api,
+    session: &Session,
+    mut request: CatalogRequest,
+    progress: impl Fn(usize),
+) -> Result<Vec<String>, crate::api::ApiError> {
+    use crate::{api::ApiError, catalog};
+    let mut uris = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut reported = 0;
+    let mut pages = 0;
+    loop {
+        let page = match &request {
+            CatalogRequest::LikedSongs { offset } => {
+                catalog::liked_songs(api, session, *offset).await?
+            }
+            CatalogRequest::Playlist { uri, offset } => {
+                catalog::playlist(api, session, uri, *offset).await?.page
+            }
+            CatalogRequest::Album { uri, offset } => {
+                catalog::album(api, session, uri, *offset).await?.page
+            }
+            CatalogRequest::Show { uri, offset } => {
+                catalog::show(api, session, uri, *offset).await?.page
+            }
+            CatalogRequest::Search {
+                query,
+                kind,
+                offset,
+            } => catalog::search(api, session, query, *kind, *offset).await?,
+            _ => return Err(ApiError::Shape("unsupported bulk selection source".into())),
+        };
+        for item in page.items {
+            if item.kind.is_playable_item() && item.playable && seen.insert(item.uri.clone()) {
+                uris.push(item.uri);
+            }
+        }
+        pages += 1;
+        if uris.len() / 500 > reported / 500 {
+            progress(uris.len());
+            reported = uris.len();
+        }
+        let Some(next) = page.next_offset else {
+            return Ok(uris);
+        };
+        let (CatalogRequest::LikedSongs { offset }
+        | CatalogRequest::Playlist { offset, .. }
+        | CatalogRequest::Album { offset, .. }
+        | CatalogRequest::Show { offset, .. }
+        | CatalogRequest::Search { offset, .. }) = &mut request
+        else {
+            unreachable!()
+        };
+        if next <= *offset || pages >= 10_000 || uris.len() > 100_000 {
+            return Err(ApiError::Shape(
+                "bulk selection paging did not advance".into(),
+            ));
+        }
+        *offset = next;
+    }
 }
 
 /// Liked state of the tracks and episodes Spotify did not mark, so rows
@@ -565,6 +634,33 @@ impl SpotifyService {
                 let session = session.ok_or(SpotifyError::NoCredentials)?;
                 let api = api.as_ref();
                 Ok(match request {
+                    CatalogRequest::CollectTracks(request) => CatalogResult::TrackUris(
+                        collect_track_uris(api, &session, *request, |count| {
+                            Self::emit(
+                                &sender,
+                                &notify,
+                                SpotifyEvent::Catalog {
+                                    stamp,
+                                    result: Ok(CatalogResult::SelectionProgress(count)),
+                                },
+                            );
+                        })
+                        .await?,
+                    ),
+                    CatalogRequest::SavedStates(uris) => {
+                        let mut states = Vec::with_capacity(uris.len());
+                        for chunk in uris.chunks(100) {
+                            let answer = catalog::saved(api, &session, chunk).await?;
+                            if answer.len() != chunk.len() {
+                                return Err(crate::api::ApiError::Shape(
+                                    "incomplete saved states".into(),
+                                )
+                                .into());
+                            }
+                            states.extend(answer);
+                        }
+                        CatalogResult::SavedStates(states)
+                    }
                     CatalogRequest::EditablePlaylists => {
                         CatalogResult::Playlists(catalog::editable_playlists(api, &session).await?)
                     }
@@ -657,7 +753,10 @@ impl SpotifyService {
                     CatalogResult::Collection(collection) => {
                         fill_saved(&api_for_saved, session, &mut collection.page.items).await;
                     }
-                    CatalogResult::Playlists(_)
+                    CatalogResult::SelectionProgress(_)
+                    | CatalogResult::TrackUris(_)
+                    | CatalogResult::SavedStates(_)
+                    | CatalogResult::Playlists(_)
                     | CatalogResult::HiddenSongs(_)
                     | CatalogResult::Sections { .. }
                     | CatalogResult::Profile(_)

@@ -479,16 +479,28 @@ pub fn named(catalog: &TranslationCatalog, key: &str, name: &str) -> String {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SpotifyMarks {
     uris: Vec<String>,
+    index: std::collections::HashSet<String>,
+    all: bool,
+    excluded: std::collections::HashSet<String>,
 }
 
 impl SpotifyMarks {
     /// Marks or unmarks `uri`; `true` when it is marked now.
     pub fn toggle(&mut self, uri: &str) -> bool {
+        if self.all {
+            if self.excluded.remove(uri) {
+                return true;
+            }
+            self.excluded.insert(uri.to_owned());
+            return false;
+        }
         if let Some(position) = self.uris.iter().position(|marked| marked == uri) {
             self.uris.remove(position);
+            self.index.remove(uri);
             false
         } else {
             self.uris.push(uri.to_owned());
+            self.index.insert(uri.to_owned());
             true
         }
     }
@@ -496,14 +508,18 @@ impl SpotifyMarks {
     /// Marks every one of `uris` that is not marked yet.
     pub fn mark_all(&mut self, uris: impl IntoIterator<Item = String>) {
         for uri in uris {
-            if !self.uris.contains(&uri) {
+            if self.index.insert(uri.clone()) {
                 self.uris.push(uri);
             }
         }
     }
 
     pub fn contains(&self, uri: &str) -> bool {
-        self.uris.iter().any(|marked| marked == uri)
+        if self.all {
+            !self.excluded.contains(uri)
+        } else {
+            self.index.contains(uri)
+        }
     }
 
     pub const fn len(&self) -> usize {
@@ -511,7 +527,7 @@ impl SpotifyMarks {
     }
 
     pub const fn is_empty(&self) -> bool {
-        self.uris.is_empty()
+        !self.all && self.uris.is_empty()
     }
 
     pub fn uris(&self) -> &[String] {
@@ -520,6 +536,22 @@ impl SpotifyMarks {
 
     pub fn clear(&mut self) {
         self.uris.clear();
+        self.index.clear();
+        self.all = false;
+        self.excluded.clear();
+    }
+
+    pub fn mark_entire_list(&mut self) {
+        self.clear();
+        self.all = true;
+    }
+    pub const fn is_all(&self) -> bool {
+        self.all
+    }
+    pub fn resolve(&self, uris: Vec<String>) -> Vec<String> {
+        uris.into_iter()
+            .filter(|uri| !self.excluded.contains(uri))
+            .collect()
     }
 }
 
@@ -538,6 +570,32 @@ pub fn split_duplicates(adding: &[String], existing: &[String]) -> (Vec<String>,
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn entire_collection_selection_resolves_thirteen_thousand_without_losing_exclusions() {
+        let mut marks = super::SpotifyMarks::default();
+        marks.mark_entire_list();
+        assert!(!marks.toggle("spotify:track:500"));
+        let uris = (0..13501).map(|i| format!("spotify:track:{i}")).collect();
+        let selected = marks.resolve(uris);
+        assert_eq!(selected.len(), 13500);
+        assert!(!selected.iter().any(|uri| uri == "spotify:track:500"));
+        assert!(marks.toggle("spotify:track:500"));
+        assert!(marks.contains("spotify:track:500"));
+        marks.clear();
+        assert!(marks.is_empty());
+        assert!(!marks.is_all());
+    }
+
+    #[test]
+    fn large_materialized_marks_deduplicate_and_preserve_order() {
+        let mut marks = super::SpotifyMarks::default();
+        let uris: Vec<_> = (0..13500).map(|i| format!("spotify:track:{i}")).collect();
+        marks.mark_all(uris.clone());
+        marks.mark_all(uris.clone());
+        assert_eq!(marks.uris(), uris);
+        assert_eq!(marks.len(), 13500);
+    }
 
     #[test]
     fn marks_toggle_and_mark_all_keep_the_order() {
