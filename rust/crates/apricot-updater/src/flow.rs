@@ -782,6 +782,23 @@ mod tests {
     /// The macOS folder build: a ZIP with `yt-dlp_macos` and `_internal`.
     #[test]
     #[cfg(target_os = "macos")]
+    fn malformed_macho_folder_does_not_replace_working_component() {
+        let folder = tempfile::tempdir().expect("folder");
+        let target = folder.path().join("yt-dlp_macos");
+        fs::create_dir(&target).expect("target");
+        fs::write(target.join("yt-dlp_macos"), b"working copy").expect("old");
+        let zip = folder.path().join("update.zip");
+        fs::write(&zip, crate::package::tests::zip_bytes(&[
+            ("yt-dlp_macos", &[0xcf, 0xfa, 0xed, 0xfe, b'n']),
+            ("_internal/base_library.zip", b"data"),
+        ])).expect("archive");
+        assert!(super::install_component_folder(&zip, &target).is_err());
+        assert_eq!(fs::read(target.join("yt-dlp_macos")).expect("kept"), b"working copy");
+    }
+
+    /// The macOS folder build: a ZIP with `yt-dlp_macos` and `_internal`.
+    #[test]
+    #[cfg(target_os = "macos")]
     fn macos_ytdlp_update_swaps_in_the_folder_build() {
         let folder = tempfile::tempdir().expect("folder");
         let components = folder.path().join("components");
