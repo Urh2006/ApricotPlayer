@@ -117,9 +117,6 @@ pub(crate) struct SpotifyState {
     /// The link whose metadata is being read; only the latest one plays.
     resolve: Option<SpotifyStamp>,
     polling: bool,
-    /// A new connection replaced the running session, whose end is not a
-    /// disconnection the user needs to hear.
-    replacing_session: bool,
     /// The last automatic reconnection after a lost session (beta 6, 4a.1).
     reconnected_at: Option<std::time::Instant>,
     /// The pending request for smart shuffle recommendations, when the
@@ -148,20 +145,29 @@ fn reconnect_due(last: &mut Option<std::time::Instant>) -> bool {
     due
 }
 
-/// Connects `key`, replacing the running session.
-fn connect_account(
-    spotify: &mut SpotifyState,
-    service: &SpotifyService,
-    stamp: SpotifyStamp,
-    key: &str,
-) {
-    spotify.replacing_session |= service.connected_account().is_some();
-    service.connect(stamp, key);
-}
-
 impl SpotifyState {
     pub(crate) const fn service_running(&self) -> bool {
         self.service.is_some()
+    }
+
+    /// Windows `is_current_account`: answers of an earlier account are
+    /// dropped.
+    pub(crate) const fn is_current_account(&self, stamp: SpotifyStamp) -> bool {
+        self.epochs.is_current_account(stamp)
+    }
+
+    /// Windows `next_account` (beta 2): another account forgets the
+    /// requests, caches and lists of the previous one.
+    pub(crate) fn next_account(&mut self) {
+        self.epochs.next_account();
+        self.resolve = None;
+        self.pending_play = None;
+        self.queue_load = None;
+        self.transfer = None;
+        self.smart_request = None;
+        self.smart_requested_at = None;
+        self.smart_used.clear();
+        self.browse.clear_account();
     }
 }
 
@@ -412,11 +418,11 @@ impl Shell {
         let Some(service) = self.spotify_service() else {
             return;
         };
-        self.spotify.epochs.next_account();
+        self.spotify.next_account();
         let stamp = self.spotify.epochs.begin();
         self.spotify.connect = Some(stamp);
         ui.set_status(&self.text("spotify_connecting"), false);
-        connect_account(&mut self.spotify, &service, stamp, key);
+        service.connect(stamp, key);
         self.spotify_refresh_accounts(ui, Some(key), false);
     }
 
@@ -434,7 +440,7 @@ impl Shell {
             return;
         };
         let name = display_name(&service.accounts(), &key);
-        self.spotify.epochs.next_account();
+        self.spotify.next_account();
         self.spotify.connect = None;
         match service.logout(&key) {
             Ok(_) => {
@@ -460,7 +466,7 @@ impl Shell {
         if !ui.ask_yes_no(&question, &self.text("yes"), &self.text("no")) {
             return;
         }
-        self.spotify.epochs.next_account();
+        self.spotify.next_account();
         self.spotify.connect = None;
         match service.remove(&key) {
             Ok(remaining) => {
@@ -567,7 +573,7 @@ impl Shell {
             .as_ref()
             .and_then(|service| service.accounts().active);
         // The new login is the active session.
-        self.spotify.epochs.next_account();
+        self.spotify.next_account();
         self.spotify.connect = None;
         self.spotify.hub_selected = Some(SpotifyHubEntry::Accounts);
         match return_to {
@@ -672,21 +678,29 @@ impl Shell {
                     ui.set_status(&text, true);
                 }
                 if let (Ok(_), Some(uri)) = (&result, pending) {
-                    self.spotify_resolve(&uri);
+                    self.spotify_resolve(ui, &uri);
                 }
             }
-            SpotifyEvent::Disconnected => {
-                let replaced = std::mem::take(&mut self.spotify.replacing_session);
-                ui.set_status(texts.text("spotify_disconnected"), !replaced);
+            SpotifyEvent::Disconnected { session_id } => {
+                // The end of a replaced session is not a disconnection.
+                if self
+                    .spotify
+                    .service
+                    .as_ref()
+                    .is_none_or(|service| !service.is_current_session(session_id))
+                {
+                    return;
+                }
+                ui.set_status(texts.text("spotify_disconnected"), true);
                 // A session lost while idle (network change, sleep) connects
                 // again on its own, at most once a minute, so the account
                 // does not stay "not logged in" until a restart.
-                if !replaced && reconnect_due(&mut self.spotify.reconnected_at) {
+                if reconnect_due(&mut self.spotify.reconnected_at) {
                     self.spotify_autoconnect();
                 }
             }
             SpotifyEvent::Resolved { stamp, result } => {
-                if self.spotify.resolve != Some(stamp) {
+                if !self.spotify.is_current_account(stamp) || self.spotify.resolve != Some(stamp) {
                     return;
                 }
                 self.spotify.resolve = None;
@@ -717,6 +731,9 @@ impl Shell {
                 result,
             } => self.spotify_smart_tracks(ui, stamp, &playlist, result.unwrap_or_default()),
             SpotifyEvent::Transferred { stamp, result } => {
+                if !self.spotify.is_current_account(stamp) {
+                    return;
+                }
                 let Some((wanted, name)) = self.spotify.transfer.take() else {
                     return;
                 };
@@ -731,7 +748,8 @@ impl Shell {
                 ui.set_status(&text, true);
             }
             SpotifyEvent::Queue { stamp, queue } => {
-                if self.spotify.queue_load != Some(stamp) {
+                if !self.spotify.is_current_account(stamp) || self.spotify.queue_load != Some(stamp)
+                {
                     return;
                 }
                 self.spotify.queue_load = None;
@@ -747,7 +765,7 @@ impl Shell {
         playlist: &str,
         tracks: Vec<apricot_spotify::smart_shuffle::SmartTrack>,
     ) {
-        if self.spotify.smart_request != Some(stamp) {
+        if !self.spotify.is_current_account(stamp) || self.spotify.smart_request != Some(stamp) {
             return;
         }
         self.spotify.smart_request = None;
@@ -962,10 +980,10 @@ impl Shell {
         let Some(service) = self.spotify_service() else {
             return;
         };
-        self.spotify.epochs.next_account();
+        self.spotify.next_account();
         let stamp = self.spotify.epochs.begin();
         self.spotify.connect = None;
-        connect_account(&mut self.spotify, &service, stamp, &key);
+        service.connect(stamp, &key);
     }
 
     /// A `spotify:` URI or an `open.spotify.com` link from Direct link;
@@ -990,6 +1008,10 @@ impl Shell {
                 | SpotifyEntityKind::Episode
                 | SpotifyEntityKind::Album
                 | SpotifyEntityKind::Playlist
+                | SpotifyEntityKind::Artist
+                | SpotifyEntityKind::Show
+                | SpotifyEntityKind::User
+                | SpotifyEntityKind::LikedSongs
         ) {
             ui.show_error(&self.text("spotify_link_kind_unsupported"));
             return true;
@@ -1001,7 +1023,7 @@ impl Shell {
             .as_ref()
             .is_some_and(|service| service.connected_account().is_some());
         if connected {
-            self.spotify_resolve(&uri);
+            self.spotify_resolve(ui, &uri);
             return true;
         }
         let accounts = self.spotify_accounts();
@@ -1013,18 +1035,23 @@ impl Shell {
             return true;
         };
         if let Some(service) = self.spotify_service() {
+            self.spotify.next_account();
             self.spotify.pending_play = Some(uri);
-            self.spotify.epochs.next_account();
             let stamp = self.spotify.epochs.begin();
             self.spotify.connect = None;
             ui.set_status(&self.text("spotify_connecting"), false);
-            connect_account(&mut self.spotify, &service, stamp, &key);
+            service.connect(stamp, &key);
             ui.set_background_polling(true);
         }
         true
     }
 
-    fn spotify_resolve(&mut self, uri: &str) {
+    /// An artist, show, profile or Liked Songs link opens its list; a
+    /// track, episode, album or playlist link plays (beta 2).
+    fn spotify_resolve(&mut self, ui: &mut dyn ShellUi, uri: &str) {
+        if self.spotify_open_link_list(ui, uri) {
+            return;
+        }
         let Some(service) = self.spotify_service() else {
             return;
         };

@@ -428,6 +428,8 @@ pub struct LibMpvEngine {
     pcm: Option<PcmPlayback>,
     /// The video surface of [`MpvVideoMode::RenderApi`].
     render: Option<crate::render::RenderAttachment>,
+    /// Latest requested state, independent of delayed PCM pause acknowledgements.
+    requested_paused: bool,
 }
 
 /// A PCM item: mpv positions are relative to the loaded generation.
@@ -514,6 +516,7 @@ impl LibMpvEngine {
             ended_reported: false,
             pcm: None,
             render,
+            requested_paused: options.initial_playback_state == InitialPlaybackState::Paused,
         })
     }
 
@@ -700,14 +703,18 @@ impl LibMpvEngine {
                 // mpv sets eof-reached when decoding ends, while the audio output
                 // still plays its buffer. The end is the pause mpv applies after
                 // that, or eof-reached arriving while the player is already paused.
-                if *property.data.cast::<c_int>() != 0 {
+                if *property.data.cast::<c_int>() != 0
+                    && self.api.property_flag(self.handle(), "eof-reached") == Some(true)
+                {
                     if self.api.property_flag(self.handle(), "pause") == Some(true) {
                         Ok(self.report_end())
                     } else {
                         Ok(None)
                     }
                 } else {
-                    self.ended_reported = false;
+                    if *property.data.cast::<c_int>() == 0 {
+                        self.ended_reported = false;
+                    }
                     Ok(None)
                 }
             }
@@ -891,7 +898,7 @@ impl LibMpvEngine {
             let position_ms = start_position_seconds
                 .filter(|value| value.is_finite() && *value >= 0.0)
                 .map_or(0, seconds_to_ms);
-            let paused = self.api.property_flag(self.handle(), "pause") == Some(true);
+            let paused = self.requested_paused;
             let attach = item
                 .metadata
                 .get("spotify_attach")
@@ -935,7 +942,10 @@ impl LibMpvEngine {
             }
             PlaybackCommand::SetPaused(paused) => {
                 source.set_paused(*paused);
-                Ok(false)
+                // Keep draining PCM until the decoder acknowledges the pause.
+                // Pausing mpv first can fill the bounded ring and block the
+                // decoder thread before it handles any further transport command.
+                Ok(true)
             }
             PlaybackCommand::Stop => {
                 source.stop();
@@ -1052,6 +1062,9 @@ unsafe fn probe_devices(
 
 impl PlaybackEngine for LibMpvEngine {
     fn execute(&mut self, command: PlaybackCommand) -> Result<(), PlaybackError> {
+        if let PlaybackCommand::SetPaused(paused) = &command {
+            self.requested_paused = *paused;
+        }
         if unsafe { self.execute_pcm(&command)? } {
             if matches!(&command, PlaybackCommand::Load { .. }) {
                 self.media_info = PlaybackMediaInfo::default();
@@ -2081,6 +2094,179 @@ mod tests {
             options.initial_playback_state = crate::InitialPlaybackState::Paused;
         }
         super::LibMpvEngine::load(&options).expect("load real library")
+    }
+
+    #[test]
+    #[ignore = "requires APRICOT_TEST_MPV"]
+    fn real_libmpv_defers_pcm_pause_and_rejects_old_eof_notification() {
+        use crate::{
+            PlaybackEngine,
+            pcm_source::{PcmGeneration, PcmSource, PcmSourceEvent, PcmStream, set_pcm_source},
+        };
+        use std::sync::{Arc, Mutex};
+        #[derive(Default)]
+        struct Source {
+            acknowledged: Mutex<Option<bool>>,
+        }
+        impl PcmSource for Source {
+            fn start(&self, _: &MediaItem, _: u32, _: bool, _: bool) -> Result<(), String> {
+                Ok(())
+            }
+            fn set_paused(&self, _: bool) {}
+            fn seek(&self, _: u32) {}
+            fn stop(&self) {}
+            fn take_generation(&self) -> Option<PcmGeneration> {
+                None
+            }
+            fn open(&self, _: u64) -> Option<Arc<dyn PcmStream>> {
+                None
+            }
+            fn poll_event(&self) -> Option<PcmSourceEvent> {
+                self.acknowledged
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .map(PcmSourceEvent::Paused)
+            }
+            fn format(&self) -> (String, Option<f64>) {
+                ("Test PCM".into(), None)
+            }
+        }
+        let source = Arc::new(Source::default());
+        set_pcm_source(Some(source.clone()));
+        let mut engine = short_engine(false);
+        engine.pcm = Some(super::PcmPlayback {
+            base_ms: 0,
+            offset: 0.0,
+            started: true,
+            loaded: true,
+            boundaries: std::collections::VecDeque::default(),
+        });
+        engine.execute(PlaybackCommand::SetPaused(true)).unwrap();
+        // SAFETY: The engine owns this initialized client for the whole test.
+        assert_eq!(
+            unsafe { engine.api.property_flag(engine.handle(), "pause") },
+            Some(false),
+            "mpv must drain the ring until the decoder acknowledges pause"
+        );
+        *source.acknowledged.lock().unwrap() = Some(true);
+        // SAFETY: Same live client, no external event data.
+        unsafe {
+            engine.poll_pcm().unwrap();
+        }
+        assert_eq!(
+            unsafe { engine.api.property_flag(engine.handle(), "pause") },
+            Some(true)
+        );
+        let mut old_eof: std::ffi::c_int = 1;
+        let mut property = super::MpvEventProperty {
+            name: c"eof-reached".as_ptr(),
+            format: super::MPV_FORMAT_FLAG,
+            data: (&raw mut old_eof).cast(),
+        };
+        // A queued EOF of the previous entry arrives after live EOF cleared.
+        assert_ne!(
+            unsafe { engine.api.property_flag(engine.handle(), "eof-reached") },
+            Some(true)
+        );
+        let event = unsafe { engine.project_property((&raw mut property).cast()).unwrap() };
+        set_pcm_source(None);
+        assert!(
+            event.is_none(),
+            "old EOF must not finish the replacement: {event:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires APRICOT_TEST_MPV"]
+    fn real_libmpv_new_pcm_track_does_not_inherit_acknowledged_pause() {
+        use crate::{
+            PlaybackEngine,
+            pcm_source::{PcmGeneration, PcmSource, PcmSourceEvent, PcmStream, set_pcm_source},
+        };
+        use std::sync::{Arc, Mutex};
+        #[derive(Default)]
+        struct Source {
+            starts: Mutex<Vec<bool>>,
+        }
+        impl PcmSource for Source {
+            fn start(&self, _: &MediaItem, _: u32, paused: bool, _: bool) -> Result<(), String> {
+                self.starts.lock().unwrap().push(paused);
+                Ok(())
+            }
+            fn set_paused(&self, _: bool) {}
+            fn seek(&self, _: u32) {}
+            fn stop(&self) {}
+            fn take_generation(&self) -> Option<PcmGeneration> {
+                None
+            }
+            fn open(&self, _: u64) -> Option<Arc<dyn PcmStream>> {
+                None
+            }
+            fn poll_event(&self) -> Option<PcmSourceEvent> {
+                None
+            }
+            fn format(&self) -> (String, Option<f64>) {
+                ("Test PCM".into(), None)
+            }
+        }
+        let source = Arc::new(Source::default());
+        set_pcm_source(Some(source.clone()));
+        let mut engine = short_engine(true);
+        engine.pcm = Some(super::PcmPlayback {
+            base_ms: 0,
+            offset: 0.0,
+            started: true,
+            loaded: true,
+            boundaries: std::collections::VecDeque::default(),
+        });
+        engine.execute(PlaybackCommand::SetPaused(false)).unwrap();
+        let track = MediaItem {
+            id: MediaId("spotify:track:0000000000000000000002".into()),
+            source: MediaSource::Spotify,
+            kind: MediaKind::Audio,
+            title: "Second".into(),
+            url: None,
+            stream_url: None,
+            external_audio_url: None,
+            local_path: None,
+            channel: String::new(),
+            duration_seconds: None,
+            metadata: BTreeMap::new(),
+        };
+        engine
+            .execute(PlaybackCommand::Load {
+                item: Box::new(track),
+                start_position_seconds: None,
+            })
+            .unwrap();
+        engine.execute(PlaybackCommand::SetPaused(true)).unwrap();
+        let paused_track = MediaItem {
+            id: MediaId("spotify:track:0000000000000000000003".into()),
+            source: MediaSource::Spotify,
+            kind: MediaKind::Audio,
+            title: "Explicitly paused".into(),
+            url: None,
+            stream_url: None,
+            external_audio_url: None,
+            local_path: None,
+            channel: String::new(),
+            duration_seconds: None,
+            metadata: BTreeMap::new(),
+        };
+        engine
+            .execute(PlaybackCommand::Load {
+                item: Box::new(paused_track),
+                start_position_seconds: None,
+            })
+            .unwrap();
+        let starts = source.starts.lock().unwrap().clone();
+        set_pcm_source(None);
+        assert_eq!(
+            starts,
+            [false, true],
+            "a new play request must beat the old mpv pause flag"
+        );
     }
 
     fn collect_events(

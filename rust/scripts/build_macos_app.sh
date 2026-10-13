@@ -6,16 +6,45 @@
 #
 # Needs Homebrew's mpv, ffmpeg and dylibbundler; yt-dlp and Node.js are
 # downloaded once into rust/.cargo-local/macos and checked by SHA-256.
-# Usage: rust/scripts/build_macos_app.sh [--skip-checks]
+# Usage: rust/scripts/build_macos_app.sh [--skip-checks] [--stable] [--channel beta]
+# --stable builds "ApricotPlayer.app", the identity of the published releases
+# (as build_stable_release.ps1 on Windows); --channel beta lets it install
+# updates from GitHub prereleases.
 set -eu
+
+SKIP_CHECKS=false
+STABLE=false
+CHANNEL=local-only
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --skip-checks) SKIP_CHECKS=true ;;
+        --stable) STABLE=true ;;
+        --channel) shift; CHANNEL="$1" ;;
+        *) echo "Unknown option $1" >&2; exit 2 ;;
+    esac
+    shift
+done
 
 RUST_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 REPO_ROOT=$(dirname "$RUST_ROOT")
 cd "$RUST_ROOT"
 
-PRODUCT="ApricotPlayer 2 Beta"
-EXECUTABLE="ApricotPlayer2Beta"
-BUNDLE_ID="com.apricotplayer.ApricotPlayer2Beta"
+if [ "$STABLE" = true ]; then
+    PRODUCT="ApricotPlayer"
+    EXECUTABLE="ApricotPlayer"
+    BUNDLE_ID="com.apricotplayer.ApricotPlayer"
+    ASSET="ApricotPlayer-macos-arm64"
+    APP_DATA="ApricotPlayer"
+else
+    PRODUCT="ApricotPlayer 2 Beta"
+    EXECUTABLE="ApricotPlayer2Beta"
+    BUNDLE_ID="com.apricotplayer.ApricotPlayer2Beta"
+    ASSET="ApricotPlayer2Beta-macos-arm64"
+    APP_DATA="ApricotPlayer2Beta"
+fi
+FEATURES=""
+[ "$CHANNEL" = beta ] && FEATURES="apricot-player/release-beta"
+[ "$STABLE" = true ] && FEATURES="${FEATURES:+$FEATURES,}apricot-player/stable-identity"
 YTDLP_VERSION="2026.08.19"
 YTDLP_SHA256="0f192b7ec147ab6288885d6351d9ab67367640029b4377576ef46dd79cf7b202"
 NODE_VERSION="v24.21.0"
@@ -33,11 +62,15 @@ print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] =
 COMMIT=$(git rev-parse HEAD)
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then DIRTY=true; else DIRTY=false; fi
 
-if [ "${1:-}" != "--skip-checks" ]; then
+if [ "$SKIP_CHECKS" != true ]; then
     cargo test --workspace --quiet
     cargo clippy --workspace --all-targets --quiet -- -D warnings
 fi
-cargo build --release -p apricot-player -p apricot-youtube-helper
+if [ -n "$FEATURES" ]; then
+    cargo build --release -p apricot-player -p apricot-youtube-helper --features "$FEATURES"
+else
+    cargo build --release -p apricot-player -p apricot-youtube-helper
+fi
 
 # Downloads, checked by SHA-256 and kept for the next build.
 CACHE="$RUST_ROOT/.cargo-local/macos"
@@ -115,8 +148,8 @@ cat > "$APP/Contents/Resources/build-info.json" <<EOF
   "built_at_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "rust": "$(rustc --version)",
   "data_schema_version": 1,
-  "update_channel": "beta",
-  "app_data_directory": "~/Library/Application Support/ApricotPlayer2Beta",
+  "update_channel": "$CHANNEL",
+  "app_data_directory": "~/Library/Application Support/$APP_DATA",
   "bundled_components": {
     "mpv": "mpv/mpv",
     "libmpv": "mpv/libmpv.2.dylib",
@@ -142,12 +175,12 @@ codesign --verify --deep --strict "$APP"
 "$MACOS/ffmpeg/ffmpeg" -hide_banner -version >/dev/null
 "$MACOS/mpv/mpv" --no-config --version >/dev/null
 
-ditto -c -k --keepParent "$APP" "$OUTPUT/ApricotPlayer2Beta-macos-arm64.zip"
+ditto -c -k --keepParent "$APP" "$OUTPUT/$ASSET.zip"
 ln -s /Applications "$STAGING/Applications"
 hdiutil create -quiet -volname "$PRODUCT" -srcfolder "$STAGING" -ov -format UDZO \
-    "$OUTPUT/ApricotPlayer2Beta-macos-arm64.dmg"
+    "$OUTPUT/$ASSET.dmg"
 rm "$STAGING/Applications"
 mv "$APP" "$OUTPUT/"
 rmdir "$STAGING"
-(cd "$OUTPUT" && shasum -a 256 ApricotPlayer2Beta-macos-arm64.dmg ApricotPlayer2Beta-macos-arm64.zip > SHA256SUMS.txt)
+(cd "$OUTPUT" && shasum -a 256 $ASSET.dmg $ASSET.zip > SHA256SUMS.txt)
 echo "MACOS_APP_READY=$OUTPUT"

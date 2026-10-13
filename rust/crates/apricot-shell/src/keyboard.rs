@@ -3,7 +3,10 @@
 
 use apricot_core::{
     ActionScope, RepeatPolicy,
-    shortcut::{ShortcutChord, ShortcutContext, ShortcutKey, action_for_shortcut},
+    shortcut::{
+        ShortcutChord, ShortcutContext, ShortcutKey, action_for_shortcut,
+        background_player_action_for_shortcut, focused_action_for_shortcut,
+    },
 };
 
 use crate::{Shell, View};
@@ -100,16 +103,33 @@ impl Shell {
         } else {
             view_shortcut_scope(self.view)
         };
-        let Some(action) =
-            action_for_shortcut(shortcuts, chord, ShortcutContext::new(scope, accepts_text))
-        else {
+        let context = ShortcutContext::new(scope, accepts_text);
+        // Beta 4: a focused Spotify row owns its keys before global
+        // shortcuts, and the transport keys reach a player that keeps
+        // playing behind another screen.
+        let resolve = if self.view == View::SpotifyBrowse && focus == FocusKind::List {
+            focused_action_for_shortcut
+        } else {
+            action_for_shortcut
+        };
+        let background_player =
+            self.view != View::Player && self.application.player_session().is_open();
+        let Some(action) = resolve(shortcuts, chord, context).or_else(|| {
+            background_player
+                .then(|| background_player_action_for_shortcut(shortcuts, chord, context))
+                .flatten()
+        }) else {
             return KeyRoute::Unhandled;
         };
         let is_global = action.scopes.contains(&ActionScope::Global);
         if !is_global && entry_focus {
             return KeyRoute::Unhandled;
         }
-        if !is_global && self.view == View::MainMenu && action.id.as_str() != "open_selected" {
+        if !is_global
+            && self.view == View::MainMenu
+            && action.id.as_str() != "open_selected"
+            && !action.scopes.contains(&ActionScope::Player)
+        {
             return KeyRoute::Unhandled;
         }
         match action.repeat {

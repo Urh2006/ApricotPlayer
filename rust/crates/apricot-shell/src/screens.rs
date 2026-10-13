@@ -370,8 +370,18 @@ impl Shell {
 
     /// Windows `navigate_back`: playback stops when leaving the player and
     /// the previous screen returns with focus on its list.
-    #[allow(clippy::too_many_lines)] // One arm per screen, as on Windows.
     pub(crate) fn navigate_back(&mut self, ui: &mut dyn ShellUi) {
+        self.navigate_back_impl(ui, false);
+    }
+
+    /// Windows `navigate_back_preserving_player`: one screen back from the
+    /// player, which keeps playing with background playback on.
+    pub(crate) fn navigate_back_preserving_player(&mut self, ui: &mut dyn ShellUi) {
+        self.navigate_back_impl(ui, true);
+    }
+
+    #[allow(clippy::too_many_lines)] // One arm per screen, as on Windows.
+    fn navigate_back_impl(&mut self, ui: &mut dyn ShellUi, keep_playing: bool) {
         self.stop_key_repeat(ui);
         if crate::audiovault::is_view(self.view) {
             // Python `back_from_audiovault`.
@@ -386,7 +396,13 @@ impl Shell {
         self.cancel_local_folder_scan();
         let leaving_collection = self.view == View::Collection;
         if self.view == View::Player {
-            self.close_player_runtime(ui);
+            if keep_playing && self.application.settings().enable_background_playback {
+                self.application
+                    .set_player_toggle(apricot_app::SessionToggle::Fullscreen, false);
+                self.application.keep_player_previous_frame();
+            } else {
+                self.close_player_runtime(ui);
+            }
         }
         if leaving_collection {
             let _ = self.application.pop_youtube_collection();

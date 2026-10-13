@@ -452,13 +452,7 @@ impl YtDlpYoutubeEngine {
             YtDlpError::InvalidOutput("resolved media metadata was incomplete".to_owned())
         })?;
         let is_live = is_live(&root);
-        let mut formats = root
-            .get("formats")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|format| youtube_format(format, is_live))
-            .collect::<Vec<_>>();
+        let mut formats = playback_formats(&root, is_live);
         if validate_media_url(media_url).is_err() {
             // The generic extractor can report the stream on the root object.
             if formats.is_empty() {
@@ -1619,6 +1613,23 @@ fn media_url(kind: MediaKind, id: &str, raw_url: Option<&str>) -> Option<Url> {
     Url::parse(&canonical).ok()
 }
 
+fn playback_formats(root: &Value, is_live: bool) -> Vec<YoutubeFormat> {
+    let raw = root.get("formats").and_then(Value::as_array);
+    // yt-dlp marks YouTube's original audio with preference 10, while the
+    // account's default (which may be an automatic dub) has preference 5.
+    // Choose the original before losing this metadata in the typed protocol.
+    let original =
+        |format: &Value| format.get("language_preference").and_then(Value::as_i64) == Some(10);
+    let has_original = raw.into_iter().flatten().any(original);
+    raw.into_iter()
+        .flatten()
+        .filter_map(|format| {
+            let typed = youtube_format(format, is_live)?;
+            (!has_original || !typed.tracks.audio || original(format)).then_some(typed)
+        })
+        .collect()
+}
+
 fn youtube_format(value: &Value, root_is_live: bool) -> Option<YoutubeFormat> {
     let object = value.as_object()?;
     let url = string(object, "url")?;
@@ -2264,6 +2275,86 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["top", "middle"]
         );
+    }
+
+    #[test]
+    fn original_audio_survives_quality_sorting_and_reopening() {
+        use apricot_media::select_youtube_playback_formats;
+        let mut raw = vec![
+            json!({"format_id":"140-1", "url":"https://example.test/original",
+                "vcodec":"none", "acodec":"mp4a", "abr":128,
+                "language":"sl", "language_preference":10}),
+            json!({"format_id":"140-2", "url":"https://example.test/dubbed",
+                "vcodec":"none", "acodec":"mp4a", "abr":192,
+                "language":"en", "language_preference":5}),
+            json!({"format_id":"18", "url":"https://example.test/dubbed-video",
+                "vcodec":"avc1", "acodec":"mp4a", "tbr":500,
+                "height":360, "language":"en", "language_preference":5}),
+            json!({"format_id":"134", "url":"https://example.test/video",
+                "vcodec":"avc1", "acodec":"none", "height":360}),
+        ];
+        for _ in 0..2 {
+            for preference in [
+                YoutubeStreamPreference::Automatic,
+                YoutubeStreamPreference::PreferAudio,
+                YoutubeStreamPreference::PreferVideo,
+            ] {
+                let mut formats = super::playback_formats(&json!({"formats":raw}), false);
+                sort_formats(&mut formats, preference);
+                let selection = select_youtube_playback_formats(&formats, preference).unwrap();
+                let audio = selection
+                    .external_audio_index
+                    .unwrap_or(selection.primary_index);
+                assert_eq!(formats[audio].url, "https://example.test/original");
+            }
+            raw.reverse();
+        }
+    }
+
+    #[test]
+    #[ignore = "requires APRICOT_TEST_YOUTUBE_FORMATS from a live yt-dlp metadata probe"]
+    fn live_multilingual_youtube_formats_select_original_audio() {
+        let path = std::env::var_os("APRICOT_TEST_YOUTUBE_FORMATS").expect("metadata path");
+        let bytes = std::fs::read(path).expect("metadata");
+        let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes);
+        let root: serde_json::Value = serde_json::from_slice(bytes).expect("JSON");
+        let raw = root["formats"].as_array().expect("formats");
+        assert!(raw.iter().any(|f| f["language_preference"] == 10));
+        assert!(raw.iter().any(|f| f["language_preference"] == -1));
+        for preference in [
+            YoutubeStreamPreference::Automatic,
+            YoutubeStreamPreference::PreferAudio,
+            YoutubeStreamPreference::PreferVideo,
+        ] {
+            let mut formats = super::playback_formats(&root, false);
+            sort_formats(&mut formats, preference);
+            let selection = apricot_media::select_youtube_playback_formats(&formats, preference)
+                .expect("playback selection");
+            let audio = selection
+                .external_audio_index
+                .unwrap_or(selection.primary_index);
+            let selected = raw
+                .iter()
+                .find(|f| f["url"].as_str() == Some(&formats[audio].url))
+                .expect("selected raw format");
+            assert_eq!(selected["language_preference"], 10);
+            println!("{preference:?}: original language {}", selected["language"]);
+        }
+    }
+
+    #[test]
+    fn ordinary_audio_without_language_metadata_is_unchanged() {
+        let raw = json!({"formats":[{"url":"https://example.test/audio",
+            "vcodec":"none", "acodec":"mp4a", "abr":128}]});
+        assert_eq!(super::playback_formats(&raw, false).len(), 1);
+    }
+
+    #[test]
+    fn unavailable_original_does_not_fall_back_to_a_dub() {
+        let raw = json!({"formats":[
+            {"url":"invalid", "vcodec":"none", "acodec":"mp4a", "language_preference":10},
+            {"url":"https://example.test/dub", "vcodec":"none", "acodec":"mp4a", "language_preference":5}]});
+        assert!(super::playback_formats(&raw, false).is_empty());
     }
 
     #[test]

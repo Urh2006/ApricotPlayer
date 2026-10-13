@@ -1034,10 +1034,9 @@ impl Shell {
         ui.set_window_title(apricot_platform::product_name());
     }
 
-    /// Windows `player_back_shortcut` without details, full screen and
-    /// background playback, which arrive in later units: from the player
-    /// and its buttons Escape stops playback and returns to the previous
-    /// screen, from the Back buttons to the main menu.
+    /// Windows `player_back_shortcut` (beta 4): Escape returns one screen
+    /// and playback continues when background playback is on; otherwise it
+    /// stops playback and returns.
     pub(crate) fn player_back(&mut self, ui: &mut dyn ShellUi) {
         if self.handle_player_back_in_place(ui) {
             return;
@@ -1046,14 +1045,10 @@ impl Shell {
             self.navigate_back(ui);
             return;
         }
-        let focus = ui.focused_player_control();
-        let background = self.application.settings().enable_background_playback;
-        let navigation = focus.is_some_and(|id| id.starts_with("back"));
-        let closes_playback = !navigation || !background;
-        if closes_playback {
-            self.navigate_back(ui);
+        if self.application.settings().enable_background_playback {
+            self.navigate_back_preserving_player(ui);
         } else {
-            self.leave_player_to_main_menu(ui, true);
+            self.navigate_back(ui);
         }
     }
 

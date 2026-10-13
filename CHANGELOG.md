@@ -1,3 +1,44 @@
+# v2.0.0-beta.5 - Original YouTube Audio and Spotify Playback
+
+## Fixed
+- YouTube playback selects the original audio before quality sorting, instead of an account-default dubbed track. Old cached selections are invalidated without deleting user data.
+- Opening a new Spotify track after pausing starts playback immediately. A delayed decoder pause acknowledgement can no longer become the new track's initial state.
+- Spotify Next and Previous start the selected track even when the previous track was paused, including recommendations that arrive asynchronously. Seeking within the current track and explicitly requested paused loads keep their existing behavior.
+
+## Verification
+- All three failures were reproduced with regression tests before their fixes, including a test using the actual libmpv runtime.
+
+# v2.0.0-beta.4 - Focus-Aware Player Shortcuts
+
+## Fixed
+- Player controls and the Player area take priority over conflicting global shortcuts, including custom shortcut assignments. Menus keep their normal shortcuts and letter navigation.
+- Spotify Like/Unlike and radio target the playing song from the player area, instead of a selected row behind it. Hide/Unhide also targets the playing track when its personal mix is known.
+- Spotify rows keep their own actions when a global shortcut uses the same keys.
+
+## Performance and verification
+- Cache immutable embedded translations lazily to avoid repeated JSON parsing during startup and screen updates.
+- Verified Spotify is already available in Customize main menu and can be hidden without disabling Ctrl+Alt+C.
+- Reviewed YouTube stream caching, prefetch and warm extraction; retained the existing playback path.
+
+# v2.0.0-beta.3 - One-Step Back and Spotify Queue Boundaries
+
+## Fixed
+- Escape and Back return to the source list while keeping background playback and restoring selection/navigation hierarchy.
+- Spotify Previous at the start restarts the current song without Stop or clearing the queue.
+- Standalone Spotify songs seed autoplay correctly; pending recommendations/context pages continue after Next or natural completion.
+- Previous, new loads, transfer and disconnect cancel pending skips; explicit Autoplay Off remains respected.
+
+# v2.0.0-beta.2 - Background Playback and Spotify Recovery
+
+## Fixed
+- Escape keeps playing when Background playback is enabled; next/previous shortcuts work from menus and results without taking plain-letter navigation.
+- Fixed Spotify decoder buffer stalls, stale end-of-track events, pause synchronization, dead Connect sessions and late account/login responses.
+- Isolated account-specific browse caches and fixed pagination after unlike/playlist removal, library folder identity, Smart Shuffle history/queue playback and large album pagination.
+- Supported Spotify artist/show/profile direct links open their existing lists.
+
+## Verification and limits
+- Added deterministic Spotify lifecycle, audio bridge, queue/history and actual libmpv regressions. See `docs/SPOTIFY_AUDIT_BETA2.md` for findings and remaining acceptance work.
+
 # v1.0.21 - Playback Recovery and Identical Pitch Export
 
 ## Added

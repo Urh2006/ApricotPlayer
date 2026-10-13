@@ -60,7 +60,7 @@ pub enum QueueEdit {
     },
     /// Removes the manually added tracks; the context stays.
     ClearManual,
-    /// Puts a manually added track first, to be played by `next`.
+    /// Puts a manual track or smart recommendation first, to play by `next`.
     ToFront(String),
 }
 
@@ -163,7 +163,10 @@ pub fn apply(next: &[ProvidedTrack], edit: &QueueEdit) -> Option<Vec<ProvidedTra
         }
         QueueEdit::ToFront(uid) => {
             let index = position(uid)?;
-            if section(&tracks[index]) != QueueSection::Manual {
+            if !matches!(
+                section(&tracks[index]),
+                QueueSection::Manual | QueueSection::SmartShuffle
+            ) {
                 return None;
             }
             let track = tracks.remove(index);
@@ -287,9 +290,24 @@ mod tests {
     }
 
     #[test]
-    fn to_front_only_for_manual_tracks() {
+    fn to_front_rejects_normal_context_tracks() {
         let edited = apply(&next(), &QueueEdit::ToFront("q1".to_owned())).unwrap();
         assert_eq!(uids(&edited), ["q1", "q0", "c1", "c2"]);
         assert_eq!(apply(&next(), &QueueEdit::ToFront("c1".to_owned())), None);
+    }
+
+    #[test]
+    fn play_now_fronts_a_smart_recommendation_without_losing_manual_or_context_tracks() {
+        let mut tracks = next();
+        tracks.insert(3, track("smart1", crate::smart_shuffle::PROVIDER));
+        let edited = apply(&tracks, &QueueEdit::ToFront("smart1".to_owned()))
+            .expect("a recommendation plays from the queue, not the original context");
+        assert_eq!(uids(&edited), ["smart1", "q0", "q1", "c1", "c2"]);
+        assert_eq!(
+            edited[0], tracks[3],
+            "preserve the exact occurrence and provider"
+        );
+        tracks.push(track("auto1", "autoplay"));
+        assert!(apply(&tracks, &QueueEdit::ToFront("auto1".to_owned())).is_none());
     }
 }

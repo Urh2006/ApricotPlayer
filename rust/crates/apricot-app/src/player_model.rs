@@ -109,15 +109,14 @@ impl PlayerScreenModel {
             "player_details",
         ));
         if settings.enable_background_playback {
-            // Python `close_current_player`, labelled with the Back shortcut.
-            controls.push(button_for(
-                catalog,
-                settings,
-                "close_player",
-                "close_player",
-                "close_player",
-                "player_back",
-            ));
+            // Escape keeps playing; only this explicit control closes it.
+            controls.push(PlayerControlModel {
+                id: "close_player",
+                label: catalog.text("close_player").to_owned(),
+                role: PlayerControlRole::Button,
+                action_id: Some("close_player"),
+                checked: None,
+            });
         }
         append_toggle_controls(&mut controls, catalog, settings, state);
         Self {
@@ -305,12 +304,12 @@ fn navigation_controls(
         )];
     }
     if settings.enable_background_playback {
-        // Python `leave_player_to_main_menu(force_keep_playing=True)`.
+        // Escape returns to the source list without stopping playback.
         return vec![button_for(
             catalog,
             settings,
             "back",
-            "back",
+            "back_results",
             "player_back_keep_playing",
             "player_back",
         )];
@@ -432,7 +431,11 @@ impl BackgroundPlayerModel {
         }
         buttons.push(button(
             "close",
-            label_with_shortcut(catalog.text("close_player"), "player_back", settings),
+            if settings.enable_background_playback {
+                catalog.text("close_player").to_owned()
+            } else {
+                label_with_shortcut(catalog.text("close_player"), "player_back", settings)
+            },
             "close_player",
         ));
         Self { label, buttons }
@@ -684,13 +687,13 @@ mod tests {
         );
         assert!(model.embedded_results);
         assert_eq!(model.controls[0].id, "back");
-        assert_eq!(model.controls[0].label, "Back to main menu Escape");
+        assert_eq!(model.controls[0].label, "Back to results Escape");
         assert_eq!(
             model.controls[0].action_id,
             Some("player_back_keep_playing")
         );
         let close = control(&model, "close_player");
-        assert_eq!(close.label, "Close Escape");
+        assert_eq!(close.label, "Close");
         assert_eq!(close.action_id, Some("close_player"));
         let ids: Vec<_> = model.controls.iter().map(|control| control.id).collect();
         let details = ids.iter().position(|id| *id == "details");
@@ -752,7 +755,7 @@ mod tests {
         assert_eq!(labels.len(), 13);
         assert_eq!(labels[0], shown("Previous Ctrl+PageUp"));
         assert_eq!(labels[1], "Play");
-        assert_eq!(labels[12], "Close Escape");
+        assert_eq!(labels[12], "Close");
         let actions: Vec<_> = model
             .buttons
             .iter()

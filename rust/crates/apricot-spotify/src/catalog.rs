@@ -1106,11 +1106,11 @@ async fn library_page(
     let list = data
         .pointer("/me/libraryV3")
         .ok_or_else(|| ApiError::Shape("libraryV3".into()))?;
+    Ok(parse_library_page(list, offset))
+}
+
+fn parse_library_page(list: &Value, offset: u64) -> CatalogPage {
     let mut page = parse_page(list, offset);
-    // Spotify keeps expired mixes and albums without a name in the library;
-    // they cannot be opened and only show first when sorted by name.
-    page.items
-        .retain(|item| !item.name.is_empty() || item.kind == ItemKind::Unavailable);
     // Everything listed is in the library.
     for item in &mut page.items {
         if item.saved.is_none() && !item.kind.is_playable_item() {
@@ -1127,7 +1127,11 @@ async fn library_page(
             }
         }
     }
-    Ok(page)
+    // Repair each folder against its original raw entry before filtering;
+    // otherwise an expired unnamed item shifts the zip onto different rows.
+    page.items
+        .retain(|item| !item.name.is_empty() || item.kind == ItemKind::Unavailable);
+    page
 }
 
 pub async fn liked_songs(
@@ -1152,20 +1156,28 @@ pub async fn liked_songs(
     Ok(page)
 }
 
-pub async fn album(api: &Api, session: &Session, uri: &str) -> Result<Collection, ApiError> {
+pub async fn album(
+    api: &Api,
+    session: &Session,
+    uri: &str,
+    offset: u64,
+) -> Result<Collection, ApiError> {
     let data = api
         .pathfinder(
             session,
             "getAlbum",
-            json!({ "uri": uri, "locale": "", "offset": 0, "limit": 300 }),
+            json!({ "uri": uri, "locale": "", "offset": offset, "limit": 300 }),
         )
         .await?;
     let album = data
         .get("albumUnion")
         .ok_or_else(|| ApiError::Shape("getAlbum".into()))?;
-    let mut page = parse_page(&album["tracksV2"], 0);
-    page.next_offset = None;
-    Ok(Collection {
+    Ok(parse_album_collection(album, uri, offset))
+}
+
+fn parse_album_collection(album: &Value, uri: &str, offset: u64) -> Collection {
+    let page = parse_page(&album["tracksV2"], offset);
+    Collection {
         uri: uri.to_owned(),
         name: text(album, "/name").to_owned(),
         subtitle: names(&album["artists"]),
@@ -1176,7 +1188,7 @@ pub async fn album(api: &Api, session: &Session, uri: &str) -> Result<Collection
         revision: String::new(),
         format: String::new(),
         page,
-    })
+    }
 }
 
 pub async fn playlist(
@@ -1369,6 +1381,22 @@ pub async fn saved(api: &Api, session: &Session, uris: &[String]) -> Result<Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unnamed_library_entry_does_not_shift_folder_identity() {
+        let list = json!({ "totalCount": 3, "items": [
+            { "item": { "data": { "__typename": "Album", "uri": "spotify:album:expired", "name": "" } } },
+            { "item": { "_uri": "spotify:user:owner:folder:one", "data": { "__typename": "Unknown", "name": "My folder" } } },
+            { "item": { "data": { "__typename": "Playlist", "uri": "spotify:playlist:p", "name": "Playlist" } } }
+        ] });
+        let page = parse_library_page(&list, 0);
+        assert_eq!(page.items.len(), 2);
+        assert_eq!(page.items[0].kind, ItemKind::Folder);
+        assert_eq!(page.items[0].uri, "spotify:user:owner:folder:one");
+        assert_eq!(page.items[0].name, "My folder");
+        assert_eq!(page.items[1].kind, ItemKind::Playlist);
+        assert_eq!(page.items[1].name, "Playlist");
+    }
 
     fn track(uri: &str, name: &str) -> Value {
         json!({
@@ -1607,5 +1635,20 @@ mod tests {
             .map(|item| item.kind)
             .collect();
         assert_eq!(kinds, [ItemKind::Track, ItemKind::Artist, ItemKind::Album]);
+    }
+    #[test]
+    fn large_albums_keep_the_offset_of_unread_tracks() {
+        let rows: Vec<_> = (0..300).map(|i| json!({"track":{"uri":format!("spotify:track:t{i}"),"name":format!("Track {i}")}})).collect();
+        let album = json!({"name":"Large album","tracksV2":{"items":rows,"totalCount":350}});
+        let first = parse_album_collection(&album, "spotify:album:a", 0);
+        assert_eq!(first.page.items.len(), 300);
+        assert_eq!(first.page.next_offset, Some(300));
+        let last = json!({"tracksV2":{"items":[{"track":{"uri":"spotify:track:last","name":"Last"}}],"totalCount":301}});
+        assert_eq!(
+            parse_album_collection(&last, "spotify:album:a", 300)
+                .page
+                .next_offset,
+            None
+        );
     }
 }

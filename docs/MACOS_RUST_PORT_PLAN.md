@@ -193,6 +193,12 @@ podporo in temi popravki skupaj (Urh, 12. 10. 2026).
    Vrstica v meniju naj odpre natanko isti seznam kot Liked songs v
    Library (isti vir, isti kontekst), ne posebnega Apricotovega seznama.
    Obe platformi.
+   Preizkus na Windows (13. 10. 2026, gradnja brez bet 2 do 5): smart
+   shuffle se v Liked songs nikoli ne vklopi (kontekst
+   `spotify:user:<id>:collection`), po večkratnem odpiranju se izgubi
+   ShuffleChanged, librespot javi "context is not available", in ob drugem
+   odprtju iz Library ni predvajalo ničesar (DispatchGone). Urh je popravek
+   prestavil na beto 7.
    Stanje: v kodi obeh platform vrstica v meniju in vrstica v Library že
    odpreta isti vir (`Source::LikedSongs`) z istim kontekstom
    (`spotify:user:<id>:collection`), smart shuffle pa je dovoljen samo za

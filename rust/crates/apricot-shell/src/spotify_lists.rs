@@ -87,7 +87,10 @@ impl Source {
                 offset,
             },
             Self::LikedSongs => CatalogRequest::LikedSongs { offset },
-            Self::Album(uri) => CatalogRequest::Album(uri.clone()),
+            Self::Album(uri) => CatalogRequest::Album {
+                uri: uri.clone(),
+                offset,
+            },
             Self::Playlist(uri) => CatalogRequest::Playlist {
                 uri: uri.clone(),
                 offset,
@@ -203,10 +206,38 @@ pub(crate) struct BrowseState {
     /// Songs the account hid, read when the first personal mix opens.
     hidden: Option<std::collections::HashSet<String>>,
     hidden_load: Option<SpotifyStamp>,
+    /// Verified personal mix contexts remain known after their list closes
+    /// (beta 5), so "Hide song" works from the player.
+    personalised_contexts: std::collections::HashSet<String>,
     /// When the open playlist was last checked.
     refreshed_at: Option<Instant>,
     /// Songs marked with Shift+A or Ctrl+A for "Add to Spotify playlist".
     marks: apricot_app::spotify::SpotifyMarks,
+}
+
+impl BrowseState {
+    /// Another account: nothing of the previous one stays (beta 2).
+    pub(crate) fn clear_account(&mut self) {
+        *self = Self::default();
+    }
+}
+
+impl Frame {
+    /// Removes rows after an edit; the next page then starts as many rows
+    /// earlier, and answers read before the edit are dropped (beta 5).
+    fn remove_items(&mut self, keep: impl FnMut(&CatalogItem) -> bool) {
+        let before = self.items.len();
+        self.items.retain(keep);
+        let removed = before - self.items.len();
+        if removed > 0 {
+            self.next_offset = self
+                .next_offset
+                .map(|offset| offset.saturating_sub(removed as u64));
+            self.loading = None;
+            self.refresh = None;
+            self.selected = self.selected.min(self.items.len().saturating_sub(1));
+        }
+    }
 }
 
 /// The context commands of a Spotify list row.
@@ -498,6 +529,9 @@ impl Shell {
         stamp: SpotifyStamp,
         result: Result<CatalogResult, SpotifyError>,
     ) {
+        if !self.spotify.is_current_account(stamp) {
+            return;
+        }
         let texts = self.catalog();
         let pending_load = matches!(
             self.spotify.browse.pending,
@@ -612,6 +646,16 @@ impl Shell {
                 frame.can_rename = collection.can_edit_metadata;
                 frame.personalised = apricot_spotify::catalog::PERSONALISED_FORMATS
                     .contains(&collection.format.as_str());
+                if let Source::Playlist(uri) = &frame.source {
+                    if frame.personalised {
+                        self.spotify
+                            .browse
+                            .personalised_contexts
+                            .insert(uri.clone());
+                    } else {
+                        self.spotify.browse.personalised_contexts.remove(uri);
+                    }
+                }
                 frame.items.extend(collection.page.items);
                 frame.next_offset = collection.page.next_offset;
             }
@@ -1088,6 +1132,23 @@ impl Shell {
         }
     }
 
+    /// An artist, show, profile or Liked Songs link opens its list (Windows
+    /// `resolve`, beta 2); `false` for links that play.
+    pub(crate) fn spotify_open_link_list(&mut self, ui: &mut dyn ShellUi, uri: &str) -> bool {
+        let Some(reference) = SpotifyRef::parse(uri) else {
+            return false;
+        };
+        let source = match reference.kind {
+            SpotifyEntityKind::Artist => Source::Artist(uri.to_owned()),
+            SpotifyEntityKind::Show => Source::Show(uri.to_owned()),
+            SpotifyEntityKind::User => self.browse_profile_source(uri),
+            SpotifyEntityKind::LikedSongs => Source::LikedSongs,
+            _ => return false,
+        };
+        self.browse_open_root(ui, source, uri.to_owned());
+        true
+    }
+
     /// A profile's source with its localized section titles.
     fn browse_profile_source(&self, uri: &str) -> Source {
         Source::Profile {
@@ -1360,14 +1421,32 @@ impl Shell {
         let frame = self
             .browse_top()
             .filter(|_| self.view == View::SpotifyBrowse);
-        let target = frame.filter(|frame| frame.personalised).and_then(|frame| {
-            let Source::Playlist(context) = &frame.source else {
-                return None;
-            };
-            self.browse_selected_item(ui)
-                .filter(|item| item.kind == ItemKind::Track)
-                .map(|item| (item.uri.clone(), context.clone()))
-        });
+        let target = frame
+            .filter(|frame| frame.personalised)
+            .and_then(|frame| {
+                let Source::Playlist(context) = &frame.source else {
+                    return None;
+                };
+                self.browse_selected_item(ui)
+                    .filter(|item| item.kind == ItemKind::Track)
+                    .map(|item| (item.uri.clone(), context.clone()))
+            })
+            .or_else(|| {
+                // The playing track of a personal mix that was opened
+                // before (beta 5).
+                let item = self.application.player_session().current_item()?;
+                if item.source != apricot_core::MediaSource::Spotify
+                    || !item.id.0.starts_with("spotify:track:")
+                {
+                    return None;
+                }
+                let context = item.metadata.get("spotify_context")?.as_str()?;
+                self.spotify
+                    .browse
+                    .personalised_contexts
+                    .contains(context)
+                    .then(|| (item.id.0.clone(), context.to_owned()))
+            });
         let Some((uri, context)) = target else {
             ui.set_status(&self.text("spotify_hide_unavailable"), true);
             return;
@@ -1628,6 +1707,9 @@ impl Shell {
         result: Result<EditOutcome, SpotifyError>,
     ) {
         use EditOutcome as O;
+        if !self.spotify.is_current_account(stamp) {
+            return;
+        }
         let texts = self.catalog();
         let Some((wanted, pending)) = self.spotify.browse.pending.take() else {
             return;
@@ -1657,7 +1739,7 @@ impl Shell {
                         frame.following = Some(*saved);
                     }
                     if !*saved && matches!(frame.source, Source::LikedSongs) {
-                        frame.items.retain(|item| item.uri != *uri);
+                        frame.remove_items(|item| item.uri != *uri);
                     }
                 }
                 let key = match (kind, *saved) {
@@ -1686,9 +1768,7 @@ impl Shell {
             }
             (O::RemovedFromPlaylist { .. }, Pending::Remove { uid }) => {
                 if let Some(frame) = self.spotify.browse.frames.last_mut() {
-                    frame
-                        .items
-                        .retain(|item| item.uid.as_deref() != Some(uid.as_str()));
+                    frame.remove_items(|item| item.uid.as_deref() != Some(uid.as_str()));
                 }
                 texts.text("spotify_removed_from_playlist").to_owned()
             }

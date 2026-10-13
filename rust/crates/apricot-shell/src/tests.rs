@@ -51,9 +51,15 @@ mod keyboard {
             shell.route_key(chord("Escape"), false, FocusKind::List),
             KeyRoute::Unhandled
         );
-        // A list action is not a main menu action.
+        // Beta 4 (Windows `handle_shortcut_message`): actions that also act
+        // on the player reach it from the main menu.
         assert_eq!(
             shell.route_key(chord("Ctrl+Shift+A"), false, FocusKind::List),
+            KeyRoute::Run("download_audio")
+        );
+        // A list-only action is not a main menu action.
+        assert_eq!(
+            shell.route_key(chord("Shift+A"), false, FocusKind::List),
             KeyRoute::Unhandled
         );
     }

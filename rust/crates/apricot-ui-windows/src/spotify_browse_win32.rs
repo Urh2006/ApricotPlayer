@@ -397,7 +397,10 @@ impl Source {
                 offset,
             },
             Self::LikedSongs => CatalogRequest::LikedSongs { offset },
-            Self::Album(uri) => CatalogRequest::Album(uri.clone()),
+            Self::Album(uri) => CatalogRequest::Album {
+                uri: uri.clone(),
+                offset,
+            },
             Self::Playlist(uri) => CatalogRequest::Playlist {
                 uri: uri.clone(),
                 offset,
@@ -511,6 +514,31 @@ pub(super) struct BrowseState {
     hidden_load: Option<SpotifyStamp>,
     /// Songs marked with Shift+A or Ctrl+A for "Add to Spotify playlist".
     marks: apricot_app::spotify::SpotifyMarks,
+    /// Verified personal mix contexts remain known after their list closes.
+    personalised_contexts: std::collections::HashSet<String>,
+}
+
+impl BrowseState {
+    pub(super) fn clear_account(&mut self) {
+        *self = Self::default();
+    }
+}
+
+impl Frame {
+    fn remove_items(&mut self, keep: impl FnMut(&CatalogItem) -> bool) {
+        let before = self.items.len();
+        self.items.retain(keep);
+        let removed = before - self.items.len();
+        if removed > 0 {
+            self.next_offset = self
+                .next_offset
+                .map(|offset| offset.saturating_sub(removed as u64));
+            // Responses read before the edit use the old server offsets.
+            self.loading = None;
+            self.refresh = None;
+            self.selected = self.selected.min(self.items.len().saturating_sub(1));
+        }
+    }
 }
 
 pub(super) const fn is_view(view: MainView) -> bool {
@@ -619,6 +647,9 @@ pub(super) unsafe fn loaded(
     let Some(state) = state_mut(window) else {
         return;
     };
+    if !state.spotify.is_current_account(stamp) {
+        return;
+    }
     let texts = super::spotify::catalog(state);
     let pending_load = matches!(
         state.spotify_browse.pending,
@@ -734,6 +765,16 @@ pub(super) unsafe fn loaded(
             frame.can_rename = collection.can_edit_metadata;
             frame.personalised = apricot_spotify::catalog::PERSONALISED_FORMATS
                 .contains(&collection.format.as_str());
+            if let Source::Playlist(uri) = &frame.source {
+                if frame.personalised {
+                    state
+                        .spotify_browse
+                        .personalised_contexts
+                        .insert(uri.clone());
+                } else {
+                    state.spotify_browse.personalised_contexts.remove(uri);
+                }
+            }
             frame.items.extend(collection.page.items);
             frame.next_offset = collection.page.next_offset;
         }
@@ -1488,23 +1529,23 @@ pub(super) unsafe fn radio(window: HWND) {
     let Some(state) = state(window) else {
         return;
     };
-    let target = selected_item(state)
+    let selected = selected_item(state)
         .filter(|item| {
             matches!(
                 item.kind,
                 ItemKind::Track | ItemKind::Artist | ItemKind::Album | ItemKind::Playlist
             )
         })
-        .map(|item| (item.uri.clone(), item.name.clone()))
-        .or_else(|| {
-            state
-                .application
-                .player_session()
-                .current_item()
-                .filter(|item| item.source == apricot_core::MediaSource::Spotify)
-                .filter(|item| item.id.0.starts_with("spotify:track:"))
-                .map(|item| (item.id.0.clone(), item.title.clone()))
-        });
+        .map(|item| (item.uri.clone(), item.name.clone()));
+    let target = shortcut_target(super::focus_in_background_player(state), selected, || {
+        state
+            .application
+            .player_session()
+            .current_item()
+            .filter(|item| item.source == apricot_core::MediaSource::Spotify)
+            .filter(|item| item.id.0.starts_with("spotify:track:"))
+            .map(|item| (item.id.0.clone(), item.title.clone()))
+    });
     let Some((seed, name)) = target else {
         return;
     };
@@ -1521,7 +1562,7 @@ pub(super) unsafe fn toggle_hidden(window: HWND) {
         return;
     };
     let frame = top(state).filter(|_| state.view == MainView::SpotifyBrowse);
-    let target = frame.filter(|frame| frame.personalised).and_then(|frame| {
+    let selected = frame.filter(|frame| frame.personalised).and_then(|frame| {
         let context = match &frame.source {
             Source::Playlist(uri) => uri.clone(),
             _ => return None,
@@ -1529,6 +1570,20 @@ pub(super) unsafe fn toggle_hidden(window: HWND) {
         selected_item(state)
             .filter(|item| item.kind == ItemKind::Track)
             .map(|item| (item.uri.clone(), context))
+    });
+    let target = shortcut_target(super::focus_in_background_player(state), selected, || {
+        let item = state.application.player_session().current_item()?;
+        if item.source != apricot_core::MediaSource::Spotify
+            || !item.id.0.starts_with("spotify:track:")
+        {
+            return None;
+        }
+        let context = item.metadata.get("spotify_context")?.as_str()?;
+        state
+            .spotify_browse
+            .personalised_contexts
+            .contains(context)
+            .then(|| (item.id.0.clone(), context.to_owned()))
     });
     let Some((uri, context)) = target else {
         let text = super::spotify::catalog(state)
@@ -1575,7 +1630,7 @@ pub(super) unsafe fn toggle_saved(window: HWND) {
         Source::Profile { uri, .. } => Some(uri.clone()),
         _ => None,
     });
-    let uri = selected_item(state)
+    let selected = selected_item(state)
         .filter(|item| item.kind != ItemKind::Unavailable && item.kind != ItemKind::Folder)
         .and_then(|item| {
             if item.kind == ItemKind::Section {
@@ -1584,15 +1639,15 @@ pub(super) unsafe fn toggle_saved(window: HWND) {
             } else {
                 Some(item.uri.clone())
             }
-        })
-        .or_else(|| {
-            let session = state.application.player_session();
-            session
-                .current_item()
-                .filter(|item| item.source == apricot_core::MediaSource::Spotify)
-                .map(|item| item.id.0.clone())
-                .filter(|uri| !uri.contains(":album:") && !uri.contains(":playlist:"))
         });
+    let uri = shortcut_target(super::focus_in_background_player(state), selected, || {
+        let session = state.application.player_session();
+        session
+            .current_item()
+            .filter(|item| item.source == apricot_core::MediaSource::Spotify)
+            .map(|item| item.id.0.clone())
+            .filter(|uri| !uri.contains(":album:") && !uri.contains(":playlist:"))
+    });
     let Some(uri) = uri else {
         return;
     };
@@ -1606,6 +1661,19 @@ pub(super) unsafe fn toggle_saved(window: HWND) {
         apricot_spotify::LibraryEdit::ToggleSaved { uri },
         Pending::Saved,
     );
+}
+
+/// Player focus must never edit a row selected in the list behind it.
+fn shortcut_target<T>(
+    player_focus: bool,
+    selected: Option<T>,
+    playing: impl FnOnce() -> Option<T>,
+) -> Option<T> {
+    if player_focus {
+        playing()
+    } else {
+        selected.or_else(playing)
+    }
 }
 
 /// Delete in an editable playlist: removes exactly the selected occurrence.
@@ -1837,6 +1905,9 @@ pub(super) unsafe fn edited(
     let Some(state) = state_mut(window) else {
         return;
     };
+    if !state.spotify.is_current_account(stamp) {
+        return;
+    }
     let texts = super::spotify::catalog(state);
     let Some((wanted, pending)) = state.spotify_browse.pending.take() else {
         return;
@@ -1865,7 +1936,7 @@ pub(super) unsafe fn edited(
                     frame.following = Some(*saved);
                 }
                 if !*saved && matches!(frame.source, Source::LikedSongs) {
-                    frame.items.retain(|item| item.uri != *uri);
+                    frame.remove_items(|item| item.uri != *uri);
                 }
             }
             let key = match (kind, *saved) {
@@ -1894,9 +1965,7 @@ pub(super) unsafe fn edited(
         }
         (O::RemovedFromPlaylist { .. }, Pending::Remove { uid }) => {
             if let Some(frame) = state.spotify_browse.frames.last_mut() {
-                frame
-                    .items
-                    .retain(|item| item.uid.as_deref() != Some(uid.as_str()));
+                frame.remove_items(|item| item.uid.as_deref() != Some(uid.as_str()));
             }
             texts.text("spotify_removed_from_playlist").to_owned()
         }
@@ -2195,6 +2264,96 @@ mod tests {
     use super::*;
 
     #[test]
+    fn spotify_player_actions_target_playing_track_instead_of_background_selection() {
+        let selected = "spotify:album:selected";
+        let playing = "spotify:track:recommended";
+        assert_eq!(
+            shortcut_target(true, Some(selected), || Some(playing)),
+            Some(playing)
+        );
+        assert_eq!(
+            shortcut_target(false, Some(selected), || Some(playing)),
+            Some(selected)
+        );
+        assert_eq!(
+            shortcut_target(true, Some(selected), || None),
+            None,
+            "a non-Spotify player must not edit the background Spotify row"
+        );
+        assert_eq!(
+            shortcut_target(false, None, || Some(playing)),
+            Some(playing)
+        );
+    }
+
+    #[test]
+    fn account_change_drops_private_caches_and_pending_answers() {
+        let mut browse = BrowseState {
+            playlists: Some(Vec::new()),
+            hidden: Some(["spotify:track:a".to_owned()].into()),
+            hidden_load: Some(SpotifyStamp::default()),
+            pending: Some((SpotifyStamp::default(), Pending::Saved)),
+            last_query: "private search".to_owned(),
+            personalised_contexts: ["spotify:playlist:personal".to_owned()].into(),
+            ..BrowseState::default()
+        };
+        browse.clear_account();
+        assert!(browse.playlists.is_none());
+        assert!(browse.hidden.is_none());
+        assert!(browse.hidden_load.is_none());
+        assert!(browse.pending.is_none());
+        assert!(browse.frames.is_empty());
+        assert!(browse.last_query.is_empty());
+        assert!(browse.personalised_contexts.is_empty());
+    }
+
+    #[test]
+    fn deleting_loaded_track_keeps_first_unread_track_in_next_page() {
+        let row = |index: usize| {
+            section_row(&apricot_spotify::catalog::Section {
+                uri: format!("track-{index}"),
+                title: index.to_string(),
+                items: Vec::new(),
+            })
+        };
+        let mut frame = Frame {
+            source: Source::LikedSongs,
+            title: String::new(),
+            items: (0..50).map(row).collect(),
+            next_offset: Some(50),
+            selected: 49,
+            loading: Some(SpotifyStamp::default()),
+            refresh: Some(SpotifyStamp::default()),
+            loaded: true,
+            error: None,
+            mixed: false,
+            can_edit: false,
+            can_rename: false,
+            personalised: false,
+            following: None,
+            sections: Vec::new(),
+            mark_all: false,
+            search_screen: false,
+            focus_results: false,
+        };
+        frame.remove_items(|item| item.uri != "track-0");
+        // The same server deletion shifts track 50 to index 49.
+        let server_rows: Vec<_> = (1..100).map(row).collect();
+        let offset = usize::try_from(frame.next_offset.unwrap()).unwrap();
+        assert_eq!(server_rows[offset].uri, "track-50");
+        assert_eq!(
+            frame.source.request(offset as u64),
+            Some(CatalogRequest::LikedSongs { offset: 49 })
+        );
+        assert!(
+            frame.loading.is_none(),
+            "page response before deletion must be discarded"
+        );
+        assert!(frame.refresh.is_none());
+        assert_eq!(frame.selected, 48);
+    }
+
+    #[test]
     fn tracks_play_in_the_context_of_their_collection() {
         assert_eq!(
             Source::Album("spotify:album:a".into()).context(),
@@ -2213,6 +2372,13 @@ mod tests {
 
     #[test]
     fn requests_continue_at_the_offset() {
+        assert_eq!(
+            Source::Album("spotify:album:a".into()).request(300),
+            Some(CatalogRequest::Album {
+                uri: "spotify:album:a".into(),
+                offset: 300
+            })
+        );
         assert_eq!(
             Source::Playlist("spotify:playlist:p".into()).request(50),
             Some(CatalogRequest::Playlist {

@@ -602,7 +602,7 @@ impl Shell {
             "player_transcript" => self.show_player_transcript(ui),
             "player_comments" => self.show_player_comments(ui),
             "player_next_related" => self.play_related_video(ui, true),
-            "player_back_keep_playing" => self.leave_player_to_main_menu(ui, true),
+            "player_back_keep_playing" => self.navigate_back_preserving_player(ui),
             "player_previous" => self.navigate_player_relative(ui, -1, false),
             "player_next" => self.navigate_player_relative(ui, 1, false),
             "player_time" => self.announce_player_time(ui),
