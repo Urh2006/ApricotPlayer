@@ -93,9 +93,13 @@ NODE_ARCHIVE="node-$NODE_VERSION-darwin-arm64.tar.gz"
 fetch "https://nodejs.org/dist/$NODE_VERSION/$NODE_ARCHIVE" "$NODE_ARCHIVE" "$NODE_SHA256"
 
 OUTPUT="$RUST_ROOT/local-dist/macos/$VERSION"
-STAGING="$OUTPUT/staging"
+# Finder/File Provider can restore FinderInfo on bundles under Documents while
+# codesign is running. Assemble and sign outside the source/output directory.
+STAGING=$(mktemp -d /private/tmp/apricot-macos.XXXXXX)
+trap 'rm -rf "$STAGING"' EXIT
 APP="$STAGING/$PRODUCT.app"
 rm -rf "$OUTPUT"
+mkdir -p "$OUTPUT"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 MACOS="$APP/Contents/MacOS"
 
@@ -169,7 +173,48 @@ cat > "$APP/Contents/Resources/build-info.json" <<EOF
 }
 EOF
 
+# The package's OS floor must include its bundled dependencies, which may have
+# been built for a newer macOS than our Rust executable or plist template.
+python3 - "$APP" <<'PY'
+import json
+import pathlib
+import plistlib
+import re
+import subprocess
+import sys
+
+app = pathlib.Path(sys.argv[1])
+plist_path = app / "Contents/Info.plist"
+plist = plistlib.loads(plist_path.read_bytes())
+versions = [plist["LSMinimumSystemVersion"]]
+magic = {bytes.fromhex(value) for value in
+         ("feedface", "cefaedfe", "feedfacf", "cffaedfe",
+          "cafebabe", "bebafeca", "cafebabf", "bfbafeca")}
+for path in app.rglob("*"):
+    if not path.is_file() or path.is_symlink():
+        continue
+    with path.open("rb") as stream:
+        if stream.read(4) not in magic:
+            continue
+    commands = subprocess.check_output(["otool", "-l", str(path)], text=True)
+    for block in re.split(r"Load command \d+", commands):
+        if "cmd LC_BUILD_VERSION" in block:
+            versions.extend(re.findall(r"\bminos\s+([\d.]+)", block))
+        elif "cmd LC_VERSION_MIN_MACOSX" in block:
+            versions.extend(re.findall(r"\bversion\s+([\d.]+)", block))
+minimum = max(versions, key=lambda value: tuple(map(int, value.split("."))))
+plist["LSMinimumSystemVersion"] = minimum
+plist_path.write_bytes(plistlib.dumps(plist))
+info_path = app / "Contents/Resources/build-info.json"
+info = json.loads(info_path.read_text())
+info["macos_minimum_version"] = minimum
+info_path.write_text(json.dumps(info, indent=2) + "\n")
+print(f"MACOS_MINIMUM_VERSION={minimum}")
+PY
+
 # Ad hoc signature: the bundle, every library and helper inside it.
+# Archive-provided Finder metadata is not permitted by codesign.
+xattr -cr "$APP"
 find "$MACOS" -type f \( -name "*.dylib" -o -perm -u+x \) ! -path "$MACOS/$EXECUTABLE" \
     -exec codesign --force --sign - {} \; 2>/dev/null
 codesign --force --sign - "$APP"
