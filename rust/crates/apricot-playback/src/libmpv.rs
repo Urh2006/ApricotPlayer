@@ -1114,6 +1114,14 @@ impl PlaybackEngine for LibMpvEngine {
 
 impl Drop for LibMpvEngine {
     fn drop(&mut self) {
+        // Closing the client also relinquishes its decoder/Connect transport.
+        // Canceling mpv's reader alone leaves the source writing to a bounded
+        // generation with no consumer. Stop it before destroying the client.
+        if self.pcm.take().is_some()
+            && let Some(source) = crate::pcm_source::pcm_source()
+        {
+            source.stop();
+        }
         // libmpv must not destroy a client whose render context still exists;
         // when the surface does not free it in time the client is leaked
         // rather than crashing the application.
@@ -2343,6 +2351,72 @@ mod tests {
         assert!(
             events.contains(&PlaybackEvent::Ended),
             "first regular item must play through: {events:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires APRICOT_TEST_MPV"]
+    fn real_libmpv_closing_pcm_player_stops_its_source() {
+        use crate::{
+            PlaybackEngine,
+            pcm_source::{PcmGeneration, PcmSource, PcmSourceEvent, PcmStream, set_pcm_source},
+        };
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        #[derive(Default)]
+        struct Source(AtomicUsize);
+        impl PcmSource for Source {
+            fn start(&self, _: &MediaItem, _: u32, _: bool, _: bool) -> Result<(), String> {
+                Ok(())
+            }
+            fn set_paused(&self, _: bool) {}
+            fn seek(&self, _: u32) {}
+            fn stop(&self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+            fn take_generation(&self) -> Option<PcmGeneration> {
+                None
+            }
+            fn open(&self, _: u64) -> Option<Arc<dyn PcmStream>> {
+                None
+            }
+            fn poll_event(&self) -> Option<PcmSourceEvent> {
+                None
+            }
+            fn format(&self) -> (String, Option<f64>) {
+                ("Test PCM".into(), None)
+            }
+        }
+        let source = Arc::new(Source::default());
+        set_pcm_source(Some(source.clone()));
+        let mut engine = short_engine(false);
+        let item = MediaItem {
+            id: MediaId("spotify:track:0000000000000000000002".into()),
+            source: MediaSource::Spotify,
+            kind: MediaKind::Audio,
+            title: "Test".into(),
+            url: None,
+            stream_url: None,
+            external_audio_url: None,
+            local_path: None,
+            channel: String::new(),
+            duration_seconds: None,
+            metadata: BTreeMap::new(),
+        };
+        engine
+            .execute(PlaybackCommand::Load {
+                item: Box::new(item),
+                start_position_seconds: None,
+            })
+            .unwrap();
+        drop(engine); // The runtime's Close request releases the owned engine.
+        set_pcm_source(None);
+        assert_eq!(
+            source.0.load(Ordering::SeqCst),
+            1,
+            "closing the player must stop its decoder/Connect source"
         );
     }
 
