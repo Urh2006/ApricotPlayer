@@ -126,6 +126,14 @@ matching the pinned dependency.
 
 ## Verification limits
 
+Final package inspection found 51 bundled Mach-O files with actual
+`LC_BUILD_VERSION minos 27.0`, including mpv, libmpv and FFmpeg. The main Rust
+executable has minos 11.0; SDK version alone is not used as the requirement.
+The packaging script now derives the declared OS minimum from bundled binaries
+and signs in private temporary storage to avoid Finder metadata invalidating
+the signature. This beta requires macOS 27.0; older-system dependency builds
+remain outstanding.
+
 Tests were run red before fixes at production seams, including actual macOS
 update scripts, real libmpv and native background controls. A passing unit suite
 does not certify complete NVDA/VoiceOver speech, braille or real-account behavior.

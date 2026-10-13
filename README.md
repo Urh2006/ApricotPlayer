@@ -4,6 +4,8 @@ Accessible YouTube player and downloader for Windows, built in Python with `wxPy
 
 Current beta: `2.0.0-beta.8` (Rust rewrite). Current stable: `1.0.21`.
 
+The beta 8 Apple silicon package requires macOS 27.0 or later because of its bundled media libraries.
+
 ## Download
 
 Download the latest Windows installer or portable ZIP from the [GitHub Releases page](https://github.com/Urh2006/ApricotPlayer/releases). Beta builds are published as prereleases and are offered only when the updater channel is set to Beta.
