@@ -86,6 +86,10 @@ selectors without making account mutations.
   The candidate Windows GUI repeated the same account/search flow and reached
   elapsed 0:26 on its first load. Shuffle enabled in Spotify survived the source
   change: toggling it from the YouTube background controls announced Off.
+  A disconnected PCM source also left the old mode set during the replacement
+  load, incorrectly failing the new regular item with "the PCM source is gone".
+  Mode cleanup now occurs even when the source has disappeared; a separate
+  real-libmpv regression reproduced that failure.
 - A new item reset shuffle even though other session state was retained.
   Shuffle now retains both manual On and Off until the player area is closed.
   Escape and item replacement preserve it. An explicit Shuffle playlist command

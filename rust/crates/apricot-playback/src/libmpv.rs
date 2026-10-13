@@ -884,9 +884,9 @@ impl LibMpvEngine {
             start_position_seconds,
         } = command
         {
-            if let Some(source) = crate::pcm_source::pcm_source()
-                && self.pcm.take().is_some()
+            if self.pcm.take().is_some()
                 && !crate::pcm_source::is_pcm_item(item)
+                && let Some(source) = crate::pcm_source::pcm_source()
             {
                 source.stop();
             }
@@ -2418,6 +2418,37 @@ mod tests {
             1,
             "closing the player must stop its decoder/Connect source"
         );
+    }
+
+    #[test]
+    #[ignore = "requires APRICOT_TEST_MPV and APRICOT_TEST_FFMPEG"]
+    fn real_libmpv_regular_load_after_pcm_source_disconnect_does_not_fail() {
+        use crate::{PlaybackEngine, PlaybackEvent, pcm_source::set_pcm_source};
+        set_pcm_source(None);
+        let mut engine = short_engine(false);
+        engine.pcm = Some(super::PcmPlayback {
+            base_ms: 0,
+            offset: 0.0,
+            started: true,
+            loaded: true,
+            boundaries: std::collections::VecDeque::default(),
+        });
+        let folder = tempfile::tempdir().unwrap();
+        engine
+            .execute(PlaybackCommand::Load {
+                item: Box::new(short_fixture(folder.path())),
+                start_position_seconds: None,
+            })
+            .unwrap();
+        let events = collect_events(&mut engine, std::time::Duration::from_millis(1500));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, PlaybackEvent::Failed(_))),
+            "a disconnected Spotify source must not fail the new regular item: {events:?}"
+        );
+        assert!(events.contains(&PlaybackEvent::Started), "{events:?}");
+        assert!(events.contains(&PlaybackEvent::Ended), "{events:?}");
     }
 
     fn collect_events(
