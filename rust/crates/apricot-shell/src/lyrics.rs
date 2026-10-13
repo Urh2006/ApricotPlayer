@@ -135,11 +135,39 @@ impl Shell {
         let settings = self.application.settings();
         let online = settings.enable_online_lyrics;
         let proxy = settings.proxy.clone();
-        // Spotify's own lyrics and episode transcripts arrive with Spotify
-        // (unit M13).
+        let transcript = item.source == apricot_core::MediaSource::Spotify
+            && item.id.0.starts_with("spotify:episode:");
+        let transcript_source = catalog.text("lyrics_source_spotify_transcript").to_owned();
+        let title = if transcript {
+            transcript_source.clone()
+        } else {
+            catalog.text("lyrics").to_owned()
+        };
+        let spotify = (item.source == apricot_core::MediaSource::Spotify)
+            .then(|| {
+                self.spotify_service_ref()?;
+                self.spotify_service()
+            })
+            .flatten();
+        let spotify_source = catalog.text("lyrics_source_spotify").to_owned();
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
             use apricot_platform::lyrics::{LyricsQuery, LyricsSource, fetch_lyrics};
+            if let Some((text, provider)) = spotify
+                .as_ref()
+                .and_then(|service| service.lyrics_blocking(&item.id.0))
+            {
+                let source = if transcript {
+                    transcript_source
+                } else {
+                    spotify_source.replace("{provider}", &provider)
+                };
+                let _ = sender.send(Some(LyricsDocument::parse(
+                    &text,
+                    source.trim_end_matches([',', ' ']),
+                )));
+                return;
+            }
             let query = LyricsQuery::from_item(&item);
             let document = fetch_lyrics(
                 item.local_path.as_deref().map(std::path::Path::new),
@@ -158,7 +186,6 @@ impl Shell {
             });
             let _ = sender.send(document);
         });
-        let title = catalog.text("lyrics").to_owned();
         ui.open_lyrics(LyricsDialog {
             copy: catalog.text("copy_lyrics").to_owned(),
             back: catalog.text("back").to_owned(),

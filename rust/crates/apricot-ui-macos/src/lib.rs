@@ -19,6 +19,8 @@ mod app;
 #[cfg(target_os = "macos")]
 mod audiovault_login;
 #[cfg(target_os = "macos")]
+mod background_player;
+#[cfg(target_os = "macos")]
 mod bookmarks;
 #[cfg(target_os = "macos")]
 mod comments;
@@ -36,6 +38,8 @@ mod download_progress;
 mod equalizer;
 #[cfg(target_os = "macos")]
 mod form_controls;
+#[cfg(target_os = "macos")]
+mod global_hotkey;
 pub mod keys;
 #[cfg(target_os = "macos")]
 mod language;
@@ -110,3 +114,8 @@ pub fn run_application(
 ) -> Result<(), String> {
     Err("the macOS user interface requires macOS".to_owned())
 }
+
+/// Runs the native background-player audit with an explicitly isolated caller
+/// profile, without the production activation socket or instance lock.
+#[cfg(all(target_os = "macos", debug_assertions))]
+pub use window::audit_background;
