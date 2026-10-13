@@ -296,7 +296,7 @@ impl Shell {
 
     /// The selected row, for the context menu and shortcuts.
     fn browse_selected_item(&self, ui: &dyn ShellUi) -> Option<&CatalogItem> {
-        if self.view != View::SpotifyBrowse {
+        if self.view != View::SpotifyBrowse || ui.focused_player_control().is_some() {
             return None;
         }
         self.browse_top()?.items.get(ui.selected_row()?)
@@ -1229,7 +1229,12 @@ impl Shell {
             ui.set_status(&self.text("spotify_unplayable"), true);
             return;
         }
-        if let Some(media) = self.browse_media_for(item, shuffle) {
+        if let Some(mut media) = self.browse_media_for(item, shuffle) {
+            if shuffle {
+                media
+                    .metadata
+                    .insert("spotify_shuffle_explicit".to_owned(), true.into());
+            }
             self.spotify_play_track(ui, media);
         }
     }
@@ -1390,9 +1395,8 @@ impl Shell {
 
     /// `spotify_radio`: Spotify's radio for the selected track, artist,
     /// album or playlist, or for the playing Spotify track.
-    pub(crate) fn spotify_radio(&mut self, ui: &mut dyn ShellUi) {
-        let target = self
-            .browse_selected_item(ui)
+    pub(crate) fn spotify_radio_target(&self, ui: &dyn ShellUi) -> Option<(String, String)> {
+        self.browse_selected_item(ui)
             .filter(|item| {
                 matches!(
                     item.kind,
@@ -1407,7 +1411,11 @@ impl Shell {
                     .filter(|item| item.source == apricot_core::MediaSource::Spotify)
                     .filter(|item| item.id.0.starts_with("spotify:track:"))
                     .map(|item| (item.id.0.clone(), item.title.clone()))
-            });
+            })
+    }
+
+    pub(crate) fn spotify_radio(&mut self, ui: &mut dyn ShellUi) {
+        let target = self.spotify_radio_target(ui);
         let Some((seed, name)) = target else {
             return;
         };
@@ -1417,11 +1425,11 @@ impl Shell {
 
     /// `spotify_dislike`: Spotify's "Hide song" in a personal mix, or
     /// showing it again. Elsewhere it says where it works.
-    pub(crate) fn spotify_toggle_hidden(&mut self, ui: &mut dyn ShellUi) {
+    pub(crate) fn spotify_hide_target(&self, ui: &dyn ShellUi) -> Option<(String, String)> {
         let frame = self
             .browse_top()
             .filter(|_| self.view == View::SpotifyBrowse);
-        let target = frame
+        frame
             .filter(|frame| frame.personalised)
             .and_then(|frame| {
                 let Source::Playlist(context) = &frame.source else {
@@ -1446,7 +1454,11 @@ impl Shell {
                     .personalised_contexts
                     .contains(context)
                     .then(|| (item.id.0.clone(), context.to_owned()))
-            });
+            })
+    }
+
+    pub(crate) fn spotify_toggle_hidden(&mut self, ui: &mut dyn ShellUi) {
+        let target = self.spotify_hide_target(ui);
         let Some((uri, context)) = target else {
             ui.set_status(&self.text("spotify_hide_unavailable"), true);
             return;
@@ -1478,7 +1490,7 @@ impl Shell {
 
     /// `spotify_toggle_saved`: like or unlike the selected track or the
     /// one that plays; save or remove a collection; follow an artist.
-    pub(crate) fn spotify_toggle_saved(&mut self, ui: &mut dyn ShellUi) {
+    pub(crate) fn spotify_saved_target(&self, ui: &dyn ShellUi) -> Option<String> {
         let profile = self.browse_top().and_then(|frame| match &frame.source {
             Source::Profile { uri, .. } => Some(uri.clone()),
             _ => None,
@@ -1502,7 +1514,11 @@ impl Shell {
                     .map(|item| item.id.0.clone())
                     .filter(|uri| !uri.contains(":album:") && !uri.contains(":playlist:"))
             });
-        let Some(uri) = uri.filter(|uri| uri != "spotify:collection:tracks") else {
+        uri.filter(|uri| uri != "spotify:collection:tracks")
+    }
+
+    pub(crate) fn spotify_toggle_saved(&mut self, ui: &mut dyn ShellUi) {
+        let Some(uri) = self.spotify_saved_target(ui) else {
             return;
         };
         self.browse_begin_edit(LibraryEdit::ToggleSaved { uri }, Pending::Saved);
@@ -1511,6 +1527,9 @@ impl Shell {
     /// Delete in an editable playlist: removes exactly the selected
     /// occurrence.
     pub(crate) fn spotify_browse_remove_selected(&mut self, ui: &mut dyn ShellUi) {
+        if ui.focused_player_control().is_some() {
+            return;
+        }
         let Some(frame) = self.browse_top() else {
             return;
         };
@@ -2102,6 +2121,18 @@ impl Shell {
         });
         self.view = View::SpotifyBrowse;
         self.browse_render(ui, true);
+    }
+
+    pub(crate) fn spotify_browse_test_personalised(&mut self) {
+        if let Some(frame) = self.spotify.browse.frames.last_mut()
+            && let Source::Playlist(context) = &frame.source
+        {
+            frame.personalised = true;
+            self.spotify
+                .browse
+                .personalised_contexts
+                .insert(context.clone());
+        }
     }
 }
 

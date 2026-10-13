@@ -860,7 +860,18 @@ impl SpotifyPlayback {
 /// The Connect load request for an Apricot item: its context at the exact
 /// occurrence (or the track), a whole album, playlist, artist or show, or a
 /// single track.
-fn load_request(item: &MediaItem, uri: String, position_ms: u32, paused: bool) -> LoadRequest {
+fn load_request(
+    item: &MediaItem,
+    uri: String,
+    position_ms: u32,
+    paused: bool,
+    repeat_mode: RepeatMode,
+) -> LoadRequest {
+    let shuffle = item
+        .metadata
+        .get("spotify_shuffle")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
     let text = |key: &str| {
         item.metadata
             .get(key)
@@ -893,11 +904,6 @@ fn load_request(item: &MediaItem, uri: String, position_ms: u32, paused: bool) -
                 .map(PlayingTrack::Uid)
                 .or(Some(PlayingTrack::Uri(uri)))
         };
-        let shuffle = item
-            .metadata
-            .get("spotify_shuffle")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
         log::info!("load context {context} (whole {whole}, shuffle {shuffle})");
         LoadRequest::from_context_uri(
             context,
@@ -906,7 +912,8 @@ fn load_request(item: &MediaItem, uri: String, position_ms: u32, paused: bool) -
                 seek_to: position_ms,
                 context_options: Some(LoadContextOptions::Options(ConnectOptions {
                     shuffle,
-                    ..ConnectOptions::default()
+                    repeat: matches!(repeat_mode, RepeatMode::Context),
+                    repeat_track: matches!(repeat_mode, RepeatMode::Track),
                 })),
                 playing_track,
             },
@@ -917,6 +924,11 @@ fn load_request(item: &MediaItem, uri: String, position_ms: u32, paused: bool) -
             LoadRequestOptions {
                 start_playing: !paused,
                 seek_to: position_ms,
+                context_options: Some(LoadContextOptions::Options(ConnectOptions {
+                    shuffle,
+                    repeat: matches!(repeat_mode, RepeatMode::Context),
+                    repeat_track: matches!(repeat_mode, RepeatMode::Track),
+                })),
                 ..LoadRequestOptions::default()
             },
         )
@@ -971,7 +983,17 @@ impl PcmSource for SpotifyPlayback {
             .ok_or_else(|| "spotify_unplayable".to_owned())?;
         self.shared.requested.store(true, Ordering::SeqCst);
         log::info!("start requested at {position_ms} ms, paused {paused}");
-        let request = load_request(item, uri, position_ms, paused);
+        // Setting shuffle requires a complete Connect options object. Keep
+        // repeat too when replacing a live item, rather than reset it as a
+        // side effect; an actually closed player begins with defaults.
+        let repeat_mode = if current.is_some() {
+            self.player_state()
+                .as_ref()
+                .map_or(RepeatMode::Off, crate::queue::repeat_mode)
+        } else {
+            RepeatMode::Off
+        };
+        let request = load_request(item, uri, position_ms, paused, repeat_mode);
         self.shared.close_current();
         if let Ok(mut pending) = self.shared.pending.lock() {
             *pending = None;
@@ -1236,5 +1258,36 @@ mod tests {
         assert_eq!(item.stream_url, None);
         assert_eq!(item.duration_seconds, Some(354.0));
         assert_eq!(item.channel, "Artist");
+    }
+
+    #[test]
+    fn a_new_single_track_load_carries_the_session_shuffle_mode() {
+        let mut item = SpotifyTrack {
+            uri: "spotify:track:4u7EnebtmKWzUH433cf5Qv".into(),
+            title: "Title".into(),
+            artists: "Artist".into(),
+            album: String::new(),
+            duration_ms: 1000,
+        }
+        .media_item();
+        item.metadata.insert("spotify_shuffle".into(), true.into());
+        let request = load_request(&item, item.id.0.clone(), 0, false, RepeatMode::Off);
+        // LibreSpot exposes the request's Debug representation but keeps
+        // its fields private. Check the actual outbound request's mode.
+        assert!(format!("{request:?}").contains("shuffle: true"));
+    }
+
+    #[test]
+    fn replacing_a_single_track_keeps_the_confirmed_repeat_track_mode() {
+        let item = SpotifyTrack {
+            uri: "spotify:track:4u7EnebtmKWzUH433cf5Qv".into(),
+            title: "Title".into(),
+            artists: "Artist".into(),
+            album: String::new(),
+            duration_ms: 1000,
+        }
+        .media_item();
+        let request = load_request(&item, item.id.0.clone(), 0, false, RepeatMode::Track);
+        assert!(format!("{request:?}").contains("repeat_track: true"));
     }
 }

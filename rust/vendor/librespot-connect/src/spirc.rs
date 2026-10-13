@@ -204,6 +204,66 @@ mod transport_regressions {
             .unwrap();
         task.connect_state.set_status(&task.play_status);
     }
+
+    #[tokio::test]
+    async fn reopening_liked_songs_context_restarts_the_first_track_and_preserves_next() {
+        let mut task = task(false);
+        let uri = "spotify:user:offline-account:collection";
+        // A completed first context resolution, without authentication or I/O.
+        task.connect_state
+            .update_context(
+                Context {
+                    uri: Some(uri.into()),
+                    pages: vec![ContextPage {
+                        tracks: [FIRST, SECOND]
+                            .into_iter()
+                            .map(|track| ContextTrack {
+                                uri: Some(track.into()),
+                                ..Default::default()
+                            })
+                            .collect(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                ContextType::Default,
+            )
+            .unwrap();
+        for state in [
+            SpircPlayStatus::Stopped,
+            SpircPlayStatus::LoadingPause { position_ms: 5000 },
+            SpircPlayStatus::LoadingPlay { position_ms: 5000 },
+        ] {
+            task.play_status = state;
+            task.connect_state.set_status(&task.play_status);
+            task.handle_load(
+                LoadRequest::from_context_uri(
+                    uri.into(),
+                    LoadRequestOptions {
+                        start_playing: true,
+                        ..Default::default()
+                    },
+                ),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(task.connect_state.player().track.uri, FIRST);
+            assert!(matches!(
+                task.play_status,
+                SpircPlayStatus::LoadingPlay { position_ms: 0 }
+            ));
+            assert!(task
+                .connect_state
+                .player()
+                .next_tracks
+                .iter()
+                .any(|track| track.uri == SECOND));
+            task.handle_next(None).unwrap();
+            assert_eq!(task.connect_state.player().track.uri, SECOND);
+        }
+    }
     #[tokio::test]
     async fn next_from_paused_starts_the_next_track() {
         let mut task = task(false);

@@ -707,26 +707,55 @@ mod macos_tests {
         let folder = tempfile::tempdir().expect("folder");
         let installed = bundle(&folder.path().join("Applications"), "old");
         let new = bundle(&folder.path().join("new"), "broken");
-        fs::copy("/usr/bin/false", new.join("Contents/MacOS/ApricotPlayer2Beta"))
-            .expect("broken executable");
-        assert!(Command::new("codesign").args(["--force", "--sign", "-"])
-            .arg(&new).status().expect("codesign").success());
+        fs::copy(
+            "/usr/bin/false",
+            new.join("Contents/MacOS/ApricotPlayer2Beta"),
+        )
+        .expect("broken executable");
+        assert!(
+            Command::new("codesign")
+                .args(["--force", "--sign", "-"])
+                .arg(&new)
+                .status()
+                .expect("codesign")
+                .success()
+        );
         let zip = folder.path().join("broken.zip");
-        assert!(Command::new("ditto").args(["-c", "-k", "--keepParent"])
-            .arg(&new).arg(&zip).status().expect("zip").success());
+        assert!(
+            Command::new("ditto")
+                .args(["-c", "-k", "--keepParent"])
+                .arg(&new)
+                .arg(&zip)
+                .status()
+                .expect("zip")
+                .success()
+        );
         let log = folder.path().join("updater.log");
         let sha = crate::package::file_sha256(&zip).expect("hash");
         let target = installed.join("Contents/MacOS");
         let script = macos_update_script(&UpdateScriptInput {
-            package: &MACOS_BETA_PACKAGE, downloaded_path: &zip,
-            target_dir: &target, process_id: 0, log_path: &log,
-            restart: false, expected_sha256: &sha,
+            package: &MACOS_BETA_PACKAGE,
+            downloaded_path: &zip,
+            target_dir: &target,
+            process_id: 0,
+            log_path: &log,
+            restart: false,
+            expected_sha256: &sha,
         });
         let path = folder.path().join("update.sh");
         fs::write(&path, script).expect("script");
-        assert!(!Command::new("/bin/sh").arg(&path).status().expect("run").success());
-        assert!(fs::read_to_string(installed.join("Contents/Info.plist"))
-            .expect("old bundle").contains("old"));
+        assert!(
+            !Command::new("/bin/sh")
+                .arg(&path)
+                .status()
+                .expect("run")
+                .success()
+        );
+        assert!(
+            fs::read_to_string(installed.join("Contents/Info.plist"))
+                .expect("old bundle")
+                .contains("old")
+        );
     }
 
     #[test]

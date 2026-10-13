@@ -140,12 +140,17 @@ impl DiagnosticRedactor {
     /// Python reads `APPDATA`, `LOCALAPPDATA`, `USERPROFILE` (or the home
     /// folder) and `TEMP`.
     pub fn from_environment() -> Self {
-        let variable = |name: &str| std::env::var(name).unwrap_or_default();
+        Self::from_environment_with(|name| std::env::var(name).unwrap_or_default())
+    }
+
+    fn from_environment_with(variable: impl Fn(&str) -> String) -> Self {
         Self::with_roots([
             (variable("APPDATA"), "%APPDATA%"),
             (variable("LOCALAPPDATA"), "%LOCALAPPDATA%"),
             (variable("USERPROFILE"), "%USERPROFILE%"),
             (variable("TEMP"), "%TEMP%"),
+            (variable("HOME"), "$HOME"),
+            (variable("TMPDIR"), "$TMPDIR"),
         ])
     }
 
@@ -1142,6 +1147,18 @@ mod tests {
         let report = DiagnosticRedactor::default()
             .report(&diagnostic_sections(&application, &environment), &[]);
         assert!(report.lines().any(|line| line == "Type: Video"), "{report}");
+    }
+
+    #[test]
+    fn macos_environment_folders_are_redacted() {
+        let redactor = DiagnosticRedactor::from_environment_with(|name| match name {
+            "HOME" => "/Users/private-person".to_owned(),
+            "TMPDIR" => "/var/folders/private-temp/".to_owned(),
+            _ => String::new(),
+        });
+        let report = redactor.redact_text("/Users/private-person/Library/Application Support/ApricotPlayer\n/var/folders/private-temp/cache");
+        assert!(!report.contains("private-person"));
+        assert!(!report.contains("private-temp"));
     }
 
     #[test]

@@ -492,6 +492,9 @@ impl Shell {
     }
 
     pub fn poll_playback(&mut self, ui: &mut dyn ShellUi) -> bool {
+        if self.windows_import_committed {
+            return false;
+        }
         loop {
             let Some(runtime) = self.player.playback.as_ref() else {
                 return false;
@@ -607,6 +610,7 @@ impl Shell {
         if let Err(error) = self.application.record_history(item, "played", timestamp) {
             ui.set_status(&format!("History was not saved: {error}"), true);
         }
+        self.schedule_stream_prefetch(ui);
     }
 
     /// Windows `execute_player_command`.
@@ -1101,6 +1105,9 @@ impl Shell {
 
     /// Closes the player when the application quits, saving its position.
     pub fn shutdown(&mut self, ui: &mut dyn ShellUi) {
+        if self.windows_import_committed {
+            return;
+        }
         if self.application.player_session().is_open() {
             self.close_player_runtime(ui);
         }

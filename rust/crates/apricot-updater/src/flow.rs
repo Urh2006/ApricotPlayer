@@ -425,8 +425,13 @@ fn install_component_folder(zip: &Path, target: &Path) -> Result<(), String> {
         let _ = fs::remove_dir_all(&fresh);
         return Err("downloaded yt-dlp is not a macOS program".to_owned());
     }
-    make_executable(&program).map_err(|error| error.to_string())?;
-    validate_component_start(&program)?;
+    if let Err(error) = make_executable(&program)
+        .map_err(|error| error.to_string())
+        .and_then(|()| validate_component_start(&program))
+    {
+        let _ = fs::remove_dir_all(&fresh);
+        return Err(error);
+    }
     if target.exists() {
         fs::rename(target, &old).map_err(|error| error.to_string())?;
     }
@@ -464,12 +469,18 @@ fn validate_component_start(program: &Path) -> Result<(), String> {
     };
     let mut output = String::new();
     if let Some(stdout) = child.stdout.take() {
-        stdout.take(4096).read_to_string(&mut output).map_err(|error| error.to_string())?;
+        stdout
+            .take(4096)
+            .read_to_string(&mut output)
+            .map_err(|error| error.to_string())?;
     }
     let version = output.trim();
     let parts = version.split('.').collect::<Vec<_>>();
-    if !status.success() || !(3..=4).contains(&parts.len())
-        || !parts.iter().all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+    if !status.success()
+        || !(3..=4).contains(&parts.len())
+        || !parts
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
     {
         return Err("updated yt-dlp did not report a valid version".to_owned());
     }
@@ -826,12 +837,19 @@ mod tests {
         fs::create_dir(&target).expect("target");
         fs::write(target.join("yt-dlp_macos"), b"working copy").expect("old");
         let zip = folder.path().join("update.zip");
-        fs::write(&zip, crate::package::tests::zip_bytes(&[
-            ("yt-dlp_macos", &[0xcf, 0xfa, 0xed, 0xfe, b'n']),
-            ("_internal/base_library.zip", b"data"),
-        ])).expect("archive");
+        fs::write(
+            &zip,
+            crate::package::tests::zip_bytes(&[
+                ("yt-dlp_macos", &[0xcf, 0xfa, 0xed, 0xfe, b'n']),
+                ("_internal/base_library.zip", b"data"),
+            ]),
+        )
+        .expect("archive");
         assert!(super::install_component_folder(&zip, &target).is_err());
-        assert_eq!(fs::read(target.join("yt-dlp_macos")).expect("kept"), b"working copy");
+        assert_eq!(
+            fs::read(target.join("yt-dlp_macos")).expect("kept"),
+            b"working copy"
+        );
     }
 
     /// The macOS folder build: a ZIP with `yt-dlp_macos` and `_internal`.
@@ -857,10 +875,20 @@ mod tests {
         };
         let source = folder.path().join("version.c");
         let executable = folder.path().join("version-test");
-        fs::write(&source, "#include <stdio.h>\nint main(void) { puts(\"2026.09.20\"); return 0; }\n")
-            .expect("fixture source");
-        assert!(std::process::Command::new("cc").arg(&source).arg("-o").arg(&executable)
-            .status().expect("compile fixture").success());
+        fs::write(
+            &source,
+            "#include <stdio.h>\nint main(void) { puts(\"2026.09.20\"); return 0; }\n",
+        )
+        .expect("fixture source");
+        assert!(
+            std::process::Command::new("cc")
+                .arg(&source)
+                .arg("-o")
+                .arg(&executable)
+                .status()
+                .expect("compile fixture")
+                .success()
+        );
         let new_program = fs::read(&executable).expect("Mach-O fixture");
         let new = zip_of(&new_program);
         let asset = super::YTDLP_ASSET_NAME;
@@ -898,7 +926,9 @@ mod tests {
             ]}),
         );
         github.files.insert(url.clone(), bad);
-        assert!(update_ytdlp_component(&mut github, "2026.09.20", &components, &mut || {}).is_err());
+        assert!(
+            update_ytdlp_component(&mut github, "2026.09.20", &components, &mut || {}).is_err()
+        );
         assert_eq!(
             fs::read(installed.join("yt-dlp_macos")).expect("kept"),
             new_program

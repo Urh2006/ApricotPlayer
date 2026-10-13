@@ -1110,6 +1110,16 @@ impl Shell {
                 let mut item = track.media_item();
                 item.metadata
                     .insert("spotify_attach".to_owned(), serde_json::Value::Bool(true));
+                if let Some(player) = self
+                    .spotify_service_ref()
+                    .and_then(SpotifyService::playback)
+                    .and_then(|playback| playback.player_state())
+                {
+                    item.metadata.insert(
+                        "spotify_shuffle".to_owned(),
+                        apricot_spotify::queue::shuffle(&player).into(),
+                    );
+                }
                 // The player's own "Playing: <title>" is the one
                 // announcement; the page opens only from the player.
                 self.start_media_item_at(ui, item, f64::from(position_ms) / 1000.0);
@@ -1119,6 +1129,14 @@ impl Shell {
                 ui.set_status(&self.text("spotify_track_unavailable"), true);
             }
             PlaybackNotice::QueueChanged => {
+                if let Some(player) = self
+                    .spotify_service_ref()
+                    .and_then(SpotifyService::playback)
+                    .and_then(|playback| playback.player_state())
+                {
+                    self.application
+                        .sync_spotify_shuffle(apricot_spotify::queue::shuffle(&player));
+                }
                 if self.spotify.queue_open {
                     self.spotify_reload_queue();
                 }
@@ -1334,6 +1352,10 @@ impl Shell {
             }
         };
         if let Some(key) = key {
+            if action_id == "player_shuffle" {
+                self.application
+                    .set_player_toggle(apricot_app::SessionToggle::Shuffle, key != "shuffle_off");
+            }
             ui.set_status(&self.text(key), true);
         }
         if let Some(playlist) = smart_start {

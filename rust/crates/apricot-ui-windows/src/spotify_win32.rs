@@ -1361,6 +1361,18 @@ unsafe fn handle_notice(window: HWND, notice: PlaybackNotice) {
             let mut item = track.media_item();
             item.metadata
                 .insert("spotify_attach".to_owned(), serde_json::Value::Bool(true));
+            if let Some(player) = state
+                .spotify
+                .service
+                .as_ref()
+                .and_then(|service| service.playback())
+                .and_then(|playback| playback.player_state())
+            {
+                item.metadata.insert(
+                    "spotify_shuffle".to_owned(),
+                    apricot_spotify::queue::shuffle(&player).into(),
+                );
+            }
             state.background_start = state.view != MainView::Player;
             // The player's own "Playing: <title>" is the one announcement.
             start_media_item_at(window, item, f64::from(position_ms) / 1000.0);
@@ -1371,6 +1383,17 @@ unsafe fn handle_notice(window: HWND, notice: PlaybackNotice) {
             set_status(state, &text, true);
         }
         PlaybackNotice::QueueChanged => {
+            if let Some(player) = state
+                .spotify
+                .service
+                .as_ref()
+                .and_then(|service| service.playback())
+                .and_then(|playback| playback.player_state())
+            {
+                state
+                    .application
+                    .sync_spotify_shuffle(apricot_spotify::queue::shuffle(&player));
+            }
             if state.spotify.queue_dialog.is_some() {
                 reload_queue(window);
             }
@@ -1725,6 +1748,13 @@ pub(super) unsafe fn transport(window: HWND, action_id: &str) -> bool {
     };
     if let Some(key) = key {
         let text = catalog(state).text(key).to_owned();
+        if action_id == "player_shuffle"
+            && let Some(state) = state_mut(window)
+        {
+            state
+                .application
+                .set_player_toggle(apricot_app::SessionToggle::Shuffle, key != "shuffle_off");
+        }
         announce(window, &text);
     }
     if let Some(playlist) = smart_start {

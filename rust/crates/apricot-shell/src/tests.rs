@@ -4,12 +4,12 @@ use apricot_app::MainMenuItem;
 
 use super::{TypeAhead, last_activated_index, preserved_index};
 
-mod keyboard {
+pub(crate) mod keyboard {
     use apricot_core::shortcut::ShortcutChord;
 
     use crate::{FocusKind, KeyRoute, Shell};
 
-    pub(super) fn shell() -> Shell {
+    pub(crate) fn shell() -> Shell {
         let directory = std::env::temp_dir().join(format!(
             "apricot-shell-test-{}-{}",
             std::process::id(),
@@ -160,7 +160,7 @@ fn main_menu_returns_to_the_last_opened_row_or_keeps_the_label() {
     assert_eq!(preserved_index(&labels, None, Some(9)), 2);
 }
 
-mod equalizer {
+pub(crate) mod equalizer {
     use std::path::PathBuf;
 
     use apricot_app::PlayerScreenModel;
@@ -173,13 +173,14 @@ mod equalizer {
 
     /// A main window that records announcements.
     #[derive(Default)]
-    pub(super) struct Ui {
+    pub(crate) struct Ui {
         pub(super) announcements: Vec<String>,
         pub(super) bookmarks: Option<crate::BookmarkDialog>,
         /// What a text prompt returns; `None` cancels.
         pub(super) prompt_answer: Option<String>,
         /// The list's selected row.
-        pub(super) selected: Option<usize>,
+        pub(crate) selected: Option<usize>,
+        pub(crate) player_focus: Option<&'static str>,
         /// The list screens shown, last last.
         pub(super) screens: Vec<crate::ListScreen>,
         /// The RSS timer interval, `None` when stopped.
@@ -188,6 +189,9 @@ mod equalizer {
         pub(super) questions: Vec<String>,
         pub(super) answer_yes: bool,
         pub(super) progress: Option<crate::DownloadProgress>,
+        pub(super) clipboard: Option<String>,
+        pub(crate) row_updates: Vec<(usize, String)>,
+        pub(crate) context_menus: Vec<Vec<apricot_app::context_menu::ContextMenuEntry>>,
     }
 
     impl ShellUi for Ui {
@@ -226,8 +230,9 @@ mod equalizer {
         fn open_playback_queue(&mut self, _dialog: crate::QueueDialog) {}
         fn show_context_menu(
             &mut self,
-            _entries: &[apricot_app::context_menu::ContextMenuEntry],
+            entries: &[apricot_app::context_menu::ContextMenuEntry],
         ) -> Option<apricot_app::context_menu::ContextCommand> {
+            self.context_menus.push(entries.to_vec());
             None
         }
         fn open_bookmarks(&mut self, dialog: crate::BookmarkDialog) {
@@ -243,7 +248,8 @@ mod equalizer {
         ) -> Option<String> {
             self.prompt_answer.clone()
         }
-        fn copy_text(&mut self, _text: &str) -> bool {
+        fn copy_text(&mut self, text: &str) -> bool {
+            self.clipboard = Some(text.to_owned());
             true
         }
         fn set_window_title(&mut self, _title: &str) {}
@@ -251,7 +257,7 @@ mod equalizer {
             self.selected
         }
         fn focused_player_control(&self) -> Option<&'static str> {
-            None
+            self.player_focus
         }
         fn focus_primary_control(&mut self) {}
         fn video_mode(&self) -> MpvVideoMode {
@@ -303,6 +309,7 @@ mod equalizer {
             self.progress = None;
         }
         fn set_list_row(&mut self, index: usize, label: &str) {
+            self.row_updates.push((index, label.to_owned()));
             if let Some(row) = self
                 .screens
                 .last_mut()
@@ -1124,6 +1131,118 @@ mod spotify_lists {
     }
 
     #[test]
+    fn focused_background_player_opens_its_context_menu_above_every_list() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell
+            .application
+            .start_player_item(crate::local_file_item(std::path::Path::new(
+                "/tmp/playing.mp3",
+            )));
+        ui.player_focus = Some("video_host");
+        for view in [
+            crate::View::MainMenu,
+            crate::View::SpotifyBrowse,
+            crate::View::DownloadQueue,
+            crate::View::SpotifyAccounts,
+        ] {
+            shell.view = view;
+            ui.context_menus.clear();
+            shell.activate_action(&mut ui, "context_menu");
+            let menu = ui
+                .context_menus
+                .last()
+                .expect("focused player must offer a context menu");
+            let menu_commands = commands(menu);
+            assert!(menu_commands.contains(&ContextCommand::ClosePlayer));
+            assert!(menu_commands.contains(&ContextCommand::PlayerAction("player_equalizer")));
+            assert!(!menu_commands.contains(&ContextCommand::SpotifyRemoveAccount));
+        }
+    }
+
+    #[test]
+    fn focused_background_player_owns_like_radio_and_active_item() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        let row = track("one", "u1");
+        let row_uri = row.uri.clone();
+        shell.spotify_browse_test_open(
+            &mut ui,
+            Source::Album("spotify:album:a".into()),
+            "Album",
+            vec![row],
+            false,
+        );
+        let playing = apricot_spotify::SpotifyTrack {
+            uri: "spotify:track:4u7EnebtmKWzUH433cf5Qv".into(),
+            title: "Playing".into(),
+            artists: "Artist".into(),
+            album: String::new(),
+            duration_ms: 1000,
+        }
+        .media_item();
+        shell.application.start_player_item(playing.clone());
+        ui.player_focus = Some("play_pause");
+        assert_eq!(shell.active_media_item(&ui).unwrap().id, playing.id);
+        assert_eq!(
+            shell.spotify_saved_target(&ui).as_deref(),
+            Some(playing.id.0.as_str())
+        );
+        assert_eq!(
+            shell.spotify_radio_target(&ui),
+            Some((playing.id.0.clone(), playing.title))
+        );
+        ui.player_focus = None;
+        assert_eq!(shell.active_media_item(&ui).unwrap().id.0, row_uri);
+        assert_eq!(shell.spotify_saved_target(&ui), Some(row_uri.clone()));
+        assert_eq!(shell.spotify_radio_target(&ui).unwrap().0, row_uri);
+        // Spotify actions in a focused local-file player must not mutate
+        // the unrelated Spotify row left behind it.
+        let local = crate::local_file_item(std::path::Path::new("/tmp/playing.mp3"));
+        shell.application.start_player_item(local.clone());
+        ui.player_focus = Some("video_host");
+        assert_eq!(shell.active_media_item(&ui).unwrap().id, local.id);
+        assert_eq!(shell.spotify_saved_target(&ui), None);
+        assert_eq!(shell.spotify_radio_target(&ui), None);
+    }
+
+    #[test]
+    fn focused_background_player_hides_the_playing_mix_track() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        let row = track("one", "u1");
+        let row_uri = row.uri.clone();
+        let mix = "spotify:playlist:37i9dQZF1E35EbChDCKjU7";
+        shell.spotify_browse_test_open(
+            &mut ui,
+            Source::Playlist(mix.into()),
+            "Mix",
+            vec![row],
+            false,
+        );
+        shell.spotify_browse_test_personalised();
+        let mut playing = apricot_spotify::SpotifyTrack {
+            uri: "spotify:track:4u7EnebtmKWzUH433cf5Qv".into(),
+            title: "Playing".into(),
+            artists: "Artist".into(),
+            album: String::new(),
+            duration_ms: 1000,
+        }
+        .media_item();
+        playing
+            .metadata
+            .insert("spotify_context".into(), mix.into());
+        shell.application.start_player_item(playing.clone());
+        ui.player_focus = Some("video_host");
+        assert_eq!(
+            shell.spotify_hide_target(&ui),
+            Some((playing.id.0, mix.into()))
+        );
+        ui.player_focus = None;
+        assert_eq!(shell.spotify_hide_target(&ui), Some((row_uri, mix.into())));
+    }
+
+    #[test]
     fn the_search_screen_has_the_query_type_and_results_like_youtube() {
         let mut shell = super::keyboard::shell();
         let mut ui = Ui::default();
@@ -1391,5 +1510,140 @@ mod subscriptions {
             ["back", "open", "notification_clear", "list"]
         );
         assert!(screen.focus_list);
+    }
+}
+
+mod missing_actions {
+    use super::{equalizer::Ui, keyboard::shell};
+    use crate::View;
+
+    #[test]
+    fn copy_link_shortcut_copies_the_selected_result() {
+        let mut shell = shell();
+        let mut ui = Ui::default();
+        let item = crate::local_file_item(std::path::Path::new("/tmp/example.mp3"));
+        let work = shell
+            .application
+            .begin_youtube_search("x", apricot_media::YoutubeSearchKind::Video)
+            .unwrap();
+        shell
+            .application
+            .apply_search_results(work.generation, vec![item], None);
+        shell.view = View::Results;
+        ui.selected = Some(0);
+        shell.activate_action(&mut ui, "copy_link");
+        assert_eq!(ui.clipboard.as_deref(), Some("/tmp/example.mp3"));
+    }
+
+    #[test]
+    fn metadata_column_shortcuts_cycle_and_reverse_the_selected_row() {
+        let mut shell = shell();
+        let mut ui = Ui::default();
+        let item = crate::local_file_item(std::path::Path::new("/tmp/example.mp3"));
+        let work = shell
+            .application
+            .begin_youtube_search("x", apricot_media::YoutubeSearchKind::Video)
+            .unwrap();
+        shell
+            .application
+            .apply_search_results(work.generation, vec![item], None);
+        shell.view = View::Results;
+        ui.selected = Some(0);
+        shell.activate_action(&mut ui, "result_column_next");
+        assert!(ui.announcements.last().unwrap().contains("example"));
+        let first = ui.announcements.last().unwrap().clone();
+        shell.activate_action(&mut ui, "result_column_next");
+        assert_ne!(ui.announcements.last().unwrap(), &first);
+        shell.activate_action(&mut ui, "result_column_previous");
+        assert_eq!(ui.announcements.last().unwrap(), &first);
+    }
+
+    #[test]
+    fn resume_action_reports_no_saved_session_instead_of_unavailable_feature() {
+        let mut shell = shell();
+        let mut ui = Ui::default();
+        shell.activate_action(&mut ui, "resume_last_session");
+        assert_eq!(
+            ui.announcements.last(),
+            Some(&shell.text("resume_last_session_unavailable"))
+        );
+    }
+
+    #[test]
+    fn diagnostic_menu_copies_a_redacted_report_without_navigating() {
+        let mut shell = shell();
+        let mut ui = Ui::default();
+        shell.show_main_menu(&mut ui);
+        let index = shell
+            .application
+            .main_menu_model()
+            .items
+            .iter()
+            .position(|i| i.id == "diagnostic_report")
+            .unwrap();
+        shell.activate_main_menu_row(&mut ui, index);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while ui.clipboard.is_none() && std::time::Instant::now() < deadline {
+            shell.poll_diagnostic_report(&mut ui);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let report = ui.clipboard.as_deref().expect("copied report");
+        assert!(report.contains("yt-dlp"));
+        assert!(report.contains(env!("CARGO_PKG_VERSION")));
+        assert_eq!(shell.view(), View::MainMenu);
+    }
+
+    #[test]
+    fn resume_restores_the_saved_folder_sequence_through_the_main_menu() {
+        use apricot_storage::LastPlayerSessionFile;
+        let directory = tempfile::tempdir().unwrap();
+        let current = LastPlayerSessionFile::new(directory.path().join("last_player_session.json"));
+        let legacy = LastPlayerSessionFile::new(directory.path().join("legacy.json"));
+        let mut original = shell();
+        original.application.configure_last_player_session(
+            LastPlayerSessionFile::new(directory.path().join("last_player_session.json")),
+            &legacy,
+        );
+        let files: Vec<_> = (0..3)
+            .map(|i| crate::local_file_item(&directory.path().join(format!("track{i}.wav"))))
+            .collect();
+        original
+            .application
+            .load_local_folder(directory.path().to_path_buf(), files);
+        let item = original
+            .application
+            .prepare_local_folder_playback(1, false)
+            .unwrap();
+        original.application.start_player_item(item.clone());
+        drop(original);
+        let mut restored = shell();
+        restored
+            .application
+            .configure_last_player_session(current, &legacy);
+        let mut ui = Ui::default();
+        restored.show_main_menu(&mut ui);
+        let index = restored
+            .application
+            .main_menu_model()
+            .items
+            .iter()
+            .position(|i| i.id == "resume_last_session")
+            .unwrap();
+        restored.activate_main_menu_row(&mut ui, index);
+        assert_eq!(
+            restored
+                .application
+                .player_session()
+                .current_item()
+                .unwrap()
+                .id,
+            item.id
+        );
+        let apricot_app::PlayerNavigationOutcome::Item { item: next, .. } =
+            restored.application.request_relative_player_item(1)
+        else {
+            panic!("restored next item");
+        };
+        assert!(next.title.contains("track2"));
     }
 }
