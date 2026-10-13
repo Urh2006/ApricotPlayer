@@ -73,6 +73,9 @@ selectors without making account mutations.
   replacing PCM now applies the requested pause state to mpv. The real beta 7
   account reproduced the stall; a real-libmpv regression failed with
   `Paused(true), Started` before the fix and played through after it.
+  The candidate Windows GUI repeated the same account/search flow and reached
+  elapsed 0:26 on its first load. Shuffle enabled in Spotify survived the source
+  change: toggling it from the YouTube background controls announced Off.
 - A new item reset shuffle even though other session state was retained.
   Shuffle now retains both manual On and Off until the player area is closed.
   Escape and item replacement preserve it. An explicit Shuffle playlist command
@@ -108,6 +111,11 @@ Tests were run red before fixes at production seams, including actual macOS
 update scripts, real libmpv and native background controls. A passing unit suite
 does not certify complete NVDA/VoiceOver speech, braille or real-account behavior.
 Release validation records the final platform-specific results separately.
+
+Native Carbon dispatch reached the correct registered hotkey ID and paused the
+isolated macOS player. Computer Use's application-targeted key injection did not
+establish a foreground Finder/WindowServer test, so physical global-hotkey input
+and complete VoiceOver speech remain separate runtime checks.
 
 The beta 7 account-dependent Liked Songs reopening report did not reproduce in
 the actual offline LibreSpot task: repeated loads after playing, paused and
