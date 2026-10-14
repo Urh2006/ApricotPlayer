@@ -1806,11 +1806,14 @@ fn my_profile_rows(uri: &str, texts: &apricot_core::TranslationCatalog) -> Vec<C
     ]
     .into_iter()
     .map(|(key, label)| {
-        section_row(&apricot_spotify::catalog::Section {
+        let mut row = section_row(&apricot_spotify::catalog::Section {
             uri: apricot_spotify::catalog::profile_section_uri(uri, key),
             title: texts.text(label).to_owned(),
             items: Vec::new(),
-        })
+        });
+        // Navigation entries have not loaded their contents yet.
+        row.count = None;
+        row
     })
     .collect()
 }

@@ -259,6 +259,18 @@ fn native_spotify_profile_and_pins_keep_routes_and_scope() -> windows::core::Res
             Source::MyProfile(profile_uri.into()),
             "QA profile".into(),
         );
+        let profile_state = super::state(window).unwrap();
+        let texts = super::super::spotify::catalog(profile_state);
+        for row in &top(profile_state).unwrap().items {
+            assert_eq!(
+                row.count, None,
+                "unloaded profile navigation has no known count"
+            );
+            assert_eq!(
+                apricot_app::spotify::item_label(&texts, row, true, false),
+                format!("{}, {}", row.name, texts.text("spotify_kind_section"))
+            );
+        }
         assert_eq!(
             SendMessageW(super::state(window).unwrap().list, LB_GETCOUNT, None, None).0,
             4
