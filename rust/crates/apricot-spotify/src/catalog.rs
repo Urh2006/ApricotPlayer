@@ -6,12 +6,13 @@
 #![allow(clippy::missing_errors_doc)] // Every read fails only with `ApiError`.
 
 use librespot_core::Session;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::api::{Api, ApiError};
 
 /// What a row is.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ItemKind {
     Track,
     Episode,
@@ -88,7 +89,7 @@ impl ItemKind {
 }
 
 /// One row of a Spotify list.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogItem {
     pub kind: ItemKind,
     pub uri: String,
@@ -1386,26 +1387,58 @@ pub async fn saved(api: &Api, session: &Session, uris: &[String]) -> Result<Vec<
     let data = api
         .pathfinder(session, "areEntitiesInLibrary", json!({ "uris": uris }))
         .await?;
-    Ok(data
+    parse_saved_states(&data, uris)
+}
+
+pub fn parse_saved_states(data: &Value, uris: &[String]) -> Result<Vec<bool>, ApiError> {
+    let lookup = data
         .get("lookup")
         .and_then(Value::as_array)
-        .map(|lookup| {
-            lookup
-                .iter()
-                .map(|entry| {
-                    entry
-                        .pointer("/data/saved")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                })
-                .collect()
+        .filter(|entries| entries.len() == uris.len())
+        .ok_or_else(|| ApiError::Shape("Incomplete saved state response".into()))?;
+    lookup
+        .iter()
+        .zip(uris)
+        .map(|(entry, uri)| {
+            if let Some(actual) = entry.pointer("/data/uri").and_then(Value::as_str)
+                && actual != uri
+            {
+                return Err(ApiError::Shape(
+                    "Saved state response order mismatch".into(),
+                ));
+            }
+            entry
+                .pointer("/data/saved")
+                .or_else(|| entry.pointer("/data/following"))
+                .or_else(|| entry.pointer("/data/isFollowing"))
+                .and_then(Value::as_bool)
+                .ok_or_else(|| ApiError::Shape("Unknown saved state".into()))
         })
-        .unwrap_or_default())
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_follow_state_is_not_interpreted_as_not_followed() {
+        let uris = vec!["spotify:artist:a".to_owned()];
+        assert!(parse_saved_states(&json!({"lookup":[{"data":{}}]}), &uris).is_err());
+        assert!(parse_saved_states(&json!({"lookup":[]}), &uris).is_err());
+        assert_eq!(
+            parse_saved_states(
+                &json!({"lookup":[{"data":{"uri":"spotify:artist:a","following":true}}]}),
+                &uris
+            )
+            .unwrap(),
+            [true]
+        );
+        assert_eq!(
+            parse_saved_states(&json!({"lookup":[{"data":{"saved":false}}]}), &uris).unwrap(),
+            [false]
+        );
+    }
 
     #[test]
     fn unnamed_library_entry_does_not_shift_folder_identity() {

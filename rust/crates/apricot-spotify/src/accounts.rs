@@ -126,6 +126,8 @@ impl AccountStore {
     }
 
     /// Loads only shortcuts belonging to this account. Malformed data is preserved.
+    /// # Errors
+    /// Returns invalid account key or unreadable shortcut data errors.
     pub fn menu_pins(&self, key: &str) -> Result<Vec<crate::main_menu::MenuPin>, String> {
         if key.len() != 16 || !key.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err("invalid account key".into());
@@ -138,6 +140,8 @@ impl AccountStore {
     }
 
     /// Adds or removes one shortcut without altering its catalog source.
+    /// # Errors
+    /// Returns invalid account, malformed data or atomic write errors.
     pub fn toggle_menu_pin(
         &self,
         key: &str,

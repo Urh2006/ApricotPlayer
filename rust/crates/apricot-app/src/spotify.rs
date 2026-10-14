@@ -50,6 +50,7 @@ pub struct SpotifyHubModel {
 }
 
 impl SpotifyHubModel {
+    #[must_use]
     pub fn with_pins(mut self, pins: &[apricot_spotify::main_menu::MenuPin]) -> Self {
         let at = self
             .items
@@ -712,8 +713,9 @@ mod tests {
         assert_eq!(model.items[6].label, "Daily Mixes\tCtrl+Alt+Shift+M");
         assert_eq!(model.items[10].label, "Spotify queue\tCtrl+Alt+Shift+Q");
         assert_eq!(model.items[11].label, "Spotify devices\tCtrl+Alt+Shift+O");
-        assert_eq!(model.items[12].label, "Spotify settings");
-        assert!(model.items[13].label.ends_with("\tCtrl+Alt+Shift+C"));
+        assert_eq!(model.items[12].label, "My profile");
+        assert_eq!(model.items[13].label, "Spotify settings");
+        assert!(model.items[14].label.ends_with("\tCtrl+Alt+Shift+C"));
     }
 
     fn catalog_item(kind: ItemKind, name: &str, subtitle: &str) -> CatalogItem {

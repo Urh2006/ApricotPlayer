@@ -424,13 +424,37 @@ impl SpotifyService {
         self.active_session()
             .map(|session| format!("spotify:user:{}", session.username()))
     }
+    /// # Errors
+    /// Returns a missing logged-in account or unreadable shortcut data error.
     pub fn menu_pins(&self) -> Result<Vec<crate::main_menu::MenuPin>, String> {
-        let key = self.connected_account().ok_or("Spotify is not connected")?;
-        self.store.menu_pins(&key)
+        let accounts = self.store.load();
+        let key = accounts
+            .active
+            .as_deref()
+            .filter(|key| {
+                accounts
+                    .accounts
+                    .iter()
+                    .any(|account| account.key == *key && account.is_logged_in())
+            })
+            .ok_or("No logged-in Spotify account")?;
+        self.store.menu_pins(key)
     }
+    /// # Errors
+    /// Returns a missing logged-in account or shortcut storage error.
     pub fn toggle_menu_pin(&self, pin: crate::main_menu::MenuPin) -> Result<bool, String> {
-        let key = self.connected_account().ok_or("Spotify is not connected")?;
-        self.store.toggle_menu_pin(&key, pin)
+        let accounts = self.store.load();
+        let key = accounts
+            .active
+            .as_deref()
+            .filter(|key| {
+                accounts
+                    .accounts
+                    .iter()
+                    .any(|account| account.key == *key && account.is_logged_in())
+            })
+            .ok_or("No logged-in Spotify account")?;
+        self.store.toggle_menu_pin(key, pin)
     }
 
     /// Whether a disconnect belongs to the newest local session attempt.
