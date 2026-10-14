@@ -999,7 +999,23 @@ impl Application {
     }
 
     pub fn navigate_back(&mut self) -> Option<RouteFrame> {
+        if self.player_returns_to_main_menu() {
+            // Beta 14: a player resumed from the main menu returns there.
+            self.navigate_main_menu();
+            return Some(RouteFrame::new(Route::MainMenu));
+        }
         self.state.navigation.back()
+    }
+
+    /// The open player page was resumed from the main menu: its result list
+    /// is context only, and Back from the player goes to the main menu.
+    pub fn player_returns_to_main_menu(&self) -> bool {
+        self.state.navigation.current().route == Route::Player
+            && self
+                .state
+                .navigation
+                .player_return_frame()
+                .player_context_only
     }
 
     pub fn navigate_main_menu(&mut self) {
@@ -1580,11 +1596,13 @@ impl Application {
 
     pub fn player_screen_model(&self) -> Option<PlayerScreenModel> {
         let item = self.state.player.current_item()?;
+        let mut state = PlayerViewState::from(&self.state.player);
+        state.returns_to_main_menu = self.player_returns_to_main_menu();
         Some(PlayerScreenModel::build(
             &embedded_catalog(&self.settings.current().language),
             self.settings.current(),
             item,
-            &PlayerViewState::from(&self.state.player),
+            &state,
         ))
     }
 
@@ -1660,6 +1678,7 @@ impl Application {
         if return_route != Route::MainMenu {
             let mut frame = RouteFrame::new(return_route);
             frame.parameters.clone_from(&session.return_data);
+            frame.player_context_only = true;
             self.state.navigation.push(frame);
         }
         let sequence_active = self.restore_last_session_sequence(&session, &sequence, &item);
@@ -3364,6 +3383,77 @@ mod tests {
         assert_eq!(resume.return_data["category_index"], 1);
         assert_eq!(resume.return_data["country_code"], "SI");
         assert_eq!(resume.return_data["category_code"], "music");
+    }
+
+    /// Beta 14 (macOS report): Escape on a player resumed from the main
+    /// menu returned to the restored list instead of the main menu.
+    #[test]
+    fn a_resumed_player_returns_to_the_main_menu_and_keeps_its_list() {
+        let root = tempdir().expect("temporary directory");
+        let current = root.path().join("beta/last_player_session.json");
+        let legacy = root.path().join("stable/last_player_session.json");
+        let mut original = application(root.path());
+        original.configure_last_player_session(
+            LastPlayerSessionFile::new(&current),
+            &LastPlayerSessionFile::new(&legacy),
+        );
+        original.navigate_to(RouteFrame::new(Route::Trending));
+        let work = original
+            .begin_youtube_trending("SI", "music")
+            .expect("trending work");
+        original.apply_search_results(
+            work.generation,
+            (0..5)
+                .map(|index| youtube_item(index, MediaKind::Video))
+                .collect(),
+            None,
+        );
+        let item = original
+            .prepare_search_playback(2)
+            .expect("trending result");
+        original.start_player_item(item);
+        drop(original);
+
+        for background in [false, true] {
+            let mut restored = application(root.path());
+            restored.configure_last_player_session(
+                LastPlayerSessionFile::new(&current),
+                &LastPlayerSessionFile::new(&legacy),
+            );
+            restored
+                .set_boolean_setting(SettingId::EnableBackgroundPlayback, background)
+                .expect("background setting");
+            let resume = restored
+                .prepare_last_player_session_resume()
+                .expect("resume plan");
+            restored.start_player_item(resume.item);
+            restored.navigate_to_player();
+            assert!(restored.player_returns_to_main_menu());
+            let model = restored.player_screen_model().expect("player model");
+            assert!(
+                model
+                    .controls
+                    .iter()
+                    .all(|control| control.id != "back_results"),
+                "background {background}"
+            );
+            assert!(model.controls[0].label.starts_with("Back to main menu"));
+            if background {
+                // Leaving and reopening the background player keeps it.
+                restored.keep_player_previous_frame();
+                assert_eq!(
+                    restored.navigate_back().map(|frame| frame.route),
+                    Some(Route::MainMenu)
+                );
+                restored.navigate_to_player();
+                assert!(restored.player_returns_to_main_menu());
+            }
+            assert_eq!(
+                restored.navigate_back().map(|frame| frame.route),
+                Some(Route::MainMenu)
+            );
+            assert_eq!(restored.current_route(), Route::MainMenu);
+        }
     }
 
     #[test]

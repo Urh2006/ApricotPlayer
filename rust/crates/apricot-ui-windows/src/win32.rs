@@ -4997,7 +4997,7 @@ unsafe fn refresh_player(
     } else {
         sync_player_details(state);
     }
-    let title = wide(&model.window_title);
+    let title = wide(&apricot_platform::playing_window_title(&model.window_title));
     let _ = SetWindowTextW(window, PCWSTR(title.as_ptr()));
     layout_controls_state(window, state);
     if show_details {
@@ -12844,9 +12844,11 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
     // Python `on_char_hook`: on the search screen's field, choices and buttons
     // Ctrl and Alt shortcuts act on the selected result, while plain keys
     // stay with the control. Its result list takes every list shortcut.
-    let search_field_focus = (is_search_screen(state.view)
-        || state.view == MainView::AudiovaultSearch)
-        && focus != state.list;
+    let search_field_focus = text_search_focus(
+        state.view,
+        spotify_browse::search_screen(state),
+        focus == state.list,
+    );
     let entry_focus =
         state.view == MainView::DirectLink || (search_field_focus && !(chord.control || chord.alt));
     let (scope, accepts_text) = if background_focus {
@@ -12952,6 +12954,15 @@ unsafe fn focused_push_button(window: HWND) -> Option<HWND> {
     }
     let style = u32::try_from(GetWindowLongPtrW(focus, GWL_STYLE)).unwrap_or_default();
     matches!(style & 0x0F, 0 | 1).then_some(focus)
+}
+
+/// The search field, choices and buttons of a search screen have focus:
+/// plain keys type there instead of running list shortcuts. The Spotify
+/// search screen counts too, as on macOS (beta 14: a letter typed in its
+/// field could reach a list or user-configured shortcut).
+const fn text_search_focus(view: MainView, spotify_search_screen: bool, list_focus: bool) -> bool {
+    (is_search_screen(view) || matches!(view, MainView::AudiovaultSearch) || spotify_search_screen)
+        && !list_focus
 }
 
 fn view_shortcut_scope(view: MainView) -> (ActionScope, bool) {
@@ -18485,6 +18496,43 @@ mod tests {
     use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource, action::ActionScope};
     use apricot_media::{YoutubeBackend, YoutubeCollectionKind, YoutubeSearchKind};
     use apricot_storage::SettingsDocument;
+
+    #[test]
+    fn spotify_search_field_types_letters_instead_of_running_shortcuts() {
+        use apricot_core::shortcut::{ShortcutChord, ShortcutContext, action_for_shortcut};
+        assert!(super::text_search_focus(
+            MainView::SpotifyBrowse,
+            true,
+            false
+        ));
+        assert!(!super::text_search_focus(
+            MainView::SpotifyBrowse,
+            true,
+            true
+        ));
+        assert!(!super::text_search_focus(
+            MainView::SpotifyBrowse,
+            false,
+            false
+        ));
+        // The field's context: Dialog scope that accepts text. Even a
+        // user-configured plain letter never runs there.
+        let shortcuts = std::collections::BTreeMap::from([(
+            "new_subscription_videos".to_owned(),
+            "N".to_owned(),
+        )]);
+        for key in ["N", "Shift+N", "Shift+A"] {
+            assert!(
+                action_for_shortcut(
+                    &shortcuts,
+                    ShortcutChord::parse(key).unwrap(),
+                    ShortcutContext::new(ActionScope::Dialog, true)
+                )
+                .is_none(),
+                "{key}"
+            );
+        }
+    }
 
     #[test]
     fn video_height_zero_means_no_limit_like_python() {

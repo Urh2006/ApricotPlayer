@@ -1311,7 +1311,7 @@ impl Shell {
             self.refresh_player(ui, PlayerFocus::Preserve);
         } else if let Some(model) = self.application.player_screen_model() {
             // The window title names the playing item on every screen.
-            ui.set_window_title(&model.window_title);
+            ui.set_window_title(&apricot_platform::playing_window_title(&model.window_title));
         }
         true
     }

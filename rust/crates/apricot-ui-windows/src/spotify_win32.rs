@@ -1740,7 +1740,7 @@ unsafe fn continue_spotify_item(window: HWND, track: &SpotifyTrack) -> bool {
         super::refresh_player(window, state, false, true);
     } else if let Some(model) = state.application.player_screen_model() {
         // The window title names the playing item on every screen.
-        let title = wide(&model.window_title);
+        let title = wide(&apricot_platform::playing_window_title(&model.window_title));
         let _ = SetWindowTextW(window, PCWSTR(title.as_ptr()));
     }
     true

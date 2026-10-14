@@ -42,6 +42,8 @@ pub enum PlayerToggle {
 pub struct PlayerViewState {
     pub transport: TransportState,
     pub enabled_toggles: BTreeSet<PlayerToggle>,
+    /// A resumed player whose Back goes to the main menu.
+    pub returns_to_main_menu: bool,
 }
 
 impl From<&PlayerSession> for PlayerViewState {
@@ -67,6 +69,7 @@ impl From<&PlayerSession> for PlayerViewState {
                 TransportState::Playing
             },
             enabled_toggles,
+            returns_to_main_menu: false,
         }
     }
 }
@@ -91,7 +94,8 @@ impl PlayerScreenModel {
         state: &PlayerViewState,
     ) -> Self {
         let fullscreen = state.enabled_toggles.contains(&PlayerToggle::Fullscreen);
-        let mut controls = navigation_controls(catalog, settings, fullscreen);
+        let mut controls =
+            navigation_controls(catalog, settings, fullscreen, state.returns_to_main_menu);
         controls.push(PlayerControlModel {
             id: "video_host",
             action_id: None,
@@ -120,7 +124,7 @@ impl PlayerScreenModel {
         }
         append_toggle_controls(&mut controls, catalog, settings, state);
         Self {
-            window_title: item.title.clone(),
+            window_title: media_window_title(catalog, item),
             heading: format!("{}: {}", catalog.text("internal_player"), item.title),
             controls,
             // With `show_video_details_by_default` the page opens its details
@@ -128,6 +132,20 @@ impl PlayerScreenModel {
             initial_focus_id: "video_host",
             embedded_results: settings.enable_background_playback && !fullscreen,
         }
+    }
+}
+
+/// The playing item as the window title names it (Urh, beta 14): a Spotify
+/// item reads "title by artist" like its "Playing" announcement, anything
+/// else its title. The UI appends the product name.
+fn media_window_title(catalog: &TranslationCatalog, item: &MediaItem) -> String {
+    if item.source == MediaSource::Spotify && !item.channel.is_empty() {
+        catalog
+            .text("spotify_playing_by")
+            .replace("{title}", &item.title)
+            .replace("{artist}", &item.channel)
+    } else {
+        item.title.clone()
     }
 }
 
@@ -291,6 +309,7 @@ fn navigation_controls(
     catalog: &TranslationCatalog,
     settings: &SettingsDocument,
     fullscreen: bool,
+    returns_to_main_menu: bool,
 ) -> Vec<PlayerControlModel> {
     if settings.enable_background_playback && fullscreen {
         // Python `exit_fullscreen_to_results`.
@@ -304,36 +323,44 @@ fn navigation_controls(
         )];
     }
     if settings.enable_background_playback {
-        // Escape returns to the source list without stopping playback.
+        // Escape returns to the source list without stopping playback; a
+        // resumed player returns to the main menu it was opened from.
         return vec![button_for(
             catalog,
             settings,
             "back",
-            "back_results",
+            if returns_to_main_menu {
+                "back"
+            } else {
+                "back_results"
+            },
             "player_back_keep_playing",
             "player_back",
         )];
     }
-    vec![
-        // Python `leave_player_to_previous_screen`.
-        button_for(
+    let mut controls = Vec::with_capacity(2);
+    // Python `leave_player_to_previous_screen`. A resumed player has no
+    // previous screen but the main menu.
+    if !returns_to_main_menu {
+        controls.push(button_for(
             catalog,
             settings,
             "back_results",
             "back_results",
             "player_back_to_results",
             "player_back",
-        ),
-        // Python `leave_player_to_main_menu(force_keep_playing=False)`.
-        button_for(
-            catalog,
-            settings,
-            "back_main",
-            "back",
-            "player_back_to_main_menu",
-            "player_back",
-        ),
-    ]
+        ));
+    }
+    // Python `leave_player_to_main_menu(force_keep_playing=False)`.
+    controls.push(button_for(
+        catalog,
+        settings,
+        "back_main",
+        "back",
+        "player_back_to_main_menu",
+        "player_back",
+    ));
+    controls
 }
 
 fn button(
@@ -532,6 +559,27 @@ mod tests {
             duration_seconds: None,
             metadata: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn window_title_names_the_item_and_a_spotify_artist() {
+        let catalog = crate::embedded_catalog("en");
+        let build = |item: &apricot_core::MediaItem| {
+            PlayerScreenModel::build(
+                &catalog,
+                &SettingsDocument::default(),
+                item,
+                &PlayerViewState::default(),
+            )
+            .window_title
+        };
+        assert_eq!(build(&local_item()), "Track");
+        let mut spotify = local_item();
+        spotify.source = MediaSource::Spotify;
+        spotify.channel = "Artist".to_owned();
+        assert_eq!(build(&spotify), "Track by Artist");
+        spotify.channel.clear();
+        assert_eq!(build(&spotify), "Track");
     }
 
     #[test]

@@ -95,6 +95,11 @@ pub struct RouteFrame {
     pub selected_index: usize,
     #[serde(default)]
     pub parameters: serde_json::Map<String, serde_json::Value>,
+    /// The frame only gives a resumed player its list context; the user
+    /// opened the player from the main menu, so Back from the player
+    /// returns there instead of to this screen.
+    #[serde(default)]
+    pub player_context_only: bool,
 }
 
 impl RouteFrame {
@@ -105,6 +110,7 @@ impl RouteFrame {
             selected_item_id: None,
             selected_index: 0,
             parameters: serde_json::Map::new(),
+            player_context_only: false,
         }
     }
 }

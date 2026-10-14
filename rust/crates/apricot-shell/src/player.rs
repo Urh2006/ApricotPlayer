@@ -293,7 +293,7 @@ impl Shell {
         let Some(model) = self.application.player_screen_model() else {
             return;
         };
-        ui.set_window_title(&model.window_title);
+        ui.set_window_title(&apricot_platform::playing_window_title(&model.window_title));
         ui.show_player(&model, focus);
         self.refresh_player_details(ui, focus);
         self.sync_window_fullscreen(ui);

@@ -89,6 +89,13 @@ pub const fn product_name() -> &'static str {
     }
 }
 
+/// The window title while something plays: `<item> - ApricotPlayer`, so a
+/// screen reader names both the item and the application.
+#[must_use]
+pub fn playing_window_title(media: &str) -> String {
+    format!("{media} - {}", product_name())
+}
+
 /// The computer's name as the user sees it: `COMPUTERNAME` on Windows and the
 /// Sharing name (`scutil --get ComputerName`) on macOS; empty when unknown.
 #[must_use]

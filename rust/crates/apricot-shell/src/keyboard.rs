@@ -227,6 +227,25 @@ mod tests {
     }
 
     #[test]
+    fn spotify_search_field_types_every_letter() {
+        // Beta 14 report: N in the Spotify search field opened the
+        // notification center. No Apricot shortcut may take a typed letter.
+        let mut shell = shell();
+        shell.view = View::SpotifyBrowse;
+        for letter in 'A'..='Z' {
+            for key in [letter.to_string(), format!("Shift+{letter}")] {
+                for focus in [FocusKind::TextEntry, FocusKind::Other] {
+                    assert_eq!(
+                        shell.route_key(ShortcutChord::parse(&key).unwrap(), false, focus),
+                        KeyRoute::Unhandled,
+                        "{key} with {focus:?} belongs to the search field"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn editable_fields_keep_native_keys_and_allow_global_navigation() {
         let mut shell = shell();
         shell.view = View::SpotifyBrowse;
