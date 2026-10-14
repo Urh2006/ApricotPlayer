@@ -340,6 +340,39 @@ fn native_spotify_profile_and_pins_keep_routes_and_scope() -> windows::core::Res
             .artist_states
             .insert(playing_artist(&track).unwrap(), true);
         assert!(commands(state).contains(&C::SpotifyToggleArtistFollow));
+        let artist_uri = playing_artist(&track).unwrap();
+        state.spotify_browse.marks.toggle(&track.id.0);
+        for followed in [false, true] {
+            let state = super::state_mut(window).unwrap();
+            let stamp = state.spotify.epochs_begin();
+            state.spotify_browse.pending = Some((stamp, Pending::Saved));
+            edited(
+                window,
+                stamp,
+                Ok(apricot_spotify::EditOutcome::SavedBatch {
+                    uris: vec![artist_uri.clone()],
+                    saved: followed,
+                }),
+            );
+            let state = super::state(window).unwrap();
+            assert_eq!(
+                state.spotify_browse.artist_states.get(&artist_uri),
+                Some(&followed)
+            );
+            assert!(
+                !state.spotify_browse.marks.is_empty(),
+                "following must preserve marked songs"
+            );
+            let key = if followed {
+                "spotify_followed_done"
+            } else {
+                "spotify_unfollowed_done"
+            };
+            assert_eq!(
+                super::super::window_text(state.status),
+                super::super::spotify::catalog(state).text(key)
+            );
+        }
         assert!(prepare_context(window, LPARAM(-1), false));
         let state = super::state_mut(window).unwrap();
         assert!(row_menu(state).unwrap().artist_followed.is_none());

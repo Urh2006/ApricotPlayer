@@ -129,6 +129,71 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let credentials: Credentials = serde_json::from_slice(&blob)?;
     let session = Session::new(SessionConfig::default(), None);
     session.connect(credentials, false).await?;
+    if command == "base-readonly" {
+        let root = api
+            .spclient(
+                &session,
+                reqwest::Method::GET,
+                &format!(
+                    "/playlist/v2/user/{}/rootlist?decorate=revision&from=0&length=10000",
+                    session.username()
+                ),
+                None,
+            )
+            .await?;
+        let items = root
+            .pointer("/contents/items")
+            .and_then(serde_json::Value::as_array)
+            .ok_or("missing rootlist")?;
+        let mut categories = std::collections::HashSet::new();
+        for item in items {
+            let Some(uri) = item
+                .get("uri")
+                .and_then(serde_json::Value::as_str)
+                .filter(|uri| uri.starts_with("spotify:playlist:"))
+            else {
+                continue;
+            };
+            let Some(published) = item
+                .pointer("/attributes/public")
+                .and_then(serde_json::Value::as_bool)
+            else {
+                continue;
+            };
+            let Ok(data) = api.pathfinder(&session, "fetchPlaylist", serde_json::json!({"uri":uri,"offset":0,"limit":1,"enableWatchFeedEntrypoint":false})).await else { continue; };
+            let own = data
+                .pointer("/playlistV2/ownerV2/data/uri")
+                .and_then(serde_json::Value::as_str)
+                == Some(format!("spotify:user:{}", session.username()).as_str());
+            let category = (own, published);
+            if categories.contains(&category) {
+                continue;
+            }
+            let path = format!(
+                "/playlist-permission/v1/playlist/{}/permission/base",
+                uri.trim_start_matches("spotify:playlist:")
+            );
+            match api
+                .spclient(&session, reqwest::Method::GET, &path, None)
+                .await
+            {
+                Ok(base) => println!(
+                    "owned={own}, published={published}, permission={}",
+                    base.get("permissionLevel")
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|p| matches!(*p, "BLOCKED" | "VIEWER" | "EDITOR" | "CONTRIBUTOR"))
+                        .unwrap_or("unknown")
+                ),
+                Err(_) => println!("owned={own}, published={published}, permission_read=failed"),
+            }
+            categories.insert(category);
+            if categories.len() == 4 {
+                break;
+            }
+        }
+        println!("categories_checked={}", categories.len());
+        return Ok(());
+    }
     let (name, answer) = match command {
         "pf" => (
             arguments[3].clone(),

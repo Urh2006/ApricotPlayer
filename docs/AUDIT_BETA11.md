@@ -61,3 +61,13 @@ not silently save a missing playlist or change private access to public. Making
 a known published playlist private unpublishes it first, matching the web client.
 Unknown states and unsupported targets remain disabled. Operation-shape and
 unknown-state regression tests pass; no live publication mutation is claimed.
+
+Publication and artist-follow menus send explicit desired states, so concurrent
+changes on another device cannot reverse the visible action. Publication readback
+checks the rootlist flag directly, including removal after access became private.
+Native Windows and shell regressions confirm artist follow results preserve
+marked songs and use follow announcements instead of Liked Songs messages.
+The read-only Windows account probe returned VIEWER from the base-permission
+endpoint for owned and foreign playlists with either publication flag. It made
+no account changes and did not start a Connect player; private BLOCKED access
+was not represented in those four sampled categories.

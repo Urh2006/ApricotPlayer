@@ -2181,17 +2181,20 @@ pub(super) unsafe fn toggle_profile_publication(window: HWND) {
     let Some(item) = context_item(state).filter(|item| item.kind == ItemKind::Playlist) else {
         return;
     };
-    if !state.spotify_browse.profile_states.contains_key(&item.uri) {
+    let Some(published) = state.spotify_browse.profile_states.get(&item.uri).copied() else {
         set_status(
             state,
             super::spotify::catalog(state).text("spotify_profile_state_unavailable"),
             true,
         );
         return;
-    }
+    };
     begin_edit(
         window,
-        apricot_spotify::LibraryEdit::ToggleProfilePublication { uri: item.uri },
+        apricot_spotify::LibraryEdit::SetProfilePublication {
+            uri: item.uri,
+            published: !published,
+        },
         Pending::Plain,
     );
 }
@@ -2208,17 +2211,20 @@ pub(super) unsafe fn toggle_artist_follow(window: HWND, active: Option<&apricot_
     let Some(uri) = uri else {
         return;
     };
-    if !state.spotify_browse.artist_states.contains_key(&uri) {
+    let Some(followed) = state.spotify_browse.artist_states.get(&uri).copied() else {
         set_status(
             state,
             super::spotify::catalog(state).text("spotify_artist_state_unavailable"),
             true,
         );
         return;
-    }
+    };
     begin_edit(
         window,
-        apricot_spotify::LibraryEdit::ToggleSaved { uri },
+        apricot_spotify::LibraryEdit::SetSaved {
+            uris: vec![uri],
+            saved: !followed,
+        },
         Pending::Saved,
     );
 }
@@ -2442,11 +2448,33 @@ pub(super) unsafe fn toggle_saved(window: HWND) {
     {
         begin_selection(window, &uri, Some(selection_saved(state) != Some(true)));
     } else {
-        begin_edit(
-            window,
-            apricot_spotify::LibraryEdit::ToggleSaved { uri },
-            Pending::Saved,
-        );
+        let edit = if ItemKind::from_uri_public(&uri) == Some(ItemKind::Artist) {
+            let known = state
+                .spotify_browse
+                .artist_states
+                .get(&uri)
+                .copied()
+                .or_else(|| {
+                    context_item(state)
+                        .filter(|item| item.uri == uri)
+                        .and_then(|item| item.saved)
+                });
+            let Some(followed) = known else {
+                set_status(
+                    state,
+                    super::spotify::catalog(state).text("spotify_artist_state_unavailable"),
+                    true,
+                );
+                return;
+            };
+            apricot_spotify::LibraryEdit::SetSaved {
+                uris: vec![uri],
+                saved: !followed,
+            }
+        } else {
+            apricot_spotify::LibraryEdit::ToggleSaved { uri }
+        };
+        begin_edit(window, edit, Pending::Saved);
     }
 }
 
@@ -2711,6 +2739,17 @@ pub(super) unsafe fn edited(
             return;
         }
     };
+    let outcome = match outcome {
+        O::SavedBatch { ref uris, saved }
+            if uris.len() == 1 && ItemKind::from_uri_public(&uris[0]) == Some(ItemKind::Artist) =>
+        {
+            O::Saved {
+                uri: uris[0].clone(),
+                saved,
+            }
+        }
+        other => other,
+    };
     let mut follow_up = None;
     let text = match (&outcome, pending) {
         (O::ProfilePublication { uri, published }, _) => {
@@ -2750,6 +2789,12 @@ pub(super) unsafe fn edited(
         }
         (O::Saved { uri, saved }, _) => {
             let kind = ItemKind::from_uri_public(uri);
+            if kind == Some(ItemKind::Artist) {
+                state
+                    .spotify_browse
+                    .artist_states
+                    .insert(uri.clone(), *saved);
+            }
             for frame in &mut state.spotify_browse.frames {
                 for item in frame.items.iter_mut().filter(|item| item.uri == *uri) {
                     item.saved = Some(*saved);

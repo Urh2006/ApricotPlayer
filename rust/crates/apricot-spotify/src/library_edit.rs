@@ -541,13 +541,18 @@ async fn set_profile_publication(
         )),
     )
     .await?;
-    let confirmed = profile_publication_state(api, session, uri).await?;
-    if confirmed != Some(published) {
+    let confirmed = publication_rootlist(api, session).await?;
+    confirm_publication(&confirmed, uri, published)?;
+    Ok(published)
+}
+
+fn confirm_publication(rootlist: &Value, uri: &str, published: bool) -> Result<(), ApiError> {
+    if profile_publication_from_rootlist(rootlist, uri)? != Some(published) {
         return Err(ApiError::Shape(
             "Spotify did not confirm profile publication".into(),
         ));
     }
-    Ok(published)
+    Ok(())
 }
 
 /// Playlists are in the library through the rootlist, not `addToLibrary`.
@@ -673,6 +678,21 @@ async fn rename_playlist(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn publication_readback_confirms_requested_flag_without_access_permission() {
+        let root = json!({"contents":{"items":[
+            {"uri":"spotify:playlist:one","attributes":{"public":false}},
+            {"uri":"spotify:playlist:two","attributes":{"public":true}},
+            {"uri":"spotify:playlist:unknown","attributes":{}}
+        ]}});
+        assert!(confirm_publication(&root, "spotify:playlist:one", false).is_ok());
+        assert!(confirm_publication(&root, "spotify:playlist:two", true).is_ok());
+        assert!(confirm_publication(&root, "spotify:playlist:one", true).is_err());
+        assert!(confirm_publication(&root, "spotify:playlist:two", false).is_err());
+        assert!(confirm_publication(&root, "spotify:playlist:unknown", false).is_err());
+        assert!(confirm_publication(&root, "spotify:playlist:absent", false).is_err());
+    }
 
     #[test]
     fn publication_state_preserves_unknown_and_targets_exact_uri() {
