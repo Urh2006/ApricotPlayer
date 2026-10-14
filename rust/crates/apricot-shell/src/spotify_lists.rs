@@ -220,6 +220,8 @@ enum Pending {
 pub(crate) struct BrowseState {
     frames: Vec<Frame>,
     context_read: Option<(SpotifyStamp, String, Vec<String>)>,
+    context_profile: Option<(SpotifyStamp, String, String)>,
+    profile_states: std::collections::HashMap<String, bool>,
     context_collection: Option<(SpotifyStamp, String, String, Vec<String>)>,
     saved_states: std::collections::HashMap<String, bool>,
     /// The last search, offered again by the search dialog.
@@ -290,6 +292,7 @@ pub(crate) const fn is_browse_command(command: ContextCommand) -> bool {
             | C::SpotifyRadio
             | C::SpotifyGoToOwner
             | C::SpotifyEditDescription
+            | C::SpotifyToggleProfilePublication
             | C::SpotifyToggleVisibility
             | C::SpotifyPlayPreview
     )
@@ -640,6 +643,31 @@ impl Shell {
         if self
             .spotify
             .browse
+            .context_profile
+            .as_ref()
+            .is_some_and(|(wanted, _, _)| *wanted == stamp)
+        {
+            let (_, target, wanted_uri) = self.spotify.browse.context_profile.take().unwrap();
+            if self.spotify_context_identity(ui) != Some(target) {
+                return;
+            }
+            if let Ok(CatalogResult::PlaylistProfileState {
+                uri,
+                published: Some(published),
+            }) = &result
+                && *uri == wanted_uri
+            {
+                self.spotify
+                    .browse
+                    .profile_states
+                    .insert(uri.clone(), *published);
+            }
+            self.show_context_menu_for_active_view_ready(ui);
+            return;
+        }
+        if self
+            .spotify
+            .browse
             .context_collection
             .as_ref()
             .is_some_and(|(wanted, _, _, _)| *wanted == stamp)
@@ -694,7 +722,20 @@ impl Shell {
                 ),
                 _ => {}
             }
-            self.show_context_menu_for_active_view_ready(ui);
+            if let Some(item) = self.browse_selected_item(ui)
+                && item.kind == ItemKind::Playlist
+                && self.spotify_service_ref().is_some()
+            {
+                let uri = item.uri.clone();
+                let target = self.spotify_context_identity(ui).unwrap();
+                let next = self.spotify.epochs.begin();
+                self.spotify.browse.context_profile = Some((next, target, uri.clone()));
+                self.spotify_service_ref()
+                    .unwrap()
+                    .load_catalog(next, CatalogRequest::PlaylistProfileState(uri));
+            } else {
+                self.show_context_menu_for_active_view_ready(ui);
+            }
             return;
         }
         let texts = self.catalog();
@@ -910,6 +951,7 @@ impl Shell {
             Ok(
                 CatalogResult::SelectionProgress(_)
                 | CatalogResult::TrackUris(_)
+                | CatalogResult::PlaylistProfileState { .. }
                 | CatalogResult::SavedStates(_)
                 | CatalogResult::Playlists(_)
                 | CatalogResult::HiddenSongs(_)
@@ -1742,6 +1784,8 @@ impl Shell {
                     .copied()
                     .or(item.saved)
             },
+            playlist_profile: item.kind == ItemKind::Playlist,
+            playlist_published: self.spotify.browse.profile_states.get(&item.uri).copied(),
             main_menu_pin: self.spotify_pin_for_item(item).map(|pin| {
                 self.spotify
                     .hub_pins
@@ -1797,6 +1841,8 @@ impl Shell {
                 is_artist: item.kind == ItemKind::Artist,
                 saved,
                 main_menu_pin: Some(true),
+                playlist_profile: item.kind == ItemKind::Playlist,
+                playlist_published: self.spotify.browse.profile_states.get(&item.uri).copied(),
                 radio: item.playable,
                 owner: item.kind == ItemKind::Playlist
                     && item.artist_uri.starts_with("spotify:user:"),
@@ -2325,6 +2371,19 @@ impl Shell {
                     .replace("{name}", name)
             }
             (O::Described { .. }, _) => texts.text("spotify_description_saved").to_owned(),
+            (O::ProfilePublication { uri, published }, _) => {
+                self.spotify
+                    .browse
+                    .profile_states
+                    .insert(uri.clone(), *published);
+                texts
+                    .text(if *published {
+                        "spotify_profile_published"
+                    } else {
+                        "spotify_profile_unpublished"
+                    })
+                    .to_owned()
+            }
             (O::Visibility { uri, private }, _) => {
                 let name = self
                     .spotify
@@ -2402,15 +2461,7 @@ impl Shell {
                     item.album.clone(),
                 );
             }
-            C::SpotifyGoToArtist => {
-                let name = item
-                    .subtitle
-                    .split(", ")
-                    .next()
-                    .unwrap_or_default()
-                    .to_owned();
-                self.browse_open(ui, Source::Artist(item.artist_uri.clone()), name);
-            }
+            C::SpotifyGoToArtist => self.spotify_open_artist(ui, &item),
             C::SpotifyCopyLink => {
                 if let Some(link) = self.browse_selected_link(ui) {
                     self.copy_text_and_announce(ui, &link, "url_copied");
@@ -2440,6 +2491,12 @@ impl Shell {
                     uri: item.uri.clone(),
                 },
             ),
+            C::SpotifyToggleProfilePublication => self.browse_begin_edit(
+                LibraryEdit::ToggleProfilePublication {
+                    uri: item.uri.clone(),
+                },
+                Pending::Plain,
+            ),
             C::SpotifyToggleVisibility => self.browse_begin_edit(
                 LibraryEdit::ToggleVisibility {
                     uri: item.uri.clone(),
@@ -2455,6 +2512,16 @@ impl Shell {
             ),
             _ => {}
         }
+    }
+
+    fn spotify_open_artist(&mut self, ui: &mut dyn ShellUi, item: &CatalogItem) {
+        let name = item
+            .subtitle
+            .split(", ")
+            .next()
+            .unwrap_or_default()
+            .to_owned();
+        self.browse_open(ui, Source::Artist(item.artist_uri.clone()), name);
     }
 
     fn spotify_selected_pin(
@@ -2616,6 +2683,9 @@ impl Shell {
     }
 
     pub(crate) fn spotify_prepare_context_menu(&mut self, ui: &mut dyn ShellUi) -> bool {
+        self.spotify.browse.context_collection = None;
+        self.spotify.browse.context_read = None;
+        self.spotify.browse.context_profile = None;
         let Some(target) = self.spotify_context_identity(ui) else {
             return false;
         };
@@ -2634,6 +2704,7 @@ impl Shell {
         }
         // Never guess the state after a failed read.
         for uri in &uris {
+            self.spotify.browse.profile_states.remove(uri);
             self.spotify.browse.saved_states.remove(uri);
             for frame in &mut self.spotify.browse.frames {
                 for item in &mut frame.items {
@@ -2854,6 +2925,14 @@ impl Shell {
         self.spotify.hub_pins = pins;
         self.view = View::SpotifyHub;
     }
+    pub(crate) fn spotify_browse_test_profile_read(&mut self, ui: &dyn ShellUi) -> SpotifyStamp {
+        let target = self.spotify_context_identity(ui).unwrap();
+        let uri = self.browse_selected_item(ui).unwrap().uri.clone();
+        let stamp = self.spotify.epochs.begin();
+        self.spotify.browse.context_profile = Some((stamp, target, uri));
+        stamp
+    }
+
     pub(crate) fn spotify_browse_test_source(&self) -> Option<Source> {
         self.browse_top().map(|frame| frame.source.clone())
     }
