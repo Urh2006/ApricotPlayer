@@ -1,3 +1,12 @@
+# v2.0.0-beta.14 - Window title and Resume fixes
+
+## Improved
+- While something plays, the window title is the playing item followed by ApricotPlayer. Spotify songs read "Song by Artist - ApricotPlayer".
+
+## Fixed
+- Escape on a player opened with Resume last playback session returns to the main menu instead of the original list.
+- Typing in the Spotify search field on Windows no longer runs list or custom single-letter shortcuts.
+
 # v2.0.0-beta.13 - Optional Spotify listening history and playback fixes
 
 ## Added
