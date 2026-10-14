@@ -2476,6 +2476,7 @@ mod tests {
     /// the end once (Python `player_monitor_worker` polls `eof-reached`).
     #[test]
     #[ignore = "requires APRICOT_TEST_MPV and APRICOT_TEST_FFMPEG"]
+    #[allow(clippy::too_many_lines)] // Complete bounded PCM fixture and cross-provider regression.
     fn real_libmpv_rapid_pcm_and_provider_replacements_with_nondefault_pitch() {
         use crate::{
             PlaybackEngine, PlaybackEvent,

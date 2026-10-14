@@ -299,6 +299,22 @@ pub(crate) fn confirm_history(
     let app = NSApplication::sharedApplication(mtm);
     let window = app.keyWindow();
     let previous = window.as_ref().and_then(|window| window.firstResponder());
+    let alert = history_alert(mtm, message, yes, no, cancel);
+    let answer = alert.runModal();
+    if let (Some(window), Some(previous)) = (window, previous) {
+        window.makeKeyAndOrderFront(None);
+        window.makeFirstResponder(Some(&previous));
+    }
+    answer == NSAlertSecondButtonReturn
+}
+
+fn history_alert(
+    mtm: MainThreadMarker,
+    message: &str,
+    yes: &str,
+    no: &str,
+    cancel: &str,
+) -> Retained<NSAlert> {
     let alert = NSAlert::new(mtm);
     alert.setMessageText(&NSString::from_str(message));
     alert.addButtonWithTitle(&NSString::from_str(no));
@@ -308,12 +324,68 @@ pub(crate) fn confirm_history(
     alert
         .addButtonWithTitle(&NSString::from_str(cancel))
         .setKeyEquivalent(&NSString::from_str("\u{1b}"));
-    let answer = alert.runModal();
-    if let (Some(window), Some(previous)) = (window, previous) {
-        window.makeKeyAndOrderFront(None);
-        window.makeFirstResponder(Some(&previous));
+    alert
+}
+
+/// Native QA of the warning only; it never changes settings or reports audio.
+#[cfg(debug_assertions)]
+pub(crate) fn audit_history_prompt(mtm: MainThreadMarker) -> Result<(), String> {
+    use objc2_app_kit::{NSAlertFirstButtonReturn, NSAlertThirdButtonReturn};
+    use objc2_foundation::{NSRunLoop, NSRunLoopCommonModes, NSTimer};
+    for (index, expected) in [
+        (0, NSAlertFirstButtonReturn),
+        (1, NSAlertSecondButtonReturn),
+        (2, NSAlertThirdButtonReturn),
+    ] {
+        let alert = history_alert(
+            mtm,
+            "Experimental Spotify account-risk warning (isolated QA)",
+            "Yes",
+            "No",
+            "Cancel",
+        );
+        let buttons = alert.buttons();
+        let labels: Vec<_> = buttons
+            .iter()
+            .map(|button| button.title().to_string())
+            .collect();
+        if labels != ["No", "Yes", "Cancel"] {
+            return Err(format!("Unexpected warning labels: {labels:?}"));
+        }
+        if alert
+            .window()
+            .defaultButtonCell()
+            .is_none_or(|cell| cell.title().to_string() != "No")
+        {
+            return Err("No must be the default warning choice".into());
+        }
+        let button = buttons.objectAtIndex(index);
+        // SAFETY: This is an owned NSButton with the documented performClick:
+        // action. The timer passes its own object as the optional sender.
+        let timer = unsafe {
+            NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(
+                0.05,
+                &button,
+                sel!(performClick:),
+                None,
+                false,
+            )
+        };
+        // SAFETY: An owned main-thread timer targets the owned alert button;
+        // the system common-mode constant is valid and the timer is invalidated below.
+        unsafe {
+            NSRunLoop::currentRunLoop().addTimer_forMode(&timer, NSRunLoopCommonModes);
+        }
+        let answer = alert.runModal();
+        timer.invalidate();
+        if answer != expected {
+            return Err(format!("Unexpected warning response {answer}"));
+        }
     }
-    answer == NSAlertSecondButtonReturn
+    println!(
+        "native-probe PASS: experimental warning No default, Yes and Cancel; no settings/account changes"
+    );
+    Ok(())
 }
 
 /// Windows `spotify_settings_win32::show`: the chosen settings, `None`

@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     fmt, fs,
     fs::File,
     future::Future,
@@ -64,6 +64,7 @@ pub struct Player {
     flush_lock: tokio::sync::Mutex<()>,
     report_consent: tokio::sync::watch::Sender<HistoryConsent>,
     request_ids: Arc<Mutex<SeqGenerator<u64>>>,
+    request_revisions: Mutex<VecDeque<(u64, u64)>>,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
@@ -559,6 +560,7 @@ impl Player {
             flush_lock: tokio::sync::Mutex::new(()),
             report_consent,
             request_ids,
+            request_revisions: Mutex::new(VecDeque::new()),
         })
     }
 
@@ -590,6 +592,19 @@ impl Player {
         position_ms: u32,
         context_uri: Option<String>,
     ) -> u64 {
+        self.load_with_context_and_revision(track_id, start_playing, position_ms, context_uri, 0)
+    }
+
+    /// A downstream navigation revision identifies the user intent that caused
+    /// this request, including intermediate commands in a rapid Next/Previous burst.
+    pub fn load_with_context_and_revision(
+        &self,
+        track_id: SpotifyUri,
+        start_playing: bool,
+        position_ms: u32,
+        context_uri: Option<String>,
+        revision: u64,
+    ) -> u64 {
         // Reserve the identity before queuing work. Connect can fence old
         // events immediately, including reselecting the same occurrence.
         let play_request_id = self
@@ -597,6 +612,16 @@ impl Player {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .get();
+        {
+            let mut revisions = self
+                .request_revisions
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            revisions.push_back((play_request_id, revision));
+            while revisions.len() > 256 {
+                revisions.pop_front();
+            }
+        }
         self.command(PlayerCommand::Load {
             track_id,
             play: start_playing,
@@ -605,6 +630,15 @@ impl Player {
             play_request_id,
         });
         play_request_id
+    }
+
+    pub fn request_revision(&self, request_id: u64) -> Option<u64> {
+        self.request_revisions
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .iter()
+            .find(|(id, _)| *id == request_id)
+            .map(|(_, revision)| *revision)
     }
 
     pub fn preload(&self, track_id: SpotifyUri) {

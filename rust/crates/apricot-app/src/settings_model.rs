@@ -1417,10 +1417,6 @@ fn spotify_controls(
             label: catalog.text("spotify_normalisation").to_owned(),
             checked: spotify.normalisation,
         },
-        SettingsControl::SpotifyListeningHistory {
-            label: catalog.text("spotify_listening_history").to_owned(),
-            checked: spotify.listening_history,
-        },
         SettingsControl::SpotifyChoice {
             field: SpotifyField::Autoplay,
             label: catalog.text("spotify_autoplay").to_owned(),
@@ -1448,6 +1444,10 @@ fn spotify_controls(
                 "spotify_order_creator",
                 "spotify_order_custom",
             ]),
+        },
+        SettingsControl::SpotifyListeningHistory {
+            label: catalog.text("spotify_listening_history").to_owned(),
+            checked: spotify.listening_history,
         },
     ]
 }

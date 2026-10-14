@@ -121,3 +121,11 @@ pub fn run_application(
 /// profile, without the production activation socket or instance lock.
 #[cfg(all(target_os = "macos", debug_assertions))]
 pub use window::audit_background;
+
+/// Runs the isolated native experimental-warning audit, without enabling reporting.
+#[cfg(all(target_os = "macos", debug_assertions))]
+#[doc(hidden)]
+pub fn audit_spotify_history_prompt() -> Result<(), String> {
+    let mtm = objc2::MainThreadMarker::new().ok_or("Native audit needs the main thread")?;
+    spotify_dialogs::audit_history_prompt(mtm)
+}

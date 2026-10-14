@@ -88,6 +88,7 @@ struct SpircTask {
     connect_established: bool,
 
     play_request_id: Option<u64>,
+    playback_revision: u64,
     play_status: SpircPlayStatus,
 
     /// A skip at the end waits for the authoritative context resolver.
@@ -172,6 +173,7 @@ mod transport_regressions {
             connect_state: ConnectState::new(ConnectConfig::default(), &session),
             connect_established: false,
             play_request_id: None,
+            playback_revision: 0,
             play_status: SpircPlayStatus::LoadingPlay { position_ms: 0 },
             connection_id_update: Box::pin(futures_util::stream::empty()),
             connect_state_update: Box::pin(futures_util::stream::empty()),
@@ -457,6 +459,21 @@ mod transport_regressions {
     }
 
     #[tokio::test]
+    async fn decoder_requests_preserve_the_intent_that_queued_them() {
+        let mut task = task(false);
+        first_track(&mut task);
+        task.playback_revision = 1;
+        task.load_track(false, 0).unwrap();
+        let old = task.play_request_id.unwrap();
+        task.playback_revision = 3;
+        task.load_track(false, 0).unwrap();
+        let current = task.play_request_id.unwrap();
+        assert_eq!(task.player.request_revision(old), Some(1));
+        assert_eq!(task.player.request_revision(current), Some(3));
+        assert_eq!(task.player.request_revision(u64::MAX), None);
+    }
+
+    #[tokio::test]
     async fn selecting_a_track_rejects_old_end_and_old_request_acknowledgements() {
         let mut task = task(false);
         task.load_context_from_tracks(vec![FIRST.to_owned(), SECOND.to_owned()])
@@ -529,8 +546,8 @@ enum SpircCommand {
     Play,
     PlayPause,
     Pause,
-    Prev,
-    Next,
+    Prev(Option<u64>),
+    Next(Option<u64>),
     VolumeUp,
     VolumeDown,
     Shutdown,
@@ -544,7 +561,7 @@ enum SpircCommand {
     SetVolume(u16),
     Activate,
     Transfer(Option<TransferRequest>),
-    Load(LoadRequest),
+    Load(LoadRequest, Option<u64>),
     // ApricotPlayer patch: local queue edits.
     AddToQueue(String),
     SetQueue {
@@ -671,6 +688,7 @@ impl Spirc {
             connect_established: false,
 
             play_request_id: None,
+            playback_revision: 0,
             play_status: SpircPlayStatus::Stopped,
             pending_next: false,
             pending_next_at_end: false,
@@ -796,14 +814,29 @@ impl Spirc {
     ///
     /// Does nothing if we are not the active device.
     pub fn prev(&self) -> Result<(), Error> {
-        Ok(self.commands.send(SpircCommand::Prev)?)
+        Ok(self.commands.send(SpircCommand::Prev(None))?)
     }
 
     /// Skips to the next track.
     ///
     /// Does nothing if we are not the active device.
     pub fn next(&self) -> Result<(), Error> {
-        Ok(self.commands.send(SpircCommand::Next)?)
+        Ok(self.commands.send(SpircCommand::Next(None))?)
+    }
+
+    /// Apricot-only manual intent tags; automatic advancement inherits its tag.
+    pub fn next_with_revision(&self, revision: u64) -> Result<(), Error> {
+        Ok(self.commands.send(SpircCommand::Next(Some(revision)))?)
+    }
+
+    pub fn prev_with_revision(&self, revision: u64) -> Result<(), Error> {
+        Ok(self.commands.send(SpircCommand::Prev(Some(revision)))?)
+    }
+
+    pub fn load_with_revision(&self, command: LoadRequest, revision: u64) -> Result<(), Error> {
+        Ok(self
+            .commands
+            .send(SpircCommand::Load(command, Some(revision)))?)
     }
 
     /// Increases the volume by configured steps of [ConnectConfig].
@@ -870,7 +903,7 @@ impl Spirc {
     ///
     /// Does not overwrite the queue.
     pub fn load(&self, command: LoadRequest) -> Result<(), Error> {
-        Ok(self.commands.send(SpircCommand::Load(command))?)
+        Ok(self.commands.send(SpircCommand::Load(command, None))?)
     }
 
     /// Disconnects the current device and pauses the playback according the value.
@@ -1191,8 +1224,18 @@ impl SpircTask {
             SpircCommand::Play => self.handle_play(),
             SpircCommand::PlayPause => self.handle_play_pause(),
             SpircCommand::Pause => self.handle_pause(),
-            SpircCommand::Prev => self.handle_prev()?,
-            SpircCommand::Next => self.handle_next(None)?,
+            SpircCommand::Prev(revision) => {
+                if let Some(revision) = revision {
+                    self.playback_revision = revision;
+                }
+                self.handle_prev()?;
+            }
+            SpircCommand::Next(revision) => {
+                if let Some(revision) = revision {
+                    self.playback_revision = revision;
+                }
+                self.handle_next(None)?;
+            }
             SpircCommand::VolumeUp => self.handle_volume_up(),
             SpircCommand::VolumeDown => self.handle_volume_down(),
             SpircCommand::Shuffle(shuffle) => self.handle_shuffle(shuffle)?,
@@ -1200,7 +1243,12 @@ impl SpircTask {
             SpircCommand::RepeatTrack(repeat) => self.handle_repeat_track(repeat),
             SpircCommand::SetPosition(position) => self.handle_seek(position),
             SpircCommand::SetVolume(volume) => self.set_volume(volume),
-            SpircCommand::Load(command) => self.handle_load(command, None, None).await?,
+            SpircCommand::Load(command, revision) => {
+                if let Some(revision) = revision {
+                    self.playback_revision = revision;
+                }
+                self.handle_load(command, None, None).await?;
+            }
             SpircCommand::AddToQueue(uri) => {
                 let mut track = ProvidedTrack::new();
                 track.uri = uri;
@@ -2356,11 +2404,12 @@ impl SpircTask {
 
         let current_uri = self.connect_state.current_track(|t| &t.uri);
         let id = SpotifyUri::from_uri(current_uri)?;
-        self.play_request_id = Some(self.player.load_with_context(
+        self.play_request_id = Some(self.player.load_with_context_and_revision(
             id,
             start_playing,
             position_ms,
             Some(self.connect_state.context_uri().clone()),
+            self.playback_revision,
         ));
 
         self.connect_state

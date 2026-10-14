@@ -23,8 +23,11 @@ integration, not an upstream-supported history API.
 - Load request IDs are reserved synchronously, before commands reach the
   decoder thread. Connect sets its expected ID immediately and ignores old
   acknowledgements, EOF and Unavailable events; reselecting the same URI is
-  covered. Manual navigation revisions discard obsolete UI notices while
-  preserving genuine automatic-skip warnings.
+  covered. Manual intent tags are captured before async commands and recorded
+  before decoder callbacks. The UI listener and PCM bridge reject stale tags,
+  including the first delayed old callback; automatic advancement inherits its
+  tag and keeps genuine skip warnings. The bounded lookup holds only a weak
+  player reference, with no event-listener/player ownership cycle.
 
 - No dev-branch upgrade. The 0.8.0 local-file loader has no reportable Spotify
   identity. Local and passthrough audio are excluded.

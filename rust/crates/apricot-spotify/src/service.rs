@@ -1273,6 +1273,7 @@ async fn open_session(
         Box::new(NoOpVolume),
         move || Box::new(SpotifyPlayback::sink(sink_shared, sink_slot)) as Box<dyn Sink>,
     );
+    shared.bind_player(&player);
     // Registered before any command, so the sink sees every fence event.
     if let Ok(mut slot) = sink_events.lock() {
         *slot = Some(player.get_player_event_channel());

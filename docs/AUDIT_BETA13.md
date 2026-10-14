@@ -34,7 +34,7 @@ event spool, profile migration, artificial listens or playback loops are added.
 
 ## Automated and Mac runtime evidence
 
-- Targeted shared Spotify, application and shell tests: 464 passed, 0 failed.
+- Targeted shared Spotify, application and shell tests: 466 passed, 0 failed.
 - Vendored report tests: 14 passed, 0 failed, including disabled/stale consent
   epochs, cancellation of in-flight work, rendered duration,
   pause/seek, private-session suppression, old/new playback statistics,
@@ -47,6 +47,8 @@ event spool, profile migration, artificial listens or playback loops are added.
   then ordinary YouTube/SoundCloud/local provider paths using offline media.
   Existing real libmpv tests cover PCM transitions, pause/seek, speed,
   pitch/EQ, replacement failures, natural completion and source shutdown.
+- Isolated native AppKit warning: No is default; Yes and Cancel return the
+  correct responses without settings/account changes.
 - Isolated real AppKit audit: Escape, 13 accessible player buttons, pause,
   focus preservation and Close passed. This is not a full VoiceOver speech
   or NVDA certification.
@@ -61,10 +63,15 @@ qualify a release package.
 An old EOF could arrive after Connect selected a new context row but before
 the decoder acknowledged its new request ID. IDs are now reserved before
 queueing; Connect fences old acknowledgements and callbacks immediately.
-Twelve Connect transport regressions pass, including reselecting the same URI
+Thirteen Connect transport regressions pass, including reselecting the same URI
 and rejecting old EOF/Unavailable, with current EOF still advancing once.
-Manual navigation also invalidates queued or late old Playing/Unavailable
-notices. Automatic advancement retains the genuine failure warning; filtering
+Manual intent revisions are captured before commands enter the asynchronous
+queue and registered against decoder request IDs before the decoder can emit
+callbacks. Both the UI listener and PCM bridge use that association, so even
+the first delayed old Loading/Playing callback cannot reopen an old stream or
+replace the selected row. The bounded lookup captures a Weak<Player>, avoiding
+a player/event-listener ownership cycle. Manual navigation also invalidates
+queued or late old Playing/Unavailable notices. Automatic advancement retains the genuine failure warning; filtering
 only by current URI would incorrectly suppress that case. Affected code is
 Spotify-only; the offline real-mpv provider transition test checks the common
 engine without making website requests or generating Spotify listen events.

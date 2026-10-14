@@ -331,6 +331,8 @@ impl PcmStream for Reader {
 type Notify = Arc<dyn Fn() + Send + Sync>;
 
 /// Shared state of the sink, the event listener and the PCM source.
+type RequestRevisionLookup = Arc<dyn Fn(u64) -> Option<u64> + Send + Sync>;
+
 pub struct Shared {
     next_id: AtomicU64,
     generations: Mutex<Vec<(u64, Arc<Generation>)>>,
@@ -339,6 +341,7 @@ pub struct Shared {
     events: Mutex<VecDeque<PcmSourceEvent>>,
     notices: Mutex<VecDeque<(u64, PlaybackNotice)>>,
     manual_revision: AtomicU64,
+    request_owner: Mutex<Option<RequestRevisionLookup>>,
     /// Apricot started playback; the next new track is its own start.
     requested: AtomicBool,
     track: Mutex<Option<SpotifyTrack>>,
@@ -411,10 +414,37 @@ impl Shared {
         (self.notify)();
     }
 
+    pub fn bind_player(&self, player: &Arc<librespot_playback::player::Player>) {
+        if let Ok(mut owner) = self.request_owner.lock() {
+            let player = Arc::downgrade(player);
+            *owner = Some(Arc::new(move |id| {
+                player
+                    .upgrade()
+                    .and_then(|player| player.request_revision(id))
+            }));
+        }
+    }
+
+    fn request_is_current(&self, request: Option<u64>) -> bool {
+        let owner = self
+            .request_owner
+            .lock()
+            .ok()
+            .and_then(|owner| owner.clone());
+        match (owner, request) {
+            (Some(owner), Some(id)) => {
+                owner(id) == Some(self.manual_revision.load(Ordering::SeqCst))
+            }
+            _ => true,
+        }
+    }
+
     /// Manual navigation invalidates old callbacks, while automatic skips retain
     /// their genuine failure notice even after the following song has started.
-    fn manual_navigation(&self) {
-        self.manual_revision.fetch_add(1, Ordering::SeqCst);
+    fn manual_navigation(&self) -> u64 {
+        self.manual_revision
+            .fetch_add(1, Ordering::SeqCst)
+            .wrapping_add(1)
     }
 
     pub fn take_notice(&self) -> Option<PlaybackNotice> {
@@ -438,6 +468,7 @@ pub struct BridgeSink {
     shared: Arc<Shared>,
     events: Arc<Mutex<Option<PlayerEventChannel>>>,
     request_id: Option<u64>,
+    event_request: Option<u64>,
     logged: bool,
     /// The decoder finished a track; the next one continues gaplessly.
     ended: bool,
@@ -454,6 +485,15 @@ impl BridgeSink {
         };
         let Some(events) = guard.as_mut() else { return };
         while let Ok(event) = events.try_recv() {
+            if let PlayerEvent::PlayRequestIdChanged { play_request_id } = &event {
+                self.event_request = Some(*play_request_id);
+            }
+            if !self
+                .shared
+                .request_is_current(event.get_play_request_id().or(self.event_request))
+            {
+                continue;
+            }
             match event {
                 PlayerEvent::EndOfTrack { .. } => self.ended = true,
                 PlayerEvent::TrackChanged { audio_item } => {
@@ -596,6 +636,7 @@ impl SpotifyPlayback {
             events: Mutex::default(),
             notices: Mutex::default(),
             manual_revision: AtomicU64::new(0),
+            request_owner: Mutex::default(),
             requested: AtomicBool::new(false),
             track: Mutex::default(),
             bitrate_kbps,
@@ -618,6 +659,7 @@ impl SpotifyPlayback {
             shared,
             events,
             request_id: None,
+            event_request: None,
             logged: false,
             ended: false,
             duration_ms: None,
@@ -634,16 +676,16 @@ impl SpotifyPlayback {
     }
 
     pub fn next(&self) {
-        self.shared.manual_navigation();
+        let revision = self.shared.manual_navigation();
         self.with_spirc(|spirc| {
-            let _ = spirc.next();
+            let _ = spirc.next_with_revision(revision);
         });
     }
 
     pub fn previous(&self) {
-        self.shared.manual_navigation();
+        let revision = self.shared.manual_navigation();
         self.with_spirc(|spirc| {
-            let _ = spirc.prev();
+            let _ = spirc.prev_with_revision(revision);
         });
     }
 
@@ -777,9 +819,10 @@ impl SpotifyPlayback {
                 playing_track: Some(PlayingTrack::Uid(uid.to_owned())),
             },
         );
+        let revision = self.shared.manual_navigation();
         let mut sent = false;
         self.with_spirc(|spirc| {
-            sent = spirc.load(request).is_ok();
+            sent = spirc.load_with_revision(request, revision).is_ok();
         });
         sent
     }
@@ -899,7 +942,14 @@ impl SpotifyPlayback {
         let mut paused = false;
         let mut request_id = None;
         let mut availability = AvailabilityNotices::default();
+        let mut event_request = None;
         while let Some(event) = events.recv().await {
+            if let PlayerEvent::PlayRequestIdChanged { play_request_id } = &event {
+                event_request = Some(*play_request_id);
+            }
+            if !shared.request_is_current(event.get_play_request_id().or(event_request)) {
+                continue;
+            }
             if !matches!(event, PlayerEvent::PositionChanged { .. }) {
                 let name = format!("{event:?}");
                 log::info!(
@@ -1109,7 +1159,7 @@ impl PcmSource for SpotifyPlayback {
             })
             .map(|reference| reference.to_uri())
             .ok_or_else(|| "spotify_unplayable".to_owned())?;
-        self.shared.manual_navigation();
+        let revision = self.shared.manual_navigation();
         self.shared.requested.store(true, Ordering::SeqCst);
         log::info!("start requested at {position_ms} ms, paused {paused}");
         // Setting shuffle requires a complete Connect options object. Keep
@@ -1131,7 +1181,7 @@ impl PcmSource for SpotifyPlayback {
         self.with_spirc(|spirc| {
             result = spirc
                 .activate()
-                .and_then(|()| spirc.load(request))
+                .and_then(|()| spirc.load_with_revision(request, revision))
                 .map_err(|_| "spotify_not_connected".to_owned());
         });
         result
@@ -1214,6 +1264,113 @@ mod tests {
         let pending = shared.pending.lock().unwrap().take().unwrap();
         assert_eq!(pending.base_ms, 60_000);
         assert_eq!(pending.id, 2);
+    }
+
+    #[tokio::test]
+    async fn first_delayed_old_callback_cannot_become_the_new_selection() {
+        let shared = shared();
+        let revision = shared.manual_navigation();
+        *shared.request_owner.lock().unwrap() = Some(Arc::new(move |id| match id {
+            1 => Some(0),
+            2 | 3 => Some(revision),
+            _ => None,
+        }));
+        let old =
+            librespot_core::SpotifyUri::from_uri("spotify:track:72AZ3V52rs9NfgMNhALxln").unwrap();
+        let chosen =
+            librespot_core::SpotifyUri::from_uri("spotify:track:6rqhFgbbKwnb9MLmUQDhG6").unwrap();
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        // The OLD Loading event itself arrives after manual navigation; there
+        // is no earlier active request to infer its revision from.
+        for event in [
+            PlayerEvent::PlayRequestIdChanged { play_request_id: 1 },
+            PlayerEvent::Loading {
+                play_request_id: 1,
+                track_id: old.clone(),
+                position_ms: 0,
+            },
+            PlayerEvent::Playing {
+                play_request_id: 1,
+                track_id: old.clone(),
+                position_ms: 0,
+            },
+            PlayerEvent::Unavailable {
+                play_request_id: 1,
+                track_id: old,
+            },
+            PlayerEvent::Loading {
+                play_request_id: 2,
+                track_id: chosen.clone(),
+                position_ms: 0,
+            },
+            PlayerEvent::Unavailable {
+                play_request_id: 2,
+                track_id: chosen.clone(),
+            },
+            // Automatic advancement inherits the same manual revision, so it
+            // cannot suppress the real failure that preceded it.
+            PlayerEvent::Loading {
+                play_request_id: 3,
+                track_id: chosen.clone(),
+                position_ms: 0,
+            },
+        ] {
+            sender.send(event).unwrap();
+        }
+        drop(sender);
+        SpotifyPlayback::listen(shared.clone(), receiver).await;
+        assert!(
+            matches!(shared.take_notice(), Some(PlaybackNotice::Unavailable { uri }) if uri == chosen.to_uri().unwrap())
+        );
+        assert!(shared.take_notice().is_none());
+    }
+
+    #[test]
+    fn old_pcm_callback_does_not_reopen_a_cancelled_generation() {
+        let shared = shared();
+        let revision = shared.manual_navigation();
+        *shared.request_owner.lock().unwrap() = Some(Arc::new(move |id| match id {
+            1 => Some(0),
+            2 => Some(revision),
+            _ => None,
+        }));
+        let track =
+            librespot_core::SpotifyUri::from_uri("spotify:track:72AZ3V52rs9NfgMNhALxln").unwrap();
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let mut sink = SpotifyPlayback::sink(shared.clone(), Arc::new(Mutex::new(Some(receiver))));
+        sender
+            .send(PlayerEvent::PlayRequestIdChanged { play_request_id: 1 })
+            .unwrap();
+        sender
+            .send(PlayerEvent::Playing {
+                play_request_id: 1,
+                track_id: track.clone(),
+                position_ms: 0,
+            })
+            .unwrap();
+        sink.fence();
+        assert!(shared.current.lock().unwrap().is_none());
+        sender
+            .send(PlayerEvent::PlayRequestIdChanged { play_request_id: 2 })
+            .unwrap();
+        sender
+            .send(PlayerEvent::Playing {
+                play_request_id: 2,
+                track_id: track,
+                position_ms: 0,
+            })
+            .unwrap();
+        sink.fence();
+        let current = shared.current.lock().unwrap();
+        assert_eq!(
+            current
+                .as_ref()
+                .unwrap()
+                .1
+                .request_id
+                .load(Ordering::SeqCst),
+            2
+        );
     }
 
     #[test]
