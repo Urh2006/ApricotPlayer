@@ -772,6 +772,31 @@ fn user_name(uri: &str) -> Result<&str, ApiError> {
         .ok_or_else(|| ApiError::Shape(format!("not a profile: {uri}")))
 }
 
+/// An explicit profile section request; failures are not presented as an empty list.
+pub async fn profile_people(
+    api: &Api,
+    session: &Session,
+    uri: &str,
+    followers: bool,
+) -> Result<CatalogPage, ApiError> {
+    let name = user_name(uri)?;
+    let section = if followers { "followers" } else { "following" };
+    let answer = api
+        .spclient(
+            session,
+            reqwest::Method::GET,
+            &format!("/user-profile-view/v3/profile/{name}/{section}?market=from_token"),
+            None,
+        )
+        .await?;
+    let items = profile_rows(&answer, "profiles");
+    Ok(CatalogPage {
+        total: Some(items.len() as u64),
+        items,
+        next_offset: None,
+    })
+}
+
 /// A profile and its sections, titled `titles` (public playlists,
 /// following, followers); empty sections are left out.
 pub async fn profile(

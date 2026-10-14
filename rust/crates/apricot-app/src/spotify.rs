@@ -27,6 +27,8 @@ pub enum SpotifyHubEntry {
     RecentlyPlayed,
     Top,
     Browse,
+    MyProfile,
+    Pinned(usize),
     Settings,
     /// The Spotify queue, once an account is logged in.
     Queue,
@@ -45,6 +47,27 @@ pub struct SpotifyHubItem {
 pub struct SpotifyHubModel {
     pub accessible_name: String,
     pub items: Vec<SpotifyHubItem>,
+}
+
+impl SpotifyHubModel {
+    pub fn with_pins(mut self, pins: &[apricot_spotify::main_menu::MenuPin]) -> Self {
+        let at = self
+            .items
+            .iter()
+            .position(|item| item.entry == SpotifyHubEntry::MyProfile);
+        if let Some(at) = at {
+            for (index, pin) in pins.iter().enumerate() {
+                self.items.insert(
+                    at + index,
+                    SpotifyHubItem {
+                        entry: SpotifyHubEntry::Pinned(index),
+                        label: pin.label.clone(),
+                    },
+                );
+            }
+        }
+        self
+    }
 }
 
 fn with_shortcut(
@@ -127,6 +150,12 @@ impl SpotifyHubModel {
                     show_shortcuts,
                     shortcuts,
                 ),
+            });
+        }
+        if active_account(accounts).is_some() {
+            items.push(SpotifyHubItem {
+                entry: SpotifyHubEntry::MyProfile,
+                label: catalog.text("spotify_my_profile").to_owned(),
             });
         }
         items.push(SpotifyHubItem {
@@ -671,6 +700,7 @@ mod tests {
                 SpotifyHubEntry::Browse,
                 SpotifyHubEntry::Queue,
                 SpotifyHubEntry::Devices,
+                SpotifyHubEntry::MyProfile,
                 SpotifyHubEntry::Settings,
                 SpotifyHubEntry::Accounts
             ]

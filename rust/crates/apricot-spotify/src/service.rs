@@ -195,6 +195,14 @@ pub struct SpotifyService {
 /// What the UI asks to read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CatalogRequest {
+    MenuSection {
+        origin: crate::main_menu::MenuOrigin,
+        uri: String,
+    },
+    ProfilePeople {
+        uri: String,
+        followers: bool,
+    },
     /// Reads URI pages on the worker without hydrating or rendering rows.
     CollectTracks(Box<CatalogRequest>),
     SavedStates(Vec<String>),
@@ -343,7 +351,10 @@ async fn fill_saved(
 ) {
     let unknown: Vec<String> = items
         .iter()
-        .filter(|item| item.saved.is_none() && item.kind.is_playable_item())
+        .filter(|item| {
+            item.saved.is_none()
+                && (item.kind.is_playable_item() || item.kind == crate::catalog::ItemKind::Artist)
+        })
         .map(|item| item.uri.clone())
         .collect();
     if unknown.is_empty() {
@@ -407,6 +418,19 @@ impl SpotifyService {
             .lock()
             .ok()
             .and_then(|session| session.as_ref().map(|(key, _)| key.clone()))
+    }
+
+    pub fn my_profile_uri(&self) -> Option<String> {
+        self.active_session()
+            .map(|session| format!("spotify:user:{}", session.username()))
+    }
+    pub fn menu_pins(&self) -> Result<Vec<crate::main_menu::MenuPin>, String> {
+        let key = self.connected_account().ok_or("Spotify is not connected")?;
+        self.store.menu_pins(&key)
+    }
+    pub fn toggle_menu_pin(&self, pin: crate::main_menu::MenuPin) -> Result<bool, String> {
+        let key = self.connected_account().ok_or("Spotify is not connected")?;
+        self.store.toggle_menu_pin(&key, pin)
     }
 
     /// Whether a disconnect belongs to the newest local session attempt.
@@ -634,6 +658,33 @@ impl SpotifyService {
                 let session = session.ok_or(SpotifyError::NoCredentials)?;
                 let api = api.as_ref();
                 Ok(match request {
+                    CatalogRequest::MenuSection { origin, uri } => {
+                        let sections = match origin {
+                            crate::main_menu::MenuOrigin::Home => {
+                                catalog::home(api, &session).await?
+                            }
+                            crate::main_menu::MenuOrigin::BrowseAll => {
+                                catalog::browse_all(api, &session).await?
+                            }
+                            crate::main_menu::MenuOrigin::BrowsePage(page) => {
+                                catalog::browse_page(api, &session, &page).await?.1
+                            }
+                        };
+                        let section =
+                            sections.into_iter().find(|s| s.uri == uri).ok_or_else(|| {
+                                crate::api::ApiError::Shape(
+                                    "This Spotify category is no longer available".into(),
+                                )
+                            })?;
+                        CatalogResult::Page(catalog::CatalogPage {
+                            items: section.items,
+                            total: None,
+                            next_offset: None,
+                        })
+                    }
+                    CatalogRequest::ProfilePeople { uri, followers } => CatalogResult::Page(
+                        catalog::profile_people(api, &session, &uri, followers).await?,
+                    ),
                     CatalogRequest::CollectTracks(request) => CatalogResult::TrackUris(
                         collect_track_uris(api, &session, *request, |count| {
                             Self::emit(

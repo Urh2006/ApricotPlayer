@@ -43,6 +43,7 @@ pub struct SpotifyTrack {
     pub uri: String,
     pub title: String,
     pub artists: String,
+    pub artist_uri: String,
     pub album: String,
     pub duration_ms: u32,
 }
@@ -67,6 +68,13 @@ impl SpotifyTrack {
         Self {
             uri: item.uri.clone(),
             title: item.name.clone(),
+            artist_uri: match &item.unique_fields {
+                UniqueFields::Track { artists, .. } => artists
+                    .first()
+                    .map(|artist| artist.id.to_string())
+                    .unwrap_or_default(),
+                _ => String::new(),
+            },
             artists,
             album,
             duration_ms: item.duration_ms,
@@ -87,6 +95,12 @@ impl SpotifyTrack {
         let mut metadata = std::collections::BTreeMap::new();
         metadata.insert("kind".to_owned(), serde_json::Value::from(kind));
         metadata.insert("source".to_owned(), serde_json::Value::from("spotify"));
+        if self.artist_uri.starts_with("spotify:artist:") {
+            metadata.insert(
+                "spotify_artist_uri".to_owned(),
+                serde_json::Value::from(self.artist_uri.clone()),
+            );
+        }
         if !self.album.is_empty() {
             metadata.insert(
                 "album".to_owned(),
@@ -1230,6 +1244,7 @@ mod tests {
             uri: "spotify:track:4u7EnebtmKWzUH433cf5Qv".into(),
             title: "T".into(),
             artists: "A".into(),
+            artist_uri: String::new(),
             album: String::new(),
             duration_ms: 1000,
         }
@@ -1246,6 +1261,7 @@ mod tests {
             uri: "spotify:track:4u7EnebtmKWzUH433cf5Qv".into(),
             title: "Title".into(),
             artists: "Artist".into(),
+            artist_uri: String::new(),
             album: "Album".into(),
             duration_ms: 354_000,
         }
@@ -1266,6 +1282,7 @@ mod tests {
             uri: "spotify:track:4u7EnebtmKWzUH433cf5Qv".into(),
             title: "Title".into(),
             artists: "Artist".into(),
+            artist_uri: String::new(),
             album: String::new(),
             duration_ms: 1000,
         }
@@ -1283,6 +1300,7 @@ mod tests {
             uri: "spotify:track:4u7EnebtmKWzUH433cf5Qv".into(),
             title: "Title".into(),
             artists: "Artist".into(),
+            artist_uri: String::new(),
             album: String::new(),
             duration_ms: 1000,
         }

@@ -1177,6 +1177,7 @@ mod spotify_lists {
             uri: "spotify:track:4u7EnebtmKWzUH433cf5Qv".into(),
             title: "Playing".into(),
             artists: "Artist".into(),
+            artist_uri: String::new(),
             album: String::new(),
             duration_ms: 1000,
         }
@@ -1225,6 +1226,7 @@ mod spotify_lists {
             uri: "spotify:track:4u7EnebtmKWzUH433cf5Qv".into(),
             title: "Playing".into(),
             artists: "Artist".into(),
+            artist_uri: String::new(),
             album: String::new(),
             duration_ms: 1000,
         }

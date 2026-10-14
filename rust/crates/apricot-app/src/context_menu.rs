@@ -68,6 +68,8 @@ pub enum ContextCommand {
     SpotifyAddToQueue,
     SpotifyGoToAlbum,
     SpotifyGoToArtist,
+    SpotifyToggleArtistFollow,
+    SpotifyToggleMenuPin,
     SpotifyCopyLink,
     SpotifyToggleSaved,
     SpotifyAddToPlaylist,
@@ -406,6 +408,9 @@ pub struct SpotifyRowMenu {
     pub saved: Option<bool>,
     /// An artist: saving is following.
     pub is_artist: bool,
+    /// Eligible artist/playlist/category shortcut and its account-local state.
+    pub main_menu_pin: Option<bool>,
+    pub artist_followed: Option<bool>,
     /// A profile (or a section of an open profile): Follow or Unfollow.
     pub profile: bool,
     /// A playlist whose owner's profile opens.
@@ -465,6 +470,35 @@ pub fn spotify_browse_context_menu(
         ));
         entries.push(context.command("spotify_add_to_playlist", C::SpotifyAddToPlaylist));
     }
+    if let Some(pinned) = menu.main_menu_pin {
+        entries.push(context.command(
+            if pinned {
+                "spotify_remove_main_menu"
+            } else {
+                "spotify_add_main_menu"
+            },
+            C::SpotifyToggleMenuPin,
+        ));
+    }
+    if menu.playable_item && menu.artist {
+        if let Some(followed) = menu.artist_followed {
+            entries.push(context.command(
+                if followed {
+                    "spotify_unfollow_artist"
+                } else {
+                    "spotify_follow_artist"
+                },
+                C::SpotifyToggleArtistFollow,
+            ));
+        } else {
+            entries.push(ContextMenuEntry::Disabled {
+                label: context
+                    .catalog
+                    .text("spotify_artist_state_unavailable")
+                    .to_owned(),
+            });
+        }
+    }
     if menu.preview {
         entries.push(context.command("spotify_play_preview", C::SpotifyPlayPreview));
     }
@@ -488,7 +522,14 @@ pub fn spotify_browse_context_menu(
             C::SpotifyToggleSaved,
         ));
     }
-    if menu.collection_plays {
+    if menu.is_artist && menu.saved.is_none() {
+        entries.push(ContextMenuEntry::Disabled {
+            label: context
+                .catalog
+                .text("spotify_artist_state_unavailable")
+                .to_owned(),
+        });
+    } else if menu.collection_plays {
         let key = match (menu.is_artist, menu.saved == Some(true)) {
             (true, true) => "spotify_unfollow",
             (true, false) => "spotify_follow",

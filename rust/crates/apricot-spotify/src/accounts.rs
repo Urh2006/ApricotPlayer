@@ -125,6 +125,40 @@ impl AccountStore {
             .map_err(|error| error.to_string())
     }
 
+    /// Loads only shortcuts belonging to this account. Malformed data is preserved.
+    pub fn menu_pins(&self, key: &str) -> Result<Vec<crate::main_menu::MenuPin>, String> {
+        if key.len() != 16 || !key.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err("invalid account key".into());
+        }
+        let path = self.account_dir(key).join("main_menu.json");
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        apricot_storage::json_file::read_json(&path).map_err(|e| e.to_string())
+    }
+
+    /// Adds or removes one shortcut without altering its catalog source.
+    pub fn toggle_menu_pin(
+        &self,
+        key: &str,
+        pin: crate::main_menu::MenuPin,
+    ) -> Result<bool, String> {
+        let mut pins = self.menu_pins(key)?;
+        let added = if let Some(index) = pins.iter().position(|entry| entry.target == pin.target) {
+            pins.remove(index);
+            false
+        } else {
+            pins.push(pin);
+            true
+        };
+        apricot_storage::json_file::write_json_atomic(
+            &self.account_dir(key).join("main_menu.json"),
+            &pins,
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(added)
+    }
+
     /// The installation device ID, created and saved on first use.
     ///
     /// # Errors

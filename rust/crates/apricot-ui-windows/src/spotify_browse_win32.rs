@@ -1588,6 +1588,7 @@ fn media_for(
         uri: item.uri.clone(),
         title: item.name.clone(),
         artists: item.subtitle.clone(),
+        artist_uri: String::new(),
         album: item.album.clone(),
         duration_ms: item
             .duration_ms

@@ -9,6 +9,7 @@ pub mod catalog;
 pub mod devices;
 pub mod diagnostics;
 pub mod library_edit;
+pub mod main_menu;
 pub mod oauth;
 pub mod playback;
 pub mod queue;
