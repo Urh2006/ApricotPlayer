@@ -355,6 +355,12 @@ impl Shell {
     /// Windows `show_context_menu_for_active_view`: the menu of the list or
     /// the player for the active item; the chosen entry runs.
     pub(crate) fn show_context_menu_for_active_view(&mut self, ui: &mut dyn ShellUi) {
+        if !self.spotify_prepare_context_menu(ui) {
+            self.show_context_menu_for_active_view_ready(ui);
+        }
+    }
+
+    pub(crate) fn show_context_menu_for_active_view_ready(&mut self, ui: &mut dyn ShellUi) {
         let item = self.active_media_item(ui);
         let entries = if ui.focused_player_control().is_some() {
             self.context_entries(item.as_ref(), View::Player)
@@ -375,7 +381,7 @@ impl Shell {
                     account.menu_account(),
                 )
             })
-        } else if self.view == View::SpotifyBrowse {
+        } else if matches!(self.view, View::SpotifyBrowse | View::SpotifyHub) {
             let catalog = self.catalog();
             let titles = Vec::new();
             self.spotify_browse_context_entries(
@@ -390,9 +396,12 @@ impl Shell {
         } else {
             self.context_entries(item.as_ref(), self.view)
         };
-        let Some(entries) = entries else {
+        let Some(mut entries) = entries else {
             return;
         };
+        if self.view == View::Player || ui.focused_player_control().is_some() {
+            self.spotify_extend_player_context(ui, &mut entries);
+        }
         self.stop_key_repeat(ui);
         if let Some(command) = ui.show_context_menu(&entries) {
             let label = find_label(&entries, command).unwrap_or_default();

@@ -106,9 +106,11 @@ pub(crate) struct SpotifyState {
     login_open: bool,
     login_return: Option<ReturnTo>,
     login_account: Option<String>,
-    hub_entries: Vec<SpotifyHubEntry>,
+    pub(crate) hub_entries: Vec<SpotifyHubEntry>,
+    pub(crate) hub_pins: Vec<apricot_spotify::main_menu::MenuPin>,
+    pub(crate) hub_pin_items: Vec<apricot_spotify::CatalogItem>,
     hub_labels: Vec<String>,
-    hub_selected: Option<SpotifyHubEntry>,
+    pub(crate) hub_selected: Option<SpotifyHubEntry>,
     rows: Vec<SpotifyAccountRow>,
     /// The switch the user asked for; only its result is announced.
     connect: Option<SpotifyStamp>,
@@ -268,12 +270,22 @@ impl Shell {
         self.spotify_prepare_screen(ui, View::SpotifyHub, Route::SpotifyHub);
         let catalog = self.catalog();
         let settings = self.application.settings();
+        let pins = self
+            .spotify_service_ref()
+            .and_then(|service| service.menu_pins().ok())
+            .unwrap_or_default();
+        self.spotify.hub_pin_items = pins
+            .iter()
+            .map(apricot_spotify::main_menu::MenuPin::item)
+            .collect();
+        self.spotify.hub_pins.clone_from(&pins);
         let model = SpotifyHubModel::build(
             &catalog,
             &accounts,
             settings.show_shortcuts_in_labels,
             &settings.keyboard_shortcuts,
-        );
+        )
+        .with_pins(&pins);
         self.spotify.hub_entries = model.items.iter().map(|item| item.entry).collect();
         let selected = self
             .spotify

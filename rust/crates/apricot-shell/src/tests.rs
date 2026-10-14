@@ -1131,6 +1131,120 @@ mod spotify_lists {
     }
 
     #[test]
+    fn my_profile_has_four_choices_and_find_friends_returns_to_it() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell.spotify_browse_test_profile(&mut ui);
+        let rows = &ui.screens.last().unwrap().rows;
+        assert_eq!(rows.len(), 4);
+        for (row, label) in rows.iter().zip([
+            "Following",
+            "Followers",
+            "Find friends",
+            "My public playlists",
+        ]) {
+            assert!(row.starts_with(label), "{row}");
+        }
+        ui.selected = Some(2);
+        shell.spotify_browse_test_activate(&mut ui);
+        assert!(matches!(
+            shell.spotify_browse_test_source(),
+            Some(Source::Search {
+                kind: apricot_spotify::SearchKind::Profiles,
+                ..
+            })
+        ));
+        shell.spotify_browse_back(&mut ui);
+        assert_eq!(ui.screens.last().unwrap().list_name, "My profile");
+        assert_eq!(ui.screens.last().unwrap().selected, Some(2));
+    }
+
+    #[test]
+    fn hub_pins_have_type_specific_menus_and_do_not_create_a_favourites_list() {
+        use apricot_spotify::main_menu::{MenuPin, MenuTarget};
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell.spotify_browse_test_hub_pins(vec![
+            MenuPin::new(
+                "Playlist",
+                MenuTarget::Playlist("spotify:playlist:p".into()),
+            ),
+            MenuPin::new("Category", MenuTarget::Category("spotify:page:c".into())),
+        ]);
+        for (index, plays) in [(0, true), (1, false)] {
+            ui.selected = Some(index);
+            let catalog = shell.catalog();
+            let titles = Vec::new();
+            let context = ContextMenuContext {
+                catalog: &catalog,
+                settings: shell.application.settings(),
+                user_playlist_titles: &titles,
+                queued_download_count: 0,
+            };
+            let menu = shell.spotify_browse_context_entries(&ui, &context).unwrap();
+            let menu = commands(&menu);
+            assert!(menu.contains(&ContextCommand::SpotifyOpen));
+            assert!(menu.contains(&ContextCommand::SpotifyToggleMenuPin));
+            assert_eq!(menu.contains(&ContextCommand::SpotifyPlay), plays);
+        }
+    }
+
+    #[test]
+    fn artist_target_uses_the_focused_player_or_selected_artist_not_a_background_row() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        let mut row = track("song", "u1");
+        row.artist_uri = "spotify:artist:row".into();
+        shell.spotify_browse_test_open(
+            &mut ui,
+            Source::Search {
+                query: "song".into(),
+                kind: apricot_spotify::SearchKind::Tracks,
+            },
+            "Search",
+            vec![row],
+            false,
+        );
+        assert_eq!(
+            shell.spotify_browse_test_artist(&ui).as_deref(),
+            Some("spotify:artist:row")
+        );
+        let playing = apricot_spotify::SpotifyTrack {
+            uri: "spotify:track:playing".into(),
+            title: "Playing".into(),
+            artists: "Artist".into(),
+            artist_uri: "spotify:artist:playing".into(),
+            album: String::new(),
+            duration_ms: 1000,
+        }
+        .media_item();
+        shell.application.start_player_item(playing);
+        ui.player_focus = Some("play_pause");
+        assert_eq!(
+            shell.spotify_browse_test_artist(&ui).as_deref(),
+            Some("spotify:artist:playing")
+        );
+        ui.player_focus = None;
+        let mut artist = track("artist", "u2");
+        artist.kind = apricot_spotify::ItemKind::Artist;
+        artist.uri = "spotify:artist:search".into();
+        shell.spotify_browse_test_open(
+            &mut ui,
+            Source::Search {
+                query: "artist".into(),
+                kind: apricot_spotify::SearchKind::Artists,
+            },
+            "Artists",
+            vec![artist],
+            false,
+        );
+        assert_eq!(
+            shell.spotify_browse_test_artist(&ui).as_deref(),
+            Some("spotify:artist:search")
+        );
+    }
+
+    #[test]
     fn focused_background_player_opens_its_context_menu_above_every_list() {
         let mut shell = super::keyboard::shell();
         let mut ui = Ui::default();

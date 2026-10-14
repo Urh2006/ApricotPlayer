@@ -125,18 +125,36 @@ impl AccountStore {
             .map_err(|error| error.to_string())
     }
 
-    /// Loads only shortcuts belonging to this account. Malformed data is preserved.
-    /// # Errors
-    /// Returns invalid account key or unreadable shortcut data errors.
-    pub fn menu_pins(&self, key: &str) -> Result<Vec<crate::main_menu::MenuPin>, String> {
+    fn menu_document(&self, key: &str) -> Result<crate::main_menu::MenuPinsDocument, String> {
         if key.len() != 16 || !key.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err("invalid account key".into());
         }
         let path = self.account_dir(key).join("main_menu.json");
         if !path.exists() {
-            return Ok(Vec::new());
+            return Ok(crate::main_menu::MenuPinsDocument::default());
         }
-        apricot_storage::json_file::read_json(&path).map_err(|e| e.to_string())
+        if let Ok(document) =
+            apricot_storage::json_file::read_json::<crate::main_menu::MenuPinsDocument>(&path)
+        {
+            if document.version != 1 {
+                return Err("Unsupported Spotify shortcut data version".into());
+            }
+            return Ok(document);
+        }
+        // The first development format used an unversioned array.
+        let pins = apricot_storage::json_file::read_json::<Vec<crate::main_menu::MenuPin>>(&path)
+            .map_err(|e| e.to_string())?;
+        Ok(crate::main_menu::MenuPinsDocument {
+            pins,
+            ..Default::default()
+        })
+    }
+
+    /// Loads only shortcuts belonging to this account. Malformed data is preserved.
+    /// # Errors
+    /// Returns invalid account key or unreadable shortcut data errors.
+    pub fn menu_pins(&self, key: &str) -> Result<Vec<crate::main_menu::MenuPin>, String> {
+        Ok(self.menu_document(key)?.pins)
     }
 
     /// Adds or removes one shortcut without altering its catalog source.
@@ -147,17 +165,21 @@ impl AccountStore {
         key: &str,
         pin: crate::main_menu::MenuPin,
     ) -> Result<bool, String> {
-        let mut pins = self.menu_pins(key)?;
-        let added = if let Some(index) = pins.iter().position(|entry| entry.target == pin.target) {
-            pins.remove(index);
+        let mut document = self.menu_document(key)?;
+        let added = if let Some(index) = document
+            .pins
+            .iter()
+            .position(|entry| entry.target == pin.target)
+        {
+            document.pins.remove(index);
             false
         } else {
-            pins.push(pin);
+            document.pins.push(pin);
             true
         };
         apricot_storage::json_file::write_json_atomic(
             &self.account_dir(key).join("main_menu.json"),
-            &pins,
+            &document,
         )
         .map_err(|e| e.to_string())?;
         Ok(added)

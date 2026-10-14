@@ -790,6 +790,11 @@ pub async fn profile_people(
             None,
         )
         .await?;
+    if answer.get("profiles").and_then(Value::as_array).is_none() {
+        return Err(ApiError::Shape(
+            "Spotify did not return the requested profile list".into(),
+        ));
+    }
     let items = profile_rows(&answer, "profiles");
     Ok(CatalogPage {
         total: Some(items.len() as u64),

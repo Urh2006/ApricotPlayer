@@ -171,3 +171,21 @@ mod tests {
         assert!(MenuPin::from_item(&section, Some(MenuOrigin::Home)).is_some());
     }
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct MenuPinsDocument {
+    pub version: u32,
+    pub pins: Vec<MenuPin>,
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+impl Default for MenuPinsDocument {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            pins: Vec::new(),
+            extra: std::collections::BTreeMap::new(),
+        }
+    }
+}

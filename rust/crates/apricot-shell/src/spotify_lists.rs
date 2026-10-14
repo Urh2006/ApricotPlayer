@@ -33,6 +33,15 @@ pub(crate) enum Source {
         folder: Option<String>,
     },
     LikedSongs,
+    MyProfile(String),
+    ProfilePeople {
+        uri: String,
+        followers: bool,
+    },
+    MenuSection {
+        origin: apricot_spotify::main_menu::MenuOrigin,
+        uri: String,
+    },
     Album(String),
     Playlist(String),
     Artist(String),
@@ -60,6 +69,14 @@ pub(crate) enum Source {
 impl Source {
     fn request(&self, offset: u64) -> Option<CatalogRequest> {
         Some(match self {
+            Self::ProfilePeople { uri, followers } => CatalogRequest::ProfilePeople {
+                uri: uri.clone(),
+                followers: *followers,
+            },
+            Self::MenuSection { origin, uri } => CatalogRequest::MenuSection {
+                origin: origin.clone(),
+                uri: uri.clone(),
+            },
             Self::Home => CatalogRequest::Home,
             Self::DailyMixes => CatalogRequest::DailyMixes,
             Self::RecentlyPlayed => CatalogRequest::RecentlyPlayed,
@@ -75,7 +92,7 @@ impl Source {
                 uri: uri.clone(),
                 offset,
             },
-            Self::Section(_) => return None,
+            Self::MyProfile(_) | Self::Section(_) => return None,
             Self::Search { query, kind } => CatalogRequest::Search {
                 query: query.clone(),
                 kind: *kind,
@@ -202,6 +219,8 @@ enum Pending {
 #[derive(Default)]
 pub(crate) struct BrowseState {
     frames: Vec<Frame>,
+    context_read: Option<(SpotifyStamp, String, Vec<String>)>,
+    saved_states: std::collections::HashMap<String, bool>,
     /// The last search, offered again by the search dialog.
     last_query: String,
     last_kind: usize,
@@ -255,6 +274,8 @@ pub(crate) const fn is_browse_command(command: ContextCommand) -> bool {
             | C::SpotifyOpen
             | C::SpotifyAddToQueue
             | C::SpotifyGoToAlbum
+            | C::SpotifyToggleMenuPin
+            | C::SpotifyToggleArtistFollow
             | C::SpotifyGoToArtist
             | C::SpotifyCopyLink
             | C::SpotifyToggleSaved
@@ -301,7 +322,18 @@ impl Shell {
 
     /// The selected row, for the context menu and shortcuts.
     fn browse_selected_item(&self, ui: &dyn ShellUi) -> Option<&CatalogItem> {
-        if self.view != View::SpotifyBrowse || ui.focused_player_control().is_some() {
+        if ui.focused_player_control().is_some() {
+            return None;
+        }
+        if self.view == View::SpotifyHub {
+            let SpotifyHubEntry::Pinned(index) =
+                self.spotify.hub_entries.get(ui.selected_row()?).copied()?
+            else {
+                return None;
+            };
+            return self.spotify.hub_pin_items.get(index);
+        }
+        if self.view != View::SpotifyBrowse {
             return None;
         }
         self.browse_top()?.items.get(ui.selected_row()?)
@@ -320,6 +352,29 @@ impl Shell {
             return;
         }
         if !self.spotify_ready_for_lists(ui) {
+            return;
+        }
+        if entry == SpotifyHubEntry::MyProfile {
+            if let Some(uri) = self
+                .spotify_service_ref()
+                .and_then(apricot_spotify::SpotifyService::my_profile_uri)
+            {
+                self.browse_open_root(ui, Source::MyProfile(uri), self.text("spotify_my_profile"));
+            } else {
+                ui.set_status(
+                    &apricot_app::spotify::error_text(
+                        &self.catalog(),
+                        &SpotifyError::NoCredentials,
+                    ),
+                    true,
+                );
+            }
+            return;
+        }
+        if let SpotifyHubEntry::Pinned(index) = entry {
+            if let Some(pin) = self.spotify.hub_pins.get(index).cloned() {
+                self.spotify_open_pin(ui, &pin);
+            }
             return;
         }
         let (source, title_key) = match entry {
@@ -380,7 +435,12 @@ impl Shell {
             .get(self.spotify.browse.last_kind)
             .copied()
             .unwrap_or(SearchKind::All);
-        self.spotify.browse.frames.clear();
+        if !self
+            .browse_top()
+            .is_some_and(|frame| matches!(frame.source, Source::MyProfile(_)))
+        {
+            self.spotify.browse.frames.clear();
+        }
         self.spotify_prepare_screen(ui, View::SpotifyBrowse, Route::SpotifyBrowse);
         self.spotify.browse.frames.push(Frame {
             source: Source::Search {
@@ -441,8 +501,15 @@ impl Shell {
             true,
         );
         // A search from a nested list starts over at the search screen.
-        self.spotify.browse.frames.truncate(1);
-        let Some(frame) = self.spotify.browse.frames.first_mut() else {
+        let search = self
+            .spotify
+            .browse
+            .frames
+            .iter()
+            .rposition(|frame| frame.search_screen)
+            .unwrap_or(0);
+        self.spotify.browse.frames.truncate(search + 1);
+        let Some(frame) = self.spotify.browse.frames.last_mut() else {
             return;
         };
         frame.source = Source::Search { query, kind };
@@ -506,6 +573,24 @@ impl Shell {
             frame.items.clone_from(items);
             frame.loaded = true;
         }
+        if let Source::MyProfile(uri) = &frame.source {
+            frame.loaded = true;
+            frame.items = [
+                ("following", "spotify_profile_following"),
+                ("followers", "spotify_profile_followers"),
+                ("friends", "spotify_find_friends"),
+                ("playlists", "spotify_my_public_playlists"),
+            ]
+            .into_iter()
+            .map(|(key, label)| {
+                section_row(&apricot_spotify::catalog::Section {
+                    uri: apricot_spotify::catalog::profile_section_uri(uri, key),
+                    title: self.text(label),
+                    items: Vec::new(),
+                })
+            })
+            .collect();
+        }
         self.spotify.browse.frames.push(frame);
         self.view = View::SpotifyBrowse;
         self.browse_request(0);
@@ -523,14 +608,17 @@ impl Shell {
     }
 
     fn browse_request(&mut self, offset: u64) {
+        let Some(request) = self
+            .browse_top()
+            .and_then(|frame| frame.source.request(offset))
+        else {
+            return;
+        };
         let Some(service) = self.spotify_service() else {
             return;
         };
         let stamp = self.spotify.epochs.begin();
         let Some(frame) = self.spotify.browse.frames.last_mut() else {
-            return;
-        };
-        let Some(request) = frame.source.request(offset) else {
             return;
         };
         frame.loading = Some(stamp);
@@ -546,6 +634,32 @@ impl Shell {
         result: Result<CatalogResult, SpotifyError>,
     ) {
         if !self.spotify.is_current_account(stamp) {
+            return;
+        }
+        if self
+            .spotify
+            .browse
+            .context_read
+            .as_ref()
+            .is_some_and(|(wanted, _, _)| *wanted == stamp)
+        {
+            let (_, target, uris) = self.spotify.browse.context_read.take().unwrap();
+            if self.spotify_context_identity(ui) != Some(target) {
+                return;
+            }
+            match &result {
+                Ok(CatalogResult::SavedStates(states)) if states.len() == uris.len() => {
+                    for (uri, state) in uris.iter().zip(states) {
+                        self.spotify.browse.saved_states.insert(uri.clone(), *state);
+                    }
+                }
+                Err(error) => ui.set_status(
+                    &apricot_app::spotify::error_text(&self.catalog(), error),
+                    true,
+                ),
+                _ => {}
+            }
+            self.show_context_menu_for_active_view_ready(ui);
             return;
         }
         let texts = self.catalog();
@@ -1050,6 +1164,7 @@ impl Shell {
     /// Refills the list. `focus` puts the focus on it (opening, going
     /// back); otherwise focus stays where it is. The Tab order is the
     /// list, Open and Back, as Windows creates them.
+    #[allow(clippy::too_many_lines)] // One complete native list screen and its controls.
     fn browse_render(&mut self, ui: &mut dyn ShellUi, focus: bool) {
         let texts = self.catalog();
         let Some(frame) = self.spotify.browse.frames.last() else {
@@ -1060,6 +1175,9 @@ impl Shell {
                 .items
                 .iter()
                 .map(|item| {
+                    if matches!(frame.source, Source::MyProfile(_)) {
+                        return item.name.clone();
+                    }
                     let mut label = item_label(
                         &texts,
                         item,
@@ -1337,6 +1455,31 @@ impl Shell {
 
     /// Opens an album, playlist, artist, show, folder or Liked Songs row.
     fn browse_open_item(&mut self, ui: &mut dyn ShellUi, item: &CatalogItem) {
+        if let Some(Source::MyProfile(uri)) = self.browse_top().map(|frame| &frame.source) {
+            let uri = uri.clone();
+            if item.uri == apricot_spotify::catalog::profile_section_uri(&uri, "friends") {
+                self.spotify.browse.last_kind = SearchKind::ALL
+                    .iter()
+                    .position(|kind| *kind == SearchKind::Profiles)
+                    .unwrap();
+                self.spotify.browse.last_query.clear();
+                self.browse_open_search_screen(ui);
+            } else {
+                let source = if item.uri
+                    == apricot_spotify::catalog::profile_section_uri(&uri, "playlists")
+                {
+                    Source::ProfilePlaylists(uri)
+                } else {
+                    Source::ProfilePeople {
+                        followers: item.uri
+                            == apricot_spotify::catalog::profile_section_uri(&uri, "followers"),
+                        uri,
+                    }
+                };
+                self.browse_open(ui, source, item.name.clone());
+            }
+            return;
+        }
         let source = match item.kind {
             ItemKind::Page => Source::Browse(Some(item.uri.clone())),
             ItemKind::Section
@@ -1526,7 +1669,12 @@ impl Shell {
                 | ItemKind::Folder
                 | ItemKind::LikedSongs
                 | ItemKind::User
+                | ItemKind::Page
+                | ItemKind::Section
         );
+        if self.view == View::SpotifyHub {
+            return self.spotify_hub_pin_context_entries(ui, context);
+        }
         let frame = self.browse_top()?;
         let profile_section =
             item.kind == ItemKind::Section && matches!(frame.source, Source::Profile { .. });
@@ -1539,7 +1687,11 @@ impl Shell {
         let menu = apricot_app::context_menu::SpotifyRowMenu {
             playable_item: item.kind.is_playable_item() && item.playable,
             collection,
-            collection_plays: collection && !matches!(item.kind, ItemKind::Folder | ItemKind::User),
+            collection_plays: collection
+                && !matches!(
+                    item.kind,
+                    ItemKind::Folder | ItemKind::User | ItemKind::Page | ItemKind::Section
+                ),
             album: !item.album_uri.is_empty(),
             artist: item.artist_uri.starts_with("spotify:artist:"),
             link: SpotifyRef::parse(&item.uri).is_some(),
@@ -1548,8 +1700,25 @@ impl Shell {
             } else if item.kind.is_playable_item() {
                 self.browse_selection_saved().or(item.saved)
             } else {
-                item.saved
+                self.spotify
+                    .browse
+                    .saved_states
+                    .get(&item.uri)
+                    .copied()
+                    .or(item.saved)
             },
+            main_menu_pin: self.spotify_pin_for_item(item).map(|pin| {
+                self.spotify
+                    .hub_pins
+                    .iter()
+                    .any(|entry| entry.target == pin.target)
+            }),
+            artist_followed: self
+                .spotify
+                .browse
+                .saved_states
+                .get(&item.artist_uri)
+                .copied(),
             is_artist: item.kind == ItemKind::Artist,
             profile: item.kind == ItemKind::User || profile_section,
             owner: item.kind == ItemKind::Playlist && item.artist_uri.starts_with("spotify:user:"),
@@ -1573,6 +1742,32 @@ impl Shell {
         };
         Some(apricot_app::context_menu::spotify_browse_context_menu(
             context, menu,
+        ))
+    }
+
+    fn spotify_hub_pin_context_entries(
+        &self,
+        ui: &dyn ShellUi,
+        context: &apricot_app::context_menu::ContextMenuContext<'_>,
+    ) -> Option<Vec<ContextMenuEntry>> {
+        let item = self.browse_selected_item(ui)?;
+        let _pin = self.spotify_selected_pin(ui)?;
+        let saved = self.spotify.browse.saved_states.get(&item.uri).copied();
+        Some(apricot_app::context_menu::spotify_browse_context_menu(
+            context,
+            apricot_app::context_menu::SpotifyRowMenu {
+                collection: true,
+                collection_plays: item.playable,
+                link: SpotifyRef::parse(&item.uri).is_some(),
+                is_artist: item.kind == ItemKind::Artist,
+                saved,
+                main_menu_pin: Some(true),
+                radio: item.playable,
+                owner: item.kind == ItemKind::Playlist
+                    && item.artist_uri.starts_with("spotify:user:"),
+                rename: item.kind == ItemKind::Playlist && item.editable,
+                ..Default::default()
+            },
         ))
     }
 
@@ -1960,6 +2155,7 @@ impl Shell {
                     .replace("{count}", &uris.len().to_string())
             }
             (O::Saved { uri, saved }, _) => {
+                self.spotify.browse.saved_states.insert(uri.clone(), *saved);
                 let kind = ItemKind::from_uri_public(uri);
                 for frame in &mut self.spotify.browse.frames {
                     for item in frame.items.iter_mut().filter(|item| item.uri == *uri) {
@@ -2127,6 +2323,28 @@ impl Shell {
     /// A context menu command on the selected row (Windows `command`).
     pub(crate) fn spotify_browse_command(&mut self, ui: &mut dyn ShellUi, command: ContextCommand) {
         use ContextCommand as C;
+        if command == C::SpotifyToggleMenuPin {
+            self.spotify_toggle_pin(ui);
+            return;
+        }
+        if command == C::SpotifyToggleArtistFollow {
+            if let Some(uri) = self.spotify_context_artist(ui) {
+                self.browse_begin_edit(LibraryEdit::ToggleSaved { uri }, Pending::Saved);
+            }
+            return;
+        }
+        if self.view == View::SpotifyHub
+            && let Some(pin) = self.spotify_selected_pin(ui).cloned()
+        {
+            if command == C::SpotifyOpen {
+                self.spotify_open_pin(ui, &pin);
+                return;
+            }
+            if matches!(command, C::SpotifyPlay | C::SpotifyShufflePlay) {
+                self.browse_play(ui, &pin.item(), command == C::SpotifyShufflePlay);
+                return;
+            }
+        }
         self.browse_remember_selection(ui);
         if command == C::SpotifyCreatePlaylist {
             self.spotify_create_playlist(ui);
@@ -2201,6 +2419,218 @@ impl Shell {
                 },
             ),
             _ => {}
+        }
+    }
+
+    fn spotify_selected_pin(
+        &self,
+        ui: &dyn ShellUi,
+    ) -> Option<&apricot_spotify::main_menu::MenuPin> {
+        let SpotifyHubEntry::Pinned(index) =
+            self.spotify.hub_entries.get(ui.selected_row()?).copied()?
+        else {
+            return None;
+        };
+        self.spotify.hub_pins.get(index)
+    }
+
+    fn spotify_pin_for_item(
+        &self,
+        item: &CatalogItem,
+    ) -> Option<apricot_spotify::main_menu::MenuPin> {
+        use apricot_spotify::main_menu::{MenuOrigin, MenuPin};
+        let origin = self.browse_top().and_then(|frame| match &frame.source {
+            Source::Home => Some(MenuOrigin::Home),
+            Source::Browse(None) => Some(MenuOrigin::BrowseAll),
+            Source::Browse(Some(uri)) => Some(MenuOrigin::BrowsePage(uri.clone())),
+            _ => None,
+        });
+        MenuPin::from_item(item, origin)
+    }
+
+    fn spotify_open_pin(
+        &mut self,
+        ui: &mut dyn ShellUi,
+        pin: &apricot_spotify::main_menu::MenuPin,
+    ) {
+        use apricot_spotify::main_menu::MenuTarget;
+        let source = match &pin.target {
+            MenuTarget::Playlist(uri) => Source::Playlist(uri.clone()),
+            MenuTarget::Artist(uri) => Source::Artist(uri.clone()),
+            MenuTarget::Category(uri) => Source::Browse(Some(uri.clone())),
+            MenuTarget::Section { origin, uri } => Source::MenuSection {
+                origin: origin.clone(),
+                uri: uri.clone(),
+            },
+        };
+        self.browse_open(ui, source, pin.label.clone());
+    }
+
+    fn spotify_toggle_pin(&mut self, ui: &mut dyn ShellUi) {
+        let pin = if self.view == View::SpotifyHub {
+            self.spotify_selected_pin(ui).cloned()
+        } else {
+            self.browse_selected_item(ui)
+                .and_then(|item| self.spotify_pin_for_item(item))
+        };
+        let Some(pin) = pin else {
+            return;
+        };
+        let selected_pin = if self.view == View::SpotifyHub {
+            ui.selected_row()
+                .and_then(|row| self.spotify.hub_entries.get(row))
+                .and_then(|entry| {
+                    if let SpotifyHubEntry::Pinned(index) = entry {
+                        Some(*index)
+                    } else {
+                        None
+                    }
+                })
+        } else {
+            None
+        };
+        let Some(service) = self.spotify_service_ref() else {
+            return;
+        };
+        match service.toggle_menu_pin(pin) {
+            Ok(added) => {
+                self.spotify.hub_pins = service.menu_pins().unwrap_or_default();
+                ui.set_status(
+                    &self.text(if added {
+                        "spotify_add_main_menu"
+                    } else {
+                        "spotify_remove_main_menu"
+                    }),
+                    true,
+                );
+                if self.view == View::SpotifyHub {
+                    self.spotify.hub_selected = Some(if self.spotify.hub_pins.is_empty() {
+                        SpotifyHubEntry::MyProfile
+                    } else {
+                        SpotifyHubEntry::Pinned(
+                            selected_pin
+                                .unwrap_or(0)
+                                .min(self.spotify.hub_pins.len() - 1),
+                        )
+                    });
+                    self.show_spotify_hub(ui);
+                } else {
+                    self.browse_render(ui, false);
+                }
+            }
+            Err(error) => ui.show_error(&error),
+        }
+    }
+
+    fn spotify_context_identity(&self, ui: &dyn ShellUi) -> Option<String> {
+        self.browse_selected_item(ui)
+            .map(|item| item.uri.clone())
+            .or_else(|| {
+                self.application
+                    .player_session()
+                    .current_item()
+                    .filter(|item| {
+                        item.source == apricot_core::MediaSource::Spotify
+                            && (self.view == View::Player || ui.focused_player_control().is_some())
+                    })
+                    .map(|item| item.id.0.clone())
+            })
+            .map(|uri| {
+                format!(
+                    "{:?}:{}:{:?}:{}:{uri}",
+                    self.view,
+                    self.spotify.browse.frames.len(),
+                    ui.selected_row(),
+                    ui.focused_player_control().unwrap_or("")
+                )
+            })
+    }
+
+    fn spotify_context_artist(&self, ui: &dyn ShellUi) -> Option<String> {
+        self.browse_selected_item(ui)
+            .map(|item| {
+                if item.kind == ItemKind::Artist {
+                    item.uri.clone()
+                } else {
+                    item.artist_uri.clone()
+                }
+            })
+            .filter(|uri| uri.starts_with("spotify:artist:"))
+            .or_else(|| {
+                self.application
+                    .player_session()
+                    .current_item()
+                    .filter(|_| self.view == View::Player || ui.focused_player_control().is_some())
+                    .and_then(|item| {
+                        item.metadata
+                            .get("spotify_artist_uri")?
+                            .as_str()
+                            .map(str::to_owned)
+                    })
+            })
+    }
+
+    pub(crate) fn spotify_prepare_context_menu(&mut self, ui: &mut dyn ShellUi) -> bool {
+        let Some(target) = self.spotify_context_identity(ui) else {
+            return false;
+        };
+        let mut uris = Vec::new();
+        if let Some(artist) = self.spotify_context_artist(ui) {
+            uris.push(artist);
+        }
+        if let Some(item) = self.browse_selected_item(ui)
+            && matches!(item.kind, ItemKind::Artist | ItemKind::Playlist)
+            && !uris.contains(&item.uri)
+        {
+            uris.push(item.uri.clone());
+        }
+        if uris.is_empty() {
+            return false;
+        }
+        // Never guess the state after a failed read.
+        for uri in &uris {
+            self.spotify.browse.saved_states.remove(uri);
+            for frame in &mut self.spotify.browse.frames {
+                for item in &mut frame.items {
+                    if item.uri == *uri {
+                        item.saved = None;
+                    }
+                }
+            }
+        }
+        if self.spotify_service_ref().is_none() {
+            return false;
+        }
+        let stamp = self.spotify.epochs.begin();
+        self.spotify.browse.context_read = Some((stamp, target, uris.clone()));
+        self.spotify_service_ref()
+            .unwrap()
+            .load_catalog(stamp, CatalogRequest::SavedStates(uris));
+        ui.set_status(&self.text("spotify_loading"), false);
+        true
+    }
+
+    pub(crate) fn spotify_extend_player_context(
+        &self,
+        ui: &dyn ShellUi,
+        entries: &mut Vec<ContextMenuEntry>,
+    ) {
+        let Some(uri) = self.spotify_context_artist(ui) else {
+            return;
+        };
+        if let Some(followed) = self.spotify.browse.saved_states.get(&uri) {
+            entries.push(ContextMenuEntry::Command {
+                label: self.text(if *followed {
+                    "spotify_unfollow_artist"
+                } else {
+                    "spotify_follow_artist"
+                }),
+                command: ContextCommand::SpotifyToggleArtistFollow,
+            });
+        } else {
+            entries.push(ContextMenuEntry::Disabled {
+                label: self.text("spotify_artist_state_unavailable"),
+            });
         }
     }
 
@@ -2331,6 +2761,38 @@ impl Shell {
         });
         self.view = View::SpotifyBrowse;
         self.browse_render(ui, true);
+    }
+
+    pub(crate) fn spotify_browse_test_profile(&mut self, ui: &mut dyn ShellUi) {
+        self.browse_open(
+            ui,
+            Source::MyProfile("spotify:user:me".into()),
+            "My profile".into(),
+        );
+    }
+    pub(crate) fn spotify_browse_test_activate(&mut self, ui: &mut dyn ShellUi) {
+        self.browse_remember_selection(ui);
+        let item = self.browse_selected_item(ui).cloned().unwrap();
+        self.browse_open_item(ui, &item);
+    }
+
+    pub(crate) fn spotify_browse_test_hub_pins(
+        &mut self,
+        pins: Vec<apricot_spotify::main_menu::MenuPin>,
+    ) {
+        self.spotify.hub_entries = (0..pins.len()).map(SpotifyHubEntry::Pinned).collect();
+        self.spotify.hub_pin_items = pins
+            .iter()
+            .map(apricot_spotify::main_menu::MenuPin::item)
+            .collect();
+        self.spotify.hub_pins = pins;
+        self.view = View::SpotifyHub;
+    }
+    pub(crate) fn spotify_browse_test_source(&self) -> Option<Source> {
+        self.browse_top().map(|frame| frame.source.clone())
+    }
+    pub(crate) fn spotify_browse_test_artist(&self, ui: &dyn ShellUi) -> Option<String> {
+        self.spotify_context_artist(ui)
     }
 
     pub(crate) fn spotify_browse_test_next_page(&mut self, offset: u64) {
