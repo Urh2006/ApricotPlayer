@@ -1143,7 +1143,7 @@ mod spotify_lists {
             "Find friends",
             "My public playlists",
         ]) {
-            assert!(row.starts_with(label), "{row}");
+            assert_eq!(row, label);
         }
         ui.selected = Some(2);
         shell.spotify_browse_test_activate(&mut ui);

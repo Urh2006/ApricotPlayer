@@ -587,11 +587,13 @@ impl Shell {
             ]
             .into_iter()
             .map(|(key, label)| {
-                section_row(&apricot_spotify::catalog::Section {
+                let mut item = section_row(&apricot_spotify::catalog::Section {
                     uri: apricot_spotify::catalog::profile_section_uri(uri, key),
                     title: self.text(label),
                     items: Vec::new(),
-                })
+                });
+                item.count = None;
+                item
             })
             .collect();
         }

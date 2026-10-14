@@ -544,11 +544,15 @@ pub fn spotify_browse_context_menu(
             C::SpotifyToggleSaved,
         ));
     }
-    if menu.is_artist && menu.saved.is_none() {
+    if (menu.is_artist || menu.playlist_profile) && menu.saved.is_none() {
         entries.push(ContextMenuEntry::Disabled {
             label: context
                 .catalog
-                .text("spotify_artist_state_unavailable")
+                .text(if menu.is_artist {
+                    "spotify_artist_state_unavailable"
+                } else {
+                    "spotify_library_state_unavailable"
+                })
                 .to_owned(),
         });
     } else if menu.collection_plays {
@@ -1054,6 +1058,34 @@ mod tests {
                 queued_download_count: self.queued,
             };
             build(&context)
+        }
+    }
+
+    #[test]
+    fn playlist_library_menu_uses_current_membership_and_does_not_guess_unknown_state() {
+        let fixture = Fixture::new();
+        for (saved, expected) in [
+            (Some(true), "Remove from your library"),
+            (Some(false), "Save to your library"),
+            (None, "Library state is unavailable. (disabled)"),
+        ] {
+            let menu = fixture.with(|context| {
+                labels(&spotify_browse_context_menu(
+                    context,
+                    SpotifyRowMenu {
+                        collection: true,
+                        collection_plays: true,
+                        playlist_profile: true,
+                        saved,
+                        ..SpotifyRowMenu::default()
+                    },
+                ))
+            });
+            assert!(menu.contains(&expected.to_owned()), "{menu:?}");
+            if saved.is_none() {
+                assert!(!menu.contains(&"Save to your library".to_owned()));
+                assert!(!menu.contains(&"Remove from your library".to_owned()));
+            }
         }
     }
 

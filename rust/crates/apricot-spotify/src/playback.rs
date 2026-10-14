@@ -34,6 +34,58 @@ use librespot_playback::{
 };
 use librespot_protocol::player::PlayerState;
 
+/// Distinguishes failure of the active load from a future preload or an old request.
+#[derive(Default)]
+struct AvailabilityNotices {
+    active: Option<(u64, librespot_core::SpotifyUri)>,
+}
+
+impl AvailabilityNotices {
+    fn current_track_failed(&mut self, event: &PlayerEvent) -> bool {
+        match event {
+            PlayerEvent::Loading {
+                play_request_id,
+                track_id,
+                ..
+            }
+            | PlayerEvent::Playing {
+                play_request_id,
+                track_id,
+                ..
+            }
+            | PlayerEvent::Paused {
+                play_request_id,
+                track_id,
+                ..
+            } => {
+                self.active = Some((*play_request_id, track_id.clone()));
+            }
+            PlayerEvent::Unavailable {
+                play_request_id,
+                track_id,
+            } if self
+                .active
+                .as_ref()
+                .is_some_and(|(request, uri)| request == play_request_id && uri == track_id) =>
+            {
+                self.active = None;
+                return true;
+            }
+            PlayerEvent::Stopped {
+                play_request_id, ..
+            } if self
+                .active
+                .as_ref()
+                .is_some_and(|(request, _)| request == play_request_id) =>
+            {
+                self.active = None;
+            }
+            _ => {}
+        }
+        false
+    }
+}
+
 /// 200 ms of s16le stereo 44.1 kHz: the bound between `LibreSpot` and mpv.
 const RING_BYTES: usize = 44_100 * 4 / 5;
 
@@ -803,6 +855,7 @@ impl SpotifyPlayback {
     pub async fn listen(shared: Arc<Shared>, mut events: PlayerEventChannel) {
         let mut paused = false;
         let mut request_id = None;
+        let mut availability = AvailabilityNotices::default();
         while let Some(event) = events.recv().await {
             if !matches!(event, PlayerEvent::PositionChanged { .. }) {
                 let name = format!("{event:?}");
@@ -811,6 +864,7 @@ impl SpotifyPlayback {
                     name.split([' ', '{', '(']).next().unwrap_or_default()
                 );
             }
+            let current_track_failed = availability.current_track_failed(&event);
             match event {
                 PlayerEvent::TrackChanged { audio_item } => {
                     if let Ok(mut track) = shared.track.lock() {
@@ -860,7 +914,7 @@ impl SpotifyPlayback {
                         generation.close();
                     }
                 }
-                PlayerEvent::Unavailable { track_id, .. } => {
+                PlayerEvent::Unavailable { track_id, .. } if current_track_failed => {
                     shared.push_notice(PlaybackNotice::Unavailable {
                         uri: track_id.to_uri().unwrap_or_default(),
                     });
@@ -1193,6 +1247,68 @@ mod tests {
                 .unwrap()
                 .1
                 .is_closed()
+        );
+    }
+
+    #[tokio::test]
+    async fn preload_and_stale_failures_do_not_announce_that_the_playing_track_was_skipped() {
+        let shared = shared();
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let first =
+            librespot_core::SpotifyUri::from_uri("spotify:track:4u7EnebtmKWzUH433cf5Qv").unwrap();
+        let next =
+            librespot_core::SpotifyUri::from_uri("spotify:track:6rqhFgbbKwnb9MLmUQDhG6").unwrap();
+        for event in [
+            PlayerEvent::Playing {
+                play_request_id: 1,
+                track_id: first.clone(),
+                position_ms: 0,
+            },
+            // A failed future preload carries the CURRENT request ID.
+            PlayerEvent::Unavailable {
+                play_request_id: 1,
+                track_id: next.clone(),
+            },
+            PlayerEvent::Loading {
+                play_request_id: 2,
+                track_id: next.clone(),
+                position_ms: 0,
+            },
+            PlayerEvent::Unavailable {
+                play_request_id: 1,
+                track_id: first.clone(),
+            },
+            // An actual current load failure must still be announced once.
+            PlayerEvent::Unavailable {
+                play_request_id: 2,
+                track_id: next.clone(),
+            },
+            PlayerEvent::Unavailable {
+                play_request_id: 2,
+                track_id: next.clone(),
+            },
+            PlayerEvent::Paused {
+                play_request_id: 3,
+                track_id: first.clone(),
+                position_ms: 0,
+            },
+            PlayerEvent::Stopped {
+                play_request_id: 3,
+                track_id: first.clone(),
+            },
+            PlayerEvent::Unavailable {
+                play_request_id: 3,
+                track_id: first,
+            },
+        ] {
+            sender.send(event).unwrap();
+        }
+        drop(sender);
+        SpotifyPlayback::listen(shared.clone(), receiver).await;
+        let notices = shared.notices.lock().unwrap();
+        assert_eq!(notices.len(), 1);
+        assert!(
+            matches!(&notices[0], PlaybackNotice::Unavailable { uri } if *uri == next.to_uri().unwrap())
         );
     }
 

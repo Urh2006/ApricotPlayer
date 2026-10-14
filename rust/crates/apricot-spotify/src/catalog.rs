@@ -1389,10 +1389,75 @@ pub async fn hidden_songs(api: &Api, session: &Session) -> Result<Vec<String>, A
 
 /// Saved state of `uris` (Liked Songs for tracks, the library for others).
 pub async fn saved(api: &Api, session: &Session, uris: &[String]) -> Result<Vec<bool>, ApiError> {
-    let data = api
-        .pathfinder(session, "areEntitiesInLibrary", json!({ "uris": uris }))
-        .await?;
-    parse_saved_states(&data, uris)
+    let playlists: Vec<String> = uris
+        .iter()
+        .filter(|uri| uri.starts_with("spotify:playlist:"))
+        .cloned()
+        .collect();
+    let other: Vec<String> = uris
+        .iter()
+        .filter(|uri| !uri.starts_with("spotify:playlist:"))
+        .cloned()
+        .collect();
+    let mut states = std::collections::HashMap::new();
+    if !playlists.is_empty() {
+        // Playlists belong to the rootlist. The entity lookup does not supply
+        // their saved state; publication/public attributes are separate.
+        let root = api
+            .spclient(
+                session,
+                reqwest::Method::GET,
+                &format!(
+                    "/playlist/v2/user/{}/rootlist?decorate=revision&from=0&length=10000",
+                    session.username()
+                ),
+                None,
+            )
+            .await?;
+        states.extend(
+            playlists
+                .iter()
+                .cloned()
+                .zip(parse_playlist_saved_states(&root, &playlists)?),
+        );
+    }
+    if !other.is_empty() {
+        let data = api
+            .pathfinder(session, "areEntitiesInLibrary", json!({ "uris": other }))
+            .await?;
+        states.extend(
+            other
+                .iter()
+                .cloned()
+                .zip(parse_saved_states(&data, &other)?),
+        );
+    }
+    Ok(uris.iter().map(|uri| states[uri]).collect())
+}
+
+fn parse_playlist_saved_states(root: &Value, uris: &[String]) -> Result<Vec<bool>, ApiError> {
+    if root.pointer("/contents/truncated").and_then(Value::as_bool) == Some(true) {
+        return Err(ApiError::Shape(
+            "Incomplete playlist library response".into(),
+        ));
+    }
+    let items = root
+        .pointer("/contents/items")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ApiError::Shape("Playlist library items missing".into()))?;
+    let entries: std::collections::HashSet<&str> = items
+        .iter()
+        .map(|item| {
+            item.get("uri")
+                .and_then(Value::as_str)
+                .filter(|uri| !uri.is_empty())
+                .ok_or_else(|| ApiError::Shape("Playlist library entry URI missing".into()))
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(uris
+        .iter()
+        .map(|uri| entries.contains(uri.as_str()))
+        .collect())
 }
 
 pub fn parse_saved_states(data: &Value, uris: &[String]) -> Result<Vec<bool>, ApiError> {
@@ -1425,6 +1490,38 @@ pub fn parse_saved_states(data: &Value, uris: &[String]) -> Result<Vec<bool>, Ap
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playlist_library_membership_is_distinct_from_profile_publication() {
+        let root = json!({"contents":{"truncated":false,"items":[
+            {"uri":"spotify:playlist:private","attributes":{"public":false}},
+            {"uri":"spotify:playlist:published","attributes":{"public":true}},
+            {"uri":"spotify:playlist:unknown_public","attributes":{}},
+            {"uri":"spotify:user:u:folder:f"}
+        ]}});
+        let uris = [
+            "spotify:playlist:unknown_public",
+            "spotify:playlist:missing",
+            "spotify:playlist:private",
+            "spotify:playlist:published",
+            "spotify:playlist:private",
+        ]
+        .map(str::to_owned);
+        assert_eq!(
+            parse_playlist_saved_states(&root, &uris),
+            Ok(vec![true, false, true, true, true])
+        );
+        assert_eq!(
+            parse_playlist_saved_states(&json!({"contents":{"items":[]}}), &uris),
+            Ok(vec![false; 5])
+        );
+        assert!(
+            parse_playlist_saved_states(&json!({"contents":{"truncated":true,"items":[]}}), &uris)
+                .is_err()
+        );
+        assert!(parse_playlist_saved_states(&json!({}), &uris).is_err());
+        assert!(parse_playlist_saved_states(&json!({"contents":{"items":[{}]}}), &uris).is_err());
+    }
 
     #[test]
     fn missing_follow_state_is_not_interpreted_as_not_followed() {

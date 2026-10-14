@@ -1,3 +1,11 @@
+# v2.0.0-beta.12 - Clearer Spotify menus and playback messages
+
+## Fixed
+- Opening a playlist menu no longer gives an incorrect Unknown saved state warning.
+- Playlist menus now show Remove from your library for saved playlists and Save to your library for unsaved playlists.
+- Following, Followers, Find friends and My public playlists no longer announce empty sections or zero items before you open them.
+- A failed attempt to prepare the next song no longer announces that the currently playing song was skipped. Real playback failures are still reported.
+
 # v2.0.0-beta.11 - Your Spotify profile and quicker access
 
 ## Added
