@@ -103,6 +103,8 @@ impl FromStr for NormalisationMethod {
 
 #[derive(Clone)]
 pub struct PlayerConfig {
+    /// Experimental listening telemetry: opt-in only.
+    pub listening_history: bool,
     pub bitrate: Bitrate,
     pub gapless: bool,
     pub passthrough: bool,
@@ -130,6 +132,7 @@ impl Default for PlayerConfig {
     fn default() -> Self {
         Self {
             bitrate: Bitrate::default(),
+            listening_history: false,
             gapless: true,
             normalisation: false,
             normalisation_type: NormalisationType::default(),

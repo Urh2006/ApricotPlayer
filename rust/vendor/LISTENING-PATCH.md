@@ -13,6 +13,19 @@ integration, not an upstream-supported history API.
 
 ## ApricotPlayer adaptations
 
+- Reporting is optional and default OFF in PlayerConfig and SpotifySettings.
+  Both settings paths require explicit Yes to an experimental/account-risk
+  warning before enabling. No/Cancel leaves the feature off. Live changes do
+  not reconnect or interrupt playback. New consent starts with zero samples.
+- A watch channel with consent epochs rejects disabled/stale queued reports
+  and cancels in-flight reporting futures on revocation. Already submitted
+  records cannot be recalled. An unchanged setting does not restart counters.
+- Load request IDs are reserved synchronously, before commands reach the
+  decoder thread. Connect sets its expected ID immediately and ignores old
+  acknowledgements, EOF and Unavailable events; reselecting the same URI is
+  covered. Manual navigation revisions discard obsolete UI notices while
+  preserving genuine automatic-skip warnings.
+
 - No dev-branch upgrade. The 0.8.0 local-file loader has no reportable Spotify
   identity. Local and passthrough audio are excluded.
 - Sink.write_counted counts PCM samples accepted by the output. The Apricot

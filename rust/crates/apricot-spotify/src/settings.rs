@@ -94,6 +94,7 @@ impl LibraryOrder {
 pub struct SpotifySettings {
     pub quality: Quality,
     pub normalisation: bool,
+    pub listening_history: bool,
     pub autoplay: Autoplay,
     pub library_order: LibraryOrder,
 }
@@ -110,6 +111,7 @@ impl Default for SpotifySettings {
         Self {
             quality: Quality::VeryHigh,
             normalisation: false,
+            listening_history: false,
             autoplay: Autoplay::Account,
             library_order: LibraryOrder::Recents,
         }
@@ -159,6 +161,16 @@ mod tests {
             serde_json::from_str(r#"{"library_order":"recently_added"}"#).unwrap();
         assert_eq!(sorted.library_order.id(), "Recently Added");
         assert!(!partial.normalisation);
+        assert!(!partial.listening_history);
+        assert!(!SpotifySettings::default().listening_history);
+        let opt_in: SpotifySettings =
+            serde_json::from_str(r#"{"listening_history":true}"#).unwrap();
+        assert!(opt_in.listening_history);
+        assert_eq!(
+            serde_json::from_str::<SpotifySettings>(&serde_json::to_string(&opt_in).unwrap())
+                .unwrap(),
+            opt_in
+        );
         assert_eq!(Quality::VeryHigh.kbps(), 320);
         assert_eq!(Autoplay::Off.session_value(), Some(false));
     }

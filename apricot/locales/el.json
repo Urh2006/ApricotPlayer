@@ -807,5 +807,7 @@
     "podcast_chapters_source": "ÎšÎµĎ†Î¬Î»Î±ÎąÎ± podcast",
     "update_channel": "Update channel",
     "update_channel_stable": "Stable",
-    "update_channel_beta": "Beta"
+    "update_channel_beta": "Beta",
+    "spotify_listening_history": "Listening history (experimental)",
+    "spotify_listening_history_warning": "Listening-history reporting is experimental and uses an unofficial Spotify interface. It increases the risk of restrictions or suspension of your Spotify account. Spotify may reject records or change this interface without notice. Enable it at your own risk?"
 }

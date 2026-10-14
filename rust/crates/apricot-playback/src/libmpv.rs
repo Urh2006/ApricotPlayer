@@ -2476,6 +2476,136 @@ mod tests {
     /// the end once (Python `player_monitor_worker` polls `eof-reached`).
     #[test]
     #[ignore = "requires APRICOT_TEST_MPV and APRICOT_TEST_FFMPEG"]
+    fn real_libmpv_rapid_pcm_and_provider_replacements_with_nondefault_pitch() {
+        use crate::{
+            PlaybackEngine, PlaybackEvent,
+            pcm_source::{PcmGeneration, PcmSource, PcmSourceEvent, PcmStream, set_pcm_source},
+        };
+        use std::sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, AtomicU64, Ordering},
+        };
+        struct Reader(AtomicBool);
+        impl PcmStream for Reader {
+            fn read(&self, buffer: &mut [u8]) -> usize {
+                if self.0.load(Ordering::SeqCst) {
+                    return 0;
+                }
+                let length = buffer.len() / 4 * 4;
+                buffer[..length].fill(0);
+                length
+            }
+            fn cancel(&self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        #[derive(Default)]
+        struct Source {
+            next: AtomicU64,
+            pending: Mutex<Option<PcmGeneration>>,
+            readers: Mutex<Vec<Arc<Reader>>>,
+            chosen: Mutex<Vec<MediaId>>,
+        }
+        impl PcmSource for Source {
+            fn start(&self, item: &MediaItem, _: u32, _: bool, _: bool) -> Result<(), String> {
+                self.stop();
+                self.chosen.lock().unwrap().push(item.id.clone());
+                *self.pending.lock().unwrap() = Some(PcmGeneration {
+                    id: self.next.fetch_add(1, Ordering::SeqCst),
+                    base_ms: 0,
+                    duration_ms: None,
+                });
+                Ok(())
+            }
+            fn set_paused(&self, _: bool) {}
+            fn seek(&self, _: u32) {}
+            fn stop(&self) {
+                for reader in self.readers.lock().unwrap().drain(..) {
+                    reader.cancel();
+                }
+            }
+            fn take_generation(&self) -> Option<PcmGeneration> {
+                self.pending.lock().unwrap().take()
+            }
+            fn open(&self, _: u64) -> Option<Arc<dyn PcmStream>> {
+                let reader = Arc::new(Reader(AtomicBool::new(false)));
+                self.readers.lock().unwrap().push(reader.clone());
+                Some(reader)
+            }
+            fn poll_event(&self) -> Option<PcmSourceEvent> {
+                None
+            }
+            fn format(&self) -> (String, Option<f64>) {
+                ("Test PCM".into(), None)
+            }
+        }
+        let folder = tempfile::tempdir().unwrap();
+        let plain = short_fixture(folder.path());
+        let source = Arc::new(Source::default());
+        set_pcm_source(Some(source.clone()));
+        let mut engine = short_engine(false);
+        engine.execute(PlaybackCommand::SetPitch(1.12)).unwrap();
+        let mut filters = crate::audio_filters::AudioFilterState::default();
+        filters
+            .execute(&mut engine, PlaybackCommand::SetPitchFilter(Some(1.12)))
+            .unwrap();
+        let mut expected = Vec::new();
+        let mut events = Vec::new();
+        for index in [0, 1, 2, 1, 0, 2, 0, 1, 2, 0, 2, 1] {
+            let mut item = plain.clone();
+            item.id = MediaId(format!("spotify:test:occurrence{index}"));
+            item.source = MediaSource::Spotify;
+            item.local_path = None;
+            expected.push(item.id.clone());
+            engine
+                .execute(PlaybackCommand::Load {
+                    item: Box::new(item),
+                    start_position_seconds: None,
+                })
+                .unwrap();
+            events.extend(collect_events(
+                &mut engine,
+                std::time::Duration::from_millis(15),
+            ));
+        }
+        assert_eq!(
+            *source.chosen.lock().unwrap(),
+            expected,
+            "exact requested occurrence, without an index shift"
+        );
+        // Replacing Spotify with other providers uses the ordinary file path.
+        for provider in [
+            MediaSource::Youtube,
+            MediaSource::Soundcloud,
+            MediaSource::Local,
+        ] {
+            let mut item = plain.clone();
+            item.source = provider;
+            engine
+                .execute(PlaybackCommand::Load {
+                    item: Box::new(item),
+                    start_position_seconds: None,
+                })
+                .unwrap();
+            events.extend(collect_events(
+                &mut engine,
+                std::time::Duration::from_millis(100),
+            ));
+        }
+        source.stop();
+        engine.execute(PlaybackCommand::Stop).unwrap();
+        set_pcm_source(None);
+        assert!(
+            !events.iter().any(|event| matches!(
+                event,
+                PlaybackEvent::Failed(_) | PlaybackEvent::CommandFailed(_)
+            )),
+            "{events:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires APRICOT_TEST_MPV and APRICOT_TEST_FFMPEG"]
     fn real_libmpv_reports_the_natural_end_once_instead_of_a_pause() {
         use crate::{PlaybackEngine, PlaybackEvent};
         let folder = tempfile::tempdir().expect("fixture folder");

@@ -186,8 +186,8 @@ pub(crate) mod equalizer {
         /// The RSS timer interval, `None` when stopped.
         pub(super) rss_timer: Option<f64>,
         /// The yes or no questions asked, and the answer given.
-        pub(super) questions: Vec<String>,
-        pub(super) answer_yes: bool,
+        pub(crate) questions: Vec<String>,
+        pub(crate) answer_yes: bool,
         pub(super) progress: Option<crate::DownloadProgress>,
         pub(super) clipboard: Option<String>,
         pub(crate) row_updates: Vec<(usize, String)>,

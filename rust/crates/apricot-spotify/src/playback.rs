@@ -37,11 +37,11 @@ use librespot_protocol::player::PlayerState;
 /// Distinguishes failure of the active load from a future preload or an old request.
 #[derive(Default)]
 struct AvailabilityNotices {
-    active: Option<(u64, librespot_core::SpotifyUri)>,
+    active: Option<(u64, librespot_core::SpotifyUri, u64)>,
 }
 
 impl AvailabilityNotices {
-    fn current_track_failed(&mut self, event: &PlayerEvent) -> bool {
+    fn current_track_failed(&mut self, event: &PlayerEvent, revision: u64) -> bool {
         match event {
             PlayerEvent::Loading {
                 play_request_id,
@@ -58,7 +58,13 @@ impl AvailabilityNotices {
                 track_id,
                 ..
             } => {
-                self.active = Some((*play_request_id, track_id.clone()));
+                if !self
+                    .active
+                    .as_ref()
+                    .is_some_and(|(request, uri, _)| request == play_request_id && uri == track_id)
+                {
+                    self.active = Some((*play_request_id, track_id.clone(), revision));
+                }
             }
             PlayerEvent::Unavailable {
                 play_request_id,
@@ -66,7 +72,9 @@ impl AvailabilityNotices {
             } if self
                 .active
                 .as_ref()
-                .is_some_and(|(request, uri)| request == play_request_id && uri == track_id) =>
+                .is_some_and(|(request, uri, active_revision)| {
+                    request == play_request_id && uri == track_id && *active_revision == revision
+                }) =>
             {
                 self.active = None;
                 return true;
@@ -76,7 +84,7 @@ impl AvailabilityNotices {
             } if self
                 .active
                 .as_ref()
-                .is_some_and(|(request, _)| request == play_request_id) =>
+                .is_some_and(|(request, _, _)| request == play_request_id) =>
             {
                 self.active = None;
             }
@@ -329,7 +337,8 @@ pub struct Shared {
     current: Mutex<Option<(u64, Arc<Generation>)>>,
     pending: Mutex<Option<PcmGeneration>>,
     events: Mutex<VecDeque<PcmSourceEvent>>,
-    notices: Mutex<VecDeque<PlaybackNotice>>,
+    notices: Mutex<VecDeque<(u64, PlaybackNotice)>>,
+    manual_revision: AtomicU64,
     /// Apricot started playback; the next new track is its own start.
     requested: AtomicBool,
     track: Mutex<Option<SpotifyTrack>>,
@@ -392,14 +401,35 @@ impl Shared {
     }
 
     fn push_notice(&self, notice: PlaybackNotice) {
+        self.push_notice_at(self.manual_revision.load(Ordering::SeqCst), notice);
+    }
+
+    fn push_notice_at(&self, revision: u64, notice: PlaybackNotice) {
         if let Ok(mut notices) = self.notices.lock() {
-            notices.push_back(notice);
+            notices.push_back((revision, notice));
         }
         (self.notify)();
     }
 
+    /// Manual navigation invalidates old callbacks, while automatic skips retain
+    /// their genuine failure notice even after the following song has started.
+    fn manual_navigation(&self) {
+        self.manual_revision.fetch_add(1, Ordering::SeqCst);
+    }
+
     pub fn take_notice(&self) -> Option<PlaybackNotice> {
-        self.notices.lock().ok()?.pop_front()
+        let mut notices = self.notices.lock().ok()?;
+        while let Some((revision, notice)) = notices.pop_front() {
+            if matches!(
+                notice,
+                PlaybackNotice::Unavailable { .. } | PlaybackNotice::Playing { .. }
+            ) && revision != self.manual_revision.load(Ordering::SeqCst)
+            {
+                continue;
+            }
+            return Some(notice);
+        }
+        None
     }
 }
 
@@ -565,6 +595,7 @@ impl SpotifyPlayback {
             pending: Mutex::default(),
             events: Mutex::default(),
             notices: Mutex::default(),
+            manual_revision: AtomicU64::new(0),
             requested: AtomicBool::new(false),
             track: Mutex::default(),
             bitrate_kbps,
@@ -603,12 +634,14 @@ impl SpotifyPlayback {
     }
 
     pub fn next(&self) {
+        self.shared.manual_navigation();
         self.with_spirc(|spirc| {
             let _ = spirc.next();
         });
     }
 
     pub fn previous(&self) {
+        self.shared.manual_navigation();
         self.with_spirc(|spirc| {
             let _ = spirc.prev();
         });
@@ -874,7 +907,18 @@ impl SpotifyPlayback {
                     name.split([' ', '{', '(']).next().unwrap_or_default()
                 );
             }
-            let current_track_failed = availability.current_track_failed(&event);
+            let revision = shared.manual_revision.load(Ordering::SeqCst);
+            let current_track_failed = availability.current_track_failed(&event, revision);
+            if matches!(
+                event,
+                PlayerEvent::Playing { .. } | PlayerEvent::Paused { .. }
+            ) && availability
+                .active
+                .as_ref()
+                .is_some_and(|(_, _, active_revision)| *active_revision != revision)
+            {
+                continue;
+            }
             match event {
                 PlayerEvent::TrackChanged { audio_item } => {
                     if let Ok(mut track) = shared.track.lock() {
@@ -897,11 +941,14 @@ impl SpotifyPlayback {
                         let track = shared.track.lock().ok().and_then(|track| track.clone());
                         if let Some(track) = track {
                             let requested = shared.requested.swap(false, Ordering::SeqCst);
-                            shared.push_notice(PlaybackNotice::Playing {
-                                track,
-                                position_ms,
-                                requested,
-                            });
+                            shared.push_notice_at(
+                                revision,
+                                PlaybackNotice::Playing {
+                                    track,
+                                    position_ms,
+                                    requested,
+                                },
+                            );
                         }
                     }
                 }
@@ -925,9 +972,12 @@ impl SpotifyPlayback {
                     }
                 }
                 PlayerEvent::Unavailable { track_id, .. } if current_track_failed => {
-                    shared.push_notice(PlaybackNotice::Unavailable {
-                        uri: track_id.to_uri().unwrap_or_default(),
-                    });
+                    shared.push_notice_at(
+                        revision,
+                        PlaybackNotice::Unavailable {
+                            uri: track_id.to_uri().unwrap_or_default(),
+                        },
+                    );
                 }
                 _ => {}
             }
@@ -1059,6 +1109,7 @@ impl PcmSource for SpotifyPlayback {
             })
             .map(|reference| reference.to_uri())
             .ok_or_else(|| "spotify_unplayable".to_owned())?;
+        self.shared.manual_navigation();
         self.shared.requested.store(true, Ordering::SeqCst);
         log::info!("start requested at {position_ms} ms, paused {paused}");
         // Setting shuffle requires a complete Connect options object. Keep
@@ -1163,6 +1214,67 @@ mod tests {
         let pending = shared.pending.lock().unwrap().take().unwrap();
         assert_eq!(pending.base_ms, 60_000);
         assert_eq!(pending.id, 2);
+    }
+
+    #[test]
+    fn manual_navigation_discards_queued_failures_but_automatic_skip_keeps_them() {
+        let shared = shared();
+        shared.push_notice(PlaybackNotice::Unavailable { uri: "old".into() });
+        shared.manual_navigation();
+        assert!(shared.take_notice().is_none());
+        shared.push_notice(PlaybackNotice::Unavailable {
+            uri: "genuine".into(),
+        });
+        // An automatic skip does not create a new manual intent.
+        assert!(
+            matches!(shared.take_notice(), Some(PlaybackNotice::Unavailable { uri }) if uri == "genuine")
+        );
+    }
+
+    #[test]
+    fn delayed_failure_after_rapid_manual_next_is_not_the_current_request() {
+        let uri =
+            librespot_core::SpotifyUri::from_uri("spotify:track:72AZ3V52rs9NfgMNhALxln").unwrap();
+        let mut guard = AvailabilityNotices::default();
+        assert!(!guard.current_track_failed(
+            &PlayerEvent::Loading {
+                play_request_id: 1,
+                track_id: uri.clone(),
+                position_ms: 0
+            },
+            0
+        ));
+        // Late play/pause from the old request cannot acquire the new manual revision.
+        assert!(!guard.current_track_failed(
+            &PlayerEvent::Playing {
+                play_request_id: 1,
+                track_id: uri.clone(),
+                position_ms: 0
+            },
+            3
+        ));
+        assert!(!guard.current_track_failed(
+            &PlayerEvent::Unavailable {
+                play_request_id: 1,
+                track_id: uri.clone()
+            },
+            3
+        ));
+        assert!(!guard.current_track_failed(
+            &PlayerEvent::Loading {
+                play_request_id: 4,
+                track_id: uri.clone(),
+                position_ms: 0
+            },
+            3
+        ));
+        assert!(guard.current_track_failed(
+            &PlayerEvent::Unavailable {
+                play_request_id: 4,
+                track_id: uri
+            },
+            3
+        ));
     }
 
     #[test]
@@ -1360,7 +1472,7 @@ mod tests {
         let notices = shared.notices.lock().unwrap();
         assert_eq!(notices.len(), 1);
         assert!(
-            matches!(&notices[0], PlaybackNotice::Unavailable { uri } if *uri == next.to_uri().unwrap())
+            matches!(&notices[0].1, PlaybackNotice::Unavailable { uri } if *uri == next.to_uri().unwrap())
         );
     }
 

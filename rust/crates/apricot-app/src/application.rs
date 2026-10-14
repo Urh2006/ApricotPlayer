@@ -2637,6 +2637,12 @@ impl Application {
         self.spotify_settings_draft = Some(settings);
     }
 
+    pub fn set_spotify_listening_history(&mut self, checked: bool) {
+        let mut settings = self.spotify_settings();
+        settings.listening_history = checked;
+        self.spotify_settings_draft = Some(settings);
+    }
+
     /// The Spotify dialog saved its own settings: they replace any unsaved
     /// change of the Settings window.
     pub fn forget_spotify_settings_draft(&mut self) {

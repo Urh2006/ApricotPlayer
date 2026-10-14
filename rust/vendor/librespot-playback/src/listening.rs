@@ -5,10 +5,16 @@ use librespot_core::{
     listening::{EndReason, ListeningReporter, PlaybackReport},
 };
 use librespot_metadata::audio::AudioFileFormat;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct HistoryConsent {
+    pub enabled: bool,
+    pub epoch: u64,
+}
 
 pub(crate) enum ReportCommand {
-    Report(u64, Session, Box<PlaybackReport>),
+    Report(u64, u64, Session, Box<PlaybackReport>),
     Flush(oneshot::Sender<Result<(), Error>>),
 }
 
@@ -67,14 +73,29 @@ impl ReportSink for SessionReporter {
     }
 }
 
-async fn run_reports(mut receiver: mpsc::Receiver<ReportCommand>, mut reporter: impl ReportSink) {
+async fn run_reports(
+    mut receiver: mpsc::Receiver<ReportCommand>,
+    mut reporter: impl ReportSink,
+    mut consent: watch::Receiver<HistoryConsent>,
+) {
     let mut pending_error = None;
     while let Some(command) = receiver.recv().await {
         match command {
-            ReportCommand::Report(generation, session, playback) => {
-                if let Err(error) = reporter.report(generation, session, *playback).await {
-                    warn!("Unable to report listening: {error}");
-                    pending_error = Some(error);
+            ReportCommand::Report(generation, epoch, session, playback) => {
+                let current = *consent.borrow_and_update();
+                if !current.enabled || current.epoch != epoch {
+                    continue;
+                }
+                // Revoking consent cancels metadata lookup / pending publication too.
+                // Already submitted records cannot be withdrawn from Spotify.
+                tokio::select! {
+                    result = reporter.report(generation, session, *playback) => {
+                        if let Err(error) = result {
+                            warn!("Unable to report listening: {error}");
+                            pending_error = Some(error);
+                        }
+                    }
+                    _ = consent.changed() => {}
                 }
             }
             ReportCommand::Flush(done) => {
@@ -84,13 +105,16 @@ async fn run_reports(mut receiver: mpsc::Receiver<ReportCommand>, mut reporter: 
     }
 }
 
-pub(crate) fn reporter(session: Session) -> mpsc::Sender<ReportCommand> {
+pub(crate) fn reporter(
+    session: Session,
+    consent: watch::Receiver<HistoryConsent>,
+) -> mpsc::Sender<ReportCommand> {
     let (sender, receiver) = mpsc::channel(32);
     let reporter = SessionReporter {
         generation: 0,
         reporter: ListeningReporter::new(session.clone()),
     };
-    session.spawn(run_reports(receiver, reporter));
+    session.spawn(run_reports(receiver, reporter, consent));
     sender
 }
 
@@ -170,6 +194,16 @@ mod tests {
     use super::*;
     use crate::SAMPLES_PER_SECOND;
 
+    fn enabled_consent() -> (
+        watch::Sender<HistoryConsent>,
+        watch::Receiver<HistoryConsent>,
+    ) {
+        watch::channel(HistoryConsent {
+            enabled: true,
+            epoch: 0,
+        })
+    }
+
     fn loaded() -> PlaybackStatistics {
         PlaybackStatistics::new(
             SpotifyUri::from_uri("spotify:track:72AZ3V52rs9NfgMNhALxln").unwrap(),
@@ -179,6 +213,130 @@ mod tests {
             },
             None,
         )
+    }
+
+    fn report_command(epoch: u64) -> ReportCommand {
+        let mut stats = loaded();
+        stats.written(SAMPLES_PER_SECOND as usize, SystemTime::now());
+        ReportCommand::Report(
+            0,
+            epoch,
+            Session::new(Default::default(), None),
+            Box::new(stats.finish(EndReason::EndPlay, SystemTime::now()).unwrap()),
+        )
+    }
+
+    #[tokio::test]
+    async fn default_off_and_revoked_epochs_never_reach_the_transport() {
+        struct Counter(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+        impl ReportSink for Counter {
+            async fn report(&mut self, _: u64, _: Session, _: PlaybackReport) -> Result<(), Error> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }
+        }
+        assert!(!crate::config::PlayerConfig::default().listening_history);
+        let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (consent, receiver_consent) = watch::channel(HistoryConsent::default());
+        let (sender, receiver) = mpsc::channel(4);
+        let worker = tokio::spawn(run_reports(
+            receiver,
+            Counter(count.clone()),
+            receiver_consent,
+        ));
+        for (state, epoch, expected) in [
+            (
+                HistoryConsent {
+                    enabled: false,
+                    epoch: 0,
+                },
+                0,
+                0,
+            ),
+            (
+                HistoryConsent {
+                    enabled: true,
+                    epoch: 1,
+                },
+                0,
+                0,
+            ),
+            (
+                HistoryConsent {
+                    enabled: true,
+                    epoch: 1,
+                },
+                1,
+                1,
+            ),
+            (
+                HistoryConsent {
+                    enabled: false,
+                    epoch: 2,
+                },
+                1,
+                1,
+            ),
+            (
+                HistoryConsent {
+                    enabled: true,
+                    epoch: 3,
+                },
+                1,
+                1,
+            ),
+            (
+                HistoryConsent {
+                    enabled: true,
+                    epoch: 3,
+                },
+                3,
+                2,
+            ),
+        ] {
+            consent.send_replace(state);
+            sender.send(report_command(epoch)).await.unwrap();
+            let (done, completed) = oneshot::channel();
+            sender.send(ReportCommand::Flush(done)).await.unwrap();
+            completed.await.unwrap().unwrap();
+            assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), expected);
+        }
+        drop(sender);
+        worker.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn revoking_consent_cancels_in_flight_reporting_without_delaying_flush() {
+        struct NeverFinishes(Option<oneshot::Sender<()>>);
+        impl ReportSink for NeverFinishes {
+            async fn report(&mut self, _: u64, _: Session, _: PlaybackReport) -> Result<(), Error> {
+                self.0.take().unwrap().send(()).unwrap();
+                std::future::pending::<Result<(), Error>>().await
+            }
+        }
+        let (consent, receiver_consent) = enabled_consent();
+        let (sender, receiver) = mpsc::channel(4);
+        let (started, begun) = oneshot::channel();
+        let worker = tokio::spawn(run_reports(
+            receiver,
+            NeverFinishes(Some(started)),
+            receiver_consent,
+        ));
+        sender.send(report_command(0)).await.unwrap();
+        begun.await.unwrap();
+        consent.send_replace(HistoryConsent {
+            enabled: false,
+            epoch: 1,
+        });
+        let (done, completed) = oneshot::channel();
+        sender.send(ReportCommand::Flush(done)).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), completed)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        drop(sender);
+        worker.await.unwrap();
     }
 
     #[tokio::test]
@@ -195,12 +353,14 @@ mod tests {
         }
         let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let (sender, receiver) = mpsc::channel(4);
-        let worker = tokio::spawn(run_reports(receiver, FailFirst(count.clone())));
+        let (_consent, consent) = enabled_consent();
+        let worker = tokio::spawn(run_reports(receiver, FailFirst(count.clone()), consent));
         for _ in 0..2 {
             let mut stats = loaded();
             stats.written(SAMPLES_PER_SECOND as usize, SystemTime::now());
             sender
                 .send(ReportCommand::Report(
+                    0,
                     0,
                     Session::new(Default::default(), None),
                     Box::new(stats.finish(EndReason::EndPlay, SystemTime::now()).unwrap()),
@@ -230,6 +390,7 @@ mod tests {
         sender
             .send(ReportCommand::Report(
                 0,
+                0,
                 Session::new(Default::default(), None),
                 Box::new(stats.finish(EndReason::EndPlay, SystemTime::now()).unwrap()),
             ))
@@ -243,7 +404,12 @@ mod tests {
                 Ok(())
             }
         }
-        let worker = tokio::spawn(run_reports(receiver, DelayedReport(Some(released))));
+        let (_consent, consent) = enabled_consent();
+        let worker = tokio::spawn(run_reports(
+            receiver,
+            DelayedReport(Some(released)),
+            consent,
+        ));
         tokio::task::yield_now().await;
         assert!(matches!(
             completed.try_recv(),
@@ -262,6 +428,7 @@ mod tests {
             let mut stats = loaded();
             stats.written(SAMPLES_PER_SECOND as usize, SystemTime::now());
             ReportCommand::Report(
+                0,
                 0,
                 Session::new(Default::default(), None),
                 Box::new(stats.finish(EndReason::EndPlay, SystemTime::now()).unwrap()),

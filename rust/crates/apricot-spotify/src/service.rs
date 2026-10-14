@@ -1098,6 +1098,16 @@ impl SpotifyService {
             .and_then(|(_, active)| active.shared.take_notice())
     }
 
+    /// Applies explicit history consent without reconnecting or interrupting audio.
+    pub fn set_listening_history(&self, enabled: bool) {
+        if let Ok(slot) = self.session.lock()
+            && let Some((_, active)) = slot.as_ref()
+            && let Some(player) = &active.player
+        {
+            player.set_listening_history(enabled);
+        }
+    }
+
     /// Closes the local session (application exit).
     pub fn shutdown(&self) {
         self.cancel_login();
@@ -1251,6 +1261,7 @@ async fn open_session(
             crate::settings::Quality::VeryHigh => Bitrate::Bitrate320,
         },
         normalisation: settings.normalisation,
+        listening_history: settings.listening_history,
         gapless: true,
         ..PlayerConfig::default()
     };

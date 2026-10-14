@@ -150,7 +150,14 @@ pub enum SettingsControl {
         options: Vec<String>,
     },
     /// Spotify volume normalisation.
-    SpotifyNormalisation { label: String, checked: bool },
+    SpotifyNormalisation {
+        label: String,
+        checked: bool,
+    },
+    SpotifyListeningHistory {
+        label: String,
+        checked: bool,
+    },
 }
 
 /// The Spotify choices of the Spotify section, in the order of the options
@@ -1410,6 +1417,10 @@ fn spotify_controls(
             label: catalog.text("spotify_normalisation").to_owned(),
             checked: spotify.normalisation,
         },
+        SettingsControl::SpotifyListeningHistory {
+            label: catalog.text("spotify_listening_history").to_owned(),
+            checked: spotify.listening_history,
+        },
         SettingsControl::SpotifyChoice {
             field: SpotifyField::Autoplay,
             label: catalog.text("spotify_autoplay").to_owned(),
@@ -1719,6 +1730,7 @@ mod tests {
         let spotify = SpotifySettings {
             quality: Quality::High,
             normalisation: true,
+            listening_history: false,
             autoplay: Autoplay::Off,
             library_order: LibraryOrder::Alphabetical,
         };
@@ -1762,6 +1774,10 @@ mod tests {
             })
         ));
 
+        assert!(model.controls.iter().any(|control| matches!(
+            control,
+            SettingsControl::SpotifyListeningHistory { checked: false, .. }
+        )));
         let mut changed = spotify;
         super::SpotifyField::Quality.apply(&mut changed, 2);
         super::SpotifyField::LibraryOrder.apply(&mut changed, 9);
@@ -1787,7 +1803,7 @@ mod tests {
             (SettingsSection::Notifications, 5),
             (SettingsSection::Cookies, 13),
             (SettingsSection::Audiovault, 5),
-            (SettingsSection::Spotify, 5),
+            (SettingsSection::Spotify, 6),
             (SettingsSection::Shortcuts, 3),
         ];
         for (section, count) in expected {

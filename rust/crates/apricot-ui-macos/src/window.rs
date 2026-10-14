@@ -2271,6 +2271,16 @@ impl ShellUi for MacUi<'_> {
         answer == objc2_app_kit::NSAlertFirstButtonReturn
     }
 
+    fn confirm_spotify_history(
+        &mut self,
+        message: &str,
+        yes: &str,
+        no: &str,
+        cancel: &str,
+    ) -> bool {
+        crate::spotify_dialogs::confirm_history(self.controller.mtm(), message, yes, no, cancel)
+    }
+
     fn show_download_progress(&mut self, progress: &apricot_shell::DownloadProgress) {
         let existing = self.controller.ivars().download_progress.borrow().clone();
         if let Some(window) = existing {

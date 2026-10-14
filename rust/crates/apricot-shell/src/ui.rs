@@ -214,6 +214,15 @@ pub trait ShellUi {
     /// Windows `MessageBoxW` with Yes and No: `true` for Yes. Focus returns
     /// to the control that had it.
     fn ask_yes_no(&mut self, message: &str, yes: &str, no: &str) -> bool;
+    fn confirm_spotify_history(
+        &mut self,
+        message: &str,
+        yes: &str,
+        no: &str,
+        _cancel: &str,
+    ) -> bool {
+        self.ask_yes_no(message, yes, no)
+    }
 
     /// Windows `DownloadProgressWindow::create` or `show`: the modeless
     /// progress window, in front with focus on Hide. Details calls

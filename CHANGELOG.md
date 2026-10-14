@@ -1,11 +1,14 @@
-# v2.0.0-beta.13 - Spotify listening history
+# v2.0.0-beta.13 - Optional Spotify listening history and playback fixes
 
 ## Added
-- Spotify playback sends listening-history records for the music you actually play.
-- Pauses, seeking and background preparation do not add listening time. Spotify private-session playback is excluded when that state is available.
-- Records are sent in the background, so submission failures do not interrupt playback.
+- Experimental listening-history reporting in both Spotify settings screens, off by default. Enabling it asks for confirmation and explains the additional risk to your Spotify account.
+- Reports include only audio played after enabling the feature. Disabling it cancels pending submissions without interrupting music.
 
-This is an experimental Spotify integration. Recommendations, On Repeat and listening statistics remain controlled by Spotify.
+## Fixed
+- Selecting a Spotify song no longer lets an old playback event advance to the song below it.
+- Rapid Previous/Next changes discard old song-failure messages, including with changed pitch. Real Spotify playback failures are still reported.
+
+Spotify controls acceptance of listening records and their effect on recommendations, On Repeat and listening statistics.
 
 # v2.0.0-beta.12 - Clearer Spotify menus and playback messages
 

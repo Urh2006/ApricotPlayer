@@ -52,6 +52,7 @@ pub enum SettingsBinding {
     Command(SettingsCommand),
     SpotifyChoice(SpotifyField),
     SpotifyNormalisation,
+    SpotifyListeningHistory,
 }
 
 impl SettingsBinding {
@@ -235,6 +236,7 @@ pub fn settings_binding(control: &SettingsControl) -> SettingsBinding {
         SettingsControl::Command { command, .. } => SettingsBinding::Command(*command),
         SettingsControl::SpotifyChoice { field, .. } => SettingsBinding::SpotifyChoice(*field),
         SettingsControl::SpotifyNormalisation { .. } => SettingsBinding::SpotifyNormalisation,
+        SettingsControl::SpotifyListeningHistory { .. } => SettingsBinding::SpotifyListeningHistory,
     }
 }
 
@@ -327,6 +329,22 @@ impl Shell {
         model
     }
 
+    /// Called before applying a newly checked experimental history control.
+    pub fn settings_confirm_spotify_history(
+        &mut self,
+        ui: &mut dyn ShellUi,
+        checked: bool,
+    ) -> bool {
+        !checked
+            || self.application.spotify_settings().listening_history
+            || ui.confirm_spotify_history(
+                &self.text("spotify_listening_history_warning"),
+                &self.text("yes"),
+                &self.text("no"),
+                &self.text("cancel"),
+            )
+    }
+
     /// Windows `sync_bound_control`: applies one visible value. `gains`
     /// are the visible equalizer sliders.
     ///
@@ -407,6 +425,10 @@ impl Shell {
                 if let Some(index) = selected {
                     app.set_spotify_choice(*field, index);
                 }
+                Ok(())
+            }
+            SettingsBinding::SpotifyListeningHistory => {
+                app.set_spotify_listening_history(checked);
                 Ok(())
             }
             SettingsBinding::SpotifyNormalisation => {
@@ -642,9 +664,16 @@ impl Shell {
 
     /// Windows `save_and_register_startup`.
     fn settings_save_and_register(&mut self) -> Result<(), String> {
+        let before = self.application.saved_spotify_settings();
         self.application
             .save_settings()
             .map_err(|error| error.to_string())?;
+        let after = self.application.saved_spotify_settings();
+        if before.listening_history != after.listening_history
+            && let Some(service) = self.spotify_service_ref()
+        {
+            service.set_listening_history(after.listening_history);
+        }
         let executable = std::env::current_exe()
             .map_err(|error| format!("Could not locate the running executable: {error}"))?;
         apricot_platform::sync_startup_registration(
@@ -843,6 +872,48 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn experimental_history_requires_yes_and_reprompts_after_disabling() {
+        let mut shell = crate::tests::keyboard::shell();
+        let mut ui = crate::tests::equalizer::Ui::default();
+        assert!(!shell.application.spotify_settings().listening_history);
+        assert!(!shell.settings_confirm_spotify_history(&mut ui, true));
+        assert!(!shell.application.spotify_settings().listening_history);
+        assert_eq!(ui.questions.len(), 1);
+        assert!(ui.questions[0].contains("experimental"));
+        assert!(ui.questions[0].contains("Spotify account"));
+        ui.answer_yes = true;
+        assert!(shell.settings_confirm_spotify_history(&mut ui, true));
+        shell
+            .settings_apply(
+                &SettingsBinding::SpotifyListeningHistory,
+                &SettingsInput::Checked(true),
+                &EqualizerGains::new(),
+            )
+            .unwrap();
+        assert!(shell.application.spotify_settings().listening_history);
+        assert!(shell.settings_confirm_spotify_history(&mut ui, true));
+        assert_eq!(
+            ui.questions.len(),
+            2,
+            "already accepted draft must not ask twice"
+        );
+        shell
+            .settings_apply(
+                &SettingsBinding::SpotifyListeningHistory,
+                &SettingsInput::Checked(false),
+                &EqualizerGains::new(),
+            )
+            .unwrap();
+        assert!(shell.settings_confirm_spotify_history(&mut ui, true));
+        assert_eq!(ui.questions.len(), 3);
+        shell.application.cancel_settings();
+        assert!(
+            !shell.application.spotify_settings().listening_history,
+            "Cancel must not save opt-in"
+        );
+    }
 
     #[test]
     fn chords_are_stored_as_windows_text() {

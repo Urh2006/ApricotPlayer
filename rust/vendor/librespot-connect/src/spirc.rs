@@ -457,6 +457,54 @@ mod transport_regressions {
     }
 
     #[tokio::test]
+    async fn selecting_a_track_rejects_old_end_and_old_request_acknowledgements() {
+        let mut task = task(false);
+        task.load_context_from_tracks(vec![FIRST.to_owned(), SECOND.to_owned()])
+            .unwrap();
+        task.connect_state.set_current_track(0).unwrap();
+        task.connect_state
+            .reset_playback_to_position(Some(0))
+            .unwrap();
+        task.load_track(true, 0).unwrap();
+        let old = task.play_request_id.unwrap();
+        // Reselect even the same URI: URI-only filtering cannot prevent this race.
+        task.connect_state.set_current_track(0).unwrap();
+        task.connect_state
+            .reset_playback_to_position(Some(0))
+            .unwrap();
+        task.load_track(true, 0).unwrap();
+        let current = task.play_request_id.unwrap();
+        assert_ne!(old, current);
+        task.handle_player_event(PlayerEvent::PlayRequestIdChanged {
+            play_request_id: old,
+        })
+        .unwrap();
+        task.handle_player_event(PlayerEvent::EndOfTrack {
+            track_id: SpotifyUri::from_uri(FIRST).unwrap(),
+            play_request_id: old,
+        })
+        .unwrap();
+        task.handle_player_event(PlayerEvent::Unavailable {
+            track_id: SpotifyUri::from_uri(FIRST).unwrap(),
+            play_request_id: old,
+        })
+        .unwrap();
+        assert_eq!(task.play_request_id, Some(current));
+        assert_eq!(
+            task.connect_state.player().track.uri,
+            FIRST,
+            "Enter must not skip the selected row"
+        );
+        // A genuine current completion still advances exactly once.
+        task.handle_player_event(PlayerEvent::EndOfTrack {
+            track_id: SpotifyUri::from_uri(FIRST).unwrap(),
+            play_request_id: current,
+        })
+        .unwrap();
+        assert_eq!(task.connect_state.player().track.uri, SECOND);
+    }
+
+    #[tokio::test]
     async fn natural_end_also_waits_for_autoplay_instead_of_stopping() {
         let mut task = task(true);
         first_track(&mut task);
@@ -1182,8 +1230,9 @@ impl SpircTask {
         }
 
         // update play_request_id
-        if let PlayerEvent::PlayRequestIdChanged { play_request_id } = event {
-            self.play_request_id = Some(play_request_id);
+        if let PlayerEvent::PlayRequestIdChanged { .. } = event {
+            // load_track already reserved the expected identity. A queued
+            // older acknowledgement must never restore an obsolete request.
             return Ok(());
         }
 
@@ -2307,12 +2356,12 @@ impl SpircTask {
 
         let current_uri = self.connect_state.current_track(|t| &t.uri);
         let id = SpotifyUri::from_uri(current_uri)?;
-        self.player.load_with_context(
+        self.play_request_id = Some(self.player.load_with_context(
             id,
             start_playing,
             position_ms,
             Some(self.connect_state.context_uri().clone()),
-        );
+        ));
 
         self.connect_state
             .update_position(position_ms, self.now_ms());

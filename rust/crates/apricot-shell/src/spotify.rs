@@ -69,6 +69,10 @@ pub struct SpotifySettingsTexts {
     pub quality: String,
     pub qualities: [String; 3],
     pub normalisation: String,
+    pub listening_history: String,
+    pub experimental_warning: String,
+    pub yes: String,
+    pub no: String,
     pub autoplay: String,
     pub autoplays: [String; 3],
     pub order: String,
@@ -886,6 +890,10 @@ impl Shell {
                 text("spotify_quality_very_high"),
             ],
             normalisation: text("spotify_normalisation"),
+            listening_history: text("spotify_listening_history"),
+            experimental_warning: text("spotify_listening_history_warning"),
+            yes: text("yes"),
+            no: text("no"),
             autoplay: text("spotify_autoplay"),
             autoplays: [
                 text("spotify_autoplay_account"),
@@ -919,6 +927,11 @@ impl Shell {
             return;
         }
         self.application.forget_spotify_settings_draft();
+        if chosen.listening_history != current.listening_history
+            && let Some(service) = &self.spotify.service
+        {
+            service.set_listening_history(chosen.listening_history);
+        }
         if chosen.playback() == current.playback() {
             ui.set_status(texts.text("spotify_settings_saved"), true);
             return;
@@ -955,7 +968,13 @@ impl Shell {
 
     /// The Settings window saved the Spotify section silently.
     pub(crate) fn spotify_settings_window_closed(&mut self, before: SpotifySettings) {
-        if self.application.saved_spotify_settings().playback() != before.playback() {
+        let after = self.application.saved_spotify_settings();
+        if before.listening_history != after.listening_history
+            && let Some(service) = &self.spotify.service
+        {
+            service.set_listening_history(after.listening_history);
+        }
+        if after.playback() != before.playback() {
             let _ = self.spotify_apply_playback_settings();
         }
     }

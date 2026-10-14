@@ -16,8 +16,8 @@ use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSBackingStoreType, NSScrollView, NSTextField, NSView, NSWindow,
-    NSWindowDelegate, NSWindowStyleMask,
+    NSAlert, NSAlertSecondButtonReturn, NSApplication, NSBackingStoreType, NSScrollView,
+    NSTextField, NSView, NSWindow, NSWindowDelegate, NSWindowStyleMask,
 };
 use objc2_foundation::{NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
 
@@ -288,6 +288,34 @@ define_class!(
     }
 );
 
+/// No is the default choice; an explicit Yes is required for opt-in.
+pub(crate) fn confirm_history(
+    mtm: MainThreadMarker,
+    message: &str,
+    yes: &str,
+    no: &str,
+    cancel: &str,
+) -> bool {
+    let app = NSApplication::sharedApplication(mtm);
+    let window = app.keyWindow();
+    let previous = window.as_ref().and_then(|window| window.firstResponder());
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(message));
+    alert.addButtonWithTitle(&NSString::from_str(no));
+    alert
+        .addButtonWithTitle(&NSString::from_str(yes))
+        .setKeyEquivalent(&NSString::from_str(""));
+    alert
+        .addButtonWithTitle(&NSString::from_str(cancel))
+        .setKeyEquivalent(&NSString::from_str("\u{1b}"));
+    let answer = alert.runModal();
+    if let (Some(window), Some(previous)) = (window, previous) {
+        window.makeKeyAndOrderFront(None);
+        window.makeFirstResponder(Some(&previous));
+    }
+    answer == NSAlertSecondButtonReturn
+}
+
 /// Windows `spotify_settings_win32::show`: the chosen settings, `None`
 /// when cancelled; focus returns where it was.
 #[allow(clippy::too_many_lines)] // The dialog's controls in their Tab order.
@@ -296,7 +324,7 @@ pub fn run_settings(
     texts: &SpotifySettingsTexts,
     current: SpotifySettings,
 ) -> Option<SpotifySettings> {
-    let (width, height) = (460.0, 250.0);
+    let (width, height) = (460.0, 286.0);
     let app = NSApplication::sharedApplication(mtm);
     let previous_window = app.keyWindow();
     let previous_focus = previous_window
@@ -383,6 +411,13 @@ pub fn run_settings(
             .position(|order| *order == current.library_order)
             .unwrap_or(0),
     );
+    let history = CheckBox::new(mtm, &texts.listening_history, target, sel!(changed:));
+    history.set_checked(current.listening_history);
+    history.setFrame(NSRect::new(
+        NSPoint::new(MARGIN, y),
+        NSSize::new(width - 2.0 * MARGIN, 28.0),
+    ));
+    content.addSubview(&history);
     let ok = Button::new(mtm, &texts.ok, target, sel!(accept:));
     ok.setFrame(NSRect::new(
         NSPoint::new(width - MARGIN - 2.0 * 110.0 - 8.0, MARGIN),
@@ -403,6 +438,7 @@ pub fn run_settings(
         &normalisation,
         &autoplay,
         &order,
+        &history,
         &ok,
         &cancel,
     ]);
@@ -412,7 +448,25 @@ pub fn run_settings(
     window.center();
     window.makeKeyAndOrderFront(None);
     window.makeFirstResponder(Some(&quality));
-    app.runModalForWindow(&window);
+    loop {
+        app.runModalForWindow(&window);
+        if !this.ivars().accepted.get()
+            || current.listening_history
+            || !history.checked()
+            || confirm_history(
+                mtm,
+                &texts.experimental_warning,
+                &texts.yes,
+                &texts.no,
+                &texts.cancel,
+            )
+        {
+            break;
+        }
+        history.set_checked(false);
+        this.ivars().accepted.set(false);
+        window.makeFirstResponder(Some(&history));
+    }
     window.setDelegate(None);
     window.orderOut(None);
     if let Some(previous) = previous_window {
@@ -430,6 +484,7 @@ pub fn run_settings(
         .and_then(|index| Quality::ALL.get(index).copied())
         .unwrap_or(current.quality);
     chosen.normalisation = normalisation.checked();
+    chosen.listening_history = history.checked();
     chosen.autoplay = autoplay
         .selected()
         .and_then(|index| Autoplay::ALL.get(index).copied())

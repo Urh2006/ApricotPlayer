@@ -26,7 +26,9 @@ use crate::{
     convert::Converter,
     core::{Error, Session, SpotifyId, SpotifyUri, util::SeqGenerator},
     decoder::{AudioDecoder, AudioPacket, AudioPacketPosition, SymphoniaDecoder},
-    listening::{self, LoadedAudioFile, PendingFlush, PlaybackStatistics, ReportCommand},
+    listening::{
+        self, HistoryConsent, LoadedAudioFile, PendingFlush, PlaybackStatistics, ReportCommand,
+    },
     local_file::{LocalFileLookup, create_local_file_lookup},
     metadata::audio::{AudioFileFormat, AudioFiles, AudioItem},
     mixer::VolumeGetter,
@@ -60,6 +62,8 @@ pub struct Player {
     commands: Option<mpsc::UnboundedSender<PlayerCommand>>,
     thread_handle: Option<thread::JoinHandle<()>>,
     flush_lock: tokio::sync::Mutex<()>,
+    report_consent: tokio::sync::watch::Sender<HistoryConsent>,
+    request_ids: Arc<Mutex<SeqGenerator<u64>>>,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
@@ -76,6 +80,7 @@ struct PlayerInternal {
     listening_reports: mpsc::Sender<ReportCommand>,
     listening: Option<PlaybackStatistics>,
     listening_generation: u64,
+    listening_consent: HistoryConsent,
     listening_error: Option<Error>,
     context_uri: Option<String>,
     private_session: bool,
@@ -100,7 +105,7 @@ struct PlayerInternal {
     auto_normalise_as_album: bool,
 
     player_id: usize,
-    play_request_id_generator: SeqGenerator<u64>,
+    play_request_id_generator: Arc<Mutex<SeqGenerator<u64>>>,
     last_progress_update: Instant,
 
     local_file_lookup: Arc<LocalFileLookup>,
@@ -114,6 +119,7 @@ enum PlayerCommand {
         play: bool,
         position_ms: u32,
         context_uri: Option<String>,
+        play_request_id: u64,
     },
     Preload {
         track_id: SpotifyUri,
@@ -125,6 +131,7 @@ enum PlayerCommand {
     Seek(u32),
     SetSession(Session),
     SetPrivateSession(bool),
+    SetListeningHistory(HistoryConsent),
     AddEventSender(mpsc::UnboundedSender<PlayerEvent>),
     SetSinkEventCallback(Option<SinkEventCallback>),
     EmitVolumeChangedEvent(u16),
@@ -455,6 +462,13 @@ impl Player {
         F: FnOnce() -> Box<dyn Sink> + Send + 'static,
     {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let request_ids = Arc::new(Mutex::new(SeqGenerator::new(0)));
+        let internal_request_ids = request_ids.clone();
+        let initial_consent = HistoryConsent {
+            enabled: config.listening_history,
+            epoch: 0,
+        };
+        let (report_consent, consent_rx) = tokio::sync::watch::channel(initial_consent);
 
         if config.normalisation {
             debug!("Normalisation Type: {:?}", config.normalisation_type);
@@ -496,9 +510,10 @@ impl Player {
                 create_local_file_lookup(config.local_file_directories.as_slice());
 
             let internal = PlayerInternal {
-                listening_reports: listening::reporter(session.clone()),
+                listening_reports: listening::reporter(session.clone(), consent_rx),
                 listening: None,
                 listening_generation: 0,
+                listening_consent: initial_consent,
                 listening_error: None,
                 context_uri: None,
                 private_session: false,
@@ -524,7 +539,7 @@ impl Player {
                 auto_normalise_as_album: false,
 
                 player_id,
-                play_request_id_generator: SeqGenerator::new(0),
+                play_request_id_generator: internal_request_ids,
                 last_progress_update: Instant::now(),
 
                 local_file_lookup: Arc::new(local_file_lookup),
@@ -542,6 +557,8 @@ impl Player {
             commands: Some(cmd_tx),
             thread_handle: Some(handle),
             flush_lock: tokio::sync::Mutex::new(()),
+            report_consent,
+            request_ids,
         })
     }
 
@@ -572,13 +589,22 @@ impl Player {
         start_playing: bool,
         position_ms: u32,
         context_uri: Option<String>,
-    ) {
+    ) -> u64 {
+        // Reserve the identity before queuing work. Connect can fence old
+        // events immediately, including reselecting the same occurrence.
+        let play_request_id = self
+            .request_ids
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .get();
         self.command(PlayerCommand::Load {
             track_id,
             play: start_playing,
             position_ms,
             context_uri,
+            play_request_id,
         });
+        play_request_id
     }
 
     pub fn preload(&self, track_id: SpotifyUri) {
@@ -604,6 +630,22 @@ impl Player {
         let (done, completed) = oneshot::channel();
         self.command(PlayerCommand::StopAndFlush(done));
         completed.await?.flush().await
+    }
+
+    /// Change explicit consent immediately, without counting earlier samples.
+    pub fn set_listening_history(&self, enabled: bool) {
+        let mut next = HistoryConsent::default();
+        if self.report_consent.send_if_modified(|current| {
+            if current.enabled == enabled {
+                return false;
+            }
+            current.enabled = enabled;
+            current.epoch = current.epoch.wrapping_add(1);
+            next = *current;
+            true
+        }) {
+            self.command(PlayerCommand::SetListeningHistory(next));
+        }
     }
 
     /// Do not report audio played during a Spotify private session.
@@ -1657,6 +1699,7 @@ impl PlayerInternal {
             .map(|report| {
                 ReportCommand::Report(
                     self.listening_generation,
+                    self.listening_consent.epoch,
                     self.session.clone(),
                     Box::new(report),
                 )
@@ -1966,7 +2009,7 @@ impl PlayerInternal {
     ) {
         self.listening = loaded_track
             .audio_file
-            .filter(|_| !self.private_session)
+            .filter(|_| !self.private_session && self.config.listening_history)
             .map(|file| {
                 PlaybackStatistics::new(
                     loaded_track.audio_item.track_id.clone(),
@@ -2051,8 +2094,12 @@ impl PlayerInternal {
         position_ms: u32,
     ) -> PlayerResult {
         self.finish_listening(EndReason::EndPlay);
-        let play_request_id =
-            play_request_id_option.unwrap_or(self.play_request_id_generator.get());
+        let play_request_id = play_request_id_option.unwrap_or_else(|| {
+            self.play_request_id_generator
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .get()
+        });
 
         self.send_event(PlayerEvent::PlayRequestIdChanged { play_request_id });
 
@@ -2383,9 +2430,10 @@ impl PlayerInternal {
                 play,
                 position_ms,
                 context_uri,
+                play_request_id,
             } => {
                 self.context_uri = context_uri.filter(|uri| !uri.is_empty());
-                self.handle_command_load(track_id, None, play, position_ms)?;
+                self.handle_command_load(track_id, Some(play_request_id), play, position_ms)?;
             }
 
             PlayerCommand::Preload { track_id } => self.handle_command_preload(track_id),
@@ -2406,6 +2454,33 @@ impl PlayerInternal {
                     final_report,
                     previous_error: self.listening_error.take(),
                 });
+            }
+
+            PlayerCommand::SetListeningHistory(consent) => {
+                self.config.listening_history = consent.enabled;
+                self.listening_consent = consent;
+                self.listening = None;
+                if consent.enabled && !self.private_session {
+                    match &self.state {
+                        PlayerState::Playing {
+                            track_id,
+                            audio_file: Some(file),
+                            ..
+                        }
+                        | PlayerState::Paused {
+                            track_id,
+                            audio_file: Some(file),
+                            ..
+                        } => {
+                            self.listening = Some(PlaybackStatistics::new(
+                                track_id.clone(),
+                                *file,
+                                self.context_uri.clone(),
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
             }
 
             PlayerCommand::SetPrivateSession(private) => {
@@ -2620,6 +2695,7 @@ impl fmt::Debug for PlayerCommand {
             PlayerCommand::Seek(position) => f.debug_tuple("Seek").field(&position).finish(),
             PlayerCommand::SetSession(_) => f.debug_tuple("SetSession").finish(),
             PlayerCommand::SetPrivateSession(_) => f.debug_tuple("SetPrivateSession").finish(),
+            PlayerCommand::SetListeningHistory(_) => f.debug_tuple("SetListeningHistory").finish(),
             PlayerCommand::AddEventSender(_) => f.debug_tuple("AddEventSender").finish(),
             PlayerCommand::SetSinkEventCallback(_) => {
                 f.debug_tuple("SetSinkEventCallback").finish()
