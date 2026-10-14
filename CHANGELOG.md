@@ -1,3 +1,12 @@
+# v2.0.0-beta.13 - Spotify listening history
+
+## Added
+- Spotify playback sends listening-history records for the music you actually play.
+- Pauses, seeking and background preparation do not add listening time. Spotify private-session playback is excluded when that state is available.
+- Records are sent in the background, so submission failures do not interrupt playback.
+
+This is an experimental Spotify integration. Recommendations, On Repeat and listening statistics remain controlled by Spotify.
+
 # v2.0.0-beta.12 - Clearer Spotify menus and playback messages
 
 ## Fixed

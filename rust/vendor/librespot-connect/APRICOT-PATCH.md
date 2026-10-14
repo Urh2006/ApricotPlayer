@@ -37,3 +37,7 @@ and queue/history functions in `src/state/tracks.rs`:
 Upstream: `dev` has `Spirc::add_to_queue` and `clear_queue` and a `SetQueue`
 player event without `uid`; a pull request with the confirmed state and the
 revision check should replace this copy.
+
+Beta 13 additionally loads the originating context into Player, propagates this
+device's Spotify private-session flag and flushes final reports on shutdown.
+See ../LISTENING-PATCH.md for the pinned backport and test contract.

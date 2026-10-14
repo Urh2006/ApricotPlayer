@@ -248,19 +248,20 @@ impl Generation {
     }
 
     /// Blocks while the ring is full: the backpressure towards `LibreSpot`.
-    fn push(&self, mut bytes: &[u8]) {
+    fn push(&self, mut bytes: &[u8]) -> usize {
+        let total = bytes.len();
         while !bytes.is_empty() {
             let Ok(mut guard) = self.data.lock() else {
-                return;
+                return total - bytes.len();
             };
             while guard.0.len() >= RING_BYTES && !guard.1 {
                 let Ok(next) = self.cond.wait(guard) else {
-                    return;
+                    return total - bytes.len();
                 };
                 guard = next;
             }
             if guard.1 {
-                return;
+                return total - bytes.len();
             }
             let take = (RING_BYTES - guard.0.len()).min(bytes.len());
             guard.0.extend(&bytes[..take]);
@@ -268,6 +269,7 @@ impl Generation {
             bytes = &bytes[take..];
             self.cond.notify_all();
         }
+        total
     }
 
     fn close(&self) {
@@ -486,9 +488,17 @@ impl BridgeSink {
 
 impl Sink for BridgeSink {
     fn write(&mut self, packet: AudioPacket, converter: &mut Converter) -> SinkResult<()> {
+        self.write_counted(packet, converter).map(|_| ())
+    }
+
+    fn write_counted(
+        &mut self,
+        packet: AudioPacket,
+        converter: &mut Converter,
+    ) -> SinkResult<usize> {
         self.fence();
         let AudioPacket::Samples(samples) = packet else {
-            return Ok(());
+            return Ok(0);
         };
         let generation = self
             .shared
@@ -503,9 +513,9 @@ impl Sink for BridgeSink {
             }
             let pcm = converter.f64_to_s16(&samples);
             let bytes: Vec<u8> = pcm.iter().flat_map(|sample| sample.to_le_bytes()).collect();
-            generation.push(&bytes);
+            return Ok(generation.push(&bytes) / 2);
         }
-        Ok(())
+        Ok(0)
     }
 }
 
@@ -1153,6 +1163,48 @@ mod tests {
         let pending = shared.pending.lock().unwrap().take().unwrap();
         assert_eq!(pending.base_ms, 60_000);
         assert_eq!(pending.id, 2);
+    }
+
+    #[test]
+    fn listening_counts_only_pcm_accepted_by_the_bridge() {
+        let shared = shared();
+        let mut sink = SpotifyPlayback::sink(shared.clone(), Arc::new(Mutex::new(None)));
+        let mut converter = Converter::new(None);
+        assert_eq!(
+            sink.write_counted(AudioPacket::Samples(vec![0.0; 8]), &mut converter)
+                .unwrap(),
+            0
+        );
+        shared.open_generation(1, 0, None);
+        assert_eq!(
+            sink.write_counted(AudioPacket::Samples(vec![0.0; 8]), &mut converter)
+                .unwrap(),
+            8
+        );
+        shared.close_all();
+        assert_eq!(
+            sink.write_counted(AudioPacket::Samples(vec![0.0; 8]), &mut converter)
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn cancelled_ring_reports_only_the_partial_packet_it_accepted() {
+        let generation = Generation::new(7);
+        let waiting = generation.clone();
+        let writer = std::thread::spawn(move || waiting.push(&vec![0; RING_BYTES + 4]));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while generation.written.load(Ordering::SeqCst) < RING_BYTES as u64 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "writer did not fill the ring"
+            );
+            std::thread::yield_now();
+        }
+        generation.close();
+        assert_eq!(writer.join().unwrap(), RING_BYTES);
+        assert_eq!(generation.push(&[0; 4]), 0);
     }
 
     #[test]

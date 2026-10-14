@@ -1,6 +1,8 @@
 use crate::{
+    LoadContextOptions, LoadRequestOptions, PlayContext,
     context_resolver::{ContextAction, ContextResolver, ResolveContext},
     core::{
+        Error, Session, SpotifyUri,
         authentication::Credentials,
         dealer::{
             manager::{BoxedStream, BoxedStreamResult, Reply, RequestReply},
@@ -8,7 +10,6 @@ use crate::{
         },
         session::UserAttributes,
         spclient::TransferRequest,
-        Error, Session, SpotifyUri,
     },
     model::{LoadRequest, PlayingTrack, SpircPlayStatus},
     playback::{
@@ -30,15 +31,14 @@ use crate::{
         provider::IsProvider,
         {ConnectConfig, ConnectState},
     },
-    LoadContextOptions, LoadRequestOptions, PlayContext,
 };
 use futures_util::StreamExt;
 use librespot_protocol::context_page::ContextPage;
 use protobuf::MessageField;
 use std::{
     future::Future,
-    sync::atomic::{AtomicUsize, Ordering},
     sync::Arc,
+    sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
@@ -136,7 +136,7 @@ mod transport_regressions {
         config::PlayerConfig,
         convert::Converter,
         decoder::AudioPacket,
-        mixer::{softmixer::SoftMixer, MixerConfig},
+        mixer::{MixerConfig, softmixer::SoftMixer},
     };
     use crate::protocol::context_track::ContextTrack;
 
@@ -254,12 +254,13 @@ mod transport_regressions {
                 task.play_status,
                 SpircPlayStatus::LoadingPlay { position_ms: 0 }
             ));
-            assert!(task
-                .connect_state
-                .player()
-                .next_tracks
-                .iter()
-                .any(|track| track.uri == SECOND));
+            assert!(
+                task.connect_state
+                    .player()
+                    .next_tracks
+                    .iter()
+                    .any(|track| track.uri == SECOND)
+            );
             task.handle_next(None).unwrap();
             assert_eq!(task.connect_state.player().track.uri, SECOND);
         }
@@ -1099,12 +1100,20 @@ impl SpircTask {
         match cmd {
             SpircCommand::Shutdown => {
                 trace!("Received SpircCommand::Shutdown");
-                self.handle_pause();
-                self.handle_disconnect().await?;
+                if let Err(error) =
+                    tokio::time::timeout(Duration::from_secs(10), self.player.stop_and_flush())
+                        .await
+                        .unwrap_or_else(|_| {
+                            Err(Error::deadline_exceeded("Listening flush timed out"))
+                        })
+                {
+                    warn!("Unable to flush listening on shutdown: {error}");
+                }
                 self.shutdown = true;
                 if let Some(rx) = self.commands.as_mut() {
                     rx.close()
                 }
+                self.handle_disconnect().await?;
             }
             SpircCommand::Transfer(request) if !self.connect_state.is_active() => {
                 let device_id = self.session.device_id();
@@ -2298,7 +2307,12 @@ impl SpircTask {
 
         let current_uri = self.connect_state.current_track(|t| &t.uri);
         let id = SpotifyUri::from_uri(current_uri)?;
-        self.player.load(id, start_playing, position_ms);
+        self.player.load_with_context(
+            id,
+            start_playing,
+            position_ms,
+            Some(self.connect_state.context_uri().clone()),
+        );
 
         self.connect_state
             .update_position(position_ms, self.now_ms());
@@ -2337,6 +2351,9 @@ impl SpircTask {
 
     // ApricotPlayer patch: publishes the devices of a received cluster.
     fn publish_devices(&self, cluster: &Cluster) {
+        if let Some(device) = cluster.device.get(self.session.device_id()) {
+            self.player.set_private_session(device.is_private_session);
+        }
         let mut devices: Vec<_> = cluster.device.values().cloned().collect();
         devices.sort_by(|a, b| a.name.cmp(&b.name).then(a.device_id.cmp(&b.device_id)));
         self.devices_tx.send_replace(ConnectDevices {

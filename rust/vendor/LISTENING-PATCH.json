@@ -1,0 +1,15 @@
+{
+  "librespot_stable": "0.8.0",
+  "checked_on": "2026-10-14",
+  "patch_url": "https://github.com/librespot-org/librespot/pull/1759",
+  "patch_repository": "alexng353/librespot",
+  "patch_commit": "fbe04b96faf2616aeebcea2d37ca21754cc96cea",
+  "patch_base": "a1b66d3c8a14e55a9572a9e17467150dca618c9a",
+  "crates_io_checksums": {
+    "librespot-core": "168bbe1c416980ddd9a969ebd6b50fb6c924eb1a3ded194285fa8ec0e2b1c68b",
+    "librespot-playback": "88258620bf3e6808ea1fadd11639648d77c06280b9f5a4c9d14ea79f6f998af6",
+    "librespot-protocol": "3e01f0b2d39f83fa162eb91d4a16313bcf99e77daf258abe8f7b7bcb1160b084"
+  },
+  "reporting_schema_version": "1.2.96.518",
+  "reporting_schema_code": 129600518
+}

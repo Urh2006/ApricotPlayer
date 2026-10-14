@@ -142,6 +142,7 @@ pub enum SpotifyEvent {
 /// The locally active account: its session, Connect device and PCM source.
 pub struct ActiveSession {
     session: Session,
+    player: Option<Arc<librespot_playback::player::Player>>,
     playback: Arc<SpotifyPlayback>,
     shared: Arc<Shared>,
     session_id: u64,
@@ -1101,7 +1102,14 @@ impl SpotifyService {
     pub fn shutdown(&self) {
         self.cancel_login();
         let _ = self.begin_session_attempt();
-        replace_session(&self.session, None);
+        let previous = self.session.lock().ok().and_then(|mut slot| slot.take());
+        apricot_playback::pcm_source::set_pcm_source(None);
+        if let Some((_, active)) = previous {
+            // Exit only: keep the runtime alive until the final record drains.
+            // Normal account replacement never waits on the UI thread.
+            let done = close_session(active);
+            let _ = done.recv_timeout(Duration::from_secs(10));
+        }
     }
 }
 
@@ -1128,11 +1136,22 @@ fn replace_session(
     }
 }
 
-fn close_session(active: ActiveSession) {
+fn close_session(active: ActiveSession) -> Receiver<()> {
+    let (finished, done) = mpsc::channel();
     active.shared.close_all();
     active.playback.set_spirc(None);
-    active.session.shutdown();
-    drop(active);
+    let session = active.session.clone();
+    session.spawn(async move {
+        if let Some(player) = &active.player {
+            match tokio::time::timeout(Duration::from_secs(10), player.stop_and_flush()).await {
+                Ok(Ok(())) => {}
+                _ => log::warn!("Spotify final listening report was not confirmed before shutdown"),
+            }
+        }
+        active.session.shutdown();
+        let _ = finished.send(());
+    });
+    done
 }
 
 fn commit_session(
@@ -1260,7 +1279,7 @@ async fn open_session(
         initial_volume: u16::MAX,
         ..ConnectConfig::default()
     };
-    let (spirc, task) = Spirc::new(connect, session.clone(), credentials, player, mixer)
+    let (spirc, task) = Spirc::new(connect, session.clone(), credentials, player.clone(), mixer)
         .await
         .map_err(|error| {
             use librespot_core::error::ErrorKind;
@@ -1332,6 +1351,7 @@ async fn open_session(
         },
         ActiveSession {
             session,
+            player: Some(player),
             playback,
             shared,
             session_id,
@@ -1346,6 +1366,7 @@ mod live_tests {
         let (playback, shared) = super::SpotifyPlayback::new(320, std::sync::Arc::new(|| {}));
         super::ActiveSession {
             session: librespot_core::Session::new(librespot_core::SessionConfig::default(), None),
+            player: None,
             playback,
             shared,
             session_id: id,

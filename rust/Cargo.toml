@@ -24,7 +24,7 @@ members = [
 ]
 
 [workspace.package]
-version = "2.0.0-beta.12"
+version = "2.0.0-beta.13"
 edition = "2024"
 rust-version = "1.98"
 publish = false
@@ -103,3 +103,6 @@ strip = "symbols"
 # Narrow local patch, see vendor/librespot-connect/APRICOT-PATCH.md (SD-1).
 [patch.crates-io]
 librespot-connect = { path = "vendor/librespot-connect" }
+librespot-core = { path = "vendor/librespot-core" }
+librespot-playback = { path = "vendor/librespot-playback" }
+librespot-protocol = { path = "vendor/librespot-protocol" }
