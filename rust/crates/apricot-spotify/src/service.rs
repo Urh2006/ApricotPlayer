@@ -195,6 +195,7 @@ pub struct SpotifyService {
 /// What the UI asks to read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CatalogRequest {
+    PlaylistProfileState(String),
     MenuSection {
         origin: crate::main_menu::MenuOrigin,
         uri: String,
@@ -261,6 +262,10 @@ pub enum CatalogRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CatalogResult {
+    PlaylistProfileState {
+        uri: String,
+        published: Option<bool>,
+    },
     TrackUris(Vec<String>),
     SelectionProgress(usize),
     SavedStates(Vec<bool>),
@@ -682,6 +687,12 @@ impl SpotifyService {
                 let session = session.ok_or(SpotifyError::NoCredentials)?;
                 let api = api.as_ref();
                 Ok(match request {
+                    CatalogRequest::PlaylistProfileState(uri) => {
+                        let published =
+                            crate::library_edit::profile_publication_state(api, &session, &uri)
+                                .await?;
+                        CatalogResult::PlaylistProfileState { uri, published }
+                    }
                     CatalogRequest::MenuSection { origin, uri } => {
                         let sections = match origin {
                             crate::main_menu::MenuOrigin::Home => {
@@ -828,7 +839,8 @@ impl SpotifyService {
                     CatalogResult::Collection(collection) => {
                         fill_saved(&api_for_saved, session, &mut collection.page.items).await;
                     }
-                    CatalogResult::SelectionProgress(_)
+                    CatalogResult::PlaylistProfileState { .. }
+                    | CatalogResult::SelectionProgress(_)
                     | CatalogResult::TrackUris(_)
                     | CatalogResult::SavedStates(_)
                     | CatalogResult::Playlists(_)

@@ -72,6 +72,7 @@ pub enum ContextCommand {
     SpotifyToggleMenuPin,
     SpotifyCopyLink,
     SpotifyToggleSaved,
+    SpotifyToggleProfilePublication,
     SpotifyAddToPlaylist,
     SpotifyRemoveFromPlaylist,
     SpotifyMoveUp,
@@ -395,6 +396,8 @@ pub fn spotify_accounts_context_menu(
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SpotifyRowMenu {
+    pub playlist_profile: bool,
+    pub playlist_published: Option<bool>,
     /// A track or episode that can play.
     pub playable_item: bool,
     /// An album, playlist, artist, show, folder or Liked Songs.
@@ -479,6 +482,25 @@ pub fn spotify_browse_context_menu(
             },
             C::SpotifyToggleMenuPin,
         ));
+    }
+    if menu.playlist_profile {
+        if let Some(published) = menu.playlist_published {
+            entries.push(context.command(
+                if published {
+                    "spotify_remove_profile"
+                } else {
+                    "spotify_add_profile"
+                },
+                C::SpotifyToggleProfilePublication,
+            ));
+        } else {
+            entries.push(ContextMenuEntry::Disabled {
+                label: context
+                    .catalog
+                    .text("spotify_profile_state_unavailable")
+                    .to_owned(),
+            });
+        }
     }
     if menu.playable_item && menu.artist {
         if let Some(followed) = menu.artist_followed {

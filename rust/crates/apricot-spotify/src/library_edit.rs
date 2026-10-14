@@ -19,6 +19,9 @@ use crate::{
 /// One change the UI asks for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LibraryEdit {
+    ToggleProfilePublication {
+        uri: String,
+    },
     SetSaved {
         uris: Vec<String>,
         saved: bool,
@@ -72,6 +75,7 @@ pub enum LibraryEdit {
 /// What a change did, as Spotify confirms it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EditOutcome {
+    ProfilePublication { uri: String, published: bool },
     SavedBatch { uris: Vec<String>, saved: bool },
     Saved { uri: String, saved: bool },
     AddedToPlaylist { playlist: String, count: usize },
@@ -119,6 +123,10 @@ pub async fn apply(
     edit: LibraryEdit,
 ) -> Result<EditOutcome, ApiError> {
     match edit {
+        LibraryEdit::ToggleProfilePublication { uri } => {
+            let published = toggle_profile_publication(api, session, &uri).await?;
+            Ok(EditOutcome::ProfilePublication { uri, published })
+        }
         LibraryEdit::SetSaved { uris, saved } => {
             let operation = if saved {
                 "addToLibrary"
@@ -319,6 +327,13 @@ async fn toggle_visibility(api: &Api, session: &Session, uri: &str) -> Result<bo
         .spclient(session, reqwest::Method::GET, &path, None)
         .await?;
     let private = base.get("permissionLevel").and_then(Value::as_str) == Some("BLOCKED");
+    // The web player removes a profile listing before making a playlist private.
+    if !private {
+        let root = publication_rootlist(api, session).await?;
+        if profile_publication_from_rootlist(&root, uri)? == Some(true) {
+            toggle_profile_publication(api, session, uri).await?;
+        }
+    }
     base["permissionLevel"] = json!(if private { "VIEWER" } else { "BLOCKED" });
     api.spclient(session, reqwest::Method::POST, &path, Some(base))
         .await?;
@@ -389,6 +404,125 @@ fn rootlist_change(ops: &Value, base_revision: Option<&str>) -> Value {
         change["baseRevision"] = json!(revision);
     }
     change
+}
+
+fn profile_publication_from_rootlist(answer: &Value, uri: &str) -> Result<Option<bool>, ApiError> {
+    if answer
+        .pointer("/contents/truncated")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return Err(ApiError::Shape(
+            "profile publication rootlist is incomplete".into(),
+        ));
+    }
+    let items = answer
+        .pointer("/contents/items")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ApiError::Shape("profile publication rootlist items missing".into()))?;
+    let mut matching = items
+        .iter()
+        .filter(|item| item.get("uri").and_then(Value::as_str) == Some(uri));
+    let Some(item) = matching.next() else {
+        return Ok(None);
+    };
+    if matching.next().is_some() {
+        return Err(ApiError::Shape(
+            "ambiguous rootlist publication target".into(),
+        ));
+    }
+    Ok(item.pointer("/attributes/public").and_then(Value::as_bool))
+}
+
+async fn publication_rootlist(api: &Api, session: &Session) -> Result<Value, ApiError> {
+    api.spclient(
+        session,
+        reqwest::Method::GET,
+        &format!(
+            "/playlist/v2/user/{}/rootlist?decorate=revision&from=0&length=10000",
+            session.username()
+        ),
+        None,
+    )
+    .await
+}
+
+pub async fn profile_publication_state(
+    api: &Api,
+    session: &Session,
+    uri: &str,
+) -> Result<Option<bool>, ApiError> {
+    playlist_id(uri)?;
+    let published =
+        profile_publication_from_rootlist(&publication_rootlist(api, session).await?, uri)?;
+    if published == Some(false) && !playlist_is_public(api, session, uri).await? {
+        return Ok(None);
+    }
+    Ok(published)
+}
+
+async fn playlist_is_public(api: &Api, session: &Session, uri: &str) -> Result<bool, ApiError> {
+    let id = playlist_id(uri)?;
+    let base = api
+        .spclient(
+            session,
+            reqwest::Method::GET,
+            &format!("/playlist-permission/v1/playlist/{id}/permission/base"),
+            None,
+        )
+        .await?;
+    match base.get("permissionLevel").and_then(Value::as_str) {
+        Some("BLOCKED") => Ok(false),
+        Some("VIEWER" | "EDITOR" | "CONTRIBUTOR") => Ok(true),
+        _ => Err(ApiError::Shape(
+            "playlist access permission is unavailable".into(),
+        )),
+    }
+}
+
+fn publication_ops(uri: &str, published: bool) -> Value {
+    // Exact operation used by the web player's library.setPublishedState.
+    json!([{"kind":"UPDATE_ITEM_ATTRIBUTES", "updateItemAttributes": {
+        "newAttributes": {"values": {"public": published, "formatAttributes": [], "availableSignals": []}, "noValue": []},
+        "item": {"uri": uri}
+    }}])
+}
+
+async fn toggle_profile_publication(
+    api: &Api,
+    session: &Session,
+    uri: &str,
+) -> Result<bool, ApiError> {
+    playlist_id(uri)?;
+    let current = publication_rootlist(api, session).await?;
+    let now = profile_publication_from_rootlist(&current, uri)?.ok_or_else(|| {
+        ApiError::Shape(
+            "profile publication state unavailable; save the playlist to your library first".into(),
+        )
+    })?;
+    let revision = current
+        .get("revision")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::Shape("profile publication rootlist revision missing".into()))?;
+    if !now && !playlist_is_public(api, session, uri).await? {
+        return Err(ApiError::Shape(
+            "make the playlist public before adding it to your profile".into(),
+        ));
+    }
+    api.spclient(
+        session,
+        reqwest::Method::POST,
+        &format!("/playlist/v2/user/{}/rootlist/changes", session.username()),
+        Some(rootlist_change(&publication_ops(uri, !now), Some(revision))),
+    )
+    .await?;
+    let confirmed = profile_publication_state(api, session, uri).await?;
+    if confirmed != Some(!now) {
+        return Err(ApiError::Shape(
+            "Spotify did not confirm profile publication".into(),
+        ));
+    }
+    Ok(!now)
 }
 
 /// Playlists are in the library through the rootlist, not `addToLibrary`.
@@ -514,6 +648,57 @@ async fn rename_playlist(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn publication_state_preserves_unknown_and_targets_exact_uri() {
+        let mut root = json!({"revision":"r", "contents":{"truncated":false,"items":[
+            {"uri":"spotify:playlist:one","attributes":{"public":false}},
+            {"uri":"spotify:playlist:two","attributes":{"public":true}},
+            {"uri":"spotify:playlist:unknown","attributes":{}}
+        ]}});
+        assert_eq!(
+            profile_publication_from_rootlist(&root, "spotify:playlist:one"),
+            Ok(Some(false))
+        );
+        assert_eq!(
+            profile_publication_from_rootlist(&root, "spotify:playlist:two"),
+            Ok(Some(true))
+        );
+        assert_eq!(
+            profile_publication_from_rootlist(&root, "spotify:playlist:unknown"),
+            Ok(None)
+        );
+        assert_eq!(
+            profile_publication_from_rootlist(&root, "spotify:playlist:missing"),
+            Ok(None)
+        );
+        root["contents"]["items"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"uri":"spotify:playlist:one","attributes":{"public":true}}));
+        assert!(profile_publication_from_rootlist(&root, "spotify:playlist:one").is_err());
+        root["contents"]["truncated"] = json!(true);
+        assert!(profile_publication_from_rootlist(&root, "spotify:playlist:two").is_err());
+    }
+
+    #[test]
+    fn publication_operation_changes_only_the_target_rootlist_attribute() {
+        for published in [true, false] {
+            let ops = publication_ops("spotify:playlist:one", published);
+            assert_eq!(ops[0]["kind"], "UPDATE_ITEM_ATTRIBUTES");
+            assert_eq!(
+                ops[0]["updateItemAttributes"]["item"]["uri"],
+                "spotify:playlist:one"
+            );
+            assert_eq!(
+                ops[0]["updateItemAttributes"]["newAttributes"]["values"]["public"],
+                published
+            );
+            assert!(!ops.to_string().contains("permissionLevel"));
+            let body = rootlist_change(&ops, Some("revision"));
+            assert_eq!(body["baseRevision"], "revision");
+        }
+    }
 
     #[test]
     fn only_playlist_uris_have_a_playlist_id() {
