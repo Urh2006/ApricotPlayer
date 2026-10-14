@@ -19,6 +19,10 @@ use crate::{
 /// One change the UI asks for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LibraryEdit {
+    SetProfilePublication {
+        uri: String,
+        published: bool,
+    },
     ToggleProfilePublication {
         uri: String,
     },
@@ -123,6 +127,10 @@ pub async fn apply(
     edit: LibraryEdit,
 ) -> Result<EditOutcome, ApiError> {
     match edit {
+        LibraryEdit::SetProfilePublication { uri, published } => {
+            let published = set_profile_publication(api, session, &uri, published).await?;
+            Ok(EditOutcome::ProfilePublication { uri, published })
+        }
         LibraryEdit::ToggleProfilePublication { uri } => {
             let published = toggle_profile_publication(api, session, &uri).await?;
             Ok(EditOutcome::ProfilePublication { uri, published })
@@ -331,7 +339,7 @@ async fn toggle_visibility(api: &Api, session: &Session, uri: &str) -> Result<bo
     if !private {
         let root = publication_rootlist(api, session).await?;
         if profile_publication_from_rootlist(&root, uri)? == Some(true) {
-            toggle_profile_publication(api, session, uri).await?;
+            set_profile_publication(api, session, uri, false).await?;
         }
     }
     base["permissionLevel"] = json!(if private { "VIEWER" } else { "BLOCKED" });
@@ -493,6 +501,17 @@ async fn toggle_profile_publication(
     session: &Session,
     uri: &str,
 ) -> Result<bool, ApiError> {
+    let now = profile_publication_from_rootlist(&publication_rootlist(api, session).await?, uri)?
+        .ok_or_else(|| ApiError::Shape("profile publication state unavailable".into()))?;
+    set_profile_publication(api, session, uri, !now).await
+}
+
+async fn set_profile_publication(
+    api: &Api,
+    session: &Session,
+    uri: &str,
+    published: bool,
+) -> Result<bool, ApiError> {
     playlist_id(uri)?;
     let current = publication_rootlist(api, session).await?;
     let now = profile_publication_from_rootlist(&current, uri)?.ok_or_else(|| {
@@ -504,25 +523,31 @@ async fn toggle_profile_publication(
         .get("revision")
         .and_then(Value::as_str)
         .ok_or_else(|| ApiError::Shape("profile publication rootlist revision missing".into()))?;
-    if !now && !playlist_is_public(api, session, uri).await? {
+    if published && !playlist_is_public(api, session, uri).await? {
         return Err(ApiError::Shape(
             "make the playlist public before adding it to your profile".into(),
         ));
+    }
+    if now == published {
+        return Ok(published);
     }
     api.spclient(
         session,
         reqwest::Method::POST,
         &format!("/playlist/v2/user/{}/rootlist/changes", session.username()),
-        Some(rootlist_change(&publication_ops(uri, !now), Some(revision))),
+        Some(rootlist_change(
+            &publication_ops(uri, published),
+            Some(revision),
+        )),
     )
     .await?;
     let confirmed = profile_publication_state(api, session, uri).await?;
-    if confirmed != Some(!now) {
+    if confirmed != Some(published) {
         return Err(ApiError::Shape(
             "Spotify did not confirm profile publication".into(),
         ));
     }
-    Ok(!now)
+    Ok(published)
 }
 
 /// Playlists are in the library through the rootlist, not `addToLibrary`.
