@@ -2643,22 +2643,24 @@ impl Shell {
                 }
             }
         }
-        if self.spotify_service_ref().is_none() {
-            return false;
-        }
         let pinned_playlist = self
             .spotify_selected_pin(ui)
             .and_then(|pin| match &pin.target {
                 apricot_spotify::main_menu::MenuTarget::Playlist(uri) => Some(uri.clone()),
                 _ => None,
             });
-        let stamp = self.spotify.epochs.begin();
-        if let Some(uri) = pinned_playlist {
+        if let Some(uri) = &pinned_playlist {
             for item in &mut self.spotify.hub_pin_items {
-                if item.uri == uri {
+                if item.uri == *uri {
                     item.editable = false;
                 }
             }
+        }
+        if self.spotify_service_ref().is_none() {
+            return false;
+        }
+        let stamp = self.spotify.epochs.begin();
+        if let Some(uri) = pinned_playlist {
             self.spotify.browse.context_collection = Some((stamp, target, uri.clone(), uris));
             self.spotify_service_ref()
                 .unwrap()

@@ -1190,6 +1190,21 @@ mod spotify_lists {
     }
 
     #[test]
+    fn offline_pinned_playlist_does_not_reuse_stored_edit_permissions() {
+        use apricot_spotify::main_menu::{MenuPin, MenuTarget};
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell.spotify_browse_test_hub_pins(vec![MenuPin::new(
+            "Playlist",
+            MenuTarget::Playlist("spotify:playlist:p".into()),
+        )]);
+        shell.spotify.hub_pin_items[0].editable = true;
+        ui.selected = Some(0);
+        assert!(!shell.spotify_prepare_context_menu(&mut ui));
+        assert!(!shell.spotify.hub_pin_items[0].editable);
+    }
+
+    #[test]
     fn artist_target_uses_the_focused_player_or_selected_artist_not_a_background_row() {
         let mut shell = super::keyboard::shell();
         let mut ui = Ui::default();
