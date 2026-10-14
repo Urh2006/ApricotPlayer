@@ -1299,12 +1299,16 @@ unsafe fn render(window: HWND, focus: bool) {
             .items
             .iter()
             .map(|item| {
-                let mut label = item_label(
-                    &texts,
-                    item,
-                    frame.mixed,
-                    !matches!(frame.source, Source::LikedSongs),
-                );
+                let mut label = if matches!(frame.source, Source::MyProfile(_)) {
+                    item.name.clone()
+                } else {
+                    item_label(
+                        &texts,
+                        item,
+                        frame.mixed,
+                        !matches!(frame.source, Source::LikedSongs),
+                    )
+                };
                 if state
                     .spotify_browse
                     .hidden

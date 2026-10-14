@@ -260,15 +260,23 @@ fn native_spotify_profile_and_pins_keep_routes_and_scope() -> windows::core::Res
             "QA profile".into(),
         );
         let profile_state = super::state(window).unwrap();
-        let texts = super::super::spotify::catalog(profile_state);
-        for row in &top(profile_state).unwrap().items {
+        for (index, row) in top(profile_state).unwrap().items.iter().enumerate() {
             assert_eq!(
                 row.count, None,
                 "unloaded profile navigation has no known count"
             );
+            let mut buffer = [0u16; 256];
+            let length = SendMessageW(
+                profile_state.list,
+                windows::Win32::UI::WindowsAndMessaging::LB_GETTEXT,
+                Some(WPARAM(index)),
+                Some(LPARAM(buffer.as_mut_ptr() as isize)),
+            )
+            .0;
+            assert!(length >= 0 && (length as usize) < buffer.len());
             assert_eq!(
-                apricot_app::spotify::item_label(&texts, row, true, false),
-                format!("{}, {}", row.name, texts.text("spotify_kind_section"))
+                String::from_utf16_lossy(&buffer[..length as usize]),
+                row.name
             );
         }
         assert_eq!(
