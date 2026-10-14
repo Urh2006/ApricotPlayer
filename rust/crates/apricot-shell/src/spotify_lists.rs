@@ -220,6 +220,7 @@ enum Pending {
 pub(crate) struct BrowseState {
     frames: Vec<Frame>,
     context_read: Option<(SpotifyStamp, String, Vec<String>)>,
+    context_collection: Option<(SpotifyStamp, String, String, Vec<String>)>,
     saved_states: std::collections::HashMap<String, bool>,
     /// The last search, offered again by the search dialog.
     last_query: String,
@@ -634,6 +635,40 @@ impl Shell {
         result: Result<CatalogResult, SpotifyError>,
     ) {
         if !self.spotify.is_current_account(stamp) {
+            return;
+        }
+        if self
+            .spotify
+            .browse
+            .context_collection
+            .as_ref()
+            .is_some_and(|(wanted, _, _, _)| *wanted == stamp)
+        {
+            let (_, target, uri, uris) = self.spotify.browse.context_collection.take().unwrap();
+            if self.spotify_context_identity(ui) != Some(target.clone()) {
+                return;
+            }
+            if let Ok(CatalogResult::Collection(collection)) = &result
+                && collection.uri == uri
+            {
+                for item in &mut self.spotify.hub_pin_items {
+                    if item.uri == uri {
+                        item.editable = collection.can_edit_metadata;
+                        item.format.clone_from(&collection.format);
+                        if !collection.name.is_empty() {
+                            item.name.clone_from(&collection.name);
+                        }
+                    }
+                }
+            }
+            let next = self.spotify.epochs.begin();
+            self.spotify.browse.context_read = Some((next, target, uris.clone()));
+            if let Some(service) = self.spotify_service_ref() {
+                service.load_catalog(next, CatalogRequest::SavedStates(uris));
+            } else {
+                self.spotify.browse.context_read = None;
+                self.show_context_menu_for_active_view_ready(ui);
+            }
             return;
         }
         if self
@@ -2439,12 +2474,21 @@ impl Shell {
         item: &CatalogItem,
     ) -> Option<apricot_spotify::main_menu::MenuPin> {
         use apricot_spotify::main_menu::{MenuOrigin, MenuPin};
-        let origin = self.browse_top().and_then(|frame| match &frame.source {
-            Source::Home => Some(MenuOrigin::Home),
-            Source::Browse(None) => Some(MenuOrigin::BrowseAll),
-            Source::Browse(Some(uri)) => Some(MenuOrigin::BrowsePage(uri.clone())),
-            _ => None,
-        });
+        let origin = self
+            .spotify
+            .browse
+            .frames
+            .iter()
+            .rev()
+            .find_map(|frame| match &frame.source {
+                Source::Home => Some(Some(MenuOrigin::Home)),
+                Source::Browse(None) => Some(Some(MenuOrigin::BrowseAll)),
+                Source::Browse(Some(uri)) => Some(Some(MenuOrigin::BrowsePage(uri.clone()))),
+                Source::MenuSection { origin, .. } => Some(Some(origin.clone())),
+                Source::Section(_) => None,
+                _ => Some(None),
+            })
+            .flatten();
         MenuPin::from_item(item, origin)
     }
 
@@ -2537,11 +2581,12 @@ impl Shell {
             })
             .map(|uri| {
                 format!(
-                    "{:?}:{}:{:?}:{}:{uri}",
+                    "{:?}:{}:{:?}:{}:{}:{uri}",
                     self.view,
                     self.spotify.browse.frames.len(),
                     ui.selected_row(),
-                    ui.focused_player_control().unwrap_or("")
+                    ui.focused_player_control().unwrap_or(""),
+                    self.application.player_session().generation()
                 )
             })
     }
@@ -2601,7 +2646,26 @@ impl Shell {
         if self.spotify_service_ref().is_none() {
             return false;
         }
+        let pinned_playlist = self
+            .spotify_selected_pin(ui)
+            .and_then(|pin| match &pin.target {
+                apricot_spotify::main_menu::MenuTarget::Playlist(uri) => Some(uri.clone()),
+                _ => None,
+            });
         let stamp = self.spotify.epochs.begin();
+        if let Some(uri) = pinned_playlist {
+            for item in &mut self.spotify.hub_pin_items {
+                if item.uri == uri {
+                    item.editable = false;
+                }
+            }
+            self.spotify.browse.context_collection = Some((stamp, target, uri.clone(), uris));
+            self.spotify_service_ref()
+                .unwrap()
+                .load_catalog(stamp, CatalogRequest::Playlist { uri, offset: 0 });
+            ui.set_status(&self.text("spotify_loading"), false);
+            return true;
+        }
         self.spotify.browse.context_read = Some((stamp, target, uris.clone()));
         self.spotify_service_ref()
             .unwrap()
