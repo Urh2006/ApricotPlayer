@@ -1877,7 +1877,9 @@ mod missing_actions {
             .position(|i| i.id == "diagnostic_report")
             .unwrap();
         shell.activate_main_menu_row(&mut ui, index);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        // The worker runs `yt-dlp --version`; its first start on a CI runner
+        // can take several seconds.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while ui.clipboard.is_none() && std::time::Instant::now() < deadline {
             shell.poll_diagnostic_report(&mut ui);
             std::thread::sleep(std::time::Duration::from_millis(5));
