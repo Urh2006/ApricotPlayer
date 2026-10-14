@@ -1190,6 +1190,68 @@ mod spotify_lists {
     }
 
     #[test]
+    fn profile_publication_read_uses_only_the_current_playlist_and_known_state() {
+        use apricot_spotify::{
+            CatalogResult,
+            main_menu::{MenuPin, MenuTarget},
+        };
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell.spotify_browse_test_hub_pins(vec![
+            MenuPin::new(
+                "First",
+                MenuTarget::Playlist("spotify:playlist:first".into()),
+            ),
+            MenuPin::new(
+                "Second",
+                MenuTarget::Playlist("spotify:playlist:second".into()),
+            ),
+        ]);
+        ui.selected = Some(0);
+        let stamp = shell.spotify_browse_test_profile_read(&ui);
+        ui.selected = Some(1);
+        shell.spotify_browse_loaded(
+            &mut ui,
+            stamp,
+            Ok(CatalogResult::PlaylistProfileState {
+                uri: "spotify:playlist:first".into(),
+                published: Some(true),
+            }),
+        );
+        let catalog = shell.catalog();
+        let context = ContextMenuContext {
+            catalog: &catalog,
+            settings: shell.application.settings(),
+            user_playlist_titles: &[],
+            queued_download_count: 0,
+        };
+        assert!(
+            !commands(&shell.spotify_browse_context_entries(&ui, &context).unwrap())
+                .contains(&ContextCommand::SpotifyToggleProfilePublication)
+        );
+        let stamp = shell.spotify_browse_test_profile_read(&ui);
+        shell.spotify_browse_loaded(
+            &mut ui,
+            stamp,
+            Ok(CatalogResult::PlaylistProfileState {
+                uri: "spotify:playlist:second".into(),
+                published: Some(false),
+            }),
+        );
+        let catalog = shell.catalog();
+        let context = ContextMenuContext {
+            catalog: &catalog,
+            settings: shell.application.settings(),
+            user_playlist_titles: &[],
+            queued_download_count: 0,
+        };
+        assert!(
+            commands(&shell.spotify_browse_context_entries(&ui, &context).unwrap())
+                .contains(&ContextCommand::SpotifyToggleProfilePublication)
+        );
+    }
+
+    #[test]
     fn offline_pinned_playlist_does_not_reuse_stored_edit_permissions() {
         use apricot_spotify::main_menu::{MenuPin, MenuTarget};
         let mut shell = super::keyboard::shell();
