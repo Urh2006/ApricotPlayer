@@ -1,39 +1,37 @@
-# v2.0.0-beta.10 - Large Spotify selections and bulk Liked Songs
+# v2.0.0-beta.11 - Your Spotify profile and quicker access
+
+## Added
+- My profile in the Spotify menu, with Following, Followers, Find friends and My public playlists.
+- Add artists, playlists, categories and subcategories directly to the Spotify main menu, or remove them again without changing their usual locations.
+- Follow and unfollow artists from search results, song menus and the playing song, using the current Spotify state.
+- Add or remove a public playlist from your Spotify profile, separately from its Public/Private setting and ApricotPlayer menu shortcuts.
+
+## Improved
+- Main-menu playlists and categories have the options that fit them, including direct playlist playback.
+
+# v2.0.0-beta.10 - Large Spotify selections and Liked Songs
 
 ## Fixed
-- Ctrl+A selects an entire Spotify list immediately without loading every remaining row into the native list. URI pages are read on the worker only when adding or saving the selection, with progress and support for excluding individual songs.
-- Materialized selections use a hash index instead of quadratic duplicate checks. Playlist additions and Liked Songs edits send bounded batches of 100 URIs.
-- The Liked Songs context command uses the whole marked selection: remove when every selected song is known liked, otherwise save. Mixed selections can save only new songs or all selected songs; bulk removal asks for confirmation.
-- Windows and macOS share selection and Spotify worker behavior. Leaving the list ignores unfinished selection reads.
+- Select all in a large Spotify collection without freezing the list. Individual songs can still be excluded.
+- Add large selections to playlists while continuing to use the interface.
+- Save to Liked Songs now applies to the whole selection. Fully liked selections offer Remove; mixed selections offer Save with a choice to skip songs already liked.
 
-# v2.0.0-beta.9 - Preserve audio settings and build macOS packages in CI
-
-## Fixed
-- Windows and macOS: a failed or interrupted startup audio-device probe no longer treats the saved device as missing and resets it to auto.
-- macOS package qualification now locates the native YouTube helper and exercises the packaged libmpv instead of using Windows-only paths.
-
-## Packaging
-- GitHub Actions can build the public beta identity, DMG and updater ZIP from the same clean commit as Windows. The workflow checks formatting, locked tests and Clippy, real libmpv, archive signatures, bundled tools, DMG integrity and build provenance.
-- Public macOS builds refuse a dirty tracked tree and use the committed dependency lockfile.
-
-# v2.0.0-beta.8 - Functional parity and reliable playback state
+# v2.0.0-beta.9 - Keep your chosen audio output
 
 ## Fixed
-- Start the first YouTube item after Spotify background playback by clearing the old PCM pause state in mpv.
-- Stop the owned Spotify decoder/Connect source when its player is actually closed.
-- macOS: use Spotify's timed lyrics and episode transcripts before generic providers.
-- Shuffle stays enabled or disabled across new tracks and Escape until the player area is closed. Spotify loads carry that state and preserve repeat in an open session.
-- macOS: keep accessible player controls beside the previous screen during background playback; register the background play/pause shortcut.
-- macOS: use Command+Shift+Space consistently, migrate the old background shortcut default, retain disabled bindings and resolve custom character hotkeys through the active keyboard layout.
-- macOS: implement Resume last session, Copy link, diagnostics and result-column shortcuts, YouTube metadata hydration and next-stream prefetch.
-- macOS: preserve native editing/submission in Spotify search fields and target the playing item from player-focused actions and context menus.
-- macOS: make Windows-data import validated and transactional, with rollback and protection against old controllers overwriting imported data.
-- macOS: reject a yt-dlp update that cannot run and restore the previous application when a signed update fails its startup check.
-- Prevent overlapping component checks and redact macOS personal folders in diagnostics.
+- A failed audio-device check no longer changes your chosen output to automatic.
+- Improved checks for Mac application packages before release.
 
-## Review
-- Detailed findings and verification limits are recorded in `docs/AUDIT_BETA8.md`. LibreSpot is embedded in ApricotPlayer and must be updated with the application, not as a separately downloaded component.
-- The account-dependent Liked Songs reopening report and Spotify Smart Shuffle are not claimed fixed by offline transport tests.
+# v2.0.0-beta.8 - More reliable playback and Mac controls
+
+## Fixed
+- Switching from Spotify to YouTube starts playback on the first attempt.
+- Shuffle stays on or off until you close the player, including when you open another song or return with Escape.
+- Improved Mac background-player controls and keyboard shortcuts.
+- Player-focused commands act on the playing song instead of a list behind it.
+- Added missing Mac options for lyrics, transcripts, resuming playback, copying links and navigating result details.
+- Improved Mac data import and updates, with the previous version restored if an update cannot start.
+- Disabled shortcuts stay disabled after restarting.
 
 # v2.0.0-beta.7 - macOS fixes
 
