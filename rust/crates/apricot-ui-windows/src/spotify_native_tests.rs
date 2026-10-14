@@ -333,14 +333,50 @@ fn native_spotify_profile_and_pins_keep_routes_and_scope() -> windows::core::Res
         assert!(
             matches!(&top(super::state(window).unwrap()).unwrap().source, Source::ProfilePlaylists(uri) if uri == profile_uri)
         );
+        let uris = [
+            "spotify:track:0000000000000000000001",
+            "spotify:track:0000000000000000000002",
+            "spotify:track:0000000000000000000001",
+        ];
+        let rows = uris
+            .iter()
+            .enumerate()
+            .map(|(index, uri)| {
+                let mut row = item(ItemKind::Track, uri);
+                row.uid = Some(format!("occurrence-{index}"));
+                row
+            })
+            .collect();
         open_root(
             window,
-            Source::Section(vec![item(
-                ItemKind::Track,
-                "spotify:track:0000000000000000000001",
-            )]),
-            "QA tracks".into(),
+            Source::Section(rows),
+            "QA occurrence selection".into(),
         );
+        super::state_mut(window)
+            .unwrap()
+            .spotify_browse
+            .frames
+            .last_mut()
+            .unwrap()
+            .source = Source::Playlist("spotify:playlist:0000000000000000000001".into());
+        for (index, uri) in uris.iter().enumerate() {
+            fixture.choose(index);
+            let state = super::state_mut(window).unwrap();
+            state.spotify_browse.frames.last_mut().unwrap().selected = 99;
+            let media = selected_media(state).unwrap();
+            assert_eq!(
+                media.id.0, *uri,
+                "native selected row must be the play target"
+            );
+            assert_eq!(
+                media.metadata.get("spotify_uid"),
+                Some(&serde_json::json!(format!("occurrence-{index}")))
+            );
+            remember_selection(window);
+            assert_eq!(top(super::state(window).unwrap()).unwrap().selected, index);
+        }
+        fixture.choose(0);
+        remember_selection(window);
         assert!(
             row_menu(super::state(window).unwrap())
                 .unwrap()

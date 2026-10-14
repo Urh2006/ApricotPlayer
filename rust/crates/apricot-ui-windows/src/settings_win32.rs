@@ -138,6 +138,7 @@ enum ControlBinding {
     Command(SettingsCommand),
     SpotifyChoice(apricot_app::SpotifyField),
     SpotifyNormalisation,
+    SpotifyListeningHistory,
 }
 
 #[derive(Clone, Debug)]
@@ -842,6 +843,10 @@ unsafe fn create_bound_control(
         SettingsControl::SpotifyNormalisation { label, checked } => {
             let control = checkbox(parent, instance, &label, id, checked)?;
             (None, control, ControlBinding::SpotifyNormalisation)
+        }
+        SettingsControl::SpotifyListeningHistory { label, checked } => {
+            let control = checkbox(parent, instance, &label, id, checked)?;
+            (None, control, ControlBinding::SpotifyListeningHistory)
         }
     };
     if let Some(label) = label {
@@ -1889,9 +1894,25 @@ unsafe fn save_settings(window: HWND) {
 }
 
 unsafe fn save_and_register_startup(window: HWND, state: &mut SettingsWindowState) -> bool {
+    let history_before = (&*state.application)
+        .saved_spotify_settings()
+        .listening_history;
     if let Err(error) = (&mut *state.application).save_settings() {
         show_error(window, &error.to_string());
         return false;
+    }
+    if (&*state.application)
+        .saved_spotify_settings()
+        .listening_history
+        != history_before
+        && !state.owner.0.is_null()
+    {
+        let _ = PostMessageW(
+            Some(state.owner),
+            crate::win32::WM_APPLY_SPOTIFY_HISTORY,
+            WPARAM(0),
+            LPARAM(0),
+        );
     }
     let executable = match std::env::current_exe() {
         Ok(executable) => executable,
@@ -2082,7 +2103,31 @@ unsafe fn sync_bound_control(
             app.set_spotify_normalisation(checkbox_is_checked(bound.control));
             Ok(())
         }
+        ControlBinding::SpotifyListeningHistory => {
+            sync_listening_history_control(state, bound);
+            Ok(())
+        }
     }
+}
+
+unsafe fn sync_listening_history_control(state: &mut SettingsWindowState, bound: &BoundControl) {
+    let app = &mut *state.application;
+    let checked = checkbox_is_checked(bound.control);
+    if checked && !app.spotify_settings().listening_history {
+        let texts = apricot_app::embedded_catalog(&app.settings().language);
+        let owner = windows::Win32::UI::WindowsAndMessaging::GetParent(bound.control)
+            .unwrap_or(state.owner);
+        if !crate::spotify_settings_win32::confirm_listening_history(
+            owner,
+            texts.text("spotify_settings"),
+            texts.text("spotify_listening_history_warning"),
+        ) {
+            SendMessageW(bound.control, BM_SETCHECK, Some(WPARAM(0)), None);
+            let _ = SetFocus(Some(bound.control));
+            return;
+        }
+    }
+    app.set_spotify_listening_history(checked);
 }
 
 unsafe extern "system" fn section_list_proc(
