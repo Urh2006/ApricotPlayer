@@ -273,11 +273,9 @@ fn native_spotify_profile_and_pins_keep_routes_and_scope() -> windows::core::Res
                 Some(LPARAM(buffer.as_mut_ptr() as isize)),
             )
             .0;
-            assert!(length >= 0 && (length as usize) < buffer.len());
-            assert_eq!(
-                String::from_utf16_lossy(&buffer[..length as usize]),
-                row.name
-            );
+            let length = usize::try_from(length).expect("native list label read succeeded");
+            assert!(length < buffer.len());
+            assert_eq!(String::from_utf16_lossy(&buffer[..length]), row.name);
         }
         assert_eq!(
             SendMessageW(super::state(window).unwrap().list, LB_GETCOUNT, None, None).0,
