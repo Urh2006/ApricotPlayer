@@ -59,7 +59,7 @@ pub(super) struct SpotifyState {
     login_url: Option<String>,
     login_dialog: Option<HWND>,
     login_account: Option<String>,
-    hub_entries: Vec<SpotifyHubEntry>,
+    pub(super) hub_entries: Vec<SpotifyHubEntry>,
     hub_selected: Option<SpotifyHubEntry>,
     rows: Vec<SpotifyAccountRow>,
     /// The switch the user asked for; only its result is announced.
@@ -93,6 +93,12 @@ pub(super) const fn is_view(view: MainView) -> bool {
 }
 
 impl SpotifyState {
+    #[cfg(test)]
+    pub(super) fn fixture_runtime(&mut self, app_data: &std::path::Path) {
+        let (service, receiver) = SpotifyService::new(app_data, Arc::new(|| {}));
+        self.service = Some(Arc::new(service));
+        self.receiver = Some(receiver);
+    }
     /// The session runtime once it started.
     pub(super) const fn service_ref(&self) -> Option<&Arc<SpotifyService>> {
         self.service.as_ref()
@@ -187,18 +193,24 @@ pub(super) unsafe fn prepare_screen(window: HWND, main_view: MainView, route: Ro
 pub(super) unsafe fn show_hub(window: HWND) {
     remember_menu_item(window, "spotify");
     let accounts = accounts(window);
+    let pins = service(window)
+        .and_then(|service| service.menu_pins().ok())
+        .unwrap_or_default();
     prepare_screen(window, MainView::SpotifyHub, Route::SpotifyHub);
     let Some(state) = state_mut(window) else {
         return;
     };
     let catalog = catalog(state);
+    state.spotify_browse.pins = pins;
+    state.spotify_browse.cancel_context();
     let settings = state.application.settings();
     let model = SpotifyHubModel::build(
         &catalog,
         &accounts,
         settings.show_shortcuts_in_labels,
         &settings.keyboard_shortcuts,
-    );
+    )
+    .with_pins(&state.spotify_browse.pins);
     super::set_open_button_label(state, "open");
     SendMessageW(state.list, LB_RESETCONTENT, None, None);
     crate::accessibility_win32::set_control_name(state.list, &model.accessible_name);
@@ -251,6 +263,17 @@ unsafe fn refresh_accounts(window: HWND, select: Option<&str>) {
 
 unsafe fn selected_index(state: &WindowState) -> Option<usize> {
     usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok()
+}
+
+pub(super) fn selected_pin(state: &WindowState) -> Option<apricot_spotify::main_menu::MenuPin> {
+    if state.view != MainView::SpotifyHub {
+        return None;
+    }
+    let index = unsafe { selected_index(state) }?;
+    let SpotifyHubEntry::Pinned(index) = *state.spotify.hub_entries.get(index)? else {
+        return None;
+    };
+    state.spotify_browse.pins.get(index).cloned()
 }
 
 /// Enter and Open.
@@ -313,6 +336,29 @@ pub(super) unsafe fn activate(window: HWND) {
             Some(entry @ SpotifyHubEntry::Settings) => {
                 remember_hub_entry(window, entry);
                 show_settings(window);
+            }
+            Some(entry @ SpotifyHubEntry::MyProfile) => {
+                remember_hub_entry(window, entry);
+                if let Some(uri) = service(window).and_then(|service| service.my_profile_uri()) {
+                    show_list(
+                        window,
+                        super::spotify_browse::Source::MyProfile(uri),
+                        "spotify_my_profile",
+                    );
+                } else {
+                    announce(window, catalog(state).text("spotify_disconnected"));
+                }
+            }
+            Some(entry @ SpotifyHubEntry::Pinned(index)) => {
+                let pin = state.spotify_browse.pins.get(index).cloned();
+                remember_hub_entry(window, entry);
+                if let Some(pin) = pin {
+                    super::spotify_browse::open_root(
+                        window,
+                        super::spotify_browse::pin_source(&pin),
+                        pin.label,
+                    );
+                }
             }
             Some(entry @ SpotifyHubEntry::Browse) => {
                 remember_hub_entry(window, entry);

@@ -8,6 +8,7 @@
 
 use apricot_app::spotify::{item_label, kind_word};
 use apricot_core::{Route, SpotifyStamp};
+use apricot_spotify::main_menu::{MenuOrigin, MenuPin, MenuTarget};
 use apricot_spotify::{
     CatalogItem, CatalogRequest, CatalogResult, ItemKind, LibraryFilter, SearchKind, SpotifyError,
     SpotifyTrack,
@@ -16,7 +17,7 @@ use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
         UI::{
-            Input::KeyboardAndMouse::SetFocus,
+            Input::KeyboardAndMouse::{GetFocus, SetFocus},
             WindowsAndMessaging::{
                 CB_ADDSTRING, CB_GETCURSEL, CB_RESETCONTENT, CB_SETCURSEL, CBS_DROPDOWNLIST,
                 ES_AUTOHSCROLL, GetWindowTextLengthW, GetWindowTextW, KillTimer, LB_GETCURSEL,
@@ -202,6 +203,7 @@ pub(super) unsafe fn submit_search(window: HWND) {
         .get(kind_index)
         .copied()
         .unwrap_or(SearchKind::All);
+    state.spotify_browse.cancel_context();
     state.spotify_browse.marks.clear();
     if matches!(
         state.spotify_browse.pending,
@@ -215,8 +217,14 @@ pub(super) unsafe fn submit_search(window: HWND) {
     let searching = texts.text("spotify_searching").replace("{query}", &query);
     set_status(state, &searching, true);
     // A search from a nested list starts over at the search screen.
-    state.spotify_browse.frames.truncate(1);
-    let Some(frame) = state.spotify_browse.frames.first_mut() else {
+    let search = state
+        .spotify_browse
+        .frames
+        .iter()
+        .rposition(|frame| frame.search_screen)
+        .unwrap_or(0);
+    state.spotify_browse.frames.truncate(search + 1);
+    let Some(frame) = state.spotify_browse.frames.last_mut() else {
         return;
     };
     frame.source = Source::Search { query, kind };
@@ -337,6 +345,15 @@ pub(super) fn primary_control(state: &WindowState) -> HWND {
 /// Where a list comes from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Source {
+    MyProfile(String),
+    ProfilePeople {
+        uri: String,
+        followers: bool,
+    },
+    MenuSection {
+        origin: MenuOrigin,
+        uri: String,
+    },
     Search {
         query: String,
         kind: SearchKind,
@@ -375,6 +392,14 @@ pub(super) enum Source {
 impl Source {
     fn request(&self, offset: u64) -> Option<CatalogRequest> {
         Some(match self {
+            Self::ProfilePeople { uri, followers } => CatalogRequest::ProfilePeople {
+                uri: uri.clone(),
+                followers: *followers,
+            },
+            Self::MenuSection { origin, uri } => CatalogRequest::MenuSection {
+                origin: origin.clone(),
+                uri: uri.clone(),
+            },
             Self::Home => CatalogRequest::Home,
             Self::DailyMixes => CatalogRequest::DailyMixes,
             Self::RecentlyPlayed => CatalogRequest::RecentlyPlayed,
@@ -390,7 +415,7 @@ impl Source {
                 uri: uri.clone(),
                 offset,
             },
-            Self::Section(_) => return None,
+            Self::MyProfile(_) | Self::Section(_) => return None,
             Self::Search { query, kind } => CatalogRequest::Search {
                 query: query.clone(),
                 kind: *kind,
@@ -512,6 +537,11 @@ enum Pending {
 
 #[derive(Default)]
 pub(super) struct BrowseState {
+    pub(super) pins: Vec<MenuPin>,
+    pin_items: std::collections::HashMap<String, CatalogItem>,
+    artist_states: std::collections::HashMap<String, bool>,
+    context_read: Option<ContextRead>,
+    context_ready: Option<ContextIdentity>,
     frames: Vec<Frame>,
     /// The last search, offered again by the search dialog.
     pub(super) last_query: String,
@@ -528,7 +558,30 @@ pub(super) struct BrowseState {
     personalised_contexts: std::collections::HashSet<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ContextIdentity {
+    view: MainView,
+    uri: String,
+    player: bool,
+    generation: u64,
+    focus: isize,
+    depth: usize,
+    row: isize,
+}
+
+struct ContextRead {
+    stamp: SpotifyStamp,
+    identity: ContextIdentity,
+    location: LPARAM,
+    uris: Vec<String>,
+    playlist: bool,
+}
+
 impl BrowseState {
+    pub(super) fn cancel_context(&mut self) {
+        self.context_read = None;
+        self.context_ready = None;
+    }
     pub(super) fn clear_account(&mut self) {
         *self = Self::default();
     }
@@ -576,6 +629,7 @@ pub(super) unsafe fn open(window: HWND, source: Source, title: String) {
     let Some(state) = state_mut(window) else {
         return;
     };
+    state.spotify_browse.cancel_context();
     state.spotify_browse.marks.clear();
     if matches!(
         state.spotify_browse.pending,
@@ -613,10 +667,17 @@ pub(super) unsafe fn open(window: HWND, source: Source, title: String) {
         search_screen: false,
         focus_results: false,
     });
+    let texts = super::spotify::catalog(state);
     if let Some(frame) = state.spotify_browse.frames.last_mut()
         && let Source::Section(items) = &frame.source
     {
         frame.items = items.clone();
+        frame.loaded = true;
+    }
+    if let Some(frame) = state.spotify_browse.frames.last_mut()
+        && let Source::MyProfile(uri) = &frame.source
+    {
+        frame.items = my_profile_rows(uri, &texts);
         frame.loaded = true;
     }
     state.view = MainView::SpotifyBrowse;
@@ -660,6 +721,9 @@ pub(super) unsafe fn loaded(
     stamp: SpotifyStamp,
     result: Result<CatalogResult, SpotifyError>,
 ) {
+    if context_loaded(window, stamp, &result) {
+        return;
+    }
     let Some(state) = state_mut(window) else {
         return;
     };
@@ -929,6 +993,7 @@ pub(super) unsafe fn mark_all(window: HWND) {
     if more {
         state.spotify_browse.marks.mark_entire_list();
     } else {
+        state.spotify_browse.cancel_context();
         state.spotify_browse.marks.clear();
         state.spotify_browse.marks.mark_all(uris);
     }
@@ -1192,6 +1257,7 @@ unsafe fn add_without_duplicates(
             Some(0) if new.is_empty() => {
                 let text = texts.text("spotify_nothing_new").replace("{name}", name);
                 if let Some(state) = state_mut(window) {
+                    state.spotify_browse.cancel_context();
                     state.spotify_browse.marks.clear();
                 }
                 super::spotify::announce(window, &text);
@@ -1467,8 +1533,57 @@ fn section_row(section: &apricot_spotify::catalog::Section) -> CatalogItem {
     }
 }
 
+unsafe fn open_my_profile_item(window: HWND, item: &CatalogItem) -> bool {
+    if let Some(uri) = state(window)
+        .and_then(top)
+        .and_then(|frame| match &frame.source {
+            Source::MyProfile(uri) => Some(uri.clone()),
+            _ => None,
+        })
+    {
+        if item.uri == apricot_spotify::catalog::profile_section_uri(&uri, "friends") {
+            let Some(state) = state_mut(window) else {
+                return true;
+            };
+            let parent = std::mem::take(&mut state.spotify_browse.frames);
+            state.spotify_browse.last_query.clear();
+            state.spotify_browse.last_kind = SearchKind::ALL
+                .iter()
+                .position(|kind| *kind == SearchKind::Profiles)
+                .unwrap_or(0);
+            show_search_screen(window);
+            if let Some(state) = state_mut(window) {
+                let search = std::mem::take(&mut state.spotify_browse.frames);
+                state.spotify_browse.frames = parent;
+                state.spotify_browse.frames.extend(search);
+            }
+            return true;
+        }
+        let source = if item.uri == apricot_spotify::catalog::profile_section_uri(&uri, "playlists")
+        {
+            Source::ProfilePlaylists(uri)
+        } else {
+            Source::ProfilePeople {
+                uri: uri.clone(),
+                followers: item.uri
+                    == apricot_spotify::catalog::profile_section_uri(&uri, "followers"),
+            }
+        };
+        open(window, source, item.name.clone());
+        return true;
+    }
+    false
+}
+
 /// Opens an album, playlist, artist, show, folder or Liked Songs row.
 pub(super) unsafe fn open_item(window: HWND, item: &CatalogItem) {
+    if let Some(pin) = state(window).and_then(super::spotify::selected_pin) {
+        open_root(window, pin_source(&pin), pin.label);
+        return;
+    }
+    if open_my_profile_item(window, item) {
+        return;
+    }
     let source = match item.kind {
         ItemKind::Page => Source::Browse(Some(item.uri.clone())),
         ItemKind::Section
@@ -1566,11 +1681,11 @@ pub(super) unsafe fn play(window: HWND, item: &CatalogItem, shuffle: bool) {
 /// and the other shared actions: a track or episode in the context of its
 /// list, or an album, playlist, artist or show that plays as a whole.
 pub(super) fn selected_media(state: &WindowState) -> Option<apricot_core::MediaItem> {
-    let item = selected_item(state)?;
+    let item = context_item(state)?;
     if item.kind == ItemKind::Unavailable || apricot_core::SpotifyRef::parse(&item.uri).is_none() {
         return None;
     }
-    media_for(state, item, false)
+    media_for(state, &item, false)
 }
 
 fn media_for(
@@ -1588,7 +1703,7 @@ fn media_for(
         uri: item.uri.clone(),
         title: item.name.clone(),
         artists: item.subtitle.clone(),
-        artist_uri: String::new(),
+        artist_uri: item.artist_uri.clone(),
         album: item.album.clone(),
         duration_ms: item
             .duration_ms
@@ -1641,6 +1756,7 @@ pub(super) unsafe fn back(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
     };
+    state.spotify_browse.cancel_context();
     state.spotify_browse.marks.clear();
     if matches!(
         state.spotify_browse.pending,
@@ -1677,15 +1793,395 @@ pub(super) fn search_title(state: &WindowState, query: &str) -> String {
 }
 
 /// The Spotify link of the selected row, for Copy link.
+fn my_profile_rows(uri: &str, texts: &apricot_core::TranslationCatalog) -> Vec<CatalogItem> {
+    [
+        ("following", "spotify_profile_following"),
+        ("followers", "spotify_profile_followers"),
+        ("friends", "spotify_find_friends"),
+        ("playlists", "spotify_my_public_playlists"),
+    ]
+    .into_iter()
+    .map(|(key, label)| {
+        section_row(&apricot_spotify::catalog::Section {
+            uri: apricot_spotify::catalog::profile_section_uri(uri, key),
+            title: texts.text(label).to_owned(),
+            items: Vec::new(),
+        })
+    })
+    .collect()
+}
+
+pub(super) fn pin_source(pin: &MenuPin) -> Source {
+    match &pin.target {
+        MenuTarget::Playlist(uri) => Source::Playlist(uri.clone()),
+        MenuTarget::Artist(uri) => Source::Artist(uri.clone()),
+        MenuTarget::Category(uri) => Source::Browse(Some(uri.clone())),
+        MenuTarget::Section { origin, uri } => Source::MenuSection {
+            origin: origin.clone(),
+            uri: uri.clone(),
+        },
+    }
+}
+
+fn menu_origin(state: &WindowState) -> Option<MenuOrigin> {
+    for frame in state.spotify_browse.frames.iter().rev() {
+        match &frame.source {
+            Source::Home => return Some(MenuOrigin::Home),
+            Source::Browse(None) => return Some(MenuOrigin::BrowseAll),
+            Source::Browse(Some(uri)) => return Some(MenuOrigin::BrowsePage(uri.clone())),
+            Source::MenuSection { origin, .. } => return Some(origin.clone()),
+            Source::Section(_) => {}
+            _ => return None,
+        }
+    }
+    None
+}
+
+pub(super) fn context_item(state: &WindowState) -> Option<CatalogItem> {
+    if state.view == MainView::SpotifyHub {
+        let pin = super::spotify::selected_pin(state)?;
+        Some(
+            state
+                .spotify_browse
+                .pin_items
+                .get(&pin.item().uri)
+                .cloned()
+                .unwrap_or_else(|| pin.item()),
+        )
+    } else {
+        selected_item(state).cloned()
+    }
+}
+
+fn current_pin(state: &WindowState) -> Option<MenuPin> {
+    if state.view == MainView::SpotifyHub {
+        super::spotify::selected_pin(state)
+    } else {
+        MenuPin::from_item(&context_item(state)?, menu_origin(state))
+    }
+}
+
+pub(super) unsafe fn toggle_menu_pin(window: HWND) {
+    let Some((pin, selected, hub)) = state(window).and_then(|state| {
+        Some((
+            current_pin(state)?,
+            SendMessageW(state.list, LB_GETCURSEL, None, None).0,
+            state.view == MainView::SpotifyHub,
+        ))
+    }) else {
+        return;
+    };
+    let Some(service) = super::spotify::service(window) else {
+        return;
+    };
+    match service
+        .toggle_menu_pin(pin)
+        .and_then(|_| service.menu_pins())
+    {
+        Ok(pins) => {
+            if let Some(state) = state_mut(window) {
+                state.spotify_browse.pins = pins;
+            }
+            if hub {
+                super::spotify::show_hub(window);
+                if let Some(state) = state(window) {
+                    let count = SendMessageW(
+                        state.list,
+                        windows::Win32::UI::WindowsAndMessaging::LB_GETCOUNT,
+                        None,
+                        None,
+                    )
+                    .0;
+                    SendMessageW(
+                        state.list,
+                        LB_SETCURSEL,
+                        Some(WPARAM(
+                            usize::try_from(selected.min(count - 1).max(0)).unwrap_or(0),
+                        )),
+                        None,
+                    );
+                }
+            }
+            if let Some(state) = state(window) {
+                super::spotify::announce(
+                    window,
+                    super::spotify::catalog(state).text("settings_saved"),
+                );
+            }
+        }
+        Err(error) => {
+            if let Some(state) = state(window) {
+                set_status(state, &error, true);
+            }
+        }
+    }
+}
+
+fn artist_uri(item: &CatalogItem) -> Option<String> {
+    if item.kind == ItemKind::Artist {
+        Some(item.uri.clone())
+    } else {
+        item.artist_uri
+            .starts_with("spotify:artist:")
+            .then(|| item.artist_uri.clone())
+    }
+}
+
+pub(super) fn playing_artist(item: &apricot_core::MediaItem) -> Option<String> {
+    (item.source == apricot_core::MediaSource::Spotify)
+        .then(|| {
+            item.metadata
+                .get("spotify_artist_uri")?
+                .as_str()
+                .map(str::to_owned)
+        })
+        .flatten()
+        .filter(|uri| uri.starts_with("spotify:artist:"))
+}
+
+fn context_identity(state: &WindowState, player: bool) -> Option<ContextIdentity> {
+    Some(ContextIdentity {
+        view: state.view,
+        uri: if player {
+            state
+                .application
+                .player_session()
+                .current_item()?
+                .id
+                .0
+                .clone()
+        } else {
+            context_item(state)?.uri
+        },
+        player,
+        generation: if player {
+            state.application.player_session().generation()
+        } else {
+            0
+        },
+        focus: unsafe { GetFocus().0 as isize },
+        depth: if player {
+            0
+        } else {
+            state.spotify_browse.frames.len()
+        },
+        row: if player {
+            -1
+        } else {
+            unsafe { SendMessageW(state.list, LB_GETCURSEL, None, None).0 }
+        },
+    })
+}
+
+/// Reads current Spotify follow state before showing a menu, without blocking the UI.
+pub(super) unsafe fn prepare_context(window: HWND, location: LPARAM, player: bool) -> bool {
+    let Some(state) = state_mut(window) else {
+        return false;
+    };
+    let Some(identity) = context_identity(state, player) else {
+        return false;
+    };
+    if state.spotify_browse.context_ready.take().as_ref() == Some(&identity) {
+        return false;
+    }
+    if state
+        .spotify_browse
+        .context_read
+        .as_ref()
+        .is_some_and(|read| read.identity == identity)
+    {
+        return true;
+    }
+    let item = (!player).then(|| context_item(state)).flatten();
+    let artist = if player {
+        state
+            .application
+            .player_session()
+            .current_item()
+            .and_then(playing_artist)
+    } else {
+        item.as_ref().and_then(artist_uri)
+    };
+    let playlist = state.view == MainView::SpotifyHub
+        && item
+            .as_ref()
+            .is_some_and(|item| item.kind == ItemKind::Playlist);
+    let uris: Vec<_> = artist
+        .into_iter()
+        .chain(playlist.then(|| identity.uri.clone()))
+        .collect();
+    if uris.is_empty() {
+        return false;
+    }
+    for uri in &uris {
+        state.spotify_browse.artist_states.remove(uri);
+        for frame in &mut state.spotify_browse.frames {
+            for item in &mut frame.items {
+                if item.kind == ItemKind::Artist && item.uri == *uri {
+                    item.saved = None;
+                }
+            }
+        }
+        if let Some(item) = state.spotify_browse.pin_items.get_mut(uri) {
+            item.saved = None;
+        }
+    }
+    let Some(service) = super::spotify::service(window) else {
+        return false;
+    };
+    let Some(state) = state_mut(window) else {
+        return false;
+    };
+    let stamp = state.spotify.epochs_begin();
+    let request = if playlist {
+        let mut cached = item.unwrap();
+        cached.editable = false;
+        cached.saved = None;
+        state
+            .spotify_browse
+            .pin_items
+            .insert(cached.uri.clone(), cached);
+        CatalogRequest::Playlist {
+            uri: identity.uri.clone(),
+            offset: 0,
+        }
+    } else {
+        CatalogRequest::SavedStates(uris.clone())
+    };
+    state.spotify_browse.context_read = Some(ContextRead {
+        stamp,
+        identity,
+        location,
+        uris,
+        playlist,
+    });
+    set_status(
+        state,
+        super::spotify::catalog(state).text("spotify_loading"),
+        false,
+    );
+    service.load_catalog(stamp, request);
+    true
+}
+
+unsafe fn context_loaded(
+    window: HWND,
+    stamp: SpotifyStamp,
+    result: &Result<CatalogResult, SpotifyError>,
+) -> bool {
+    let Some(state) = state_mut(window) else {
+        return false;
+    };
+    if !state
+        .spotify_browse
+        .context_read
+        .as_ref()
+        .is_some_and(|read| read.stamp == stamp)
+    {
+        return false;
+    }
+    let mut read = state.spotify_browse.context_read.take().unwrap();
+    if !state.spotify.is_current_account(stamp)
+        || context_identity(state, read.identity.player).as_ref() != Some(&read.identity)
+    {
+        return true;
+    }
+    if read.playlist
+        && let Ok(CatalogResult::Collection(collection)) = result
+    {
+        if let Some(item) = state.spotify_browse.pin_items.get_mut(&read.identity.uri) {
+            item.editable = collection.can_edit_metadata;
+            item.saved = collection.saved;
+        }
+        read.playlist = false;
+        let uris = read.uris.clone();
+        state.spotify_browse.context_read = Some(read);
+        if let Some(service) = super::spotify::service(window) {
+            service.load_catalog(stamp, CatalogRequest::SavedStates(uris));
+        }
+        return true;
+    }
+    match result {
+        Ok(CatalogResult::SavedStates(states)) if states.len() == read.uris.len() => {
+            for (uri, followed) in read.uris.iter().zip(states) {
+                state
+                    .spotify_browse
+                    .artist_states
+                    .insert(uri.clone(), *followed);
+                for frame in &mut state.spotify_browse.frames {
+                    for item in &mut frame.items {
+                        if item.uri == *uri {
+                            item.saved = Some(*followed);
+                        }
+                    }
+                }
+                if let Some(item) = state.spotify_browse.pin_items.get_mut(uri) {
+                    item.saved = Some(*followed);
+                }
+            }
+        }
+        Err(error) => set_status(
+            state,
+            &apricot_app::spotify::error_text(&super::spotify::catalog(state), error),
+            true,
+        ),
+        _ => {}
+    }
+    let player = read.identity.player;
+    state.spotify_browse.context_ready = Some(read.identity);
+    if player {
+        super::show_player_context_menu(window, read.location);
+    } else {
+        super::show_list_context_menu(window, read.location);
+    }
+    true
+}
+
+pub(super) fn artist_followed(state: &WindowState, item: &apricot_core::MediaItem) -> Option<bool> {
+    state
+        .spotify_browse
+        .artist_states
+        .get(&playing_artist(item)?)
+        .copied()
+}
+
+pub(super) unsafe fn toggle_artist_follow(window: HWND, active: Option<&apricot_core::MediaItem>) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    let uri = if state.view == MainView::Player || super::focus_in_background_player(state) {
+        active.and_then(playing_artist)
+    } else {
+        context_item(state).as_ref().and_then(artist_uri)
+    };
+    let Some(uri) = uri else {
+        return;
+    };
+    if !state.spotify_browse.artist_states.contains_key(&uri) {
+        set_status(
+            state,
+            super::spotify::catalog(state).text("spotify_artist_state_unavailable"),
+            true,
+        );
+        return;
+    }
+    begin_edit(
+        window,
+        apricot_spotify::LibraryEdit::ToggleSaved { uri },
+        Pending::Saved,
+    );
+}
+
+/// The Spotify link of the selected row, for Copy link.
 pub(super) fn selected_link(state: &WindowState) -> Option<String> {
-    selected_item(state)
+    context_item(state)
         .and_then(|item| apricot_core::SpotifyRef::parse(&item.uri))
         .and_then(|reference| reference.to_url())
 }
 
 /// What the context menu offers for the selected row.
 pub(super) fn row_menu(state: &WindowState) -> Option<apricot_app::context_menu::SpotifyRowMenu> {
-    let item = selected_item(state)?;
+    let item = context_item(state)?;
     let collection = matches!(
         item.kind,
         ItemKind::Album
@@ -1696,26 +2192,27 @@ pub(super) fn row_menu(state: &WindowState) -> Option<apricot_app::context_menu:
             | ItemKind::LikedSongs
             | ItemKind::User
     );
-    let frame = top(state)?;
-    let profile_section =
-        item.kind == ItemKind::Section && matches!(frame.source, Source::Profile { .. });
-    let editable = frame.can_edit && matches!(frame.source, Source::Playlist(_));
+    let frame = top(state).filter(|_| state.view == MainView::SpotifyBrowse);
+    let profile_section = item.kind == ItemKind::Section
+        && frame.is_some_and(|frame| matches!(frame.source, Source::Profile { .. }));
+    let editable =
+        frame.is_some_and(|frame| frame.can_edit && matches!(frame.source, Source::Playlist(_)));
     // SAFETY: Reads the selection of this thread's list.
     let index = usize::try_from(unsafe { SendMessageW(state.list, LB_GETCURSEL, None, None).0 })
         .unwrap_or(0);
     let has_uid = |at: Option<usize>| {
-        at.and_then(|at| frame.items.get(at))
+        at.and_then(|at| frame?.items.get(at))
             .is_some_and(|item| item.uid.is_some())
     };
     Some(apricot_app::context_menu::SpotifyRowMenu {
         playable_item: item.kind.is_playable_item() && item.playable,
-        collection,
+        collection: collection || matches!(item.kind, ItemKind::Page | ItemKind::Section),
         collection_plays: collection && !matches!(item.kind, ItemKind::Folder | ItemKind::User),
         album: !item.album_uri.is_empty(),
         artist: item.artist_uri.starts_with("spotify:artist:"),
         link: apricot_core::SpotifyRef::parse(&item.uri).is_some(),
         saved: if profile_section {
-            frame.following
+            frame.and_then(|frame| frame.following)
         } else if item.kind.is_playable_item() {
             selection_saved(state).or(item.saved)
         } else {
@@ -1729,8 +2226,8 @@ pub(super) fn row_menu(state: &WindowState) -> Option<apricot_app::context_menu:
         move_up: editable && has_uid(index.checked_sub(1)),
         move_down: editable && has_uid(Some(index + 1)),
         rename: item.kind == ItemKind::Playlist && item.editable,
-        create_playlist: matches!(frame.source, Source::Library { .. }),
-        hide: frame.personalised && item.kind == ItemKind::Track,
+        create_playlist: frame.is_some_and(|frame| matches!(frame.source, Source::Library { .. })),
+        hide: frame.is_some_and(|frame| frame.personalised) && item.kind == ItemKind::Track,
         hidden: state
             .spotify_browse
             .hidden
@@ -1740,6 +2237,15 @@ pub(super) fn row_menu(state: &WindowState) -> Option<apricot_app::context_menu:
             item.kind,
             ItemKind::Track | ItemKind::Artist | ItemKind::Album | ItemKind::Playlist
         ),
+        main_menu_pin: current_pin(state).map(|pin| {
+            state
+                .spotify_browse
+                .pins
+                .iter()
+                .any(|existing| existing.target == pin.target)
+        }),
+        artist_followed: artist_uri(&item)
+            .and_then(|uri| state.spotify_browse.artist_states.get(&uri).copied()),
     })
 }
 
@@ -1750,7 +2256,7 @@ pub(super) unsafe fn radio(window: HWND) {
     let Some(state) = state(window) else {
         return;
     };
-    let selected = selected_item(state)
+    let selected = context_item(state)
         .filter(|item| {
             matches!(
                 item.kind,
@@ -1851,7 +2357,7 @@ pub(super) unsafe fn toggle_saved(window: HWND) {
         Source::Profile { uri, .. } => Some(uri.clone()),
         _ => None,
     });
-    let selected = selected_item(state)
+    let selected = context_item(state)
         .filter(|item| item.kind != ItemKind::Unavailable && item.kind != ItemKind::Folder)
         .and_then(|item| {
             if item.kind == ItemKind::Section {
@@ -2024,7 +2530,7 @@ unsafe fn create_playlist_then_add(window: HWND, then_add: Option<Vec<String>>) 
 }
 
 unsafe fn rename_selected(window: HWND) {
-    let Some(item) = state(window).and_then(|state| selected_item(state).cloned()) else {
+    let Some(item) = state(window).and_then(context_item) else {
         return;
     };
     let Some(name) = ask_name(window, "spotify_rename_playlist", &item.name) else {
@@ -2166,6 +2672,7 @@ pub(super) unsafe fn edited(
                     frame.remove_items(|item| !changed.contains(&item.uri));
                 }
             }
+            state.spotify_browse.cancel_context();
             state.spotify_browse.marks.clear();
             texts
                 .text(if *saved {
@@ -2200,6 +2707,7 @@ pub(super) unsafe fn edited(
         }
         (O::AddedToPlaylist { .. }, Pending::Add { name, count }) => {
             // The marks are used up once Spotify confirmed them.
+            state.spotify_browse.cancel_context();
             state.spotify_browse.marks.clear();
             if count > 1 {
                 texts
@@ -2345,7 +2853,7 @@ pub(super) unsafe fn command(window: HWND, command: apricot_app::context_menu::C
         create_playlist(window);
         return;
     }
-    let Some(item) = state(window).and_then(|state| selected_item(state).cloned()) else {
+    let Some(item) = state(window).and_then(context_item) else {
         return;
     };
     match command {
@@ -2375,6 +2883,8 @@ pub(super) unsafe fn command(window: HWND, command: apricot_app::context_menu::C
             }
         }
         C::SpotifyToggleSaved => toggle_saved(window),
+        C::SpotifyToggleMenuPin => toggle_menu_pin(window),
+        C::SpotifyToggleArtistFollow => toggle_artist_follow(window, None),
         C::SpotifyAddToPlaylist => {
             begin_selection(window, &item.uri, None);
         }
@@ -2503,6 +3013,10 @@ unsafe fn play_preview(window: HWND, name: &str, url: Option<&str>) {
     };
     super::start_media_item(window, item, None);
 }
+
+#[cfg(test)]
+#[path = "spotify_native_tests.rs"]
+mod native_tests;
 
 #[cfg(test)]
 mod tests {
