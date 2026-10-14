@@ -2244,6 +2244,9 @@ unsafe extern "system" fn text_entry_proc(
 }
 
 unsafe fn show_list_context_menu(window: HWND, location: LPARAM) {
+    if spotify_browse::prepare_context(window, location, false) {
+        return;
+    }
     let Some((view, language, list)) = state(window).map(|main_state| {
         (
             list_view(main_state),
@@ -2366,7 +2369,29 @@ fn model_context_entries(
         MainView::UserPlaylistItems => {
             context_menu::user_playlist_items_context_menu(&context, item)
         }
-        MainView::Player => context_menu::player_context_menu(&context, item?),
+        MainView::Player => {
+            let item = item?;
+            let mut entries = context_menu::player_context_menu(&context, item);
+            if spotify_browse::playing_artist(item).is_some() {
+                if let Some(followed) = spotify_browse::artist_followed(state, item) {
+                    entries.push(ContextMenuEntry::Command {
+                        label: catalog
+                            .text(if followed {
+                                "spotify_unfollow_artist"
+                            } else {
+                                "spotify_follow_artist"
+                            })
+                            .to_owned(),
+                        command: ContextCommand::SpotifyToggleArtistFollow,
+                    });
+                } else {
+                    entries.push(ContextMenuEntry::Disabled {
+                        label: catalog.text("spotify_artist_state_unavailable").to_owned(),
+                    });
+                }
+            }
+            entries
+        }
         // Python `open_audiovault_context_menu` opens only on an item.
         MainView::AudiovaultSearch | MainView::AudiovaultResults => {
             context_menu::audiovault_results_context_menu(&context, item?)
@@ -2376,7 +2401,7 @@ fn model_context_entries(
             let row = unsafe { spotify::selected_account(state) }?;
             context_menu::spotify_accounts_context_menu(&context, row.menu_account())
         }
-        MainView::SpotifyBrowse => {
+        MainView::SpotifyBrowse | MainView::SpotifyHub => {
             let menu = spotify_browse::row_menu(state)?;
             context_menu::spotify_browse_context_menu(&context, menu)
         }
@@ -2427,6 +2452,10 @@ unsafe fn execute_context_command(
 ) {
     use ContextCommand as C;
     match command {
+        C::SpotifyToggleMenuPin => spotify_browse::toggle_menu_pin(window),
+        C::SpotifyToggleArtistFollow => {
+            spotify_browse::toggle_artist_follow(window, active_item.as_ref());
+        }
         C::SpotifyUseAccount => spotify::use_selected_account(window),
         C::SpotifyLogIn => spotify::log_in_from_accounts(window),
         C::SpotifyLogOut => spotify::log_out_selected(window),
@@ -2677,6 +2706,7 @@ unsafe fn show_context_menu_for_active_view(window: HWND) {
             | MainView::DownloadQueue
             | MainView::AudiovaultSearch
             | MainView::AudiovaultResults
+            | MainView::SpotifyHub
             | MainView::SpotifyAccounts
             | MainView::SpotifyBrowse,
         ) => {
@@ -2688,6 +2718,9 @@ unsafe fn show_context_menu_for_active_view(window: HWND) {
 }
 
 unsafe fn show_player_context_menu(window: HWND, location: LPARAM) {
+    if spotify_browse::prepare_context(window, location, true) {
+        return;
+    }
     let Some((language, item, focused)) = state(window).and_then(|state| {
         Some((
             state.application.settings().language.clone(),
