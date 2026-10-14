@@ -1190,6 +1190,35 @@ mod spotify_lists {
     }
 
     #[test]
+    fn artist_follow_confirmation_preserves_song_marks_and_announces_following() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell.spotify_browse_test_open(
+            &mut ui,
+            Source::Search {
+                query: "song".into(),
+                kind: apricot_spotify::SearchKind::Tracks,
+            },
+            "Search",
+            vec![track("song", "u1")],
+            false,
+        );
+        shell.activate_action(&mut ui, "spotify_mark_all");
+        for saved in [true, false] {
+            shell.spotify_browse_test_artist_edit(&mut ui, saved);
+            assert!(ui.screens.last().unwrap().rows[0].ends_with(", marked"));
+            assert_eq!(
+                ui.announcements.last(),
+                Some(&shell.text(if saved {
+                    "spotify_followed_done"
+                } else {
+                    "spotify_unfollowed_done"
+                }))
+            );
+        }
+    }
+
+    #[test]
     fn profile_publication_read_uses_only_the_current_playlist_and_known_state() {
         use apricot_spotify::{
             CatalogResult,
