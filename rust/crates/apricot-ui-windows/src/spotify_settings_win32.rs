@@ -18,9 +18,10 @@ use windows::{
             WindowsAndMessaging::{
                 BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, CBS_DROPDOWNLIST, CW_USEDEFAULT,
                 CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
-                GetMessageW, GetWindowLongPtrW, HMENU, IDC_ARROW, IsChild, IsDialogMessageW,
-                IsWindow, LoadCursorW, MSG, MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW,
-                SendMessageW, SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TranslateMessage,
+                GetMessageW, GetWindowLongPtrW, HMENU, IDC_ARROW, IDYES, IsChild, IsDialogMessageW,
+                IsWindow, LoadCursorW, MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNOCANCEL, MSG,
+                MessageBoxW, MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW, SendMessageW,
+                SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TranslateMessage,
                 WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CLOSE, WM_COMMAND,
                 WM_KEYDOWN, WM_NCDESTROY, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_CAPTION, WS_CHILD,
                 WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
@@ -37,6 +38,7 @@ const ID_AUTOPLAY: usize = 2203;
 const ID_OK: usize = 2204;
 const ID_CANCEL: usize = 2205;
 const ID_ORDER: usize = 2206;
+const ID_HISTORY: usize = 2207;
 const IDOK_COMMAND: usize = 1;
 const IDCANCEL_COMMAND: usize = 2;
 const CB_ADDSTRING: u32 = 0x0143;
@@ -52,6 +54,8 @@ pub struct SettingsTexts<'a> {
     /// Labels in `Quality::ALL` order.
     pub qualities: [&'a str; 3],
     pub normalisation: &'a str,
+    pub listening_history: &'a str,
+    pub experimental_warning: &'a str,
     pub autoplay: &'a str,
     /// Labels in `Autoplay::ALL` order.
     pub autoplays: [&'a str; 3],
@@ -66,6 +70,10 @@ struct DialogState {
     controls: Vec<HWND>,
     quality: HWND,
     normalisation: HWND,
+    listening_history: HWND,
+    history_consented: bool,
+    warning_title: String,
+    warning: String,
     autoplay: HWND,
     order: HWND,
     result: Option<SpotifySettings>,
@@ -122,7 +130,7 @@ unsafe fn show_win32(
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         460,
-        272,
+        310,
         Some(owner),
         None,
         Some(instance),
@@ -159,6 +167,12 @@ unsafe fn show_win32(
         let autoplay = create(w!("COMBOBOX"), "", combo, ID_AUTOPLAY)?;
         let order_label = create(w!("STATIC"), texts.order, WINDOW_STYLE(0), 0)?;
         let order = create(w!("COMBOBOX"), "", combo, ID_ORDER)?;
+        let listening_history = create(
+            w!("BUTTON"),
+            texts.listening_history,
+            WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
+            ID_HISTORY,
+        )?;
         let ok = create(
             w!("BUTTON"),
             texts.ok,
@@ -175,6 +189,7 @@ unsafe fn show_win32(
                 autoplay,
                 order_label,
                 order,
+                listening_history,
                 ok,
                 cancel,
             ],
@@ -182,6 +197,10 @@ unsafe fn show_win32(
             normalisation,
             autoplay,
             order,
+            listening_history,
+            history_consented: current.listening_history,
+            warning_title: texts.title.to_owned(),
+            warning: texts.experimental_warning.to_owned(),
             result: None,
         })
     })();
@@ -246,6 +265,12 @@ unsafe fn show_win32(
     crate::accessibility_win32::annotate_control_name(state.quality, texts.quality);
     crate::accessibility_win32::annotate_control_name(state.autoplay, texts.autoplay);
     crate::accessibility_win32::annotate_control_name(state.order, texts.order);
+    SendMessageW(
+        state.listening_history,
+        BM_SETCHECK,
+        Some(WPARAM(usize::from(current.listening_history))),
+        None,
+    );
     let initial_focus = state.quality;
     let pointer = Box::into_raw(Box::new(state));
     SetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0), pointer as isize);
@@ -308,6 +333,8 @@ unsafe extern "system" fn window_proc(
             let command = wparam.0 & 0xffff;
             if command == ID_OK || command == IDOK_COMMAND {
                 accept(window);
+            } else if command == ID_HISTORY {
+                confirm_history_control(window);
             } else if command == ID_CANCEL || command == IDCANCEL_COMMAND {
                 let _ = DestroyWindow(window);
             }
@@ -326,6 +353,9 @@ unsafe extern "system" fn window_proc(
 }
 
 unsafe fn accept(window: HWND) {
+    if !confirm_history_control(window) {
+        return;
+    }
     let Some(state) = state(window) else {
         return;
     };
@@ -337,6 +367,7 @@ unsafe fn accept(window: HWND) {
             .copied()
             .unwrap_or(Quality::VeryHigh),
         normalisation: SendMessageW(state.normalisation, BM_GETCHECK, None, None).0 == 1,
+        listening_history: SendMessageW(state.listening_history, BM_GETCHECK, None, None).0 == 1,
         autoplay: Autoplay::ALL
             .get(selected(state.autoplay))
             .copied()
@@ -372,6 +403,7 @@ unsafe fn layout(window: HWND) {
         autoplay,
         order_label,
         order,
+        listening_history,
         ok,
         cancel,
     ] = state.controls[..]
@@ -406,9 +438,49 @@ unsafe fn layout(window: HWND) {
         true,
     );
     let _ = MoveWindow(order, field_x, margin + row * 3, field_width, 200, true);
+    let _ = MoveWindow(
+        listening_history,
+        margin,
+        margin + row * 4,
+        width - margin * 2,
+        28,
+        true,
+    );
     let button_y = height - 30 - margin;
     let _ = MoveWindow(ok, width - margin - 206, button_y, 100, 30, true);
     let _ = MoveWindow(cancel, width - margin - 100, button_y, 100, 30, true);
+}
+
+pub(crate) unsafe fn confirm_listening_history(window: HWND, title: &str, warning: &str) -> bool {
+    let title = wide(title);
+    let warning = wide(warning);
+    MessageBoxW(
+        Some(window),
+        PCWSTR(warning.as_ptr()),
+        PCWSTR(title.as_ptr()),
+        MB_YESNOCANCEL | MB_ICONWARNING | MB_DEFBUTTON2,
+    ) == IDYES
+}
+
+unsafe fn confirm_history_control(window: HWND) -> bool {
+    let Some(state) = state(window) else {
+        return false;
+    };
+    let checked = SendMessageW(state.listening_history, BM_GETCHECK, None, None).0 == 1;
+    if !checked {
+        state.history_consented = false;
+        return true;
+    }
+    if state.history_consented {
+        return true;
+    }
+    if confirm_listening_history(window, &state.warning_title, &state.warning) {
+        state.history_consented = true;
+        return true;
+    }
+    SendMessageW(state.listening_history, BM_SETCHECK, Some(WPARAM(0)), None);
+    let _ = SetFocus(Some(state.listening_history));
+    false
 }
 
 unsafe fn state(window: HWND) -> Option<&'static mut DialogState> {
@@ -418,4 +490,198 @@ unsafe fn state(window: HWND) -> Option<&'static mut DialogState> {
 
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        BS_DEFPUSHBUTTON, FindWindowW, GWL_STYLE, GetDlgItem, GetWindowThreadProcessId, IDCANCEL,
+        IDNO, KillTimer, PostMessageW, SetTimer,
+    };
+
+    static ACTION: AtomicI32 = AtomicI32::new(0);
+    static DEFAULT_NO: AtomicBool = AtomicBool::new(false);
+    static TICKS: AtomicU32 = AtomicU32::new(0);
+    static TIMED_OUT: AtomicBool = AtomicBool::new(false);
+    static DRIVER: Mutex<()> = Mutex::new(());
+    const TITLE: PCWSTR = w!("Apricot isolated consent fixture");
+
+    unsafe extern "system" fn reply(_: HWND, _: u32, _: usize, _: u32) {
+        let Ok(dialog) = FindWindowW(w!("#32770"), TITLE) else {
+            return;
+        };
+        let mut process_id = 0;
+        GetWindowThreadProcessId(dialog, Some(&raw mut process_id));
+        if process_id != std::process::id() {
+            return;
+        }
+        if TICKS.fetch_add(1, Ordering::SeqCst) > 100 {
+            TIMED_OUT.store(true, Ordering::SeqCst);
+            let _ = PostMessageW(
+                Some(dialog),
+                WM_COMMAND,
+                WPARAM(usize::try_from(IDCANCEL.0).unwrap()),
+                LPARAM(0),
+            );
+            return;
+        }
+        if let Ok(no) = GetDlgItem(Some(dialog), IDNO.0) {
+            DEFAULT_NO.store(
+                GetWindowLongPtrW(no, GWL_STYLE) & 0xf
+                    == isize::try_from(BS_DEFPUSHBUTTON).unwrap(),
+                Ordering::SeqCst,
+            );
+        }
+        let action = ACTION.swap(0, Ordering::SeqCst);
+        if action == IDCANCEL.0 {
+            let _ = PostMessageW(
+                Some(dialog),
+                WM_KEYDOWN,
+                WPARAM(usize::from(VK_ESCAPE.0)),
+                LPARAM(0),
+            );
+        } else if action != 0 {
+            let _ = PostMessageW(
+                Some(dialog),
+                WM_COMMAND,
+                WPARAM(usize::try_from(action).unwrap()),
+                LPARAM(0),
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "Native modal fixture; no accounts or reporting. Run on an available desktop."]
+    fn native_consent_defaults_no_and_rejects_escape() {
+        let _driver = DRIVER.lock().unwrap();
+        // SAFETY: This fixture addresses only its own unique-caption dialog,
+        // verifies its process ID, and never creates a Spotify runtime.
+        unsafe {
+            for (action, expected) in [(IDNO.0, false), (IDCANCEL.0, false), (IDYES.0, true)] {
+                ACTION.store(action, Ordering::SeqCst);
+                DEFAULT_NO.store(false, Ordering::SeqCst);
+                TICKS.store(0, Ordering::SeqCst);
+                TIMED_OUT.store(false, Ordering::SeqCst);
+                let timer = SetTimer(None, 0, 10, Some(reply));
+                assert_ne!(timer, 0);
+                let accepted = confirm_listening_history(
+                    HWND::default(),
+                    "Apricot isolated consent fixture",
+                    "Fixture warning only. No account or settings are changed.",
+                );
+                let _ = KillTimer(None, timer);
+                assert_eq!(accepted, expected);
+                assert!(
+                    !TIMED_OUT.load(Ordering::SeqCst),
+                    "native response must complete without forced dismissal"
+                );
+                assert!(
+                    DEFAULT_NO.load(Ordering::SeqCst),
+                    "No must be the default button"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "Isolated native checkbox and consent fixture; no accounts or reporting."]
+    fn native_history_checkbox_rejects_and_reconfirms_after_disable() {
+        let _driver = DRIVER.lock().unwrap();
+        // SAFETY: All handles and modal input belong to this fixture's thread.
+        unsafe {
+            register().unwrap();
+            let module = GetModuleHandleW(None).unwrap();
+            let instance = HINSTANCE(module.0);
+            let owner = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                CLASS,
+                w!("Isolated checkbox fixture"),
+                WS_CAPTION | WS_SYSMENU,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                360,
+                180,
+                None,
+                None,
+                Some(instance),
+                None,
+            )
+            .unwrap();
+            let checkbox = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("BUTTON"),
+                w!("Fixture option"),
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
+                10,
+                10,
+                280,
+                30,
+                Some(owner),
+                Some(HMENU(ID_HISTORY as *mut _)),
+                Some(instance),
+                None,
+            )
+            .unwrap();
+            let mut data = Box::new(DialogState {
+                controls: vec![checkbox],
+                quality: HWND::default(),
+                normalisation: HWND::default(),
+                autoplay: HWND::default(),
+                order: HWND::default(),
+                listening_history: checkbox,
+                history_consented: false,
+                warning_title: "Apricot isolated consent fixture".into(),
+                warning: "Fixture warning only. No account or settings are changed.".into(),
+                result: None,
+            });
+            SetWindowLongPtrW(
+                owner,
+                WINDOW_LONG_PTR_INDEX(0),
+                std::ptr::from_mut(&mut *data) as isize,
+            );
+            let _ = ShowWindow(owner, SW_SHOW);
+            for action in [IDNO.0, IDCANCEL.0, IDYES.0] {
+                SendMessageW(checkbox, BM_SETCHECK, Some(WPARAM(1)), None);
+                ACTION.store(action, Ordering::SeqCst);
+                TICKS.store(0, Ordering::SeqCst);
+                TIMED_OUT.store(false, Ordering::SeqCst);
+                let timer = SetTimer(None, 0, 10, Some(reply));
+                assert_ne!(timer, 0);
+                assert_eq!(confirm_history_control(owner), action == IDYES.0);
+                let _ = KillTimer(None, timer);
+                assert!(!TIMED_OUT.load(Ordering::SeqCst));
+                assert_eq!(data.history_consented, action == IDYES.0);
+                assert_eq!(
+                    SendMessageW(checkbox, BM_GETCHECK, None, None).0 == 1,
+                    action == IDYES.0
+                );
+                if action != IDYES.0 {
+                    assert_eq!(
+                        windows::Win32::UI::Input::KeyboardAndMouse::GetFocus(),
+                        checkbox
+                    );
+                }
+            }
+            SendMessageW(checkbox, BM_SETCHECK, Some(WPARAM(0)), None);
+            assert!(confirm_history_control(owner));
+            assert!(
+                !data.history_consented,
+                "turning off must discard previous consent"
+            );
+            SendMessageW(checkbox, BM_SETCHECK, Some(WPARAM(1)), None);
+            ACTION.store(IDNO.0, Ordering::SeqCst);
+            TICKS.store(0, Ordering::SeqCst);
+            let timer = SetTimer(None, 0, 10, Some(reply));
+            assert_ne!(timer, 0);
+            assert!(
+                !confirm_history_control(owner),
+                "re-enabling must ask again"
+            );
+            let _ = KillTimer(None, timer);
+            let _ = DestroyWindow(owner);
+        }
+    }
 }

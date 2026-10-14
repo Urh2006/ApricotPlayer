@@ -218,6 +218,7 @@ pub(crate) const WM_AUDIOVAULT_REQUEST: u32 = WM_APP + 8;
 const WM_STREAM_PREFETCH: u32 = WM_APP + 9;
 /// Posted by the Spotify runtime when an event is in its channel.
 const WM_SPOTIFY_EVENT: u32 = WM_APP + 10;
+pub(crate) const WM_APPLY_SPOTIFY_HISTORY: u32 = WM_APP + 11;
 pub(crate) const AUDIOVAULT_REQUEST_LOGIN: usize = 1;
 pub(crate) const AUDIOVAULT_REQUEST_LOGOUT: usize = 2;
 
@@ -1177,6 +1178,10 @@ unsafe extern "system" fn window_proc(
             if let Some(event) = crate::cookies_win32::take_event(lparam) {
                 handle_cookie_event(window, event);
             }
+            LRESULT(0)
+        }
+        WM_APPLY_SPOTIFY_HISTORY => {
+            spotify::apply_listening_history_setting(window);
             LRESULT(0)
         }
         WM_APPLY_GLOBAL_EQUALIZER => {

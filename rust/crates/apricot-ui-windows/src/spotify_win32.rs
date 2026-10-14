@@ -1032,6 +1032,8 @@ unsafe fn show_settings(window: HWND) {
             texts.text("spotify_quality_very_high"),
         ],
         normalisation: texts.text("spotify_normalisation"),
+        listening_history: texts.text("spotify_listening_history"),
+        experimental_warning: texts.text("spotify_listening_history_warning"),
         autoplay: texts.text("spotify_autoplay"),
         autoplays: [
             texts.text("spotify_autoplay_account"),
@@ -1081,6 +1083,9 @@ unsafe fn show_settings(window: HWND) {
         return;
     }
     state.application.forget_spotify_settings_draft();
+    if let Some(service) = state.spotify.service_ref() {
+        service.set_listening_history(chosen.listening_history);
+    }
     if chosen.playback() == current.playback() {
         announce(window, texts.text("spotify_settings_saved"));
         return;
@@ -1127,8 +1132,25 @@ pub(super) unsafe fn settings_window_closed(
     let Some(state) = state(window) else {
         return;
     };
-    if state.application.saved_spotify_settings().playback() != before.playback() {
+    let after = state.application.saved_spotify_settings();
+    if after.listening_history != before.listening_history
+        && let Some(service) = state.spotify.service_ref()
+    {
+        service.set_listening_history(after.listening_history);
+    }
+    if after.playback() != before.playback() {
         let _ = apply_playback_settings(window);
+    }
+}
+
+/// Global Save stays open: apply committed consent on the main window's next
+/// message turn, without borrowing its application during the settings save.
+pub(super) unsafe fn apply_listening_history_setting(window: HWND) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    if let Some(service) = state.spotify.service_ref() {
+        service.set_listening_history(state.application.saved_spotify_settings().listening_history);
     }
 }
 
