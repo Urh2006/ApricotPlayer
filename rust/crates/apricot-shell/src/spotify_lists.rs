@@ -1980,6 +1980,10 @@ impl Shell {
         let Some(uri) = self.spotify_saved_target(ui) else {
             return;
         };
+        if uri.starts_with("spotify:artist:") {
+            self.spotify_set_artist_follow(ui, uri);
+            return;
+        }
         if self.view == View::SpotifyBrowse
             && ui.focused_player_control().is_none()
             && !self.spotify.browse.marks.is_empty()
@@ -2205,6 +2209,14 @@ impl Shell {
             return;
         }
         let outcome = match result {
+            Ok(O::SavedBatch { uris, saved })
+                if uris.len() == 1 && uris[0].starts_with("spotify:artist:") =>
+            {
+                O::Saved {
+                    uri: uris[0].clone(),
+                    saved,
+                }
+            }
             Ok(outcome) => outcome,
             Err(error) => {
                 ui.set_status(&apricot_app::spotify::error_text(&texts, &error), true);
@@ -2423,7 +2435,7 @@ impl Shell {
         }
         if command == C::SpotifyToggleArtistFollow {
             if let Some(uri) = self.spotify_context_artist(ui) {
-                self.browse_begin_edit(LibraryEdit::ToggleSaved { uri }, Pending::Saved);
+                self.spotify_set_artist_follow(ui, uri);
             }
             return;
         }
@@ -2491,12 +2503,7 @@ impl Shell {
                     uri: item.uri.clone(),
                 },
             ),
-            C::SpotifyToggleProfilePublication => self.browse_begin_edit(
-                LibraryEdit::ToggleProfilePublication {
-                    uri: item.uri.clone(),
-                },
-                Pending::Plain,
-            ),
+            C::SpotifyToggleProfilePublication => self.spotify_set_profile_publication(&item.uri),
             C::SpotifyToggleVisibility => self.browse_begin_edit(
                 LibraryEdit::ToggleVisibility {
                     uri: item.uri.clone(),
@@ -2511,6 +2518,43 @@ impl Shell {
                 },
             ),
             _ => {}
+        }
+    }
+
+    fn spotify_set_profile_publication(&mut self, uri: &str) {
+        if let Some(published) = self.spotify.browse.profile_states.get(uri).copied() {
+            self.browse_begin_edit(
+                LibraryEdit::SetProfilePublication {
+                    uri: uri.to_owned(),
+                    published: !published,
+                },
+                Pending::Plain,
+            );
+        }
+    }
+
+    fn spotify_set_artist_follow(&mut self, ui: &mut dyn ShellUi, uri: String) {
+        let known = self
+            .spotify
+            .browse
+            .saved_states
+            .get(&uri)
+            .copied()
+            .or_else(|| {
+                self.browse_selected_item(ui)
+                    .filter(|item| item.uri == uri)
+                    .and_then(|item| item.saved)
+            });
+        if let Some(saved) = known {
+            self.browse_begin_edit(
+                LibraryEdit::SetSaved {
+                    uris: vec![uri],
+                    saved: !saved,
+                },
+                Pending::Saved,
+            );
+        } else {
+            ui.set_status(&self.text("spotify_artist_state_unavailable"), true);
         }
     }
 
@@ -2925,6 +2969,19 @@ impl Shell {
         self.spotify.hub_pins = pins;
         self.view = View::SpotifyHub;
     }
+    pub(crate) fn spotify_browse_test_artist_edit(&mut self, ui: &mut dyn ShellUi, saved: bool) {
+        let stamp = self.spotify.epochs.begin();
+        self.spotify.browse.pending = Some((stamp, Pending::Saved));
+        self.spotify_browse_edited(
+            ui,
+            stamp,
+            Ok(EditOutcome::SavedBatch {
+                uris: vec!["spotify:artist:b".into()],
+                saved,
+            }),
+        );
+    }
+
     pub(crate) fn spotify_browse_test_profile_read(&mut self, ui: &dyn ShellUi) -> SpotifyStamp {
         let target = self.spotify_context_identity(ui).unwrap();
         let uri = self.browse_selected_item(ui).unwrap().uri.clone();
