@@ -212,6 +212,23 @@ fn native_spotify_profile_and_pins_keep_routes_and_scope() -> windows::core::Res
                 && menu.contains(&C::SpotifyOpen)
                 && menu.contains(&C::SpotifyToggleMenuPin)
         );
+        let state = super::state_mut(window).unwrap();
+        let uri = context_item(state).unwrap().uri;
+        assert!(
+            !menu.contains(&C::SpotifyToggleProfilePublication),
+            "unknown publication stays disabled"
+        );
+        state
+            .spotify_browse
+            .profile_states
+            .insert(uri.clone(), false);
+        assert!(commands(state).contains(&C::SpotifyToggleProfilePublication));
+        assert!(
+            commands(state).contains(&C::SpotifyToggleMenuPin),
+            "profile and local menu pins are separate commands"
+        );
+        state.spotify_browse.profile_states.insert(uri, true);
+        assert_eq!(row_menu(state).unwrap().playlist_published, Some(true));
         super::super::spotify::activate(window);
         assert!(
             matches!(&top(super::state(window).unwrap()).unwrap().source, Source::Playlist(uri) if uri.ends_with('1'))
@@ -231,6 +248,7 @@ fn native_spotify_profile_and_pins_keep_routes_and_scope() -> windows::core::Res
                 && !menu.contains(&C::SpotifyPlay)
                 && !menu.contains(&C::SpotifyToggleSaved)
         );
+        assert!(!menu.contains(&C::SpotifyToggleProfilePublication));
         super::super::spotify::activate(window);
         assert!(
             matches!(&top(super::state(window).unwrap()).unwrap().source, Source::Browse(Some(uri)) if uri == "spotify:page:qa")

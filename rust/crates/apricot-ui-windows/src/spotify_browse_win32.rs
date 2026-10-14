@@ -540,6 +540,7 @@ pub(super) struct BrowseState {
     pub(super) pins: Vec<MenuPin>,
     pin_items: std::collections::HashMap<String, CatalogItem>,
     artist_states: std::collections::HashMap<String, bool>,
+    profile_states: std::collections::HashMap<String, bool>,
     context_read: Option<ContextRead>,
     context_ready: Option<ContextIdentity>,
     frames: Vec<Frame>,
@@ -575,6 +576,8 @@ struct ContextRead {
     location: LPARAM,
     uris: Vec<String>,
     playlist: bool,
+    publication: bool,
+    profile_uri: Option<String>,
 }
 
 impl BrowseState {
@@ -942,7 +945,8 @@ pub(super) unsafe fn loaded(
             return;
         }
         Ok(
-            CatalogResult::SelectionProgress(_)
+            CatalogResult::PlaylistProfileState { .. }
+            | CatalogResult::SelectionProgress(_)
             | CatalogResult::TrackUris(_)
             | CatalogResult::SavedStates(_)
             | CatalogResult::Playlists(_)
@@ -1979,6 +1983,7 @@ pub(super) unsafe fn prepare_context(window: HWND, location: LPARAM, player: boo
         return false;
     };
     let Some(identity) = context_identity(state, player) else {
+        state.spotify_browse.cancel_context();
         return false;
     };
     if state.spotify_browse.context_ready.take().as_ref() == Some(&identity) {
@@ -1992,6 +1997,7 @@ pub(super) unsafe fn prepare_context(window: HWND, location: LPARAM, player: boo
     {
         return true;
     }
+    state.spotify_browse.context_read = None;
     let item = (!player).then(|| context_item(state)).flatten();
     let artist = if player {
         state
@@ -2002,16 +2008,17 @@ pub(super) unsafe fn prepare_context(window: HWND, location: LPARAM, player: boo
     } else {
         item.as_ref().and_then(artist_uri)
     };
-    let playlist = state.view == MainView::SpotifyHub
-        && item
-            .as_ref()
-            .is_some_and(|item| item.kind == ItemKind::Playlist);
-    let uris: Vec<_> = artist
-        .into_iter()
-        .chain(playlist.then(|| identity.uri.clone()))
-        .collect();
+    let profile_uri = item
+        .as_ref()
+        .filter(|item| item.kind == ItemKind::Playlist)
+        .map(|item| item.uri.clone());
+    let playlist = state.view == MainView::SpotifyHub && profile_uri.is_some();
+    let uris: Vec<_> = artist.into_iter().chain(profile_uri.clone()).collect();
     if uris.is_empty() {
         return false;
+    }
+    if let Some(uri) = &profile_uri {
+        state.spotify_browse.profile_states.remove(uri);
     }
     for uri in &uris {
         state.spotify_browse.artist_states.remove(uri);
@@ -2054,6 +2061,8 @@ pub(super) unsafe fn prepare_context(window: HWND, location: LPARAM, player: boo
         location,
         uris,
         playlist,
+        publication: false,
+        profile_uri,
     });
     set_status(
         state,
@@ -2102,6 +2111,15 @@ unsafe fn context_loaded(
         return true;
     }
     match result {
+        Ok(CatalogResult::PlaylistProfileState {
+            uri,
+            published: Some(published),
+        }) if read.publication && read.profile_uri.as_ref() == Some(uri) => {
+            state
+                .spotify_browse
+                .profile_states
+                .insert(uri.clone(), *published);
+        }
         Ok(CatalogResult::SavedStates(states)) if states.len() == read.uris.len() => {
             for (uri, followed) in read.uris.iter().zip(states) {
                 state
@@ -2127,6 +2145,17 @@ unsafe fn context_loaded(
         ),
         _ => {}
     }
+    if !read.publication
+        && let Some(uri) = &read.profile_uri
+    {
+        let request = CatalogRequest::PlaylistProfileState(uri.clone());
+        read.publication = true;
+        state.spotify_browse.context_read = Some(read);
+        if let Some(service) = super::spotify::service(window) {
+            service.load_catalog(stamp, request);
+        }
+        return true;
+    }
     let player = read.identity.player;
     state.spotify_browse.context_ready = Some(read.identity);
     if player {
@@ -2143,6 +2172,28 @@ pub(super) fn artist_followed(state: &WindowState, item: &apricot_core::MediaIte
         .artist_states
         .get(&playing_artist(item)?)
         .copied()
+}
+
+pub(super) unsafe fn toggle_profile_publication(window: HWND) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    let Some(item) = context_item(state).filter(|item| item.kind == ItemKind::Playlist) else {
+        return;
+    };
+    if !state.spotify_browse.profile_states.contains_key(&item.uri) {
+        set_status(
+            state,
+            super::spotify::catalog(state).text("spotify_profile_state_unavailable"),
+            true,
+        );
+        return;
+    }
+    begin_edit(
+        window,
+        apricot_spotify::LibraryEdit::ToggleProfilePublication { uri: item.uri },
+        Pending::Plain,
+    );
 }
 
 pub(super) unsafe fn toggle_artist_follow(window: HWND, active: Option<&apricot_core::MediaItem>) {
@@ -2246,6 +2297,8 @@ pub(super) fn row_menu(state: &WindowState) -> Option<apricot_app::context_menu:
         }),
         artist_followed: artist_uri(&item)
             .and_then(|uri| state.spotify_browse.artist_states.get(&uri).copied()),
+        playlist_profile: item.kind == ItemKind::Playlist,
+        playlist_published: state.spotify_browse.profile_states.get(&item.uri).copied(),
     })
 }
 
@@ -2660,6 +2713,19 @@ pub(super) unsafe fn edited(
     };
     let mut follow_up = None;
     let text = match (&outcome, pending) {
+        (O::ProfilePublication { uri, published }, _) => {
+            state
+                .spotify_browse
+                .profile_states
+                .insert(uri.clone(), *published);
+            texts
+                .text(if *published {
+                    "spotify_profile_published"
+                } else {
+                    "spotify_profile_unpublished"
+                })
+                .to_owned()
+        }
         (O::SavedBatch { uris, saved }, _) => {
             let changed: std::collections::HashSet<_> = uris.iter().collect();
             for frame in &mut state.spotify_browse.frames {
@@ -2884,6 +2950,7 @@ pub(super) unsafe fn command(window: HWND, command: apricot_app::context_menu::C
         }
         C::SpotifyToggleSaved => toggle_saved(window),
         C::SpotifyToggleMenuPin => toggle_menu_pin(window),
+        C::SpotifyToggleProfilePublication => toggle_profile_publication(window),
         C::SpotifyToggleArtistFollow => toggle_artist_follow(window, None),
         C::SpotifyAddToPlaylist => {
             begin_selection(window, &item.uri, None);

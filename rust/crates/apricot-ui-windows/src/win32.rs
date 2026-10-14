@@ -2453,6 +2453,7 @@ unsafe fn execute_context_command(
     use ContextCommand as C;
     match command {
         C::SpotifyToggleMenuPin => spotify_browse::toggle_menu_pin(window),
+        C::SpotifyToggleProfilePublication => spotify_browse::toggle_profile_publication(window),
         C::SpotifyToggleArtistFollow => {
             spotify_browse::toggle_artist_follow(window, active_item.as_ref());
         }
