@@ -1,3 +1,8 @@
+# v2.0.0-beta.15 - Reliable updates on Windows
+
+## Fixed
+- In-app updates on Windows no longer fail because a yt-dlp helper kept running after ApricotPlayer closed. The app stops the helper on exit and the installer closes leftovers.
+
 # v2.0.0-beta.14 - Window title and Resume fixes
 
 ## Improved
