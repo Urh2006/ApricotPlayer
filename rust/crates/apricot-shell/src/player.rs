@@ -1112,6 +1112,7 @@ impl Shell {
             self.close_player_runtime(ui);
         }
         self.spotify_shutdown();
+        apricot_platform::stop_playback_resolver();
     }
 }
 

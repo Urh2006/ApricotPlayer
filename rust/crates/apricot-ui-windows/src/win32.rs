@@ -1288,6 +1288,7 @@ unsafe extern "system" fn window_proc(
                 drop(state);
                 SetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0), 0);
             }
+            apricot_platform::stop_playback_resolver();
             PostQuitMessage(0);
             LRESULT(0)
         }

@@ -36,7 +36,7 @@ PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\ApricotPlayer.exe
-CloseApplications=yes
+CloseApplications=force
 RestartApplications=no
 ChangesAssociations=yes
 

@@ -745,8 +745,9 @@ where
 /// Starting yt-dlp.exe costs about a second before it does any work (measured
 /// 1.15 s for `--version`). A process started in advance with
 /// `--batch-file -` has paid that and waits for its URL on standard input;
-/// a playback start through it measured 0.6 to 1 s faster. When Apricot
-/// exits, the pipe closes and the waiting process ends without work.
+/// a playback start through it measured 0.6 to 1 s faster. Apricot stops it
+/// when it exits: a closed pipe alone did not always end it (beta 14), and a
+/// leftover yt-dlp.exe made the installer refuse to update the app.
 const WARM_RESOLVER_ENABLED: bool = cfg!(not(test));
 
 struct WarmResolver {
@@ -763,6 +764,16 @@ pub fn prewarm_playback_resolver(executable: &Path, config: YoutubeSessionConfig
         && engine.configure(config).is_ok()
     {
         engine.prewarm_resolver();
+    }
+}
+
+/// Stops the waiting yt-dlp; the application calls this when it exits.
+pub fn stop_playback_resolver() {
+    let Ok(mut slot) = WARM_RESOLVER.lock() else {
+        return;
+    };
+    if let Some(mut warm) = slot.take() {
+        stop_child(&mut warm.child);
     }
 }
 
