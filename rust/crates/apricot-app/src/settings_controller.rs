@@ -146,6 +146,7 @@ impl SettingsController {
                     other_id.as_str() != action_id
                         && wanted.is_some()
                         && apricot_core::shortcut::ShortcutChord::parse(other) == wanted
+                        && !apricot_core::action::actions_may_share_a_chord(action_id, other_id)
                 })
         {
             return Err(SettingsControllerError::ShortcutConflict {
@@ -183,6 +184,28 @@ mod tests {
     use tempfile::tempdir;
 
     use super::SettingsController;
+
+    /// Beta 17: the Spotify last-song key may repeat the next related
+    /// video's key, since only one of them applies to the playing item.
+    #[test]
+    fn spotify_list_edges_may_share_the_related_video_key_only() {
+        let root = tempdir().expect("temporary directory");
+        let paths =
+            SettingsPaths::for_app_data(&root.path().join("beta"), &root.path().join("old"));
+        let mut controller = SettingsController::load(paths, SettingsDocument::default());
+        controller
+            .set_shortcut("spotify_last_track", "Ctrl+Shift+PageDown")
+            .expect("shared with the next related video");
+        controller
+            .set_shortcut("player_next_related", "Ctrl+Shift+PageDown")
+            .expect("shared with the last Spotify song");
+        assert!(
+            controller
+                .set_shortcut("spotify_first_track", "Ctrl+PageDown")
+                .is_err(),
+            "Ctrl+PageDown is Next"
+        );
+    }
 
     #[test]
     fn shortcut_conflicts_use_the_canonical_chord() {

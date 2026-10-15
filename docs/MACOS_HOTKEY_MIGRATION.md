@@ -22,6 +22,12 @@ default for `spotify_queue` migrates the same way as background play/pause;
 The Spotify hub shows its shortcuts with `display_shortcut`, so every Spotify
 label names Command and Option on macOS, as the main menu does.
 
+Beta 17: Add to playback queue defaults to `Ctrl+Shift+Enter` on macOS
+(`Command+Shift+Return`), because `Command+Shift+Q` opens the macOS log out
+dialog, and Current downloads to `Ctrl+Alt+J` (`Command+Option+J`), because
+`Command+Option+D` turns Dock hiding on and off. Both stored Windows defaults
+migrate the same way.
+
 Character global shortcuts resolve virtual keys through the active TIS Unicode
 keyboard layout and UCKeyTranslate, with an ASCII-capable layout fallback for
 input methods that have no layout data. Input-source notifications re-register

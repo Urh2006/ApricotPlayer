@@ -752,6 +752,16 @@ impl SpotifyPlayback {
         });
     }
 
+    /// The first or (`last`) the last song of the playing list, in the
+    /// list's own order (beta 17). It is a song the user chose: when it
+    /// cannot load, the player says so instead of playing another.
+    pub fn play_context_edge(&self, last: bool) {
+        let revision = self.shared.manual_selection(true);
+        self.with_spirc(|spirc| {
+            let _ = spirc.play_context_edge(last, revision);
+        });
+    }
+
     pub fn set_shuffle(&self, shuffle: bool) {
         // Beta 6 check (plan 4a.3): which context Spotify reports when the
         // user changes shuffle, e.g. Liked Songs from the menu or Library.

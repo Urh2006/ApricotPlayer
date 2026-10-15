@@ -110,7 +110,13 @@ impl Shell {
         } else {
             view_shortcut_scope(self.view)
         };
-        let context = ShortcutContext::new(scope, accepts_text);
+        // Beta 17: the Spotify-only player keys apply while a Spotify song plays.
+        let session = self.application.player_session();
+        let spotify = session.is_open()
+            && session
+                .current_item()
+                .is_some_and(|item| item.source == apricot_core::MediaSource::Spotify);
+        let context = ShortcutContext::new(scope, accepts_text).with_spotify(spotify);
         // Beta 4: a focused Spotify row owns its keys before global
         // shortcuts, and the transport keys reach a player that keeps
         // playing behind another screen.
@@ -221,7 +227,10 @@ mod tests {
         let mut shell = shell();
         let spotify: Vec<_> = apricot_core::action::ACTIONS
             .iter()
-            .filter(|action| action.id.as_str().contains("spotify"))
+            .filter(|action| {
+                action.id.as_str().contains("spotify")
+                    && !apricot_core::action::SPOTIFY_PLAYER_ACTIONS.contains(&action.id.as_str())
+            })
             .collect();
         assert_eq!(spotify.len(), 12);
         for action in spotify {
@@ -239,6 +248,75 @@ mod tests {
                     action.id.as_str()
                 );
             }
+        }
+    }
+
+    fn media(id: &str, source: apricot_core::MediaSource) -> apricot_core::MediaItem {
+        apricot_core::MediaItem {
+            id: apricot_core::MediaId(id.into()),
+            source,
+            kind: apricot_core::MediaKind::Audio,
+            title: "Title".into(),
+            url: None,
+            stream_url: None,
+            external_audio_url: None,
+            local_path: None,
+            channel: String::new(),
+            duration_seconds: None,
+            metadata: std::collections::BTreeMap::new(),
+        }
+    }
+
+    /// Beta 17: while a Spotify song plays, `Ctrl+Shift+PageUp` and
+    /// `PageDown` (Command on macOS) go to the first and last song of its
+    /// list, in the player and behind another screen; otherwise `PageDown`
+    /// stays the next related video.
+    #[test]
+    fn spotify_list_edges_follow_the_playing_item() {
+        let first = ShortcutChord::parse(
+            apricot_core::action::action_by_id("spotify_first_track")
+                .unwrap()
+                .default_shortcut(),
+        )
+        .unwrap();
+        let last = ShortcutChord::parse(
+            apricot_core::action::action_by_id("spotify_last_track")
+                .unwrap()
+                .default_shortcut(),
+        )
+        .unwrap();
+        let mut shell = shell();
+        shell.view = View::Player;
+        shell
+            .application
+            .start_player_item(media("dQw4w9WgXcQ", apricot_core::MediaSource::Youtube));
+        assert_eq!(
+            shell.route_key(last, false, FocusKind::PlayerSurface),
+            KeyRoute::Run("player_next_related")
+        );
+        assert_eq!(
+            shell.route_key(first, false, FocusKind::PlayerSurface),
+            KeyRoute::Unhandled
+        );
+        shell.application.start_player_item(media(
+            "spotify:track:4u7EnebtmKWzUH433cf5Qv",
+            apricot_core::MediaSource::Spotify,
+        ));
+        for (view, focus) in [
+            (View::Player, FocusKind::PlayerSurface),
+            (View::SpotifyBrowse, FocusKind::List),
+        ] {
+            shell.view = view;
+            assert_eq!(
+                shell.route_key(first, false, focus),
+                KeyRoute::Run("spotify_first_track"),
+                "{view:?}"
+            );
+            assert_eq!(
+                shell.route_key(last, false, focus),
+                KeyRoute::Run("spotify_last_track"),
+                "{view:?}"
+            );
         }
     }
 

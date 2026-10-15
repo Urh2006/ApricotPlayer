@@ -639,6 +639,16 @@ mod tests {
             settings.keyboard_shortcuts["spotify_search"],
             "Ctrl+Alt+Shift+Y"
         );
+        // Beta 17: Command+Shift+Q asks to log out, Command+Option+D hides
+        // the Dock.
+        assert_eq!(
+            settings.keyboard_shortcuts["add_to_playback_queue"],
+            "Ctrl+Shift+Enter"
+        );
+        assert_eq!(
+            settings.keyboard_shortcuts["open_current_downloads"],
+            "Ctrl+Alt+J"
+        );
     }
 
     #[cfg(target_os = "macos")]

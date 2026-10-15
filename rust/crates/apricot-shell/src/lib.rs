@@ -581,6 +581,8 @@ impl Shell {
                 self.show_context_menu_for_active_view(ui);
                 return;
             }
+            // Beta 17: they act only on a Spotify song (spotify_transport).
+            "spotify_first_track" | "spotify_last_track" => return,
             _ => {}
         }
         // Every other action arrives with its macOS screen.

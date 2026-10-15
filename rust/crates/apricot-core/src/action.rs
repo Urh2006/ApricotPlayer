@@ -53,8 +53,29 @@ pub fn macos_default_shortcut(id: &str) -> Option<&'static str> {
         "background_play_pause" => Some("Ctrl+Shift+Space"),
         // Command+Option+Shift+Q logs out of macOS at once, without asking.
         "spotify_queue" => Some("Ctrl+Alt+Shift+U"),
+        // Command+Shift+Q opens the macOS log out dialog (beta 17).
+        "add_to_playback_queue" => Some("Ctrl+Shift+Enter"),
+        // Command+Option+D turns Dock hiding on and off (beta 17).
+        "open_current_downloads" => Some("Ctrl+Alt+J"),
         _ => None,
     }
+}
+
+/// Player actions only for a playing Spotify song (beta 17). While one
+/// plays, they take their chord before the other player actions.
+pub const SPOTIFY_PLAYER_ACTIONS: [&str; 2] = ["spotify_first_track", "spotify_last_track"];
+
+/// Player actions that never act on a Spotify song.
+const NEVER_FOR_SPOTIFY: [&str; 1] = ["player_next_related"];
+
+/// Two actions may share one chord when one only acts on a Spotify song and
+/// the other never does: `Ctrl+Shift+PageDown` is the next related video on
+/// `YouTube` and the last song of a Spotify list.
+pub fn actions_may_share_a_chord(first: &str, second: &str) -> bool {
+    let pair = |spotify: &str, other: &str| {
+        SPOTIFY_PLAYER_ACTIONS.contains(&spotify) && NEVER_FOR_SPOTIFY.contains(&other)
+    };
+    pair(first, second) || pair(second, first)
 }
 
 const GLOBAL: &[ActionScope] = &[ActionScope::Global];
@@ -210,6 +231,9 @@ pub const ACTIONS: &[ActionDefinition] = &[
     action!("spotify_dislike", "Ctrl+Shift+H", LIST_PLAYER),
     action!("spotify_daily_mixes", "Ctrl+Alt+Shift+M", GLOBAL),
     action!("spotify_radio", "Ctrl+Alt+Shift+R", LIST_PLAYER),
+    // Beta 17: only in the shortcut editor, never as player labels.
+    action!("spotify_first_track", "Ctrl+Shift+PageUp", PLAYER),
+    action!("spotify_last_track", "Ctrl+Shift+PageDown", PLAYER),
 ];
 
 /// Number of leading [`ACTIONS`] that mirror the Python 1.0.21 catalog.
@@ -231,7 +255,7 @@ mod tests {
     fn baseline_contains_91_unique_actions() {
         let ids: HashSet<_> = ACTIONS.iter().map(|action| action.id.as_str()).collect();
         assert_eq!(PYTHON_BASELINE_ACTIONS, 91);
-        assert_eq!(ACTIONS.len(), PYTHON_BASELINE_ACTIONS + 12);
+        assert_eq!(ACTIONS.len(), PYTHON_BASELINE_ACTIONS + 14);
         assert_eq!(ids.len(), ACTIONS.len());
         assert!(
             ACTIONS[PYTHON_BASELINE_ACTIONS..]
@@ -278,9 +302,16 @@ mod tests {
         let mac = |action: &ActionDefinition| {
             macos_default_shortcut(action.id.as_str()).unwrap_or(action.default_windows_shortcut)
         };
-        // Command+Option+Shift+Q logs out of macOS at once and Command+Space
-        // opens Spotlight; neither may be a default there.
-        let reserved = ["Ctrl+Alt+Shift+Q", "Ctrl+Space"].map(ShortcutChord::parse);
+        // Command+Option+Shift+Q logs out of macOS at once, Command+Shift+Q
+        // asks to log out, Command+Option+D hides the Dock and Command+Space
+        // opens Spotlight; none may be a default there.
+        let reserved = [
+            "Ctrl+Alt+Shift+Q",
+            "Ctrl+Shift+Q",
+            "Ctrl+Alt+D",
+            "Ctrl+Space",
+        ]
+        .map(ShortcutChord::parse);
         for action in ACTIONS {
             let chord = ShortcutChord::parse(mac(action));
             assert!(chord.is_some(), "{:?}", action.id);
@@ -294,13 +325,49 @@ mod tests {
             action_by_id("spotify_search").map(mac),
             Some("Ctrl+Alt+Shift+Y")
         );
-        let global: Vec<_> = ACTIONS
-            .iter()
-            .filter(|action| action.scopes.contains(&ActionScope::Global))
-            .map(|action| ShortcutChord::parse(mac(action)))
-            .collect();
-        let unique: HashSet<_> = global.iter().collect();
-        assert_eq!(unique.len(), global.len());
+        assert_eq!(
+            action_by_id("add_to_playback_queue").map(mac),
+            Some("Ctrl+Shift+Enter")
+        );
+        assert_eq!(
+            action_by_id("open_current_downloads").map(mac),
+            Some("Ctrl+Alt+J")
+        );
+    }
+
+    /// No two defaults share a chord, on Windows or on macOS, except a
+    /// Spotify-only player action with one that never acts on Spotify.
+    #[test]
+    fn default_chords_are_unique_except_the_spotify_pair() {
+        use super::{ActionDefinition, actions_may_share_a_chord, macos_default_shortcut};
+        use crate::shortcut::ShortcutChord;
+        let windows = |action: &ActionDefinition| action.default_windows_shortcut;
+        let mac = |action: &ActionDefinition| {
+            macos_default_shortcut(action.id.as_str()).unwrap_or(action.default_windows_shortcut)
+        };
+        for default in [windows, mac] {
+            for (index, first) in ACTIONS.iter().enumerate() {
+                for second in &ACTIONS[index + 1..] {
+                    if ShortcutChord::parse(default(first)) == ShortcutChord::parse(default(second))
+                    {
+                        assert!(
+                            actions_may_share_a_chord(first.id.as_str(), second.id.as_str()),
+                            "{:?} and {:?}",
+                            first.id,
+                            second.id
+                        );
+                    }
+                }
+            }
+        }
+        assert!(actions_may_share_a_chord(
+            "player_next_related",
+            "spotify_last_track"
+        ));
+        assert!(!actions_may_share_a_chord(
+            "player_next",
+            "spotify_last_track"
+        ));
     }
 
     #[test]

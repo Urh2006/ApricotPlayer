@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::action::{ACTIONS, ActionDefinition, ActionScope};
+use crate::action::{ACTIONS, ActionDefinition, ActionScope, SPOTIFY_PLAYER_ACTIONS};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ShortcutKey {
@@ -103,6 +103,9 @@ impl ShortcutChord {
 pub struct ShortcutContext {
     pub scope: ActionScope,
     pub accepts_text: bool,
+    /// A Spotify song is the player's item: the Spotify-only player actions
+    /// apply and take their chord first.
+    pub spotify: bool,
 }
 
 impl ShortcutContext {
@@ -110,7 +113,14 @@ impl ShortcutContext {
         Self {
             scope,
             accepts_text,
+            spotify: false,
         }
+    }
+
+    #[must_use]
+    pub const fn with_spotify(mut self, spotify: bool) -> Self {
+        self.spotify = spotify;
+        self
     }
 }
 
@@ -153,12 +163,17 @@ pub fn background_player_action_for_shortcut(
     action_for_shortcut(
         shortcuts,
         chord,
-        ShortcutContext::new(ActionScope::Player, false),
+        ShortcutContext::new(ActionScope::Player, false).with_spotify(context.spotify),
     )
     .filter(|action| {
         matches!(
             action.id.as_str(),
-            "player_previous" | "player_next" | "player_next_related" | "player_fullscreen"
+            "player_previous"
+                | "player_next"
+                | "player_next_related"
+                | "player_fullscreen"
+                | "spotify_first_track"
+                | "spotify_last_track"
         )
     })
 }
@@ -169,7 +184,16 @@ fn resolve_pass(
     context: ShortcutContext,
     global_pass: bool,
 ) -> Option<&'static ActionDefinition> {
-    ACTIONS.iter().find(|action| {
+    let spotify_only =
+        |action: &&ActionDefinition| SPOTIFY_PLAYER_ACTIONS.contains(&action.id.as_str());
+    // While a Spotify song plays, its own player actions come first; without
+    // one they do not apply at all.
+    let spotify_actions = ACTIONS
+        .iter()
+        .filter(spotify_only)
+        .filter(|_| context.spotify);
+    let other_actions = ACTIONS.iter().filter(|action| !spotify_only(action));
+    spotify_actions.chain(other_actions).find(|action| {
         let is_global = action.scopes.contains(&ActionScope::Global);
         if is_global != global_pass
             || (!is_global && !action.scopes.contains(&context.scope))
@@ -294,6 +318,44 @@ mod tests {
         ShortcutChord, ShortcutContext, ShortcutKey, action_for_shortcut,
         background_player_action_for_shortcut, focused_action_for_shortcut,
     };
+
+    /// Beta 17: `Ctrl+Shift+PageUp` and `PageDown` go to the first and last
+    /// song while a Spotify song plays; otherwise `PageDown` stays the next
+    /// related video and `PageUp` does nothing.
+    #[test]
+    fn spotify_list_edges_share_a_chord_only_while_spotify_plays() {
+        let shortcuts = BTreeMap::new();
+        let player = ShortcutContext::new(ActionScope::Player, false);
+        let resolve = |key: &str, context| {
+            action_for_shortcut(&shortcuts, ShortcutChord::parse(key).unwrap(), context)
+                .map(|action| action.id.as_str())
+        };
+        assert_eq!(
+            resolve("Ctrl+Shift+PageDown", player),
+            Some("player_next_related")
+        );
+        assert_eq!(resolve("Ctrl+Shift+PageUp", player), None);
+        let spotify = player.with_spotify(true);
+        assert_eq!(
+            resolve("Ctrl+Shift+PageDown", spotify),
+            Some("spotify_last_track")
+        );
+        assert_eq!(
+            resolve("Ctrl+Shift+PageUp", spotify),
+            Some("spotify_first_track")
+        );
+        // Behind another screen the Spotify player keeps both keys.
+        let list = ShortcutContext::new(ActionScope::List, false).with_spotify(true);
+        assert_eq!(
+            background_player_action_for_shortcut(
+                &shortcuts,
+                ShortcutChord::parse("Ctrl+Shift+PageUp").unwrap(),
+                list
+            )
+            .map(|action| action.id.as_str()),
+            Some("spotify_first_track")
+        );
+    }
 
     #[test]
     fn focused_spotify_rows_like_the_selection_despite_a_global_collision() {
@@ -466,10 +528,13 @@ mod tests {
             let key = player_action.default_shortcut();
             let shortcuts =
                 BTreeMap::from([("new_subscription_videos".to_owned(), key.to_owned())]);
+            // A Spotify-only player action applies while a Spotify song plays.
+            let spotify =
+                crate::action::SPOTIFY_PLAYER_ACTIONS.contains(&player_action.id.as_str());
             let action = action_for_shortcut(
                 &shortcuts,
                 ShortcutChord::parse(key).unwrap(),
-                ShortcutContext::new(ActionScope::Player, false),
+                ShortcutContext::new(ActionScope::Player, false).with_spotify(spotify),
             )
             .unwrap();
             assert_eq!(action.id, player_action.id, "player zone: {key}");

@@ -146,6 +146,7 @@ mod transport_regressions {
 
     const FIRST: &str = "spotify:track:0000000000000000000001";
     const SECOND: &str = "spotify:track:0000000000000000000002";
+    const THIRD: &str = "spotify:track:0000000000000000000003";
     struct SilentSink;
     impl Sink for SilentSink {
         fn write(&mut self, _: AudioPacket, _: &mut Converter) -> SinkResult<()> {
@@ -596,6 +597,52 @@ mod transport_regressions {
         assert_eq!(task.selected_request, None);
     }
 
+    fn three_tracks_at(task: &mut SpircTask, index: usize) {
+        task.load_context_from_tracks(vec![FIRST.to_owned(), SECOND.to_owned(), THIRD.to_owned()])
+            .unwrap();
+        task.connect_state.set_current_track(index).unwrap();
+        task.connect_state
+            .reset_playback_to_position(Some(index))
+            .unwrap();
+        task.load_track(true, 0).unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_list_edges_play_its_first_and_last_song_as_chosen_songs() {
+        let mut task = task(false);
+        three_tracks_at(&mut task, 1);
+        task.handle_context_edge(true, 4).await.unwrap();
+        assert_eq!(task.connect_state.player().track.uri, THIRD);
+        assert_eq!(task.selected_request, task.play_request_id);
+        assert_eq!(task.playback_revision, 4);
+        task.handle_context_edge(false, 5).await.unwrap();
+        assert_eq!(task.connect_state.player().track.uri, FIRST);
+        assert!(matches!(
+            task.play_status,
+            SpircPlayStatus::LoadingPlay { position_ms: 0 }
+        ));
+    }
+
+    #[tokio::test]
+    async fn the_first_song_is_the_lists_first_also_while_shuffle_is_on() {
+        let mut task = task(false);
+        three_tracks_at(&mut task, 2);
+        task.connect_state.set_shuffle(true);
+        task.connect_state.shuffle_new().unwrap();
+        // Shuffle puts the playing song first in its own order.
+        assert_eq!(
+            task.connect_state
+                .get_context(ContextType::Default)
+                .unwrap()
+                .tracks[0]
+                .uri,
+            THIRD
+        );
+        task.handle_context_edge(false, 1).await.unwrap();
+        assert_eq!(task.connect_state.player().track.uri, FIRST);
+        assert!(task.connect_state.shuffling_context(), "shuffle stays on");
+    }
+
     #[tokio::test]
     async fn natural_end_also_waits_for_autoplay_instead_of_stopping() {
         let mut task = task(true);
@@ -637,6 +684,11 @@ enum SpircCommand {
     Activate,
     Transfer(Option<TransferRequest>),
     Load(LoadRequest, Option<u64>),
+    // ApricotPlayer patch: the first or last song of the context (beta 17).
+    PlayContextEdge {
+        last: bool,
+        revision: u64,
+    },
     // ApricotPlayer patch: local queue edits.
     AddToQueue(String),
     SetQueue {
@@ -908,6 +960,14 @@ impl Spirc {
     /// Goes to the previous track for a manual intent tag.
     pub fn prev_with_revision(&self, revision: u64) -> Result<(), Error> {
         Ok(self.commands.send(SpircCommand::Prev(Some(revision)))?)
+    }
+
+    /// ApricotPlayer: plays the first or (`last`) the last song of the
+    /// current context in its own order, as a song the user chose.
+    pub fn play_context_edge(&self, last: bool, revision: u64) -> Result<(), Error> {
+        Ok(self
+            .commands
+            .send(SpircCommand::PlayContextEdge { last, revision })?)
     }
 
     /// Loads for a manual intent tag. When the request names its song and
@@ -1324,6 +1384,9 @@ impl SpircTask {
             SpircCommand::SetVolume(volume) => self.set_volume(volume),
             SpircCommand::Load(command, revision) => {
                 self.handle_apricot_load(command, revision).await?;
+            }
+            SpircCommand::PlayContextEdge { last, revision } => {
+                self.handle_context_edge(last, revision).await?;
             }
             SpircCommand::AddToQueue(uri) => {
                 let mut track = ProvidedTrack::new();
@@ -2081,6 +2144,65 @@ impl SpircTask {
             self.selected_request = self.play_request_id;
         }
         Ok(())
+    }
+
+    /// ApricotPlayer: the first or the last song of the playing context, in
+    /// the list's own order also while shuffle is on. For the last song the
+    /// remaining pages are read first, so it is the list's real last song.
+    async fn handle_context_edge(&mut self, last: bool, revision: u64) -> Result<(), Error> {
+        let context_uri = self.connect_state.context_uri().clone();
+        if context_uri.is_empty() {
+            return Ok(());
+        }
+        // Bounded: each pass resolves one queued page or recommendation.
+        let mut passes = 0;
+        while last && self.context_resolver.has_next() && passes < 64 {
+            passes += 1;
+            let context = self
+                .context_resolver
+                .get_next_context(|| {
+                    self.connect_state
+                        .recent_track_uris()
+                        .into_iter()
+                        .filter(|t| !t.starts_with("spotify:local"))
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            self.handle_next_context(context);
+        }
+        let mut ordered = self
+            .connect_state
+            .get_context(ContextType::Default)?
+            .tracks
+            .clone();
+        ordered.unshuffle();
+        let edge = if last {
+            ordered.last()
+        } else {
+            ordered.first()
+        };
+        let Some(track) = edge else {
+            return Ok(());
+        };
+        let playing_track = if track.uid.is_empty() {
+            PlayingTrack::Uri(track.uri.clone())
+        } else {
+            PlayingTrack::Uid(track.uid.clone())
+        };
+        let request = LoadRequest::from_context_uri(
+            context_uri,
+            LoadRequestOptions {
+                start_playing: true,
+                seek_to: 0,
+                context_options: Some(LoadContextOptions::Options(crate::model::Options {
+                    shuffle: self.connect_state.shuffling_context(),
+                    repeat: self.connect_state.repeat_context(),
+                    repeat_track: self.connect_state.repeat_track(),
+                })),
+                playing_track: Some(playing_track),
+            },
+        );
+        self.handle_apricot_load(request, Some(revision)).await
     }
 
     /// The selected song could not load: it stays the current song, stopped,

@@ -40,6 +40,11 @@ and queue/history functions in `src/state/tracks.rs`:
   never starts in place of the selected one. The record ends once the song
   plays.
 
+* Beta 17: `Spirc::play_context_edge(last, revision)` plays the first or last
+  song of the current context in the list's own order (an unshuffled copy of
+  the context), reading the remaining pages first for the last song. It loads
+  through the same path as a named song, so a song that cannot load stops.
+
 Upstream: `dev` has `Spirc::add_to_queue` and `clear_queue` and a `SetQueue`
 player event without `uid`; a pull request with the confirmed state and the
 revision check should replace this copy.

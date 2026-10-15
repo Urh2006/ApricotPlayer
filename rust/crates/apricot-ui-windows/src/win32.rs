@@ -12815,6 +12815,12 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
         return false;
     }
     let shortcuts = &state.application.settings().keyboard_shortcuts;
+    // Beta 17: the Spotify-only player keys apply while a Spotify song plays.
+    let session = state.application.player_session();
+    let spotify = session.is_open()
+        && session
+            .current_item()
+            .is_some_and(|item| item.source == apricot_core::MediaSource::Spotify);
     let embedded_list_focus =
         state.view == MainView::Player && state.embedded_results.is_some() && focus == state.list;
     if embedded_list_focus {
@@ -12832,7 +12838,7 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
                     action_for_shortcut(
                         shortcuts,
                         chord,
-                        ShortcutContext::new(ActionScope::Player, false),
+                        ShortcutContext::new(ActionScope::Player, false).with_spotify(spotify),
                     )
                 })
                 .flatten()
@@ -12861,7 +12867,7 @@ unsafe fn handle_shortcut_message(window: HWND, message: &MSG) -> bool {
     } else {
         view_shortcut_scope(state.view)
     };
-    let context = ShortcutContext::new(scope, accepts_text);
+    let context = ShortcutContext::new(scope, accepts_text).with_spotify(spotify);
     let resolve = if state.view == MainView::SpotifyBrowse && focus == state.list {
         focused_action_for_shortcut
     } else {
@@ -13458,6 +13464,8 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "copy_diagnostic_report" => copy_diagnostic_report(window),
         "file_converter" => show_converter(window, false),
         "folder_converter" => show_converter(window, true),
+        // Beta 17: they act only on a Spotify song (spotify::transport).
+        "spotify_first_track" | "spotify_last_track" => {}
         _ => announce_unimplemented_action(window, action_id),
     }
 }

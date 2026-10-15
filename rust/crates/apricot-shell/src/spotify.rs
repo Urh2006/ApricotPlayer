@@ -1322,7 +1322,12 @@ impl Shell {
     pub(crate) fn spotify_transport(&mut self, ui: &mut dyn ShellUi, action_id: &str) -> bool {
         if !matches!(
             action_id,
-            "player_next" | "player_previous" | "player_shuffle" | "player_repeat"
+            "player_next"
+                | "player_previous"
+                | "player_shuffle"
+                | "player_repeat"
+                | "spotify_first_track"
+                | "spotify_last_track"
         ) {
             return false;
         }
@@ -1349,6 +1354,11 @@ impl Shell {
             }
             "player_previous" => {
                 playback.previous();
+                None
+            }
+            // Beta 17: the list's first or last song, announced as it plays.
+            "spotify_first_track" | "spotify_last_track" => {
+                playback.play_context_edge(action_id == "spotify_last_track");
                 None
             }
             // Off, on, smart shuffle (playlists only), off: the order of the
