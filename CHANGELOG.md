@@ -1,3 +1,12 @@
+# v2.0.0-beta.16 - Spotify selection and Mac shortcuts
+
+## Fixed
+- A Spotify song you select no longer turns into the song below it when it cannot start. An interrupted load is tried again, and a song that still cannot play is reported instead of skipped.
+- On the Mac, the Spotify menu names its shortcuts with Command and Option, as the main menu does.
+
+## Changed
+- On the Mac, the Spotify queue shortcut is Command+Option+Shift+U, because Command+Option+Shift+Q logs out of macOS immediately. Windows keeps Ctrl+Alt+Shift+Q.
+
 # v2.0.0-beta.15 - Reliable updates on Windows
 
 ## Fixed
