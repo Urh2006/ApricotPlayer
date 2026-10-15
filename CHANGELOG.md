@@ -1,3 +1,11 @@
+# v2.0.0-beta.17 - Spotify list edges and safer Mac shortcuts
+
+## Added
+- While a Spotify song plays, Ctrl+Shift+PageUp plays the first song of its list and Ctrl+Shift+PageDown the last, in the list's own order also with shuffle on. They can be changed in the keyboard shortcuts settings and are not shown in the player. On YouTube, Ctrl+Shift+PageDown is still the next related video.
+
+## Changed
+- On the Mac, Add to playback queue is Command+Shift+Return, because Command+Shift+Q opens the macOS log out dialog, and Current downloads is Command+Option+J, because Command+Option+D hides the Dock.
+
 # v2.0.0-beta.16 - Spotify selection and Mac shortcuts
 
 ## Fixed
