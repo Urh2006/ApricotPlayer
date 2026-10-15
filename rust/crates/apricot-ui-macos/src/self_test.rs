@@ -283,17 +283,17 @@ pub fn folder_steps() -> Vec<(&'static str, Option<Key>)> {
             Some(key(keys::KEY_ESCAPE, "\u{1b}")),
         ),
         (
-            "Command+Shift+Q (add to queue)",
-            with(12, "Q", command_shift),
+            "Command+Shift+Return (add to queue)",
+            with(keys::KEY_RETURN, "\r", command_shift),
         ),
         ("Up", Some(key(keys::KEY_UP, "\u{f700}"))),
         (
-            "Command+Shift+Q (add to queue)",
-            with(12, "Q", command_shift),
+            "Command+Shift+Return (add to queue)",
+            with(keys::KEY_RETURN, "\r", command_shift),
         ),
         (
-            "Command+Shift+Q (already added)",
-            with(12, "Q", command_shift),
+            "Command+Shift+Return (already added)",
+            with(keys::KEY_RETURN, "\r", command_shift),
         ),
         (
             "Shift+F10 (context menu: Remove from playback queue)",
@@ -304,8 +304,8 @@ pub fn folder_steps() -> Vec<(&'static str, Option<Key>)> {
             ),
         ),
         (
-            "Command+Shift+Q (add to queue)",
-            with(12, "Q", command_shift),
+            "Command+Shift+Return (add to queue)",
+            with(keys::KEY_RETURN, "\r", command_shift),
         ),
         (
             "Command+Option+Q (playback queue)",
@@ -487,10 +487,10 @@ fn download_steps() -> Vec<(String, Option<Key>)> {
             }),
         ),
         named(
-            "Command+Option+D (downloads)",
+            "Command+Option+J (downloads)",
             Some(Key {
-                code: 2,
-                text: "d",
+                code: 38,
+                text: "j",
                 flags: Flags::Command | Flags::Option,
             }),
         ),

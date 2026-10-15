@@ -1178,7 +1178,13 @@ mod tests {
             labels(&entries),
             [
                 "Play".to_owned(),
-                shown("Add to playback queue", "Ctrl+Shift+Q"),
+                // Command+Shift+Return on macOS (beta 17).
+                shown(
+                    "Add to playback queue",
+                    apricot_core::action::action_by_id("add_to_playback_queue")
+                        .unwrap()
+                        .default_shortcut()
+                ),
                 shown("Remove from playback queue", "Ctrl+Shift+Delete"),
                 shown("Remove from playlist", "Ctrl+Shift+P"),
                 shown("Copy path", "Ctrl+L"),
