@@ -2293,6 +2293,86 @@ mod tests {
         );
     }
 
+    /// Beta 16: a chosen Spotify song that cannot load produces no stream;
+    /// the source's failure reaches the player as its playback failure.
+    #[test]
+    #[ignore = "requires APRICOT_TEST_MPV"]
+    fn real_libmpv_reports_a_pcm_source_failure_before_any_stream() {
+        use crate::{
+            PlaybackEngine, PlaybackEvent,
+            pcm_source::{PcmGeneration, PcmSource, PcmSourceEvent, PcmStream, set_pcm_source},
+        };
+        use std::sync::{Arc, Mutex};
+        #[derive(Default)]
+        struct Source {
+            failure: Mutex<Option<String>>,
+        }
+        impl PcmSource for Source {
+            fn start(&self, _: &MediaItem, _: u32, _: bool, _: bool) -> Result<(), String> {
+                *self.failure.lock().unwrap() = Some("spotify_unplayable".into());
+                Ok(())
+            }
+            fn set_paused(&self, _: bool) {}
+            fn seek(&self, _: u32) {}
+            fn stop(&self) {}
+            fn take_generation(&self) -> Option<PcmGeneration> {
+                None
+            }
+            fn open(&self, _: u64) -> Option<Arc<dyn PcmStream>> {
+                None
+            }
+            fn poll_event(&self) -> Option<PcmSourceEvent> {
+                self.failure
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .map(PcmSourceEvent::Failed)
+            }
+            fn format(&self) -> (String, Option<f64>) {
+                ("Test PCM".into(), None)
+            }
+        }
+        set_pcm_source(Some(Arc::new(Source::default())));
+        let mut engine = short_engine(false);
+        engine
+            .execute(PlaybackCommand::Load {
+                item: Box::new(MediaItem {
+                    id: MediaId("spotify:track:0000000000000000000002".into()),
+                    source: MediaSource::Spotify,
+                    kind: MediaKind::Audio,
+                    title: "Chosen".into(),
+                    url: None,
+                    stream_url: None,
+                    external_audio_url: None,
+                    local_path: None,
+                    channel: String::new(),
+                    duration_seconds: None,
+                    metadata: BTreeMap::new(),
+                }),
+                start_position_seconds: None,
+            })
+            .unwrap();
+        let mut events = Vec::new();
+        for _ in 0..50 {
+            // SAFETY: The engine owns this initialized client for the whole test.
+            if let Some(event) = unsafe { engine.next_event().unwrap() } {
+                events.push(event);
+            }
+            if events
+                .iter()
+                .any(|event| matches!(event, PlaybackEvent::Failed(_)))
+            {
+                break;
+            }
+        }
+        set_pcm_source(None);
+        assert!(
+            events.contains(&PlaybackEvent::Failed("spotify_unplayable".into())),
+            "{events:?}"
+        );
+        assert!(!events.contains(&PlaybackEvent::Ended), "{events:?}");
+    }
+
     #[test]
     #[ignore = "requires APRICOT_TEST_MPV and APRICOT_TEST_FFMPEG"]
     fn real_libmpv_pcm_to_regular_media_starts_on_first_load() {

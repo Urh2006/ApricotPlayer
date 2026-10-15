@@ -34,6 +34,12 @@ and queue/history functions in `src/state/tracks.rs`:
   has filled the queue. Previous, new loads, transfer and disconnect cancel a
   pending skip. Autoplay Off remains respected.
 
+* Beta 16: `load_with_revision` with a named song records that song's decoder
+  request (`selected_request`). An `Unavailable` for that request stops on the
+  song (`stop_on_selected_track`) instead of `handle_next`, so the row below
+  never starts in place of the selected one. The record ends once the song
+  plays.
+
 Upstream: `dev` has `Spirc::add_to_queue` and `clear_queue` and a `SetQueue`
 player event without `uid`; a pull request with the confirmed state and the
 revision check should replace this copy.

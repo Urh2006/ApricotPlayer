@@ -14,6 +14,14 @@ distinguished. This one legacy canonical value therefore migrates in either
 case. Other custom values, including explicit empty/unbound entries, survive
 normalization. The normalized value is persisted on the next settings save.
 
+Beta 16: Spotify queue defaults to `Ctrl+Alt+Shift+U` on macOS
+(`Command+Option+Shift+U`), because `Command+Option+Shift+Q` logs out of macOS
+at once without asking. Windows keeps `Ctrl+Alt+Shift+Q`. The stored Windows
+default for `spotify_queue` migrates the same way as background play/pause;
+`apricot_core::action::macos_default_shortcut` lists both platform differences.
+The Spotify hub shows its shortcuts with `display_shortcut`, so every Spotify
+label names Command and Option on macOS, as the main menu does.
+
 Character global shortcuts resolve virtual keys through the active TIS Unicode
 keyboard layout and UCKeyTranslate, with an ASCII-capable layout fallback for
 input methods that have no layout data. Input-source notifications re-register

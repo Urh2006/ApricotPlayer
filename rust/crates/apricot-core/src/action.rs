@@ -37,11 +37,23 @@ impl ActionDefinition {
     /// The platform's default logical chord. Explicit custom values remain
     /// separate; macOS stores Command with the logical Ctrl name.
     pub fn default_shortcut(&self) -> &'static str {
-        if cfg!(target_os = "macos") && self.id.as_str() == "background_play_pause" {
-            "Ctrl+Shift+Space"
+        if cfg!(target_os = "macos") {
+            macos_default_shortcut(self.id.as_str()).unwrap_or(self.default_windows_shortcut)
         } else {
             self.default_windows_shortcut
         }
+    }
+}
+
+/// macOS defaults that differ from Windows: there Command takes the place of
+/// Ctrl, and these Windows chords would be system shortcuts.
+pub fn macos_default_shortcut(id: &str) -> Option<&'static str> {
+    match id {
+        // Command+Space opens Spotlight.
+        "background_play_pause" => Some("Ctrl+Shift+Space"),
+        // Command+Option+Shift+Q logs out of macOS at once, without asking.
+        "spotify_queue" => Some("Ctrl+Alt+Shift+U"),
+        _ => None,
     }
 }
 
@@ -257,6 +269,38 @@ mod tests {
 
         let volume = action_by_id("player_volume_up").expect("volume action");
         assert_eq!(volume.repeat, RepeatPolicy::Native);
+    }
+
+    #[test]
+    fn macos_defaults_avoid_system_shortcuts_and_stay_unique() {
+        use super::{ActionDefinition, macos_default_shortcut};
+        use crate::shortcut::ShortcutChord;
+        let mac = |action: &ActionDefinition| {
+            macos_default_shortcut(action.id.as_str()).unwrap_or(action.default_windows_shortcut)
+        };
+        // Command+Option+Shift+Q logs out of macOS at once and Command+Space
+        // opens Spotlight; neither may be a default there.
+        let reserved = ["Ctrl+Alt+Shift+Q", "Ctrl+Space"].map(ShortcutChord::parse);
+        for action in ACTIONS {
+            let chord = ShortcutChord::parse(mac(action));
+            assert!(chord.is_some(), "{:?}", action.id);
+            assert!(!reserved.contains(&chord), "{:?}", action.id);
+        }
+        assert_eq!(
+            action_by_id("spotify_queue").map(mac),
+            Some("Ctrl+Alt+Shift+U")
+        );
+        assert_eq!(
+            action_by_id("spotify_search").map(mac),
+            Some("Ctrl+Alt+Shift+Y")
+        );
+        let global: Vec<_> = ACTIONS
+            .iter()
+            .filter(|action| action.scopes.contains(&ActionScope::Global))
+            .map(|action| ShortcutChord::parse(mac(action)))
+            .collect();
+        let unique: HashSet<_> = global.iter().collect();
+        assert_eq!(unique.len(), global.len());
     }
 
     #[test]

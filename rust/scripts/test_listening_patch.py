@@ -32,3 +32,8 @@ librespot-connect = { path = "connect" }
     if os.environ.get("APRICOT_TEST_OFFLINE") == "1":
         transport.insert(3, "--offline")
     subprocess.run(transport, check=True)
+    retries = ["cargo", "+1.98.0", "test", "--manifest-path", str(root / "Cargo.toml"),
+               "-p", "librespot-playback", "--no-default-features", "--features", "rustls-tls-native-roots", "load_retry"]
+    if os.environ.get("APRICOT_TEST_OFFLINE") == "1":
+        retries.insert(3, "--offline")
+    subprocess.run(retries, check=True)

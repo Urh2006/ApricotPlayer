@@ -164,6 +164,38 @@ mod tests {
         );
     }
 
+    /// Beta 16: Command+Option+Shift and a letter is the Spotify shortcut
+    /// the labels name, whether or not AppKit applies Shift to the letter.
+    #[test]
+    fn command_option_shift_letters_are_the_spotify_shortcuts() {
+        let modifiers = Modifiers {
+            command: true,
+            option: true,
+            shift: true,
+            control: false,
+        };
+        for (key_code, letter, action) in [
+            (16, "y", "spotify_search"),
+            (37, "l", "spotify_library"),
+            (3, "f", "spotify_liked_songs"),
+            (32, "u", "spotify_queue"),
+        ] {
+            // The macOS default, also when this test runs on another system.
+            let expected = apricot_core::action::action_by_id(action).and_then(|definition| {
+                ShortcutChord::parse(
+                    apricot_core::action::macos_default_shortcut(action)
+                        .unwrap_or(definition.default_windows_shortcut),
+                )
+            });
+            assert_eq!(chord(key_code, letter, modifiers), expected, "{action}");
+            assert_eq!(
+                chord(key_code, &letter.to_uppercase(), modifiers),
+                expected,
+                "{action}"
+            );
+        }
+    }
+
     #[test]
     fn the_control_key_is_left_to_the_system() {
         let modifiers = Modifiers {

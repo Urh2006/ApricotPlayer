@@ -89,6 +89,9 @@ struct SpircTask {
 
     play_request_id: Option<u64>,
     playback_revision: u64,
+    /// ApricotPlayer patch: the decoder request of a song the user selected.
+    /// If that song cannot load, playback stops on it instead of skipping.
+    selected_request: Option<u64>,
     play_status: SpircPlayStatus,
 
     /// A skip at the end waits for the authoritative context resolver.
@@ -174,6 +177,7 @@ mod transport_regressions {
             connect_established: false,
             play_request_id: None,
             playback_revision: 0,
+            selected_request: None,
             play_status: SpircPlayStatus::LoadingPlay { position_ms: 0 },
             connection_id_update: Box::pin(futures_util::stream::empty()),
             connect_state_update: Box::pin(futures_util::stream::empty()),
@@ -521,6 +525,77 @@ mod transport_regressions {
         assert_eq!(task.connect_state.player().track.uri, SECOND);
     }
 
+    fn two_tracks(playing_track: Option<PlayingTrack>) -> LoadRequest {
+        LoadRequest::from_tracks(
+            vec![FIRST.to_owned(), SECOND.to_owned()],
+            LoadRequestOptions {
+                start_playing: true,
+                playing_track,
+                ..Default::default()
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn a_selected_song_that_cannot_load_stops_instead_of_playing_the_next_row() {
+        let mut task = task(false);
+        task.handle_apricot_load(
+            two_tracks(Some(PlayingTrack::Uri(FIRST.to_owned()))),
+            Some(1),
+        )
+        .await
+        .unwrap();
+        let selected = task.play_request_id.unwrap();
+        assert_eq!(task.selected_request, Some(selected));
+        task.handle_player_event(PlayerEvent::Unavailable {
+            track_id: SpotifyUri::from_uri(FIRST).unwrap(),
+            play_request_id: selected,
+        })
+        .unwrap();
+        assert_eq!(
+            task.connect_state.player().track.uri,
+            FIRST,
+            "the row below must not start in place of the selected song"
+        );
+        assert_eq!(task.play_request_id, Some(selected));
+        assert!(matches!(task.play_status, SpircPlayStatus::Stopped));
+    }
+
+    #[tokio::test]
+    async fn songs_spotify_chose_still_skip_when_they_cannot_load() {
+        let mut task = task(false);
+        task.handle_apricot_load(two_tracks(None), Some(1))
+            .await
+            .unwrap();
+        let first = task.play_request_id.unwrap();
+        assert_eq!(task.selected_request, None);
+        task.handle_player_event(PlayerEvent::Unavailable {
+            track_id: SpotifyUri::from_uri(FIRST).unwrap(),
+            play_request_id: first,
+        })
+        .unwrap();
+        assert_eq!(task.connect_state.player().track.uri, SECOND);
+    }
+
+    #[tokio::test]
+    async fn a_selected_song_that_played_is_no_longer_protected() {
+        let mut task = task(false);
+        task.handle_apricot_load(
+            two_tracks(Some(PlayingTrack::Uri(FIRST.to_owned()))),
+            Some(1),
+        )
+        .await
+        .unwrap();
+        let selected = task.play_request_id.unwrap();
+        task.handle_player_event(PlayerEvent::Playing {
+            play_request_id: selected,
+            track_id: SpotifyUri::from_uri(FIRST).unwrap(),
+            position_ms: 0,
+        })
+        .unwrap();
+        assert_eq!(task.selected_request, None);
+    }
+
     #[tokio::test]
     async fn natural_end_also_waits_for_autoplay_instead_of_stopping() {
         let mut task = task(true);
@@ -689,6 +764,7 @@ impl Spirc {
 
             play_request_id: None,
             playback_revision: 0,
+            selected_request: None,
             play_status: SpircPlayStatus::Stopped,
             pending_next: false,
             pending_next_at_end: false,
@@ -829,10 +905,13 @@ impl Spirc {
         Ok(self.commands.send(SpircCommand::Next(Some(revision)))?)
     }
 
+    /// Goes to the previous track for a manual intent tag.
     pub fn prev_with_revision(&self, revision: u64) -> Result<(), Error> {
         Ok(self.commands.send(SpircCommand::Prev(Some(revision)))?)
     }
 
+    /// Loads for a manual intent tag. When the request names its song and
+    /// that song cannot load, playback stops on it instead of skipping.
     pub fn load_with_revision(&self, command: LoadRequest, revision: u64) -> Result<(), Error> {
         Ok(self
             .commands
@@ -1244,10 +1323,7 @@ impl SpircTask {
             SpircCommand::SetPosition(position) => self.handle_seek(position),
             SpircCommand::SetVolume(volume) => self.set_volume(volume),
             SpircCommand::Load(command, revision) => {
-                if let Some(revision) = revision {
-                    self.playback_revision = revision;
-                }
-                self.handle_load(command, None, None).await?;
+                self.handle_apricot_load(command, revision).await?;
             }
             SpircCommand::AddToQueue(uri) => {
                 let mut track = ProvidedTrack::new();
@@ -1295,6 +1371,15 @@ impl SpircTask {
         // mess with it.
         if !is_current_track {
             return Ok(());
+        }
+
+        if let PlayerEvent::Playing {
+            play_request_id, ..
+        } = event
+            && self.selected_request == Some(play_request_id)
+        {
+            // The selected song plays; later failures are ordinary skips.
+            self.selected_request = None;
         }
 
         match event {
@@ -1392,10 +1477,17 @@ impl SpircTask {
                 self.handle_preload_next_track();
                 return Ok(());
             }
-            PlayerEvent::Unavailable { track_id, .. } => {
+            PlayerEvent::Unavailable {
+                track_id,
+                play_request_id,
+            } => {
                 self.handle_unavailable(&track_id)?;
                 if self.connect_state.current_track(|t| &t.uri) == &track_id.to_uri()? {
-                    self.handle_next(None)?
+                    if self.selected_request == Some(play_request_id) {
+                        self.stop_on_selected_track();
+                    } else {
+                        self.handle_next(None)?
+                    }
                 }
             }
             _ => return Ok(()),
@@ -1969,6 +2061,38 @@ impl SpircTask {
         }
 
         Ok(())
+    }
+
+    /// ApricotPlayer: a load from Apricot carries the revision of the user's
+    /// intent. A load that names its song remembers that song's decoder
+    /// request (see `selected_request`).
+    async fn handle_apricot_load(
+        &mut self,
+        command: LoadRequest,
+        revision: Option<u64>,
+    ) -> Result<(), Error> {
+        if let Some(revision) = revision {
+            self.playback_revision = revision;
+        }
+        let names_song = revision.is_some() && command.options.playing_track.is_some();
+        self.selected_request = None;
+        self.handle_load(command, None, None).await?;
+        if names_song {
+            self.selected_request = self.play_request_id;
+        }
+        Ok(())
+    }
+
+    /// The selected song could not load: it stays the current song, stopped,
+    /// rather than the next row starting in its place.
+    fn stop_on_selected_track(&mut self) {
+        info!("the selected track cannot be played; stopping on it");
+        self.selected_request = None;
+        self.pending_next = false;
+        self.pending_next_at_end = false;
+        self.player.stop();
+        self.play_status = SpircPlayStatus::Stopped;
+        self.connect_state.update_position(0, self.now_ms());
     }
 
     async fn load_context_from_uri(

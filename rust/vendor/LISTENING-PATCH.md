@@ -29,6 +29,14 @@ integration, not an upstream-supported history API.
   tag and keeps genuine skip warnings. The bounded lookup holds only a weak
   player reference, with no event-listener/player ownership cycle.
 
+- Beta 16: a remote track whose load was interrupted (network, audio key,
+  stalled download or a decoder failure caused by those) is tried once more
+  after 750 ms before Player reports it Unavailable. Metadata saying the track
+  cannot play here is not retried. A Connect load from Apricot that names its
+  song remembers that song's decoder request; if exactly that request is
+  Unavailable, Connect stops on the song instead of skipping to the next row,
+  and Apricot reports "This Spotify item cannot be played". Songs Spotify
+  chose (whole albums, Next, natural advancement) still skip as before.
 - No dev-branch upgrade. The 0.8.0 local-file loader has no reportable Spotify
   identity. Local and passthrough audio are excluded.
 - Sink.write_counted counts PCM samples accepted by the output. The Apricot

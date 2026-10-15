@@ -78,12 +78,14 @@ fn with_shortcut(
     shortcuts: &BTreeMap<String, String>,
 ) -> String {
     if show_shortcuts && let Some(action) = action_by_id(action_id) {
-        label.push('\t');
-        label.push_str(
-            shortcuts
-                .get(action_id)
-                .map_or(action.default_shortcut(), String::as_str),
-        );
+        let shortcut = shortcuts
+            .get(action_id)
+            .map_or(action.default_shortcut(), String::as_str);
+        // As the main menu shows it: Command and Option on macOS.
+        if !shortcut.trim().is_empty() {
+            label.push('\t');
+            label.push_str(&apricot_core::shortcut::display_shortcut(shortcut));
+        }
     }
     label
 }
@@ -706,16 +708,63 @@ mod tests {
                 SpotifyHubEntry::Accounts
             ]
         );
-        assert_eq!(model.items[0].label, "Search\tCtrl+Alt+Shift+Y");
-        assert_eq!(model.items[2].label, "Liked Songs\tCtrl+Alt+Shift+F");
+        let shown = |label: &str, action: &str| {
+            format!(
+                "{label}\t{}",
+                apricot_core::shortcut::display_shortcut(
+                    action_by_id(action).unwrap().default_shortcut()
+                )
+            )
+        };
+        assert_eq!(model.items[0].label, shown("Search", "spotify_search"));
+        assert_eq!(
+            model.items[2].label,
+            shown("Liked Songs", "spotify_liked_songs")
+        );
         assert_eq!(model.items[4].label, "Followed artists");
         assert_eq!(model.items[5].label, "Home");
-        assert_eq!(model.items[6].label, "Daily Mixes\tCtrl+Alt+Shift+M");
-        assert_eq!(model.items[10].label, "Spotify queue\tCtrl+Alt+Shift+Q");
-        assert_eq!(model.items[11].label, "Spotify devices\tCtrl+Alt+Shift+O");
+        assert_eq!(
+            model.items[6].label,
+            shown("Daily Mixes", "spotify_daily_mixes")
+        );
+        assert_eq!(
+            model.items[10].label,
+            shown("Spotify queue", "spotify_queue")
+        );
+        assert_eq!(
+            model.items[11].label,
+            shown("Spotify devices", "spotify_devices")
+        );
         assert_eq!(model.items[12].label, "My profile");
         assert_eq!(model.items[13].label, "Spotify settings");
-        assert!(model.items[14].label.ends_with("\tCtrl+Alt+Shift+C"));
+        assert!(
+            model.items[14]
+                .label
+                .ends_with(&shown("", "spotify_accounts"))
+        );
+        // Beta 16: the Mac shows Command and Option, as its main menu does.
+        if cfg!(target_os = "macos") {
+            assert_eq!(model.items[0].label, "Search\tCommand+Option+Shift+Y");
+            assert_eq!(
+                model.items[10].label,
+                "Spotify queue\tCommand+Option+Shift+U"
+            );
+        } else {
+            assert_eq!(model.items[0].label, "Search\tCtrl+Alt+Shift+Y");
+            assert_eq!(model.items[10].label, "Spotify queue\tCtrl+Alt+Shift+Q");
+        }
+    }
+
+    #[test]
+    fn a_cleared_hub_shortcut_leaves_the_label_alone() {
+        let accounts = SpotifyAccounts {
+            active: Some("a".into()),
+            accounts: vec![account("a", "premium", true)],
+            ..SpotifyAccounts::default()
+        };
+        let shortcuts = BTreeMap::from([("spotify_search".to_owned(), String::new())]);
+        let model = SpotifyHubModel::build(&english_catalog(), &accounts, true, &shortcuts);
+        assert_eq!(model.items[0].label, "Search");
     }
 
     fn catalog_item(kind: ItemKind, name: &str, subtitle: &str) -> CatalogItem {

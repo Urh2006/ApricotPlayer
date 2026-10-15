@@ -213,6 +213,35 @@ mod tests {
         ))
     }
 
+    /// Beta 16: every Spotify shortcut runs with this platform's default
+    /// chord (Command for Ctrl on macOS, as in the main menu), from the
+    /// main menu, the Spotify hub and a focused Spotify list.
+    #[test]
+    fn every_spotify_shortcut_runs_with_the_platform_default_chord() {
+        let mut shell = shell();
+        let spotify: Vec<_> = apricot_core::action::ACTIONS
+            .iter()
+            .filter(|action| action.id.as_str().contains("spotify"))
+            .collect();
+        assert_eq!(spotify.len(), 12);
+        for action in spotify {
+            let chord = ShortcutChord::parse(action.default_shortcut()).unwrap();
+            let global = action.scopes.contains(&ActionScope::Global);
+            for view in [View::MainMenu, View::SpotifyHub, View::SpotifyBrowse] {
+                if !global && view != View::SpotifyBrowse {
+                    continue;
+                }
+                shell.view = view;
+                assert_eq!(
+                    shell.route_key(chord, false, FocusKind::List),
+                    KeyRoute::Run(action.id.as_str()),
+                    "{} in {view:?}",
+                    action.id.as_str()
+                );
+            }
+        }
+    }
+
     #[test]
     fn spotify_search_field_keeps_native_submit_delete_and_typing() {
         let mut shell = shell();

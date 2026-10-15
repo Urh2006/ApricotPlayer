@@ -56,6 +56,41 @@ const SPOTIFY_OGG_HEADER_END: u64 = 0xa7;
 
 const LOAD_HANDLES_POISON_MSG: &str = "load handles mutex should not be poisoned";
 
+// ApricotPlayer patch: how often a remote track is tried before it is
+// reported unavailable, and the pause between the tries.
+const REMOTE_LOAD_ATTEMPTS: u32 = 2;
+const REMOTE_LOAD_RETRY_DELAY: Duration = Duration::from_millis(750);
+
+/// Why one attempt to load a remote track failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LoadFailure {
+    /// Spotify says the track cannot play here; another try cannot help.
+    Unavailable,
+    /// The network, the audio key or the download failed; another try may work.
+    Interrupted,
+}
+
+/// Runs `attempt` until it loads, reports the track unavailable, or was
+/// interrupted `attempts` times.
+async fn load_with_retries<T, F, Fut>(attempts: u32, delay: Duration, mut attempt: F) -> Option<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, LoadFailure>>,
+{
+    for number in 1..=attempts {
+        match attempt().await {
+            Ok(loaded) => return Some(loaded),
+            Err(LoadFailure::Unavailable) => return None,
+            Err(LoadFailure::Interrupted) if number < attempts => {
+                warn!("Loading was interrupted, trying again ({number} of {attempts})");
+                tokio::time::sleep(delay).await;
+            }
+            Err(LoadFailure::Interrupted) => {}
+        }
+    }
+    None
+}
+
 pub type PlayerResult = Result<(), Error>;
 
 pub struct Player {
@@ -1102,20 +1137,34 @@ impl PlayerTrackLoader {
         }
     }
 
+    // ApricotPlayer patch: a load interrupted by the network, the audio key
+    // service or a stalled download is tried again before the track is
+    // reported unavailable, so Connect does not skip a song that can play.
     async fn load_remote_track(
         &self,
         track_uri: SpotifyUri,
         position_ms: u32,
     ) -> Option<PlayerLoadedTrackData> {
-        let track_id: SpotifyId = match (&track_uri).try_into() {
+        load_with_retries(REMOTE_LOAD_ATTEMPTS, REMOTE_LOAD_RETRY_DELAY, || {
+            self.load_remote_track_attempt(&track_uri, position_ms)
+        })
+        .await
+    }
+
+    async fn load_remote_track_attempt(
+        &self,
+        track_uri: &SpotifyUri,
+        position_ms: u32,
+    ) -> Result<PlayerLoadedTrackData, LoadFailure> {
+        let track_id: SpotifyId = match track_uri.try_into() {
             Ok(id) => id,
             Err(_) => {
                 warn!("<{track_uri}> could not be converted to a base62 ID");
-                return None;
+                return Err(LoadFailure::Unavailable);
             }
         };
 
-        let audio_item = match AudioItem::get_file(&self.session, track_uri).await {
+        let audio_item = match AudioItem::get_file(&self.session, track_uri.clone()).await {
             Ok(audio) => match self.find_available_alternative(audio).await {
                 Some(audio) => audio,
                 None => {
@@ -1123,12 +1172,12 @@ impl PlayerTrackLoader {
                         "spotify:track:<{}> is not available",
                         track_id.to_base62().unwrap_or_default()
                     );
-                    return None;
+                    return Err(LoadFailure::Unavailable);
                 }
             },
             Err(e) => {
                 error!("Unable to load audio item: {e:?}");
-                return None;
+                return Err(LoadFailure::Interrupted);
             }
         };
 
@@ -1181,11 +1230,13 @@ impl PlayerTrackLoader {
                         "<{}> is not available in any supported format",
                         audio_item.name
                     );
-                    return None;
+                    return Err(LoadFailure::Unavailable);
                 }
             };
 
-        let bytes_per_second = self.stream_data_rate(format)?;
+        let bytes_per_second = self
+            .stream_data_rate(format)
+            .ok_or(LoadFailure::Unavailable)?;
 
         // This is only a loop to be able to reload the file if an error occurred
         // while opening a cached file.
@@ -1196,13 +1247,15 @@ impl PlayerTrackLoader {
                 Ok(encrypted_file) => encrypted_file,
                 Err(e) => {
                     error!("Unable to load encrypted file: {e:?}");
-                    return None;
+                    return Err(LoadFailure::Interrupted);
                 }
             };
 
             let is_cached = encrypted_file.is_cached();
 
-            let stream_loader_controller = encrypted_file.get_stream_loader_controller().ok()?;
+            let stream_loader_controller = encrypted_file
+                .get_stream_loader_controller()
+                .map_err(|_| LoadFailure::Interrupted)?;
 
             // Not all audio files are encrypted. If we can't get a key, try loading the track
             // without decryption. If the file was encrypted after all, the decoder will fail
@@ -1235,7 +1288,7 @@ impl PlayerTrackLoader {
                 Ok(audio_file) => audio_file,
                 Err(e) => {
                     error!("PlayerTrackLoader::load_track error opening subfile: {e}");
-                    return None;
+                    return Err(LoadFailure::Interrupted);
                 }
             };
 
@@ -1279,12 +1332,12 @@ impl PlayerTrackLoader {
                         Some(cache) => {
                             if cache.remove_file(file_id).is_err() {
                                 error!("Error removing file from cache");
-                                return None;
+                                return Err(LoadFailure::Interrupted);
                             }
                         }
                         None => {
                             error!("If the audio file is cached, a cache should exist");
-                            return None;
+                            return Err(LoadFailure::Interrupted);
                         }
                     }
 
@@ -1293,7 +1346,7 @@ impl PlayerTrackLoader {
                 }
                 Err(e) => {
                     error!("Unable to read audio file: {e}");
-                    return None;
+                    return Err(LoadFailure::Interrupted);
                 }
             };
 
@@ -1320,7 +1373,7 @@ impl PlayerTrackLoader {
                     error!(
                         "PlayerTrackLoader::load_track error seeking to starting position {position_ms}: {e}"
                     );
-                    return None;
+                    return Err(LoadFailure::Interrupted);
                 }
             };
 
@@ -1335,7 +1388,7 @@ impl PlayerTrackLoader {
 
             info!("<{}> ({} ms) loaded", audio_item.name, duration_ms);
 
-            return Some(PlayerLoadedTrackData {
+            return Ok(PlayerLoadedTrackData {
                 decoder,
                 normalisation_data,
                 stream_loader_controller,
@@ -2893,5 +2946,44 @@ where
 
     fn byte_len(&self) -> Option<u64> {
         Some(self.length)
+    }
+}
+
+#[cfg(test)]
+mod load_retry_tests {
+    use std::cell::Cell;
+
+    use super::{Duration, LoadFailure, load_with_retries};
+
+    async fn run(results: &[Result<u32, LoadFailure>]) -> (Option<u32>, usize) {
+        let calls = Cell::new(0);
+        let loaded = load_with_retries(2, Duration::ZERO, || {
+            let result = results[calls.get()];
+            calls.set(calls.get() + 1);
+            async move { result }
+        })
+        .await;
+        (loaded, calls.get())
+    }
+
+    #[tokio::test]
+    async fn load_retry_an_interrupted_load_is_tried_again() {
+        assert_eq!(
+            run(&[Err(LoadFailure::Interrupted), Ok(7)]).await,
+            (Some(7), 2)
+        );
+    }
+
+    #[tokio::test]
+    async fn load_retry_an_unavailable_track_is_not_tried_again() {
+        assert_eq!(run(&[Err(LoadFailure::Unavailable)]).await, (None, 1));
+    }
+
+    #[tokio::test]
+    async fn load_retry_gives_up_after_the_last_attempt() {
+        assert_eq!(
+            run(&[Err(LoadFailure::Interrupted), Err(LoadFailure::Interrupted)]).await,
+            (None, 2)
+        );
     }
 }

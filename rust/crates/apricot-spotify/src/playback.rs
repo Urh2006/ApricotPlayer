@@ -34,6 +34,42 @@ use librespot_playback::{
 };
 use librespot_protocol::player::PlayerState;
 
+/// The song the user chose (beta 16): its manual revision and, until it
+/// plays, its decoder request. Connect keeps the same record and stops on
+/// that song when it cannot load, instead of playing the next row.
+#[derive(Default)]
+struct ChosenSong {
+    chosen: Option<(u64, Option<u64>)>,
+}
+
+impl ChosenSong {
+    /// `selection` is the revision of the last start that named its song.
+    fn observe(&mut self, event: &PlayerEvent, revision: u64, selection: u64) {
+        match event {
+            // Every decoder request starts with its identity, also one that
+            // plays a preloaded song at once; the first of the chosen
+            // revision is the chosen song.
+            PlayerEvent::PlayRequestIdChanged { play_request_id }
+                if revision != 0
+                    && selection == revision
+                    && self.chosen.is_none_or(|(chosen, _)| chosen != revision) =>
+            {
+                self.chosen = Some((revision, Some(*play_request_id)));
+            }
+            PlayerEvent::Playing {
+                play_request_id, ..
+            } if self.chosen == Some((revision, Some(*play_request_id))) => {
+                self.chosen = Some((revision, None));
+            }
+            _ => {}
+        }
+    }
+
+    fn is_chosen(&self, revision: u64, request: u64) -> bool {
+        self.chosen == Some((revision, Some(request)))
+    }
+}
+
 /// Distinguishes failure of the active load from a future preload or an old request.
 #[derive(Default)]
 struct AvailabilityNotices {
@@ -341,6 +377,10 @@ pub struct Shared {
     events: Mutex<VecDeque<PcmSourceEvent>>,
     notices: Mutex<VecDeque<(u64, PlaybackNotice)>>,
     manual_revision: AtomicU64,
+    /// The manual revision of a start that names its song, or 0. Connect
+    /// stops on that song when it cannot load instead of playing the next
+    /// row, and the player reports the failure (beta 16).
+    selection_revision: AtomicU64,
     request_owner: Mutex<Option<RequestRevisionLookup>>,
     /// Apricot started playback; the next new track is its own start.
     requested: AtomicBool,
@@ -445,6 +485,28 @@ impl Shared {
         self.manual_revision
             .fetch_add(1, Ordering::SeqCst)
             .wrapping_add(1)
+    }
+
+    /// Manual navigation that does (`names_song`) or does not start a song
+    /// the user chose.
+    fn manual_selection(&self, names_song: bool) -> u64 {
+        let revision = self.manual_navigation();
+        self.selection_revision
+            .store(if names_song { revision } else { 0 }, Ordering::SeqCst);
+        revision
+    }
+
+    /// The current song cannot load. Connect skipped a song it chose itself,
+    /// which the UI announces; it stopped on the song the user chose, which
+    /// the player reports as its failure, so nothing else starts.
+    fn report_unavailable(&self, revision: u64, uri: String, chosen: bool) {
+        if chosen {
+            log::info!("the selected track cannot be played");
+            self.push_event(PcmSourceEvent::Failed("spotify_unplayable".to_owned()));
+            (self.notify)();
+        } else {
+            self.push_notice_at(revision, PlaybackNotice::Unavailable { uri });
+        }
     }
 
     pub fn take_notice(&self) -> Option<PlaybackNotice> {
@@ -636,6 +698,7 @@ impl SpotifyPlayback {
             events: Mutex::default(),
             notices: Mutex::default(),
             manual_revision: AtomicU64::new(0),
+            selection_revision: AtomicU64::new(0),
             request_owner: Mutex::default(),
             requested: AtomicBool::new(false),
             track: Mutex::default(),
@@ -676,14 +739,14 @@ impl SpotifyPlayback {
     }
 
     pub fn next(&self) {
-        let revision = self.shared.manual_navigation();
+        let revision = self.shared.manual_selection(false);
         self.with_spirc(|spirc| {
             let _ = spirc.next_with_revision(revision);
         });
     }
 
     pub fn previous(&self) {
-        let revision = self.shared.manual_navigation();
+        let revision = self.shared.manual_selection(false);
         self.with_spirc(|spirc| {
             let _ = spirc.prev_with_revision(revision);
         });
@@ -819,7 +882,7 @@ impl SpotifyPlayback {
                 playing_track: Some(PlayingTrack::Uid(uid.to_owned())),
             },
         );
-        let revision = self.shared.manual_navigation();
+        let revision = self.shared.manual_selection(true);
         let mut sent = false;
         self.with_spirc(|spirc| {
             sent = spirc.load_with_revision(request, revision).is_ok();
@@ -943,6 +1006,7 @@ impl SpotifyPlayback {
         let mut request_id = None;
         let mut availability = AvailabilityNotices::default();
         let mut event_request = None;
+        let mut chosen = ChosenSong::default();
         while let Some(event) = events.recv().await {
             if let PlayerEvent::PlayRequestIdChanged { play_request_id } = &event {
                 event_request = Some(*play_request_id);
@@ -958,6 +1022,11 @@ impl SpotifyPlayback {
                 );
             }
             let revision = shared.manual_revision.load(Ordering::SeqCst);
+            chosen.observe(
+                &event,
+                revision,
+                shared.selection_revision.load(Ordering::SeqCst),
+            );
             let current_track_failed = availability.current_track_failed(&event, revision);
             if matches!(
                 event,
@@ -1021,14 +1090,14 @@ impl SpotifyPlayback {
                         generation.close();
                     }
                 }
-                PlayerEvent::Unavailable { track_id, .. } if current_track_failed => {
-                    shared.push_notice_at(
-                        revision,
-                        PlaybackNotice::Unavailable {
-                            uri: track_id.to_uri().unwrap_or_default(),
-                        },
-                    );
-                }
+                PlayerEvent::Unavailable {
+                    track_id,
+                    play_request_id,
+                } if current_track_failed => shared.report_unavailable(
+                    revision,
+                    track_id.to_uri().unwrap_or_default(),
+                    chosen.is_chosen(revision, play_request_id),
+                ),
                 _ => {}
             }
         }
@@ -1044,7 +1113,7 @@ fn load_request(
     position_ms: u32,
     paused: bool,
     repeat_mode: RepeatMode,
-) -> LoadRequest {
+) -> (LoadRequest, bool) {
     let shuffle = item
         .metadata
         .get("spotify_shuffle")
@@ -1083,7 +1152,8 @@ fn load_request(
                 .or(Some(PlayingTrack::Uri(uri)))
         };
         log::info!("load context {context} (whole {whole}, shuffle {shuffle})");
-        LoadRequest::from_context_uri(
+        let names_song = playing_track.is_some();
+        let request = LoadRequest::from_context_uri(
             context,
             LoadRequestOptions {
                 start_playing: !paused,
@@ -1095,9 +1165,11 @@ fn load_request(
                 })),
                 playing_track,
             },
-        )
+        );
+        (request, names_song)
     } else {
-        LoadRequest::from_tracks(
+        // A single song: Connect has no next row to play in its place.
+        let request = LoadRequest::from_tracks(
             vec![uri],
             LoadRequestOptions {
                 start_playing: !paused,
@@ -1109,7 +1181,8 @@ fn load_request(
                 })),
                 ..LoadRequestOptions::default()
             },
-        )
+        );
+        (request, false)
     }
 }
 
@@ -1159,7 +1232,6 @@ impl PcmSource for SpotifyPlayback {
             })
             .map(|reference| reference.to_uri())
             .ok_or_else(|| "spotify_unplayable".to_owned())?;
-        let revision = self.shared.manual_navigation();
         self.shared.requested.store(true, Ordering::SeqCst);
         log::info!("start requested at {position_ms} ms, paused {paused}");
         // Setting shuffle requires a complete Connect options object. Keep
@@ -1172,7 +1244,8 @@ impl PcmSource for SpotifyPlayback {
         } else {
             RepeatMode::Off
         };
-        let request = load_request(item, uri, position_ms, paused, repeat_mode);
+        let (request, names_song) = load_request(item, uri, position_ms, paused, repeat_mode);
+        let revision = self.shared.manual_selection(names_song);
         self.shared.close_current();
         if let Ok(mut pending) = self.shared.pending.lock() {
             *pending = None;
@@ -1725,7 +1798,9 @@ mod tests {
         }
         .media_item();
         item.metadata.insert("spotify_shuffle".into(), true.into());
-        let request = load_request(&item, item.id.0.clone(), 0, false, RepeatMode::Off);
+        let (request, names_song) =
+            load_request(&item, item.id.0.clone(), 0, false, RepeatMode::Off);
+        assert!(!names_song, "a single song has no next row to protect");
         // LibreSpot exposes the request's Debug representation but keeps
         // its fields private. Check the actual outbound request's mode.
         assert!(format!("{request:?}").contains("shuffle: true"));
@@ -1742,7 +1817,127 @@ mod tests {
             duration_ms: 1000,
         }
         .media_item();
-        let request = load_request(&item, item.id.0.clone(), 0, false, RepeatMode::Track);
+        let (request, _) = load_request(&item, item.id.0.clone(), 0, false, RepeatMode::Track);
         assert!(format!("{request:?}").contains("repeat_track: true"));
+    }
+
+    fn context_song() -> MediaItem {
+        let mut item = SpotifyTrack {
+            uri: "spotify:track:4u7EnebtmKWzUH433cf5Qv".into(),
+            title: "Title".into(),
+            artists: "Artist".into(),
+            artist_uri: String::new(),
+            album: String::new(),
+            duration_ms: 1000,
+        }
+        .media_item();
+        item.metadata.insert(
+            "spotify_context".into(),
+            "spotify:album:1DFixLWuPkv3KT3TnV35m3".into(),
+        );
+        item
+    }
+
+    #[test]
+    fn a_row_of_a_list_names_its_song_but_a_whole_album_does_not() {
+        let item = context_song();
+        let (_, names_song) = load_request(&item, item.id.0.clone(), 0, false, RepeatMode::Off);
+        assert!(names_song);
+        let mut whole = context_song();
+        whole
+            .metadata
+            .insert("spotify_collection".into(), true.into());
+        let (_, names_song) = load_request(&whole, whole.id.0.clone(), 0, false, RepeatMode::Off);
+        assert!(!names_song);
+    }
+
+    /// Beta 16: a chosen song that cannot load is reported by the player;
+    /// Connect stops on it, so no other song is announced as playing.
+    #[tokio::test]
+    async fn a_chosen_song_that_cannot_load_fails_the_player_instead_of_a_skip_notice() {
+        let shared = shared();
+        let revision = shared.manual_selection(true);
+        *shared.request_owner.lock().unwrap() = Some(Arc::new(move |id| match id {
+            1 => Some(0),
+            2 | 3 => Some(revision),
+            _ => None,
+        }));
+        let chosen =
+            librespot_core::SpotifyUri::from_uri("spotify:track:6rqhFgbbKwnb9MLmUQDhG6").unwrap();
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        for event in [
+            PlayerEvent::PlayRequestIdChanged { play_request_id: 2 },
+            PlayerEvent::Loading {
+                play_request_id: 2,
+                track_id: chosen.clone(),
+                position_ms: 0,
+            },
+            PlayerEvent::Unavailable {
+                play_request_id: 2,
+                track_id: chosen,
+            },
+        ] {
+            sender.send(event).unwrap();
+        }
+        drop(sender);
+        SpotifyPlayback::listen(shared.clone(), receiver).await;
+        assert!(shared.take_notice().is_none());
+        assert_eq!(
+            shared.events.lock().unwrap().pop_front(),
+            Some(PcmSourceEvent::Failed("spotify_unplayable".to_owned()))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_song_spotify_chose_after_the_chosen_one_still_announces_its_skip() {
+        let shared = shared();
+        let revision = shared.manual_selection(true);
+        *shared.request_owner.lock().unwrap() = Some(Arc::new(move |id| match id {
+            2 | 3 => Some(revision),
+            _ => None,
+        }));
+        let chosen =
+            librespot_core::SpotifyUri::from_uri("spotify:track:6rqhFgbbKwnb9MLmUQDhG6").unwrap();
+        let next =
+            librespot_core::SpotifyUri::from_uri("spotify:track:72AZ3V52rs9NfgMNhALxln").unwrap();
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        // The chosen song was preloaded: it plays without a Loading event.
+        for event in [
+            PlayerEvent::PlayRequestIdChanged { play_request_id: 2 },
+            PlayerEvent::Playing {
+                play_request_id: 2,
+                track_id: chosen,
+                position_ms: 0,
+            },
+            PlayerEvent::PlayRequestIdChanged { play_request_id: 3 },
+            PlayerEvent::Loading {
+                play_request_id: 3,
+                track_id: next.clone(),
+                position_ms: 0,
+            },
+            PlayerEvent::Unavailable {
+                play_request_id: 3,
+                track_id: next.clone(),
+            },
+        ] {
+            sender.send(event).unwrap();
+        }
+        drop(sender);
+        SpotifyPlayback::listen(shared.clone(), receiver).await;
+        let notices: Vec<_> = std::iter::from_fn(|| shared.take_notice()).collect();
+        assert!(
+            notices.iter().any(
+                |notice| matches!(notice, PlaybackNotice::Unavailable { uri } if *uri == next.to_uri().unwrap())
+            ),
+            "{notices:?}"
+        );
+        assert!(
+            !shared
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|event| matches!(event, PcmSourceEvent::Failed(_)))
+        );
     }
 }

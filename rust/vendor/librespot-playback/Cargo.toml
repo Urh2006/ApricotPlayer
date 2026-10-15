@@ -180,6 +180,7 @@ version = "1"
 features = [
     "rt-multi-thread",
     "sync",
+    "time",
 ]
 
 [dependencies.zerocopy]

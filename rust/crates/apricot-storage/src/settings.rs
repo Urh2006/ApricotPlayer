@@ -418,12 +418,14 @@ fn normalize_shortcuts(input: &BTreeMap<String, String>) -> BTreeMap<String, Str
                 .get(action.id.as_str())
                 .map_or(action.default_shortcut(), |value| value.trim());
             // Beta6/7 serialized the Windows default in full maps. It cannot
-            // be distinguished from an explicit identical override, and
-            // Command+Space is reserved by Spotlight. Normalize this one
-            // canonical legacy binding consistently for editor and routing.
+            // be distinguished from an explicit identical override, and on
+            // macOS these Windows chords are system shortcuts (Command+Space
+            // is Spotlight, Command+Option+Shift+Q logs out at once).
+            // Normalize these canonical legacy bindings consistently for
+            // editor and routing.
             let value = if cfg!(target_os = "macos")
-                && action.id.as_str() == "background_play_pause"
-                && value == "Ctrl+Space"
+                && apricot_core::action::macos_default_shortcut(action.id.as_str()).is_some()
+                && value == action.default_windows_shortcut
             {
                 action.default_shortcut()
             } else {
@@ -627,6 +629,15 @@ mod tests {
         assert_eq!(
             settings.keyboard_shortcuts["background_play_pause"],
             "Ctrl+Shift+Space"
+        );
+        // Beta 16: Command+Option+Shift+Q would log out of macOS at once.
+        assert_eq!(
+            settings.keyboard_shortcuts["spotify_queue"],
+            "Ctrl+Alt+Shift+U"
+        );
+        assert_eq!(
+            settings.keyboard_shortcuts["spotify_search"],
+            "Ctrl+Alt+Shift+Y"
         );
     }
 
