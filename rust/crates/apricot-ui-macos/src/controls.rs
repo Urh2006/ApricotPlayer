@@ -13,16 +13,18 @@ use std::cell::{Cell, RefCell};
 use std::time::Instant;
 
 use apricot_shell::TypeAhead;
-use objc2::rc::Retained;
+use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{
-    NSAccessibility, NSBezelStyle, NSButton, NSControl, NSControlTextEditingDelegate, NSEvent,
-    NSEventModifierFlags, NSResponder, NSTableColumn, NSTableRowView, NSTableView,
-    NSTableViewDataSource, NSTableViewDelegate, NSTextField, NSUserInterfaceItemIdentification,
-    NSView,
+    NSAccessibility, NSAccessibilityElement, NSBezelStyle, NSButton, NSControl,
+    NSControlTextEditingDelegate, NSEvent, NSEventModifierFlags, NSResponder, NSTableColumn,
+    NSTableRowView, NSTableView, NSTableViewDataSource, NSTableViewDelegate, NSTextField,
+    NSUserInterfaceItemIdentification, NSView,
 };
-use objc2_foundation::{NSIndexSet, NSInteger, NSObjectProtocol, NSPoint, NSRect, NSString};
+use objc2_foundation::{
+    NSArray, NSIndexSet, NSInteger, NSObjectProtocol, NSPoint, NSRect, NSString,
+};
 
 use crate::keys::{self, Modifiers};
 
@@ -93,6 +95,8 @@ pub struct ListIvars {
     tab: Cell<Option<Sel>>,
     /// Sent on Select All (Command+A, the Edit menu).
     select_all: Cell<Option<Sel>>,
+    /// The rows VoiceOver reads, one per row (see [`ListRowElement`]).
+    row_elements: RefCell<Vec<Retained<ListRowElement>>>,
 }
 
 define_class!(
@@ -192,6 +196,38 @@ define_class!(
             }
         }
 
+        /// The table's rows for VoiceOver are [`ListRowElement`]s: AppKit's
+        /// own row elements offer no press, and overrides on the row view do
+        /// not reach them.
+        #[unsafe(method_id(accessibilityRows))]
+        fn accessibility_rows(&self) -> Option<Retained<NSArray<AnyObject>>> {
+            Some(self.row_element_array(0..self.row_count()))
+        }
+
+        #[unsafe(method_id(accessibilityChildren))]
+        fn accessibility_children(&self) -> Option<Retained<NSArray<AnyObject>>> {
+            Some(self.row_element_array(0..self.row_count()))
+        }
+
+        #[unsafe(method_id(accessibilityVisibleRows))]
+        fn accessibility_visible_rows(&self) -> Option<Retained<NSArray<AnyObject>>> {
+            let range = self.rowsInRect(self.visibleRect());
+            let start = range.location;
+            let end = start.saturating_add(range.length).min(self.row_count());
+            Some(self.row_element_array(start.min(end)..end))
+        }
+
+        #[unsafe(method_id(accessibilitySelectedRows))]
+        fn accessibility_selected_rows(&self) -> Option<Retained<NSArray<AnyObject>>> {
+            let range = self.selected().map_or(0..0, |row| row..row + 1);
+            Some(self.row_element_array(range))
+        }
+
+        #[unsafe(method_id(accessibilityHitTest:))]
+        fn accessibility_hit_test(&self, point: NSPoint) -> Option<Retained<AnyObject>> {
+            self.row_element_at(point)
+        }
+
         /// VoiceOver's "show menu" (VO+Shift+M).
         #[unsafe(method(accessibilityPerformShowMenu))]
         fn accessibility_show_menu(&self) -> bool {
@@ -287,20 +323,6 @@ define_class!(
     pub struct ListRow;
 
     impl ListRow {
-        /// AppKit filters the actions of a table row through this check and
-        /// allows neither press nor menu there; a Mac check found Press only
-        /// on the row's text, not on the row VoiceOver reads (beta 18).
-        #[unsafe(method(isAccessibilitySelectorAllowed:))]
-        fn is_accessibility_selector_allowed(&self, selector: Sel) -> bool {
-            if selector == sel!(accessibilityPerformPress)
-                || selector == sel!(accessibilityPerformShowMenu)
-            {
-                return true;
-            }
-            // SAFETY: forwarding to NSTableRowView.
-            unsafe { msg_send![super(self), isAccessibilitySelectorAllowed: selector] }
-        }
-
         #[unsafe(method(accessibilityPerformPress))]
         fn accessibility_press(&self) -> bool {
             press_row(self)
@@ -318,6 +340,128 @@ impl ListRow {
         let this = Self::alloc(mtm).set_ivars(());
         // SAFETY: `initWithFrame:` of NSTableRowView.
         unsafe { msg_send![super(this), initWithFrame: NSRect::ZERO] }
+    }
+}
+
+pub struct ListRowElementIvars {
+    list: Weak<List>,
+    index: usize,
+}
+
+define_class!(
+    /// One row of a [`List`] as VoiceOver reads it: the row's text, its
+    /// position and selection, VoiceOver's press (VO+Space), which selects
+    /// and activates the row as Return does, and its menu command
+    /// (VO+Shift+M), which opens the row's context menu (beta 18).
+    // SAFETY: NSAccessibilityElement may be subclassed; no Drop impl.
+    #[unsafe(super(NSAccessibilityElement, objc2_foundation::NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "ApricotListRowElement"]
+    #[ivars = ListRowElementIvars]
+    pub struct ListRowElement;
+
+    impl ListRowElement {
+        #[unsafe(method(isAccessibilityElement))]
+        fn is_element(&self) -> bool {
+            true
+        }
+
+        #[unsafe(method_id(accessibilityRole))]
+        fn role(&self) -> Option<Retained<NSString>> {
+            Some(NSString::from_str("AXRow"))
+        }
+
+        #[unsafe(method_id(accessibilitySubrole))]
+        fn subrole(&self) -> Option<Retained<NSString>> {
+            Some(NSString::from_str("AXTableRow"))
+        }
+
+        #[unsafe(method_id(accessibilityLabel))]
+        fn label(&self) -> Option<Retained<NSString>> {
+            self.text().map(|text| NSString::from_str(&text))
+        }
+
+        #[unsafe(method_id(accessibilityParent))]
+        fn parent(&self) -> Option<Retained<AnyObject>> {
+            self.ivars().list.load().map(|list| {
+                let object: &AnyObject = list.as_ref();
+                objc2::Message::retain(object)
+            })
+        }
+
+        #[unsafe(method(accessibilityIndex))]
+        fn index(&self) -> NSInteger {
+            NSInteger::try_from(self.ivars().index).unwrap_or(0)
+        }
+
+        #[unsafe(method(accessibilityFrame))]
+        fn frame(&self) -> NSRect {
+            let Some(list) = self.ivars().list.load() else {
+                return NSRect::ZERO;
+            };
+            let Ok(row) = NSInteger::try_from(self.ivars().index) else {
+                return NSRect::ZERO;
+            };
+            let rect = list.convertRect_toView(list.rectOfRow(row), None);
+            list.window()
+                .map_or(NSRect::ZERO, |window| window.convertRectToScreen(rect))
+        }
+
+        #[unsafe(method(isAccessibilitySelected))]
+        fn is_selected(&self) -> bool {
+            self.ivars()
+                .list
+                .load()
+                .is_some_and(|list| list.selected() == Some(self.ivars().index))
+        }
+
+        #[unsafe(method(setAccessibilitySelected:))]
+        fn set_selected(&self, selected: bool) {
+            if let (true, Some(list)) = (selected, self.ivars().list.load()) {
+                list.select(self.ivars().index);
+            }
+        }
+
+        #[unsafe(method(accessibilityPerformPress))]
+        fn press(&self) -> bool {
+            self.act(List::activate)
+        }
+
+        #[unsafe(method(accessibilityPerformShowMenu))]
+        fn show_menu(&self) -> bool {
+            self.act(List::show_context_menu)
+        }
+    }
+);
+
+impl ListRowElement {
+    fn new(mtm: MainThreadMarker, list: &List, index: usize) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(ListRowElementIvars {
+            list: Weak::from(list),
+            index,
+        });
+        // SAFETY: `init` of NSAccessibilityElement.
+        unsafe { msg_send![super(this), init] }
+    }
+
+    /// The row's text.
+    fn text(&self) -> Option<String> {
+        let list = self.ivars().list.load()?;
+        let rows = list.ivars().rows.borrow();
+        rows.get(self.ivars().index).cloned()
+    }
+
+    /// Selects this row and runs `act` on its list.
+    fn act(&self, act: impl FnOnce(&List)) -> bool {
+        let Some(list) = self.ivars().list.load() else {
+            return false;
+        };
+        if self.ivars().index >= list.row_count() {
+            return false;
+        }
+        list.select(self.ivars().index);
+        act(&list);
+        true
     }
 }
 
@@ -534,6 +678,40 @@ impl List {
     /// The selector sent to the target on End or Down at the last row.
     pub fn set_end_action(&self, action: Sel) {
         self.ivars().end.set(Some(action));
+    }
+
+    /// The row element under a screen point.
+    fn row_element_at(&self, point: NSPoint) -> Option<Retained<AnyObject>> {
+        let window = self.window()?;
+        let local = self.convertPoint_fromView(window.convertPointFromScreen(point), None);
+        let row = usize::try_from(self.rowAtPoint(local)).ok()?;
+        self.row_element_array(row..row + 1).firstObject()
+    }
+
+    fn row_count(&self) -> usize {
+        self.ivars().rows.borrow().len()
+    }
+
+    /// The row elements for `range`, made when the row count changed.
+    fn row_element_array(&self, range: std::ops::Range<usize>) -> Retained<NSArray<AnyObject>> {
+        let count = self.row_count();
+        let mut elements = self.ivars().row_elements.borrow_mut();
+        if elements.len() != count {
+            let mtm = MainThreadMarker::from(self);
+            elements.truncate(count);
+            for index in elements.len()..count {
+                elements.push(ListRowElement::new(mtm, self, index));
+            }
+        }
+        let rows: Vec<Retained<AnyObject>> = elements
+            .get(range)
+            .unwrap_or_default()
+            .iter()
+            .map(|element| {
+                Retained::into_super(Retained::into_super(Retained::into_super(element.clone())))
+            })
+            .collect();
+        NSArray::from_retained_slice(&rows)
     }
 
     /// The selector sent to the target on Delete.
