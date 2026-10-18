@@ -310,7 +310,7 @@ impl Shell {
             .set_player_toggle(SessionToggle::Fullscreen, enabled);
         if self.view == View::Player {
             self.refresh_player(ui, PlayerFocus::Keep);
-            ui.focus_player_control(if focus_checkbox {
+            ui.focus_player_control(if focus_checkbox && !enabled {
                 "fullscreen"
             } else {
                 "video_host"
@@ -384,6 +384,16 @@ mod tests {
         );
         assert_eq!(ui.details_shown, 1);
         assert!(shell.extras.details_visible);
+        shell.set_player_fullscreen(&mut ui, true, true, false);
+        assert_eq!(
+            ui.focus_requests.last().map(String::as_str),
+            Some("video_host")
+        );
+        shell.set_player_fullscreen(&mut ui, false, true, false);
+        assert_eq!(
+            ui.focus_requests.last().map(String::as_str),
+            Some("fullscreen")
+        );
         shell
             .application
             .set_player_toggle(SessionToggle::Fullscreen, false);

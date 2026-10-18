@@ -1079,6 +1079,16 @@ impl PlaybackEngine for LibMpvEngine {
             self.restart_log();
         }
         let load = matches!(&command, PlaybackCommand::Load { .. });
+        if load
+            && self
+                .render
+                .as_ref()
+                .is_some_and(|render| !render.wait_until_ready(Duration::from_secs(2)))
+        {
+            return Err(PlaybackError::Operation(
+                "the video surface was not ready to display media".to_owned(),
+            ));
+        }
         let arguments = command_arguments(command)?;
         unsafe {
             self.api.run_command(self.handle(), &arguments)?;
