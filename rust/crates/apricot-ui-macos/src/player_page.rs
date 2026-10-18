@@ -4,6 +4,8 @@
 
 #![allow(unsafe_code)]
 
+use std::cell::Cell;
+
 use apricot_app::{PlayerControlRole, PlayerScreenModel};
 use apricot_playback::MpvRenderHost;
 use apricot_shell::DetailsLabels;
@@ -54,6 +56,7 @@ pub struct PlayerPage {
     order: Vec<&'static str>,
     initial_focus_id: &'static str,
     details: DetailsPanel,
+    fullscreen: Cell<bool>,
     target: Retained<AnyObject>,
     action: Sel,
 }
@@ -94,6 +97,7 @@ impl PlayerPage {
             order: Vec::new(),
             initial_focus_id: "video_host",
             details,
+            fullscreen: Cell::new(false),
             target: target.retain(),
             action,
         }
@@ -185,7 +189,31 @@ impl PlayerPage {
             }
         }
         for control in &self.controls {
-            control.button.setHidden(!control.active);
+            control
+                .button
+                .setHidden(!control.active || self.fullscreen.get());
+        }
+        self.update_tab_order();
+        self.layout();
+    }
+
+    pub fn is_fullscreen(&self) -> bool {
+        self.fullscreen.get()
+    }
+
+    /// Only the video remains visible; keyboard shortcuts continue to work.
+    pub fn set_fullscreen(&self, fullscreen: bool) {
+        self.fullscreen.set(fullscreen);
+        for control in &self.controls {
+            control.button.setHidden(fullscreen || !control.active);
+        }
+        for view in [
+            &*self.details.label as &NSView,
+            &self.details.scroll,
+            &self.details.copy,
+            &self.details.back,
+        ] {
+            view.setHidden(fullscreen || !self.details.visible);
         }
         self.update_tab_order();
         self.layout();
@@ -193,6 +221,10 @@ impl PlayerPage {
 
     /// The page's Tab order: the model's controls, then the details.
     fn update_tab_order(&self) {
+        if self.fullscreen.get() {
+            controls::set_tab_order(&[self.surface.as_ref()]);
+            return;
+        }
         let mut views: Vec<&NSView> = self
             .order
             .iter()
@@ -259,6 +291,10 @@ impl PlayerPage {
     /// Windows `PlayerControls::layout_below` in the container's bounds.
     pub fn layout(&self) {
         let bounds = self.container.bounds();
+        if self.fullscreen.get() {
+            self.surface.setFrame(bounds);
+            return;
+        }
         let margin = 12.0;
         let gap = 6.0;
         let width = bounds.size.width;

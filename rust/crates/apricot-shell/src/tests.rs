@@ -188,6 +188,8 @@ pub(crate) mod equalizer {
         /// The yes or no questions asked, and the answer given.
         pub(crate) questions: Vec<String>,
         pub(crate) answer_yes: bool,
+        pub(crate) details_shown: usize,
+        pub(crate) fullscreen: bool,
         pub(super) progress: Option<crate::DownloadProgress>,
         pub(super) clipboard: Option<String>,
         pub(crate) row_updates: Vec<(usize, String)>,
@@ -206,11 +208,15 @@ pub(crate) mod equalizer {
             self.selected = screen.selected;
         }
         fn show_player(&mut self, _model: &PlayerScreenModel, _focus: PlayerFocus) {}
-        fn show_player_details(&mut self, _labels: &DetailsLabels, _text: &str) {}
+        fn show_player_details(&mut self, _labels: &DetailsLabels, _text: &str) {
+            self.details_shown += 1;
+        }
         fn hide_player_details(&mut self) {}
         fn set_player_details_text(&mut self, _text: &str) {}
         fn focus_player_control(&mut self, _id: &str) {}
-        fn set_window_fullscreen(&mut self, _fullscreen: bool) {}
+        fn set_window_fullscreen(&mut self, fullscreen: bool) {
+            self.fullscreen = fullscreen;
+        }
         fn choose(&mut self, _dialog: &ChoiceDialog) -> Option<usize> {
             None
         }

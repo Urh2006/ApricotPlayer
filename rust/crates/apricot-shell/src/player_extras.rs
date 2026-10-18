@@ -74,6 +74,14 @@ impl Shell {
             }
             return;
         }
+        if self
+            .application
+            .player_session()
+            .enabled_toggles()
+            .contains(&SessionToggle::Fullscreen)
+        {
+            self.set_player_fullscreen(ui, false, false, false);
+        }
         self.extras.details_visible = true;
         ui.show_player_details(&self.details_labels(), &self.player_details_text());
         ui.set_status(&self.text("video_details"), true);
@@ -114,7 +122,13 @@ impl Shell {
             self.extras.details_visible = false;
             ui.hide_player_details();
         }
-        if self.application.settings().show_video_details_by_default {
+        if self.application.settings().show_video_details_by_default
+            && !self
+                .application
+                .player_session()
+                .enabled_toggles()
+                .contains(&SessionToggle::Fullscreen)
+        {
             self.extras.details_visible = true;
             ui.show_player_details(&self.details_labels(), &self.player_details_text());
             ui.set_status(&self.text("video_details"), true);
@@ -330,6 +344,55 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fullscreen_default_details_wait_for_explicit_f7() {
+        use apricot_core::{setting::SettingId, shortcut::ShortcutChord};
+        let mut shell = crate::tests::keyboard::shell();
+        shell
+            .application
+            .set_boolean_setting(SettingId::ShowVideoDetailsByDefault, true)
+            .unwrap();
+        shell
+            .application
+            .start_player_item(crate::local_file_item(std::path::Path::new("fixture.mp4")));
+        shell
+            .application
+            .set_player_toggle(SessionToggle::Fullscreen, true);
+        shell.view = View::Player;
+        let mut ui = crate::tests::equalizer::Ui::default();
+        shell.refresh_player(&mut ui, PlayerFocus::Initial);
+        assert!(ui.fullscreen);
+        assert_eq!(
+            ui.details_shown, 0,
+            "automatic details must not take hidden focus"
+        );
+        let route = shell.route_key(
+            ShortcutChord::parse("F7").unwrap(),
+            false,
+            crate::FocusKind::PlayerSurface,
+        );
+        assert!(matches!(route, crate::KeyRoute::Run("player_details")));
+        shell.activate_action(&mut ui, "player_details");
+        assert!(!ui.fullscreen);
+        assert!(
+            !shell
+                .application
+                .player_session()
+                .enabled_toggles()
+                .contains(&SessionToggle::Fullscreen)
+        );
+        assert_eq!(ui.details_shown, 1);
+        assert!(shell.extras.details_visible);
+        shell
+            .application
+            .set_player_toggle(SessionToggle::Fullscreen, false);
+        shell.refresh_player(&mut ui, PlayerFocus::Initial);
+        assert_eq!(
+            ui.details_shown, 2,
+            "ordinary player still opens default details"
+        );
+    }
 
     #[test]
     fn a_disconnected_device_probe_keeps_the_saved_output() {

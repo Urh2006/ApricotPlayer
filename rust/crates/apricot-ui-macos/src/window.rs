@@ -127,9 +127,7 @@ define_class!(
 
         #[unsafe(method(windowDidResize:))]
         fn window_did_resize(&self, _notification: &NSNotification) {
-            if let Some(page) = self.ivars().page.borrow().as_ref() {
-                page.layout();
-            }
+            self.layout_player_page();
         }
     }
 
@@ -463,6 +461,28 @@ impl MainWindowController {
 
     fn route_key_event(&self, event: &NSEvent) -> bool {
         let modifiers = controls::modifiers(event);
+        if event.keyCode() == keys::KEY_TAB
+            && !modifiers.command
+            && !modifiers.option
+            && !modifiers.control
+            && self
+                .ivars()
+                .page
+                .borrow()
+                .as_ref()
+                .is_some_and(PlayerPage::is_fullscreen)
+        {
+            self.with_shell(|shell, ui| shell.activate_action(ui, "player_fullscreen"));
+            if let (Some(window), Some(page)) = (self.window(), self.ivars().page.borrow().as_ref())
+            {
+                if modifiers.shift {
+                    window.selectKeyViewPrecedingView(&page.surface_view());
+                } else {
+                    window.selectKeyViewFollowingView(&page.surface_view());
+                }
+            }
+            return true;
+        }
         let characters = event
             .charactersIgnoringModifiers()
             .map(|text| text.to_string())
@@ -889,6 +909,32 @@ impl MainWindowController {
         if let Some(page) = self.ivars().page.borrow().as_ref() {
             page.set_visible(player);
         }
+    }
+
+    /// Fullscreen video occupies the whole client, including the status area.
+    fn layout_player_page(&self) {
+        let page = self.ivars().page.borrow();
+        let (Some(window), Some(page)) = (self.window(), page.as_ref()) else {
+            return;
+        };
+        let Some(content) = window.contentView() else {
+            return;
+        };
+        let bounds = content.bounds();
+        let fullscreen = page.is_fullscreen();
+        if let Some(status) = self.ivars().status.borrow().as_ref() {
+            status.setHidden(fullscreen);
+        }
+        let bottom = if fullscreen {
+            0.0
+        } else {
+            MARGIN * 2.0 + STATUS_HEIGHT
+        };
+        page.view().setFrame(NSRect::new(
+            NSPoint::new(0.0, bottom),
+            NSSize::new(bounds.size.width, (bounds.size.height - bottom).max(0.0)),
+        ));
+        page.layout();
     }
 
     /// Windows `layout_controls_state` for a list screen: the buttons above
@@ -2687,8 +2733,22 @@ impl ShellUi for MacUi<'_> {
         let Some(window) = self.controller.window() else {
             return;
         };
+        let changed = self
+            .controller
+            .ivars()
+            .page
+            .borrow()
+            .as_ref()
+            .is_some_and(|page| {
+                let changed = page.is_fullscreen() != fullscreen;
+                page.set_fullscreen(fullscreen);
+                changed
+            });
+        self.controller.layout_player_page();
         let current = window.styleMask().contains(NSWindowStyleMask::FullScreen);
-        if current != fullscreen {
+        // AppKit transitions asynchronously. Repeated refreshes must not toggle
+        // the window back while the first animation is still in progress.
+        if changed && current != fullscreen {
             window.toggleFullScreen(None);
         }
     }
