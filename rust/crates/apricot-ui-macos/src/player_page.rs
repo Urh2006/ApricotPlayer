@@ -121,9 +121,8 @@ impl PlayerPage {
         let mtm = MainThreadMarker::from(&*self.container);
         // Back from the background player, between the navigation and the
         // action buttons (Windows `restore_video_host_order`).
-        let home = self
-            .surface
-            .superview()
+        // SAFETY: reading the parent of a live view on the main thread.
+        let home = unsafe { self.surface.superview() }
             .is_some_and(|parent| std::ptr::eq(&*parent, &*self.container));
         if !home {
             self.container.addSubview(&self.surface);

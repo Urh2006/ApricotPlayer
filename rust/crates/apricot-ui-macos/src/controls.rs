@@ -344,7 +344,8 @@ impl ListText {
 
 /// Selects the row that shows `view` in its list and runs `act` with them.
 fn with_row_of(view: &NSView, act: impl FnOnce(&List)) -> bool {
-    let mut current = view.superview();
+    // SAFETY: reading the parents of live views on the main thread.
+    let mut current = unsafe { view.superview() };
     while let Some(ancestor) = current {
         if let Some(list) = ancestor.downcast_ref::<List>() {
             let Ok(row) = usize::try_from(list.rowForView(view)) else {
@@ -354,7 +355,8 @@ fn with_row_of(view: &NSView, act: impl FnOnce(&List)) -> bool {
             act(list);
             return true;
         }
-        current = ancestor.superview();
+        // SAFETY: as above.
+        current = unsafe { ancestor.superview() };
     }
     false
 }
