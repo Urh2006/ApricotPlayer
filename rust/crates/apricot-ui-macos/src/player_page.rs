@@ -110,9 +110,24 @@ impl PlayerPage {
         self.container.setHidden(!visible);
     }
 
+    /// The player surface, which the background player shows below other
+    /// screens (Windows `show_video_host_after`, beta 18).
+    pub fn surface_view(&self) -> Retained<NSView> {
+        Retained::into_super(self.surface.clone())
+    }
+
     /// Windows `PlayerControls::sync` and `layout`.
     pub fn sync(&mut self, model: &PlayerScreenModel) {
         let mtm = MainThreadMarker::from(&*self.container);
+        // Back from the background player, between the navigation and the
+        // action buttons (Windows `restore_video_host_order`).
+        let home = self
+            .surface
+            .superview()
+            .is_some_and(|parent| std::ptr::eq(&*parent, &*self.container));
+        if !home {
+            self.container.addSubview(&self.surface);
+        }
         self.initial_focus_id = model.initial_focus_id;
         for control in &mut self.controls {
             control.active = false;

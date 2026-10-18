@@ -924,6 +924,11 @@ impl MainWindowController {
             .flatten();
         if let Some(background) = self.ivars().background_player.borrow_mut().as_mut() {
             background.sync(model);
+            // Windows `show_video_host_after`: the section shows the player
+            // itself, with its keys, between its label and its buttons.
+            if let Some(page) = self.ivars().page.borrow().as_ref() {
+                background.adopt_surface(page.surface_view());
+            }
         }
         if shell.view() != apricot_shell::View::Player {
             let (buttons, fields) = self.ivars().screen_counts.get();

@@ -88,6 +88,14 @@ impl Shell {
             return KeyRoute::Unhandled;
         }
         let shortcuts = &self.application.settings().keyboard_shortcuts;
+        // Windows `focus_in_background_player`: the player and its buttons
+        // below another screen take the player's keys (beta 18).
+        let background_focus = self.view != View::Player
+            && self.application.player_session().is_open()
+            && matches!(
+                focus,
+                FocusKind::PlayerSurface | FocusKind::PlayerButton | FocusKind::PlayerCheckbox
+            );
         // Python `on_char_hook`: on the search screen's field, choices and
         // buttons Ctrl and Alt shortcuts act on the selected result, while
         // plain keys stay with the control. Its result list takes every list
@@ -99,11 +107,15 @@ impl Shell {
                 | View::Collection
                 | View::AudiovaultSearch
                 | View::SpotifyBrowse
-        ) && focus != FocusKind::List;
-        let entry_focus = focus == FocusKind::TextEntry
-            || self.view == View::DirectLink
-            || (search_field_focus && !(chord.control || chord.alt));
-        let (scope, accepts_text) = if entry_focus {
+        ) && focus != FocusKind::List
+            && !background_focus;
+        let entry_focus = !background_focus
+            && (focus == FocusKind::TextEntry
+                || self.view == View::DirectLink
+                || (search_field_focus && !(chord.control || chord.alt)));
+        let (scope, accepts_text) = if background_focus {
+            (ActionScope::Player, false)
+        } else if entry_focus {
             (ActionScope::Dialog, true)
         } else if search_field_focus {
             (ActionScope::List, false)
@@ -139,6 +151,7 @@ impl Shell {
             return KeyRoute::Unhandled;
         }
         if !is_global
+            && !background_focus
             && self.view == View::MainMenu
             && action.id.as_str() != "open_selected"
             && !action.scopes.contains(&ActionScope::Player)
@@ -318,6 +331,54 @@ mod tests {
                 "{view:?}"
             );
         }
+    }
+
+    /// Beta 18 (Windows `focus_in_background_player`): below another screen
+    /// the player and its buttons take the player's keys, so the arrows seek
+    /// there; Space and Return still press a focused button.
+    #[test]
+    fn the_background_player_takes_player_keys_on_any_screen() {
+        let mut shell = shell();
+        shell
+            .application
+            .start_player_item(media("dQw4w9WgXcQ", apricot_core::MediaSource::Youtube));
+        let key = |name: &str| ShortcutChord::parse(name).unwrap();
+        for view in [
+            View::MainMenu,
+            View::Search,
+            View::SpotifyBrowse,
+            View::DirectLink,
+        ] {
+            shell.view = view;
+            for focus in [FocusKind::PlayerSurface, FocusKind::PlayerButton] {
+                assert_eq!(
+                    shell.route_key(key("Left"), false, focus),
+                    KeyRoute::Hold("player_seek_back", key("Left")),
+                    "{view:?} {focus:?}"
+                );
+                assert_eq!(
+                    shell.route_key(key("Up"), false, focus),
+                    KeyRoute::Run("player_volume_up"),
+                    "{view:?} {focus:?}"
+                );
+            }
+            assert_eq!(
+                shell.route_key(key("Space"), false, FocusKind::PlayerSurface),
+                KeyRoute::Run("player_play_pause"),
+                "{view:?}"
+            );
+            assert_eq!(
+                shell.route_key(key("Space"), false, FocusKind::PlayerButton),
+                KeyRoute::Unhandled,
+                "{view:?}"
+            );
+        }
+        // The list itself keeps its own keys.
+        shell.view = View::MainMenu;
+        assert_eq!(
+            shell.route_key(key("Left"), false, FocusKind::List),
+            KeyRoute::Unhandled
+        );
     }
 
     #[test]

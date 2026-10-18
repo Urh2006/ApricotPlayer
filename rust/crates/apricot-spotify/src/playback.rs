@@ -382,6 +382,8 @@ pub struct Shared {
     /// row, and the player reports the failure (beta 16).
     selection_revision: AtomicU64,
     request_owner: Mutex<Option<RequestRevisionLookup>>,
+    /// The decoder, paused directly when Apricot stops Spotify (beta 18).
+    player: Mutex<Option<std::sync::Weak<librespot_playback::player::Player>>>,
     /// Apricot started playback; the next new track is its own start.
     requested: AtomicBool,
     track: Mutex<Option<SpotifyTrack>>,
@@ -427,6 +429,19 @@ impl Shared {
         }
     }
 
+    /// Queues a pause on the decoder thread itself, ahead of any packet it
+    /// decodes after a release; Connect learns it from the Paused event.
+    fn pause_decoder(&self) {
+        let player = self
+            .player
+            .lock()
+            .ok()
+            .and_then(|player| player.as_ref().and_then(std::sync::Weak::upgrade));
+        if let Some(player) = player {
+            player.pause();
+        }
+    }
+
     /// mpv has stopped consuming this stream. Release a decoder waiting for
     /// ring space before it can handle the next transport command.
     fn close_current(&self) {
@@ -455,6 +470,9 @@ impl Shared {
     }
 
     pub fn bind_player(&self, player: &Arc<librespot_playback::player::Player>) {
+        if let Ok(mut slot) = self.player.lock() {
+            *slot = Some(Arc::downgrade(player));
+        }
         if let Ok(mut owner) = self.request_owner.lock() {
             let player = Arc::downgrade(player);
             *owner = Some(Arc::new(move |id| {
@@ -700,6 +718,7 @@ impl SpotifyPlayback {
             manual_revision: AtomicU64::new(0),
             selection_revision: AtomicU64::new(0),
             request_owner: Mutex::default(),
+            player: Mutex::default(),
             requested: AtomicBool::new(false),
             track: Mutex::default(),
             bitrate_kbps,
@@ -1283,6 +1302,12 @@ impl PcmSource for SpotifyPlayback {
     }
 
     fn stop(&self) {
+        // Another item replaces Spotify (beta 18). The decoder pauses first,
+        // directly: a released decoder no longer waits for mpv, races to the
+        // end of the song, and Connect, still busy with the network, could
+        // start the next song before its own pause, which then took over the
+        // player from the new item.
+        self.shared.pause_decoder();
         self.shared.close_current();
         self.with_spirc(|spirc| {
             let _ = spirc.pause();

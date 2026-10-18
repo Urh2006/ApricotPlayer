@@ -18,8 +18,9 @@ use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{
     NSAccessibility, NSBezelStyle, NSButton, NSControl, NSControlTextEditingDelegate, NSEvent,
-    NSEventModifierFlags, NSResponder, NSTableColumn, NSTableView, NSTableViewDataSource,
-    NSTableViewDelegate, NSView,
+    NSEventModifierFlags, NSResponder, NSTableColumn, NSTableRowView, NSTableView,
+    NSTableViewDataSource, NSTableViewDelegate, NSTextField, NSUserInterfaceItemIdentification,
+    NSView,
 };
 use objc2_foundation::{NSIndexSet, NSInteger, NSObjectProtocol, NSPoint, NSRect, NSString};
 
@@ -137,6 +138,38 @@ define_class!(
             }
         }
 
+        /// Rows are views (beta 18), so VoiceOver can press them: the row and
+        /// its text activate as Return does (see [`ListRow`]).
+        #[unsafe(method_id(tableView:viewForTableColumn:row:))]
+        fn view_for_row(
+            &self,
+            table: &NSTableView,
+            _column: Option<&NSTableColumn>,
+            row: NSInteger,
+        ) -> Option<Retained<NSView>> {
+            let text = usize::try_from(row)
+                .ok()
+                .and_then(|row| self.ivars().rows.borrow().get(row).cloned())
+                .unwrap_or_default();
+            let identifier = NSString::from_str(LIST_TEXT_IDENTIFIER);
+            // SAFETY: views made in code have no owner.
+            let reused = unsafe { table.makeViewWithIdentifier_owner(&identifier, None) };
+            let view = reused.unwrap_or_else(|| {
+                let text = ListText::new(MainThreadMarker::from(self));
+                text.setIdentifier(Some(&identifier));
+                Retained::into_super(Retained::into_super(Retained::into_super(text)))
+            });
+            if let Some(field) = view.downcast_ref::<NSTextField>() {
+                field.setStringValue(&NSString::from_str(&text));
+            }
+            Some(view)
+        }
+
+        #[unsafe(method_id(tableView:rowViewForRow:))]
+        fn row_view(&self, _table: &NSTableView, _row: NSInteger) -> Option<Retained<NSTableRowView>> {
+            Some(Retained::into_super(ListRow::new(MainThreadMarker::from(self))))
+        }
+
         /// Letters are handled in `keyDown:`; AppKit's type select would
         /// search for "pp" on a repeated P.
         #[unsafe(method(tableView:shouldTypeSelectForEvent:withCurrentSearchString:))]
@@ -239,6 +272,102 @@ define_class!(
         }
     }
 );
+
+/// The reuse identifier of a row's text.
+const LIST_TEXT_IDENTIFIER: &str = "ApricotListText";
+
+define_class!(
+    /// A list row. VoiceOver's press (VO+Space) activates it as Return does,
+    /// and its menu command opens the row's context menu, so the VoiceOver
+    /// cursor works without moving the keyboard focus first (beta 18).
+    // SAFETY: NSTableRowView may be subclassed; no Drop impl.
+    #[unsafe(super(NSTableRowView, NSView, NSResponder, objc2_foundation::NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "ApricotListRow"]
+    pub struct ListRow;
+
+    impl ListRow {
+        #[unsafe(method(accessibilityPerformPress))]
+        fn accessibility_press(&self) -> bool {
+            press_row(self)
+        }
+
+        #[unsafe(method(accessibilityPerformShowMenu))]
+        fn accessibility_show_menu(&self) -> bool {
+            show_row_menu(self)
+        }
+    }
+);
+
+impl ListRow {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(());
+        // SAFETY: `initWithFrame:` of NSTableRowView.
+        unsafe { msg_send![super(this), initWithFrame: NSRect::ZERO] }
+    }
+}
+
+define_class!(
+    /// The text of a list row; VoiceOver's press and menu command on it act
+    /// on its row, as on [`ListRow`].
+    // SAFETY: NSTextField may be subclassed; no Drop impl.
+    #[unsafe(super(NSTextField, NSControl, NSView, NSResponder, objc2_foundation::NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "ApricotListText"]
+    pub struct ListText;
+
+    impl ListText {
+        #[unsafe(method(accessibilityPerformPress))]
+        fn accessibility_press(&self) -> bool {
+            press_row(self)
+        }
+
+        #[unsafe(method(accessibilityPerformShowMenu))]
+        fn accessibility_show_menu(&self) -> bool {
+            show_row_menu(self)
+        }
+    }
+);
+
+impl ListText {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(());
+        // SAFETY: `initWithFrame:` of NSTextField.
+        let text: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: NSRect::ZERO] };
+        text.setEditable(false);
+        text.setSelectable(false);
+        text.setBordered(false);
+        text.setDrawsBackground(false);
+        text
+    }
+}
+
+/// Selects the row that shows `view` in its list and runs `act` with them.
+fn with_row_of(view: &NSView, act: impl FnOnce(&List)) -> bool {
+    let mut current = view.superview();
+    while let Some(ancestor) = current {
+        if let Some(list) = ancestor.downcast_ref::<List>() {
+            let Ok(row) = usize::try_from(list.rowForView(view)) else {
+                return false;
+            };
+            list.select(row);
+            act(list);
+            return true;
+        }
+        current = ancestor.superview();
+    }
+    false
+}
+
+/// VoiceOver's press on a row: the row is selected and activated.
+fn press_row(view: &NSView) -> bool {
+    with_row_of(view, List::activate)
+}
+
+/// VoiceOver's menu command on a row: its context menu.
+fn show_row_menu(view: &NSView) -> bool {
+    with_row_of(view, List::show_context_menu)
+}
 
 impl List {
     pub fn new(mtm: MainThreadMarker, label: &str) -> Retained<Self> {
