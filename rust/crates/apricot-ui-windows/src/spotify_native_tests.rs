@@ -160,11 +160,25 @@ fn fullscreen_video_fills_client_and_restores_keyboard_controls() -> windows::co
             0
         );
 
-        super::super::set_player_fullscreen(fixture.window, false, false, false);
+        let tab = super::super::MSG {
+            hwnd: state.video_host,
+            message: super::super::WM_KEYDOWN,
+            wParam: WPARAM(usize::from(super::super::VK_TAB.0)),
+            ..Default::default()
+        };
+        super::super::handle_view_tab_message(fixture.window, &tab);
+        assert!(!super::super::wants_window_fullscreen(
+            super::state(fixture.window).unwrap()
+        ));
         assert_ne!(
             GetWindowLongPtrW(pause, GWL_STYLE) & isize::try_from(WS_VISIBLE.0).unwrap(),
             0
         );
+        super::super::set_player_fullscreen(fixture.window, true, false, false);
+        super::super::show_player_details(fixture.window);
+        let state = super::state(fixture.window).unwrap();
+        assert!(!super::super::wants_window_fullscreen(state));
+        assert!(state.player_controls.details_visible());
     }
     Ok(())
 }
