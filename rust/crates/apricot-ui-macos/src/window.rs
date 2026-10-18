@@ -125,6 +125,16 @@ define_class!(
             false
         }
 
+        #[unsafe(method(windowDidEnterFullScreen:))]
+        fn window_did_enter_fullscreen(&self, _notification: &NSNotification) {
+            self.sync_native_fullscreen(true);
+        }
+
+        #[unsafe(method(windowDidExitFullScreen:))]
+        fn window_did_exit_fullscreen(&self, _notification: &NSNotification) {
+            self.sync_native_fullscreen(false);
+        }
+
         #[unsafe(method(windowDidResize:))]
         fn window_did_resize(&self, _notification: &NSNotification) {
             self.layout_player_page();
@@ -645,6 +655,9 @@ impl MainWindowController {
 
     /// Saves the player position before the application ends.
     pub fn shutdown(&self) {
+        if let Some(page) = self.ivars().page.borrow().as_ref() {
+            page.render_host().cancel_pending_setup();
+        }
         if self.ivars().layout_observer.replace(false) {
             // SAFETY: unregister the exact notification installed by this controller.
             unsafe {
@@ -909,6 +922,24 @@ impl MainWindowController {
         if let Some(page) = self.ivars().page.borrow().as_ref() {
             page.set_visible(player);
         }
+    }
+
+    /// The native green button and AppKit Escape must update the same state
+    /// as F11, after the operating system has completed its transition.
+    fn sync_native_fullscreen(&self, fullscreen: bool) {
+        self.with_shell(|shell, ui| {
+            if shell.view() == apricot_shell::View::Player
+                && shell.application.player_session().is_open()
+            {
+                shell
+                    .application
+                    .set_player_toggle(apricot_app::SessionToggle::Fullscreen, fullscreen);
+                ui.set_window_fullscreen(fullscreen);
+                if fullscreen {
+                    ui.focus_player_control("video_host");
+                }
+            }
+        });
     }
 
     /// Fullscreen video occupies the whole client, including the status area.

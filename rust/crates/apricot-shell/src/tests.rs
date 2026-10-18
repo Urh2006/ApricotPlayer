@@ -190,6 +190,7 @@ pub(crate) mod equalizer {
         pub(crate) answer_yes: bool,
         pub(crate) details_shown: usize,
         pub(crate) fullscreen: bool,
+        pub(crate) focus_requests: Vec<String>,
         pub(super) progress: Option<crate::DownloadProgress>,
         pub(super) clipboard: Option<String>,
         pub(crate) row_updates: Vec<(usize, String)>,
@@ -213,7 +214,9 @@ pub(crate) mod equalizer {
         }
         fn hide_player_details(&mut self) {}
         fn set_player_details_text(&mut self, _text: &str) {}
-        fn focus_player_control(&mut self, _id: &str) {}
+        fn focus_player_control(&mut self, id: &str) {
+            self.focus_requests.push(id.to_owned());
+        }
         fn set_window_fullscreen(&mut self, fullscreen: bool) {
             self.fullscreen = fullscreen;
         }

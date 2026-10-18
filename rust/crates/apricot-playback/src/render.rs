@@ -121,6 +121,8 @@ struct RenderState {
     context: usize,
     /// The engine waits for the drawing thread to free the context.
     detaching: bool,
+    creation_failed: bool,
+    setup_cancelled: bool,
     update_callback: Option<(UpdateCallback, usize)>,
 }
 
@@ -234,6 +236,9 @@ impl MpvRenderHost {
         let Some(api) = state.api.clone() else {
             return false;
         };
+        if state.creation_failed {
+            return false;
+        }
         if state.context == 0 {
             let mut init = OpenGlInitParams {
                 get_proc_address: Some(get_proc_address),
@@ -261,9 +266,12 @@ impl MpvRenderHost {
             );
             if status < 0 || context.is_null() {
                 log::error!("libmpv render context could not be created: {status}");
+                state.creation_failed = true;
+                self.shared.freed.notify_all();
                 return false;
             }
             state.context = context as usize;
+            self.shared.freed.notify_all();
             if let Some((callback, callback_context)) = state.update_callback {
                 (api.set_update_callback)(context, Some(callback), callback_context as *mut c_void);
             }
@@ -321,6 +329,21 @@ impl MpvRenderHost {
         {
             // SAFETY: the context is live while the lock is held.
             unsafe { (api.report_swap)(state.context as *mut c_void) };
+        }
+    }
+
+    /// Cancels setup before the closing UI joins the playback worker. This is
+    /// terminal for this surface, including setup not yet attached; ordinary
+    /// player Close/reopen keeps the host usable and does not call this method.
+    /// An initialized video context is released by the normal teardown.
+    pub fn cancel_pending_setup(&self) {
+        if let Ok(mut state) = self.shared.state.lock() {
+            state.setup_cancelled = true;
+            if state.context == 0 {
+                state.detaching = true;
+                state.client = 0;
+            }
+            self.shared.freed.notify_all();
         }
     }
 
@@ -382,15 +405,21 @@ impl RenderAttachment {
             .ok()
             .and_then(|hosts| hosts.get(&id).and_then(Weak::upgrade))
             .ok_or_else(|| PlaybackError::Operation("the video surface is gone".to_owned()))?;
-        let api = Arc::new(RenderApi::load(library)?);
         let mut state = shared
             .state
             .lock()
             .map_err(|_| PlaybackError::Operation("video surface lock was poisoned".to_owned()))?;
+        if state.setup_cancelled {
+            return Err(PlaybackError::Operation(
+                "video surface setup was cancelled".to_owned(),
+            ));
+        }
+        let api = Arc::new(RenderApi::load(library)?);
         state.api = Some(api);
         state.client = client as usize;
         state.context = 0;
         state.detaching = false;
+        state.creation_failed = false;
         let callback = state.update_callback;
         drop(state);
         // The surface draws once to create the render context.
@@ -398,6 +427,29 @@ impl RenderAttachment {
             callback(context as *mut c_void);
         }
         Ok(Self { shared })
+    }
+
+    /// Before loading video, the worker waits for AppKit to create the render
+    /// context on its drawing thread. Once initialized this returns immediately.
+    pub(crate) fn wait_until_ready(&self, timeout: Duration) -> bool {
+        let Ok(state) = self.shared.state.lock() else {
+            return false;
+        };
+        self.shared
+            .freed
+            .wait_timeout_while(state, timeout, |state| {
+                state.context == 0
+                    && state.client != 0
+                    && !state.detaching
+                    && !state.creation_failed
+                    && !state.setup_cancelled
+            })
+            .is_ok_and(|(state, _)| {
+                state.context != 0
+                    && !state.detaching
+                    && !state.creation_failed
+                    && !state.setup_cancelled
+            })
     }
 
     /// Asks the drawing thread to free the render context and waits for it.
@@ -410,6 +462,7 @@ impl RenderAttachment {
         if state.context == 0 {
             state.api = None;
             state.client = 0;
+            self.shared.freed.notify_all();
             return true;
         }
         state.detaching = true;
@@ -426,5 +479,97 @@ impl RenderAttachment {
             .freed
             .wait_timeout_while(state, timeout, |state| state.context != 0)
             .is_ok_and(|(state, _)| state.context == 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pending_attachment() -> RenderAttachment {
+        RenderAttachment {
+            shared: Arc::new(RenderShared {
+                id: 0,
+                state: Mutex::new(RenderState {
+                    client: 1,
+                    ..RenderState::default()
+                }),
+                freed: Condvar::new(),
+            }),
+        }
+    }
+
+    #[test]
+    fn loading_waits_for_the_drawing_thread_to_initialize_the_context() {
+        let attachment = pending_attachment();
+        assert!(!attachment.wait_until_ready(Duration::ZERO));
+        let shared = Arc::clone(&attachment.shared);
+        let drawing = std::thread::spawn(move || {
+            let mut state = shared.state.lock().unwrap();
+            // An opaque readiness marker; no OpenGL functions are called here.
+            state.context = 2;
+            shared.freed.notify_all();
+        });
+        assert!(attachment.wait_until_ready(Duration::from_secs(1)));
+        drawing.join().unwrap();
+        assert!(attachment.wait_until_ready(Duration::ZERO));
+    }
+
+    #[test]
+    fn failed_setup_or_shutdown_wakes_the_waiter_without_the_timeout() {
+        for failure in [true, false] {
+            let attachment = pending_attachment();
+            let other = RenderAttachment {
+                shared: Arc::clone(&attachment.shared),
+            };
+            let (done, receive) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                done.send(other.wait_until_ready(Duration::from_secs(5)))
+                    .unwrap();
+            });
+            if failure {
+                attachment.shared.state.lock().unwrap().creation_failed = true;
+                attachment.shared.freed.notify_all();
+            } else {
+                let host = MpvRenderHost {
+                    shared: Arc::clone(&attachment.shared),
+                };
+                host.cancel_pending_setup();
+                assert!(attachment.detach(Duration::ZERO));
+            }
+            assert!(
+                !receive
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("worker must not wait five seconds")
+            );
+            worker.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn shutdown_before_attach_cannot_reset_the_cancellation() {
+        let host = MpvRenderHost::new();
+        host.cancel_pending_setup();
+        // Cancellation is checked before loading any API or touching the client.
+        let error = unsafe {
+            RenderAttachment::attach(host.id(), Path::new("absent-library"), ptr::null_mut())
+        };
+        assert!(
+            matches!(error, Err(PlaybackError::Operation(message)) if message.contains("cancelled"))
+        );
+        assert!(host.shared.state.lock().unwrap().setup_cancelled);
+    }
+
+    #[test]
+    fn an_unavailable_or_detaching_surface_cannot_start_video() {
+        let attachment = pending_attachment();
+        assert!(!attachment.wait_until_ready(Duration::from_millis(1)));
+        attachment.shared.state.lock().unwrap().client = 0;
+        assert!(!attachment.wait_until_ready(Duration::ZERO));
+        let mut state = attachment.shared.state.lock().unwrap();
+        state.context = 2;
+        state.detaching = true;
+        drop(state);
+        assert!(!attachment.wait_until_ready(Duration::ZERO));
     }
 }
