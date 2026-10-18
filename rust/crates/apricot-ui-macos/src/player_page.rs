@@ -122,8 +122,9 @@ impl PlayerPage {
         // Back from the background player, between the navigation and the
         // action buttons (Windows `restore_video_host_order`).
         // SAFETY: reading the parent of a live view on the main thread.
-        let home = unsafe { self.surface.superview() }
-            .is_some_and(|parent| std::ptr::eq(&*parent, &*self.container));
+        let home = unsafe { self.surface.superview() }.is_some_and(|parent| {
+            std::ptr::eq(Retained::as_ptr(&parent), Retained::as_ptr(&self.container))
+        });
         if !home {
             self.container.addSubview(&self.surface);
         }

@@ -49,8 +49,9 @@ impl BackgroundPlayer {
             return;
         }
         // SAFETY: reading the parent of a live view on the main thread.
-        let here = unsafe { surface.superview() }
-            .is_some_and(|parent| std::ptr::eq(&*parent, &*self.view));
+        let here = unsafe { surface.superview() }.is_some_and(|parent| {
+            std::ptr::eq(Retained::as_ptr(&parent), Retained::as_ptr(&self.view))
+        });
         if !here {
             self.view.addSubview(&surface);
         }
