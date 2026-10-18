@@ -22,7 +22,9 @@ use objc2_app_kit::{
     NSTableViewDataSource, NSTableViewDelegate, NSTextField, NSUserInterfaceItemIdentification,
     NSView,
 };
-use objc2_foundation::{NSIndexSet, NSInteger, NSObjectProtocol, NSPoint, NSRect, NSString};
+use objc2_foundation::{
+    NSArray, NSIndexSet, NSInteger, NSObjectProtocol, NSPoint, NSRect, NSString,
+};
 
 use crate::keys::{self, Modifiers};
 
@@ -287,6 +289,36 @@ define_class!(
     pub struct ListRow;
 
     impl ListRow {
+        /// AppKit offers no actions on a table row, and VoiceOver presses
+        /// the row its cursor is on only when the row offers Press (a Mac
+        /// check showed Press only on the row's text).
+        #[unsafe(method_id(accessibilityActionNames))]
+        fn accessibility_action_names(&self) -> Retained<NSArray<NSString>> {
+            // SAFETY: AppKit's action names are immutable for the process.
+            unsafe {
+                NSArray::from_slice(&[
+                    objc2_app_kit::NSAccessibilityPressAction,
+                    objc2_app_kit::NSAccessibilityShowMenuAction,
+                ])
+            }
+        }
+
+        #[unsafe(method(accessibilityPerformAction:))]
+        fn accessibility_perform_action(&self, action: &NSString) {
+            // SAFETY: as above.
+            let (press, menu) = unsafe {
+                (
+                    objc2_app_kit::NSAccessibilityPressAction,
+                    objc2_app_kit::NSAccessibilityShowMenuAction,
+                )
+            };
+            if action == press {
+                press_row(self);
+            } else if action == menu {
+                show_row_menu(self);
+            }
+        }
+
         #[unsafe(method(accessibilityPerformPress))]
         fn accessibility_press(&self) -> bool {
             press_row(self)

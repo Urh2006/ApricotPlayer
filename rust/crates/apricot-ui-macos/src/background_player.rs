@@ -8,7 +8,9 @@ use apricot_app::BackgroundPlayerModel;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{MainThreadMarker, MainThreadOnly};
-use objc2_app_kit::{NSAccessibility, NSAccessibilityButtonRole, NSTextField, NSView};
+use objc2_app_kit::{
+    NSAccessibility, NSAccessibilityButtonRole, NSTextField, NSView, NSWindowOrderingMode,
+};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 /// Windows `PLAYER_HEIGHT` of the section.
@@ -53,7 +55,13 @@ impl BackgroundPlayer {
             std::ptr::eq(Retained::as_ptr(&parent), Retained::as_ptr(&self.view))
         });
         if !here {
-            self.view.addSubview(&surface);
+            // Right after the label, so VoiceOver meets it where Tab does.
+            let label: &NSView = &self.label;
+            self.view.addSubview_positioned_relativeTo(
+                &surface,
+                NSWindowOrderingMode::Above,
+                Some(label),
+            );
         }
         self.surface = Some(surface);
         self.layout();

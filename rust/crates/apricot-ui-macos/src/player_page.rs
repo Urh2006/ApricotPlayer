@@ -12,6 +12,7 @@ use objc2::runtime::{AnyObject, Sel};
 use objc2::{MainThreadMarker, MainThreadOnly, Message};
 use objc2_app_kit::{
     NSButtonType, NSControlStateValueOff, NSControlStateValueOn, NSScrollView, NSTextField, NSView,
+    NSWindowOrderingMode,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
@@ -126,7 +127,12 @@ impl PlayerPage {
             std::ptr::eq(Retained::as_ptr(&parent), Retained::as_ptr(&self.container))
         });
         if !home {
-            self.container.addSubview(&self.surface);
+            // First again, where VoiceOver met it before.
+            self.container.addSubview_positioned_relativeTo(
+                &self.surface,
+                NSWindowOrderingMode::Below,
+                None,
+            );
         }
         self.initial_focus_id = model.initial_focus_id;
         for control in &mut self.controls {
