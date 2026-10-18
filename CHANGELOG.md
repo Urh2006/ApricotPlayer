@@ -1,3 +1,10 @@
+# v2.0.0-beta.18 - Mac background player and VoiceOver cursor
+
+## Fixed
+- On the Mac, the background player shows the player itself between its label and its buttons, as on Windows. Tab reaches it before the buttons, and the player keys work on it and on its buttons.
+- On the Mac, the VoiceOver cursor can activate list rows: VO+Space opens a row as Return does, and the VoiceOver menu command opens its context menu.
+- Leaving a Spotify song for another item pauses Spotify before releasing it, so Spotify can no longer take over the player again with its next song.
+
 # v2.0.0-beta.17 - Spotify list edges and safer Mac shortcuts
 
 ## Added

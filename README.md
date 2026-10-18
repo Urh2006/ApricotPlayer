@@ -2,7 +2,7 @@
 
 Accessible YouTube player and downloader for Windows, built in Python with `wxPython`.
 
-Current beta: `2.0.0-beta.17` (Rust rewrite). Current stable: `1.0.21`.
+Current beta: `2.0.0-beta.18` (Rust rewrite). Current stable: `1.0.21`.
 
 The Apple silicon package declares its actual macOS minimum from the bundled media libraries; see the release notes for its system requirement. Mac packages can be built locally or with the manual GitHub Actions workflow.
 
