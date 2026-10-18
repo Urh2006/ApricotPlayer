@@ -1,14 +1,16 @@
 //! Real Win32 controls with synthetic Spotify data and a private account store.
 use super::*;
+use apricot_app::SessionToggle;
 use apricot_app::context_menu::{ContextCommand as C, ContextMenuContext, ContextMenuEntry};
 use apricot_app::spotify::{SpotifyHubEntry, SpotifyHubModel};
 use std::{ffi::c_void, path::PathBuf};
 use windows::Win32::{
-    Foundation::LRESULT,
+    Foundation::{LRESULT, RECT},
     System::LibraryLoader::GetModuleHandleW,
     UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DestroyWindow, LB_GETCOUNT, RegisterClassW,
-        SetWindowLongPtrW, WINDOW_LONG_PTR_INDEX, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+        CreateWindowExW, DefWindowProcW, DestroyWindow, GWL_STYLE, GetClientRect,
+        GetWindowLongPtrW, GetWindowRect, LB_GETCOUNT, RegisterClassW, SetWindowLongPtrW,
+        WINDOW_LONG_PTR_INDEX, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
     },
 };
 
@@ -129,6 +131,42 @@ fn fixture_accounts() -> apricot_spotify::SpotifyAccounts {
         }],
         ..Default::default()
     }
+}
+
+#[test]
+fn fullscreen_video_fills_client_and_restores_keyboard_controls() -> windows::core::Result<()> {
+    let fixture = Fixture::new()?;
+    // SAFETY: All windows and application state belong to this fixture's thread.
+    unsafe {
+        let state = super::state_mut(fixture.window).unwrap();
+        state.application.start_player_item(
+            apricot_core::media::MediaItem::from_direct_link("https://example.com/video.mp4")
+                .unwrap(),
+        );
+        state.view = MainView::Player;
+        state
+            .application
+            .set_player_toggle(SessionToggle::Fullscreen, true);
+        super::super::refresh_player(fixture.window, state, false, false);
+        let mut client = RECT::default();
+        let mut video = RECT::default();
+        GetClientRect(fixture.window, &raw mut client)?;
+        GetWindowRect(state.video_host, &raw mut video)?;
+        assert_eq!(video.right - video.left, client.right - client.left);
+        assert_eq!(video.bottom - video.top, client.bottom - client.top);
+        let pause = state.player_controls.window_for_id("play_pause").unwrap();
+        assert_eq!(
+            GetWindowLongPtrW(pause, GWL_STYLE) & isize::try_from(WS_VISIBLE.0).unwrap(),
+            0
+        );
+
+        super::super::set_player_fullscreen(fixture.window, false, false, false);
+        assert_ne!(
+            GetWindowLongPtrW(pause, GWL_STYLE) & isize::try_from(WS_VISIBLE.0).unwrap(),
+            0
+        );
+    }
+    Ok(())
 }
 
 fn commands(state: &WindowState) -> Vec<C> {

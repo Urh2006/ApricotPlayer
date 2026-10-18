@@ -128,6 +128,7 @@ pub struct PlayerControls {
     controls: Vec<NativeControl>,
     details: DetailsPanel,
     surface_visible: bool,
+    fullscreen: bool,
     // The background player shows the video host on another screen.
     video_host_shared: bool,
     initial_focus_id: &'static str,
@@ -179,6 +180,7 @@ impl PlayerControls {
             controls,
             details,
             surface_visible: false,
+            fullscreen: false,
             video_host_shared: false,
             initial_focus_id: "video_host",
         })
@@ -264,22 +266,36 @@ impl PlayerControls {
                     );
                 }
             }
-            show(native.window, self.surface_visible && native.active);
+            show(
+                native.window,
+                self.surface_visible && !self.fullscreen && native.active,
+            );
         }
         show(
             self.video_host,
             self.surface_visible || self.video_host_shared,
         );
-        self.details.show(self.surface_visible);
+        self.details.show(self.surface_visible && !self.fullscreen);
     }
 
     pub unsafe fn set_visible(&mut self, visible: bool) {
         self.surface_visible = visible;
         show(self.video_host, visible || self.video_host_shared);
         for control in &self.controls {
-            show(control.window, visible && control.active);
+            show(
+                control.window,
+                visible && !self.fullscreen && control.active,
+            );
         }
-        self.details.show(visible);
+        self.details.show(visible && !self.fullscreen);
+    }
+
+    pub const fn set_fullscreen(&mut self, fullscreen: bool) {
+        self.fullscreen = fullscreen;
+    }
+
+    pub unsafe fn layout_fullscreen(&self, width: i32, height: i32) {
+        let _ = MoveWindow(self.video_host, 0, 0, width.max(1), height.max(1), true);
     }
 
     /// While the background player shows the video host on another screen,

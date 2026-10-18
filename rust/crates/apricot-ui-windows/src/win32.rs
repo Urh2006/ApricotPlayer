@@ -62,8 +62,8 @@ use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::Gdi::{
-            DEFAULT_GUI_FONT, GetMonitorInfoW, GetStockObject, MONITOR_DEFAULTTONEAREST,
-            MONITORINFO, MonitorFromWindow,
+            COLOR_WINDOW, DEFAULT_GUI_FONT, GetMonitorInfoW, GetStockObject, GetSysColorBrush,
+            MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
         },
         System::LibraryLoader::GetModuleHandleW,
         UI::{
@@ -96,8 +96,8 @@ use windows::{
                 WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WINDOWPLACEMENT, WM_APP, WM_CLOSE, WM_COMMAND,
                 WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_KEYUP,
                 WM_LBUTTONDBLCLK, WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WM_SYSKEYUP,
-                WM_TIMER, WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE, WS_GROUP, WS_OVERLAPPEDWINDOW,
-                WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+                WM_TIMER, WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_GROUP,
+                WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -718,6 +718,7 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
         hInstance: instance,
         lpszClassName: class_name,
         lpfnWndProc: Some(window_proc),
+        hbrBackground: GetSysColorBrush(COLOR_WINDOW),
         ..Default::default()
     };
     if RegisterClassW(&raw const class) == 0 {
@@ -730,7 +731,7 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
         WINDOW_EX_STYLE::default(),
         class_name,
         PCWSTR(title.as_ptr()),
-        WS_OVERLAPPEDWINDOW,
+        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         760,
@@ -876,6 +877,10 @@ unsafe fn handle_view_tab_message(window: HWND, message: &MSG) -> bool {
         || !matches!(message.message, WM_KEYDOWN | WM_KEYUP)
     {
         return false;
+    }
+    if message.message == WM_KEYDOWN && state(window).is_some_and(wants_window_fullscreen) {
+        // Reveal the regular accessible controls before traversing them.
+        set_player_fullscreen(window, false, false, false);
     }
     let Some(state) = state(window) else {
         return false;
@@ -2833,6 +2838,15 @@ unsafe fn layout_controls_state(window: HWND, state: &mut WindowState) {
     let label_height = 22;
     let field_height = 30;
     set_view_visibility(state);
+    if wants_window_fullscreen(state) {
+        let _ = ShowWindow(state.list, SW_HIDE);
+        let _ = ShowWindow(state.status, SW_HIDE);
+        state
+            .player_controls
+            .layout_fullscreen(width, (bounds.bottom - bounds.top).max(1));
+        return;
+    }
+    let _ = ShowWindow(state.status, SW_SHOW);
     let height = layout_player_surfaces(
         state,
         width,
@@ -3440,6 +3454,8 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
     state
         .player_controls
         .set_video_host_shared(background.is_some());
+    let fullscreen = wants_window_fullscreen(state);
+    state.player_controls.set_fullscreen(fullscreen);
     state
         .player_controls
         .set_visible(state.view == MainView::Player);
@@ -16637,6 +16653,9 @@ unsafe fn sync_player_details(state: &WindowState) {
 /// Python `show_video_details`: the details open inside the player page.
 unsafe fn show_player_details(window: HWND) {
     stop_controlled_repeat(window);
+    if state(window).is_some_and(wants_window_fullscreen) {
+        set_player_fullscreen(window, false, false, false);
+    }
     let Some(state) = state_mut(window) else {
         return;
     };
@@ -17738,7 +17757,7 @@ unsafe fn set_player_fullscreen(window: HWND, enabled: bool, focus_checkbox: boo
         .set_player_toggle(SessionToggle::Fullscreen, enabled);
     if state.view == MainView::Player {
         refresh_player(window, state, false, true);
-        let target = if focus_checkbox {
+        let target = if focus_checkbox && !enabled {
             state.player_controls.window_for_id("fullscreen")
         } else {
             Some(state.player_controls.video_host())
