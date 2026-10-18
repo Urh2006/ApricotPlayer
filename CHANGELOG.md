@@ -2,6 +2,7 @@
 
 ## Fixed
 - Full screen video uses the whole screen. F11 and Escape restore the regular player, and Tab reveals its keyboard-accessible controls.
+- On the Mac, opening a video waits for its video surface to be ready, preventing intermittent black video or playback errors.
 - On Windows, redrawing the main window removes stale controls left behind when switching screens or resizing.
 - Reopening a finished file starts playback again instead of staying at 0:00.
 
