@@ -1062,9 +1062,6 @@ unsafe fn probe_devices(
 
 impl PlaybackEngine for LibMpvEngine {
     fn execute(&mut self, command: PlaybackCommand) -> Result<(), PlaybackError> {
-        let leaving_pcm = self.pcm.is_some()
-            && matches!(&command, PlaybackCommand::Load { item, .. }
-                if !crate::pcm_source::is_pcm_item(item));
         if let PlaybackCommand::SetPaused(paused) = &command {
             self.requested_paused = *paused;
         }
@@ -1089,19 +1086,17 @@ impl PlaybackEngine for LibMpvEngine {
                 // `loadfile replace` leaves only the new entry in the playlist.
                 self.expected_entry = self.api.property_i64(self.handle(), "playlist/0/id");
                 self.ended_reported = false;
-                if leaving_pcm {
-                    // The per-item pause reset was routed to the old PCM source.
-                    // Its confirmed pause/EOF can leave mpv paused independently;
-                    // apply the new request to mpv after replacing that stream.
-                    self.api.run_command(
-                        self.handle(),
-                        &[
-                            "set".to_owned(),
-                            "pause".to_owned(),
-                            yes_no(self.requested_paused).to_owned(),
-                        ],
-                    )?;
-                }
+                // keep-open pauses at EOF. Resetting pause before loadfile can
+                // restart that old EOF and race its automatic pause. Apply the
+                // requested state after replacing the entry, including PCM exits.
+                self.api.run_command(
+                    self.handle(),
+                    &[
+                        "set".to_owned(),
+                        "pause".to_owned(),
+                        yes_no(self.requested_paused).to_owned(),
+                    ],
+                )?;
             }
         }
         Ok(())
@@ -2118,6 +2113,29 @@ mod tests {
             options.initial_playback_state = crate::InitialPlaybackState::Paused;
         }
         super::LibMpvEngine::load(&options).expect("load real library")
+    }
+
+    #[test]
+    #[ignore = "requires APRICOT_TEST_MPV and APRICOT_TEST_FFMPEG"]
+    fn real_libmpv_reopening_finished_file_advances_again() {
+        use crate::{PlaybackEngine, PlaybackEvent};
+        let folder = tempfile::tempdir().unwrap();
+        let item = short_fixture(folder.path());
+        let mut engine = short_engine(false);
+        for attempt in 0..3 {
+            engine.execute(PlaybackCommand::SetPaused(false)).unwrap();
+            engine
+                .execute(PlaybackCommand::Load {
+                    item: Box::new(item.clone()),
+                    start_position_seconds: None,
+                })
+                .unwrap();
+            let events = collect_events(&mut engine, std::time::Duration::from_millis(1600));
+            assert!(
+                events.contains(&PlaybackEvent::Ended),
+                "attempt {attempt}: {events:?}"
+            );
+        }
     }
 
     #[test]
