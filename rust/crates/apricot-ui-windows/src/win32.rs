@@ -4993,7 +4993,9 @@ unsafe fn refresh_player(
     let Some(model) = state.application.player_screen_model() else {
         return;
     };
-    let show_details = focus && state.application.settings().show_video_details_by_default;
+    let show_details = focus
+        && state.application.settings().show_video_details_by_default
+        && !wants_window_fullscreen(state);
     if focus {
         state.player_controls.hide_details();
     }

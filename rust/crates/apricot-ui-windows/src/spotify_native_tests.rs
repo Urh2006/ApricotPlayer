@@ -147,7 +147,15 @@ fn fullscreen_video_fills_client_and_restores_keyboard_controls() -> windows::co
         state
             .application
             .set_player_toggle(SessionToggle::Fullscreen, true);
-        super::super::refresh_player(fixture.window, state, false, false);
+        state
+            .application
+            .set_boolean_setting(
+                apricot_core::setting::SettingId::ShowVideoDetailsByDefault,
+                true,
+            )
+            .unwrap();
+        super::super::refresh_player(fixture.window, state, true, false);
+        assert!(!state.player_controls.details_visible());
         let mut client = RECT::default();
         let mut video = RECT::default();
         GetClientRect(fixture.window, &raw mut client)?;
