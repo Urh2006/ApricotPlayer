@@ -479,6 +479,24 @@ mod transport_regressions {
     }
 
     #[tokio::test]
+    async fn previous_that_only_seeks_hands_the_current_request_to_its_navigation() {
+        let mut task = task(false);
+        first_track(&mut task);
+        task.playback_revision = 1;
+        task.load_track(true, 0).unwrap();
+        let current = task.play_request_id.unwrap();
+        // Ctrl+PageUp returns to the start of the same song without a load.
+        task.playback_revision = 2;
+        task.handle_prev().unwrap();
+        assert_eq!(task.play_request_id, Some(current));
+        assert_eq!(
+            task.player.request_revision(current),
+            Some(2),
+            "Apricot must keep the seeks and pauses of the song it restarted"
+        );
+    }
+
+    #[tokio::test]
     async fn selecting_a_track_rejects_old_end_and_old_request_acknowledgements() {
         let mut task = task(false);
         task.load_context_from_tracks(vec![FIRST.to_owned(), SECOND.to_owned()])
@@ -2549,6 +2567,13 @@ impl SpircTask {
     fn handle_prev(&mut self) -> Result<(), Error> {
         self.pending_next = false;
         self.pending_next_at_end = false;
+        // Apricot: Previous that only seeks keeps the current request, which
+        // now belongs to this navigation; otherwise Apricot would ignore its
+        // seeks and pause changes as events of an earlier selection.
+        if let Some(request) = self.play_request_id {
+            self.player
+                .set_request_revision(request, self.playback_revision);
+        }
         // Previous behaves differently based on the position
         // Under 3s it goes to the previous song (starts playing)
         // Over 3s it seeks to zero (retains previous play status)

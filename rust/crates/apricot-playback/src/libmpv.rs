@@ -446,6 +446,9 @@ struct PcmPlayback {
     /// asked for. Right Arrow presses before then continue from it, as mpv's
     /// own relative seeks do, instead of from the position before the seek.
     seek_target: Option<(u32, Instant)>,
+    /// A seek moved the position: report it now, also while paused, when
+    /// Spotify sends no new generation until playback resumes.
+    report_position: bool,
 }
 
 /// A seek whose generation never arrives (Spotify refused it) stops
@@ -463,6 +466,7 @@ impl PcmPlayback {
             loaded: false,
             boundaries: std::collections::VecDeque::new(),
             seek_target: None,
+            report_position: false,
         }
     }
 
@@ -480,6 +484,13 @@ impl PcmPlayback {
 
     fn seek_requested(&mut self, target_ms: u32) {
         self.seek_target = Some((target_ms, Instant::now()));
+    }
+
+    /// Spotify answers a seek made while paused only after playback resumes.
+    fn resumed(&mut self) {
+        if let Some((target, _)) = self.seek_target {
+            self.seek_target = Some((target, Instant::now()));
+        }
     }
 
     /// A generation starting at `base_ms` loaded. The newest seek has landed
@@ -867,6 +878,13 @@ impl LibMpvEngine {
                 "the PCM source is gone".to_owned(),
             )));
         };
+        if self
+            .pcm
+            .as_mut()
+            .is_some_and(|pcm| std::mem::take(&mut pcm.report_position))
+        {
+            return Ok(Some(self.position_event()));
+        }
         if let Some(generation) = source.take_generation() {
             let arguments = [
                 "loadfile".to_owned(),
@@ -998,6 +1016,7 @@ impl LibMpvEngine {
             source.seek(target);
             if let Some(pcm) = self.pcm.as_mut() {
                 pcm.seek_requested(target);
+                pcm.report_position = true;
             }
             self.elapsed = f64::from(target) / 1000.0;
             return Ok(true);
@@ -1005,6 +1024,11 @@ impl LibMpvEngine {
         match command {
             PlaybackCommand::SetPaused(paused) => {
                 source.set_paused(*paused);
+                // A seek made while paused lands only once playback resumes:
+                // its target stays the position until then.
+                if !*paused && let Some(pcm) = self.pcm.as_mut() {
+                    pcm.resumed();
+                }
                 // Keep draining PCM until the decoder acknowledges the pause.
                 // Pausing mpv first can fill the bounded ring and block the
                 // decoder thread before it handles any further transport command.
@@ -1614,6 +1638,15 @@ mod tests {
         pcm.seek_requested(30_000);
         pcm.generation_loaded(0, true);
         assert_eq!(pcm.pending_seek_ms(), None);
+    }
+
+    #[test]
+    fn a_spotify_seek_while_paused_counts_again_from_resuming() {
+        let mut pcm = super::PcmPlayback::new(0);
+        let asked = std::time::Instant::now().checked_sub(super::PCM_SEEK_PENDING_LIMIT);
+        pcm.seek_target = Some((20_000, asked.expect("an instant in the past")));
+        pcm.resumed();
+        assert_eq!(pcm.pending_seek_ms(), Some(20_000));
     }
 
     #[test]
@@ -2313,6 +2346,7 @@ mod tests {
             loaded: true,
             boundaries: std::collections::VecDeque::default(),
             seek_target: None,
+            report_position: false,
         });
         engine.execute(PlaybackCommand::SetPaused(true)).unwrap();
         // SAFETY: The engine owns this initialized client for the whole test.
@@ -2392,6 +2426,7 @@ mod tests {
             loaded: true,
             boundaries: std::collections::VecDeque::default(),
             seek_target: None,
+            report_position: false,
         });
         engine.execute(PlaybackCommand::SetPaused(false)).unwrap();
         let track = MediaItem {
@@ -2561,6 +2596,7 @@ mod tests {
             loaded: true,
             boundaries: std::collections::VecDeque::default(),
             seek_target: None,
+            report_position: false,
         });
         // Confirmed PCM pause reaches mpv; a new play request resets the old
         // item through the same command used by the runtime before Load.
@@ -2663,6 +2699,7 @@ mod tests {
             loaded: true,
             boundaries: std::collections::VecDeque::default(),
             seek_target: None,
+            report_position: false,
         });
         let folder = tempfile::tempdir().unwrap();
         engine

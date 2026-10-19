@@ -56,3 +56,7 @@ revision check should replace this copy.
 Beta 13 additionally loads the originating context into Player, propagates this
 device's Spotify private-session flag and flushes final reports on shutdown.
 See ../LISTENING-PATCH.md for the pinned backport and test contract.
+- Beta 23: Previous that only returns to the start of the song keeps the
+  current decoder request; Connect hands it to the new navigation revision
+  with Player::set_request_revision, so Apricot keeps that song's seeks and
+  pause changes instead of discarding them as events of an earlier selection.

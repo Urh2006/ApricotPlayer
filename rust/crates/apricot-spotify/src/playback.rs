@@ -77,6 +77,16 @@ struct AvailabilityNotices {
 }
 
 impl AvailabilityNotices {
+    /// Previous that only seeks hands the active request to the new manual
+    /// revision (beta 23); its later events are current again.
+    fn adopt(&mut self, request: u64, revision: u64) {
+        if let Some((active, _, active_revision)) = self.active.as_mut()
+            && *active == request
+        {
+            *active_revision = revision;
+        }
+    }
+
     fn current_track_failed(&mut self, event: &PlayerEvent, revision: u64) -> bool {
         match event {
             PlayerEvent::Loading {
@@ -490,6 +500,15 @@ impl Shared {
                     .and_then(|player| player.request_revision(id))
             }));
         }
+    }
+
+    /// The player confirms that `request` belongs to `revision`.
+    fn owns_request(&self, request: u64, revision: u64) -> bool {
+        self.request_owner
+            .lock()
+            .ok()
+            .and_then(|owner| owner.clone())
+            .is_some_and(|owner| owner(request) == Some(revision))
     }
 
     fn request_is_current(&self, request: Option<u64>) -> bool {
@@ -1081,6 +1100,11 @@ impl SpotifyPlayback {
                 );
             }
             let revision = shared.manual_revision.load(Ordering::SeqCst);
+            if let Some(request) = event.get_play_request_id()
+                && shared.owns_request(request, revision)
+            {
+                availability.adopt(request, revision);
+            }
             chosen.observe(
                 &event,
                 revision,
@@ -1539,6 +1563,36 @@ mod tests {
         // An automatic skip does not create a new manual intent.
         assert!(
             matches!(shared.take_notice(), Some(PlaybackNotice::Unavailable { uri }) if uri == "genuine")
+        );
+    }
+
+    #[test]
+    fn previous_that_only_seeks_keeps_the_songs_pause_events() {
+        let uri =
+            librespot_core::SpotifyUri::from_uri("spotify:track:72AZ3V52rs9NfgMNhALxln").unwrap();
+        let mut guard = AvailabilityNotices::default();
+        let playing = PlayerEvent::Playing {
+            play_request_id: 1,
+            track_id: uri.clone(),
+            position_ms: 0,
+        };
+        guard.current_track_failed(&playing, 2);
+        // Ctrl+PageUp later in the song: the player hands request 1 to revision 3.
+        guard.adopt(1, 3);
+        guard.current_track_failed(&playing, 3);
+        assert!(
+            guard
+                .active
+                .as_ref()
+                .is_some_and(|(_, _, revision)| *revision == 3),
+            "the restarted song's play and pause events stay current"
+        );
+        guard.adopt(7, 4);
+        assert!(
+            guard
+                .active
+                .as_ref()
+                .is_some_and(|(_, _, revision)| *revision == 3)
         );
     }
 

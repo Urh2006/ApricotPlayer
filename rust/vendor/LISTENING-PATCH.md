@@ -55,6 +55,8 @@ integration, not an upstream-supported history API.
   Dropping the load ends the wait. A load whose key is refused no longer
   decodes an encrypted file without decryption (that read and downloaded the
   whole file before failing); only plain Ogg or MP3 data plays without a key.
+- Beta 23: Player::set_request_revision lets Connect move an existing request
+  to a new navigation revision (Previous that only seeks to the start).
 - No dev-branch upgrade. The 0.8.0 local-file loader has no reportable Spotify
   identity. Local and passthrough audio are excluded.
 - Sink.write_counted counts PCM samples accepted by the output. The Apricot

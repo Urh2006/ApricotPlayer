@@ -732,6 +732,19 @@ impl Player {
         play_request_id
     }
 
+    /// ApricotPlayer: the user's navigation now owns this request without a
+    /// new load (Previous that only returns to the start of the song).
+    pub fn set_request_revision(&self, request_id: u64, revision: u64) {
+        let mut revisions = self
+            .request_revisions
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        match revisions.iter_mut().find(|(id, _)| *id == request_id) {
+            Some(entry) => entry.1 = revision,
+            None => revisions.push_back((request_id, revision)),
+        }
+    }
+
     pub fn request_revision(&self, request_id: u64) -> Option<u64> {
         self.request_revisions
             .lock()
