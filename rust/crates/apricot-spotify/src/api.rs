@@ -22,8 +22,6 @@ use serde_json::{Value, json};
 const PATHFINDER: &str = "https://api-partner.spotify.com/pathfinder/v2/query";
 const WEB_PLAYER: &str = "https://open.spotify.com/";
 const BUNDLE_BASE: &str = "https://open.spotifycdn.com/cdn/build/web-player/";
-/// Hashes older than this are read again before use.
-const HASHES_MAX_AGE: Duration = Duration::from_hours(7 * 24);
 /// The desktop web player; without a desktop browser name Spotify serves the
 /// mobile web player, which has other bundles.
 pub const BROWSER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
@@ -54,6 +52,9 @@ pub struct Api {
     http: reqwest::Client,
     cache_file: Option<PathBuf>,
     hashes: Mutex<Option<HashCache>>,
+    /// One reading of the web-player bundles at a time; requests that wait
+    /// for it use its result instead of reading the bundles again.
+    refreshing: tokio::sync::Mutex<()>,
 }
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -136,6 +137,7 @@ impl Api {
                 .unwrap_or_default(),
             cache_file,
             hashes: Mutex::new(None),
+            refreshing: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -235,11 +237,26 @@ impl Api {
         Ok(hashes)
     }
 
+    /// The persisted query hash of `operation`. Hashes change only when
+    /// Spotify ships a new web player, so the cache is used however old it
+    /// is; `query` reads the bundles again (`fresh`) when an operation is
+    /// missing or Spotify rejects a hash. Reading them takes a minute or more
+    /// and blocked every Spotify list once the cache was a week old (beta 21).
     async fn hash(&self, operation: &str, fresh: bool) -> Result<String, ApiError> {
-        let cache = self.cached().filter(|cache| {
-            !fresh && now().saturating_sub(cache.fetched_at) < HASHES_MAX_AGE.as_secs()
-        });
-        let hashes = match cache {
+        if !fresh && let Some(cache) = self.cached() {
+            return cache
+                .hashes
+                .get(operation)
+                .cloned()
+                .ok_or_else(|| ApiError::UnknownOperation(operation.to_owned()));
+        }
+        let requested_at = now();
+        let _refreshing = self.refreshing.lock().await;
+        // Another request may have read the bundles while this one waited.
+        let hashes = match self
+            .cached()
+            .filter(|cache| cache.fetched_at >= requested_at)
+        {
             Some(cache) => cache.hashes,
             None => self.refresh_hashes().await?,
         };
@@ -449,6 +466,30 @@ pub mod proto {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Beta 21: a week-old cache is still used at once; reading the
+    /// web-player bundles again blocked every Spotify list for a minute.
+    #[tokio::test]
+    async fn an_old_hash_cache_is_used_without_reading_the_web_player() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("pathfinder.json");
+        let cache = HashCache {
+            fetched_at: now().saturating_sub(30 * 24 * 60 * 60),
+            hashes: HashMap::from([("fetchPlaylist".to_owned(), "a".repeat(64))]),
+        };
+        std::fs::write(&file, serde_json::to_vec(&cache).unwrap()).unwrap();
+        let api = Api::new(Some(file));
+        let started = std::time::Instant::now();
+        assert_eq!(
+            api.hash("fetchPlaylist", false).await.unwrap(),
+            "a".repeat(64)
+        );
+        assert!(matches!(
+            api.hash("missingOperation", false).await,
+            Err(ApiError::UnknownOperation(_))
+        ));
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
 
     #[test]
     fn protobuf_fields_are_tagged_and_length_prefixed() {
