@@ -442,57 +442,6 @@ struct PcmPlayback {
     /// Gapless boundaries not yet reached: stream seconds, base ms and the
     /// length of the next track, applied when it becomes audible.
     boundaries: std::collections::VecDeque<(f64, u32, Option<f64>)>,
-    /// The newest seek whose generation has not loaded yet, and when it was
-    /// asked for. Right Arrow presses before then continue from it, as mpv's
-    /// own relative seeks do, instead of from the position before the seek.
-    seek_target: Option<(u32, Instant)>,
-}
-
-/// A seek whose generation never arrives (Spotify refused it) stops
-/// counting after this long.
-const PCM_SEEK_PENDING_LIMIT: Duration = Duration::from_secs(5);
-/// The decoder starts a seek at the nearest Ogg page, a few ms away.
-const PCM_SEEK_LANDING_MS: u32 = 300;
-
-impl PcmPlayback {
-    fn new(base_ms: u32) -> Self {
-        Self {
-            base_ms,
-            offset: 0.0,
-            started: false,
-            loaded: false,
-            boundaries: std::collections::VecDeque::new(),
-            seek_target: None,
-        }
-    }
-
-    fn pending_seek_ms(&self) -> Option<u32> {
-        self.seek_target
-            .filter(|(_, asked)| asked.elapsed() < PCM_SEEK_PENDING_LIMIT)
-            .map(|(target, _)| target)
-    }
-
-    /// Where a relative seek starts: the newest unanswered seek, or `elapsed`.
-    fn seek_origin(&self, elapsed: f64) -> f64 {
-        self.pending_seek_ms()
-            .map_or(elapsed, |target| f64::from(target) / 1000.0)
-    }
-
-    fn seek_requested(&mut self, target_ms: u32) {
-        self.seek_target = Some((target_ms, Instant::now()));
-    }
-
-    /// A generation starting at `base_ms` loaded. The newest seek has landed
-    /// when this is its generation; a new track ends every seek.
-    fn generation_loaded(&mut self, base_ms: u32, new_track: bool) {
-        if new_track
-            || self
-                .pending_seek_ms()
-                .is_none_or(|target| target.abs_diff(base_ms) <= PCM_SEEK_LANDING_MS)
-        {
-            self.seek_target = None;
-        }
-    }
 }
 
 impl LibMpvEngine {
@@ -781,21 +730,11 @@ impl LibMpvEngine {
                         if let Some((at, base_ms, duration)) = pcm.boundaries.pop_front() {
                             pcm.offset = at;
                             pcm.base_ms = base_ms;
-                            pcm.seek_target = None;
                             if duration.is_some() {
                                 self.duration = duration;
                             }
                         }
                     }
-                }
-                if self
-                    .pcm
-                    .as_ref()
-                    .is_some_and(|pcm| pcm.pending_seek_ms().is_some())
-                {
-                    // The old generation still plays until the seek's one
-                    // loads; the position is already the seek's target.
-                    return Ok(None);
                 }
                 let (base, offset) = self.pcm.as_ref().map_or((0.0, 0.0), |pcm| {
                     (f64::from(pcm.base_ms) / 1000.0, pcm.offset)
@@ -883,20 +822,17 @@ impl LibMpvEngine {
                 self.expected_entry
             );
             self.ended_reported = false;
-            let mut pending = None;
             if let Some(pcm) = self.pcm.as_mut() {
                 pcm.base_ms = generation.base_ms;
                 pcm.offset = 0.0;
                 pcm.boundaries.clear();
                 pcm.loaded = true;
-                pcm.generation_loaded(generation.base_ms, generation.duration_ms.is_some());
-                pending = pcm.pending_seek_ms();
             }
             // A generation of a new track carries that track's length.
             if let Some(duration_ms) = generation.duration_ms.filter(|ms| *ms > 0) {
                 self.duration = Some(f64::from(duration_ms) / 1000.0);
             }
-            self.elapsed = f64::from(pending.unwrap_or(generation.base_ms)) / 1000.0;
+            self.elapsed = f64::from(generation.base_ms) / 1000.0;
             let (codec, bitrate) = source.format();
             self.media_info.audio_codec = Some(codec);
             // Spotify streams are Ogg Vorbis; the PCM itself has no container.
@@ -975,34 +911,35 @@ impl LibMpvEngine {
             source
                 .start(item, position_ms, paused, attach)
                 .map_err(PlaybackError::Operation)?;
-            self.pcm = Some(PcmPlayback::new(position_ms));
+            self.pcm = Some(PcmPlayback {
+                base_ms: position_ms,
+                offset: 0.0,
+                started: false,
+                loaded: false,
+                boundaries: std::collections::VecDeque::new(),
+            });
             return Ok(true);
         }
-        if self.pcm.is_none() {
+        let Some(pcm) = self.pcm.as_ref() else {
             return Ok(false);
-        }
+        };
         let Some(source) = crate::pcm_source::pcm_source() else {
             return Ok(false);
         };
-        let upper = self.duration.unwrap_or(f64::MAX).max(0.0);
-        let clamp = |seconds: f64| seconds_to_ms(seconds.clamp(0.0, upper));
-        let target = match command {
-            PlaybackCommand::SeekAbsolute { seconds, .. } => Some(clamp(*seconds)),
-            PlaybackCommand::SeekRelative { seconds, .. } => self
-                .pcm
-                .as_ref()
-                .map(|pcm| clamp(pcm.seek_origin(self.elapsed) + seconds)),
-            _ => None,
+        let clamp = |seconds: f64| {
+            let upper = self.duration.unwrap_or(f64::MAX).max(0.0);
+            seconds_to_ms(seconds.clamp(0.0, upper))
         };
-        if let Some(target) = target {
-            source.seek(target);
-            if let Some(pcm) = self.pcm.as_mut() {
-                pcm.seek_requested(target);
-            }
-            self.elapsed = f64::from(target) / 1000.0;
-            return Ok(true);
-        }
         match command {
+            PlaybackCommand::SeekAbsolute { seconds, .. } => {
+                source.seek(clamp(*seconds));
+                Ok(true)
+            }
+            PlaybackCommand::SeekRelative { seconds, .. } => {
+                let _ = pcm;
+                source.seek(clamp(self.elapsed + seconds));
+                Ok(true)
+            }
             PlaybackCommand::SetPaused(paused) => {
                 source.set_paused(*paused);
                 // Keep draining PCM until the decoder acknowledges the pause.
@@ -1594,36 +1531,6 @@ mod tests {
 
     use super::{command_arguments, http_header_options, library_path, terminal_log_line};
     use crate::{MpvLaunchOptions, PlaybackCommand};
-
-    #[test]
-    fn quick_spotify_seeks_continue_from_the_newest_unanswered_seek() {
-        let mut pcm = super::PcmPlayback::new(0);
-        assert!((pcm.seek_origin(1.0) - 1.0).abs() < 1e-9);
-        // Right Arrow three times before Spotify answers the first seek.
-        pcm.seek_requested(6_000);
-        assert!((pcm.seek_origin(1.2) - 6.0).abs() < 1e-9);
-        pcm.seek_requested(11_000);
-        // The first seek's generation loads: the newest seek still counts.
-        pcm.generation_loaded(5_990, false);
-        assert_eq!(pcm.pending_seek_ms(), Some(11_000));
-        // Its own generation (a few ms off, at an Ogg page) ends the seek.
-        pcm.generation_loaded(10_985, false);
-        assert_eq!(pcm.pending_seek_ms(), None);
-        assert!((pcm.seek_origin(11.3) - 11.3).abs() < 1e-9);
-        // A new track ends any seek.
-        pcm.seek_requested(30_000);
-        pcm.generation_loaded(0, true);
-        assert_eq!(pcm.pending_seek_ms(), None);
-    }
-
-    #[test]
-    fn an_unanswered_spotify_seek_stops_counting() {
-        let mut pcm = super::PcmPlayback::new(0);
-        let asked = std::time::Instant::now().checked_sub(super::PCM_SEEK_PENDING_LIMIT);
-        pcm.seek_target = Some((9_000, asked.expect("an instant in the past")));
-        assert_eq!(pcm.pending_seek_ms(), None);
-        assert!((pcm.seek_origin(2.0) - 2.0).abs() < 1e-9);
-    }
 
     fn chapter_fixtures() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
         let folder = tempfile::tempdir().expect("fixture folder");
@@ -2312,7 +2219,6 @@ mod tests {
             started: true,
             loaded: true,
             boundaries: std::collections::VecDeque::default(),
-            seek_target: None,
         });
         engine.execute(PlaybackCommand::SetPaused(true)).unwrap();
         // SAFETY: The engine owns this initialized client for the whole test.
@@ -2391,7 +2297,6 @@ mod tests {
             started: true,
             loaded: true,
             boundaries: std::collections::VecDeque::default(),
-            seek_target: None,
         });
         engine.execute(PlaybackCommand::SetPaused(false)).unwrap();
         let track = MediaItem {
@@ -2560,7 +2465,6 @@ mod tests {
             started: true,
             loaded: true,
             boundaries: std::collections::VecDeque::default(),
-            seek_target: None,
         });
         // Confirmed PCM pause reaches mpv; a new play request resets the old
         // item through the same command used by the runtime before Load.
@@ -2662,7 +2566,6 @@ mod tests {
             started: true,
             loaded: true,
             boundaries: std::collections::VecDeque::default(),
-            seek_target: None,
         });
         let folder = tempfile::tempdir().unwrap();
         engine
