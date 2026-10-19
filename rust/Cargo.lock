@@ -60,7 +60,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "apricot-app"
-version = "2.0.0-beta.23"
+version = "2.0.0-beta.22"
 dependencies = [
  "apricot-core",
  "apricot-media",
@@ -81,7 +81,7 @@ dependencies = [
 
 [[package]]
 name = "apricot-core"
-version = "2.0.0-beta.23"
+version = "2.0.0-beta.22"
 dependencies = [
  "serde",
  "serde_json",
@@ -90,7 +90,7 @@ dependencies = [
 
 [[package]]
 name = "apricot-libmpv-spike"
-version = "2.0.0-beta.23"
+version = "2.0.0-beta.22"
 dependencies = [
  "apricot-core",
  "apricot-playback",
@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "apricot-macos-accessibility-spike"
-version = "2.0.0-beta.23"
+version = "2.0.0-beta.22"
 dependencies = [
  "apricot-core",
  "apricot-playback",
@@ -117,7 +117,7 @@ dependencies = [
 
 [[package]]
 name = "apricot-media"
-version = "2.0.0-beta.23"
+version = "2.0.0-beta.22"
 dependencies = [
  "apricot-core",
  "chrono",
@@ -132,7 +132,7 @@ dependencies = [
 
 [[package]]
 name = "apricot-media-process-spike"
-version = "2.0.0-beta.23"
+version = "2.0.0-beta.22"
 dependencies = [
  "apricot-platform",
  "serde_json",
@@ -140,7 +140,7 @@ dependencies = [
 
 [[package]]
 name = "apricot-mpv-ipc-spike"
-version = "2.0.0-beta.23"
+version = "2.0.0-beta.22"
 dependencies = [
  "apricot-core",
  "apricot-playback",
@@ -149,7 +149,7 @@ dependencies = [
 
 [[package]]
 name = "apricot-platform"
-version = "2.0.0-beta.23"
+version = "2.0.0-beta.22"
 dependencies = [
  "apricot-core",
  "apricot-media",
@@ -170,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "apricot-playback"
-version = "2.0.0-beta.23"
+version = "2.0.0-beta.22"
 dependencies = [
  "apricot-core",
  "libloading",
@@ -184,7 +184,7 @@ dependencies = [
 
 [[package]]
 name = "apricot-player"
-version = "2.0.0-beta.23"
+version = "2.0.0-beta.22"
 dependencies = [
  "apricot-app",
  "apricot-core",
@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "apricot-shell"
-version = "2.0.0-beta.23"
+version = "2.0.0-beta.22"
 dependencies = [
  "apricot-app",
  "apricot-core",
@@ -218,7 +218,7 @@ dependencies = [
 
 [[package]]
 name = "apricot-spotify"
-version = "2.0.0-beta.23"
+version = "2.0.0-beta.22"
 dependencies = [
  "apricot-core",
  "apricot-platform",
@@ -244,7 +244,7 @@ dependencies = [
 
 [[package]]
 name = "apricot-storage"
-version = "2.0.0-beta.23"
+version = "2.0.0-beta.22"
 dependencies = [
  "apricot-core",
  "serde",
@@ -255,14 +255,14 @@ dependencies = [
 
 [[package]]
 name = "apricot-test-support"
-version = "2.0.0-beta.23"
+version = "2.0.0-beta.22"
 dependencies = [
  "apricot-platform",
 ]
 
 [[package]]
 name = "apricot-ui-macos"
-version = "2.0.0-beta.23"
+version = "2.0.0-beta.22"
 dependencies = [
  "apricot-app",
  "apricot-core",
@@ -285,7 +285,7 @@ dependencies = [
 
 [[package]]
 name = "apricot-ui-windows"
-version = "2.0.0-beta.23"
+version = "2.0.0-beta.22"
 dependencies = [
  "apricot-app",
  "apricot-core",
@@ -303,7 +303,7 @@ dependencies = [
 
 [[package]]
 name = "apricot-updater"
-version = "2.0.0-beta.23"
+version = "2.0.0-beta.22"
 dependencies = [
  "chrono",
  "serde",
@@ -316,14 +316,14 @@ dependencies = [
 
 [[package]]
 name = "apricot-windows-accessibility-spike"
-version = "2.0.0-beta.23"
+version = "2.0.0-beta.22"
 dependencies = [
  "windows 0.62.2",
 ]
 
 [[package]]
 name = "apricot-youtube-helper"
-version = "2.0.0-beta.23"
+version = "2.0.0-beta.22"
 dependencies = [
  "apricot-core",
  "apricot-media",

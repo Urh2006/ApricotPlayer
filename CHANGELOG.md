@@ -1,8 +1,3 @@
-# v2.0.0-beta.23 - Previous Spotify seeking
-
-## Changed
-- Seeking in Spotify songs works as before beta 22 again, so holding Right Arrow or Left Arrow moves smoothly instead of too fast. The fix for skipping quickly through Spotify playlists from beta 22 stays.
-
 # v2.0.0-beta.22 - Spotify skipping and seeking
 
 ## Fixed
