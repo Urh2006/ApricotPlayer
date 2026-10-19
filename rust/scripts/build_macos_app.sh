@@ -233,8 +233,13 @@ if [ -n "${MACOS_SIGNING_P12:-}" ] && [ -n "${MACOS_SIGNING_PASSWORD:-}" ]; then
     SIGN_KEYCHAIN="$SIGN_DIR/signing.keychain-db"
     echo "Signing with the project certificate"
     KEYCHAIN_PASSWORD=$(openssl rand -hex 16)
-    trap 'security delete-keychain "$SIGN_KEYCHAIN" 2>/dev/null; rm -rf "$STAGING" "$SIGN_DIR"' EXIT
+    # codesign finds the identity only in a keychain on the search list; the
+    # previous list comes back when the script ends.
+    SEARCH_LIST=$(security list-keychains -d user | tr -d '"' | tr '\n' ' ')
+    trap 'security list-keychains -d user -s $SEARCH_LIST; security delete-keychain "$SIGN_KEYCHAIN" 2>/dev/null; rm -rf "$STAGING" "$SIGN_DIR"' EXIT
     security create-keychain -p "$KEYCHAIN_PASSWORD" "$SIGN_KEYCHAIN"
+    # shellcheck disable=SC2086 # One keychain path per word.
+    security list-keychains -d user -s "$SIGN_KEYCHAIN" $SEARCH_LIST
     security set-keychain-settings "$SIGN_KEYCHAIN"
     security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$SIGN_KEYCHAIN"
     printf '%s' "$MACOS_SIGNING_P12" | base64 -D > "$SIGN_DIR/signing.p12"
