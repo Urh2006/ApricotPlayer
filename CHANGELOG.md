@@ -1,3 +1,8 @@
+# v2.0.0-beta.24 - Remember Spotify song keys
+
+## Added
+- New Spotify setting "Remember keys of played Spotify songs", off by default, in the Spotify settings and in the Spotify section of Settings. Spotify lets an account start about 30 new songs in quick succession and then about one new song every 30 seconds. With this setting, a song you have played before starts without waiting for that limit, also after restarting ApricotPlayer. The keys are kept encrypted for your user account, at most 250,000 songs or about 18 MB, and turning the setting off deletes them.
+
 # v2.0.0-beta.23 - Spotify seeking after Previous and while paused
 
 ## Fixed
