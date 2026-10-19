@@ -482,7 +482,9 @@ mod tests {
         }
         let filled = started.elapsed();
         drop(cache);
-        let size = std::fs::metadata(KeyCache::path(folder.path())).unwrap().len();
+        let size = std::fs::metadata(KeyCache::path(folder.path()))
+            .unwrap()
+            .len();
         let started = std::time::Instant::now();
         let reopened = KeyCache::open_with(folder.path(), &plain()).unwrap();
         let opened = started.elapsed();
@@ -495,7 +497,11 @@ mod tests {
         let mut newest = [0; 20];
         let last = u32::try_from(total - 1).unwrap();
         newest[..4].copy_from_slice(&last.to_le_bytes());
-        assert!(reopened.get(track(u128::from(last)), FileId(newest)).is_some());
+        assert!(
+            reopened
+                .get(track(u128::from(last)), FileId(newest))
+                .is_some()
+        );
     }
 
     #[test]
