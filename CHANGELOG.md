@@ -1,3 +1,9 @@
+# v2.0.0-beta.22 - Spotify skipping and seeking
+
+## Fixed
+- Skipping quickly through Spotify playlists no longer stops songs with "Spotify playback was interrupted". Spotify lets an account start about 30 new songs in quick succession and then about one new song every 30 seconds. ApricotPlayer now waits until Spotify allows the song, says once that Spotify is limiting new songs, and then starts the song by itself. A song Spotify refused also no longer downloads its whole file in the background, which slowed down the following songs.
+- Pressing Right Arrow or Left Arrow quickly in a Spotify song now moves the position by every press. A press made before the previous one had taken effect used to start from the old position, so presses were lost and the position jumped unevenly.
+
 # v2.0.0-beta.21 - Spotify lists load again
 
 ## Fixed
