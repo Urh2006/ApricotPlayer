@@ -1,3 +1,9 @@
+# v2.0.0-beta.20 - Reliable Spotify Previous and Next
+
+## Fixed
+- Quick Previous and Next in Spotify no longer report a playable song as not available and skip it. A temporary key or download failure now says that playback was interrupted, and the song stays playable.
+- Returning to a Spotify song reuses its key, and changing songs during a failure cancels the old attempt instead of stalling playback.
+
 # v2.0.0-beta.19 - Full screen video and reliable file replay
 
 ## Fixed
