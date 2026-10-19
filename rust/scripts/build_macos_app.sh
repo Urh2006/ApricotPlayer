@@ -244,7 +244,11 @@ if [ -n "${MACOS_SIGNING_P12:-}" ] && [ -n "${MACOS_SIGNING_PASSWORD:-}" ]; then
     security set-key-partition-list -S apple-tool:,apple: -s \
         -k "$KEYCHAIN_PASSWORD" "$SIGN_KEYCHAIN" >/dev/null || {
         echo "Could not allow codesign to use the signing key" >&2; exit 1; }
-    SIGN_IDENTITY="ApricotPlayer Code Signing"
+    # By its SHA-1: codesign finds a self-signed identity by name only when
+    # the certificate is trusted, which it is not on the build machines.
+    SIGN_IDENTITY=$(security find-certificate -c "ApricotPlayer Code Signing" -Z \
+        "$SIGN_KEYCHAIN" | awk '/SHA-1 hash/ { print $NF }')
+    [ -n "$SIGN_IDENTITY" ] || { echo "The signing certificate was not imported" >&2; exit 1; }
 fi
 sign() {
     if [ -n "$SIGN_KEYCHAIN" ]; then
