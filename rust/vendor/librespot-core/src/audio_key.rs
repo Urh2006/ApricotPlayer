@@ -1,4 +1,8 @@
-use std::{collections::HashMap, io::Write, time::Duration};
+use std::{
+    collections::{HashMap, VecDeque},
+    io::Write,
+    time::Duration,
+};
 
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
 use bytes::Bytes;
@@ -40,6 +44,21 @@ component! {
     AudioKeyManager : AudioKeyManagerInner {
         sequence: SeqGenerator<u32> = SeqGenerator::new(0),
         pending: HashMap<u32, oneshot::Sender<Result<AudioKey, Error>>> = HashMap::new(),
+        // Keys belong to an exact track/file pair and this authenticated
+        // session only. Replaying a song must not request its key repeatedly.
+        keys: VecDeque<((SpotifyId, FileId), AudioKey)> = VecDeque::new(),
+    }
+}
+
+struct PendingKeyRequest<'a> {
+    manager: &'a AudioKeyManager,
+    sequence: u32,
+}
+
+impl Drop for PendingKeyRequest<'_> {
+    fn drop(&mut self) {
+        self.manager
+            .lock(|inner| inner.pending.remove(&self.sequence));
     }
 }
 
@@ -79,6 +98,15 @@ impl AudioKeyManager {
     }
 
     pub async fn request(&self, track: SpotifyId, file: FileId) -> Result<AudioKey, Error> {
+        if let Some(key) = self.lock(|inner| {
+            inner
+                .keys
+                .iter()
+                .rev()
+                .find_map(|(pair, key)| (*pair == (track, file)).then_some(*key))
+        }) {
+            return Ok(key);
+        }
         let (tx, rx) = oneshot::channel();
 
         let seq = self.lock(move |inner| {
@@ -87,15 +115,30 @@ impl AudioKeyManager {
             seq
         });
 
+        // Also remove canceled requests when Next/Previous drops its loader,
+        // and on send errors/timeouts; otherwise pending senders accumulate.
+        let _pending = PendingKeyRequest {
+            manager: self,
+            sequence: seq,
+        };
+
         self.send_key_request(seq, track, file)?;
         const KEY_RESPONSE_TIMEOUT: Duration = Duration::from_millis(1500);
-        match tokio::time::timeout(KEY_RESPONSE_TIMEOUT, rx).await {
+        let key = match tokio::time::timeout(KEY_RESPONSE_TIMEOUT, rx).await {
             Err(_) => {
                 error!("Audio key response timeout");
-                Err(AudioKeyError::Timeout.into())
+                return Err(AudioKeyError::Timeout.into());
             }
-            Ok(k) => k?,
-        }
+            Ok(k) => k??,
+        };
+        self.lock(|inner| {
+            const MAX_SESSION_KEYS: usize = 256;
+            if inner.keys.len() == MAX_SESSION_KEYS {
+                inner.keys.pop_front();
+            }
+            inner.keys.push_back(((track, file), key));
+        });
+        Ok(key)
     }
 
     fn send_key_request(&self, seq: u32, track: SpotifyId, file: FileId) -> Result<(), Error> {

@@ -34,8 +34,7 @@ use crate::{
     mixer::VolumeGetter,
 };
 use futures_util::{
-    StreamExt, TryFutureExt, future, future::FusedFuture,
-    stream::futures_unordered::FuturesUnordered,
+    FutureExt, StreamExt, future, future::FusedFuture, stream::futures_unordered::FuturesUnordered,
 };
 use librespot_core::listening::EndReason;
 use librespot_metadata::{audio::UniqueFields, track::Tracks};
@@ -56,8 +55,7 @@ const SPOTIFY_OGG_HEADER_END: u64 = 0xa7;
 
 const LOAD_HANDLES_POISON_MSG: &str = "load handles mutex should not be poisoned";
 
-// ApricotPlayer patch: how often a remote track is tried before it is
-// reported unavailable, and the pause between the tries.
+// Retry temporary load failures without turning them into catalogue restrictions.
 const REMOTE_LOAD_ATTEMPTS: u32 = 2;
 const REMOTE_LOAD_RETRY_DELAY: Duration = Duration::from_millis(750);
 
@@ -72,15 +70,19 @@ enum LoadFailure {
 
 /// Runs `attempt` until it loads, reports the track unavailable, or was
 /// interrupted `attempts` times.
-async fn load_with_retries<T, F, Fut>(attempts: u32, delay: Duration, mut attempt: F) -> Option<T>
+async fn load_with_retries<T, F, Fut>(
+    attempts: u32,
+    delay: Duration,
+    mut attempt: F,
+) -> Result<T, LoadFailure>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, LoadFailure>>,
 {
     for number in 1..=attempts {
         match attempt().await {
-            Ok(loaded) => return Some(loaded),
-            Err(LoadFailure::Unavailable) => return None,
+            Ok(loaded) => return Ok(loaded),
+            Err(LoadFailure::Unavailable) => return Err(LoadFailure::Unavailable),
             Err(LoadFailure::Interrupted) if number < attempts => {
                 warn!("Loading was interrupted, trying again ({number} of {attempts})");
                 tokio::time::sleep(delay).await;
@@ -88,7 +90,33 @@ where
             Err(LoadFailure::Interrupted) => {}
         }
     }
-    None
+    Err(LoadFailure::Interrupted)
+}
+
+// Dropping a superseded foreground/preload receiver cancels its async work,
+// including retry sleeps. Blocking decoder reads finish on their worker thread,
+// but cannot subsequently start another obsolete request.
+async fn deliver_load<T>(mut sender: oneshot::Sender<T>, load: impl Future<Output = T>) {
+    tokio::select! {
+        biased;
+        _ = sender.closed() => {}
+        result = load => { let _ = sender.send(result); }
+    }
+}
+
+impl LoadFailure {
+    fn event(self, track_id: SpotifyUri, play_request_id: u64) -> PlayerEvent {
+        match self {
+            Self::Unavailable => PlayerEvent::Unavailable {
+                track_id,
+                play_request_id,
+            },
+            Self::Interrupted => PlayerEvent::LoadingFailed {
+                track_id,
+                play_request_id,
+            },
+        }
+    }
 }
 
 pub type PlayerResult = Result<(), Error>;
@@ -251,6 +279,11 @@ pub enum PlayerEvent {
         play_request_id: u64,
         track_id: SpotifyUri,
     },
+    // Temporary transport/decoder failure; never blacklist this URI in Connect.
+    LoadingFailed {
+        play_request_id: u64,
+        track_id: SpotifyUri,
+    },
     // The mixer volume was set to a new level.
     VolumeChanged {
         volume: u16,
@@ -313,6 +346,9 @@ impl PlayerEvent {
                 play_request_id, ..
             }
             | Unavailable {
+                play_request_id, ..
+            }
+            | LoadingFailed {
                 play_request_id, ..
             }
             | Playing {
@@ -834,7 +870,8 @@ enum PlayerPreload {
     None,
     Loading {
         track_id: SpotifyUri,
-        loader: Pin<Box<dyn FusedFuture<Output = Result<PlayerLoadedTrackData, ()>> + Send>>,
+        loader:
+            Pin<Box<dyn FusedFuture<Output = Result<PlayerLoadedTrackData, LoadFailure>> + Send>>,
     },
     Ready {
         track_id: SpotifyUri,
@@ -850,7 +887,8 @@ enum PlayerState {
         track_id: SpotifyUri,
         play_request_id: u64,
         start_playback: bool,
-        loader: Pin<Box<dyn FusedFuture<Output = Result<PlayerLoadedTrackData, ()>> + Send>>,
+        loader:
+            Pin<Box<dyn FusedFuture<Output = Result<PlayerLoadedTrackData, LoadFailure>> + Send>>,
     },
     Paused {
         track_id: SpotifyUri,
@@ -1124,27 +1162,29 @@ impl PlayerTrackLoader {
         &self,
         track_uri: SpotifyUri,
         position_ms: u32,
-    ) -> Option<PlayerLoadedTrackData> {
+    ) -> Result<PlayerLoadedTrackData, LoadFailure> {
         match track_uri {
             SpotifyUri::Track { .. } | SpotifyUri::Episode { .. } => {
                 self.load_remote_track(track_uri, position_ms).await
             }
-            SpotifyUri::Local { .. } => self.load_local_track(track_uri, position_ms).await,
+            SpotifyUri::Local { .. } => self
+                .load_local_track(track_uri, position_ms)
+                .await
+                .ok_or(LoadFailure::Unavailable),
             _ => {
                 error!("Cannot handle load of track with URI: <{track_uri}>",);
-                None
+                Err(LoadFailure::Unavailable)
             }
         }
     }
 
-    // ApricotPlayer patch: a load interrupted by the network, the audio key
-    // service or a stalled download is tried again before the track is
-    // reported unavailable, so Connect does not skip a song that can play.
+    // Retain the reason even after retries: a transport failure does not
+    // establish that Spotify has restricted this song.
     async fn load_remote_track(
         &self,
         track_uri: SpotifyUri,
         position_ms: u32,
-    ) -> Option<PlayerLoadedTrackData> {
+    ) -> Result<PlayerLoadedTrackData, LoadFailure> {
         load_with_retries(REMOTE_LOAD_ATTEMPTS, REMOTE_LOAD_RETRY_DELAY, || {
             self.load_remote_track_attempt(&track_uri, position_ms)
         })
@@ -1560,13 +1600,9 @@ impl Future for PlayerInternal {
                             }
                         }
                         Poll::Ready(Err(e)) => {
-                            error!(
-                                "Skipping to next track, unable to load track <{track_id:?}>: {e:?}"
-                            );
-                            self.send_event(PlayerEvent::Unavailable {
-                                track_id,
-                                play_request_id,
-                            })
+                            error!("Unable to load track <{track_id:?}>: {e:?}");
+                            self.state = PlayerState::Stopped;
+                            self.send_event(e.event(track_id, play_request_id));
                         }
                         Poll::Pending => (),
                     }
@@ -1590,16 +1626,17 @@ impl Future for PlayerInternal {
                             loaded_track: Box::new(loaded_track),
                         };
                     }
-                    Poll::Ready(Err(_)) => {
+                    Poll::Ready(Err(failure)) => {
                         debug!("Unable to preload {track_id:?}");
                         self.preload = PlayerPreload::None;
                         // Let Spirc know that the track was unavailable.
-                        if let PlayerState::Playing {
-                            play_request_id, ..
-                        }
-                        | PlayerState::Paused {
-                            play_request_id, ..
-                        } = self.state
+                        if failure == LoadFailure::Unavailable
+                            && let PlayerState::Playing {
+                                play_request_id, ..
+                            }
+                            | PlayerState::Paused {
+                                play_request_id, ..
+                            } = self.state
                         {
                             self.send_event(PlayerEvent::Unavailable {
                                 track_id,
@@ -2680,7 +2717,8 @@ impl PlayerInternal {
         &mut self,
         spotify_uri: SpotifyUri,
         position_ms: u32,
-    ) -> impl FusedFuture<Output = Result<PlayerLoadedTrackData, ()>> + Send + 'static {
+    ) -> impl FusedFuture<Output = Result<PlayerLoadedTrackData, LoadFailure>> + Send + 'static
+    {
         // This method creates a future that returns the loaded stream and associated info.
         // Ideally all work should be done using asynchronous code. However, seek() on the
         // audio stream is implemented in a blocking fashion. Thus, we can't turn it into future
@@ -2699,10 +2737,10 @@ impl PlayerInternal {
         let handle = tokio::runtime::Handle::current();
 
         let load_handle = thread::spawn(move || {
-            let data = handle.block_on(loader.load_track(spotify_uri, position_ms));
-            if let Some(data) = data {
-                let _ = result_tx.send(data);
-            }
+            handle.block_on(deliver_load(
+                result_tx,
+                loader.load_track(spotify_uri, position_ms),
+            ));
 
             let mut load_handles = load_handles_clone.lock().expect(LOAD_HANDLES_POISON_MSG);
             load_handles.remove(&thread::current().id());
@@ -2711,7 +2749,7 @@ impl PlayerInternal {
         let mut load_handles = self.load_handles.lock().expect(LOAD_HANDLES_POISON_MSG);
         load_handles.insert(load_handle.thread().id(), load_handle);
 
-        result_rx.map_err(|_| ())
+        async move { result_rx.await.unwrap_or(Err(LoadFailure::Interrupted)) }.fuse()
     }
 
     fn preload_data_before_playback(&mut self) -> PlayerResult {
@@ -2953,9 +2991,10 @@ where
 mod load_retry_tests {
     use std::cell::Cell;
 
-    use super::{Duration, LoadFailure, load_with_retries};
+    use super::{Duration, LoadFailure, PlayerEvent, SpotifyUri, deliver_load, load_with_retries};
+    use tokio::sync::oneshot;
 
-    async fn run(results: &[Result<u32, LoadFailure>]) -> (Option<u32>, usize) {
+    async fn run(results: &[Result<u32, LoadFailure>]) -> (Result<u32, LoadFailure>, usize) {
         let calls = Cell::new(0);
         let loaded = load_with_retries(2, Duration::ZERO, || {
             let result = results[calls.get()];
@@ -2970,20 +3009,85 @@ mod load_retry_tests {
     async fn load_retry_an_interrupted_load_is_tried_again() {
         assert_eq!(
             run(&[Err(LoadFailure::Interrupted), Ok(7)]).await,
-            (Some(7), 2)
+            (Ok(7), 2)
         );
     }
 
     #[tokio::test]
     async fn load_retry_an_unavailable_track_is_not_tried_again() {
-        assert_eq!(run(&[Err(LoadFailure::Unavailable)]).await, (None, 1));
+        assert_eq!(
+            run(&[Err(LoadFailure::Unavailable)]).await,
+            (Err(LoadFailure::Unavailable), 1)
+        );
     }
 
     #[tokio::test]
     async fn load_retry_gives_up_after_the_last_attempt() {
         assert_eq!(
             run(&[Err(LoadFailure::Interrupted), Err(LoadFailure::Interrupted)]).await,
-            (None, 2)
+            (Err(LoadFailure::Interrupted), 2)
         );
+    }
+
+    #[tokio::test]
+    async fn load_retry_exhausted_network_failure_is_not_an_unavailable_song() {
+        let interrupted =
+            run(&[Err(LoadFailure::Interrupted), Err(LoadFailure::Interrupted)]).await;
+        let unavailable = run(&[Err(LoadFailure::Unavailable)]).await;
+        assert_ne!(
+            interrupted.0, unavailable.0,
+            "a key/download failure must not blacklist a playable song for this session"
+        );
+        let event = interrupted.0.unwrap_err().event(
+            SpotifyUri::from_uri("spotify:track:0000000000000000000001").unwrap(),
+            17,
+        );
+        assert!(matches!(
+            event,
+            PlayerEvent::LoadingFailed {
+                play_request_id: 17,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn load_retry_replaced_request_does_not_start_a_download() {
+        let (sender, receiver) = oneshot::channel();
+        drop(receiver);
+        let calls = Cell::new(0);
+        deliver_load(sender, async {
+            calls.set(calls.get() + 1);
+            Ok::<_, LoadFailure>(7)
+        })
+        .await;
+        assert_eq!(calls.get(), 0);
+    }
+
+    #[tokio::test]
+    async fn load_retry_navigation_during_failure_cancels_obsolete_retries() {
+        let (sender, receiver) = oneshot::channel();
+        let calls = Cell::new(0);
+        deliver_load(sender, async {
+            drop(receiver);
+            load_with_retries::<u32, _, _>(2, Duration::from_secs(60), || {
+                calls.set(calls.get() + 1);
+                async { Err(LoadFailure::Interrupted) }
+            })
+            .await
+        })
+        .await;
+        assert_eq!(
+            calls.get(),
+            1,
+            "Next/Previous must cancel the old key/download retry"
+        );
+    }
+
+    #[tokio::test]
+    async fn load_retry_current_request_still_delivers_its_result() {
+        let (sender, receiver) = oneshot::channel();
+        deliver_load(sender, async { Ok::<_, LoadFailure>(7) }).await;
+        assert_eq!(receiver.await.unwrap(), Ok(7));
     }
 }

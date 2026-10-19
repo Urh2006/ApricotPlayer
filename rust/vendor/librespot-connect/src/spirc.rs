@@ -526,6 +526,33 @@ mod transport_regressions {
         assert_eq!(task.connect_state.player().track.uri, SECOND);
     }
 
+    #[tokio::test]
+    async fn interrupted_load_keeps_song_retryable_and_transport_usable() {
+        let mut task = task(false);
+        task.handle_apricot_load(two_tracks(None), Some(1))
+            .await
+            .unwrap();
+        let request = task.play_request_id.unwrap();
+        task.handle_player_event(PlayerEvent::LoadingFailed {
+            track_id: SpotifyUri::from_uri(FIRST).unwrap(),
+            play_request_id: request,
+        })
+        .unwrap();
+        assert_eq!(task.connect_state.player().track.uri, FIRST);
+        task.handle_next(None).unwrap();
+        assert_eq!(task.connect_state.player().track.uri, SECOND);
+        task.handle_prev().unwrap();
+        assert_eq!(
+            task.connect_state.player().track.uri,
+            FIRST,
+            "temporary key/download errors must not remove this song from the session"
+        );
+        assert!(matches!(
+            task.play_status,
+            SpircPlayStatus::LoadingPlay { .. }
+        ));
+    }
+
     fn two_tracks(playing_track: Option<PlayingTrack>) -> LoadRequest {
         LoadRequest::from_tracks(
             vec![FIRST.to_owned(), SECOND.to_owned()],
@@ -1539,6 +1566,13 @@ impl SpircTask {
             PlayerEvent::TimeToPreloadNextTrack { .. } => {
                 self.handle_preload_next_track();
                 return Ok(());
+            }
+            PlayerEvent::LoadingFailed { track_id, .. } => {
+                // Keep this URI, queue and context retryable. A failed key or
+                // download is not evidence of a catalogue restriction.
+                if self.connect_state.current_track(|t| &t.uri) == &track_id.to_uri()? {
+                    self.stop_on_selected_track();
+                }
             }
             PlayerEvent::Unavailable {
                 track_id,

@@ -105,6 +105,10 @@ impl AvailabilityNotices {
             PlayerEvent::Unavailable {
                 play_request_id,
                 track_id,
+            }
+            | PlayerEvent::LoadingFailed {
+                play_request_id,
+                track_id,
             } if self
                 .active
                 .as_ref()
@@ -525,6 +529,15 @@ impl Shared {
         } else {
             self.push_notice_at(revision, PlaybackNotice::Unavailable { uri });
         }
+    }
+
+    /// The current song's key or download failed even after a retry: the
+    /// player says so, and the song stays playable for another try.
+    fn report_interrupted(&self) {
+        self.push_event(PcmSourceEvent::Failed(
+            "spotify_playback_interrupted".to_owned(),
+        ));
+        (self.notify)();
     }
 
     pub fn take_notice(&self) -> Option<PlaybackNotice> {
@@ -1118,6 +1131,9 @@ impl SpotifyPlayback {
                         log::info!("request {play_request_id} stopped; its generation ends");
                         generation.close();
                     }
+                }
+                PlayerEvent::LoadingFailed { .. } if current_track_failed => {
+                    shared.report_interrupted();
                 }
                 PlayerEvent::Unavailable {
                     track_id,
@@ -1884,6 +1900,71 @@ mod tests {
             .insert("spotify_collection".into(), true.into());
         let (_, names_song) = load_request(&whole, whole.id.0.clone(), 0, false, RepeatMode::Off);
         assert!(!names_song);
+    }
+
+    #[tokio::test]
+    async fn interrupted_track_reports_retryable_failure_without_unavailable_notice() {
+        let shared = shared();
+        let revision = shared.manual_selection(true);
+        *shared.request_owner.lock().unwrap() = Some(Arc::new(move |_| Some(revision)));
+        let uri =
+            librespot_core::SpotifyUri::from_uri("spotify:track:6rqhFgbbKwnb9MLmUQDhG6").unwrap();
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        for event in [
+            PlayerEvent::PlayRequestIdChanged { play_request_id: 2 },
+            PlayerEvent::Loading {
+                play_request_id: 2,
+                track_id: uri.clone(),
+                position_ms: 0,
+            },
+            // A failed preload cannot stop the current song.
+            PlayerEvent::LoadingFailed {
+                play_request_id: 2,
+                track_id: librespot_core::SpotifyUri::from_uri(
+                    "spotify:track:72AZ3V52rs9NfgMNhALxln",
+                )
+                .unwrap(),
+            },
+            PlayerEvent::LoadingFailed {
+                play_request_id: 2,
+                track_id: uri.clone(),
+            },
+            // Replaying exactly the same URI is a fresh, valid request.
+            PlayerEvent::PlayRequestIdChanged { play_request_id: 3 },
+            PlayerEvent::Loading {
+                play_request_id: 3,
+                track_id: uri,
+                position_ms: 0,
+            },
+            PlayerEvent::Playing {
+                play_request_id: 3,
+                track_id: librespot_core::SpotifyUri::from_uri(
+                    "spotify:track:6rqhFgbbKwnb9MLmUQDhG6",
+                )
+                .unwrap(),
+                position_ms: 0,
+            },
+        ] {
+            sender.send(event).unwrap();
+        }
+        drop(sender);
+        SpotifyPlayback::listen(shared.clone(), receiver).await;
+        assert!(shared.take_notice().is_none());
+        let events = shared.events.lock().unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, PcmSourceEvent::Failed(_)))
+                .count(),
+            1
+        );
+        assert!(events.contains(&PcmSourceEvent::Failed(
+            "spotify_playback_interrupted".to_owned()
+        )));
+        assert!(
+            events.contains(&PcmSourceEvent::Paused(false)),
+            "replay can resume without restarting the app"
+        );
     }
 
     /// Beta 16: a chosen song that cannot load is reported by the player;

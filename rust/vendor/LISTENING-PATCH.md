@@ -37,6 +37,15 @@ integration, not an upstream-supported history API.
   Unavailable, Connect stops on the song instead of skipping to the next row,
   and Apricot reports "This Spotify item cannot be played". Songs Spotify
   chose (whole albums, Next, natural advancement) still skip as before.
+- Beta 20: a load that is still interrupted after its retry keeps its reason.
+  Player sends the new LoadingFailed event instead of Unavailable, leaves the
+  Loading state, and a failed preload no longer marks the next song
+  unavailable. Connect stops on the song without blacklisting its URI for the
+  session, so Previous and Next can return to it; Apricot reports "Spotify
+  playback was interrupted". Dropping a replaced loader cancels its pending
+  retry. The audio key manager keeps up to 256 successful keys of this session
+  in memory per track and file, so returning to a song does not request its
+  key again, and canceled key requests no longer stay pending.
 - No dev-branch upgrade. The 0.8.0 local-file loader has no reportable Spotify
   identity. Local and passthrough audio are excluded.
 - Sink.write_counted counts PCM samples accepted by the output. The Apricot

@@ -129,6 +129,73 @@ struct SessionInternal {
 #[derive(Clone)]
 pub struct Session(Arc<SessionInternal>);
 
+#[cfg(test)]
+mod audio_key_regressions {
+    use super::*;
+    use crate::{FileId, SpotifyId, audio_key::AudioKey};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn audio_key_replaying_a_song_reuses_its_successful_session_key() {
+        let session = Session::new(SessionConfig::default(), None);
+        let (sender, mut packets) = mpsc::unbounded_channel();
+        session.0.tx_connection.set(sender).unwrap();
+        let count = Arc::new(AtomicUsize::new(0));
+        let requests = count.clone();
+        let responder_session = session.clone();
+        let responder = tokio::spawn(async move {
+            while let Some((command, data)) = packets.recv().await {
+                assert_eq!(command, PacketType::RequestKey as u8);
+                let number = requests.fetch_add(1, Ordering::SeqCst);
+                let mut response = data[36..40].to_vec();
+                let command = if number == 0 {
+                    response.extend_from_slice(&[7; 16]);
+                    PacketType::AesKey
+                } else {
+                    response.extend_from_slice(&[0, 2]);
+                    PacketType::AesKeyError
+                };
+                responder_session
+                    .audio_key()
+                    .dispatch(command, response.into())
+                    .unwrap();
+            }
+        });
+        let track = SpotifyId { id: 17 };
+        let file = FileId([1; 20]);
+        assert_eq!(
+            session.audio_key().request(track, file).await.unwrap(),
+            AudioKey([7; 16])
+        );
+        let replayed = session.audio_key().request(track, file).await;
+        assert_eq!(
+            replayed.unwrap(),
+            AudioKey([7; 16]),
+            "Previous/Next must not request a known key again"
+        );
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        assert!(
+            session
+                .audio_key()
+                .request(track, FileId([2; 20]))
+                .await
+                .is_err(),
+            "a key for another file/quality cannot decrypt this file"
+        );
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+        responder.abort();
+        let other_session = Session::new(SessionConfig::default(), None);
+        assert!(
+            other_session
+                .audio_key()
+                .request(track, file)
+                .await
+                .is_err(),
+            "keys must not cross authenticated sessions"
+        );
+    }
+}
+
 impl Session {
     pub fn new(config: SessionConfig, cache: Option<Cache>) -> Self {
         let http_client = HttpClient::new(config.proxy.as_ref());

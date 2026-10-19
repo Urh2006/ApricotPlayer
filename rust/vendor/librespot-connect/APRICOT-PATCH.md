@@ -45,6 +45,10 @@ and queue/history functions in `src/state/tracks.rs`:
   the context), reading the remaining pages first for the last song. It loads
   through the same path as a named song, so a song that cannot load stops.
 
+* Beta 20: `PlayerEvent::LoadingFailed` (a temporary key, download or decoder
+  failure) stops on the current song like a failed chosen song, without
+  `handle_unavailable`, so its URI stays in the queue and context.
+
 Upstream: `dev` has `Spirc::add_to_queue` and `clear_queue` and a `SetQueue`
 player event without `uid`; a pull request with the confirmed state and the
 revision check should replace this copy.
