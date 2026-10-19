@@ -231,6 +231,7 @@ if [ -n "${MACOS_SIGNING_P12:-}" ] && [ -n "${MACOS_SIGNING_PASSWORD:-}" ]; then
     # The keychain stays outside the staging folder, which becomes the DMG.
     SIGN_DIR=$(mktemp -d /private/tmp/apricot-sign.XXXXXX)
     SIGN_KEYCHAIN="$SIGN_DIR/signing.keychain-db"
+    echo "Signing with the project certificate"
     KEYCHAIN_PASSWORD=$(openssl rand -hex 16)
     trap 'security delete-keychain "$SIGN_KEYCHAIN" 2>/dev/null; rm -rf "$STAGING" "$SIGN_DIR"' EXIT
     security create-keychain -p "$KEYCHAIN_PASSWORD" "$SIGN_KEYCHAIN"
@@ -238,10 +239,11 @@ if [ -n "${MACOS_SIGNING_P12:-}" ] && [ -n "${MACOS_SIGNING_PASSWORD:-}" ]; then
     security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$SIGN_KEYCHAIN"
     printf '%s' "$MACOS_SIGNING_P12" | base64 -D > "$SIGN_DIR/signing.p12"
     security import "$SIGN_DIR/signing.p12" -k "$SIGN_KEYCHAIN" \
-        -P "$MACOS_SIGNING_PASSWORD" -T /usr/bin/codesign >/dev/null
+        -P "$MACOS_SIGNING_PASSWORD" -T /usr/bin/codesign
     rm -f "$SIGN_DIR/signing.p12"
     security set-key-partition-list -S apple-tool:,apple: -s \
-        -k "$KEYCHAIN_PASSWORD" "$SIGN_KEYCHAIN" >/dev/null
+        -k "$KEYCHAIN_PASSWORD" "$SIGN_KEYCHAIN" >/dev/null || {
+        echo "Could not allow codesign to use the signing key" >&2; exit 1; }
     SIGN_IDENTITY="ApricotPlayer Code Signing"
 fi
 sign() {
