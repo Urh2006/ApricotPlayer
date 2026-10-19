@@ -1,3 +1,9 @@
+# v2.0.0-beta.23 - Spotify seeking after Previous and while paused
+
+## Fixed
+- Seeking in a Spotify song after pressing Ctrl+PageUp to start it again works right away again. Before, the position did not change, the sound moved only after a delay, and further presses started from the wrong place.
+- Seeking in a paused Spotify song now changes the position at once, so the time is right before playback continues, as with other sources.
+
 # v2.0.0-beta.22 - Spotify skipping and seeking
 
 ## Fixed
