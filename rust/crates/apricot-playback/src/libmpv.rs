@@ -1079,7 +1079,9 @@ impl PlaybackEngine for LibMpvEngine {
             self.restart_log();
         }
         let load = matches!(&command, PlaybackCommand::Load { .. });
-        if load
+        let needs_video_surface = matches!(&command, PlaybackCommand::Load { item, .. }
+            if item.kind != apricot_core::media::MediaKind::Audio);
+        if needs_video_surface
             && self
                 .render
                 .as_ref()
@@ -2123,6 +2125,30 @@ mod tests {
             options.initial_playback_state = crate::InitialPlaybackState::Paused;
         }
         super::LibMpvEngine::load(&options).expect("load real library")
+    }
+
+    #[test]
+    #[ignore = "requires APRICOT_TEST_MPV and APRICOT_TEST_FFMPEG"]
+    fn real_libmpv_audio_plays_without_an_initialized_video_surface() {
+        use crate::{PlaybackEngine, PlaybackEvent};
+        let folder = tempfile::tempdir().unwrap();
+        let item = short_fixture(folder.path());
+        let host = crate::MpvRenderHost::new();
+        let mut options = MpvLaunchOptions::new(std::path::PathBuf::from(
+            std::env::var_os("APRICOT_TEST_MPV").expect("mpv path"),
+        ));
+        options.audio_driver = Some("null".to_owned());
+        options.video_mode = crate::MpvVideoMode::RenderApi(host.id());
+        let mut engine = super::LibMpvEngine::load(&options).unwrap();
+        // A hidden/minimized window has not drawn or created any GL context.
+        engine
+            .execute(PlaybackCommand::Load {
+                item: Box::new(item),
+                start_position_seconds: None,
+            })
+            .expect("known audio must not wait for a hidden video surface");
+        let events = collect_events(&mut engine, std::time::Duration::from_millis(1600));
+        assert!(events.contains(&PlaybackEvent::Ended), "{events:?}");
     }
 
     #[test]
