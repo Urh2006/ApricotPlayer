@@ -254,7 +254,9 @@ sign() {
     fi
 }
 find "$MACOS" -type f \( -name "*.dylib" -o -perm -u+x \) ! -path "$MACOS/$EXECUTABLE" |
-    while read -r code; do sign "$code" 2>/dev/null; done
+    while read -r code; do
+        sign "$code" 2>/dev/null || echo "Warning: could not sign $code" >&2
+    done
 sign "$APP"
 codesign --verify --deep --strict "$APP"
 codesign -d -r- "$APP" 2>&1 | grep designated
