@@ -1,3 +1,8 @@
+# v2.0.0-beta.21 - Spotify lists load again
+
+## Fixed
+- Spotify playlists and other Spotify lists no longer stay at Loading. A week after ApricotPlayer last read Spotify's query list, every list read it again before loading, which took a minute or more.
+
 # v2.0.0-beta.20 - Reliable Spotify Previous and Next
 
 ## Fixed
