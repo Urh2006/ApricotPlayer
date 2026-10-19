@@ -216,13 +216,46 @@ info_path.write_text(json.dumps(info, indent=2) + "\n")
 print(f"MACOS_MINIMUM_VERSION={minimum}")
 PY
 
-# Ad hoc signature: the bundle, every library and helper inside it.
+# Signature: the bundle, every library and helper inside it. With
+# MACOS_SIGNING_P12 (base64 of a PKCS#12 file) and MACOS_SIGNING_PASSWORD, as
+# the release workflow sets them from its secrets, everything is signed with
+# the project's own self-signed certificate. Its designated requirement then
+# stays the same from one version to the next, so the Keychain keeps the
+# user's "Always Allow" after an update. Without them the signature is ad
+# hoc, which macOS ties to this exact build.
 # Archive-provided Finder metadata is not permitted by codesign.
 xattr -cr "$APP"
-find "$MACOS" -type f \( -name "*.dylib" -o -perm -u+x \) ! -path "$MACOS/$EXECUTABLE" \
-    -exec codesign --force --sign - {} \; 2>/dev/null
-codesign --force --sign - "$APP"
+SIGN_IDENTITY="-"
+SIGN_KEYCHAIN=""
+if [ -n "${MACOS_SIGNING_P12:-}" ] && [ -n "${MACOS_SIGNING_PASSWORD:-}" ]; then
+    # The keychain stays outside the staging folder, which becomes the DMG.
+    SIGN_DIR=$(mktemp -d /private/tmp/apricot-sign.XXXXXX)
+    SIGN_KEYCHAIN="$SIGN_DIR/signing.keychain-db"
+    KEYCHAIN_PASSWORD=$(openssl rand -hex 16)
+    trap 'security delete-keychain "$SIGN_KEYCHAIN" 2>/dev/null; rm -rf "$STAGING" "$SIGN_DIR"' EXIT
+    security create-keychain -p "$KEYCHAIN_PASSWORD" "$SIGN_KEYCHAIN"
+    security set-keychain-settings "$SIGN_KEYCHAIN"
+    security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$SIGN_KEYCHAIN"
+    printf '%s' "$MACOS_SIGNING_P12" | base64 -D > "$SIGN_DIR/signing.p12"
+    security import "$SIGN_DIR/signing.p12" -k "$SIGN_KEYCHAIN" \
+        -P "$MACOS_SIGNING_PASSWORD" -T /usr/bin/codesign >/dev/null
+    rm -f "$SIGN_DIR/signing.p12"
+    security set-key-partition-list -S apple-tool:,apple: -s \
+        -k "$KEYCHAIN_PASSWORD" "$SIGN_KEYCHAIN" >/dev/null
+    SIGN_IDENTITY="ApricotPlayer Code Signing"
+fi
+sign() {
+    if [ -n "$SIGN_KEYCHAIN" ]; then
+        codesign --force --keychain "$SIGN_KEYCHAIN" --sign "$SIGN_IDENTITY" "$1"
+    else
+        codesign --force --sign - "$1"
+    fi
+}
+find "$MACOS" -type f \( -name "*.dylib" -o -perm -u+x \) ! -path "$MACOS/$EXECUTABLE" |
+    while read -r code; do sign "$code" 2>/dev/null; done
+sign "$APP"
 codesign --verify --deep --strict "$APP"
+codesign -d -r- "$APP" 2>&1 | grep designated
 
 # The packaged application must start its smoke check and find its tools.
 "$MACOS/$EXECUTABLE" --qualification-smoke

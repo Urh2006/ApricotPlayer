@@ -58,6 +58,10 @@ jobs:
       - name: Build the package
         env:
           RELEASE_IDENTITY: ${{ inputs.release_identity }}
+          # The project's self-signed certificate keeps the app's identity
+          # stable across updates (Keychain); see build_macos_app.sh.
+          MACOS_SIGNING_P12: ${{ secrets.MACOS_SIGNING_P12 }}
+          MACOS_SIGNING_PASSWORD: ${{ secrets.MACOS_SIGNING_PASSWORD }}
         run: |
           test "$(uname -m)" = arm64
           if [ "$RELEASE_IDENTITY" = true ]; then
