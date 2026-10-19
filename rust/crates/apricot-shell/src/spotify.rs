@@ -1159,6 +1159,9 @@ impl Shell {
             PlaybackNotice::Unavailable { .. } => {
                 ui.set_status(&self.text("spotify_track_unavailable"), true);
             }
+            PlaybackNotice::KeyLimit => {
+                ui.set_status(&self.text("spotify_key_limit"), true);
+            }
             PlaybackNotice::QueueChanged => {
                 if let Some(player) = self
                     .spotify_service_ref()

@@ -14,10 +14,15 @@ use crate::{Error, FileId, SpotifyId, packet::PacketType, util::SeqGenerator};
 #[derive(Debug, Hash, PartialEq, Eq, Copy, Clone)]
 pub struct AudioKey(pub [u8; 16]);
 
+/// Spotify's refusal code when this account requested too many audio keys.
+/// Measured on 2026-10-19: about 30 keys at once, then about one every 30 s,
+/// for the whole account; refused requests did not delay the next key.
+pub const AUDIO_KEY_RATE_LIMITED: u16 = 0x0002;
+
 #[derive(Debug, Error)]
 pub enum AudioKeyError {
-    #[error("audio key error")]
-    AesKey,
+    #[error("audio key error {0:#06x}")]
+    AesKey(u16),
     #[error("other end of channel disconnected")]
     Channel,
     #[error("unexpected packet type {0}")]
@@ -31,7 +36,7 @@ pub enum AudioKeyError {
 impl From<AudioKeyError> for Error {
     fn from(err: AudioKeyError) -> Self {
         match err {
-            AudioKeyError::AesKey => Error::unavailable(err),
+            AudioKeyError::AesKey(_) => Error::unavailable(err),
             AudioKeyError::Channel => Error::aborted(err),
             AudioKeyError::Sequence(_) => Error::aborted(err),
             AudioKeyError::Packet(_) => Error::unimplemented(err),
@@ -62,6 +67,17 @@ impl Drop for PendingKeyRequest<'_> {
     }
 }
 
+impl AudioKeyError {
+    /// Spotify refused the key only because this account asked for too many
+    /// keys recently; the same request succeeds once the limit allows it.
+    pub fn is_rate_limited(error: &Error) -> bool {
+        matches!(
+            error.error.downcast_ref::<Self>(),
+            Some(Self::AesKey(AUDIO_KEY_RATE_LIMITED))
+        )
+    }
+}
+
 impl AudioKeyManager {
     pub(crate) fn dispatch(&self, cmd: PacketType, mut data: Bytes) -> Result<(), Error> {
         let seq = BigEndian::read_u32(data.split_to(4).as_ref());
@@ -79,13 +95,13 @@ impl AudioKeyManager {
                     .map_err(|_| AudioKeyError::Channel)?
             }
             PacketType::AesKeyError => {
-                error!(
-                    "error audio key {:x} {:x}",
-                    data.as_ref()[0],
-                    data.as_ref()[1]
-                );
+                let code = match data.as_ref() {
+                    [high, low, ..] => u16::from_be_bytes([*high, *low]),
+                    _ => 0,
+                };
+                error!("error audio key {:x} {:x}", code >> 8, code & 0xff);
                 sender
-                    .send(Err(AudioKeyError::AesKey.into()))
+                    .send(Err(AudioKeyError::AesKey(code).into()))
                     .map_err(|_| AudioKeyError::Channel)?
             }
             _ => {

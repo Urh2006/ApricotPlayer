@@ -46,6 +46,15 @@ integration, not an upstream-supported history API.
   retry. The audio key manager keeps up to 256 successful keys of this session
   in memory per track and file, so returning to a song does not request its
   key again, and canceled key requests no longer stay pending.
+- Beta 22: Spotify limits audio keys per account (measured 2026-10-19: about
+  30 keys at once, then about one every 30 s; refusal code 0x0002; refused
+  requests do not delay the next key). AudioKeyError::AesKey carries the
+  refusal code. A load refused with 0x0002 asks again every 2 s for up to
+  75 s instead of failing, and Player sends the new LoadingDelayed event once
+  for the current load; Apricot announces the limit once until a song plays.
+  Dropping the load ends the wait. A load whose key is refused no longer
+  decodes an encrypted file without decryption (that read and downloaded the
+  whole file before failing); only plain Ogg or MP3 data plays without a key.
 - No dev-branch upgrade. The 0.8.0 local-file loader has no reportable Spotify
   identity. Local and passthrough audio are excluded.
 - Sink.write_counted counts PCM samples accepted by the output. The Apricot

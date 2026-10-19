@@ -1450,6 +1450,10 @@ unsafe fn handle_notice(window: HWND, notice: PlaybackNotice) {
             let text = texts.text("spotify_track_unavailable").to_owned();
             set_status(state, &text, true);
         }
+        PlaybackNotice::KeyLimit => {
+            let text = texts.text("spotify_key_limit").to_owned();
+            set_status(state, &text, true);
+        }
         PlaybackNotice::QueueChanged => {
             if let Some(player) = state
                 .spotify

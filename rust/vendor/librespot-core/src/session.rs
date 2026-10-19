@@ -194,6 +194,35 @@ mod audio_key_regressions {
             "keys must not cross authenticated sessions"
         );
     }
+
+    #[tokio::test]
+    async fn audio_key_refusal_code_2_is_the_account_rate_limit() {
+        use crate::audio_key::AudioKeyError;
+        let session = Session::new(SessionConfig::default(), None);
+        let (sender, mut packets) = mpsc::unbounded_channel();
+        session.0.tx_connection.set(sender).unwrap();
+        let responder_session = session.clone();
+        let responder = tokio::spawn(async move {
+            let mut codes = [[0_u8, 2], [0, 1]].into_iter();
+            while let Some((_, data)) = packets.recv().await {
+                let mut response = data[36..40].to_vec();
+                response.extend_from_slice(&codes.next().unwrap());
+                responder_session
+                    .audio_key()
+                    .dispatch(PacketType::AesKeyError, response.into())
+                    .unwrap();
+            }
+        });
+        let track = SpotifyId { id: 18 };
+        let limited = session.audio_key().request(track, FileId([3; 20])).await;
+        assert!(AudioKeyError::is_rate_limited(&limited.unwrap_err()));
+        let refused = session.audio_key().request(track, FileId([4; 20])).await;
+        assert!(
+            !AudioKeyError::is_rate_limited(&refused.unwrap_err()),
+            "only 0x0002 means wait; other refusals are not the rate limit"
+        );
+        responder.abort();
+    }
 }
 
 impl Session {

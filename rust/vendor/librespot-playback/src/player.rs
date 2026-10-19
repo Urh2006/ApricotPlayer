@@ -24,7 +24,11 @@ use crate::{
     audio_backend::Sink,
     config::{Bitrate, NormalisationMethod, NormalisationType, PlayerConfig},
     convert::Converter,
-    core::{Error, Session, SpotifyId, SpotifyUri, util::SeqGenerator},
+    core::{
+        Error, FileId, Session, SpotifyId, SpotifyUri,
+        audio_key::{AudioKey, AudioKeyError},
+        util::SeqGenerator,
+    },
     decoder::{AudioDecoder, AudioPacket, AudioPacketPosition, SymphoniaDecoder},
     listening::{
         self, HistoryConsent, LoadedAudioFile, PendingFlush, PlaybackStatistics, ReportCommand,
@@ -59,6 +63,12 @@ const LOAD_HANDLES_POISON_MSG: &str = "load handles mutex should not be poisoned
 const REMOTE_LOAD_ATTEMPTS: u32 = 2;
 const REMOTE_LOAD_RETRY_DELAY: Duration = Duration::from_millis(750);
 
+// While Spotify's per-account audio key limit refuses a key (code 0x0002),
+// the load asks again this often, for at most this long. Measured 2026-10-19:
+// about one new key every 30 s once about 30 were used; refusals are free.
+const KEY_LIMIT_RETRY_DELAY: Duration = Duration::from_secs(2);
+const KEY_LIMIT_WAIT: Duration = Duration::from_secs(75);
+
 /// Why one attempt to load a remote track failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LoadFailure {
@@ -66,6 +76,8 @@ enum LoadFailure {
     Unavailable,
     /// The network, the audio key or the download failed; another try may work.
     Interrupted,
+    /// Spotify's audio key limit still refused the key after the whole wait.
+    KeyLimited,
 }
 
 /// Runs `attempt` until it loads, reports the track unavailable, or was
@@ -82,7 +94,9 @@ where
     for number in 1..=attempts {
         match attempt().await {
             Ok(loaded) => return Ok(loaded),
-            Err(LoadFailure::Unavailable) => return Err(LoadFailure::Unavailable),
+            Err(failure @ (LoadFailure::Unavailable | LoadFailure::KeyLimited)) => {
+                return Err(failure);
+            }
             Err(LoadFailure::Interrupted) if number < attempts => {
                 warn!("Loading was interrupted, trying again ({number} of {attempts})");
                 tokio::time::sleep(delay).await;
@@ -111,7 +125,7 @@ impl LoadFailure {
                 track_id,
                 play_request_id,
             },
-            Self::Interrupted => PlayerEvent::LoadingFailed {
+            Self::Interrupted | Self::KeyLimited => PlayerEvent::LoadingFailed {
                 track_id,
                 play_request_id,
             },
@@ -154,6 +168,10 @@ struct PlayerInternal {
 
     state: PlayerState,
     preload: PlayerPreload,
+    /// The current load's and the preload's signal that they wait for
+    /// Spotify's audio key limit.
+    key_wait: Option<(u64, oneshot::Receiver<()>)>,
+    preload_key_wait: Option<oneshot::Receiver<()>>,
     sink: Box<dyn Sink>,
     sink_status: SinkStatus,
     sink_event_callback: Option<SinkEventCallback>,
@@ -284,6 +302,12 @@ pub enum PlayerEvent {
         play_request_id: u64,
         track_id: SpotifyUri,
     },
+    // The load waits because Spotify limits audio keys for the account; it
+    // continues by itself once Spotify allows the key.
+    LoadingDelayed {
+        play_request_id: u64,
+        track_id: SpotifyUri,
+    },
     // The mixer volume was set to a new level.
     VolumeChanged {
         volume: u16,
@@ -349,6 +373,9 @@ impl PlayerEvent {
                 play_request_id, ..
             }
             | LoadingFailed {
+                play_request_id, ..
+            }
+            | LoadingDelayed {
                 play_request_id, ..
             }
             | Playing {
@@ -596,6 +623,8 @@ impl Player {
 
                 state: PlayerState::Stopped,
                 preload: PlayerPreload::None,
+                key_wait: None,
+                preload_key_wait: None,
                 sink: sink_builder(),
                 sink_status: SinkStatus::Closed,
                 sink_event_callback: None,
@@ -1104,6 +1133,23 @@ struct PlayerTrackLoader {
     session: Session,
     config: PlayerConfig,
     local_file_lookup: Arc<LocalFileLookup>,
+    /// Tells Player once that this load waits for Spotify's key limit.
+    key_wait: Mutex<Option<oneshot::Sender<()>>>,
+}
+
+/// Spotify's own files are encrypted, a few (some podcasts) are not. Without
+/// a key only plain Ogg or MP3 data can play; decoding encrypted data instead
+/// reads, and so downloads, the whole file before it fails.
+fn plain_audio(file: &mut AudioFile, format: AudioFileFormat) -> io::Result<bool> {
+    let mut magic = [0_u8; 4];
+    let read = file.read_exact(&mut magic);
+    file.seek(SeekFrom::Start(0))?;
+    Ok(read.is_ok()
+        && if AudioFiles::is_ogg_vorbis(format) {
+            &magic == b"OggS"
+        } else {
+            magic.starts_with(b"ID3") || (magic[0] == 0xff && magic[1] & 0xe0 == 0xe0)
+        })
 }
 
 impl PlayerTrackLoader {
@@ -1176,6 +1222,39 @@ impl PlayerTrackLoader {
                 Err(LoadFailure::Unavailable)
             }
         }
+    }
+
+    /// Asks for the key again until Spotify's per-account limit allows it.
+    /// Dropping the load (Next, Previous, another song) ends the wait.
+    async fn wait_for_limited_key(
+        &self,
+        track_id: SpotifyId,
+        file_id: FileId,
+    ) -> Result<AudioKey, LoadFailure> {
+        warn!("Spotify limits audio keys for this account, waiting for one");
+        if let Some(started) = self.key_wait.lock().ok().and_then(|mut wait| wait.take()) {
+            let _ = started.send(());
+        }
+        let began = Instant::now();
+        while began.elapsed() < KEY_LIMIT_WAIT {
+            tokio::time::sleep(KEY_LIMIT_RETRY_DELAY).await;
+            match self.session.audio_key().request(track_id, file_id).await {
+                Ok(key) => {
+                    warn!("Audio key allowed after {} s", began.elapsed().as_secs());
+                    return Ok(key);
+                }
+                Err(e) if AudioKeyError::is_rate_limited(&e) => {}
+                Err(e) => {
+                    error!("Unable to load key: {e}");
+                    return Err(LoadFailure::Interrupted);
+                }
+            }
+        }
+        error!(
+            "Spotify still limits audio keys after {} s",
+            KEY_LIMIT_WAIT.as_secs()
+        );
+        Err(LoadFailure::KeyLimited)
     }
 
     // Retain the reason even after retries: a transport failure does not
@@ -1291,21 +1370,34 @@ impl PlayerTrackLoader {
                 }
             };
 
+            let mut encrypted_file = encrypted_file;
             let is_cached = encrypted_file.is_cached();
 
             let stream_loader_controller = encrypted_file
                 .get_stream_loader_controller()
                 .map_err(|_| LoadFailure::Interrupted)?;
 
-            // Not all audio files are encrypted. If we can't get a key, try loading the track
-            // without decryption. If the file was encrypted after all, the decoder will fail
-            // parsing and bail out, so we should be safe from outputting ear-piercing noise.
+            // Not all audio files are encrypted: a plain file plays without a key. An
+            // encrypted one waits while Spotify's key limit refuses its key.
             let key = match self.session.audio_key().request(track_id, file_id).await {
                 Ok(key) => Some(key),
-                Err(e) => {
-                    warn!("Unable to load key, continuing without decryption: {e}");
-                    None
-                }
+                Err(e) => match plain_audio(&mut encrypted_file, format) {
+                    Ok(true) => {
+                        warn!("Unable to load key, continuing without decryption: {e}");
+                        None
+                    }
+                    Ok(false) if AudioKeyError::is_rate_limited(&e) => {
+                        Some(self.wait_for_limited_key(track_id, file_id).await?)
+                    }
+                    Ok(false) => {
+                        error!("Unable to load key: {e}");
+                        return Err(LoadFailure::Interrupted);
+                    }
+                    Err(read) => {
+                        error!("Unable to load key: {e}; unable to read audio file: {read}");
+                        return Err(LoadFailure::Interrupted);
+                    }
+                },
             };
 
             let mut decrypted_file = AudioDecrypt::new(key, encrypted_file);
@@ -1606,6 +1698,31 @@ impl Future for PlayerInternal {
                         }
                         Poll::Pending => (),
                     }
+                }
+            }
+
+            // The current load waits for Spotify's audio key limit: say so once.
+            if let Some((request, waiting)) = self.key_wait.as_mut() {
+                let request = *request;
+                match Pin::new(waiting).poll(cx) {
+                    Poll::Ready(Ok(())) => {
+                        self.key_wait = None;
+                        if let PlayerState::Loading {
+                            ref track_id,
+                            play_request_id,
+                            ..
+                        } = self.state
+                            && play_request_id == request
+                        {
+                            let track_id = track_id.clone();
+                            self.send_event(PlayerEvent::LoadingDelayed {
+                                play_request_id,
+                                track_id,
+                            });
+                        }
+                    }
+                    Poll::Ready(Err(_)) => self.key_wait = None,
+                    Poll::Pending => (),
                 }
             }
 
@@ -2392,6 +2509,7 @@ impl PlayerInternal {
         });
 
         // Try to extract a pending loader from the preloading mechanism
+        self.key_wait = None;
         let loader = if let PlayerPreload::Loading {
             track_id: loaded_track_id,
             ..
@@ -2401,6 +2519,10 @@ impl PlayerInternal {
                 let mut preload = PlayerPreload::None;
                 std::mem::swap(&mut preload, &mut self.preload);
                 if let PlayerPreload::Loading { loader, .. } = preload {
+                    self.key_wait = self
+                        .preload_key_wait
+                        .take()
+                        .map(|waiting| (play_request_id, waiting));
                     Some(loader)
                 } else {
                     None
@@ -2415,8 +2537,11 @@ impl PlayerInternal {
         self.preload = PlayerPreload::None;
 
         // If we don't have a loader yet, create one from scratch.
-        let loader =
-            loader.unwrap_or_else(|| Box::pin(self.load_track(track_id.clone(), position_ms)));
+        let loader = loader.unwrap_or_else(|| {
+            let (started, waiting) = oneshot::channel();
+            self.key_wait = Some((play_request_id, waiting));
+            Box::pin(self.load_track(track_id.clone(), position_ms, started))
+        });
 
         // Set ourselves to a loading state.
         self.state = PlayerState::Loading {
@@ -2472,7 +2597,9 @@ impl PlayerInternal {
 
         // schedule the preload of the current track if desired.
         if preload_track {
-            let loader = self.load_track(track_id.clone(), 0);
+            let (started, waiting) = oneshot::channel();
+            self.preload_key_wait = Some(waiting);
+            let loader = self.load_track(track_id.clone(), 0, started);
             self.preload = PlayerPreload::Loading {
                 track_id,
                 loader: Box::pin(loader),
@@ -2717,6 +2844,7 @@ impl PlayerInternal {
         &mut self,
         spotify_uri: SpotifyUri,
         position_ms: u32,
+        key_wait: oneshot::Sender<()>,
     ) -> impl FusedFuture<Output = Result<PlayerLoadedTrackData, LoadFailure>> + Send + 'static
     {
         // This method creates a future that returns the loaded stream and associated info.
@@ -2729,6 +2857,7 @@ impl PlayerInternal {
             session: self.session.clone(),
             config: self.config.clone(),
             local_file_lookup: self.local_file_lookup.clone(),
+            key_wait: Mutex::new(Some(key_wait)),
         };
 
         let (result_tx, result_rx) = oneshot::channel();
@@ -3018,6 +3147,22 @@ mod load_retry_tests {
         assert_eq!(
             run(&[Err(LoadFailure::Unavailable)]).await,
             (Err(LoadFailure::Unavailable), 1)
+        );
+    }
+
+    #[tokio::test]
+    async fn load_retry_a_key_limit_that_outlasted_its_wait_is_not_tried_again() {
+        // The load already waited for Spotify's key limit; trying again at
+        // once would only wait the whole time again.
+        let limited = run(&[Err(LoadFailure::KeyLimited)]).await;
+        assert_eq!(limited, (Err(LoadFailure::KeyLimited), 1));
+        let event = limited.0.unwrap_err().event(
+            SpotifyUri::from_uri("spotify:track:0000000000000000000001").unwrap(),
+            18,
+        );
+        assert!(
+            matches!(event, PlayerEvent::LoadingFailed { .. }),
+            "the song stays playable for another try: {event:?}"
         );
     }
 

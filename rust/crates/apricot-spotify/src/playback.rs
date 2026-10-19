@@ -266,6 +266,9 @@ pub enum PlaybackNotice {
     DevicesChanged,
     /// Another device (the phone) set the volume of this device, 0 to 65535.
     Volume(u16),
+    /// Spotify limits how many new songs the account may start; the chosen
+    /// song starts by itself when Spotify allows it. Once until a song plays.
+    KeyLimit,
 }
 
 struct Generation {
@@ -390,6 +393,8 @@ pub struct Shared {
     player: Mutex<Option<std::sync::Weak<librespot_playback::player::Player>>>,
     /// Apricot started playback; the next new track is its own start.
     requested: AtomicBool,
+    /// The key limit was announced and no song has played since.
+    key_limit_announced: AtomicBool,
     track: Mutex<Option<SpotifyTrack>>,
     bitrate_kbps: u32,
     notify: Notify,
@@ -540,12 +545,22 @@ impl Shared {
         (self.notify)();
     }
 
+    /// The current song waits for Spotify's audio key limit (beta 22).
+    fn report_key_limit(&self, revision: u64) {
+        if !self.key_limit_announced.swap(true, Ordering::SeqCst) {
+            log::info!("the current track waits for Spotify's audio key limit");
+            self.push_notice_at(revision, PlaybackNotice::KeyLimit);
+        }
+    }
+
     pub fn take_notice(&self) -> Option<PlaybackNotice> {
         let mut notices = self.notices.lock().ok()?;
         while let Some((revision, notice)) = notices.pop_front() {
             if matches!(
                 notice,
-                PlaybackNotice::Unavailable { .. } | PlaybackNotice::Playing { .. }
+                PlaybackNotice::Unavailable { .. }
+                    | PlaybackNotice::Playing { .. }
+                    | PlaybackNotice::KeyLimit
             ) && revision != self.manual_revision.load(Ordering::SeqCst)
             {
                 continue;
@@ -733,6 +748,7 @@ impl SpotifyPlayback {
             request_owner: Mutex::default(),
             player: Mutex::default(),
             requested: AtomicBool::new(false),
+            key_limit_announced: AtomicBool::new(false),
             track: Mutex::default(),
             bitrate_kbps,
             notify,
@@ -1043,6 +1059,7 @@ impl SpotifyPlayback {
 
     /// Player events that are not fences: pause state, track changes, the
     /// end of playback and unavailable tracks. Runs on the Spotify runtime.
+    #[allow(clippy::too_many_lines)]
     pub async fn listen(shared: Arc<Shared>, mut events: PlayerEventChannel) {
         let mut paused = false;
         let mut request_id = None;
@@ -1097,6 +1114,7 @@ impl SpotifyPlayback {
                     // including Next/Previous and a resumed generation.
                     paused = false;
                     shared.push_event(PcmSourceEvent::Paused(false));
+                    shared.key_limit_announced.store(false, Ordering::SeqCst);
                     if request_id != Some(play_request_id) {
                         request_id = Some(play_request_id);
                         let track = shared.track.lock().ok().and_then(|track| track.clone());
@@ -1134,6 +1152,18 @@ impl SpotifyPlayback {
                 }
                 PlayerEvent::LoadingFailed { .. } if current_track_failed => {
                     shared.report_interrupted();
+                }
+                PlayerEvent::LoadingDelayed {
+                    play_request_id,
+                    track_id,
+                } if availability
+                    .active
+                    .as_ref()
+                    .is_some_and(|(request, uri, _)| {
+                        *request == play_request_id && *uri == track_id
+                    }) =>
+                {
+                    shared.report_key_limit(revision);
                 }
                 PlayerEvent::Unavailable {
                     track_id,
