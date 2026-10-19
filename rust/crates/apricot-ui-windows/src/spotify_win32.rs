@@ -1033,6 +1033,7 @@ unsafe fn show_settings(window: HWND) {
         ],
         normalisation: texts.text("spotify_normalisation"),
         listening_history: texts.text("spotify_listening_history"),
+        key_cache: texts.text("spotify_key_cache"),
         experimental_warning: texts.text("spotify_listening_history_warning"),
         autoplay: texts.text("spotify_autoplay"),
         autoplays: [
@@ -1085,6 +1086,9 @@ unsafe fn show_settings(window: HWND) {
     state.application.forget_spotify_settings_draft();
     if let Some(service) = state.spotify.service_ref() {
         service.set_listening_history(chosen.listening_history);
+        if chosen.key_cache != current.key_cache {
+            service.set_key_cache(chosen.key_cache);
+        }
     }
     if chosen.playback() == current.playback() {
         announce(window, texts.text("spotify_settings_saved"));
@@ -1138,6 +1142,11 @@ pub(super) unsafe fn settings_window_closed(
     {
         service.set_listening_history(after.listening_history);
     }
+    if after.key_cache != before.key_cache
+        && let Some(service) = state.spotify.service_ref()
+    {
+        service.set_key_cache(after.key_cache);
+    }
     if after.playback() != before.playback() {
         let _ = apply_playback_settings(window);
     }
@@ -1150,7 +1159,10 @@ pub(super) unsafe fn apply_listening_history_setting(window: HWND) {
         return;
     };
     if let Some(service) = state.spotify.service_ref() {
-        service.set_listening_history(state.application.saved_spotify_settings().listening_history);
+        let saved = state.application.saved_spotify_settings();
+        service.set_listening_history(saved.listening_history);
+        // Idempotent: an unchanged setting keeps the open key file.
+        service.set_key_cache(saved.key_cache);
     }
 }
 

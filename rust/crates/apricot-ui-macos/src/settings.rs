@@ -1018,7 +1018,8 @@ impl SettingsWindow {
             ),
             SettingsControl::Checkbox { label, checked, .. }
             | SettingsControl::SpotifyNormalisation { label, checked }
-            | SettingsControl::SpotifyListeningHistory { label, checked } => {
+            | SettingsControl::SpotifyListeningHistory { label, checked }
+            | SettingsControl::SpotifyKeyCache { label, checked } => {
                 (None, ControlKind::Check(check(&label, checked)))
             }
             SettingsControl::MenuItemCheckbox { label, checked, .. } => {

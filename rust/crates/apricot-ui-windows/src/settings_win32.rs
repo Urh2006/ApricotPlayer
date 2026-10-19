@@ -139,6 +139,7 @@ enum ControlBinding {
     SpotifyChoice(apricot_app::SpotifyField),
     SpotifyNormalisation,
     SpotifyListeningHistory,
+    SpotifyKeyCache,
 }
 
 #[derive(Clone, Debug)]
@@ -847,6 +848,10 @@ unsafe fn create_bound_control(
         SettingsControl::SpotifyListeningHistory { label, checked } => {
             let control = checkbox(parent, instance, &label, id, checked)?;
             (None, control, ControlBinding::SpotifyListeningHistory)
+        }
+        SettingsControl::SpotifyKeyCache { label, checked } => {
+            let control = checkbox(parent, instance, &label, id, checked)?;
+            (None, control, ControlBinding::SpotifyKeyCache)
         }
     };
     if let Some(label) = label {
@@ -2105,6 +2110,10 @@ unsafe fn sync_bound_control(
         }
         ControlBinding::SpotifyListeningHistory => {
             sync_listening_history_control(state, bound);
+            Ok(())
+        }
+        ControlBinding::SpotifyKeyCache => {
+            app.set_spotify_key_cache(checkbox_is_checked(bound.control));
             Ok(())
         }
     }

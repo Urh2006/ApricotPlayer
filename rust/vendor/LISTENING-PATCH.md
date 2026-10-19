@@ -57,6 +57,11 @@ integration, not an upstream-supported history API.
   whole file before failing); only plain Ogg or MP3 data plays without a key.
 - Beta 23: Player::set_request_revision lets Connect move an existing request
   to a new navigation revision (Previous that only seeks to the start).
+- Beta 24: AudioKeyManager accepts an optional AudioKeyStore (set_store,
+  has_store, forget). A kept key is used without asking Spotify, a new key is
+  kept, and Player forgets a key whose file does not decode so the retry asks
+  Spotify again. Apricot's store (apricot-spotify key_cache.rs) is optional,
+  off by default, encrypted and limited to 250,000 keys.
 - No dev-branch upgrade. The 0.8.0 local-file loader has no reportable Spotify
   identity. Local and passthrough audio are excluded.
 - Sink.write_counted counts PCM samples accepted by the output. The Apricot

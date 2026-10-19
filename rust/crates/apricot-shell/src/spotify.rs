@@ -71,6 +71,7 @@ pub struct SpotifySettingsTexts {
     pub normalisation: String,
     pub listening_history: String,
     pub experimental_warning: String,
+    pub key_cache: String,
     pub yes: String,
     pub no: String,
     pub autoplay: String,
@@ -892,6 +893,7 @@ impl Shell {
             normalisation: text("spotify_normalisation"),
             listening_history: text("spotify_listening_history"),
             experimental_warning: text("spotify_listening_history_warning"),
+            key_cache: text("spotify_key_cache"),
             yes: text("yes"),
             no: text("no"),
             autoplay: text("spotify_autoplay"),
@@ -931,6 +933,11 @@ impl Shell {
             && let Some(service) = &self.spotify.service
         {
             service.set_listening_history(chosen.listening_history);
+        }
+        if chosen.key_cache != current.key_cache
+            && let Some(service) = &self.spotify.service
+        {
+            service.set_key_cache(chosen.key_cache);
         }
         if chosen.playback() == current.playback() {
             ui.set_status(texts.text("spotify_settings_saved"), true);
@@ -973,6 +980,11 @@ impl Shell {
             && let Some(service) = &self.spotify.service
         {
             service.set_listening_history(after.listening_history);
+        }
+        if before.key_cache != after.key_cache
+            && let Some(service) = &self.spotify.service
+        {
+            service.set_key_cache(after.key_cache);
         }
         if after.playback() != before.playback() {
             let _ = self.spotify_apply_playback_settings();

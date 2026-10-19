@@ -1098,6 +1098,23 @@ impl SpotifyService {
             .and_then(|(_, active)| active.shared.take_notice())
     }
 
+    /// Keeps audio keys between sessions or forgets them (beta 24), at once
+    /// and without reconnecting.
+    pub fn set_key_cache(&self, enabled: bool) {
+        let Ok(slot) = self.session.lock() else {
+            return;
+        };
+        match slot.as_ref() {
+            Some((key, active)) => apply_key_cache(&active.session, &self.store, key, enabled),
+            None if !enabled => {
+                if let Some(key) = self.store.load().active {
+                    crate::key_cache::KeyCache::delete(&self.store.account_dir(&key));
+                }
+            }
+            None => {}
+        }
+    }
+
     /// Applies explicit history consent without reconnecting or interrupting audio.
     pub fn set_listening_history(&self, enabled: bool) {
         if let Ok(slot) = self.session.lock()
@@ -1164,12 +1181,36 @@ fn close_session(active: ActiveSession) -> Receiver<()> {
     done
 }
 
+/// Gives the session the account's kept audio keys, or removes them when
+/// the setting is off (beta 24).
+fn apply_key_cache(session: &Session, store: &AccountStore, key: &str, enabled: bool) {
+    let folder = store.account_dir(key);
+    if !enabled {
+        session.audio_key().set_store(None);
+        crate::key_cache::KeyCache::delete(&folder);
+        return;
+    }
+    if session.audio_key().has_store() {
+        return;
+    }
+    match crate::key_cache::KeyCache::open(&folder) {
+        Ok(cache) => {
+            log::info!("{} kept audio keys", cache.len());
+            session.audio_key().set_store(Some(Arc::new(cache)));
+        }
+        Err(error) => log::warn!("audio keys are not kept: {error}"),
+    }
+}
+
 fn commit_session(
     attempt: &SessionAttempt,
     store: &AccountStore,
     account: &SpotifyAccount,
     session: ActiveSession,
 ) -> Result<(), SpotifyError> {
+    if crate::settings::load().key_cache {
+        apply_key_cache(&session.session, store, &account.key, true);
+    }
     let guard = attempt
         .lifecycle
         .lock()

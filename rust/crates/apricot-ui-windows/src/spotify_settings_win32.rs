@@ -39,6 +39,7 @@ const ID_OK: usize = 2204;
 const ID_CANCEL: usize = 2205;
 const ID_ORDER: usize = 2206;
 const ID_HISTORY: usize = 2207;
+const ID_KEY_CACHE: usize = 2208;
 const IDOK_COMMAND: usize = 1;
 const IDCANCEL_COMMAND: usize = 2;
 const CB_ADDSTRING: u32 = 0x0143;
@@ -56,6 +57,7 @@ pub struct SettingsTexts<'a> {
     pub normalisation: &'a str,
     pub listening_history: &'a str,
     pub experimental_warning: &'a str,
+    pub key_cache: &'a str,
     pub autoplay: &'a str,
     /// Labels in `Autoplay::ALL` order.
     pub autoplays: [&'a str; 3],
@@ -72,6 +74,7 @@ struct DialogState {
     normalisation: HWND,
     listening_history: HWND,
     history_consented: bool,
+    key_cache: HWND,
     warning_title: String,
     warning: String,
     autoplay: HWND,
@@ -130,7 +133,7 @@ unsafe fn show_win32(
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         460,
-        310,
+        345,
         Some(owner),
         None,
         Some(instance),
@@ -173,6 +176,12 @@ unsafe fn show_win32(
             WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
             ID_HISTORY,
         )?;
+        let key_cache = create(
+            w!("BUTTON"),
+            texts.key_cache,
+            WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
+            ID_KEY_CACHE,
+        )?;
         let ok = create(
             w!("BUTTON"),
             texts.ok,
@@ -190,6 +199,7 @@ unsafe fn show_win32(
                 order_label,
                 order,
                 listening_history,
+                key_cache,
                 ok,
                 cancel,
             ],
@@ -199,6 +209,7 @@ unsafe fn show_win32(
             order,
             listening_history,
             history_consented: current.listening_history,
+            key_cache,
             warning_title: texts.title.to_owned(),
             warning: texts.experimental_warning.to_owned(),
             result: None,
@@ -269,6 +280,12 @@ unsafe fn show_win32(
         state.listening_history,
         BM_SETCHECK,
         Some(WPARAM(usize::from(current.listening_history))),
+        None,
+    );
+    SendMessageW(
+        state.key_cache,
+        BM_SETCHECK,
+        Some(WPARAM(usize::from(current.key_cache))),
         None,
     );
     let initial_focus = state.quality;
@@ -376,6 +393,7 @@ unsafe fn accept(window: HWND) {
             .get(selected(state.order))
             .copied()
             .unwrap_or_default(),
+        key_cache: SendMessageW(state.key_cache, BM_GETCHECK, None, None).0 == 1,
     });
     let _ = DestroyWindow(window);
 }
@@ -389,7 +407,7 @@ unsafe fn layout(window: HWND) {
         return;
     }
     let width = (bounds.right - bounds.left).max(360);
-    let height = (bounds.bottom - bounds.top).max(212);
+    let height = (bounds.bottom - bounds.top).max(246);
     let margin = 10;
     let label_width = 140;
     let row = 32;
@@ -404,6 +422,7 @@ unsafe fn layout(window: HWND) {
         order_label,
         order,
         listening_history,
+        key_cache,
         ok,
         cancel,
     ] = state.controls[..]
@@ -442,6 +461,14 @@ unsafe fn layout(window: HWND) {
         listening_history,
         margin,
         margin + row * 4,
+        width - margin * 2,
+        28,
+        true,
+    );
+    let _ = MoveWindow(
+        key_cache,
+        margin,
+        margin + row * 5,
         width - margin * 2,
         28,
         true,
@@ -633,6 +660,7 @@ mod tests {
                 order: HWND::default(),
                 listening_history: checkbox,
                 history_consented: false,
+                key_cache: HWND::default(),
                 warning_title: "Apricot isolated consent fixture".into(),
                 warning: "Fixture warning only. No account or settings are changed.".into(),
                 result: None,

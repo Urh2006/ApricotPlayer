@@ -1491,6 +1491,11 @@ impl PlayerTrackLoader {
                 }
                 Err(e) => {
                     error!("Unable to read audio file: {e}");
+                    // A kept key that no longer decrypts this file must not
+                    // be used again; the retry asks Spotify for a new one.
+                    if key.is_some() {
+                        self.session.audio_key().forget(track_id, file_id);
+                    }
                     return Err(LoadFailure::Interrupted);
                 }
             };

@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     io::Write,
+    sync::Arc,
     time::Duration,
 };
 
@@ -13,6 +14,14 @@ use crate::{Error, FileId, SpotifyId, packet::PacketType, util::SeqGenerator};
 
 #[derive(Debug, Hash, PartialEq, Eq, Copy, Clone)]
 pub struct AudioKey(pub [u8; 16]);
+
+/// ApricotPlayer: keys kept between sessions, so a song played before needs
+/// no new key from Spotify's per-account limit (beta 24).
+pub trait AudioKeyStore: Send + Sync {
+    fn get(&self, track: SpotifyId, file: FileId) -> Option<AudioKey>;
+    fn put(&self, track: SpotifyId, file: FileId, key: AudioKey);
+    fn forget(&self, track: SpotifyId, file: FileId);
+}
 
 /// Spotify's refusal code when this account requested too many audio keys.
 /// Measured on 2026-10-19: about 30 keys at once, then about one every 30 s,
@@ -52,6 +61,7 @@ component! {
         // Keys belong to an exact track/file pair and this authenticated
         // session only. Replaying a song must not request its key repeatedly.
         keys: VecDeque<((SpotifyId, FileId), AudioKey)> = VecDeque::new(),
+        store: Option<Arc<dyn AudioKeyStore>> = None,
     }
 }
 
@@ -113,14 +123,41 @@ impl AudioKeyManager {
         Ok(())
     }
 
+    /// Keys kept between sessions, or `None` for this session's keys only.
+    pub fn set_store(&self, store: Option<Arc<dyn AudioKeyStore>>) {
+        self.lock(|inner| inner.store = store);
+    }
+
+    pub fn has_store(&self) -> bool {
+        self.lock(|inner| inner.store.is_some())
+    }
+
+    /// A key that did not decrypt its file is dropped everywhere, so the
+    /// next request asks Spotify again.
+    pub fn forget(&self, track: SpotifyId, file: FileId) {
+        let store = self.lock(|inner| {
+            inner.keys.retain(|(pair, _)| *pair != (track, file));
+            inner.store.clone()
+        });
+        if let Some(store) = store {
+            store.forget(track, file);
+        }
+    }
+
     pub async fn request(&self, track: SpotifyId, file: FileId) -> Result<AudioKey, Error> {
-        if let Some(key) = self.lock(|inner| {
-            inner
+        let (known, store) = self.lock(|inner| {
+            let known = inner
                 .keys
                 .iter()
                 .rev()
-                .find_map(|(pair, key)| (*pair == (track, file)).then_some(*key))
-        }) {
+                .find_map(|(pair, key)| (*pair == (track, file)).then_some(*key));
+            (known, inner.store.clone())
+        });
+        if let Some(key) = known {
+            return Ok(key);
+        }
+        if let Some(key) = store.as_ref().and_then(|store| store.get(track, file)) {
+            self.remember(track, file, key);
             return Ok(key);
         }
         let (tx, rx) = oneshot::channel();
@@ -147,6 +184,14 @@ impl AudioKeyManager {
             }
             Ok(k) => k??,
         };
+        self.remember(track, file, key);
+        if let Some(store) = self.lock(|inner| inner.store.clone()) {
+            store.put(track, file, key);
+        }
+        Ok(key)
+    }
+
+    fn remember(&self, track: SpotifyId, file: FileId, key: AudioKey) {
         self.lock(|inner| {
             const MAX_SESSION_KEYS: usize = 256;
             if inner.keys.len() == MAX_SESSION_KEYS {
@@ -154,7 +199,6 @@ impl AudioKeyManager {
             }
             inner.keys.push_back(((track, file), key));
         });
-        Ok(key)
     }
 
     fn send_key_request(&self, seq: u32, track: SpotifyId, file: FileId) -> Result<(), Error> {

@@ -396,7 +396,7 @@ pub fn run_settings(
     texts: &SpotifySettingsTexts,
     current: SpotifySettings,
 ) -> Option<SpotifySettings> {
-    let (width, height) = (460.0, 286.0);
+    let (width, height) = (460.0, 322.0);
     let app = NSApplication::sharedApplication(mtm);
     let previous_window = app.keyWindow();
     let previous_focus = previous_window
@@ -490,6 +490,13 @@ pub fn run_settings(
         NSSize::new(width - 2.0 * MARGIN, 28.0),
     ));
     content.addSubview(&history);
+    let key_cache = CheckBox::new(mtm, &texts.key_cache, target, sel!(changed:));
+    key_cache.set_checked(current.key_cache);
+    key_cache.setFrame(NSRect::new(
+        NSPoint::new(MARGIN, y - 36.0),
+        NSSize::new(width - 2.0 * MARGIN, 28.0),
+    ));
+    content.addSubview(&key_cache);
     let ok = Button::new(mtm, &texts.ok, target, sel!(accept:));
     ok.setFrame(NSRect::new(
         NSPoint::new(width - MARGIN - 2.0 * 110.0 - 8.0, MARGIN),
@@ -511,6 +518,7 @@ pub fn run_settings(
         &autoplay,
         &order,
         &history,
+        &key_cache,
         &ok,
         &cancel,
     ]);
@@ -557,6 +565,7 @@ pub fn run_settings(
         .unwrap_or(current.quality);
     chosen.normalisation = normalisation.checked();
     chosen.listening_history = history.checked();
+    chosen.key_cache = key_cache.checked();
     chosen.autoplay = autoplay
         .selected()
         .and_then(|index| Autoplay::ALL.get(index).copied())

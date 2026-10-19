@@ -2662,6 +2662,12 @@ impl Application {
         self.spotify_settings_draft = Some(settings);
     }
 
+    pub fn set_spotify_key_cache(&mut self, checked: bool) {
+        let mut settings = self.spotify_settings();
+        settings.key_cache = checked;
+        self.spotify_settings_draft = Some(settings);
+    }
+
     /// The Spotify dialog saved its own settings: they replace any unsaved
     /// change of the Settings window.
     pub fn forget_spotify_settings_draft(&mut self) {

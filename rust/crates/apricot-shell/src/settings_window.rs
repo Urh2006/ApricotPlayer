@@ -53,6 +53,7 @@ pub enum SettingsBinding {
     SpotifyChoice(SpotifyField),
     SpotifyNormalisation,
     SpotifyListeningHistory,
+    SpotifyKeyCache,
 }
 
 impl SettingsBinding {
@@ -237,6 +238,7 @@ pub fn settings_binding(control: &SettingsControl) -> SettingsBinding {
         SettingsControl::SpotifyChoice { field, .. } => SettingsBinding::SpotifyChoice(*field),
         SettingsControl::SpotifyNormalisation { .. } => SettingsBinding::SpotifyNormalisation,
         SettingsControl::SpotifyListeningHistory { .. } => SettingsBinding::SpotifyListeningHistory,
+        SettingsControl::SpotifyKeyCache { .. } => SettingsBinding::SpotifyKeyCache,
     }
 }
 
@@ -433,6 +435,10 @@ impl Shell {
             }
             SettingsBinding::SpotifyNormalisation => {
                 app.set_spotify_normalisation(checked);
+                Ok(())
+            }
+            SettingsBinding::SpotifyKeyCache => {
+                app.set_spotify_key_cache(checked);
                 Ok(())
             }
         };
@@ -673,6 +679,11 @@ impl Shell {
             && let Some(service) = self.spotify_service_ref()
         {
             service.set_listening_history(after.listening_history);
+        }
+        if before.key_cache != after.key_cache
+            && let Some(service) = self.spotify_service_ref()
+        {
+            service.set_key_cache(after.key_cache);
         }
         let executable = std::env::current_exe()
             .map_err(|error| format!("Could not locate the running executable: {error}"))?;

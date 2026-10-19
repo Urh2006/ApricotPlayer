@@ -8,6 +8,7 @@ pub mod api;
 pub mod catalog;
 pub mod devices;
 pub mod diagnostics;
+pub mod key_cache;
 pub mod library_edit;
 pub mod main_menu;
 pub mod oauth;

@@ -158,6 +158,11 @@ pub enum SettingsControl {
         label: String,
         checked: bool,
     },
+    /// Keep Spotify audio keys between sessions (beta 24).
+    SpotifyKeyCache {
+        label: String,
+        checked: bool,
+    },
 }
 
 /// The Spotify choices of the Spotify section, in the order of the options
@@ -1449,6 +1454,10 @@ fn spotify_controls(
             label: catalog.text("spotify_listening_history").to_owned(),
             checked: spotify.listening_history,
         },
+        SettingsControl::SpotifyKeyCache {
+            label: catalog.text("spotify_key_cache").to_owned(),
+            checked: spotify.key_cache,
+        },
     ]
 }
 
@@ -1733,6 +1742,7 @@ mod tests {
             listening_history: false,
             autoplay: Autoplay::Off,
             library_order: LibraryOrder::Alphabetical,
+            key_cache: true,
         };
         let model = SettingsScreenModel::build_with_spotify(
             &english_catalog(),
@@ -1778,6 +1788,10 @@ mod tests {
             control,
             SettingsControl::SpotifyListeningHistory { checked: false, .. }
         )));
+        assert!(model.controls.iter().any(|control| matches!(
+            control,
+            SettingsControl::SpotifyKeyCache { checked: true, .. }
+        )));
         let mut changed = spotify;
         super::SpotifyField::Quality.apply(&mut changed, 2);
         super::SpotifyField::LibraryOrder.apply(&mut changed, 9);
@@ -1803,7 +1817,7 @@ mod tests {
             (SettingsSection::Notifications, 5),
             (SettingsSection::Cookies, 13),
             (SettingsSection::Audiovault, 5),
-            (SettingsSection::Spotify, 6),
+            (SettingsSection::Spotify, 7),
             (SettingsSection::Shortcuts, 3),
         ];
         for (section, count) in expected {

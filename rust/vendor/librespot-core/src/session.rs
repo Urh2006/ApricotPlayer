@@ -196,6 +196,69 @@ mod audio_key_regressions {
     }
 
     #[tokio::test]
+    async fn audio_key_kept_keys_need_no_request_and_new_keys_are_kept() {
+        use crate::audio_key::AudioKeyStore;
+        use std::sync::Mutex;
+        #[derive(Default)]
+        struct Kept(Mutex<Vec<((SpotifyId, FileId), AudioKey)>>);
+        impl AudioKeyStore for Kept {
+            fn get(&self, track: SpotifyId, file: FileId) -> Option<AudioKey> {
+                let kept = self.0.lock().unwrap();
+                kept.iter()
+                    .find_map(|(pair, key)| (*pair == (track, file)).then_some(*key))
+            }
+            fn put(&self, track: SpotifyId, file: FileId, key: AudioKey) {
+                self.0.lock().unwrap().push(((track, file), key));
+            }
+            fn forget(&self, track: SpotifyId, file: FileId) {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .retain(|(pair, _)| *pair != (track, file));
+            }
+        }
+        let track = SpotifyId { id: 19 };
+        let kept = Arc::new(Kept::default());
+        kept.put(track, FileId([5; 20]), AudioKey([9; 16]));
+        let session = Session::new(SessionConfig::default(), None);
+        session.audio_key().set_store(Some(kept.clone()));
+        // No connection: a kept key must not need Spotify.
+        assert_eq!(
+            session
+                .audio_key()
+                .request(track, FileId([5; 20]))
+                .await
+                .unwrap(),
+            AudioKey([9; 16])
+        );
+        let (sender, mut packets) = mpsc::unbounded_channel();
+        session.0.tx_connection.set(sender).unwrap();
+        let responder_session = session.clone();
+        let responder = tokio::spawn(async move {
+            while let Some((_, data)) = packets.recv().await {
+                let mut response = data[36..40].to_vec();
+                response.extend_from_slice(&[4; 16]);
+                responder_session
+                    .audio_key()
+                    .dispatch(PacketType::AesKey, response.into())
+                    .unwrap();
+            }
+        });
+        assert_eq!(
+            session
+                .audio_key()
+                .request(track, FileId([6; 20]))
+                .await
+                .unwrap(),
+            AudioKey([4; 16])
+        );
+        assert_eq!(kept.get(track, FileId([6; 20])), Some(AudioKey([4; 16])));
+        session.audio_key().forget(track, FileId([5; 20]));
+        assert_eq!(kept.get(track, FileId([5; 20])), None);
+        responder.abort();
+    }
+
+    #[tokio::test]
     async fn audio_key_refusal_code_2_is_the_account_rate_limit() {
         use crate::audio_key::AudioKeyError;
         let session = Session::new(SessionConfig::default(), None);

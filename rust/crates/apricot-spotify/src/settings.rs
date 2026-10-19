@@ -97,6 +97,8 @@ pub struct SpotifySettings {
     pub listening_history: bool,
     pub autoplay: Autoplay,
     pub library_order: LibraryOrder,
+    /// Keep audio keys between sessions ([`crate::key_cache`], beta 24).
+    pub key_cache: bool,
 }
 
 impl SpotifySettings {
@@ -114,6 +116,7 @@ impl Default for SpotifySettings {
             listening_history: false,
             autoplay: Autoplay::Account,
             library_order: LibraryOrder::Recents,
+            key_cache: false,
         }
     }
 }
