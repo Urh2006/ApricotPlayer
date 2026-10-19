@@ -64,5 +64,10 @@ $Sums = foreach ($Name in "ApricotPlayer.zip", "ApricotPlayerSetup.exe") {
 }
 [IO.File]::WriteAllLines((Join-Path $ReleaseRoot "SHA256SUMS.txt"), [string[]]$Sums)
 Remove-Item -LiteralPath $PackageDir -Recurse -Force
+# Only the two newest builds stay in local-dist\stable (AGENTS.md, Prostor na disku).
+Get-ChildItem -LiteralPath (Split-Path -Parent $ReleaseRoot) -Directory |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -Skip 2 |
+    ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force }
 Write-Output "STABLE_VERSION=$Version"
 Write-Output "STABLE_FILES=$ReleaseRoot"

@@ -238,4 +238,8 @@ rm "$STAGING/Applications"
 mv "$APP" "$OUTPUT/"
 rmdir "$STAGING"
 (cd "$OUTPUT" && shasum -a 256 "$DMG_ASSET.dmg" "$ASSET.zip" > SHA256SUMS.txt)
+# Only the two newest builds stay in local-dist/macos (AGENTS.md, Prostor na disku).
+ls -1dt "$RUST_ROOT/local-dist/macos"/*/ 2>/dev/null | tail -n +3 | while read -r old; do
+    rm -rf "$old"
+done
 echo "MACOS_APP_READY=$OUTPUT"

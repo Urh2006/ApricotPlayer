@@ -65,6 +65,17 @@ Za trenutno verzijo vedno preberi `apricot/__init__.py`, `apricot/constants.py`,
 - Uporabniške nastavitve, zgodovina, favorites, playlisti, pozicije, bookmarks, subscriptions in RSS podatki se pri posodobitvah ne smejo izgubiti ali prepisati.
 - Vsako novo običajno možnost glavnega menija dodaj v `MAIN_MENU_CUSTOMIZABLE_ITEMS`, da jo lahko uporabnik skrije v sekciji Customize main menu. Skrivanje ne sme onemogočiti pripadajoče globalne bližnjice. Razpoložljiva posodobitev, `Settings` in `Exit` morajo vedno ostati vidni in zato ne sodijo v nastavljivi katalog.
 
+## Prostor na disku
+
+Uporabnikov Mac ima 512 GB, Windows računalnik 1 TB diska. Ta pravila veljajo za vse agente (ChatGPT/Codex, Claude Code) na obeh računalnikih:
+
+- Delaj samo v obstoječem klonu repozitorija. Ne ustvarjaj dodatnih klonov, kopij projekta ali delovnih map v `Documents`, `Downloads`, `Temp` ali drugje. Za ločeno delo uporabi vejo v istem klonu.
+- Začasne testne mape, testne datoteke, prenesene pakete in dnevnike pobriši takoj po testu. Testne profile (na primer `ApricotPlayer2Beta`) po testu vrni v prejšnje stanje.
+- Gradbeni skripti v `rust/local-dist` same obdržita samo zadnji dve verziji. Starih paketov ne kopiraj drugam.
+- Ko `rust/target` preseže 20 GB, ga izprazni s `cargo clean` (izmeri z `du -sh rust/target` oziroma velikostjo mape v Raziskovalcu). Preveri tudi ob vsaki izdaji bete in uporabniku v isti vrstici kot obvestilo o namestitvi povej, če je kaj čez mejo.
+- Kar je veliko in ga je res treba shraniti (paketi, posnetki, večji dnevniki, arhivi), gre v uporabnikov Google Drive, nikoli trajno na lokalni disk. Pred tem uporabnika vprašaj in se z njim dogovori za mapo.
+- Ničesar zunaj repozitorija ne briši brez uporabnikovega dovoljenja, razen začasnih datotek, ki si jih v isti nalogi ustvaril sam.
+
 ## Preverjanje
 
 Preverjanje prilagodi tveganju spremembe. Osnovni nabor je:
