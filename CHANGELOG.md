@@ -1,3 +1,8 @@
+# v2.0.0-beta.25 - Save whole Spotify playlists to Liked Songs
+
+## Fixed
+- Saving a large Spotify selection to Liked Songs now works with both Add new ones and Add all. ApricotPlayer sends changes in batches of up to 50 songs, the limit Spotify accepts, and checks each batch before reporting success. Removing large selections from Liked Songs uses the same limit.
+
 # v2.0.0-beta.24 - Remember Spotify song keys
 
 ## Added

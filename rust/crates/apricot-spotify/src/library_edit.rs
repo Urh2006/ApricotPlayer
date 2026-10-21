@@ -6,7 +6,10 @@
 
 #![allow(clippy::missing_errors_doc)] // Every change fails only with `ApiError`.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    future::Future,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use librespot_core::Session;
 use serde_json::{Value, json};
@@ -141,16 +144,12 @@ pub async fn apply(
             } else {
                 "removeFromLibrary"
             };
-            for chunk in uris.chunks(100) {
+            update_saved(&uris, saved, |chunk| async move {
                 api.pathfinder(session, operation, json!({ "libraryItemUris": chunk }))
                     .await?;
-                let confirmed = catalog::saved(api, session, chunk).await?;
-                if confirmed.len() != chunk.len() || confirmed.iter().any(|state| *state != saved) {
-                    return Err(ApiError::Shape(
-                        "Spotify did not confirm the requested saved state".into(),
-                    ));
-                }
-            }
+                catalog::saved(api, session, &chunk).await
+            })
+            .await?;
             Ok(EditOutcome::SavedBatch { uris, saved })
         }
         LibraryEdit::ToggleSaved { uri } if uri.starts_with("spotify:playlist:") => {
@@ -263,6 +262,25 @@ pub async fn apply(
             })
         }
     }
+}
+
+/// Execute and confirm each library change before proceeding to the next batch.
+async fn update_saved<F, Fut>(uris: &[String], saved: bool, mut update: F) -> Result<(), ApiError>
+where
+    F: FnMut(Vec<String>) -> Fut,
+    Fut: Future<Output = Result<Vec<bool>, ApiError>>,
+{
+    // addLibraryItems/removeLibraryItems accept at most 50 URIs. The
+    // read-only saved-state query and playlist edits have different limits.
+    for chunk in uris.chunks(50) {
+        let confirmed = update(chunk.to_vec()).await?;
+        if confirmed.len() != chunk.len() || confirmed.iter().any(|state| *state != saved) {
+            return Err(ApiError::Shape(
+                "Spotify did not confirm the requested saved state".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Follows or unfollows a profile, the opposite of now; whether this
@@ -678,6 +696,72 @@ async fn rename_playlist(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn saving_a_whole_playlist_respects_spotify_library_limit() {
+        use std::{cell::RefCell, collections::HashSet};
+        let uris: Vec<String> = (0..137)
+            .map(|id| format!("spotify:track:{id:022}"))
+            .collect();
+        let library = RefCell::new(HashSet::<String>::new());
+        for saved in [true, false] {
+            update_saved(&uris, saved, |chunk| {
+                // Actual server rejection from the user's spotify.log:
+                // addLibraryItems cannot accept more than 50 URIs.
+                let result = if chunk.len() > 50 {
+                    Err(ApiError::Shape(
+                        "The number of URIs cannot be greater than 50".into(),
+                    ))
+                } else {
+                    let mut library = library.borrow_mut();
+                    for uri in &chunk {
+                        if saved {
+                            library.insert(uri.clone());
+                        } else {
+                            library.remove(uri);
+                        }
+                    }
+                    Ok(chunk.iter().map(|uri| library.contains(uri)).collect())
+                };
+                std::future::ready(result)
+            })
+            .await
+            .unwrap();
+            assert_eq!(library.borrow().len(), if saved { uris.len() } else { 0 });
+        }
+    }
+
+    #[tokio::test]
+    async fn bulk_library_change_does_not_report_unconfirmed_success() {
+        let uris: Vec<String> = (0..137)
+            .map(|id| format!("spotify:track:{id:022}"))
+            .collect();
+        let calls = std::cell::Cell::new(0);
+        let result = update_saved(&uris, true, |chunk| {
+            calls.set(calls.get() + 1);
+            std::future::ready(Ok(vec![calls.get() == 1; chunk.len()]))
+        })
+        .await;
+        assert!(result.is_err());
+        assert_eq!(calls.get(), 2);
+    }
+
+    #[tokio::test]
+    async fn empty_and_small_library_changes_do_not_add_requests() {
+        for size in [0, 1, 49, 50, 51, 100, 101] {
+            let uris: Vec<String> = (0..size)
+                .map(|id| format!("spotify:track:{id:022}"))
+                .collect();
+            let calls = std::cell::Cell::new(0usize);
+            update_saved(&uris, true, |chunk| {
+                calls.set(calls.get() + 1);
+                std::future::ready(Ok(vec![true; chunk.len()]))
+            })
+            .await
+            .unwrap();
+            assert_eq!(calls.get(), uris.len().div_ceil(50));
+        }
+    }
 
     #[test]
     fn publication_readback_confirms_requested_flag_without_access_permission() {
