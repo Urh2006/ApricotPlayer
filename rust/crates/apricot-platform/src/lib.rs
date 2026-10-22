@@ -32,7 +32,10 @@ pub mod youtube_search_service;
 pub mod ytdlp_youtube;
 pub mod zip_archive;
 
-pub use bpm::{BpmAnalysisRequest, analyze_source_bpm, bpm_ffmpeg_arguments, ffmpeg_executable};
+pub use bpm::{
+    BpmAnalysisRequest, analyze_pcm_bpm, analyze_source_bpm, bpm_ffmpeg_arguments,
+    ffmpeg_executable,
+};
 pub use clip_export::{
     ClipExportError, ClipExportMode, ClipExportRequest, build_clip_export_arguments,
     export_marked_clip,

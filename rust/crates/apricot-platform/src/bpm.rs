@@ -2,7 +2,7 @@
 //! `analyze_bpm_worker` and `bpm_ffmpeg_args`.
 
 use std::{
-    io::Read,
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::atomic::{AtomicBool, Ordering},
@@ -103,18 +103,41 @@ pub fn bpm_ffmpeg_arguments(
 /// `cancelled` is checked while ffmpeg runs, like Python's generation and
 /// speed or pitch checks.
 pub fn analyze_source_bpm(request: &BpmAnalysisRequest, cancelled: &AtomicBool) -> Option<f64> {
+    analyze_input_bpm(request, cancelled, None)
+}
+
+fn analyze_input_bpm(
+    request: &BpmAnalysisRequest,
+    cancelled: &AtomicBool,
+    input: Option<Vec<u8>>,
+) -> Option<f64> {
+    if cancelled.load(Ordering::Acquire) {
+        return None;
+    }
     let ffmpeg = request.ffmpeg.as_ref()?;
     if request.source.trim().is_empty() {
         return None;
     }
     let mut command = Command::new(ffmpeg);
+    let mut arguments = bpm_ffmpeg_arguments(
+        &request.source,
+        request.start_seconds,
+        request.duration_seconds,
+    );
+    if input.is_some() {
+        let index = arguments.iter().position(|argument| argument == "-i")?;
+        arguments.splice(
+            index..index,
+            ["-f", "s16le", "-ar", "44100", "-ac", "2"].map(str::to_owned),
+        );
+    }
     command
-        .args(bpm_ffmpeg_arguments(
-            &request.source,
-            request.start_seconds,
-            request.duration_seconds,
-        ))
-        .stdin(Stdio::null())
+        .args(arguments)
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(windows)]
@@ -122,6 +145,13 @@ pub fn analyze_source_bpm(request: &BpmAnalysisRequest, cancelled: &AtomicBool) 
     let mut child = command.spawn().ok()?;
     let mut stdout = child.stdout.take()?;
     let mut stderr = child.stderr.take()?;
+    let writer = input.and_then(|data| {
+        child.stdin.take().map(|mut stdin| {
+            std::thread::spawn(move || {
+                let _ = stdin.write_all(&data);
+            })
+        })
+    });
     let reader = std::thread::spawn(move || {
         let mut pcm = Vec::new();
         let _ = stdout.read_to_end(&mut pcm);
@@ -149,10 +179,26 @@ pub fn analyze_source_bpm(request: &BpmAnalysisRequest, cancelled: &AtomicBool) 
     };
     let pcm = reader.join().unwrap_or_default();
     let _ = diagnostics.join();
+    if let Some(writer) = writer {
+        let _ = writer.join();
+    }
     if !status?.success() || pcm.len() < TEMPO_SAMPLE_RATE * 2 * 2 * 6 {
         return None;
     }
     estimate_tempo_from_pcm16_stereo(&pcm, TEMPO_SAMPLE_RATE).map(|estimate| estimate.bpm)
+}
+
+/// Apply the same analysis to decoded 44.1 kHz stereo s16le audio.
+pub fn analyze_pcm_bpm(
+    request: &BpmAnalysisRequest,
+    pcm: Vec<u8>,
+    cancelled: &AtomicBool,
+) -> Option<f64> {
+    let mut request = request.clone();
+    "pipe:0".clone_into(&mut request.source);
+    // The Spotify decoder has already sought to the requested window.
+    request.start_seconds = 0.0;
+    analyze_input_bpm(&request, cancelled, Some(pcm))
 }
 
 #[cfg(test)]
@@ -160,6 +206,40 @@ mod tests {
     use std::{path::PathBuf, sync::atomic::AtomicBool};
 
     use super::{BpmAnalysisRequest, analyze_source_bpm, bpm_ffmpeg_arguments, ffmpeg_executable};
+
+    #[test]
+    #[ignore = "needs APRICOT_TEST_FFMPEG"]
+    fn real_ffmpeg_finds_bpm_from_decoded_spotify_pcm() {
+        let ffmpeg = PathBuf::from(std::env::var_os("APRICOT_TEST_FFMPEG").expect("FFmpeg path"));
+        let output = std::process::Command::new(&ffmpeg)
+            .args([
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=1000:beep_factor=4:duration=40:sample_rate=44100",
+                "-ac",
+                "2",
+                "-f",
+                "s16le",
+                "pipe:1",
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let request = BpmAnalysisRequest {
+            ffmpeg: Some(ffmpeg),
+            source: "spotify:track:0000000000000000000001".into(),
+            start_seconds: 17.0,
+            duration_seconds: 40.0,
+        };
+        let bpm = super::analyze_pcm_bpm(&request, output.stdout, &AtomicBool::new(false))
+            .expect("Spotify PCM tempo");
+        assert!((bpm - 60.0).abs() < 1.0, "got {bpm}");
+    }
 
     #[test]
     fn arguments_match_python() {

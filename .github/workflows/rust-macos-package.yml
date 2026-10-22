@@ -53,7 +53,9 @@ jobs:
         env:
           APRICOT_TEST_MPV: /opt/homebrew/lib/mpv
           APRICOT_TEST_FFMPEG: /opt/homebrew/bin/ffmpeg
-        run: cargo test -p apricot-playback real_libmpv --locked -- --ignored --test-threads=1
+        run: |
+          cargo test -p apricot-playback real_libmpv --locked -- --ignored --test-threads=1
+          cargo test -p apricot-platform real_ffmpeg_finds_bpm_from_decoded_spotify_pcm --locked -- --ignored
 
       - name: Build the package
         env:

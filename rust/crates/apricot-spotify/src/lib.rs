@@ -5,6 +5,7 @@
 
 pub mod accounts;
 pub mod api;
+pub mod bpm;
 pub mod catalog;
 pub mod devices;
 pub mod diagnostics;

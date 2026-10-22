@@ -921,6 +921,25 @@ impl SpotifyService {
             .map(|(_, active)| active.playback.clone())
     }
 
+    /// A silent decoder for the BPM worker; never changes Connect playback.
+    pub fn bpm_analyzer(&self) -> Option<crate::bpm::SpotifyBpmAnalyzer> {
+        use librespot_playback::config::{Bitrate, PlayerConfig};
+        let bitrate = match crate::settings::load().quality {
+            crate::settings::Quality::Normal => Bitrate::Bitrate96,
+            crate::settings::Quality::High => Bitrate::Bitrate160,
+            crate::settings::Quality::VeryHigh => Bitrate::Bitrate320,
+        };
+        Some(crate::bpm::SpotifyBpmAnalyzer::new(
+            self.active_session()?,
+            self.runtime().handle().clone(),
+            PlayerConfig {
+                bitrate,
+                listening_history: false,
+                ..PlayerConfig::default()
+            },
+        ))
+    }
+
     fn runtime(&self) -> &tokio::runtime::Runtime {
         self.runtime.get_or_init(|| {
             tokio::runtime::Builder::new_multi_thread()

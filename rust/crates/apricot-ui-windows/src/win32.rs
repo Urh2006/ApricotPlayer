@@ -15211,12 +15211,27 @@ unsafe fn announce_bpm(window: HWND) {
         start_seconds,
         duration_seconds,
     };
+    let spotify_input = session
+        .current_item()
+        .is_some_and(apricot_playback::pcm_source::is_pcm_item);
+    let spotify_analyzer = spotify_input
+        .then(|| {
+            state
+                .spotify
+                .service_ref()
+                .and_then(|service| service.bpm_analyzer())
+        })
+        .flatten();
     let cancelled = Arc::new(AtomicBool::new(false));
     let worker_cancelled = Arc::clone(&cancelled);
     let (sender, receiver) = mpsc::sync_channel(1);
     std::thread::spawn(move || {
-        let bpm = apricot_platform::analyze_source_bpm(&request, &worker_cancelled)
-            .map(|source_bpm| apricot_app::bpm::effective_playback_bpm(source_bpm, speed));
+        let bpm = if spotify_input {
+            spotify_analyzer.and_then(|analyzer| analyzer.analyze(&request, &worker_cancelled))
+        } else {
+            apricot_platform::analyze_source_bpm(&request, &worker_cancelled)
+        }
+        .map(|source_bpm| apricot_app::bpm::effective_playback_bpm(source_bpm, speed));
         let _ = sender.send(bpm);
     });
     state.pending_bpm.push(PendingBpmAnalysis {

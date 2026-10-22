@@ -1,3 +1,8 @@
+# v2.0.0-beta.26 - Spotify BPM analysis
+
+## Fixed
+- B in the player now checks the BPM of Spotify songs too, including while paused. It uses the same tempo analysis, window around the current position and playback-speed adjustment as other sources, without moving or interrupting playback.
+
 # v2.0.0-beta.25 - Save whole Spotify playlists to Liked Songs
 
 ## Fixed
