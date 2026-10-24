@@ -25,6 +25,11 @@ while [ $# -gt 0 ]; do
     shift
 done
 
+case "$CHANNEL" in
+    local-only|beta|stable) ;;
+    *) echo "Unknown update channel $CHANNEL" >&2; exit 2 ;;
+esac
+
 RUST_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 REPO_ROOT=$(dirname "$RUST_ROOT")
 cd "$RUST_ROOT"
@@ -45,6 +50,7 @@ else
     APP_DATA="ApricotPlayer2Beta"
 fi
 FEATURES=""
+[ "$CHANNEL" = stable ] && FEATURES="apricot-player/release-stable"
 [ "$CHANNEL" = beta ] && FEATURES="apricot-player/release-beta"
 [ "$STABLE" = true ] && FEATURES="${FEATURES:+$FEATURES,}apricot-player/stable-identity"
 YTDLP_VERSION="2026.08.19"

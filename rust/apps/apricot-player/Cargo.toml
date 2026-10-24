@@ -20,6 +20,7 @@ serde_json.workspace = true
 apricot-ui-macos.workspace = true
 
 [features]
+release-stable = ["apricot-updater/release-stable"]
 release-beta = ["apricot-updater/release-beta"]
 stable-identity = ["apricot-platform/stable-identity"]
 

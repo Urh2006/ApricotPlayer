@@ -20,9 +20,11 @@ pub use version::{
     version_is_prerelease,
 };
 
-/// This build's channel: a local Rust beta is `LocalOnly` (D-011); the
-/// distributed 2.0 beta is built with the `release-beta` feature.
-pub const BUILD_CHANNEL: UpdateChannel = if cfg!(feature = "release-beta") {
+/// Local development builds cannot install remote updates. Public packages
+/// explicitly select the stable or beta update policy.
+pub const BUILD_CHANNEL: UpdateChannel = if cfg!(feature = "release-stable") {
+    UpdateChannel::Stable
+} else if cfg!(feature = "release-beta") {
     UpdateChannel::Beta
 } else {
     UpdateChannel::LocalOnly

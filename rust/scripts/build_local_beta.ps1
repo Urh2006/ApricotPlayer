@@ -2,7 +2,7 @@ param(
     [string]$OutputDir = "",
     [switch]$SkipChecks,
     # "beta" builds the distributed 2.0 beta, which installs GitHub updates.
-    [ValidateSet("local-only", "beta")]
+    [ValidateSet("local-only", "beta", "stable")]
     [string]$Channel = "local-only",
     # ApricotPlayer 2.0 in place of the Python version: Python's folders,
     # ApricotPlayer.exe and Python's installer identity.
@@ -46,6 +46,7 @@ try {
     }
 
     $Features = @()
+    if ($Channel -eq "stable") { $Features += "apricot-player/release-stable" }
     if ($Channel -eq "beta") { $Features += "apricot-player/release-beta" }
     if ($Stable) { $Features += "apricot-player/stable-identity" }
     if ($Features.Count -gt 0) {

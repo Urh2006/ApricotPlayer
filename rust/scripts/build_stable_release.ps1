@@ -2,11 +2,11 @@
 # with Python's folders, ApricotPlayerSetup.exe from Python's own installer
 # script (same AppId, so it installs over ApricotPlayer 1.x), ApricotPlayer.zip
 # and SHA-256 sums, in local-dist\stable\<version>. It publishes nothing.
-# -Channel local-only (default) takes app updates only from the folder in
-# APRICOT_UPDATE_TEST_FEED; -Channel beta takes them from GitHub prereleases.
+# -Channel stable (default) enables public stable updates. Beta includes
+# prereleases; local-only takes app updates from APRICOT_UPDATE_TEST_FEED.
 param(
-    [ValidateSet("local-only", "beta")]
-    [string]$Channel = "local-only",
+    [ValidateSet("local-only", "beta", "stable")]
+    [string]$Channel = "stable",
     [switch]$SkipChecks,
     [switch]$AllowDirty
 )

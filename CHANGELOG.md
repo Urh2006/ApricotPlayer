@@ -1,3 +1,59 @@
+# v2.0.0 - Rust rewrite, Spotify, and macOS
+
+ApricotPlayer 2.0 is now stable. This is the full Rust rewrite, including the work completed through beta 26. If you are updating from the last Python version, 1.0.21, here is what has changed.
+
+## A native player for Windows and Mac
+
+- ApricotPlayer's application code has been rewritten in Rust, with native controls on Windows and macOS. The Windows version continues to work with NVDA; the Mac version supports VoiceOver and keyboard navigation.
+- The familiar YouTube and SoundCloud search, local playback, AudioVault, podcasts, downloads, converters, playlists, bookmarks, equalizer, speed and pitch controls, and configurable shortcuts are carried over from the Python player.
+- Windows uses the same application name, installer, file associations, and user-data location. You can update directly from 1.0.21 without moving your settings, favorites, playlists, history, subscriptions, feeds, bookmarks, or saved positions.
+- The Mac version includes file opening, a menu-bar item, start at login, notifications, background playback, application updates, and yt-dlp updates. Import Windows data in Settings accepts your Windows data folder or a ZIP of it. Machine-specific paths and devices are reset; sign in again to Spotify and AudioVault.
+
+## Spotify
+
+- Sign in with your own Spotify account through your browser. You can save several accounts and switch between them. Spotify Premium is required for full local music playback.
+- Search tracks, artists, albums, playlists, shows, episodes, profiles, and audiobooks. Browse My library, Liked songs, Playlists, Followed artists, Home, Daily mixes, Recently played, Top tracks and artists, and Browse all.
+- Open a playlist or album and start with any track, keeping the collection for the following songs. Use previous/next, repeat a track or collection, shuffle, or use Smart Shuffle where Spotify provides it. Autoplay and radio can continue with related music.
+- Like and unlike songs directly in Spotify, save or remove supported library items, and follow or unfollow artists and profiles. Likes in ApricotPlayer update your real Spotify Liked Songs.
+- Mark songs individually or select an entire collection, including pages not yet loaded, to save songs or add them to a playlist. Mixed selections offer Add new ones or Add all, and large library changes are checked in batches.
+- Create playlists, rename them, edit descriptions, add or remove songs, move tracks, and change visibility where you have permission. Adding a public playlist to your profile is separate from making it public.
+- Open My profile, Following, Followers, Find friends, and public playlists. Pin artists, playlists, categories, and browse sections to your Spotify menu for quicker access.
+- Use a separate Spotify queue and Spotify Connect device selection. Move or remove manually queued songs and transfer playback to an available device. Spotify's queue stays separate from ApricotPlayer's general queue.
+- Hide or unhide songs in supported personalized mixes. This is separate from removing a like and is available only where Spotify supports it.
+- Read available Spotify lyrics and episode transcripts, play episode previews, and check a song's BPM with B, including while paused. BPM analysis does not move playback or change the queue.
+- Choose streaming quality, normalization, autoplay behavior, and library sorting. Optional encrypted storage of previously played song keys helps with repeated playback after restarting; turning it off deletes those keys.
+- Experimental listening-history reporting is available but off by default and asks for confirmation before being enabled. Spotify controls its effect on recommendations and listening statistics.
+- Rapid skips and temporary Spotify failures no longer leave the player stuck. When Spotify limits new song starts, ApricotPlayer announces it and waits for the selected song to become available again.
+
+Spotify content cannot be downloaded or exported. Mixes, Smart Shuffle, lyrics, previews, audiobooks, and other account content depend on Spotify and your account's access and region. The librespot engine is delivered with application updates.
+
+## Playback and navigation
+
+- With Background playback enabled, Escape returns one screen to the list you came from while music continues. Close the player area with its Close button when you want to end the session.
+- Player shortcuts act on the playing item when focus is on the player or its buttons, even with a menu or list alongside it. Menus retain their own shortcuts and first-letter navigation.
+- Shuffle, speed, and pitch are kept while the player remains open, including when selecting another item. The background play/pause shortcut works when the app is not focused: Ctrl+Space on Windows or Command+Shift+Space on Mac.
+- Switching between Spotify and YouTube starts the selected source without needing to close and reopen the player. A newly selected Spotify song starts playing even if the previous song was paused.
+- Previous and Next handle playlist boundaries and fast repeated presses more reliably. Spotify also has shortcuts for the first and last track in the current list, in its original order even with shuffle on.
+- YouTube playback selects the original audio rather than an automatically dubbed language.
+- Full-screen video fills the screen. F11 toggles it, Escape restores the regular player, and Tab reaches the controls. Reopening a finished local file starts it again.
+- The window title follows the current item, including the artist for Spotify songs. Mac background-player controls, VoiceOver row activation, result details, transcripts, lyrics, and context menus follow the same navigation model as Windows.
+
+## Settings, updates, and shortcuts
+
+- Spotify is included in Customize main menu and can be hidden without disabling its shortcut.
+- The keyboard shortcut editor includes Spotify actions. Disabled shortcuts remain disabled, and labels follow your current bindings.
+- Mac uses Command and Option, with different defaults where the Windows combination would trigger a system action: Add to playback queue is Command+Shift+Return, Current downloads is Command+Option+J, and Spotify Queue is Command+Option+Shift+U.
+- Application and yt-dlp updates are available on both platforms. Version 2.0.0 is a normal stable release, so users on the Stable channel receive it too. Future test releases remain on the Beta channel.
+- The README now covers the current features, menus, installation instructions, and separate Windows and Mac shortcut lists, with every shortcut on its own line.
+
+## Download and install
+
+Download packages from the [Releases page](https://github.com/Urh2006/ApricotPlayer/releases): **ApricotPlayerSetup.exe** or **ApricotPlayer.zip** for Windows, and **ApricotPlayer-macOS-arm64.dmg** for Mac. The Mac ZIP is for the in-app updater.
+
+The Mac version requires **Apple silicon and macOS 27 or later**. Copy ApricotPlayer from the DMG to Applications. The app is not notarized by Apple; if the first launch is blocked, open **System Settings > Privacy & Security**, choose **Open Anyway** for ApricotPlayer, and confirm. Use the package from this project's Releases page.
+
+For all default shortcuts and feature details, see the [README](https://github.com/Urh2006/ApricotPlayer#readme).
+
 # v2.0.0-beta.26 - Spotify BPM analysis
 
 ## Fixed

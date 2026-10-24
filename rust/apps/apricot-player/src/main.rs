@@ -205,6 +205,14 @@ fn run_qualification(arguments: &[std::ffi::OsString]) -> Result<bool, Box<dyn s
         assert_eq!(CUSTOMIZABLE_MAIN_MENU.len(), 20);
         assert_eq!(LANGUAGES.len(), 27);
         assert!(!UpdateChannel::LocalOnly.allows_remote_install());
+        if cfg!(feature = "release-stable") {
+            assert_eq!(apricot_updater::BUILD_CHANNEL, UpdateChannel::Stable);
+            assert!(apricot_updater::BUILD_CHANNEL.allows_remote_install());
+            assert!(!apricot_updater::version_is_prerelease(env!(
+                "CARGO_PKG_VERSION"
+            )));
+            assert_eq!(apricot_updater::APP_PACKAGE.display_name, "ApricotPlayer");
+        }
         return Ok(true);
     }
     if arguments

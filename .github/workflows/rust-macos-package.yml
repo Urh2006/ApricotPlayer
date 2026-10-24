@@ -14,9 +14,14 @@ on:
   workflow_dispatch:
     inputs:
       release_identity:
-        description: "Build the public ApricotPlayer identity and beta updater"
+        description: "Build the public ApricotPlayer identity"
         type: boolean
         default: false
+      release_channel:
+        description: "Update channel for the public package"
+        type: choice
+        options: [stable, beta]
+        default: stable
 
 permissions:
   contents: read
@@ -60,6 +65,7 @@ jobs:
       - name: Build the package
         env:
           RELEASE_IDENTITY: ${{ inputs.release_identity }}
+          RELEASE_CHANNEL: ${{ inputs.release_channel }}
           # The project's self-signed certificate keeps the app's identity
           # stable across updates (Keychain); see build_macos_app.sh.
           MACOS_SIGNING_P12: ${{ secrets.MACOS_SIGNING_P12 }}
@@ -67,7 +73,7 @@ jobs:
         run: |
           test "$(uname -m)" = arm64
           if [ "$RELEASE_IDENTITY" = true ]; then
-            ./scripts/build_macos_app.sh --stable --channel beta
+            ./scripts/build_macos_app.sh --stable --channel "$RELEASE_CHANNEL"
           else
             ./scripts/build_macos_app.sh
           fi

@@ -667,6 +667,54 @@ mod tests {
     }
 
     #[test]
+    fn stable_2_0_updates_python_and_beta_users_with_their_existing_package_names() {
+        let stable = json!({
+            "tag_name": "v2.0.0", "prerelease": false, "body": "What's new since Python 1.0.21",
+            "assets": [
+                {"name": "ApricotPlayerSetup.exe"},
+                {"name": "ApricotPlayer.zip"},
+                {"name": "ApricotPlayer-macos-arm64.zip"}
+            ]
+        });
+        for (package, installed, expected) in [
+            (
+                crate::release::STABLE_PACKAGE,
+                true,
+                "ApricotPlayerSetup.exe",
+            ),
+            (crate::release::STABLE_PACKAGE, false, "ApricotPlayer.zip"),
+            (
+                crate::release::MACOS_STABLE_PACKAGE,
+                false,
+                "ApricotPlayer-macos-arm64.zip",
+            ),
+        ] {
+            for (current, channel) in [("1.0.21", "stable"), ("2.0.0-beta.26", "beta")] {
+                let mut github = FakeGithub::default();
+                github.json.insert(
+                    crate::release::GITHUB_LATEST_RELEASE_API_URL.to_owned(),
+                    stable.clone(),
+                );
+                github.json.insert(
+                    crate::release::GITHUB_RELEASES_API_URL.to_owned(),
+                    json!([stable.clone()]),
+                );
+                let mut feed = GithubReleaseFeed {
+                    transport: &mut github,
+                };
+                let AppUpdateCheck::Available { release, asset } = check_app_update(
+                    &mut feed, &package, channel, current, "", false, installed, "",
+                ) else {
+                    panic!("2.0 must update {current} on {channel}");
+                };
+                assert_eq!(release.version(), "2.0.0");
+                assert_eq!(asset.name, expected);
+                assert!(release.cumulative_changelog.contains("since Python 1.0.21"));
+            }
+        }
+    }
+
+    #[test]
     fn app_check_without_a_matching_asset_fails_like_python() {
         let mut github = FakeGithub::default();
         github.json.insert(

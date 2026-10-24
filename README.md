@@ -2,7 +2,7 @@
 
 ApricotPlayer is an accessible media player and downloader for Windows and macOS. Search YouTube and SoundCloud, listen to Spotify, follow podcasts, watch videos, play your own files, and keep everything within reach of the keyboard.
 
-The current **2.0 beta is 2.0.0-beta.26**, written in Rust with native Windows and Mac interfaces. This README describes that version. The Windows **1.0.21 stable release** is the earlier Python version; Spotify, macOS support, and the changes in the 2.0 release notes require the beta.
+The current stable release is **2.0.0**, written in Rust with native Windows and Mac interfaces. It brings Spotify and macOS support alongside the familiar ApricotPlayer features. Existing Windows users can update directly from the Python-based 1.0.21 release through the Stable update channel.
 
 ## Contents
 
@@ -25,7 +25,7 @@ The current **2.0 beta is 2.0.0-beta.26**, written in Rust with native Windows a
 
 ## Download and install
 
-Open the [Releases page](https://github.com/Urh2006/ApricotPlayer/releases), choose a release, and expand **Assets**. Choose a release marked **Pre-release** for the current 2.0 beta, or the stable 1.x release if you want the older Windows version. Read that release's notes before installing.
+Open the [Releases page](https://github.com/Urh2006/ApricotPlayer/releases), choose a release, and expand **Assets**. Choose **2.0.0 or a newer stable release** for everyday use. Releases marked **Pre-release** are optional test versions, offered through the Beta update channel. Read the release notes before installing.
 
 The files under **Source code** are for development. To run ApricotPlayer, download one of the packages below. The packages include the media tools they need; you do not need to install Python, Rust, mpv, or FFmpeg separately.
 
@@ -131,7 +131,7 @@ Age-restricted YouTube support is a separate option, off by default. Advanced ne
 
 ## Spotify
 
-Spotify is built into 2.0 through **librespot**. You sign in with your own Spotify account in your browser; ApricotPlayer does not ask you to type your Spotify password into the player. **Spotify Premium is required for full local music playback.** The official Spotify application does not need to be installed.
+Spotify is built into ApricotPlayer through **librespot**. You sign in with your own Spotify account in your browser; ApricotPlayer does not ask you to type your Spotify password into the player. **Spotify Premium is required for full local music playback.** The official Spotify application does not need to be installed.
 
 Open **Spotify > Log in**, finish the browser sign-in, and return to ApricotPlayer. The login screen lets you copy the link, reopen the browser, or retry. You can add several accounts, choose the active one, log out, log in again, or remove a saved account. Libraries and pinned Spotify-menu items follow the selected account.
 
@@ -574,7 +574,7 @@ Actions apply where available. List commands use the selection; player commands 
 
 ## Help and bug reports
 
-Read the [changelog](https://github.com/Urh2006/ApricotPlayer/blob/beta/CHANGELOG.md) and [release notes](https://github.com/Urh2006/ApricotPlayer/releases) for changes and release-specific information.
+Read the [changelog](https://github.com/Urh2006/ApricotPlayer/blob/main/CHANGELOG.md) and [release notes](https://github.com/Urh2006/ApricotPlayer/releases) for changes and release-specific information.
 
 Report bugs or suggest improvements in [GitHub Issues](https://github.com/Urh2006/ApricotPlayer/issues). Include the app version, operating system, source involved, steps, and expected result. For accessibility issues, include your screen reader/version, focus location, and what was announced. A diagnostic report can help; review it before sharing and remove private information. Do not include passwords, cookies, or account tokens.
 
@@ -582,9 +582,9 @@ For security problems, use the private reporting route in [SECURITY.md](SECURITY
 
 ## Source code and development
 
-The 2.0 source is on **beta**, with the Rust workspace in **rust/**. The **main** branch contains the stable Python line until 2.0 becomes stable. This README covers the beta so its downloads and features are available from the repository front page.
+The stable source is on **main**, with the Rust workspace in **rust/**. Future prereleases are prepared on **beta**. Version 2.0.0 is the stable release of the rewrite completed through beta 26.
 
-For Rust development, check out beta in your existing clone and use the [pinned toolchain](https://github.com/Urh2006/ApricotPlayer/blob/beta/rust/rust-toolchain.toml). The workspace separates shared application logic, playback, storage, Spotify, updater, and native interfaces. Packaging includes external libraries and helpers; a plain Cargo executable is not the complete distribution.
+For Rust development, use main in your existing clone and use the [pinned toolchain](https://github.com/Urh2006/ApricotPlayer/blob/main/rust/rust-toolchain.toml). The workspace separates shared application logic, playback, storage, Spotify, updater, and native interfaces. Packaging includes external libraries and helpers; a plain Cargo executable is not the complete distribution.
 
 From **rust/**, the regular checks are:
 
@@ -594,10 +594,10 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked --no-fail-fast
 ```
 
-Build prerequisites and options are documented in the [Windows packaging script](https://github.com/Urh2006/ApricotPlayer/blob/beta/rust/scripts/build_stable_release.ps1) and [Mac packaging script](https://github.com/Urh2006/ApricotPlayer/blob/beta/rust/scripts/build_macos_app.sh).
+Build prerequisites and options are documented in the [Windows packaging script](https://github.com/Urh2006/ApricotPlayer/blob/main/rust/scripts/build_stable_release.ps1) and [Mac packaging script](https://github.com/Urh2006/ApricotPlayer/blob/main/rust/scripts/build_macos_app.sh).
 
-The [Rust rewrite plan](https://github.com/Urh2006/ApricotPlayer/blob/beta/docs/RUST_REWRITE_PLAN.md), [parity manifest](https://github.com/Urh2006/ApricotPlayer/blob/beta/docs/RUST_PARITY_MANIFEST.md), and [Mac port plan](https://github.com/Urh2006/ApricotPlayer/blob/beta/docs/MACOS_PORT_PLAN.md) record architecture and acceptance requirements. Some sections retain planning history; current source and release notes show what is shipped.
+The [Rust rewrite plan](https://github.com/Urh2006/ApricotPlayer/blob/main/docs/RUST_REWRITE_PLAN.md), [parity manifest](https://github.com/Urh2006/ApricotPlayer/blob/main/docs/RUST_PARITY_MANIFEST.md), and [Mac port plan](https://github.com/Urh2006/ApricotPlayer/blob/main/docs/MACOS_PORT_PLAN.md) record architecture and acceptance requirements. Some sections retain planning history; current source and release notes show what is shipped.
 
-The earlier Python source remains for stable 1.x. Its entry point is **wx_main.py**, using Python 3.11+, wxPython, and **requirements.txt**. It does not run the Rust 2.0 interface.
+The earlier Python source remains for reference; 1.0.21 was the last Python release. Its entry point is **wx_main.py**, using Python 3.11+, wxPython, and **requirements.txt**. It does not run the Rust 2.0 interface.
 
-Translations live in **apricot/locales/**, with Rust-specific text in **rust/crates/apricot-app/locales/rust_strings.json** on beta. Preserve placeholders such as `{title}` and keep control names, messages, and shortcut labels consistent when contributing translations.
+Translations live in **apricot/locales/**, with Rust-specific text in **rust/crates/apricot-app/locales/rust_strings.json** on main. Preserve placeholders such as `{title}` and keep control names, messages, and shortcut labels consistent when contributing translations.

@@ -4,7 +4,7 @@ name: Rust CI
 # reads the repository; it never builds release assets or publishes.
 on:
   push:
-    branches: [rust-2.0]
+    branches: [main, beta, rust-2.0]
     paths:
       - "rust/**"
       - ".github/workflows/rust-ci.yml"
@@ -54,3 +54,6 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --locked --no-fail-fast
+
+      - name: Check public stable update policy
+        run: cargo test -p apricot-updater --locked --features release-stable,stable-identity
