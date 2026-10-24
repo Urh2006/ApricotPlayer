@@ -235,9 +235,7 @@ unsafe fn cancel_function(module: HMODULE, name: &'static [u8]) -> Option<Cancel
 
 fn nvda_client_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
-    if let Ok(executable) = std::env::current_exe()
-        && let Some(directory) = executable.parent()
-    {
+    if let Some(directory) = apricot_platform::bundled_runtime_directory() {
         candidates.push(directory.join("nvda").join("nvdaControllerClient64.dll"));
     }
     candidates.push(

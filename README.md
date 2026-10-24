@@ -34,6 +34,8 @@ The files under **Source code** are for development. To run ApricotPlayer, downl
 - **ApricotPlayerSetup.exe:** download and run the installer. It can add Start menu and desktop shortcuts and register ApricotPlayer for common audio and video files.
 - **ApricotPlayer.zip:** download the portable package, extract the whole ZIP, and run **ApricotPlayer.exe** from the extracted folder. Keep its other files and folders together. The portable package still saves settings in your Windows user profile.
 
+If you are upgrading a portable Rust 2.0 beta, download and extract the 2.0 ZIP manually for this transition. The older Rust portable updater cannot read its layout. Installed copies and Python 1.0.21 portable copies can use the normal updater; saved data remains in your user profile.
+
 Windows releases contain the 64-bit build. Settings also provides media-player registration options if you want to change file associations later. Windows may ask you to finish choosing the default app in its own settings.
 
 ### macOS

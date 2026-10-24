@@ -51,9 +51,7 @@ impl Drop for PlayerTools {
 
 /// Windows `application_directory`: the folder of the executable.
 pub(crate) fn application_directory() -> Option<std::path::PathBuf> {
-    std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(std::path::Path::to_path_buf))
+    apricot_platform::bundled_runtime_directory()
 }
 
 /// Windows `current_bpm_state`: the analysis key, the item key and the speed.

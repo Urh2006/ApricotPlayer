@@ -365,12 +365,13 @@ pub fn validate_zip_entries(entries: &[ZipEntry]) -> Result<(), String> {
 }
 
 /// Top-level items a Rust package may carry next to the executable.
-const PORTABLE_ITEMS: [&str; 7] = [
+const PORTABLE_ITEMS: [&str; 8] = [
     "assets",
     "components",
     "ffmpeg",
     "mpv",
     "nvda",
+    "node",
     "build-info.json",
     "package-manifest.json",
 ];
@@ -427,6 +428,14 @@ fn validate_portable_layout(package: &PackageNames, entries: &[ZipEntry]) -> Res
             return true;
         }
         name.strip_prefix(&format!("{root}/")).is_some_and(|rest| {
+            if root == "apricotplayer" && rest == "_internal" {
+                return true;
+            }
+            let rest = if root == "apricotplayer" {
+                rest.strip_prefix("_internal/").unwrap_or(rest)
+            } else {
+                rest
+            };
             let first = rest.split('/').next().unwrap_or_default();
             PORTABLE_ITEMS.contains(&first)
         })
@@ -440,8 +449,16 @@ fn validate_portable_layout(package: &PackageNames, entries: &[ZipEntry]) -> Res
             package.portable_root, package.executable
         ));
     }
+    let runtime = if names
+        .iter()
+        .any(|name| name.starts_with(&format!("{root}/_internal/components/")))
+    {
+        format!("{root}/_internal")
+    } else {
+        root.clone()
+    };
     for required in ["components", "mpv"] {
-        let folder = format!("{root}/{required}");
+        let folder = format!("{runtime}/{required}");
         if !names
             .iter()
             .any(|name| *name == folder || name.starts_with(&format!("{folder}/")))
@@ -644,6 +661,28 @@ pub(crate) mod tests {
             validate_update_package(&RUST_BETA_PACKAGE, &path),
             Err("downloaded portable update is not a valid zip file".to_owned())
         );
+    }
+
+    #[test]
+    fn stable_zip_accepts_the_python_compatible_runtime_but_rejects_unknown_files() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("ApricotPlayer.zip");
+        let big = vec![b'x'; 1024 * 1024];
+        let members: Vec<(&str, &[u8])> = vec![
+            ("ApricotPlayer/ApricotPlayer.exe", &big),
+            ("ApricotPlayer/_internal/components/yt-dlp.exe", b"tool"),
+            ("ApricotPlayer/_internal/mpv/libmpv-2.dll", b"library"),
+            ("ApricotPlayer/_internal/node/node.exe", b"node"),
+        ];
+        fs::write(&path, zip_bytes(&members)).unwrap();
+        assert_eq!(
+            validate_update_package(&crate::STABLE_PACKAGE, &path),
+            Ok(())
+        );
+        let mut unexpected = members;
+        unexpected.push(("ApricotPlayer/_internal/unexpected.exe", b"unknown"));
+        fs::write(&path, zip_bytes(&unexpected)).unwrap();
+        assert!(validate_update_package(&crate::STABLE_PACKAGE, &path).is_err());
     }
 
     #[test]

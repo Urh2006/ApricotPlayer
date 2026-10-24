@@ -48,6 +48,8 @@ Spotify content cannot be downloaded or exported. Mixes, Smart Shuffle, lyrics, 
 
 ## Download and install
 
+If you use a portable Rust 2.0 beta, download and extract the new ZIP manually for this upgrade. Those earlier portable updaters do not understand the package layout needed by the Python updater. Installed copies and the Python 1.0.21 portable version can update normally. Your saved data stays in your user profile.
+
 Download packages from the [Releases page](https://github.com/Urh2006/ApricotPlayer/releases): **ApricotPlayerSetup.exe** or **ApricotPlayer.zip** for Windows, and **ApricotPlayer-macOS-arm64.dmg** for Mac. The Mac ZIP is for the in-app updater.
 
 The Mac version requires **Apple silicon and macOS 27 or later**. Copy ApricotPlayer from the DMG to Applications. The app is not notarized by Apple; if the first launch is blocked, open **System Settings > Privacy & Security**, choose **Open Anyway** for ApricotPlayer, and confirm. Use the package from this project's Releases page.

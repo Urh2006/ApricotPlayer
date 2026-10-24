@@ -84,10 +84,8 @@ pub(crate) unsafe fn take_event(lparam: LPARAM) -> Option<CookieEvent> {
 
 /// The bundled `components\yt-dlp.exe`.
 pub(crate) fn ytdlp_executable() -> Option<PathBuf> {
-    std::env::current_exe().ok().and_then(|path| {
-        path.parent().map(|folder| {
-            apricot_platform::app_update::preferred_ytdlp_executable(&folder.join("components"))
-        })
+    apricot_platform::bundled_runtime_directory().map(|folder| {
+        apricot_platform::app_update::preferred_ytdlp_executable(&folder.join("components"))
     })
 }
 

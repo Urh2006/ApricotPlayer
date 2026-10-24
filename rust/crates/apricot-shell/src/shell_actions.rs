@@ -66,9 +66,10 @@ impl Shell {
             return;
         }
         let directory = crate::player_tools::application_directory();
+        let product = apricot_platform::product_name();
         let environment = DiagnosticEnvironment {
             app_version: env!("CARGO_PKG_VERSION").to_owned(),
-            app_label: format!("2 Beta {}", env!("CARGO_PKG_VERSION")),
+            app_label: format!("{product} {}", env!("CARGO_PKG_VERSION")),
             frozen_build: !cfg!(debug_assertions),
             executable: std::env::current_exe()
                 .map(|p| p.display().to_string())

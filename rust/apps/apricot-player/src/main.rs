@@ -219,9 +219,7 @@ fn run_qualification(arguments: &[std::ffi::OsString]) -> Result<bool, Box<dyn s
         .iter()
         .any(|argument| argument == "--qualification-youtube-helper")
     {
-        let executable = std::env::current_exe()?;
-        let helper_path = executable
-            .parent()
+        let helper_path = apricot_platform::bundled_runtime_directory()
             .ok_or("application executable has no parent directory")?
             .join("components")
             .join(apricot_platform::executable_name("apricot-youtube-helper"));
@@ -262,10 +260,8 @@ fn run_qualification(arguments: &[std::ffi::OsString]) -> Result<bool, Box<dyn s
         .iter()
         .any(|argument| argument == "--qualification-ytdlp")
     {
-        let executable = std::env::current_exe()?;
         let ytdlp_path = apricot_platform::app_update::preferred_ytdlp_executable(
-            &executable
-                .parent()
+            &apricot_platform::bundled_runtime_directory()
                 .ok_or("application executable has no parent directory")?
                 .join("components"),
         );
@@ -303,9 +299,7 @@ fn qualify_packaged_playback() -> Result<(), Box<dyn std::error::Error>> {
         MpvLaunchOptions, MpvVideoMode, PlaybackCommand, PlaybackEvent, PlaybackRuntime,
     };
 
-    let executable = std::env::current_exe()?;
-    let root = executable
-        .parent()
+    let root = apricot_platform::bundled_runtime_directory()
         .ok_or("application executable has no parent directory")?;
     let fixture = std::env::temp_dir().join(format!(
         "apricot-player-qualification-{}.wav",

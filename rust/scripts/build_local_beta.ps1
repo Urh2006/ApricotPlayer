@@ -140,6 +140,15 @@ try {
     $AssetsDestination = Join-Path $StagingDir "assets"
     New-Item -ItemType Directory -Path $AssetsDestination -Force | Out-Null
     Copy-Item -LiteralPath $DefaultReachedSound -Destination $AssetsDestination
+    $MetadataDirectory = $StagingDir
+    if ($Stable -and $Channel -eq "stable") {
+        # Python 1.0.21 accepts only the executable and _internal in its ZIP.
+        $MetadataDirectory = Assert-PathInside (Join-Path $StagingDir "_internal") $StagingDir "Compatibility runtime"
+        New-Item -ItemType Directory -Path $MetadataDirectory | Out-Null
+        Get-ChildItem -LiteralPath $StagingDir -Force |
+            Where-Object { $_.Name -ne $ExecutableName -and $_.Name -ne "_internal" } |
+            ForEach-Object { Move-Item -LiteralPath $_.FullName -Destination $MetadataDirectory }
+    }
     $BuildInfo = [ordered]@{
         schema_version = 1
         application_id = $ApplicationId
@@ -166,7 +175,7 @@ try {
             node = "node/node.exe"
         }
     }
-    $BuildInfo | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $StagingDir "build-info.json") -Encoding utf8
+    $BuildInfo | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $MetadataDirectory "build-info.json") -Encoding utf8
 
     $ManifestFiles = @()
     Get-ChildItem -LiteralPath $StagingDir -File -Recurse | Sort-Object FullName | ForEach-Object {
@@ -182,7 +191,7 @@ try {
         application_id = $ApplicationId
         files = $ManifestFiles
     }
-    $Manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $StagingDir "package-manifest.json") -Encoding utf8
+    $Manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $MetadataDirectory "package-manifest.json") -Encoding utf8
 
     New-Item -ItemType Directory -Path $OutputParent -Force | Out-Null
     if (Test-Path -LiteralPath $OutputDir) {

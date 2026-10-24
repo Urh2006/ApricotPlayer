@@ -17,7 +17,7 @@ use windows::{
 const DEFAULT_REACHED_SOUND: &str = "default_reached.wav";
 
 fn default_reached_sound_path() -> Option<PathBuf> {
-    let directory = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let directory = apricot_platform::bundled_runtime_directory()?;
     let path = directory.join("assets").join(DEFAULT_REACHED_SOUND);
     path.is_file().then_some(path)
 }

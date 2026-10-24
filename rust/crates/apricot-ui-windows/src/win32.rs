@@ -10026,9 +10026,7 @@ unsafe fn start_youtube_work(window: HWND, work: SearchWork) {
     let kind = work.kind;
     let limit = work.limit;
     state.pending_youtube_work = Some(PendingYoutubeListWork::Search(work));
-    let Some(components) = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(|parent| parent.join("components")))
+    let Some(components) = application_directory().map(|directory| directory.join("components"))
     else {
         finish_youtube_error_state(window, state, generation, "Application path is unavailable");
         return;
@@ -10166,9 +10164,7 @@ unsafe fn start_youtube_collection_work(window: HWND, work: YoutubeCollectionWor
         return;
     };
     let backend = collection_backend(YOUTUBE_BACKEND, work.kind);
-    let Some(components) = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(|parent| parent.join("components")))
+    let Some(components) = application_directory().map(|directory| directory.join("components"))
     else {
         report_youtube_collection_start_error(
             window,
@@ -12257,9 +12253,7 @@ fn youtube_stream_preference(value: &str) -> YoutubeStreamPreference {
 }
 
 fn application_directory() -> Option<std::path::PathBuf> {
-    std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(std::path::Path::to_path_buf))
+    apricot_platform::bundled_runtime_directory()
 }
 
 fn playback_launch_options(
@@ -12339,7 +12333,7 @@ unsafe fn copy_diagnostic_report(window: HWND) {
     let session_open = state.application.player_session().is_open();
     let environment = apricot_app::diagnostic_report::DiagnosticEnvironment {
         app_version: version.to_owned(),
-        app_label: format!("2 Beta {version}"),
+        app_label: format!("{} {version}", apricot_platform::product_name()),
         frozen_build: !cfg!(debug_assertions),
         executable: std::env::current_exe()
             .map(|path| path.display().to_string())

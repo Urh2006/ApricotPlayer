@@ -1280,13 +1280,8 @@ fn is_youtube_recoverable_error(message: &str) -> bool {
 /// application, otherwise one on `PATH`.
 fn node_executable() -> Option<PathBuf> {
     let file_name = crate::executable_name("node");
-    let bundled = std::env::current_exe()
-        .ok()
-        .and_then(|executable| {
-            executable
-                .parent()
-                .map(|parent| parent.join("node").join(&file_name))
-        })
+    let bundled = crate::bundled_runtime_directory()
+        .map(|directory| directory.join("node").join(&file_name))
         .filter(|path| path.is_file());
     bundled.or_else(|| {
         std::env::var_os("PATH").and_then(|paths| {

@@ -122,7 +122,7 @@ pub fn computer_name() -> String {
 /// executable, in a development build also Homebrew's libmpv.
 #[must_use]
 pub fn mpv_locations() -> Option<(PathBuf, PathBuf)> {
-    let directory = std::env::current_exe().ok()?.parent()?.join("mpv");
+    let directory = bundled_runtime_directory()?.join("mpv");
     #[cfg(windows)]
     {
         let executable = directory.join("mpv.exe");
@@ -152,6 +152,14 @@ pub fn mpv_locations() -> Option<(PathBuf, PathBuf)> {
         let executable = library.with_file_name(executable_name("mpv"));
         Some((executable, library))
     }
+}
+
+/// Bundled tools live beside the executable, or under `_internal` in Windows
+/// packages compatible with the Python 1.x portable updater.
+#[must_use]
+pub fn bundled_runtime_directory() -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    Some(paths::bundled_runtime_root(executable.parent()?))
 }
 
 /// The file name of a bundled or `PATH` program: `name.exe` on Windows and

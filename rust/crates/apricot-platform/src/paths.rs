@@ -67,8 +67,26 @@ fn runtime_directory() -> Result<PathBuf, PathDiscoveryError> {
     let executable = env::current_exe()?;
     executable
         .parent()
-        .map(std::path::Path::to_path_buf)
+        .map(bundled_runtime_root)
         .ok_or(PathDiscoveryError::MissingRuntimeParent(executable))
+}
+
+pub(crate) fn bundled_runtime_root(directory: &std::path::Path) -> PathBuf {
+    let complete =
+        |root: &std::path::Path| root.join("components").is_dir() && root.join("mpv").is_dir();
+    let internal = directory.join("_internal");
+    if complete(&internal) {
+        return internal;
+    }
+    // The YouTube helper runs from the components subfolder.
+    if directory
+        .file_name()
+        .is_some_and(|name| name == "components")
+        && let Some(parent) = directory.parent().filter(|parent| complete(parent))
+    {
+        return parent.to_path_buf();
+    }
+    directory.to_path_buf()
 }
 
 fn discover_windows_paths_for_identity(
@@ -93,6 +111,25 @@ mod tests {
     use std::path::Path;
 
     use crate::{ApplicationIdentity, PlatformPaths};
+
+    #[test]
+    fn bundled_tools_resolve_for_both_portable_layouts_and_the_helper() {
+        let folder = tempfile::tempdir().expect("folder");
+        let root = folder.path();
+        assert_eq!(super::bundled_runtime_root(root), root);
+        let internal = root.join("_internal");
+        std::fs::create_dir_all(internal.join("components")).unwrap();
+        std::fs::create_dir_all(internal.join("mpv")).unwrap();
+        assert_eq!(super::bundled_runtime_root(root), internal);
+        assert_eq!(
+            super::bundled_runtime_root(&internal.join("components")),
+            internal
+        );
+        std::fs::create_dir_all(root.join("components")).unwrap();
+        std::fs::create_dir_all(root.join("mpv")).unwrap();
+        assert_eq!(super::bundled_runtime_root(root), internal);
+        assert_eq!(super::bundled_runtime_root(&root.join("components")), root);
+    }
 
     #[test]
     fn macos_paths_use_the_library_folders_with_the_windows_names() {
