@@ -29,11 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let paths = discover_app_paths()?;
-    let defaults = SettingsDocument::with_platform_defaults(
-        paths.downloads.to_string_lossy().into_owned(),
-        paths.cache.to_string_lossy().into_owned(),
-        "beta",
-    );
+    let defaults = startup_settings_defaults(&paths);
     let settings_paths = SettingsPaths::for_app_data(&paths.app_data, &paths.legacy_app_data);
     // Python `first_run_without_settings` and `settings_file_existed`.
     let settings_file_existed = settings_paths.primary.exists();
@@ -166,6 +162,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(Into::into)
 }
 
+fn startup_settings_defaults(paths: &apricot_platform::PlatformPaths) -> SettingsDocument {
+    let channel = if apricot_updater::version_is_prerelease(env!("CARGO_PKG_VERSION")) {
+        "beta"
+    } else {
+        "stable"
+    };
+    SettingsDocument::with_platform_defaults(
+        paths.downloads.to_string_lossy().into_owned(),
+        paths.cache.to_string_lossy().into_owned(),
+        channel,
+    )
+}
+
 /// Python `load_settings`: settings of Python 1.0 on the stable channel move
 /// to beta while this build is a pre-release; the change is saved at once.
 fn migrate_update_settings(settings: &mut SettingsController) {
@@ -212,6 +221,8 @@ fn run_qualification(arguments: &[std::ffi::OsString]) -> Result<bool, Box<dyn s
                 "CARGO_PKG_VERSION"
             )));
             assert_eq!(apricot_updater::APP_PACKAGE.display_name, "ApricotPlayer");
+            let paths = apricot_platform::discover_app_paths()?;
+            assert_eq!(startup_settings_defaults(&paths).update_channel, "stable");
         }
         return Ok(true);
     }
@@ -400,4 +411,33 @@ fn startup_file_argument(arguments: &[std::ffi::OsString]) -> Option<PathBuf> {
         .iter()
         .find(|argument| !argument.to_string_lossy().starts_with("--"))
         .map(PathBuf::from)
+}
+
+#[cfg(all(test, feature = "release-stable"))]
+mod stable_release_tests {
+    use super::*;
+
+    #[test]
+    fn fresh_settings_use_stable_without_overwriting_an_existing_channel_choice() {
+        let paths = apricot_platform::PlatformPaths::from_windows_roots(
+            std::path::Path::new("profile"),
+            std::path::Path::new("home"),
+            std::path::Path::new("application"),
+        );
+        let defaults = startup_settings_defaults(&paths);
+        let fresh = SettingsDocument::from_value_with_defaults(
+            &serde_json::json!({"language": "en"}),
+            defaults.clone(),
+        )
+        .unwrap();
+        assert_eq!(fresh.update_channel, "stable");
+        for channel in ["stable", "beta"] {
+            let existing = SettingsDocument::from_value_with_defaults(
+                &serde_json::json!({"update_channel": channel}),
+                defaults.clone(),
+            )
+            .unwrap();
+            assert_eq!(existing.update_channel, channel);
+        }
+    }
 }

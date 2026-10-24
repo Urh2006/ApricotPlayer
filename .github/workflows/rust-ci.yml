@@ -56,4 +56,4 @@ jobs:
         run: cargo test --workspace --locked --no-fail-fast
 
       - name: Check public stable update policy
-        run: cargo test -p apricot-updater --locked --features release-stable,stable-identity
+        run: cargo test -p apricot-player -p apricot-updater --locked --features apricot-player/release-stable,apricot-player/stable-identity
