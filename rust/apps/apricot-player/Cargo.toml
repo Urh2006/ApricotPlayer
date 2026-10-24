@@ -1,0 +1,27 @@
+[package]
+name = "apricot-player"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+apricot-app.workspace = true
+apricot-core.workspace = true
+apricot-media.workspace = true
+apricot-platform.workspace = true
+apricot-playback.workspace = true
+apricot-storage.workspace = true
+apricot-ui-windows.workspace = true
+apricot-updater.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apricot-ui-macos.workspace = true
+
+[features]
+release-beta = ["apricot-updater/release-beta"]
+stable-identity = ["apricot-platform/stable-identity"]
+
+[lints]
+workspace = true

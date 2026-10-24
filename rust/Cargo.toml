@@ -1,0 +1,116 @@
+[workspace]
+resolver = "3"
+exclude = ["vendor"]
+members = [
+    "apps/apricot-player",
+    "apps/apricot-youtube-helper",
+    "crates/apricot-app",
+    "crates/apricot-core",
+    "crates/apricot-media",
+    "crates/apricot-platform",
+    "crates/apricot-shell",
+    "crates/apricot-playback",
+    "crates/apricot-spotify",
+    "crates/apricot-storage",
+    "crates/apricot-test-support",
+    "crates/apricot-ui-macos",
+    "crates/apricot-ui-windows",
+    "crates/apricot-updater",
+    "tools/media-process-spike",
+    "tools/libmpv-spike",
+    "tools/mpv-ipc-spike",
+    "tools/windows-accessibility-spike",
+    "tools/macos-accessibility-spike",
+]
+
+[workspace.package]
+version = "2.0.0-beta.26"
+edition = "2024"
+rust-version = "1.98"
+publish = false
+
+[workspace.dependencies]
+apricot-app = { path = "crates/apricot-app" }
+apricot-core = { path = "crates/apricot-core" }
+apricot-media = { path = "crates/apricot-media" }
+apricot-platform = { path = "crates/apricot-platform" }
+apricot-shell = { path = "crates/apricot-shell" }
+apricot-playback = { path = "crates/apricot-playback" }
+apricot-spotify = { path = "crates/apricot-spotify" }
+apricot-storage = { path = "crates/apricot-storage" }
+apricot-test-support = { path = "crates/apricot-test-support" }
+apricot-ui-macos = { path = "crates/apricot-ui-macos" }
+apricot-ui-windows = { path = "crates/apricot-ui-windows" }
+apricot-updater = { path = "crates/apricot-updater" }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+encoding_rs = "0.8.41"
+libloading = "0.8"
+rand = "0.9"
+quick-xml = "0.42.0"
+reqwest = { version = "=0.13.4", default-features = false, features = ["blocking", "query", "rustls"] }
+roxmltree = "0.21.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1"
+url = { version = "2", features = ["serde"] }
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_Audio",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_DataExchange",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_JobObjects",
+    "Win32_System_Com",
+    "Win32_System_Pipes",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_UI_Accessibility",
+    "Win32_UI_Controls",
+    "Win32_UI_Controls_RichEdit",
+    "Win32_UI_Controls_Dialogs",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+
+# Development builds keep only line tables, so panics and backtraces stay
+# readable while rust/target stays small (AGENTS.md, Prostor na disku).
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+# Narrow local patch, see vendor/librespot-connect/APRICOT-PATCH.md (SD-1).
+[patch.crates-io]
+librespot-connect = { path = "vendor/librespot-connect" }
+librespot-core = { path = "vendor/librespot-core" }
+librespot-playback = { path = "vendor/librespot-playback" }
+librespot-protocol = { path = "vendor/librespot-protocol" }

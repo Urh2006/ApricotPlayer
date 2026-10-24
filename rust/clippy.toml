@@ -1,0 +1,2 @@
+# Product and Apple framework names that are prose, not code.
+doc-valid-idents = ["AppKit", "VoiceOver", "macOS", ".."]

@@ -1,0 +1,32 @@
+[package]
+name = "apricot-ui-macos"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# The native AppKit UI of the macOS edition. It renders what `apricot-shell`
+# decides, with native controls so VoiceOver gets real roles and names.
+[dependencies]
+apricot-app.workspace = true
+apricot-core.workspace = true
+apricot-platform.workspace = true
+apricot-shell.workspace = true
+apricot-spotify.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apricot-playback.workspace = true
+dispatch2 = "0.3.1"
+libloading.workspace = true
+objc2 = "0.6.5"
+objc2-app-kit = "0.3.2"
+objc2-core-foundation = "0.3.2"
+objc2-core-video = "0.3.2"
+objc2-foundation = "0.3.2"
+objc2-open-gl = "0.3.2"
+objc2-quartz-core = { version = "0.3.2", features = ["objc2-open-gl", "objc2-core-video"] }
+block2 = "0.6.2"
+objc2-user-notifications = "0.3.2"
+
+[lints]
+workspace = true

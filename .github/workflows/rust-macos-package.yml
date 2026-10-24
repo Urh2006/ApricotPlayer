@@ -1,0 +1,107 @@
+name: Rust macOS package
+
+# Builds the macOS application bundle, its DMG and its updater zip with
+# rust/scripts/build_macos_app.sh and keeps them as a workflow artifact.
+# It runs when the packaging itself changes or when started by hand, and
+# never publishes a release.
+on:
+  push:
+    branches: [rust-2.0]
+    paths:
+      - "rust/scripts/build_macos_app.sh"
+      - "rust/packaging/macos/**"
+      - ".github/workflows/rust-macos-package.yml"
+  workflow_dispatch:
+    inputs:
+      release_identity:
+        description: "Build the public ApricotPlayer identity and beta updater"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: macOS package
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: rust
+    env:
+      CARGO_TERM_COLOR: always
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+
+      - name: Install mpv, FFmpeg and dylibbundler
+        run: brew install mpv ffmpeg dylibbundler
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: rust
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Qualify real playback
+        env:
+          APRICOT_TEST_MPV: /opt/homebrew/lib/mpv
+          APRICOT_TEST_FFMPEG: /opt/homebrew/bin/ffmpeg
+        run: |
+          cargo test -p apricot-playback real_libmpv --locked -- --ignored --test-threads=1
+          cargo test -p apricot-platform real_ffmpeg_finds_bpm_from_decoded_spotify_pcm --locked -- --ignored
+
+      - name: Build the package
+        env:
+          RELEASE_IDENTITY: ${{ inputs.release_identity }}
+          # The project's self-signed certificate keeps the app's identity
+          # stable across updates (Keychain); see build_macos_app.sh.
+          MACOS_SIGNING_P12: ${{ secrets.MACOS_SIGNING_P12 }}
+          MACOS_SIGNING_PASSWORD: ${{ secrets.MACOS_SIGNING_PASSWORD }}
+        run: |
+          test "$(uname -m)" = arm64
+          if [ "$RELEASE_IDENTITY" = true ]; then
+            ./scripts/build_macos_app.sh --stable --channel beta
+          else
+            ./scripts/build_macos_app.sh
+          fi
+
+      - name: Verify the archived application
+        run: |
+          VERSION=$(cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "apricot-player"))')
+          OUTPUT="$PWD/local-dist/macos/$VERSION"
+          VERIFY=$(mktemp -d /private/tmp/apricot-ci-verify.XXXXXX)
+          trap 'rm -rf "$VERIFY"' EXIT
+          ditto -x -k "$OUTPUT/"*.zip "$VERIFY"
+          APP=$(find "$VERIFY" -maxdepth 1 -name '*.app' -print)
+          codesign --verify --deep --strict "$APP"
+          EXE=$(python3 -c 'import plistlib,sys; print(plistlib.load(open(sys.argv[1],"rb"))["CFBundleExecutable"])' "$APP/Contents/Info.plist")
+          "$APP/Contents/MacOS/$EXE" --qualification-smoke
+          "$APP/Contents/MacOS/$EXE" --qualification-ytdlp
+          "$APP/Contents/MacOS/$EXE" --qualification-youtube-helper
+          "$APP/Contents/MacOS/$EXE" --qualification-playback
+          hdiutil verify "$OUTPUT/"*.dmg
+          cp "$APP/Contents/Resources/build-info.json" "$OUTPUT/build-info.json"
+          python3 - "$OUTPUT/build-info.json" "$GITHUB_SHA" <<'PY'
+          import json, sys
+          info = json.load(open(sys.argv[1]))
+          assert info["commit"] == sys.argv[2] and info["dirty"] is False, info
+          print(json.dumps(info, indent=2))
+          PY
+
+      - name: Keep the package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: apricotplayer-macos-arm64
+          path: |
+            rust/local-dist/macos/*/*.dmg
+            rust/local-dist/macos/*/*.zip
+            rust/local-dist/macos/*/SHA256SUMS.txt
+            rust/local-dist/macos/*/build-info.json
+          if-no-files-found: error

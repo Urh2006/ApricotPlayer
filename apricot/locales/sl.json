@@ -996,5 +996,7 @@
     "format_status_audio": "Format: {container} zvok ({audio})",
     "format_status_simple": "Format: {container}",
     "format_status_video_with_audio_bitrate": "Format: {container} {resolution} video, {audio} zvok ({bitrate})",
-    "format_status_audio_bitrate": "Format: {container} zvok ({bitrate})"
+    "format_status_audio_bitrate": "Format: {container} zvok ({bitrate})",
+    "spotify_listening_history": "Zgodovina poslušanja (eksperimentalno)",
+    "spotify_listening_history_warning": "Poročanje zgodovine poslušanja je eksperimentalno in uporablja neuradni vmesnik Spotify. Povečuje tveganje omejitve ali blokade tvojega Spotify računa. Spotify lahko zapise zavrne ali vmesnik spremeni brez opozorila. Želiš funkcijo vklopiti na lastno odgovornost?"
 }

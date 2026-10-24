@@ -7,9 +7,10 @@
 - Trenutna razvojna veja: `main`.
 - Stabilna 1.0.21 uporablja seekable HLS video in zvok, ohranja kakovosten AAC zvok ter uskladi shranjeni pitch z zvokom živega predvajalnika.
 - Obstoječi 1.0 roadmap in potrjeni AudioVault obseg sta izvedena.
-- Popoln macOS feature-parity port je potrjeno prihodnje delo. Implementacija se
-  še ni začela; trajni plan in acceptance manifest sta v
-  `docs/MACOS_PORT_PLAN.md`.
+- Popoln macOS feature-parity port je potrjeno prihodnje delo. Najprej bo izveden
+  popoln Windows Rust 2.0 rewrite; macOS sledi po Windows parity gateu.
+- Rust rewrite je splaniran v `docs/RUST_REWRITE_PLAN.md`, popolna pogodba
+  funkcijske paritete pa je `docs/RUST_PARITY_MANIFEST.md`.
 
 To je informativni posnetek. Če se številke razlikujejo, imajo prednost `apricot/__init__.py`, `apricot/constants.py`, Git zgodovina, `CHANGELOG.md` in zadnje release notes.
 

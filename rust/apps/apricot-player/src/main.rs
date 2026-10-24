@@ -1,0 +1,401 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
+use std::path::PathBuf;
+
+use apricot_app::{ActivationRequest, Application, MainMenuAvailability, SettingsController};
+use apricot_core::{
+    action::ACTIONS, locale::LANGUAGES, menu::CUSTOMIZABLE_MAIN_MENU, setting::SettingId,
+};
+use apricot_media::{YoutubeCommand, YoutubeEngine, YoutubeResponsePayload};
+use apricot_platform::{
+    SingleInstanceOutcome, YoutubeHelperProcess, YtDlpYoutubeEngine, acquire_single_instance,
+    discover_app_paths, sync_startup_registration,
+};
+use apricot_storage::{
+    BookmarkFile, LastPlayerSessionFile, MediaListFile, NotificationFile, PlaybackPositionFile,
+    PlaybackQueueFile, RssFeedFile, SettingsDocument, SettingsPaths, SubscriptionFile,
+    UserPlaylistFile,
+};
+use apricot_updater::UpdateChannel;
+
+#[allow(clippy::too_many_lines)]
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    let start_hidden = arguments
+        .iter()
+        .any(|argument| argument == "--start-in-tray");
+    if run_qualification(&arguments)? {
+        return Ok(());
+    }
+
+    let paths = discover_app_paths()?;
+    let defaults = SettingsDocument::with_platform_defaults(
+        paths.downloads.to_string_lossy().into_owned(),
+        paths.cache.to_string_lossy().into_owned(),
+        "beta",
+    );
+    let settings_paths = SettingsPaths::for_app_data(&paths.app_data, &paths.legacy_app_data);
+    // Python `first_run_without_settings` and `settings_file_existed`.
+    let settings_file_existed = settings_paths.primary.exists();
+    let first_run_without_settings = !settings_file_existed && !settings_paths.legacy.exists();
+    let mut settings = SettingsController::load(settings_paths, defaults);
+    migrate_update_settings(&mut settings);
+    let startup_file = startup_file_argument(&arguments);
+    // Python `mark_update_relaunch_window` and
+    // `suppress_already_open_for_update`.
+    if apricot_platform::app_update::relaunch_requested(&arguments) {
+        apricot_platform::app_update::mark_update_relaunch_window(
+            &paths.app_data,
+            unix_timestamp(),
+        );
+    }
+    let instance = acquire_single_instance(apricot_platform::BUILD_IDENTITY)?;
+    let _instance_guard = match instance {
+        SingleInstanceOutcome::Primary(guard) => guard,
+        SingleInstanceOutcome::Secondary => {
+            if apricot_platform::app_update::suppress_already_open_for_update(
+                &paths.app_data,
+                unix_timestamp(),
+            ) {
+                return Ok(());
+            }
+            #[cfg(windows)]
+            if let Some(path) = startup_file {
+                apricot_ui_windows::forward_to_existing(&ActivationRequest::OpenFile(path))?;
+            } else if settings.current().close_to_tray {
+                apricot_ui_windows::forward_to_existing(&ActivationRequest::Show)?;
+            } else {
+                let catalog = apricot_app::embedded_catalog(&settings.current().language);
+                let message = catalog.text("already_open");
+                apricot_ui_windows::show_already_open(message);
+            }
+            #[cfg(target_os = "macos")]
+            {
+                use apricot_platform::activation::{ActivationMessage, forward};
+                if let Some(path) = startup_file {
+                    forward(
+                        apricot_platform::BUILD_IDENTITY,
+                        &ActivationMessage::OpenFile(path),
+                    )?;
+                } else if settings.current().close_to_tray {
+                    forward(apricot_platform::BUILD_IDENTITY, &ActivationMessage::Show)?;
+                } else {
+                    let catalog = apricot_app::embedded_catalog(&settings.current().language);
+                    apricot_ui_macos::show_already_open(catalog.text("already_open"));
+                }
+            }
+            return Ok(());
+        }
+    };
+    if !settings_file_existed {
+        let _ = settings.save();
+    }
+    if let Ok(executable) = std::env::current_exe() {
+        let _ = sync_startup_registration(
+            apricot_platform::BUILD_IDENTITY,
+            &executable,
+            settings.current().start_with_windows,
+        );
+    }
+    let mut application = Application::new(settings, MainMenuAvailability::default());
+    let legacy_queue = PlaybackQueueFile::new(paths.legacy_app_data.join("playback_queue.json"));
+    application.configure_playback_queue(
+        PlaybackQueueFile::new(paths.app_data.join("playback_queue.json")),
+        &legacy_queue,
+    );
+    application.configure_media_collections(
+        MediaListFile::new(paths.app_data.join("favorites.json")),
+        &MediaListFile::new(paths.legacy_app_data.join("favorites.json")),
+        MediaListFile::new(paths.app_data.join("history.json")),
+        &MediaListFile::new(paths.legacy_app_data.join("history.json")),
+    );
+    application.configure_notifications(
+        NotificationFile::new(paths.app_data.join("notifications.json")),
+        &NotificationFile::new(paths.legacy_app_data.join("notifications.json")),
+    );
+    application.configure_subscriptions(
+        SubscriptionFile::new(paths.app_data.join("subscriptions.json")),
+        &SubscriptionFile::new(paths.legacy_app_data.join("subscriptions.json")),
+    );
+    application.configure_rss_feeds(
+        RssFeedFile::new(paths.app_data.join("rss_feeds.json")),
+        &RssFeedFile::new(paths.legacy_app_data.join("rss_feeds.json")),
+    );
+    application.configure_user_playlists(
+        UserPlaylistFile::new(paths.app_data.join("playlists.json")),
+        &UserPlaylistFile::new(paths.legacy_app_data.join("playlists.json")),
+    );
+    application.configure_bookmarks(
+        BookmarkFile::new(paths.app_data.join("bookmarks.json")),
+        &BookmarkFile::new(paths.legacy_app_data.join("bookmarks.json")),
+        unix_timestamp(),
+    );
+    application.configure_playback_positions(
+        PlaybackPositionFile::new(paths.app_data.join("playback_positions.json")),
+        &PlaybackPositionFile::new(paths.legacy_app_data.join("playback_positions.json")),
+    );
+    application.configure_last_player_session(
+        LastPlayerSessionFile::new(paths.app_data.join("last_player_session.json")),
+        &LastPlayerSessionFile::new(paths.legacy_app_data.join("last_player_session.json")),
+    );
+    // macOS asks inside its own run loop; see `run_application` below.
+    #[cfg(target_os = "macos")]
+    let prompt_language =
+        application.initial_language_prompt_due(first_run_without_settings, start_hidden);
+    if application.initial_language_prompt_due(first_run_without_settings, start_hidden) {
+        #[cfg(windows)]
+        {
+            let selected =
+                apricot_ui_windows::choose_initial_language(&application.settings().language)?;
+            application.complete_initial_language(selected)?;
+        }
+    }
+    if let Some(path) = startup_file {
+        application.enqueue_activation(ActivationRequest::OpenFile(path));
+    }
+    #[cfg(target_os = "macos")]
+    return apricot_ui_macos::run_application(
+        application,
+        env!("CARGO_PKG_VERSION"),
+        start_hidden,
+        prompt_language,
+    )
+    .map_err(Into::into);
+    #[cfg(not(target_os = "macos"))]
+    apricot_ui_windows::run_application(application, env!("CARGO_PKG_VERSION"), start_hidden)
+        .map_err(Into::into)
+}
+
+/// Python `load_settings`: settings of Python 1.0 on the stable channel move
+/// to beta while this build is a pre-release; the change is saved at once.
+fn migrate_update_settings(settings: &mut SettingsController) {
+    let current = settings.current();
+    let (channel, skipped) = apricot_updater::migrated_update_settings(
+        env!("CARGO_PKG_VERSION"),
+        &current.update_channel,
+        &current.skipped_update_version,
+    );
+    if channel == current.update_channel && skipped == current.skipped_update_version {
+        return;
+    }
+    let applied = settings.set_values([
+        (SettingId::UpdateChannel, serde_json::json!(channel)),
+        (SettingId::SkippedUpdateVersion, serde_json::json!(skipped)),
+    ]);
+    if applied.is_ok() && !settings.save_is_blocked() {
+        let _ = settings.save();
+    }
+}
+
+fn unix_timestamp() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |duration| duration.as_secs_f64())
+}
+
+fn run_qualification(arguments: &[std::ffi::OsString]) -> Result<bool, Box<dyn std::error::Error>> {
+    if arguments
+        .iter()
+        .any(|argument| argument == "--qualification-smoke")
+    {
+        assert_eq!(SettingId::ALL.len(), 116);
+        // 91 Python actions plus the Spotify ones, 19 Python menu items plus Spotify.
+        assert_eq!(apricot_core::PYTHON_BASELINE_ACTIONS, 91);
+        assert_eq!(ACTIONS.len(), 105);
+        assert_eq!(CUSTOMIZABLE_MAIN_MENU.len(), 20);
+        assert_eq!(LANGUAGES.len(), 27);
+        assert!(!UpdateChannel::LocalOnly.allows_remote_install());
+        return Ok(true);
+    }
+    if arguments
+        .iter()
+        .any(|argument| argument == "--qualification-youtube-helper")
+    {
+        let executable = std::env::current_exe()?;
+        let helper_path = executable
+            .parent()
+            .ok_or("application executable has no parent directory")?
+            .join("components")
+            .join(apricot_platform::executable_name("apricot-youtube-helper"));
+        let helper = YoutubeHelperProcess::start(&helper_path)?;
+        assert!(!helper.helper_version().is_empty());
+        assert!(!helper.backend_revision().is_empty());
+        return Ok(true);
+    }
+    // The installer registers the same current-user values as Settings'
+    // "Set default player"; the release script turns these lines into its
+    // registry section. Arguments: the flag, then the installed executable.
+    if let Some(position) = arguments
+        .iter()
+        .position(|argument| argument == "--qualification-media-associations")
+    {
+        let executable = arguments
+            .get(position + 1)
+            .map(PathBuf::from)
+            .ok_or("--qualification-media-associations needs an executable path")?;
+        let writes = apricot_platform::windows_registration::media_association_writes(
+            apricot_platform::BUILD_IDENTITY,
+            &executable,
+        )?;
+        for write in writes {
+            let (kind, data) = match write.data {
+                apricot_platform::windows_registration::RegistryData::Text(text) => {
+                    ("string", text)
+                }
+                apricot_platform::windows_registration::RegistryData::Empty => {
+                    ("none", String::new())
+                }
+            };
+            println!("{}\t{}\t{kind}\t{data}", write.subkey, write.name);
+        }
+        return Ok(true);
+    }
+    if arguments
+        .iter()
+        .any(|argument| argument == "--qualification-ytdlp")
+    {
+        let executable = std::env::current_exe()?;
+        let ytdlp_path = apricot_platform::app_update::preferred_ytdlp_executable(
+            &executable
+                .parent()
+                .ok_or("application executable has no parent directory")?
+                .join("components"),
+        );
+        let mut engine = YtDlpYoutubeEngine::new(&ytdlp_path)?;
+        let response = engine.execute(YoutubeCommand::Hello)?;
+        assert!(matches!(
+            response,
+            YoutubeResponsePayload::Hello {
+                helper_version,
+                backend_revision,
+                ..
+            } if !helper_version.is_empty() && helper_version == backend_revision
+        ));
+        return Ok(true);
+    }
+    if arguments
+        .iter()
+        .any(|argument| argument == "--qualification-playback")
+    {
+        qualify_packaged_playback()?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn qualify_packaged_playback() -> Result<(), Box<dyn std::error::Error>> {
+    use std::{
+        collections::BTreeMap,
+        fs,
+        time::{Duration, Instant},
+    };
+
+    use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
+    use apricot_playback::{
+        MpvLaunchOptions, MpvVideoMode, PlaybackCommand, PlaybackEvent, PlaybackRuntime,
+    };
+
+    let executable = std::env::current_exe()?;
+    let root = executable
+        .parent()
+        .ok_or("application executable has no parent directory")?;
+    let fixture = std::env::temp_dir().join(format!(
+        "apricot-player-qualification-{}.wav",
+        std::process::id()
+    ));
+    write_silent_wav(&fixture)?;
+    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        let mut options = MpvLaunchOptions::new(
+            root.join("mpv")
+                .join(apricot_platform::executable_name("mpv")),
+        );
+        #[cfg(windows)]
+        let library_name = "libmpv-2.dll";
+        #[cfg(target_os = "macos")]
+        let library_name = "libmpv.2.dylib";
+        #[cfg(not(any(windows, target_os = "macos")))]
+        let library_name = "libmpv.so.2";
+        options.library = Some(root.join("mpv").join(library_name));
+        options.video_mode = MpvVideoMode::AudioOnly;
+        options.audio_driver = Some("null".to_owned());
+        let item = MediaItem {
+            id: MediaId("qualification".to_owned()),
+            source: MediaSource::Local,
+            kind: MediaKind::Audio,
+            title: "Qualification".to_owned(),
+            url: None,
+            stream_url: None,
+            external_audio_url: None,
+            local_path: Some(fixture.to_string_lossy().into_owned()),
+            channel: String::new(),
+            duration_seconds: None,
+            metadata: BTreeMap::new(),
+        };
+        let runtime = PlaybackRuntime::spawn()?;
+        runtime.start(1, options, item)?;
+        let deadline = Instant::now() + Duration::from_secs(4);
+        loop {
+            if let Some(update) = runtime.poll_update()? {
+                match update.event {
+                    PlaybackEvent::Started => break,
+                    PlaybackEvent::Failed(error) => return Err(error.into()),
+                    _ => {}
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err("packaged libmpv playback timed out".into());
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        runtime.execute(1, PlaybackCommand::SetVolume(42.0))?;
+        runtime.execute(
+            1,
+            PlaybackCommand::SeekAbsolute {
+                seconds: 0.05,
+                exact: true,
+            },
+        )?;
+        runtime.close(1)?;
+        Ok(())
+    })();
+    let _ = fs::remove_file(&fixture);
+    result
+}
+
+fn write_silent_wav(path: &std::path::Path) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let sample_rate = 44_100_u32;
+    let channels = 2_u16;
+    let bits_per_sample = 16_u16;
+    let frames = sample_rate / 4;
+    let data_size = frames * u32::from(channels) * u32::from(bits_per_sample / 8);
+    let mut file = std::fs::File::create(path)?;
+    file.write_all(b"RIFF")?;
+    file.write_all(&(36 + data_size).to_le_bytes())?;
+    file.write_all(b"WAVEfmt ")?;
+    file.write_all(&16_u32.to_le_bytes())?;
+    file.write_all(&1_u16.to_le_bytes())?;
+    file.write_all(&channels.to_le_bytes())?;
+    file.write_all(&sample_rate.to_le_bytes())?;
+    let byte_rate = sample_rate * u32::from(channels) * u32::from(bits_per_sample / 8);
+    file.write_all(&byte_rate.to_le_bytes())?;
+    let block_align = channels * (bits_per_sample / 8);
+    file.write_all(&block_align.to_le_bytes())?;
+    file.write_all(&bits_per_sample.to_le_bytes())?;
+    file.write_all(b"data")?;
+    file.write_all(&data_size.to_le_bytes())?;
+    file.write_all(&vec![
+        0_u8;
+        usize::try_from(data_size)
+            .expect("qualification WAV size fits usize")
+    ])?;
+    Ok(())
+}
+
+fn startup_file_argument(arguments: &[std::ffi::OsString]) -> Option<PathBuf> {
+    arguments
+        .iter()
+        .find(|argument| !argument.to_string_lossy().starts_with("--"))
+        .map(PathBuf::from)
+}

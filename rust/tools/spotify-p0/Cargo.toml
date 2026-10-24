@@ -1,0 +1,28 @@
+[package]
+name = "spotify-p0"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Spotify P0 feasibility spike for ApricotPlayer 2.0 (not part of the product build)"
+
+# Separate workspace root so the LibreSpot dependency tree does not enter the
+# product Cargo.lock before the P0 decision.
+[workspace]
+
+[dependencies]
+librespot-core = { version = "=0.8.0", default-features = false, features = ["native-tls"] }
+librespot-oauth = { version = "=0.8.0", default-features = false, features = ["native-tls"] }
+librespot-discovery = { version = "=0.8.0", default-features = false, features = ["with-libmdns", "native-tls"] }
+librespot-playback = { version = "=0.8.0", default-features = false, features = ["native-tls"] }
+librespot-connect = { version = "=0.8.0", default-features = false, features = ["native-tls"] }
+librespot-metadata = { version = "=0.8.0", default-features = false, features = ["native-tls"] }
+librespot-protocol = "=0.8.0"
+tokio = { version = "1", features = ["full"] }
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["native-tls", "json"] }
+serde_json = "1"
+anyhow = "1"
+protobuf = "3"
+libloading = "0.8"
+log = "0.4"
+env_logger = "0.11"

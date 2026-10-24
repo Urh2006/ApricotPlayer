@@ -34,3 +34,8 @@ test_itunes_rss.py
 ui_methods.txt
 update_wx.py
 wx_main_cleaned.py
+
+# Rust 2.0 local builds and private side-by-side installer output.
+/rust/target/
+/rust/local-dist/
+/rust/.cargo-local/

@@ -1,0 +1,848 @@
+//! Changes to the account's Spotify data (`docs/SPOTIFY_PLAN.md` 3.3, 5.1):
+//! Liked Songs and the library, playlist items and playlists. Every change
+//! uses the request P0 verified live (`docs/spotify-p0/P0_EVIDENCE.md` 4)
+//! and names exact occurrences (`uid`), never positions. Saved states are
+//! read back after the change, so the UI announces Spotify's state.
+
+#![allow(clippy::missing_errors_doc)] // Every change fails only with `ApiError`.
+
+use std::{
+    future::Future,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use librespot_core::Session;
+use serde_json::{Value, json};
+
+use crate::{
+    api::{Api, ApiError},
+    catalog,
+};
+
+/// One change the UI asks for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LibraryEdit {
+    SetProfilePublication {
+        uri: String,
+        published: bool,
+    },
+    ToggleProfilePublication {
+        uri: String,
+    },
+    SetSaved {
+        uris: Vec<String>,
+        saved: bool,
+    },
+    /// Like or unlike a track or episode, save or remove an album,
+    /// playlist, show, or follow or unfollow an artist or a profile: the
+    /// opposite of the current state.
+    ToggleSaved {
+        uri: String,
+    },
+    AddToPlaylist {
+        playlist: String,
+        uris: Vec<String>,
+    },
+    RemoveFromPlaylist {
+        playlist: String,
+        uids: Vec<String>,
+    },
+    /// Moves one occurrence before or after another one.
+    MoveInPlaylist {
+        playlist: String,
+        uid: String,
+        before: bool,
+        other_uid: String,
+    },
+    CreatePlaylist {
+        name: String,
+    },
+    RenamePlaylist {
+        uri: String,
+        name: String,
+    },
+    /// A new playlist description; empty removes it.
+    DescribePlaylist {
+        uri: String,
+        description: String,
+    },
+    /// Private (only the owner sees it) or public, the opposite of now.
+    ToggleVisibility {
+        uri: String,
+    },
+    /// Spotify's "Hide song" (or showing it again), from a personalised
+    /// playlist `context`; Spotify keeps it for the whole account.
+    Hide {
+        uri: String,
+        context: String,
+        hidden: bool,
+    },
+}
+
+/// What a change did, as Spotify confirms it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EditOutcome {
+    ProfilePublication { uri: String, published: bool },
+    SavedBatch { uris: Vec<String>, saved: bool },
+    Saved { uri: String, saved: bool },
+    AddedToPlaylist { playlist: String, count: usize },
+    RemovedFromPlaylist { playlist: String, count: usize },
+    Moved { playlist: String },
+    Created { uri: String, name: String },
+    Renamed { uri: String, name: String },
+    Described { uri: String },
+    Visibility { uri: String, private: bool },
+    Hidden { uri: String, hidden: bool },
+}
+
+fn playlist_id(uri: &str) -> Result<&str, ApiError> {
+    uri.strip_prefix("spotify:playlist:")
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| ApiError::Shape(format!("not a playlist: {uri}")))
+}
+
+/// Liked Songs (tracks, episodes) or the library (everything else); `saved`
+/// is the state Spotify reports afterwards.
+pub async fn set_saved(
+    api: &Api,
+    session: &Session,
+    uri: &str,
+    saved: bool,
+) -> Result<bool, ApiError> {
+    let operation = if saved {
+        "addToLibrary"
+    } else {
+        "removeFromLibrary"
+    };
+    api.pathfinder(session, operation, json!({ "libraryItemUris": [uri] }))
+        .await?;
+    let confirmed = catalog::saved(api, session, &[uri.to_owned()]).await?;
+    confirmed
+        .first()
+        .copied()
+        .ok_or_else(|| ApiError::Shape("no saved state".into()))
+}
+
+#[allow(clippy::too_many_lines)]
+pub async fn apply(
+    api: &Api,
+    session: &Session,
+    edit: LibraryEdit,
+) -> Result<EditOutcome, ApiError> {
+    match edit {
+        LibraryEdit::SetProfilePublication { uri, published } => {
+            let published = set_profile_publication(api, session, &uri, published).await?;
+            Ok(EditOutcome::ProfilePublication { uri, published })
+        }
+        LibraryEdit::ToggleProfilePublication { uri } => {
+            let published = toggle_profile_publication(api, session, &uri).await?;
+            Ok(EditOutcome::ProfilePublication { uri, published })
+        }
+        LibraryEdit::SetSaved { uris, saved } => {
+            let operation = if saved {
+                "addToLibrary"
+            } else {
+                "removeFromLibrary"
+            };
+            update_saved(&uris, saved, |chunk| async move {
+                api.pathfinder(session, operation, json!({ "libraryItemUris": chunk }))
+                    .await?;
+                catalog::saved(api, session, &chunk).await
+            })
+            .await?;
+            Ok(EditOutcome::SavedBatch { uris, saved })
+        }
+        LibraryEdit::ToggleSaved { uri } if uri.starts_with("spotify:playlist:") => {
+            let saved = toggle_playlist_in_library(api, session, &uri).await?;
+            Ok(EditOutcome::Saved { uri, saved })
+        }
+        LibraryEdit::ToggleSaved { uri } if uri.starts_with("spotify:user:") => {
+            let saved = toggle_following(api, session, &uri).await?;
+            Ok(EditOutcome::Saved { uri, saved })
+        }
+        LibraryEdit::ToggleSaved { uri } => {
+            let now = catalog::saved(api, session, std::slice::from_ref(&uri))
+                .await?
+                .first()
+                .copied()
+                .unwrap_or(false);
+            let saved = set_saved(api, session, &uri, !now).await?;
+            Ok(EditOutcome::Saved { uri, saved })
+        }
+        LibraryEdit::AddToPlaylist { playlist, uris } => {
+            for chunk in uris.chunks(100) {
+                api.pathfinder(
+                    session,
+                    "addToPlaylist",
+                    json!({
+                        "playlistUri": playlist,
+                        "playlistItemUris": chunk,
+                        "newPosition": { "moveType": "BOTTOM_OF_PLAYLIST", "fromUid": null },
+                    }),
+                )
+                .await?;
+            }
+            Ok(EditOutcome::AddedToPlaylist {
+                playlist,
+                count: uris.len(),
+            })
+        }
+        LibraryEdit::RemoveFromPlaylist { playlist, uids } => {
+            api.pathfinder(
+                session,
+                "removeFromPlaylist",
+                json!({ "playlistUri": playlist, "uids": uids }),
+            )
+            .await?;
+            Ok(EditOutcome::RemovedFromPlaylist {
+                playlist,
+                count: uids.len(),
+            })
+        }
+        LibraryEdit::MoveInPlaylist {
+            playlist,
+            uid,
+            before,
+            other_uid,
+        } => {
+            api.pathfinder(
+                session,
+                "moveItemsInPlaylist",
+                json!({
+                    "playlistUri": playlist,
+                    "uids": [uid],
+                    "newPosition": {
+                        "moveType": if before { "BEFORE_UID" } else { "AFTER_UID" },
+                        "fromUid": other_uid,
+                    },
+                }),
+            )
+            .await?;
+            Ok(EditOutcome::Moved { playlist })
+        }
+        LibraryEdit::CreatePlaylist { name } => {
+            let uri = create_playlist(api, session, &name).await?;
+            Ok(EditOutcome::Created { uri, name })
+        }
+        LibraryEdit::RenamePlaylist { uri, name } => {
+            rename_playlist(api, session, &uri, &name).await?;
+            Ok(EditOutcome::Renamed { uri, name })
+        }
+        LibraryEdit::DescribePlaylist { uri, description } => {
+            describe_playlist(api, session, &uri, &description).await?;
+            Ok(EditOutcome::Described { uri })
+        }
+        LibraryEdit::ToggleVisibility { uri } => {
+            let private = toggle_visibility(api, session, &uri).await?;
+            Ok(EditOutcome::Visibility { uri, private })
+        }
+        LibraryEdit::Hide {
+            uri,
+            context,
+            hidden,
+        } => {
+            let mut item = Vec::new();
+            crate::api::proto::bytes(&mut item, 1, uri.as_bytes());
+            if !hidden {
+                crate::api::proto::int(&mut item, 3, 1);
+            }
+            if !context.is_empty() {
+                crate::api::proto::bytes(&mut item, 4, context.as_bytes());
+            }
+            let mut body = Vec::new();
+            crate::api::proto::bytes(&mut body, 1, session.username().as_bytes());
+            crate::api::proto::bytes(&mut body, 2, b"ban");
+            crate::api::proto::bytes(&mut body, 3, &item);
+            api.collection(session, "/collection/v2/write", body)
+                .await?;
+            let now = catalog::hidden_songs(api, session).await?;
+            Ok(EditOutcome::Hidden {
+                hidden: now.contains(&uri),
+                uri,
+            })
+        }
+    }
+}
+
+/// Execute and confirm each library change before proceeding to the next batch.
+async fn update_saved<F, Fut>(uris: &[String], saved: bool, mut update: F) -> Result<(), ApiError>
+where
+    F: FnMut(Vec<String>) -> Fut,
+    Fut: Future<Output = Result<Vec<bool>, ApiError>>,
+{
+    // addLibraryItems/removeLibraryItems accept at most 50 URIs. The
+    // read-only saved-state query and playlist edits have different limits.
+    for chunk in uris.chunks(50) {
+        let confirmed = update(chunk.to_vec()).await?;
+        if confirmed.len() != chunk.len() || confirmed.iter().any(|state| *state != saved) {
+            return Err(ApiError::Shape(
+                "Spotify did not confirm the requested saved state".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Follows or unfollows a profile, the opposite of now; whether this
+/// account follows it afterwards.
+async fn toggle_following(api: &Api, session: &Session, uri: &str) -> Result<bool, ApiError> {
+    let following = |data: &Value| {
+        data.pointer("/users/0/following")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| ApiError::Shape("isFollowingUsers".into()))
+    };
+    let now = following(
+        &api.pathfinder(session, "isFollowingUsers", json!({ "uris": [uri] }))
+            .await?,
+    )?;
+    let username = uri.trim_start_matches("spotify:user:");
+    let operation = if now { "unfollowUsers" } else { "followUsers" };
+    api.pathfinder(session, operation, json!({ "usernames": [username] }))
+        .await?;
+    following(
+        &api.pathfinder(session, "isFollowingUsers", json!({ "uris": [uri] }))
+            .await?,
+    )
+}
+
+/// The description change the web player sends; an empty description is
+/// removed.
+async fn describe_playlist(
+    api: &Api,
+    session: &Session,
+    uri: &str,
+    description: &str,
+) -> Result<(), ApiError> {
+    let id = playlist_id(uri)?;
+    let current = catalog::playlist(api, session, uri, 0).await?;
+    if !current.can_edit_metadata {
+        return Err(ApiError::Status(403));
+    }
+    let attributes = if description.trim().is_empty() {
+        json!({
+            "values": { "formatAttributes": [], "pictureSize": [] },
+            "noValue": ["LIST_DESCRIPTION"]
+        })
+    } else {
+        json!({
+            "values": { "description": description.trim(), "formatAttributes": [], "pictureSize": [] },
+            "noValue": []
+        })
+    };
+    let ops = json!([{
+        "kind": "UPDATE_LIST_ATTRIBUTES",
+        "updateListAttributes": { "newAttributes": attributes }
+    }]);
+    api.spclient(
+        session,
+        reqwest::Method::POST,
+        &format!("/playlist/v2/playlist/{id}/changes"),
+        Some(rootlist_change(&ops, Some(&current.revision))),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Spotify's "Make private" and "Make public": the base permission of the
+/// playlist becomes `BLOCKED` (only the owner) or `VIEWER`. Returns
+/// whether it is private afterwards.
+async fn toggle_visibility(api: &Api, session: &Session, uri: &str) -> Result<bool, ApiError> {
+    let id = playlist_id(uri)?;
+    let path = format!("/playlist-permission/v1/playlist/{id}/permission/base");
+    let mut base = api
+        .spclient(session, reqwest::Method::GET, &path, None)
+        .await?;
+    let private = base.get("permissionLevel").and_then(Value::as_str) == Some("BLOCKED");
+    // The web player removes a profile listing before making a playlist private.
+    if !private {
+        let root = publication_rootlist(api, session).await?;
+        if profile_publication_from_rootlist(&root, uri)? == Some(true) {
+            set_profile_publication(api, session, uri, false).await?;
+        }
+    }
+    base["permissionLevel"] = json!(if private { "VIEWER" } else { "BLOCKED" });
+    api.spclient(session, reqwest::Method::POST, &path, Some(base))
+        .await?;
+    let now = api
+        .spclient(session, reqwest::Method::GET, &path, None)
+        .await?;
+    Ok(now.get("permissionLevel").and_then(Value::as_str) == Some("BLOCKED"))
+}
+
+/// The attribute change the web player sends for a new or renamed playlist.
+fn name_ops(name: &str) -> Value {
+    json!([{
+        "kind": "UPDATE_LIST_ATTRIBUTES",
+        "updateListAttributes": {
+            "newAttributes": {
+                "values": { "name": name, "formatAttributes": [], "pictureSize": [] },
+                "noValue": []
+            }
+        }
+    }])
+}
+
+/// The library's playlist list (`rootlist`): its revision and URIs in order
+/// (folders appear as their start and end entries).
+async fn rootlist(api: &Api, session: &Session) -> Result<(String, Vec<String>), ApiError> {
+    let answer = api
+        .spclient(
+            session,
+            reqwest::Method::GET,
+            &format!(
+                "/playlist/v2/user/{}/rootlist?decorate=revision&from=0&length=10000",
+                session.username()
+            ),
+            None,
+        )
+        .await?;
+    let revision = answer
+        .get("revision")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::Shape("rootlist without revision".into()))?
+        .to_owned();
+    let uris = answer
+        .pointer("/contents/items")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    item.get("uri")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok((revision, uris))
+}
+
+fn rootlist_change(ops: &Value, base_revision: Option<&str>) -> Value {
+    let mut change = json!({
+        "deltas": [{ "ops": ops, "info": { "source": { "client": "WEBPLAYER" } } }],
+        "wantResultingRevisions": false,
+        "wantSyncResult": false,
+        "nonces": []
+    });
+    if let Some(revision) = base_revision {
+        change["baseRevision"] = json!(revision);
+    }
+    change
+}
+
+fn profile_publication_from_rootlist(answer: &Value, uri: &str) -> Result<Option<bool>, ApiError> {
+    if answer
+        .pointer("/contents/truncated")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return Err(ApiError::Shape(
+            "profile publication rootlist is incomplete".into(),
+        ));
+    }
+    let items = answer
+        .pointer("/contents/items")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ApiError::Shape("profile publication rootlist items missing".into()))?;
+    let mut matching = items
+        .iter()
+        .filter(|item| item.get("uri").and_then(Value::as_str) == Some(uri));
+    let Some(item) = matching.next() else {
+        return Ok(None);
+    };
+    if matching.next().is_some() {
+        return Err(ApiError::Shape(
+            "ambiguous rootlist publication target".into(),
+        ));
+    }
+    Ok(item.pointer("/attributes/public").and_then(Value::as_bool))
+}
+
+async fn publication_rootlist(api: &Api, session: &Session) -> Result<Value, ApiError> {
+    api.spclient(
+        session,
+        reqwest::Method::GET,
+        &format!(
+            "/playlist/v2/user/{}/rootlist?decorate=revision&from=0&length=10000",
+            session.username()
+        ),
+        None,
+    )
+    .await
+}
+
+pub async fn profile_publication_state(
+    api: &Api,
+    session: &Session,
+    uri: &str,
+) -> Result<Option<bool>, ApiError> {
+    playlist_id(uri)?;
+    let published =
+        profile_publication_from_rootlist(&publication_rootlist(api, session).await?, uri)?;
+    if published == Some(false) && !playlist_is_public(api, session, uri).await? {
+        return Ok(None);
+    }
+    Ok(published)
+}
+
+async fn playlist_is_public(api: &Api, session: &Session, uri: &str) -> Result<bool, ApiError> {
+    let id = playlist_id(uri)?;
+    let base = api
+        .spclient(
+            session,
+            reqwest::Method::GET,
+            &format!("/playlist-permission/v1/playlist/{id}/permission/base"),
+            None,
+        )
+        .await?;
+    match base.get("permissionLevel").and_then(Value::as_str) {
+        Some("BLOCKED") => Ok(false),
+        Some("VIEWER" | "EDITOR" | "CONTRIBUTOR") => Ok(true),
+        _ => Err(ApiError::Shape(
+            "playlist access permission is unavailable".into(),
+        )),
+    }
+}
+
+fn publication_ops(uri: &str, published: bool) -> Value {
+    // Exact operation used by the web player's library.setPublishedState.
+    json!([{"kind":"UPDATE_ITEM_ATTRIBUTES", "updateItemAttributes": {
+        "newAttributes": {"values": {"public": published, "formatAttributes": [], "availableSignals": []}, "noValue": []},
+        "item": {"uri": uri}
+    }}])
+}
+
+async fn toggle_profile_publication(
+    api: &Api,
+    session: &Session,
+    uri: &str,
+) -> Result<bool, ApiError> {
+    let now = profile_publication_from_rootlist(&publication_rootlist(api, session).await?, uri)?
+        .ok_or_else(|| ApiError::Shape("profile publication state unavailable".into()))?;
+    set_profile_publication(api, session, uri, !now).await
+}
+
+async fn set_profile_publication(
+    api: &Api,
+    session: &Session,
+    uri: &str,
+    published: bool,
+) -> Result<bool, ApiError> {
+    playlist_id(uri)?;
+    let current = publication_rootlist(api, session).await?;
+    let now = profile_publication_from_rootlist(&current, uri)?.ok_or_else(|| {
+        ApiError::Shape(
+            "profile publication state unavailable; save the playlist to your library first".into(),
+        )
+    })?;
+    let revision = current
+        .get("revision")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::Shape("profile publication rootlist revision missing".into()))?;
+    if published && !playlist_is_public(api, session, uri).await? {
+        return Err(ApiError::Shape(
+            "make the playlist public before adding it to your profile".into(),
+        ));
+    }
+    if now == published {
+        return Ok(published);
+    }
+    api.spclient(
+        session,
+        reqwest::Method::POST,
+        &format!("/playlist/v2/user/{}/rootlist/changes", session.username()),
+        Some(rootlist_change(
+            &publication_ops(uri, published),
+            Some(revision),
+        )),
+    )
+    .await?;
+    let confirmed = publication_rootlist(api, session).await?;
+    confirm_publication(&confirmed, uri, published)?;
+    Ok(published)
+}
+
+fn confirm_publication(rootlist: &Value, uri: &str, published: bool) -> Result<(), ApiError> {
+    if profile_publication_from_rootlist(rootlist, uri)? != Some(published) {
+        return Err(ApiError::Shape(
+            "Spotify did not confirm profile publication".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Playlists are in the library through the rootlist, not `addToLibrary`.
+/// Removing names the exact entry and the revision it was read at, so a
+/// change made meanwhile never removes another playlist. Returns whether
+/// the playlist is in the library afterwards.
+async fn toggle_playlist_in_library(
+    api: &Api,
+    session: &Session,
+    uri: &str,
+) -> Result<bool, ApiError> {
+    let (revision, uris) = rootlist(api, session).await?;
+    let path = format!("/playlist/v2/user/{}/rootlist/changes", session.username());
+    let ops = if let Some(index) = uris.iter().position(|entry| entry == uri) {
+        let body = rootlist_change(
+            &json!([{
+                "kind": "REM",
+                "rem": { "fromIndex": index, "length": 1, "items": [{ "uri": uri }], "itemsAsKey": true }
+            }]),
+            Some(&revision),
+        );
+        api.spclient(session, reqwest::Method::POST, &path, Some(body))
+            .await?;
+        false
+    } else {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_millis());
+        let body = rootlist_change(
+            &json!([{
+                "kind": "ADD",
+                "add": {
+                    "items": [{ "uri": uri, "attributes": { "timestamp": timestamp.to_string() } }],
+                    "addFirst": true
+                }
+            }]),
+            None,
+        );
+        api.spclient(session, reqwest::Method::POST, &path, Some(body))
+            .await?;
+        true
+    };
+    let (_, now) = rootlist(api, session).await?;
+    let saved = now.iter().any(|entry| entry == uri);
+    if saved == ops {
+        Ok(saved)
+    } else {
+        Err(ApiError::Shape("the library did not change".into()))
+    }
+}
+
+/// A new playlist, first in the library (`rootlist`), as the clients do it.
+async fn create_playlist(api: &Api, session: &Session, name: &str) -> Result<String, ApiError> {
+    let created = api
+        .spclient(
+            session,
+            reqwest::Method::POST,
+            "/playlist/v2/playlist",
+            Some(json!({ "ops": name_ops(name) })),
+        )
+        .await?;
+    let uri = created
+        .get("uri")
+        .and_then(Value::as_str)
+        .filter(|uri| uri.starts_with("spotify:playlist:"))
+        .ok_or_else(|| ApiError::Shape("created playlist without URI".into()))?
+        .to_owned();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis());
+    api.spclient(
+        session,
+        reqwest::Method::POST,
+        &format!("/playlist/v2/user/{}/rootlist/changes", session.username()),
+        Some(json!({
+            "deltas": [{
+                "ops": [{
+                    "kind": "ADD",
+                    "add": {
+                        "items": [{ "uri": uri, "attributes": { "timestamp": timestamp.to_string() } }],
+                        "addFirst": true
+                    }
+                }],
+                "info": { "source": { "client": "WEBPLAYER" } }
+            }],
+            "wantResultingRevisions": false,
+            "wantSyncResult": false,
+            "nonces": []
+        })),
+    )
+    .await?;
+    Ok(uri)
+}
+
+/// Renames a playlist the account may edit, against its current revision.
+async fn rename_playlist(
+    api: &Api,
+    session: &Session,
+    uri: &str,
+    name: &str,
+) -> Result<(), ApiError> {
+    let id = playlist_id(uri)?;
+    let current = catalog::playlist(api, session, uri, 0).await?;
+    if !current.can_edit_metadata {
+        return Err(ApiError::Status(403));
+    }
+    api.spclient(
+        session,
+        reqwest::Method::POST,
+        &format!("/playlist/v2/playlist/{id}/changes"),
+        Some(json!({
+            "baseRevision": current.revision,
+            "deltas": [{ "ops": name_ops(name), "info": { "source": { "client": "WEBPLAYER" } } }],
+            "wantResultingRevisions": false,
+            "wantSyncResult": false,
+            "nonces": []
+        })),
+    )
+    .await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn saving_a_whole_playlist_respects_spotify_library_limit() {
+        use std::{cell::RefCell, collections::HashSet};
+        let uris: Vec<String> = (0..137)
+            .map(|id| format!("spotify:track:{id:022}"))
+            .collect();
+        let library = RefCell::new(HashSet::<String>::new());
+        for saved in [true, false] {
+            update_saved(&uris, saved, |chunk| {
+                // Actual server rejection from the user's spotify.log:
+                // addLibraryItems cannot accept more than 50 URIs.
+                let result = if chunk.len() > 50 {
+                    Err(ApiError::Shape(
+                        "The number of URIs cannot be greater than 50".into(),
+                    ))
+                } else {
+                    let mut library = library.borrow_mut();
+                    for uri in &chunk {
+                        if saved {
+                            library.insert(uri.clone());
+                        } else {
+                            library.remove(uri);
+                        }
+                    }
+                    Ok(chunk.iter().map(|uri| library.contains(uri)).collect())
+                };
+                std::future::ready(result)
+            })
+            .await
+            .unwrap();
+            assert_eq!(library.borrow().len(), if saved { uris.len() } else { 0 });
+        }
+    }
+
+    #[tokio::test]
+    async fn bulk_library_change_does_not_report_unconfirmed_success() {
+        let uris: Vec<String> = (0..137)
+            .map(|id| format!("spotify:track:{id:022}"))
+            .collect();
+        let calls = std::cell::Cell::new(0);
+        let result = update_saved(&uris, true, |chunk| {
+            calls.set(calls.get() + 1);
+            std::future::ready(Ok(vec![calls.get() == 1; chunk.len()]))
+        })
+        .await;
+        assert!(result.is_err());
+        assert_eq!(calls.get(), 2);
+    }
+
+    #[tokio::test]
+    async fn empty_and_small_library_changes_do_not_add_requests() {
+        for size in [0, 1, 49, 50, 51, 100, 101] {
+            let uris: Vec<String> = (0..size)
+                .map(|id| format!("spotify:track:{id:022}"))
+                .collect();
+            let calls = std::cell::Cell::new(0usize);
+            update_saved(&uris, true, |chunk| {
+                calls.set(calls.get() + 1);
+                std::future::ready(Ok(vec![true; chunk.len()]))
+            })
+            .await
+            .unwrap();
+            assert_eq!(calls.get(), uris.len().div_ceil(50));
+        }
+    }
+
+    #[test]
+    fn publication_readback_confirms_requested_flag_without_access_permission() {
+        let root = json!({"contents":{"items":[
+            {"uri":"spotify:playlist:one","attributes":{"public":false}},
+            {"uri":"spotify:playlist:two","attributes":{"public":true}},
+            {"uri":"spotify:playlist:unknown","attributes":{}}
+        ]}});
+        assert!(confirm_publication(&root, "spotify:playlist:one", false).is_ok());
+        assert!(confirm_publication(&root, "spotify:playlist:two", true).is_ok());
+        assert!(confirm_publication(&root, "spotify:playlist:one", true).is_err());
+        assert!(confirm_publication(&root, "spotify:playlist:two", false).is_err());
+        assert!(confirm_publication(&root, "spotify:playlist:unknown", false).is_err());
+        assert!(confirm_publication(&root, "spotify:playlist:absent", false).is_err());
+    }
+
+    #[test]
+    fn publication_state_preserves_unknown_and_targets_exact_uri() {
+        let mut root = json!({"revision":"r", "contents":{"truncated":false,"items":[
+            {"uri":"spotify:playlist:one","attributes":{"public":false}},
+            {"uri":"spotify:playlist:two","attributes":{"public":true}},
+            {"uri":"spotify:playlist:unknown","attributes":{}}
+        ]}});
+        assert_eq!(
+            profile_publication_from_rootlist(&root, "spotify:playlist:one"),
+            Ok(Some(false))
+        );
+        assert_eq!(
+            profile_publication_from_rootlist(&root, "spotify:playlist:two"),
+            Ok(Some(true))
+        );
+        assert_eq!(
+            profile_publication_from_rootlist(&root, "spotify:playlist:unknown"),
+            Ok(None)
+        );
+        assert_eq!(
+            profile_publication_from_rootlist(&root, "spotify:playlist:missing"),
+            Ok(None)
+        );
+        root["contents"]["items"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"uri":"spotify:playlist:one","attributes":{"public":true}}));
+        assert!(profile_publication_from_rootlist(&root, "spotify:playlist:one").is_err());
+        root["contents"]["truncated"] = json!(true);
+        assert!(profile_publication_from_rootlist(&root, "spotify:playlist:two").is_err());
+    }
+
+    #[test]
+    fn publication_operation_changes_only_the_target_rootlist_attribute() {
+        for published in [true, false] {
+            let ops = publication_ops("spotify:playlist:one", published);
+            assert_eq!(ops[0]["kind"], "UPDATE_ITEM_ATTRIBUTES");
+            assert_eq!(
+                ops[0]["updateItemAttributes"]["item"]["uri"],
+                "spotify:playlist:one"
+            );
+            assert_eq!(
+                ops[0]["updateItemAttributes"]["newAttributes"]["values"]["public"],
+                published
+            );
+            assert!(!ops.to_string().contains("permissionLevel"));
+            let body = rootlist_change(&ops, Some("revision"));
+            assert_eq!(body["baseRevision"], "revision");
+        }
+    }
+
+    #[test]
+    fn only_playlist_uris_have_a_playlist_id() {
+        assert_eq!(playlist_id("spotify:playlist:abc"), Ok("abc"));
+        assert!(playlist_id("spotify:album:abc").is_err());
+        assert!(playlist_id("spotify:playlist:").is_err());
+    }
+
+    #[test]
+    fn a_name_change_is_one_attribute_update() {
+        let ops = name_ops("Road trip");
+        assert_eq!(ops[0]["kind"], "UPDATE_LIST_ATTRIBUTES");
+        assert_eq!(
+            ops[0]["updateListAttributes"]["newAttributes"]["values"]["name"],
+            "Road trip"
+        );
+    }
+}

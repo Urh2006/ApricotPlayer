@@ -1,0 +1,28 @@
+[package]
+name = "apricot-shell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# The platform-neutral coordinator between the application and a native UI.
+# It holds the behavior that the Windows UI keeps in `win32.rs` today, so the
+# macOS UI renders the same screens, messages and focus targets.
+[dependencies]
+apricot-app.workspace = true
+apricot-core.workspace = true
+apricot-media.workspace = true
+apricot-platform.workspace = true
+apricot-spotify.workspace = true
+apricot-storage.workspace = true
+apricot-updater.workspace = true
+chrono.workspace = true
+apricot-playback.workspace = true
+serde_json.workspace = true
+url.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = "3"

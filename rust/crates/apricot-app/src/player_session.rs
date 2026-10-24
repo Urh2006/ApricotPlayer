@@ -1,0 +1,751 @@
+//! Authoritative player-session state, independent of the visible UI route.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use apricot_core::MediaItem;
+use apricot_playback::{AudioOutputDevice, PlaybackEvent, PlaybackMediaInfo};
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PlaybackPhase {
+    #[default]
+    Closed,
+    Starting,
+    Playing,
+    Paused,
+    Ended,
+    Failed,
+}
+
+/// Python `player_play_pause`: what Play/Pause does in the current state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlayAction {
+    Pause,
+    Resume,
+    /// Python `restart_current_playback`: seek to the start and play.
+    RestartFromStart,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SessionToggle {
+    AutoplayNext,
+    BassBoost,
+    VolumeBoost,
+    Repeat,
+    Shuffle,
+    Fullscreen,
+}
+
+/// Python `session_equalizer_enabled` and `session_equalizer_gains`: the
+/// player equalizer chosen in the F4 dialog for this session only.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EqualizerSession {
+    pub enabled: bool,
+    pub gains: BTreeMap<String, f64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AudioSession {
+    pub volume: f64,
+    pub output_device: String,
+    pub speed: f64,
+    pub pitch: f64,
+    /// `None` follows the global settings, as Python's `None` session value.
+    pub equalizer: Option<EqualizerSession>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlayerSessionDefaults {
+    pub audio: AudioSession,
+    pub enabled_toggles: BTreeSet<SessionToggle>,
+    pub starts_paused: bool,
+}
+
+#[derive(Debug, Default)]
+pub struct PlayerSession {
+    generation: u64,
+    phase: PlaybackPhase,
+    current_item: Option<MediaItem>,
+    audio: Option<AudioSession>,
+    enabled_toggles: BTreeSet<SessionToggle>,
+    position_seconds: f64,
+    duration_seconds: Option<f64>,
+    clip_start_seconds: Option<f64>,
+    clip_end_seconds: Option<f64>,
+    media_info: PlaybackMediaInfo,
+    /// mpv `audio-device-list` of the running player, for Python
+    /// `show_output_devices`.
+    audio_devices: Vec<AudioOutputDevice>,
+    last_error: Option<String>,
+    transcript: Option<crate::transcript::CachedTranscript>,
+    /// Python `edit_mode_enabled`, off again for every started item.
+    edit_mode: bool,
+}
+
+impl PlayerSession {
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub const fn phase(&self) -> PlaybackPhase {
+        self.phase
+    }
+
+    /// Python `player_play_pause` and `player_should_restart_from_end`: at the
+    /// end the item starts again, unless the user moved back from the end.
+    pub fn play_action(&self) -> PlayAction {
+        match self.phase {
+            PlaybackPhase::Paused => PlayAction::Resume,
+            PlaybackPhase::Ended => {
+                let at_end = self
+                    .duration_seconds
+                    .is_none_or(|duration| self.position_seconds >= (duration - 0.35).max(0.0));
+                if at_end {
+                    PlayAction::RestartFromStart
+                } else {
+                    PlayAction::Resume
+                }
+            }
+            _ => PlayAction::Pause,
+        }
+    }
+
+    /// Python `player_paused`: the end counts as paused for the Play/Pause button.
+    pub const fn is_paused(&self) -> bool {
+        matches!(self.phase, PlaybackPhase::Paused | PlaybackPhase::Ended)
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.phase != PlaybackPhase::Closed
+    }
+
+    pub const fn current_item(&self) -> Option<&MediaItem> {
+        self.current_item.as_ref()
+    }
+
+    pub const fn transcript(&self) -> Option<&crate::transcript::CachedTranscript> {
+        self.transcript.as_ref()
+    }
+
+    pub fn cache_transcript(
+        &mut self,
+        generation: u64,
+        transcript: crate::transcript::CachedTranscript,
+    ) -> bool {
+        if generation != self.generation || !self.is_open() || self.current_item.is_none() {
+            return false;
+        }
+        self.transcript = Some(transcript);
+        true
+    }
+
+    /// A late chapter response must never attach to a replacement episode.
+    pub fn cache_external_chapters(
+        &mut self,
+        generation: u64,
+        chapters: Vec<serde_json::Value>,
+    ) -> bool {
+        if generation != self.generation || !self.is_open() {
+            return false;
+        }
+        let Some(item) = self.current_item.as_mut() else {
+            return false;
+        };
+        item.metadata
+            .insert("_chapters_url_checked".into(), true.into());
+        item.metadata.insert("chapters".into(), chapters.into());
+        true
+    }
+
+    pub fn audio_devices(&self) -> &[AudioOutputDevice] {
+        &self.audio_devices
+    }
+
+    pub const fn audio(&self) -> Option<&AudioSession> {
+        self.audio.as_ref()
+    }
+
+    pub fn enabled_toggles(&self) -> &BTreeSet<SessionToggle> {
+        &self.enabled_toggles
+    }
+
+    pub const fn position_seconds(&self) -> f64 {
+        self.position_seconds
+    }
+
+    pub const fn duration_seconds(&self) -> Option<f64> {
+        self.duration_seconds
+    }
+
+    pub const fn edit_mode(&self) -> bool {
+        self.edit_mode
+    }
+
+    /// Python `toggle_edit_mode`; returns the new state.
+    pub const fn toggle_edit_mode(&mut self) -> bool {
+        self.edit_mode = !self.edit_mode;
+        self.edit_mode
+    }
+
+    pub const fn clip_start_seconds(&self) -> Option<f64> {
+        self.clip_start_seconds
+    }
+
+    pub const fn clip_end_seconds(&self) -> Option<f64> {
+        self.clip_end_seconds
+    }
+
+    pub const fn clip_range(&self) -> Option<(f64, f64)> {
+        match (self.clip_start_seconds, self.clip_end_seconds) {
+            (Some(start), Some(end)) if end - start >= 0.25 => Some((start, end)),
+            _ => None,
+        }
+    }
+
+    pub const fn media_info(&self) -> &PlaybackMediaInfo {
+        &self.media_info
+    }
+
+    pub fn last_error(&self) -> Option<&str> {
+        self.last_error.as_deref()
+    }
+
+    /// Starts or replaces media. Existing open sessions retain volume, output
+    /// device, equalizer, toggle state, speed and pitch until the player is
+    /// closed (Urh's beta 6 decision; Python `start_mpv` reset speed and
+    /// pitch for every item). A genuinely new session receives all current
+    /// defaults.
+    pub fn start_item(&mut self, item: MediaItem, defaults: PlayerSessionDefaults) -> u64 {
+        self.start_item_at(item, defaults, None)
+    }
+
+    /// Starts or replaces media with an item-specific initial position.
+    pub fn start_item_at(
+        &mut self,
+        item: MediaItem,
+        defaults: PlayerSessionDefaults,
+        initial_position_seconds: Option<f64>,
+    ) -> u64 {
+        if !self.is_open() || self.audio.is_none() {
+            self.audio = Some(defaults.audio);
+            self.enabled_toggles = defaults.enabled_toggles;
+        }
+        self.advance_generation();
+        self.phase = if defaults.starts_paused {
+            PlaybackPhase::Paused
+        } else {
+            PlaybackPhase::Starting
+        };
+        self.current_item = Some(item);
+        self.transcript = None;
+        self.position_seconds = initial_position_seconds
+            .filter(|position| position.is_finite())
+            .unwrap_or_default()
+            .max(0.0);
+        self.duration_seconds = None;
+        self.clip_start_seconds = None;
+        self.clip_end_seconds = None;
+        self.edit_mode = false;
+        self.media_info = PlaybackMediaInfo::default();
+        self.last_error = None;
+        self.generation
+    }
+
+    /// A source that owns its own transport (Spotify Connect) moved on to
+    /// the next track inside the running player: the item changes, the
+    /// engine generation, phase and audio stay. Per-item state starts over.
+    pub fn replace_current_item(&mut self, item: MediaItem) -> bool {
+        if !self.is_open() || self.current_item.is_none() {
+            return false;
+        }
+        self.current_item = Some(item);
+        self.transcript = None;
+        self.clip_start_seconds = None;
+        self.clip_end_seconds = None;
+        self.edit_mode = false;
+        true
+    }
+
+    pub fn apply_event(&mut self, generation: u64, event: PlaybackEvent) -> bool {
+        if generation != self.generation || !self.is_open() {
+            return false;
+        }
+        match event {
+            // A player started paused (Python `player_start_paused`) reports
+            // the pause before the file is loaded; loading does not unpause it.
+            PlaybackEvent::Started if self.phase == PlaybackPhase::Paused => {}
+            PlaybackEvent::Started => self.phase = PlaybackPhase::Playing,
+            PlaybackEvent::Paused(paused) => {
+                self.phase = if paused {
+                    PlaybackPhase::Paused
+                } else {
+                    PlaybackPhase::Playing
+                };
+            }
+            PlaybackEvent::Position { elapsed, duration } => {
+                self.position_seconds = elapsed.max(0.0);
+                self.duration_seconds = duration.filter(|value| value.is_finite() && *value >= 0.0);
+            }
+            PlaybackEvent::MediaInfo(info) => self.media_info = info,
+            PlaybackEvent::AudioDevices(devices) => self.audio_devices = devices,
+            PlaybackEvent::Ended => self.phase = PlaybackPhase::Ended,
+            PlaybackEvent::PreviewFinished => self.phase = PlaybackPhase::Paused,
+            PlaybackEvent::Failed(error) => {
+                self.phase = PlaybackPhase::Failed;
+                self.last_error = Some(error);
+            }
+            // The item keeps playing after a single failed command.
+            PlaybackEvent::CommandFailed(_) => {}
+        }
+        true
+    }
+
+    pub fn set_volume(&mut self, volume: f64) {
+        if let Some(audio) = &mut self.audio
+            && volume.is_finite()
+        {
+            audio.volume = volume.max(0.0);
+        }
+    }
+
+    pub fn set_output_device(&mut self, output_device: impl Into<String>) {
+        if let Some(audio) = &mut self.audio {
+            audio.output_device = output_device.into();
+        }
+    }
+
+    pub fn set_speed(&mut self, speed: f64) {
+        if let Some(audio) = &mut self.audio
+            && speed.is_finite()
+        {
+            audio.speed = speed.clamp(0.01, 100.0);
+        }
+    }
+
+    /// Python `session_equalizer_enabled`/`session_equalizer_gains`; `None`
+    /// returns to the global equalizer (`use_global_equalizer_for_live_preview`).
+    pub fn set_equalizer(&mut self, equalizer: Option<EqualizerSession>) {
+        if let Some(audio) = &mut self.audio {
+            audio.equalizer = equalizer;
+        }
+    }
+
+    pub fn set_pitch(&mut self, pitch: f64) {
+        if let Some(audio) = &mut self.audio
+            && pitch.is_finite()
+        {
+            audio.pitch = pitch.clamp(0.01, 100.0);
+        }
+    }
+
+    pub fn set_toggle(&mut self, toggle: SessionToggle, enabled: bool) {
+        if enabled {
+            self.enabled_toggles.insert(toggle);
+        } else {
+            self.enabled_toggles.remove(&toggle);
+        }
+    }
+
+    /// Sets or clears a clip marker. Repeating the same marker action clears it,
+    /// matching the Python player's toggle behavior.
+    pub fn toggle_clip_start(&mut self) -> Option<f64> {
+        if self.clip_start_seconds.take().is_some() {
+            return None;
+        }
+        let position = self.position_seconds.max(0.0);
+        self.clip_start_seconds = Some(position);
+        Some(position)
+    }
+
+    pub fn toggle_clip_end(&mut self) -> Option<f64> {
+        if self.clip_end_seconds.take().is_some() {
+            return None;
+        }
+        let position = self.position_seconds.max(0.0);
+        self.clip_end_seconds = Some(position);
+        Some(position)
+    }
+
+    pub fn close(&mut self) {
+        self.advance_generation();
+        self.phase = PlaybackPhase::Closed;
+        self.current_item = None;
+        self.transcript = None;
+        self.audio = None;
+        self.enabled_toggles.clear();
+        self.position_seconds = 0.0;
+        self.duration_seconds = None;
+        self.clip_start_seconds = None;
+        self.clip_end_seconds = None;
+        self.edit_mode = false;
+        self.media_info = PlaybackMediaInfo::default();
+        self.last_error = None;
+    }
+
+    fn advance_generation(&mut self) {
+        self.generation = self.generation.wrapping_add(1).max(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use apricot_core::{MediaId, MediaKind, MediaSource};
+    use apricot_playback::{PlaybackEvent, PlaybackMediaInfo};
+
+    use super::{
+        AudioSession, EqualizerSession, PlayAction, PlaybackPhase, PlayerSession,
+        PlayerSessionDefaults, SessionToggle,
+    };
+
+    fn item(id: &str) -> apricot_core::MediaItem {
+        apricot_core::MediaItem {
+            id: MediaId(id.to_owned()),
+            source: MediaSource::Local,
+            kind: MediaKind::Audio,
+            title: id.to_owned(),
+            url: None,
+            stream_url: None,
+            external_audio_url: None,
+            local_path: Some(format!(r"C:\Music\{id}.mp3")),
+            channel: String::new(),
+            duration_seconds: None,
+            metadata: BTreeMap::new(),
+        }
+    }
+
+    fn defaults() -> PlayerSessionDefaults {
+        PlayerSessionDefaults {
+            audio: AudioSession {
+                volume: 80.0,
+                output_device: "speakers".to_owned(),
+                speed: 1.0,
+                pitch: 1.0,
+                equalizer: None,
+            },
+            enabled_toggles: BTreeSet::from([SessionToggle::BassBoost]),
+            starts_paused: false,
+        }
+    }
+
+    #[test]
+    fn replacement_preserves_session_audio_until_real_close() {
+        let mut session = PlayerSession::default();
+        session.start_item(item("first"), defaults());
+        session.set_volume(110.0);
+        session.set_output_device("headphones");
+        session.set_toggle(SessionToggle::AutoplayNext, true);
+
+        let mut changed_defaults = defaults();
+        changed_defaults.audio.volume = 20.0;
+        changed_defaults.audio.output_device = "auto".to_owned();
+        session.start_item(item("second"), changed_defaults);
+
+        let audio = session.audio().expect("open audio session");
+        assert!((audio.volume - 110.0).abs() < f64::EPSILON);
+        assert_eq!(audio.output_device, "headphones");
+        assert!(
+            session
+                .enabled_toggles()
+                .contains(&SessionToggle::AutoplayNext)
+        );
+
+        session.close();
+        assert_eq!(session.phase(), PlaybackPhase::Closed);
+        assert!(session.audio().is_none());
+        assert!(session.enabled_toggles().is_empty());
+    }
+
+    #[test]
+    fn edit_mode_is_off_for_every_started_item_and_after_close() {
+        let mut session = PlayerSession::default();
+        session.start_item(item("first"), defaults());
+        assert!(!session.edit_mode());
+        assert!(session.toggle_edit_mode());
+        assert!(session.edit_mode());
+        session.start_item(item("second"), defaults());
+        assert!(
+            !session.edit_mode(),
+            "Python start_mpv clears edit_mode_enabled"
+        );
+        assert!(session.toggle_edit_mode());
+        assert!(!session.toggle_edit_mode());
+        session.toggle_edit_mode();
+        session.close();
+        assert!(!session.edit_mode());
+    }
+
+    #[test]
+    fn replacement_keeps_speed_and_pitch_until_the_player_closes() {
+        let mut session = PlayerSession::default();
+        session.start_item(item("first"), defaults());
+        session.set_speed(1.7);
+        session.set_pitch(0.8);
+        let player_equalizer = EqualizerSession {
+            enabled: true,
+            gains: BTreeMap::from([("31".to_owned(), 3.0)]),
+        };
+        session.set_equalizer(Some(player_equalizer.clone()));
+
+        let mut next_defaults = defaults();
+        next_defaults.audio.speed = 1.25;
+        next_defaults.audio.volume = 20.0;
+        session.start_item(item("second"), next_defaults);
+
+        let audio = session.audio().expect("open audio session");
+        assert!((audio.speed - 1.7).abs() < f64::EPSILON);
+        assert!((audio.pitch - 0.8).abs() < f64::EPSILON);
+        assert_eq!(
+            audio.equalizer.as_ref(),
+            Some(&player_equalizer),
+            "session equalizer stays for the session"
+        );
+        assert!((audio.volume - 80.0).abs() < f64::EPSILON);
+
+        // Close starts the next item with the configured values again.
+        session.close();
+        session.start_item(item("third"), next_defaults_after_close());
+        let audio = session.audio().expect("new audio session");
+        assert!((audio.speed - 1.25).abs() < f64::EPSILON);
+        assert!((audio.pitch - 1.0).abs() < f64::EPSILON);
+    }
+
+    fn next_defaults_after_close() -> PlayerSessionDefaults {
+        let mut next = defaults();
+        next.audio.speed = 1.25;
+        next
+    }
+
+    #[test]
+    fn late_events_from_replaced_or_closed_players_are_ignored() {
+        let mut session = PlayerSession::default();
+        let first = session.start_item(item("first"), defaults());
+        let second = session.start_item(item("second"), defaults());
+        assert!(!session.apply_event(first, PlaybackEvent::Ended));
+        assert_eq!(
+            session.current_item().map(|media| media.id.0.as_str()),
+            Some("second")
+        );
+        assert!(session.apply_event(second, PlaybackEvent::Started));
+
+        session.close();
+        assert!(!session.apply_event(second, PlaybackEvent::Paused(true)));
+        assert_eq!(session.phase(), PlaybackPhase::Closed);
+    }
+
+    #[test]
+    fn event_projection_tracks_transport_and_timing() {
+        let mut session = PlayerSession::default();
+        let generation = session.start_item(item("track"), defaults());
+        assert!(session.apply_event(
+            generation,
+            PlaybackEvent::Position {
+                elapsed: 12.5,
+                duration: Some(90.0),
+            }
+        ));
+        assert!((session.position_seconds() - 12.5).abs() < f64::EPSILON);
+        assert_eq!(session.duration_seconds(), Some(90.0));
+        assert!(session.apply_event(generation, PlaybackEvent::Paused(true)));
+        assert_eq!(session.phase(), PlaybackPhase::Paused);
+    }
+
+    #[test]
+    fn a_player_started_paused_stays_paused_after_the_file_loads() {
+        let mut session = PlayerSession::default();
+        let mut paused_defaults = defaults();
+        paused_defaults.starts_paused = true;
+        let generation = session.start_item(item("track"), paused_defaults);
+        // libmpv order for `pause=yes`: the pause, then FILE_LOADED.
+        assert!(session.apply_event(generation, PlaybackEvent::Paused(true)));
+        assert!(session.apply_event(generation, PlaybackEvent::Started));
+        assert_eq!(session.phase(), PlaybackPhase::Paused);
+        assert_eq!(session.play_action(), PlayAction::Resume);
+
+        let generation = session.start_item(item("next"), defaults());
+        assert!(session.apply_event(generation, PlaybackEvent::Paused(false)));
+        assert!(session.apply_event(generation, PlaybackEvent::Started));
+        assert_eq!(session.phase(), PlaybackPhase::Playing);
+        assert_eq!(session.play_action(), PlayAction::Pause);
+    }
+
+    #[test]
+    fn play_at_the_end_restarts_unless_the_user_moved_back() {
+        let mut session = PlayerSession::default();
+        let generation = session.start_item(item("track"), defaults());
+        assert!(session.apply_event(generation, PlaybackEvent::Started));
+        assert!(session.apply_event(
+            generation,
+            PlaybackEvent::Position {
+                elapsed: 90.0,
+                duration: Some(90.0),
+            }
+        ));
+        assert!(session.apply_event(generation, PlaybackEvent::Ended));
+        assert!(session.is_paused());
+        assert_eq!(session.play_action(), PlayAction::RestartFromStart);
+        assert!(session.apply_event(
+            generation,
+            PlaybackEvent::Position {
+                elapsed: 30.0,
+                duration: Some(90.0),
+            }
+        ));
+        assert_eq!(session.play_action(), PlayAction::Resume);
+    }
+
+    #[test]
+    fn item_specific_initial_position_never_leaks_to_the_next_item() {
+        let mut session = PlayerSession::default();
+        session.start_item_at(item("first"), defaults(), Some(42.5));
+        assert!((session.position_seconds() - 42.5).abs() < f64::EPSILON);
+        session.start_item(item("second"), defaults());
+        assert!(session.position_seconds().abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn external_chapters_are_cached_only_for_the_requesting_episode() {
+        let mut session = PlayerSession::default();
+        let first = session.start_item(item("first"), defaults());
+        let chapters = vec![serde_json::json!({"startTime": 0, "title": "Opening"})];
+        assert!(session.cache_external_chapters(first, chapters.clone()));
+        assert_eq!(crate::chapters::session_chapters(&session).len(), 1);
+        let second = session.start_item(item("second"), defaults());
+        assert!(!session.cache_external_chapters(first, chapters));
+        assert!(crate::chapters::session_chapters(&session).is_empty());
+        assert!(session.cache_external_chapters(second, Vec::new()));
+        assert_eq!(
+            session
+                .current_item()
+                .unwrap()
+                .metadata
+                .get("_chapters_url_checked"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        session.close();
+        assert!(!session.cache_external_chapters(second, Vec::new()));
+    }
+
+    #[test]
+    fn transcript_cache_rejects_late_results_and_distinguishes_empty_from_unchecked() {
+        let mut session = PlayerSession::default();
+        let first = session.start_item(item("first"), defaults());
+        let cached = crate::transcript::CachedTranscript {
+            entries: crate::transcript::parse_transcript("00:01.000 --> 00:02.000\nFirst\n"),
+            source_key: "transcript_source_local".to_owned(),
+        };
+        assert!(session.cache_transcript(first, cached.clone()));
+        assert_eq!(session.transcript(), Some(&cached));
+        let second = session.start_item(item("second"), defaults());
+        assert!(session.transcript().is_none());
+        assert!(!session.cache_transcript(first, cached.clone()));
+        let empty = crate::transcript::CachedTranscript {
+            entries: Vec::new(),
+            source_key: String::new(),
+        };
+        assert!(session.cache_transcript(second, empty));
+        assert!(session.transcript().unwrap().entries.is_empty());
+        session.close();
+        assert!(session.transcript().is_none());
+        assert!(!session.cache_transcript(second, cached));
+    }
+
+    #[test]
+    fn media_information_is_generation_bound_and_cleared_on_replacement() {
+        let mut session = PlayerSession::default();
+        let first = session.start_item(item("first"), defaults());
+        assert!(session.apply_event(
+            first,
+            PlaybackEvent::MediaInfo(PlaybackMediaInfo {
+                audio_codec: Some("flac".to_owned()),
+                ..PlaybackMediaInfo::default()
+            })
+        ));
+        assert_eq!(session.media_info().audio_codec.as_deref(), Some("flac"));
+
+        let second = session.start_item(item("second"), defaults());
+        assert_eq!(session.media_info(), &PlaybackMediaInfo::default());
+        assert!(!session.apply_event(
+            first,
+            PlaybackEvent::MediaInfo(PlaybackMediaInfo {
+                audio_codec: Some("stale".to_owned()),
+                ..PlaybackMediaInfo::default()
+            })
+        ));
+        assert!(session.media_info().audio_codec.is_none());
+        assert!(session.apply_event(second, PlaybackEvent::Started));
+    }
+
+    #[test]
+    fn clip_markers_toggle_independently_and_never_cross_media() {
+        let mut session = PlayerSession::default();
+        let first = session.start_item(item("first"), defaults());
+        assert!(session.apply_event(
+            first,
+            PlaybackEvent::Position {
+                elapsed: 12.5,
+                duration: Some(90.0),
+            }
+        ));
+        assert_eq!(session.toggle_clip_start(), Some(12.5));
+        assert_eq!(session.clip_range(), None);
+        assert!(session.apply_event(
+            first,
+            PlaybackEvent::Position {
+                elapsed: 20.0,
+                duration: Some(90.0),
+            }
+        ));
+        assert_eq!(session.toggle_clip_end(), Some(20.0));
+        assert_eq!(session.clip_range(), Some((12.5, 20.0)));
+        assert_eq!(session.toggle_clip_end(), None);
+        assert_eq!(session.clip_end_seconds(), None);
+
+        session.start_item(item("second"), defaults());
+        assert_eq!(session.clip_start_seconds(), None);
+        assert_eq!(session.clip_end_seconds(), None);
+    }
+
+    #[test]
+    fn clip_range_rejects_reversed_and_too_short_markers() {
+        let mut session = PlayerSession::default();
+        let generation = session.start_item(item("track"), defaults());
+        assert!(session.apply_event(
+            generation,
+            PlaybackEvent::Position {
+                elapsed: 10.0,
+                duration: Some(90.0),
+            }
+        ));
+        session.toggle_clip_end();
+        assert!(session.apply_event(
+            generation,
+            PlaybackEvent::Position {
+                elapsed: 9.9,
+                duration: Some(90.0),
+            }
+        ));
+        session.toggle_clip_start();
+        assert_eq!(session.clip_range(), None);
+    }
+
+    #[test]
+    fn replacing_the_item_keeps_generation_and_phase() {
+        let mut session = PlayerSession::default();
+        let mut item = item("a");
+        assert!(!session.replace_current_item(item.clone()));
+        let generation = session.start_item(item.clone(), defaults());
+        session.apply_event(generation, PlaybackEvent::Started);
+        session.toggle_clip_start();
+        item.title = "B".into();
+        assert!(session.replace_current_item(item));
+        assert_eq!(session.generation(), generation);
+        assert_eq!(session.phase(), PlaybackPhase::Playing);
+        assert_eq!(
+            session.current_item().map(|item| item.title.as_str()),
+            Some("B")
+        );
+        assert_eq!(session.clip_start_seconds, None);
+    }
+}

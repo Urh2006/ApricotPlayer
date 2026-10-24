@@ -1,3 +1,213 @@
+# v2.0.0-beta.26 - Spotify BPM analysis
+
+## Fixed
+- B in the player now checks the BPM of Spotify songs too, including while paused. It uses the same tempo analysis, window around the current position and playback-speed adjustment as other sources, without moving or interrupting playback.
+
+# v2.0.0-beta.25 - Save whole Spotify playlists to Liked Songs
+
+## Fixed
+- Saving a large Spotify selection to Liked Songs now works with both Add new ones and Add all. ApricotPlayer sends changes in batches of up to 50 songs, the limit Spotify accepts, and checks each batch before reporting success. Removing large selections from Liked Songs uses the same limit.
+
+# v2.0.0-beta.24 - Remember Spotify song keys
+
+## Added
+- New Spotify setting "Remember keys of played Spotify songs", off by default, in the Spotify settings and in the Spotify section of Settings. Spotify lets an account start about 30 new songs in quick succession and then about one new song every 30 seconds. With this setting, a song you have played before starts without waiting for that limit, also after restarting ApricotPlayer. The keys are kept encrypted for your user account, at most 250,000 songs or about 18 MB, and turning the setting off deletes them.
+
+# v2.0.0-beta.23 - Spotify seeking after Previous and while paused
+
+## Fixed
+- Seeking in a Spotify song after pressing Ctrl+PageUp to start it again works right away again. Before, the position did not change, the sound moved only after a delay, and further presses started from the wrong place.
+- Seeking in a paused Spotify song now changes the position at once, so the time is right before playback continues, as with other sources.
+
+# v2.0.0-beta.22 - Spotify skipping and seeking
+
+## Fixed
+- Skipping quickly through Spotify playlists no longer stops songs with "Spotify playback was interrupted". Spotify lets an account start about 30 new songs in quick succession and then about one new song every 30 seconds. ApricotPlayer now waits until Spotify allows the song, says once that Spotify is limiting new songs, and then starts the song by itself. A song Spotify refused also no longer downloads its whole file in the background, which slowed down the following songs.
+- Pressing Right Arrow or Left Arrow quickly in a Spotify song now moves the position by every press. A press made before the previous one had taken effect used to start from the old position, so presses were lost and the position jumped unevenly.
+
+# v2.0.0-beta.21 - Spotify lists load again
+
+## Fixed
+- Spotify playlists and other Spotify lists no longer stay at Loading. A week after ApricotPlayer last read Spotify's query list, every list read it again before loading, which took a minute or more.
+
+# v2.0.0-beta.20 - Reliable Spotify Previous and Next
+
+## Fixed
+- Quick Previous and Next in Spotify no longer report a playable song as not available and skip it. A temporary key or download failure now says that playback was interrupted, and the song stays playable.
+- Returning to a Spotify song reuses its key, and changing songs during a failure cancels the old attempt instead of stalling playback.
+
+# v2.0.0-beta.19 - Full screen video and reliable file replay
+
+## Fixed
+- Full screen video uses the whole screen. F11 and Escape restore the regular player, and Tab reveals its keyboard-accessible controls.
+- On the Mac, opening a video waits for its video surface to be ready, preventing intermittent black video or playback errors.
+- On Windows, redrawing the main window removes stale controls left behind when switching screens or resizing.
+- Reopening a finished file starts playback again instead of staying at 0:00.
+
+# v2.0.0-beta.18 - Mac background player and VoiceOver cursor
+
+## Fixed
+- On the Mac, the background player shows the player itself between its label and its buttons, as on Windows. Tab reaches it before the buttons, and the player keys work on it and on its buttons.
+- On the Mac, the VoiceOver cursor can activate list rows: VO+Space opens a row as Return does, and the VoiceOver menu command opens its context menu.
+- Leaving a Spotify song for another item pauses Spotify before releasing it, so Spotify can no longer take over the player again with its next song.
+
+# v2.0.0-beta.17 - Spotify list edges and safer Mac shortcuts
+
+## Added
+- While a Spotify song plays, Ctrl+Shift+PageUp plays the first song of its list and Ctrl+Shift+PageDown the last, in the list's own order also with shuffle on. They can be changed in the keyboard shortcuts settings and are not shown in the player. On YouTube, Ctrl+Shift+PageDown is still the next related video.
+
+## Changed
+- On the Mac, Add to playback queue is Command+Shift+Return, because Command+Shift+Q opens the macOS log out dialog, and Current downloads is Command+Option+J, because Command+Option+D hides the Dock.
+
+# v2.0.0-beta.16 - Spotify selection and Mac shortcuts
+
+## Fixed
+- A Spotify song you select no longer turns into the song below it when it cannot start. An interrupted load is tried again, and a song that still cannot play is reported instead of skipped.
+- On the Mac, the Spotify menu names its shortcuts with Command and Option, as the main menu does.
+
+## Changed
+- On the Mac, the Spotify queue shortcut is Command+Option+Shift+U, because Command+Option+Shift+Q logs out of macOS immediately. Windows keeps Ctrl+Alt+Shift+Q.
+
+# v2.0.0-beta.15 - Reliable updates on Windows
+
+## Fixed
+- In-app updates on Windows no longer fail because a yt-dlp helper kept running after ApricotPlayer closed. The app stops the helper on exit and the installer closes leftovers.
+
+# v2.0.0-beta.14 - Window title and Resume fixes
+
+## Improved
+- While something plays, the window title is the playing item followed by ApricotPlayer. Spotify songs read "Song by Artist - ApricotPlayer".
+
+## Fixed
+- Escape on a player opened with Resume last playback session returns to the main menu instead of the original list.
+- Typing in the Spotify search field on Windows no longer runs list or custom single-letter shortcuts.
+
+# v2.0.0-beta.13 - Optional Spotify listening history and playback fixes
+
+## Added
+- Experimental listening-history reporting in both Spotify settings screens, off by default. Enabling it asks for confirmation and explains the additional risk to your Spotify account.
+- Reports include only audio played after enabling the feature. Disabling it cancels pending submissions without interrupting music.
+
+## Fixed
+- Selecting a Spotify song no longer lets an old playback event advance to the song below it.
+- Rapid Previous/Next changes discard old song-failure messages, including with changed pitch. Real Spotify playback failures are still reported.
+
+Spotify controls acceptance of listening records and their effect on recommendations, On Repeat and listening statistics.
+
+# v2.0.0-beta.12 - Clearer Spotify menus and playback messages
+
+## Fixed
+- Opening a playlist menu no longer gives an incorrect Unknown saved state warning.
+- Playlist menus now show Remove from your library for saved playlists and Save to your library for unsaved playlists.
+- Following, Followers, Find friends and My public playlists no longer announce empty sections or zero items before you open them.
+- A failed attempt to prepare the next song no longer announces that the currently playing song was skipped. Real playback failures are still reported.
+
+# v2.0.0-beta.11 - Your Spotify profile and quicker access
+
+## Added
+- My profile in the Spotify menu, with Following, Followers, Find friends and My public playlists.
+- Add artists, playlists, categories and subcategories directly to the Spotify main menu, or remove them again without changing their usual locations.
+- Follow and unfollow artists from search results, song menus and the playing song, using the current Spotify state.
+- Add or remove a public playlist from your Spotify profile, separately from its Public/Private setting and ApricotPlayer menu shortcuts.
+
+## Improved
+- Main-menu playlists and categories have the options that fit them, including direct playlist playback.
+
+# v2.0.0-beta.10 - Large Spotify selections and Liked Songs
+
+## Fixed
+- Select all in a large Spotify collection without freezing the list. Individual songs can still be excluded.
+- Add large selections to playlists while continuing to use the interface.
+- Save to Liked Songs now applies to the whole selection. Fully liked selections offer Remove; mixed selections offer Save with a choice to skip songs already liked.
+
+# v2.0.0-beta.9 - Keep your chosen audio output
+
+## Fixed
+- A failed audio-device check no longer changes your chosen output to automatic.
+- Improved checks for Mac application packages before release.
+
+# v2.0.0-beta.8 - More reliable playback and Mac controls
+
+## Fixed
+- Switching from Spotify to YouTube starts playback on the first attempt.
+- Shuffle stays on or off until you close the player, including when you open another song or return with Escape.
+- Improved Mac background-player controls and keyboard shortcuts.
+- Player-focused commands act on the playing song instead of a list behind it.
+- Added missing Mac options for lyrics, transcripts, resuming playback, copying links and navigating result details.
+- Improved Mac data import and updates, with the previous version restored if an update cannot start.
+- Disabled shortcuts stay disabled after restarting.
+
+# v2.0.0-beta.7 - macOS fixes
+
+## Fixed
+- macOS: a held Command shortcut for pitch or speed stops when the key is released.
+- macOS: YouTube search is about four seconds faster; the bundled yt-dlp and its updates use the unpacked yt-dlp_macos build.
+
+## Known issues
+- Spotify login on macOS: Safari may warn that the connection to the app is not secure; choose Visit Website.
+- Spotify Liked songs: smart shuffle does not turn on, and a second open from Library may not start playback.
+
+# v2.0.0-beta.6 - ApricotPlayer for macOS
+
+## Added
+- Native macOS version for Apple silicon with VoiceOver support, the menu bar item, notifications, start at login, the default player setting, app and yt-dlp updates, and data import from Windows. It is not signed by Apple yet; open it the first time with Open Anyway in System Settings, Privacy & Security.
+- Spotify Followed artists in the Spotify menu on Windows and macOS.
+- Spotify songs can be marked with Shift+A and Ctrl+A and added to a playlist; songs already in the playlist are skipped.
+
+## Changed
+- Spotify search is a screen like the YouTube search instead of a separate window.
+- Spotify reconnects automatically after a lost session.
+- Speed and pitch are kept until the player is closed.
+- Spotify logs the play context and shuffle changes to spotify.log for diagnostics.
+
+## Fixed
+- Windows: focus returns to the last control after Alt+Tab.
+- Translations keep placeholder order in the new Spotify texts.
+
+## Known issues
+- Spotify Liked songs: smart shuffle does not turn on, and a second open from Library may not start playback. Planned for beta 7.
+
+# v2.0.0-beta.5 - Original YouTube Audio and Spotify Playback
+
+## Fixed
+- YouTube playback selects the original audio before quality sorting, instead of an account-default dubbed track. Old cached selections are invalidated without deleting user data.
+- Opening a new Spotify track after pausing starts playback immediately. A delayed decoder pause acknowledgement can no longer become the new track's initial state.
+- Spotify Next and Previous start the selected track even when the previous track was paused, including recommendations that arrive asynchronously. Seeking within the current track and explicitly requested paused loads keep their existing behavior.
+
+## Verification
+- All three failures were reproduced with regression tests before their fixes, including a test using the actual libmpv runtime.
+
+# v2.0.0-beta.4 - Focus-Aware Player Shortcuts
+
+## Fixed
+- Player controls and the Player area take priority over conflicting global shortcuts, including custom shortcut assignments. Menus keep their normal shortcuts and letter navigation.
+- Spotify Like/Unlike and radio target the playing song from the player area, instead of a selected row behind it. Hide/Unhide also targets the playing track when its personal mix is known.
+- Spotify rows keep their own actions when a global shortcut uses the same keys.
+
+## Performance and verification
+- Cache immutable embedded translations lazily to avoid repeated JSON parsing during startup and screen updates.
+- Verified Spotify is already available in Customize main menu and can be hidden without disabling Ctrl+Alt+C.
+- Reviewed YouTube stream caching, prefetch and warm extraction; retained the existing playback path.
+
+# v2.0.0-beta.3 - One-Step Back and Spotify Queue Boundaries
+
+## Fixed
+- Escape and Back return to the source list while keeping background playback and restoring selection/navigation hierarchy.
+- Spotify Previous at the start restarts the current song without Stop or clearing the queue.
+- Standalone Spotify songs seed autoplay correctly; pending recommendations/context pages continue after Next or natural completion.
+- Previous, new loads, transfer and disconnect cancel pending skips; explicit Autoplay Off remains respected.
+
+# v2.0.0-beta.2 - Background Playback and Spotify Recovery
+
+## Fixed
+- Escape keeps playing when Background playback is enabled; next/previous shortcuts work from menus and results without taking plain-letter navigation.
+- Fixed Spotify decoder buffer stalls, stale end-of-track events, pause synchronization, dead Connect sessions and late account/login responses.
+- Isolated account-specific browse caches and fixed pagination after unlike/playlist removal, library folder identity, Smart Shuffle history/queue playback and large album pagination.
+- Supported Spotify artist/show/profile direct links open their existing lists.
+
+## Verification and limits
+- Added deterministic Spotify lifecycle, audio bridge, queue/history and actual libmpv regressions. See `docs/SPOTIFY_AUDIT_BETA2.md` for findings and remaining acceptance work.
+
 # v1.0.21 - Playback Recovery and Identical Pitch Export
 
 ## Added

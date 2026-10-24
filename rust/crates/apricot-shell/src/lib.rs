@@ -1,0 +1,744 @@
+//! The platform-neutral coordinator of the main window.
+//!
+//! The Windows UI (`apricot-ui-windows/src/win32.rs`) decides itself which
+//! screen opens, what the status line says, which row is selected and when
+//! something is announced. This crate holds the same decisions without any
+//! native control, so the macOS UI behaves identically. A native UI owns one
+//! [`Shell`], forwards user input to it and implements [`ShellUi`] to show
+//! the result. Windows moves onto this crate in unit W1
+//! (`docs/MACOS_RUST_PORT_PLAN.md`).
+
+mod audiovault;
+mod bookmarks;
+mod collections;
+mod comments;
+mod converter;
+mod cookies;
+mod download_work;
+mod downloads;
+mod equalizer_dialog;
+mod keyboard;
+mod library;
+mod lyrics;
+mod main_menu;
+mod player;
+mod player_edit;
+mod player_extras;
+mod player_tools;
+mod playlists;
+mod podcast_work;
+mod podcasts;
+mod queue;
+mod related;
+mod repeat;
+mod screens;
+mod search;
+mod settings_window;
+mod shell_actions;
+mod spotify;
+mod spotify_lists;
+mod spotify_panels;
+mod subscriptions;
+mod transcript;
+mod transcript_loader;
+mod trending;
+mod type_ahead;
+mod ui;
+mod updates;
+mod windows_import;
+mod youtube;
+
+pub use audiovault::AudiovaultLogin;
+pub use bookmarks::{BookmarkDialog, BookmarkEntry, BookmarkRequest, BookmarkResponse};
+pub use comments::{CommentsCommand, CommentsDialog, CommentsEffect};
+pub use converter::{ConverterDialog, ConverterOptions, ConverterStart, ConverterView};
+pub use cookies::CookieCommandResult;
+pub use downloads::{DownloadProgress, safe_path_component};
+pub use equalizer_dialog::{EQUALIZER_BUTTONS, EqualizerButton, EqualizerLabels, EqualizerView};
+pub use keyboard::{FocusKind, KeyRoute};
+pub use library::media_collection_label;
+pub use lyrics::{LyricsDialog, LyricsHighlight, LyricsLoaded};
+pub use player::{format_duration, local_file_item};
+pub use player_extras::DetailsLabels;
+pub use podcasts::{rss_episode_label, rss_feed_label};
+pub use queue::{QueueChange, QueueDialog};
+pub use repeat::KeyRelease;
+pub use screens::{ListScreen, ScreenControl, local_folder_result_label};
+pub use search::result_label;
+pub use settings_window::{
+    SettingsBinding, SettingsInput, ShortcutCapture, settings_binding, shortcut_action_label,
+    shortcut_text,
+};
+pub use spotify::{
+    SpotifyLoginAction, SpotifyLoginTexts, SpotifyLoginUpdate, SpotifySettingsTexts,
+};
+pub use spotify_panels::{
+    SpotifyDialogAction, SpotifyDialogKind, SpotifyDialogRow, SpotifyListDialog,
+};
+pub use transcript::{TranscriptButton, TranscriptDialog, TranscriptRows};
+pub use updates::UpdatePrompt;
+
+pub use main_menu::{MainMenuSelection, last_activated_index, preserved_index};
+pub use type_ahead::TypeAhead;
+pub use ui::{ChoiceDialog, PlayerFocus, ShellUi};
+
+use apricot_app::{Application, MainMenuModel};
+use apricot_core::TranslationCatalog;
+
+/// The screen shown in the main window (Windows `MainView`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum View {
+    MainMenu,
+    /// The search screen before a search (Windows `MainView::Search`).
+    Search,
+    /// The search screen with results (Windows `MainView::Results`).
+    Results,
+    /// Channel or playlist contents on the search screen (Windows
+    /// `MainView::YoutubeCollection`).
+    Collection,
+    /// The Trending screen (Windows `MainView::Trending`).
+    Trending,
+    /// The direct link screen (Windows `MainView::DirectLink`).
+    DirectLink,
+    Favorites,
+    History,
+    UserPlaylists,
+    UserPlaylistItems,
+    LocalFolder,
+    RssFeeds,
+    RssItems,
+    PodcastSearchResults,
+    PodcastCategories,
+    DownloadQueue,
+    AudiovaultMenu,
+    AudiovaultSearch,
+    AudiovaultResults,
+    SpotifyHub,
+    SpotifyAccounts,
+    SpotifyBrowse,
+    /// Channel subscriptions (Windows `MainView::Subscriptions`).
+    Subscriptions,
+    /// New videos and episodes (Windows `MainView::NotificationCenter`).
+    NotificationCenter,
+    Player,
+}
+
+/// The main window's application state and the decisions made on it.
+pub struct Shell {
+    pub application: Application,
+    view: View,
+    model: MainMenuModel,
+    /// Windows `last_activated_menu_item`: the main menu returns to it.
+    last_activated_menu_item: Option<&'static str>,
+    player: player::PlayerRuntime,
+    key_repeat: Option<repeat::KeyRepeat>,
+    screens: screens::ScreenState,
+    extras: player_extras::PlayerExtras,
+    /// The open equalizer dialog (Windows `DialogState`).
+    equalizer: Option<equalizer_dialog::EqualizerDialogState>,
+    tools: player_tools::PlayerTools,
+    edit_saves: player_edit::EditSaves,
+    search: search::SearchState,
+    youtube: youtube::YoutubeState,
+    related: Option<related::PendingRelated>,
+    playlists: playlists::PlaylistState,
+    podcasts: podcasts::PodcastState,
+    downloads: downloads::DownloadState,
+    conversions: converter::ConversionState,
+    settings_window: settings_window::SettingsState,
+    subscriptions: subscriptions::SubscriptionState,
+    updates: updates::UpdateState,
+    cookies: cookies::CookieState,
+    audiovault: audiovault::AudiovaultState,
+    spotify: spotify::SpotifyState,
+    /// A Settings browser export runs.
+    settings_cookie_export_running: bool,
+    actions: shell_actions::ActionState,
+    pub(crate) windows_import_committed: bool,
+}
+
+impl Shell {
+    /// Prevents background work from overwriting a newly imported profile.
+    pub(crate) fn finish_windows_import(&mut self) {
+        self.windows_import_committed = true;
+    }
+
+    pub fn new(application: Application) -> Self {
+        let model = application.main_menu_model();
+        Self {
+            application,
+            view: View::MainMenu,
+            model,
+            last_activated_menu_item: None,
+            player: player::PlayerRuntime::default(),
+            key_repeat: None,
+            screens: screens::ScreenState::default(),
+            extras: player_extras::PlayerExtras::default(),
+            equalizer: None,
+            tools: player_tools::PlayerTools::default(),
+            edit_saves: player_edit::EditSaves::default(),
+            search: search::SearchState::default(),
+            youtube: youtube::YoutubeState::default(),
+            related: None,
+            playlists: playlists::PlaylistState::default(),
+            podcasts: podcasts::PodcastState::default(),
+            downloads: downloads::DownloadState::default(),
+            conversions: converter::ConversionState::default(),
+            settings_window: settings_window::SettingsState::default(),
+            subscriptions: subscriptions::SubscriptionState::default(),
+            updates: updates::UpdateState::default(),
+            cookies: cookies::CookieState::default(),
+            audiovault: audiovault::AudiovaultState::default(),
+            spotify: spotify::SpotifyState::default(),
+            settings_cookie_export_running: false,
+            actions: shell_actions::ActionState::default(),
+            windows_import_committed: false,
+        }
+    }
+
+    /// Windows `remember_menu_item`.
+    pub(crate) const fn remember_menu_item(&mut self, item_id: &'static str) {
+        self.last_activated_menu_item = Some(item_id);
+    }
+
+    #[must_use]
+    pub const fn view(&self) -> View {
+        self.view
+    }
+
+    /// The main menu as it is currently shown.
+    #[must_use]
+    pub const fn main_menu(&self) -> &MainMenuModel {
+        &self.model
+    }
+
+    #[must_use]
+    pub fn catalog(&self) -> TranslationCatalog {
+        apricot_app::embedded_catalog(&self.application.settings().language)
+    }
+
+    /// Windows `catalog_text`.
+    #[must_use]
+    pub fn text(&self, key: &str) -> String {
+        self.catalog().text(key).to_owned()
+    }
+
+    /// Windows `run_win32` after the window is shown: the main menu with its
+    /// first row and the one-time startup announcement
+    /// (`take_startup_announcement`, spoken by `announce_player_text`).
+    pub fn start(&mut self, ui: &mut dyn ShellUi) {
+        self.model = self.application.main_menu_model();
+        self.show_main_menu_screen(ui, 0, true);
+        ui.set_status(&self.text("ready"), false);
+        if let Some(key) = self.application.take_startup_announcement() {
+            let message = self.text(key);
+            ui.set_status(&message, true);
+        }
+        self.install_cookie_repairer();
+        self.spotify_autoconnect();
+        self.configure_subscription_timer(ui);
+        self.check_subscriptions_if_due(ui);
+        self.start_rss(ui);
+        self.configure_app_update_timer(ui);
+        self.schedule_startup_update_checks(ui);
+        if self.spotify.service_running() {
+            ui.set_background_polling(true);
+        }
+    }
+
+    /// End, or Down at the last row of the list (Windows
+    /// `rss_list_subclass_proc`): the episode list loads more.
+    pub fn list_end_reached(&mut self, ui: &mut dyn ShellUi) {
+        if self.view == View::RssItems {
+            self.maybe_extend_rss_items(ui);
+        }
+    }
+
+    /// Windows `show_main_menu`: the main menu with the last opened item
+    /// selected, "Ready" on the status line, focus on the list.
+    pub fn show_main_menu(&mut self, ui: &mut dyn ShellUi) {
+        self.stop_key_repeat(ui);
+        self.cancel_local_folder_scan();
+        self.application.navigate_main_menu();
+        self.view = View::MainMenu;
+        self.refresh_main_menu(ui, MainMenuSelection::LastActivated, None, true);
+        ui.set_status(&self.text("ready"), false);
+    }
+
+    /// Windows `refresh_main_menu`. `current` is the row selected now, for
+    /// [`MainMenuSelection::Preserve`].
+    pub fn refresh_main_menu(
+        &mut self,
+        ui: &mut dyn ShellUi,
+        selection: MainMenuSelection,
+        current: Option<usize>,
+        focus: bool,
+    ) {
+        let old_label = current
+            .and_then(|index| self.model.items.get(index))
+            .map(|item| item.label.clone());
+        self.model = self.application.main_menu_model();
+        let selected = match selection {
+            MainMenuSelection::LastActivated => {
+                last_activated_index(&self.model.items, self.last_activated_menu_item)
+            }
+            MainMenuSelection::Preserve => {
+                let labels: Vec<_> = self
+                    .model
+                    .items
+                    .iter()
+                    .map(|item| item.label.as_str())
+                    .collect();
+                preserved_index(&labels, old_label.as_deref(), current)
+            }
+        };
+        self.show_main_menu_screen(ui, selected, focus);
+    }
+
+    /// The main menu as a list screen: the list, then Open.
+    fn show_main_menu_screen(&self, ui: &mut dyn ShellUi, selected: usize, focus: bool) {
+        self.sync_window_fullscreen(ui);
+        ui.show_list_screen(&ListScreen {
+            list_name: self.model.accessible_name.clone(),
+            rows: self
+                .model
+                .items
+                .iter()
+                .map(|item| item.label.clone())
+                .collect(),
+            selected: Some(selected),
+            controls: vec![
+                ScreenControl::List,
+                ScreenControl::Button {
+                    id: "open",
+                    label: self.text("open"),
+                },
+            ],
+            focus_list: focus,
+        });
+    }
+
+    /// Windows `activate_main_menu_selection` for the row at `index`.
+    #[allow(clippy::too_many_lines)] // One branch per main-menu destination.
+    pub fn activate_main_menu_row(&mut self, ui: &mut dyn ShellUi, index: usize) {
+        if self.windows_import_committed {
+            return;
+        }
+        let Some(item) = self.model.items.get(index).cloned() else {
+            return;
+        };
+        self.last_activated_menu_item = Some(item.id);
+        match item.id {
+            "resume_last_session" => {
+                self.resume_last_player_session(ui);
+                return;
+            }
+            "diagnostic_report" => {
+                self.copy_diagnostic_report(ui);
+                return;
+            }
+            "exit" => {
+                ui.exit();
+                return;
+            }
+            "app_update" => {
+                self.open_pending_app_update(ui);
+                return;
+            }
+            "play_file" => {
+                self.open_media_file(ui);
+                return;
+            }
+            "play_folder" => {
+                self.open_media_folder(ui);
+                return;
+            }
+            "bookmarks" => {
+                self.show_bookmarks_dialog(ui, false, false);
+                return;
+            }
+            "search" => {
+                self.show_search(ui);
+                return;
+            }
+            "trending" => {
+                self.show_trending(ui);
+                return;
+            }
+            "playlists" => {
+                self.show_user_playlists(ui);
+                return;
+            }
+            "favorites" => {
+                self.show_media_collection(ui, View::Favorites);
+                return;
+            }
+            "history" => {
+                self.show_media_collection(ui, View::History);
+                return;
+            }
+            "rss_feeds" => {
+                self.show_rss_feeds(ui);
+                return;
+            }
+            "subscriptions" => {
+                self.show_subscriptions(ui);
+                return;
+            }
+            "notification_center" => {
+                self.show_notification_center(ui);
+                return;
+            }
+            "current_downloads" => {
+                self.show_download_queue(ui);
+                return;
+            }
+            "settings" => {
+                self.open_settings(ui);
+                return;
+            }
+            "audiovault" => {
+                self.show_audiovault_menu(ui);
+                return;
+            }
+            "spotify" => {
+                self.show_spotify_hub(ui);
+                return;
+            }
+            "file_converter" | "folder_converter" => {
+                self.show_converter(ui, item.id == "folder_converter");
+                return;
+            }
+            "direct_link" => {
+                self.show_direct_link(ui);
+                return;
+            }
+            "playback_queue" => {
+                self.show_playback_queue(ui);
+                return;
+            }
+            _ => {}
+        }
+        // Every other destination arrives with its macOS screen; until then
+        // the row says so, as Windows did for actions without a Rust route.
+        let feature = item.label.split('\t').next().unwrap_or(&item.label);
+        let message = apricot_app::unavailable_feature_message(&self.catalog(), feature);
+        ui.set_status(&message, true);
+    }
+
+    /// The player, podcast and download actions; `true` when `action_id`
+    /// is one.
+    fn feature_action(&mut self, ui: &mut dyn ShellUi, action_id: &str) -> bool {
+        self.spotify_transport(ui, action_id)
+            || self.spotify_action(ui, action_id)
+            || self.activate_player_action(ui, action_id)
+            || self.podcast_action(ui, action_id)
+            || self.download_action(ui, action_id)
+            || self.settings_action(ui, action_id)
+            || (action_id == "open_audiovault" && {
+                self.show_audiovault_menu(ui);
+                true
+            })
+    }
+
+    /// An action chosen by its shortcut or from a menu (Windows
+    /// `activate_action`).
+    #[allow(clippy::too_many_lines)] // One arm per action, as on Windows.
+    pub fn activate_action(&mut self, ui: &mut dyn ShellUi, action_id: &str) {
+        if self.windows_import_committed {
+            return;
+        }
+        self.leave_player_for_global_navigation(ui, action_id);
+        if self.feature_action(ui, action_id) {
+            return;
+        }
+        match action_id {
+            "resume_last_session" => {
+                self.resume_last_player_session(ui);
+                return;
+            }
+            "copy_diagnostic_report" => {
+                self.copy_diagnostic_report(ui);
+                return;
+            }
+            "copy_link" => {
+                self.copy_active_location(ui);
+                return;
+            }
+            "result_column_previous" | "result_column_next" => {
+                self.announce_active_media_column(ui, action_id == "result_column_next");
+                return;
+            }
+            "open_main_menu" => {
+                self.show_main_menu(ui);
+                return;
+            }
+            "open_selected" => {
+                self.activate_selection(ui);
+                return;
+            }
+            "open_play_file" => {
+                self.open_media_file(ui);
+                return;
+            }
+            "open_play_from_folder" => {
+                self.open_media_folder(ui);
+                return;
+            }
+            "open_bookmarks" => {
+                self.show_bookmarks_dialog(ui, false, false);
+                return;
+            }
+            "open_search" => {
+                self.show_search(ui);
+                return;
+            }
+            "open_playlists" => {
+                self.show_user_playlists(ui);
+                return;
+            }
+            "open_subscriptions" => {
+                self.show_subscriptions(ui);
+                return;
+            }
+            "new_subscription_videos" => {
+                self.show_notification_center(ui);
+                return;
+            }
+            "subscribe_channel" => {
+                self.subscribe_active_channel(ui);
+                return;
+            }
+            "unsubscribe_channel" => {
+                self.unsubscribe_active_channel(ui);
+                return;
+            }
+            "create_playlist" if self.view == View::SpotifyBrowse => {
+                self.spotify_create_playlist(ui);
+                return;
+            }
+            "create_playlist" => {
+                self.create_user_playlist(ui, None);
+                return;
+            }
+            "add_to_playlist" => {
+                self.add_active_item_to_user_playlist(ui);
+                return;
+            }
+            "remove_from_playlist" => {
+                self.remove_active_item_from_user_playlist(ui);
+                return;
+            }
+            "open_favorites" => {
+                self.show_media_collection(ui, View::Favorites);
+                return;
+            }
+            "open_history" => {
+                self.show_media_collection(ui, View::History);
+                return;
+            }
+            "add_favorite" => {
+                self.add_active_favorite(ui);
+                return;
+            }
+            "remove_favorite" => {
+                self.remove_active_favorite(ui);
+                return;
+            }
+            "remove_selected" if self.view == View::SpotifyBrowse => {
+                self.spotify_browse_remove_selected(ui);
+                return;
+            }
+            "remove_selected" => {
+                self.remove_selected_collection_item(ui);
+                return;
+            }
+            "open_trending" => {
+                self.show_trending(ui);
+                return;
+            }
+            "open_direct_link" => {
+                self.show_direct_link(ui);
+                return;
+            }
+            "open_channel" => {
+                self.open_item_channel(ui);
+                return;
+            }
+            "open_playback_queue" => {
+                self.show_playback_queue(ui);
+                return;
+            }
+            "add_to_playback_queue" => {
+                self.add_active_item_to_playback_queue(ui);
+                return;
+            }
+            "remove_from_playback_queue" => {
+                self.remove_active_item_from_playback_queue(ui);
+                return;
+            }
+            "context_menu" => {
+                self.show_context_menu_for_active_view(ui);
+                return;
+            }
+            // Beta 17: they act only on a Spotify song (spotify_transport).
+            "spotify_first_track" | "spotify_last_track" => return,
+            _ => {}
+        }
+        // Every other action arrives with its macOS screen.
+        let catalog = self.catalog();
+        if let Some(message) = apricot_app::unavailable_action_message(&catalog, action_id, None) {
+            ui.set_status(&message, true);
+        }
+    }
+
+    /// A button or check box of the player page (Windows
+    /// `activate_player_control`): the Full screen check box keeps focus.
+    pub fn activate_player_control(&mut self, ui: &mut dyn ShellUi, action_id: &str) {
+        if action_id == "player_fullscreen" {
+            self.toggle_player_fullscreen(ui, true, true);
+        } else {
+            self.activate_action(ui, action_id);
+        }
+    }
+
+    /// The player actions of Windows `activate_action`; `true` when
+    /// `action_id` is one of them.
+    fn activate_player_action(&mut self, ui: &mut dyn ShellUi, action_id: &str) -> bool {
+        match action_id {
+            "background_play_pause" => self.background_play_pause(ui),
+            "player_play_pause" => self.toggle_player_pause(ui),
+            "close_player" => self.close_current_player(ui),
+            "player_back" => self.player_back(ui),
+            // The player page's Back buttons (`player_model` navigation row).
+            // Windows `activate_player_control`.
+            "player_back_to_results" => self.navigate_back(ui),
+            "player_back_to_main_menu" => self.leave_player_to_main_menu(ui, false),
+            "player_fullscreen_back_to_results" => {
+                self.set_player_fullscreen(ui, false, false, false);
+            }
+            "player_fullscreen" => self.toggle_player_fullscreen(ui, false, true),
+            "player_details" => self.show_player_details(ui),
+            "details_copy" => self.copy_player_details(ui),
+            "details_back" => self.hide_player_details(ui),
+            "player_output_devices" => self.show_output_devices(ui),
+            "player_equalizer" => self.show_player_equalizer(ui),
+            "player_replaygain" => self.cycle_player_replaygain(ui),
+            "player_bpm" => self.announce_bpm(ui),
+            "player_previous_chapter" => self.seek_relative_player_chapter(ui, false),
+            "player_next_chapter" => self.seek_relative_player_chapter(ui, true),
+            "player_chapters" => self.show_player_chapters(ui),
+            "player_copy_link" => self.copy_active_location(ui),
+            "player_copy_timestamp_link" => self.copy_current_timestamp_link(ui),
+            "copy_stream_url" => self.copy_active_stream_url(ui),
+            "player_edit_mode" => self.toggle_player_edit_mode(ui),
+            "player_save_edit_copy" => self.save_edited_local_file(ui, false),
+            "player_replace_edit_original" => self.save_edited_local_file(ui, true),
+            "player_marker_start" => self.toggle_player_clip_marker(ui, true),
+            "player_marker_end" => self.toggle_player_clip_marker(ui, false),
+            "player_preview_marked_clip" => self.preview_marked_clip(ui),
+            "player_add_bookmark" => {
+                let _ = self.prompt_add_current_bookmark(ui);
+            }
+            "player_bookmarks" => self.show_bookmarks_dialog(ui, true, false),
+            "player_lyrics" => self.show_player_lyrics(ui),
+            "player_transcript" => self.show_player_transcript(ui),
+            "player_comments" => self.show_player_comments(ui),
+            "player_next_related" => self.play_related_video(ui, true),
+            "player_back_keep_playing" => self.navigate_back_preserving_player(ui),
+            "player_previous" => self.navigate_player_relative(ui, -1, false),
+            "player_next" => self.navigate_player_relative(ui, 1, false),
+            "player_time" => self.announce_player_time(ui),
+            "player_volume_status" => self.announce_player_volume(ui),
+            "player_format_status" => self.announce_player_format(ui),
+            "player_seek_back" => self.seek_player(ui, -self.configured_seek_seconds()),
+            "player_seek_forward" => self.seek_player(ui, self.configured_seek_seconds()),
+            "player_seek_back_large" => self.seek_player(ui, -60.0),
+            "player_seek_forward_large" => self.seek_player(ui, 60.0),
+            "player_seek_back_huge" => self.seek_player(ui, -600.0),
+            "player_seek_forward_huge" => self.seek_player(ui, 600.0),
+            "player_seek_start" => self.seek_player_to_start(ui),
+            "player_seek_end" => self.seek_player_to_end(ui),
+            "player_volume_up" => self.adjust_player_volume(ui, self.configured_volume_step()),
+            "player_volume_down" => self.adjust_player_volume(ui, -self.configured_volume_step()),
+            "player_speed_up" => self.adjust_player_speed(ui, self.configured_speed_step()),
+            "player_speed_down" => self.adjust_player_speed(ui, -self.configured_speed_step()),
+            "player_pitch_up" => self.adjust_player_pitch(ui, self.configured_pitch_step()),
+            "player_pitch_down" => self.adjust_player_pitch(ui, -self.configured_pitch_step()),
+            "player_reset_speed_pitch" => self.reset_player_speed_pitch(ui),
+            "player_repeat" => {
+                self.toggle_player_session_setting(ui, apricot_app::SessionToggle::Repeat);
+            }
+            "player_shuffle" => {
+                self.toggle_player_session_setting(ui, apricot_app::SessionToggle::Shuffle);
+            }
+            "player_bass_boost" => {
+                self.toggle_player_session_setting(ui, apricot_app::SessionToggle::BassBoost);
+            }
+            "player_volume_boost" => {
+                self.toggle_player_session_setting(ui, apricot_app::SessionToggle::VolumeBoost);
+            }
+            "session_autoplay_next" => {
+                self.toggle_player_session_setting(ui, apricot_app::SessionToggle::AutoplayNext);
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Windows `leave_player_for_global_navigation`: leaving the player page
+    /// for another screen stops playback unless background playback is on.
+    fn leave_player_for_global_navigation(&mut self, ui: &mut dyn ShellUi, action_id: &str) {
+        if !matches!(
+            action_id,
+            "open_main_menu"
+                | "open_search"
+                | "open_play_from_folder"
+                | "open_play_file"
+                | "open_direct_link"
+                | "open_favorites"
+                | "open_bookmarks"
+                | "open_playlists"
+                | "open_subscriptions"
+                | "open_current_downloads"
+                | "open_history"
+                | "open_podcasts_rss"
+                | "open_settings"
+                | "new_subscription_videos"
+                | "open_audiovault"
+                | "open_spotify"
+                | "spotify_accounts"
+                | "spotify_search"
+                | "spotify_library"
+                | "spotify_liked_songs"
+                | "spotify_playlists"
+                | "spotify_daily_mixes"
+        ) || self.view != View::Player
+        {
+            return;
+        }
+        if self.application.settings().enable_background_playback {
+            self.application.keep_player_return_frame();
+            return;
+        }
+        self.close_player_runtime(ui);
+        if matches!(
+            action_id,
+            "open_settings" | "open_bookmarks" | "open_play_file" | "open_play_from_folder"
+        ) {
+            // These open over the current screen; without a player there is
+            // no player page to return to.
+            self.show_main_menu(ui);
+        }
+    }
+}
+
+/// Seconds since the Unix epoch.
+pub(crate) fn unix_timestamp() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |duration| duration.as_secs_f64())
+}
+
+#[cfg(test)]
+mod tests;

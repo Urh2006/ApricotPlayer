@@ -2,9 +2,24 @@
 
 Ta datoteka vsebuje samo potrjeno prihodnje delo. Stare ideje iz chatov niso avtomatsko del backloga.
 
+## ApricotPlayer 2.0 Rust rewrite
+
+Status: potrjen in arhitekturno splaniran; implementacija se začne na uporabnikov
+ukaz `začnimo`.
+
+Celotna ApricotPlayerjeva aplikacijska koda se prepiše v Rust brez namernega
+izpuščanja funkcij. Windows izdaja mora najprej doseči popolno pariteto s Python
+baselineom. Razvojne alphe in bete se gradijo ter nameščajo samo lokalno in se ne
+objavljajo na GitHubu. Spotify trenutno ni v obsegu.
+
+Izvedbeni plan: `docs/RUST_REWRITE_PLAN.md`.
+
+Obvezni acceptance manifest: `docs/RUST_PARITY_MANIFEST.md`.
+
 ## macOS feature-parity port
 
-Status: potrjeno prihodnje delo; implementacija se ni začela.
+Status: potrjeno prihodnje delo po Windows Rust parity gateu; implementacija se
+ni začela.
 
 ApricotPlayer mora dobiti macOS arm64 izdajo z vsemi funkcijami trenutne Windows
 izdaje. Port mora ohraniti en skupni codebase, VoiceOver in popolno tipkovnično
@@ -14,9 +29,9 @@ nenotariziran, dokler projekt nima Apple Developer računa; release mora jasno
 opisati Gatekeeper opozorilo. Noben obstoječ feature ne sme biti namenoma
 izpuščen.
 
-Celoten fazni plan, platformna arhitektura, feature inventory, settings in
-shortcut manifest ter kriteriji za stable release so v
-`docs/MACOS_PORT_PLAN.md`.
+Celoten macOS acceptance manifest je v `docs/MACOS_PORT_PLAN.md`. Njegovo staro
+Python/wxPython izvedbeno zaporedje nadomesti Rust-first zaporedje iz
+`docs/RUST_REWRITE_PLAN.md`; funkcijska pariteta ostane nespremenljiva.
 
 ## Pred stabilno 1.0
 
