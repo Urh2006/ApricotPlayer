@@ -1,3 +1,15 @@
+# v2.0.1 - Related video navigation and cookie imports
+
+- Playing a related YouTube video no longer replaces the search results you were browsing. The original list and selection stay available when you return, while Previous and Next follow the related-video playback sequence.
+- Cookie file import accepts BOM-marked UTF-16 exports, blank lines before the Netscape header, and space-separated HttpOnly cookie rows. Unsupported or malformed imports keep the previous cached cookies.
+- Invalid Netscape cookie errors identify the line without including its cookie value. The README explains how to import an export and what information helps diagnose a remaining problem.
+
+These fixes do not make expired or revoked YouTube sessions valid again. The reported Windows equalizer issue was investigated with native keyboard/control tests, but preset corruption was not reproduced; no speculative equalizer behavior change is included.
+
+Download **ApricotPlayerSetup.exe** or **ApricotPlayer.zip** for Windows, or **ApricotPlayer-macOS-arm64.dmg** for Apple silicon Macs running macOS 27 or later. The Mac ZIP is used by the in-app updater. Settings and saved data are retained.
+
+The Mac app is not notarized by Apple. If macOS blocks its first launch, open **System Settings > Privacy & Security**, choose **Open Anyway** for ApricotPlayer, and confirm. Only use packages from this project's Releases page. This release does not change Keychain permissions or resolve the repeated Keychain prompt after updates.
+
 # v2.0.0 - Rust rewrite, Spotify, and macOS
 
 ApricotPlayer 2.0 is now stable. This is the full Rust rewrite, including the work completed through beta 26. If you are updating from the last Python version, 1.0.21, here is what has changed.

@@ -2,7 +2,7 @@
 
 ApricotPlayer is an accessible media player and downloader for Windows and macOS. Search YouTube and SoundCloud, listen to Spotify, follow podcasts, watch videos, play your own files, and keep everything within reach of the keyboard.
 
-The current stable release is **2.0.0**, written in Rust with native Windows and Mac interfaces. It brings Spotify and macOS support alongside the familiar ApricotPlayer features. Existing Windows users can update directly from the Python-based 1.0.21 release through the Stable update channel.
+The current stable release is **2.0.1**, written in Rust with native Windows and Mac interfaces. It brings Spotify and macOS support alongside the familiar ApricotPlayer features. Existing Windows users can update directly from the Python-based 1.0.21 release through the Stable update channel.
 
 ## Contents
 
@@ -25,7 +25,7 @@ The current stable release is **2.0.0**, written in Rust with native Windows and
 
 ## Download and install
 
-Open the [Releases page](https://github.com/Urh2006/ApricotPlayer/releases), choose a release, and expand **Assets**. Choose **2.0.0 or a newer stable release** for everyday use. Releases marked **Pre-release** are optional test versions, offered through the Beta update channel. Read the release notes before installing.
+Open the [Releases page](https://github.com/Urh2006/ApricotPlayer/releases), choose a release, and expand **Assets**. Choose **2.0.1 or a newer stable release** for everyday use. Releases marked **Pre-release** are optional test versions, offered through the Beta update channel. Read the release notes before installing.
 
 The files under **Source code** are for development. To run ApricotPlayer, download one of the packages below. The packages include the media tools they need; you do not need to install Python, Rust, mpv, or FFmpeg separately.
 
@@ -128,6 +128,10 @@ These tools depend on what the source provides. Not every video has chapters or 
 ### Cookies and network settings
 
 Most public content does not need browser cookies. For content that needs your signed-in session, Settings can export cookies from supported Brave, Chrome, Edge, Firefox, Chromium, Opera, or Vivaldi profiles, or import a cookies file. Browser and profile availability depends on your system. Open the selected browser's YouTube login profile from Settings if you need to sign in first. The exporter can offer to close the browser when needed. Treat cookies files as private account data.
+
+Import the export through Settings rather than editing ApricotPlayer's cached cookies file by hand. Supported imports include Netscape cookies.txt, JSON exports, and Cookie header text; UTF-8 and BOM-marked UTF-16 text files are accepted. An import error leaves the previous cached file intact. Finding login-cookie names does not prove that YouTube still accepts that session.
+
+For a private-session export, follow [yt-dlp's YouTube cookie instructions](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies): sign in in a new private window, use the same tab to open YouTube's robots.txt, export the cookies, and close that private session. Cookies are not guaranteed to remain valid permanently. If a problem remains, report the browser, export format, app and yt-dlp versions, and the error text. Never attach the cookies themselves.
 
 Age-restricted YouTube support is a separate option, off by default. Advanced network options include a proxy, user-agent override, rate limit, retries, socket timeout, concurrent download fragments, a custom FFmpeg location, and a YouTube Data API key. Settings includes a link to obtain an API key. A key is needed for Trending; ordinary search and playback do not require one. Bundled JavaScript support is used when YouTube extraction requires it.
 

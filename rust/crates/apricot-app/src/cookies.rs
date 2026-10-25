@@ -301,6 +301,12 @@ fn normalized_absolute(path: &Path) -> String {
 /// Python `decode_cookie_file_bytes`.
 #[must_use]
 pub fn decode_cookie_file_bytes(data: &[u8]) -> String {
+    if data.starts_with(b"\xff\xfe") {
+        return encoding_rs::UTF_16LE.decode(data).0.into_owned();
+    }
+    if data.starts_with(b"\xfe\xff") {
+        return encoding_rs::UTF_16BE.decode(data).0.into_owned();
+    }
     let data = data.strip_prefix(b"\xef\xbb\xbf").unwrap_or(data);
     if let Ok(text) = std::str::from_utf8(data) {
         return text.to_owned();
@@ -338,7 +344,7 @@ pub fn normalized_netscape_cookie_text(text: &str) -> String {
     let mut lines = Vec::new();
     let mut has_header = false;
     let unified = text.replace("\r\n", "\n").replace('\r', "\n");
-    for raw_line in unified.split('\n') {
+    for raw_line in unified.trim_start_matches(['\n', '\u{feff}']).split('\n') {
         let mut line = raw_line.trim_start_matches('\u{feff}').to_owned();
         let lowered = line.to_lowercase();
         if lowered.starts_with("# netscape http cookie file")
@@ -347,7 +353,10 @@ pub fn normalized_netscape_cookie_text(text: &str) -> String {
             has_header = true;
         }
         let stripped = line.trim();
-        if !stripped.is_empty() && !stripped.starts_with('#') && !stripped.contains('\t') {
+        if !stripped.is_empty()
+            && (!stripped.starts_with('#') || stripped.starts_with("#HttpOnly_"))
+            && !stripped.contains('\t')
+        {
             let parts = split_whitespace_max(stripped, 6);
             if parts.len() >= 7 {
                 line = parts[..7].join("\t");
@@ -379,7 +388,7 @@ pub fn parse_netscape_cookie_text(text: &str, filename: &str) -> Result<CookieJa
         )));
     }
     let mut jar = CookieJar::default();
-    for raw_line in lines {
+    for (line_index, raw_line) in lines.enumerate() {
         let (http_only, line) = raw_line
             .strip_prefix("#HttpOnly_")
             .map_or((false, raw_line), |rest| (true, rest));
@@ -389,7 +398,8 @@ pub fn parse_netscape_cookie_text(text: &str, filename: &str) -> Result<CookieJa
         }
         let invalid = || {
             CookieError::Load(format!(
-                "invalid Netscape format cookies file '{filename}': '{raw_line}'"
+                "invalid Netscape format cookies file '{filename}' at line {}",
+                line_index + 2
             ))
         };
         let fields = line.split('\t').collect::<Vec<_>>();
@@ -1488,6 +1498,68 @@ mod tests {
 
     fn catalog() -> TranslationCatalog {
         crate::embedded_catalog("en")
+    }
+
+    #[test]
+    fn import_accepts_utf16_exports_and_leading_blank_lines() {
+        let root = tempfile::tempdir().expect("temporary directory");
+        let source = root.path().join("export.txt");
+        let cache = root.path().join("cookies.txt");
+        let text = "\r\n# Netscape HTTP Cookie File\r\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\ttest-secret\r\n";
+        for big_endian in [false, true] {
+            let mut bytes = if big_endian {
+                vec![0xfe, 0xff]
+            } else {
+                vec![0xff, 0xfe]
+            };
+            for unit in text.encode_utf16() {
+                bytes.extend(if big_endian {
+                    unit.to_be_bytes()
+                } else {
+                    unit.to_le_bytes()
+                });
+            }
+            fs::write(&source, bytes).expect("export");
+            let imported = import_cookie_file_to_cache(&source, &cache).expect("UTF-16 import");
+            assert!(imported.has_login);
+            assert_eq!(imported.total_count, 1);
+            assert!(cookies_file_has_youtube_login(&cache));
+        }
+        fs::write(&source, text).expect("UTF-8 export");
+        assert!(
+            import_cookie_file_to_cache(&source, &cache)
+                .expect("leading blank")
+                .has_login
+        );
+    }
+
+    #[test]
+    fn whitespace_export_preserves_http_only_login_cookies() {
+        let root = tempfile::tempdir().expect("temporary directory");
+        let source = root.path().join("export.txt");
+        let cache = root.path().join("cookies.txt");
+        fs::write(
+            &source,
+            "# Netscape HTTP Cookie File\n#HttpOnly_.youtube.com TRUE / TRUE 0 SID test-secret\n",
+        )
+        .unwrap();
+        let imported = import_cookie_file_to_cache(&source, &cache).expect("import");
+        assert!(imported.has_login);
+        let jar =
+            parse_netscape_cookie_text(&fs::read_to_string(&cache).unwrap(), "cache").unwrap();
+        assert!(jar.iter().next().unwrap().http_only);
+    }
+
+    #[test]
+    fn malformed_cookie_errors_do_not_expose_cookie_values_or_replace_cache() {
+        let root = tempfile::tempdir().expect("temporary directory");
+        let source = root.path().join("export.txt");
+        let cache = root.path().join("cookies.txt");
+        fs::write(&cache, "previous cookies").unwrap();
+        fs::write(&source, "# Netscape HTTP Cookie File\n.youtube.com\tFALSE\t/\tTRUE\t0\tSID\tprivate-cookie-value\n").unwrap();
+        let error = import_cookie_file_to_cache(&source, &cache).expect_err("invalid domain flag");
+        assert!(!error.to_string().contains("private-cookie-value"));
+        assert_eq!(fs::read_to_string(cache).unwrap(), "previous cookies");
     }
 
     #[test]

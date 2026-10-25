@@ -25,6 +25,8 @@ pub enum PlaybackSequenceSource {
     /// Python `set_player_sequence(self.audiovault_results)`.
     Audiovault,
     Collection,
+    /// Recommendations belong to playback, never to the browsing results.
+    RelatedVideos,
 }
 
 #[derive(Debug, Default)]

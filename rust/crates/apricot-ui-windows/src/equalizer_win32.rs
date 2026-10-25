@@ -1295,6 +1295,144 @@ mod tests {
         }
     }
 
+    /// The actual dialog callback and `IsDialogMessage` keyboard path, isolated
+    /// from the user's settings and player. No foreground focus is changed.
+    #[test]
+    #[ignore = "creates native Windows controls"]
+    #[allow(clippy::too_many_lines, clippy::float_cmp)] // One native lifecycle; exact tenths of a dB.
+    fn native_slider_arrows_change_only_the_focused_band() {
+        use super::*;
+        use std::{cell::RefCell, rc::Rc};
+        use windows::Win32::UI::Controls::{
+            ICC_BAR_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx,
+        };
+        use windows::Win32::UI::Input::KeyboardAndMouse::{VK_DOWN, VK_UP};
+        use windows::Win32::UI::WindowsAndMessaging::WM_KEYDOWN;
+        struct Host(Rc<RefCell<Option<EqualizerSession>>>);
+        impl EqualizerDialogHost for Host {
+            fn catalog(&self) -> TranslationCatalog {
+                apricot_app::embedded_catalog("en")
+            }
+            fn settings(&self) -> EqualizerSettings {
+                EqualizerSettings::from_document(&apricot_storage::SettingsDocument::default())
+            }
+            fn update_settings(
+                &mut self,
+                _: &EqualizerSettings,
+                _: bool,
+            ) -> std::result::Result<(), String> {
+                panic!("arrows must not write saved presets")
+            }
+            fn session_equalizer(&self) -> Option<EqualizerSession> {
+                self.0.borrow().clone()
+            }
+            fn set_session_equalizer(&mut self, value: Option<EqualizerSession>) {
+                *self.0.borrow_mut() = value;
+            }
+            fn apply_to_player(&mut self) {}
+            fn device_key(&self) -> String {
+                String::new()
+            }
+            fn announce(&mut self, _: &str) {}
+        }
+        unsafe {
+            let common = INITCOMMONCONTROLSEX {
+                dwSize: u32::try_from(size_of::<INITCOMMONCONTROLSEX>()).unwrap(),
+                dwICC: ICC_BAR_CLASSES,
+            };
+            assert!(InitCommonControlsEx(&raw const common).as_bool());
+            register().unwrap();
+            let instance = HINSTANCE(GetModuleHandleW(None).unwrap().0);
+            let parent = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                CLASS_NAME,
+                w!("EQ keyboard test"),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                760,
+                600,
+                None,
+                None,
+                Some(instance),
+                None,
+            )
+            .unwrap();
+            let controls =
+                create_controls(parent, instance, &apricot_app::embedded_catalog("en")).unwrap();
+            let live = Rc::new(RefCell::new(None));
+            let mut state = Box::new(DialogState {
+                host: Box::new(Host(live.clone())),
+                catalog: apricot_app::embedded_catalog("en"),
+                previous_focus: HWND::default(),
+                preset_label: controls.preset_label,
+                preset: controls.preset,
+                range_label: controls.range_label,
+                range: controls.range,
+                name_label: controls.name_label,
+                name: controls.name,
+                band_labels: controls.band_labels,
+                sliders: controls.sliders,
+                buttons: controls.buttons,
+                preset_options: Vec::new(),
+                visible_preset: "flat".into(),
+                gains: equalizer::default_gains(),
+                db_range: 24,
+                original_equalizer: None,
+                original_db_range: 24,
+                compare_showing_original: false,
+                accepted: false,
+            });
+            let settings = state.host.settings();
+            initialize_controls(&mut state, &settings, "flat");
+            let gains: EqualizerGains = EQUALIZER_BANDS
+                .iter()
+                .enumerate()
+                .map(|(i, band)| {
+                    (
+                        band.id.to_owned(),
+                        f64::from(u32::try_from(i).unwrap()) - 5.0,
+                    )
+                })
+                .collect();
+            show_gains(&mut state, &gains);
+            let before: Vec<_> = state
+                .sliders
+                .iter()
+                .map(|slider| slider_position(*slider))
+                .collect();
+            let preset_before = SendMessageW(state.preset, CB_GETCURSEL, None, None);
+            let slider = state.sliders[2];
+            SetWindowLongPtrW(parent, WINDOW_LONG_PTR_INDEX(0), (&raw mut *state) as isize);
+            for (key, delta) in [(VK_UP, -SLIDER_LINE_STEP), (VK_DOWN, 0)] {
+                let message = MSG {
+                    hwnd: slider,
+                    message: WM_KEYDOWN,
+                    wParam: WPARAM(usize::from(key.0)),
+                    ..Default::default()
+                };
+                if !IsDialogMessageW(parent, &raw const message).as_bool() {
+                    DispatchMessageW(&raw const message);
+                }
+                assert_eq!(slider_position(slider), before[2] + delta);
+                for (index, other) in state.sliders.iter().enumerate() {
+                    let expected = before[index] + if index == 2 { delta } else { 0 };
+                    assert_eq!(slider_position(*other), expected);
+                    assert_eq!(band_gain(&state.gains, index), f64::from(expected) / 10.0);
+                    assert_eq!(
+                        live.borrow().as_ref().unwrap().gains[EQUALIZER_BANDS[index].id],
+                        f64::from(expected) / 10.0
+                    );
+                }
+                assert_eq!(
+                    SendMessageW(state.preset, CB_GETCURSEL, None, None),
+                    preset_before
+                );
+            }
+            DestroyWindow(parent).unwrap();
+        }
+    }
+
     #[test]
     fn every_button_label_is_translated() {
         let catalog = apricot_app::embedded_catalog("sl");

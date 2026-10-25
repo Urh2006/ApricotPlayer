@@ -2256,8 +2256,8 @@ impl Application {
         self.related_seen_ids.clear();
     }
 
-    /// Python `apply_related_videos_and_play`: the unseen related videos
-    /// replace the search results and the first of them plays next.
+    /// Plays unseen related videos in their own sequence. Browsing results,
+    /// their pagination and selection remain available when leaving the player.
     pub fn apply_related_videos(&mut self, videos: Vec<MediaItem>) -> Option<MediaItem> {
         let mut seen = self.related_seen_ids.clone();
         let unseen: Vec<_> = videos
@@ -2271,12 +2271,14 @@ impl Application {
         if unseen.is_empty() {
             return None;
         }
-        let query = self.state.search.query().to_owned();
-        let kind = self.state.search.kind();
-        if !self.state.search.restore_snapshot(query, kind, unseen, 0) {
+        let item = unseen.iter().find(|item| item.is_playable())?.clone();
+        if !self
+            .state
+            .player_sequence
+            .set(PlaybackSequenceSource::RelatedVideos, &unseen, &item)
+        {
             return None;
         }
-        let item = self.prepare_search_playback(0)?;
         if let Some(video_id) = item.youtube_video_id() {
             self.related_seen_ids.insert(video_id);
         }
@@ -4273,14 +4275,18 @@ mod tests {
     }
 
     #[test]
-    fn related_videos_skip_seen_ones_and_replace_the_results() {
+    fn related_videos_keep_search_results_and_use_a_separate_sequence() {
         let root = tempdir().expect("temporary directory");
         let mut app = application(root.path());
         let work = app
             .begin_youtube_search("query", YoutubeSearchKind::All)
             .expect("search");
-        app.apply_search_results(work.generation, vec![watch_video("current0001")], None);
-        let current = app.prepare_search_playback(0).expect("current");
+        app.apply_search_results(
+            work.generation,
+            vec![watch_video("earlier0001"), watch_video("current0001")],
+            Some("next-page".into()),
+        );
+        let current = app.prepare_search_playback(1).expect("current");
         app.start_player_item(current);
 
         assert_eq!(
@@ -4301,7 +4307,15 @@ mod tests {
             .iter()
             .map(|item| item.id.0.as_str())
             .collect();
-        assert_eq!(titles, ["related0001", "related0002"]);
+        assert_eq!(titles, ["earlier0001", "current0001"]);
+        assert_eq!(app.search_session().selected_index(), 1);
+        assert_eq!(app.search_session().generation(), work.generation);
+        assert_eq!(app.search_session().query(), "query");
+        assert_eq!(app.search_session().continuation(), Some("next-page"));
+        assert_eq!(
+            app.player_sequence_source(),
+            Some(PlaybackSequenceSource::RelatedVideos)
+        );
         app.start_player_item(next);
         let PlayerNavigationOutcome::Item { item, .. } = app.request_relative_player_item(1) else {
             panic!("next related video");
