@@ -1,6 +1,6 @@
 yt-dlp==2026.8.19
 yt-dlp-ejs==0.8.0
-wxPython==4.2.5
+wxPython==4.3.1
 certifi==2026.6.17
 cryptography==49.0.0
 requests==2.34.2
