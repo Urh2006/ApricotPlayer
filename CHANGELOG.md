@@ -1,3 +1,15 @@
+# v2.0.2 - Responsive Spotify transport during Connect updates
+
+- Spotify playback controls remain responsive while Connect waits for a state update, including Spotify rate limits and Retry-After delays. Play, pause and seek no longer wait behind that HTTP request.
+- Volume changes use the existing debounce rather than sending a full Connect update for every key press. While a request is in flight, Apricot keeps only the newest pending state, including pending volume changes.
+- Connecting again or transferring playback cancels stale pending state publications, so an old active-state update cannot be queued after disconnecting.
+
+The fix is shared by Windows and macOS. It addresses the transport failure found after repeated volume changes on Mac; the log reported HTTP 429 while the menus still worked. The macOS packages for this release are built locally on the developer's Mac.
+
+Download **ApricotPlayerSetup.exe** or **ApricotPlayer.zip** for Windows, or **ApricotPlayer-macOS-arm64.dmg** for Apple silicon Macs running macOS 27 or later. The Mac ZIP is used by the in-app updater. Existing settings and saved data are retained.
+
+The Mac app is not notarized by Apple. If macOS blocks its first launch, open **System Settings > Privacy & Security**, choose **Open Anyway** for ApricotPlayer, and confirm. Use packages from this project's Releases page. This update does not change Keychain permission requirements.
+
 # v2.0.1 - Related video navigation and cookie imports
 
 - Playing a related YouTube video no longer replaces the search results you were browsing. The original list and selection stay available when you return, while Previous and Next follow the related-video playback sequence.

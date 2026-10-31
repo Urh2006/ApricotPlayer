@@ -55,5 +55,8 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked --no-fail-fast
 
+      - name: Test patched Spotify Connect transport
+        run: cargo test -p librespot-connect --locked
+
       - name: Check public stable update policy
         run: cargo test -p apricot-player -p apricot-updater --locked --features apricot-player/release-stable,apricot-player/stable-identity

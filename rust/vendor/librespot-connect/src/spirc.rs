@@ -9,7 +9,7 @@ use crate::{
             protocol::{Command, FallbackWrapper, Message, Request},
         },
         session::UserAttributes,
-        spclient::TransferRequest,
+        spclient::{SpClientResult, TransferRequest},
     },
     model::{LoadRequest, PlayingTrack, SpircPlayStatus},
     playback::{
@@ -17,7 +17,10 @@ use crate::{
         player::{Player, PlayerEvent, PlayerEventChannel},
     },
     protocol::{
-        connect::{Cluster, ClusterUpdate, LogoutCommand, SetVolumeCommand},
+        connect::{
+            Cluster, ClusterUpdate, LogoutCommand, PutStateReason, PutStateRequest,
+            SetVolumeCommand,
+        },
         context::Context,
         explicit_content_pubsub::UserAttributesUpdate,
         player::{PlayerState, ProvidedTrack},
@@ -37,6 +40,7 @@ use librespot_protocol::context_page::ContextPage;
 use protobuf::MessageField;
 use std::{
     future::Future,
+    pin::Pin,
     sync::Arc,
     sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -127,6 +131,11 @@ struct SpircTask {
     /// when no other future resolves, otherwise resets the delay
     update_state: bool,
 
+    // One HTTP publication in flight, plus only the newest local state.
+    // Spotify's Retry-After waits must never block the transport actor.
+    pending_publication: Option<(PutStateRequest, bool)>,
+    publication: Option<Pin<Box<dyn Future<Output = SpClientResult> + Send>>>,
+
     spirc_id: usize,
 }
 
@@ -197,11 +206,100 @@ mod transport_regressions {
             transfer_state: None,
             update_volume: false,
             update_state: false,
+            pending_publication: None,
+            publication: None,
             spirc_id: 0,
             pending_next: false,
             pending_next_at_end: false,
         }
     }
+    #[tokio::test]
+    async fn local_volume_and_pause_do_not_wait_for_connect_http() {
+        let mut task = task(false);
+        first_track(&mut task);
+        task.connect_state.set_active(true);
+        // No live service or credentials: local transport must not need an
+        // HTTP response just to apply and publish its local state.
+        task.session.set_connection_id("\0");
+        task.session.shutdown();
+        tokio::time::timeout(Duration::from_millis(100), async {
+            task.handle_command(SpircCommand::SetVolume(1000))
+                .await
+                .unwrap();
+            task.handle_command(SpircCommand::Pause).await.unwrap();
+        })
+        .await
+        .expect("local transport was blocked on Connect HTTP");
+        assert_eq!(task.connect_state.device_info().volume, 1000);
+    }
+
+    #[tokio::test]
+    async fn pending_rate_limited_publication_does_not_block_transport_or_grow_a_queue() {
+        let mut task = task(false);
+        first_track(&mut task);
+        task.connect_state.set_active(true);
+        task.connect_state.update_duration(300_000);
+        // Simulate an HTTP request waiting indefinitely for Retry-After.
+        task.publication = Some(Box::pin(std::future::pending()));
+        tokio::time::timeout(Duration::from_millis(100), async {
+            for volume in 0..1000 {
+                task.handle_command(SpircCommand::SetVolume(volume))
+                    .await
+                    .unwrap();
+            }
+            assert!(
+                task.pending_publication.is_none(),
+                "volume must use its debounce"
+            );
+            task.handle_command(SpircCommand::Pause).await.unwrap();
+            assert!(matches!(
+                task.play_status,
+                SpircPlayStatus::LoadingPause { .. }
+            ));
+            task.handle_command(SpircCommand::SetPosition(15_000))
+                .await
+                .unwrap();
+            assert!(matches!(
+                task.play_status,
+                SpircPlayStatus::LoadingPause {
+                    position_ms: 15_000
+                }
+            ));
+            task.handle_command(SpircCommand::Play).await.unwrap();
+            assert!(matches!(
+                task.play_status,
+                SpircPlayStatus::LoadingPlay {
+                    position_ms: 15_000
+                }
+            ));
+        })
+        .await
+        .expect("transport stopped while HTTP publication was waiting");
+        assert_eq!(
+            task.pending_publication
+                .as_ref()
+                .unwrap()
+                .0
+                .device
+                .as_ref()
+                .unwrap()
+                .device_info
+                .as_ref()
+                .unwrap()
+                .volume,
+            task.connect_state.device_info().volume
+        );
+        task.begin_publication();
+        assert!(
+            task.pending_publication.is_some(),
+            "do not start a second HTTP request"
+        );
+        // Coalescing keeps the latest complete state and a pending volume notification.
+        task.pending_publication.as_mut().unwrap().1 = true;
+        task.handle_command(SpircCommand::Pause).await.unwrap();
+        assert!(task.pending_publication.as_ref().unwrap().1);
+    }
+
     fn first_track(task: &mut SpircTask) {
         task.load_context_from_tracks(vec![FIRST.to_owned()])
             .unwrap();
@@ -886,6 +984,8 @@ impl Spirc {
             transfer_state: None,
             update_volume: false,
             update_state: false,
+            pending_publication: None,
+            publication: None,
 
             spirc_id,
         };
@@ -1141,6 +1241,7 @@ impl SpircTask {
         }
 
         while !self.session.is_invalid() && !self.shutdown {
+            self.begin_publication();
             let commands = self.commands.as_mut();
             let player_events = self.player_events.as_mut();
 
@@ -1149,6 +1250,18 @@ impl SpircTask {
             let allow_context_resolving = !self.update_state && !self.update_volume;
 
             tokio::select! {
+                result = async { self.publication.as_mut().expect("publication guard").await }, if self.publication.is_some() => {
+                    self.publication = None;
+                    match result {
+                        Ok(body) if self.pending_publication.is_none() => {
+                            if let Ok(cluster) = <Cluster as protobuf::Message>::parse_from_bytes(&body) {
+                                self.publish_devices(&cluster);
+                            }
+                        }
+                        Ok(_) => {} // A newer local state supersedes this acknowledgement.
+                        Err(why) => error!("Connect state publication: {why}"),
+                    }
+                },
                 // startup of the dealer requires a connection_id, which is retrieved at the very beginning
                 connection_id_update = self.connection_id_update.next() => unwrap! {
                     connection_id_update,
@@ -1229,15 +1342,13 @@ impl SpircTask {
                     self.update_volume = false;
 
                     info!("delayed volume update for all devices: volume is now {}", self.connect_state.device_info().volume);
-                    if let Err(why) = self.connect_state.notify_volume_changed(&self.session).await {
-                        error!("error updating connect state for volume update: {why}")
-                    }
-
-                    // for some reason the web-player does need two separate updates, so that the
-                    // position of the current track is retained, other clients also send a state
-                    // update before they send the volume update
+                    // Keep both volume and regular state notifications, but let
+                    // the HTTP future run beside local transport commands.
                     if let Err(why) = self.notify().await {
-                        error!("error updating connect state for volume update: {why}")
+                        error!("error preparing connect state for volume update: {why}")
+                    }
+                    if let Some((_, volume_changed)) = self.pending_publication.as_mut() {
+                        *volume_changed = true;
                     }
                 },
                 // context resolver handling, the idea/reason behind it the following:
@@ -1362,6 +1473,10 @@ impl SpircTask {
 
     async fn handle_command(&mut self, cmd: SpircCommand) -> Result<(), Error> {
         trace!("Received SpircCommand::{cmd:?}");
+        let volume_only = matches!(
+            cmd,
+            SpircCommand::VolumeUp | SpircCommand::VolumeDown | SpircCommand::SetVolume(_)
+        );
         match cmd {
             SpircCommand::Shutdown => {
                 trace!("Received SpircCommand::Shutdown");
@@ -1451,7 +1566,13 @@ impl SpircTask {
             }
         };
 
-        self.notify().await
+        // Volume has its own debounce. Publishing every arrow key bypasses
+        // it and can exhaust Spotify's rate limit within a few seconds.
+        if volume_only {
+            Ok(())
+        } else {
+            self.notify().await
+        }
     }
 
     fn handle_player_event(&mut self, event: PlayerEvent) -> Result<(), Error> {
@@ -1614,6 +1735,7 @@ impl SpircTask {
 
     async fn handle_connection_id_update(&mut self, connection_id: String) -> Result<(), Error> {
         trace!("Received connection ID update: {connection_id:?}");
+        self.cancel_publication();
         self.session.set_connection_id(&connection_id);
 
         let cluster = match self
@@ -1738,6 +1860,7 @@ impl SpircTask {
                 self.update_state = true;
             }
         } else if self.connect_state.is_active() {
+            self.cancel_publication();
             self.connect_state.became_inactive(&self.session).await?;
         }
 
@@ -2019,8 +2142,9 @@ impl SpircTask {
         self.play_status = SpircPlayStatus::Stopped {};
         self.connect_state
             .update_position_in_relation(self.now_ms());
-        self.notify().await?;
-
+        // An old active-state request must not reactivate this device after
+        // handing playback off or disconnecting.
+        self.cancel_publication();
         self.connect_state.became_inactive(&self.session).await?;
         self.state_tx
             .send_replace(self.connect_state.player().clone());
@@ -2739,17 +2863,41 @@ impl SpircTask {
 
         self.connect_state.set_now(self.now_ms() as u64);
 
-        let result = self.connect_state.send_state(&self.session).await;
+        let volume_changed = self
+            .pending_publication
+            .as_ref()
+            .is_some_and(|(_, volume)| *volume);
+        self.pending_publication = Some((self.connect_state.state_request(), volume_changed));
         self.state_tx
             .send_replace(self.connect_state.player().clone());
-        if let Some(cluster) = result
-            .as_ref()
-            .ok()
-            .and_then(|body| <Cluster as protobuf::Message>::parse_from_bytes(body).ok())
-        {
-            self.publish_devices(&cluster);
+        Ok(())
+    }
+
+    fn cancel_publication(&mut self) {
+        self.publication = None;
+        self.pending_publication = None;
+        self.update_state = false;
+        self.update_volume = false;
+    }
+
+    fn begin_publication(&mut self) {
+        if self.publication.is_some() || !self.connect_established {
+            return;
         }
-        result.map(|_| ())
+        let Some((request, volume_changed)) = self.pending_publication.take() else {
+            return;
+        };
+        let session = self.session.clone();
+        self.publication = Some(Box::pin(async move {
+            if volume_changed {
+                let mut volume = request.clone();
+                volume.put_state_reason = PutStateReason::VOLUME_CHANGED.into();
+                if let Err(why) = session.spclient().put_connect_state_request(&volume).await {
+                    error!("Connect volume publication: {why}");
+                }
+            }
+            session.spclient().put_connect_state_request(&request).await
+        }));
     }
 
     // ApricotPlayer patch: publishes the devices of a received cluster.

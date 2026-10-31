@@ -483,10 +483,9 @@ impl ConnectState {
             .await
     }
 
-    /// Notifies the remote server about a new volume
-    pub async fn notify_volume_changed(&mut self, session: &Session) -> SpClientResult {
-        self.send_with_reason(session, PutStateReason::VOLUME_CHANGED)
-            .await
+    /// A snapshot for the coalesced HTTP publisher, independent of transport.
+    pub fn state_request(&self) -> PutStateRequest {
+        self.request.clone()
     }
 
     /// Sends the connect state for the connect session to the remote server
