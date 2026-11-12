@@ -425,24 +425,11 @@ impl Shell {
 
     /// Windows `playing_message`.
     pub(crate) fn playing_message(&self, item: &MediaItem) -> String {
-        let smart = item
-            .metadata
-            .get("spotify_smart_shuffle")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        let title = if item.source == MediaSource::Spotify && !item.channel.is_empty() {
-            let key = if smart {
-                "spotify_playing_by_smart"
-            } else {
-                "spotify_playing_by"
-            };
-            self.text(key)
-                .replace("{title}", &item.title)
-                .replace("{artist}", &item.channel)
-        } else {
-            item.title.clone()
-        };
-        self.text("playing").replace("{title}", &title)
+        apricot_app::spotify::playing_message(
+            &self.catalog(),
+            item,
+            self.spotify_playing_saved(item),
+        )
     }
 
     /// Windows `announce_player_text`.
@@ -602,7 +589,7 @@ impl Shell {
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         if !collection {
-            ui.set_status(&self.playing_message(&item), true);
+            self.announce_playing(ui, &item);
         }
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

@@ -1314,8 +1314,7 @@ impl Shell {
         if !self.application.replace_current_player_item(item.clone()) {
             return false;
         }
-        let message = self.playing_message(&item);
-        ui.set_status(&message, true);
+        self.announce_playing(ui, &item);
         if let Err(error) = self
             .application
             .record_history(item, "played", crate::unix_timestamp())

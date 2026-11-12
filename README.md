@@ -2,7 +2,7 @@
 
 ApricotPlayer is an accessible media player and downloader for Windows and macOS. Search YouTube and SoundCloud, listen to Spotify, follow podcasts, watch videos, play your own files, and keep everything within reach of the keyboard.
 
-The current stable release is **2.0.2**, written in Rust with native Windows and Mac interfaces. It brings Spotify and macOS support alongside the familiar ApricotPlayer features. Existing Windows users can update directly from the Python-based 1.0.21 release through the Stable update channel.
+The current stable release is **2.0.3**, written in Rust with native Windows and Mac interfaces. It brings Spotify and macOS support alongside the familiar ApricotPlayer features. Existing Windows users can update directly from the Python-based 1.0.21 release through the Stable update channel.
 
 ## Contents
 
@@ -25,7 +25,7 @@ The current stable release is **2.0.2**, written in Rust with native Windows and
 
 ## Download and install
 
-Open the [Releases page](https://github.com/Urh2006/ApricotPlayer/releases), choose a release, and expand **Assets**. Choose **2.0.2 or a newer stable release** for everyday use. Releases marked **Pre-release** are optional test versions, offered through the Beta update channel. Read the release notes before installing.
+Open the [Releases page](https://github.com/Urh2006/ApricotPlayer/releases), choose a release, and expand **Assets**. Choose **2.0.3 or a newer stable release** for everyday use. Releases marked **Pre-release** are optional test versions, offered through the Beta update channel. Read the release notes before installing.
 
 The files under **Source code** are for development. To run ApricotPlayer, download one of the packages below. The packages include the media tools they need; you do not need to install Python, Rust, mpv, or FFmpeg separately.
 
@@ -174,6 +174,8 @@ Spotify has its own queue, separate from ApricotPlayer's general playback queue.
 ### Likes, follows, and playlist editing
 
 **Like means a real Spotify like.** Save a song with **Ctrl+Shift+I** on Windows or **Command+Shift+I** on Mac, and it is added to your Spotify Liked Songs. Use the same command to remove a saved song. It works on the selected Spotify row or on the playing song when focus is in the player area. Saving albums or playlists and following artists or profiles use the matching Spotify library action; ApricotPlayer favorites remain separate.
+
+The Spotify player context menu offers the same applicable track actions as Spotify lists: add to the Spotify queue or a Spotify playlist, save or remove a like, open the artist or album when available, start a radio, and hide a song where supported. These actions also work in the background player area. A playlist action there adds the playing song, regardless of songs marked in the browsing list. When a saved song starts, the playing announcement ends with **liked**; unsaved songs have no extra qualifier.
 
 Use **Shift+A** to mark or unmark individual songs, or **Ctrl+A / Command+A** to select a whole Spotify collection, including songs not yet loaded into the visible list. Individual songs can be excluded. Save a selection to Liked Songs or add it to a playlist. If some songs are already present, choose whether to add only new ones or add all. Large changes are processed in batches, with the result reported when they finish.
 

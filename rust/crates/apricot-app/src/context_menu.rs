@@ -843,31 +843,64 @@ pub fn player_context_menu(
     context: &ContextMenuContext<'_>,
     item: &MediaItem,
 ) -> Vec<ContextMenuEntry> {
+    player_context_menu_with_spotify(context, item, SpotifyRowMenu::default())
+}
+
+/// Player controls and Spotify lists share the same track actions, while
+/// playlist-row editing and selection commands remain in the browsing list.
+#[allow(clippy::too_many_lines)] // One ordered menu, including source-specific entries.
+pub fn player_context_menu_with_spotify(
+    context: &ContextMenuContext<'_>,
+    item: &MediaItem,
+    mut spotify_menu: SpotifyRowMenu,
+) -> Vec<ContextMenuEntry> {
     use ContextCommand as C;
     let local = item.is_local_media();
+    let spotify = item.source == apricot_core::MediaSource::Spotify;
     let mut entries = Vec::new();
-    if !local {
+    if let Some(track) = crate::spotify::playing_item(item) {
+        spotify_menu.playable_item = true;
+        spotify_menu.link = true;
+        spotify_menu.radio = track.kind == apricot_spotify::ItemKind::Track;
+        spotify_menu.album = !track.album_uri.is_empty();
+        spotify_menu.artist = track.artist_uri.starts_with("spotify:artist:");
+        entries = spotify_browse_context_menu(context, spotify_menu);
+        entries.retain(|entry| {
+            !matches!(
+                entry,
+                ContextMenuEntry::Command {
+                    command: C::SpotifyPlay,
+                    ..
+                }
+            )
+        });
+    }
+    if !local && !spotify {
         entries.push(context.shortcut("download_audio", C::DownloadAudio));
         entries.push(context.shortcut("download_video", C::DownloadVideo));
     }
     entries.push(context.shortcut("add_favorite", C::AddFavorite));
     entries.push(context.shortcut("remove_favorite", C::RemoveFavorite));
-    if !local {
+    if !local && !spotify {
         entries.push(context.shortcut("subscribe_channel", C::SubscribeChannel));
         entries.push(context.shortcut("unsubscribe_channel", C::UnsubscribeChannel));
         if has_openable_youtube_channel(item) {
             entries.push(context.shortcut("open_channel", C::OpenChannel));
         }
     }
-    entries.push(context.shortcut("add_to_playback_queue", C::AddToPlaybackQueue));
-    entries.push(context.shortcut("remove_from_playback_queue", C::RemoveFromPlaybackQueue));
+    if !spotify {
+        entries.push(context.shortcut("add_to_playback_queue", C::AddToPlaybackQueue));
+        entries.push(context.shortcut("remove_from_playback_queue", C::RemoveFromPlaybackQueue));
+    }
     entries.push(context.shortcut("remove_from_playlist", C::RemoveFromPlaylist));
-    entries.push(context.command_with_shortcut(
-        if local { "copy_path" } else { "copy_link" },
-        "player_copy_link",
-        C::CopyLocation,
-    ));
-    if !local {
+    if !spotify {
+        entries.push(context.command_with_shortcut(
+            if local { "copy_path" } else { "copy_link" },
+            "player_copy_link",
+            C::CopyLocation,
+        ));
+    }
+    if !local && !spotify {
         entries.push(context.shortcut("copy_stream_url", C::CopyStreamUrl));
         if item.youtube_url_at_timestamp(0.0).is_some() {
             entries.push(context.command_with_shortcut(
@@ -911,12 +944,14 @@ pub fn player_context_menu(
     ] {
         entries.push(context.command_with_shortcut(key, action_id, C::PlayerAction(action_id)));
     }
-    if !local {
+    if !local && !spotify {
         entries.push(context.command_with_shortcut(
             "comments",
             "player_comments",
             C::PlayerAction("player_comments"),
         ));
+    }
+    if !local {
         entries.push(context.command("open_browser", C::OpenInBrowser));
     }
     entries.push(context.command("close_player", C::ClosePlayer));

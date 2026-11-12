@@ -221,6 +221,89 @@ fn item(kind: ItemKind, uri: &str) -> CatalogItem {
 }
 
 #[test]
+fn native_spotify_player_menu_uses_playing_track_and_current_saved_state()
+-> windows::core::Result<()> {
+    let fixture = Fixture::new()?;
+    // SAFETY: Production menu projection and dispatch use only this fixture's
+    // hidden native controls and private account store. No Spotify login.
+    unsafe {
+        let state = super::state_mut(fixture.window).unwrap();
+        let playing = SpotifyTrack {
+            uri: "spotify:track:4u7EnebtmKWzUH433cf5Qv".into(),
+            title: "Playing".into(),
+            artists: "Artist".into(),
+            artist_uri: String::new(),
+            album: String::new(),
+            duration_ms: 1000,
+        }
+        .media_item();
+        state.application.start_player_item(playing.clone());
+        state.view = MainView::Player;
+        state
+            .spotify_browse
+            .marks
+            .mark_all(vec!["spotify:track:0000000000000000000001".into()]);
+        assert_eq!(command_item(state).unwrap().uri, playing.id.0);
+        let texts = super::super::spotify::catalog(state);
+        for saved in [false, true] {
+            state
+                .spotify_browse
+                .saved_states
+                .insert(playing.id.0.clone(), saved);
+            let entries = super::super::model_context_entries(
+                state,
+                &texts,
+                MainView::Player,
+                Some(&playing),
+            )
+            .unwrap();
+            let menu = super::super::CreatePopupMenu()?;
+            let mut commands = Vec::new();
+            super::super::append_context_model_entries(menu, &entries, &mut commands);
+            for command in [
+                C::SpotifyAddToQueue,
+                C::SpotifyAddToPlaylist,
+                C::SpotifyToggleSaved,
+                C::SpotifyRadio,
+                C::ClosePlayer,
+            ] {
+                assert!(commands.contains(&command), "missing {command:?}");
+            }
+            assert!(!commands.contains(&C::DownloadAudio));
+            assert!(!commands.contains(&C::SubscribeChannel));
+            let label = entries
+                .iter()
+                .find_map(|entry| match entry {
+                    ContextMenuEntry::Command {
+                        command: C::SpotifyToggleSaved,
+                        label,
+                    } => Some(label),
+                    _ => None,
+                })
+                .unwrap();
+            assert!(label.starts_with(texts.text(if saved {
+                "spotify_unlike"
+            } else {
+                "spotify_like"
+            })));
+            assert_eq!(
+                windows::Win32::UI::WindowsAndMessaging::GetMenuItemCount(Some(menu)),
+                i32::try_from(entries.len()).unwrap()
+            );
+            super::super::DestroyMenu(menu)?;
+        }
+        super::super::execute_context_command(fixture.window, C::SpotifyAddToQueue, Some(playing));
+        let state = super::state(fixture.window).unwrap();
+        assert_eq!(
+            super::super::window_text(state.status),
+            texts.text("spotify_queue_inactive")
+        );
+        assert!(!state.spotify_browse.marks.is_empty());
+    }
+    Ok(())
+}
+
+#[test]
 #[ignore = "requires native Windows desktop controls"]
 #[allow(clippy::too_many_lines)]
 fn native_spotify_profile_and_pins_keep_routes_and_scope() -> windows::core::Result<()> {

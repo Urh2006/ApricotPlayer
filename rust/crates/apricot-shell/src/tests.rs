@@ -195,6 +195,7 @@ pub(crate) mod equalizer {
         pub(super) clipboard: Option<String>,
         pub(crate) row_updates: Vec<(usize, String)>,
         pub(crate) context_menus: Vec<Vec<apricot_app::context_menu::ContextMenuEntry>>,
+        pub(crate) context_command: Option<apricot_app::context_menu::ContextCommand>,
     }
 
     impl ShellUi for Ui {
@@ -242,7 +243,7 @@ pub(crate) mod equalizer {
             entries: &[apricot_app::context_menu::ContextMenuEntry],
         ) -> Option<apricot_app::context_menu::ContextCommand> {
             self.context_menus.push(entries.to_vec());
-            None
+            self.context_command.take()
         }
         fn open_bookmarks(&mut self, dialog: crate::BookmarkDialog) {
             self.bookmarks = Some(dialog);
@@ -1387,6 +1388,143 @@ mod spotify_lists {
             assert!(menu_commands.contains(&ContextCommand::PlayerAction("player_equalizer")));
             assert!(!menu_commands.contains(&ContextCommand::SpotifyRemoveAccount));
         }
+    }
+
+    #[test]
+    fn spotify_player_menu_has_track_actions_without_youtube_actions() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        let playing = apricot_spotify::SpotifyTrack {
+            uri: "spotify:track:4u7EnebtmKWzUH433cf5Qv".into(),
+            title: "Playing".into(),
+            artists: "Artist".into(),
+            artist_uri: String::new(),
+            album: String::new(),
+            duration_ms: 1000,
+        }
+        .media_item();
+        shell.application.start_player_item(playing);
+        ui.player_focus = Some("play_pause");
+        for view in [
+            crate::View::Player,
+            crate::View::MainMenu,
+            crate::View::SpotifyBrowse,
+        ] {
+            shell.view = view;
+            ui.context_menus.clear();
+            shell.activate_action(&mut ui, "context_menu");
+            let entries = ui.context_menus.last().unwrap();
+            let menu = commands(entries);
+            for command in [
+                ContextCommand::SpotifyAddToQueue,
+                ContextCommand::SpotifyAddToPlaylist,
+                ContextCommand::SpotifyToggleSaved,
+                ContextCommand::SpotifyRadio,
+                ContextCommand::ClosePlayer,
+            ] {
+                assert!(menu.contains(&command), "missing {command:?} in {view:?}");
+            }
+            assert!(!menu.contains(&ContextCommand::DownloadAudio));
+            assert!(!menu.contains(&ContextCommand::SubscribeChannel));
+        }
+    }
+
+    #[test]
+    fn spotify_playing_announcement_ends_in_liked_only_for_saved_tracks() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        let mut row = track("one", "uid");
+        row.name = "Liked track".into();
+        row.saved = Some(true);
+        shell.spotify_browse_test_open(
+            &mut ui,
+            Source::LikedSongs,
+            "Liked Songs",
+            vec![row],
+            false,
+        );
+        let media = shell.active_media_item(&ui).unwrap();
+        let message = shell.playing_message(&media);
+        assert!(message.ends_with(", liked"), "{message}");
+        assert!(message.contains("Artist"));
+        assert!(message.contains("Liked track"));
+        let local = crate::local_file_item(std::path::Path::new("/tmp/playing.mp3"));
+        assert!(!shell.playing_message(&local).ends_with(", liked"));
+    }
+
+    #[test]
+    fn spotify_player_context_commands_run_without_a_selected_spotify_row() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        let playing = apricot_spotify::SpotifyTrack {
+            uri: "spotify:track:4u7EnebtmKWzUH433cf5Qv".into(),
+            title: "Playing".into(),
+            artists: "Artist".into(),
+            artist_uri: String::new(),
+            album: String::new(),
+            duration_ms: 1000,
+        }
+        .media_item();
+        shell.application.start_player_item(playing);
+        for view in [crate::View::Player, crate::View::MainMenu] {
+            shell.view = view;
+            ui.player_focus = Some("play_pause");
+            ui.context_command = Some(ContextCommand::SpotifyCopyLink);
+            shell.activate_action(&mut ui, "context_menu");
+            assert_eq!(
+                ui.clipboard.as_deref(),
+                Some("https://open.spotify.com/track/4u7EnebtmKWzUH433cf5Qv")
+            );
+            ui.context_command = Some(ContextCommand::SpotifyAddToQueue);
+            shell.activate_action(&mut ui, "context_menu");
+            assert_eq!(
+                ui.announcements.last().unwrap(),
+                &shell.text("spotify_queue_inactive")
+            );
+        }
+    }
+
+    #[test]
+    fn late_liked_lookup_announces_once_and_never_names_a_replaced_track() {
+        use apricot_spotify::{CatalogResult, SpotifyError};
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        let playing = apricot_spotify::SpotifyTrack {
+            uri: "spotify:track:4u7EnebtmKWzUH433cf5Qv".into(),
+            title: "Playing".into(),
+            artists: "Artist".into(),
+            artist_uri: String::new(),
+            album: String::new(),
+            duration_ms: 1000,
+        }
+        .media_item();
+        for (answer, suffix) in [
+            (Ok(CatalogResult::SavedStates(vec![true])), ", liked"),
+            (Ok(CatalogResult::SavedStates(vec![false])), "Artist"),
+            (Err(SpotifyError::NoCredentials), "Artist"),
+        ] {
+            shell.application.start_player_item(playing.clone());
+            let stamp = shell.spotify_test_waiting_announcement(&playing);
+            ui.announcements.clear();
+            shell.spotify_browse_loaded(&mut ui, stamp, answer);
+            assert_eq!(ui.announcements.len(), 1);
+            assert!(
+                ui.announcements[0].ends_with(suffix),
+                "{:?}",
+                ui.announcements
+            );
+            shell.spotify_browse_loaded(&mut ui, stamp, Ok(CatalogResult::SavedStates(vec![true])));
+            assert_eq!(ui.announcements.len(), 1);
+        }
+        let stamp = shell.spotify_test_waiting_announcement(&playing);
+        shell
+            .application
+            .start_player_item(crate::local_file_item(std::path::Path::new(
+                "/tmp/other.mp3",
+            )));
+        ui.announcements.clear();
+        shell.spotify_browse_loaded(&mut ui, stamp, Ok(CatalogResult::SavedStates(vec![true])));
+        assert!(ui.announcements.is_empty());
     }
 
     #[test]

@@ -1,3 +1,15 @@
+# v2.0.3 - Spotify player menus and liked announcements
+
+- The Spotify player context menu now offers Add to Spotify queue, Add to Spotify playlist, and Save to Liked Songs or Remove from Liked Songs. It also includes the available Spotify artist, album, radio, and Hide song actions alongside the player controls. Open it with Shift+F10 or the Windows Applications key, including while browsing with the player in the background.
+- Commands from the player act on the playing song. Adding that song to a Spotify playlist does not add songs marked in the browsing list behind it. YouTube download and channel commands no longer appear for Spotify playback.
+- The playing announcement ends with “liked” when the Spotify song is saved. Unsaved songs keep the usual title and artist announcement. If the saved state is not already known, Apricot checks it in the background without delaying playback. A slow or failed lookup keeps the usual announcement, and a late answer cannot announce a song you have already left.
+
+These changes apply to Windows and macOS. The Mac packages for this release are built with GitHub Actions. Existing settings and saved data are retained.
+
+Download **ApricotPlayerSetup.exe** or **ApricotPlayer.zip** for Windows, or **ApricotPlayer-macOS-arm64.dmg** for Apple silicon Macs running macOS 27 or later. The Mac ZIP is used by the in-app updater.
+
+The Mac app is not notarized by Apple. If macOS blocks its first launch, open **System Settings > Privacy & Security**, choose **Open Anyway** for ApricotPlayer, and confirm. Use packages from this project's Releases page. This update does not change Keychain permission requirements.
+
 # v2.0.2 - Responsive Spotify transport during Connect updates
 
 - Spotify playback controls remain responsive while Connect waits for a state update, including Spotify rate limits and Retry-After delays. Play, pause and seek no longer wait behind that HTTP request.

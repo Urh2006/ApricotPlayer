@@ -304,6 +304,7 @@ impl Shell {
     /// Windows `model_context_entries` for the screens the shell shows.
     fn context_entries(
         &self,
+        ui: &dyn ShellUi,
         item: Option<&MediaItem>,
         view: View,
     ) -> Option<Vec<ContextMenuEntry>> {
@@ -326,7 +327,7 @@ impl Shell {
             | View::Results
             | View::Collection
             | View::Trending => Some(context_menu::results_context_menu(&context, item)),
-            View::Player => Some(context_menu::player_context_menu(&context, item?)),
+            View::Player => Some(self.spotify_player_context(ui, item?, &context)),
             View::Favorites => Some(context_menu::favorites_context_menu(&context, item)),
             View::History => Some(context_menu::history_context_menu(&context, item)),
             View::UserPlaylists => Some(context_menu::user_playlists_context_menu(&context)),
@@ -363,7 +364,7 @@ impl Shell {
     pub(crate) fn show_context_menu_for_active_view_ready(&mut self, ui: &mut dyn ShellUi) {
         let item = self.active_media_item(ui);
         let entries = if ui.focused_player_control().is_some() {
-            self.context_entries(item.as_ref(), View::Player)
+            self.context_entries(ui, item.as_ref(), View::Player)
         } else if self.view == View::DownloadQueue {
             self.download_queue_context_entries(ui)
         } else if self.view == View::SpotifyAccounts {
@@ -394,14 +395,11 @@ impl Shell {
                 },
             )
         } else {
-            self.context_entries(item.as_ref(), self.view)
+            self.context_entries(ui, item.as_ref(), self.view)
         };
-        let Some(mut entries) = entries else {
+        let Some(entries) = entries else {
             return;
         };
-        if self.view == View::Player || ui.focused_player_control().is_some() {
-            self.spotify_extend_player_context(ui, &mut entries);
-        }
         self.stop_key_repeat(ui);
         if let Some(command) = ui.show_context_menu(&entries) {
             let label = find_label(&entries, command).unwrap_or_default();

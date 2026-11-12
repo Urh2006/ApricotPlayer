@@ -208,6 +208,9 @@ pub enum CatalogRequest {
     /// Reads URI pages on the worker without hydrating or rendering rows.
     CollectTracks(Box<CatalogRequest>),
     SavedStates(Vec<String>),
+    /// An optional announcement qualifier. Never hold up playback or speech
+    /// behind a slow library endpoint or Spotify's Retry-After interval.
+    PlayingSavedState(String),
     Search {
         query: String,
         kind: crate::catalog::SearchKind,
@@ -734,6 +737,17 @@ impl SpotifyService {
                         })
                         .await?,
                     ),
+                    CatalogRequest::PlayingSavedState(uri) => {
+                        let states = tokio::time::timeout(
+                            Duration::from_secs(1),
+                            catalog::saved(api, &session, &[uri]),
+                        )
+                        .await
+                        .map_err(|_| {
+                            crate::api::ApiError::Shape("playing saved state timed out".into())
+                        })??;
+                        CatalogResult::SavedStates(states)
+                    }
                     CatalogRequest::SavedStates(uris) => {
                         let mut states = Vec::with_capacity(uris.len());
                         for chunk in uris.chunks(100) {

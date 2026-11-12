@@ -2382,26 +2382,11 @@ fn model_context_entries(
         }
         MainView::Player => {
             let item = item?;
-            let mut entries = context_menu::player_context_menu(&context, item);
-            if spotify_browse::playing_artist(item).is_some() {
-                if let Some(followed) = spotify_browse::artist_followed(state, item) {
-                    entries.push(ContextMenuEntry::Command {
-                        label: catalog
-                            .text(if followed {
-                                "spotify_unfollow_artist"
-                            } else {
-                                "spotify_follow_artist"
-                            })
-                            .to_owned(),
-                        command: ContextCommand::SpotifyToggleArtistFollow,
-                    });
-                } else {
-                    entries.push(ContextMenuEntry::Disabled {
-                        label: catalog.text("spotify_artist_state_unavailable").to_owned(),
-                    });
-                }
-            }
-            entries
+            context_menu::player_context_menu_with_spotify(
+                &context,
+                item,
+                spotify_browse::player_menu(state, item),
+            )
         }
         // Python `open_audiovault_context_menu` opens only on an item.
         MainView::AudiovaultSearch | MainView::AudiovaultResults => {
@@ -10503,8 +10488,7 @@ unsafe fn poll_playback_runtime(window: HWND) {
                         .unwrap_or(false)
                 });
                 if !collection && let Some(item) = current_item.as_ref() {
-                    let message = playing_message(&state.application, item);
-                    set_status(state, &message, true);
+                    spotify_browse::announce_playing(state, item);
                 }
                 if let Some(item) = current_item {
                     let timestamp = std::time::SystemTime::now()
@@ -12673,29 +12657,6 @@ fn catalog_text(application: &Application, key: &str) -> String {
     apricot_app::embedded_catalog(&application.settings().language)
         .text(key)
         .to_owned()
-}
-
-/// "Playing: title" when an item starts; a Spotify item also names its
-/// artist (Urh, 2026-10-02).
-fn playing_message(application: &Application, item: &apricot_core::MediaItem) -> String {
-    let smart = item
-        .metadata
-        .get("spotify_smart_shuffle")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    let title = if item.source == apricot_core::MediaSource::Spotify && !item.channel.is_empty() {
-        let key = if smart {
-            "spotify_playing_by_smart"
-        } else {
-            "spotify_playing_by"
-        };
-        catalog_text(application, key)
-            .replace("{title}", &item.title)
-            .replace("{artist}", &item.channel)
-    } else {
-        item.title.clone()
-    };
-    catalog_text(application, "playing").replace("{title}", &title)
 }
 
 unsafe fn set_status(state: &WindowState, message: &str, announce: bool) {

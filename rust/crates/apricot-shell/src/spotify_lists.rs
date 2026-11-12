@@ -224,6 +224,7 @@ pub(crate) struct BrowseState {
     profile_states: std::collections::HashMap<String, bool>,
     context_collection: Option<(SpotifyStamp, String, String, Vec<String>)>,
     saved_states: std::collections::HashMap<String, bool>,
+    playing_announcement: Option<apricot_app::spotify::PendingPlayingAnnouncement>,
     /// The last search, offered again by the search dialog.
     last_query: String,
     last_kind: usize,
@@ -645,6 +646,32 @@ impl Shell {
         if self
             .spotify
             .browse
+            .playing_announcement
+            .as_ref()
+            .is_some_and(|pending| pending.stamp == stamp)
+        {
+            let pending = self.spotify.browse.playing_announcement.take().unwrap();
+            if pending.is_current(self.application.player_session()) {
+                let saved = match &result {
+                    Ok(CatalogResult::SavedStates(states)) if states.len() == 1 => Some(states[0]),
+                    _ => None,
+                };
+                if let Some(saved) = saved {
+                    self.spotify
+                        .browse
+                        .saved_states
+                        .insert(pending.item.id.0.clone(), saved);
+                }
+                ui.set_status(
+                    &apricot_app::spotify::playing_message(&self.catalog(), &pending.item, saved),
+                    true,
+                );
+            }
+            return;
+        }
+        if self
+            .spotify
+            .browse
             .context_profile
             .as_ref()
             .is_some_and(|(wanted, _, _)| *wanted == stamp)
@@ -716,6 +743,11 @@ impl Shell {
                 Ok(CatalogResult::SavedStates(states)) if states.len() == uris.len() => {
                     for (uri, state) in uris.iter().zip(states) {
                         self.spotify.browse.saved_states.insert(uri.clone(), *state);
+                        for frame in &mut self.spotify.browse.frames {
+                            for item in frame.items.iter_mut().filter(|item| item.uri == *uri) {
+                                item.saved = Some(*state);
+                            }
+                        }
                     }
                 }
                 Err(error) => ui.set_status(
@@ -1665,6 +1697,7 @@ impl Shell {
             media.metadata.insert(key.to_owned(), value);
         };
         if item.kind.is_playable_item() {
+            insert("spotify_album_uri", item.album_uri.clone().into());
             let context = match self.browse_top().map(|frame| &frame.source) {
                 Some(Source::LikedSongs) => liked_songs(),
                 Some(source) => source.context().map(str::to_owned),
@@ -2229,6 +2262,9 @@ impl Shell {
         let mut select = None;
         let text = match (&outcome, pending) {
             (O::SavedBatch { uris, saved }, _) => {
+                for uri in uris {
+                    self.spotify.browse.saved_states.insert(uri.clone(), *saved);
+                }
                 let changed: std::collections::HashSet<_> = uris.iter().collect();
                 for frame in &mut self.spotify.browse.frames {
                     for item in &mut frame.items {
@@ -2458,7 +2494,7 @@ impl Shell {
             self.spotify_create_playlist(ui);
             return;
         }
-        let Some(item) = self.browse_selected_item(ui).cloned() else {
+        let Some(item) = self.spotify_command_item(ui) else {
             return;
         };
         match command {
@@ -2477,13 +2513,22 @@ impl Shell {
             }
             C::SpotifyGoToArtist => self.spotify_open_artist(ui, &item),
             C::SpotifyCopyLink => {
-                if let Some(link) = self.browse_selected_link(ui) {
+                let link = if self.view == View::Player || ui.focused_player_control().is_some() {
+                    SpotifyRef::parse(&item.uri).and_then(|reference| reference.to_url())
+                } else {
+                    self.browse_selected_link(ui)
+                };
+                if let Some(link) = link {
                     self.copy_text_and_announce(ui, &link, "url_copied");
                 }
             }
             C::SpotifyToggleSaved => self.spotify_toggle_saved(ui),
             C::SpotifyAddToPlaylist => {
-                self.browse_begin_selection(ui, &item.uri, None);
+                if self.view == View::Player || ui.focused_player_control().is_some() {
+                    self.browse_add_to_playlist(ui, vec![item.uri.clone()]);
+                } else {
+                    self.browse_begin_selection(ui, &item.uri, None);
+                }
             }
             C::SpotifyRemoveFromPlaylist => self.spotify_browse_remove_selected(ui),
             C::SpotifyMoveUp => self.browse_move_selected(ui, true),
@@ -2736,6 +2781,15 @@ impl Shell {
             return false;
         };
         let mut uris = Vec::new();
+        if (self.view == View::Player || ui.focused_player_control().is_some())
+            && let Some(item) = self
+                .application
+                .player_session()
+                .current_item()
+                .and_then(apricot_app::spotify::playing_item)
+        {
+            uris.push(item.uri);
+        }
         if let Some(artist) = self.spotify_context_artist(ui) {
             uris.push(artist);
         }
@@ -2793,27 +2847,76 @@ impl Shell {
         true
     }
 
-    pub(crate) fn spotify_extend_player_context(
+    pub(crate) fn spotify_player_context(
         &self,
         ui: &dyn ShellUi,
-        entries: &mut Vec<ContextMenuEntry>,
-    ) {
-        let Some(uri) = self.spotify_context_artist(ui) else {
-            return;
+        item: &MediaItem,
+        context: &apricot_app::context_menu::ContextMenuContext<'_>,
+    ) -> Vec<ContextMenuEntry> {
+        let menu = apricot_app::context_menu::SpotifyRowMenu {
+            saved: self.spotify_playing_saved(item),
+            artist_followed: self
+                .spotify_context_artist(ui)
+                .and_then(|uri| self.spotify.browse.saved_states.get(&uri).copied()),
+            hide: self.spotify_hide_target(ui).is_some(),
+            hidden: self
+                .spotify
+                .browse
+                .hidden
+                .as_ref()
+                .is_some_and(|hidden| hidden.contains(&item.id.0)),
+            ..Default::default()
         };
-        if let Some(followed) = self.spotify.browse.saved_states.get(&uri) {
-            entries.push(ContextMenuEntry::Command {
-                label: self.text(if *followed {
-                    "spotify_unfollow_artist"
-                } else {
-                    "spotify_follow_artist"
-                }),
-                command: ContextCommand::SpotifyToggleArtistFollow,
-            });
+        apricot_app::context_menu::player_context_menu_with_spotify(context, item, menu)
+    }
+
+    fn spotify_command_item(&self, ui: &dyn ShellUi) -> Option<CatalogItem> {
+        if self.view == View::Player || ui.focused_player_control().is_some() {
+            self.application
+                .player_session()
+                .current_item()
+                .and_then(apricot_app::spotify::playing_item)
         } else {
-            entries.push(ContextMenuEntry::Disabled {
-                label: self.text("spotify_artist_state_unavailable"),
-            });
+            self.browse_selected_item(ui).cloned()
+        }
+    }
+
+    pub(crate) fn spotify_playing_saved(&self, item: &MediaItem) -> Option<bool> {
+        self.spotify
+            .browse
+            .saved_states
+            .get(&item.id.0)
+            .copied()
+            .or_else(|| {
+                self.spotify
+                    .browse
+                    .frames
+                    .iter()
+                    .rev()
+                    .flat_map(|frame| &frame.items)
+                    .find_map(|row| (row.uri == item.id.0).then_some(row.saved).flatten())
+            })
+    }
+
+    pub(crate) fn announce_playing(&mut self, ui: &mut dyn ShellUi, item: &MediaItem) {
+        let generation = self.application.player_session().generation();
+        self.spotify.browse.playing_announcement = None;
+        let saved = self.spotify_playing_saved(item);
+        if apricot_app::spotify::playing_item(item).is_some()
+            && saved.is_none()
+            && self.spotify_service_ref().is_some()
+            && let Some(service) = self.spotify_service()
+        {
+            let stamp = self.spotify.epochs.begin();
+            self.spotify.browse.playing_announcement =
+                Some(apricot_app::spotify::PendingPlayingAnnouncement {
+                    stamp,
+                    generation,
+                    item: item.clone(),
+                });
+            service.load_catalog(stamp, CatalogRequest::PlayingSavedState(item.id.0.clone()));
+        } else {
+            ui.set_status(&self.playing_message(item), true);
         }
     }
 
@@ -2982,6 +3085,17 @@ impl Shell {
                 saved,
             }),
         );
+    }
+
+    pub(crate) fn spotify_test_waiting_announcement(&mut self, item: &MediaItem) -> SpotifyStamp {
+        let stamp = self.spotify.epochs.begin();
+        self.spotify.browse.playing_announcement =
+            Some(apricot_app::spotify::PendingPlayingAnnouncement {
+                stamp,
+                generation: self.application.player_session().generation(),
+                item: item.clone(),
+            });
+        stamp
     }
 
     pub(crate) fn spotify_browse_test_profile_read(&mut self, ui: &dyn ShellUi) -> SpotifyStamp {

@@ -12,6 +12,100 @@ use apricot_spotify::{
     SpotifyQueue,
 };
 
+/// The playing Spotify item projected as a catalog row. This deliberately has
+/// no playlist editing permissions or selection marks from the browsing list.
+pub fn playing_item(item: &apricot_core::MediaItem) -> Option<CatalogItem> {
+    use apricot_core::{MediaSource, SpotifyEntityKind, SpotifyRef};
+    if item.source != MediaSource::Spotify {
+        return None;
+    }
+    let kind = match SpotifyRef::parse(&item.id.0)?.kind {
+        SpotifyEntityKind::Track => ItemKind::Track,
+        SpotifyEntityKind::Episode => ItemKind::Episode,
+        _ => return None,
+    };
+    let metadata = |key: &str| {
+        item.metadata
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    Some(CatalogItem {
+        kind,
+        uri: item.id.0.clone(),
+        name: item.title.clone(),
+        subtitle: item.channel.clone(),
+        album: metadata("album"),
+        album_uri: metadata("spotify_album_uri"),
+        artist_uri: metadata("spotify_artist_uri"),
+        duration_ms: None,
+        playable: true,
+        explicit: false,
+        uid: None,
+        saved: None,
+        count: None,
+        editable: false,
+        format: String::new(),
+    })
+}
+
+/// One announcement for all sources, retaining Spotify's artist and smart
+/// shuffle wording. An unknown or unsaved track gets no extra qualifier.
+pub fn playing_message(
+    catalog: &TranslationCatalog,
+    item: &apricot_core::MediaItem,
+    saved: Option<bool>,
+) -> String {
+    let spotify = item.source == apricot_core::MediaSource::Spotify;
+    let title = if spotify && !item.channel.is_empty() {
+        let smart = item
+            .metadata
+            .get("spotify_smart_shuffle")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        catalog
+            .text(if smart {
+                "spotify_playing_by_smart"
+            } else {
+                "spotify_playing_by"
+            })
+            .replace("{title}", &item.title)
+            .replace("{artist}", &item.channel)
+    } else {
+        item.title.clone()
+    };
+    let mut message = catalog.text("playing").replace("{title}", &title);
+    if spotify && saved == Some(true) {
+        message.push_str(", ");
+        message.push_str(catalog.text("spotify_liked"));
+    }
+    message
+}
+
+/// A library lookup may complete after Next, Close, another source, or an
+/// account switch. The UI must discard it rather than announce an old track.
+pub struct PendingPlayingAnnouncement {
+    pub stamp: apricot_core::SpotifyStamp,
+    pub generation: u64,
+    pub item: apricot_core::MediaItem,
+}
+
+impl PendingPlayingAnnouncement {
+    pub fn is_current(&self, session: &crate::PlayerSession) -> bool {
+        session.generation() == self.generation
+            && session
+                .current_item()
+                .is_some_and(|item| item.id == self.item.id)
+            && matches!(
+                session.phase(),
+                crate::PlaybackPhase::Playing
+                    | crate::PlaybackPhase::Paused
+                    | crate::PlaybackPhase::Starting
+            )
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SpotifyHubEntry {
     /// Browser login; the only way in without a saved account.

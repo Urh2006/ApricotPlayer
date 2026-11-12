@@ -1743,8 +1743,7 @@ unsafe fn continue_spotify_item(window: HWND, track: &SpotifyTrack) -> bool {
     if !state.application.replace_current_player_item(item.clone()) {
         return false;
     }
-    let message = super::playing_message(&state.application, &item);
-    set_status(state, &message, true);
+    super::spotify_browse::announce_playing(state, &item);
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0.0, |duration| duration.as_secs_f64());
