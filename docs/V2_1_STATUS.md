@@ -21,7 +21,7 @@ Ta dokument vodi delo za 2.1 beta 1. Obseg je potrjen v 19 sklopih (EQ, obdelava
 | 5 | Prehodi in crossfade | narejeno |
 | 6 | Sleep timer | narejeno |
 | 7 | Izseki, A-B, shranjeni izseki v Bookmarks, izvoz | narejeno |
-| 8 | Zvočne sledi in podnapisi, glasno branje | čaka |
+| 8 | Zvočne sledi in podnapisi, glasno branje | narejeno |
 | 9 | Zvočne knjige, navigacija in informacije | čaka |
 | 10 | Playlisti, mape, formati | čaka |
 | 11 | Upravljanje lokalnih datotek | čaka |
@@ -113,3 +113,14 @@ Ročni NVDA preizkus: Ctrl+Alt+T. NVDA prebere "Sleep timer" in "Current timer, 
 Preverjeno v izoliranem namizju: imena in vrstni red polj, izvoz (najavi "Clip export started." in "Clip exported: song - 0-02-0-04.mp3", datoteka 96 kB), shranjen zaznamek z `end_position`, Alt+L vklop in izklop.
 
 Ročni NVDA preizkus: predvajaj datoteko, pritisni [ in čez nekaj sekund ]. Alt+B: NVDA prebere "Marked excerpts" in "Excerpt, combo box, Excerpt 1: ...". Action Save in Bookmarks, Enter: "Excerpt saved in Bookmarks." Ctrl+Shift+K: vrstica vsebuje "Excerpt until". Enter predvaja izsek enkrat in ustavi.
+
+## Enota 8
+
+- Alt+A: izbira zvočne sledi (jezik, naslov, kodek, zunanja datoteka), Alt+PageDown in Alt+PageUp krožita med sledmi in povesta izbrano. Če datoteka nima druge sledi, NVDA to pove.
+- Alt+S Subtitles: sled podnapisov ali izklopljeno, glasno branje, nova vrstica prekine prejšnjo (privzeto izključeno, vrstica se prebere do konca), ohranjanje jezika do zaprtja predvajalnika (privzeto vključeno). Zadnji dve izbiri se shranita.
+- Alt+Shift+S naloži datoteko s podnapisi, Ctrl+Alt+Shift+F8 podnapise s spletnega naslova; po nalaganju se berejo na glas.
+- Najave za način zvočne knjige in ustavitev na koncu poglavja so prevedene.
+
+Preverjeno v izoliranem namizju z datoteko z dvema zvočnima sledema in podnapisi: seznam sledi ("Track 2: slv, Commentary, opus"), preklop z Alt+PageDown, izbira podnapisov in branje obeh vrstic brez prekinjanja.
+
+Ročni NVDA preizkus: predvajaj video z več sledmi, Alt+PageDown pove novo sled. Alt+S, izberi podnapise in označi Read subtitles aloud, Enter: NVDA bere vrstice podnapisov.

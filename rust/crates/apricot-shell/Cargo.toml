@@ -19,6 +19,7 @@ apricot-updater.workspace = true
 chrono.workspace = true
 apricot-playback.workspace = true
 serde_json.workspace = true
+serde.workspace = true
 url.workspace = true
 
 [lints]

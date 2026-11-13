@@ -1090,110 +1090,120 @@ pub fn dispatch_playback_feature(
             commands.extend(play_excerpt(app, index, ranges[index], false));
         }
         "player_audio_tracks" | "player_audio_track_next" | "player_audio_track_previous" => {
-            let tracks: Vec<_> = app
-                .player_session()
-                .media_info()
-                .tracks
-                .iter()
-                .filter(|track| track["type"] == "audio")
-                .cloned()
-                .collect();
-            if tracks.is_empty() {
-                ui.announce("No alternative audio tracks are available.");
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
+            let tracks = media_tracks(app, "audio");
+            if tracks.len() < 2 {
+                ui.announce(catalog.text("audio_tracks_none"));
                 return Some(commands);
             }
             let selected = tracks
                 .iter()
                 .position(|track| track["selected"].as_bool() == Some(true))
                 .unwrap_or_default();
-            let index = if action == "player_audio_track_next" {
-                Some((selected + 1) % tracks.len())
-            } else if action == "player_audio_track_previous" {
-                Some((selected + tracks.len() - 1) % tracks.len())
-            } else {
-                ui.form(&FeatureForm::new(
-                    "Audio tracks",
-                    vec![FormField::choice(
-                        "track",
-                        "Audio track",
-                        tracks.iter().map(track_label).collect(),
-                        selected,
-                    )],
-                ))
-                .map(|v| choice(&v, "track"))
+            let index = match action {
+                "player_audio_track_next" => Some((selected + 1) % tracks.len()),
+                "player_audio_track_previous" => Some((selected + tracks.len() - 1) % tracks.len()),
+                _ => ui
+                    .form(&FeatureForm::localized(
+                        &catalog,
+                        catalog.text("audio_tracks_title"),
+                        vec![FormField::choice(
+                            "track",
+                            catalog.text("audio_track_field"),
+                            tracks
+                                .iter()
+                                .map(|track| track_label(&catalog, track))
+                                .collect(),
+                            selected,
+                        )],
+                    ))
+                    .map(|values| choice(&values, "track")),
             };
-            if let Some(index) = index.and_then(|i| tracks.get(i))
-                && let Some(id) = index["id"].as_i64()
+            if let Some(track) = index.and_then(|index| tracks.get(index))
+                && let Some(id) = track["id"].as_i64()
             {
                 commands.push(set_property("aid", id));
-                ui.announce(&track_label(index));
+                ui.announce(&track_label(&catalog, track));
             }
         }
         "player_subtitle_file" => {
-            if let Some(path) = ui.open_file("Load subtitles", &["srt", "vtt", "ass", "ssa", "sub"])
-            {
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
+            if let Some(path) = ui.open_file(
+                catalog.text("subtitles_load_file"),
+                &["srt", "vtt", "ass", "ssa", "sub"],
+            ) {
                 commands.push(PlaybackCommand::AddSubtitle(
                     path.to_string_lossy().into_owned(),
                 ));
+                // A chosen subtitle file is meant to be read aloud.
                 app.playback_features_mut().subtitles_enabled = true;
+                ui.announce(catalog.text("subtitles_loaded"));
             }
         }
         "player_subtitle_url" => {
-            if let Some(values) = ui.form(&FeatureForm::new(
-                "Load subtitle URL",
-                vec![FormField::text("url", "Subtitle URL", "")],
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
+            if let Some(values) = ui.form(&FeatureForm::localized(
+                &catalog,
+                catalog.text("subtitles_load_url"),
+                vec![FormField::text("url", catalog.text("subtitles_url"), "")],
             )) {
-                match url::Url::parse(text(&values, "url")) {
+                match url::Url::parse(text(&values, "url").trim()) {
                     Ok(url) if matches!(url.scheme(), "http" | "https") => {
                         commands.push(PlaybackCommand::AddSubtitle(url.to_string()));
                         app.playback_features_mut().subtitles_enabled = true;
+                        ui.announce(catalog.text("subtitles_loaded"));
                     }
-                    _ => ui.announce("Enter a valid HTTP or HTTPS subtitle URL."),
+                    _ => ui.announce(catalog.text("subtitles_url_invalid")),
                 }
             }
         }
         "player_subtitles" => {
-            let tracks: Vec<_> = app
-                .player_session()
-                .media_info()
-                .tracks
-                .iter()
-                .filter(|track| track["type"] == "sub")
-                .cloned()
-                .collect();
-            let state = app.playback_features();
-            let mut options = vec!["Off".to_owned()];
-            options.extend(tracks.iter().map(track_label));
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
+            let tracks = media_tracks(app, "sub");
+            let preferences = SubtitlePreferences::from_settings(app.settings());
+            let mut options = vec![catalog.text("subtitles_off").to_owned()];
+            options.extend(tracks.iter().map(|track| track_label(&catalog, track)));
             let selected = tracks
                 .iter()
                 .position(|track| track["selected"].as_bool() == Some(true))
-                .map_or(0, |i| i + 1);
-            let Some(values) = ui.form(&FeatureForm::new(
-                "Subtitles",
+                .map_or(0, |index| index + 1);
+            let Some(values) = ui.form(&FeatureForm::localized(
+                &catalog,
+                catalog.text("subtitles_title"),
                 vec![
-                    FormField::choice("track", "Subtitle track", options, selected),
-                    FormField::checkbox("speak", "Read subtitles aloud", state.subtitles_enabled),
+                    FormField::choice("track", catalog.text("subtitles_track"), options, selected),
+                    FormField::checkbox(
+                        "speak",
+                        catalog.text("subtitles_speak"),
+                        app.playback_features().subtitles_enabled,
+                    ),
                     FormField::checkbox(
                         "interrupt",
-                        "New lines interrupt current speech",
-                        state.subtitle_interrupt,
+                        catalog.text("subtitles_interrupt"),
+                        preferences.interrupt,
                     ),
                     FormField::checkbox(
                         "remember",
-                        "Remember language until the player is closed",
-                        state.subtitle_remember_language,
+                        catalog.text("subtitles_remember_language"),
+                        preferences.remember_language,
                     ),
                 ],
             )) else {
                 return Some(commands);
             };
+            let preferences = SubtitlePreferences {
+                interrupt: checked(&values, "interrupt"),
+                remember_language: checked(&values, "remember"),
+            };
+            persist(app, "subtitles_v1", serde_json::json!(preferences), ui);
             let selected = choice(&values, "track");
             let state = app.playback_features_mut();
             state.subtitles_enabled = checked(&values, "speak");
-            state.subtitle_interrupt = checked(&values, "interrupt");
-            state.subtitle_remember_language = checked(&values, "remember");
+            state.subtitle_interrupt = preferences.interrupt;
+            state.subtitle_remember_language = preferences.remember_language;
             if selected == 0 {
                 commands.push(set_property("sid", "no"));
+                state.subtitle_language = None;
             } else if let Some(track) = tracks.get(selected - 1)
                 && let Some(id) = track["id"].as_i64()
             {
@@ -1202,22 +1212,24 @@ pub fn dispatch_playback_feature(
             }
         }
         "player_audiobook_mode" => {
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
             let state = app.playback_features_mut();
             state.audiobook = !state.audiobook;
-            ui.announce(if state.audiobook {
-                "Audiobook mode on."
+            ui.announce(catalog.text(if state.audiobook {
+                "audiobook_mode_on"
             } else {
-                "Audiobook mode off."
-            });
+                "audiobook_mode_off"
+            }));
         }
         "player_chapter_stop" => {
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
             let state = app.playback_features_mut();
             state.chapter_stop = !state.chapter_stop;
-            ui.announce(if state.chapter_stop {
-                "Stop at the end of the chapter on."
+            ui.announce(catalog.text(if state.chapter_stop {
+                "chapter_stop_on"
             } else {
-                "Stop at the end of the chapter off."
-            });
+                "chapter_stop_off"
+            }));
         }
         _ => return None,
     }
@@ -1232,14 +1244,77 @@ pub fn dispatch_playback_feature(
     Some(commands)
 }
 
-fn track_label(track: &serde_json::Value) -> String {
-    let id = track["id"].as_i64().unwrap_or_default();
-    let language = track["lang"].as_str().unwrap_or("");
-    let title = track["title"].as_str().unwrap_or("");
-    let codec = track["codec"].as_str().unwrap_or("");
-    format!("{id}: {language} {title} {codec}")
-        .trim()
-        .to_owned()
+/// Subtitle choices kept between sessions (the language itself is kept only
+/// until the player is closed).
+#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct SubtitlePreferences {
+    /// A new line interrupts the one being read; by default it waits.
+    pub interrupt: bool,
+    pub remember_language: bool,
+}
+
+impl Default for SubtitlePreferences {
+    fn default() -> Self {
+        Self {
+            interrupt: false,
+            remember_language: true,
+        }
+    }
+}
+
+impl SubtitlePreferences {
+    #[must_use]
+    pub fn from_settings(settings: &apricot_storage::SettingsDocument) -> Self {
+        settings
+            .preserved
+            .get("subtitles_v1")
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or_default()
+    }
+}
+
+fn media_tracks(app: &Application, kind: &str) -> Vec<serde_json::Value> {
+    app.player_session()
+        .media_info()
+        .tracks
+        .iter()
+        .filter(|track| track["type"] == kind)
+        .cloned()
+        .collect()
+}
+
+/// "English, Commentary, aac 2 channels": what a track is, without ids.
+fn track_label(catalog: &apricot_core::TranslationCatalog, track: &serde_json::Value) -> String {
+    let mut parts = Vec::new();
+    if let Some(language) = track["lang"].as_str().filter(|value| !value.is_empty()) {
+        parts.push(language.to_owned());
+    }
+    if let Some(title) = track["title"].as_str().filter(|value| !value.is_empty()) {
+        parts.push(title.to_owned());
+    }
+    if let Some(codec) = track["codec"].as_str().filter(|value| !value.is_empty()) {
+        parts.push(codec.to_owned());
+    }
+    if let Some(channels) = track["demux-channel-count"].as_i64() {
+        parts.push(
+            catalog
+                .text("audio_track_channels")
+                .replace("{count}", &channels.to_string()),
+        );
+    }
+    if track["external"].as_bool() == Some(true) {
+        parts.push(catalog.text("track_external").to_owned());
+    }
+    let number = track["id"].as_i64().unwrap_or_default().to_string();
+    if parts.is_empty() {
+        return catalog.text("track_number").replace("{number}", &number);
+    }
+    format!(
+        "{}: {}",
+        catalog.text("track_number").replace("{number}", &number),
+        parts.join(", ")
+    )
 }
 
 /// The advanced equalizer of the profile shown in the equalizer dialog: band
@@ -1442,6 +1517,10 @@ pub fn tick_playback_features(
     if state.ranges.media_key != key {
         state.reset_media(&key, m4b);
     }
+    let preferences = SubtitlePreferences::from_settings(app.settings());
+    let state = app.playback_features_mut();
+    state.subtitle_interrupt = preferences.interrupt;
+    state.subtitle_remember_language = preferences.remember_language;
     {
         let state = app.playback_features_mut();
         if state.subtitle_remember_language
