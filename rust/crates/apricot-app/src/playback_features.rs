@@ -82,6 +82,8 @@ impl SleepTimer {
         {
             return Err("The timer duration or fade is outside the supported range.".to_owned());
         }
+        // A short timer needs no "one minute remaining" right after it starts.
+        let warned = options.seconds <= 75.0;
         Ok(Self {
             options,
             previous_tick: now,
@@ -89,7 +91,7 @@ impl SleepTimer {
             previous_playing: playing,
             original_volume: volume,
             faded: false,
-            warned: false,
+            warned,
         })
     }
 

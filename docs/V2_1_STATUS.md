@@ -19,7 +19,7 @@ Ta dokument vodi delo za 2.1 beta 1. Obseg je potrjen v 19 sklopih (EQ, obdelava
 | 3 | EQ 15 pasov, Advanced, urejanje presetov | narejeno |
 | 4 | Obdelava zvoka: pan, mono, normalizacija, tišina, SOFA | narejeno |
 | 5 | Prehodi in crossfade | narejeno |
-| 6 | Sleep timer | čaka |
+| 6 | Sleep timer | narejeno |
 | 7 | Izseki, A-B, shranjeni izseki v Bookmarks, izvoz | čaka |
 | 8 | Zvočne sledi in podnapisi, glasno branje | čaka |
 | 9 | Zvočne knjige, navigacija in informacije | čaka |
@@ -91,3 +91,14 @@ Ročni NVDA preizkus: predvajaj datoteko, F5. NVDA prebere "Audio processing" in
 - Preverjeno v izoliranem namizju: playlist z dvema 12-sekundnima datotekama, crossfade 3 s, Autoplay next vključen: drugi posnetek se je začel pri 8,9 s. Spotify crossfade (osnutek v predvajanju Spotify) ni preverjen.
 
 Ročni NVDA preizkus: v kontekstnem meniju predvajalnika izberi Playback transitions, označi "Crossfade when the next item starts by itself" in Save (NVDA: "Playback transitions saved."). Predvajaj playlist z vključenim Autoplay next: naslednji posnetek se začne 3 s pred koncem, zvoka se prelijeta.
+
+## Enota 6
+
+- Sleep timer v glavnem meniju (za Copy diagnostic report, pred Settings), Ctrl+Alt+T odpre okno, Alt+Shift+T pove preostali čas, Ctrl+Alt+Shift+T prekliče.
+- Okno: najprej Current timer (stanje), nato Run the sleep timer, When to finish (čas, konec posnetka, konec poglavja), Duration (15 do 120 minut ali lastno), Count down (dejanski čas s premori ali samo predvajanje), When the timer finishes (pavza s položajem ali stop), Fade out before finishing (privzeto izključeno) in trajanje. Gumb je Start.
+- Zadnje izbire se zapomnijo, tekoče odštevanje se po ponovnem zagonu ne nadaljuje. Ročna menjava posnetka časovnika do konca posnetka ne sproži in ne prekliče.
+- Opozorilo minuto pred koncem, razen pri časovnikih do 75 s. Vse najave so prevedene.
+
+Preverjeno v izoliranem namizju: vnos v glavnem meniju, Tab vrstni red in imena vseh polj, začetek z eno minuto ("Sleep timer: 1:00 remaining."), Alt+Shift+T ("0:58 remaining"), preklic in ponovni preklic ("No sleep timer is running.").
+
+Ročni NVDA preizkus: Ctrl+Alt+T. NVDA prebere "Sleep timer" in "Current timer, No sleep timer is running." Tab do Duration, izberi 15 minutes, Enter: NVDA pove "Sleep timer: 15:00 remaining." Alt+Shift+T pove preostali čas, Ctrl+Alt+Shift+T "Sleep timer cancelled."
