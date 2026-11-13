@@ -374,6 +374,10 @@ pub(super) enum Source {
     Browse(Option<String>),
     /// A section of Home or a browse page, already loaded.
     Section(Vec<CatalogItem>),
+    SubscriptionChanges {
+        uri: String,
+        items: Vec<CatalogItem>,
+    },
     /// Spotify's radio for a track, artist, album or playlist; it becomes
     /// the station playlist once Spotify names it.
     Radio(String),
@@ -415,7 +419,9 @@ impl Source {
                 uri: uri.clone(),
                 offset,
             },
-            Self::MyProfile(_) | Self::Section(_) => return None,
+            Self::MyProfile(_) | Self::Section(_) | Self::SubscriptionChanges { .. } => {
+                return None;
+            }
             Self::Search { query, kind } => CatalogRequest::Search {
                 query: query.clone(),
                 kind: *kind,
@@ -446,6 +452,7 @@ impl Source {
     /// The Spotify context a track of this list plays in.
     fn context(&self) -> Option<&str> {
         match self {
+            Self::SubscriptionChanges { uri, .. } => Some(uri),
             Self::Album(uri) | Self::Playlist(uri) | Self::Artist(uri) | Self::Show(uri) => {
                 Some(uri)
             }
@@ -674,7 +681,7 @@ pub(super) unsafe fn open(window: HWND, source: Source, title: String) {
     });
     let texts = super::spotify::catalog(state);
     if let Some(frame) = state.spotify_browse.frames.last_mut()
-        && let Source::Section(items) = &frame.source
+        && let Source::Section(items) | Source::SubscriptionChanges { items, .. } = &frame.source
     {
         frame.items = items.clone();
         frame.loaded = true;
@@ -3305,6 +3312,188 @@ unsafe fn play_preview(window: HWND, name: &str, url: Option<&str>) {
 #[cfg(test)]
 #[path = "spotify_native_tests.rs"]
 mod native_tests;
+
+pub(super) unsafe fn subscribe_selected(window: HWND, subscribe: bool) {
+    let uri = state(window).and_then(|state| {
+        context_item(state)
+            .filter(|item| item.kind == ItemKind::Playlist)
+            .map(|item| item.uri)
+            .or_else(|| {
+                state
+                    .spotify_browse
+                    .frames
+                    .last()
+                    .and_then(|frame| frame.source.context())
+                    .filter(|uri| uri.starts_with("spotify:playlist:"))
+                    .map(str::to_owned)
+            })
+    });
+    let Some(uri) = uri else {
+        show_error_message(window, "Select a Spotify playlist first");
+        return;
+    };
+    if let Some(service) = super::spotify::service(window)
+        && let Some(state) = state_mut(window)
+    {
+        let stamp = state.spotify.epochs_begin();
+        service.subscription_operation(
+            stamp,
+            if subscribe {
+                apricot_spotify::playlist_subscriptions::SubscriptionCommand::Subscribe(uri)
+            } else {
+                apricot_spotify::playlist_subscriptions::SubscriptionCommand::Unsubscribe(uri)
+            },
+        );
+        super::spotify::announce(window, "Updating Spotify subscriptions");
+    }
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Bounded form minutes.
+pub(super) unsafe fn subscriptions(window: HWND) {
+    use apricot_shell::spotify_subscriptions as forms;
+    use apricot_spotify::playlist_subscriptions::SubscriptionCommand as C;
+    let Some(service) = super::spotify::service(window) else {
+        return;
+    };
+    let document = match service.playlist_subscriptions() {
+        Ok(doc) => doc,
+        Err(error) => {
+            show_error_message(window, &error);
+            return;
+        }
+    };
+    let Some(values) = crate::feature_form_win32::show(window, &forms::panel(&document)) else {
+        return;
+    };
+    let action = match forms::selection(&document, &values) {
+        Ok(action) => action,
+        Err(error) => {
+            show_error_message(window, &error);
+            return;
+        }
+    };
+    let command = match action {
+        forms::SubscriptionPanelAction::Open(uri) => {
+            open(window, Source::Playlist(uri), "Spotify playlist".into());
+            return;
+        }
+        forms::SubscriptionPanelAction::Changes(uri) => {
+            if let Some(change) = document.history.iter().find(|change| change.uri == uri) {
+                subscription_changes(window, change.clone());
+            } else {
+                super::spotify::announce(window, "No saved changes for this playlist");
+            }
+            return;
+        }
+        forms::SubscriptionPanelAction::Options(uri) => {
+            let Some(form) = forms::options_form(&document, &uri) else {
+                return;
+            };
+            let Some(values) = crate::feature_form_win32::show(window, &form) else {
+                return;
+            };
+            C::Options {
+                uri,
+                options: forms::options(&values),
+            }
+        }
+        forms::SubscriptionPanelAction::Subscribe => {
+            let Some(values) = crate::feature_form_win32::show(window, &forms::subscribe_form())
+            else {
+                return;
+            };
+            let Some(uri) = values
+                .get("uri")
+                .and_then(apricot_shell::FormValue::text)
+                .and_then(forms::parse_uri)
+            else {
+                show_error_message(window, "Enter a valid Spotify playlist link or URI");
+                return;
+            };
+            C::Subscribe(uri)
+        }
+        forms::SubscriptionPanelAction::Command(C::Interval(_)) => {
+            let Some(values) =
+                crate::feature_form_win32::show(window, &forms::interval_form(&document))
+            else {
+                return;
+            };
+            C::Interval(
+                (values
+                    .get("minutes")
+                    .and_then(apricot_shell::FormValue::number)
+                    .unwrap_or(60.0)
+                    * 60.0)
+                    .round() as u64,
+            )
+        }
+        forms::SubscriptionPanelAction::Command(command) => command,
+    };
+    if let Some(state) = state_mut(window) {
+        let stamp = state.spotify.epochs_begin();
+        service.subscription_operation(stamp, command);
+    }
+    super::spotify::announce(window, "Updating Spotify subscriptions");
+}
+pub(super) unsafe fn subscription_report(
+    window: HWND,
+    result: Result<apricot_spotify::playlist_subscriptions::SubscriptionReport, SpotifyError>,
+) {
+    use apricot_spotify::playlist_subscriptions::SubscriptionCommand;
+    let report = match result {
+        Ok(report) => report,
+        Err(error) => {
+            show_error_message(window, error.detail());
+            return;
+        }
+    };
+    let ids = if let Some(state) = state_mut(window) {
+        match apricot_shell::spotify_subscriptions::publish(&mut state.application, &report) {
+            Ok(ids) => ids,
+            Err(error) => {
+                show_error_message(window, &error);
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    if !ids.is_empty()
+        && let Some(service) = super::spotify::service(window)
+        && let Some(state) = state_mut(window)
+    {
+        let stamp = state.spotify.epochs_begin();
+        service.subscription_operation(stamp, SubscriptionCommand::Acknowledge(ids));
+    }
+    if !report.message.is_empty() {
+        super::spotify::announce(window, &report.message);
+    }
+    if !report.errors.is_empty() {
+        show_error_message(window, &report.errors.join("\n"));
+    }
+}
+pub(super) unsafe fn subscription_changes(
+    window: HWND,
+    change: apricot_spotify::playlist_subscriptions::PlaylistChanges,
+) {
+    let items = if change.added.is_empty() {
+        change.removed
+    } else {
+        change.added
+    };
+    if items.is_empty() {
+        super::spotify::announce(window, "The playlist order changed");
+        return;
+    }
+    open(
+        window,
+        Source::SubscriptionChanges {
+            uri: change.uri,
+            items,
+        },
+        format!("{}: playlist changes", change.name),
+    );
+}
 
 #[cfg(test)]
 mod tests {

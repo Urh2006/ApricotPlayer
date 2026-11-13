@@ -8,12 +8,20 @@ pub struct EqualizerBand {
 
 pub const EQUALIZER_BANDS: &[EqualizerBand] = &[
     EqualizerBand {
+        id: "25",
+        frequency_hz: 25,
+    },
+    EqualizerBand {
         id: "31",
         frequency_hz: 31,
     },
     EqualizerBand {
         id: "62",
         frequency_hz: 62,
+    },
+    EqualizerBand {
+        id: "100",
+        frequency_hz: 100,
     },
     EqualizerBand {
         id: "125",
@@ -24,12 +32,20 @@ pub const EQUALIZER_BANDS: &[EqualizerBand] = &[
         frequency_hz: 250,
     },
     EqualizerBand {
+        id: "400",
+        frequency_hz: 400,
+    },
+    EqualizerBand {
         id: "500",
         frequency_hz: 500,
     },
     EqualizerBand {
         id: "1000",
         frequency_hz: 1_000,
+    },
+    EqualizerBand {
+        id: "1600",
+        frequency_hz: 1_600,
     },
     EqualizerBand {
         id: "2000",
@@ -44,15 +60,35 @@ pub const EQUALIZER_BANDS: &[EqualizerBand] = &[
         frequency_hz: 8_000,
     },
     EqualizerBand {
+        id: "10000",
+        frequency_hz: 10_000,
+    },
+    EqualizerBand {
         id: "16000",
         frequency_hz: 16_000,
     },
+];
+
+/// Existing ten-band profiles retain their exact filters. New controls start
+/// flat instead of interpolating and silently changing the sound on upgrade.
+pub const LEGACY_EQUALIZER_BAND_IDS: [&str; 10] = [
+    "31", "62", "125", "250", "500", "1000", "2000", "4000", "8000", "16000",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FactoryEqualizerPreset {
     pub id: &'static str,
     pub gains_db: [f32; 10],
+}
+
+impl FactoryEqualizerPreset {
+    #[must_use]
+    pub fn gain_db(&self, band_id: &str) -> f64 {
+        LEGACY_EQUALIZER_BAND_IDS
+            .iter()
+            .position(|id| *id == band_id)
+            .map_or(0.0, |index| f64::from(self.gains_db[index]))
+    }
 }
 
 pub const FACTORY_EQUALIZER_PRESETS: &[FactoryEqualizerPreset] = &[
@@ -145,8 +181,8 @@ mod tests {
             .iter()
             .map(|preset| preset.id)
             .collect();
-        assert_eq!(EQUALIZER_BANDS.len(), 10);
-        assert_eq!(band_ids.len(), 10);
+        assert_eq!(EQUALIZER_BANDS.len(), 15);
+        assert_eq!(band_ids.len(), 15);
         assert_eq!(FACTORY_EQUALIZER_PRESETS.len(), 18);
         assert_eq!(preset_ids.len(), 18);
         assert_eq!(CUSTOM_EQUALIZER_PRESET_IDS.len(), 3);

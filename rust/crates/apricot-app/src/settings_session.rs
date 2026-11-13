@@ -37,6 +37,13 @@ impl SettingsDraft {
         &self.current
     }
 
+    /// Stores an independently versioned feature document while retaining every
+    /// unrelated preference and unknown field. The ordinary atomic save still
+    /// owns committing this draft.
+    pub fn set_extension(&mut self, key: &str, value: Value) {
+        self.current.preserved.insert(key.to_owned(), value);
+    }
+
     pub fn is_dirty(&self) -> bool {
         self.current != self.original
     }

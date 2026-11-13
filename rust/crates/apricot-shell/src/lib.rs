@@ -17,14 +17,17 @@ mod cookies;
 mod download_work;
 mod downloads;
 mod equalizer_dialog;
+mod feature_form;
 mod keyboard;
 mod library;
 mod lyrics;
 mod main_menu;
+pub mod playback_features;
 mod player;
 mod player_edit;
 mod player_extras;
 mod player_tools;
+pub mod playlist_editor;
 mod playlists;
 mod podcast_work;
 mod podcasts;
@@ -35,9 +38,12 @@ mod screens;
 mod search;
 mod settings_window;
 mod shell_actions;
+pub mod sources;
+mod sources_shell;
 mod spotify;
 mod spotify_lists;
 mod spotify_panels;
+pub mod spotify_subscriptions;
 mod subscriptions;
 mod transcript;
 mod transcript_loader;
@@ -55,6 +61,7 @@ pub use converter::{ConverterDialog, ConverterOptions, ConverterStart, Converter
 pub use cookies::CookieCommandResult;
 pub use downloads::{DownloadProgress, safe_path_component};
 pub use equalizer_dialog::{EQUALIZER_BUTTONS, EqualizerButton, EqualizerLabels, EqualizerView};
+pub use feature_form::{FeatureForm, FormField, FormFieldKind, FormValue, FormValues};
 pub use keyboard::{FocusKind, KeyRoute};
 pub use library::media_collection_label;
 pub use lyrics::{LyricsDialog, LyricsHighlight, LyricsLoaded};
@@ -126,6 +133,7 @@ pub enum View {
 /// The main window's application state and the decisions made on it.
 pub struct Shell {
     pub application: Application,
+    sources: sources::SourcesController,
     view: View,
     model: MainMenuModel,
     /// Windows `last_activated_menu_item`: the main menu returns to it.
@@ -167,6 +175,7 @@ impl Shell {
         let model = application.main_menu_model();
         Self {
             application,
+            sources: sources::SourcesController::default(),
             view: View::MainMenu,
             model,
             last_activated_menu_item: None,
@@ -328,7 +337,20 @@ impl Shell {
             return;
         };
         self.last_activated_menu_item = Some(item.id);
+        if let Some(action) = match item.id {
+            "radio" => Some("open_radio"),
+            "iptv" => Some("open_iptv"),
+            "recording" => Some("open_recording"),
+            _ => None,
+        } {
+            self.sources_action(ui, action);
+            return;
+        }
         match item.id {
+            "sleep_timer" => {
+                self.activate_playback_feature(ui, "open_sleep_timer");
+                return;
+            }
             "resume_last_session" => {
                 self.resume_last_player_session(ui);
                 return;
@@ -429,7 +451,8 @@ impl Shell {
     /// The player, podcast and download actions; `true` when `action_id`
     /// is one.
     fn feature_action(&mut self, ui: &mut dyn ShellUi, action_id: &str) -> bool {
-        self.spotify_transport(ui, action_id)
+        self.sources_action(ui, action_id)
+            || self.spotify_transport(ui, action_id)
             || self.spotify_action(ui, action_id)
             || self.activate_player_action(ui, action_id)
             || self.podcast_action(ui, action_id)
@@ -449,6 +472,9 @@ impl Shell {
             return;
         }
         self.leave_player_for_global_navigation(ui, action_id);
+        if self.activate_playback_feature(ui, action_id) {
+            return;
+        }
         if self.feature_action(ui, action_id) {
             return;
         }
@@ -495,6 +521,14 @@ impl Shell {
             }
             "open_playlists" => {
                 self.show_user_playlists(ui);
+                return;
+            }
+            "playlist_edit" => {
+                self.edit_selected_playlist(ui);
+                return;
+            }
+            "playlist_save_current" => {
+                self.save_current_playlist(ui);
                 return;
             }
             "open_subscriptions" => {

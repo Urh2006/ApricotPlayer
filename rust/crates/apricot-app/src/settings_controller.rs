@@ -22,6 +22,8 @@ pub enum SettingsControllerError {
     ShortcutConflict { shortcut: String, action: String },
     #[error("unknown shortcut action {0}")]
     UnknownShortcutAction(String),
+    #[error("invalid shortcut {0}")]
+    InvalidShortcut(String),
     #[error("{0}")]
     Spotify(String),
 }
@@ -116,6 +118,10 @@ impl SettingsController {
         self.draft.discard();
     }
 
+    pub fn set_extension(&mut self, key: &str, value: serde_json::Value) {
+        self.draft.set_extension(key, value);
+    }
+
     /// Assigns one non-empty shortcut while rejecting conflicts in the
     /// canonical form (Python `canonical_shortcut`), so `Control+F8` and
     /// `ctrl-f8` are the same key.
@@ -136,7 +142,16 @@ impl SettingsController {
         } else {
             shortcut
         };
-        let wanted = apricot_core::shortcut::ShortcutChord::parse(shortcut);
+        let wanted: Vec<_> = shortcut
+            .split('|')
+            .filter(|part| !part.trim().is_empty())
+            .map(apricot_core::shortcut::ShortcutChord::parse)
+            .collect();
+        if wanted.iter().any(Option::is_none) {
+            return Err(SettingsControllerError::InvalidShortcut(
+                shortcut.to_owned(),
+            ));
+        }
         if let Some((conflicting_action, _)) =
             self.draft
                 .current()
@@ -144,8 +159,10 @@ impl SettingsController {
                 .iter()
                 .find(|(other_id, other)| {
                     other_id.as_str() != action_id
-                        && wanted.is_some()
-                        && apricot_core::shortcut::ShortcutChord::parse(other) == wanted
+                        && wanted
+                            .iter()
+                            .flatten()
+                            .any(|chord| chord.matches_configured(other))
                         && !apricot_core::action::actions_may_share_a_chord(action_id, other_id)
                 })
         {
@@ -227,6 +244,31 @@ mod tests {
         controller
             .set_shortcut("open_search", "Ctrl+Shift+F8")
             .expect("own action may change");
+    }
+
+    #[test]
+    fn shortcut_alternatives_conflict_in_either_slot_and_invalid_input_is_atomic() {
+        let root = tempdir().expect("temporary directory");
+        let paths =
+            SettingsPaths::for_app_data(&root.path().join("beta"), &root.path().join("old"));
+        let mut controller = SettingsController::load(paths, SettingsDocument::default());
+        controller
+            .set_shortcut("open_search", "Ctrl+F8 | Shift+F8")
+            .expect("two free chords");
+        let before = controller.current().clone();
+        assert!(matches!(
+            controller.set_shortcut("open_settings", "Shift+F8"),
+            Err(super::SettingsControllerError::ShortcutConflict { .. })
+        ));
+        assert!(matches!(
+            controller.set_shortcut("open_settings", "Ctrl+F9 | Control+F8"),
+            Err(super::SettingsControllerError::ShortcutConflict { .. })
+        ));
+        assert!(matches!(
+            controller.set_shortcut("open_settings", "not a keyboard key"),
+            Err(super::SettingsControllerError::InvalidShortcut(_))
+        ));
+        assert_eq!(controller.current(), &before);
     }
 
     #[test]

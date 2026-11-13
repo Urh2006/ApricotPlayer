@@ -37,6 +37,8 @@ mod download_win32;
 #[cfg(windows)]
 mod equalizer_win32;
 #[cfg(windows)]
+mod feature_form_win32;
+#[cfg(windows)]
 mod file_dialog_win32;
 #[cfg(windows)]
 mod first_run_language_win32;
@@ -56,6 +58,8 @@ mod settings_win32;
 mod shortcut_win32;
 #[cfg(windows)]
 mod sound_win32;
+#[cfg(windows)]
+mod sources_browser_win32;
 #[cfg(windows)]
 mod spotify_devices_win32;
 #[cfg(windows)]

@@ -14,6 +14,7 @@ pub mod library_edit;
 pub mod main_menu;
 pub mod oauth;
 pub mod playback;
+pub mod playlist_subscriptions;
 pub mod queue;
 pub mod service;
 pub mod settings;

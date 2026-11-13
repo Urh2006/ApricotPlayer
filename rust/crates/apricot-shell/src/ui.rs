@@ -32,6 +32,11 @@ pub struct ChoiceDialog {
 
 /// The native side of the main window. Every method runs on the UI thread.
 pub trait ShellUi {
+    /// Queued subtitle speech by default; interrupt mode explicitly replaces
+    /// current speech. Native adapters select their screen reader priority.
+    fn speak_subtitle(&mut self, text: &str, _interrupt: bool) {
+        self.set_status(text, true);
+    }
     /// Windows `set_status`: shows `message` on the status line and, when
     /// `announce` is set, speaks it once without moving focus.
     fn set_status(&mut self, message: &str, announce: bool);
@@ -70,6 +75,29 @@ pub trait ShellUi {
 
     /// A modal list choice; `None` when cancelled.
     fn choose(&mut self, dialog: &ChoiceDialog) -> Option<usize>;
+
+    /// Native source browser with Enter, configurable actions and Shift+F10.
+    fn sources_browser(
+        &mut self,
+        _browser: &crate::sources::SourceBrowser,
+    ) -> Option<crate::sources::SourceSelection> {
+        None
+    }
+
+    /// Native typed form. Cancellation commits nothing. Native adapters override this;
+    /// a headless host may safely decline to open a form.
+    fn feature_form(&mut self, _form: &crate::FeatureForm) -> Option<crate::FormValues> {
+        None
+    }
+
+    /// Preview only valid complete values. The caller restores its prior state on Cancel.
+    fn feature_form_preview(
+        &mut self,
+        form: &crate::FeatureForm,
+        _preview: &mut dyn FnMut(&crate::FormValues),
+    ) -> Option<crate::FormValues> {
+        self.feature_form(form)
+    }
 
     /// The text of a screen's text field.
     fn screen_text(&self, id: &str) -> String;

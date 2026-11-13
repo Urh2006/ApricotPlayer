@@ -484,6 +484,14 @@ pub fn spotify_browse_context_menu(
         ));
     }
     if menu.playlist_profile {
+        entries.push(context.command(
+            "spotify_subscribe_playlist",
+            C::PlayerAction("spotify_subscribe_playlist"),
+        ));
+        entries.push(context.command(
+            "spotify_unsubscribe_playlist",
+            C::PlayerAction("spotify_unsubscribe_playlist"),
+        ));
         if let Some(published) = menu.playlist_published {
             entries.push(context.command(
                 if published {
@@ -798,6 +806,8 @@ pub fn user_playlists_context_menu(context: &ContextMenuContext<'_>) -> Vec<Cont
         create,
         context.command("download_user_playlist", C::DownloadUserPlaylist),
         context.command("remove_playlist", C::RemoveUserPlaylist),
+        // 2.1: appended so the Python entries keep their positions.
+        context.command("playlist_edit", C::PlayerAction("playlist_edit")),
     ]
 }
 
@@ -808,9 +818,12 @@ pub fn user_playlist_items_context_menu(
 ) -> Vec<ContextMenuEntry> {
     use ContextCommand as C;
     let Some(item) = item else {
-        return vec![ContextMenuEntry::Disabled {
-            label: context.text("playlist_empty"),
-        }];
+        return vec![
+            ContextMenuEntry::Disabled {
+                label: context.text("playlist_empty"),
+            },
+            context.command("playlist_edit", C::PlayerAction("playlist_edit")),
+        ];
     };
     if item.is_local_media() {
         return vec![
@@ -819,6 +832,7 @@ pub fn user_playlist_items_context_menu(
             context.shortcut("remove_from_playback_queue", C::RemoveFromPlaybackQueue),
             context.shortcut("remove_from_playlist", C::RemoveFromPlaylist),
             context.command("copy_path", C::CopyLocation),
+            context.command("playlist_edit", C::PlayerAction("playlist_edit")),
         ];
     }
     let mut entries = vec![
@@ -835,6 +849,7 @@ pub fn user_playlist_items_context_menu(
     if has_openable_youtube_channel(item) {
         entries.insert(7, context.shortcut("open_channel", C::OpenChannel));
     }
+    entries.push(context.command("playlist_edit", C::PlayerAction("playlist_edit")));
     entries
 }
 
@@ -1408,6 +1423,7 @@ mod tests {
                 "Create playlist",
                 "Download playlist",
                 "Remove playlist",
+                "Edit playlist",
             ]
         );
     }
@@ -1430,14 +1446,22 @@ mod tests {
                 "Open channel",
                 "Copy URL",
                 "Copy direct media URL",
+                "Edit playlist",
             ]
         );
         let local =
             fixture.with(|context| user_playlist_items_context_menu(context, Some(&local_file())));
-        assert_eq!(labels(&local).last().map(String::as_str), Some("Copy path"));
-        assert_eq!(labels(&local).len(), 5);
+        assert_eq!(labels(&local)[4], "Copy path");
+        assert_eq!(
+            labels(&local).last().map(String::as_str),
+            Some("Edit playlist")
+        );
+        assert_eq!(labels(&local).len(), 6);
         let empty = fixture.with(|context| user_playlist_items_context_menu(context, None));
-        assert_eq!(labels(&empty), ["Playlist is empty. (disabled)"]);
+        assert_eq!(
+            labels(&empty),
+            ["Playlist is empty. (disabled)", "Edit playlist"]
+        );
     }
 
     #[test]

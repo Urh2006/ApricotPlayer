@@ -37,6 +37,18 @@ pub const CUSTOMIZABLE_MAIN_MENU: &[MainMenuDefinition] = &[
         label_key: "spotify",
     },
     MainMenuDefinition {
+        action_id: "radio",
+        label_key: "radio",
+    },
+    MainMenuDefinition {
+        action_id: "iptv",
+        label_key: "iptv",
+    },
+    MainMenuDefinition {
+        action_id: "recording",
+        label_key: "recording",
+    },
+    MainMenuDefinition {
         action_id: "play_folder",
         label_key: "play_folder",
     },
@@ -88,6 +100,10 @@ pub const CUSTOMIZABLE_MAIN_MENU: &[MainMenuDefinition] = &[
         action_id: "diagnostic_report",
         label_key: "copy_diagnostic_report",
     },
+    MainMenuDefinition {
+        action_id: "sleep_timer",
+        label_key: "sleep_timer",
+    },
 ];
 
 pub const PERMANENT_MAIN_MENU_IDS: &[&str] = &["update_available", "settings", "exit"];
@@ -104,8 +120,11 @@ mod tests {
             .iter()
             .map(|item| item.action_id)
             .collect();
-        // 19 Python items plus Spotify.
-        assert_eq!(CUSTOMIZABLE_MAIN_MENU.len(), 20);
+        // The legacy catalog and all new 2.1 destinations remain customizable.
+        assert!(CUSTOMIZABLE_MAIN_MENU.len() >= 23);
+        for id in ["radio", "iptv", "recording"] {
+            assert!(ids.contains(id));
+        }
         assert_eq!(ids.len(), CUSTOMIZABLE_MAIN_MENU.len());
     }
 

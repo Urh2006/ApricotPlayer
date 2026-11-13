@@ -234,6 +234,52 @@ pub const ACTIONS: &[ActionDefinition] = &[
     // Beta 17: only in the shortcut editor, never as player labels.
     action!("spotify_first_track", "Ctrl+Shift+PageUp", PLAYER),
     action!("spotify_last_track", "Ctrl+Shift+PageDown", PLAYER),
+    // ApricotPlayer 2.1 additions. Existing action identities and defaults stay stable.
+    action!("open_sleep_timer", "Ctrl+Alt+T", GLOBAL),
+    action!("cancel_sleep_timer", "Ctrl+Alt+Shift+T", GLOBAL),
+    action!("sleep_timer_remaining", "Alt+Shift+T", GLOBAL),
+    action!("open_radio", "Ctrl+Alt+Shift+1", GLOBAL),
+    action!("open_iptv", "Ctrl+Alt+Shift+2", GLOBAL),
+    action!("open_recording", "Ctrl+Alt+Shift+3", GLOBAL),
+    action!("recording_start", "Ctrl+Alt+F9", GLOBAL),
+    action!("recording_pause", "Ctrl+Alt+F10", GLOBAL),
+    action!("recording_stop", "Ctrl+Alt+F11", GLOBAL),
+    action!("open_recordings_folder", "Ctrl+Alt+Shift+F10", GLOBAL),
+    action!("radio_now_playing", "Alt+Shift+N", PLAYER),
+    action!("open_integrations", "Ctrl+Alt+Shift+4", GLOBAL),
+    action!("player_audio_processing", "F5", PLAYER),
+    action!("player_pan_left", "Alt+Shift+Left", PLAYER),
+    action!("player_pan_right", "Alt+Shift+Right", PLAYER),
+    action!("player_pan_status", "Alt+Shift+V", PLAYER),
+    action!("player_audio_tracks", "Alt+A", PLAYER),
+    action!("player_audio_track_next", "Alt+PageDown", PLAYER),
+    action!("player_audio_track_previous", "Alt+PageUp", PLAYER),
+    action!("player_subtitles", "Alt+S", PLAYER),
+    action!("player_subtitle_file", "Alt+Shift+S", PLAYER),
+    action!("player_subtitle_url", "Ctrl+Alt+Shift+F8", PLAYER),
+    action!("player_ab_loop", "Alt+L", PLAYER),
+    action!("player_ranges", "Alt+B", PLAYER),
+    action!("player_audiobook_mode", "Alt+K", PLAYER),
+    action!("player_chapter_stop", "Alt+Shift+C", PLAYER),
+    action!("player_go_to_time", "Ctrl+T", PLAYER),
+    action!("player_go_to_percent", "Alt+P", PLAYER),
+    action!("player_elapsed", "Alt+T", PLAYER),
+    action!("player_remaining", "Alt+R", PLAYER),
+    action!("player_duration", "Alt+D", PLAYER),
+    action!("player_percent", "Alt+Shift+P", PLAYER),
+    action!("player_title", "Alt+N", PLAYER),
+    action!("player_artist", "Alt+I", PLAYER),
+    action!("spotify_subscriptions", "Ctrl+Alt+Shift+B", GLOBAL),
+    action!("spotify_subscribe_playlist", "Ctrl+Alt+Shift+S", LIST),
+    action!("spotify_unsubscribe_playlist", "Ctrl+Alt+Shift+F7", LIST),
+    action!("spotify_check_subscriptions", "Ctrl+Alt+Shift+F9", GLOBAL),
+    action!("playlist_save_current", "Ctrl+Alt+Shift+F2", GLOBAL),
+    action!("playlist_edit", "Alt+E", LIST),
+    action!("local_file_actions", "Alt+F", LIST_PLAYER),
+    action!("bookmarks_import", "Ctrl+Alt+Shift+F3", GLOBAL),
+    action!("bookmarks_export", "Ctrl+Alt+Shift+F4", GLOBAL),
+    action!("settings_import", "Ctrl+Alt+Shift+F5", GLOBAL),
+    action!("settings_export", "Ctrl+Alt+Shift+F6", GLOBAL),
 ];
 
 /// Number of leading [`ACTIONS`] that mirror the Python 1.0.21 catalog.
@@ -255,12 +301,17 @@ mod tests {
     fn baseline_contains_91_unique_actions() {
         let ids: HashSet<_> = ACTIONS.iter().map(|action| action.id.as_str()).collect();
         assert_eq!(PYTHON_BASELINE_ACTIONS, 91);
-        assert_eq!(ACTIONS.len(), PYTHON_BASELINE_ACTIONS + 14);
+        // 14 Spotify actions, then the 2.1 additions.
+        assert_eq!(ACTIONS.len(), PYTHON_BASELINE_ACTIONS + 14 + 45);
         assert_eq!(ids.len(), ACTIONS.len());
         assert!(
-            ACTIONS[PYTHON_BASELINE_ACTIONS..]
+            ACTIONS[PYTHON_BASELINE_ACTIONS..PYTHON_BASELINE_ACTIONS + 14]
                 .iter()
                 .all(|action| action.id.as_str().contains("spotify"))
+        );
+        assert_eq!(
+            ACTIONS[PYTHON_BASELINE_ACTIONS + 14].id.as_str(),
+            "open_sleep_timer"
         );
     }
 

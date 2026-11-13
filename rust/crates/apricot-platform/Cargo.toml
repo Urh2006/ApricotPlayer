@@ -15,15 +15,22 @@ reqwest = { workspace = true, features = ["cookies"] }
 flate2 = "1.1.10"
 regex = "1"
 serde_json.workspace = true
+serde.workspace = true
+roxmltree.workspace = true
 thiserror.workspace = true
 tempfile = "3"
 url.workspace = true
+discord-rich-presence = "1.1.0"
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
+wasapi = "0.27"
+souvlaki = { version = "0.9.3", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3.7"
+screencapturekit = { version = "11.1.2", features = ["macos_15_0"] }
+souvlaki = { version = "0.9.3", default-features = false }
 sha2.workspace = true
 
 [features]

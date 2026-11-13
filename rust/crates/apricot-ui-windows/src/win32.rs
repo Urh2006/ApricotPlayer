@@ -2,6 +2,9 @@
 
 #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
+#[path = "sources_win32.rs"]
+mod sources_ui;
+
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     ffi::c_void,
@@ -106,6 +109,10 @@ use windows::{
 
 #[path = "audiovault_win32.rs"]
 mod audiovault;
+#[path = "playback_features_win32.rs"]
+mod playback_features;
+#[path = "playlist_tools_win32.rs"]
+mod playlist_tools;
 #[path = "spotify_win32.rs"]
 mod spotify;
 #[path = "spotify_browse_win32.rs"]
@@ -526,6 +533,7 @@ struct PendingLocalFolderScan {
 // The window keeps several independent flags of Python's frame.
 #[allow(clippy::struct_excessive_bools)]
 struct WindowState {
+    source_tools: apricot_shell::sources::SourcesController,
     list: HWND,
     open: HWND,
     search_label: HWND,
@@ -639,6 +647,7 @@ struct WindowState {
     next_local_folder_generation: u64,
     current_user_playlist_index: usize,
     current_user_playlist_item_index: usize,
+    pending_playlist_resolution: Option<playlist_tools::PendingResolution>,
     download_sender: SyncSender<DownloadWorkerUpdate>,
     download_receiver: Receiver<DownloadWorkerUpdate>,
     download_cancellations: HashMap<u64, Arc<AtomicBool>>,
@@ -971,6 +980,8 @@ fn explicit_view_tab_controls(state: &WindowState) -> Option<Vec<HWND>> {
             state.collection_remove,
             state.subscription_filter,
             state.subscription_set_category,
+            // 2.1: "Spotify subscriptions" after the Python controls.
+            state.rss_refresh,
             state.list,
         ],
         MainView::RssFeeds => vec![
@@ -1151,6 +1162,10 @@ unsafe extern "system" fn window_proc(
             poll_playback_runtime(window);
             LRESULT(0)
         }
+        WM_TIMER if wparam.0 == sources_ui::TIMER => {
+            sources_ui::poll(window);
+            LRESULT(0)
+        }
         WM_TIMER if wparam.0 == CONTROLLED_REPEAT_TIMER_ID => {
             tick_controlled_repeat(window);
             LRESULT(0)
@@ -1221,6 +1236,10 @@ unsafe extern "system" fn window_proc(
             poll_conversions(window);
             LRESULT(0)
         }
+        WM_TIMER if wparam.0 == playlist_tools::TIMER_ID => {
+            playlist_tools::poll(window);
+            LRESULT(0)
+        }
         WM_TIMER if wparam.0 == UPDATE_TIMER_ID => {
             poll_updates(window);
             LRESULT(0)
@@ -1237,6 +1256,10 @@ unsafe extern "system" fn window_proc(
         }
         WM_TIMER if wparam.0 == spotify_browse::REFRESH_TIMER_ID => {
             spotify_browse::refresh_tick(window);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == spotify::SUBSCRIPTION_TIMER_ID => {
+            spotify::poll(window);
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == APP_UPDATE_TIMER_ID => {
@@ -1397,7 +1420,11 @@ unsafe fn handle_window_command(window: HWND, wparam: WPARAM) {
     } else if command == ID_RSS_ADD {
         prompt_add_rss_feed(window);
     } else if command == ID_RSS_REFRESH {
-        refresh_rss_from_active_view(window);
+        if state(window).is_some_and(|state| state.view == MainView::Subscriptions) {
+            spotify_browse::subscriptions(window);
+        } else {
+            refresh_rss_from_active_view(window);
+        }
     } else if command == ID_RSS_FILTER {
         choose_rss_category_filter(window);
     } else if command == ID_RSS_SET_CATEGORY {
@@ -2072,6 +2099,7 @@ unsafe fn create_controls(
         model,
         application,
         settings_open: false,
+        source_tools: apricot_shell::sources::SourcesController::default(),
         modal_open: false,
         tray_icon_added: false,
         focus_before_deactivation: HWND::default(),
@@ -2115,6 +2143,7 @@ unsafe fn create_controls(
         next_local_folder_generation: 0,
         current_user_playlist_index: 0,
         current_user_playlist_item_index: 0,
+        pending_playlist_resolution: None,
         download_sender,
         download_receiver,
         download_cancellations: HashMap::new(),
@@ -3108,6 +3137,7 @@ unsafe fn layout_bottom_controls(
                 state.open,
                 state.subscription_new,
                 state.collection_remove,
+                state.rss_refresh,
             ],
             width,
             first_button_y,
@@ -3401,7 +3431,10 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
         (state.rss_search, rss_feeds_visible),
         (state.rss_categories, rss_feeds_visible),
         (state.rss_add, rss_feeds_visible),
-        (state.rss_refresh, rss_feeds_visible || rss_items_visible),
+        (
+            state.rss_refresh,
+            rss_feeds_visible || rss_items_visible || subscriptions_visible,
+        ),
         (state.rss_filter, rss_feeds_visible),
         (state.rss_set_category, rss_feeds_visible),
         (state.rss_import, rss_feeds_visible),
@@ -3724,11 +3757,21 @@ unsafe fn activate_selection(window: HWND) {
     }
 }
 
+#[allow(clippy::too_many_lines)] // One dispatch over every main menu entry.
 unsafe fn activate_main_menu_selection(window: HWND) {
     let Some((item_id, item_label)) = selected_main_menu_item(window) else {
         return;
     };
     remember_menu_item(window, item_id);
+    if let Some(action) = match item_id {
+        "radio" => Some("open_radio"),
+        "iptv" => Some("open_iptv"),
+        "recording" => Some("open_recording"),
+        _ => None,
+    } {
+        sources_ui::action(window, action);
+        return;
+    }
     if item_id == "app_update" {
         open_pending_app_update(window);
         return;
@@ -3811,6 +3854,10 @@ unsafe fn activate_main_menu_selection(window: HWND) {
     }
     if item_id == "spotify" {
         spotify::show_hub(window);
+        return;
+    }
+    if item_id == "sleep_timer" {
+        activate_action(window, "open_sleep_timer");
         return;
     }
     if item_id == "file_converter" || item_id == "folder_converter" {
@@ -4144,6 +4191,22 @@ unsafe fn activate_notification_selection(window: HWND) {
     let item =
         state_mut(window).and_then(|state| state.application.prepare_notification_playback(index));
     if let Some(item) = item {
+        if let Some(change) = apricot_shell::spotify_subscriptions::item_changes(&item) {
+            let account = item
+                .metadata
+                .get("spotify_subscription_account")
+                .and_then(serde_json::Value::as_str);
+            let selected = spotify::service(window).and_then(|service| service.accounts().active);
+            if account.is_some() && account != selected.as_deref() {
+                show_error_message(
+                    window,
+                    "Select the Spotify account that owns this subscription before opening its changes",
+                );
+                return;
+            }
+            spotify_browse::subscription_changes(window, change);
+            return;
+        }
         start_media_item(window, item, None);
     } else if let Some(state) = state(window) {
         set_status(
@@ -5410,6 +5473,7 @@ unsafe fn show_subscriptions(window: HWND) {
             .navigate_to(RouteFrame::new(Route::Subscriptions));
     }
     state.view = MainView::Subscriptions;
+    set_control_text(state, state.rss_refresh, "spotify_subscriptions");
     set_open_button_label(state, "subscription_open_videos");
     set_control_text(state, state.collection_remove, "remove");
     set_control_text(state, state.subscription_check, "subscription_check_now");
@@ -7761,6 +7825,7 @@ unsafe fn show_user_playlist_items(window: HWND, playlist_index: usize, push_rou
     state.view = MainView::UserPlaylistItems;
     refresh_user_playlist_items(state, true, false);
     layout_controls_state(window, state);
+    playlist_tools::start_resolution(window, playlist_index);
 }
 
 unsafe fn activate_user_playlist_item(window: HWND) {
@@ -10438,6 +10503,7 @@ unsafe fn poll_playback_runtime(window: HWND) {
     if state(window).is_some_and(|state| state.modal_open) {
         return;
     }
+    playback_features::tick(window);
     loop {
         let update = {
             let Some(state) = state(window) else {
@@ -10527,9 +10593,8 @@ unsafe fn poll_playback_runtime(window: HWND) {
                 }
                 refresh_player(window, state, false, true);
             }
-            PlaybackEvent::Position { .. }
-            | PlaybackEvent::MediaInfo(_)
-            | PlaybackEvent::AudioDevices(_) => {}
+            PlaybackEvent::MediaInfo(_) => sources_ui::metadata(window),
+            PlaybackEvent::Position { .. } | PlaybackEvent::AudioDevices(_) => {}
             PlaybackEvent::PreviewFinished => {
                 if state
                     .clip_preview
@@ -10546,6 +10611,9 @@ unsafe fn poll_playback_runtime(window: HWND) {
                 refresh_player(window, state, false, true);
             }
             PlaybackEvent::Ended => {
+                if playback_features::ended(window) {
+                    continue;
+                }
                 if state.clip_preview.take().is_some() {
                     let _ = execute_player_command(window, PlaybackCommand::SetPaused(true));
                     set_status(
@@ -11017,6 +11085,9 @@ unsafe fn stop_youtube_timer(window: HWND) {
 }
 
 unsafe fn stop_playback_timer(window: HWND) {
+    if state(window).is_some_and(|state| state.application.playback_features().timer.is_some()) {
+        return;
+    }
     let _ = KillTimer(Some(window), PLAYBACK_TIMER_ID);
 }
 
@@ -11825,12 +11896,15 @@ unsafe fn refresh_user_playlist_items(state: &mut WindowState, focus: bool, anno
         set_status(state, catalog.text("playlist_empty"), announce_status);
         return;
     };
-    if playlist.items.is_empty() {
+    let displayed = state
+        .application
+        .user_playlist_items(state.current_user_playlist_index);
+    if displayed.is_empty() {
         add_list_string(state.list, catalog.text("playlist_empty"));
         SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
         set_status(state, catalog.text("playlist_empty"), announce_status);
     } else {
-        for item in &playlist.items {
+        for item in displayed {
             add_list_string(
                 state.list,
                 &media_collection_label(item, MainView::UserPlaylistItems, &catalog),
@@ -11838,7 +11912,7 @@ unsafe fn refresh_user_playlist_items(state: &mut WindowState, focus: bool, anno
         }
         let selected = state
             .current_user_playlist_item_index
-            .min(playlist.items.len().saturating_sub(1));
+            .min(displayed.len().saturating_sub(1));
         state.current_user_playlist_item_index = selected;
         SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selected)), None);
         set_status(
@@ -11847,7 +11921,7 @@ unsafe fn refresh_user_playlist_items(state: &mut WindowState, focus: bool, anno
                 "{}: {} | {}",
                 catalog.text("playlist_items"),
                 playlist.title,
-                playlist.items.len()
+                displayed.len()
             ),
             announce_status,
         );
@@ -13122,6 +13196,7 @@ unsafe fn close_current_player(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
     };
+    state.application.playback_features_mut().close_player();
     let show_menu = matches!(state.view, MainView::Player | MainView::MainMenu)
         || state.background_player.is_visible();
     close_player_runtime(window, state);
@@ -13302,6 +13377,23 @@ unsafe fn virtual_key_is_down(key: usize) -> bool {
 
 #[allow(clippy::too_many_lines)]
 unsafe fn activate_action(window: HWND, action_id: &str) {
+    if sources_ui::action(window, action_id) {
+        return;
+    }
+    if matches!(action_id, "player_previous" | "player_next")
+        && let Some(position) = state(window).and_then(|state| {
+            apricot_app::playback_features::audiobook_navigation(
+                &state.application,
+                if action_id == "player_next" { 1 } else { -1 },
+            )
+        })
+    {
+        seek_player_absolute(window, position, "chapter_changed");
+        return;
+    }
+    if playback_features::dispatch(window, window, action_id) {
+        return;
+    }
     // Spotify Connect owns next, previous, shuffle and repeat of its items.
     if spotify::transport(window, action_id) {
         return;
@@ -13397,6 +13489,24 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
             spotify_browse::create_playlist(window);
         }
         "create_playlist" => create_user_playlist(window, None),
+        "spotify_subscriptions" => spotify_browse::subscriptions(window),
+        "playlist_edit" => playlist_tools::edit(window),
+        "playlist_save_current" => playlist_tools::save_current(window),
+        "spotify_subscribe_playlist" => spotify_browse::subscribe_selected(window, true),
+        "spotify_unsubscribe_playlist" => spotify_browse::subscribe_selected(window, false),
+        "spotify_check_subscriptions" => {
+            if let Some(service) = spotify::service(window)
+                && let Some(state) = state_mut(window)
+            {
+                let stamp = state.spotify.epochs_begin();
+                service.subscription_operation(
+                    stamp,
+                    apricot_spotify::playlist_subscriptions::SubscriptionCommand::Check {
+                        force: true,
+                    },
+                );
+            }
+        }
         "spotify_toggle_saved" => spotify_browse::toggle_saved(window),
         "spotify_dislike" => spotify_browse::toggle_hidden(window),
         "spotify_daily_mixes" => spotify::show_daily_mixes(window),
@@ -13552,18 +13662,16 @@ fn sync_user_playlist_item_selection(state: &mut WindowState, item: &apricot_cor
     else {
         return;
     };
-    let Some(identity) = item.stable_identity() else {
+    let Some(identity) = apricot_app::playback_sequence::playlist_entry_identity(item) else {
         return;
     };
     let Some(item_index) = state
         .application
-        .user_playlists()
-        .get(playlist_index)
-        .and_then(|playlist| {
-            playlist
-                .items
-                .iter()
-                .position(|candidate| candidate.stable_identity().as_deref() == Some(&identity))
+        .user_playlist_items(playlist_index)
+        .iter()
+        .position(|candidate| {
+            apricot_app::playback_sequence::playlist_entry_identity(candidate).as_deref()
+                == Some(&identity)
         })
     else {
         return;
@@ -13658,9 +13766,7 @@ unsafe fn active_media_item(window: HWND) -> Option<apricot_core::MediaItem> {
             let index = usize::try_from(selected).ok()?;
             state
                 .application
-                .user_playlists()
-                .get(state.current_user_playlist_index)?
-                .items
+                .user_playlist_items(state.current_user_playlist_index)
                 .get(index)
                 .cloned()
         }
@@ -15018,6 +15124,25 @@ unsafe fn toggle_player_pause(window: HWND) {
 
 unsafe fn seek_player(window: HWND, seconds: f64) {
     if let Some(state) = state_mut(window) {
+        state.application.playback_features_mut().note_manual_seek();
+        if state.application.playback_features().ranges.repeat {
+            let target = state
+                .application
+                .playback_features()
+                .ranges
+                .constrain(state.application.player_session().position_seconds() + seconds);
+            state.clip_preview = None;
+            let _ = execute_player_command(
+                window,
+                PlaybackCommand::SeekAbsolute {
+                    seconds: target,
+                    exact: true,
+                },
+            );
+            return;
+        }
+    }
+    if let Some(state) = state_mut(window) {
         state.clip_preview = None;
     }
     let _ = execute_player_command(
@@ -15032,6 +15157,16 @@ unsafe fn seek_player(window: HWND, seconds: f64) {
 /// Python `player_seek_absolute`: exact absolute seek followed by the
 /// localized jump announcement.
 unsafe fn seek_player_absolute(window: HWND, seconds: f64, announcement_key: &str) {
+    let seconds = if let Some(state) = state_mut(window) {
+        state.application.playback_features_mut().note_manual_seek();
+        state
+            .application
+            .playback_features()
+            .ranges
+            .constrain(seconds)
+    } else {
+        seconds
+    };
     if let Some(state) = state_mut(window) {
         state.clip_preview = None;
     }
@@ -15047,10 +15182,31 @@ unsafe fn seek_player_absolute(window: HWND, seconds: f64, announcement_key: &st
 }
 
 unsafe fn seek_player_to_start(window: HWND) {
+    if let Some(start) = state(window).and_then(|state| {
+        apricot_app::playback_features::chapter_span(&state.application).map(|(start, _)| start)
+    }) {
+        seek_player_absolute(window, start, "seeked_to_start");
+        return;
+    }
     seek_player_absolute(window, 0.0, "seeked_to_start");
 }
 
 unsafe fn seek_player_to_end(window: HWND) {
+    if let Some(end) = state(window).and_then(|state| {
+        state
+            .application
+            .playback_features()
+            .ranges
+            .active
+            .filter(|_| state.application.playback_features().ranges.repeat)
+            .map(|range| range.end)
+            .or_else(|| {
+                apricot_app::playback_features::chapter_span(&state.application).map(|(_, end)| end)
+            })
+    }) {
+        seek_player_absolute(window, end, "seeked_to_end");
+        return;
+    }
     let Some(duration) =
         state(window).and_then(|state| state.application.player_session().duration_seconds())
     else {
@@ -15086,9 +15242,9 @@ unsafe fn announce_player_time(window: HWND) {
     let Some(state) = state(window) else {
         return;
     };
-    let session = state.application.player_session();
-    let elapsed = session.position_seconds();
-    let Some(duration) = session.duration_seconds() else {
+    let _session = state.application.player_session();
+    let (elapsed, duration) = apricot_app::playback_features::displayed_times(&state.application);
+    let Some(duration) = duration else {
         announce_player_text(window, "timing_unavailable", &[]);
         return;
     };
@@ -17347,6 +17503,18 @@ struct PlayerEqualizerHost {
 }
 
 impl crate::equalizer_win32::EqualizerDialogHost for PlayerEqualizerHost {
+    fn advanced(&mut self, owner: HWND, preset_id: &str) {
+        unsafe {
+            if let Some(state) = state_mut(self.window) {
+                state
+                    .application
+                    .playback_features_mut()
+                    .extra
+                    .insert("equalizer_edit_profile".to_owned(), preset_id.to_owned());
+            }
+            playback_features::dispatch(self.window, owner, "player_equalizer_advanced");
+        }
+    }
     fn catalog(&self) -> apricot_core::TranslationCatalog {
         // SAFETY: The host is only used on the UI thread while the main window lives.
         unsafe { state(self.window) }.map_or_else(

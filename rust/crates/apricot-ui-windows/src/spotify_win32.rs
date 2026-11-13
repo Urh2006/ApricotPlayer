@@ -35,6 +35,8 @@ use windows::{
     core::{PCWSTR, w},
 };
 
+pub(super) const SUBSCRIPTION_TIMER_ID: usize = 112;
+
 use super::{
     MainView, WM_SPOTIFY_EVENT, WindowState, add_list_string, cancel_local_folder_scan,
     cancel_youtube_work, layout_controls_state, remember_menu_item, restore_from_tray,
@@ -140,6 +142,12 @@ pub(super) unsafe fn announce(window: HWND, text: &str) {
 pub(super) unsafe fn service(window: HWND) -> Option<Arc<SpotifyService>> {
     let state = state_mut(window)?;
     if state.spotify.service.is_none() {
+        let _ = windows::Win32::UI::WindowsAndMessaging::SetTimer(
+            Some(window),
+            SUBSCRIPTION_TIMER_ID,
+            60_000,
+            None,
+        );
         let app_data = apricot_platform::discover_app_paths().ok()?.app_data;
         let handle = window.0 as isize;
         let (service, receiver) = SpotifyService::new(
@@ -368,6 +376,7 @@ pub(super) unsafe fn activate(window: HWND) {
                     "spotify_browse_all",
                 );
             }
+            Some(SpotifyHubEntry::Subscriptions) => super::spotify_browse::subscriptions(window),
             Some(SpotifyHubEntry::Queue) => {
                 if let Some(state) = state_mut(window) {
                     state.spotify.hub_selected = Some(SpotifyHubEntry::Queue);
@@ -729,6 +738,12 @@ fn catalog_for(state: &WindowState) -> TranslationCatalog {
 
 /// `WM_SPOTIFY_EVENT`.
 pub(super) unsafe fn poll(window: HWND) {
+    if let Some(state) = state_mut(window)
+        && let Some(service) = state.spotify.service.clone()
+    {
+        let stamp = state.spotify.epochs_begin();
+        service.poll_playlist_subscriptions(stamp);
+    }
     loop {
         let Some(state) = state_mut(window) else {
             return;
@@ -869,6 +884,11 @@ unsafe fn handle_event(window: HWND, event: SpotifyEvent) {
                     let text = error_text(&texts, &error);
                     show_error_message(window, &text);
                 }
+            }
+        }
+        SpotifyEvent::PlaylistSubscriptions { stamp, result } => {
+            if state.spotify.is_current_account(stamp) {
+                super::spotify_browse::subscription_report(window, result);
             }
         }
         SpotifyEvent::Catalog { stamp, result } => {

@@ -17,6 +17,7 @@ pub enum SettingsSection {
     /// Rust only (Urh, 2026-10-02): the Spotify settings, which live in
     /// `spotify/settings.json` and not in `settings.json`.
     Spotify,
+    Recording,
     Shortcuts,
 }
 
@@ -33,6 +34,7 @@ impl SettingsSection {
         Self::Cookies,
         Self::Audiovault,
         Self::Spotify,
+        Self::Recording,
         Self::Shortcuts,
     ];
 
@@ -49,6 +51,7 @@ impl SettingsSection {
             Self::Cookies => "cookies",
             Self::Audiovault => "audiovault",
             Self::Spotify => "spotify",
+            Self::Recording => "recording",
             Self::Shortcuts => "shortcuts",
         }
     }
@@ -259,6 +262,11 @@ pub const SETTINGS_SECTIONS: &[SettingsSectionDefinition] = &[
         reset_fields: &[],
     },
     SettingsSectionDefinition {
+        section: SettingsSection::Recording,
+        label_key: "recording_section",
+        reset_fields: &[],
+    },
+    SettingsSectionDefinition {
         section: SettingsSection::Shortcuts,
         label_key: "keyboard_shortcuts_section",
         reset_fields: SHORTCUTS,
@@ -283,7 +291,7 @@ mod tests {
 
     #[test]
     fn sections_match_python_order_and_reset_placement_count() {
-        assert_eq!(SETTINGS_SECTIONS.len(), 12);
+        assert_eq!(SETTINGS_SECTIONS.len(), 13);
         assert_eq!(SettingsSection::ALL.len(), SETTINGS_SECTIONS.len());
         assert_eq!(
             SETTINGS_SECTIONS

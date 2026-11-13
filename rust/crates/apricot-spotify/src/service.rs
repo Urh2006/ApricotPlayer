@@ -92,6 +92,10 @@ impl From<OAuthError> for SpotifyError {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SpotifyEvent {
+    PlaylistSubscriptions {
+        stamp: SpotifyStamp,
+        result: Result<crate::playlist_subscriptions::SubscriptionReport, SpotifyError>,
+    },
     /// The browser should open this URL for login `login`.
     LoginUrl { login: u64, url: String },
     LoginFinished {
@@ -180,6 +184,9 @@ type Notify = Arc<dyn Fn() + Send + Sync>;
 
 pub struct SpotifyService {
     store: AccountStore,
+    subscriptions_lock: Arc<tokio::sync::Mutex<()>>,
+    subscriptions_last_poll: Mutex<Option<Instant>>,
+    subscriptions_check_running: Arc<AtomicBool>,
     runtime: OnceLock<tokio::runtime::Runtime>,
     sender: Sender<SpotifyEvent>,
     notify: Notify,
@@ -408,6 +415,9 @@ impl SpotifyService {
                 login_cancel: Mutex::new(None),
                 session: Arc::default(),
                 lifecycle: Arc::default(),
+                subscriptions_lock: Arc::new(tokio::sync::Mutex::new(())),
+                subscriptions_last_poll: Mutex::new(None),
+                subscriptions_check_running: Arc::new(AtomicBool::new(false)),
                 titles: Arc::default(),
                 api: Arc::new(crate::api::Api::new(Some(
                     app_data.join("spotify").join("pathfinder.json"),
@@ -432,6 +442,101 @@ impl SpotifyService {
     pub fn my_profile_uri(&self) -> Option<String> {
         self.active_session()
             .map(|session| format!("spotify:user:{}", session.username()))
+    }
+
+    /// The active account's playlist subscriptions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no account is active or its file cannot be read.
+    pub fn playlist_subscriptions(
+        &self,
+    ) -> Result<crate::playlist_subscriptions::SubscriptionDocument, String> {
+        let key = self
+            .accounts()
+            .active
+            .ok_or("No selected Spotify account")?;
+        crate::playlist_subscriptions::load(&self.store, &key)
+    }
+
+    /// All network work stays on the catalog worker; it never owns the transport.
+    pub fn subscription_operation(
+        &self,
+        stamp: SpotifyStamp,
+        command: crate::playlist_subscriptions::SubscriptionCommand,
+    ) {
+        use std::sync::atomic::Ordering;
+        let checking = matches!(
+            command,
+            crate::playlist_subscriptions::SubscriptionCommand::Check { .. }
+        );
+        if checking
+            && self
+                .subscriptions_check_running
+                .swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
+        let session = self.active_session();
+        let account = self.connected_account();
+        let store = self.store.clone();
+        let api = self.api.clone();
+        let running = self.subscriptions_check_running.clone();
+        let lock = self.subscriptions_lock.clone();
+        let sender = self.sender.clone();
+        let notify = self.notify.clone();
+        self.runtime().spawn(async move {
+            let result = async {
+                let session = session.ok_or(SpotifyError::NoCredentials)?;
+                let account = account.ok_or(SpotifyError::NoCredentials)?;
+                let _guard = lock.lock().await;
+                crate::playlist_subscriptions::execute(&store, &account, &api, &session, command)
+                    .await
+                    .map_err(SpotifyError::Service)
+            }
+            .await;
+            if checking {
+                running.store(false, Ordering::Release);
+            }
+            Self::emit(
+                &sender,
+                &notify,
+                SpotifyEvent::PlaylistSubscriptions { stamp, result },
+            );
+        });
+    }
+
+    /// Cheap timer hook. Only the connected, selected account is read and no
+    /// empty library or not-yet-due playlist causes network work.
+    pub fn poll_playlist_subscriptions(&self, stamp: SpotifyStamp) {
+        let Some(account) = self.connected_account() else {
+            return;
+        };
+        if self.accounts().active.as_deref() != Some(account.as_str()) {
+            return;
+        }
+        let Ok(mut last) = self.subscriptions_last_poll.try_lock() else {
+            return;
+        };
+        if last.is_some_and(|time| time.elapsed() < Duration::from_secs(60)) {
+            return;
+        }
+        *last = Some(Instant::now());
+        drop(last);
+        let Ok(document) = crate::playlist_subscriptions::load(&self.store, &account) else {
+            return;
+        };
+        if document
+            .due(crate::playlist_subscriptions::now(), false)
+            .is_empty()
+            && document.outbox.is_empty()
+        {
+            return;
+        }
+        self.subscription_operation(
+            stamp,
+            crate::playlist_subscriptions::SubscriptionCommand::Check { force: false },
+        );
     }
     /// # Errors
     /// Returns a missing logged-in account or unreadable shortcut data error.
@@ -910,13 +1015,47 @@ impl SpotifyService {
     /// Changes the account's data; the answer is `SpotifyEvent::Edited`.
     pub fn edit(&self, stamp: SpotifyStamp, edit: crate::library_edit::LibraryEdit) {
         let session = self.active_session();
+        let subscription_account = self.connected_account();
+        let subscription_store = self.store.clone();
+        let subscription_lock = self.subscriptions_lock.clone();
         let api = self.api.clone();
         let sender = self.sender.clone();
         let notify = self.notify.clone();
         self.runtime().spawn(async move {
             let result = async {
                 let session = session.ok_or(SpotifyError::NoCredentials)?;
-                Ok(crate::library_edit::apply(&api, &session, edit).await?)
+                let playlist_edit = matches!(
+                    edit,
+                    crate::LibraryEdit::AddToPlaylist { .. }
+                        | crate::LibraryEdit::RemoveFromPlaylist { .. }
+                        | crate::LibraryEdit::MoveInPlaylist { .. }
+                );
+                let _guard = if playlist_edit {
+                    Some(subscription_lock.lock().await)
+                } else {
+                    None
+                };
+                let confirmed = crate::library_edit::apply(&api, &session, edit.clone()).await?;
+                if playlist_edit && let Some(account) = subscription_account {
+                    match crate::playlist_subscriptions::load(&subscription_store, &account) {
+                        Ok(mut doc) => {
+                            doc.record_local_edit(&edit);
+                            if let Err(error) = crate::playlist_subscriptions::save(
+                                &subscription_store,
+                                &account,
+                                &doc,
+                            ) {
+                                log::warn!(
+                                    "Spotify local subscription edit could not be recorded: {error}"
+                                );
+                            }
+                        }
+                        Err(error) => log::warn!(
+                            "Spotify subscription data could not be read after local edit: {error}"
+                        ),
+                    }
+                }
+                Ok(confirmed)
             }
             .await;
             if let Err(error) = &result {

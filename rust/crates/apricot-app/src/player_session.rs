@@ -285,7 +285,7 @@ impl PlayerSession {
                 self.position_seconds = elapsed.max(0.0);
                 self.duration_seconds = duration.filter(|value| value.is_finite() && *value >= 0.0);
             }
-            PlaybackEvent::MediaInfo(info) => self.media_info = info,
+            PlaybackEvent::MediaInfo(info) => self.media_info = *info,
             PlaybackEvent::AudioDevices(devices) => self.audio_devices = devices,
             PlaybackEvent::Ended => self.phase = PlaybackPhase::Ended,
             PlaybackEvent::PreviewFinished => self.phase = PlaybackPhase::Paused,
@@ -657,10 +657,10 @@ mod tests {
         let first = session.start_item(item("first"), defaults());
         assert!(session.apply_event(
             first,
-            PlaybackEvent::MediaInfo(PlaybackMediaInfo {
+            PlaybackEvent::MediaInfo(Box::new(PlaybackMediaInfo {
                 audio_codec: Some("flac".to_owned()),
                 ..PlaybackMediaInfo::default()
-            })
+            }))
         ));
         assert_eq!(session.media_info().audio_codec.as_deref(), Some("flac"));
 
@@ -668,10 +668,10 @@ mod tests {
         assert_eq!(session.media_info(), &PlaybackMediaInfo::default());
         assert!(!session.apply_event(
             first,
-            PlaybackEvent::MediaInfo(PlaybackMediaInfo {
+            PlaybackEvent::MediaInfo(Box::new(PlaybackMediaInfo {
                 audio_codec: Some("stale".to_owned()),
                 ..PlaybackMediaInfo::default()
-            })
+            }))
         ));
         assert!(session.media_info().audio_codec.is_none());
         assert!(session.apply_event(second, PlaybackEvent::Started));

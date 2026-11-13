@@ -60,6 +60,7 @@ const TBM_GETPOS: u32 = 0x0400;
 /// What the dialog needs from the main window: settings, the player session
 /// equalizer, applying it to mpv and speaking through the player announcer.
 pub trait EqualizerDialogHost {
+    fn advanced(&mut self, _owner: HWND, _preset_id: &str) {}
     fn catalog(&self) -> TranslationCatalog;
     fn settings(&self) -> EqualizerSettings;
     /// Writes the equalizer settings; `save` also writes `settings.json`.
@@ -85,6 +86,7 @@ pub trait EqualizerDialogHost {
 /// Buttons in Python's creation order, which is the Tab order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DialogButton {
+    Advanced,
     Ok,
     Cancel,
     Reset,
@@ -98,7 +100,7 @@ enum DialogButton {
     ClearDevice,
 }
 
-const BUTTONS: [(DialogButton, &str); 11] = [
+const BUTTONS: [(DialogButton, &str); 12] = [
     (DialogButton::Ok, "ok"),
     (DialogButton::Cancel, "cancel"),
     (DialogButton::Reset, "reset_equalizer"),
@@ -108,6 +110,7 @@ const BUTTONS: [(DialogButton, &str); 11] = [
     (DialogButton::ImportProfile, "import_equalizer_profile"),
     (DialogButton::ExportProfile, "export_equalizer_profile"),
     (DialogButton::Compare, "compare_equalizer_profile"),
+    (DialogButton::Advanced, "equalizer_advanced"),
     (DialogButton::SaveDevice, "save_equalizer_as_device_default"),
     (DialogButton::ClearDevice, "clear_equalizer_device_default"),
 ];
@@ -499,6 +502,16 @@ unsafe fn handle_command(window: HWND, wparam: WPARAM) {
 
 unsafe fn button_clicked(window: HWND, button: DialogButton) {
     match button {
+        DialogButton::Advanced => {
+            if let Some(state) = state_mut(window) {
+                let preset = current_preset(state);
+                state.host.advanced(window, &preset);
+                let gains = state.host.settings().gains_for_preset(&preset);
+                show_gains(state, &gains);
+                state.original_equalizer = state.host.session_equalizer();
+                live_apply(window, state);
+            }
+        }
         DialogButton::Ok => accept(window),
         DialogButton::Cancel => {
             let _ = DestroyWindow(window);
@@ -521,6 +534,7 @@ unsafe fn accept(window: HWND) {
         return;
     };
     let mut settings = state.host.settings();
+    settings.set_preset_gains(&current_preset(state), &state.gains);
     save_dialog_name(state, &mut settings, None);
     settings.db_range = state.db_range;
     if let Err(error) = state.host.update_settings(&settings, true) {
@@ -1148,9 +1162,25 @@ unsafe fn layout(window: HWND) {
     if equalizer::is_custom_preset(&current_preset(state)) {
         place_pair(state.name_label, state.name, 24, &mut top);
     }
-    for (label, slider) in state.band_labels.iter().zip(&state.sliders) {
-        place_pair(*label, *slider, 28, &mut top);
+    // Keep every slider and all buttons visible on small laptop displays.
+    // The native Tab order stays frequency-ordered, down each column.
+    let columns = if bounds.bottom - bounds.top < 650 {
+        3
+    } else {
+        2
+    };
+    let rows = state.sliders.len().div_ceil(columns);
+    let cell_width = inner / i32::try_from(columns).unwrap_or(2);
+    let row_height = if columns == 3 { 40 } else { 48 };
+    for (index, (label, slider)) in state.band_labels.iter().zip(&state.sliders).enumerate() {
+        let column = i32::try_from(index / rows).unwrap_or_default();
+        let row = i32::try_from(index % rows).unwrap_or_default();
+        let x = margin + column * cell_width;
+        let y = top + row * row_height;
+        let _ = MoveWindow(*label, x, y, cell_width - 8, label_height, true);
+        let _ = MoveWindow(*slider, x, y + label_height, cell_width - 8, 22, true);
     }
+    top += i32::try_from(rows).unwrap_or_default() * row_height + 4;
     let button_width = 230;
     let button_height = 28;
     let columns = (inner / (button_width + 8)).max(1);
@@ -1284,6 +1314,7 @@ mod tests {
                 DialogButton::ImportProfile,
                 DialogButton::ExportProfile,
                 DialogButton::Compare,
+                DialogButton::Advanced,
                 DialogButton::SaveDevice,
                 DialogButton::ClearDevice,
             ]

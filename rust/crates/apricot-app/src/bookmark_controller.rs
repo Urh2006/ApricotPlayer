@@ -1,6 +1,6 @@
 //! Transactional playback bookmarks compatible with the Python application.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use apricot_core::MediaItem;
 use apricot_storage::{Bookmark, BookmarkFile, BookmarkFileError, bookmark_media_key};
@@ -9,6 +9,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum BookmarkControllerError {
+    #[error("the excerpt needs a finite start and an end later than its start")]
+    InvalidRange,
     #[error("bookmark changes are blocked because loading {path} failed: {message}")]
     SaveBlocked { path: PathBuf, message: String },
     #[error(transparent)]
@@ -150,6 +152,137 @@ impl BookmarkController {
         Ok(Some(bookmark))
     }
 
+    /// Saves an explicitly named excerpt without rounding away millisecond marks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the range is invalid or the bookmarks cannot be saved.
+    pub fn add_range(
+        &mut self,
+        name: &str,
+        start: f64,
+        end: f64,
+        media: MediaItem,
+        timestamp: f64,
+    ) -> Result<Option<Bookmark>, BookmarkControllerError> {
+        if !start.is_finite()
+            || !end.is_finite()
+            || start < 0.0
+            || end <= start
+            || !(end * 1000.0).is_finite()
+        {
+            return Err(BookmarkControllerError::InvalidRange);
+        }
+        let Some(media_key) = bookmark_media_key(&media) else {
+            return Ok(None);
+        };
+        let start = (start * 1000.0).round() / 1000.0;
+        let end = (end * 1000.0).round() / 1000.0;
+        if end <= start {
+            return Err(BookmarkControllerError::InvalidRange);
+        }
+        let bookmark = Bookmark {
+            id: format!(
+                "{}-{}",
+                milliseconds(timestamp),
+                rand::rng().random::<u64>()
+            ),
+            name: name.trim().to_owned(),
+            position: start,
+            media_key,
+            media_title: media.title.trim().to_owned(),
+            media,
+            created_at: timestamp.is_finite().then_some(timestamp),
+            updated_at: timestamp.is_finite().then_some(timestamp),
+            metadata: serde_json::Map::from_iter([(
+                "end_position".to_owned(),
+                serde_json::json!(end),
+            )]),
+        };
+        let mut candidate = self.bookmarks.clone();
+        candidate.push(bookmark.clone());
+        self.commit(candidate)?;
+        Ok(Some(bookmark))
+    }
+
+    /// Exports the complete applied collection atomically to a user-selected path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the bookmark file cannot be written.
+    pub fn export(&self, path: &Path) -> Result<(), BookmarkControllerError> {
+        BookmarkFile::new(path).save(&self.bookmarks)?;
+        Ok(())
+    }
+
+    /// Imports a validated backup. Merging is the default chosen by the UI;
+    /// replacement requires an explicit separate confirmation there.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the backup is invalid or the bookmarks cannot be saved.
+    pub fn import(
+        &mut self,
+        path: &Path,
+        replace: bool,
+        timestamp: f64,
+    ) -> Result<usize, BookmarkControllerError> {
+        let imported = BookmarkFile::new(path).load_import()?;
+        let mut candidate = if replace {
+            Vec::new()
+        } else {
+            self.bookmarks.clone()
+        };
+        let mut added = 0;
+        for mut entry in imported {
+            if candidate.iter().any(|current| {
+                same_location(current, &entry)
+                    && (current.id == entry.id || current.name.trim() == entry.name.trim())
+            }) {
+                continue;
+            }
+            if entry.id.is_empty() || candidate.iter().any(|current| current.id == entry.id) {
+                entry.id = format!(
+                    "{}-{}",
+                    milliseconds(timestamp),
+                    rand::rng().random::<u64>()
+                );
+            }
+            candidate.push(entry);
+            added += 1;
+        }
+        // Preserve the previous complete file before a replacement, including
+        // corrupt bytes when explicit restore is being used for recovery.
+        if replace
+            && let Some(file) = &self.file
+            && file.path().exists()
+        {
+            let bytes = std::fs::read(file.path())
+                .map_err(|source| apricot_storage::JsonFileError::Read {
+                    path: file.path().to_owned(),
+                    source,
+                })
+                .map_err(BookmarkFileError::from)?;
+            apricot_storage::write_bytes_atomic(
+                &file.path().with_extension("json.before-import"),
+                &bytes,
+            )
+            .map_err(BookmarkFileError::from)?;
+        }
+        let was_blocked = self.save_blocked;
+        if replace {
+            self.save_blocked = false;
+        }
+        if let Err(error) = self.commit(candidate) {
+            self.save_blocked = was_blocked;
+            return Err(error);
+        }
+        if replace {
+            self.load_error = None;
+        }
+        Ok(added)
+    }
+
     /// Renames one bookmark identified by its durable bookmark id.
     ///
     /// # Errors
@@ -219,6 +352,16 @@ impl BookmarkController {
         self.bookmarks = candidate;
         Ok(())
     }
+}
+
+fn same_location(first: &Bookmark, second: &Bookmark) -> bool {
+    first.media_key == second.media_key
+        && (first.position - second.position).abs() < 0.0005
+        && match (first.end_position(), second.end_position()) {
+            (None, None) => true,
+            (Some(a), Some(b)) => (a - b).abs() < 0.0005,
+            _ => false,
+        }
 }
 
 fn milliseconds(timestamp: f64) -> u128 {
@@ -330,5 +473,60 @@ mod tests {
                 .is_err()
         );
         assert_eq!(fs::read(current).expect("preserved"), b"broken");
+    }
+
+    #[test]
+    fn saved_ranges_retain_milliseconds_and_merge_without_duplicates() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("bookmarks.json");
+        let mut controller = BookmarkController::load(
+            BookmarkFile::new(&path),
+            &BookmarkFile::new(root.path().join("missing")),
+            1.0,
+        );
+        let range = controller
+            .add_range("Chorus", 12.345, 19.876, item("abcdefghijk"), 2.0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(range.end_position(), Some(19.876));
+        let backup = root.path().join("export.json");
+        controller.export(&backup).unwrap();
+        assert_eq!(controller.import(&backup, false, 3.0).unwrap(), 0);
+        assert_eq!(controller.bookmarks().len(), 1);
+        let loaded = BookmarkFile::new(&path).load().unwrap();
+        assert!((loaded[0].position - 12.345).abs() < 1e-9);
+        assert_eq!(loaded[0].end_position(), Some(19.876));
+        assert!(
+            controller
+                .add_range("Bad", 3.0, 2.0, item("abcdefghijk"), 4.0)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn malformed_import_preserves_collection_and_confirmed_restore_keeps_backup() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("bookmarks.json");
+        let mut controller = BookmarkController::load(
+            BookmarkFile::new(&path),
+            &BookmarkFile::new(root.path().join("missing")),
+            1.0,
+        );
+        controller
+            .add("Intro", 1.0, item("abcdefghijk"), 2.0)
+            .unwrap();
+        let before = fs::read(&path).unwrap();
+        let bad = root.path().join("bad.json");
+        fs::write(&bad, br"[null]").unwrap();
+        assert!(controller.import(&bad, true, 3.0).is_err());
+        assert_eq!(fs::read(&path).unwrap(), before);
+        let empty = root.path().join("empty.json");
+        fs::write(&empty, b"[]").unwrap();
+        controller.import(&empty, true, 4.0).unwrap();
+        assert!(controller.bookmarks().is_empty());
+        assert_eq!(
+            fs::read(path.with_extension("json.before-import")).unwrap(),
+            before
+        );
     }
 }

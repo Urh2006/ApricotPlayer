@@ -52,6 +52,9 @@ pub struct PcmGeneration {
 }
 
 pub trait PcmSource: Send + Sync {
+    /// Optional bounded decoder lookahead and unplayed-tail mixing. Sources
+    /// that have no decoded PCM transition path leave this disabled.
+    fn configure_crossfade(&self, _seconds: f64, _manual: bool, _equal_power: bool) {}
     /// Starts `item` at `position_ms`. When `attach` is true the source is
     /// already playing it (for example after a Connect transfer) and only the
     /// current generation is reused.

@@ -53,6 +53,10 @@ pub(crate) enum Source {
     Browse(Option<String>),
     /// A section of Home or a browse page, already loaded.
     Section(Vec<CatalogItem>),
+    SubscriptionChanges {
+        uri: String,
+        items: Vec<CatalogItem>,
+    },
     /// Spotify's radio; it becomes the station playlist once named.
     Radio(String),
     /// Top tracks and artists with their six section titles.
@@ -92,7 +96,9 @@ impl Source {
                 uri: uri.clone(),
                 offset,
             },
-            Self::MyProfile(_) | Self::Section(_) => return None,
+            Self::MyProfile(_) | Self::Section(_) | Self::SubscriptionChanges { .. } => {
+                return None;
+            }
             Self::Search { query, kind } => CatalogRequest::Search {
                 query: query.clone(),
                 kind: *kind,
@@ -123,6 +129,7 @@ impl Source {
     /// The Spotify context a track of this list plays in.
     fn context(&self) -> Option<&str> {
         match self {
+            Self::SubscriptionChanges { uri, .. } => Some(uri),
             Self::Album(uri) | Self::Playlist(uri) | Self::Artist(uri) | Self::Show(uri) => {
                 Some(uri)
             }
@@ -574,7 +581,7 @@ impl Shell {
             field_value: None,
             focus_results: false,
         };
-        if let Source::Section(items) = &frame.source {
+        if let Source::Section(items) | Source::SubscriptionChanges { items, .. } = &frame.source {
             frame.items.clone_from(items);
             frame.loaded = true;
         }
@@ -612,6 +619,33 @@ impl Shell {
             self.view = View::SpotifyHub;
         }
         self.browse_open(ui, source, title);
+    }
+
+    pub(crate) fn spotify_open_subscription_playlist(&mut self, ui: &mut dyn ShellUi, uri: String) {
+        self.browse_open(ui, Source::Playlist(uri), "Spotify playlist".to_owned());
+    }
+    pub(crate) fn spotify_open_subscription_changes(
+        &mut self,
+        ui: &mut dyn ShellUi,
+        change: apricot_spotify::playlist_subscriptions::PlaylistChanges,
+    ) {
+        let items = if change.added.is_empty() {
+            change.removed.clone()
+        } else {
+            change.added.clone()
+        };
+        if items.is_empty() {
+            ui.set_status("The playlist order changed", true);
+            return;
+        }
+        self.browse_open(
+            ui,
+            Source::SubscriptionChanges {
+                uri: change.uri,
+                items,
+            },
+            format!("{}: playlist changes", change.name),
+        );
     }
 
     fn browse_request(&mut self, offset: u64) {
@@ -1674,6 +1708,39 @@ impl Shell {
             return None;
         }
         self.browse_media_for(item, false)
+    }
+
+    pub(crate) fn spotify_subscribe_selected(&mut self, ui: &mut dyn ShellUi, subscribe: bool) {
+        let uri = self
+            .browse_selected_item(ui)
+            .filter(|item| item.kind == ItemKind::Playlist)
+            .map(|item| item.uri.clone())
+            .or_else(|| {
+                self.spotify
+                    .browse
+                    .frames
+                    .last()
+                    .and_then(|frame| frame.source.context())
+                    .filter(|uri| uri.starts_with("spotify:playlist:"))
+                    .map(str::to_owned)
+            });
+        let Some(uri) = uri else {
+            ui.show_error("Select a Spotify playlist first");
+            return;
+        };
+        if let Some(service) = self.spotify_service() {
+            let stamp = self.spotify.epochs.begin();
+            service.subscription_operation(
+                stamp,
+                if subscribe {
+                    apricot_spotify::playlist_subscriptions::SubscriptionCommand::Subscribe(uri)
+                } else {
+                    apricot_spotify::playlist_subscriptions::SubscriptionCommand::Unsubscribe(uri)
+                },
+            );
+            ui.set_background_polling(true);
+            ui.set_status("Updating Spotify subscriptions", true);
+        }
     }
 
     fn browse_media_for(&self, item: &CatalogItem, shuffle: bool) -> Option<MediaItem> {

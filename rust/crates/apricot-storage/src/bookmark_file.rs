@@ -27,12 +27,24 @@ pub struct Bookmark {
     pub metadata: Map<String, Value>,
 }
 
+impl Bookmark {
+    /// The exclusive end of a saved excerpt. Point bookmarks have no end.
+    #[must_use]
+    pub fn end_position(&self) -> Option<f64> {
+        flexible_number(self.metadata.get("end_position")).filter(|end| *end > self.position)
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum BookmarkFileError {
     #[error(transparent)]
     Json(#[from] JsonFileError),
     #[error("bookmarks data is not a JSON array")]
     InvalidRoot,
+    #[error("bookmark entry {0} is invalid")]
+    InvalidEntry(usize),
+    #[error("bookmark import is too large (maximum 8 MiB)")]
+    ImportTooLarge,
 }
 
 #[derive(Clone, Debug)]
@@ -47,6 +59,50 @@ impl BookmarkFile {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Reads a user-selected backup strictly. A damaged entry must not be
+    /// silently dropped while replacing the user's collection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the file cannot be read, is larger than 8 MiB,
+    /// is not a JSON array or contains an invalid entry.
+    pub fn load_import(&self) -> Result<Vec<Bookmark>, BookmarkFileError> {
+        use std::io::Read;
+        const LIMIT: u64 = 8 * 1024 * 1024;
+        let file = std::fs::File::open(&self.path).map_err(|source| JsonFileError::Read {
+            path: self.path.clone(),
+            source,
+        })?;
+        let mut bytes = Vec::new();
+        file.take(LIMIT + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|source| JsonFileError::Read {
+                path: self.path.clone(),
+                source,
+            })?;
+        if bytes.len() as u64 > LIMIT {
+            return Err(BookmarkFileError::ImportTooLarge);
+        }
+        let value: Value =
+            serde_json::from_slice(&bytes).map_err(|source| JsonFileError::Parse {
+                path: self.path.clone(),
+                source,
+            })?;
+        let entries = value.as_array().ok_or(BookmarkFileError::InvalidRoot)?;
+        entries
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                let bookmark = bookmark_from_python_value(value)
+                    .ok_or(BookmarkFileError::InvalidEntry(index + 1))?;
+                if value.get("end_position").is_some() && bookmark.end_position().is_none() {
+                    return Err(BookmarkFileError::InvalidEntry(index + 1));
+                }
+                Ok(bookmark)
+            })
+            .collect()
     }
 
     /// Loads every compatible Python bookmark while matching Python's
@@ -165,7 +221,11 @@ fn bookmark_from_python_value(value: &Value) -> Option<Bookmark> {
     Some(Bookmark {
         id: text(object, "id"),
         name: text(object, "name"),
-        position: round_tenth(position),
+        position: if object.contains_key("end_position") {
+            round_millisecond(position)
+        } else {
+            round_tenth(position)
+        },
         media_key,
         media_title,
         media,
@@ -181,7 +241,11 @@ fn bookmark_to_python_value(bookmark: &Bookmark) -> Value {
     object.insert("name".to_owned(), Value::String(bookmark.name.clone()));
     object.insert(
         "position".to_owned(),
-        Value::from(round_tenth(bookmark.position)),
+        Value::from(if bookmark.end_position().is_some() {
+            round_millisecond(bookmark.position)
+        } else {
+            round_tenth(bookmark.position)
+        }),
     );
     object.insert(
         "media_key".to_owned(),
@@ -230,6 +294,10 @@ fn flexible_number(value: Option<&Value>) -> Option<f64> {
 
 fn round_tenth(value: f64) -> f64 {
     (value.max(0.0) * 10.0).round() / 10.0
+}
+
+fn round_millisecond(value: f64) -> f64 {
+    (value.max(0.0) * 1000.0).round() / 1000.0
 }
 
 #[cfg(test)]

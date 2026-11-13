@@ -266,6 +266,41 @@ impl Application {
         self.state.bookmarks.add(name, position, media, timestamp)
     }
 
+    /// # Errors
+    ///
+    /// Returns an error when the range is invalid or the bookmarks cannot be saved.
+    pub fn add_range_bookmark(
+        &mut self,
+        name: &str,
+        start: f64,
+        end: f64,
+        media: MediaItem,
+        timestamp: f64,
+    ) -> Result<Option<Bookmark>, BookmarkControllerError> {
+        self.state
+            .bookmarks
+            .add_range(name, start, end, media, timestamp)
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error when the bookmark file cannot be written.
+    pub fn export_bookmarks(&self, path: &std::path::Path) -> Result<(), BookmarkControllerError> {
+        self.state.bookmarks.export(path)
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error when the backup is invalid or the bookmarks cannot be saved.
+    pub fn import_bookmarks(
+        &mut self,
+        path: &std::path::Path,
+        replace: bool,
+        timestamp: f64,
+    ) -> Result<usize, BookmarkControllerError> {
+        self.state.bookmarks.import(path, replace, timestamp)
+    }
+
     /// Renames one bookmark by its durable bookmark id.
     ///
     /// # Errors
@@ -827,6 +862,63 @@ impl Application {
         self.state.user_playlists.playlists()
     }
 
+    pub fn user_playlist_items(&self, index: usize) -> &[MediaItem] {
+        self.state.user_playlists.items(index)
+    }
+    pub fn current_sequence_items(&self) -> &[MediaItem] {
+        self.state.player_sequence.items()
+    }
+    pub fn install_user_playlist_resolution(
+        &mut self,
+        index: usize,
+        expected: &UserPlaylist,
+        items: Vec<MediaItem>,
+    ) -> bool {
+        self.state
+            .user_playlists
+            .install_resolution(index, expected, items)
+    }
+    /// # Errors
+    ///
+    /// Returns an error when the edited playlist is invalid or cannot be saved.
+    pub fn replace_user_playlist(
+        &mut self,
+        index: usize,
+        playlist: UserPlaylist,
+        timestamp: f64,
+    ) -> Result<bool, UserPlaylistControllerError> {
+        self.state
+            .user_playlists
+            .replace(index, playlist, timestamp)
+    }
+    /// # Errors
+    ///
+    /// Returns an error when the playlist cannot be saved.
+    pub fn create_user_playlist_with_items(
+        &mut self,
+        title: &str,
+        items: Vec<MediaItem>,
+        timestamp: f64,
+    ) -> Result<PlaylistCreateOutcome, UserPlaylistControllerError> {
+        self.state
+            .user_playlists
+            .create_with_items(title, items, timestamp)
+    }
+    /// # Errors
+    ///
+    /// Returns an error when the playlists cannot be saved.
+    pub fn move_user_playlist_items(
+        &mut self,
+        index: usize,
+        indices: &[usize],
+        destination: usize,
+        timestamp: f64,
+    ) -> Result<bool, UserPlaylistControllerError> {
+        self.state
+            .user_playlists
+            .move_items(index, indices, destination, timestamp)
+    }
+
     pub fn configure_user_playlists(
         &mut self,
         current: UserPlaylistFile,
@@ -917,15 +1009,24 @@ impl Application {
         playlist_index: usize,
         item_index: usize,
     ) -> Option<MediaItem> {
-        let playlist = self.state.user_playlists.playlists().get(playlist_index)?;
-        let item = playlist.items.get(item_index)?.clone();
+        self.state.user_playlists.playlists().get(playlist_index)?;
+        let displayed = self.state.user_playlists.items(playlist_index);
+        let item = displayed.get(item_index)?.clone();
+        if item.metadata.contains_key("apricot_missing")
+            || item
+                .metadata
+                .get("apricot_folder_reference")
+                .and_then(Value::as_bool)
+                == Some(true)
+        {
+            return None;
+        }
         // Python `play_selected_user_playlist_item` returns to the playlist
         // and `relative_player_item` goes on with its next and previous
         // items.
-        let items: Vec<_> = playlist
-            .items
+        let items: Vec<_> = displayed
             .iter()
-            .filter(|item| item.is_playable())
+            .filter(|item| item.is_playable() && !item.metadata.contains_key("apricot_missing"))
             .cloned()
             .collect();
         if !self.state.player_sequence.set(
@@ -943,9 +1044,11 @@ impl Application {
         playlist_index: usize,
         shuffle: bool,
     ) -> Option<MediaItem> {
-        let playlist = self.state.user_playlists.playlists().get(playlist_index)?;
-        let mut items: Vec<_> = playlist
-            .items
+        self.state.user_playlists.playlists().get(playlist_index)?;
+        let mut items: Vec<_> = self
+            .state
+            .user_playlists
+            .items(playlist_index)
             .iter()
             .filter(|item| item.is_playable())
             .cloned()
@@ -2195,8 +2298,32 @@ impl Application {
     /// player, or `None` when the equalizer is off or flat.
     pub fn player_equalizer_graph(&self, bass_boost_override: Option<bool>) -> Option<String> {
         let (enabled, gains) = self.player_equalizer_state(bass_boost_override)?;
-        if !enabled || !crate::equalizer::has_audible_gain(&gains) {
+        if !enabled {
             return None;
+        }
+        let preset = self
+            .playback_features()
+            .extra
+            .get("equalizer_edit_profile")
+            .cloned()
+            .unwrap_or_else(|| {
+                self.equalizer_settings()
+                    .effective_preset(&self.equalizer_device_key())
+            });
+        if let Some(value) = self
+            .settings
+            .current()
+            .preserved
+            .get("equalizer_advanced_v1")
+            .and_then(|profiles| profiles.get(&preset))
+            && let Ok(profile) =
+                serde_json::from_value::<crate::playback_features::ParametricProfile>(value.clone())
+            && let Ok(graph) = profile.graph(
+                &gains,
+                self.settings.current().equalizer_clipping_protection,
+            )
+        {
+            return graph;
         }
         apricot_playback::equalizer_filter_graph(
             &gains,
@@ -2599,6 +2726,92 @@ impl Application {
         shortcut: &str,
     ) -> Result<(), SettingsControllerError> {
         self.settings.set_shortcut(action_id, shortcut)
+    }
+
+    /// Removes a binding explicitly; an empty stored value is not a factory reset.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the action is unknown.
+    pub fn clear_keyboard_shortcut(
+        &mut self,
+        action_id: &str,
+    ) -> Result<(), SettingsControllerError> {
+        if apricot_core::action::action_by_id(action_id).is_none() {
+            return Err(SettingsControllerError::UnknownShortcutAction(
+                action_id.to_owned(),
+            ));
+        }
+        let mut shortcuts = self.settings().keyboard_shortcuts.clone();
+        shortcuts.insert(action_id.to_owned(), String::new());
+        self.settings
+            .set_value(SettingId::KeyboardShortcuts, serde_json::json!(shortcuts))
+    }
+
+    /// Resets only the presentation category, keeping all other custom assignments intact.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the shortcuts cannot be stored in the settings draft.
+    pub fn reset_shortcut_category(
+        &mut self,
+        category: &str,
+    ) -> Result<(), SettingsControllerError> {
+        let mut shortcuts = self.settings().keyboard_shortcuts.clone();
+        for action in apricot_core::action::ACTIONS {
+            if category == "all"
+                || crate::shortcut_catalog::action_category(action.id.as_str()) == category
+            {
+                shortcuts.insert(
+                    action.id.as_str().to_owned(),
+                    action.default_shortcut().to_owned(),
+                );
+            }
+        }
+        self.settings
+            .set_value(SettingId::KeyboardShortcuts, serde_json::json!(shortcuts))
+    }
+
+    /// Capturing the primary chord preserves an existing alternate chord.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the shortcut is invalid or conflicts with another action.
+    pub fn set_primary_keyboard_shortcut(
+        &mut self,
+        action_id: &str,
+        shortcut: &str,
+    ) -> Result<String, SettingsControllerError> {
+        let current = self
+            .settings()
+            .keyboard_shortcuts
+            .get(action_id)
+            .cloned()
+            .unwrap_or_default();
+        let secondary = current
+            .split_once('|')
+            .map(|(_, tail)| tail.trim())
+            .filter(|value| !value.is_empty());
+        let shortcut = secondary.filter(|value| *value != shortcut).map_or_else(
+            || shortcut.to_owned(),
+            |secondary| format!("{shortcut} | {secondary}"),
+        );
+        self.set_keyboard_shortcut(action_id, &shortcut)?;
+        Ok(shortcut)
+    }
+
+    /// Updates one feature's preferences in the ordinary transactional draft.
+    /// Call `save_settings` explicitly to commit, just like typed settings.
+    pub fn set_feature_settings(&mut self, key: &str, value: serde_json::Value) {
+        self.settings.set_extension(key, value);
+    }
+
+    pub fn playback_features(&self) -> &crate::playback_features::PlaybackFeatures {
+        &self.state.playback_features
+    }
+
+    pub fn playback_features_mut(&mut self) -> &mut crate::playback_features::PlaybackFeatures {
+        &mut self.state.playback_features
     }
 
     /// Resets one settings section in the current draft.
@@ -3230,12 +3443,18 @@ mod tests {
             .expect("factory gains");
         assert!((app.settings().global_equalizer_gains["31"] - 7.5).abs() < f64::EPSILON);
         assert!((app.settings().global_equalizer_gains["62"] - 3.0).abs() < f64::EPSILON);
+        // 2.1: built-in presets can be edited and saved; their factory
+        // values stay available for Reset.
         assert!(
-            crate::equalizer::gains_match(
-                &app.equalizer_settings().gains_for_preset("rock"),
-                &crate::equalizer::factory_gains("rock")
+            (app.equalizer_settings().gains_for_preset("rock")["31"] - 7.5).abs() < f64::EPSILON,
+            "factory preset edits are stored"
+        );
+        assert!(
+            !crate::equalizer::gains_match(
+                &crate::equalizer::factory_gains("rock"),
+                &app.equalizer_settings().gains_for_preset("rock")
             ),
-            "factory presets stay read-only"
+            "factory defaults stay unchanged"
         );
         app.set_visible_equalizer_gains("custom2", &gains)
             .expect("custom gains");

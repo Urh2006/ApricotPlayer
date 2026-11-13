@@ -2,9 +2,11 @@
 
 use std::path::Path;
 
+#[cfg(test)]
+use apricot_core::action::ACTIONS;
 use apricot_core::{
     CUSTOMIZABLE_MAIN_MENU, SETTINGS_SECTIONS, SettingId, SettingsSection, TranslationCatalog,
-    action::ACTIONS, audio::EQUALIZER_BANDS, locale::LANGUAGES,
+    audio::EQUALIZER_BANDS, locale::LANGUAGES,
 };
 use apricot_spotify::settings::{Autoplay, LibraryOrder, Quality, SpotifySettings};
 use apricot_storage::SettingsDocument;
@@ -56,6 +58,12 @@ pub enum SettingsCommand {
     ExportEqualizerProfile,
     DeleteEqualizerProfile,
     ResetSection,
+    ResetShortcut,
+    ResetShortcutCategory,
+    ClearShortcut,
+    EditShortcutAlternatives,
+    RecordingSettings,
+    OpenIntegrations,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -127,6 +135,17 @@ pub enum SettingsControl {
     ShortcutActionList {
         label: String,
         actions: Vec<ShortcutActionItem>,
+    },
+    ShortcutCategoryList {
+        label: String,
+        categories: Vec<SettingsChoiceOption>,
+    },
+    ShortcutSearch {
+        label: String,
+    },
+    ShortcutFilter {
+        label: String,
+        options: Vec<String>,
     },
     ShortcutCapture {
         label: String,
@@ -209,6 +228,7 @@ pub struct ShortcutActionItem {
     pub action_id: String,
     pub label: String,
     pub shortcut: String,
+    pub scope: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -302,20 +322,32 @@ impl SettingsScreenModel {
             SettingsSection::Cookies => cookie_controls(catalog, settings),
             SettingsSection::Audiovault => audiovault_controls(catalog, settings),
             SettingsSection::Spotify => spotify_controls(catalog, spotify),
+            SettingsSection::Recording => vec![SettingsControl::Command {
+                command: SettingsCommand::RecordingSettings,
+                label: catalog.text("recording_settings").to_owned(),
+            }],
             SettingsSection::Shortcuts => shortcut_controls(catalog, settings),
         };
+        if selected_section == SettingsSection::General {
+            controls.push(SettingsControl::Command {
+                command: SettingsCommand::OpenIntegrations,
+                label: catalog.text("integrations_settings").to_owned(),
+            });
+        }
         let section_label = SETTINGS_SECTIONS
             .iter()
             .find(|definition| definition.section == selected_section)
             .map_or(selected_section.id(), |definition| {
                 catalog.text(definition.label_key)
             });
-        controls.push(SettingsControl::Command {
-            command: SettingsCommand::ResetSection,
-            label: catalog
-                .text("reset_settings_for_section")
-                .replace("{section}", section_label),
-        });
+        if selected_section != SettingsSection::Recording {
+            controls.push(SettingsControl::Command {
+                command: SettingsCommand::ResetSection,
+                label: catalog
+                    .text("reset_settings_for_section")
+                    .replace("{section}", section_label),
+            });
+        }
         Self {
             title: catalog.text("settings").to_owned(),
             section_list_name: catalog.text("settings_sections").to_owned(),
@@ -1465,27 +1497,38 @@ fn shortcut_controls(
     catalog: &TranslationCatalog,
     settings: &SettingsDocument,
 ) -> Vec<SettingsControl> {
-    let actions: Vec<_> = ACTIONS
-        .iter()
-        .map(|action| {
-            let action_id = action.id.as_str();
-            let shortcut = settings
-                .keyboard_shortcuts
-                .get(action_id)
-                .cloned()
-                .unwrap_or_else(|| action.default_shortcut().to_owned());
-            ShortcutActionItem {
-                action_id: action_id.to_owned(),
-                label: catalog.text(action.label_key).to_owned(),
-                shortcut,
-            }
-        })
-        .collect();
+    let actions = crate::shortcut_catalog::shortcut_actions(catalog, settings);
     let first = actions.first().cloned();
-    let mut controls = vec![SettingsControl::ShortcutActionList {
-        label: catalog.text("shortcut_actions").to_owned(),
-        actions,
-    }];
+    let mut controls = vec![
+        SettingsControl::ShortcutSearch {
+            label: catalog.text("shortcut_search_all").to_owned(),
+        },
+        SettingsControl::ShortcutCategoryList {
+            label: catalog.text("shortcut_categories").to_owned(),
+            categories: crate::shortcut_catalog::SHORTCUT_CATEGORIES
+                .iter()
+                .map(|category| {
+                    SettingsChoiceOption::labeled(category.id, catalog.text(category.label_key))
+                })
+                .collect(),
+        },
+        SettingsControl::ShortcutFilter {
+            label: catalog.text("shortcut_filter").to_owned(),
+            options: [
+                "shortcut_filter_all",
+                "shortcut_filter_assigned",
+                "shortcut_filter_unassigned",
+                "shortcut_filter_changed",
+            ]
+            .iter()
+            .map(|key| catalog.text(key).to_owned())
+            .collect(),
+        },
+        SettingsControl::ShortcutActionList {
+            label: catalog.text("shortcut_actions").to_owned(),
+            actions,
+        },
+    ];
     if let Some(first) = first {
         controls.push(SettingsControl::ShortcutCapture {
             label: format!(
@@ -1495,6 +1538,23 @@ fn shortcut_controls(
             ),
             action_id: first.action_id,
             value: first.shortcut,
+        });
+    }
+    for (command, key) in [
+        (
+            SettingsCommand::EditShortcutAlternatives,
+            "shortcut_edit_alternatives",
+        ),
+        (SettingsCommand::ResetShortcut, "shortcut_reset_action"),
+        (SettingsCommand::ClearShortcut, "shortcut_clear_action"),
+        (
+            SettingsCommand::ResetShortcutCategory,
+            "shortcut_reset_category",
+        ),
+    ] {
+        controls.push(SettingsControl::Command {
+            command,
+            label: catalog.text(key).to_owned(),
         });
     }
     controls
@@ -1644,7 +1704,7 @@ mod tests {
             Path::new(r"C:\Profile\settings.json"),
             SettingsSection::General,
         );
-        assert_eq!(model.sections.len(), 12);
+        assert_eq!(model.sections.len(), 13);
         assert_eq!(model.sections[0].section, SettingsSection::General);
         assert_eq!(model.sections[1].section, SettingsSection::MainMenu);
         assert_eq!(model.selected_section, SettingsSection::General);
@@ -1666,7 +1726,8 @@ mod tests {
         );
         // macOS adds "Import data from Windows" after "Set default player".
         let mac = usize::from(cfg!(target_os = "macos"));
-        assert_eq!(model.controls.len(), 18 + mac);
+        // 2.1 appends "Media controls and Discord".
+        assert_eq!(model.controls.len(), 19 + mac);
         assert!(matches!(
             &model.controls[0],
             SettingsControl::Choice {
@@ -1805,10 +1866,10 @@ mod tests {
         let expected = [
             (
                 SettingsSection::General,
-                18 + usize::from(cfg!(target_os = "macos")),
+                19 + usize::from(cfg!(target_os = "macos")),
             ),
-            // 19 Python items, Spotify and the reset button.
-            (SettingsSection::MainMenu, 21),
+            // 19 Python items, Spotify, the four 2.1 entries and the reset button.
+            (SettingsSection::MainMenu, 25),
             (SettingsSection::Playback, 35),
             (SettingsSection::Equalizer, 3),
             (SettingsSection::Downloads, 23),
@@ -1818,7 +1879,10 @@ mod tests {
             (SettingsSection::Cookies, 13),
             (SettingsSection::Audiovault, 5),
             (SettingsSection::Spotify, 7),
-            (SettingsSection::Shortcuts, 3),
+            // Recording has no reset button yet.
+            (SettingsSection::Recording, 1),
+            // Search, categories, filter, list, capture, four commands, reset.
+            (SettingsSection::Shortcuts, 10),
         ];
         for (section, count) in expected {
             let model = SettingsScreenModel::build(
@@ -1856,7 +1920,7 @@ mod tests {
     }
 
     #[test]
-    fn enabled_equalizer_exposes_ten_independent_band_sliders() {
+    fn enabled_equalizer_exposes_fifteen_independent_band_sliders() {
         let settings = SettingsDocument {
             global_equalizer_enabled: true,
             ..SettingsDocument::default()
@@ -1867,7 +1931,7 @@ mod tests {
             Path::new("settings.json"),
             SettingsSection::Equalizer,
         );
-        assert_eq!(model.controls.len(), 20);
+        assert_eq!(model.controls.len(), 25);
         let bands: Vec<_> = model
             .controls
             .iter()
@@ -1879,7 +1943,8 @@ mod tests {
         assert_eq!(
             bands,
             [
-                "31", "62", "125", "250", "500", "1000", "2000", "4000", "8000", "16000"
+                "25", "31", "62", "100", "125", "250", "400", "500", "1000", "1600", "2000",
+                "4000", "8000", "10000", "16000"
             ]
         );
     }
@@ -1893,13 +1958,20 @@ mod tests {
             SettingsSection::Shortcuts,
         );
         assert!(matches!(
-            &model.controls[0],
+            model.controls.iter().find(|control| matches!(control, SettingsControl::ShortcutActionList { .. })).expect("shortcut list"),
             SettingsControl::ShortcutActionList { actions, .. } if actions.len() == super::ACTIONS.len()
         ));
         assert!(matches!(
-            &model.controls[1],
+            model.controls.iter().find(|control| matches!(control, SettingsControl::ShortcutCapture { .. })).expect("capture field"),
             SettingsControl::ShortcutCapture { action_id, value, .. }
                 if action_id == "open_main_menu" && value == "Ctrl+Alt+M"
         ));
+        assert!(
+            model
+                .controls
+                .iter()
+                .any(|control| matches!(control, SettingsControl::ShortcutSearch { .. }))
+        );
+        assert!(model.controls.iter().any(|control| matches!(control, SettingsControl::ShortcutCategoryList { categories, .. } if categories.iter().any(|category| category.value == "spotify"))));
     }
 }

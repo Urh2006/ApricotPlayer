@@ -280,6 +280,10 @@ fn shortcut_action_id(menu_id: &str) -> Option<&'static str> {
         "search" => Some("open_search"),
         "audiovault" => Some("open_audiovault"),
         "spotify" => Some("open_spotify"),
+        "radio" => Some("open_radio"),
+        "iptv" => Some("open_iptv"),
+        "recording" => Some("open_recording"),
+        "sleep_timer" => Some("open_sleep_timer"),
         "play_folder" => Some("open_play_from_folder"),
         "play_file" => Some("open_play_file"),
         "direct_link" => Some("open_direct_link"),
@@ -320,8 +324,8 @@ mod tests {
             &BTreeMap::new(),
         );
         assert_eq!(model.accessible_name, "Main menu");
-        // 16 Python items plus Spotify.
-        assert_eq!(model.items.len(), 18);
+        // 16 Python items plus Spotify, Radio, IPTV, Recording and Sleep timer.
+        assert_eq!(model.items.len(), 22);
         assert_eq!(model.items[0].id, "search");
         assert!(
             model.items[0]
@@ -401,7 +405,7 @@ mod tests {
             true,
             &BTreeMap::new(),
         );
-        assert_eq!(model.items.len(), 22);
+        assert_eq!(model.items.len(), 26);
         assert!(model.items[0].label.starts_with("Current downloads (3)"));
         assert!(model.items[1].label.starts_with("Playback queue (2)"));
     }

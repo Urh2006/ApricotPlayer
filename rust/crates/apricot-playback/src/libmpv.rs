@@ -718,15 +718,42 @@ impl LibMpvEngine {
             ));
         }
         let property = &*data.cast::<MpvEventProperty>();
-        if property.name.is_null() || property.format == MPV_FORMAT_NONE || property.data.is_null()
-        {
+        if property.name.is_null() {
             return Ok(None);
         }
         let name = CStr::from_ptr(property.name).to_bytes();
+        if name == b"sub-text" && (property.format == MPV_FORMAT_NONE || property.data.is_null()) {
+            self.media_info.subtitle_text = None;
+            return Ok(Some(self.media_info_event()));
+        }
+        if property.format == MPV_FORMAT_NONE || property.data.is_null() {
+            return Ok(None);
+        }
         if self.stale() && !matches!(name, b"pause" | b"audio-device-list") {
             return Ok(None);
         }
         match name {
+            b"media-title" if property.format == MPV_FORMAT_STRING => {
+                self.media_info.stream_title = property_string(property.data);
+                Ok(Some(self.media_info_event()))
+            }
+            b"track-list" if property.format == MPV_FORMAT_NODE => {
+                self.media_info.tracks = node_json(
+                    &*property.data.cast::<Node>(),
+                    0,
+                    &[
+                        "id", "type", "lang", "title", "selected", "external", "codec",
+                    ],
+                )
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+                Ok(Some(self.media_info_event()))
+            }
+            b"sub-text" if property.format == MPV_FORMAT_STRING => {
+                self.media_info.subtitle_text = property_string(property.data);
+                Ok(Some(self.media_info_event()))
+            }
             b"chapter-list" if property.format == MPV_FORMAT_NODE => {
                 self.media_info.chapters =
                     node_json(&*property.data.cast::<Node>(), 0, &["time", "title"])
@@ -1059,7 +1086,7 @@ impl LibMpvEngine {
     }
 
     fn media_info_event(&self) -> PlaybackEvent {
-        PlaybackEvent::MediaInfo(self.media_info.clone())
+        PlaybackEvent::MediaInfo(Box::new(self.media_info.clone()))
     }
 }
 
@@ -1428,6 +1455,9 @@ unsafe fn subscribe(api: &MpvApi, handle: *mut MpvHandle) -> Result<(), Playback
         (13, "chapter-list", MPV_FORMAT_NODE),
         (14, "audio-device-list", MPV_FORMAT_NODE),
         (15, "eof-reached", MPV_FORMAT_FLAG),
+        (16, "track-list", MPV_FORMAT_NODE),
+        (17, "sub-text", MPV_FORMAT_STRING),
+        (18, "media-title", MPV_FORMAT_STRING),
     ] {
         api.observe(handle, id, name, format)?;
     }
@@ -1544,6 +1574,10 @@ fn command_arguments(command: PlaybackCommand) -> Result<Vec<String>, PlaybackEr
         PlaybackCommand::SetAudioDevice(device) => {
             vec!["set".to_owned(), "audio-device".to_owned(), device]
         }
+        PlaybackCommand::SetProperty { name, value } => {
+            vec!["set".to_owned(), name.to_owned(), value]
+        }
+        PlaybackCommand::AddSubtitle(path) => vec!["sub-add".to_owned(), path, "select".to_owned()],
         PlaybackCommand::Stop => vec!["stop".to_owned()],
     };
     Ok(arguments)

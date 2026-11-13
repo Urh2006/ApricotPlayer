@@ -1,0 +1,274 @@
+//! Shared, typed form contract for native feature dialogs.
+#![allow(clippy::pedantic, clippy::style)] // 2.1 draft: fully linted when its feature unit is finished.
+
+use std::collections::BTreeMap;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FeatureForm {
+    pub title: String,
+    pub fields: Vec<FormField>,
+    pub submit: String,
+    pub cancel: String,
+}
+
+pub type FormValues = BTreeMap<String, FormValue>;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FormField {
+    pub id: String,
+    pub label: String,
+    pub kind: FormFieldKind,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum FormFieldKind {
+    Text {
+        value: String,
+        secret: bool,
+    },
+    Number {
+        value: f64,
+        minimum: f64,
+        maximum: f64,
+    },
+    Choice {
+        options: Vec<String>,
+        selected: usize,
+    },
+    Checkbox {
+        checked: bool,
+    },
+    ReadOnly {
+        value: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum FormValue {
+    Text(String),
+    Number(f64),
+    Choice(usize),
+    Checkbox(bool),
+}
+
+impl FormValue {
+    #[must_use]
+    pub fn text(&self) -> Option<&str> {
+        match self {
+            Self::Text(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn number(&self) -> Option<f64> {
+        match self {
+            Self::Number(value) => Some(*value),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn choice(&self) -> Option<usize> {
+        match self {
+            Self::Choice(value) => Some(*value),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn checked(&self) -> Option<bool> {
+        match self {
+            Self::Checkbox(value) => Some(*value),
+            _ => None,
+        }
+    }
+}
+
+impl FeatureForm {
+    #[must_use]
+    pub fn new(title: impl Into<String>, fields: Vec<FormField>) -> Self {
+        Self {
+            title: title.into(),
+            fields,
+            submit: "Save".to_owned(),
+            cancel: "Cancel".to_owned(),
+        }
+    }
+
+    /// Validates the complete response before any settings or side effects are committed.
+    /// Numeric edit fields may supply text; both native adapters share this parser.
+    ///
+    /// # Errors
+    /// Returns the first invalid field's label. The form remains open for correction.
+    pub fn validate(&self, values: &FormValues) -> Result<FormValues, String> {
+        let mut result = BTreeMap::new();
+        for field in &self.fields {
+            if result.contains_key(&field.id) {
+                return Err(field.label.clone());
+            }
+            let value = match &field.kind {
+                FormFieldKind::ReadOnly { .. } => continue,
+                FormFieldKind::Text { .. } => match values.get(&field.id) {
+                    Some(FormValue::Text(value)) => FormValue::Text(value.clone()),
+                    _ => return Err(field.label.clone()),
+                },
+                FormFieldKind::Number {
+                    minimum, maximum, ..
+                } => {
+                    let value = match values.get(&field.id) {
+                        Some(FormValue::Number(value)) => Some(*value),
+                        Some(FormValue::Text(value)) => {
+                            value.trim().replace(',', ".").parse::<f64>().ok()
+                        }
+                        _ => None,
+                    }
+                    .filter(|value| value.is_finite() && value >= minimum && value <= maximum);
+                    FormValue::Number(value.ok_or_else(|| field.label.clone())?)
+                }
+                FormFieldKind::Choice { options, .. } => match values.get(&field.id) {
+                    Some(FormValue::Choice(index)) if *index < options.len() => {
+                        FormValue::Choice(*index)
+                    }
+                    _ => return Err(field.label.clone()),
+                },
+                FormFieldKind::Checkbox { .. } => match values.get(&field.id) {
+                    Some(FormValue::Checkbox(value)) => FormValue::Checkbox(*value),
+                    _ => return Err(field.label.clone()),
+                },
+            };
+            result.insert(field.id.clone(), value);
+        }
+        Ok(result)
+    }
+}
+
+impl FormField {
+    #[must_use]
+    pub fn text(id: &str, label: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            kind: FormFieldKind::Text {
+                value: value.into(),
+                secret: false,
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn secret(id: &str, label: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            kind: FormFieldKind::Text {
+                value: value.into(),
+                secret: true,
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn number(
+        id: &str,
+        label: impl Into<String>,
+        value: f64,
+        minimum: f64,
+        maximum: f64,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            kind: FormFieldKind::Number {
+                value,
+                minimum,
+                maximum,
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn choice(
+        id: &str,
+        label: impl Into<String>,
+        options: Vec<String>,
+        selected: usize,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            kind: FormFieldKind::Choice { options, selected },
+        }
+    }
+
+    #[must_use]
+    pub fn checkbox(id: &str, label: impl Into<String>, checked: bool) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            kind: FormFieldKind::Checkbox { checked },
+        }
+    }
+
+    #[must_use]
+    pub fn read_only(id: &str, label: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            kind: FormFieldKind::ReadOnly {
+                value: value.into(),
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_incomplete_invalid_and_nonfinite_input_before_commit() {
+        let form = FeatureForm::new(
+            "Timer",
+            vec![FormField::number("minutes", "Minutes", 30.0, 1.0, 1440.0)],
+        );
+        for raw in ["NaN", "inf", "-1", "1441", "oops"] {
+            assert_eq!(
+                form.validate(&BTreeMap::from([(
+                    "minutes".into(),
+                    FormValue::Text(raw.into())
+                )])),
+                Err("Minutes".into())
+            );
+        }
+        assert!(form.validate(&BTreeMap::new()).is_err());
+        let result = form
+            .validate(&BTreeMap::from([(
+                "minutes".into(),
+                FormValue::Text("2.5".into()),
+            )]))
+            .unwrap();
+        assert_eq!(result["minutes"], FormValue::Number(2.5));
+    }
+
+    #[test]
+    fn preserves_secret_text_without_normalizing_and_checks_choice_bounds() {
+        let form = FeatureForm::new(
+            "Source",
+            vec![
+                FormField::secret("password", "Password", ""),
+                FormField::choice("type", "Type", vec!["A".into()], 0),
+            ],
+        );
+        let mut raw = BTreeMap::from([
+            ("password".into(), FormValue::Text("  secret  ".into())),
+            ("type".into(), FormValue::Choice(0)),
+        ]);
+        assert_eq!(
+            form.validate(&raw).unwrap()["password"].text(),
+            Some("  secret  ")
+        );
+        raw.insert("type".into(), FormValue::Choice(1));
+        assert_eq!(form.validate(&raw), Err("Type".into()));
+    }
+}

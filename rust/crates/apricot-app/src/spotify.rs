@@ -114,6 +114,7 @@ pub enum SpotifyHubEntry {
     Library,
     LikedSongs,
     Playlists,
+    Subscriptions,
     /// The artists the account follows (S1, not in Python).
     FollowedArtists,
     Home,
@@ -213,6 +214,7 @@ impl SpotifyHubModel {
                 (SpotifyHubEntry::Library, "spotify_library"),
                 (SpotifyHubEntry::LikedSongs, "spotify_liked_songs"),
                 (SpotifyHubEntry::Playlists, "spotify_playlists"),
+                (SpotifyHubEntry::Subscriptions, "spotify_subscriptions"),
                 (SpotifyHubEntry::FollowedArtists, "spotify_followed_artists"),
                 (SpotifyHubEntry::Home, "spotify_home"),
                 (SpotifyHubEntry::DailyMixes, "spotify_daily_mixes"),
@@ -789,6 +791,7 @@ mod tests {
                 SpotifyHubEntry::Library,
                 SpotifyHubEntry::LikedSongs,
                 SpotifyHubEntry::Playlists,
+                SpotifyHubEntry::Subscriptions,
                 SpotifyHubEntry::FollowedArtists,
                 SpotifyHubEntry::Home,
                 SpotifyHubEntry::DailyMixes,
@@ -815,24 +818,24 @@ mod tests {
             model.items[2].label,
             shown("Liked Songs", "spotify_liked_songs")
         );
-        assert_eq!(model.items[4].label, "Followed artists");
-        assert_eq!(model.items[5].label, "Home");
+        assert_eq!(model.items[5].label, "Followed artists");
+        assert_eq!(model.items[6].label, "Home");
         assert_eq!(
-            model.items[6].label,
+            model.items[7].label,
             shown("Daily Mixes", "spotify_daily_mixes")
         );
         assert_eq!(
-            model.items[10].label,
+            model.items[11].label,
             shown("Spotify queue", "spotify_queue")
         );
         assert_eq!(
-            model.items[11].label,
+            model.items[12].label,
             shown("Spotify devices", "spotify_devices")
         );
-        assert_eq!(model.items[12].label, "My profile");
-        assert_eq!(model.items[13].label, "Spotify settings");
+        assert_eq!(model.items[13].label, "My profile");
+        assert_eq!(model.items[14].label, "Spotify settings");
         assert!(
-            model.items[14]
+            model.items[15]
                 .label
                 .ends_with(&shown("", "spotify_accounts"))
         );
@@ -840,12 +843,12 @@ mod tests {
         if cfg!(target_os = "macos") {
             assert_eq!(model.items[0].label, "Search\tCommand+Option+Shift+Y");
             assert_eq!(
-                model.items[10].label,
+                model.items[11].label,
                 "Spotify queue\tCommand+Option+Shift+U"
             );
         } else {
             assert_eq!(model.items[0].label, "Search\tCtrl+Alt+Shift+Y");
-            assert_eq!(model.items[10].label, "Spotify queue\tCtrl+Alt+Shift+Q");
+            assert_eq!(model.items[11].label, "Spotify queue\tCtrl+Alt+Shift+Q");
         }
     }
 

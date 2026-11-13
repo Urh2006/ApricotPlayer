@@ -246,7 +246,7 @@ impl Shell {
         if let Some(speed) = podcast_speed {
             self.application.set_player_speed(speed);
         }
-        let Some(options) = self.playback_launch_options(ui, start_position_seconds) else {
+        let Some(mut options) = self.playback_launch_options(ui, start_position_seconds) else {
             let message = self.player_failed_message("mpv was not found");
             let _ = self
                 .application
@@ -255,6 +255,7 @@ impl Shell {
             ui.show_error(&message);
             return;
         };
+        crate::playback_features::configure_transition_launch(&mut self.application, &mut options);
         let item = self
             .application
             .player_session()
@@ -482,9 +483,13 @@ impl Shell {
         if self.windows_import_committed {
             return false;
         }
+        self.tick_playback_tools(ui);
+        if crate::playback_features::automatic_crossfade_due(&mut self.application) {
+            self.navigate_player_relative(ui, 1, true);
+        }
         loop {
             let Some(runtime) = self.player.playback.as_ref() else {
-                return false;
+                return self.application.playback_features().timer.is_some();
             };
             let update = match runtime.poll_update() {
                 Ok(Some(update)) => update,
@@ -507,6 +512,7 @@ impl Shell {
             }
             match update.event {
                 PlaybackEvent::Started => self.player_started(ui),
+                PlaybackEvent::MediaInfo(_) => self.source_stream_metadata(ui),
                 PlaybackEvent::Paused(paused) => {
                     let key = if paused {
                         "playback_paused"
@@ -528,9 +534,7 @@ impl Shell {
                         self.refresh_player(ui, PlayerFocus::Preserve);
                     }
                 }
-                PlaybackEvent::Position { .. }
-                | PlaybackEvent::MediaInfo(_)
-                | PlaybackEvent::AudioDevices(_) => {}
+                PlaybackEvent::Position { .. } | PlaybackEvent::AudioDevices(_) => {}
                 PlaybackEvent::PreviewFinished => {
                     if self.player.clip_preview == Some(update.generation) {
                         self.player.clip_preview = None;
@@ -541,6 +545,15 @@ impl Shell {
                     }
                 }
                 PlaybackEvent::Ended => {
+                    if let Some(commands) =
+                        crate::playback_features::natural_playback_end(&mut self.application, false)
+                    {
+                        for command in commands {
+                            self.execute_player_command(ui, command);
+                        }
+                        ui.set_status("Sleep timer finished.", true);
+                        continue;
+                    }
                     if self.player.clip_preview.take().is_some() {
                         let _ = self.execute_player_command(ui, PlaybackCommand::SetPaused(true));
                         ui.set_status(&self.text("clip_preview_finished"), true);
@@ -660,6 +673,22 @@ impl Shell {
     /// Windows `seek_player`.
     pub(crate) fn seek_player(&mut self, ui: &mut dyn ShellUi, seconds: f64) {
         self.player.clip_preview = None;
+        self.application.playback_features_mut().note_manual_seek();
+        if self.application.playback_features().ranges.repeat {
+            let target = self
+                .application
+                .playback_features()
+                .ranges
+                .constrain(self.application.player_session().position_seconds() + seconds);
+            let _ = self.execute_player_command(
+                ui,
+                PlaybackCommand::SeekAbsolute {
+                    seconds: target,
+                    exact: true,
+                },
+            );
+            return;
+        }
         let _ = self.execute_player_command(
             ui,
             PlaybackCommand::SeekRelative {
@@ -672,6 +701,11 @@ impl Shell {
     /// Windows `seek_player_absolute`.
     fn seek_player_absolute(&mut self, ui: &mut dyn ShellUi, seconds: f64, key: &str) {
         self.player.clip_preview = None;
+        let seconds = self
+            .application
+            .playback_features()
+            .ranges
+            .constrain(seconds);
         if self.execute_player_command(
             ui,
             PlaybackCommand::SeekAbsolute {
@@ -684,10 +718,37 @@ impl Shell {
     }
 
     pub(crate) fn seek_player_to_start(&mut self, ui: &mut dyn ShellUi) {
-        self.seek_player_absolute(ui, 0.0, "seeked_to_start");
+        let start = self
+            .application
+            .playback_features()
+            .ranges
+            .active
+            .filter(|_| self.application.playback_features().ranges.repeat)
+            .map_or_else(
+                || {
+                    apricot_app::playback_features::chapter_span(&self.application)
+                        .map_or(0.0, |(start, _)| start)
+                },
+                |range| range.start,
+            );
+        self.seek_player_absolute(ui, start, "seeked_to_start");
     }
 
     pub(crate) fn seek_player_to_end(&mut self, ui: &mut dyn ShellUi) {
+        if let Some(range) = self
+            .application
+            .playback_features()
+            .ranges
+            .active
+            .filter(|_| self.application.playback_features().ranges.repeat)
+        {
+            self.seek_player_absolute(ui, range.end, "seeked_to_end");
+            return;
+        }
+        if let Some((_, end)) = apricot_app::playback_features::chapter_span(&self.application) {
+            self.seek_player_absolute(ui, (end - 0.05).max(0.0), "seeked_to_end");
+            return;
+        }
         let Some(duration) = self.application.player_session().duration_seconds() else {
             self.announce_player_text(ui, "timing_unavailable", &[]);
             return;
@@ -697,9 +758,9 @@ impl Shell {
 
     /// Windows `announce_player_time`.
     pub(crate) fn announce_player_time(&mut self, ui: &mut dyn ShellUi) {
-        let session = self.application.player_session();
-        let elapsed = session.position_seconds();
-        let Some(duration) = session.duration_seconds() else {
+        let (elapsed, duration) =
+            apricot_app::playback_features::displayed_times(&self.application);
+        let Some(duration) = duration else {
             self.announce_player_text(ui, "timing_unavailable", &[]);
             return;
         };
@@ -944,6 +1005,21 @@ impl Shell {
         delta: i32,
         after_end: bool,
     ) {
+        if !after_end
+            && let Some(target) =
+                apricot_app::playback_features::audiobook_navigation(&self.application, delta)
+        {
+            self.application.playback_features_mut().note_manual_seek();
+            self.execute_player_command(
+                ui,
+                PlaybackCommand::SeekAbsolute {
+                    seconds: target,
+                    exact: true,
+                },
+            );
+            self.execute_player_command(ui, PlaybackCommand::SetPaused(false));
+            return;
+        }
         if self.youtube.pending_navigation.is_some() || self.youtube.resolving() {
             return;
         }
@@ -1065,6 +1141,7 @@ impl Shell {
     pub(crate) fn close_current_player(&mut self, ui: &mut dyn ShellUi) {
         let show_menu = matches!(self.view, View::Player | View::MainMenu);
         self.close_player_runtime(ui);
+        self.application.playback_features_mut().close_player();
         let message = self.text("player_closed");
         ui.set_status(&message, true);
         if show_menu {

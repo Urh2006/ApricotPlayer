@@ -20,7 +20,7 @@ use crate::{ChoiceDialog, Shell, ShellUi};
 
 /// The dialog buttons in Python's creation order, which is the Tab order,
 /// with their label keys.
-pub const EQUALIZER_BUTTONS: [(EqualizerButton, &str); 11] = [
+pub const EQUALIZER_BUTTONS: [(EqualizerButton, &str); 12] = [
     (EqualizerButton::Ok, "ok"),
     (EqualizerButton::Cancel, "cancel"),
     (EqualizerButton::Reset, "reset_equalizer"),
@@ -30,6 +30,7 @@ pub const EQUALIZER_BUTTONS: [(EqualizerButton, &str); 11] = [
     (EqualizerButton::ImportProfile, "import_equalizer_profile"),
     (EqualizerButton::ExportProfile, "export_equalizer_profile"),
     (EqualizerButton::Compare, "compare_equalizer_profile"),
+    (EqualizerButton::Advanced, "equalizer_advanced"),
     (
         EqualizerButton::SaveDevice,
         "save_equalizer_as_device_default",
@@ -42,6 +43,7 @@ pub const EQUALIZER_BUTTONS: [(EqualizerButton, &str); 11] = [
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EqualizerButton {
+    Advanced,
     Ok,
     Cancel,
     Reset,
@@ -419,6 +421,25 @@ impl Shell {
         button: EqualizerButton,
     ) {
         match button {
+            EqualizerButton::Advanced => {
+                let preset = self.current_preset(view);
+                self.application
+                    .playback_features_mut()
+                    .extra
+                    .insert("equalizer_edit_profile".to_owned(), preset.clone());
+                self.activate_playback_feature(ui, "player_equalizer_advanced");
+                let gains = self.equalizer_settings().gains_for_preset(&preset);
+                if let Some(state) = self.equalizer.as_mut() {
+                    state.gains = gains.clone();
+                    state.original_equalizer = self
+                        .application
+                        .player_session()
+                        .audio()
+                        .and_then(|audio| audio.equalizer.clone());
+                }
+                self.show_gains(view, &gains);
+                self.live_apply(view);
+            }
             EqualizerButton::Ok => self.equalizer_accept(view),
             EqualizerButton::Cancel => view.close(),
             EqualizerButton::Reset => {
@@ -468,6 +489,7 @@ impl Shell {
     /// Windows `accept`: the name and dB range are saved.
     fn equalizer_accept(&mut self, view: &mut dyn EqualizerView) {
         let mut settings = self.equalizer_settings();
+        settings.set_preset_gains(&self.current_preset(view), &self.dialog_gains());
         self.save_dialog_name(view, &mut settings);
         if let Some(state) = self.equalizer.as_ref() {
             settings.db_range = state.db_range;

@@ -21,6 +21,7 @@ pub mod local_folder;
 pub mod main_menu;
 pub mod media_collection_controller;
 pub mod notification_controller;
+pub mod playback_features;
 pub mod playback_position_controller;
 pub mod playback_queue;
 pub mod playback_queue_controller;
@@ -34,6 +35,7 @@ pub mod search_session;
 pub mod settings_controller;
 pub mod settings_model;
 pub mod settings_session;
+pub mod shortcut_catalog;
 pub mod spotify;
 pub mod stream_url_cache;
 pub mod subscription_controller;
@@ -123,6 +125,7 @@ pub use youtube_trending::{
 
 #[derive(Debug, Default)]
 pub struct AppState {
+    pub playback_features: playback_features::PlaybackFeatures,
     pub bookmarks: BookmarkController,
     pub downloads: DownloadController,
     pub favorites: MediaCollectionController,

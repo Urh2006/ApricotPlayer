@@ -144,6 +144,9 @@ impl Shell {
                     format!("{}. {}", index + 1, format_duration(bookmark.position)),
                     name.to_owned(),
                 ];
+                if let Some(end) = bookmark.end_position() {
+                    parts.push(format!("Excerpt, ends at {}", format_duration(end)));
+                }
                 if !current_only && !bookmark.media_title.trim().is_empty() {
                     parts.push(bookmark.media_title.trim().to_owned());
                 }
@@ -302,6 +305,7 @@ impl Shell {
         let Some(bookmark) = self.application.bookmark(id).cloned() else {
             return;
         };
+        let saved_range = bookmark.end_position().is_some();
         let same_item = self
             .application
             .player_session()
@@ -321,6 +325,10 @@ impl Shell {
                 },
             )
         {
+            apricot_app::playback_features::arm_saved_range(&mut self.application, &bookmark);
+            if saved_range {
+                self.execute_player_command(ui, PlaybackCommand::SetPaused(false));
+            }
             let name = if bookmark.name.trim().is_empty() {
                 self.text("bookmark")
             } else {
@@ -340,6 +348,7 @@ impl Shell {
             self.application
                 .navigate_to(RouteFrame::new(Route::Bookmarks));
         }
-        self.start_media_item_at(ui, bookmark.media, bookmark.position);
+        self.start_media_item_at(ui, bookmark.media.clone(), bookmark.position);
+        apricot_app::playback_features::arm_saved_range(&mut self.application, &bookmark);
     }
 }

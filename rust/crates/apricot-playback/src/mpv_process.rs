@@ -74,6 +74,7 @@ pub enum RepeatMode {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MpvLaunchOptions {
+    pub transitions: PlaybackTransitionOptions,
     pub executable: PathBuf,
     pub library: Option<PathBuf>,
     pub working_directory: PathBuf,
@@ -95,6 +96,15 @@ pub struct MpvLaunchOptions {
     pub initial_audio_filter: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PlaybackTransitionOptions {
+    pub crossfade_seconds: f64,
+    pub equal_power: bool,
+    pub seek_fade_seconds: f64,
+    pub pause_fade_seconds: f64,
+    pub start_fade_seconds: f64,
+}
+
 impl MpvLaunchOptions {
     pub fn new(executable: impl Into<PathBuf>) -> Self {
         let executable = executable.into();
@@ -102,6 +112,7 @@ impl MpvLaunchOptions {
             .parent()
             .map_or_else(PathBuf::new, Path::to_path_buf);
         Self {
+            transitions: PlaybackTransitionOptions::default(),
             executable,
             library: None,
             working_directory,
@@ -263,6 +274,8 @@ impl PlaybackEngine for MpvProcessEngine {
             PlaybackCommand::SetAudioDevice(device) => {
                 json!(["set_property", "audio-device", device])
             }
+            PlaybackCommand::SetProperty { name, value } => json!(["set_property", name, value]),
+            PlaybackCommand::AddSubtitle(path) => json!(["sub-add", path, "select"]),
             PlaybackCommand::Stop => json!(["stop"]),
         };
         request_success(&self.client, command, COMMAND_TIMEOUT)
@@ -543,6 +556,9 @@ fn event_monitor_inner(
         (13, "audio-params/hr-channels"),
         (14, "chapter-list"),
         (15, "audio-device-list"),
+        (16, "track-list"),
+        (17, "sub-text"),
+        (18, "media-title"),
     ] {
         let mut payload = serde_json::to_vec(&json!({
             "command": ["observe_property", observer_id, property]
@@ -601,6 +617,7 @@ fn open_event_pipe(path: &str, deadline: Instant) -> Result<IpcStream, PlaybackE
     }
 }
 
+#[allow(clippy::too_many_lines)] // One match over every observed mpv property.
 fn project_event(
     event: &Value,
     sender: &SyncSender<PlaybackEvent>,
@@ -621,6 +638,28 @@ fn project_event(
             let _ = sender.try_send(PlaybackEvent::Ended);
         }
         Some("property-change") => match event.get("name").and_then(Value::as_str) {
+            Some("media-title") => {
+                media_info.stream_title = event
+                    .get("data")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned);
+                emit_media_info(sender, media_info);
+            }
+            Some("track-list") => {
+                media_info.tracks = event
+                    .get("data")
+                    .and_then(Value::as_array)
+                    .map(|tracks| tracks.iter().take(1000).cloned().collect())
+                    .unwrap_or_default();
+                emit_media_info(sender, media_info);
+            }
+            Some("sub-text") => {
+                media_info.subtitle_text = event
+                    .get("data")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned);
+                emit_media_info(sender, media_info);
+            }
             Some("chapter-list") => {
                 media_info.chapters = event
                     .get("data")
@@ -720,7 +759,7 @@ fn event_u32(event: &Value) -> Option<u32> {
 }
 
 fn emit_media_info(sender: &SyncSender<PlaybackEvent>, media_info: &PlaybackMediaInfo) {
-    let _ = sender.try_send(PlaybackEvent::MediaInfo(media_info.clone()));
+    let _ = sender.try_send(PlaybackEvent::MediaInfo(Box::new(media_info.clone())));
 }
 
 #[cfg(test)]
@@ -842,12 +881,12 @@ mod tests {
         }
         assert_eq!(
             receiver.try_iter().last(),
-            Some(PlaybackEvent::MediaInfo(PlaybackMediaInfo {
+            Some(PlaybackEvent::MediaInfo(Box::new(PlaybackMediaInfo {
                 container: Some("matroska".to_owned()),
                 audio_codec: Some("opus".to_owned()),
                 height: Some(1080),
                 ..PlaybackMediaInfo::default()
-            }))
+            })))
         );
     }
 }

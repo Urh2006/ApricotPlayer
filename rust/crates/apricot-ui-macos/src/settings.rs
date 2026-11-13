@@ -223,6 +223,14 @@ define_class!(
     }
 
     unsafe impl NSControlTextEditingDelegate for SettingsWindow {
+        #[unsafe(method(controlTextDidChange:))]
+        fn control_text_did_change(&self, notification: &NSNotification) {
+            if let Some(object) = notification.object() {
+                let view = Retained::as_ptr(&object).cast();
+                let search = self.index_of(view).is_some_and(|index| matches!(self.ivars().controls.borrow()[index].binding, SettingsBinding::ShortcutSearch));
+                if search { self.refresh_shortcut_browser(); }
+            }
+        }
         /// Windows `EN_KILLFOCUS`: a text field applies its value.
         #[unsafe(method(controlTextDidEndEditing:))]
         fn control_text_did_end_editing(&self, notification: &NSNotification) {
@@ -255,6 +263,9 @@ define_class!(
         fn section_changed(&self, _sender: Option<&AnyObject>) {
             self.schedule_section_render();
         }
+
+        #[unsafe(method(shortcutFilterChanged:))]
+        fn shortcut_filter_changed(&self, _sender: Option<&AnyObject>) { self.refresh_shortcut_browser(); }
 
         /// Tab or Return in the section list.
         #[unsafe(method(sectionCommit:))]
@@ -471,6 +482,15 @@ impl SettingsWindow {
             return;
         };
         let binding = self.ivars().controls.borrow()[index].binding.clone();
+        if matches!(
+            binding,
+            SettingsBinding::ShortcutCategoryList(_)
+                | SettingsBinding::ShortcutSearch
+                | SettingsBinding::ShortcutFilter
+        ) {
+            self.refresh_shortcut_browser();
+            return;
+        }
         if let SettingsBinding::Command(command) = binding {
             self.handle_command(command);
             return;
@@ -608,6 +628,194 @@ impl SettingsWindow {
                 break;
             }
         }
+    }
+
+    fn shortcut_browser_filters(
+        &self,
+    ) -> (
+        String,
+        String,
+        apricot_app::shortcut_catalog::ShortcutFilter,
+    ) {
+        let mut category = "all".to_owned();
+        let mut query = String::new();
+        let mut filter = apricot_app::shortcut_catalog::ShortcutFilter::All;
+        for bound in self.ivars().controls.borrow().iter() {
+            match (&bound.binding, &bound.kind) {
+                (SettingsBinding::ShortcutCategoryList(categories), ControlKind::List(list, _)) => {
+                    category = list
+                        .selected()
+                        .and_then(|index| categories.get(index))
+                        .map_or("all", |item| &item.value)
+                        .to_owned();
+                }
+                (SettingsBinding::ShortcutSearch, ControlKind::Field(field)) => {
+                    query = field.stringValue().to_string()
+                }
+                (SettingsBinding::ShortcutFilter, ControlKind::Choice(choice)) => {
+                    filter = apricot_app::shortcut_catalog::ShortcutFilter::from_index(
+                        choice.selected().unwrap_or(0),
+                    )
+                }
+                _ => {}
+            }
+        }
+        (category, query, filter)
+    }
+
+    fn selected_shortcut(&self) -> Option<String> {
+        self.ivars()
+            .controls
+            .borrow()
+            .iter()
+            .find_map(|bound| match &bound.binding {
+                SettingsBinding::ShortcutCapture(id) if !id.is_empty() => Some(id.clone()),
+                _ => None,
+            })
+    }
+
+    fn refresh_shortcut_browser(&self) {
+        let selected = self.selected_shortcut();
+        let (category, query, filter) = self.shortcut_browser_filters();
+        let Some(actions) = self.with_shell(|shell, _| {
+            let catalog = apricot_app::embedded_catalog(&shell.application.settings().language);
+            apricot_app::shortcut_catalog::filtered_actions(
+                &catalog,
+                shell.application.settings(),
+                &category,
+                &query,
+                filter,
+            )
+        }) else {
+            return;
+        };
+        let index = selected
+            .as_ref()
+            .and_then(|id| actions.iter().position(|action| &action.action_id == id))
+            .unwrap_or(0);
+        let rows = actions.iter().map(shortcut_action_label).collect();
+        let enabled = !actions.is_empty();
+        let list = {
+            let mut controls = self.ivars().controls.borrow_mut();
+            let mut list = None;
+            for bound in controls.iter_mut() {
+                match (&mut bound.binding, &bound.kind) {
+                    (
+                        SettingsBinding::ShortcutActionList(current),
+                        ControlKind::List(control, _),
+                    ) => {
+                        current.clone_from(&actions);
+                        list = Some(control.clone());
+                    }
+                    (SettingsBinding::ShortcutCapture(id), ControlKind::Capture(field)) => {
+                        field.setEnabled(enabled);
+                        if !enabled {
+                            id.clear();
+                            field.setStringValue(&NSString::from_str(""));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            list
+        };
+        if let Some(list) = list {
+            list.set_rows(rows, enabled.then_some(index));
+        }
+        self.sync_shortcut_selection();
+    }
+
+    fn shortcut_command(&self, command: SettingsCommand) {
+        let selected = self.selected_shortcut();
+        let (category, _, _) = self.shortcut_browser_filters();
+        let Some(catalog) = self.with_shell(|shell, _| {
+            apricot_app::embedded_catalog(&shell.application.settings().language)
+        }) else {
+            return;
+        };
+        if command == SettingsCommand::ResetShortcutCategory {
+            let alert = NSAlert::new(self.mtm());
+            alert.setMessageText(&NSString::from_str(
+                catalog.text("shortcut_reset_category_confirm"),
+            ));
+            alert.addButtonWithTitle(&NSString::from_str(catalog.text("yes")));
+            alert.addButtonWithTitle(&NSString::from_str(catalog.text("cancel")));
+            if alert.runModal() != NSAlertFirstButtonReturn {
+                return;
+            }
+        }
+        let alternatives = if command == SettingsCommand::EditShortcutAlternatives {
+            let Some(id) = selected.as_deref() else {
+                return;
+            };
+            let current = self
+                .with_shell(|shell, _| {
+                    shell
+                        .application
+                        .settings()
+                        .keyboard_shortcuts
+                        .get(id)
+                        .cloned()
+                        .unwrap_or_default()
+                })
+                .unwrap_or_default();
+            let (primary, secondary) = current.split_once('|').unwrap_or((&current, ""));
+            let form = apricot_shell::FeatureForm {
+                title: catalog.text("shortcut_edit_alternatives").to_owned(),
+                fields: vec![
+                    apricot_shell::FormField::text(
+                        "primary",
+                        catalog.text("shortcut_primary"),
+                        primary.trim(),
+                    ),
+                    apricot_shell::FormField::text(
+                        "secondary",
+                        catalog.text("shortcut_secondary"),
+                        secondary.trim(),
+                    ),
+                ],
+                submit: catalog.text("save").to_owned(),
+                cancel: catalog.text("cancel").to_owned(),
+            };
+            let Some(values) = crate::feature_form::show(self.mtm(), &form) else {
+                return;
+            };
+            Some(
+                ["primary", "secondary"]
+                    .iter()
+                    .filter_map(|key| values.get(*key).and_then(apricot_shell::FormValue::text))
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" | "),
+            )
+        } else {
+            None
+        };
+        let result = self.with_shell(|shell, _| match (command, selected.as_deref()) {
+            (SettingsCommand::ResetShortcutCategory, _) => {
+                shell.application.reset_shortcut_category(&category)
+            }
+            (SettingsCommand::ClearShortcut, Some(id)) => {
+                shell.application.clear_keyboard_shortcut(id)
+            }
+            (SettingsCommand::ResetShortcut, Some(id)) => {
+                shell.application.set_keyboard_shortcut(id, "")
+            }
+            (SettingsCommand::EditShortcutAlternatives, Some(id)) => {
+                let shortcut = alternatives.as_deref().unwrap_or_default();
+                if shortcut.is_empty() {
+                    shell.application.clear_keyboard_shortcut(id)
+                } else {
+                    shell.application.set_keyboard_shortcut(id, shortcut)
+                }
+            }
+            _ => Ok(()),
+        });
+        if let Some(Err(error)) = result {
+            self.show_error(&error.to_string());
+        }
+        self.refresh_shortcut_browser();
     }
 
     /// Windows `capture_shortcut`.
@@ -1083,6 +1291,34 @@ impl SettingsWindow {
                 Some(label_view(&label)),
                 ControlKind::Field(text_field(&value, &label, false, false)),
             ),
+            SettingsControl::ShortcutSearch { label } => {
+                let field = text_field("", &label, false, false);
+                document.addSubview(&field);
+                (Some(label_view(&label)), ControlKind::Field(field))
+            }
+            SettingsControl::ShortcutCategoryList { label, categories } => {
+                let list = List::new(mtm, &label);
+                unsafe { list.setTarget(Some(target)) };
+                list.set_selection_action(sel!(shortcutFilterChanged:));
+                list.set_rows(
+                    categories
+                        .into_iter()
+                        .map(|category| category.label)
+                        .collect(),
+                    Some(0),
+                );
+                let scroll = NSScrollView::initWithFrame(NSScrollView::alloc(mtm), NSRect::ZERO);
+                scroll.setDocumentView(Some(&list));
+                scroll.setHasVerticalScroller(true);
+                document.addSubview(&scroll);
+                (Some(label_view(&label)), ControlKind::List(list, scroll))
+            }
+            SettingsControl::ShortcutFilter { label, options } => {
+                let popup = PopUp::new(mtm, &label, target, sel!(shortcutFilterChanged:));
+                popup.set_items(&options, 0);
+                document.addSubview(&popup);
+                (Some(label_view(&label)), ControlKind::Choice(popup))
+            }
             SettingsControl::ShortcutActionList { label, actions } => {
                 let list = List::new(mtm, &label);
                 // SAFETY: the dialog outlives the list.
@@ -1215,6 +1451,12 @@ impl SettingsWindow {
     #[allow(clippy::too_many_lines)] // One arm per command, as on Windows.
     fn handle_command(&self, command: SettingsCommand) {
         match command {
+            SettingsCommand::RecordingSettings => self.defer_global_action("recording_settings"),
+            SettingsCommand::OpenIntegrations => self.defer_global_action("open_integrations"),
+            SettingsCommand::ResetShortcut
+            | SettingsCommand::ClearShortcut
+            | SettingsCommand::ResetShortcutCategory
+            | SettingsCommand::EditShortcutAlternatives => self.shortcut_command(command),
             SettingsCommand::ResetSection => self.reset_section(),
             SettingsCommand::BrowseDownloadFolder => self.browse_download_folder(),
             SettingsCommand::ResetEqualizerPreset => self.reset_equalizer_preset(),

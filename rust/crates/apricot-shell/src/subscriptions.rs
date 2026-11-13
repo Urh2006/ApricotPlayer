@@ -210,6 +210,8 @@ impl Shell {
                 self.subscription_button("collection_remove", "remove"),
                 self.subscription_button("subscription_filter", "filter_category"),
                 self.subscription_button("subscription_set_category", "set_category"),
+                // 2.1: after the Python controls, as on Windows.
+                self.subscription_button("spotify_subscriptions", "spotify_subscriptions"),
                 ScreenControl::List,
             ],
             focus_list: focus,
@@ -326,6 +328,21 @@ impl Shell {
             return;
         };
         if let Some(item) = self.application.prepare_notification_playback(index) {
+            if let Some(change) = crate::spotify_subscriptions::item_changes(&item) {
+                let account = item
+                    .metadata
+                    .get("spotify_subscription_account")
+                    .and_then(serde_json::Value::as_str);
+                let selected = self
+                    .spotify_service()
+                    .and_then(|service| service.accounts().active);
+                if account.is_some() && account != selected.as_deref() {
+                    ui.show_error("Select the Spotify account that owns this subscription before opening its changes");
+                    return;
+                }
+                self.spotify_open_subscription_changes(ui, change);
+                return;
+            }
             self.start_media_item(ui, item, None);
         } else {
             ui.set_status(&self.text("notification_center_empty"), true);

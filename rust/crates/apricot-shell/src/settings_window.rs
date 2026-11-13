@@ -48,6 +48,9 @@ pub enum SettingsBinding {
         label: String,
     },
     ShortcutActionList(Vec<ShortcutActionItem>),
+    ShortcutCategoryList(Vec<SettingsChoiceOption>),
+    ShortcutSearch,
+    ShortcutFilter,
     ShortcutCapture(String),
     Command(SettingsCommand),
     SpotifyChoice(SpotifyField),
@@ -124,9 +127,10 @@ pub enum ShortcutCapture {
 #[must_use]
 pub fn shortcut_action_label(action: &ShortcutActionItem) -> String {
     format!(
-        "{}: {}",
+        "{}: {}. {}",
         action.label,
-        apricot_core::shortcut::display_shortcut(&action.shortcut)
+        apricot_core::shortcut::display_shortcut(&action.shortcut),
+        action.scope
     )
 }
 
@@ -230,6 +234,11 @@ pub fn settings_binding(control: &SettingsControl) -> SettingsBinding {
         SettingsControl::ShortcutActionList { actions, .. } => {
             SettingsBinding::ShortcutActionList(actions.clone())
         }
+        SettingsControl::ShortcutCategoryList { categories, .. } => {
+            SettingsBinding::ShortcutCategoryList(categories.clone())
+        }
+        SettingsControl::ShortcutSearch { .. } => SettingsBinding::ShortcutSearch,
+        SettingsControl::ShortcutFilter { .. } => SettingsBinding::ShortcutFilter,
         SettingsControl::ShortcutCapture { action_id, .. } => {
             SettingsBinding::ShortcutCapture(action_id.clone())
         }
@@ -372,6 +381,9 @@ impl Shell {
         let result = match binding {
             SettingsBinding::ReadOnly
             | SettingsBinding::Command(_)
+            | SettingsBinding::ShortcutCategoryList(_)
+            | SettingsBinding::ShortcutSearch
+            | SettingsBinding::ShortcutFilter
             | SettingsBinding::ShortcutActionList(_) => Ok(()),
             SettingsBinding::Text(SettingId::CookiesFile) => app.apply_cookies_path_text(text),
             SettingsBinding::Text(SettingId::AudiovaultEmail) => {
@@ -779,8 +791,11 @@ impl Shell {
         let Some(shortcut) = shortcut_text(chord) else {
             return ShortcutCapture::Ignored;
         };
-        match self.application.set_keyboard_shortcut(action_id, &shortcut) {
-            Ok(()) => ShortcutCapture::Captured {
+        match self
+            .application
+            .set_primary_keyboard_shortcut(action_id, &shortcut)
+        {
+            Ok(shortcut) => ShortcutCapture::Captured {
                 message: self.text("shortcut_captured").replace(
                     "{shortcut}",
                     &apricot_core::shortcut::display_shortcut(&shortcut),

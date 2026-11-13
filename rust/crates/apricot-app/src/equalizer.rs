@@ -27,6 +27,11 @@ pub const SLIDER_PAGE_STEP: i32 = 30;
 /// Python `EQ_BANDS` labels, used in `equalizer_band_gain`.
 pub fn band_label(band_id: &str) -> &'static str {
     match band_id {
+        "25" => "25 Hz deep bass",
+        "100" => "100 Hz bass body",
+        "400" => "400 Hz low midrange",
+        "1600" => "1.6 kHz presence",
+        "10000" => "10 kHz brilliance",
         "31" => "31 Hz sub bass rumble",
         "62" => "62 Hz bass thump",
         "125" => "125 Hz upper bass warmth",
@@ -110,8 +115,7 @@ pub fn factory_gains(preset_id: &str) -> EqualizerGains {
         .map_or_else(default_gains, |preset| {
             EQUALIZER_BANDS
                 .iter()
-                .zip(preset.gains_db)
-                .map(|(band, gain)| (band.id.to_owned(), f64::from(gain)))
+                .map(|band| (band.id.to_owned(), preset.gain_db(band.id)))
                 .collect()
         })
 }
@@ -338,12 +342,9 @@ impl EqualizerSettings {
     /// factory values, custom profiles their saved gains.
     pub fn gains_for_preset(&self, preset_id: &str) -> EqualizerGains {
         let preset_id = self.normalized_preset(preset_id);
-        if is_factory_preset(&preset_id) {
-            return factory_gains(&preset_id);
-        }
         self.preset_gains
             .get(&preset_id)
-            .map_or_else(default_gains, normalized_gains)
+            .map_or_else(|| factory_gains(&preset_id), normalized_gains)
     }
 
     /// Python `effective_equalizer_preset`: the output device's own preset,
@@ -458,12 +459,11 @@ impl EqualizerSettings {
         self.custom_names.insert(preset_id.to_owned(), name);
     }
 
-    /// Stores gains for a custom profile; factory presets are read-only.
+    /// Explicitly saved edits may override any profile. Factory identities
+    /// remain stable and their untouched defaults are always available to Reset.
     pub fn set_preset_gains(&mut self, preset_id: &str, gains: &EqualizerGains) {
-        if is_custom_preset(preset_id) {
-            self.preset_gains
-                .insert(preset_id.to_owned(), normalized_gains(gains));
-        }
+        self.preset_gains
+            .insert(preset_id.to_owned(), normalized_gains(gains));
     }
 
     /// Python `set_equalizer_device_preset`: an empty preset clears the entry.
@@ -641,7 +641,8 @@ mod tests {
         let payload = equalizer.export_payload("Vocal clarity", &gains, "vocal");
         assert_eq!(payload["type"], "apricot_equalizer_profile");
         assert_eq!(payload["version"], 1);
-        assert_eq!(payload["bands"].as_array().map(Vec::len), Some(10));
+        // 2.1 exports all fifteen bands; Python reads the ten it knows.
+        assert_eq!(payload["bands"].as_array().map(Vec::len), Some(15));
         let (name, imported) = equalizer
             .profile_from_payload(&payload, "invalid")
             .expect("valid payload");

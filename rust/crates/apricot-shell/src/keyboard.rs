@@ -245,7 +245,8 @@ mod tests {
                     && !apricot_core::action::SPOTIFY_PLAYER_ACTIONS.contains(&action.id.as_str())
             })
             .collect();
-        assert_eq!(spotify.len(), 12);
+        // 12 Spotify actions plus the four 2.1 subscription actions.
+        assert_eq!(spotify.len(), 16);
         for action in spotify {
             let chord = ShortcutChord::parse(action.default_shortcut()).unwrap();
             let global = action.scopes.contains(&ActionScope::Global);

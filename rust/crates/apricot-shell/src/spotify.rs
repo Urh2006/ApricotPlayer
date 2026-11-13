@@ -353,6 +353,7 @@ impl Shell {
                     self.spotify_remember_hub_entry(SpotifyHubEntry::Settings);
                     self.show_spotify_settings(ui);
                 }
+                Some(SpotifyHubEntry::Subscriptions) => self.show_spotify_subscriptions(ui),
                 Some(SpotifyHubEntry::Queue) => {
                     self.spotify.hub_selected = Some(SpotifyHubEntry::Queue);
                     self.show_spotify_queue(ui);
@@ -617,6 +618,10 @@ impl Shell {
             return true;
         }
         self.spotify_browse_refresh_tick();
+        if let Some(service) = self.spotify.service.clone() {
+            let stamp = self.spotify.epochs.begin();
+            service.poll_playlist_subscriptions(stamp);
+        }
         loop {
             let event = self
                 .spotify
@@ -736,6 +741,14 @@ impl Shell {
                     Err(error) => ui.show_error(&error_text(&texts, &error)),
                 }
             }
+            SpotifyEvent::PlaylistSubscriptions { stamp, result } => {
+                if self.spotify.is_current_account(stamp) {
+                    match result {
+                        Ok(report) => self.spotify_subscription_report(ui, report),
+                        Err(error) => ui.show_error(&error_text(&texts, &error)),
+                    }
+                }
+            }
             SpotifyEvent::Catalog { stamp, result } => {
                 self.spotify_browse_loaded(ui, stamp, result);
             }
@@ -815,6 +828,31 @@ impl Shell {
     /// one.
     pub(crate) fn spotify_action(&mut self, ui: &mut dyn ShellUi, action_id: &str) -> bool {
         let entry = match action_id {
+            "spotify_subscriptions" => {
+                self.show_spotify_subscriptions(ui);
+                return true;
+            }
+            "spotify_subscribe_playlist" => {
+                self.spotify_subscribe_selected(ui, true);
+                return true;
+            }
+            "spotify_unsubscribe_playlist" => {
+                self.spotify_subscribe_selected(ui, false);
+                return true;
+            }
+            "spotify_check_subscriptions" => {
+                if let Some(service) = self.spotify_service() {
+                    let stamp = self.spotify.epochs.begin();
+                    service.subscription_operation(
+                        stamp,
+                        apricot_spotify::playlist_subscriptions::SubscriptionCommand::Check {
+                            force: true,
+                        },
+                    );
+                    ui.set_background_polling(true);
+                }
+                return true;
+            }
             "open_spotify" => {
                 self.show_spotify_hub(ui);
                 return true;

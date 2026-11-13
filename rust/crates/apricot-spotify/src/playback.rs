@@ -14,7 +14,7 @@ use std::{
     collections::VecDeque,
     sync::{
         Arc, Condvar, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
 };
 
@@ -282,6 +282,8 @@ pub enum PlaybackNotice {
 }
 
 struct Generation {
+    capacity: AtomicUsize,
+    crossfade: Mutex<Option<apricot_playback::PcmCrossfade>>,
     /// The play request whose PCM the generation carries; a gapless
     /// transition moves it to the next request.
     request_id: AtomicU64,
@@ -297,6 +299,8 @@ const BYTES_PER_SECOND: u64 = 44_100 * 4;
 impl Generation {
     fn new(request_id: u64) -> Arc<Self> {
         Arc::new(Self {
+            capacity: AtomicUsize::new(RING_BYTES),
+            crossfade: Mutex::new(None),
             request_id: AtomicU64::new(request_id),
             written: AtomicU64::new(0),
             data: Mutex::new((VecDeque::with_capacity(RING_BYTES), false)),
@@ -309,13 +313,28 @@ impl Generation {
     }
 
     /// Blocks while the ring is full: the backpressure towards `LibreSpot`.
-    fn push(&self, mut bytes: &[u8]) -> usize {
+    fn push(&self, bytes: &[u8]) -> usize {
+        let mut mixed = Vec::new();
+        if let Ok(mut fade) = self.crossfade.lock()
+            && let Some(mixer) = fade.as_mut()
+        {
+            mixed = bytes.to_vec();
+            mixer.mix(&mut mixed);
+            if mixer.finished() {
+                *fade = None;
+            }
+        }
+        let mut bytes = if mixed.is_empty() {
+            bytes
+        } else {
+            mixed.as_slice()
+        };
         let total = bytes.len();
         while !bytes.is_empty() {
             let Ok(mut guard) = self.data.lock() else {
                 return total - bytes.len();
             };
-            while guard.0.len() >= RING_BYTES && !guard.1 {
+            while guard.0.len() >= self.capacity.load(Ordering::SeqCst) && !guard.1 {
                 let Ok(next) = self.cond.wait(guard) else {
                     return total - bytes.len();
                 };
@@ -324,13 +343,39 @@ impl Generation {
             if guard.1 {
                 return total - bytes.len();
             }
-            let take = (RING_BYTES - guard.0.len()).min(bytes.len());
+            let take = self
+                .capacity
+                .load(Ordering::SeqCst)
+                .saturating_sub(guard.0.len())
+                .min(bytes.len());
             guard.0.extend(&bytes[..take]);
             self.written.fetch_add(take as u64, Ordering::SeqCst);
             bytes = &bytes[take..];
             self.cond.notify_all();
         }
         total
+    }
+
+    /// Atomically extracts only PCM that mpv has not consumed yet. Taking an
+    /// overlap shortens the stream by exactly that many bytes.
+    fn take_tail(&self, maximum: usize) -> Vec<u8> {
+        let Ok(mut guard) = self.data.lock() else {
+            return Vec::new();
+        };
+        let count = guard.0.len().min(maximum) & !3;
+        let start = guard.0.len() - count;
+        let tail: Vec<_> = guard.0.drain(start..).collect();
+        self.written.fetch_sub(count as u64, Ordering::SeqCst);
+        self.cond.notify_all();
+        tail
+    }
+
+    fn begin_crossfade(&self, tail: &[u8], equal_power: bool) {
+        if !tail.is_empty()
+            && let Ok(mut fade) = self.crossfade.lock()
+        {
+            *fade = Some(apricot_playback::PcmCrossfade::new(tail, equal_power));
+        }
     }
 
     fn close(&self) {
@@ -387,6 +432,7 @@ type Notify = Arc<dyn Fn() + Send + Sync>;
 type RequestRevisionLookup = Arc<dyn Fn(u64) -> Option<u64> + Send + Sync>;
 
 pub struct Shared {
+    crossfade: Mutex<CrossfadeOptions>,
     next_id: AtomicU64,
     generations: Mutex<Vec<(u64, Arc<Generation>)>>,
     current: Mutex<Option<(u64, Arc<Generation>)>>,
@@ -410,11 +456,36 @@ pub struct Shared {
     notify: Notify,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct CrossfadeOptions {
+    bytes: usize,
+    manual: bool,
+    equal_power: bool,
+}
+
 impl Shared {
     fn open_generation(&self, request_id: u64, base_ms: u32, duration_ms: Option<u32>) {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst) + 1;
         log::info!("generation {id} opened at {base_ms} ms for request {request_id}");
         let generation = Generation::new(request_id);
+        let options = self
+            .crossfade
+            .lock()
+            .map(|options| *options)
+            .unwrap_or_default();
+        generation
+            .capacity
+            .store(options.bytes.max(RING_BYTES), Ordering::SeqCst);
+        if options.manual
+            && options.bytes > 0
+            && base_ms == 0
+            && duration_ms.is_some()
+            && let Ok(current) = self.current.lock()
+            && let Some((_, previous)) = current.as_ref()
+            && previous.request_id.load(Ordering::SeqCst) != request_id
+        {
+            generation.begin_crossfade(&previous.take_tail(options.bytes), options.equal_power);
+        }
         if let Ok(mut all) = self.generations.lock() {
             // Keep only the few generations mpv may still open.
             all.retain(|(known, _)| *known + 4 > id);
@@ -657,6 +728,16 @@ impl BridgeSink {
                         .filter(|generation| self.ended && !generation.is_closed());
                     self.ended = false;
                     if let Some(generation) = continuing {
+                        let options = self
+                            .shared
+                            .crossfade
+                            .lock()
+                            .map(|options| *options)
+                            .unwrap_or_default();
+                        if options.bytes > 0 {
+                            let tail = generation.take_tail(options.bytes);
+                            generation.begin_crossfade(&tail, options.equal_power);
+                        }
                         // Gapless: the next track follows in the same stream.
                         generation
                             .request_id
@@ -756,6 +837,7 @@ pub struct SpotifyPlayback {
 impl SpotifyPlayback {
     pub fn new(bitrate_kbps: u32, notify: Notify) -> (Arc<Self>, Arc<Shared>) {
         let shared = Arc::new(Shared {
+            crossfade: Mutex::default(),
             next_id: AtomicU64::new(0),
             generations: Mutex::default(),
             current: Mutex::default(),
@@ -1286,6 +1368,33 @@ fn load_request(
 }
 
 impl PcmSource for SpotifyPlayback {
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
+    fn configure_crossfade(&self, seconds: f64, manual: bool, equal_power: bool) {
+        let bytes = if seconds.is_finite() && seconds > 0.0 {
+            ((seconds.min(30.0) * BYTES_PER_SECOND as f64) as usize) & !3
+        } else {
+            0
+        };
+        if let Ok(mut options) = self.shared.crossfade.lock() {
+            *options = CrossfadeOptions {
+                bytes,
+                manual,
+                equal_power,
+            };
+        }
+        if let Ok(current) = self.shared.current.lock()
+            && let Some((_, generation)) = current.as_ref()
+        {
+            generation
+                .capacity
+                .store(bytes.max(RING_BYTES), Ordering::SeqCst);
+            generation.cond.notify_all();
+        }
+    }
     fn start(
         &self,
         item: &MediaItem,

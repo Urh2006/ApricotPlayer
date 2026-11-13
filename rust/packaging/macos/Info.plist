@@ -26,6 +26,10 @@
     <string>12.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>ApricotPlayer records audio from a microphone only when you select that source and start a recording.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>ApricotPlayer uses screen and system audio capture permission to record the computer or applications you select.</string>
     <key>NSSupportsAutomaticTermination</key>
     <false/>
     <key>NSAppleEventsUsageDescription</key>

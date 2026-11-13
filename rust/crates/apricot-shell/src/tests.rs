@@ -1905,6 +1905,7 @@ mod subscriptions {
                 "collection_remove",
                 "subscription_filter",
                 "subscription_set_category",
+                "spotify_subscriptions",
                 "list"
             ]
         );

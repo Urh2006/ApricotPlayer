@@ -7,7 +7,7 @@ use std::{
         Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError, sync_channel,
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use apricot_core::MediaItem;
@@ -25,6 +25,108 @@ const ACTIVE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const MAX_EVENTS_PER_TICK: usize = 32;
 /// Updates kept while the UI does not read the channel (a modal dialog).
 const MAX_BACKLOG: usize = 1024;
+
+struct OutgoingEngine {
+    engine: Box<dyn PlaybackEngine>,
+    started: Option<Instant>,
+    queued: Instant,
+    seconds: f64,
+    equal_power: bool,
+    target_volume: f64,
+}
+
+struct VolumeFade {
+    started: Option<Instant>,
+    seconds: f64,
+    from: f64,
+    to: f64,
+    after: Option<PlaybackCommand>,
+    fade_back: bool,
+}
+
+fn tick_transitions(
+    active: &mut Option<(u64, Box<dyn PlaybackEngine>)>,
+    outgoing: &mut Option<OutgoingEngine>,
+    fade: &mut Option<VolumeFade>,
+    position: &PlaybackPositionReader,
+    updates: &UpdateSink,
+) {
+    let Some((generation, engine)) = active.as_mut() else {
+        *outgoing = None;
+        *fade = None;
+        return;
+    };
+    let now = Instant::now();
+    if let Some(old) = outgoing.as_mut() {
+        if old.started.is_none() && position.read(*generation).is_some() {
+            old.started = Some(now);
+        }
+        if let Some(started) = old.started {
+            let progress = (now.saturating_duration_since(started).as_secs_f64() / old.seconds)
+                .clamp(0.0, 1.0);
+            let (outgoing_gain, incoming_gain) = if old.equal_power {
+                let angle = progress * std::f64::consts::FRAC_PI_2;
+                (angle.cos(), angle.sin())
+            } else {
+                (1.0 - progress, progress)
+            };
+            let _ = old.engine.execute(PlaybackCommand::SetVolume(
+                old.target_volume * outgoing_gain,
+            ));
+            let _ = engine.execute(PlaybackCommand::SetVolume(
+                old.target_volume * incoming_gain,
+            ));
+            if progress >= 1.0 {
+                *outgoing = None;
+            }
+        } else if now.saturating_duration_since(old.queued) > Duration::from_secs(15) {
+            let _ = engine.execute(PlaybackCommand::SetVolume(old.target_volume));
+            *outgoing = None;
+        }
+    }
+    let Some(task) = fade.as_mut() else {
+        return;
+    };
+    if task.started.is_none() {
+        if position.read(*generation).is_some() {
+            task.started = Some(now);
+        } else {
+            return;
+        }
+    }
+    let progress = (now
+        .saturating_duration_since(task.started.unwrap_or(now))
+        .as_secs_f64()
+        / task.seconds)
+        .clamp(0.0, 1.0);
+    let _ = engine.execute(PlaybackCommand::SetVolume(
+        task.from + (task.to - task.from) * progress,
+    ));
+    if progress < 1.0 {
+        return;
+    }
+    let mut completed = fade.take().expect("fade was active");
+    if let Some(command) = completed.after.take() {
+        if let Err(error) = engine.execute(command.clone()) {
+            updates.try_send(PlaybackUpdate {
+                generation: *generation,
+                event: PlaybackEvent::CommandFailed(error.to_string()),
+            });
+        }
+        if completed.fade_back {
+            *fade = Some(VolumeFade {
+                started: Some(now),
+                seconds: completed.seconds,
+                from: 0.0,
+                to: completed.from,
+                after: None,
+                fade_back: false,
+            });
+        } else if matches!(command, PlaybackCommand::SetPaused(true)) {
+            let _ = engine.execute(PlaybackCommand::SetVolume(completed.from));
+        }
+    }
+}
 
 /// The update channel plus a backlog for a full channel. Position updates may
 /// be dropped because the latest position is also published through
@@ -146,6 +248,33 @@ type EngineFactory = Box<
     dyn FnMut(&MpvLaunchOptions) -> Result<Box<dyn PlaybackEngine>, PlaybackError> + Send + 'static,
 >;
 
+/// A command-only handle for modal previews. It never exposes application state
+/// and cannot consume worker events or keep the worker alive after shutdown.
+#[derive(Clone)]
+pub struct PlaybackCommandSender {
+    requests: SyncSender<RuntimeRequest>,
+}
+
+impl PlaybackCommandSender {
+    /// # Errors
+    /// Returns Busy for a full bounded queue, or Stopped after worker shutdown.
+    pub fn execute(
+        &self,
+        generation: u64,
+        command: PlaybackCommand,
+    ) -> Result<(), PlaybackRuntimeError> {
+        self.requests
+            .try_send(RuntimeRequest::Execute {
+                generation,
+                command,
+            })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => PlaybackRuntimeError::Busy,
+                TrySendError::Disconnected(_) => PlaybackRuntimeError::Stopped,
+            })
+    }
+}
+
 pub struct PlaybackRuntime {
     position: PlaybackPositionReader,
     requests: SyncSender<RuntimeRequest>,
@@ -154,6 +283,12 @@ pub struct PlaybackRuntime {
 }
 
 impl PlaybackRuntime {
+    #[must_use]
+    pub fn command_sender(&self) -> PlaybackCommandSender {
+        PlaybackCommandSender {
+            requests: self.requests.clone(),
+        }
+    }
     #[must_use]
     pub fn position_reader(&self) -> PlaybackPositionReader {
         self.position.clone()
@@ -307,6 +442,11 @@ fn playback_worker(
     let mut active: Option<(u64, Box<dyn PlaybackEngine>)> = None;
     let mut filters = AudioFilterState::default();
     let mut preview: Option<(u64, f64, f64, bool)> = None;
+    let mut outgoing: Option<OutgoingEngine> = None;
+    let mut fade: Option<VolumeFade> = None;
+    let mut transition_options = crate::PlaybackTransitionOptions::default();
+    let mut target_volume = 100.0;
+    let mut active_video_mode = None;
     loop {
         updates.flush();
         let request = if active.is_some() || updates.has_backlog() {
@@ -365,14 +505,63 @@ fn playback_worker(
                 } => {
                     preview = None;
                     position.publish(None);
-                    active = start_or_replace_engine(
-                        active,
-                        generation,
-                        &options,
-                        item,
-                        updates,
-                        &mut factory,
-                    );
+                    outgoing = None;
+                    fade = None;
+                    transition_options = options.transitions;
+                    target_volume = options.initial_volume;
+                    let crossfade = active.is_some()
+                        && transition_options.crossfade_seconds > 0.0
+                        && !crate::pcm_source::is_pcm_item(&item);
+                    let mut launch = (*options).clone();
+                    if crossfade || transition_options.start_fade_seconds > 0.0 {
+                        launch.initial_volume = 0.0;
+                    }
+                    if crossfade {
+                        let old = active.take();
+                        active = start_or_replace_engine(
+                            None,
+                            generation,
+                            &launch,
+                            item,
+                            updates,
+                            &mut factory,
+                        );
+                        if active.is_some()
+                            && let Some((_, engine)) = old
+                        {
+                            outgoing = Some(OutgoingEngine {
+                                engine,
+                                started: None,
+                                queued: Instant::now(),
+                                seconds: transition_options.crossfade_seconds.clamp(0.001, 30.0),
+                                equal_power: transition_options.equal_power,
+                                target_volume,
+                            });
+                        }
+                    } else {
+                        if active_video_mode.is_some_and(|mode| mode != launch.video_mode) {
+                            active = None;
+                        }
+                        active = start_or_replace_engine(
+                            active,
+                            generation,
+                            &launch,
+                            item,
+                            updates,
+                            &mut factory,
+                        );
+                        if transition_options.start_fade_seconds > 0.0 && active.is_some() {
+                            fade = Some(VolumeFade {
+                                started: None,
+                                seconds: transition_options.start_fade_seconds,
+                                from: 0.0,
+                                to: target_volume,
+                                after: None,
+                                fade_back: false,
+                            });
+                        }
+                    }
+                    active_video_mode = Some(launch.video_mode);
                     filters = AudioFilterState::from_chain(options.initial_audio_filter.as_deref());
                 }
                 RuntimeRequest::Execute {
@@ -391,6 +580,72 @@ fn playback_worker(
                     {
                         preview = None;
                     }
+                    if active
+                        .as_ref()
+                        .is_some_and(|(current, _)| *current == generation)
+                    {
+                        match &command {
+                            PlaybackCommand::SetVolume(volume) => {
+                                target_volume = *volume;
+                                if let Some(old) = outgoing.as_mut() {
+                                    old.target_volume = *volume;
+                                }
+                                if let Some(task) = fade.as_mut() {
+                                    if task.after.is_none() {
+                                        task.to = *volume;
+                                    } else {
+                                        task.from = *volume;
+                                    }
+                                }
+                            }
+                            PlaybackCommand::SeekAbsolute { .. }
+                            | PlaybackCommand::SeekRelative { .. } => {
+                                outgoing = None;
+                                if transition_options.seek_fade_seconds > 0.0 {
+                                    fade = Some(VolumeFade {
+                                        started: Some(Instant::now()),
+                                        seconds: transition_options.seek_fade_seconds,
+                                        from: target_volume,
+                                        to: 0.0,
+                                        after: Some(command),
+                                        fade_back: true,
+                                    });
+                                    continue;
+                                }
+                            }
+                            PlaybackCommand::SetPaused(paused) => {
+                                if let Some(old) = outgoing.as_mut() {
+                                    let _ = old.engine.execute(command.clone());
+                                }
+                                if transition_options.pause_fade_seconds > 0.0 && outgoing.is_none()
+                                {
+                                    if *paused {
+                                        fade = Some(VolumeFade {
+                                            started: Some(Instant::now()),
+                                            seconds: transition_options.pause_fade_seconds,
+                                            from: target_volume,
+                                            to: 0.0,
+                                            after: Some(command),
+                                            fade_back: false,
+                                        });
+                                        continue;
+                                    }
+                                    if let Some((_, engine)) = active.as_mut() {
+                                        let _ = engine.execute(PlaybackCommand::SetVolume(0.0));
+                                    }
+                                    fade = Some(VolumeFade {
+                                        started: Some(Instant::now()),
+                                        seconds: transition_options.pause_fade_seconds,
+                                        from: 0.0,
+                                        to: target_volume,
+                                        after: None,
+                                        fade_back: false,
+                                    });
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                     execute_if_current(&mut active, &mut filters, generation, command, updates);
                 }
                 RuntimeRequest::Close { generation } => {
@@ -399,6 +654,8 @@ fn playback_worker(
                         .is_some_and(|(active_generation, _)| *active_generation == generation)
                     {
                         active = None;
+                        outgoing = None;
+                        fade = None;
                         filters = AudioFilterState::default();
                         preview = None;
                         position.publish(None);
@@ -408,6 +665,7 @@ fn playback_worker(
             }
         }
         poll_engine_events(&mut active, updates, &mut preview, position);
+        tick_transitions(&mut active, &mut outgoing, &mut fade, position, updates);
     }
     position.publish(None);
 }

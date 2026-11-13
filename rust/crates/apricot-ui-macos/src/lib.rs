@@ -37,6 +37,8 @@ mod download_progress;
 #[cfg(target_os = "macos")]
 mod equalizer;
 #[cfg(target_os = "macos")]
+mod feature_form;
+#[cfg(target_os = "macos")]
 mod form_controls;
 #[cfg(target_os = "macos")]
 mod global_hotkey;
@@ -61,6 +63,8 @@ mod screen_fields;
 mod self_test;
 #[cfg(target_os = "macos")]
 mod settings;
+#[cfg(target_os = "macos")]
+mod sources_browser;
 #[cfg(target_os = "macos")]
 mod spotify_dialogs;
 #[cfg(target_os = "macos")]

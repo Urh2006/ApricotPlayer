@@ -134,6 +134,9 @@ enum ControlBinding {
         label: String,
     },
     ShortcutActionList(Vec<ShortcutActionItem>),
+    ShortcutCategoryList(Vec<apricot_app::SettingsChoiceOption>),
+    ShortcutSearch,
+    ShortcutFilter,
     ShortcutCapture(String),
     Command(SettingsCommand),
     SpotifyChoice(apricot_app::SpotifyField),
@@ -771,6 +774,49 @@ unsafe fn create_bound_control(
                 },
             )
         }
+        SettingsControl::ShortcutSearch { label } => {
+            let label = static_label(parent, instance, &label)?;
+            let control = edit(parent, instance, "", id, false, false)?;
+            (Some(label), control, ControlBinding::ShortcutSearch)
+        }
+        SettingsControl::ShortcutCategoryList { label, categories } => {
+            let label = static_label(parent, instance, &label)?;
+            let control = create_control(
+                parent,
+                instance,
+                w!("LISTBOX"),
+                PCWSTR::null(),
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | WINDOW_STYLE(LBS_NOTIFY as u32),
+                WS_EX_CLIENTEDGE,
+                id,
+            )?;
+            for category in &categories {
+                add_list_string(control, &category.label);
+            }
+            SendMessageW(control, LB_SETCURSEL, Some(WPARAM(0)), None);
+            (
+                Some(label),
+                control,
+                ControlBinding::ShortcutCategoryList(categories),
+            )
+        }
+        SettingsControl::ShortcutFilter { label, options } => {
+            let label = static_label(parent, instance, &label)?;
+            let control = create_control(
+                parent,
+                instance,
+                w!("COMBOBOX"),
+                PCWSTR::null(),
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(CBS_DROPDOWNLIST as u32),
+                WINDOW_EX_STYLE::default(),
+                id,
+            )?;
+            for option in options {
+                add_combo_string(control, &option);
+            }
+            SendMessageW(control, CB_SETCURSEL, Some(WPARAM(0)), None);
+            (Some(label), control, ControlBinding::ShortcutFilter)
+        }
         SettingsControl::ShortcutActionList { label, actions } => {
             let label = static_label(parent, instance, &label)?;
             let control = create_control(
@@ -880,7 +926,13 @@ unsafe fn handle_command(window: HWND, wparam: WPARAM) {
         _ if id >= DYNAMIC_ID_START
             && (notification == BN_CLICKED
                 || notification == CBN_SELCHANGE
-                || notification == EN_KILLFOCUS) =>
+                || notification == EN_KILLFOCUS
+                || (notification == 0x0300
+                    && state(window)
+                        .and_then(|state| state.controls.get(id - DYNAMIC_ID_START))
+                        .is_some_and(|bound| {
+                            matches!(bound.binding, ControlBinding::ShortcutSearch)
+                        }))) =>
         {
             activate_dynamic_control(window, id);
         }
@@ -1078,6 +1130,15 @@ unsafe fn activate_dynamic_control(window: HWND, id: usize) {
     let Some(bound) = state.controls.get(index).cloned() else {
         return;
     };
+    if matches!(
+        bound.binding,
+        ControlBinding::ShortcutCategoryList(_)
+            | ControlBinding::ShortcutSearch
+            | ControlBinding::ShortcutFilter
+    ) {
+        refresh_shortcut_browser(state);
+        return;
+    }
     if let ControlBinding::Command(command) = bound.binding {
         handle_settings_command(window, command);
         return;
@@ -1135,8 +1196,176 @@ unsafe fn sync_shortcut_selection(state: &mut SettingsWindowState, source: &Boun
     }
 }
 
+unsafe fn shortcut_browser_filters(
+    state: &SettingsWindowState,
+) -> (
+    String,
+    String,
+    apricot_app::shortcut_catalog::ShortcutFilter,
+) {
+    let mut category = "all".to_owned();
+    let mut query = String::new();
+    let mut filter = apricot_app::shortcut_catalog::ShortcutFilter::All;
+    for bound in &state.controls {
+        match &bound.binding {
+            ControlBinding::ShortcutCategoryList(categories) => {
+                let index =
+                    usize::try_from(SendMessageW(bound.control, LB_GETCURSEL, None, None).0)
+                        .unwrap_or(0);
+                categories
+                    .get(index)
+                    .map_or("all", |item| &item.value)
+                    .clone_into(&mut category);
+            }
+            ControlBinding::ShortcutSearch => query = window_text(bound.control),
+            ControlBinding::ShortcutFilter => {
+                filter = apricot_app::shortcut_catalog::ShortcutFilter::from_index(
+                    usize::try_from(SendMessageW(bound.control, CB_GETCURSEL, None, None).0)
+                        .unwrap_or(0),
+                );
+            }
+            _ => {}
+        }
+    }
+    (category, query, filter)
+}
+
+unsafe fn selected_shortcut(state: &SettingsWindowState) -> Option<String> {
+    state
+        .controls
+        .iter()
+        .find_map(|bound| match &bound.binding {
+            ControlBinding::ShortcutCapture(id) if !id.is_empty() => Some(id.clone()),
+            _ => None,
+        })
+}
+
+unsafe fn refresh_shortcut_browser(state: &mut SettingsWindowState) {
+    let selected = selected_shortcut(state);
+    let (category, query, filter) = shortcut_browser_filters(state);
+    let actions = apricot_app::shortcut_catalog::filtered_actions(
+        &settings_catalog(state),
+        (&*state.application).settings(),
+        &category,
+        &query,
+        filter,
+    );
+    let index = selected
+        .as_ref()
+        .and_then(|id| actions.iter().position(|action| &action.action_id == id))
+        .unwrap_or(0);
+    let enabled = !actions.is_empty();
+    let mut source = None;
+    for bound in &mut state.controls {
+        match &mut bound.binding {
+            ControlBinding::ShortcutActionList(current) => {
+                SendMessageW(bound.control, LB_RESETCONTENT, None, None);
+                for action in &actions {
+                    add_list_string(bound.control, &shortcut_action_label(action));
+                }
+                if enabled {
+                    SendMessageW(bound.control, LB_SETCURSEL, Some(WPARAM(index)), None);
+                }
+                current.clone_from(&actions);
+                source = Some(bound.clone());
+            }
+            ControlBinding::ShortcutCapture(id) => {
+                let _ = EnableWindow(bound.control, enabled);
+                if !enabled {
+                    id.clear();
+                    set_window_text(bound.control, "");
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(source) = source {
+        sync_shortcut_selection(state, &source);
+    }
+}
+
+unsafe fn shortcut_command(window: HWND, command: SettingsCommand) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let selected = selected_shortcut(state);
+    let catalog = settings_catalog(state);
+    let (category, _, _) = shortcut_browser_filters(state);
+    if command == SettingsCommand::ResetShortcutCategory {
+        let title = wide(catalog.text("shortcut_reset_category"));
+        let message = wide(catalog.text("shortcut_reset_category_confirm"));
+        if MessageBoxW(
+            Some(window),
+            PCWSTR(message.as_ptr()),
+            PCWSTR(title.as_ptr()),
+            MB_YESNO | MB_ICONWARNING,
+        ) != IDYES
+        {
+            return;
+        }
+    }
+    let app = &mut *state.application;
+    let result = match (command, selected.as_deref()) {
+        (SettingsCommand::ResetShortcutCategory, _) => app.reset_shortcut_category(&category),
+        (SettingsCommand::ClearShortcut, Some(id)) => app.clear_keyboard_shortcut(id),
+        (SettingsCommand::ResetShortcut, Some(id)) => app.set_keyboard_shortcut(id, ""),
+        (SettingsCommand::EditShortcutAlternatives, Some(id)) => {
+            let current = app
+                .settings()
+                .keyboard_shortcuts
+                .get(id)
+                .cloned()
+                .unwrap_or_default();
+            let (primary, secondary) = current.split_once('|').unwrap_or((&current, ""));
+            let form = apricot_shell::FeatureForm {
+                title: catalog.text("shortcut_edit_alternatives").to_owned(),
+                fields: vec![
+                    apricot_shell::FormField::text(
+                        "primary",
+                        catalog.text("shortcut_primary"),
+                        primary.trim(),
+                    ),
+                    apricot_shell::FormField::text(
+                        "secondary",
+                        catalog.text("shortcut_secondary"),
+                        secondary.trim(),
+                    ),
+                ],
+                submit: catalog.text("save").to_owned(),
+                cancel: catalog.text("cancel").to_owned(),
+            };
+            let Some(values) = crate::feature_form_win32::show(window, &form) else {
+                return;
+            };
+            let shortcut = ["primary", "secondary"]
+                .iter()
+                .filter_map(|key| values.get(*key).and_then(apricot_shell::FormValue::text))
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>()
+                .join(" | ");
+            if shortcut.is_empty() {
+                app.clear_keyboard_shortcut(id)
+            } else {
+                app.set_keyboard_shortcut(id, &shortcut)
+            }
+        }
+        _ => return,
+    };
+    if let Err(error) = result {
+        show_error(window, &error.to_string());
+    }
+    refresh_shortcut_browser(state);
+}
+
 unsafe fn handle_settings_command(window: HWND, command: SettingsCommand) {
     match command {
+        SettingsCommand::RecordingSettings => defer_global_action(window, "recording_settings"),
+        SettingsCommand::OpenIntegrations => defer_global_action(window, "open_integrations"),
+        SettingsCommand::ResetShortcut
+        | SettingsCommand::ClearShortcut
+        | SettingsCommand::ResetShortcutCategory
+        | SettingsCommand::EditShortcutAlternatives => shortcut_command(window, command),
         SettingsCommand::ResetSection => reset_section(window),
         SettingsCommand::BrowseDownloadFolder => browse_download_folder(window),
         SettingsCommand::SetDefaultPlayer => set_default_player(window),
@@ -2026,6 +2255,9 @@ unsafe fn sync_bound_control(
     match &bound.binding {
         ControlBinding::ReadOnly
         | ControlBinding::Command(_)
+        | ControlBinding::ShortcutCategoryList(_)
+        | ControlBinding::ShortcutSearch
+        | ControlBinding::ShortcutFilter
         | ControlBinding::ShortcutActionList(_) => Ok(()),
         ControlBinding::Text(SettingId::CookiesFile) => {
             app.apply_cookies_path_text(&window_text(bound.control))
@@ -2287,31 +2519,32 @@ unsafe fn capture_shortcut(
         return;
     };
     let catalog = settings_catalog(state);
-    match (&mut *state.application).set_keyboard_shortcut(action_id, &shortcut) {
-        Ok(()) => {}
-        Err(apricot_app::SettingsControllerError::ShortcutConflict { shortcut, action }) => {
-            // Python names the other action by its translated label, shows a
-            // warning and then speaks the same sentence.
-            let message = catalog
-                .text("shortcut_in_use")
-                .replace("{shortcut}", &shortcut)
-                .replace("{action}", &shortcut_action_name(state, &action));
-            show_message(
-                parent,
-                &message,
-                catalog.text("shortcut_in_use_title"),
-                MB_ICONWARNING,
-            );
-            state.announcer.announce(&message, true);
-            let _ = SetFocus(Some(capture));
-            return;
-        }
-        Err(error) => {
-            show_error(parent, &error.to_string());
-            let _ = SetFocus(Some(capture));
-            return;
-        }
-    }
+    let shortcut =
+        match (&mut *state.application).set_primary_keyboard_shortcut(action_id, &shortcut) {
+            Ok(configured) => configured,
+            Err(apricot_app::SettingsControllerError::ShortcutConflict { shortcut, action }) => {
+                // Python names the other action by its translated label, shows a
+                // warning and then speaks the same sentence.
+                let message = catalog
+                    .text("shortcut_in_use")
+                    .replace("{shortcut}", &shortcut)
+                    .replace("{action}", &shortcut_action_name(state, &action));
+                show_message(
+                    parent,
+                    &message,
+                    catalog.text("shortcut_in_use_title"),
+                    MB_ICONWARNING,
+                );
+                state.announcer.announce(&message, true);
+                let _ = SetFocus(Some(capture));
+                return;
+            }
+            Err(error) => {
+                show_error(parent, &error.to_string());
+                let _ = SetFocus(Some(capture));
+                return;
+            }
+        };
     set_window_text(capture, &shortcut);
     update_shortcut_action_list(state, action_id, &shortcut);
     let _ = SetFocus(Some(capture));
@@ -2539,14 +2772,14 @@ fn control_window_height(binding: &ControlBinding) -> i32 {
         ControlBinding::Choice { .. }
         | ControlBinding::EqualizerDevicePreset { .. }
         | ControlBinding::SpotifyChoice(_) => 420,
-        ControlBinding::ShortcutActionList(_) => 260,
+        ControlBinding::ShortcutActionList(_) | ControlBinding::ShortcutCategoryList(_) => 260,
         _ => 30,
     }
 }
 
 fn control_row_height(bound: &BoundControl) -> i32 {
     match bound.binding {
-        ControlBinding::ShortcutActionList(_) => 268,
+        ControlBinding::ShortcutActionList(_) | ControlBinding::ShortcutCategoryList(_) => 268,
         _ => 34,
     }
 }
@@ -2785,7 +3018,7 @@ unsafe fn replace_combo_string(control: HWND, index: usize, label: &str) {
 }
 
 fn shortcut_action_label(action: &ShortcutActionItem) -> String {
-    format!("{}: {}", action.label, action.shortcut)
+    format!("{}: {}. {}", action.label, action.shortcut, action.scope)
 }
 
 unsafe fn set_window_text(control: HWND, value: &str) {

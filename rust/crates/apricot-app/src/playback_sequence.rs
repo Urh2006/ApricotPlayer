@@ -36,6 +36,25 @@ pub struct PlaybackSequence {
     current_identity: Option<String>,
 }
 
+pub fn playlist_entry_identity(item: &MediaItem) -> Option<String> {
+    let identity = item.stable_identity()?;
+    Some(
+        item.metadata
+            .get("apricot_playlist_entry_id")
+            .and_then(serde_json::Value::as_str)
+            .map_or(identity.clone(), |entry| {
+                format!("{identity}#entry:{entry}")
+            }),
+    )
+}
+fn sequence_identity(source: Option<PlaybackSequenceSource>, item: &MediaItem) -> Option<String> {
+    if matches!(source, Some(PlaybackSequenceSource::UserPlaylist { .. })) {
+        playlist_entry_identity(item)
+    } else {
+        item.stable_identity()
+    }
+}
+
 impl PlaybackSequence {
     pub const fn source(&self) -> Option<PlaybackSequenceSource> {
         self.source
@@ -50,12 +69,12 @@ impl PlaybackSequence {
     }
 
     pub fn contains(&self, item: &MediaItem) -> bool {
-        let Some(identity) = item.stable_identity() else {
+        let Some(identity) = sequence_identity(self.source, item) else {
             return false;
         };
-        self.items
-            .iter()
-            .any(|candidate| candidate.stable_identity().as_deref() == Some(&identity))
+        self.items.iter().any(|candidate| {
+            sequence_identity(self.source, candidate).as_deref() == Some(&identity)
+        })
     }
 
     pub fn set(
@@ -64,7 +83,7 @@ impl PlaybackSequence {
         items: &[MediaItem],
         current: &MediaItem,
     ) -> bool {
-        let Some(current_identity) = current.stable_identity() else {
+        let Some(current_identity) = sequence_identity(Some(source), current) else {
             self.clear();
             return false;
         };
@@ -75,7 +94,7 @@ impl PlaybackSequence {
             .collect();
         if !playable
             .iter()
-            .any(|item| item.stable_identity().as_deref() == Some(&current_identity))
+            .any(|item| sequence_identity(Some(source), item).as_deref() == Some(&current_identity))
         {
             self.clear();
             return false;
@@ -100,7 +119,7 @@ impl PlaybackSequence {
             .collect();
         if !playable
             .iter()
-            .any(|item| item.stable_identity().as_deref() == Some(current_identity))
+            .any(|item| sequence_identity(self.source, item).as_deref() == Some(current_identity))
         {
             self.clear();
             return false;
@@ -110,15 +129,13 @@ impl PlaybackSequence {
     }
 
     pub fn activate(&mut self, item: &MediaItem) -> bool {
-        let Some(identity) = item.stable_identity() else {
+        let Some(identity) = sequence_identity(self.source, item) else {
             self.clear();
             return false;
         };
-        if self
-            .items
-            .iter()
-            .any(|candidate| candidate.stable_identity().as_deref() == Some(&identity))
-        {
+        if self.items.iter().any(|candidate| {
+            sequence_identity(self.source, candidate).as_deref() == Some(&identity)
+        }) {
             self.current_identity = Some(identity);
             true
         } else {
@@ -163,7 +180,7 @@ impl PlaybackSequence {
         let identity = self.current_identity.as_deref()?;
         self.items
             .iter()
-            .position(|item| item.stable_identity().as_deref() == Some(identity))
+            .position(|item| sequence_identity(self.source, item).as_deref() == Some(identity))
     }
 }
 

@@ -222,9 +222,11 @@ impl Shell {
             return false;
         }
         let diagnostics = self.poll_diagnostic_report(ui);
+        let sources = self.poll_sources(ui);
         let youtube = self.poll_youtube(ui);
         let related = self.poll_related_videos(ui);
         let folder = self.poll_folder_scan(ui);
+        let playlists = self.poll_playlist_resolution(ui);
         let device = self.poll_saved_audio_device_check(ui);
         let chapters = self.poll_external_chapters(ui);
         let bpm = self.poll_bpm_analyses(ui);
@@ -237,6 +239,7 @@ impl Shell {
         youtube
             || related
             || folder
+            || playlists
             || device
             || chapters
             || bpm
@@ -245,6 +248,7 @@ impl Shell {
             || downloads
             || cookies
             || diagnostics
+            || sources
     }
 
     fn poll_folder_scan(&mut self, ui: &mut dyn ShellUi) -> bool {

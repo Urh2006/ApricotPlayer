@@ -1,6 +1,6 @@
 //! Transactional user playlists compatible with the Python application.
 
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use apricot_core::MediaItem;
 use apricot_storage::{UserPlaylist, UserPlaylistFile, UserPlaylistFileError};
@@ -24,6 +24,8 @@ pub enum PlaylistAddOutcome {
 
 #[derive(Debug, Error)]
 pub enum UserPlaylistControllerError {
+    #[error("{0}")]
+    InvalidEdit(String),
     #[error("playlist changes are blocked because loading {path} failed: {message}")]
     SaveBlocked { path: PathBuf, message: String },
     #[error(transparent)]
@@ -36,6 +38,7 @@ pub struct UserPlaylistController {
     file: Option<UserPlaylistFile>,
     load_error: Option<String>,
     save_blocked: bool,
+    resolved: BTreeMap<usize, Vec<MediaItem>>,
 }
 
 impl UserPlaylistController {
@@ -54,6 +57,7 @@ impl UserPlaylistController {
                     file: Some(current),
                     load_error: Some(error.to_string()),
                     save_blocked: false,
+                    resolved: BTreeMap::new(),
                 },
             };
         }
@@ -66,6 +70,7 @@ impl UserPlaylistController {
             file: Some(file),
             load_error: None,
             save_blocked: false,
+            resolved: BTreeMap::new(),
         }
     }
 
@@ -75,6 +80,7 @@ impl UserPlaylistController {
             file: Some(file),
             load_error: Some(message),
             save_blocked: true,
+            resolved: BTreeMap::new(),
         }
     }
 
@@ -84,6 +90,183 @@ impl UserPlaylistController {
 
     pub fn load_error(&self) -> Option<&str> {
         self.load_error.as_deref()
+    }
+
+    pub fn items(&self, index: usize) -> &[MediaItem] {
+        self.resolved
+            .get(&index)
+            .map(Vec::as_slice)
+            .or_else(|| {
+                self.playlists
+                    .get(index)
+                    .map(|playlist| playlist.items.as_slice())
+            })
+            .unwrap_or_default()
+    }
+
+    /// Replaces the editor's complete snapshot in one write, preserving duplicate
+    /// occurrences and never changing the currently playing sequence.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the edited playlist is invalid or cannot be saved.
+    pub fn replace(
+        &mut self,
+        index: usize,
+        mut playlist: UserPlaylist,
+        timestamp: f64,
+    ) -> Result<bool, UserPlaylistControllerError> {
+        if index >= self.playlists.len() {
+            return Ok(false);
+        }
+        let title = playlist.title.trim().to_owned();
+        playlist.title = title;
+        if playlist.title.is_empty() {
+            return Err(UserPlaylistControllerError::InvalidEdit(
+                "Enter a playlist name".into(),
+            ));
+        }
+        if self
+            .playlists
+            .iter()
+            .enumerate()
+            .any(|(at, other)| at != index && titles_match(&playlist.title, &other.title))
+        {
+            return Err(UserPlaylistControllerError::InvalidEdit(
+                "A playlist with this name already exists".into(),
+            ));
+        }
+        let mut entry_ids = std::collections::BTreeSet::new();
+        for item in &mut playlist.items {
+            if playlist_identity(item).is_none() {
+                return Err(UserPlaylistControllerError::InvalidEdit(
+                    "A playlist entry has no durable location".into(),
+                ));
+            }
+            item.stream_url = None;
+            item.external_audio_url = None;
+            let current = item
+                .metadata
+                .get("apricot_playlist_entry_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let id = if current.is_empty() || entry_ids.contains(current) {
+                format!("{:016x}", rand::random::<u64>())
+            } else {
+                current.to_owned()
+            };
+            entry_ids.insert(id.clone());
+            item.metadata
+                .insert("apricot_playlist_entry_id".into(), serde_json::json!(id));
+        }
+        playlist.updated_at = timestamp.is_finite().then_some(timestamp);
+        let mut candidate = self.playlists.clone();
+        candidate[index] = playlist;
+        self.commit(candidate)?;
+        Ok(true)
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error when the playlist cannot be saved.
+    pub fn create_with_items(
+        &mut self,
+        title: &str,
+        items: Vec<MediaItem>,
+        timestamp: f64,
+    ) -> Result<PlaylistCreateOutcome, UserPlaylistControllerError> {
+        if title.trim().is_empty() {
+            return Ok(PlaylistCreateOutcome::EmptyName);
+        }
+        if self
+            .playlists
+            .iter()
+            .any(|playlist| titles_match(&playlist.title, title.trim()))
+        {
+            return Ok(PlaylistCreateOutcome::AlreadyExists);
+        }
+        let mut playlist = UserPlaylist::new(title.trim(), timestamp);
+        let mut entry_ids = std::collections::BTreeSet::new();
+        for mut item in items {
+            if playlist_identity(&item).is_none() {
+                return Ok(PlaylistCreateOutcome::UnsupportedItem);
+            }
+            item.stream_url = None;
+            item.external_audio_url = None;
+            let current = item
+                .metadata
+                .get("apricot_playlist_entry_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let id = if current.is_empty() || entry_ids.contains(current) {
+                format!("{:016x}", rand::random::<u64>())
+            } else {
+                current.to_owned()
+            };
+            entry_ids.insert(id.clone());
+            item.metadata
+                .insert("apricot_playlist_entry_id".into(), serde_json::json!(id));
+            playlist.items.push(item);
+        }
+        let index = self.playlists.len();
+        let mut candidate = self.playlists.clone();
+        candidate.push(playlist);
+        self.commit(candidate)?;
+        Ok(PlaylistCreateOutcome::Created(index))
+    }
+
+    /// Reorders arbitrary marked entries before a boundary in the old order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the playlists cannot be saved.
+    pub fn move_items(
+        &mut self,
+        index: usize,
+        indices: &[usize],
+        destination: usize,
+        timestamp: f64,
+    ) -> Result<bool, UserPlaylistControllerError> {
+        let Some(mut playlist) = self.playlists.get(index).cloned() else {
+            return Ok(false);
+        };
+        if indices.is_empty() {
+            return Ok(false);
+        }
+        let marked: std::collections::BTreeSet<_> = indices.iter().copied().collect();
+        if marked.iter().any(|at| *at >= playlist.items.len()) || destination > playlist.items.len()
+        {
+            return Err(UserPlaylistControllerError::InvalidEdit(
+                "A selected playlist position is no longer valid".into(),
+            ));
+        }
+        let mut moved = Vec::new();
+        let mut retained = Vec::new();
+        for (at, item) in playlist.items.into_iter().enumerate() {
+            if marked.contains(&at) {
+                moved.push(item);
+            } else {
+                retained.push(item);
+            }
+        }
+        let target =
+            destination.saturating_sub(marked.iter().filter(|at| **at < destination).count());
+        retained.splice(target..target, moved);
+        playlist.items = retained;
+        self.replace(index, playlist, timestamp)
+    }
+
+    pub fn install_resolution(
+        &mut self,
+        index: usize,
+        expected: &UserPlaylist,
+        items: Vec<MediaItem>,
+    ) -> bool {
+        if self.playlists.get(index) != Some(expected) {
+            return false;
+        }
+        self.resolved.insert(index, items);
+        true
     }
 
     /// Creates a case-insensitively unique playlist after trimming its title.
@@ -218,6 +401,67 @@ impl UserPlaylistController {
         item_index: usize,
         timestamp: f64,
     ) -> Result<Option<MediaItem>, UserPlaylistControllerError> {
+        if let Some(items) = self.resolved.get(&playlist_index).cloned() {
+            let Some(removed) = items.get(item_index).cloned() else {
+                return Ok(None);
+            };
+            let source = removed
+                .metadata
+                .get("apricot_playlist_source_index")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|i| usize::try_from(i).ok())
+                .unwrap_or(item_index);
+            let Some(base) = self
+                .playlists
+                .get(playlist_index)
+                .and_then(|playlist| playlist.items.get(source))
+            else {
+                return Ok(None);
+            };
+            if base
+                .metadata
+                .get("apricot_folder_reference")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+            {
+                let mut candidate = self.playlists.clone();
+                let reference = &mut candidate[playlist_index].items[source];
+                let paths = reference
+                    .metadata
+                    .entry("apricot_folder_exclusions".to_owned())
+                    .or_insert_with(|| serde_json::json!([]));
+                if let Some(path) = removed.local_path.as_ref()
+                    && let Some(paths) = paths.as_array_mut()
+                {
+                    paths.push(serde_json::json!(path));
+                }
+                self.commit(candidate)?;
+                let mut remaining = items;
+                remaining.remove(item_index);
+                self.resolved.insert(playlist_index, remaining);
+                return Ok(Some(removed));
+            }
+            let mut candidate = self.playlists.clone();
+            candidate[playlist_index].items.remove(source);
+            self.commit(candidate)?;
+            let mut remaining = items;
+            remaining.remove(item_index);
+            for item in &mut remaining {
+                if let Some(index) = item
+                    .metadata
+                    .get("apricot_playlist_source_index")
+                    .and_then(serde_json::Value::as_u64)
+                    && index > source as u64
+                {
+                    item.metadata.insert(
+                        "apricot_playlist_source_index".into(),
+                        serde_json::json!(index - 1),
+                    );
+                }
+            }
+            self.resolved.insert(playlist_index, remaining);
+            return Ok(Some(removed));
+        }
         let Some(playlist) = self.playlists.get(playlist_index) else {
             return Ok(None);
         };
@@ -266,6 +510,7 @@ impl UserPlaylistController {
             file.save(&candidate)?;
         }
         self.playlists = candidate;
+        self.resolved.clear();
         Ok(())
     }
 }
@@ -319,6 +564,54 @@ mod tests {
             duration_seconds: None,
             metadata: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn editor_preserves_duplicate_occurrences_and_reorders_marked_entries_atomically() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("playlists.json");
+        let mut controller = UserPlaylistController::load(
+            UserPlaylistFile::new(&path),
+            &UserPlaylistFile::new(root.path().join("missing")),
+        );
+        controller
+            .create_with_items(
+                "Test",
+                vec![item("a"), item("a"), item("b"), item("c")],
+                1.0,
+            )
+            .unwrap();
+        let entries = &controller.playlists()[0].items;
+        assert_eq!(entries.len(), 4);
+        assert_ne!(
+            entries[0].metadata["apricot_playlist_entry_id"],
+            entries[1].metadata["apricot_playlist_entry_id"]
+        );
+        let mut sequence = crate::PlaybackSequence::default();
+        assert!(sequence.set(
+            crate::PlaybackSequenceSource::UserPlaylist { playlist_index: 0 },
+            entries,
+            &entries[1]
+        ));
+        assert_eq!(sequence.relative(1).unwrap().id.0, "b");
+        assert_eq!(
+            entries[0].stable_identity(),
+            entries[1].stable_identity(),
+            "media identity remains source identity"
+        );
+        controller.move_items(0, &[0, 2], 4, 2.0).unwrap();
+        assert_eq!(
+            controller.playlists()[0]
+                .items
+                .iter()
+                .map(|item| item.id.0.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "c", "a", "b"]
+        );
+        assert_eq!(
+            UserPlaylistFile::new(path).load().unwrap()[0].items.len(),
+            4
+        );
     }
 
     #[test]

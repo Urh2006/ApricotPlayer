@@ -2105,6 +2105,9 @@ struct MacUi<'a> {
 }
 
 impl ShellUi for MacUi<'_> {
+    fn speak_subtitle(&mut self, text: &str, interrupt: bool) {
+        crate::announce::announce(self.controller.mtm(), text, interrupt);
+    }
     fn set_status(&mut self, message: &str, announce: bool) {
         if let Some(status) = self.controller.ivars().status.borrow().as_ref() {
             status.setStringValue(&NSString::from_str(message));
@@ -2799,6 +2802,28 @@ impl ShellUi for MacUi<'_> {
                 height: 470.0,
             },
         )
+    }
+
+    fn feature_form(
+        &mut self,
+        form: &apricot_shell::FeatureForm,
+    ) -> Option<apricot_shell::FormValues> {
+        crate::feature_form::show(self.controller.mtm(), form)
+    }
+
+    fn sources_browser(
+        &mut self,
+        browser: &apricot_shell::sources::SourceBrowser,
+    ) -> Option<apricot_shell::sources::SourceSelection> {
+        crate::sources_browser::show(self.controller.mtm(), browser)
+    }
+
+    fn feature_form_preview(
+        &mut self,
+        form: &apricot_shell::FeatureForm,
+        preview: &mut dyn FnMut(&apricot_shell::FormValues),
+    ) -> Option<apricot_shell::FormValues> {
+        crate::feature_form::show_preview(self.controller.mtm(), form, preview)
     }
 
     fn open_equalizer(&mut self) {

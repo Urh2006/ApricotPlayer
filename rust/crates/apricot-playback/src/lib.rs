@@ -6,6 +6,7 @@ use thiserror::Error;
 
 mod audio_chain;
 mod audio_filters;
+mod crossfade;
 mod equalizer;
 mod libmpv;
 mod mpv_ipc;
@@ -19,6 +20,7 @@ pub use audio_chain::{
     is_default_rate, mpv_pitch_property, pitch_filter_active, rubberband_pitch_filter,
 };
 pub use audio_filters::AudioFilterState;
+pub use crossfade::PcmCrossfade;
 pub use equalizer::{
     EQUALIZER_FILTER_ALT_LABEL, EQUALIZER_FILTER_LABEL, equalizer_filter_graph, equalizer_filters,
     tagged_equalizer_filter,
@@ -27,10 +29,13 @@ pub use libmpv::{LibMpvEngine, probe_audio_output_devices};
 pub use mpv_ipc::{MpvIpcClient, make_unique_ipc_path};
 pub use mpv_process::{
     InitialPlaybackState, MpvCacheConfig, MpvLaunchOptions, MpvProcessEngine, MpvVideoMode,
-    RepeatMode,
+    PlaybackTransitionOptions, RepeatMode,
 };
 pub use render::{GetProcAddress, MpvRenderHost, UpdateCallback};
-pub use runtime::{PlaybackPositionReader, PlaybackRuntime, PlaybackRuntimeError, PlaybackUpdate};
+pub use runtime::{
+    PlaybackCommandSender, PlaybackPositionReader, PlaybackRuntime, PlaybackRuntimeError,
+    PlaybackUpdate,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PlaybackCommand {
@@ -76,6 +81,12 @@ pub enum PlaybackCommand {
     SetReplayGain(String),
     /// mpv `audio-device`, a name from `audio-device-list`.
     SetAudioDevice(String),
+    /// A playback property controlled by the application's media tools.
+    SetProperty {
+        name: &'static str,
+        value: String,
+    },
+    AddSubtitle(String),
     Stop,
 }
 
@@ -120,6 +131,9 @@ pub fn audio_output_devices_from_json(value: &serde_json::Value) -> Vec<AudioOut
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PlaybackMediaInfo {
+    pub stream_title: Option<String>,
+    pub tracks: Vec<serde_json::Value>,
+    pub subtitle_text: Option<String>,
     pub chapters: Vec<serde_json::Value>,
     pub container: Option<String>,
     pub video_codec: Option<String>,
@@ -140,7 +154,7 @@ pub enum PlaybackEvent {
         elapsed: f64,
         duration: Option<f64>,
     },
-    MediaInfo(PlaybackMediaInfo),
+    MediaInfo(Box<PlaybackMediaInfo>),
     /// mpv `audio-device-list` changed or was first reported.
     AudioDevices(Vec<AudioOutputDevice>),
     Ended,

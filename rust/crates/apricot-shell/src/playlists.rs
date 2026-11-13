@@ -20,6 +20,20 @@ use crate::{
 pub(crate) struct PlaylistState {
     pub(crate) playlist: usize,
     pub(crate) item: usize,
+    pub(crate) resolution: Option<PlaylistResolution>,
+}
+
+pub(crate) struct PlaylistResolution {
+    pub(crate) index: usize,
+    pub(crate) expected: apricot_storage::UserPlaylist,
+    pub(crate) receiver: std::sync::mpsc::Receiver<Result<Vec<MediaItem>, String>>,
+    pub(crate) cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+impl Drop for PlaylistResolution {
+    fn drop(&mut self) {
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 fn unix_timestamp() -> f64 {
@@ -128,6 +142,7 @@ impl Shell {
             self.application.navigate_to(frame);
         }
         self.view = View::UserPlaylistItems;
+        self.start_playlist_resolution(ui, playlist_index);
         self.refresh_user_playlist_items(ui, true, false);
     }
 
@@ -146,11 +161,13 @@ impl Shell {
             .application
             .user_playlists()
             .get(self.playlists.playlist);
+        let displayed = self
+            .application
+            .user_playlist_items(self.playlists.playlist);
         let (rows, selected, status) = match playlist {
-            Some(playlist) if !playlist.items.is_empty() => {
-                let selected = self.playlists.item.min(playlist.items.len() - 1);
-                let rows = playlist
-                    .items
+            Some(playlist) if !displayed.is_empty() => {
+                let selected = self.playlists.item.min(displayed.len() - 1);
+                let rows = displayed
                     .iter()
                     .map(|item| media_collection_label(item, false, &catalog))
                     .collect();
@@ -158,7 +175,7 @@ impl Shell {
                     "{}: {} | {}",
                     catalog.text("playlist_items"),
                     playlist.title,
-                    playlist.items.len()
+                    displayed.len()
                 );
                 controls.extend([
                     self.screen_button("open", "play"),
@@ -182,6 +199,93 @@ impl Shell {
             focus_list: focus,
         });
         ui.set_status(&status, announce_status);
+    }
+
+    pub(crate) fn start_playlist_resolution(&mut self, ui: &mut dyn ShellUi, index: usize) {
+        self.playlists.resolution = None;
+        let Some(expected) = self.application.user_playlists().get(index).cloned() else {
+            return;
+        };
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = cancelled.clone();
+        let items = expected.items.clone();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = apricot_platform::playlist_file::resolve_folders(&items, &flag);
+            let _ = sender.send(result);
+        });
+        self.playlists.resolution = Some(PlaylistResolution {
+            index,
+            expected,
+            receiver,
+            cancelled,
+        });
+        ui.set_background_polling(true);
+    }
+    pub(crate) fn poll_playlist_resolution(&mut self, ui: &mut dyn ShellUi) -> bool {
+        let Some(pending) = self.playlists.resolution.as_ref() else {
+            return false;
+        };
+        let result = match pending.receiver.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return true,
+            Err(_) => Err("Playlist folder scan stopped unexpectedly".into()),
+        };
+        let Some(pending) = self.playlists.resolution.take() else {
+            return false;
+        };
+        match result {
+            Ok(items) => {
+                if self.application.install_user_playlist_resolution(
+                    pending.index,
+                    &pending.expected,
+                    items,
+                ) && self.view == View::UserPlaylistItems
+                    && self.playlists.playlist == pending.index
+                {
+                    self.refresh_user_playlist_items(ui, false, false);
+                }
+            }
+            Err(error) => {
+                if self.view == View::UserPlaylistItems && self.playlists.playlist == pending.index
+                {
+                    ui.show_error(&error);
+                }
+            }
+        }
+        false
+    }
+
+    pub(crate) fn edit_selected_playlist(&mut self, ui: &mut dyn ShellUi) {
+        let index = if self.view == View::UserPlaylists {
+            ui.selected_row().unwrap_or(0)
+        } else {
+            self.playlists.playlist
+        };
+        match crate::playlist_editor::edit(&mut self.application, index, |form| {
+            ui.feature_form(form)
+        }) {
+            Ok(true) => {
+                if self.view == View::UserPlaylistItems {
+                    self.start_playlist_resolution(ui, index);
+                    self.refresh_user_playlist_items(ui, true, false);
+                } else {
+                    self.refresh_user_playlists(ui, true);
+                }
+                ui.set_status("Playlist saved", true);
+            }
+            Ok(false) => {}
+            Err(error) => ui.show_error(&error),
+        }
+    }
+    pub(crate) fn save_current_playlist(&mut self, ui: &mut dyn ShellUi) {
+        match crate::playlist_editor::save_current(&mut self.application, |form| {
+            ui.feature_form(form)
+        }) {
+            Ok(true) => ui.set_status("Playback list saved as a playlist", true),
+            Ok(false) => {}
+            Err(error) => ui.show_error(&error),
+        }
     }
 
     /// Windows `activate_user_playlist_item`: the playlist stays the
@@ -241,18 +345,17 @@ impl Shell {
         else {
             return;
         };
-        let Some(identity) = item.stable_identity() else {
+        let Some(identity) = apricot_app::playback_sequence::playlist_entry_identity(item) else {
             return;
         };
-        let Some(item_index) =
-            self.application
-                .user_playlists()
-                .get(playlist_index)
-                .and_then(|playlist| {
-                    playlist.items.iter().position(|candidate| {
-                        candidate.stable_identity().as_deref() == Some(&identity)
-                    })
-                })
+        let Some(item_index) = self
+            .application
+            .user_playlist_items(playlist_index)
+            .iter()
+            .position(|candidate| {
+                apricot_app::playback_sequence::playlist_entry_identity(candidate).as_deref()
+                    == Some(&identity)
+            })
         else {
             return;
         };

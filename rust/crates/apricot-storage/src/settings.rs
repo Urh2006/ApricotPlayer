@@ -449,8 +449,7 @@ fn default_equalizer_preset_gains() -> BTreeMap<String, BTreeMap<String, f64>> {
         .map(|preset| {
             let gains = EQUALIZER_BANDS
                 .iter()
-                .zip(preset.gains_db)
-                .map(|(band, gain)| (band.id.to_owned(), f64::from(gain)))
+                .map(|band| (band.id.to_owned(), preset.gain_db(band.id)))
                 .collect();
             (preset.id.to_owned(), gains)
         })
@@ -485,11 +484,7 @@ fn normalize_equalizer_presets(
 ) -> BTreeMap<String, BTreeMap<String, f64>> {
     let mut output = default_equalizer_preset_gains();
     for (id, gains) in input {
-        if !id.trim().is_empty()
-            && !FACTORY_EQUALIZER_PRESETS
-                .iter()
-                .any(|preset| preset.id == id)
-        {
+        if !id.trim().is_empty() {
             output.insert(id.clone(), normalize_equalizer_gains(gains));
         }
     }
