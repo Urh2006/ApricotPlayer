@@ -190,9 +190,9 @@ fn show_inner(
             kind => {
                 let secret = matches!(kind, FormFieldKind::Text { secret: true, .. });
                 let text = match kind {
-                    FormFieldKind::Text { value, .. } | FormFieldKind::ReadOnly { value } => {
-                        value.clone()
-                    }
+                    FormFieldKind::Text { value, .. }
+                    | FormFieldKind::ReadOnly { value }
+                    | FormFieldKind::File { value, .. } => value.clone(),
                     FormFieldKind::Number { value, .. } => value.to_string(),
                     _ => unreachable!(),
                 };
@@ -254,7 +254,7 @@ fn show_inner(
             Err(label) => {
                 let error = NSAlert::new(mtm);
                 error.setMessageText(&NSString::from_str(&form.title));
-                error.setInformativeText(&NSString::from_str(&label));
+                error.setInformativeText(&NSString::from_str(&form.error_message(&label)));
                 error.runModal();
                 if let Some(index) = form.fields.iter().position(|field| field.label == label) {
                     alert

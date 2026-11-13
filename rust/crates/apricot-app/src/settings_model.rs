@@ -58,6 +58,7 @@ pub enum SettingsCommand {
     ExportEqualizerProfile,
     DeleteEqualizerProfile,
     ResetSection,
+    AudioProcessing,
     ResetShortcut,
     ResetShortcutCategory,
     ClearShortcut,
@@ -334,6 +335,12 @@ impl SettingsScreenModel {
             controls.push(SettingsControl::Command {
                 command: SettingsCommand::OpenIntegrations,
                 label: catalog.text("integrations_settings").to_owned(),
+            });
+        }
+        if selected_section == SettingsSection::Playback {
+            controls.push(SettingsControl::Command {
+                command: SettingsCommand::AudioProcessing,
+                label: catalog.text("audio_processing").to_owned(),
             });
         }
         let section_label = SETTINGS_SECTIONS
@@ -1874,7 +1881,8 @@ mod tests {
             ),
             // 19 Python items, Spotify, the four 2.1 entries and the reset button.
             (SettingsSection::MainMenu, 25),
-            (SettingsSection::Playback, 35),
+            // 2.1 appends "Audio processing".
+            (SettingsSection::Playback, 36),
             (SettingsSection::Equalizer, 3),
             (SettingsSection::Downloads, 23),
             (SettingsSection::Library, 7),

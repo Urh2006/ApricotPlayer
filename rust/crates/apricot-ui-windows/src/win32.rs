@@ -211,6 +211,8 @@ const WM_SHOW_DOWNLOAD_DETAILS: u32 = WM_APP + 3;
 const WM_SYNC_FULLSCREEN: u32 = WM_APP + 4;
 /// Posted by the settings window after a global equalizer change.
 pub(crate) const WM_APPLY_GLOBAL_EQUALIZER: u32 = WM_APP + 5;
+/// Settings saved new audio processing: replace the running filter.
+pub(crate) const WM_APPLY_AUDIO_PROCESSING: u32 = WM_APP + 12;
 /// Posted by the settings window: Python `manual_ytdlp_update_check` and
 /// `manual_app_update_check`.
 pub(crate) const WM_UPDATE_REQUEST: u32 = WM_APP + 7;
@@ -1202,6 +1204,19 @@ unsafe extern "system" fn window_proc(
         }
         WM_APPLY_SPOTIFY_HISTORY => {
             spotify::apply_listening_history_setting(window);
+            LRESULT(0)
+        }
+        WM_APPLY_AUDIO_PROCESSING => {
+            let filter = state(window).and_then(|state| {
+                apricot_shell::playback_features::processing_chain_filter(&state.application)
+            });
+            let _ = execute_player_command(
+                window,
+                PlaybackCommand::RemoveAudioFilter("@apricot_processing".to_owned()),
+            );
+            if let Some(filter) = filter {
+                let _ = execute_player_command(window, PlaybackCommand::AddAudioFilter(filter));
+            }
             LRESULT(0)
         }
         WM_APPLY_GLOBAL_EQUALIZER => {
@@ -17246,12 +17261,17 @@ fn player_audio_filter(state: &WindowState, pitch_override: Option<f64>) -> Opti
             .map_or(1.0, |audio| audio.pitch)
     });
     let equalizer = player_equalizer_filter(state);
-    audio_filter_chain(
+    let chain = audio_filter_chain(
         speed_audio_mode(state),
         equalizer.as_deref(),
         pitch_mode(state),
         pitch,
-    )
+    );
+    let processing = apricot_shell::playback_features::processing_chain_filter(&state.application);
+    match (chain, processing) {
+        (Some(chain), Some(processing)) => Some(format!("{chain},{processing}")),
+        (chain, processing) => chain.or(processing),
+    }
 }
 
 /// Python `apply_speed_target_worker`.

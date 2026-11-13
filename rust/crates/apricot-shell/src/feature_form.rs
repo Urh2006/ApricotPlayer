@@ -45,6 +45,13 @@ pub enum FormFieldKind {
     ReadOnly {
         value: String,
     },
+    /// A path typed or chosen with a Browse button; `extensions` filter the
+    /// file dialog.
+    File {
+        value: String,
+        extensions: Vec<String>,
+        browse: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -155,10 +162,12 @@ impl FeatureForm {
             }
             let value = match &field.kind {
                 FormFieldKind::ReadOnly { .. } => continue,
-                FormFieldKind::Text { .. } => match values.get(&field.id) {
-                    Some(FormValue::Text(value)) => FormValue::Text(value.clone()),
-                    _ => return Err(field.label.clone()),
-                },
+                FormFieldKind::Text { .. } | FormFieldKind::File { .. } => {
+                    match values.get(&field.id) {
+                        Some(FormValue::Text(value)) => FormValue::Text(value.clone()),
+                        _ => return Err(field.label.clone()),
+                    }
+                }
                 FormFieldKind::Number {
                     minimum, maximum, ..
                 } => {
@@ -253,6 +262,25 @@ impl FormField {
             id: id.into(),
             label: label.into(),
             kind: FormFieldKind::Checkbox { checked },
+        }
+    }
+
+    #[must_use]
+    pub fn file(
+        id: &str,
+        label: impl Into<String>,
+        value: impl Into<String>,
+        extensions: &[&str],
+        browse: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            kind: FormFieldKind::File {
+                value: value.into(),
+                extensions: extensions.iter().map(|value| (*value).to_owned()).collect(),
+                browse: browse.into(),
+            },
         }
     }
 

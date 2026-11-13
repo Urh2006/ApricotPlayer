@@ -256,22 +256,31 @@ impl Default for AudioProcessingSettings {
     }
 }
 
+/// Errors are translation keys, so every native UI speaks them localized.
 impl AudioProcessingSettings {
+    /// # Errors
+    ///
+    /// `audio_processing_unreadable` when the saved settings are damaged.
     pub fn from_settings(settings: &apricot_storage::SettingsDocument) -> Result<Self, String> {
         settings.preserved.get("audio_processing_v1").map_or_else(
             || Ok(Self::default()),
             |value| {
-                serde_json::from_value(value.clone()).map_err(|error| {
-                    format!("Audio processing settings could not be read: {error}")
-                })
+                serde_json::from_value(value.clone())
+                    .map_err(|_| "audio_processing_unreadable".to_owned())
             },
         )
     }
-    /// Tagged filters can be replaced independently without losing EQ/pitch.
+    /// The tagged `af` filter, replaced on its own without touching the
+    /// equalizer or pitch filters; `None` when nothing is enabled.
+    ///
+    /// # Errors
+    ///
+    /// `audio_processing_invalid` for a value outside its range and
+    /// `spatial_sofa_missing` when spatialization has no readable file.
     pub fn filter(&self) -> Result<Option<String>, String> {
         let mut filters = Vec::new();
         if !self.pan.is_finite() || !(-100.0..=100.0).contains(&self.pan) {
-            return Err("Pan must be between -100 and 100.".to_owned());
+            return Err("audio_processing_invalid".to_owned());
         }
         if self.mono {
             filters.push("pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1".to_owned());
@@ -282,7 +291,10 @@ impl AudioProcessingSettings {
             filters.push(format!("pan=stereo|c0={left:.4}*c0|c1={right:.4}*c1"));
         }
         if self.normalize {
-            filters.push("dynaudnorm=f=500:g=31:p=0.95,alimiter=limit=0.95:level=false".to_owned());
+            // About 0.7 s of look-ahead keeps starts and seeks responsive.
+            filters.push(
+                "dynaudnorm=f=100:g=15:p=0.95:m=10,alimiter=limit=0.95:level=false".to_owned(),
+            );
         }
         if self.silence.enabled {
             let s = &self.silence;
@@ -299,16 +311,14 @@ impl AudioProcessingSettings {
                 || !(0..=100).contains(&s.leading_parts)
                 || !(-100..=100).contains(&s.later_parts)
             {
-                return Err(
-                    "The silence-removal settings are outside the supported range.".to_owned(),
-                );
+                return Err("audio_processing_invalid".to_owned());
             }
             filters.push(format!("silenceremove=start_periods={}:start_duration={:.4}:start_threshold={:.2}dB:stop_periods={}:stop_duration={:.4}:stop_threshold={:.2}dB:stop_silence={:.4}:window={:.4}:detection={}", s.leading_parts,s.leading_sound_seconds,s.threshold_db,s.later_parts,s.minimum_seconds,s.threshold_db,s.keep_seconds,s.window_seconds,if s.rms {"rms"} else {"peak"}));
         }
         if self.spatial.enabled {
             let s = &self.spatial;
             if !std::path::Path::new(&s.file).is_file() {
-                return Err("The selected SOFA file is not available.".to_owned());
+                return Err("spatial_sofa_missing".to_owned());
             }
             if !s.gain_db.is_finite()
                 || !(-24.0..=24.0).contains(&s.gain_db)
@@ -317,10 +327,7 @@ impl AudioProcessingSettings {
                 || !s.elevation.is_finite()
                 || !(-90.0..=90.0).contains(&s.elevation)
             {
-                return Err(
-                    "The headphone spatialization settings are outside the supported range."
-                        .to_owned(),
-                );
+                return Err("audio_processing_invalid".to_owned());
             }
             let file = s
                 .file

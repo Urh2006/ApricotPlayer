@@ -73,7 +73,12 @@ fn persist(
     match app.save_settings() {
         Ok(()) => true,
         Err(error) => {
-            ui.announce(&format!("Settings were not saved: {error}"));
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
+            ui.announce(
+                &catalog
+                    .text("settings_save_failed")
+                    .replace("{error}", &error.to_string()),
+            );
             false
         }
     }
@@ -85,11 +90,207 @@ fn audio_settings(
 ) -> Option<AudioProcessingSettings> {
     match AudioProcessingSettings::from_settings(app.settings()) {
         Ok(settings) => Some(settings),
-        Err(error) => {
-            ui.announce(&error);
+        Err(key) => {
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
+            ui.announce(catalog.text(&key));
             None
         }
     }
+}
+
+fn pan_status(app: &Application, pan: f64) -> String {
+    let catalog = apricot_app::embedded_catalog(&app.settings().language);
+    let key = if pan.abs() < 0.5 {
+        "audio_balance_centre"
+    } else if pan < 0.0 {
+        "audio_balance_left"
+    } else {
+        "audio_balance_right"
+    };
+    catalog
+        .text(key)
+        .replace("{value}", &format!("{:.0}", pan.abs()))
+}
+
+/// The complete audio processing form, shared by the player (F5) and
+/// Settings > Playback.
+#[must_use]
+pub fn audio_processing_form(
+    catalog: &apricot_core::TranslationCatalog,
+    settings: &AudioProcessingSettings,
+) -> FeatureForm {
+    let silence = &settings.silence;
+    let spatial = &settings.spatial;
+    FeatureForm::localized(
+        catalog,
+        catalog.text("audio_processing"),
+        vec![
+            FormField::number(
+                "pan",
+                catalog.text("audio_balance_field"),
+                settings.pan,
+                -100.0,
+                100.0,
+            ),
+            FormField::number(
+                "pan_step",
+                catalog.text("audio_balance_step"),
+                settings.pan_step,
+                1.0,
+                100.0,
+            ),
+            FormField::checkbox("mono", catalog.text("audio_mono"), settings.mono),
+            FormField::checkbox(
+                "normalize",
+                catalog.text("audio_dynamic_normalization"),
+                settings.normalize,
+            ),
+            FormField::checkbox(
+                "silence",
+                catalog.text("silence_removal_enabled"),
+                silence.enabled,
+            ),
+            FormField::number(
+                "threshold",
+                catalog.text("silence_threshold"),
+                silence.threshold_db,
+                -100.0,
+                0.0,
+            ),
+            FormField::number(
+                "minimum",
+                catalog.text("silence_minimum"),
+                silence.minimum_seconds,
+                0.01,
+                60.0,
+            ),
+            FormField::number(
+                "leading",
+                catalog.text("silence_leading_parts"),
+                f64::from(silence.leading_parts),
+                0.0,
+                100.0,
+            ),
+            FormField::number(
+                "sound",
+                catalog.text("silence_leading_sound"),
+                silence.leading_sound_seconds,
+                0.0,
+                60.0,
+            ),
+            FormField::number(
+                "later",
+                catalog.text("silence_later_parts"),
+                f64::from(silence.later_parts),
+                -100.0,
+                100.0,
+            ),
+            FormField::number(
+                "keep",
+                catalog.text("silence_keep"),
+                silence.keep_seconds,
+                0.0,
+                60.0,
+            ),
+            FormField::number(
+                "window",
+                catalog.text("silence_window"),
+                silence.window_seconds,
+                0.0,
+                10.0,
+            ),
+            FormField::choice(
+                "detection",
+                catalog.text("silence_detection"),
+                vec![
+                    catalog.text("silence_detection_peak").to_owned(),
+                    catalog.text("silence_detection_rms").to_owned(),
+                ],
+                usize::from(silence.rms),
+            ),
+            FormField::checkbox(
+                "spatial",
+                catalog.text("spatial_audio_enabled"),
+                spatial.enabled,
+            ),
+            FormField::file(
+                "sofa",
+                catalog.text("spatial_sofa_file"),
+                &spatial.file,
+                &["sofa"],
+                catalog.text("browse"),
+            ),
+            FormField::number(
+                "spatial_gain",
+                catalog.text("spatial_gain"),
+                spatial.gain_db,
+                -24.0,
+                24.0,
+            ),
+            FormField::number(
+                "rotation",
+                catalog.text("spatial_rotation"),
+                spatial.rotation,
+                -360.0,
+                360.0,
+            ),
+            FormField::number(
+                "elevation",
+                catalog.text("spatial_elevation"),
+                spatial.elevation,
+                -90.0,
+                90.0,
+            ),
+            FormField::number(
+                "spatial_step",
+                catalog.text("spatial_step"),
+                spatial.step,
+                0.1,
+                90.0,
+            ),
+        ],
+    )
+}
+
+/// The settings a confirmed audio processing form describes; transitions
+/// and other values not in the form are kept.
+#[must_use]
+#[allow(clippy::cast_possible_truncation)] // Bounded by the form ranges.
+pub fn audio_processing_from_values(
+    previous: &AudioProcessingSettings,
+    values: &FormValues,
+) -> AudioProcessingSettings {
+    let mut settings = previous.clone();
+    settings.pan = number(values, "pan");
+    settings.pan_step = number(values, "pan_step");
+    settings.mono = checked(values, "mono");
+    settings.normalize = checked(values, "normalize");
+    let silence = &mut settings.silence;
+    silence.enabled = checked(values, "silence");
+    silence.threshold_db = number(values, "threshold");
+    silence.minimum_seconds = number(values, "minimum");
+    silence.leading_parts = number(values, "leading").round() as i32;
+    silence.leading_sound_seconds = number(values, "sound");
+    silence.later_parts = number(values, "later").round() as i32;
+    silence.keep_seconds = number(values, "keep");
+    silence.window_seconds = number(values, "window");
+    silence.rms = choice(values, "detection") == 1;
+    let spatial = &mut settings.spatial;
+    spatial.enabled = checked(values, "spatial");
+    text(values, "sofa").trim().clone_into(&mut spatial.file);
+    spatial.gain_db = number(values, "spatial_gain");
+    spatial.rotation = number(values, "rotation");
+    spatial.elevation = number(values, "elevation");
+    spatial.step = number(values, "spatial_step");
+    settings
+}
+
+/// The tagged processing filter for a starting player's `af` chain.
+#[must_use]
+pub fn processing_chain_filter(app: &Application) -> Option<String> {
+    AudioProcessingSettings::from_settings(app.settings())
+        .ok()
+        .and_then(|settings| settings.filter().ok().flatten())
 }
 
 fn apply_processing(
@@ -99,8 +300,9 @@ fn apply_processing(
 ) -> Vec<PlaybackCommand> {
     let filter = match settings.filter() {
         Ok(filter) => filter,
-        Err(error) => {
-            ui.announce(&error);
+        Err(key) => {
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
+            ui.announce(catalog.text(&key));
             return Vec::new();
         }
     };
@@ -122,7 +324,6 @@ fn apply_processing(
             "no"
         },
     ));
-    ui.announce("Audio settings saved.");
     commands
 }
 
@@ -299,35 +500,18 @@ pub fn dispatch_playback_feature(
         }
         "sleep_timer_remaining" => ui.announce(&timer_description(app)),
         "player_audio_processing" => {
-            let Some(mut settings) = audio_settings(app, ui) else {
+            let Some(settings) = audio_settings(app, ui) else {
                 return Some(commands);
             };
-            let Some(values) = ui.form(&FeatureForm::new(
-                "Audio processing",
-                vec![
-                    FormField::number(
-                        "pan",
-                        "Stereo pan: -100 left, 0 centre, 100 right",
-                        settings.pan,
-                        -100.0,
-                        100.0,
-                    ),
-                    FormField::number("pan_step", "Pan step", settings.pan_step, 1.0, 100.0),
-                    FormField::checkbox("mono", "Play audio as mono", settings.mono),
-                    FormField::checkbox(
-                        "normalize",
-                        "Dynamic normalization and limiter",
-                        settings.normalize,
-                    ),
-                ],
-            )) else {
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
+            let Some(values) = ui.form(&audio_processing_form(&catalog, &settings)) else {
                 return Some(commands);
             };
-            settings.pan = number(&values, "pan");
-            settings.pan_step = number(&values, "pan_step");
-            settings.mono = checked(&values, "mono");
-            settings.normalize = checked(&values, "normalize");
+            let settings = audio_processing_from_values(&settings, &values);
             commands = apply_processing(app, &settings, ui);
+            if !commands.is_empty() {
+                ui.announce(catalog.text("audio_processing_saved"));
+            }
         }
         "player_pan_left" | "player_pan_right" => {
             let Some(mut settings) = audio_settings(app, ui) else {
@@ -341,132 +525,61 @@ pub fn dispatch_playback_feature(
                 })
             .clamp(-100.0, 100.0);
             commands = apply_processing(app, &settings, ui);
-            ui.announce(&format!("Pan: {:.0}", settings.pan));
+            ui.announce(&pan_status(app, settings.pan));
         }
         "player_pan_status" => {
             if let Some(settings) = audio_settings(app, ui) {
-                ui.announce(&format!("Pan: {:.0}", settings.pan));
+                ui.announce(&pan_status(app, settings.pan));
             }
         }
-        "player_silence_settings" => {
+        "player_spatial_rotate_left"
+        | "player_spatial_rotate_right"
+        | "player_spatial_up"
+        | "player_spatial_down" => {
             let Some(mut settings) = audio_settings(app, ui) else {
                 return Some(commands);
             };
-            let s = &settings.silence;
-            let Some(values) = ui.form(&FeatureForm::new(
-                "Silence removal",
-                vec![
-                    FormField::checkbox("enabled", "Enable silence removal", s.enabled),
-                    FormField::number(
-                        "threshold",
-                        "Silence threshold in dB",
-                        s.threshold_db,
-                        -100.0,
-                        0.0,
-                    ),
-                    FormField::number(
-                        "minimum",
-                        "Minimum silence duration in seconds",
-                        s.minimum_seconds,
-                        0.01,
-                        60.0,
-                    ),
-                    FormField::number(
-                        "leading",
-                        "Leading silent parts to trim",
-                        f64::from(s.leading_parts),
-                        0.0,
-                        100.0,
-                    ),
-                    FormField::number(
-                        "sound",
-                        "Sound required before leading trim stops",
-                        s.leading_sound_seconds,
-                        0.0,
-                        60.0,
-                    ),
-                    FormField::number(
-                        "later",
-                        "Later silent parts: -1 for all, 0 to preserve",
-                        f64::from(s.later_parts),
-                        -100.0,
-                        100.0,
-                    ),
-                    FormField::number(
-                        "keep",
-                        "Pause to keep after trimmed silence",
-                        s.keep_seconds,
-                        0.0,
-                        60.0,
-                    ),
-                    FormField::number(
-                        "window",
-                        "Detection window in seconds",
-                        s.window_seconds,
-                        0.0,
-                        10.0,
-                    ),
-                    FormField::choice(
-                        "detection",
-                        "Detection mode",
-                        strings(&["Peak", "RMS"]),
-                        usize::from(s.rms),
-                    ),
-                ],
-            )) else {
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
+            if !settings.spatial.enabled {
+                ui.announce(catalog.text("spatial_audio_off"));
                 return Some(commands);
-            };
-            let s = &mut settings.silence;
-            s.enabled = checked(&values, "enabled");
-            s.threshold_db = number(&values, "threshold");
-            s.minimum_seconds = number(&values, "minimum");
-            #[allow(clippy::cast_possible_truncation)]
-            {
-                s.leading_parts = number(&values, "leading").round() as i32;
-                s.later_parts = number(&values, "later").round() as i32;
             }
-            s.leading_sound_seconds = number(&values, "sound");
-            s.keep_seconds = number(&values, "keep");
-            s.window_seconds = number(&values, "window");
-            s.rms = choice(&values, "detection") == 1;
-            commands = apply_processing(app, &settings, ui);
-        }
-        "player_spatial_settings" => {
-            let Some(mut settings) = audio_settings(app, ui) else {
-                return Some(commands);
+            let step = settings.spatial.step;
+            let spatial = &mut settings.spatial;
+            let message = match action {
+                "player_spatial_rotate_left" | "player_spatial_rotate_right" => {
+                    let delta = if action == "player_spatial_rotate_left" {
+                        -step
+                    } else {
+                        step
+                    };
+                    // Keep the angle in -180..180 so it reads naturally.
+                    let mut rotation = (spatial.rotation + delta) % 360.0;
+                    if rotation > 180.0 {
+                        rotation -= 360.0;
+                    } else if rotation < -180.0 {
+                        rotation += 360.0;
+                    }
+                    spatial.rotation = rotation;
+                    catalog
+                        .text("spatial_rotation_status")
+                        .replace("{value}", &crate::feature_form::format_number(rotation))
+                }
+                _ => {
+                    let delta = if action == "player_spatial_down" {
+                        -step
+                    } else {
+                        step
+                    };
+                    spatial.elevation = (spatial.elevation + delta).clamp(-90.0, 90.0);
+                    catalog.text("spatial_elevation_status").replace(
+                        "{value}",
+                        &crate::feature_form::format_number(spatial.elevation),
+                    )
+                }
             };
-            let s = &settings.spatial;
-            let Some(values) = ui.form(&FeatureForm::new(
-                "Headphone spatialization",
-                vec![
-                    FormField::checkbox(
-                        "enabled",
-                        "Enable SOFA headphone spatialization",
-                        s.enabled,
-                    ),
-                    FormField::text("file", "SOFA file", &s.file),
-                    FormField::number("gain", "Gain in dB", s.gain_db, -24.0, 24.0),
-                    FormField::number("rotation", "Rotation in degrees", s.rotation, -360.0, 360.0),
-                    FormField::number(
-                        "elevation",
-                        "Elevation in degrees",
-                        s.elevation,
-                        -90.0,
-                        90.0,
-                    ),
-                    FormField::number("step", "Movement step in degrees", s.step, 0.1, 90.0),
-                ],
-            )) else {
-                return Some(commands);
-            };
-            let s = &mut settings.spatial;
-            s.enabled = checked(&values, "enabled");
-            s.file = text(&values, "file").to_owned();
-            s.gain_db = number(&values, "gain");
-            s.rotation = number(&values, "rotation");
-            s.elevation = number(&values, "elevation");
-            s.step = number(&values, "step");
             commands = apply_processing(app, &settings, ui);
+            ui.announce(&message);
         }
         "player_transition_settings" => {
             let Some(mut settings) = audio_settings(app, ui) else {
@@ -1058,16 +1171,6 @@ pub fn tick_playback_features(
     if state.ranges.media_key != key {
         state.reset_media(&key, m4b);
     }
-    if state.applied_generation != Some(generation) && playing {
-        state.applied_generation = Some(generation);
-        match AudioProcessingSettings::from_settings(app.settings())
-            .and_then(|settings| settings.filter())
-        {
-            Ok(Some(filter)) => commands.push(PlaybackCommand::AddAudioFilter(filter)),
-            Ok(None) => {}
-            Err(error) => ui.announce(&error),
-        }
-    }
     {
         let state = app.playback_features_mut();
         if state.subtitle_remember_language
@@ -1376,5 +1479,68 @@ impl crate::Shell {
         for command in commands {
             self.execute_player_command(ui, command);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn audio_processing_form_round_trips_and_keeps_transitions() {
+        let catalog = apricot_app::english_catalog();
+        let mut previous = AudioProcessingSettings::default();
+        previous.transitions.crossfade = true;
+        let form = audio_processing_form(&catalog, &previous);
+        assert_eq!(form.title, "Audio processing");
+        assert_eq!(form.submit, "Save");
+        let mut values = form
+            .validate(
+                &form
+                    .fields
+                    .iter()
+                    .filter_map(|field| {
+                        let value = match &field.kind {
+                            crate::FormFieldKind::Number { value, .. } => FormValue::Number(*value),
+                            crate::FormFieldKind::Checkbox { checked } => {
+                                FormValue::Checkbox(*checked)
+                            }
+                            crate::FormFieldKind::Choice { selected, .. } => {
+                                FormValue::Choice(*selected)
+                            }
+                            crate::FormFieldKind::Text { value, .. }
+                            | crate::FormFieldKind::File { value, .. } => {
+                                FormValue::Text(value.clone())
+                            }
+                            crate::FormFieldKind::ReadOnly { .. } => return None,
+                        };
+                        Some((field.id.clone(), value))
+                    })
+                    .collect(),
+            )
+            .expect("defaults are valid");
+        values.insert("mono".to_owned(), FormValue::Checkbox(true));
+        values.insert("pan".to_owned(), FormValue::Number(-40.0));
+        let settings = audio_processing_from_values(&previous, &values);
+        assert!(settings.mono);
+        assert!((settings.pan + 40.0).abs() < f64::EPSILON);
+        assert!(settings.transitions.crossfade, "transitions are kept");
+        let filter = settings.filter().expect("valid").expect("audible");
+        assert!(
+            filter.starts_with("@apricot_processing:lavfi=["),
+            "{filter}"
+        );
+    }
+
+    #[test]
+    fn missing_sofa_file_is_a_translation_key() {
+        let mut settings = AudioProcessingSettings::default();
+        settings.spatial.enabled = true;
+        settings.spatial.file = "Z:/missing/head.sofa".to_owned();
+        let key = settings.filter().expect_err("missing file");
+        assert_eq!(
+            apricot_app::english_catalog().text(&key),
+            "Choose an existing SOFA file for headphone spatialization."
+        );
     }
 }

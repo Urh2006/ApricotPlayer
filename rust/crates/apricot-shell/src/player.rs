@@ -401,12 +401,18 @@ impl Shell {
             .application
             .player_equalizer_graph(None)
             .map(|graph| tagged_equalizer_filter(apricot_playback::EQUALIZER_FILTER_LABEL, &graph));
-        audio_filter_chain(
+        let chain = audio_filter_chain(
             self.speed_audio_mode(),
             equalizer.as_deref(),
             self.pitch_mode(),
             pitch,
-        )
+        );
+        // 2.1 audio processing runs after speed, equalizer and pitch.
+        let processing = crate::playback_features::processing_chain_filter(&self.application);
+        match (chain, processing) {
+            (Some(chain), Some(processing)) => Some(format!("{chain},{processing}")),
+            (chain, processing) => chain.or(processing),
+        }
     }
 
     /// Windows `player_failed_message`.

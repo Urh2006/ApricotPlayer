@@ -20,11 +20,11 @@ use windows::{
                 GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW, IsDialogMessageW, IsWindow,
                 LoadCursorW, MB_ICONWARNING, MB_OK, MSG, MessageBoxW, MoveWindow, PostQuitMessage,
                 RegisterClassW, SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SW_SHOW,
-                SendMessageW, SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TranslateMessage,
-                WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_NCDESTROY,
-                WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_CAPTION, WS_CHILD,
-                WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME,
-                WS_VISIBLE, WS_VSCROLL,
+                SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
+                TranslateMessage, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CLOSE, WM_COMMAND,
+                WM_NCDESTROY, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_CAPTION,
+                WS_CHILD, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_SYSMENU, WS_TABSTOP,
+                WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -38,7 +38,12 @@ const CLASS: PCWSTR = w!("ApricotFeatureForm");
 struct Bound {
     label: Option<HWND>,
     control: HWND,
+    /// The Browse button of a file field.
+    browse: Option<HWND>,
 }
+
+/// Browse buttons use these ids plus the field index.
+const FIRST_BROWSE: usize = 600;
 #[derive(Clone, Copy)]
 struct Preview {
     data: *mut c_void,
@@ -225,6 +230,14 @@ unsafe fn create_controls(
         };
         let id = FIRST_FIELD + index;
         let control = match &field.kind {
+            FormFieldKind::File { value, .. } => child(
+                parent,
+                instance,
+                w!("EDIT"),
+                value,
+                WS_TABSTOP | WINDOW_STYLE(ES_AUTOHSCROLL as u32),
+                id,
+            )?,
             FormFieldKind::Text { value, secret } => child(
                 parent,
                 instance,
@@ -289,7 +302,23 @@ unsafe fn create_controls(
         if !SetWindowSubclass(control, Some(field_proc), 1, index).as_bool() {
             return Err(windows::core::Error::from_thread());
         }
-        fields.push(Bound { label, control });
+        // The Browse button follows its field in the Tab order.
+        let browse = match &field.kind {
+            FormFieldKind::File { browse, .. } => Some(child(
+                parent,
+                instance,
+                w!("BUTTON"),
+                browse,
+                WS_TABSTOP,
+                FIRST_BROWSE + index,
+            )?),
+            _ => None,
+        };
+        fields.push(Bound {
+            label,
+            control,
+            browse,
+        });
     }
     let submit = child(
         parent,
@@ -334,20 +363,43 @@ unsafe fn layout(window: HWND, state: &mut State) {
             } else {
                 28
             };
-            let _ = MoveWindow(
-                field.control,
-                column,
-                y,
-                (area.right - column - 16).max(100),
-                h,
-                true,
-            );
+            let width = (area.right - column - 16).max(100);
+            if let Some(browse) = field.browse {
+                let _ = MoveWindow(field.control, column, y, (width - 110).max(80), h, true);
+                let _ = MoveWindow(browse, column + (width - 100).max(90), y, 100, 28, true);
+            } else {
+                let _ = MoveWindow(field.control, column, y, width, h, true);
+            }
         } else {
             let _ = MoveWindow(field.control, 12, y, (area.right - 28).max(100), 28, true);
         }
     }
     let _ = MoveWindow(state.submit, 12, area.bottom - 44, 130, 30, true);
     let _ = MoveWindow(state.cancel, 154, area.bottom - 44, 130, 30, true);
+}
+
+/// Fills a file field from the file dialog; focus returns to the field, so
+/// the screen reader reads the chosen path.
+unsafe fn browse_for_file(window: HWND, state: &mut State, index: usize) {
+    let (Some(field), Some(bound)) = (state.form.fields.get(index), state.fields.get(index)) else {
+        return;
+    };
+    let FormFieldKind::File { extensions, .. } = &field.kind else {
+        return;
+    };
+    let patterns = extensions
+        .iter()
+        .map(|extension| format!("*.{}", extension.trim_start_matches('.')))
+        .collect::<Vec<_>>()
+        .join(";");
+    let filters = [(field.label.clone(), patterns)];
+    if let Ok(Some(path)) =
+        crate::file_dialog_win32::choose_file_with_filters(window, &field.label, &filters)
+    {
+        let text = wide(&path.to_string_lossy());
+        let _ = SetWindowTextW(bound.control, PCWSTR(text.as_ptr()));
+    }
+    let _ = SetFocus(Some(bound.control));
 }
 
 /// Scrolls just enough to show the field at `index`.
@@ -429,6 +481,12 @@ unsafe extern "system" fn window_proc(window: HWND, message: u32, w: WPARAM, l: 
             }
             WM_SIZE => {
                 layout(window, state);
+                return LRESULT(0);
+            }
+            WM_COMMAND
+                if (FIRST_BROWSE..FIRST_BROWSE + state.fields.len()).contains(&(w.0 & 0xffff)) =>
+            {
+                browse_for_file(window, state, (w.0 & 0xffff) - FIRST_BROWSE);
                 return LRESULT(0);
             }
             WM_COMMAND if w.0 & 0xffff >= FIRST_FIELD => {

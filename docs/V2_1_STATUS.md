@@ -17,7 +17,7 @@ Ta dokument vodi delo za 2.1 beta 1. Obseg je potrjen v 19 sklopih (EQ, obdelava
 | 1 | Utrditev osnutka: testi, fmt, clippy, prevodi kataloga bližnjic, vrstni red menijev in Tab | narejeno |
 | 2 | Kategorije bližnjic: drevo, iskanje, filtri, primarna in dodatna bližnjica, ponastavitve | narejeno |
 | 3 | EQ 15 pasov, Advanced, urejanje presetov | narejeno |
-| 4 | Obdelava zvoka: pan, mono, normalizacija, tišina, SOFA | čaka |
+| 4 | Obdelava zvoka: pan, mono, normalizacija, tišina, SOFA | narejeno |
 | 5 | Prehodi in crossfade | čaka |
 | 6 | Sleep timer | čaka |
 | 7 | Izseki, A-B, shranjeni izseki v Bookmarks, izvoz | čaka |
@@ -69,3 +69,16 @@ Ročni NVDA preizkus: Ctrl+Alt+S, End (Keyboard shortcuts), Tab. NVDA mora prebr
 Preverjeno v izoliranem namizju: Tab vrstni red okna F4 (prednastavitev, razpon, 15 drsnikov od 25 Hz do 16 kHz, gumbi, Advanced zadnji), obrazec Advanced (naslov s profilom, 37 polj, Save shrani v `settings.json`, najava "Advanced equalizer settings saved.", fokus nazaj na Advanced). Veriga filtrov preverjena s ffmpeg.
 
 Ročni NVDA preizkus: predvajaj datoteko, F4. Tab gre čez preset, razpon in 15 drsnikov ("Equalizer 25 Hz deep bass" do "Equalizer 16 kHz air and sparkle"), nato gumbe; zadnji je Advanced. Space na Advanced odpre "Advanced equalizer: ...". Spremeni "High shelf: gain in dB" na 6 in pritisni Enter: slišiš svetlejši zvok, NVDA pove "Advanced equalizer settings saved.", fokus je na Advanced.
+
+## Enota 4
+
+- Eno okno Audio processing (F5 v predvajalniku, zadnji vnos kontekstnega menija predvajalnika, Settings > Playback > Audio processing): stereo ravnovesje in korak, mono, dinamična normalizacija z omejevalnikom (privzeto izključena, ločeno od ReplayGain), odstranjevanje tišine z vsemi nastavitvami, prostorski zvok v slušalkah z datoteko SOFA (polje in gumb Browse), ojačanje, vrtenje, višina in korak.
+- Iz predvajalnika se nastavitve shranijo takoj in slišijo takoj. Iz Settings ostanejo v neshranjenih nastavitvah do Save; po Save se filter v predvajalniku zamenja.
+- Obdelava je v začetni verigi filtrov vsakega predvajanja (za hitrostjo, EQ in višino tona), zato se sliši od prve sekunde, ne šele po zagonu.
+- Alt+Shift+Left in Right premikata ravnovesje ("Balance 5 right", "Balance centre"), Alt+Shift+V ga pove. Ctrl+Alt+Shift+puščice vrtijo in dvigujejo prostorski zvok; ko je izklopljen, NVDA pove "Headphone spatialization is off."
+- Normalizacija gleda naprej približno 0,7 s, zato zagon in premikanje ostaneta odzivna.
+- Napake so prevedeni stavki (manjkajoča datoteka SOFA, vrednost zunaj razpona).
+
+Preverjeno v izoliranem namizju: imena in vrstni red vseh 20 polj in gumba Browse, shranjevanje (najava "Audio processing saved."), ravnovesje s tipkami, shranjene nastavitve v `settings.json` in ponovni zagon z obdelavo v začetni verigi brez napak v mpv.log. Prostorskega zvoka nisem mogel preizkusiti brez datoteke SOFA.
+
+Ročni NVDA preizkus: predvajaj datoteko, F5. NVDA prebere "Audio processing" in "Stereo balance: -100 left, 0 centre, 100 right, edit". Označi Play as mono in pritisni Enter: NVDA pove "Audio processing saved.", zvok je mono. Alt+Shift+Right trikrat: "Balance 15 right".

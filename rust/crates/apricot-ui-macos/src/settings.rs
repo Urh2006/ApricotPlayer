@@ -1450,6 +1450,7 @@ impl SettingsWindow {
     #[allow(clippy::too_many_lines)] // One arm per command, as on Windows.
     fn handle_command(&self, command: SettingsCommand) {
         match command {
+            SettingsCommand::AudioProcessing => self.edit_audio_processing(),
             SettingsCommand::RecordingSettings => self.defer_global_action("recording_settings"),
             SettingsCommand::OpenIntegrations => self.defer_global_action("open_integrations"),
             SettingsCommand::ResetShortcut
@@ -1976,6 +1977,40 @@ impl SettingsWindow {
             }
             Some(action_id) => self.defer_global_action(action_id),
         }
+    }
+
+    /// Windows `edit_audio_processing`: the player's audio processing form,
+    /// kept in the unsaved settings until Save.
+    fn edit_audio_processing(&self) {
+        let Some((catalog, settings)) = self.with_shell(|shell, _| {
+            let application = &shell.application;
+            (
+                apricot_app::embedded_catalog(&application.settings().language),
+                apricot_app::playback_features::AudioProcessingSettings::from_settings(
+                    application.settings(),
+                )
+                .unwrap_or_default(),
+            )
+        }) else {
+            return;
+        };
+        let form = apricot_shell::playback_features::audio_processing_form(&catalog, &settings);
+        let Some(values) = crate::feature_form::show(self.mtm(), &form) else {
+            return;
+        };
+        let settings =
+            apricot_shell::playback_features::audio_processing_from_values(&settings, &values);
+        if let Err(key) = settings.filter() {
+            let alert = NSAlert::new(self.mtm());
+            alert.setMessageText(&NSString::from_str(catalog.text(&key)));
+            alert.runModal();
+            return;
+        }
+        self.with_shell(|shell, _| {
+            shell
+                .application
+                .set_feature_settings("audio_processing_v1", serde_json::json!(settings));
+        });
     }
 
     fn defer_global_action(&self, action_id: &'static str) {

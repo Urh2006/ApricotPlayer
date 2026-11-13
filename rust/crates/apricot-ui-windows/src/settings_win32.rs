@@ -1372,8 +1372,33 @@ unsafe fn shortcut_command(window: HWND, command: SettingsCommand) {
     }
 }
 
+/// Settings > Playback > Audio processing: the same form as F5 in the player,
+/// kept in the unsaved settings until Save, like every other setting.
+unsafe fn edit_audio_processing(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let catalog = settings_catalog(state);
+    let app = &mut *state.application;
+    let settings =
+        apricot_app::playback_features::AudioProcessingSettings::from_settings(app.settings())
+            .unwrap_or_default();
+    let form = apricot_shell::playback_features::audio_processing_form(&catalog, &settings);
+    let Some(values) = crate::feature_form_win32::show(window, &form) else {
+        return;
+    };
+    let settings =
+        apricot_shell::playback_features::audio_processing_from_values(&settings, &values);
+    if let Err(key) = settings.filter() {
+        show_error(window, catalog.text(&key));
+        return;
+    }
+    app.set_feature_settings("audio_processing_v1", serde_json::json!(settings));
+}
+
 unsafe fn handle_settings_command(window: HWND, command: SettingsCommand) {
     match command {
+        SettingsCommand::AudioProcessing => edit_audio_processing(window),
         SettingsCommand::RecordingSettings => defer_global_action(window, "recording_settings"),
         SettingsCommand::OpenIntegrations => defer_global_action(window, "open_integrations"),
         SettingsCommand::ResetShortcut
@@ -2145,9 +2170,22 @@ unsafe fn save_and_register_startup(window: HWND, state: &mut SettingsWindowStat
     let history_before = (&*state.application)
         .saved_spotify_settings()
         .listening_history;
+    let processing_before =
+        apricot_shell::playback_features::processing_chain_filter(&*state.application);
     if let Err(error) = (&mut *state.application).save_settings() {
         show_error(window, &error.to_string());
         return false;
+    }
+    if apricot_shell::playback_features::processing_chain_filter(&*state.application)
+        != processing_before
+        && !state.owner.0.is_null()
+    {
+        let _ = PostMessageW(
+            Some(state.owner),
+            crate::win32::WM_APPLY_AUDIO_PROCESSING,
+            WPARAM(0),
+            LPARAM(0),
+        );
     }
     if (&*state.application)
         .saved_spotify_settings()

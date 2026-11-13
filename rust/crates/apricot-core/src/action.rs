@@ -251,6 +251,14 @@ pub const ACTIONS: &[ActionDefinition] = &[
     action!("player_pan_left", "Alt+Shift+Left", PLAYER),
     action!("player_pan_right", "Alt+Shift+Right", PLAYER),
     action!("player_pan_status", "Alt+Shift+V", PLAYER),
+    action!("player_spatial_rotate_left", "Ctrl+Alt+Shift+Left", PLAYER),
+    action!(
+        "player_spatial_rotate_right",
+        "Ctrl+Alt+Shift+Right",
+        PLAYER
+    ),
+    action!("player_spatial_up", "Ctrl+Alt+Shift+Up", PLAYER),
+    action!("player_spatial_down", "Ctrl+Alt+Shift+Down", PLAYER),
     action!("player_audio_tracks", "Alt+A", PLAYER),
     action!("player_audio_track_next", "Alt+PageDown", PLAYER),
     action!("player_audio_track_previous", "Alt+PageUp", PLAYER),
@@ -302,7 +310,7 @@ mod tests {
         let ids: HashSet<_> = ACTIONS.iter().map(|action| action.id.as_str()).collect();
         assert_eq!(PYTHON_BASELINE_ACTIONS, 91);
         // 14 Spotify actions, then the 2.1 additions.
-        assert_eq!(ACTIONS.len(), PYTHON_BASELINE_ACTIONS + 14 + 45);
+        assert_eq!(ACTIONS.len(), PYTHON_BASELINE_ACTIONS + 14 + 49);
         assert_eq!(ids.len(), ACTIONS.len());
         assert!(
             ACTIONS[PYTHON_BASELINE_ACTIONS..PYTHON_BASELINE_ACTIONS + 14]

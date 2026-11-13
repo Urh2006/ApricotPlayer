@@ -973,6 +973,12 @@ pub fn player_context_menu_with_spotify(
     if playlist_item_is_supported(item) {
         entries.push(context.add_to_playlist_entry());
     }
+    // 2.1 player tools, after the Python entries.
+    entries.push(context.command_with_shortcut(
+        "audio_processing",
+        "player_audio_processing",
+        C::PlayerAction("player_audio_processing"),
+    ));
     entries
 }
 
@@ -1498,6 +1504,7 @@ mod tests {
                 "Open in browser",
                 "Close",
                 "Add to playlist",
+                "Audio processing",
             ]
         );
     }
@@ -1558,6 +1565,7 @@ mod tests {
                 "player_transcript",
                 "player_lyrics",
                 "player_comments",
+                "player_audio_processing",
             ]
         );
     }
