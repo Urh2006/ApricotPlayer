@@ -24,7 +24,7 @@ Ta dokument vodi delo za 2.1 beta 1. Obseg je potrjen v 19 sklopih (EQ, obdelava
 | 8 | Zvočne sledi in podnapisi, glasno branje | narejeno |
 | 9 | Zvočne knjige, navigacija in informacije | narejeno |
 | 10 | Playlisti, mape, formati | narejeno |
-| 11 | Upravljanje lokalnih datotek | čaka |
+| 11 | Upravljanje lokalnih datotek | narejeno |
 | 12 | Radio | čaka |
 | 13 | IPTV | čaka |
 | 14 | Snemanje | čaka |
@@ -148,3 +148,15 @@ Ročni NVDA preizkus: odpri M4B s poglavji, Ctrl+PageDown: NVDA pove ime nasledn
 Preverjeno v izoliranem namizju: shranjevanje trenutnega seznama, odprtje urejevalnika, vrstni red Tab (ime, opis, vnosi, dejanje, Do it, Cancel), izvoz skozi pravi Windows dialog v M3U8, označevanje ("1. Marked. 01-alpha"), premik, shranitev v `playlists.json` in najava "Playlist saved."
 
 Ročni NVDA preizkus: predvajaj datoteko, Ctrl+Alt+Shift+F2, vpiši ime, Enter: NVDA pove "The playback list was saved as a playlist." Ctrl+Alt+P, Alt+E: NVDA pove "Edit playlist" in ime playlista. Tab do Action, izberi "Mark or unmark the selected entry", Enter: fokus je na Entries in NVDA prebere "1. Marked. ...". Tab do Action, "Save playlist and close", Enter: NVDA pove "Playlist saved."
+
+## Enota 11
+
+- V seznamu mape (Ctrl+Alt+O) Delete premakne izbrano datoteko v koš (Windows Recycle Bin, macOS Trash) brez vprašanja, ker jo je mogoče obnoviti. Shift+Delete jo trajno izbriše šele po potrditvi, privzeti gumb je No. Odstranjevanje iz zgodovine, priljubljenih in playlistov ostaja samo odstranjevanje vnosa.
+- Alt+Shift+M odpre Manage files: seznam datotek z oznakami in dejanja premakni v koš, trajno izbriši, kopiraj v mapo, premakni v mapo, označi, označi vse, počisti oznake. Dejanje velja za označene datoteke ali za izbrano, če ni nobene oznake.
+- Ob obstoječem imenu v ciljni mapi se odpre izbira Skip, Keep both (nova datoteka dobi številko, na primer "02-beta (2).ogg") ali Replace in potrditveno polje "Do the same for the remaining files". Cancel ustavi preostanek, že premaknjene datoteke ostanejo, kjer so. Datoteka nikoli ne nadomesti same sebe.
+- Premik na drug disk kopira in izvirnik izbriše šele po uspešni kopiji. Po operaciji seznam ostane na isti vrstici, najava pove rezultat ("Moved to the Recycle Bin: ...", "2 files moved."), neuspele datoteke pa so naštete v sporočilu z razlogom sistema.
+- Enaki ukazi so v kontekstnem meniju datoteke v seznamu mape.
+
+Preverjeno v izoliranem namizju s pravim košem in pravimi sistemskimi dialogi: Delete, Shift+Delete z odgovorom No, Manage files z vrstnim redom Tab (Files, Action, Do it, Close), označi vse, premik v mapo z obstoječim imenom in izbiro Keep both za vse. Testne datoteke so bile nato odstranjene iz koša.
+
+Ročni NVDA preizkus: Ctrl+Alt+O, izberi mapo, na datoteki pritisni Delete: NVDA pove "Moved to the Recycle Bin: ime". Shift+Delete: NVDA prebere vprašanje, fokus je na No. Alt+Shift+M: NVDA pove "Manage files" in prvo datoteko; izberi Mark all files, Enter, nato Move to folder, Enter in izberi mapo z isto datoteko: NVDA prebere "ime already exists in the destination folder".

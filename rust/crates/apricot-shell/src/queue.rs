@@ -322,11 +322,10 @@ impl Shell {
             queued_download_count: self.application.downloads().queued().len(),
         };
         match view {
-            View::LocalFolder
-            | View::Search
-            | View::Results
-            | View::Collection
-            | View::Trending => Some(context_menu::results_context_menu(&context, item)),
+            View::LocalFolder => Some(context_menu::local_folder_context_menu(&context, item)),
+            View::Search | View::Results | View::Collection | View::Trending => {
+                Some(context_menu::results_context_menu(&context, item))
+            }
             View::Player => Some(self.spotify_player_context(ui, item?, &context)),
             View::Favorites => Some(context_menu::favorites_context_menu(&context, item)),
             View::History => Some(context_menu::history_context_menu(&context, item)),
@@ -459,6 +458,13 @@ impl Shell {
             C::AddToPlaylist => self.add_active_item_to_user_playlist(ui),
             C::AddToUserPlaylist(index) => self.add_active_item_to_chosen_user_playlist(ui, index),
             C::RemoveFromPlaylist => self.remove_active_item_from_user_playlist(ui),
+            C::TrashFile => {
+                self.local_file_operation(ui, Some(crate::file_manager::Operation::Trash));
+            }
+            C::DeleteFilePermanently => {
+                self.local_file_operation(ui, Some(crate::file_manager::Operation::Delete));
+            }
+            C::ManageFiles => self.local_file_operation(ui, None),
             C::RemoveUserPlaylist => self.remove_selected_user_playlist(ui),
             C::ChannelOptions => {
                 if let Some(item) = item {

@@ -18,6 +18,7 @@ mod download_work;
 mod downloads;
 mod equalizer_dialog;
 mod feature_form;
+pub mod file_manager;
 mod keyboard;
 mod library;
 mod lyrics;
@@ -577,6 +578,18 @@ impl Shell {
             }
             "remove_favorite" => {
                 self.remove_active_favorite(ui);
+                return;
+            }
+            "remove_selected" if self.view == View::LocalFolder => {
+                self.local_file_operation(ui, Some(file_manager::Operation::Trash));
+                return;
+            }
+            "delete_file_permanently" => {
+                self.local_file_operation(ui, Some(file_manager::Operation::Delete));
+                return;
+            }
+            "manage_files" => {
+                self.local_file_operation(ui, None);
                 return;
             }
             "remove_selected" if self.view == View::SpotifyBrowse => {

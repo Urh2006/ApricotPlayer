@@ -85,6 +85,10 @@ pub enum ContextCommand {
     SpotifyEditDescription,
     SpotifyToggleVisibility,
     SpotifyPlayPreview,
+    /// The Recycle Bin on Windows, the Trash on macOS.
+    TrashFile,
+    DeleteFilePermanently,
+    ManageFiles,
 }
 
 /// One row of a context menu.
@@ -710,6 +714,28 @@ pub fn results_context_menu(
     }
     if item.is_some() && collection.is_none() {
         entries.push(context.add_to_playlist_entry());
+    }
+    entries
+}
+
+/// The folder list: the result menu plus the file operations on a file.
+pub fn local_folder_context_menu(
+    context: &ContextMenuContext<'_>,
+    item: Option<&MediaItem>,
+) -> Vec<ContextMenuEntry> {
+    use ContextCommand as C;
+    let mut entries = results_context_menu(context, item);
+    if item.is_some_and(MediaItem::is_local_media) {
+        let trash = if cfg!(target_os = "macos") {
+            "file_manager_trash"
+        } else {
+            "file_manager_recycle"
+        };
+        entries.extend([
+            context.command_with_shortcut(trash, "remove_selected", C::TrashFile),
+            context.shortcut("delete_file_permanently", C::DeleteFilePermanently),
+            context.shortcut("manage_files", C::ManageFiles),
+        ]);
     }
     entries
 }

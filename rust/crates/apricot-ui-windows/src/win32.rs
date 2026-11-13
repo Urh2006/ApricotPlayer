@@ -109,6 +109,8 @@ use windows::{
 
 #[path = "audiovault_win32.rs"]
 mod audiovault;
+#[path = "file_operations_win32.rs"]
+mod file_operations;
 #[path = "playback_features_win32.rs"]
 mod playback_features;
 #[path = "playlist_tools_win32.rs"]
@@ -2419,11 +2421,10 @@ fn model_context_entries(
     };
     Some(match view {
         // Python `open_context_menu` also opens on the empty result list.
-        MainView::Search
-        | MainView::Results
-        | MainView::Trending
-        | MainView::YoutubeCollection
-        | MainView::LocalFolder => context_menu::results_context_menu(&context, item),
+        MainView::Search | MainView::Results | MainView::Trending | MainView::YoutubeCollection => {
+            context_menu::results_context_menu(&context, item)
+        }
+        MainView::LocalFolder => context_menu::local_folder_context_menu(&context, item),
         MainView::Favorites => context_menu::favorites_context_menu(&context, item),
         MainView::History => context_menu::history_context_menu(&context, item),
         MainView::UserPlaylists => context_menu::user_playlists_context_menu(&context),
@@ -2540,6 +2541,13 @@ unsafe fn execute_context_command(
         C::AddToPlaybackQueue => add_active_item_to_playback_queue(window),
         C::RemoveFromPlaybackQueue => remove_active_item_from_playback_queue(window),
         C::RemoveFromPlaylist => remove_active_item_from_user_playlist(window),
+        C::TrashFile => {
+            file_operations::run(window, Some(apricot_shell::file_manager::Operation::Trash));
+        }
+        C::DeleteFilePermanently => {
+            file_operations::run(window, Some(apricot_shell::file_manager::Operation::Delete));
+        }
+        C::ManageFiles => file_operations::run(window, None),
         C::OpenInBrowser => open_item_in_browser(window, active_item.as_ref()),
         C::CopyStreamUrl => copy_active_stream_url(window),
         C::CopyLocation => copy_active_location(window),
@@ -13567,6 +13575,15 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         {
             spotify_browse::remove_selected(window);
         }
+        "remove_selected"
+            if state(window).is_some_and(|state| state.view == MainView::LocalFolder) =>
+        {
+            file_operations::run(window, Some(apricot_shell::file_manager::Operation::Trash));
+        }
+        "delete_file_permanently" => {
+            file_operations::run(window, Some(apricot_shell::file_manager::Operation::Delete));
+        }
+        "manage_files" => file_operations::run(window, None),
         "remove_selected" => remove_selected_collection_item(window),
         "subscribe_channel" => subscribe_active_channel(window),
         "unsubscribe_channel" => unsubscribe_active_channel(window),

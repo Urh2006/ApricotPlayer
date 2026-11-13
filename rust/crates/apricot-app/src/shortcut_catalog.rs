@@ -209,6 +209,8 @@ const ACTION_CATEGORIES: &[(&str, &str)] = &[
     ("open_playback_queue", "files"),
     ("playlist_save_current", "files"),
     ("playlist_edit", "files"),
+    ("delete_file_permanently", "files"),
+    ("manage_files", "files"),
     ("local_file_actions", "files"),
     ("open_search", "youtube"),
     ("open_channel", "youtube"),

@@ -1438,6 +1438,11 @@ impl Application {
         self.state.local_folder.load(path, items);
     }
 
+    /// Drops files that were deleted or moved out of the shown folder.
+    pub fn remove_local_folder_files(&mut self, removed: &[PathBuf]) {
+        self.state.local_folder.remove_paths(removed);
+    }
+
     pub fn select_local_folder_item(&mut self, index: usize) -> bool {
         self.state.local_folder.select(index)
     }

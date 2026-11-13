@@ -29,6 +29,7 @@ souvlaki = { version = "0.9.3", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3.7"
+objc2-foundation = "0.3.2"
 screencapturekit = { version = "11.1.2", features = ["macos_15_0"] }
 souvlaki = { version = "0.9.3", default-features = false }
 sha2.workspace = true
