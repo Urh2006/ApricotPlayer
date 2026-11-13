@@ -86,6 +86,15 @@ pub(super) unsafe fn dispatch(window: HWND, owner: HWND, action: &str) -> bool {
     for command in commands {
         let _ = execute_player_command(window, command);
     }
+    if let Some(index) = state_mut(window).and_then(|state| {
+        state
+            .application
+            .playback_features_mut()
+            .pending_item_index
+            .take()
+    }) {
+        super::navigate_player_to_index(window, index);
+    }
     let exports = state_mut(window).map_or_else(Vec::new, |state| {
         std::mem::take(&mut state.application.playback_features_mut().pending_exports)
     });

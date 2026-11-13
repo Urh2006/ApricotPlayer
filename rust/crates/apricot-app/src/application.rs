@@ -1485,6 +1485,27 @@ impl Application {
             .add_many(self.state.local_folder.items().iter().cloned())
     }
 
+    /// 2.1: the playing item's number and the length of its list.
+    pub fn player_sequence_position(&self) -> Option<(usize, usize)> {
+        self.state.player_sequence.position()
+    }
+
+    /// 2.1: the items of the list the player plays from.
+    pub fn player_sequence_items(&self) -> &[MediaItem] {
+        self.state.player_sequence.items()
+    }
+
+    /// 2.1: one item of the playing list by index (Go to item, first, last).
+    pub fn request_player_item_at(&mut self, index: usize) -> PlayerNavigationOutcome {
+        self.state.player_sequence.item_at(index).map_or(
+            PlayerNavigationOutcome::Unavailable,
+            |item| PlayerNavigationOutcome::Item {
+                item: Box::new(item),
+                origin: PlayerNavigationOrigin::Sequence,
+            },
+        )
+    }
+
     pub fn request_relative_player_item(&mut self, delta: i32) -> PlayerNavigationOutcome {
         let sequence_active = self.state.player_sequence.is_active();
         if delta > 0

@@ -153,6 +153,16 @@ impl PlaybackSequence {
 
     /// Python `relative_player_item` with shuffle on: a random item other
     /// than the current one, or the current one when it is the only item.
+    /// The playing item's index and the list length.
+    pub fn position(&self) -> Option<(usize, usize)> {
+        Some((self.current_index()?, self.items().len()))
+    }
+
+    pub fn item_at(&self, index: usize) -> Option<MediaItem> {
+        self.current_index()?;
+        self.items().get(index).cloned()
+    }
+
     pub fn random_next(&self) -> Option<MediaItem> {
         use rand::seq::IndexedRandom;
 

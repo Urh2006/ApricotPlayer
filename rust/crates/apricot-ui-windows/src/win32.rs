@@ -13429,7 +13429,10 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
             )
         })
     {
-        seek_player_absolute(window, position, "chapter_changed");
+        // Audiobook mode: Previous and Next move by chapter with the chapter
+        // keys' own announcement.
+        let _ = position;
+        seek_relative_player_chapter(window, action_id == "player_next");
         return;
     }
     if playback_features::dispatch(window, window, action_id) {
@@ -13625,6 +13628,26 @@ unsafe fn finish_current_item(window: HWND) {
     refresh_player(window, state, false, true);
 }
 
+/// 2.1: Go to item, first and last item of the playing list.
+pub(crate) unsafe fn navigate_player_to_index(window: HWND, index: usize) {
+    let outcome = {
+        let Some(state) = state_mut(window) else {
+            return;
+        };
+        if state.pending_player_navigation.is_some() || state.pending_youtube_resolve.is_some() {
+            return;
+        }
+        state.application.request_player_item_at(index)
+    };
+    if let PlayerNavigationOutcome::Item { item, .. } = outcome {
+        if let Some(state) = state_mut(window) {
+            sync_user_playlist_item_selection(state, &item);
+            mark_background_start(state);
+        }
+        start_sequence_media_item(window, *item, None);
+    }
+}
+
 unsafe fn navigate_player_relative_after_end(window: HWND) {
     navigate_player_relative_from(window, 1, true);
 }
@@ -13680,6 +13703,20 @@ unsafe fn navigate_player_relative_from(window: HWND, delta: i32, after_end: boo
             start_youtube_collection_work(window, work);
         }
         PlayerNavigationOutcome::Unavailable => {
+            let wrap = state(window).is_some_and(|state| {
+                apricot_app::playback_features::AudioProcessingSettings::from_settings(
+                    state.application.settings(),
+                )
+                .unwrap_or_default()
+                .transitions
+                .wrap_list
+                    && state.application.player_sequence_position().is_some()
+            });
+            // 2.1: optionally start the list again after its last item.
+            if after_end && delta > 0 && wrap {
+                navigate_player_to_index(window, 0);
+                return;
+            }
             let Some(state) = state(window) else {
                 return;
             };
@@ -15306,7 +15343,6 @@ unsafe fn announce_player_time(window: HWND) {
     let Some(state) = state(window) else {
         return;
     };
-    let _session = state.application.player_session();
     let (elapsed, duration) = apricot_app::playback_features::displayed_times(&state.application);
     let Some(duration) = duration else {
         announce_player_text(window, "timing_unavailable", &[]);

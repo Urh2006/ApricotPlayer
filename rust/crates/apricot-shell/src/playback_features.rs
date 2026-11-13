@@ -365,6 +365,7 @@ pub fn transitions_form(
                 0.05,
                 10.0,
             ),
+            FormField::checkbox("wrap", catalog.text("list_wrap"), t.wrap_list),
         ],
     )
 }
@@ -385,6 +386,7 @@ pub fn transitions_from_values(
     t.start_fade = checked(values, "start");
     t.end_fade = checked(values, "end");
     t.fade_seconds = number(values, "fade_seconds");
+    t.wrap_list = checked(values, "wrap");
     settings
 }
 
@@ -583,6 +585,64 @@ fn atempo_chain(mut factor: f64) -> Vec<String> {
     }
     stages.push(format!("atempo={factor:.6}"));
     stages
+}
+
+fn list_position(
+    catalog: &apricot_core::TranslationCatalog,
+    current: usize,
+    length: usize,
+) -> String {
+    catalog
+        .text("list_position_status")
+        .replace("{number}", &(current + 1).to_string())
+        .replace("{count}", &length.to_string())
+}
+
+/// "Item 3 of 12. Total 48:10, 1.2 GB": the list the player plays from.
+/// Durations and sizes count only items that report them.
+fn list_statistics(app: &Application, catalog: &apricot_core::TranslationCatalog) -> String {
+    let Some((current, length)) = app.player_sequence_position() else {
+        return catalog.text("list_position_unavailable").to_owned();
+    };
+    let items = app.player_sequence_items();
+    let total: f64 = items.iter().filter_map(|item| item.duration_seconds).sum();
+    let before: f64 = items[..current]
+        .iter()
+        .filter_map(|item| item.duration_seconds)
+        .sum::<f64>()
+        + app.player_session().position_seconds();
+    let bytes: u64 = items
+        .iter()
+        .filter_map(|item| item.local_path.as_deref())
+        .filter_map(|path| std::fs::metadata(path).ok())
+        .map(|metadata| metadata.len())
+        .sum();
+    let mut parts = vec![list_position(catalog, current, length)];
+    if total > 0.0 {
+        parts.push(
+            catalog
+                .text("list_duration_status")
+                .replace("{total}", &crate::format_duration(total))
+                .replace("{played}", &crate::format_duration(before.min(total)))
+                .replace(
+                    "{remaining}",
+                    &crate::format_duration((total - before).max(0.0)),
+                ),
+        );
+    }
+    if bytes > 0 {
+        #[allow(clippy::cast_precision_loss)]
+        let megabytes = bytes as f64 / 1_048_576.0;
+        parts.push(catalog.text("list_size_status").replace(
+            "{size}",
+            &if megabytes >= 1024.0 {
+                format!("{:.1} GB", megabytes / 1024.0)
+            } else {
+                format!("{megabytes:.0} MB")
+            },
+        ));
+    }
+    parts.join(". ")
 }
 
 const SLEEP_TIMER_PRESETS: [f64; 6] = [900.0, 1_800.0, 2_700.0, 3_600.0, 5_400.0, 7_200.0];
@@ -887,25 +947,36 @@ pub fn dispatch_playback_feature(
             }
         }
         "player_go_to_time" | "player_go_to_percent" => {
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
             let percent = action == "player_go_to_percent";
-            let Some(values) = ui.form(&FeatureForm::new(
-                if percent {
-                    "Go to percentage"
+            let (elapsed, _) = apricot_app::playback_features::displayed_times(app);
+            let field = if percent {
+                FormField::number(
+                    "percent",
+                    catalog.text("go_to_percent_field"),
+                    0.0,
+                    0.0,
+                    100.0,
+                )
+            } else {
+                FormField::text(
+                    "time",
+                    catalog.text("go_to_time_field"),
+                    crate::format_duration(elapsed),
+                )
+            };
+            let Some(values) = ui.form(&FeatureForm::localized(
+                &catalog,
+                catalog.text(if percent {
+                    "shortcut_player_go_to_percent"
                 } else {
-                    "Go to time"
-                },
-                if percent {
-                    vec![FormField::number("percent", "Percentage", 0.0, 0.0, 100.0)]
-                } else {
-                    vec![FormField::text(
-                        "time",
-                        "Time: hours:minutes:seconds or seconds",
-                        crate::format_duration(app.player_session().position_seconds()),
-                    )]
-                },
+                    "shortcut_player_go_to_time"
+                }),
+                vec![field],
             )) else {
                 return Some(commands);
             };
+            // In audiobook mode times and percentages are within the chapter.
             let span = apricot_app::playback_features::chapter_span(app);
             let target = if percent {
                 span.map_or_else(
@@ -920,33 +991,150 @@ pub fn dispatch_playback_feature(
                 parse_time(text(&values, "time"))
                     .map(|time| span.map_or(time, |(start, end)| (start + time).min(end)))
             };
-            if let Some(target) = target {
-                let target = app.playback_features().ranges.constrain(target);
-                commands.push(PlaybackCommand::SeekAbsolute {
-                    seconds: target,
-                    exact: true,
-                });
-            } else {
-                ui.announce("The time or duration is not available.");
+            match target {
+                Some(target) => {
+                    let target = app.playback_features().ranges.constrain(target);
+                    commands.push(PlaybackCommand::SeekAbsolute {
+                        seconds: target,
+                        exact: true,
+                    });
+                }
+                None => ui.announce(catalog.text("timing_unavailable")),
             }
         }
         "player_elapsed" | "player_remaining" | "player_duration" | "player_percent"
         | "player_title" | "player_artist" => {
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
             let session = app.player_session();
             let (elapsed, duration) = apricot_app::playback_features::displayed_times(app);
             let message = match action {
-                "player_title" => session.current_item().map(|item| item.title.clone()),
-                "player_artist" => session.current_item().map(|item| item.channel.clone()),
-                "player_elapsed" => Some(crate::format_duration(elapsed)),
-                "player_remaining" => {
-                    duration.map(|d| crate::format_duration((d - elapsed).max(0.0)))
-                }
-                "player_duration" => duration.map(crate::format_duration),
-                _ => duration
-                    .filter(|d| *d > 0.0)
-                    .map(|d| format!("{:.0} percent", elapsed / d * 100.0)),
+                "player_title" => session
+                    .current_item()
+                    .map(|item| item.title.clone())
+                    .filter(|title| !title.trim().is_empty()),
+                "player_artist" => session
+                    .current_item()
+                    .map(|item| item.channel.clone())
+                    .filter(|artist| !artist.trim().is_empty())
+                    .or_else(|| Some(catalog.text("artist_unknown").to_owned())),
+                "player_elapsed" => Some(
+                    catalog
+                        .text("time_elapsed_status")
+                        .replace("{time}", &crate::format_duration(elapsed)),
+                ),
+                "player_remaining" => duration.map(|duration| {
+                    catalog.text("time_remaining_status").replace(
+                        "{time}",
+                        &crate::format_duration((duration - elapsed).max(0.0)),
+                    )
+                }),
+                "player_duration" => duration.map(|duration| {
+                    catalog
+                        .text("time_duration_status")
+                        .replace("{time}", &crate::format_duration(duration))
+                }),
+                _ => duration.filter(|duration| *duration > 0.0).map(|duration| {
+                    catalog
+                        .text("time_percent_status")
+                        .replace("{percent}", &format!("{:.0}", elapsed / duration * 100.0))
+                }),
             };
-            ui.announce(message.as_deref().unwrap_or("Timing is not available yet."));
+            ui.announce(
+                message
+                    .as_deref()
+                    .unwrap_or_else(|| catalog.text("timing_unavailable")),
+            );
+        }
+        "player_go_to_item" | "player_first_item" | "player_last_item" => {
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
+            let Some((current, length)) = app.player_sequence_position() else {
+                ui.announce(catalog.text("list_position_unavailable"));
+                return Some(commands);
+            };
+            let index = match action {
+                "player_first_item" => Some(0),
+                "player_last_item" => Some(length - 1),
+                _ => ui
+                    .form(&FeatureForm::localized(
+                        &catalog,
+                        catalog.text("shortcut_player_go_to_item"),
+                        vec![FormField::number(
+                            "item",
+                            catalog
+                                .text("go_to_item_field")
+                                .replace("{count}", &length.to_string()),
+                            (current + 1) as f64,
+                            1.0,
+                            length as f64,
+                        )],
+                    ))
+                    .map(|values| {
+                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                        let number = number(&values, "item").round() as usize;
+                        number.saturating_sub(1)
+                    }),
+            };
+            if let Some(index) = index.filter(|index| *index != current) {
+                app.playback_features_mut().pending_item_index = Some(index);
+            } else if index.is_some() {
+                ui.announce(&list_position(&catalog, current, length));
+            }
+        }
+        "player_list_info" => {
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
+            ui.announce(&list_statistics(app, &catalog));
+        }
+        slot if slot.starts_with("player_slot_set_") || slot.starts_with("player_slot_go_") => {
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
+            let number: u8 = slot
+                .rsplit('_')
+                .next()
+                .and_then(|digit| digit.parse().ok())
+                .unwrap_or(1);
+            let Some(media) = app
+                .player_session()
+                .current_item()
+                .and_then(apricot_core::MediaItem::copy_location)
+            else {
+                return Some(commands);
+            };
+            let label = |key: &str, seconds: f64| {
+                catalog
+                    .text(key)
+                    .replace("{slot}", &number.to_string())
+                    .replace("{time}", &crate::format_duration(seconds))
+            };
+            if slot.starts_with("player_slot_set_") {
+                let position = app.player_session().position_seconds();
+                let value = apricot_app::playback_features::bookmark_slots_with(
+                    app.settings(),
+                    &media,
+                    number,
+                    position,
+                );
+                if persist(
+                    app,
+                    apricot_app::playback_features::BOOKMARK_SLOTS_KEY,
+                    value,
+                    ui,
+                ) {
+                    ui.announce(&label("bookmark_slot_set", position));
+                }
+            } else if let Some(seconds) =
+                apricot_app::playback_features::bookmark_slot(app.settings(), &media, number)
+            {
+                commands.push(PlaybackCommand::SeekAbsolute {
+                    seconds,
+                    exact: true,
+                });
+                ui.announce(&label("bookmark_slot_go", seconds));
+            } else {
+                ui.announce(
+                    &catalog
+                        .text("bookmark_slot_empty")
+                        .replace("{slot}", &number.to_string()),
+                );
+            }
         }
         "player_ab_loop" => {
             let catalog = apricot_app::embedded_catalog(&app.settings().language);
@@ -1785,6 +1973,14 @@ impl crate::Shell {
         };
         for command in commands {
             self.execute_player_command(ui, command);
+        }
+        if let Some(index) = self
+            .application
+            .playback_features_mut()
+            .pending_item_index
+            .take()
+        {
+            self.navigate_player_to_index(ui, index);
         }
         let exports = std::mem::take(&mut self.application.playback_features_mut().pending_exports);
         for export in exports {

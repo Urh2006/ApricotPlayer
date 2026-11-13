@@ -213,6 +213,8 @@ pub struct TransitionSettings {
     pub start_fade: bool,
     pub end_fade: bool,
     pub fade_seconds: f64,
+    /// After the last item of a list, start again from the first.
+    pub wrap_list: bool,
 }
 impl Default for TransitionSettings {
     fn default() -> Self {
@@ -226,6 +228,7 @@ impl Default for TransitionSettings {
             start_fade: false,
             end_fade: false,
             fade_seconds: 0.5,
+            wrap_list: false,
         }
     }
 }
@@ -537,6 +540,50 @@ pub fn arm_saved_range(app: &mut crate::Application, bookmark: &apricot_storage:
     app.playback_features_mut().note_manual_seek();
 }
 
+/// Ten quick positions per file, kept in `settings.json` by media key.
+pub const BOOKMARK_SLOTS_KEY: &str = "bookmark_slots_v1";
+
+#[must_use]
+pub fn bookmark_slot(
+    settings: &apricot_storage::SettingsDocument,
+    media: &str,
+    slot: u8,
+) -> Option<f64> {
+    settings
+        .preserved
+        .get(BOOKMARK_SLOTS_KEY)?
+        .get(media)?
+        .get(slot.to_string())?
+        .as_f64()
+        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+}
+
+/// The slot map with one position replaced.
+#[must_use]
+pub fn bookmark_slots_with(
+    settings: &apricot_storage::SettingsDocument,
+    media: &str,
+    slot: u8,
+    seconds: f64,
+) -> serde_json::Value {
+    let mut all = settings
+        .preserved
+        .get(BOOKMARK_SLOTS_KEY)
+        .and_then(serde_json::Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let entry = all
+        .entry(media.to_owned())
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(map) = entry.as_object_mut() {
+        map.insert(
+            slot.to_string(),
+            serde_json::json!((seconds * 1000.0).round() / 1000.0),
+        );
+    }
+    serde_json::Value::Object(all)
+}
+
 /// One marked excerpt the native UI exports into the clips folder.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExcerptExport {
@@ -597,6 +644,8 @@ pub struct PlaybackFeatures {
     pub crossfade_started_generation: Option<u64>,
     /// Excerpts the native UI exports after the dialog closes.
     pub pending_exports: Vec<ExcerptExport>,
+    /// A list item the native UI starts after the dialog closes.
+    pub pending_item_index: Option<usize>,
     pub last_position: Option<(Instant, f64)>,
     pub manual_seek_at: Option<Instant>,
     pub extra: BTreeMap<String, String>,
@@ -621,6 +670,7 @@ impl Default for PlaybackFeatures {
             pending_transition: None,
             crossfade_started_generation: None,
             pending_exports: Vec::new(),
+            pending_item_index: None,
             last_position: None,
             manual_seek_at: None,
             extra: BTreeMap::new(),

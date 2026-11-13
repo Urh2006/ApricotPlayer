@@ -22,7 +22,7 @@ Ta dokument vodi delo za 2.1 beta 1. Obseg je potrjen v 19 sklopih (EQ, obdelava
 | 6 | Sleep timer | narejeno |
 | 7 | Izseki, A-B, shranjeni izseki v Bookmarks, izvoz | narejeno |
 | 8 | Zvočne sledi in podnapisi, glasno branje | narejeno |
-| 9 | Zvočne knjige, navigacija in informacije | čaka |
+| 9 | Zvočne knjige, navigacija in informacije | narejeno |
 | 10 | Playlisti, mape, formati | čaka |
 | 11 | Upravljanje lokalnih datotek | čaka |
 | 12 | Radio | čaka |
@@ -124,3 +124,15 @@ Ročni NVDA preizkus: predvajaj datoteko, pritisni [ in čez nekaj sekund ]. Alt
 Preverjeno v izoliranem namizju z datoteko z dvema zvočnima sledema in podnapisi: seznam sledi ("Track 2: slv, Commentary, opus"), preklop z Alt+PageDown, izbira podnapisov in branje obeh vrstic brez prekinjanja.
 
 Ročni NVDA preizkus: predvajaj video z več sledmi, Alt+PageDown pove novo sled. Alt+S, izberi podnapise in označi Read subtitles aloud, Enter: NVDA bere vrstice podnapisov.
+
+## Enota 9
+
+- M4B s poglavji samodejno vklopi način zvočne knjige, Alt+K ga ročno vklopi ali izklopi. V tem načinu Ctrl+PageUp in Ctrl+PageDown premikata po poglavjih z enako najavo kot Alt+puščice, T in Alt+T, Alt+R, Alt+D povedo čas znotraj poglavja, Ctrl+T in Alt+P skočita znotraj poglavja. Položaj za nadaljevanje in zaznamke ostane v celotni knjigi. Alt+Shift+C ustavi na koncu poglavja.
+- Ctrl+G skok na številko posnetka, Ctrl+Alt+PageUp in PageDown prvi in zadnji posnetek seznama, Alt+Shift+I pove številko, skupni, predvajani in preostali čas ter velikost lokalnih datotek.
+- Alt+T, Alt+R, Alt+D, Alt+Shift+P, Alt+N, Alt+I povedo pretečeni, preostali čas, trajanje, odstotek, naslov in izvajalca.
+- Deset hitrih položajev na datoteko: Alt+Shift+1 do 0 nastavi, Alt+1 do 0 skoči ("Quick position 1: 0:24"). Shranjeni so v `settings.json` (`bookmark_slots_v1`).
+- Playback transitions ima možnost "After the last item, start again from the first".
+
+Preverjeno v izoliranem namizju z M4B s tremi poglavji: premik na naslednje poglavje ("Chapter Two. 0:20."), čas znotraj poglavja, hitri položaj nastavi in skoči, prazen položaj, Ctrl+G zunaj seznama, vklop in izklop načina zvočne knjige.
+
+Ročni NVDA preizkus: odpri M4B s poglavji, Ctrl+PageDown: NVDA pove ime naslednjega poglavja. T pove čas znotraj poglavja. Alt+Shift+1, nato kasneje Alt+1: NVDA pove "Quick position 1: ..." in skoči nazaj.

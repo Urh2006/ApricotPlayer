@@ -1011,19 +1011,14 @@ impl Shell {
         delta: i32,
         after_end: bool,
     ) {
+        // Audiobook mode: Previous and Next move by chapter, announced like
+        // the chapter keys.
         if !after_end
-            && let Some(target) =
-                apricot_app::playback_features::audiobook_navigation(&self.application, delta)
+            && apricot_app::playback_features::audiobook_navigation(&self.application, delta)
+                .is_some()
         {
             self.application.playback_features_mut().note_manual_seek();
-            self.execute_player_command(
-                ui,
-                PlaybackCommand::SeekAbsolute {
-                    seconds: target,
-                    exact: true,
-                },
-            );
-            self.execute_player_command(ui, PlaybackCommand::SetPaused(false));
+            self.seek_relative_player_chapter(ui, delta > 0);
             return;
         }
         if self.youtube.pending_navigation.is_some() || self.youtube.resolving() {
@@ -1055,6 +1050,20 @@ impl Shell {
                 self.start_youtube_collection_work(ui, work);
             }
             PlayerNavigationOutcome::Unavailable => {
+                // 2.1: optionally start the list again after its last item.
+                if after_end
+                    && delta > 0
+                    && apricot_app::playback_features::AudioProcessingSettings::from_settings(
+                        self.application.settings(),
+                    )
+                    .unwrap_or_default()
+                    .transitions
+                    .wrap_list
+                    && self.application.player_sequence_position().is_some()
+                {
+                    self.navigate_player_to_index(ui, 0);
+                    return;
+                }
                 if after_end {
                     ui.set_status(
                         &self.text("playback_finished"),
@@ -1069,6 +1078,19 @@ impl Shell {
                 };
                 ui.set_status(&self.text(key), true);
             }
+        }
+    }
+
+    /// Windows `navigate_player_to_index`: Go to item, first and last item.
+    pub(crate) fn navigate_player_to_index(&mut self, ui: &mut dyn ShellUi, index: usize) {
+        if self.youtube.pending_navigation.is_some() || self.youtube.resolving() {
+            return;
+        }
+        if let PlayerNavigationOutcome::Item { item, .. } =
+            self.application.request_player_item_at(index)
+        {
+            self.sync_user_playlist_item_selection(&item);
+            self.start_sequence_media_item(ui, *item, None);
         }
     }
 

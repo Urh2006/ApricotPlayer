@@ -273,6 +273,30 @@ pub const ACTIONS: &[ActionDefinition] = &[
     action!("player_chapter_stop", "Alt+Shift+C", PLAYER),
     action!("player_go_to_time", "Ctrl+T", PLAYER),
     action!("player_go_to_percent", "Alt+P", PLAYER),
+    action!("player_go_to_item", "Ctrl+G", PLAYER),
+    action!("player_first_item", "Ctrl+Alt+PageUp", PLAYER),
+    action!("player_last_item", "Ctrl+Alt+PageDown", PLAYER),
+    action!("player_list_info", "Alt+Shift+I", PLAYER),
+    action!("player_slot_set_1", "Alt+Shift+1", PLAYER),
+    action!("player_slot_set_2", "Alt+Shift+2", PLAYER),
+    action!("player_slot_set_3", "Alt+Shift+3", PLAYER),
+    action!("player_slot_set_4", "Alt+Shift+4", PLAYER),
+    action!("player_slot_set_5", "Alt+Shift+5", PLAYER),
+    action!("player_slot_set_6", "Alt+Shift+6", PLAYER),
+    action!("player_slot_set_7", "Alt+Shift+7", PLAYER),
+    action!("player_slot_set_8", "Alt+Shift+8", PLAYER),
+    action!("player_slot_set_9", "Alt+Shift+9", PLAYER),
+    action!("player_slot_set_0", "Alt+Shift+0", PLAYER),
+    action!("player_slot_go_1", "Alt+1", PLAYER),
+    action!("player_slot_go_2", "Alt+2", PLAYER),
+    action!("player_slot_go_3", "Alt+3", PLAYER),
+    action!("player_slot_go_4", "Alt+4", PLAYER),
+    action!("player_slot_go_5", "Alt+5", PLAYER),
+    action!("player_slot_go_6", "Alt+6", PLAYER),
+    action!("player_slot_go_7", "Alt+7", PLAYER),
+    action!("player_slot_go_8", "Alt+8", PLAYER),
+    action!("player_slot_go_9", "Alt+9", PLAYER),
+    action!("player_slot_go_0", "Alt+0", PLAYER),
     action!("player_elapsed", "Alt+T", PLAYER),
     action!("player_remaining", "Alt+R", PLAYER),
     action!("player_duration", "Alt+D", PLAYER),
@@ -312,7 +336,7 @@ mod tests {
         let ids: HashSet<_> = ACTIONS.iter().map(|action| action.id.as_str()).collect();
         assert_eq!(PYTHON_BASELINE_ACTIONS, 91);
         // 14 Spotify actions, then the 2.1 additions.
-        assert_eq!(ACTIONS.len(), PYTHON_BASELINE_ACTIONS + 14 + 51);
+        assert_eq!(ACTIONS.len(), PYTHON_BASELINE_ACTIONS + 14 + 75);
         assert_eq!(ids.len(), ACTIONS.len());
         assert!(
             ACTIONS[PYTHON_BASELINE_ACTIONS..PYTHON_BASELINE_ACTIONS + 14]
