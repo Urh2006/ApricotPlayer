@@ -18,7 +18,7 @@ Ta dokument vodi delo za 2.1 beta 1. Obseg je potrjen v 19 sklopih (EQ, obdelava
 | 2 | Kategorije bližnjic: drevo, iskanje, filtri, primarna in dodatna bližnjica, ponastavitve | narejeno |
 | 3 | EQ 15 pasov, Advanced, urejanje presetov | narejeno |
 | 4 | Obdelava zvoka: pan, mono, normalizacija, tišina, SOFA | narejeno |
-| 5 | Prehodi in crossfade | koda narejena, crossfade v živo še ni preverjen |
+| 5 | Prehodi in crossfade | narejeno |
 | 6 | Sleep timer | čaka |
 | 7 | Izseki, A-B, shranjeni izseki v Bookmarks, izvoz | čaka |
 | 8 | Zvočne sledi in podnapisi, glasno branje | čaka |
@@ -83,8 +83,11 @@ Preverjeno v izoliranem namizju: imena in vrstni red vseh 20 polj in gumba Brows
 
 Ročni NVDA preizkus: predvajaj datoteko, F5. NVDA prebere "Audio processing" in "Stereo balance: -100 left, 0 centre, 100 right, edit". Označi Play as mono in pritisni Enter: NVDA pove "Audio processing saved.", zvok je mono. Alt+Shift+Right trikrat: "Balance 15 right".
 
-## Enota 5 (delno preverjena)
+## Enota 5
 
 - Okno Playback transitions (kontekstni meni predvajalnika, Settings > Playback): crossfade samodejnih prehodov (privzeto izključen, 3 s, do 30 s), crossfade pri Previous/Next (privzeto izključen), krivulja, pojemanje pri premikanju, premoru, začetku in koncu datoteke. Gapless ostane obstoječa Python nastavitev (osnutek jo je prepisoval, popravljeno).
 - Naslednji posnetek se pri vključenem crossfadu začne pred koncem trenutnega; runtime pusti stari predvajalnik teči in prekriža glasnost. Pojemanje na koncu datoteke je v runtime.
-- Preverjeno: testi (944), clippy, fmt. Odprto: preizkus crossfada v živo (potreben zaporedni seznam lokalnih datotek v izoliranem namizju), runtime test s FakeEngine za prekrivanje, Spotify crossfade.
+- Runtime test s FakeEngine potrdi, da stari predvajalnik teče, dokler se glasnosti ne prekrižata.
+- Preverjeno v izoliranem namizju: playlist z dvema 12-sekundnima datotekama, crossfade 3 s, Autoplay next vključen: drugi posnetek se je začel pri 8,9 s. Spotify crossfade (osnutek v predvajanju Spotify) ni preverjen.
+
+Ročni NVDA preizkus: v kontekstnem meniju predvajalnika izberi Playback transitions, označi "Crossfade when the next item starts by itself" in Save (NVDA: "Playback transitions saved."). Predvajaj playlist z vključenim Autoplay next: naslednji posnetek se začne 3 s pred koncem, zvoka se prelijeta.

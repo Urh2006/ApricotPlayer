@@ -1222,6 +1222,72 @@ mod tests {
     }
 
     #[test]
+    fn crossfade_keeps_the_old_engine_until_the_volumes_have_crossed() {
+        let engines: Arc<Mutex<Vec<Arc<Mutex<Vec<PlaybackCommand>>>>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let created = Arc::clone(&engines);
+        let runtime = PlaybackRuntime::spawn_with(Box::new(move |_| {
+            let commands = Arc::new(Mutex::new(Vec::new()));
+            created.lock().expect("engines").push(Arc::clone(&commands));
+            Ok(Box::new(FakeEngine {
+                events: vec![PlaybackEvent::Position {
+                    elapsed: 0.1,
+                    duration: Some(60.0),
+                }],
+                commands,
+            }))
+        }))
+        .expect("runtime");
+        let mut first = MpvLaunchOptions::new("mpv.exe");
+        first.initial_volume = 80.0;
+        runtime.start(1, first, item("first")).expect("first start");
+        std::thread::sleep(Duration::from_millis(50));
+        let mut second = MpvLaunchOptions::new("mpv.exe");
+        second.initial_volume = 80.0;
+        second.transitions.crossfade_seconds = 0.2;
+        second.transitions.equal_power = false;
+        runtime
+            .start(2, second, item("second"))
+            .expect("second start");
+        std::thread::sleep(Duration::from_millis(500));
+
+        let engines = engines.lock().expect("engines");
+        assert_eq!(engines.len(), 2, "the next item gets its own engine");
+        let volumes = |engine: &Arc<Mutex<Vec<PlaybackCommand>>>| -> Vec<f64> {
+            engine
+                .lock()
+                .expect("commands")
+                .iter()
+                .filter_map(|command| match command {
+                    PlaybackCommand::SetVolume(volume) => Some(*volume),
+                    _ => None,
+                })
+                .collect()
+        };
+        let outgoing = volumes(&engines[0]);
+        let incoming = volumes(&engines[1]);
+        assert!(outgoing.len() > 2, "the old item fades out: {outgoing:?}");
+        assert!(
+            outgoing.windows(2).all(|pair| pair[1] <= pair[0]),
+            "{outgoing:?}"
+        );
+        assert!(
+            outgoing.last().is_some_and(|volume| *volume < 1.0),
+            "{outgoing:?}"
+        );
+        assert!(
+            incoming.windows(2).all(|pair| pair[1] >= pair[0]),
+            "{incoming:?}"
+        );
+        assert!(
+            incoming
+                .last()
+                .is_some_and(|volume| (*volume - 80.0).abs() < 1.0),
+            "{incoming:?}"
+        );
+    }
+
+    #[test]
     fn media_replacement_reuses_one_engine_until_close() {
         let commands = Arc::new(Mutex::new(Vec::new()));
         let factory_calls = Arc::new(AtomicUsize::new(0));
