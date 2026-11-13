@@ -1396,9 +1396,28 @@ unsafe fn edit_audio_processing(window: HWND) {
     app.set_feature_settings("audio_processing_v1", serde_json::json!(settings));
 }
 
+/// Settings > Playback > Playback transitions, kept in the unsaved settings.
+unsafe fn edit_playback_transitions(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let catalog = settings_catalog(state);
+    let app = &mut *state.application;
+    let settings =
+        apricot_app::playback_features::AudioProcessingSettings::from_settings(app.settings())
+            .unwrap_or_default();
+    let form = apricot_shell::playback_features::transitions_form(&catalog, &settings);
+    let Some(values) = crate::feature_form_win32::show(window, &form) else {
+        return;
+    };
+    let settings = apricot_shell::playback_features::transitions_from_values(&settings, &values);
+    app.set_feature_settings("audio_processing_v1", serde_json::json!(settings));
+}
+
 unsafe fn handle_settings_command(window: HWND, command: SettingsCommand) {
     match command {
         SettingsCommand::AudioProcessing => edit_audio_processing(window),
+        SettingsCommand::PlaybackTransitions => edit_playback_transitions(window),
         SettingsCommand::RecordingSettings => defer_global_action(window, "recording_settings"),
         SettingsCommand::OpenIntegrations => defer_global_action(window, "open_integrations"),
         SettingsCommand::ResetShortcut
@@ -2170,14 +2189,18 @@ unsafe fn save_and_register_startup(window: HWND, state: &mut SettingsWindowStat
     let history_before = (&*state.application)
         .saved_spotify_settings()
         .listening_history;
-    let processing_before =
-        apricot_shell::playback_features::processing_chain_filter(&*state.application);
+    let processing_before = (
+        apricot_shell::playback_features::processing_chain_filter(&*state.application),
+        apricot_shell::playback_features::running_transition_options(&*state.application),
+    );
     if let Err(error) = (&mut *state.application).save_settings() {
         show_error(window, &error.to_string());
         return false;
     }
-    if apricot_shell::playback_features::processing_chain_filter(&*state.application)
-        != processing_before
+    if (
+        apricot_shell::playback_features::processing_chain_filter(&*state.application),
+        apricot_shell::playback_features::running_transition_options(&*state.application),
+    ) != processing_before
         && !state.owner.0.is_null()
     {
         let _ = PostMessageW(

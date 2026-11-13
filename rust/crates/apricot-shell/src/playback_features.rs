@@ -316,15 +316,130 @@ fn apply_processing(
     if let Some(filter) = filter {
         commands.push(PlaybackCommand::AddAudioFilter(filter));
     }
-    commands.push(set_property(
-        "gapless-audio",
-        if settings.transitions.gapless {
-            "yes"
-        } else {
-            "no"
-        },
-    ));
     commands
+}
+
+/// Playback transitions: crossfade and fades, shared by the player menu and
+/// Settings > Playback. Gapless playback stays its own Python setting.
+#[must_use]
+pub fn transitions_form(
+    catalog: &apricot_core::TranslationCatalog,
+    settings: &AudioProcessingSettings,
+) -> FeatureForm {
+    let t = &settings.transitions;
+    FeatureForm::localized(
+        catalog,
+        catalog.text("playback_transitions"),
+        vec![
+            FormField::checkbox(
+                "crossfade",
+                catalog.text("crossfade_automatic"),
+                t.crossfade,
+            ),
+            FormField::number(
+                "crossfade_seconds",
+                catalog.text("crossfade_seconds"),
+                t.crossfade_seconds,
+                0.5,
+                30.0,
+            ),
+            FormField::checkbox(
+                "manual",
+                catalog.text("crossfade_manual"),
+                t.manual_crossfade,
+            ),
+            FormField::choice(
+                "curve",
+                catalog.text("crossfade_curve"),
+                vec![
+                    catalog.text("crossfade_curve_equal_power").to_owned(),
+                    catalog.text("crossfade_curve_linear").to_owned(),
+                ],
+                usize::from(!t.equal_power),
+            ),
+            FormField::checkbox("seek", catalog.text("fade_on_seek"), t.seek_fade),
+            FormField::checkbox("pause", catalog.text("fade_on_pause"), t.pause_fade),
+            FormField::checkbox("start", catalog.text("fade_at_start"), t.start_fade),
+            FormField::checkbox("end", catalog.text("fade_at_end"), t.end_fade),
+            FormField::number(
+                "fade_seconds",
+                catalog.text("fade_seconds"),
+                t.fade_seconds,
+                0.05,
+                10.0,
+            ),
+        ],
+    )
+}
+
+#[must_use]
+pub fn transitions_from_values(
+    previous: &AudioProcessingSettings,
+    values: &FormValues,
+) -> AudioProcessingSettings {
+    let mut settings = previous.clone();
+    let t = &mut settings.transitions;
+    t.crossfade = checked(values, "crossfade");
+    t.crossfade_seconds = number(values, "crossfade_seconds");
+    t.manual_crossfade = checked(values, "manual");
+    t.equal_power = choice(values, "curve") == 0;
+    t.seek_fade = checked(values, "seek");
+    t.pause_fade = checked(values, "pause");
+    t.start_fade = checked(values, "start");
+    t.end_fade = checked(values, "end");
+    t.fade_seconds = number(values, "fade_seconds");
+    settings
+}
+
+/// Saved fades for the running player (Settings Save replaces them).
+#[must_use]
+pub fn running_transition_options(
+    app: &Application,
+) -> apricot_playback::PlaybackTransitionOptions {
+    running_transitions(
+        &AudioProcessingSettings::from_settings(app.settings())
+            .unwrap_or_default()
+            .transitions,
+    )
+}
+
+/// Fades for the running player; a crossfade only comes with a start.
+fn running_transitions(
+    t: &apricot_app::playback_features::TransitionSettings,
+) -> apricot_playback::PlaybackTransitionOptions {
+    let fade = |enabled: bool| if enabled { t.fade_seconds } else { 0.0 };
+    apricot_playback::PlaybackTransitionOptions {
+        crossfade_seconds: 0.0,
+        equal_power: t.equal_power,
+        seek_fade_seconds: fade(t.seek_fade),
+        pause_fade_seconds: fade(t.pause_fade),
+        start_fade_seconds: fade(t.start_fade),
+        end_fade_seconds: fade(t.end_fade),
+    }
+}
+
+/// The transitions of the player that starts now. The pending start kind is
+/// consumed: an automatic advance crossfades when crossfade is on, a manual
+/// Previous or Next only when that option is on too, every other start never.
+pub fn take_transition_options(
+    app: &mut Application,
+) -> apricot_playback::PlaybackTransitionOptions {
+    let kind = app.playback_features_mut().pending_transition.take();
+    let settings = AudioProcessingSettings::from_settings(app.settings()).unwrap_or_default();
+    let t = &settings.transitions;
+    let mut options = running_transitions(t);
+    let crossfade = t.crossfade
+        && match kind {
+            Some(apricot_app::playback_features::TransitionKind::Automatic) => true,
+            Some(apricot_app::playback_features::TransitionKind::Manual) => t.manual_crossfade,
+            None => false,
+        };
+    if crossfade {
+        options.crossfade_seconds = t.crossfade_seconds.clamp(0.5, 30.0);
+        // The incoming item fades in through the crossfade, not twice.
+        options.start_fade_seconds = 0.0;
+    }
+    options
 }
 
 /// `None` means this action belongs to another feature. A handled, cancelled
@@ -582,64 +697,21 @@ pub fn dispatch_playback_feature(
             ui.announce(&message);
         }
         "player_transition_settings" => {
-            let Some(mut settings) = audio_settings(app, ui) else {
+            let Some(settings) = audio_settings(app, ui) else {
                 return Some(commands);
             };
-            let t = &settings.transitions;
-            let Some(values) = ui.form(&FeatureForm::new(
-                "Playback transitions",
-                vec![
-                    FormField::checkbox("gapless", "Gapless playback", t.gapless),
-                    FormField::checkbox(
-                        "crossfade",
-                        "Crossfade automatic transitions",
-                        t.crossfade,
-                    ),
-                    FormField::number(
-                        "crossfade_seconds",
-                        "Crossfade duration in seconds",
-                        t.crossfade_seconds,
-                        0.001,
-                        30.0,
-                    ),
-                    FormField::checkbox(
-                        "manual",
-                        "Also crossfade manual previous and next",
-                        t.manual_crossfade,
-                    ),
-                    FormField::choice(
-                        "curve",
-                        "Crossfade curve",
-                        strings(&["Equal power", "Linear"]),
-                        usize::from(!t.equal_power),
-                    ),
-                    FormField::checkbox("seek", "Fade during seeking", t.seek_fade),
-                    FormField::checkbox("pause", "Fade during pause and resume", t.pause_fade),
-                    FormField::checkbox("start", "Fade at the start", t.start_fade),
-                    FormField::checkbox("end", "Fade at the end", t.end_fade),
-                    FormField::number(
-                        "fade_seconds",
-                        "Other fade duration in seconds",
-                        t.fade_seconds,
-                        0.001,
-                        10.0,
-                    ),
-                ],
-            )) else {
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
+            let Some(values) = ui.form(&transitions_form(&catalog, &settings)) else {
                 return Some(commands);
             };
-            let t = &mut settings.transitions;
-            t.gapless = checked(&values, "gapless");
-            t.crossfade = checked(&values, "crossfade");
-            t.crossfade_seconds = number(&values, "crossfade_seconds");
-            t.manual_crossfade = checked(&values, "manual");
-            t.equal_power = choice(&values, "curve") == 0;
-            t.seek_fade = checked(&values, "seek");
-            t.pause_fade = checked(&values, "pause");
-            t.start_fade = checked(&values, "start");
-            t.end_fade = checked(&values, "end");
-            t.fade_seconds = number(&values, "fade_seconds");
-            commands = apply_processing(app, &settings, ui);
+            let settings = transitions_from_values(&settings, &values);
+            if persist(app, "audio_processing_v1", serde_json::json!(settings), ui) {
+                configure_pcm_crossfade(app, &settings);
+                commands.push(PlaybackCommand::SetTransitions(running_transitions(
+                    &settings.transitions,
+                )));
+                ui.announce(catalog.text("transitions_saved"));
+            }
         }
         "player_go_to_time" | "player_go_to_percent" => {
             let percent = action == "player_go_to_percent";
@@ -1318,6 +1390,8 @@ pub fn automatic_crossfade_due(app: &mut Application) -> bool {
         || session.current_item().is_none_or(|item| {
             item.source == apricot_core::MediaSource::Spotify
                 || item.kind == apricot_core::MediaKind::Video
+                // Python plays a related video at the end instead of the next item.
+                || (app.settings().autoplay_related && item.youtube_video_id().is_some())
         })
         || app.playback_features().ranges.active.is_some()
         || app
@@ -1344,17 +1418,13 @@ pub fn automatic_crossfade_due(app: &mut Application) -> bool {
     }) {
         return false;
     }
-    let generation = session.generation().to_string();
+    let generation = session.generation();
     let state = app.playback_features_mut();
-    if state.extra.get("automatic_crossfade_generation") == Some(&generation) {
+    if state.crossfade_started_generation == Some(generation) {
         return false;
     }
-    state
-        .extra
-        .insert("automatic_crossfade_generation".to_owned(), generation);
-    state
-        .extra
-        .insert("automatic_crossfade_launch".to_owned(), "true".to_owned());
+    state.crossfade_started_generation = Some(generation);
+    state.pending_transition = Some(apricot_app::playback_features::TransitionKind::Automatic);
     true
 }
 
@@ -1362,15 +1432,9 @@ pub fn configure_transition_launch(
     app: &mut Application,
     options: &mut apricot_playback::MpvLaunchOptions,
 ) {
-    let automatic = app
-        .playback_features_mut()
-        .extra
-        .remove("automatic_crossfade_launch")
-        .is_some();
-    let Ok(settings) = AudioProcessingSettings::from_settings(app.settings()) else {
-        return;
-    };
-    let t = &settings.transitions;
+    let mut transitions = take_transition_options(app);
+    // Only audio that mpv plays can overlap; video and Spotify never do, and
+    // neither does a marked range or an end-of-track sleep timer.
     let can_overlap = app.player_session().current_item().is_some_and(|item| {
         item.kind != apricot_core::MediaKind::Video
             && item.source != apricot_core::MediaSource::Spotify
@@ -1380,33 +1444,10 @@ pub fn configure_transition_launch(
             .timer
             .as_ref()
             .is_none_or(|timer| timer.options().mode == TimerMode::Duration);
-    options.transitions = apricot_playback::PlaybackTransitionOptions {
-        crossfade_seconds: if can_overlap && t.crossfade && (automatic || t.manual_crossfade) {
-            t.crossfade_seconds.clamp(0.001, 30.0)
-        } else {
-            0.0
-        },
-        equal_power: t.equal_power,
-        seek_fade_seconds: if t.seek_fade {
-            t.fade_seconds.clamp(0.001, 10.0)
-        } else {
-            0.0
-        },
-        pause_fade_seconds: if t.pause_fade {
-            t.fade_seconds.clamp(0.001, 10.0)
-        } else {
-            0.0
-        },
-        start_fade_seconds: if t.start_fade {
-            t.fade_seconds.clamp(0.001, 10.0)
-        } else {
-            0.0
-        },
-    };
-    options.gapless = t.gapless;
-    if options.transitions.crossfade_seconds > 0.0 {
-        options.video_mode = apricot_playback::MpvVideoMode::AudioOnly;
+    if !can_overlap {
+        transitions.crossfade_seconds = 0.0;
     }
+    options.transitions = transitions;
 }
 
 struct ShellFeatureUi<'a> {

@@ -1210,6 +1210,12 @@ unsafe extern "system" fn window_proc(
             let filter = state(window).and_then(|state| {
                 apricot_shell::playback_features::processing_chain_filter(&state.application)
             });
+            if let Some(transitions) = state(window).map(|state| {
+                apricot_shell::playback_features::running_transition_options(&state.application)
+            }) {
+                let _ =
+                    execute_player_command(window, PlaybackCommand::SetTransitions(transitions));
+            }
             let _ = execute_player_command(
                 window,
                 PlaybackCommand::RemoveAudioFilter("@apricot_processing".to_owned()),
@@ -4932,6 +4938,7 @@ fn fail_preparing_player(state: &mut WindowState, message: &str) {
     }
 }
 
+#[allow(clippy::too_many_lines)] // One start sequence, as in Python `start_player`.
 unsafe fn start_player_at(
     window: HWND,
     item: apricot_core::MediaItem,
@@ -4975,7 +4982,7 @@ unsafe fn start_player_at(
     if let Some(speed) = podcast_speed {
         state.application.set_player_speed(speed);
     }
-    let Some(options) = playback_launch_options(state, start_position_seconds) else {
+    let Some(mut options) = playback_launch_options(state, start_position_seconds) else {
         let message = player_failed_message(&state.application, "mpv was not found");
         let _ = state
             .application
@@ -4984,6 +4991,10 @@ unsafe fn start_player_at(
         show_error_message(window, &message);
         return;
     };
+    apricot_shell::playback_features::configure_transition_launch(
+        &mut state.application,
+        &mut options,
+    );
     let start_result = state
         .playback
         .as_ref()
@@ -13610,6 +13621,10 @@ unsafe fn navigate_player_relative_from(window: HWND, delta: i32, after_end: boo
         };
         if state.pending_player_navigation.is_some() || state.pending_youtube_resolve.is_some() {
             return;
+        }
+        if !after_end {
+            state.application.playback_features_mut().pending_transition =
+                Some(apricot_app::playback_features::TransitionKind::Manual);
         }
         state.application.request_relative_player_item(delta)
     };

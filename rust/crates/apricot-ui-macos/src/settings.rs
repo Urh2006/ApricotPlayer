@@ -1451,6 +1451,7 @@ impl SettingsWindow {
     fn handle_command(&self, command: SettingsCommand) {
         match command {
             SettingsCommand::AudioProcessing => self.edit_audio_processing(),
+            SettingsCommand::PlaybackTransitions => self.edit_playback_transitions(),
             SettingsCommand::RecordingSettings => self.defer_global_action("recording_settings"),
             SettingsCommand::OpenIntegrations => self.defer_global_action("open_integrations"),
             SettingsCommand::ResetShortcut
@@ -2006,6 +2007,33 @@ impl SettingsWindow {
             alert.runModal();
             return;
         }
+        self.with_shell(|shell, _| {
+            shell
+                .application
+                .set_feature_settings("audio_processing_v1", serde_json::json!(settings));
+        });
+    }
+
+    /// Windows `edit_playback_transitions`.
+    fn edit_playback_transitions(&self) {
+        let Some((catalog, settings)) = self.with_shell(|shell, _| {
+            let application = &shell.application;
+            (
+                apricot_app::embedded_catalog(&application.settings().language),
+                apricot_app::playback_features::AudioProcessingSettings::from_settings(
+                    application.settings(),
+                )
+                .unwrap_or_default(),
+            )
+        }) else {
+            return;
+        };
+        let form = apricot_shell::playback_features::transitions_form(&catalog, &settings);
+        let Some(values) = crate::feature_form::show(self.mtm(), &form) else {
+            return;
+        };
+        let settings =
+            apricot_shell::playback_features::transitions_from_values(&settings, &values);
         self.with_shell(|shell, _| {
             shell
                 .application

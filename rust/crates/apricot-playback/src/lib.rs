@@ -87,6 +87,9 @@ pub enum PlaybackCommand {
         value: String,
     },
     AddSubtitle(String),
+    /// Fades and crossfade for the running player and the next start; the
+    /// playback runtime keeps it, engines never see it.
+    SetTransitions(PlaybackTransitionOptions),
     Stop,
 }
 

@@ -121,6 +121,16 @@ pub(super) unsafe fn tick(window: HWND) {
     for command in commands {
         let _ = execute_player_command(window, command);
     }
+    // Crossfade: the next item starts before this one ends; the playback
+    // runtime keeps the old player running while the volumes cross.
+    let due = state_mut(window)
+        .is_some_and(|state| features::automatic_crossfade_due(&mut state.application));
+    if due {
+        if let Some(state) = state_mut(window) {
+            super::mark_current_podcast_episode_played(state);
+        }
+        super::navigate_player_relative_after_end(window);
+    }
 }
 
 pub(super) unsafe fn ended(window: HWND) -> bool {

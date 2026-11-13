@@ -979,6 +979,10 @@ pub fn player_context_menu_with_spotify(
         "player_audio_processing",
         C::PlayerAction("player_audio_processing"),
     ));
+    entries.push(context.command(
+        "playback_transitions",
+        C::PlayerAction("player_transition_settings"),
+    ));
     entries
 }
 
@@ -1505,6 +1509,7 @@ mod tests {
                 "Close",
                 "Add to playlist",
                 "Audio processing",
+                "Playback transitions",
             ]
         );
     }
@@ -1566,6 +1571,7 @@ mod tests {
                 "player_lyrics",
                 "player_comments",
                 "player_audio_processing",
+                "player_transition_settings",
             ]
         );
     }

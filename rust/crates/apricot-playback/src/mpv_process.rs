@@ -98,11 +98,14 @@ pub struct MpvLaunchOptions {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PlaybackTransitionOptions {
+    /// Zero starts the next item without overlap.
     pub crossfade_seconds: f64,
     pub equal_power: bool,
     pub seek_fade_seconds: f64,
     pub pause_fade_seconds: f64,
     pub start_fade_seconds: f64,
+    /// Volume falls over the last seconds of a file.
+    pub end_fade_seconds: f64,
 }
 
 impl MpvLaunchOptions {
@@ -276,6 +279,7 @@ impl PlaybackEngine for MpvProcessEngine {
             }
             PlaybackCommand::SetProperty { name, value } => json!(["set_property", name, value]),
             PlaybackCommand::AddSubtitle(path) => json!(["sub-add", path, "select"]),
+            PlaybackCommand::SetTransitions(_) => return Ok(()),
             PlaybackCommand::Stop => json!(["stop"]),
         };
         request_success(&self.client, command, COMMAND_TIMEOUT)

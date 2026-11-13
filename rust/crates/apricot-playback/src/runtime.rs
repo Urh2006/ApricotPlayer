@@ -35,6 +35,17 @@ struct OutgoingEngine {
     target_volume: f64,
 }
 
+/// The fade at the end of a file.
+#[derive(Default)]
+struct EndFade {
+    seconds: f64,
+    target: f64,
+    /// The duration of the active file, from its position events.
+    duration: Option<f64>,
+    /// The volume last set by the fade, `None` while it is not fading.
+    applied: Option<f64>,
+}
+
 struct VolumeFade {
     started: Option<Instant>,
     seconds: f64,
@@ -44,10 +55,20 @@ struct VolumeFade {
     fade_back: bool,
 }
 
+/// Volume over the last `seconds` of a file: full until then, silent at the end.
+fn end_fade_volume(target: f64, elapsed: f64, duration: f64, seconds: f64) -> Option<f64> {
+    if seconds <= 0.0 || !duration.is_finite() || duration <= seconds * 2.0 {
+        return None;
+    }
+    let remaining = duration - elapsed;
+    (remaining < seconds).then(|| target * (remaining / seconds).clamp(0.0, 1.0))
+}
+
 fn tick_transitions(
     active: &mut Option<(u64, Box<dyn PlaybackEngine>)>,
     outgoing: &mut Option<OutgoingEngine>,
     fade: &mut Option<VolumeFade>,
+    end_fade: &mut EndFade,
     position: &PlaybackPositionReader,
     updates: &UpdateSink,
 ) {
@@ -82,6 +103,32 @@ fn tick_transitions(
         } else if now.saturating_duration_since(old.queued) > Duration::from_secs(15) {
             let _ = engine.execute(PlaybackCommand::SetVolume(old.target_volume));
             *outgoing = None;
+        }
+    }
+    if outgoing.is_none() && fade.is_none() {
+        let volume =
+            position
+                .read(*generation)
+                .zip(end_fade.duration)
+                .and_then(|(elapsed, duration)| {
+                    end_fade_volume(end_fade.target, elapsed, duration, end_fade.seconds)
+                });
+        match volume {
+            Some(volume) => {
+                if end_fade
+                    .applied
+                    .is_none_or(|last| (last - volume).abs() >= 0.5)
+                {
+                    let _ = engine.execute(PlaybackCommand::SetVolume(volume));
+                    end_fade.applied = Some(volume);
+                }
+            }
+            None => {
+                // A seek back out of the last seconds restores the volume.
+                if end_fade.applied.take().is_some() {
+                    let _ = engine.execute(PlaybackCommand::SetVolume(end_fade.target));
+                }
+            }
         }
     }
     let Some(task) = fade.as_mut() else {
@@ -446,6 +493,7 @@ fn playback_worker(
     let mut fade: Option<VolumeFade> = None;
     let mut transition_options = crate::PlaybackTransitionOptions::default();
     let mut target_volume = 100.0;
+    let mut end_fade = EndFade::default();
     let mut active_video_mode = None;
     loop {
         updates.flush();
@@ -509,6 +557,12 @@ fn playback_worker(
                     fade = None;
                     transition_options = options.transitions;
                     target_volume = options.initial_volume;
+                    end_fade = EndFade {
+                        seconds: transition_options.end_fade_seconds,
+                        target: target_volume,
+                        duration: None,
+                        applied: None,
+                    };
                     let crossfade = active.is_some()
                         && transition_options.crossfade_seconds > 0.0
                         && !crate::pcm_source::is_pcm_item(&item);
@@ -585,8 +639,14 @@ fn playback_worker(
                         .is_some_and(|(current, _)| *current == generation)
                     {
                         match &command {
+                            PlaybackCommand::SetTransitions(options) => {
+                                transition_options = *options;
+                                end_fade.seconds = options.end_fade_seconds;
+                                continue;
+                            }
                             PlaybackCommand::SetVolume(volume) => {
                                 target_volume = *volume;
+                                end_fade.target = *volume;
                                 if let Some(old) = outgoing.as_mut() {
                                     old.target_volume = *volume;
                                 }
@@ -664,8 +724,21 @@ fn playback_worker(
                 RuntimeRequest::Shutdown => break,
             }
         }
-        poll_engine_events(&mut active, updates, &mut preview, position);
-        tick_transitions(&mut active, &mut outgoing, &mut fade, position, updates);
+        poll_engine_events(
+            &mut active,
+            updates,
+            &mut preview,
+            position,
+            &mut end_fade.duration,
+        );
+        tick_transitions(
+            &mut active,
+            &mut outgoing,
+            &mut fade,
+            &mut end_fade,
+            position,
+            updates,
+        );
     }
     position.publish(None);
 }
@@ -759,6 +832,7 @@ fn poll_engine_events(
     updates: &UpdateSink,
     preview: &mut Option<(u64, f64, f64, bool)>,
     position: &PlaybackPositionReader,
+    duration: &mut Option<f64>,
 ) {
     let Some((generation, engine)) = active else {
         return;
@@ -766,10 +840,16 @@ fn poll_engine_events(
     for _ in 0..MAX_EVENTS_PER_TICK {
         match engine.poll_event() {
             Ok(Some(mut event)) => {
-                if let PlaybackEvent::Position { elapsed, .. } = &event
+                if let PlaybackEvent::Position {
+                    elapsed,
+                    duration: reported,
+                } = &event
                     && elapsed.is_finite()
                 {
                     position.publish(Some((*generation, elapsed.max(0.0))));
+                    if let Some(reported) = reported.filter(|value| value.is_finite()) {
+                        *duration = Some(reported);
+                    }
                 }
                 let finish = preview
                     .as_mut()
@@ -856,6 +936,7 @@ mod tests {
             &super::UpdateSink::new(sender),
             &mut None,
             &reader,
+            &mut None,
         );
         assert_eq!(reader.read(7), Some(12.5));
         assert_eq!(reader.read(8), None);
@@ -1029,6 +1110,7 @@ mod tests {
             &super::UpdateSink::new(sender),
             &mut preview,
             &super::PlaybackPositionReader::default(),
+            &mut None,
         );
         assert_eq!(preview, Some((7, 10.0, 15.0, false)));
         assert!(commands.lock().expect("commands").is_empty());
@@ -1049,6 +1131,7 @@ mod tests {
             &super::UpdateSink::new(sender),
             &mut preview,
             &super::PlaybackPositionReader::default(),
+            &mut None,
         );
         assert!(preview.is_none());
         assert_eq!(
@@ -1086,6 +1169,7 @@ mod tests {
             &super::UpdateSink::new(sender),
             &mut preview,
             &super::PlaybackPositionReader::default(),
+            &mut None,
         );
         assert!(preview.is_none());
         assert!(
@@ -1209,5 +1293,24 @@ mod tests {
             &commands[11],
             PlaybackCommand::Load { item, .. } if item.id.0 == "third"
         ));
+    }
+}
+
+#[cfg(test)]
+mod end_fade_tests {
+    use super::end_fade_volume;
+
+    #[test]
+    fn end_fade_lowers_only_the_last_seconds_of_long_files() {
+        assert_eq!(end_fade_volume(80.0, 50.0, 60.0, 2.0), None);
+        let volume = end_fade_volume(80.0, 59.0, 60.0, 2.0).expect("fading");
+        assert!((volume - 40.0).abs() < 1e-9);
+        assert_eq!(end_fade_volume(80.0, 60.5, 60.0, 2.0), Some(0.0));
+        assert_eq!(
+            end_fade_volume(80.0, 3.0, 3.5, 2.0),
+            None,
+            "too short to fade"
+        );
+        assert_eq!(end_fade_volume(80.0, 59.0, 60.0, 0.0), None, "off");
     }
 }

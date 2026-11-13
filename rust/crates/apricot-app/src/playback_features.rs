@@ -211,7 +211,6 @@ pub struct TransitionSettings {
     pub start_fade: bool,
     pub end_fade: bool,
     pub fade_seconds: f64,
-    pub gapless: bool,
 }
 impl Default for TransitionSettings {
     fn default() -> Self {
@@ -224,8 +223,7 @@ impl Default for TransitionSettings {
             pause_fade: false,
             start_fade: false,
             end_fade: false,
-            fade_seconds: 0.1,
-            gapless: true,
+            fade_seconds: 0.5,
         }
     }
 }
@@ -537,6 +535,15 @@ pub fn arm_saved_range(app: &mut crate::Application, bookmark: &apricot_storage:
     app.playback_features_mut().note_manual_seek();
 }
 
+/// How the next player start was requested, which decides a crossfade.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransitionKind {
+    /// The next item starts before the current one ends.
+    Automatic,
+    /// Previous or Next pressed by the user.
+    Manual,
+}
+
 #[derive(Debug)]
 pub struct PlaybackFeatures {
     pub timer: Option<SleepTimer>,
@@ -553,6 +560,10 @@ pub struct PlaybackFeatures {
     pub applied_generation: Option<u64>,
     /// The equalizer profile shown in an open equalizer dialog.
     pub equalizer_preview_preset: Option<String>,
+    /// Consumed by the next player start.
+    pub pending_transition: Option<TransitionKind>,
+    /// The player generation whose automatic crossfade already started.
+    pub crossfade_started_generation: Option<u64>,
     pub last_position: Option<(Instant, f64)>,
     pub manual_seek_at: Option<Instant>,
     pub extra: BTreeMap<String, String>,
@@ -574,6 +585,8 @@ impl Default for PlaybackFeatures {
             chapter_index: None,
             applied_generation: None,
             equalizer_preview_preset: None,
+            pending_transition: None,
+            crossfade_started_generation: None,
             last_position: None,
             manual_seek_at: None,
             extra: BTreeMap::new(),

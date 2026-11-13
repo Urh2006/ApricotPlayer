@@ -1029,6 +1029,10 @@ impl Shell {
         if self.youtube.pending_navigation.is_some() || self.youtube.resolving() {
             return;
         }
+        if !after_end {
+            self.application.playback_features_mut().pending_transition =
+                Some(apricot_app::playback_features::TransitionKind::Manual);
+        }
         match self.application.request_relative_player_item(delta) {
             PlayerNavigationOutcome::Item { item, origin } => {
                 self.sync_user_playlist_item_selection(&item);

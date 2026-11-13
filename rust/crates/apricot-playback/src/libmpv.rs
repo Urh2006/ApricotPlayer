@@ -1176,6 +1176,9 @@ unsafe fn probe_devices(
 
 impl PlaybackEngine for LibMpvEngine {
     fn execute(&mut self, command: PlaybackCommand) -> Result<(), PlaybackError> {
+        if matches!(&command, PlaybackCommand::SetTransitions(_)) {
+            return Ok(());
+        }
         if let PlaybackCommand::SetPaused(paused) = &command {
             self.requested_paused = *paused;
         }
@@ -1578,6 +1581,7 @@ fn command_arguments(command: PlaybackCommand) -> Result<Vec<String>, PlaybackEr
             vec!["set".to_owned(), name.to_owned(), value]
         }
         PlaybackCommand::AddSubtitle(path) => vec!["sub-add".to_owned(), path, "select".to_owned()],
+        PlaybackCommand::SetTransitions(_) => Vec::new(),
         PlaybackCommand::Stop => vec!["stop".to_owned()],
     };
     Ok(arguments)
