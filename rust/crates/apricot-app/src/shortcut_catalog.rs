@@ -73,80 +73,168 @@ pub const SHORTCUT_CATEGORIES: &[ShortcutCategory] = &[
     },
 ];
 
+/// The presentation category of every action. Categories never change an
+/// action's activation scope or its saved identity.
+const ACTION_CATEGORIES: &[(&str, &str)] = &[
+    ("open_main_menu", "general"),
+    ("open_action_finder", "general"),
+    ("context_menu", "general"),
+    ("open_selected", "general"),
+    ("remove_selected", "general"),
+    ("result_column_previous", "general"),
+    ("result_column_next", "general"),
+    ("open_favorites", "general"),
+    ("add_favorite", "general"),
+    ("remove_favorite", "general"),
+    ("open_history", "general"),
+    ("copy_link", "general"),
+    ("copy_stream_url", "general"),
+    ("open_audiovault", "general"),
+    ("background_play_pause", "playback"),
+    ("player_play_pause", "playback"),
+    ("player_previous", "playback"),
+    ("player_next", "playback"),
+    ("player_back", "playback"),
+    ("player_repeat", "playback"),
+    ("player_shuffle", "playback"),
+    ("player_time", "playback"),
+    ("player_volume_status", "playback"),
+    ("player_format_status", "playback"),
+    ("player_details", "playback"),
+    ("player_output_devices", "playback"),
+    ("player_fullscreen", "playback"),
+    ("player_copy_link", "playback"),
+    ("player_copy_timestamp_link", "playback"),
+    ("player_bpm", "playback"),
+    ("player_lyrics", "playback"),
+    ("player_transcript", "playback"),
+    ("player_comments", "playback"),
+    ("open_sleep_timer", "playback"),
+    ("cancel_sleep_timer", "playback"),
+    ("sleep_timer_remaining", "playback"),
+    ("player_audio_tracks", "playback"),
+    ("player_audio_track_next", "playback"),
+    ("player_audio_track_previous", "playback"),
+    ("player_subtitles", "playback"),
+    ("player_subtitle_file", "playback"),
+    ("player_subtitle_url", "playback"),
+    ("player_elapsed", "playback"),
+    ("player_remaining", "playback"),
+    ("player_duration", "playback"),
+    ("player_percent", "playback"),
+    ("player_title", "playback"),
+    ("player_artist", "playback"),
+    ("player_seek_back", "seeking"),
+    ("player_seek_forward", "seeking"),
+    ("player_seek_back_large", "seeking"),
+    ("player_seek_forward_large", "seeking"),
+    ("player_seek_back_huge", "seeking"),
+    ("player_seek_forward_huge", "seeking"),
+    ("player_seek_start", "seeking"),
+    ("player_seek_end", "seeking"),
+    ("player_go_to_time", "seeking"),
+    ("player_go_to_percent", "seeking"),
+    ("player_volume_up", "audio"),
+    ("player_volume_down", "audio"),
+    ("player_volume_boost", "audio"),
+    ("player_bass_boost", "audio"),
+    ("player_equalizer", "audio"),
+    ("player_replaygain", "audio"),
+    ("player_speed_down", "audio"),
+    ("player_speed_up", "audio"),
+    ("player_pitch_up", "audio"),
+    ("player_pitch_down", "audio"),
+    ("player_reset_speed_pitch", "audio"),
+    ("player_edit_mode", "audio"),
+    ("player_save_edit_copy", "audio"),
+    ("player_replace_edit_original", "audio"),
+    ("player_audio_processing", "audio"),
+    ("player_pan_left", "audio"),
+    ("player_pan_right", "audio"),
+    ("player_pan_status", "audio"),
+    ("open_bookmarks", "bookmarks"),
+    ("player_add_bookmark", "bookmarks"),
+    ("player_bookmarks", "bookmarks"),
+    ("player_chapters", "bookmarks"),
+    ("player_previous_chapter", "bookmarks"),
+    ("player_next_chapter", "bookmarks"),
+    ("player_marker_start", "bookmarks"),
+    ("player_marker_end", "bookmarks"),
+    ("player_preview_marked_clip", "bookmarks"),
+    ("player_ab_loop", "bookmarks"),
+    ("player_ranges", "bookmarks"),
+    ("player_audiobook_mode", "bookmarks"),
+    ("player_chapter_stop", "bookmarks"),
+    ("bookmarks_import", "bookmarks"),
+    ("bookmarks_export", "bookmarks"),
+    ("open_play_from_folder", "files"),
+    ("open_play_file", "files"),
+    ("open_direct_link", "files"),
+    ("open_playlists", "files"),
+    ("create_playlist", "files"),
+    ("add_to_playlist", "files"),
+    ("remove_from_playlist", "files"),
+    ("add_to_playback_queue", "files"),
+    ("remove_from_playback_queue", "files"),
+    ("open_playback_queue", "files"),
+    ("playlist_save_current", "files"),
+    ("playlist_edit", "files"),
+    ("local_file_actions", "files"),
+    ("open_search", "youtube"),
+    ("open_channel", "youtube"),
+    ("player_next_related", "youtube"),
+    ("open_spotify", "spotify"),
+    ("spotify_accounts", "spotify"),
+    ("spotify_search", "spotify"),
+    ("spotify_library", "spotify"),
+    ("spotify_liked_songs", "spotify"),
+    ("spotify_playlists", "spotify"),
+    ("spotify_queue", "spotify"),
+    ("spotify_devices", "spotify"),
+    ("spotify_toggle_saved", "spotify"),
+    ("spotify_dislike", "spotify"),
+    ("spotify_daily_mixes", "spotify"),
+    ("spotify_radio", "spotify"),
+    ("spotify_first_track", "spotify"),
+    ("spotify_last_track", "spotify"),
+    ("spotify_subscriptions", "spotify"),
+    ("spotify_subscribe_playlist", "spotify"),
+    ("spotify_unsubscribe_playlist", "spotify"),
+    ("spotify_check_subscriptions", "spotify"),
+    ("open_podcasts_rss", "podcasts"),
+    ("open_subscriptions", "podcasts"),
+    ("new_subscription_videos", "podcasts"),
+    ("subscribe_channel", "podcasts"),
+    ("unsubscribe_channel", "podcasts"),
+    ("toggle_podcast_played", "podcasts"),
+    ("clear_podcast_progress", "podcasts"),
+    ("save_podcast_speed_preset", "podcasts"),
+    ("open_radio", "radio_iptv"),
+    ("open_iptv", "radio_iptv"),
+    ("radio_now_playing", "radio_iptv"),
+    ("open_recording", "recording"),
+    ("recording_start", "recording"),
+    ("recording_pause", "recording"),
+    ("recording_stop", "recording"),
+    ("open_recordings_folder", "recording"),
+    ("download_audio", "downloads"),
+    ("download_video", "downloads"),
+    ("queue_audio", "downloads"),
+    ("open_current_downloads", "downloads"),
+    ("open_settings", "system"),
+    ("copy_diagnostic_report", "system"),
+    ("open_integrations", "system"),
+    ("settings_import", "system"),
+    ("settings_export", "system"),
+];
+
+/// The category an action is listed under; unknown ids fall back to General.
 #[must_use]
 pub fn action_category(id: &str) -> &'static str {
-    if id.starts_with("spotify_") || id == "open_spotify" {
-        return "spotify";
-    }
-    if id.starts_with("recording_") || id.starts_with("open_recording") {
-        return "recording";
-    }
-    if id.contains("radio") || id.contains("iptv") {
-        return "radio_iptv";
-    }
-    if id.contains("bookmark")
-        || id.contains("marker")
-        || id.contains("chapter")
-        || id.contains("range")
-        || id.contains("clip")
-        || id == "player_ab_loop"
-    {
-        return "bookmarks";
-    }
-    if id.contains("seek") || id.contains("go_to_time") || id.contains("go_to_percent") {
-        return "seeking";
-    }
-    if id.contains("equalizer")
-        || id.contains("volume")
-        || id.contains("pitch")
-        || id.contains("speed")
-        || id.contains("pan_")
-        || id.contains("replaygain")
-        || id.contains("bass_boost")
-        || id.contains("audio_processing")
-        || id.contains("spatial")
-    {
-        return "audio";
-    }
-    if id.contains("download") || id.contains("converter") || id == "queue_audio" {
-        return "downloads";
-    }
-    if id.contains("podcast")
-        || id.contains("subscription")
-        || id.contains("rss")
-        || id == "subscribe_channel"
-        || id == "unsubscribe_channel"
-    {
-        return "podcasts";
-    }
-    if id.contains("playlist")
-        || id.contains("file")
-        || id.contains("folder")
-        || id.contains("playback_queue")
-    {
-        return "files";
-    }
-    if id.contains("search")
-        || id.contains("channel")
-        || id.contains("related")
-        || id.contains("youtube")
-        || id.contains("soundcloud")
-    {
-        return "youtube";
-    }
-    if id.starts_with("player_") || id.contains("sleep_timer") || id == "background_play_pause" {
-        return "playback";
-    }
-    if id.contains("diagnostic")
-        || id.contains("notification")
-        || id.contains("settings")
-        || id.contains("integrations")
-        || id.contains("update")
-        || id.contains("help")
-    {
-        return "system";
-    }
-    "general"
+    ACTION_CATEGORIES
+        .iter()
+        .find(|(action, _)| *action == id)
+        .map_or("general", |(_, category)| category)
 }
 
 #[must_use]
@@ -190,6 +278,7 @@ pub fn shortcut_actions(
             action_id: action.id.as_str().to_owned(),
             label: catalog.text(action.label_key).to_owned(),
             scope: action_scope_label(catalog, action.id.as_str()),
+            unassigned: catalog.text("shortcut_none").to_owned(),
             shortcut: settings
                 .keyboard_shortcuts
                 .get(action.id.as_str())
@@ -270,6 +359,25 @@ pub fn action_scope_label(catalog: &TranslationCatalog, action_id: &str) -> Stri
 mod tests {
     use super::*;
     use crate::english_catalog;
+
+    #[test]
+    fn every_action_has_exactly_one_known_category() {
+        for action in ACTIONS {
+            let id = action.id.as_str();
+            let rows: Vec<_> = ACTION_CATEGORIES
+                .iter()
+                .filter(|(action, _)| *action == id)
+                .collect();
+            assert_eq!(rows.len(), 1, "{id}");
+            assert!(
+                SHORTCUT_CATEGORIES
+                    .iter()
+                    .any(|category| category.id == rows[0].1 && category.id != "all"),
+                "{id}"
+            );
+        }
+        assert_eq!(ACTION_CATEGORIES.len(), ACTIONS.len());
+    }
 
     #[test]
     fn category_navigation_cannot_change_assignments_and_search_spans_categories() {

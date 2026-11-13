@@ -416,7 +416,7 @@ fn normalize_shortcuts(input: &BTreeMap<String, String>) -> BTreeMap<String, Str
         .map(|action| {
             let value = input
                 .get(action.id.as_str())
-                .map_or(action.default_shortcut(), |value| value.trim());
+                .map_or_else(|| new_action_default(input, action), |value| value.trim());
             // Beta6/7 serialized the Windows default in full maps. It cannot
             // be distinguished from an explicit identical override, and on
             // macOS these Windows chords are system shortcuts (Command+Space
@@ -434,6 +434,34 @@ fn normalize_shortcuts(input: &BTreeMap<String, String>) -> BTreeMap<String, Str
             (action.id.as_str().to_owned(), value.to_owned())
         })
         .collect()
+}
+
+/// An action added after the user saved their shortcuts starts with its
+/// default chord, unless the user already gave that chord to another action;
+/// then it stays unassigned instead of taking the key away.
+fn new_action_default<'a>(
+    input: &BTreeMap<String, String>,
+    action: &'a apricot_core::action::ActionDefinition,
+) -> &'a str {
+    let default = action.default_shortcut();
+    // Python's own actions keep Python's behavior: a missing entry is the default.
+    let python_action = ACTIONS[..apricot_core::action::PYTHON_BASELINE_ACTIONS]
+        .iter()
+        .any(|python| python.id == action.id);
+    if input.is_empty() || python_action {
+        return default;
+    }
+    let taken = default
+        .split('|')
+        .filter_map(apricot_core::shortcut::ShortcutChord::parse)
+        .any(|chord| {
+            input.iter().any(|(other, configured)| {
+                other != action.id.as_str()
+                    && !apricot_core::action::actions_may_share_a_chord(action.id.as_str(), other)
+                    && chord.matches_configured(configured)
+            })
+        });
+    if taken { "" } else { default }
 }
 
 fn default_equalizer_gains() -> BTreeMap<String, f64> {
@@ -680,6 +708,30 @@ mod tests {
         )
         .expect("load saved disabled shortcut");
         assert_eq!(document.keyboard_shortcuts["background_play_pause"], "");
+    }
+
+    #[test]
+    fn new_actions_do_not_take_a_chord_the_user_already_uses() {
+        let document = SettingsDocument::from_value_with_defaults(
+            &json!({"language": "en", "keyboard_shortcuts": {"open_search": "Alt+T"}}),
+            SettingsDocument::default(),
+        )
+        .expect("settings");
+        assert_eq!(document.keyboard_shortcuts["open_search"], "Alt+T");
+        assert_eq!(document.keyboard_shortcuts["player_elapsed"], "");
+        assert_eq!(
+            document.keyboard_shortcuts["player_remaining"],
+            apricot_core::action::action_by_id("player_remaining")
+                .expect("action")
+                .default_shortcut()
+        );
+        // Python actions still fall back to their defaults.
+        let python = SettingsDocument::from_value_with_defaults(
+            &json!({"language": "en", "keyboard_shortcuts": {"open_search": "Ctrl+F"}}),
+            SettingsDocument::default(),
+        )
+        .expect("settings");
+        assert_eq!(python.keyboard_shortcuts["add_favorite"], "Ctrl+F");
     }
 
     #[test]

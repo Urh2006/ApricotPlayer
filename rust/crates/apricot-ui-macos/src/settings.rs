@@ -760,9 +760,10 @@ impl SettingsWindow {
                 })
                 .unwrap_or_default();
             let (primary, secondary) = current.split_once('|').unwrap_or((&current, ""));
-            let form = apricot_shell::FeatureForm {
-                title: catalog.text("shortcut_edit_alternatives").to_owned(),
-                fields: vec![
+            let form = apricot_shell::FeatureForm::localized(
+                &catalog,
+                catalog.text("shortcut_edit_alternatives").to_owned(),
+                vec![
                     apricot_shell::FormField::text(
                         "primary",
                         catalog.text("shortcut_primary"),
@@ -774,9 +775,7 @@ impl SettingsWindow {
                         secondary.trim(),
                     ),
                 ],
-                submit: catalog.text("save").to_owned(),
-                cancel: catalog.text("cancel").to_owned(),
-            };
+            );
             let Some(values) = crate::feature_form::show(self.mtm(), &form) else {
                 return;
             };
@@ -784,7 +783,7 @@ impl SettingsWindow {
                 ["primary", "secondary"]
                     .iter()
                     .filter_map(|key| values.get(*key).and_then(apricot_shell::FormValue::text))
-                    .map(str::trim)
+                    .map(apricot_shell::canonical_shortcut_text)
                     .filter(|value| !value.is_empty())
                     .collect::<Vec<_>>()
                     .join(" | "),

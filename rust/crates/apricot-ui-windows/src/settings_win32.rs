@@ -1317,9 +1317,10 @@ unsafe fn shortcut_command(window: HWND, command: SettingsCommand) {
                 .cloned()
                 .unwrap_or_default();
             let (primary, secondary) = current.split_once('|').unwrap_or((&current, ""));
-            let form = apricot_shell::FeatureForm {
-                title: catalog.text("shortcut_edit_alternatives").to_owned(),
-                fields: vec![
+            let form = apricot_shell::FeatureForm::localized(
+                &catalog,
+                catalog.text("shortcut_edit_alternatives").to_owned(),
+                vec![
                     apricot_shell::FormField::text(
                         "primary",
                         catalog.text("shortcut_primary"),
@@ -1331,16 +1332,14 @@ unsafe fn shortcut_command(window: HWND, command: SettingsCommand) {
                         secondary.trim(),
                     ),
                 ],
-                submit: catalog.text("save").to_owned(),
-                cancel: catalog.text("cancel").to_owned(),
-            };
+            );
             let Some(values) = crate::feature_form_win32::show(window, &form) else {
                 return;
             };
             let shortcut = ["primary", "secondary"]
                 .iter()
                 .filter_map(|key| values.get(*key).and_then(apricot_shell::FormValue::text))
-                .map(str::trim)
+                .map(apricot_shell::canonical_shortcut_text)
                 .filter(|value| !value.is_empty())
                 .collect::<Vec<_>>()
                 .join(" | ");
@@ -1356,6 +1355,21 @@ unsafe fn shortcut_command(window: HWND, command: SettingsCommand) {
         show_error(window, &error.to_string());
     }
     refresh_shortcut_browser(state);
+    // Focus stays on the button, so speak the changed row.
+    if let Some(row) = selected.as_deref().and_then(|id| {
+        state
+            .controls
+            .iter()
+            .find_map(|bound| match &bound.binding {
+                ControlBinding::ShortcutActionList(actions) => actions
+                    .iter()
+                    .find(|action| action.action_id == id)
+                    .map(shortcut_action_label),
+                _ => None,
+            })
+    }) {
+        state.announcer.announce(&row, true);
+    }
 }
 
 unsafe fn handle_settings_command(window: HWND, command: SettingsCommand) {
@@ -3018,7 +3032,12 @@ unsafe fn replace_combo_string(control: HWND, index: usize, label: &str) {
 }
 
 fn shortcut_action_label(action: &ShortcutActionItem) -> String {
-    format!("{}: {}. {}", action.label, action.shortcut, action.scope)
+    let shortcut = if action.shortcut.trim().is_empty() {
+        &action.unassigned
+    } else {
+        &action.shortcut
+    };
+    format!("{}: {shortcut}. {}", action.label, action.scope)
 }
 
 unsafe fn set_window_text(control: HWND, value: &str) {

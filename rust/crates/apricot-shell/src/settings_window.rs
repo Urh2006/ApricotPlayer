@@ -126,12 +126,12 @@ pub enum ShortcutCapture {
 /// Windows `shortcut_action_label`, with the macOS key names on a Mac.
 #[must_use]
 pub fn shortcut_action_label(action: &ShortcutActionItem) -> String {
-    format!(
-        "{}: {}. {}",
-        action.label,
-        apricot_core::shortcut::display_shortcut(&action.shortcut),
-        action.scope
-    )
+    let shortcut = if action.shortcut.trim().is_empty() {
+        action.unassigned.clone()
+    } else {
+        apricot_core::shortcut::display_shortcut(&action.shortcut)
+    };
+    format!("{}: {shortcut}. {}", action.label, action.scope)
 }
 
 /// Windows `shortcut_from_virtual_key`: the stored text of a chord.
@@ -173,6 +173,16 @@ pub fn shortcut_text(chord: ShortcutChord) -> Option<String> {
     }
     parts.push(key);
     Some(parts.join("+"))
+}
+
+/// A typed chord in its stored spelling ("ctrl-f8" becomes "Ctrl+F8");
+/// text that is not a chord is returned as typed, so validation can name it.
+#[must_use]
+pub fn canonical_shortcut_text(value: &str) -> String {
+    let value = value.trim();
+    ShortcutChord::parse(value)
+        .and_then(shortcut_text)
+        .unwrap_or_else(|| value.to_owned())
 }
 
 /// The binding of one model control (Windows `create_bound_control`).
@@ -898,6 +908,13 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_alternate_shortcuts_get_the_stored_spelling() {
+        assert_eq!(super::canonical_shortcut_text(" ctrl-f8 "), "Ctrl+F8");
+        assert_eq!(super::canonical_shortcut_text("f8"), "F8");
+        assert_eq!(super::canonical_shortcut_text("not a key"), "not a key");
+    }
 
     #[test]
     fn experimental_history_requires_yes_and_reprompts_after_disabling() {

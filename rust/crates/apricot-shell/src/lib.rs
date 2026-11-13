@@ -73,8 +73,8 @@ pub use repeat::KeyRelease;
 pub use screens::{ListScreen, ScreenControl, local_folder_result_label};
 pub use search::result_label;
 pub use settings_window::{
-    SettingsBinding, SettingsInput, ShortcutCapture, settings_binding, shortcut_action_label,
-    shortcut_text,
+    SettingsBinding, SettingsInput, ShortcutCapture, canonical_shortcut_text, settings_binding,
+    shortcut_action_label, shortcut_text,
 };
 pub use spotify::{
     SpotifyLoginAction, SpotifyLoginTexts, SpotifyLoginUpdate, SpotifySettingsTexts,

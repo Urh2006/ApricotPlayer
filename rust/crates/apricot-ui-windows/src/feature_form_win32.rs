@@ -11,9 +11,7 @@ use windows::{
         System::LibraryLoader::GetModuleHandleW,
         UI::{
             Controls::SetScrollInfo,
-            Input::KeyboardAndMouse::{
-                EnableWindow, GetFocus, GetKeyState, IsWindowEnabled, SetFocus, VK_SHIFT,
-            },
+            Input::KeyboardAndMouse::{EnableWindow, GetFocus, IsWindowEnabled, SetFocus},
             Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
             WindowsAndMessaging::{
                 BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, CBS_DROPDOWNLIST, CW_USEDEFAULT,
@@ -21,12 +19,12 @@ use windows::{
                 ES_PASSWORD, ES_READONLY, GetClientRect, GetMessageW, GetParent, GetWindowLongPtrW,
                 GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW, IsDialogMessageW, IsWindow,
                 LoadCursorW, MB_ICONWARNING, MB_OK, MSG, MessageBoxW, MoveWindow, PostQuitMessage,
-                RegisterClassW, SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SW_HIDE,
-                SW_SHOW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, ShowWindow,
-                TranslateMessage, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CLOSE, WM_COMMAND,
-                WM_GETDLGCODE, WM_KEYDOWN, WM_NCDESTROY, WM_SETFOCUS, WM_SETFONT, WM_SIZE,
-                WM_VSCROLL, WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME,
-                WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+                RegisterClassW, SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SW_SHOW,
+                SendMessageW, SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TranslateMessage,
+                WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_NCDESTROY,
+                WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_CAPTION, WS_CHILD,
+                WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME,
+                WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -108,7 +106,7 @@ unsafe fn show_inner(
         WS_EX_DLGMODALFRAME,
         CLASS,
         PCWSTR(title.as_ptr()),
-        WS_OVERLAPPEDWINDOW | WS_VSCROLL,
+        WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_VSCROLL,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         760,
@@ -305,6 +303,9 @@ unsafe fn create_controls(
     Ok((fields, submit, cancel))
 }
 
+/// Scrolling moves the fields; it never hides them. A hidden window cannot
+/// keep the keyboard focus, and the dialog manager skips hidden controls when
+/// Tab looks for the next field.
 unsafe fn layout(window: HWND, state: &mut State) {
     let mut area = RECT::default();
     let _ = GetClientRect(window, &raw mut area);
@@ -326,10 +327,7 @@ unsafe fn layout(window: HWND, state: &mut State) {
     let column = (area.right / 3).clamp(160, 280);
     for (index, field) in state.fields.iter().enumerate() {
         let y = 12 + i32::try_from(index).unwrap_or(0) * ROW - state.offset;
-        let show = y >= 0 && y + 28 <= visible;
-        let _ = ShowWindow(field.control, if show { SW_SHOW } else { SW_HIDE });
         if let Some(label) = field.label {
-            let _ = ShowWindow(label, if show { SW_SHOW } else { SW_HIDE });
             let _ = MoveWindow(label, 12, y + 4, column - 20, 26, true);
             let h = if matches!(state.form.fields[index].kind, FormFieldKind::Choice { .. }) {
                 300
@@ -350,6 +348,22 @@ unsafe fn layout(window: HWND, state: &mut State) {
     }
     let _ = MoveWindow(state.submit, 12, area.bottom - 44, 130, 30, true);
     let _ = MoveWindow(state.cancel, 154, area.bottom - 44, 130, 30, true);
+}
+
+/// Scrolls just enough to show the field at `index`.
+unsafe fn reveal(window: HWND, state: &mut State, index: usize) {
+    let mut area = RECT::default();
+    let _ = GetClientRect(window, &raw mut area);
+    let top = i32::try_from(index).unwrap_or(0) * ROW;
+    let visible = (area.bottom - 70).max(ROW);
+    if top < state.offset {
+        state.offset = top;
+    } else if top + ROW > state.offset + visible {
+        state.offset = top + ROW - visible;
+    } else {
+        return;
+    }
+    layout(window, state);
 }
 
 unsafe fn read_values(state: &State) -> FormValues {
@@ -394,14 +408,21 @@ unsafe extern "system" fn window_proc(window: HWND, message: u32, w: WPARAM, l: 
                         let _ = DestroyWindow(window);
                     }
                     Err(label) => {
-                        let label = wide(&label);
+                        let message = wide(&state.form.error_message(&label));
                         let title = wide(&state.form.title);
                         MessageBoxW(
                             Some(window),
-                            PCWSTR(label.as_ptr()),
+                            PCWSTR(message.as_ptr()),
                             PCWSTR(title.as_ptr()),
                             MB_OK | MB_ICONWARNING,
                         );
+                        if let Some(field) = state
+                            .form
+                            .field_index(&label)
+                            .and_then(|index| state.fields.get(index))
+                        {
+                            let _ = SetFocus(Some(field.control));
+                        }
                     }
                 }
                 return LRESULT(0);
@@ -448,51 +469,12 @@ unsafe extern "system" fn field_proc(
     id: usize,
     index: usize,
 ) -> LRESULT {
-    // Keep every row reachable even when it is outside the current viewport.
-    if message == WM_GETDLGCODE {
-        return LRESULT(0x0002 | DefSubclassProc(window, message, w, l).0);
-    }
-    if message == WM_KEYDOWN
-        && w.0 == 9
-        && let Ok(parent) = GetParent(window)
-    {
-        let ptr = GetWindowLongPtrW(parent, WINDOW_LONG_PTR_INDEX(0)) as *mut State;
-        if let Some(state) = ptr.as_mut() {
-            let previous = GetKeyState(i32::from(VK_SHIFT.0)) < 0;
-            let next = if previous {
-                index.checked_sub(1)
-            } else {
-                index
-                    .checked_add(1)
-                    .filter(|next| *next < state.fields.len())
-            };
-            let target = if let Some(next) = next {
-                state.offset = i32::try_from(next).unwrap_or(0) * ROW;
-                layout(parent, state);
-                state.fields[next].control
-            } else if previous {
-                state.cancel
-            } else {
-                state.submit
-            };
-            let _ = SetFocus(Some(target));
-            return LRESULT(0);
-        }
-    }
     if message == WM_SETFOCUS
         && let Ok(parent) = GetParent(window)
     {
         let ptr = GetWindowLongPtrW(parent, WINDOW_LONG_PTR_INDEX(0)) as *mut State;
         if let Some(state) = ptr.as_mut() {
-            let mut area = RECT::default();
-            let _ = GetClientRect(parent, &raw mut area);
-            let top = i32::try_from(index).unwrap_or(0) * ROW;
-            if top < state.offset {
-                state.offset = top;
-            } else if top + ROW > state.offset + area.bottom - 70 {
-                state.offset = top + ROW - (area.bottom - 70);
-            }
-            layout(parent, state);
+            reveal(parent, state, index);
         }
     }
     if message == WM_NCDESTROY {
@@ -516,20 +498,33 @@ mod tests {
     use super::*;
     use apricot_shell::FormField;
     use std::{thread, time::Duration};
-    use windows::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, GetDlgItem, IsWindowVisible, SetWindowTextW,
+    use windows::Win32::{
+        Graphics::Gdi::ClientToScreen,
+        UI::WindowsAndMessaging::{
+            FindWindowW, GetDlgItem, GetNextDlgTabItem, GetWindowRect, IsWindowVisible,
+            PostMessageW, SetWindowTextW, WM_NEXTDLGCTL,
+        },
     };
 
+    /// Runs `action` against the form, then always closes it, so a failed
+    /// assertion can never leave a modal window waiting on the desktop.
     fn drive(title: &str, action: impl FnOnce(HWND) + Send + 'static) -> thread::JoinHandle<()> {
         let title = title.to_owned();
         thread::spawn(move || unsafe {
             for _ in 0..250 {
                 let title = wide(&title);
-                if let Ok(window) = FindWindowW(CLASS, PCWSTR(title.as_ptr())) {
-                    if IsWindowVisible(window).as_bool() {
-                        action(window);
-                        return;
+                if let Ok(window) = FindWindowW(CLASS, PCWSTR(title.as_ptr()))
+                    && IsWindowVisible(window).as_bool()
+                {
+                    let outcome =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| action(window)));
+                    if IsWindow(Some(window)).as_bool() {
+                        let _ = PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0));
                     }
+                    if let Err(panic) = outcome {
+                        std::panic::resume_unwind(panic);
+                    }
+                    return;
                 }
                 thread::sleep(Duration::from_millis(20));
             }
@@ -617,14 +612,29 @@ mod tests {
         );
         let driver = drive(&form.title, |window| unsafe {
             let last = GetDlgItem(Some(window), (FIRST_FIELD + 23) as i32).unwrap();
-            assert!(!IsWindowVisible(last).as_bool());
-            for index in 0..23 {
-                let field = GetDlgItem(Some(window), (FIRST_FIELD + index) as i32).unwrap();
-                SendMessageW(field, WM_KEYDOWN, Some(WPARAM(9)), None);
+            let mut field = GetDlgItem(Some(window), FIRST_FIELD as i32).unwrap();
+            for _ in 0..23 {
+                field = GetNextDlgTabItem(window, Some(field), false).unwrap();
             }
+            assert_eq!(field, last, "Tab reaches the last field");
+            SendMessageW(
+                window,
+                WM_NEXTDLGCTL,
+                Some(WPARAM(last.0 as usize)),
+                Some(LPARAM(1)),
+            );
+            let mut area = RECT::default();
+            let mut client = RECT::default();
+            let _ = GetWindowRect(last, &raw mut area);
+            let _ = GetClientRect(window, &raw mut client);
+            let mut corner = windows::Win32::Foundation::POINT {
+                x: 0,
+                y: client.bottom,
+            };
+            let _ = ClientToScreen(window, &raw mut corner);
             assert!(
-                IsWindowVisible(last).as_bool(),
-                "last EQ field reachable with Tab"
+                area.bottom <= corner.y,
+                "focused field is scrolled into view"
             );
             SendMessageW(window, WM_COMMAND, Some(WPARAM(2)), None);
         });

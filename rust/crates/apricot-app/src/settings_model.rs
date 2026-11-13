@@ -229,6 +229,8 @@ pub struct ShortcutActionItem {
     pub label: String,
     pub shortcut: String,
     pub scope: String,
+    /// Shown instead of an empty shortcut ("Unassigned").
+    pub unassigned: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1499,18 +1501,11 @@ fn shortcut_controls(
 ) -> Vec<SettingsControl> {
     let actions = crate::shortcut_catalog::shortcut_actions(catalog, settings);
     let first = actions.first().cloned();
+    // Search and filter come first; Tab from the category list goes
+    // straight to the commands of the selected category.
     let mut controls = vec![
         SettingsControl::ShortcutSearch {
             label: catalog.text("shortcut_search_all").to_owned(),
-        },
-        SettingsControl::ShortcutCategoryList {
-            label: catalog.text("shortcut_categories").to_owned(),
-            categories: crate::shortcut_catalog::SHORTCUT_CATEGORIES
-                .iter()
-                .map(|category| {
-                    SettingsChoiceOption::labeled(category.id, catalog.text(category.label_key))
-                })
-                .collect(),
         },
         SettingsControl::ShortcutFilter {
             label: catalog.text("shortcut_filter").to_owned(),
@@ -1523,6 +1518,15 @@ fn shortcut_controls(
             .iter()
             .map(|key| catalog.text(key).to_owned())
             .collect(),
+        },
+        SettingsControl::ShortcutCategoryList {
+            label: catalog.text("shortcut_categories").to_owned(),
+            categories: crate::shortcut_catalog::SHORTCUT_CATEGORIES
+                .iter()
+                .map(|category| {
+                    SettingsChoiceOption::labeled(category.id, catalog.text(category.label_key))
+                })
+                .collect(),
         },
         SettingsControl::ShortcutActionList {
             label: catalog.text("shortcut_actions").to_owned(),

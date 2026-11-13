@@ -9,6 +9,10 @@ pub struct FeatureForm {
     pub fields: Vec<FormField>,
     pub submit: String,
     pub cancel: String,
+    /// "{field}" is replaced by the label of the rejected field.
+    pub invalid_value: String,
+    /// "{field}", "{minimum}" and "{maximum}" describe a rejected number.
+    pub number_range: String,
 }
 
 pub type FormValues = BTreeMap<String, FormValue>;
@@ -93,7 +97,49 @@ impl FeatureForm {
             fields,
             submit: "Save".to_owned(),
             cancel: "Cancel".to_owned(),
+            invalid_value: "{field}: the value is not valid.".to_owned(),
+            number_range: "{field}: enter a number from {minimum} to {maximum}.".to_owned(),
         }
+    }
+
+    /// A form whose buttons and validation messages use the interface language.
+    #[must_use]
+    pub fn localized(
+        catalog: &apricot_core::TranslationCatalog,
+        title: impl Into<String>,
+        fields: Vec<FormField>,
+    ) -> Self {
+        Self {
+            title: title.into(),
+            fields,
+            submit: catalog.text("save").to_owned(),
+            cancel: catalog.text("cancel").to_owned(),
+            invalid_value: catalog.text("form_invalid_value").to_owned(),
+            number_range: catalog.text("form_number_range").to_owned(),
+        }
+    }
+
+    /// The sentence shown and spoken when `validate` rejects `label`.
+    #[must_use]
+    pub fn error_message(&self, label: &str) -> String {
+        let field = self.fields.iter().find(|field| field.label == label);
+        if let Some(FormFieldKind::Number {
+            minimum, maximum, ..
+        }) = field.map(|field| &field.kind)
+        {
+            return self
+                .number_range
+                .replace("{field}", label)
+                .replace("{minimum}", &format_number(*minimum))
+                .replace("{maximum}", &format_number(*maximum));
+        }
+        self.invalid_value.replace("{field}", label)
+    }
+
+    /// The position of the field whose label `validate` returned.
+    #[must_use]
+    pub fn field_index(&self, label: &str) -> Option<usize> {
+        self.fields.iter().position(|field| field.label == label)
     }
 
     /// Validates the complete response before any settings or side effects are committed.
@@ -222,9 +268,39 @@ impl FormField {
     }
 }
 
+/// Whole numbers without a decimal point, others as typed (2.5, 0.1).
+#[must_use]
+pub fn format_number(value: f64) -> String {
+    if value.fract() == 0.0 && value.abs() < 1e15 {
+        format!("{value:.0}")
+    } else {
+        let text = format!("{value:.3}");
+        text.trim_end_matches('0').trim_end_matches('.').to_owned()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejected_fields_get_a_sentence_with_the_allowed_range() {
+        let form = FeatureForm::new(
+            "Timer",
+            vec![
+                FormField::number("minutes", "Minutes", 30.0, 1.0, 1440.0),
+                FormField::text("name", "Name", ""),
+            ],
+        );
+        assert_eq!(
+            form.error_message("Minutes"),
+            "Minutes: enter a number from 1 to 1440."
+        );
+        assert_eq!(form.error_message("Name"), "Name: the value is not valid.");
+        assert_eq!(form.field_index("Name"), Some(1));
+        assert_eq!(format_number(0.016_666_7), "0.017");
+        assert_eq!(format_number(2.5), "2.5");
+    }
 
     #[test]
     fn rejects_incomplete_invalid_and_nonfinite_input_before_commit() {
