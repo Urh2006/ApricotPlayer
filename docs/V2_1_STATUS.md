@@ -23,7 +23,7 @@ Ta dokument vodi delo za 2.1 beta 1. Obseg je potrjen v 19 sklopih (EQ, obdelava
 | 7 | Izseki, A-B, shranjeni izseki v Bookmarks, izvoz | narejeno |
 | 8 | Zvočne sledi in podnapisi, glasno branje | narejeno |
 | 9 | Zvočne knjige, navigacija in informacije | narejeno |
-| 10 | Playlisti, mape, formati | čaka |
+| 10 | Playlisti, mape, formati | narejeno |
 | 11 | Upravljanje lokalnih datotek | čaka |
 | 12 | Radio | čaka |
 | 13 | IPTV | čaka |
@@ -136,3 +136,15 @@ Ročni NVDA preizkus: predvajaj video z več sledmi, Alt+PageDown pove novo sled
 Preverjeno v izoliranem namizju z M4B s tremi poglavji: premik na naslednje poglavje ("Chapter Two. 0:20."), čas znotraj poglavja, hitri položaj nastavi in skoči, prazen položaj, Ctrl+G zunaj seznama, vklop in izklop načina zvočne knjige.
 
 Ročni NVDA preizkus: odpri M4B s poglavji, Ctrl+PageDown: NVDA pove ime naslednjega poglavja. T pove čas znotraj poglavja. Alt+Shift+1, nato kasneje Alt+1: NVDA pove "Quick position 1: ..." in skoči nazaj.
+
+## Enota 10
+
+- Urejevalnik playlista (Alt+E na playlistu ali v njegovih vnosih) je en dialog z imenom, opisom, seznamom vnosov in izbiro dejanja. Vse spremembe so na kopiji in se zapišejo šele z "Save playlist and close"; Escape zavrže vse.
+- Dejanja: dodaj datoteko, spletno povezavo ali mapo, uvozi M3U, M3U8, PLS, XSPF, ASX ali CUE, izvozi v M3U8, M3U ali JSON, označi ali odznači vnos, označi vse, počisti oznake, premakni in odstrani označene ali izbrani vnos.
+- Mapo lahko dodaš kot živo mapo (vnos "Folder: pot", datoteke se preberejo ob vsakem odprtju playlista) ali kot trenutne datoteke. Izvoz v M3U8 mapo razširi v datoteke, JSON jo ohrani kot mapo.
+- Po vsakem dejanju se dialog vrne na seznam vnosov z istim dejanjem izbranim, zato Enter ponovi dejanje na naslednjem vnosu. Za to ima skupni obrazec novo polje `initial_focus`, ki ga upoštevata Windows in macOS.
+- Ctrl+Alt+Shift+F2 shrani trenutni seznam predvajanja kot nov playlist; obstoječe ime javi "A playlist with that name already exists."
+
+Preverjeno v izoliranem namizju: shranjevanje trenutnega seznama, odprtje urejevalnika, vrstni red Tab (ime, opis, vnosi, dejanje, Do it, Cancel), izvoz skozi pravi Windows dialog v M3U8, označevanje ("1. Marked. 01-alpha"), premik, shranitev v `playlists.json` in najava "Playlist saved."
+
+Ročni NVDA preizkus: predvajaj datoteko, Ctrl+Alt+Shift+F2, vpiši ime, Enter: NVDA pove "The playback list was saved as a playlist." Ctrl+Alt+P, Alt+E: NVDA pove "Edit playlist" in ime playlista. Tab do Action, izberi "Mark or unmark the selected entry", Enter: fokus je na Entries in NVDA prebere "1. Marked. ...". Tab do Action, "Save playlist and close", Enter: NVDA pove "Playlist saved."

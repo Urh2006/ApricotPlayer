@@ -148,7 +148,11 @@ unsafe fn show_inner(
     layout(window, &mut state);
     let _ = ShowWindow(window, SW_SHOW);
     let _ = SetForegroundWindow(window);
-    let first = state.fields.first().map_or(submit, |field| field.control);
+    let first = state
+        .fields
+        .get(form.initial_focus)
+        .or(state.fields.first())
+        .map_or(submit, |field| field.control);
     let _ = SetFocus(Some(first));
     let mut message = MSG::default();
     while IsWindow(Some(window)).as_bool() {

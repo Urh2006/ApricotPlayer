@@ -1,48 +1,115 @@
-//! Transactional playlist editor shared by both native frontends.
-#![allow(clippy::pedantic, clippy::style)] // 2.1 draft: fully linted when its feature unit is finished.
-use crate::{FeatureForm, FormField, FormValue, FormValues};
-use apricot_app::Application;
-use apricot_storage::UserPlaylist;
+//! Playlist editor shared by both native frontends: the edits are made on a
+//! copy and written in one step when the user saves.
+
 use std::{
     collections::BTreeSet,
+    fmt::Write as _,
     path::{Path, PathBuf},
 };
 
+use apricot_app::Application;
+use apricot_core::{MediaItem, TranslationCatalog};
+use apricot_storage::UserPlaylist;
+
+use crate::{FeatureForm, FormField, FormValue, FormValues};
+
+/// File types the editor imports; HLS streams stay one live entry.
+pub const PLAYLIST_IMPORT_EXTENSIONS: [&str; 6] = ["m3u", "m3u8", "pls", "xspf", "asx", "cue"];
+
+/// What the editor needs from the native window.
+pub trait PlaylistEditorUi {
+    fn form(&mut self, form: &FeatureForm) -> Option<FormValues>;
+    fn open_file(&mut self, title: &str, extensions: &[&str]) -> Option<PathBuf>;
+    fn open_folder(&mut self, title: &str) -> Option<PathBuf>;
+    fn save_file(
+        &mut self,
+        title: &str,
+        default_name: &str,
+        extensions: &[&str],
+    ) -> Option<PathBuf>;
+}
+
+const ACTIONS: [&str; 11] = [
+    "playlist_editor_save",
+    "playlist_editor_add_file",
+    "playlist_editor_add_link",
+    "playlist_editor_add_folder",
+    "playlist_editor_import",
+    "playlist_editor_export",
+    "playlist_editor_mark",
+    "playlist_editor_mark_all",
+    "playlist_editor_clear_marks",
+    "playlist_editor_move",
+    "playlist_editor_remove",
+];
+
+fn text<'a>(values: &'a FormValues, key: &str) -> &'a str {
+    values.get(key).and_then(FormValue::text).unwrap_or("")
+}
+
+fn entry_label(catalog: &TranslationCatalog, item: &MediaItem) -> String {
+    if item
+        .metadata
+        .get("apricot_folder_reference")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        return catalog
+            .text("playlist_folder_entry")
+            .replace("{path}", item.local_path.as_deref().unwrap_or(""));
+    }
+    item.title.clone()
+}
+
+/// Edits playlist `index`; `Ok(true)` when it was saved.
+///
+/// # Errors
+///
+/// Returns a message when the playlist cannot be read or saved.
+#[allow(clippy::too_many_lines)] // One dialog loop with its actions.
 pub fn edit(
     application: &mut Application,
     index: usize,
-    mut show: impl FnMut(&FeatureForm) -> Option<FormValues>,
+    ui: &mut dyn PlaylistEditorUi,
 ) -> Result<bool, String> {
+    let catalog = apricot_app::embedded_catalog(&application.settings().language);
     let Some(mut draft) = application.user_playlists().get(index).cloned() else {
-        return Err("Select a playlist first".into());
+        return Err(catalog.text("playlist_editor_no_playlist").to_owned());
     };
     let mut selected = 0;
     let mut marked = BTreeSet::new();
+    // After an action the form comes back on the entries with that action
+    // still chosen, so Enter repeats it on the next entry.
+    let mut last_action = None;
     loop {
         let rows = if draft.items.is_empty() {
-            vec!["Empty playlist".into()]
+            vec![catalog.text("playlist_empty").to_owned()]
         } else {
             draft
                 .items
                 .iter()
                 .enumerate()
                 .map(|(at, item)| {
-                    format!(
-                        "{}. {}{}",
-                        at + 1,
-                        if marked.contains(&at) { "Marked. " } else { "" },
-                        item.title
-                    )
+                    let label = entry_label(&catalog, item);
+                    if marked.contains(&at) {
+                        catalog
+                            .text("playlist_editor_marked_row")
+                            .replace("{number}", &(at + 1).to_string())
+                            .replace("{title}", &label)
+                    } else {
+                        format!("{}. {label}", at + 1)
+                    }
                 })
                 .collect()
         };
-        let mut form = FeatureForm::new(
-            "Edit playlist",
+        let mut form = FeatureForm::localized(
+            &catalog,
+            catalog.text("playlist_edit"),
             vec![
-                FormField::text("name", "Name", &draft.title),
+                FormField::text("name", catalog.text("playlist_editor_name"), &draft.title),
                 FormField::text(
                     "description",
-                    "Description",
+                    catalog.text("playlist_editor_description"),
                     draft
                         .metadata
                         .get("description")
@@ -51,204 +118,178 @@ pub fn edit(
                 ),
                 FormField::choice(
                     "entry",
-                    "Entries",
+                    catalog.text("playlist_editor_entries"),
                     rows,
                     selected.min(draft.items.len().saturating_sub(1)),
                 ),
                 FormField::choice(
                     "action",
-                    "Action",
-                    vec![
-                        "Save playlist".into(),
-                        "Add file or link".into(),
-                        "Add folder".into(),
-                        "Import playlist".into(),
-                        "Export playlist".into(),
-                        "Mark or unmark selected".into(),
-                        "Mark all".into(),
-                        "Clear marks".into(),
-                        "Move marked entries".into(),
-                        "Remove marked or selected".into(),
-                        "Duplicate selected entry".into(),
-                    ],
-                    0,
+                    catalog.text("playlist_editor_action"),
+                    ACTIONS
+                        .iter()
+                        .map(|key| catalog.text(key).to_owned())
+                        .collect(),
+                    last_action.unwrap_or(0),
                 ),
             ],
         );
-        form.submit = "Continue".into();
-        let Some(values) = show(&form) else {
+        catalog
+            .text("playlist_editor_do")
+            .clone_into(&mut form.submit);
+        if last_action.is_some() {
+            form.initial_focus = 2;
+        }
+        let Some(values) = ui.form(&form) else {
             return Ok(false);
         };
-        draft.title = values
-            .get("name")
-            .and_then(FormValue::text)
-            .unwrap_or("")
-            .trim()
-            .to_owned();
+        let title = text(&values, "name").trim();
+        if !title.is_empty() {
+            title.clone_into(&mut draft.title);
+        }
         draft.metadata.insert(
             "description".into(),
-            serde_json::json!(
-                values
-                    .get("description")
-                    .and_then(FormValue::text)
-                    .unwrap_or("")
-            ),
+            serde_json::json!(text(&values, "description").trim()),
         );
         selected = values.get("entry").and_then(FormValue::choice).unwrap_or(0);
-        match values
+        let action = values
             .get("action")
             .and_then(FormValue::choice)
-            .unwrap_or(0)
-        {
+            .unwrap_or(0);
+        last_action = Some(action);
+        match action {
             0 => {
                 return application
                     .replace_user_playlist(index, draft, now())
-                    .map_err(|e| e.to_string());
+                    .map_err(|error| error.to_string());
             }
             1 => {
-                let Some(values) = show(&FeatureForm::new(
-                    "Add file or link",
-                    vec![FormField::text("path", "File path or media link", "")],
-                )) else {
-                    continue;
-                };
-                let path = values
-                    .get("path")
-                    .and_then(FormValue::text)
-                    .unwrap_or("")
-                    .trim();
-                if path.is_empty() {
-                    continue;
+                if let Some(path) = ui.open_file(
+                    catalog.text("playlist_editor_add_file"),
+                    apricot_platform::local_media::MEDIA_EXTENSIONS,
+                ) {
+                    draft.items.push(crate::local_file_item(&path));
+                    selected = draft.items.len() - 1;
                 }
-                let base = url::Url::from_directory_path(
-                    std::env::current_dir().map_err(|e| e.to_string())?,
-                )
-                .map_err(|()| "Invalid current folder")?;
-                let item =
-                    apricot_platform::playlist_file::parse(&format!("#EXTM3U\n{path}"), &base)?
-                        .items
-                        .into_iter()
-                        .next()
-                        .ok_or("The media location is invalid")?;
-                draft.items.push(item);
             }
             2 => {
-                let Some(values) = show(&FeatureForm::new(
-                    "Add folder",
-                    vec![
-                        FormField::text("path", "Folder path", ""),
-                        FormField::checkbox(
-                            "live",
-                            "Read current folder contents whenever this playlist opens",
-                            true,
-                        ),
-                    ],
-                )) else {
-                    continue;
-                };
-                let path = PathBuf::from(
-                    values
-                        .get("path")
-                        .and_then(FormValue::text)
-                        .unwrap_or("")
-                        .trim()
-                        .trim_matches('"'),
-                );
-                if values
-                    .get("live")
-                    .and_then(FormValue::checked)
-                    .unwrap_or(true)
-                {
-                    draft
-                        .items
-                        .push(apricot_platform::playlist_file::folder_reference(&path)?);
-                } else {
-                    draft.items.extend(
-                        apricot_platform::local_media::scan_local_media_folder(&path)
-                            .map_err(|e| e.to_string())?,
-                    );
-                }
-            }
-            3 => {
-                let Some(values) = show(&FeatureForm::new(
-                    "Import playlist",
+                let Some(values) = ui.form(&FeatureForm::localized(
+                    &catalog,
+                    catalog.text("playlist_editor_add_link"),
                     vec![FormField::text(
-                        "path",
-                        "Playlist file path or HTTP address",
+                        "url",
+                        catalog.text("playlist_editor_link_field"),
                         "",
                     )],
                 )) else {
                     continue;
                 };
-                let value = values
-                    .get("path")
-                    .and_then(FormValue::text)
-                    .unwrap_or("")
-                    .trim();
-                let parsed = if let Some(url) = url::Url::parse(value)
+                let link = text(&values, "url").trim();
+                match url::Url::parse(link)
                     .ok()
                     .filter(|url| matches!(url.scheme(), "http" | "https"))
+                    .and_then(|url| {
+                        apricot_platform::playlist_file::parse(&format!("#EXTM3U\n{url}"), &url)
+                            .ok()
+                    })
+                    .and_then(|parsed| parsed.items.into_iter().next())
                 {
-                    apricot_platform::playlist_file::read_url(&url)?
-                } else {
-                    apricot_platform::playlist_file::read_local(Path::new(value))?
-                };
-                draft.items.extend(parsed.items);
+                    Some(item) => {
+                        draft.items.push(item);
+                        selected = draft.items.len() - 1;
+                    }
+                    None => return Err(catalog.text("subtitles_url_invalid").to_owned()),
+                }
             }
-            4 => {
-                let Some(values) = show(&FeatureForm::new(
-                    "Export playlist",
-                    vec![
-                        FormField::text("path", "Destination (.json, .m3u or .m3u8)", ""),
-                        FormField::checkbox("replace", "Replace an existing file", false),
-                    ],
+            3 => {
+                let Some(folder) = ui.open_folder(catalog.text("playlist_editor_add_folder"))
+                else {
+                    continue;
+                };
+                let Some(values) = ui.form(&FeatureForm::localized(
+                    &catalog,
+                    catalog.text("playlist_editor_add_folder"),
+                    vec![FormField::choice(
+                        "kind",
+                        catalog.text("playlist_editor_folder_kind"),
+                        vec![
+                            catalog.text("playlist_editor_folder_live").to_owned(),
+                            catalog.text("playlist_editor_folder_snapshot").to_owned(),
+                        ],
+                        0,
+                    )],
                 )) else {
                     continue;
                 };
-                let path = PathBuf::from(
-                    values
-                        .get("path")
-                        .and_then(FormValue::text)
-                        .unwrap_or("")
-                        .trim(),
-                );
-                if path.exists()
-                    && !values
-                        .get("replace")
-                        .and_then(FormValue::checked)
-                        .unwrap_or(false)
-                {
-                    return Err(
-                        "The destination exists; confirm replacement or choose another name".into(),
+                if values.get("kind").and_then(FormValue::choice) == Some(1) {
+                    draft.items.extend(
+                        apricot_platform::local_media::scan_local_media_folder(&folder)
+                            .map_err(|error| error.to_string())?,
                     );
+                } else {
+                    draft
+                        .items
+                        .push(apricot_platform::playlist_file::folder_reference(&folder)?);
                 }
-                export(&draft, &path)?;
+                selected = draft.items.len().saturating_sub(1);
+            }
+            4 => {
+                let Some(path) = ui.open_file(
+                    catalog.text("playlist_editor_import"),
+                    &PLAYLIST_IMPORT_EXTENSIONS,
+                ) else {
+                    continue;
+                };
+                let parsed =
+                    apricot_platform::playlist_file::read_local(&path).map_err(|error| {
+                        catalog
+                            .text("playlist_import_failed")
+                            .replace("{error}", &error)
+                    })?;
+                draft.items.extend(parsed.items);
             }
             5 => {
+                let name = format!("{}.m3u8", crate::safe_path_component(&draft.title));
+                let Some(path) = ui.save_file(
+                    catalog.text("playlist_editor_export"),
+                    &name,
+                    &["m3u8", "m3u", "json"],
+                ) else {
+                    continue;
+                };
+                export(&catalog, &draft, &path)?;
+            }
+            6 => {
                 if selected < draft.items.len() && !marked.remove(&selected) {
                     marked.insert(selected);
                 }
             }
-            6 => marked = (0..draft.items.len()).collect(),
-            7 => marked.clear(),
-            8 => {
+            7 => marked = (0..draft.items.len()).collect(),
+            8 => marked.clear(),
+            9 => {
+                if draft.items.is_empty() {
+                    continue;
+                }
                 let indices: Vec<_> = if marked.is_empty() {
                     vec![selected]
                 } else {
                     marked.iter().copied().collect()
                 };
-                let Some(values) = show(&FeatureForm::new(
-                    "Move playlist entries",
+                #[allow(clippy::cast_precision_loss)]
+                let length = draft.items.len() as f64;
+                let Some(values) = ui.form(&FeatureForm::localized(
+                    &catalog,
+                    catalog.text("playlist_editor_move"),
                     vec![FormField::number(
                         "before",
-                        "Move before entry number (last + 1 means end)",
-                        (selected + 1) as f64,
+                        catalog.text("playlist_editor_move_before"),
                         1.0,
-                        (draft.items.len() + 1) as f64,
+                        1.0,
+                        length + 1.0,
                     )],
                 )) else {
                     continue;
                 };
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 let destination = values
                     .get("before")
                     .and_then(FormValue::number)
@@ -258,7 +299,7 @@ pub fn edit(
                 move_entries(&mut draft.items, &indices, destination)?;
                 marked.clear();
             }
-            9 => {
+            _ => {
                 if marked.is_empty() {
                     if selected < draft.items.len() {
                         draft.items.remove(selected);
@@ -273,19 +314,19 @@ pub fn edit(
                         .collect();
                 }
                 marked.clear();
-            }
-            _ => {
-                if let Some(mut item) = draft.items.get(selected).cloned() {
-                    item.metadata.remove("apricot_playlist_entry_id");
-                    draft.items.insert(selected + 1, item);
-                    selected += 1;
-                }
+                selected = selected.min(draft.items.len().saturating_sub(1));
             }
         }
     }
 }
+
+/// Moves `indices` before position `destination` in their old order.
+///
+/// # Errors
+///
+/// Returns an error when a position is outside the list.
 pub fn move_entries(
-    items: &mut Vec<apricot_core::MediaItem>,
+    items: &mut Vec<MediaItem>,
     indices: &[usize],
     destination: usize,
 ) -> Result<(), String> {
@@ -308,57 +349,294 @@ pub fn move_entries(
     *items = retained;
     Ok(())
 }
-pub fn export(playlist: &UserPlaylist, path: &Path) -> Result<(), String> {
-    if path.as_os_str().is_empty() {
-        return Err("Choose a destination file".into());
-    }
-    let ext = path
+
+/// Writes the playlist as M3U8 (folders expanded to their current files) or
+/// as Apricot JSON (folders kept as folders).
+///
+/// # Errors
+///
+/// Returns a translated message when the file cannot be written.
+pub fn export(
+    catalog: &TranslationCatalog,
+    playlist: &UserPlaylist,
+    path: &Path,
+) -> Result<(), String> {
+    let extension = path
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    let bytes=match ext.as_str(){
-        "json"=>serde_json::to_vec_pretty(&serde_json::json!({"version":1,"title":playlist.title,"description":playlist.metadata.get("description"),"items":playlist.items})).map_err(|e|e.to_string())?,
-        "m3u"|"m3u8"=>{
-            let mut text=format!("#EXTM3U\n#PLAYLIST:{}\n",playlist.title.replace(['\r','\n']," "));
-            for item in apricot_platform::playlist_file::resolve_folders(&playlist.items,&std::sync::atomic::AtomicBool::new(false))?{
-                let path=item.copy_location().ok_or("A playlist entry has no exportable location")?;
-                if path.contains(['\r','\n']){return Err("A playlist path contains a line break; use JSON export".into());}
-                text.push_str(&format!("#EXTINF:{},{}\n{}\n",item.duration_seconds.unwrap_or(-1.0),item.title.replace(['\r','\n']," "),path));
-            }text.into_bytes()
-        },
-        _=>return Err("Choose JSON, M3U or M3U8 for playlist export".into()),
+    let bytes = if extension == "json" {
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "version": 1,
+            "title": playlist.title,
+            "description": playlist.metadata.get("description"),
+            "items": playlist.items,
+        }))
+        .map_err(|error| error.to_string())?
+    } else {
+        let mut text = format!(
+            "#EXTM3U\n#PLAYLIST:{}\n",
+            playlist.title.replace(['\r', '\n'], " ")
+        );
+        let items = apricot_platform::playlist_file::resolve_folders(
+            &playlist.items,
+            &std::sync::atomic::AtomicBool::new(false),
+        )?;
+        for item in items {
+            let Some(location) = item.copy_location() else {
+                continue;
+            };
+            if location.contains(['\r', '\n']) {
+                continue;
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            let seconds = item
+                .duration_seconds
+                .map_or(-1, |value| value.round() as i64);
+            let _ = writeln!(
+                text,
+                "#EXTINF:{seconds},{}\n{location}",
+                item.title.replace(['\r', '\n'], " ")
+            );
+        }
+        text.into_bytes()
     };
-    apricot_storage::write_bytes_atomic(path, &bytes).map_err(|e| e.to_string())
+    apricot_storage::write_bytes_atomic(path, &bytes).map_err(|error| {
+        catalog
+            .text("playlist_editor_export_failed")
+            .replace("{error}", &error.to_string())
+    })
 }
+
+/// Saves the list the player plays from as a new playlist.
+///
+/// # Errors
+///
+/// Returns a translated message when nothing plays or saving fails.
 pub fn save_current(
     application: &mut Application,
     mut show: impl FnMut(&FeatureForm) -> Option<FormValues>,
 ) -> Result<bool, String> {
+    let catalog = apricot_app::embedded_catalog(&application.settings().language);
     let mut items = application.current_sequence_items().to_vec();
     if items.is_empty() {
         items.extend(application.player_session().current_item().cloned());
     }
     if items.is_empty() {
-        return Err("No playback list is open".into());
+        return Err(catalog.text("playlist_save_current_nothing").to_owned());
     }
-    let Some(values) = show(&FeatureForm::new(
-        "Save current playback list",
-        vec![FormField::text("name", "Playlist name", "")],
+    let Some(values) = show(&FeatureForm::localized(
+        &catalog,
+        catalog.text("shortcut_playlist_save_current"),
+        vec![FormField::text(
+            "name",
+            catalog.text("playlist_editor_name"),
+            "",
+        )],
     )) else {
         return Ok(false);
     };
-    let name = values.get("name").and_then(FormValue::text).unwrap_or("");
     match application
-        .create_user_playlist_with_items(name, items, now())
-        .map_err(|e| e.to_string())?
+        .create_user_playlist_with_items(text(&values, "name"), items, now())
+        .map_err(|error| error.to_string())?
     {
         apricot_app::PlaylistCreateOutcome::Created(_) => Ok(true),
-        other => Err(format!("The playlist could not be saved: {other:?}")),
+        apricot_app::PlaylistCreateOutcome::EmptyName => Ok(false),
+        apricot_app::PlaylistCreateOutcome::AlreadyExists => {
+            Err(catalog.text("playlist_exists").to_owned())
+        }
+        apricot_app::PlaylistCreateOutcome::UnsupportedItem => {
+            Err(catalog.text("playlist_save_current_failed").to_owned())
+        }
     }
 }
+
 fn now() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0.0, |time| time.as_secs_f64())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+
+    use super::*;
+
+    #[derive(Default)]
+    struct Script {
+        forms: VecDeque<Vec<(&'static str, FormValue)>>,
+        files: VecDeque<PathBuf>,
+        folders: VecDeque<PathBuf>,
+        saves: VecDeque<PathBuf>,
+        seen: Vec<FeatureForm>,
+    }
+
+    impl PlaylistEditorUi for Script {
+        fn form(&mut self, form: &FeatureForm) -> Option<FormValues> {
+            self.seen.push(form.clone());
+            let answers = self.forms.pop_front()?;
+            let mut values = FormValues::new();
+            for field in &form.fields {
+                let value = match &field.kind {
+                    crate::FormFieldKind::Text { value, .. } => FormValue::Text(value.clone()),
+                    crate::FormFieldKind::Choice { selected, .. } => FormValue::Choice(*selected),
+                    crate::FormFieldKind::Number { value, .. } => FormValue::Number(*value),
+                    _ => continue,
+                };
+                values.insert(field.id.clone(), value);
+            }
+            for (id, value) in answers {
+                values.insert(id.to_owned(), value);
+            }
+            Some(values)
+        }
+
+        fn open_file(&mut self, _title: &str, _extensions: &[&str]) -> Option<PathBuf> {
+            self.files.pop_front()
+        }
+
+        fn open_folder(&mut self, _title: &str) -> Option<PathBuf> {
+            self.folders.pop_front()
+        }
+
+        fn save_file(
+            &mut self,
+            _title: &str,
+            _name: &str,
+            _extensions: &[&str],
+        ) -> Option<PathBuf> {
+            self.saves.pop_front()
+        }
+    }
+
+    fn application(directory: &Path) -> Application {
+        let paths =
+            apricot_storage::SettingsPaths::for_app_data(directory, &directory.join("legacy"));
+        let defaults = apricot_storage::SettingsDocument::with_platform_defaults(
+            directory.join("Downloads").to_string_lossy().into_owned(),
+            directory.join("cache").to_string_lossy().into_owned(),
+            "beta",
+        );
+        let mut application = Application::new(
+            apricot_app::SettingsController::load(paths, defaults),
+            apricot_app::MainMenuAvailability::default(),
+        );
+        application
+            .create_user_playlist_with_items("Mix", Vec::new(), 1.0)
+            .expect("playlist");
+        application
+    }
+
+    fn action(index: usize) -> (&'static str, FormValue) {
+        ("action", FormValue::Choice(index))
+    }
+
+    #[test]
+    fn the_editor_adds_marks_moves_and_saves_on_a_copy() {
+        let directory = tempfile::tempdir().expect("folder");
+        let media = directory.path().join("media");
+        std::fs::create_dir_all(&media).expect("media");
+        std::fs::write(media.join("01-alpha.ogg"), b"x").expect("alpha");
+        std::fs::write(media.join("02-beta.ogg"), b"x").expect("beta");
+        let mut application = application(directory.path());
+        let mut ui = Script::default();
+        ui.files.push_back(media.join("01-alpha.ogg"));
+        ui.folders.push_back(media.clone());
+        ui.forms.extend([
+            vec![action(1)],
+            vec![action(3)],
+            vec![("kind", FormValue::Choice(0))],
+            vec![("entry", FormValue::Choice(0)), action(6)],
+            vec![action(9)],
+            vec![("before", FormValue::Number(3.0))],
+            vec![("name", FormValue::Text("Evening".into())), action(0)],
+        ]);
+
+        assert_eq!(edit(&mut application, 0, &mut ui), Ok(true));
+
+        let playlist = &application.user_playlists()[0];
+        assert_eq!(playlist.title, "Evening");
+        assert_eq!(playlist.items.len(), 2);
+        assert_eq!(
+            playlist.items[0].metadata.get("apricot_folder_reference"),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(playlist.items[1].title, "01-alpha");
+        let rows = entries(&ui.seen[4]);
+        assert!(rows[0].ends_with(". 01-alpha") && rows[0].contains("Marked"));
+        assert!(rows[1].starts_with("2. Folder: "));
+        assert_eq!(ui.seen[0].initial_focus, 0);
+        assert_eq!(ui.seen[4].initial_focus, 2);
+        assert!(matches!(
+            ui.seen[4].fields[3].kind,
+            crate::FormFieldKind::Choice { selected: 6, .. }
+        ));
+    }
+
+    #[test]
+    fn closing_the_editor_keeps_the_saved_playlist() {
+        let directory = tempfile::tempdir().expect("folder");
+        let mut application = application(directory.path());
+        let mut ui = Script::default();
+        ui.forms
+            .push_back(vec![("name", FormValue::Text("Other".into())), action(2)]);
+
+        assert_eq!(edit(&mut application, 0, &mut ui), Ok(false));
+        assert_eq!(application.user_playlists()[0].title, "Mix");
+        assert_eq!(ui.seen.len(), 3);
+    }
+
+    #[test]
+    fn moving_keeps_the_marked_order() {
+        let item = |title: &str| crate::local_file_item(Path::new(&format!("{title}.mp3")));
+        let mut items = vec![item("a"), item("b"), item("c"), item("d")];
+        move_entries(&mut items, &[3, 1], 0).expect("move");
+        let titles: Vec<_> = items.iter().map(|item| item.title.as_str()).collect();
+        assert_eq!(titles, ["b", "d", "a", "c"]);
+        move_entries(&mut items, &[0], 4).expect("move");
+        let titles: Vec<_> = items.iter().map(|item| item.title.as_str()).collect();
+        assert_eq!(titles, ["d", "a", "c", "b"]);
+        assert!(move_entries(&mut items, &[4], 0).is_err());
+    }
+
+    #[test]
+    fn export_expands_folders_in_m3u8_and_keeps_them_in_json() {
+        let directory = tempfile::tempdir().expect("folder");
+        let media = directory.path().join("media");
+        std::fs::create_dir_all(&media).expect("media");
+        std::fs::write(media.join("song.ogg"), b"x").expect("song");
+        let catalog = apricot_app::embedded_catalog("en");
+        let mut playlist = UserPlaylist::new("Mix", 1.0);
+        playlist
+            .items
+            .push(apricot_platform::playlist_file::folder_reference(&media).expect("ref"));
+        let m3u = directory.path().join("mix.m3u8");
+        export(&catalog, &playlist, &m3u).expect("m3u8");
+        let text = std::fs::read_to_string(&m3u).expect("read");
+        assert!(text.starts_with("#EXTM3U\n#PLAYLIST:Mix\n#EXTINF:-1,song\n"));
+        assert!(text.contains("song.ogg"));
+
+        let json = directory.path().join("mix.json");
+        export(&catalog, &playlist, &json).expect("json");
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&json).expect("read")).expect("parse");
+        assert_eq!(
+            value["items"][0]["metadata"]["apricot_folder_reference"],
+            serde_json::json!(true)
+        );
+    }
+
+    fn entries(form: &FeatureForm) -> Vec<String> {
+        form.fields
+            .iter()
+            .find_map(|field| match &field.kind {
+                crate::FormFieldKind::Choice { options, .. } if field.id == "entry" => {
+                    Some(options.clone())
+                }
+                _ => None,
+            })
+            .expect("entries")
+    }
 }

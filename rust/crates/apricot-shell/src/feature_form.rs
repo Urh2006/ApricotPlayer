@@ -13,6 +13,8 @@ pub struct FeatureForm {
     pub invalid_value: String,
     /// "{field}", "{minimum}" and "{maximum}" describe a rejected number.
     pub number_range: String,
+    /// Index of the field that has the focus when the form opens.
+    pub initial_focus: usize,
 }
 
 pub type FormValues = BTreeMap<String, FormValue>;
@@ -106,6 +108,7 @@ impl FeatureForm {
             cancel: "Cancel".to_owned(),
             invalid_value: "{field}: the value is not valid.".to_owned(),
             number_range: "{field}: enter a number from {minimum} to {maximum}.".to_owned(),
+            initial_focus: 0,
         }
     }
 
@@ -123,6 +126,7 @@ impl FeatureForm {
             cancel: catalog.text("cancel").to_owned(),
             invalid_value: catalog.text("form_invalid_value").to_owned(),
             number_range: catalog.text("form_number_range").to_owned(),
+            initial_focus: 0,
         }
     }
 

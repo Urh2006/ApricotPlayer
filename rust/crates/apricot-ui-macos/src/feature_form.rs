@@ -230,7 +230,7 @@ fn show_inner(
     order.push(&save);
     order.push(&cancel);
     controls::set_tab_order(&order);
-    if let Some(first) = bound.first() {
+    if let Some(first) = bound.get(form.initial_focus).or(bound.first()) {
         alert.window().setInitialFirstResponder(Some(first.view()));
     }
     if let Some(callback) = preview {

@@ -262,9 +262,10 @@ impl Shell {
         } else {
             self.playlists.playlist
         };
-        match crate::playlist_editor::edit(&mut self.application, index, |form| {
-            ui.feature_form(form)
-        }) {
+        let mut editor = ShellEditorUi { ui };
+        let result = crate::playlist_editor::edit(&mut self.application, index, &mut editor);
+        let ui = editor.ui;
+        match result {
             Ok(true) => {
                 if self.view == View::UserPlaylistItems {
                     self.start_playlist_resolution(ui, index);
@@ -272,7 +273,7 @@ impl Shell {
                 } else {
                     self.refresh_user_playlists(ui, true);
                 }
-                ui.set_status("Playlist saved", true);
+                ui.set_status(&self.text("playlist_editor_saved"), true);
             }
             Ok(false) => {}
             Err(error) => ui.show_error(&error),
@@ -282,7 +283,7 @@ impl Shell {
         match crate::playlist_editor::save_current(&mut self.application, |form| {
             ui.feature_form(form)
         }) {
-            Ok(true) => ui.set_status("Playback list saved as a playlist", true),
+            Ok(true) => ui.set_status(&self.text("playlist_save_current_done"), true),
             Ok(false) => {}
             Err(error) => ui.show_error(&error),
         }
@@ -622,5 +623,34 @@ impl Shell {
                 ui.show_error(&message);
             }
         }
+    }
+}
+
+/// The playlist editor's pickers on the shared shell UI.
+struct ShellEditorUi<'a> {
+    ui: &'a mut dyn ShellUi,
+}
+
+impl crate::playlist_editor::PlaylistEditorUi for ShellEditorUi<'_> {
+    fn form(&mut self, form: &crate::FeatureForm) -> Option<crate::FormValues> {
+        self.ui.feature_form(form)
+    }
+
+    fn open_file(&mut self, title: &str, extensions: &[&str]) -> Option<std::path::PathBuf> {
+        self.ui.choose_open_file(title, extensions)
+    }
+
+    fn open_folder(&mut self, title: &str) -> Option<std::path::PathBuf> {
+        self.ui.choose_folder(title)
+    }
+
+    fn save_file(
+        &mut self,
+        title: &str,
+        default_name: &str,
+        extensions: &[&str],
+    ) -> Option<std::path::PathBuf> {
+        self.ui
+            .choose_save_file(title, None, default_name, extensions)
     }
 }

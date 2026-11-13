@@ -1,5 +1,4 @@
 //! Native wrapper for shared playlist editing and cancellable folder expansion.
-#![allow(clippy::pedantic, clippy::style)] // 2.1 draft: fully linted when its feature unit is finished.
 use super::{
     MainView, layout_controls_state, refresh_user_playlist_items, refresh_user_playlists,
     set_status, show_error_message, state_mut,
@@ -60,7 +59,11 @@ pub(super) unsafe fn poll(window: HWND) {
     let result = match pending.receiver.try_recv() {
         Ok(result) => result,
         Err(TryRecvError::Empty) => return,
-        Err(_) => Err("Playlist folder scan stopped unexpectedly".into()),
+        Err(_) => Err(
+            apricot_app::embedded_catalog(&state.application.settings().language)
+                .text("playlist_folder_scan_failed")
+                .to_owned(),
+        ),
     };
     let Some(pending) = state.pending_playlist_resolution.take() else {
         return;
@@ -88,6 +91,60 @@ pub(super) unsafe fn poll(window: HWND) {
         }
     }
 }
+/// The playlist editor's pickers on native dialogs owned by the main window.
+struct EditorUi {
+    owner: HWND,
+}
+
+fn pattern(extensions: &[&str]) -> String {
+    extensions
+        .iter()
+        .map(|extension| format!("*.{extension}"))
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+impl apricot_shell::playlist_editor::PlaylistEditorUi for EditorUi {
+    fn form(&mut self, form: &apricot_shell::FeatureForm) -> Option<apricot_shell::FormValues> {
+        crate::feature_form_win32::show(self.owner, form)
+    }
+
+    fn open_file(&mut self, title: &str, extensions: &[&str]) -> Option<std::path::PathBuf> {
+        crate::file_dialog_win32::choose_file_with_filters(
+            self.owner,
+            title,
+            &[(title.to_owned(), pattern(extensions))],
+        )
+        .ok()
+        .flatten()
+    }
+
+    fn open_folder(&mut self, title: &str) -> Option<std::path::PathBuf> {
+        crate::folder_dialog_win32::choose_media_folder(self.owner, title)
+    }
+
+    fn save_file(
+        &mut self,
+        title: &str,
+        default_name: &str,
+        extensions: &[&str],
+    ) -> Option<std::path::PathBuf> {
+        let directory = std::env::var_os("USERPROFILE")
+            .map(|home| std::path::PathBuf::from(home).join("Music"))
+            .unwrap_or_default();
+        crate::file_dialog_win32::save_file_with_filters(
+            self.owner,
+            title,
+            &[(title.to_owned(), pattern(extensions))],
+            &directory,
+            default_name,
+            extensions.first().copied().unwrap_or("m3u8"),
+        )
+        .ok()
+        .flatten()
+    }
+}
+
 pub(super) unsafe fn edit(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
@@ -97,9 +154,15 @@ pub(super) unsafe fn edit(window: HWND) {
     } else {
         state.current_user_playlist_index
     };
-    let result = apricot_shell::playlist_editor::edit(&mut state.application, index, |form| {
-        crate::feature_form_win32::show(window, form)
-    });
+    let previous_modal = state.modal_open;
+    state.modal_open = true;
+    let result = apricot_shell::playlist_editor::edit(
+        &mut state.application,
+        index,
+        &mut EditorUi { owner: window },
+    );
+    state.modal_open = previous_modal;
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
     match result {
         Ok(true) => {
             let on_items = state.view == MainView::UserPlaylistItems;
@@ -108,7 +171,7 @@ pub(super) unsafe fn edit(window: HWND) {
             } else {
                 refresh_user_playlists(state, true);
             }
-            set_status(state, "Playlist saved", true);
+            set_status(state, catalog.text("playlist_editor_saved"), true);
             layout_controls_state(window, state);
             if on_items {
                 start_resolution(window, index);
@@ -122,10 +185,11 @@ pub(super) unsafe fn save_current(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
     };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
     match apricot_shell::playlist_editor::save_current(&mut state.application, |form| {
         crate::feature_form_win32::show(window, form)
     }) {
-        Ok(true) => set_status(state, "Playback list saved as a playlist", true),
+        Ok(true) => set_status(state, catalog.text("playlist_save_current_done"), true),
         Ok(false) => {}
         Err(error) => show_error_message(window, &error),
     }
