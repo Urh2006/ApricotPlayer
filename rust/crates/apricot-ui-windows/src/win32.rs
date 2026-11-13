@@ -17509,12 +17509,44 @@ impl crate::equalizer_win32::EqualizerDialogHost for PlayerEqualizerHost {
                 state
                     .application
                     .playback_features_mut()
-                    .extra
-                    .insert("equalizer_edit_profile".to_owned(), preset_id.to_owned());
+                    .equalizer_preview_preset = Some(preset_id.to_owned());
             }
             playback_features::dispatch(self.window, owner, "player_equalizer_advanced");
         }
     }
+    fn advanced_payload(&self, preset_id: &str) -> Option<serde_json::Value> {
+        // SAFETY: The host is only used on the UI thread while the main window lives.
+        unsafe { state(self.window) }
+            .and_then(|state| state.application.equalizer_advanced_payload(preset_id))
+    }
+
+    fn import_advanced(&mut self, preset_id: &str, payload: &serde_json::Value) {
+        // SAFETY: As above.
+        if let Some(state) = unsafe { state_mut(self.window) } {
+            state
+                .application
+                .import_equalizer_advanced(preset_id, payload);
+            let _ = state.application.save_settings();
+        }
+    }
+
+    fn forget_advanced(&mut self, preset_id: &str) {
+        // SAFETY: The host is only used on the UI thread while the main window lives.
+        if let Some(state) = unsafe { state_mut(self.window) } {
+            state.application.forget_equalizer_advanced(preset_id);
+        }
+    }
+
+    fn set_preview_preset(&mut self, preset_id: Option<String>) {
+        // SAFETY: The host is only used on the UI thread while the main window lives.
+        if let Some(state) = unsafe { state_mut(self.window) } {
+            state
+                .application
+                .playback_features_mut()
+                .equalizer_preview_preset = preset_id;
+        }
+    }
+
     fn catalog(&self) -> apricot_core::TranslationCatalog {
         // SAFETY: The host is only used on the UI thread while the main window lives.
         unsafe { state(self.window) }.map_or_else(

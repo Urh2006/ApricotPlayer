@@ -15,6 +15,7 @@ pub mod cookies;
 pub mod diagnostic_report;
 pub mod download_controller;
 pub mod equalizer;
+pub mod equalizer_advanced;
 pub mod last_player_session_controller;
 pub mod local_edit;
 pub mod local_folder;

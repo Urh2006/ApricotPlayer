@@ -860,191 +860,135 @@ fn track_label(track: &serde_json::Value) -> String {
         .to_owned()
 }
 
+/// The advanced equalizer of the profile shown in the equalizer dialog: band
+/// frequencies and widths and two shelves. Changes are heard at once; Save
+/// keeps them, Cancel restores the previous sound.
 fn edit_advanced_equalizer(
     app: &mut Application,
     ui: &mut dyn PlaybackFeatureUi,
 ) -> Vec<PlaybackCommand> {
-    use apricot_app::playback_features::{ParametricBand, ParametricProfile, ShelfBand};
+    use apricot_app::equalizer_advanced::{
+        AdvancedEqualizer, BandShape, FREQUENCY_RANGE, SHELF_GAIN_RANGE, Shelf, WIDTH_RANGE,
+    };
+    let catalog = apricot_app::embedded_catalog(&app.settings().language);
     let settings = app.equalizer_settings();
-    let preset = app
-        .playback_features()
-        .extra
-        .get("equalizer_edit_profile")
-        .cloned()
-        .unwrap_or_else(|| settings.effective_preset(&app.equalizer_device_key()));
+    let preset = app.equalizer_graph_preset();
+    let current = app.equalizer_advanced(&preset);
     let gains = app
         .player_equalizer_state(None)
         .map_or_else(|| settings.gains_for_preset(&preset), |(_, gains)| gains);
     let original_graph = app.player_equalizer_graph(None);
-    let mut profiles = app
-        .settings()
-        .preserved
-        .get("equalizer_advanced_v1")
-        .and_then(serde_json::Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    let profile = match profiles.get(&preset) {
-        Some(value) => match serde_json::from_value::<ParametricProfile>(value.clone()) {
-            Ok(profile) => profile,
-            Err(error) => {
-                ui.announce(&format!("The equalizer profile could not be read: {error}"));
-                return Vec::new();
-            }
-        },
-        None => ParametricProfile::default(),
-    };
     let mut fields = vec![FormField::checkbox(
-        "reset",
-        "Reset this profile to factory defaults",
+        "restore",
+        catalog.text("equalizer_advanced_restore"),
         false,
     )];
     for band in apricot_core::audio::EQUALIZER_BANDS {
-        let params = profile.bands.get(band.id);
-        let q = match band.id {
-            "31" => 1.7,
-            "62" => 2.0,
-            "125" => 2.6,
-            "250" => 2.3,
-            "500" => 2.1,
-            "2000" | "4000" => 1.9,
-            "8000" => 1.7,
-            "16000" => 1.5,
-            _ => 2.0,
+        let Some(shape) = current.band(band.id) else {
+            continue;
         };
+        let name = apricot_app::equalizer::band_label(band.id);
         fields.push(FormField::number(
             &format!("{}_frequency", band.id),
-            format!("{} Hz band: frequency", band.frequency_hz),
-            params.map_or(f64::from(band.frequency_hz), |p| p.frequency),
-            10.0,
-            24_000.0,
+            catalog
+                .text("equalizer_band_frequency")
+                .replace("{band}", name),
+            shape.frequency,
+            FREQUENCY_RANGE.0,
+            FREQUENCY_RANGE.1,
         ));
         fields.push(FormField::number(
             &format!("{}_q", band.id),
-            format!("{} Hz band: width Q", band.frequency_hz),
-            params.map_or(q, |p| p.q),
-            0.1,
-            10.0,
-        ));
-        fields.push(FormField::number(
-            &format!("{}_gain", band.id),
-            format!("{} Hz band: gain dB", band.frequency_hz),
-            gains.get(band.id).copied().unwrap_or_default(),
-            -24.0,
-            24.0,
+            catalog.text("equalizer_band_width").replace("{band}", name),
+            shape.q,
+            WIDTH_RANGE.0,
+            WIDTH_RANGE.1,
         ));
     }
-    for (id, label, shelf) in [
-        ("low", "Low shelf", &profile.low),
-        ("high", "High shelf", &profile.high),
+    for (id, key, shelf) in [
+        ("low", "equalizer_low_shelf", current.low_shelf),
+        ("high", "equalizer_high_shelf", current.high_shelf),
     ] {
+        let name = catalog.text(key);
         fields.push(FormField::number(
             &format!("{id}_frequency"),
-            format!("{label}: frequency"),
+            catalog
+                .text("equalizer_band_frequency")
+                .replace("{band}", name),
             shelf.frequency,
-            10.0,
-            24_000.0,
+            FREQUENCY_RANGE.0,
+            FREQUENCY_RANGE.1,
         ));
         fields.push(FormField::number(
             &format!("{id}_q"),
-            format!("{label}: width Q"),
+            catalog.text("equalizer_band_width").replace("{band}", name),
             shelf.q,
-            0.1,
-            10.0,
+            WIDTH_RANGE.0,
+            WIDTH_RANGE.1,
         ));
         fields.push(FormField::number(
             &format!("{id}_gain"),
-            format!("{label}: gain dB"),
+            catalog.text("equalizer_shelf_gain").replace("{band}", name),
             shelf.gain,
-            -24.0,
-            24.0,
+            SHELF_GAIN_RANGE.0,
+            SHELF_GAIN_RANGE.1,
         ));
     }
     let decode = |values: &FormValues| {
-        let mut profile = ParametricProfile::default();
-        let mut gains = std::collections::BTreeMap::new();
-        if checked(values, "reset") {
-            return (profile, apricot_app::equalizer::factory_gains(&preset));
+        let mut advanced = AdvancedEqualizer::default();
+        if checked(values, "restore") {
+            return advanced;
         }
         for band in apricot_core::audio::EQUALIZER_BANDS {
-            profile.bands.insert(
-                band.id.to_owned(),
-                ParametricBand {
+            advanced.set_band(
+                band.id,
+                BandShape {
                     frequency: number(values, &format!("{}_frequency", band.id)),
                     q: number(values, &format!("{}_q", band.id)),
                 },
             );
-            gains.insert(
-                band.id.to_owned(),
-                number(values, &format!("{}_gain", band.id)),
-            );
         }
-        profile.low = ShelfBand {
+        advanced.low_shelf = Shelf {
             frequency: number(values, "low_frequency"),
             q: number(values, "low_q"),
             gain: number(values, "low_gain"),
         };
-        profile.high = ShelfBand {
+        advanced.high_shelf = Shelf {
             frequency: number(values, "high_frequency"),
             q: number(values, "high_q"),
             gain: number(values, "high_gain"),
         };
-        (profile, gains)
+        advanced
     };
+    let protection = settings.clipping_protection;
     let mut preview = |values: &FormValues| {
-        let (profile, gains) = decode(values);
-        match profile.graph(&gains, settings.clipping_protection) {
-            Ok(graph) => vec![PlaybackCommand::SetEqualizerFilter(graph)],
-            Err(_) => Vec::new(),
-        }
+        vec![PlaybackCommand::SetEqualizerFilter(
+            decode(values).graph(&gains, protection),
+        )]
     };
+    let title = catalog
+        .text("equalizer_advanced_title")
+        .replace("{profile}", &settings.preset_label(&catalog, &preset));
     let Some(values) = ui.form_preview(
-        &FeatureForm::new(
-            format!(
-                "Advanced equalizer: {}",
-                settings.preset_label(
-                    &apricot_app::embedded_catalog(&app.settings().language),
-                    &preset
-                )
-            ),
-            fields,
-        ),
+        &FeatureForm::localized(&catalog, title, fields),
         &mut preview,
     ) else {
         return vec![PlaybackCommand::SetEqualizerFilter(original_graph)];
     };
-    let (profile, gains) = decode(&values);
-    let graph = match profile.graph(&gains, settings.clipping_protection) {
-        Ok(graph) => graph,
-        Err(error) => {
-            ui.announce(&error);
-            return vec![PlaybackCommand::SetEqualizerFilter(original_graph)];
-        }
-    };
-    let mut next = settings.clone();
-    next.set_preset_gains(&preset, &gains);
-    if let Err(error) = app.set_equalizer_settings(&next) {
-        ui.announce(&error.to_string());
+    let advanced = decode(&values);
+    app.set_equalizer_advanced(&preset, &advanced);
+    if let Err(error) = app.save_settings() {
+        ui.announce(
+            &catalog
+                .text("settings_save_failed")
+                .replace("{error}", &error.to_string()),
+        );
         return vec![PlaybackCommand::SetEqualizerFilter(original_graph)];
     }
-    profiles.insert(preset.clone(), serde_json::json!(profile));
-    if !persist(
-        app,
-        "equalizer_advanced_v1",
-        serde_json::Value::Object(profiles),
-        ui,
-    ) {
-        let _ = app.set_equalizer_settings(&settings);
-        return vec![PlaybackCommand::SetEqualizerFilter(original_graph)];
-    }
-    app.set_player_equalizer(Some(apricot_app::EqualizerSession {
-        enabled: true,
-        gains,
-    }));
-    app.playback_features_mut()
-        .extra
-        .insert("equalizer_edit_profile".to_owned(), preset);
-    ui.announce("Equalizer profile saved.");
-    vec![PlaybackCommand::SetEqualizerFilter(graph)]
+    ui.announce(catalog.text("equalizer_advanced_saved"));
+    vec![PlaybackCommand::SetEqualizerFilter(
+        app.player_equalizer_graph(None),
+    )]
 }
 
 pub fn timer_description(app: &Application) -> String {

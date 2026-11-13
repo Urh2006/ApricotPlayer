@@ -16,7 +16,7 @@ Ta dokument vodi delo za 2.1 beta 1. Obseg je potrjen v 19 sklopih (EQ, obdelava
 | --- | --- | --- |
 | 1 | Utrditev osnutka: testi, fmt, clippy, prevodi kataloga bližnjic, vrstni red menijev in Tab | narejeno |
 | 2 | Kategorije bližnjic: drevo, iskanje, filtri, primarna in dodatna bližnjica, ponastavitve | narejeno |
-| 3 | EQ 15 pasov, Advanced, urejanje presetov | čaka |
+| 3 | EQ 15 pasov, Advanced, urejanje presetov | narejeno |
 | 4 | Obdelava zvoka: pan, mono, normalizacija, tišina, SOFA | čaka |
 | 5 | Prehodi in crossfade | čaka |
 | 6 | Sleep timer | čaka |
@@ -56,3 +56,16 @@ Izhodišče je bil necommitan osnutek na veji `beta` nad 2.0.3. Posnetek osnutka
 Preverjeno v izoliranem namizju z lažnim NVDA: vrstni red Tab in imena kontrol, filtriranje po kategoriji (34 ukazov v Playback), iskanje `like`, Clear z najavo, obrazec za dodatno bližnjico (fokus, Tab, Escape, vrnitev fokusa na gumb).
 
 Ročni NVDA preizkus: Ctrl+Alt+S, End (Keyboard shortcuts), Tab. NVDA mora prebrati "Search all shortcuts, edit", nato "Show shortcuts, combo box", "Shortcut categories, list", "Shortcut actions, list". V kategorijah s puščico dol izberi Playback and sleep timer in pritisni Tab: seznam ima samo ukaze predvajanja. Tab do Clear selected shortcut in Space: NVDA prebere ime ukaza in "Unassigned".
+
+## Enota 3
+
+- 15 pasov: 10 obstoječih (31 Hz do 16 kHz) ostane nespremenjenih, novi 25 Hz, 100 Hz, 400 Hz, 1,6 kHz in 10 kHz začnejo ravni, zato se zvok obstoječih profilov ne spremeni. Izvoz profila vsebuje vseh 15 pasov.
+- Vgrajene presete je mogoče urejati; Reset this preset vrne tovarniške vrednosti.
+- Advanced (zadnji gumb v oknu F4, za Python gumbi): za vsak pas frekvenca v Hz in širina Q ter nizka in visoka polica s frekvenco, širino in ojačanjem. Spremembe se slišijo takoj, Save jih shrani za prikazani profil, Cancel vrne prejšnji zvok. Potrditveno polje vrne privzete vrednosti.
+- Profil brez naprednih sprememb predvaja popolnoma enak filter kot pred 2.1. Napredne nastavitve so v `settings.json` pod `equalizer_advanced_v1`, poškodovan vnos se preskoči.
+- Izvoz profila doda napredne nastavitve (`advanced`), uvoz jih prevzame. Izbris lastnega profila izbriše tudi njegove napredne nastavitve.
+- Med odprtim oknom F4 zvok oblikujejo napredne nastavitve prikazanega profila, po zaprtju spet učinkovitega profila.
+
+Preverjeno v izoliranem namizju: Tab vrstni red okna F4 (prednastavitev, razpon, 15 drsnikov od 25 Hz do 16 kHz, gumbi, Advanced zadnji), obrazec Advanced (naslov s profilom, 37 polj, Save shrani v `settings.json`, najava "Advanced equalizer settings saved.", fokus nazaj na Advanced). Veriga filtrov preverjena s ffmpeg.
+
+Ročni NVDA preizkus: predvajaj datoteko, F4. Tab gre čez preset, razpon in 15 drsnikov ("Equalizer 25 Hz deep bass" do "Equalizer 16 kHz air and sparkle"), nato gumbe; zadnji je Advanced. Space na Advanced odpre "Advanced equalizer: ...". Spremeni "High shelf: gain in dB" na 6 in pritisni Enter: slišiš svetlejši zvok, NVDA pove "Advanced equalizer settings saved.", fokus je na Advanced.

@@ -242,114 +242,6 @@ pub struct AudioProcessingSettings {
     pub transitions: TransitionSettings,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-pub struct ParametricBand {
-    pub frequency: f64,
-    pub q: f64,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-pub struct ShelfBand {
-    pub frequency: f64,
-    pub q: f64,
-    pub gain: f64,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[serde(default)]
-pub struct ParametricProfile {
-    pub bands: BTreeMap<String, ParametricBand>,
-    pub low: ShelfBand,
-    pub high: ShelfBand,
-}
-impl Default for ParametricProfile {
-    fn default() -> Self {
-        Self {
-            bands: BTreeMap::new(),
-            low: ShelfBand {
-                frequency: 70.0,
-                q: 0.7,
-                gain: 0.0,
-            },
-            high: ShelfBand {
-                frequency: 8_000.0,
-                q: 0.7,
-                gain: 0.0,
-            },
-        }
-    }
-}
-impl ParametricProfile {
-    pub fn graph(
-        &self,
-        gains: &BTreeMap<String, f64>,
-        protect: bool,
-    ) -> Result<Option<String>, String> {
-        let mut filters = Vec::new();
-        let mut maximum = 0.0_f64;
-        for band in apricot_core::audio::EQUALIZER_BANDS {
-            let gain = gains.get(band.id).copied().unwrap_or_default();
-            let q = match band.id {
-                "31" => 1.7,
-                "62" => 2.0,
-                "125" => 2.6,
-                "250" => 2.3,
-                "500" => 2.1,
-                "2000" | "4000" => 1.9,
-                "8000" => 1.7,
-                "16000" => 1.5,
-                _ => 2.0,
-            };
-            let default = ParametricBand {
-                frequency: f64::from(band.frequency_hz),
-                q,
-            };
-            let params = self.bands.get(band.id).unwrap_or(&default);
-            if !params.frequency.is_finite()
-                || !(10.0..=24_000.0).contains(&params.frequency)
-                || !params.q.is_finite()
-                || !(0.1..=10.0).contains(&params.q)
-                || !gain.is_finite()
-                || !(-24.0..=24.0).contains(&gain)
-            {
-                return Err("Invalid equalizer frequency, width or gain.".to_owned());
-            }
-            if gain.abs() >= 0.05 {
-                filters.push(format!(
-                    "equalizer=f={:.3}:t=q:w={:.3}:g={gain:.1}",
-                    params.frequency, params.q
-                ));
-                maximum = maximum.max(gain);
-            }
-        }
-        for (name, shelf) in [("bass", &self.low), ("treble", &self.high)] {
-            if !shelf.frequency.is_finite()
-                || !(10.0..=24_000.0).contains(&shelf.frequency)
-                || !shelf.q.is_finite()
-                || !(0.1..=10.0).contains(&shelf.q)
-                || !shelf.gain.is_finite()
-                || !(-24.0..=24.0).contains(&shelf.gain)
-            {
-                return Err("Invalid shelf frequency, width or gain.".to_owned());
-            }
-            if shelf.gain.abs() >= 0.05 {
-                filters.push(format!(
-                    "{name}=f={:.3}:t=q:w={:.3}:g={:.1}",
-                    shelf.frequency, shelf.q, shelf.gain
-                ));
-                maximum = maximum.max(shelf.gain);
-            }
-        }
-        if filters.is_empty() {
-            return Ok(None);
-        }
-        if protect && maximum > 0.05 {
-            filters.insert(0, format!("volume={:.1}dB", -maximum.min(12.0)));
-            filters.push("alimiter=limit=0.95:attack=5:release=80".to_owned());
-        }
-        Ok(Some(format!("lavfi=[{}]", filters.join(","))))
-    }
-}
 impl Default for AudioProcessingSettings {
     fn default() -> Self {
         Self {
@@ -652,6 +544,8 @@ pub struct PlaybackFeatures {
     pub chapter_stop: bool,
     pub chapter_index: Option<usize>,
     pub applied_generation: Option<u64>,
+    /// The equalizer profile shown in an open equalizer dialog.
+    pub equalizer_preview_preset: Option<String>,
     pub last_position: Option<(Instant, f64)>,
     pub manual_seek_at: Option<Instant>,
     pub extra: BTreeMap<String, String>,
@@ -672,6 +566,7 @@ impl Default for PlaybackFeatures {
             chapter_stop: false,
             chapter_index: None,
             applied_generation: None,
+            equalizer_preview_preset: None,
             last_position: None,
             manual_seek_at: None,
             extra: BTreeMap::new(),

@@ -2301,34 +2301,85 @@ impl Application {
         if !enabled {
             return None;
         }
-        let preset = self
-            .playback_features()
-            .extra
-            .get("equalizer_edit_profile")
-            .cloned()
-            .unwrap_or_else(|| {
-                self.equalizer_settings()
-                    .effective_preset(&self.equalizer_device_key())
-            });
-        if let Some(value) = self
-            .settings
-            .current()
-            .preserved
-            .get("equalizer_advanced_v1")
-            .and_then(|profiles| profiles.get(&preset))
-            && let Ok(profile) =
-                serde_json::from_value::<crate::playback_features::ParametricProfile>(value.clone())
-            && let Ok(graph) = profile.graph(
-                &gains,
-                self.settings.current().equalizer_clipping_protection,
-            )
-        {
-            return graph;
-        }
-        apricot_playback::equalizer_filter_graph(
+        let preset = self.equalizer_graph_preset();
+        self.equalizer_advanced(&preset).graph(
             &gains,
             self.settings.current().equalizer_clipping_protection,
         )
+    }
+
+    /// The profile whose advanced settings shape the player equalizer: the
+    /// one shown in an open equalizer dialog, else the effective profile.
+    pub fn equalizer_graph_preset(&self) -> String {
+        self.state
+            .playback_features
+            .equalizer_preview_preset
+            .clone()
+            .unwrap_or_else(|| {
+                self.equalizer_settings()
+                    .effective_preset(&self.equalizer_device_key())
+            })
+    }
+
+    /// Advanced equalizer settings of one profile (defaults when none).
+    pub fn equalizer_advanced(
+        &self,
+        preset_id: &str,
+    ) -> crate::equalizer_advanced::AdvancedEqualizer {
+        crate::equalizer_advanced::profiles_from_settings(self.settings.current())
+            .remove(preset_id)
+            .unwrap_or_default()
+    }
+
+    /// The `advanced` member of an exported profile, absent when unchanged.
+    pub fn equalizer_advanced_payload(&self, preset_id: &str) -> Option<serde_json::Value> {
+        let advanced = self.equalizer_advanced(preset_id);
+        (!advanced.is_default()).then(|| serde_json::json!(advanced))
+    }
+
+    /// Takes the `advanced` member of an imported profile into the unsaved
+    /// draft. A missing or damaged member leaves the profile plain.
+    pub fn import_equalizer_advanced(&mut self, preset_id: &str, payload: &serde_json::Value) {
+        let advanced = payload
+            .get("advanced")
+            .and_then(|value| {
+                serde_json::from_value::<crate::equalizer_advanced::AdvancedEqualizer>(
+                    value.clone(),
+                )
+                .ok()
+            })
+            .filter(crate::equalizer_advanced::AdvancedEqualizer::is_valid)
+            .unwrap_or_default();
+        self.set_equalizer_advanced(preset_id, &advanced);
+    }
+
+    /// A deleted profile also loses its advanced settings, so a new profile
+    /// in the same slot starts plain.
+    pub fn forget_equalizer_advanced(&mut self, preset_id: &str) {
+        self.set_equalizer_advanced(
+            preset_id,
+            &crate::equalizer_advanced::AdvancedEqualizer::default(),
+        );
+    }
+
+    /// Stores one profile's advanced settings in the unsaved draft; default
+    /// settings remove the entry.
+    pub fn set_equalizer_advanced(
+        &mut self,
+        preset_id: &str,
+        advanced: &crate::equalizer_advanced::AdvancedEqualizer,
+    ) {
+        let mut profiles =
+            crate::equalizer_advanced::profiles_from_settings(self.settings.current());
+        if advanced.is_default() {
+            profiles.remove(preset_id);
+        } else {
+            profiles.insert(preset_id.to_owned(), advanced.clone());
+        }
+        self.settings.set_extension(
+            crate::equalizer_advanced::ADVANCED_SETTINGS_KEY,
+            serde_json::json!(profiles),
+        );
     }
 
     pub fn equalizer_settings(&self) -> crate::equalizer::EqualizerSettings {
@@ -3481,6 +3532,54 @@ mod tests {
         assert!(graph.contains("f=16000:t=q:w=1.5:g=6.0"), "{graph}");
         app.set_player_equalizer(None);
         assert_eq!(app.player_equalizer_graph(None), None);
+    }
+
+    #[test]
+    fn advanced_equalizer_shapes_the_shown_profile_and_follows_profile_life() {
+        use crate::equalizer_advanced::{AdvancedEqualizer, BandShape};
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        app.start_player_item(media_item("song"));
+        app.set_player_equalizer(Some(crate::EqualizerSession {
+            enabled: true,
+            gains: crate::equalizer::factory_gains("treble_boost"),
+        }));
+        let plain = app.player_equalizer_graph(None).expect("plain graph");
+        let mut advanced = AdvancedEqualizer::default();
+        advanced.set_band(
+            "16000",
+            BandShape {
+                frequency: 14_000.0,
+                q: 1.0,
+            },
+        );
+        app.set_equalizer_advanced("custom1", &advanced);
+        assert_eq!(
+            app.player_equalizer_graph(None).as_deref(),
+            Some(plain.as_str()),
+            "only the shown or effective profile counts"
+        );
+        app.playback_features_mut().equalizer_preview_preset = Some("custom1".to_owned());
+        let shaped = app.player_equalizer_graph(None).expect("shaped graph");
+        assert!(shaped.contains("f=14000:t=q:w=1:g=6.0"), "{shaped}");
+
+        // Export carries the shape; import gives it to the new profile.
+        let payload = serde_json::json!({
+            "advanced": app.equalizer_advanced_payload("custom1").expect("changed profile")
+        });
+        app.import_equalizer_advanced("custom2", &payload);
+        assert_eq!(app.equalizer_advanced("custom2"), advanced);
+        assert!(app.equalizer_advanced_payload("rock").is_none());
+
+        // Deleting a custom profile drops its advanced settings.
+        let mut settings = app.equalizer_settings();
+        settings.set_preset_gains("custom2", &crate::equalizer::factory_gains("rock"));
+        app.set_equalizer_settings(&settings).expect("settings");
+        assert_eq!(app.equalizer_advanced("custom2"), advanced);
+        settings.delete_profile("custom2");
+        app.set_equalizer_settings(&settings).expect("settings");
+        app.forget_equalizer_advanced("custom2");
+        assert!(app.equalizer_advanced("custom2").is_default());
     }
 
     #[test]

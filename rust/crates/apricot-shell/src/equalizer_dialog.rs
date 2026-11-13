@@ -30,7 +30,6 @@ pub const EQUALIZER_BUTTONS: [(EqualizerButton, &str); 12] = [
     (EqualizerButton::ImportProfile, "import_equalizer_profile"),
     (EqualizerButton::ExportProfile, "export_equalizer_profile"),
     (EqualizerButton::Compare, "compare_equalizer_profile"),
-    (EqualizerButton::Advanced, "equalizer_advanced"),
     (
         EqualizerButton::SaveDevice,
         "save_equalizer_as_device_default",
@@ -39,6 +38,8 @@ pub const EQUALIZER_BUTTONS: [(EqualizerButton, &str); 12] = [
         EqualizerButton::ClearDevice,
         "clear_equalizer_device_default",
     ),
+    // 2.1: after the Python buttons, so their positions stay.
+    (EqualizerButton::Advanced, "equalizer_advanced"),
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -211,6 +212,10 @@ impl Shell {
         let (_, gains) = settings.base_state(original_equalizer.as_ref(), &device);
         let active_preset = settings.effective_preset(&device);
         let db_range = settings.db_range();
+        // The shown profile's advanced settings shape what is heard.
+        self.application
+            .playback_features_mut()
+            .equalizer_preview_preset = Some(active_preset.clone());
         self.equalizer = Some(EqualizerDialogState {
             preset_options: Vec::new(),
             visible_preset: active_preset.clone(),
@@ -364,6 +369,9 @@ impl Shell {
     fn load_preset(&mut self, view: &mut dyn EqualizerView, preset_id: &str) {
         let settings = self.equalizer_settings();
         let gains = settings.gains_for_preset(preset_id);
+        self.application
+            .playback_features_mut()
+            .equalizer_preview_preset = Some(settings.normalized_preset(preset_id));
         if let Some(state) = self.equalizer.as_mut() {
             state.visible_preset = settings.normalized_preset(preset_id);
             state.gains = equalizer::normalized_gains(&gains);
@@ -425,8 +433,7 @@ impl Shell {
                 let preset = self.current_preset(view);
                 self.application
                     .playback_features_mut()
-                    .extra
-                    .insert("equalizer_edit_profile".to_owned(), preset.clone());
+                    .equalizer_preview_preset = Some(preset.clone());
                 self.activate_playback_feature(ui, "player_equalizer_advanced");
                 let gains = self.equalizer_settings().gains_for_preset(&preset);
                 if let Some(state) = self.equalizer.as_mut() {
@@ -509,6 +516,9 @@ impl Shell {
         let Some(state) = self.equalizer.take() else {
             return;
         };
+        self.application
+            .playback_features_mut()
+            .equalizer_preview_preset = None;
         if state.accepted {
             ui.set_status(&self.text("equalizer_saved"), true);
             return;
@@ -706,13 +716,20 @@ impl Shell {
                 serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}'))
                     .map_err(|error| error.to_string())
             })
-            .and_then(|payload| settings.profile_from_payload(&payload, &invalid))
-            .and_then(|(name, gains)| {
+            .and_then(|payload| {
+                settings
+                    .profile_from_payload(&payload, &invalid)
+                    .map(|profile| (payload, profile))
+            })
+            .and_then(|(payload, (name, gains))| {
                 let preset_id = settings.create_profile(&name, &gains);
                 settings.preset.clone_from(&preset_id);
                 settings.global_gains = equalizer::normalized_gains(&gains);
-                self.update_equalizer_settings(&settings, true)
-                    .map(|()| (name, preset_id))
+                self.update_equalizer_settings(&settings, true)?;
+                self.application
+                    .import_equalizer_advanced(&preset_id, &payload);
+                let _ = self.application.save_settings();
+                Ok((name, preset_id))
             });
         match imported {
             Ok((name, preset_id)) => {
@@ -751,9 +768,15 @@ impl Shell {
             return;
         };
         let path = equalizer::export_path(&path);
-        let payload = self
+        let mut payload = self
             .equalizer_settings()
             .export_payload(name, gains, preset_id);
+        if let (Some(advanced), Some(object)) = (
+            self.application.equalizer_advanced_payload(preset_id),
+            payload.as_object_mut(),
+        ) {
+            object.insert("advanced".to_owned(), advanced);
+        }
         let written = serde_json::to_string_pretty(&payload)
             .map_err(|error| error.to_string())
             .and_then(|text| std::fs::write(&path, text).map_err(|error| error.to_string()));
@@ -794,6 +817,7 @@ impl Shell {
             return None;
         }
         let replacement = settings.delete_profile(preset_id)?;
+        self.application.forget_equalizer_advanced(preset_id);
         if let Err(error) = self.update_equalizer_settings(&settings, true) {
             self.equalizer_error(view, &error);
             return None;

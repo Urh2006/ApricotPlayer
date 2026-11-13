@@ -52,7 +52,7 @@ pub fn equalizer_filters(gains: &BTreeMap<String, f64>, clipping_protection: boo
         filters.push(format!(
             "equalizer=f={}:t=q:w={}:g={gain:.1}",
             band.frequency_hz,
-            band_width(band.id)
+            equalizer_band_width(band.id)
         ));
     }
     if !audible {
@@ -69,7 +69,9 @@ pub fn tagged_equalizer_filter(label: &str, graph: &str) -> String {
     format!("@{label}:{graph}")
 }
 
-fn band_width(id: &str) -> f64 {
+/// Python `EQ_BANDS` filter width (Q) of a band.
+#[must_use]
+pub fn equalizer_band_width(id: &str) -> f64 {
     match id {
         "31" | "8000" => 1.7,
         "62" | "1000" => 2.0,

@@ -22,8 +22,8 @@ pub use audio_chain::{
 pub use audio_filters::AudioFilterState;
 pub use crossfade::PcmCrossfade;
 pub use equalizer::{
-    EQUALIZER_FILTER_ALT_LABEL, EQUALIZER_FILTER_LABEL, equalizer_filter_graph, equalizer_filters,
-    tagged_equalizer_filter,
+    EQUALIZER_FILTER_ALT_LABEL, EQUALIZER_FILTER_LABEL, equalizer_band_width,
+    equalizer_filter_graph, equalizer_filters, tagged_equalizer_filter,
 };
 pub use libmpv::{LibMpvEngine, probe_audio_output_devices};
 pub use mpv_ipc::{MpvIpcClient, make_unique_ipc_path};

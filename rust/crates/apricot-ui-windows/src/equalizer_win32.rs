@@ -61,6 +61,17 @@ const TBM_GETPOS: u32 = 0x0400;
 /// equalizer, applying it to mpv and speaking through the player announcer.
 pub trait EqualizerDialogHost {
     fn advanced(&mut self, _owner: HWND, _preset_id: &str) {}
+    /// The profile shown in the dialog, whose advanced settings shape the
+    /// sound while the dialog is open; `None` when it closes.
+    fn set_preview_preset(&mut self, _preset_id: Option<String>) {}
+    /// The advanced settings an exported profile carries, if any.
+    fn advanced_payload(&self, _preset_id: &str) -> Option<serde_json::Value> {
+        None
+    }
+    /// Stores and saves the advanced settings of an imported profile.
+    fn import_advanced(&mut self, _preset_id: &str, _payload: &serde_json::Value) {}
+    /// Drops the advanced settings of a deleted profile in the unsaved draft.
+    fn forget_advanced(&mut self, _preset_id: &str) {}
     fn catalog(&self) -> TranslationCatalog;
     fn settings(&self) -> EqualizerSettings;
     /// Writes the equalizer settings; `save` also writes `settings.json`.
@@ -110,9 +121,10 @@ const BUTTONS: [(DialogButton, &str); 12] = [
     (DialogButton::ImportProfile, "import_equalizer_profile"),
     (DialogButton::ExportProfile, "export_equalizer_profile"),
     (DialogButton::Compare, "compare_equalizer_profile"),
-    (DialogButton::Advanced, "equalizer_advanced"),
     (DialogButton::SaveDevice, "save_equalizer_as_device_default"),
     (DialogButton::ClearDevice, "clear_equalizer_device_default"),
+    // 2.1: after the Python buttons, so their positions stay.
+    (DialogButton::Advanced, "equalizer_advanced"),
 ];
 
 const fn button_id(button: DialogButton) -> usize {
@@ -196,6 +208,8 @@ unsafe fn show_win32(owner: HWND, host: Box<dyn EqualizerDialogHost>) -> Result<
     let (_, gains) = settings.base_state(original_equalizer.as_ref(), &device);
     let active_preset = settings.effective_preset(&device);
     let db_range = settings.db_range();
+    let mut host = host;
+    host.set_preview_preset(Some(active_preset.clone()));
     let title = wide(catalog.text("equalizer"));
     let height = (GetSystemMetrics(SM_CYMAXIMIZED) - 20).clamp(520, 1_020);
     let window = CreateWindowExW(
@@ -324,6 +338,7 @@ unsafe fn show_gains(state: &mut DialogState, gains: &EqualizerGains) {
 
 /// Python's code after `dialog.ShowModal()`.
 fn finish(state: &mut DialogState) {
+    state.host.set_preview_preset(None);
     if state.accepted {
         state.host.announce(state.catalog.text("equalizer_saved"));
         return;
@@ -685,6 +700,9 @@ unsafe fn slider_changed(window: HWND, slider: HWND) {
 unsafe fn load_preset(window: HWND, state: &mut DialogState, preset_id: &str) {
     let settings = state.host.settings();
     state.visible_preset = settings.normalized_preset(preset_id);
+    state
+        .host
+        .set_preview_preset(Some(state.visible_preset.clone()));
     let gains = settings.gains_for_preset(preset_id);
     state.gains = equalizer::normalized_gains(&gains);
     show_gains(state, &gains);
@@ -1019,14 +1037,17 @@ pub unsafe fn import_profile_with_prompt(
                 .map_err(|error| error.to_string())
         })
         .and_then(|payload| {
-            settings.profile_from_payload(&payload, catalog.text("equalizer_profile_invalid"))
+            settings
+                .profile_from_payload(&payload, catalog.text("equalizer_profile_invalid"))
+                .map(|profile| (payload, profile))
         })
-        .and_then(|(name, gains)| {
+        .and_then(|(payload, (name, gains))| {
             let preset_id = settings.create_profile(&name, &gains);
             settings.preset.clone_from(&preset_id);
             settings.global_gains = equalizer::normalized_gains(&gains);
-            host.update_settings(&settings, true)
-                .map(|()| (name, preset_id))
+            host.update_settings(&settings, true)?;
+            host.import_advanced(&preset_id, &payload);
+            Ok((name, preset_id))
         });
     match imported {
         Ok((name, preset_id)) => {
@@ -1066,7 +1087,12 @@ pub unsafe fn export_profile_with_prompt(
         return;
     };
     let path: PathBuf = equalizer::export_path(&path);
-    let payload = host.settings().export_payload(name, gains, preset_id);
+    let mut payload = host.settings().export_payload(name, gains, preset_id);
+    if let (Some(advanced), Some(object)) =
+        (host.advanced_payload(preset_id), payload.as_object_mut())
+    {
+        object.insert("advanced".to_owned(), advanced);
+    }
     let written = serde_json::to_string_pretty(&payload)
         .map_err(|error| error.to_string())
         .and_then(|text| std::fs::write(&path, text).map_err(|error| error.to_string()));
@@ -1107,6 +1133,7 @@ pub unsafe fn delete_profile_with_prompt(
         return None;
     }
     let replacement = settings.delete_profile(preset_id)?;
+    host.forget_advanced(preset_id);
     if let Err(error) = host.update_settings(&settings, true) {
         show_message(owner, &catalog, &error, MB_ICONERROR);
         return None;
@@ -1314,9 +1341,9 @@ mod tests {
                 DialogButton::ImportProfile,
                 DialogButton::ExportProfile,
                 DialogButton::Compare,
-                DialogButton::Advanced,
                 DialogButton::SaveDevice,
                 DialogButton::ClearDevice,
+                DialogButton::Advanced,
             ]
         );
         assert_eq!(button_id(DialogButton::Ok), ID_OK);
