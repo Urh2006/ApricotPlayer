@@ -1223,8 +1223,8 @@ mod tests {
 
     #[test]
     fn crossfade_keeps_the_old_engine_until_the_volumes_have_crossed() {
-        let engines: Arc<Mutex<Vec<Arc<Mutex<Vec<PlaybackCommand>>>>>> =
-            Arc::new(Mutex::new(Vec::new()));
+        type Commands = Arc<Mutex<Vec<PlaybackCommand>>>;
+        let engines: Arc<Mutex<Vec<Commands>>> = Arc::new(Mutex::new(Vec::new()));
         let created = Arc::clone(&engines);
         let runtime = PlaybackRuntime::spawn_with(Box::new(move |_| {
             let commands = Arc::new(Mutex::new(Vec::new()));
@@ -1253,7 +1253,7 @@ mod tests {
 
         let engines = engines.lock().expect("engines");
         assert_eq!(engines.len(), 2, "the next item gets its own engine");
-        let volumes = |engine: &Arc<Mutex<Vec<PlaybackCommand>>>| -> Vec<f64> {
+        let volumes = |engine: &Commands| -> Vec<f64> {
             engine
                 .lock()
                 .expect("commands")
