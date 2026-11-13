@@ -86,6 +86,18 @@ pub(super) unsafe fn dispatch(window: HWND, owner: HWND, action: &str) -> bool {
     for command in commands {
         let _ = execute_player_command(window, command);
     }
+    let exports = state_mut(window).map_or_else(Vec::new, |state| {
+        std::mem::take(&mut state.application.playback_features_mut().pending_exports)
+    });
+    for export in exports {
+        super::export_clip_range(
+            window,
+            super::DownloadChoice::Audio,
+            export.start,
+            export.end,
+            export.audio_filter,
+        );
+    }
     if let Some(state) = state_mut(window) {
         if state.application.playback_features().timer.is_some() || state.playback.is_some() {
             let _ = SetTimer(

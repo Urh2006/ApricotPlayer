@@ -581,9 +581,6 @@ impl Shell {
     /// or video in the `clips` folder.
     pub(crate) fn start_clip_export(&mut self, ui: &mut dyn ShellUi, choice: DownloadChoice) {
         let session = self.application.player_session();
-        let Some(item) = session.current_item().cloned() else {
-            return;
-        };
         let Some((start, end)) = session.clip_range() else {
             let key =
                 if session.clip_start_seconds().is_some() && session.clip_end_seconds().is_some() {
@@ -592,6 +589,21 @@ impl Shell {
                     "clip_markers_missing"
                 };
             ui.set_status(&self.text(key), true);
+            return;
+        };
+        self.export_clip_range(ui, choice, start, end, None);
+    }
+
+    /// Windows `export_clip_range`.
+    pub(crate) fn export_clip_range(
+        &mut self,
+        ui: &mut dyn ShellUi,
+        choice: DownloadChoice,
+        start: f64,
+        end: f64,
+        audio_filter: Option<String>,
+    ) {
+        let Some(item) = self.application.player_session().current_item().cloned() else {
             return;
         };
         let primary = item.local_path.clone().or_else(|| {
@@ -655,6 +667,7 @@ impl Shell {
             audio_format: settings.audio_format,
             audio_quality: settings.audio_quality,
             headers: clip_http_headers(&item),
+            audio_filter,
         };
         let (sender, receiver) = mpsc::sync_channel(1);
         std::thread::spawn(move || {

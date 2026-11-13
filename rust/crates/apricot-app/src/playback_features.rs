@@ -537,6 +537,35 @@ pub fn arm_saved_range(app: &mut crate::Application, bookmark: &apricot_storage:
     app.playback_features_mut().note_manual_seek();
 }
 
+/// One marked excerpt the native UI exports into the clips folder.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExcerptExport {
+    pub start: f64,
+    pub end: f64,
+    /// The player's effects as an `FFmpeg` filter, `None` for the original sound.
+    pub audio_filter: Option<String>,
+}
+
+/// A time with milliseconds: `1:02.345`, `1:00:02.345`.
+#[must_use]
+pub fn format_precise(seconds: f64) -> String {
+    let total_millis = (seconds.max(0.0) * 1000.0).round();
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let total_millis = total_millis as u64;
+    let millis = total_millis % 1000;
+    let total_seconds = total_millis / 1000;
+    let (hours, minutes, seconds) = (
+        total_seconds / 3600,
+        total_seconds / 60 % 60,
+        total_seconds % 60,
+    );
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}.{millis:03}")
+    } else {
+        format!("{minutes}:{seconds:02}.{millis:03}")
+    }
+}
+
 /// How the next player start was requested, which decides a crossfade.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TransitionKind {
@@ -566,6 +595,8 @@ pub struct PlaybackFeatures {
     pub pending_transition: Option<TransitionKind>,
     /// The player generation whose automatic crossfade already started.
     pub crossfade_started_generation: Option<u64>,
+    /// Excerpts the native UI exports after the dialog closes.
+    pub pending_exports: Vec<ExcerptExport>,
     pub last_position: Option<(Instant, f64)>,
     pub manual_seek_at: Option<Instant>,
     pub extra: BTreeMap<String, String>,
@@ -589,6 +620,7 @@ impl Default for PlaybackFeatures {
             equalizer_preview_preset: None,
             pending_transition: None,
             crossfade_started_generation: None,
+            pending_exports: Vec::new(),
             last_position: None,
             manual_seek_at: None,
             extra: BTreeMap::new(),

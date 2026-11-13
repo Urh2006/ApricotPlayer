@@ -267,6 +267,8 @@ pub const ACTIONS: &[ActionDefinition] = &[
     action!("player_subtitle_url", "Ctrl+Alt+Shift+F8", PLAYER),
     action!("player_ab_loop", "Alt+L", PLAYER),
     action!("player_ranges", "Alt+B", PLAYER),
+    action!("player_range_previous", "Alt+Shift+PageUp", PLAYER),
+    action!("player_range_next", "Alt+Shift+PageDown", PLAYER),
     action!("player_audiobook_mode", "Alt+K", PLAYER),
     action!("player_chapter_stop", "Alt+Shift+C", PLAYER),
     action!("player_go_to_time", "Ctrl+T", PLAYER),
@@ -310,7 +312,7 @@ mod tests {
         let ids: HashSet<_> = ACTIONS.iter().map(|action| action.id.as_str()).collect();
         assert_eq!(PYTHON_BASELINE_ACTIONS, 91);
         // 14 Spotify actions, then the 2.1 additions.
-        assert_eq!(ACTIONS.len(), PYTHON_BASELINE_ACTIONS + 14 + 49);
+        assert_eq!(ACTIONS.len(), PYTHON_BASELINE_ACTIONS + 14 + 51);
         assert_eq!(ids.len(), ACTIONS.len());
         assert!(
             ACTIONS[PYTHON_BASELINE_ACTIONS..PYTHON_BASELINE_ACTIONS + 14]

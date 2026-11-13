@@ -167,6 +167,8 @@ const ACTION_CATEGORIES: &[(&str, &str)] = &[
     ("player_preview_marked_clip", "bookmarks"),
     ("player_ab_loop", "bookmarks"),
     ("player_ranges", "bookmarks"),
+    ("player_range_previous", "bookmarks"),
+    ("player_range_next", "bookmarks"),
     ("player_audiobook_mode", "bookmarks"),
     ("player_chapter_stop", "bookmarks"),
     ("bookmarks_import", "bookmarks"),

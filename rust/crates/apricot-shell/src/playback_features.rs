@@ -53,9 +53,6 @@ fn text<'a>(values: &'a FormValues, key: &str) -> &'a str {
         .and_then(FormValue::text)
         .unwrap_or_default()
 }
-fn strings(items: &[&str]) -> Vec<String> {
-    items.iter().map(|item| (*item).to_owned()).collect()
-}
 fn set_property(name: &'static str, value: impl ToString) -> PlaybackCommand {
     PlaybackCommand::SetProperty {
         name,
@@ -442,6 +439,152 @@ pub fn take_transition_options(
     options
 }
 
+fn excerpt_label(
+    catalog: &apricot_core::TranslationCatalog,
+    index: usize,
+    range: MarkedRange,
+) -> String {
+    catalog
+        .text("excerpt_label")
+        .replace("{number}", &(index + 1).to_string())
+        .replace(
+            "{start}",
+            &apricot_app::playback_features::format_precise(range.start),
+        )
+        .replace(
+            "{end}",
+            &apricot_app::playback_features::format_precise(range.end),
+        )
+}
+
+/// Plays one excerpt from its start; once it ends playback pauses, or with
+/// `repeat` it starts again until A-B repeat is turned off.
+fn play_excerpt(
+    app: &mut Application,
+    index: usize,
+    range: MarkedRange,
+    repeat: bool,
+) -> Vec<PlaybackCommand> {
+    let state = &mut app.playback_features_mut().ranges;
+    state.selected = Some(index);
+    state.active = Some(range);
+    state.repeat = repeat;
+    app.playback_features_mut().note_manual_seek();
+    vec![
+        PlaybackCommand::SeekAbsolute {
+            seconds: range.start,
+            exact: true,
+        },
+        PlaybackCommand::SetPaused(false),
+    ]
+}
+
+/// The marked excerpts dialog: which excerpt, what to do, and its exact times.
+#[must_use]
+pub fn excerpts_form(
+    catalog: &apricot_core::TranslationCatalog,
+    ranges: &[MarkedRange],
+    selected: usize,
+) -> FeatureForm {
+    let shown = ranges[selected];
+    let mut form = FeatureForm::localized(
+        catalog,
+        catalog.text("excerpts_title"),
+        vec![
+            FormField::choice(
+                "excerpt",
+                catalog.text("excerpt_field"),
+                ranges
+                    .iter()
+                    .enumerate()
+                    .map(|(index, range)| excerpt_label(catalog, index, *range))
+                    .collect(),
+                selected,
+            ),
+            FormField::choice(
+                "action",
+                catalog.text("excerpt_action"),
+                [
+                    "excerpt_play_once",
+                    "excerpt_repeat",
+                    "excerpt_save_bookmark",
+                    "excerpt_export",
+                    "excerpt_export_all",
+                    "excerpt_delete",
+                    "excerpts_clear",
+                ]
+                .iter()
+                .map(|key| catalog.text(key).to_owned())
+                .collect(),
+                0,
+            ),
+            FormField::text(
+                "start",
+                catalog.text("excerpt_start"),
+                apricot_app::playback_features::format_precise(shown.start),
+            ),
+            FormField::text(
+                "end",
+                catalog.text("excerpt_end"),
+                apricot_app::playback_features::format_precise(shown.end),
+            ),
+            FormField::text("name", catalog.text("excerpt_bookmark_name"), ""),
+            FormField::checkbox("effects", catalog.text("excerpt_apply_effects"), false),
+        ],
+    );
+    catalog.text("ok").clone_into(&mut form.submit);
+    form
+}
+
+/// The player's current speed, pitch, equalizer and processing as one
+/// `FFmpeg` filter for an exported excerpt; `None` when nothing changes.
+#[must_use]
+pub fn export_effect_filter(app: &Application) -> Option<String> {
+    let mut filters = Vec::new();
+    if let Some(audio) = app.player_session().audio() {
+        if (audio.pitch - 1.0).abs() > 0.001 && audio.pitch.is_finite() && audio.pitch > 0.0 {
+            // Pitch without tempo change: resample, then restore the tempo.
+            filters.push(format!(
+                "aresample=48000,asetrate={:.0},aresample=48000",
+                48_000.0 * audio.pitch
+            ));
+            filters.extend(atempo_chain(1.0 / audio.pitch));
+        }
+        if (audio.speed - 1.0).abs() > 0.001 && audio.speed.is_finite() && audio.speed > 0.0 {
+            filters.extend(atempo_chain(audio.speed));
+        }
+    }
+    let inner = |graph: &str| -> Option<String> {
+        let start = graph.find("lavfi=[")? + "lavfi=[".len();
+        Some(graph[start..graph.rfind(']')?].to_owned())
+    };
+    if let Some(graph) = app
+        .player_equalizer_graph(None)
+        .and_then(|graph| inner(&graph))
+    {
+        filters.push(graph);
+    }
+    if let Some(graph) = processing_chain_filter(app).and_then(|graph| inner(&graph)) {
+        filters.push(graph);
+    }
+    (!filters.is_empty()).then(|| filters.join(","))
+}
+
+/// `atempo` accepts 0.5 to 2 per stage.
+fn atempo_chain(mut factor: f64) -> Vec<String> {
+    let mut stages = Vec::new();
+    while factor > 2.0 {
+        stages.push("atempo=2".to_owned());
+        factor /= 2.0;
+    }
+    while factor < 0.5 {
+        stages.push("atempo=0.5".to_owned());
+        factor /= 0.5;
+    }
+    stages.push(format!("atempo={factor:.6}"));
+    stages
+}
+
 const SLEEP_TIMER_PRESETS: [f64; 6] = [900.0, 1_800.0, 2_700.0, 3_600.0, 5_400.0, 7_200.0];
 
 /// The Sleep timer dialog: the running timer first, then the choices, which
@@ -806,97 +949,82 @@ pub fn dispatch_playback_feature(
             ui.announce(message.as_deref().unwrap_or("Timing is not available yet."));
         }
         "player_ab_loop" => {
-            let active = app.playback_features().ranges.repeat;
-            if active {
-                app.playback_features_mut().ranges.repeat = false;
-                app.playback_features_mut().ranges.active = None;
-                ui.announce("A-B repeat off.");
-            } else if let Some((start, end)) = app.player_session().clip_range() {
-                if let Ok(range) = MarkedRange::new(start, end) {
-                    let ranges = &mut app.playback_features_mut().ranges;
-                    ranges.remember(range);
-                    ranges.active = Some(range);
-                    ranges.repeat = true;
-                    commands.push(PlaybackCommand::SeekAbsolute {
-                        seconds: start,
-                        exact: true,
-                    });
-                    commands.push(PlaybackCommand::SetPaused(false));
-                    ui.announce("A-B repeat on.");
-                }
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
+            if app.playback_features().ranges.repeat {
+                let ranges = &mut app.playback_features_mut().ranges;
+                ranges.repeat = false;
+                ranges.active = None;
+                ui.announce(catalog.text("ab_repeat_off"));
+            } else if let Some(range) = app
+                .player_session()
+                .clip_range()
+                .and_then(|(start, end)| MarkedRange::new(start, end).ok())
+                .or(app.playback_features().ranges.active)
+            {
+                let index = app.playback_features_mut().ranges.remember(range);
+                commands.extend(play_excerpt(app, index, range, true));
+                ui.announce(catalog.text("ab_repeat_on"));
             } else {
-                ui.announce("Set the start and end markers first.");
+                ui.announce(catalog.text("excerpts_none"));
             }
         }
         "player_ranges" => {
-            let range = app
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
+            if let Some(range) = app
                 .player_session()
                 .clip_range()
-                .and_then(|(start, end)| MarkedRange::new(start, end).ok());
-            if let Some(range) = range {
+                .and_then(|(start, end)| MarkedRange::new(start, end).ok())
+            {
                 app.playback_features_mut().ranges.remember(range);
             }
             let ranges = app.playback_features().ranges.ranges.clone();
             if ranges.is_empty() {
-                ui.announce("Set the start and end markers first.");
+                ui.announce(catalog.text("excerpts_none"));
                 return Some(commands);
             }
-            let labels = ranges
-                .iter()
-                .enumerate()
-                .map(|(i, r)| format!("{}: {:.3} to {:.3}", i + 1, r.start, r.end))
-                .collect();
-            let Some(values) = ui.form(&FeatureForm::new(
-                "Marked excerpts",
-                vec![
-                    FormField::choice(
-                        "range",
-                        "Excerpt",
-                        labels,
-                        app.playback_features()
-                            .ranges
-                            .selected
-                            .unwrap_or(0)
-                            .min(ranges.len() - 1),
-                    ),
-                    FormField::choice(
-                        "action",
-                        "Action",
-                        strings(&[
-                            "Play once",
-                            "Repeat",
-                            "Save in Bookmarks",
-                            "Delete excerpt",
-                            "Clear all excerpts",
-                        ]),
-                        0,
-                    ),
-                    FormField::text("name", "Bookmark name", ""),
-                ],
-            )) else {
+            let selected = app
+                .playback_features()
+                .ranges
+                .selected
+                .unwrap_or(ranges.len() - 1)
+                .min(ranges.len() - 1);
+            let Some(values) = ui.form(&excerpts_form(&catalog, &ranges, selected)) else {
                 return Some(commands);
             };
-            let index = choice(&values, "range");
-            let Some(range) = ranges.get(index).copied() else {
-                return Some(commands);
-            };
+            let index = choice(&values, "excerpt").min(ranges.len() - 1);
+            // Edited times apply to the chosen excerpt; unchanged fields keep it.
+            let mut range = ranges[index];
+            let shown = ranges[selected];
+            let start = parse_time(text(&values, "start"));
+            let end = parse_time(text(&values, "end"));
+            if let (Some(start), Some(end)) = (start, end)
+                && ((start - shown.start).abs() > 0.000_5 || (end - shown.end).abs() > 0.000_5)
+            {
+                match MarkedRange::new(start, end) {
+                    Ok(edited) => {
+                        range = edited;
+                        app.playback_features_mut().ranges.ranges[index] = edited;
+                    }
+                    Err(_) => {
+                        ui.announce(catalog.text("excerpt_invalid_times"));
+                        return Some(commands);
+                    }
+                }
+            }
+            let effects = checked(&values, "effects");
             match choice(&values, "action") {
                 0 | 1 => {
-                    let repeat = choice(&values, "action") == 1;
-                    let state = &mut app.playback_features_mut().ranges;
-                    state.selected = Some(index);
-                    state.active = Some(range);
-                    state.repeat = repeat;
-                    commands.push(PlaybackCommand::SeekAbsolute {
-                        seconds: range.start,
-                        exact: true,
-                    });
-                    commands.push(PlaybackCommand::SetPaused(false));
+                    commands.extend(play_excerpt(
+                        app,
+                        index,
+                        range,
+                        choice(&values, "action") == 1,
+                    ));
                 }
                 2 => {
                     if let Some(item) = app.player_session().current_item().cloned() {
                         let name = if text(&values, "name").trim().is_empty() {
-                            item.title.clone()
+                            excerpt_label(&catalog, index, range)
                         } else {
                             text(&values, "name").trim().to_owned()
                         };
@@ -905,22 +1033,61 @@ pub fn dispatch_playback_feature(
                             .map_or(0.0, |d| d.as_secs_f64());
                         match app.add_range_bookmark(&name, range.start, range.end, item, timestamp)
                         {
-                            Ok(_) => ui.announce("Excerpt saved in Bookmarks."),
+                            Ok(_) => ui.announce(catalog.text("excerpt_saved")),
                             Err(error) => ui.announce(&error.to_string()),
                         }
                     }
                 }
-                3 => {
+                3 | 4 => {
+                    let filter = effects.then(|| export_effect_filter(app)).flatten();
+                    let chosen: Vec<MarkedRange> = if choice(&values, "action") == 3 {
+                        vec![range]
+                    } else {
+                        app.playback_features().ranges.ranges.clone()
+                    };
+                    app.playback_features_mut()
+                        .pending_exports
+                        .extend(chosen.into_iter().map(|range| {
+                            apricot_app::playback_features::ExcerptExport {
+                                start: range.start,
+                                end: range.end,
+                                audio_filter: filter.clone(),
+                            }
+                        }));
+                }
+                5 => {
                     let state = &mut app.playback_features_mut().ranges;
                     state.ranges.remove(index);
                     state.active = None;
                     state.repeat = false;
                     state.selected = None;
+                    ui.announce(catalog.text("excerpt_deleted"));
                 }
                 _ => {
-                    app.playback_features_mut().ranges = Default::default();
+                    let key = app.playback_features().ranges.media_key.clone();
+                    let state = &mut app.playback_features_mut().ranges;
+                    *state = apricot_app::playback_features::SelectionRanges::default();
+                    state.media_key = key;
+                    ui.announce(catalog.text("excerpts_cleared"));
                 }
             }
+        }
+        "player_range_previous" | "player_range_next" => {
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
+            let ranges = app.playback_features().ranges.ranges.clone();
+            if ranges.is_empty() {
+                ui.announce(catalog.text("excerpts_none"));
+                return Some(commands);
+            }
+            let current = app.playback_features().ranges.selected;
+            let index = match (action, current) {
+                ("player_range_next", Some(index)) => (index + 1).min(ranges.len() - 1),
+                ("player_range_next", None) => 0,
+                (_, Some(index)) => index.saturating_sub(1),
+                (_, None) => ranges.len() - 1,
+            };
+            ui.announce(&excerpt_label(&catalog, index, ranges[index]));
+            commands.extend(play_excerpt(app, index, ranges[index], false));
         }
         "player_audio_tracks" | "player_audio_track_next" | "player_audio_track_previous" => {
             let tracks: Vec<_> = app
@@ -1540,6 +1707,16 @@ impl crate::Shell {
         for command in commands {
             self.execute_player_command(ui, command);
         }
+        let exports = std::mem::take(&mut self.application.playback_features_mut().pending_exports);
+        for export in exports {
+            self.export_clip_range(
+                ui,
+                apricot_app::DownloadChoice::Audio,
+                export.start,
+                export.end,
+                export.audio_filter,
+            );
+        }
         ui.set_playback_polling(
             self.application.playback_features().timer.is_some() || self.has_playback(),
         );
@@ -1670,5 +1847,26 @@ mod sleep_timer_tests {
             timer_description(&shell.application),
             "Sleep timer: 10:00 remaining."
         );
+    }
+}
+
+#[cfg(test)]
+mod excerpt_tests {
+    use super::*;
+
+    #[test]
+    fn excerpt_labels_use_milliseconds_and_effects_build_one_filter() {
+        let catalog = apricot_app::english_catalog();
+        let range = MarkedRange::new(62.345, 75.5).expect("range");
+        assert_eq!(
+            excerpt_label(&catalog, 1, range),
+            "Excerpt 2: 1:02.345 to 1:15.500"
+        );
+        let form = excerpts_form(&catalog, &[range], 0);
+        assert_eq!(form.title, "Marked excerpts");
+        assert_eq!(parse_time("1:02.345"), Some(62.345));
+        assert_eq!(atempo_chain(4.0), ["atempo=2", "atempo=2.000000"]);
+        let shell = crate::tests::keyboard::shell();
+        assert_eq!(export_effect_filter(&shell.application), None);
     }
 }

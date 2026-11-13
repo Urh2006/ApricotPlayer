@@ -36,6 +36,9 @@ pub struct ClipExportRequest {
     /// Python `export_marked_clip_worker`: the stream's HTTP headers as one
     /// `Name: value\r\n` block for `FFmpeg` `-headers` (empty for none).
     pub headers: String,
+    /// 2.1: the player's audio effects for an audio clip (`-af`), `None`
+    /// keeps the original sound.
+    pub audio_filter: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -214,6 +217,13 @@ pub fn build_clip_export_arguments(
                 OsString::from("-t"),
                 OsString::from(format!("{duration:.3}")),
             ]);
+            if let Some(filter) = request
+                .audio_filter
+                .as_deref()
+                .filter(|filter| !filter.is_empty())
+            {
+                arguments.extend([OsString::from("-af"), OsString::from(filter)]);
+            }
             arguments.extend(audio_codec_arguments(
                 &request.audio_format,
                 &request.audio_quality,
@@ -356,6 +366,7 @@ mod tests {
             audio_format: "mp3".to_owned(),
             audio_quality: "320kbps".to_owned(),
             headers: String::new(),
+            audio_filter: None,
         }
     }
 

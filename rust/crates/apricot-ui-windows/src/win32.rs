@@ -8573,16 +8573,9 @@ unsafe fn start_active_download(window: HWND, requested_choice: DownloadChoice) 
     start_download_item(window, &item, requested_choice, false);
 }
 
-#[allow(clippy::too_many_lines)]
 unsafe fn start_clip_export(window: HWND, choice: DownloadChoice) {
-    let Some((item, range, settings)) = state(window).and_then(|state| {
-        let session = state.application.player_session();
-        Some((
-            session.current_item()?.clone(),
-            session.clip_range(),
-            state.application.settings().clone(),
-        ))
-    }) else {
+    let Some(range) = state(window).map(|state| state.application.player_session().clip_range())
+    else {
         return;
     };
     let Some((start, end)) = range else {
@@ -8596,6 +8589,27 @@ unsafe fn start_clip_export(window: HWND, choice: DownloadChoice) {
                 };
             set_status(state, &catalog_text(&state.application, key), true);
         }
+        return;
+    };
+    export_clip_range(window, choice, start, end, None);
+}
+
+/// Exports `start..end` of the playing item into the clips folder; 2.1
+/// marked excerpts use it with an optional effect filter.
+#[allow(clippy::too_many_lines)]
+pub(crate) unsafe fn export_clip_range(
+    window: HWND,
+    choice: DownloadChoice,
+    start: f64,
+    end: f64,
+    audio_filter: Option<String>,
+) {
+    let Some((item, settings)) = state(window).and_then(|state| {
+        Some((
+            state.application.player_session().current_item()?.clone(),
+            state.application.settings().clone(),
+        ))
+    }) else {
         return;
     };
     let primary = item.local_path.clone().or_else(|| {
@@ -8681,6 +8695,7 @@ unsafe fn start_clip_export(window: HWND, choice: DownloadChoice) {
         audio_format: settings.audio_format,
         audio_quality: settings.audio_quality,
         headers: clip_http_headers(&item),
+        audio_filter,
     };
     let (sender, receiver) = mpsc::sync_channel(1);
     std::thread::spawn(move || {
@@ -14210,6 +14225,14 @@ fn bookmark_dialog_entries(
                 format!("{}. {}", index + 1, format_duration(bookmark.position)),
                 name.to_owned(),
             ];
+            // 2.1: a saved excerpt says so, a point bookmark stays as in Python.
+            if let Some(end) = bookmark.end_position() {
+                parts.push(
+                    catalog
+                        .text("bookmark_excerpt_until")
+                        .replace("{time}", &format_duration(end)),
+                );
+            }
             if !current_only && !bookmark.media_title.trim().is_empty() {
                 parts.push(bookmark.media_title.trim().to_owned());
             }
@@ -14447,6 +14470,7 @@ unsafe fn play_bookmark(window: HWND, id: &str) {
     }) else {
         return;
     };
+    let excerpt = bookmark.end_position().is_some();
     if same_item
         && execute_player_command(
             window,
@@ -14456,6 +14480,13 @@ unsafe fn play_bookmark(window: HWND, id: &str) {
             },
         )
     {
+        // A saved excerpt plays once and pauses at its end.
+        if let Some(state) = state_mut(window) {
+            apricot_app::playback_features::arm_saved_range(&mut state.application, &bookmark);
+        }
+        if excerpt {
+            let _ = execute_player_command(window, PlaybackCommand::SetPaused(false));
+        }
         if let Some(state) = state(window) {
             announce_selected_bookmark(state, &bookmark.name, bookmark.position);
         }
@@ -14471,7 +14502,10 @@ unsafe fn play_bookmark(window: HWND, id: &str) {
                 .navigate_to(RouteFrame::new(Route::Bookmarks));
         }
     }
-    start_media_item_at(window, bookmark.media, bookmark.position);
+    start_media_item_at(window, bookmark.media.clone(), bookmark.position);
+    if let Some(state) = state_mut(window) {
+        apricot_app::playback_features::arm_saved_range(&mut state.application, &bookmark);
+    }
 }
 
 unsafe fn announce_selected_bookmark(state: &WindowState, bookmark_name: &str, position: f64) {

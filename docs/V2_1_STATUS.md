@@ -20,7 +20,7 @@ Ta dokument vodi delo za 2.1 beta 1. Obseg je potrjen v 19 sklopih (EQ, obdelava
 | 4 | Obdelava zvoka: pan, mono, normalizacija, tišina, SOFA | narejeno |
 | 5 | Prehodi in crossfade | narejeno |
 | 6 | Sleep timer | narejeno |
-| 7 | Izseki, A-B, shranjeni izseki v Bookmarks, izvoz | čaka |
+| 7 | Izseki, A-B, shranjeni izseki v Bookmarks, izvoz | narejeno |
 | 8 | Zvočne sledi in podnapisi, glasno branje | čaka |
 | 9 | Zvočne knjige, navigacija in informacije | čaka |
 | 10 | Playlisti, mape, formati | čaka |
@@ -102,3 +102,14 @@ Ročni NVDA preizkus: v kontekstnem meniju predvajalnika izberi Playback transit
 Preverjeno v izoliranem namizju: vnos v glavnem meniju, Tab vrstni red in imena vseh polj, začetek z eno minuto ("Sleep timer: 1:00 remaining."), Alt+Shift+T ("0:58 remaining"), preklic in ponovni preklic ("No sleep timer is running.").
 
 Ročni NVDA preizkus: Ctrl+Alt+T. NVDA prebere "Sleep timer" in "Current timer, No sleep timer is running." Tab do Duration, izberi 15 minutes, Enter: NVDA pove "Sleep timer: 15:00 remaining." Alt+Shift+T pove preostali čas, Ctrl+Alt+Shift+T "Sleep timer cancelled."
+
+## Enota 7
+
+- [ in ] ostaneta oznaki začetka in konca, P ostane enkratni predogled (Python). Alt+L vklopi in izklopi ponavljanje A-B označenega izseka; premikanje je med ponavljanjem omejeno na izsek.
+- Alt+B odpre Marked excerpts: izsek, dejanje (Play once, Repeat, Save in Bookmarks, Export this excerpt, Export all excerpts, Delete, Clear all), natančen začetni in končni čas z milisekundami, ime zaznamka, potrditveno polje za uporabo trenutnih učinkov pri izvozu. Alt+Shift+PageUp in PageDown skočita na prejšnji ali naslednji izsek in ga predvajata enkrat.
+- Izvoz uporablja obstoječi Python izvoz označenega posnetka (mapa clips, nastavljena oblika), privzeto z izvornim zvokom. Z vključenim poljem se dodajo hitrost, višina tona, EQ in obdelava zvoka kot filter FFmpeg.
+- Shranjeni izsek je v Bookmarks z oznako "Excerpt until 0:04". Enter ga predvaja enkrat in na koncu ustavi (Windows in Mac).
+
+Preverjeno v izoliranem namizju: imena in vrstni red polj, izvoz (najavi "Clip export started." in "Clip exported: song - 0-02-0-04.mp3", datoteka 96 kB), shranjen zaznamek z `end_position`, Alt+L vklop in izklop.
+
+Ročni NVDA preizkus: predvajaj datoteko, pritisni [ in čez nekaj sekund ]. Alt+B: NVDA prebere "Marked excerpts" in "Excerpt, combo box, Excerpt 1: ...". Action Save in Bookmarks, Enter: "Excerpt saved in Bookmarks." Ctrl+Shift+K: vrstica vsebuje "Excerpt until". Enter predvaja izsek enkrat in ustavi.

@@ -145,7 +145,10 @@ impl Shell {
                     name.to_owned(),
                 ];
                 if let Some(end) = bookmark.end_position() {
-                    parts.push(format!("Excerpt, ends at {}", format_duration(end)));
+                    parts.push(
+                        self.text("bookmark_excerpt_until")
+                            .replace("{time}", &format_duration(end)),
+                    );
                 }
                 if !current_only && !bookmark.media_title.trim().is_empty() {
                     parts.push(bookmark.media_title.trim().to_owned());
