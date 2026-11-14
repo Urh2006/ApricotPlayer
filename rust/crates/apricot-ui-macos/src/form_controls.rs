@@ -12,12 +12,15 @@ use std::time::Instant;
 use apricot_shell::TypeAhead;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSAccessibility, NSAccessibilityPostNotification, NSAccessibilityValueChangedNotification,
-    NSButton, NSControl, NSEvent, NSPopUpButton, NSResponder, NSSlider, NSView,
+    NSButton, NSControl, NSEvent, NSMenu, NSMenuDelegate, NSPopUpButton, NSResponder, NSSlider,
+    NSView,
 };
-use objc2_foundation::{NSInteger, NSRect, NSString};
+use objc2_foundation::{
+    NSArray, NSInteger, NSObjectProtocol, NSRect, NSRunLoopCommonModes, NSString,
+};
 
 use crate::controls::{handle_tab, modifiers, scroll_into_view};
 use crate::keys;
@@ -95,6 +98,45 @@ define_class!(
                 unsafe {
                     let _: () = msg_send![super(self), keyDown: event];
                 }
+                self.keep_focus_after_menu();
+            }
+        }
+
+        /// Space and VoiceOver's press open the list; the menu runs until
+        /// it closes.
+        #[unsafe(method(performClick:))]
+        fn perform_click(&self, sender: Option<&AnyObject>) {
+            // SAFETY: forwarding to NSPopUpButton.
+            unsafe {
+                let _: () = msg_send![super(self), performClick: sender];
+            }
+            self.keep_focus_after_menu();
+        }
+
+        /// After the list closed by any route (VoiceOver opens it without
+        /// waiting), on the next pass of the run loop, also a modal one.
+        #[unsafe(method(restoreFocusAfterMenu:))]
+        fn restore_focus_after_menu(&self, _sender: Option<&AnyObject>) {
+            self.keep_focus_after_menu();
+        }
+    }
+
+    unsafe impl NSObjectProtocol for PopUp {}
+
+    unsafe impl NSMenuDelegate for PopUp {
+        #[unsafe(method(menuDidClose:))]
+        fn menu_did_close(&self, _menu: &NSMenu) {
+            let modes = NSArray::from_slice(&[unsafe { NSRunLoopCommonModes }]);
+            // SAFETY: the selector is this class's own method; AppKit keeps
+            // the pop-up until the request ran.
+            unsafe {
+                let _: () = msg_send![
+                    self,
+                    performSelector: sel!(restoreFocusAfterMenu:),
+                    withObject: Option::<&AnyObject>::None,
+                    afterDelay: 0.0_f64,
+                    inModes: &*modes
+                ];
             }
         }
     }
@@ -112,6 +154,10 @@ impl PopUp {
         let popup: Retained<Self> =
             unsafe { msg_send![super(this), initWithFrame: NSRect::ZERO, pullsDown: false] };
         popup.setAccessibilityLabel(Some(&NSString::from_str(label)));
+        if let Some(menu) = popup.menu() {
+            // The menu holds its delegate weakly; the pop-up owns the menu.
+            menu.setDelegate(Some(objc2::runtime::ProtocolObject::from_ref(&*popup)));
+        }
         // SAFETY: the target outlives the pop-up (it owns the dialog).
         unsafe {
             popup.setTarget(Some(target));
@@ -152,6 +198,19 @@ impl PopUp {
         (0..self.numberOfItems())
             .map(|index| self.itemTitleAtIndex(index).to_string())
             .collect()
+    }
+
+    /// A closed list leaves the keyboard in an `NSAlert` form's main
+    /// window behind it, where the modal session ignores every key: the
+    /// form and this pop-up get it back.
+    fn keep_focus_after_menu(&self) {
+        if let Some(window) = self.window()
+            && window.isVisible()
+            && !window.isKeyWindow()
+        {
+            window.makeKeyWindow();
+            window.makeFirstResponder(Some(self));
+        }
     }
 
     /// The Windows combo box keys; `true` when handled.

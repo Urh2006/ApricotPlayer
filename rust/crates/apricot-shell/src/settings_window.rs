@@ -13,6 +13,7 @@ use apricot_app::{
 use apricot_core::shortcut::{ShortcutChord, ShortcutKey};
 use apricot_core::{SettingId, SettingsSection};
 
+use crate::feature_form::{FormFieldKind, FormValue};
 use crate::{MainMenuSelection, PlayerFocus, Shell, ShellUi, View};
 
 /// What a control changes (Windows `ControlBinding`).
@@ -57,6 +58,8 @@ pub enum SettingsBinding {
     SpotifyNormalisation,
     SpotifyListeningHistory,
     SpotifyKeyCache,
+    /// A field of the Recording section, saved to recording.json.
+    RecordingField(String),
 }
 
 impl SettingsBinding {
@@ -258,6 +261,11 @@ pub fn settings_binding(control: &SettingsControl) -> SettingsBinding {
         SettingsControl::SpotifyNormalisation { .. } => SettingsBinding::SpotifyNormalisation,
         SettingsControl::SpotifyListeningHistory { .. } => SettingsBinding::SpotifyListeningHistory,
         SettingsControl::SpotifyKeyCache { .. } => SettingsBinding::SpotifyKeyCache,
+        SettingsControl::FieldText { field, .. }
+        | SettingsControl::FieldChoice { field, .. }
+        | SettingsControl::FieldCheckbox { field, .. } => {
+            SettingsBinding::RecordingField(field.clone())
+        }
     }
 }
 
@@ -289,6 +297,8 @@ pub(crate) struct SettingsState {
     open: bool,
     /// Windows `saved_spotify_settings` when the window opened.
     spotify_before: Option<apricot_spotify::settings::SpotifySettings>,
+    /// Recording fields changed since the last Save.
+    recording_draft: crate::FormValues,
 }
 
 impl Shell {
@@ -301,6 +311,7 @@ impl Shell {
         }
         self.settings_window.open = true;
         self.settings_window.spotify_before = Some(self.application.saved_spotify_settings());
+        self.load_sources_quietly(ui);
         ui.open_settings();
     }
 
@@ -347,7 +358,107 @@ impl Shell {
                 cookie_profile_options(self.application.settings()),
             );
         }
+        if section == SettingsSection::Recording {
+            model.controls = self.settings_recording_controls();
+        }
         model
+    }
+
+    /// The fields of the recording defaults form as Settings controls,
+    /// showing changes that are not saved yet.
+    #[must_use]
+    pub fn settings_recording_controls(&self) -> Vec<SettingsControl> {
+        let draft = &self.settings_window.recording_draft;
+        self.sources
+            .recording_form(&self.catalog())
+            .fields
+            .into_iter()
+            .filter_map(|field| {
+                let changed = draft.get(&field.id);
+                Some(match field.kind {
+                    FormFieldKind::Choice { options, selected } => SettingsControl::FieldChoice {
+                        selected: changed.and_then(FormValue::choice).unwrap_or(selected),
+                        field: field.id,
+                        label: field.label,
+                        options,
+                    },
+                    FormFieldKind::Checkbox { checked } => SettingsControl::FieldCheckbox {
+                        checked: changed.and_then(FormValue::checked).unwrap_or(checked),
+                        field: field.id,
+                        label: field.label,
+                    },
+                    FormFieldKind::Text { value, .. } | FormFieldKind::File { value, .. } => {
+                        SettingsControl::FieldText {
+                            value: changed
+                                .and_then(FormValue::text)
+                                .map_or(value, str::to_owned),
+                            field: field.id,
+                            label: field.label,
+                        }
+                    }
+                    FormFieldKind::Number { value, .. } => SettingsControl::FieldText {
+                        value: changed.and_then(FormValue::text).map_or_else(
+                            || crate::feature_form::format_number(value),
+                            str::to_owned,
+                        ),
+                        field: field.id,
+                        label: field.label,
+                    },
+                    FormFieldKind::ReadOnly { .. } => return None,
+                })
+            })
+            .collect()
+    }
+
+    /// Saves changed recording fields; nothing to do without changes.
+    fn save_recording_draft(&mut self) -> Result<(), String> {
+        if self.settings_window.recording_draft.is_empty() {
+            return Ok(());
+        }
+        let form = self.sources.recording_form(&self.catalog());
+        let mut values = crate::FormValues::new();
+        for field in &form.fields {
+            let value = self
+                .settings_window
+                .recording_draft
+                .get(&field.id)
+                .cloned()
+                .or_else(|| match &field.kind {
+                    FormFieldKind::Choice { selected, .. } => Some(FormValue::Choice(*selected)),
+                    FormFieldKind::Checkbox { checked } => Some(FormValue::Checkbox(*checked)),
+                    FormFieldKind::Text { value, .. } | FormFieldKind::File { value, .. } => {
+                        Some(FormValue::Text(value.clone()))
+                    }
+                    FormFieldKind::Number { value, .. } => Some(FormValue::Number(*value)),
+                    FormFieldKind::ReadOnly { .. } => None,
+                });
+            if let Some(value) = value {
+                values.insert(field.id.clone(), value);
+            }
+        }
+        // The form's own check names the field and its range.
+        let values = form.validate(&values).map_err(|label| {
+            form.fields
+                .iter()
+                .find(|field| field.label == label)
+                .map_or_else(
+                    || form.invalid_value.replace("{field}", &label),
+                    |field| match field.kind {
+                        FormFieldKind::Number {
+                            minimum, maximum, ..
+                        } => form
+                            .number_range
+                            .replace("{field}", &label)
+                            .replace("{minimum}", &crate::feature_form::format_number(minimum))
+                            .replace("{maximum}", &crate::feature_form::format_number(maximum)),
+                        _ => form.invalid_value.replace("{field}", &label),
+                    },
+                )
+        })?;
+        let environment = self.sources_environment();
+        self.sources.apply_recording_values(&environment, &values)?;
+        self.settings_window.recording_draft.clear();
+        Ok(())
     }
 
     /// Called before applying a newly checked experimental history control.
@@ -378,6 +489,18 @@ impl Shell {
         input: &SettingsInput,
         gains: &EqualizerGains,
     ) -> Result<(), String> {
+        if let SettingsBinding::RecordingField(field) = binding {
+            let value = match input {
+                SettingsInput::Text(text) => FormValue::Text(text.clone()),
+                SettingsInput::Selected(Some(index)) => FormValue::Choice(*index),
+                SettingsInput::Checked(checked) => FormValue::Checkbox(*checked),
+                _ => return Ok(()),
+            };
+            self.settings_window
+                .recording_draft
+                .insert(field.clone(), value);
+            return Ok(());
+        }
         let app = &mut self.application;
         let selected = match input {
             SettingsInput::Selected(selected) => *selected,
@@ -394,7 +517,8 @@ impl Shell {
             | SettingsBinding::ShortcutCategoryList(_)
             | SettingsBinding::ShortcutSearch
             | SettingsBinding::ShortcutFilter
-            | SettingsBinding::ShortcutActionList(_) => Ok(()),
+            | SettingsBinding::ShortcutActionList(_)
+            | SettingsBinding::RecordingField(_) => Ok(()),
             SettingsBinding::Text(SettingId::CookiesFile) => app.apply_cookies_path_text(text),
             SettingsBinding::Text(SettingId::AudiovaultEmail) => {
                 app.apply_audiovault_email_text(text)
@@ -486,7 +610,11 @@ impl Shell {
                 }
                 self.settings_apply_equalizer(ui, false);
             }
-            SettingsBinding::Checkbox(SettingId::EqualizerClippingProtection) => {
+            SettingsBinding::Checkbox(SettingId::EqualizerClippingProtection)
+            | SettingsBinding::Choice {
+                setting: SettingId::BassBoostIntensity,
+                ..
+            } => {
                 self.settings_apply_equalizer(ui, true);
             }
             SettingsBinding::EqualizerDevicePreset { .. } => {
@@ -724,6 +852,7 @@ impl Shell {
     ///
     /// Returns the message when the settings were not saved.
     pub fn settings_save(&mut self, displayed_language: &str) -> Result<(String, bool), String> {
+        self.save_recording_draft()?;
         self.settings_save_and_register()?;
         Ok((
             self.text("settings_saved"),
@@ -956,6 +1085,65 @@ mod tests {
             !shell.application.spotify_settings().listening_history,
             "Cancel must not save opt-in"
         );
+    }
+
+    #[test]
+    fn recording_fields_are_edited_in_settings_and_saved_with_save() {
+        let mut shell = crate::tests::keyboard::shell();
+        let mut ui = crate::tests::equalizer::Ui::default();
+        shell.load_sources_quietly(&mut ui);
+        let model = shell.settings_screen(SettingsSection::Recording);
+        assert!(matches!(
+            &model.controls[0],
+            SettingsControl::FieldChoice { field, selected: 0, options, .. }
+                if field == "format" && options.len() == 4
+        ));
+        assert!(model.controls.iter().any(|control| matches!(
+            control,
+            SettingsControl::FieldCheckbox { field, .. } if field == "remember"
+        )));
+        let gains = EqualizerGains::new();
+        let field = |id: &str| SettingsBinding::RecordingField(id.to_owned());
+        shell
+            .settings_apply(&field("format"), &SettingsInput::Selected(Some(2)), &gains)
+            .unwrap();
+        // The unsaved choice is shown again when the section is rebuilt.
+        let model = shell.settings_screen(SettingsSection::Recording);
+        assert!(matches!(
+            &model.controls[0],
+            SettingsControl::FieldChoice { selected: 2, .. }
+        ));
+        shell
+            .settings_apply(&field("remember"), &SettingsInput::Checked(true), &gains)
+            .unwrap();
+        shell.settings_save("en").unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(
+                shell
+                    .application
+                    .settings_file()
+                    .with_file_name("recording.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(saved["format"], "Mp3");
+
+        // A relative folder is refused with the reason; nothing else is lost.
+        shell
+            .settings_apply(
+                &field("folder"),
+                &SettingsInput::Text("Recordings".into()),
+                &gains,
+            )
+            .unwrap();
+        let error = shell.settings_save("en").unwrap_err();
+        assert!(error.contains("folder"), "{error}");
+        let model = shell.settings_screen(SettingsSection::Recording);
+        assert!(matches!(
+            &model.controls[0],
+            SettingsControl::FieldChoice { selected: 2, .. }
+        ));
     }
 
     #[test]

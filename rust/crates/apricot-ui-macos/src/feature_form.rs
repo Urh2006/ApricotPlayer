@@ -1,7 +1,7 @@
 //! Native AppKit rendering of typed feature forms.
 #![allow(unsafe_code)]
 
-use crate::controls;
+use crate::controls::{self, ReadOnlyText};
 use crate::form_controls::{CheckBox, PopUp};
 use apricot_shell::{FeatureForm, FormFieldKind, FormValue, FormValues};
 use objc2::rc::Retained;
@@ -67,13 +67,14 @@ enum Control {
     Text(Retained<NSTextField>),
     Choice(Retained<PopUp>),
     Check(Retained<CheckBox>),
-    ReadOnly(Retained<NSTextField>),
+    ReadOnly(Retained<ReadOnlyText>),
 }
 
 impl Control {
     fn view(&self) -> &NSView {
         match self {
-            Self::Text(field) | Self::ReadOnly(field) => field,
+            Self::Text(field) => field,
+            Self::ReadOnly(text) => text,
             Self::Choice(choice) => choice,
             Self::Check(check) => check,
         }
@@ -187,12 +188,20 @@ fn show_inner(
                 check.set_checked(*checked);
                 Control::Check(check)
             }
+            // A focusable text, as the Windows read-only edit: Tab reaches
+            // it and VoiceOver reads it, a running timer for example.
+            FormFieldKind::ReadOnly { value } => {
+                let text = ReadOnlyText::new(mtm);
+                text.set_text(value);
+                text.set_label(&field.label);
+                Control::ReadOnly(text)
+            }
             kind => {
                 let secret = matches!(kind, FormFieldKind::Text { secret: true, .. });
                 let text = match kind {
-                    FormFieldKind::Text { value, .. }
-                    | FormFieldKind::ReadOnly { value }
-                    | FormFieldKind::File { value, .. } => value.clone(),
+                    FormFieldKind::Text { value, .. } | FormFieldKind::File { value, .. } => {
+                        value.clone()
+                    }
                     FormFieldKind::Number { value, .. } => value.to_string(),
                     _ => unreachable!(),
                 };
@@ -203,16 +212,11 @@ fn show_inner(
                 };
                 field_view.setStringValue(&NSString::from_str(&text));
                 field_view.setAccessibilityLabel(Some(&NSString::from_str(&field.label)));
-                let read_only = matches!(kind, FormFieldKind::ReadOnly { .. });
-                field_view.setEditable(!read_only);
+                field_view.setEditable(true);
                 field_view.setSelectable(true);
                 // SAFETY: the form target outlives the field; the delegate is weak.
                 unsafe { field_view.setDelegate(Some(ProtocolObject::from_ref(&*target))) };
-                if read_only {
-                    Control::ReadOnly(field_view)
-                } else {
-                    Control::Text(field_view)
-                }
+                Control::Text(field_view)
             }
         };
         let (x, width) = if matches!(control, Control::Check(_)) {

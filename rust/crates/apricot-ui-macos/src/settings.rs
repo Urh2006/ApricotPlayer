@@ -1218,11 +1218,18 @@ impl SettingsWindow {
                 selected,
                 options,
                 ..
+            }
+            | SettingsControl::FieldChoice {
+                label,
+                selected,
+                options,
+                ..
             } => (
                 Some(label_view(&label)),
                 ControlKind::Choice(popup(&label, &options, selected)),
             ),
             SettingsControl::Checkbox { label, checked, .. }
+            | SettingsControl::FieldCheckbox { label, checked, .. }
             | SettingsControl::SpotifyNormalisation { label, checked }
             | SettingsControl::SpotifyListeningHistory { label, checked }
             | SettingsControl::SpotifyKeyCache { label, checked } => {
@@ -1285,7 +1292,8 @@ impl SettingsWindow {
                 document.addSubview(&slider);
                 (Some(label_view(&label)), ControlKind::Slider(slider))
             }
-            SettingsControl::EqualizerPresetName { label, value, .. } => (
+            SettingsControl::EqualizerPresetName { label, value, .. }
+            | SettingsControl::FieldText { label, value, .. } => (
                 Some(label_view(&label)),
                 ControlKind::Field(text_field(&value, &label, false, false)),
             ),

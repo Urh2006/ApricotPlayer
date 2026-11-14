@@ -337,7 +337,7 @@ impl Shell {
                     .spotify_service()
                     .and_then(|service| service.accounts().active);
                 if account.is_some() && account != selected.as_deref() {
-                    ui.show_error("Select the Spotify account that owns this subscription before opening its changes");
+                    ui.show_error(&self.text("spotify_sub_wrong_account"));
                     return;
                 }
                 self.spotify_open_subscription_changes(ui, change);

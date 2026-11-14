@@ -140,6 +140,11 @@ pub struct SourcesController {
     recording_since: String,
     metadata_identity: String,
     metadata_title: String,
+    /// The list a station or channel was played from, with its id: leaving
+    /// the player goes back to it, one step, as everywhere else.
+    player_return: Option<(SourceReturn, String)>,
+    /// The IPTV list whose channel is being resolved.
+    opening_from: IptvScreen,
 }
 
 impl Default for SourcesController {
@@ -183,6 +188,8 @@ impl Default for SourcesController {
             recording_since: String::new(),
             metadata_identity: String::new(),
             metadata_title: String::new(),
+            player_return: None,
+            opening_from: IptvScreen::Channels,
         }
     }
 }
@@ -496,6 +503,8 @@ impl SourcesController {
                 let catalog = environment.catalog();
                 if let Some(item) = channel.media(&source) {
                     ui.play(item);
+                    self.player_return =
+                        Some((SourceReturn::Iptv(self.opening_from), channel.id.clone()));
                     self.playing_iptv = Some(channel.id.clone());
                     // The player names the channel when it starts; the
                     // programme follows with its first stream details.
@@ -523,6 +532,36 @@ impl SourcesController {
     }
 
     /// After the player announced what started: the IPTV programme.
+    /// Leaving the player: back to the station or channel list it was
+    /// played from, when the player still plays that station or channel.
+    /// `true` when a list opened. The return is used once either way.
+    pub fn resume_after_player(
+        &mut self,
+        ui: &mut dyn SourcesUi,
+        environment: &SourcesEnvironment,
+        station: Option<&str>,
+        channel: Option<&str>,
+    ) -> bool {
+        let Some((target, id)) = self.player_return.take() else {
+            return false;
+        };
+        match target {
+            SourceReturn::Radio if station == Some(id.as_str()) => {
+                self.radio_navigate(ui, environment, RadioScreen::Stations);
+            }
+            SourceReturn::Iptv(screen) if channel == Some(id.as_str()) => {
+                self.iptv_navigate(ui, environment, screen);
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// The player went to the main menu: nothing to go back to.
+    pub fn forget_player_return(&mut self) {
+        self.player_return = None;
+    }
+
     pub fn playback_started(&mut self, ui: &mut dyn SourcesUi) {
         if let Some(programme) = self.pending_programme.take() {
             ui.status(&programme, true);
@@ -836,6 +875,7 @@ impl SourcesController {
                         ui.error(&error);
                     }
                     ui.play(item);
+                    self.player_return = Some((SourceReturn::Radio, station.stationuuid.clone()));
                     // The catalog counts plays; nothing waits for the answer.
                     let proxy = environment.proxy.clone();
                     let id = station.stationuuid;
@@ -1670,6 +1710,7 @@ impl SourcesController {
                         self.episode_series = Some(channel.clone());
                         self.episode_selected = 0;
                     }
+                    self.opening_from = IptvScreen::Channels;
                     self.open_channel(ui, environment, source, channel);
                     return None;
                 }
@@ -1749,6 +1790,7 @@ impl SourcesController {
         ) else {
             return Some(IptvScreen::Channels);
         };
+        self.opening_from = IptvScreen::Episodes;
         self.open_channel(ui, environment, source, episode);
         None
     }
@@ -2045,13 +2087,12 @@ impl SourcesController {
     }
 
     #[allow(clippy::too_many_lines)] // One form with its checks.
-    fn recording_settings(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) {
-        let catalog = environment.catalog();
-        let rates = [
-            8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000, 88200, 96000, 192_000,
-        ];
-        let form = FeatureForm::localized(
-            &catalog,
+    /// The recording defaults: Settings, Recording shows these fields in
+    /// place, and the recording panel opens them as a form.
+    #[must_use]
+    pub fn recording_form(&self, catalog: &TranslationCatalog) -> FeatureForm {
+        FeatureForm::localized(
+            catalog,
             catalog.text("recording_settings"),
             vec![
                 FormField::choice(
@@ -2073,8 +2114,11 @@ impl SourcesController {
                 FormField::choice(
                     "rate",
                     catalog.text("recording_sample_rate"),
-                    rates.iter().map(|rate| format!("{rate} Hz")).collect(),
-                    rates
+                    RECORDING_RATES
+                        .iter()
+                        .map(|rate| format!("{rate} Hz"))
+                        .collect(),
+                    RECORDING_RATES
                         .iter()
                         .position(|rate| *rate == self.recording.sample_rate)
                         .unwrap_or(7),
@@ -2122,27 +2166,41 @@ impl SourcesController {
                     },
                 ),
             ],
-        );
-        let Some(values) = ui.form(&form) else { return };
+        )
+    }
+
+    /// Applies and saves values of [`Self::recording_form`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the message when the folder is not absolute or the settings
+    /// could not be saved; the previous settings stay in effect.
+    pub fn apply_recording_values(
+        &mut self,
+        environment: &SourcesEnvironment,
+        values: &FormValues,
+    ) -> Result<(), String> {
+        let catalog = environment.catalog();
         let previous = self.recording.clone();
-        self.recording.format = match choice(&values, "format") {
+        self.recording.format = match choice(values, "format") {
             1 => RecordingFormat::Wav,
             2 => RecordingFormat::Mp3,
             3 => RecordingFormat::Aac,
             _ => RecordingFormat::Flac,
         };
-        self.recording.sample_rate = rates[choice(&values, "rate").min(rates.len() - 1)];
-        self.recording.channels = if choice(&values, "channels") == 0 {
+        self.recording.sample_rate =
+            RECORDING_RATES[choice(values, "rate").min(RECORDING_RATES.len() - 1)];
+        self.recording.channels = if choice(values, "channels") == 0 {
             1
         } else {
             2
         };
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // 32 to 512.
-        let bitrate = number(&values, "bitrate").clamp(32.0, 512.0).round() as u32;
+        let bitrate = number(values, "bitrate").clamp(32.0, 512.0).round() as u32;
         self.recording.bitrate = bitrate;
-        self.recording.directory = PathBuf::from(text(&values, "folder").trim());
-        self.recording.remember = checked(&values, "remember");
-        self.recording.feedback = match choice(&values, "feedback") {
+        self.recording.directory = PathBuf::from(text(values, "folder").trim());
+        self.recording.remember = checked(values, "remember");
+        self.recording.feedback = match choice(values, "feedback") {
             1 => RecordingFeedback::Speech,
             2 => RecordingFeedback::Both,
             3 => RecordingFeedback::None,
@@ -2150,11 +2208,23 @@ impl SourcesController {
         };
         if !self.recording.directory.is_absolute() {
             self.recording = previous;
-            ui.error(catalog.text("recording_folder_absolute"));
-            return;
+            return Err(catalog.text("recording_folder_absolute").to_owned());
         }
-        if let Err(error) = self.save_recording(environment) {
+        self.save_recording(environment).inspect_err(|_| {
             self.recording = previous;
+        })
+    }
+
+    /// Loads the saved sources, IPTV and recording files once.
+    pub fn ensure_loaded(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) {
+        self.load(ui, environment);
+    }
+
+    fn recording_settings(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) {
+        let catalog = environment.catalog();
+        let form = self.recording_form(&catalog);
+        let Some(values) = ui.form(&form) else { return };
+        if let Err(error) = self.apply_recording_values(environment, &values) {
             ui.error(&error);
         }
     }
@@ -2269,6 +2339,16 @@ enum RadioScreen {
     Search,
     Stations,
     Settings,
+}
+
+const RECORDING_RATES: [u32; 11] = [
+    8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000, 88200, 96000, 192_000,
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SourceReturn {
+    Radio,
+    Iptv(IptvScreen),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2608,6 +2688,58 @@ mod tests {
         fn ask_yes_no(&mut self, _message: &str) -> bool {
             false
         }
+    }
+
+    #[test]
+    fn leaving_the_player_returns_to_the_list_it_was_played_from() {
+        let environment = SourcesEnvironment {
+            directory: PathBuf::from("unused"),
+            download_directory: PathBuf::from("unused"),
+            ffmpeg: None,
+            proxy: String::new(),
+            shortcuts: BTreeMap::new(),
+            language: "en".into(),
+        };
+        let mut controller = SourcesController {
+            station_rows: vec![
+                Station {
+                    name: "First".into(),
+                    stationuuid: "first".into(),
+                    ..Station::default()
+                },
+                Station {
+                    name: "Second".into(),
+                    stationuuid: "second".into(),
+                    ..Station::default()
+                },
+            ],
+            station_selected: 1,
+            player_return: Some((SourceReturn::Radio, "second".into())),
+            ..SourcesController::default()
+        };
+        let mut ui = Browsing::default();
+        // Back from the stations, then from the radio menu.
+        ui.answers.extend([None, None]);
+        assert!(controller.resume_after_player(&mut ui, &environment, Some("second"), None));
+        let catalog = apricot_app::embedded_catalog("en");
+        assert_eq!(
+            ui.titles,
+            [catalog.text("radio_stations"), catalog.text("radio_title")]
+        );
+        assert_eq!(controller.station_selected, 1);
+        // The return is used once.
+        assert!(!controller.resume_after_player(&mut ui, &environment, Some("second"), None));
+
+        // The player went on to something else: nothing opens.
+        controller.player_return = Some((SourceReturn::Radio, "second".into()));
+        let mut ui = Browsing::default();
+        assert!(!controller.resume_after_player(&mut ui, &environment, None, None));
+        assert!(ui.titles.is_empty());
+        assert!(controller.player_return.is_none());
+
+        controller.player_return = Some((SourceReturn::Radio, "second".into()));
+        controller.forget_player_return();
+        assert!(!controller.resume_after_player(&mut ui, &environment, Some("second"), None));
     }
 
     fn channel(name: &str, group: &str, kind: ChannelKind) -> IptvChannel {

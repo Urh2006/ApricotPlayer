@@ -631,6 +631,14 @@ fn audio_section(application: &Application) -> DiagnosticSection {
             "Bass boost enabled",
             toggles.contains(&SessionToggle::BassBoost),
         )
+        .line(
+            "Bass boost intensity",
+            settings.bass_boost_intensity.as_str(),
+        )
+        .line(
+            "Player equalizer filter",
+            application.player_equalizer_graph(None),
+        )
         .line("Equalizer enabled", equalizer_enabled)
         .line("Equalizer preset", effective_preset)
         .line("Equalizer range", settings.equalizer_db_range)

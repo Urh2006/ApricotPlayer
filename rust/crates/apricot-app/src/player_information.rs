@@ -136,6 +136,11 @@ fn item_type_label(catalog: &TranslationCatalog, kind: MediaKind) -> &str {
     })
 }
 
+/// The clock form of a duration ("20:05", "1:02:03").
+pub(crate) fn clock_time(seconds: f64) -> String {
+    format_duration(seconds)
+}
+
 fn format_duration(seconds: f64) -> String {
     if !seconds.is_finite() || seconds < 0.0 {
         return String::new();

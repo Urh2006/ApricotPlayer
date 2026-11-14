@@ -1731,12 +1731,37 @@ impl Application {
         let item = self.state.player.current_item()?;
         let mut state = PlayerViewState::from(&self.state.player);
         state.returns_to_main_menu = self.player_returns_to_main_menu();
-        Some(PlayerScreenModel::build(
+        let mut model = PlayerScreenModel::build(
             &embedded_catalog(&self.settings.current().language),
             self.settings.current(),
             item,
             &state,
-        ))
+        );
+        if let Some(control) = model
+            .controls
+            .iter_mut()
+            .find(|control| control.id == "sleep_timer")
+        {
+            control.label = self.sleep_timer_button_label();
+        }
+        Some(model)
+    }
+
+    /// The Sleep timer button of the player with the timer's state, for
+    /// example "Sleep timer: Running, 20:05 left, then playback pauses".
+    /// The native windows refresh it while the button has no focus, so a
+    /// screen reader reads it on focus and never during the countdown.
+    pub fn sleep_timer_button_label(&self) -> String {
+        let catalog = embedded_catalog(&self.settings.current().language);
+        let state = crate::playback_features::sleep_timer_state(
+            &catalog,
+            self.playback_features().timer.as_ref(),
+        );
+        crate::player_model::label_with_shortcut(
+            &format!("{}: {state}", catalog.text("sleep_timer")),
+            "open_sleep_timer",
+            self.settings.current(),
+        )
     }
 
     /// Python `add_background_player_section`: only while background
@@ -3570,6 +3595,16 @@ mod tests {
     }
 
     #[test]
+    fn sleep_timer_button_says_whether_the_timer_runs() {
+        let root = tempdir().expect("temporary directory");
+        let app = application(root.path());
+        assert!(
+            app.sleep_timer_button_label()
+                .starts_with("Sleep timer: Not running")
+        );
+    }
+
+    #[test]
     fn player_equalizer_graph_follows_session_override_and_bass_boost() {
         let root = tempdir().expect("temporary directory");
         let mut app = application(root.path());
@@ -3578,6 +3613,18 @@ mod tests {
         assert_eq!(app.player_equalizer_graph(None), None, "equalizer off");
         let boosted = app.player_equalizer_graph(Some(true)).expect("bass boost");
         assert!(boosted.contains("f=31:t=q:w=1.7:g=5.0"), "{boosted}");
+        assert!(
+            !boosted.contains("f=25:"),
+            "Medium leaves 25 Hz flat: {boosted}"
+        );
+        // The chosen intensity reaches the player's filter at once.
+        app.set_string_setting(SettingId::BassBoostIntensity, "extreme")
+            .expect("intensity");
+        let extreme = app.player_equalizer_graph(Some(true)).expect("bass boost");
+        assert!(extreme.contains("f=25:t=q:w=1.8:g=6.5"), "{extreme}");
+        assert!(extreme.contains("f=62:t=q:w=2:g=9.0"), "{extreme}");
+        app.set_string_setting(SettingId::BassBoostIntensity, "medium")
+            .expect("intensity");
 
         app.set_player_equalizer(Some(crate::EqualizerSession {
             enabled: true,

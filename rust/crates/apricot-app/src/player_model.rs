@@ -172,6 +172,8 @@ fn append_primary_controls(
     });
     for (id, label_key, action_id) in [
         ("next", "next", "player_next"),
+        // 2.1: the sleep timer one Tab after Next, as in the main menu.
+        ("sleep_timer", "sleep_timer", "open_sleep_timer"),
         ("queue", "playback_queue", "open_playback_queue"),
         ("add_to_playlist", "add_to_playlist", "add_to_playlist"),
         ("add_bookmark", "add_bookmark", "player_add_bookmark"),
@@ -501,7 +503,11 @@ fn checkbox_without_shortcut(
     }
 }
 
-fn label_with_shortcut(label: &str, action_id: &str, settings: &SettingsDocument) -> String {
+pub(crate) fn label_with_shortcut(
+    label: &str,
+    action_id: &str,
+    settings: &SettingsDocument,
+) -> String {
     if !settings.show_shortcuts_in_labels {
         return label.to_owned();
     }
@@ -600,6 +606,13 @@ mod tests {
                 "previous",
                 "play_pause"
             ]
+        );
+        // The sleep timer is the next Tab stop after Next.
+        let next = ids.iter().position(|id| *id == "next").expect("next");
+        assert_eq!(ids[next + 1], "sleep_timer");
+        assert_eq!(
+            control(&model, "sleep_timer").action_id,
+            Some("open_sleep_timer")
         );
         assert!(ids.contains(&"copy_location"));
         assert!(!ids.contains(&"copy_stream_url"));

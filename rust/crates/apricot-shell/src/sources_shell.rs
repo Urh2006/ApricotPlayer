@@ -47,7 +47,7 @@ impl SourcesUi for Ui<'_> {
 }
 
 impl Shell {
-    fn sources_environment(&self) -> SourcesEnvironment {
+    pub(crate) fn sources_environment(&self) -> SourcesEnvironment {
         let settings = self.application.settings();
         let app_directory = crate::player_tools::application_directory();
         SourcesEnvironment {
@@ -91,6 +91,51 @@ impl Shell {
             ui.set_background_polling(true);
         }
         handled
+    }
+    /// The station or channel of the player, before it closes.
+    pub(crate) fn player_source_ids(&self) -> (Option<String>, Option<String>) {
+        let session = self.application.player_session();
+        let id = |key: &str| {
+            session
+                .current_item()
+                .and_then(|item| item.metadata.get(key))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        };
+        (id("radio_station_id"), id("iptv_channel_id"))
+    }
+    /// One step back from a player started in Radio or IPTV: the list it
+    /// was played from. `true` when that list opened.
+    pub(crate) fn resume_sources_after_player(
+        &mut self,
+        ui: &mut dyn ShellUi,
+        (station, channel): (Option<String>, Option<String>),
+    ) -> bool {
+        let environment = self.sources_environment();
+        let mut controller = std::mem::take(&mut self.sources);
+        let resumed = controller.resume_after_player(
+            &mut Ui { shell: self, ui },
+            &environment,
+            station.as_deref(),
+            channel.as_deref(),
+        );
+        let busy = controller.is_busy();
+        self.sources = controller;
+        if busy {
+            ui.set_background_polling(true);
+        }
+        resumed
+    }
+    /// Reads radio.json, iptv-sources.json and recording.json once, for
+    /// Settings; a damaged file is reported as when Radio opens.
+    pub(crate) fn load_sources_quietly(&mut self, ui: &mut dyn ShellUi) {
+        let environment = self.sources_environment();
+        let mut controller = std::mem::take(&mut self.sources);
+        controller.ensure_loaded(&mut Ui { shell: self, ui }, &environment);
+        self.sources = controller;
+    }
+    pub(crate) fn forget_sources_player_return(&mut self) {
+        self.sources.forget_player_return();
     }
     pub(crate) fn poll_sources(&mut self, ui: &mut dyn ShellUi) -> bool {
         let environment = self.sources_environment();

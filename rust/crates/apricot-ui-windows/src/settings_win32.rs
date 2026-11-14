@@ -558,6 +558,15 @@ unsafe fn create_bound_control(
             let control = edit(parent, instance, &value, id, true, false)?;
             (Some(label), control, ControlBinding::ReadOnly)
         }
+        // Only `Shell::settings_screen` shows these (macOS); this window
+        // still opens the recording form with its button.
+        SettingsControl::FieldText { label, .. }
+        | SettingsControl::FieldChoice { label, .. }
+        | SettingsControl::FieldCheckbox { label, .. } => {
+            let label = static_label(parent, instance, &label)?;
+            let control = edit(parent, instance, "", id, true, false)?;
+            (Some(label), control, ControlBinding::ReadOnly)
+        }
         SettingsControl::Text {
             setting,
             label,
@@ -1078,8 +1087,13 @@ unsafe fn equalizer_setting_changed(window: HWND, binding: &ControlBinding) {
             }
             post_equalizer_apply(window, false);
         }
-        // `on_equalizer_clipping_protection_changed`.
-        ControlBinding::Checkbox(SettingId::EqualizerClippingProtection) => {
+        // `on_equalizer_clipping_protection_changed`; 2.1 bass boost
+        // intensity is heard at once the same way.
+        ControlBinding::Checkbox(SettingId::EqualizerClippingProtection)
+        | ControlBinding::Choice {
+            setting: SettingId::BassBoostIntensity,
+            ..
+        } => {
             post_equalizer_apply(window, true);
         }
         // `on_equalizer_device_preset_changed`.

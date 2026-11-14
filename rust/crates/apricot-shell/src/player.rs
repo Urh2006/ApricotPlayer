@@ -563,7 +563,7 @@ impl Shell {
                         for command in commands {
                             self.execute_player_command(ui, command);
                         }
-                        ui.set_status("Sleep timer finished.", true);
+                        ui.set_status(&self.text("sleep_timer_finished"), true);
                         continue;
                     }
                     if self.player.clip_preview.take().is_some() {
@@ -1166,6 +1166,7 @@ impl Shell {
     ) {
         let keep_playing =
             force_keep_playing && self.application.settings().enable_background_playback;
+        self.forget_sources_player_return();
         self.application
             .set_player_toggle(SessionToggle::Fullscreen, false);
         if keep_playing {

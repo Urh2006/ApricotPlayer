@@ -81,6 +81,8 @@ pub struct SettingsDocument {
     pub equalizer_device_presets: BTreeMap<String, String>,
     pub equalizer_db_range: i64,
     pub equalizer_clipping_protection: bool,
+    /// 2.1: low, medium (the Python bass boost), high or extreme.
+    pub bass_boost_intensity: String,
     pub ask_download_location_each_time: bool,
     pub quiet_downloads: bool,
     pub keep_playlist_order: bool,
@@ -205,6 +207,7 @@ impl Default for SettingsDocument {
             equalizer_device_presets: BTreeMap::new(),
             equalizer_db_range: 12,
             equalizer_clipping_protection: false,
+            bass_boost_intensity: "medium".to_owned(),
             ask_download_location_each_time: false,
             quiet_downloads: false,
             keep_playlist_order: true,
@@ -351,6 +354,11 @@ impl SettingsDocument {
         );
         self.replaygain_mode = normalize_replaygain(&self.replaygain_mode);
         self.pitch_mode = normalize_pitch_mode(&self.pitch_mode);
+        self.bass_boost_intensity = normalized_member(
+            &self.bass_boost_intensity.trim().to_lowercase(),
+            &["low", "medium", "high", "extreme"],
+            "medium",
+        );
         self.speed_audio_mode = normalize_speed_audio_mode(&self.speed_audio_mode);
         self.audio_quality = normalize_audio_quality(&self.audio_quality);
         self.stream_url_cache_minutes = if self.stream_url_cache_minutes <= 0 {

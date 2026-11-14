@@ -501,6 +501,30 @@ pub fn parse_time(value: &str) -> Option<f64> {
 
 /// Absolute source positions remain authoritative for bookmarks and resume.
 /// The audiobook presentation projects the current chapter over that timeline.
+/// 2.1 beta 2: the state the Sleep timer button and dialog show, read when
+/// they get focus: whether the timer runs, the time left and what happens.
+pub fn sleep_timer_state(
+    catalog: &apricot_core::TranslationCatalog,
+    timer: Option<&SleepTimer>,
+) -> String {
+    let Some(timer) = timer else {
+        return catalog.text("sleep_timer_state_off").to_owned();
+    };
+    let stop = timer.options().action == TimerAction::Stop;
+    let key = match (timer.options().mode, stop) {
+        (TimerMode::Duration, false) => "sleep_timer_state_time_pause",
+        (TimerMode::Duration, true) => "sleep_timer_state_time_stop",
+        (TimerMode::TrackEnd, false) => "sleep_timer_state_track_pause",
+        (TimerMode::TrackEnd, true) => "sleep_timer_state_track_stop",
+        (TimerMode::ChapterEnd, false) => "sleep_timer_state_chapter_pause",
+        (TimerMode::ChapterEnd, true) => "sleep_timer_state_chapter_stop",
+    };
+    catalog.text(key).replace(
+        "{time}",
+        &crate::player_information::clock_time(timer.remaining().unwrap_or_default()),
+    )
+}
+
 pub fn chapter_span(app: &crate::Application) -> Option<(f64, f64)> {
     if !app.playback_features().audiobook {
         return None;

@@ -872,7 +872,15 @@ define_class!(
     impl ReadOnlyText {
         #[unsafe(method(keyDown:))]
         fn key_down(&self, event: &NSEvent) {
-            if !handle_tab(self, event) {
+            // Return presses a form's default button, as Enter in a Windows
+            // read-only edit does; elsewhere nothing takes it.
+            let modifiers = modifiers(event);
+            let default_button = matches!(event.keyCode(), keys::KEY_RETURN | keys::KEY_KEYPAD_ENTER)
+                && !(modifiers.command || modifiers.option || modifiers.control)
+                && self
+                    .window()
+                    .is_some_and(|window| window.performKeyEquivalent(event));
+            if !(default_button || handle_tab(self, event)) {
                 // SAFETY: forwarding the unhandled event to NSTextView.
                 unsafe {
                     let _: () = msg_send![super(self), keyDown: event];

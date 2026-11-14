@@ -66,6 +66,7 @@ define_setting_ids! {
     EqualizerDevicePresets => "equalizer_device_presets",
     EqualizerDbRange => "equalizer_db_range",
     EqualizerClippingProtection => "equalizer_clipping_protection",
+    BassBoostIntensity => "bass_boost_intensity",
     AskDownloadLocationEachTime => "ask_download_location_each_time",
     QuietDownloads => "quiet_downloads",
     KeepPlaylistOrder => "keep_playlist_order",
@@ -145,9 +146,9 @@ mod tests {
     use super::SettingId;
 
     #[test]
-    fn baseline_contains_116_unique_settings() {
+    fn baseline_contains_117_unique_settings() {
         let keys: HashSet<_> = SettingId::ALL.iter().map(|id| id.key()).collect();
-        assert_eq!(SettingId::ALL.len(), 116);
+        assert_eq!(SettingId::ALL.len(), 117);
         assert_eq!(keys.len(), SettingId::ALL.len());
     }
 }

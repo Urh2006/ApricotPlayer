@@ -70,18 +70,40 @@ pub fn chord(key_code: u16, characters: &str, modifiers: Modifiers) -> Option<Sh
     if modifiers.control {
         return None;
     }
-    let key = special_key(key_code).or_else(|| {
-        let mut letters = characters.chars();
-        let character = letters.next()?;
-        (letters.next().is_none() && character.is_ascii_alphanumeric())
-            .then(|| ShortcutKey::Character(character.to_ascii_uppercase()))
-    })?;
+    let key = special_key(key_code)
+        .or_else(|| {
+            let mut letters = characters.chars();
+            let character = letters.next()?;
+            (letters.next().is_none() && character.is_ascii_alphanumeric())
+                .then(|| ShortcutKey::Character(character.to_ascii_uppercase()))
+        })
+        // Shift turns the digit row into symbols ("!" for 1), and some
+        // layouts type symbols there without it: the key is its digit,
+        // as Windows' VK_1 to VK_0.
+        .or_else(|| digit_row(key_code).map(ShortcutKey::Character))?;
     Some(ShortcutChord::new(
         modifiers.command,
         modifiers.shift,
         modifiers.option,
         key,
     ))
+}
+
+/// The digit of a key of the top row, by its position.
+const fn digit_row(key_code: u16) -> Option<char> {
+    Some(match key_code {
+        18 => '1',
+        19 => '2',
+        20 => '3',
+        21 => '4',
+        23 => '5',
+        22 => '6',
+        26 => '7',
+        28 => '8',
+        25 => '9',
+        29 => '0',
+        _ => return None,
+    })
 }
 
 fn special_key(key_code: u16) -> Option<ShortcutKey> {
@@ -194,6 +216,41 @@ mod tests {
                 "{action}"
             );
         }
+    }
+
+    /// 2.1: Command+Option+Shift+1 opens Radio although Shift makes the
+    /// key "!", and Option+Shift+1 sets quick position 1.
+    #[test]
+    fn shifted_digits_keep_their_digit() {
+        let modifiers = Modifiers {
+            command: true,
+            option: true,
+            shift: true,
+            control: false,
+        };
+        assert_eq!(
+            chord(18, "!", modifiers),
+            ShortcutChord::parse("Ctrl+Alt+Shift+1")
+        );
+        assert_eq!(
+            chord(29, "=", modifiers),
+            ShortcutChord::parse("Ctrl+Alt+Shift+0")
+        );
+        assert_eq!(
+            chord(
+                19,
+                "\"",
+                Modifiers {
+                    command: false,
+                    option: true,
+                    shift: true,
+                    control: false
+                }
+            ),
+            ShortcutChord::parse("Alt+Shift+2")
+        );
+        // A symbol key elsewhere stays unbound.
+        assert_eq!(chord(27, "_", modifiers), None);
     }
 
     #[test]

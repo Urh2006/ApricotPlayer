@@ -666,79 +666,86 @@ pub fn sleep_timer_form(
         .iter()
         .position(|seconds| (seconds - options.seconds).abs() < 0.5)
         .map_or(0, |index| index + 1);
-    let mut form = FeatureForm::localized(
-        catalog,
-        catalog.text("sleep_timer"),
-        vec![
-            FormField::read_only(
-                "current",
-                catalog.text("sleep_timer_current"),
-                timer_description(app),
-            ),
-            FormField::checkbox("enabled", catalog.text("sleep_timer_run"), true),
-            FormField::choice(
-                "mode",
-                catalog.text("sleep_timer_mode"),
-                vec![
-                    catalog.text("sleep_timer_mode_duration").to_owned(),
-                    catalog.text("sleep_timer_mode_track").to_owned(),
-                    catalog.text("sleep_timer_mode_chapter").to_owned(),
-                ],
-                match options.mode {
-                    TimerMode::Duration => 0,
-                    TimerMode::TrackEnd => 1,
-                    TimerMode::ChapterEnd => 2,
-                },
-            ),
-            FormField::choice(
-                "preset",
-                catalog.text("sleep_timer_duration"),
-                presets,
-                preset,
-            ),
-            FormField::number(
-                "minutes",
-                catalog.text("sleep_timer_custom_minutes"),
-                (options.seconds / 60.0).max(1.0).round(),
-                1.0,
-                10_080.0,
-            ),
-            FormField::choice(
-                "clock",
-                catalog.text("sleep_timer_clock"),
-                vec![
-                    catalog.text("sleep_timer_clock_wall").to_owned(),
-                    catalog.text("sleep_timer_clock_playing").to_owned(),
-                ],
-                usize::from(options.clock == TimerClock::Playing),
-            ),
-            FormField::choice(
-                "action",
-                catalog.text("sleep_timer_action"),
-                vec![
-                    catalog.text("sleep_timer_action_pause").to_owned(),
-                    catalog.text("sleep_timer_action_stop").to_owned(),
-                ],
-                usize::from(options.action == TimerAction::Stop),
-            ),
-            FormField::checkbox(
-                "fade",
-                catalog.text("sleep_timer_fade"),
-                options.fade_seconds > 0.0,
-            ),
-            FormField::number(
-                "fade_seconds",
-                catalog.text("sleep_timer_fade_seconds"),
-                if options.fade_seconds > 0.0 {
-                    options.fade_seconds
-                } else {
-                    30.0
-                },
-                1.0,
-                120.0,
-            ),
-        ],
-    );
+    let mut fields = vec![FormField::read_only(
+        "current",
+        catalog.text("sleep_timer_current"),
+        apricot_app::playback_features::sleep_timer_state(
+            catalog,
+            app.playback_features().timer.as_ref(),
+        ),
+    )];
+    // Only a running timer can be cancelled here; Start always starts one.
+    if app.playback_features().timer.is_some() {
+        fields.push(FormField::checkbox(
+            "cancel",
+            catalog.text("sleep_timer_cancel_running"),
+            false,
+        ));
+    }
+    fields.extend([
+        FormField::choice(
+            "mode",
+            catalog.text("sleep_timer_mode"),
+            vec![
+                catalog.text("sleep_timer_mode_duration").to_owned(),
+                catalog.text("sleep_timer_mode_track").to_owned(),
+                catalog.text("sleep_timer_mode_chapter").to_owned(),
+            ],
+            match options.mode {
+                TimerMode::Duration => 0,
+                TimerMode::TrackEnd => 1,
+                TimerMode::ChapterEnd => 2,
+            },
+        ),
+        FormField::choice(
+            "preset",
+            catalog.text("sleep_timer_duration"),
+            presets,
+            preset,
+        ),
+        FormField::number(
+            "minutes",
+            catalog.text("sleep_timer_custom_minutes"),
+            (options.seconds / 60.0).max(1.0).round(),
+            1.0,
+            10_080.0,
+        ),
+        FormField::choice(
+            "clock",
+            catalog.text("sleep_timer_clock"),
+            vec![
+                catalog.text("sleep_timer_clock_wall").to_owned(),
+                catalog.text("sleep_timer_clock_playing").to_owned(),
+            ],
+            usize::from(options.clock == TimerClock::Playing),
+        ),
+        FormField::choice(
+            "action",
+            catalog.text("sleep_timer_action"),
+            vec![
+                catalog.text("sleep_timer_action_pause").to_owned(),
+                catalog.text("sleep_timer_action_stop").to_owned(),
+            ],
+            usize::from(options.action == TimerAction::Stop),
+        ),
+        FormField::checkbox(
+            "fade",
+            catalog.text("sleep_timer_fade"),
+            options.fade_seconds > 0.0,
+        ),
+        FormField::number(
+            "fade_seconds",
+            catalog.text("sleep_timer_fade_seconds"),
+            if options.fade_seconds > 0.0 {
+                options.fade_seconds
+            } else {
+                30.0
+            },
+            1.0,
+            120.0,
+        ),
+    ]);
+    let mut form = FeatureForm::localized(catalog, catalog.text("sleep_timer"), fields);
     catalog
         .text("sleep_timer_start")
         .clone_into(&mut form.submit);
@@ -800,7 +807,7 @@ pub fn dispatch_playback_feature(
             let Some(values) = ui.form(&sleep_timer_form(&catalog, app, &options)) else {
                 return Some(commands);
             };
-            if !checked(&values, "enabled") {
+            if checked(&values, "cancel") {
                 if let Some(volume) = app.playback_features_mut().cancel_timer() {
                     commands.push(PlaybackCommand::SetVolume(volume));
                 }
@@ -2093,14 +2100,15 @@ mod sleep_timer_tests {
         assert_eq!(form.submit, "Start");
         assert!(matches!(
             &form.fields[0].kind,
-            crate::FormFieldKind::ReadOnly { value } if value == "No sleep timer is running."
+            crate::FormFieldKind::ReadOnly { value } if value == "Not running"
         ));
+        // Without a running timer there is nothing to cancel.
+        assert!(form.fields.iter().all(|field| field.id != "cancel"));
         assert!(matches!(
-            &form.fields[3].kind,
+            &form.fields[2].kind,
             crate::FormFieldKind::Choice { options, selected: 3 } if options[3] == "45 minutes"
         ));
         let values: FormValues = [
-            ("enabled".to_owned(), FormValue::Checkbox(true)),
             ("mode".to_owned(), FormValue::Choice(0)),
             ("preset".to_owned(), FormValue::Choice(0)),
             ("minutes".to_owned(), FormValue::Number(10.0)),
@@ -2122,6 +2130,19 @@ mod sleep_timer_tests {
             timer_description(&shell.application),
             "Sleep timer: 10:00 remaining."
         );
+        let form = sleep_timer_form(&catalog, &shell.application, &options);
+        assert!(matches!(
+            &form.fields[0].kind,
+            crate::FormFieldKind::ReadOnly { value }
+                if value == "Running, 10:00 left, then playback stops"
+        ));
+        // A running timer adds the choice to cancel it, unchecked.
+        let form = sleep_timer_form(&catalog, &shell.application, &options);
+        assert!(matches!(
+            &form.fields[1],
+            crate::FormField { id, label, kind: crate::FormFieldKind::Checkbox { checked: false } }
+                if id == "cancel" && label == "Cancel the running timer instead of starting a new one"
+        ));
     }
 }
 

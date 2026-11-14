@@ -405,6 +405,7 @@ impl Shell {
         self.cancel_youtube_work();
         self.cancel_local_folder_scan();
         let leaving_collection = self.view == View::Collection;
+        let source_ids = (self.view == View::Player).then(|| self.player_source_ids());
         if self.view == View::Player {
             if keep_playing && self.application.settings().enable_background_playback {
                 self.application
@@ -512,6 +513,13 @@ impl Shell {
                 self.view = View::MainMenu;
                 self.refresh_main_menu(ui, MainMenuSelection::LastActivated, None, true);
             }
+        }
+        // Radio and IPTV lists are dialogs, not routes: the player started
+        // from one goes back to it, over the screen below.
+        if let Some(ids) = source_ids
+            && self.view != View::Player
+        {
+            self.resume_sources_after_player(ui, ids);
         }
     }
 }

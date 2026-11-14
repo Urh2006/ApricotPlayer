@@ -53,6 +53,7 @@ const ACTION_SPECS: &[ControlSpec] = &[
     button("previous"),
     button("play_pause"),
     button("next"),
+    button("sleep_timer"),
     button("queue"),
     button("add_to_playlist"),
     button("add_bookmark"),

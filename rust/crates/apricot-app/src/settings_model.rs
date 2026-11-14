@@ -204,6 +204,24 @@ pub enum SettingsControl {
         label: String,
         checked: bool,
     },
+    /// 2.1: a field of a feature with its own settings file (Recording),
+    /// edited in place and saved with Save.
+    FieldText {
+        field: String,
+        label: String,
+        value: String,
+    },
+    FieldChoice {
+        field: String,
+        label: String,
+        options: Vec<String>,
+        selected: usize,
+    },
+    FieldCheckbox {
+        field: String,
+        label: String,
+        checked: bool,
+    },
 }
 
 /// The Spotify choices of the Spotify section, in the order of the options
@@ -346,6 +364,8 @@ impl SettingsScreenModel {
             SettingsSection::Cookies => cookie_controls(catalog, settings),
             SettingsSection::Audiovault => audiovault_controls(catalog, settings),
             SettingsSection::Spotify => spotify_controls(catalog, spotify),
+            // `Shell::settings_screen` shows the fields of this form in
+            // place; the Windows window still opens it with this button.
             SettingsSection::Recording => vec![SettingsControl::Command {
                 command: SettingsCommand::RecordingSettings,
                 label: catalog.text("recording_settings").to_owned(),
@@ -907,6 +927,19 @@ fn equalizer_controls(
             SettingId::EqualizerClippingProtection,
             "equalizer_clipping_protection",
             settings.equalizer_clipping_protection,
+            catalog,
+        ),
+        // 2.1: bass boost (F3) works with the equalizer off as well.
+        choice_labeled(
+            SettingId::BassBoostIntensity,
+            "bass_boost_intensity",
+            &settings.bass_boost_intensity,
+            &[
+                ("low", "bass_boost_low"),
+                ("medium", "bass_boost_medium"),
+                ("high", "bass_boost_high"),
+                ("extreme", "bass_boost_extreme"),
+            ],
             catalog,
         ),
     ];
@@ -1917,7 +1950,8 @@ mod tests {
             (SettingsSection::MainMenu, 25),
             // 2.1 appends "Audio processing" and "Playback transitions".
             (SettingsSection::Playback, 37),
-            (SettingsSection::Equalizer, 3),
+            // 2.1 appends "Bass boost intensity".
+            (SettingsSection::Equalizer, 4),
             // 2.1 appends "Converter options".
             (SettingsSection::Downloads, 24),
             (SettingsSection::Library, 7),
@@ -1978,7 +2012,17 @@ mod tests {
             Path::new("settings.json"),
             SettingsSection::Equalizer,
         );
-        assert_eq!(model.controls.len(), 25);
+        assert_eq!(model.controls.len(), 26);
+        // Bass boost intensity follows clipping protection, Medium by default.
+        assert!(matches!(
+            &model.controls[2],
+            SettingsControl::Choice {
+                setting: SettingId::BassBoostIntensity,
+                value,
+                options,
+                ..
+            } if value == "medium" && options.len() == 4
+        ));
         let bands: Vec<_> = model
             .controls
             .iter()

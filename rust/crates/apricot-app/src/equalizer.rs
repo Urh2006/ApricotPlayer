@@ -120,9 +120,48 @@ pub fn factory_gains(preset_id: &str) -> EqualizerGains {
         })
 }
 
-/// Python `equalizer_gains_with_bass_boost`.
-pub fn gains_with_bass_boost(gains: &EqualizerGains) -> EqualizerGains {
-    let boost = factory_gains("bass_boost");
+/// The bass boost intensities of Settings > Equalizer, weakest first.
+pub const BASS_BOOST_INTENSITIES: [&str; 4] = ["low", "medium", "high", "extreme"];
+
+/// The curve that bass boost adds at an intensity. Medium is the Python
+/// bass boost, the factory `bass_boost` preset. Low is half of it. High and
+/// Extreme also use the 25 and 100 Hz bands: about 8 and 12 dB below 100 Hz
+/// while 250 Hz rises less than 1 dB, so the midrange keeps its balance.
+pub fn bass_boost_gains(intensity: &str) -> EqualizerGains {
+    let curve: &[(&str, f64)] = match intensity {
+        "low" => &[
+            ("31", 2.5),
+            ("62", 2.0),
+            ("125", 1.5),
+            ("250", 1.0),
+            ("500", 0.5),
+        ],
+        "high" => &[
+            ("25", 4.5),
+            ("31", 4.5),
+            ("62", 6.0),
+            ("100", 3.5),
+            ("125", 1.0),
+        ],
+        "extreme" => &[
+            ("25", 6.5),
+            ("31", 6.5),
+            ("62", 9.0),
+            ("100", 5.0),
+            ("125", 1.5),
+        ],
+        _ => return factory_gains("bass_boost"),
+    };
+    let mut gains = default_gains();
+    for (band, gain) in curve {
+        gains.insert((*band).to_owned(), *gain);
+    }
+    gains
+}
+
+/// Python `equalizer_gains_with_bass_boost`, at the chosen intensity.
+pub fn gains_with_bass_boost(gains: &EqualizerGains, intensity: &str) -> EqualizerGains {
+    let boost = bass_boost_gains(intensity);
     let mut combined = normalized_gains(gains);
     for band in EQUALIZER_BANDS {
         let gain = combined.entry(band.id.to_owned()).or_default();
@@ -217,6 +256,7 @@ pub struct EqualizerSettings {
     pub device_presets: BTreeMap<String, String>,
     pub db_range: i64,
     pub clipping_protection: bool,
+    pub bass_boost_intensity: String,
 }
 
 impl EqualizerSettings {
@@ -230,6 +270,7 @@ impl EqualizerSettings {
             device_presets: settings.equalizer_device_presets.clone(),
             db_range: settings.equalizer_db_range,
             clipping_protection: settings.equalizer_clipping_protection,
+            bass_boost_intensity: settings.bass_boost_intensity.clone(),
         }
     }
 
@@ -248,6 +289,10 @@ impl EqualizerSettings {
             (
                 SettingId::EqualizerClippingProtection,
                 json!(self.clipping_protection),
+            ),
+            (
+                SettingId::BassBoostIntensity,
+                json!(self.bass_boost_intensity),
             ),
         ]
     }
@@ -385,7 +430,10 @@ impl EqualizerSettings {
         let (enabled, gains) = self.base_state(session_override, device);
         if bass_boost {
             let base = if enabled { gains } else { default_gains() };
-            return (true, gains_with_bass_boost(&base));
+            return (
+                true,
+                gains_with_bass_boost(&base, &self.bass_boost_intensity),
+            );
         }
         (enabled, gains)
     }
@@ -601,6 +649,39 @@ mod tests {
         equalizer.enabled = true;
         let (_, gains) = equalizer.effective_state(None, "auto", true);
         assert!((gains["31"] - 9.0).abs() < f64::EPSILON);
+
+        // The intensity changes only the added curve.
+        "extreme".clone_into(&mut equalizer.bass_boost_intensity);
+        let (_, gains) = equalizer.effective_state(None, "auto", true);
+        assert!((gains["31"] - 10.5).abs() < f64::EPSILON);
+        assert!((gains["25"] - 6.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn medium_bass_boost_is_the_python_curve_and_high_spares_the_mids() {
+        assert!(gains_match(
+            &bass_boost_gains("medium"),
+            &factory_gains("bass_boost")
+        ));
+        assert!(gains_match(
+            &bass_boost_gains("unknown"),
+            &factory_gains("bass_boost")
+        ));
+        let total = |intensity: &str, bands: &[&str]| -> f64 {
+            let gains = bass_boost_gains(intensity);
+            bands.iter().map(|band| gains[*band]).sum()
+        };
+        let bass = ["25", "31", "62", "100"];
+        let mids = ["250", "400", "500", "1000"];
+        let mut previous = 0.0;
+        for intensity in BASS_BOOST_INTENSITIES {
+            let gains = bass_boost_gains(intensity);
+            assert_eq!(gains.len(), EQUALIZER_BANDS.len());
+            assert!(total(intensity, &bass) > previous, "{intensity}");
+            previous = total(intensity, &bass);
+        }
+        assert!(total("high", &mids) < total("medium", &mids));
+        assert!(total("extreme", &mids) < total("medium", &mids));
     }
 
     #[test]

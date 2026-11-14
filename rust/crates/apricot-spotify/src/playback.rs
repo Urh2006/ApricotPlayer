@@ -1553,6 +1553,45 @@ mod tests {
         assert_eq!(pending.id, 2);
     }
 
+    #[test]
+    fn automatic_crossfade_overlaps_the_unplayed_tail_with_the_next_track() {
+        let pcm = |samples: &[i16]| -> Vec<u8> {
+            samples
+                .iter()
+                .flat_map(|sample| sample.to_le_bytes())
+                .collect()
+        };
+        let shared = shared();
+        // Two frames of crossfade: the ring keeps them of the first track.
+        *shared.crossfade.lock().unwrap() = CrossfadeOptions {
+            bytes: 8,
+            manual: false,
+            equal_power: false,
+        };
+        shared.open_generation(1, 0, None);
+        let generation = shared.current.lock().unwrap().clone().unwrap().1;
+        generation.push(&pcm(&[1000, -1000, 1000, -1000, 1000, -1000]));
+        // The next track continues in the same stream, as in a gapless
+        // transition: its first frames mix with the tail.
+        let options = *shared.crossfade.lock().unwrap();
+        let tail = generation.take_tail(options.bytes);
+        assert_eq!(tail.len(), 8);
+        generation.begin_crossfade(&tail, options.equal_power);
+        generation.push(&pcm(&[3000, -3000, 3000, -3000, 3000, -3000]));
+        let reader = Reader {
+            generation: generation.clone(),
+            cancelled: AtomicBool::new(false),
+        };
+        let mut buffer = [0_u8; 64];
+        let read = reader.read(&mut buffer);
+        // Four frames: one of the first track, the two mixed frames and the
+        // rest of the second; the overlap shortened the stream by two.
+        assert_eq!(
+            &buffer[..read],
+            pcm(&[1000, -1000, 1000, -1000, 3000, -3000, 3000, -3000]).as_slice()
+        );
+    }
+
     #[tokio::test]
     async fn first_delayed_old_callback_cannot_become_the_new_selection() {
         let shared = shared();

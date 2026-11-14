@@ -197,6 +197,32 @@ impl PlayerPage {
         self.layout();
     }
 
+    /// A label that changes by itself (the sleep timer's time left): the
+    /// title follows while the button has no focus, so VoiceOver reads the
+    /// current state when it gets there and is never interrupted.
+    pub fn refresh_unfocused_label(&self, id: &str, label: &str) {
+        let Some(control) = self
+            .controls
+            .iter()
+            .find(|control| control.id == id && control.active)
+        else {
+            return;
+        };
+        let focused = control
+            .button
+            .window()
+            .and_then(|window| window.firstResponder())
+            .is_some_and(|responder| {
+                std::ptr::eq(
+                    Retained::as_ptr(&responder).cast::<u8>(),
+                    Retained::as_ptr(&control.button).cast::<u8>(),
+                )
+            });
+        if !focused && control.button.title().to_string() != label {
+            control.button.setTitle(&NSString::from_str(label));
+        }
+    }
+
     pub fn is_fullscreen(&self) -> bool {
         self.fullscreen.get()
     }

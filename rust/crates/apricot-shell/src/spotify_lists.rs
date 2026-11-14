@@ -1727,7 +1727,7 @@ impl Shell {
                     .map(str::to_owned)
             });
         let Some(uri) = uri else {
-            ui.show_error("Select a Spotify playlist first");
+            ui.show_error(&self.text("spotify_sub_select_playlist"));
             return;
         };
         if let Some(service) = self.spotify_service() {
@@ -1741,7 +1741,7 @@ impl Shell {
                 },
             );
             ui.set_background_polling(true);
-            ui.set_status("Updating Spotify subscriptions", true);
+            ui.set_status(&self.text("spotify_sub_updating"), true);
         }
     }
 

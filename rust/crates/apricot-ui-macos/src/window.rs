@@ -192,6 +192,12 @@ define_class!(
             if self.with_shell(|shell, ui| shell.poll_playback(ui)) == Some(false) {
                 self.stop_poll_timer();
             }
+            if let Some(label) =
+                self.with_shell(|shell, _| shell.application.sleep_timer_button_label())
+                && let Some(page) = self.ivars().page.borrow().as_ref()
+            {
+                page.refresh_unfocused_label("sleep_timer", &label);
+            }
         }
 
         /// Windows `CONTROLLED_REPEAT_TIMER_ID`.
