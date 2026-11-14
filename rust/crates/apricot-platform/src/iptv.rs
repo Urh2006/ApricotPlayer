@@ -1,6 +1,5 @@
 //! IPTV source loading, playlist parsing, provider browsing and programme data.
 //! Source credentials use the same OS protection as the rest of Apricot.
-#![allow(clippy::pedantic, clippy::style)] // 2.1 draft: fully linted when its feature unit is finished.
 
 use std::{collections::BTreeMap, io::Read, path::Path, time::Duration};
 
@@ -13,6 +12,40 @@ use url::Url;
 
 const MAX_BYTES: u64 = 24 * 1024 * 1024;
 const CREDENTIAL_ENTROPY: &[u8] = b"ApricotPlayer IPTV credentials v1";
+
+/// Why an IPTV source could not be used; the interface words each case.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IptvError {
+    /// The login could not be protected for saving.
+    CredentialsSave,
+    /// The saved login cannot be unlocked on this computer.
+    CredentialsLocked,
+    PlaylistUnreadable,
+    PlaylistTooLarge,
+    /// The address is one HLS stream, not a list of channels.
+    HlsStream,
+    TooManyChannels,
+    NoChannels,
+    GuideUnreadable,
+    GuideTooLarge,
+    GuideInvalid,
+    Proxy,
+    Connect,
+    Http(u16),
+    ResponseTooLarge,
+    /// The provider sent data that is cut off or not what was asked for.
+    InvalidData,
+    NoSeries,
+    ChooseEpisode,
+    InvalidMac,
+    PortalRefused,
+    NoPlaybackLink,
+    NeedHttpAddress,
+}
+
+fn too_large(length: usize) -> bool {
+    u64::try_from(length).unwrap_or(u64::MAX) > MAX_BYTES
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum SourceKind {
@@ -36,30 +69,45 @@ pub struct IptvSource {
 }
 
 impl IptvSource {
+    /// Protects the login with the system's credential protection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the system cannot protect it.
     pub fn set_credentials(
         &mut self,
         username: &str,
         password: &str,
         mac: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), IptvError> {
         let bytes = serde_json::to_vec(
             &serde_json::json!({"username":username,"password":password,"mac":mac}),
         )
-        .map_err(|_| "Unable to encode IPTV credentials.".to_owned())?;
+        .map_err(|_| IptvError::CredentialsSave)?;
         self.protected_credentials = crate::audiovault_credentials::protect_data(
             &bytes,
             CREDENTIAL_ENTROPY,
             "ApricotPlayer IPTV",
-        )?;
+        )
+        .map_err(|_| IptvError::CredentialsSave)?;
         Ok(())
     }
 
-    pub fn credentials(&self) -> Result<Value, String> {
+    /// The saved login, empty for a playlist source.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the login cannot be unlocked on this computer.
+    pub fn credentials(&self) -> Result<Value, IptvError> {
         if self.protected_credentials.is_empty() {
             return Ok(serde_json::json!({}));
         }
-        let bytes = crate::audiovault_credentials::unprotect_data(&self.protected_credentials, CREDENTIAL_ENTROPY).ok_or_else(|| "The saved IPTV login cannot be unlocked on this computer. Edit the source and sign in again.".to_owned())?;
-        serde_json::from_slice(&bytes).map_err(|_| "The saved IPTV login is invalid.".to_owned())
+        let bytes = crate::audiovault_credentials::unprotect_data(
+            &self.protected_credentials,
+            CREDENTIAL_ENTROPY,
+        )
+        .ok_or(IptvError::CredentialsLocked)?;
+        serde_json::from_slice(&bytes).map_err(|_| IptvError::CredentialsLocked)
     }
 }
 
@@ -102,6 +150,12 @@ impl IptvChannel {
             .insert("iptv_source_id".into(), source.id.clone().into());
         item.metadata
             .insert("iptv_channel_id".into(), self.id.clone().into());
+        // Provider addresses carry the login, so they stay out of history
+        // and resume positions.
+        if source.kind != SourceKind::Playlist {
+            item.metadata
+                .insert("apricot_private_address".into(), true.into());
+        }
         Some(item)
     }
 }
@@ -134,27 +188,30 @@ impl EpgGuide {
     }
 }
 
-pub fn parse_xmltv(bytes: &[u8]) -> Result<EpgGuide, String> {
+/// Reads an XMLTV guide, also gzip compressed.
+///
+/// # Errors
+///
+/// Returns an error when the guide is too large or not XMLTV.
+pub fn parse_xmltv(bytes: &[u8]) -> Result<EpgGuide, IptvError> {
     let bytes = if bytes.starts_with(&[0x1f, 0x8b]) {
         let mut decoded = Vec::new();
         flate2::read::GzDecoder::new(bytes)
             .take(MAX_BYTES + 1)
             .read_to_end(&mut decoded)
-            .map_err(|_| "Unable to unpack the programme guide.".to_owned())?;
-        if decoded.len() as u64 > MAX_BYTES {
-            return Err("The programme guide is too large.".into());
+            .map_err(|_| IptvError::GuideInvalid)?;
+        if too_large(decoded.len()) {
+            return Err(IptvError::GuideTooLarge);
         }
         decoded
     } else {
         bytes.to_vec()
     };
-    if bytes.len() as u64 > MAX_BYTES {
-        return Err("The programme guide is too large.".into());
+    if too_large(bytes.len()) {
+        return Err(IptvError::GuideTooLarge);
     }
-    let text = apricot_media::decode_xml(&bytes)
-        .map_err(|_| "The programme guide has invalid text encoding.".to_owned())?;
-    let document = roxmltree::Document::parse(&text)
-        .map_err(|_| "The programme guide is not valid XMLTV.".to_owned())?;
+    let text = apricot_media::decode_xml(&bytes).map_err(|_| IptvError::GuideInvalid)?;
+    let document = roxmltree::Document::parse(&text).map_err(|_| IptvError::GuideInvalid)?;
     let mut guide = EpgGuide::default();
     for node in document
         .descendants()
@@ -191,7 +248,7 @@ pub fn parse_xmltv(bytes: &[u8]) -> Result<EpgGuide, String> {
             });
     }
     for items in guide.programmes.values_mut() {
-        items.sort_by_key(|item| item.start)
+        items.sort_by_key(|item| item.start);
     }
     Ok(guide)
 }
@@ -206,26 +263,30 @@ fn xmltv_time(value: &str) -> Option<i64> {
 
 /// Attribute parsing respects quotes, including commas and spaces inside a
 /// channel title or group. Playlist rows retain their order and duplicates.
-pub fn parse_m3u(text: &str, base: Option<&Url>) -> Result<Vec<IptvChannel>, String> {
-    if text.len() as u64 > MAX_BYTES {
-        return Err("The playlist is too large.".into());
+///
+/// # Errors
+///
+/// Returns an error for an HLS stream or a list without playable channels.
+pub fn parse_m3u(text: &str, base: Option<&Url>) -> Result<Vec<IptvChannel>, IptvError> {
+    if too_large(text.len()) {
+        return Err(IptvError::PlaylistTooLarge);
     }
     let text = text.trim_start_matches('\u{feff}');
     if text.lines().any(|line| {
         line.starts_with("#EXT-X-TARGETDURATION") || line.starts_with("#EXT-X-STREAM-INF")
     }) {
-        return Err("This address is an HLS media stream, not a channel playlist. Open it with Direct link.".into());
+        return Err(IptvError::HlsStream);
     }
     let mut channels = Vec::new();
     let mut info = String::new();
     let mut group = String::new();
     for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
         if let Some(value) = line.strip_prefix("#EXTINF:") {
-            info = value.to_owned();
+            value.clone_into(&mut info);
             continue;
         }
         if let Some(value) = line.strip_prefix("#EXTGRP:") {
-            group = value.to_owned();
+            value.clone_into(&mut group);
             continue;
         }
         if line.starts_with('#') {
@@ -264,11 +325,11 @@ pub fn parse_m3u(text: &str, base: Option<&Url>) -> Result<Vec<IptvChannel>, Str
         info.clear();
         group.clear();
         if channels.len() > 150_000 {
-            return Err("The playlist contains too many channels.".into());
+            return Err(IptvError::TooManyChannels);
         }
     }
     if channels.is_empty() {
-        return Err("The playlist does not contain playable channels.".into());
+        return Err(IptvError::NoChannels);
     }
     Ok(channels)
 }
@@ -277,8 +338,8 @@ fn unquoted_comma(text: &str) -> Option<usize> {
     let mut quoted = false;
     text.char_indices().find_map(|(index, character)| {
         if character == '"' {
-            quoted = !quoted
-        };
+            quoted = !quoted;
+        }
         (character == ',' && !quoted).then_some(index)
     })
 }
@@ -307,38 +368,44 @@ pub struct IptvClient {
 }
 
 impl IptvClient {
-    pub fn new(proxy: Option<&str>) -> Result<Self, String> {
+    /// Builds the client; construction performs no request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the proxy is not a valid address.
+    pub fn new(proxy: Option<&str>) -> Result<Self, IptvError> {
         let mut builder = Client::builder()
             .timeout(Duration::from_secs(25))
             .connect_timeout(Duration::from_secs(8))
             .redirect(Policy::limited(5))
             .user_agent(format!("ApricotPlayer/{}", env!("CARGO_PKG_VERSION")));
         if let Some(proxy) = proxy.filter(|value| !value.trim().is_empty()) {
-            builder = builder
-                .proxy(reqwest::Proxy::all(proxy).map_err(|_| "Invalid IPTV proxy.".to_owned())?)
+            builder = builder.proxy(reqwest::Proxy::all(proxy).map_err(|_| IptvError::Proxy)?);
         }
         Ok(Self {
-            client: builder
-                .build()
-                .map_err(|_| "Unable to create the IPTV client.".to_owned())?,
+            client: builder.build().map_err(|_| IptvError::Connect)?,
         })
     }
 
-    pub fn load(&self, source: &IptvSource) -> Result<Vec<IptvChannel>, String> {
+    /// Every channel, film and series of the source.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the source cannot be read.
+    pub fn load(&self, source: &IptvSource) -> Result<Vec<IptvChannel>, IptvError> {
         match source.kind {
             SourceKind::Playlist => {
                 let path = Path::new(&source.address);
                 let (bytes, base) = if path.is_file() {
                     let length = path
                         .metadata()
-                        .map_err(|_| "Unable to read the playlist.".to_owned())?
+                        .map_err(|_| IptvError::PlaylistUnreadable)?
                         .len();
                     if length > MAX_BYTES {
-                        return Err("The playlist is too large.".into());
+                        return Err(IptvError::PlaylistTooLarge);
                     }
                     (
-                        std::fs::read(path)
-                            .map_err(|_| "Unable to read the playlist.".to_owned())?,
+                        std::fs::read(path).map_err(|_| IptvError::PlaylistUnreadable)?,
                         Url::from_file_path(path).ok(),
                     )
                 } else {
@@ -353,18 +420,23 @@ impl IptvClient {
         }
     }
 
-    pub fn epg(&self, address: &str) -> Result<EpgGuide, String> {
+    /// The programme guide from a file or an address.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the guide cannot be read.
+    pub fn epg(&self, address: &str) -> Result<EpgGuide, IptvError> {
         let bytes = if Path::new(address).is_file() {
             let path = Path::new(address);
             if path
                 .metadata()
-                .map_err(|_| "Unable to read the programme guide.".to_owned())?
+                .map_err(|_| IptvError::GuideUnreadable)?
                 .len()
                 > MAX_BYTES
             {
-                return Err("The programme guide is too large.".into());
+                return Err(IptvError::GuideTooLarge);
             }
-            std::fs::read(path).map_err(|_| "Unable to read the programme guide.".to_owned())?
+            std::fs::read(path).map_err(|_| IptvError::GuideUnreadable)?
         } else {
             self.bytes(http_address(address)?, &[])?
         };
@@ -376,14 +448,14 @@ impl IptvClient {
         source: &IptvSource,
         action: &str,
         extra: &[(&str, String)],
-    ) -> Result<Value, String> {
+    ) -> Result<Value, IptvError> {
         let login = source.credentials()?;
         let mut url = http_address(&source.address)?;
         if !url.path().ends_with("player_api.php") {
             url.set_path(&format!(
                 "{}/player_api.php",
                 url.path().trim_end_matches('/')
-            ))
+            ));
         }
         url.query_pairs_mut()
             .append_pair("username", login["username"].as_str().unwrap_or_default())
@@ -393,7 +465,7 @@ impl IptvClient {
         self.json(url, &[])
     }
 
-    fn xtream(&self, source: &IptvSource) -> Result<Vec<IptvChannel>, String> {
+    fn xtream(&self, source: &IptvSource) -> Result<Vec<IptvChannel>, IptvError> {
         let mut output = Vec::new();
         for (kind, categories, streams) in [
             (ChannelKind::Live, "get_live_categories", "get_live_streams"),
@@ -403,7 +475,7 @@ impl IptvClient {
             let categories = self.xtream_request(source, categories, &[])?;
             let names: BTreeMap<String, String> = categories
                 .as_array()
-                .ok_or("The IPTV provider returned invalid categories.")?
+                .ok_or(IptvError::InvalidData)?
                 .iter()
                 .map(|item| {
                     (
@@ -413,10 +485,7 @@ impl IptvClient {
                 })
                 .collect();
             let result = self.xtream_request(source, streams, &[])?;
-            for item in result
-                .as_array()
-                .ok_or("The IPTV provider returned invalid channel data.")?
-            {
+            for item in result.as_array().ok_or(IptvError::InvalidData)? {
                 let id = value_text(
                     &item[if kind == ChannelKind::Series {
                         "series_id"
@@ -456,9 +525,19 @@ impl IptvClient {
         Ok(output)
     }
 
-    pub fn series(&self, source: &IptvSource, series_id: &str) -> Result<Vec<IptvChannel>, String> {
+    /// The episodes of one series, season by season. The group of an
+    /// episode is its season number.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the provider has no episodes for it.
+    pub fn series(
+        &self,
+        source: &IptvSource,
+        series_id: &str,
+    ) -> Result<Vec<IptvChannel>, IptvError> {
         if source.kind != SourceKind::Xtream {
-            return Err("This source does not provide a series catalog.".into());
+            return Err(IptvError::NoSeries);
         }
         let response = self.xtream_request(
             source,
@@ -467,21 +546,18 @@ impl IptvClient {
         )?;
         let seasons = response["episodes"]
             .as_object()
-            .ok_or("The IPTV provider did not return episodes.")?;
+            .ok_or(IptvError::NoSeries)?;
         let mut seasons: Vec<_> = seasons.iter().collect();
         seasons.sort_by_key(|(key, _)| key.parse::<u64>().unwrap_or(u64::MAX));
         let mut channels = Vec::new();
         for (season, episodes) in seasons {
-            for episode in episodes
-                .as_array()
-                .ok_or("The IPTV provider returned invalid episode data.")?
-            {
+            for episode in episodes.as_array().ok_or(IptvError::InvalidData)? {
                 let id = value_text(&episode["id"]);
                 let extension = episode["container_extension"].as_str().unwrap_or("mp4");
                 channels.push(IptvChannel {
                     id: id.clone(),
                     name: value_text(&episode["title"]),
-                    group: format!("Season {season}"),
+                    group: season.clone(),
                     number: value_text(&episode["episode_num"]),
                     epg_id: String::new(),
                     logo: String::new(),
@@ -494,7 +570,7 @@ impl IptvClient {
         Ok(channels)
     }
 
-    fn stalker(&self, source: &IptvSource) -> Result<Vec<IptvChannel>, String> {
+    fn stalker(&self, source: &IptvSource) -> Result<Vec<IptvChannel>, IptvError> {
         let credentials = source.credentials()?;
         let mac = credentials["mac"].as_str().unwrap_or_default();
         if mac.len() != 17
@@ -502,21 +578,21 @@ impl IptvClient {
                 .chars()
                 .all(|value| value.is_ascii_hexdigit() || value == ':')
         {
-            return Err("Enter a valid MAC address for this portal.".into());
+            return Err(IptvError::InvalidMac);
         }
         let mut base = http_address(&source.address)?;
         if !base.path().ends_with("load.php") {
             base.set_path(&format!(
                 "{}/server/load.php",
                 base.path().trim_end_matches('/').trim_end_matches("/c")
-            ))
+            ));
         }
         let cookie = format!("mac={}; stb_lang=en; timezone=UTC", mac.replace(':', "%3A"));
         let request = |kind: &str,
                        action: &str,
                        token: Option<&str>,
                        extra: &[(&str, &str)]|
-         -> Result<Value, String> {
+         -> Result<Value, IptvError> {
             let mut url = base.clone();
             url.query_pairs_mut()
                 .append_pair("type", kind)
@@ -526,7 +602,7 @@ impl IptvClient {
             let mut headers = vec![("Cookie", cookie.as_str())];
             let auth = token.map(|token| format!("Bearer {token}"));
             if let Some(auth) = &auth {
-                headers.push(("Authorization", auth))
+                headers.push(("Authorization", auth));
             }
             self.json(url, &headers)
                 .map(|value| value.get("js").cloned().unwrap_or(value))
@@ -534,7 +610,7 @@ impl IptvClient {
         let handshake = request("stb", "handshake", None, &[])?;
         let token = handshake["token"]
             .as_str()
-            .ok_or("The IPTV portal did not accept the connection.")?;
+            .ok_or(IptvError::PortalRefused)?;
         let _profile = request(
             "stb",
             "get_profile",
@@ -557,7 +633,7 @@ impl IptvClient {
             .get("data")
             .and_then(Value::as_array)
             .or_else(|| data.as_array())
-            .ok_or("The IPTV portal returned invalid channels.")?;
+            .ok_or(IptvError::InvalidData)?;
         let mut channels = Vec::new();
         for item in values {
             let id = value_text(&item["id"]);
@@ -593,7 +669,12 @@ impl IptvClient {
         Ok(channels)
     }
 
-    pub fn resolve_channel(&self, channel: &IptvChannel) -> Result<IptvChannel, String> {
+    /// A portal channel's playback link, asked for just before it plays.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the portal gives no link.
+    pub fn resolve_channel(&self, channel: &IptvChannel) -> Result<IptvChannel, IptvError> {
         let Some(endpoint) = channel
             .metadata
             .get("stalker_endpoint")
@@ -621,47 +702,41 @@ impl IptvClient {
         )?;
         let command = response["js"]["cmd"]
             .as_str()
-            .ok_or("The IPTV portal did not provide a playback link.")?;
+            .ok_or(IptvError::NoPlaybackLink)?;
         let mut result = channel.clone();
-        result.url = command
+        command
             .strip_prefix("ffmpeg ")
             .unwrap_or(command)
-            .to_owned();
+            .clone_into(&mut result.url);
         Ok(result)
     }
 
-    fn json(&self, url: Url, headers: &[(&str, &str)]) -> Result<Value, String> {
-        serde_json::from_slice(&self.bytes(url, headers)?)
-            .map_err(|_| "The IPTV provider returned invalid JSON.".into())
+    fn json(&self, url: Url, headers: &[(&str, &str)]) -> Result<Value, IptvError> {
+        serde_json::from_slice(&self.bytes(url, headers)?).map_err(|_| IptvError::InvalidData)
     }
 
-    fn bytes(&self, url: Url, headers: &[(&str, &str)]) -> Result<Vec<u8>, String> {
+    fn bytes(&self, url: Url, headers: &[(&str, &str)]) -> Result<Vec<u8>, IptvError> {
         let mut request = self.client.get(url);
         for (name, value) in headers {
-            request = request.header(*name, *value)
+            request = request.header(*name, *value);
         }
-        let response = request
-            .send()
-            .map_err(|_| "Unable to connect to the IPTV provider.".to_owned())?;
+        let response = request.send().map_err(|_| IptvError::Connect)?;
         if !response.status().is_success() {
-            return Err(format!(
-                "The IPTV provider returned HTTP {}.",
-                response.status().as_u16()
-            ));
+            return Err(IptvError::Http(response.status().as_u16()));
         }
         if response
             .content_length()
             .is_some_and(|length| length > MAX_BYTES)
         {
-            return Err("The IPTV response is too large.".into());
+            return Err(IptvError::ResponseTooLarge);
         }
         let mut bytes = Vec::new();
         response
             .take(MAX_BYTES + 1)
             .read_to_end(&mut bytes)
-            .map_err(|_| "The IPTV download was interrupted.".to_owned())?;
-        if bytes.len() as u64 > MAX_BYTES {
-            return Err("The IPTV response is too large.".into());
+            .map_err(|_| IptvError::InvalidData)?;
+        if too_large(bytes.len()) {
+            return Err(IptvError::ResponseTooLarge);
         }
         Ok(bytes)
     }
@@ -672,11 +747,11 @@ fn provider_stream(
     kind: ChannelKind,
     id: &str,
     extension: &str,
-) -> Result<String, String> {
+) -> Result<String, IptvError> {
     if !id.chars().all(|value| value.is_ascii_alphanumeric())
         || !extension.chars().all(|value| value.is_ascii_alphanumeric())
     {
-        return Err("The IPTV provider returned an invalid stream identity.".into());
+        return Err(IptvError::InvalidData);
     }
     let credentials = source.credentials()?;
     let mut url = http_address(&source.address)?;
@@ -691,10 +766,10 @@ fn provider_stream(
         ChannelKind::Live => "live",
         ChannelKind::Movie => "movie",
         ChannelKind::Episode => "series",
-        ChannelKind::Series => return Err("Choose an episode to play.".into()),
+        ChannelKind::Series => return Err(IptvError::ChooseEpisode),
     };
     url.path_segments_mut()
-        .map_err(|()| "Invalid IPTV server address.".to_owned())?
+        .map_err(|()| IptvError::NeedHttpAddress)?
         .pop_if_empty()
         .push(group)
         .push(credentials["username"].as_str().unwrap_or_default())
@@ -703,11 +778,11 @@ fn provider_stream(
     Ok(url.to_string())
 }
 
-fn http_address(value: &str) -> Result<Url, String> {
+fn http_address(value: &str) -> Result<Url, IptvError> {
     Url::parse(value.trim())
         .ok()
         .filter(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
-        .ok_or_else(|| "Enter an HTTP or HTTPS IPTV address.".into())
+        .ok_or(IptvError::NeedHttpAddress)
 }
 
 fn decode_playlist(bytes: &[u8]) -> String {

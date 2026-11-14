@@ -126,7 +126,12 @@ pub(super) unsafe fn poll(window: HWND) {
     if let Some(state) = state_mut(window) {
         state.source_tools = controller;
     }
-    if !busy {
+    // A list shown while polling runs its own message loop, where this
+    // timer polls the empty stand-in controller and stops; work the list
+    // started afterwards needs the timer again.
+    if busy {
+        SetTimer(Some(window), TIMER, 50, None);
+    } else {
         let _ = KillTimer(Some(window), TIMER);
     }
 }
@@ -145,13 +150,29 @@ pub(super) unsafe fn metadata(window: HWND) {
         .current_item()
         .and_then(|item| item.url.as_ref())
         .map(ToString::to_string);
+    let iptv = session
+        .current_item()
+        .and_then(|item| item.metadata.get("iptv_channel_id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
     let mut controller = std::mem::take(&mut state.source_tools);
     controller.stream_metadata(
         &mut Ui { window },
         station.as_deref(),
         title.as_deref(),
         url.as_deref(),
+        iptv.as_deref(),
     );
+    if let Some(state) = state_mut(window) {
+        state.source_tools = controller;
+    }
+}
+pub(super) unsafe fn playback_started(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let mut controller = std::mem::take(&mut state.source_tools);
+    controller.playback_started(&mut Ui { window });
     if let Some(state) = state_mut(window) {
         state.source_tools = controller;
     }

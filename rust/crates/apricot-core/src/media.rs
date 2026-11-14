@@ -98,6 +98,16 @@ impl MediaItem {
             || self.metadata.contains_key("iptv_channel_id")
     }
 
+    /// The address carries a login, so the item is not kept in history or
+    /// resume positions.
+    #[must_use]
+    pub fn has_private_address(&self) -> bool {
+        self.metadata
+            .get("apricot_private_address")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+    }
+
     pub fn is_local_media(&self) -> bool {
         self.source == MediaSource::Local
             || self

@@ -5,7 +5,7 @@
 use crate::{FeatureForm, FormField, FormValue, FormValues};
 use apricot_core::{MediaItem, TranslationCatalog};
 use apricot_platform::{
-    iptv::{ChannelKind, EpgGuide, IptvChannel, IptvClient, IptvSource, SourceKind},
+    iptv::{ChannelKind, EpgGuide, IptvChannel, IptvClient, IptvError, IptvSource, SourceKind},
     radio::{
         DirectoryEntry, DirectoryKind, RadioCategory, RadioClient, RadioError, RadioFilters,
         RadioLibrary, RadioPage, RadioRequest, Station,
@@ -126,6 +126,15 @@ pub struct SourcesController {
     /// The localized "Loading" announcement of the current language.
     loading: String,
     hub_selected: usize,
+    iptv_selected: usize,
+    /// The episodes of `episode_series`, kept apart from the channel list.
+    episodes: Vec<IptvChannel>,
+    episode_series: Option<IptvChannel>,
+    episode_selected: usize,
+    /// The IPTV channel that plays, for its programme on request.
+    playing_iptv: Option<String>,
+    /// "Now: programme", spoken after the player names the channel.
+    pending_programme: Option<String>,
     metadata_identity: String,
     metadata_title: String,
 }
@@ -161,6 +170,12 @@ impl Default for SourcesController {
             pending: None,
             loading: String::new(),
             hub_selected: 0,
+            iptv_selected: 0,
+            episodes: Vec::new(),
+            episode_series: None,
+            episode_selected: 0,
+            playing_iptv: None,
+            pending_programme: None,
             metadata_identity: String::new(),
             metadata_title: String::new(),
         }
@@ -284,7 +299,7 @@ impl SourcesController {
             .clone_into(&mut self.loading);
         match action {
             "open_radio" => self.radio_hub(ui, environment),
-            "open_iptv" => self.iptv_hub(ui, environment),
+            "open_iptv" => self.iptv_navigate(ui, environment, IptvScreen::Sources),
             "open_recording" => self.recording_panel(ui, environment),
             "recording_start" => self.start_recording(ui, environment),
             "recording_pause" => {
@@ -311,14 +326,20 @@ impl SourcesController {
                     ui.error(&error.to_string());
                 }
             }
-            "radio_now_playing" => ui.status(
-                if self.metadata_title.is_empty() {
-                    catalog.text("radio_no_song")
+            "radio_now_playing" => {
+                if let Some(programme) = self.playing_programme(&catalog) {
+                    ui.status(&programme, true);
                 } else {
-                    &self.metadata_title
-                },
-                true,
-            ),
+                    ui.status(
+                        if self.metadata_title.is_empty() {
+                            catalog.text("radio_no_song")
+                        } else {
+                            &self.metadata_title
+                        },
+                        true,
+                    );
+                }
+            }
             "recording_settings" => self.recording_settings(ui, environment),
             _ => {}
         }
@@ -461,23 +482,40 @@ impl SourcesController {
                 self.iptv_active = Some(source);
                 self.channels = channels;
                 self.guide = guide;
+                self.channel_kind = None;
+                self.channel_group.clear();
+                self.channel_query.clear();
                 self.channel_selected = 0;
+                self.episodes.clear();
                 if let Some(warning) = warning {
                     ui.status(&warning, true);
                 }
-                self.channel_list(ui, environment);
+                self.iptv_navigate(ui, environment, IptvScreen::Kinds);
             }
             Ok(Work::IptvSeries { source, channels }) => {
                 self.iptv_active = Some(source);
-                self.channels = channels;
-                self.channel_selected = 0;
-                self.channel_list(ui, environment);
+                self.episodes = channels;
+                self.iptv_navigate(ui, environment, IptvScreen::Episodes);
             }
             Ok(Work::PlayIptv { source, channel }) => {
+                let catalog = environment.catalog();
                 if let Some(item) = channel.media(&source) {
                     ui.play(item);
+                    self.playing_iptv = Some(channel.id.clone());
+                    // The player names the channel when it starts; the
+                    // programme follows with its first stream details.
+                    let now = chrono::Utc::now().timestamp();
+                    self.pending_programme =
+                        self.guide
+                            .now_next(&channel.epg_id, now)
+                            .0
+                            .map(|programme| {
+                                catalog
+                                    .text("iptv_now_short")
+                                    .replace("{title}", &programme.title)
+                            });
                 } else {
-                    ui.error("This IPTV channel has no playable address.");
+                    ui.error(catalog.text("iptv_no_stream"));
                 }
             }
             Ok(Work::Sources(sources)) => {
@@ -489,13 +527,25 @@ impl SourcesController {
         self.is_busy()
     }
 
+    /// After the player announced what started: the IPTV programme.
+    pub fn playback_started(&mut self, ui: &mut dyn SourcesUi) {
+        if let Some(programme) = self.pending_programme.take() {
+            ui.status(&programme, true);
+        }
+    }
+
     pub fn stream_metadata(
         &mut self,
         ui: &mut dyn SourcesUi,
         station_id: Option<&str>,
         title: Option<&str>,
         stream_url: Option<&str>,
+        iptv_channel: Option<&str>,
     ) {
+        self.playing_iptv = iptv_channel.map(str::to_owned);
+        if self.playing_iptv.is_none() {
+            self.pending_programme = None;
+        }
         let Some(station_id) = station_id else {
             self.metadata_identity.clear();
             self.metadata_title.clear();
@@ -1037,59 +1087,115 @@ impl SourcesController {
         true
     }
 
-    fn iptv_hub(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) {
+    /// The IPTV screens as one loop, so going back and forth never nests
+    /// calls. A screen returns the next one, or `None` to close IPTV.
+    fn iptv_navigate(
+        &mut self,
+        ui: &mut dyn SourcesUi,
+        environment: &SourcesEnvironment,
+        mut screen: IptvScreen,
+    ) {
+        loop {
+            let next = match screen {
+                IptvScreen::Sources => self.iptv_hub(ui, environment),
+                IptvScreen::Kinds => self.iptv_kinds(ui, environment),
+                IptvScreen::Groups => self.iptv_groups(ui, environment),
+                IptvScreen::Channels => self.channel_list(ui, environment),
+                IptvScreen::Episodes => self.episode_list(ui, environment),
+            };
+            match next {
+                Some(next) => screen = next,
+                None => return,
+            }
+        }
+    }
+
+    fn iptv_hub(
+        &mut self,
+        ui: &mut dyn SourcesUi,
+        environment: &SourcesEnvironment,
+    ) -> Option<IptvScreen> {
+        let catalog = environment.catalog();
+        if self.iptv_sources.is_empty() {
+            ui.status(catalog.text("iptv_no_sources"), true);
+            if !self.edit_iptv_source(ui, environment, None) {
+                return None;
+            }
+        }
         loop {
             let rows = self
                 .iptv_sources
                 .iter()
                 .map(|source| source.name.clone())
                 .collect();
-            let Some(selection) = ui.browse(&Self::browser(
+            let selection = ui.browse(&Self::browser(
                 environment,
-                "IPTV sources",
+                catalog.text("iptv_sources"),
                 rows,
-                0,
+                self.iptv_selected,
                 &[
-                    ("open", "Open source"),
-                    ("add", "Add source"),
-                    ("edit", "Edit source"),
-                    ("remove", "Remove source"),
+                    ("open", catalog.text("open")),
+                    ("add", catalog.text("iptv_add_source")),
+                    ("edit", catalog.text("iptv_edit_source")),
+                    ("remove", catalog.text("iptv_remove_source")),
                 ],
-            )) else {
-                return;
-            };
+            ))?;
+            self.iptv_selected = selection.index;
             match selection.action.as_str() {
-                "add" => self.edit_iptv_source(ui, environment, None),
-                "edit" => self.edit_iptv_source(ui, environment, Some(selection.index)),
+                "add" => {
+                    if self.edit_iptv_source(ui, environment, None) {
+                        self.iptv_selected = self.iptv_sources.len().saturating_sub(1);
+                    }
+                }
+                "edit" => {
+                    self.edit_iptv_source(ui, environment, Some(selection.index));
+                }
                 "remove" => {
                     if let Some(source) = self.iptv_sources.get(selection.index)
-                        && confirm(ui, "Remove IPTV source?", &source.name)
+                        && ui.ask_yes_no(
+                            &catalog
+                                .text("iptv_remove_confirm")
+                                .replace("{name}", &source.name),
+                        )
                     {
                         let previous = self.iptv_sources.clone();
                         self.iptv_sources.remove(selection.index);
-                        if let Err(error) = self.save_iptv(environment) {
-                            self.iptv_sources = previous;
-                            ui.error(&error);
+                        match self.save_iptv(environment) {
+                            Ok(()) => {
+                                self.iptv_selected = self
+                                    .iptv_selected
+                                    .min(self.iptv_sources.len().saturating_sub(1));
+                                ui.status(catalog.text("iptv_source_removed"), true);
+                                if self.iptv_sources.is_empty() {
+                                    return None;
+                                }
+                            }
+                            Err(error) => {
+                                self.iptv_sources = previous;
+                                ui.error(&error);
+                            }
                         }
                     }
                 }
-                "open" => {
+                _ => {
                     if let Some(source) = self.iptv_sources.get(selection.index).cloned() {
                         self.load_iptv(ui, environment, source);
-                        return;
+                        return None;
                     }
                 }
-                _ => {}
             }
         }
     }
 
+    /// Adds a source or edits one; `true` when it was saved.
+    #[allow(clippy::too_many_lines)] // One form with its checks.
     fn edit_iptv_source(
         &mut self,
         ui: &mut dyn SourcesUi,
         environment: &SourcesEnvironment,
         index: Option<usize>,
-    ) {
+    ) -> bool {
+        let catalog = environment.catalog();
         let old = index
             .and_then(|index| self.iptv_sources.get(index))
             .cloned();
@@ -1097,21 +1203,22 @@ impl SourcesController {
             .as_ref()
             .and_then(|source| source.credentials().ok())
             .unwrap_or(Value::Null);
-        let form = FeatureForm::new(
-            "IPTV source",
+        let mut form = FeatureForm::localized(
+            &catalog,
+            catalog.text("iptv_source_title"),
             vec![
                 FormField::text(
                     "name",
-                    "Source name",
+                    catalog.text("iptv_source_name"),
                     old.as_ref().map_or("", |source| &source.name),
                 ),
                 FormField::choice(
                     "kind",
-                    "Source type",
+                    catalog.text("iptv_source_kind"),
                     vec![
-                        "Playlist file or URL".into(),
-                        "Xtream".into(),
-                        "Stalker portal".into(),
+                        catalog.text("iptv_kind_playlist").to_owned(),
+                        catalog.text("iptv_kind_xtream").to_owned(),
+                        catalog.text("iptv_kind_stalker").to_owned(),
                     ],
                     old.as_ref().map_or(0, |source| match source.kind {
                         SourceKind::Playlist => 0,
@@ -1119,81 +1226,115 @@ impl SourcesController {
                         SourceKind::Stalker => 2,
                     }),
                 ),
-                FormField::text(
+                FormField::file(
                     "address",
-                    "Playlist file path or server URL",
+                    catalog.text("iptv_source_address"),
                     old.as_ref().map_or("", |source| &source.address),
+                    &["m3u", "m3u8"],
+                    catalog.text("browse"),
                 ),
                 FormField::text(
                     "username",
-                    "Username",
+                    catalog.text("iptv_username"),
                     credentials["username"].as_str().unwrap_or_default(),
                 ),
                 FormField::secret(
                     "password",
-                    "Password",
+                    catalog.text("iptv_password"),
                     credentials["password"].as_str().unwrap_or_default(),
                 ),
                 FormField::text(
                     "mac",
-                    "Portal MAC address",
+                    catalog.text("iptv_mac"),
                     credentials["mac"].as_str().unwrap_or_default(),
                 ),
-                FormField::text(
+                FormField::file(
                     "epg",
-                    "Programme guide file or URL (optional)",
+                    catalog.text("iptv_guide_address"),
                     old.as_ref().map_or("", |source| &source.epg_address),
+                    &["xml", "gz"],
+                    catalog.text("browse"),
                 ),
                 FormField::checkbox(
                     "hls",
-                    "Prefer HLS live streams",
+                    catalog.text("iptv_prefer_hls"),
                     old.as_ref().is_some_and(|source| source.prefer_hls),
                 ),
             ],
         );
-        let Some(values) = ui.form(&form) else { return };
-        let name = text(&values, "name");
-        let address = text(&values, "address");
-        if name.trim().is_empty() || address.trim().is_empty() {
-            ui.error("Enter a source name and address.");
-            return;
-        }
-        let mut source = IptvSource {
-            id: old
-                .as_ref()
-                .map_or_else(unique_id, |source| source.id.clone()),
-            name,
-            kind: match choice(&values, "kind") {
-                1 => SourceKind::Xtream,
-                2 => SourceKind::Stalker,
-                _ => SourceKind::Playlist,
-            },
-            address,
-            protected_credentials: String::new(),
-            epg_address: text(&values, "epg"),
-            prefer_hls: checked(&values, "hls"),
-        };
-        if source.kind != SourceKind::Playlist
-            && let Err(error) = source.set_credentials(
-                &text(&values, "username"),
-                &text(&values, "password"),
-                &text(&values, "mac"),
-            )
-        {
-            ui.error(&error);
-            return;
-        }
-        let previous = self.iptv_sources.clone();
-        if let Some(index) = index {
-            if let Some(current) = self.iptv_sources.get_mut(index) {
-                *current = source;
+        loop {
+            let Some(values) = ui.form(&form) else {
+                return false;
+            };
+            // A rejected form comes back with what was typed.
+            for field in &mut form.fields {
+                match (&mut field.kind, values.get(&field.id)) {
+                    (
+                        crate::FormFieldKind::Text { value, .. }
+                        | crate::FormFieldKind::File { value, .. },
+                        Some(FormValue::Text(text)),
+                    ) => text.clone_into(value),
+                    (
+                        crate::FormFieldKind::Choice { selected, .. },
+                        Some(FormValue::Choice(choice)),
+                    ) => *selected = *choice,
+                    (
+                        crate::FormFieldKind::Checkbox { checked },
+                        Some(FormValue::Checkbox(value)),
+                    ) => *checked = *value,
+                    _ => {}
+                }
             }
-        } else {
-            self.iptv_sources.push(source);
-        }
-        if let Err(error) = self.save_iptv(environment) {
-            self.iptv_sources = previous;
-            ui.error(&error);
+            let name = text(&values, "name").trim().to_owned();
+            let address = text(&values, "address").trim().to_owned();
+            if name.is_empty() || address.is_empty() {
+                ui.error(catalog.text("iptv_source_incomplete"));
+                continue;
+            }
+            let mut source = IptvSource {
+                id: old
+                    .as_ref()
+                    .map_or_else(unique_id, |source| source.id.clone()),
+                name,
+                kind: match choice(&values, "kind") {
+                    1 => SourceKind::Xtream,
+                    2 => SourceKind::Stalker,
+                    _ => SourceKind::Playlist,
+                },
+                address,
+                protected_credentials: String::new(),
+                epg_address: text(&values, "epg").trim().to_owned(),
+                prefer_hls: checked(&values, "hls"),
+            };
+            if source.kind != SourceKind::Playlist
+                && let Err(error) = source.set_credentials(
+                    &text(&values, "username"),
+                    &text(&values, "password"),
+                    &text(&values, "mac"),
+                )
+            {
+                ui.error(&iptv_error(&catalog, error));
+                continue;
+            }
+            let previous = self.iptv_sources.clone();
+            if let Some(index) = index {
+                if let Some(current) = self.iptv_sources.get_mut(index) {
+                    *current = source;
+                }
+            } else {
+                self.iptv_sources.push(source);
+            }
+            return match self.save_iptv(environment) {
+                Ok(()) => {
+                    ui.status(catalog.text("iptv_source_saved"), true);
+                    true
+                }
+                Err(error) => {
+                    self.iptv_sources = previous;
+                    ui.error(&error);
+                    false
+                }
+            };
         }
     }
 
@@ -1204,20 +1345,25 @@ impl SourcesController {
         source: IptvSource,
     ) {
         let proxy = environment.proxy.clone();
+        let catalog = environment.catalog();
         self.spawn(ui, move || {
-            let client = IptvClient::new(Some(&proxy))?;
-            let channels = client.load(&source)?;
+            let client =
+                IptvClient::new(Some(&proxy)).map_err(|error| iptv_error(&catalog, error))?;
+            let channels = client
+                .load(&source)
+                .map_err(|error| iptv_error(&catalog, error))?;
             let mut warning = None;
             let guide = if source.epg_address.trim().is_empty() {
                 EpgGuide::default()
             } else {
-                match client.epg(&source.epg_address) {
-                    Ok(guide) => guide,
-                    Err(error) => {
-                        warning = Some(error);
-                        EpgGuide::default()
-                    }
-                }
+                client.epg(&source.epg_address).unwrap_or_else(|error| {
+                    warning = Some(
+                        catalog
+                            .text("iptv_guide_failed")
+                            .replace("{error}", &iptv_error(&catalog, error)),
+                    );
+                    EpgGuide::default()
+                })
             };
             Ok(Work::Iptv {
                 source,
@@ -1228,58 +1374,258 @@ impl SourcesController {
         });
     }
 
-    fn channel_list(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) {
+    fn kinds_present(&self) -> Vec<ChannelKind> {
+        IPTV_KINDS
+            .iter()
+            .copied()
+            .filter(|kind| self.channels.iter().any(|channel| channel.kind == *kind))
+            .collect()
+    }
+
+    fn groups_present(&self) -> Vec<(String, usize)> {
+        let mut groups = BTreeMap::<String, usize>::new();
+        for channel in self
+            .channels
+            .iter()
+            .filter(|channel| self.channel_kind.is_none_or(|kind| channel.kind == kind))
+        {
+            *groups.entry(channel.group.clone()).or_default() += 1;
+        }
+        groups.into_iter().collect()
+    }
+
+    /// Where Back goes from the channel list: the screens that had a
+    /// choice to make.
+    fn channels_back(&self) -> IptvScreen {
+        if self.groups_present().len() > 1 {
+            IptvScreen::Groups
+        } else if self.kinds_present().len() > 1 {
+            IptvScreen::Kinds
+        } else {
+            IptvScreen::Sources
+        }
+    }
+
+    fn iptv_kinds(
+        &mut self,
+        ui: &mut dyn SourcesUi,
+        environment: &SourcesEnvironment,
+    ) -> Option<IptvScreen> {
+        let kinds = self.kinds_present();
+        if kinds.len() <= 1 {
+            self.channel_kind = kinds.first().copied();
+            return Some(IptvScreen::Groups);
+        }
+        let catalog = environment.catalog();
+        let rows = kinds
+            .iter()
+            .map(|kind| {
+                catalog
+                    .text("iptv_kind_row")
+                    .replace("{name}", catalog.text(iptv_kind_key(*kind)))
+                    .replace(
+                        "{count}",
+                        &self
+                            .channels
+                            .iter()
+                            .filter(|channel| channel.kind == *kind)
+                            .count()
+                            .to_string(),
+                    )
+            })
+            .collect();
+        let selected = self
+            .channel_kind
+            .and_then(|kind| kinds.iter().position(|present| *present == kind))
+            .unwrap_or(0);
+        let Some(choice) = ui.browse(&Self::browser(
+            environment,
+            self.iptv_active
+                .as_ref()
+                .map_or(catalog.text("iptv_title"), |source| &source.name),
+            rows,
+            selected,
+            &[("open", catalog.text("open"))],
+        )) else {
+            return Some(IptvScreen::Sources);
+        };
+        let kind = kinds.get(choice.index).copied();
+        if kind != self.channel_kind {
+            self.channel_kind = kind;
+            self.channel_group.clear();
+            self.channel_selected = 0;
+        }
+        Some(IptvScreen::Groups)
+    }
+
+    fn iptv_groups(
+        &mut self,
+        ui: &mut dyn SourcesUi,
+        environment: &SourcesEnvironment,
+    ) -> Option<IptvScreen> {
+        let groups = self.groups_present();
+        let back = if self.kinds_present().len() > 1 {
+            IptvScreen::Kinds
+        } else {
+            IptvScreen::Sources
+        };
+        if groups.len() <= 1 {
+            self.channel_group = groups
+                .first()
+                .map(|(name, _)| name.clone())
+                .unwrap_or_default();
+            return Some(IptvScreen::Channels);
+        }
+        let catalog = environment.catalog();
+        let total: usize = groups.iter().map(|(_, count)| count).sum();
+        let mut rows = vec![
+            catalog
+                .text("iptv_kind_row")
+                .replace("{name}", catalog.text("iptv_all_categories"))
+                .replace("{count}", &total.to_string()),
+        ];
+        rows.extend(groups.iter().map(|(name, count)| {
+            catalog
+                .text("iptv_kind_row")
+                .replace(
+                    "{name}",
+                    if name.is_empty() {
+                        catalog.text("iptv_no_category")
+                    } else {
+                        name
+                    },
+                )
+                .replace("{count}", &count.to_string())
+        }));
+        let selected = if self.channel_group.is_empty() {
+            0
+        } else {
+            groups
+                .iter()
+                .position(|(name, _)| *name == self.channel_group)
+                .map_or(0, |at| at + 1)
+        };
+        let title = self
+            .channel_kind
+            .map_or(catalog.text("iptv_categories"), |kind| {
+                catalog.text(iptv_kind_key(kind))
+            });
+        let Some(choice) = ui.browse(&Self::browser(
+            environment,
+            title,
+            rows,
+            selected,
+            &[("open", catalog.text("open"))],
+        )) else {
+            return Some(back);
+        };
+        let group = choice
+            .index
+            .checked_sub(1)
+            .and_then(|at| groups.get(at))
+            .map(|(name, _)| name.clone())
+            .unwrap_or_default();
+        if group != self.channel_group || choice.index == 0 {
+            self.channel_group = group;
+            self.channel_selected = 0;
+        }
+        Some(IptvScreen::Channels)
+    }
+
+    fn visible_channels(&self) -> Vec<usize> {
+        let query = self.channel_query.to_lowercase();
+        self.channels
+            .iter()
+            .enumerate()
+            .filter(|(_, channel)| {
+                self.channel_kind.is_none_or(|kind| channel.kind == kind)
+                    && (self.channel_group.is_empty() || self.channel_group == channel.group)
+                    && (query.is_empty() || channel.name.to_lowercase().contains(&query))
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    fn channel_list(
+        &mut self,
+        ui: &mut dyn SourcesUi,
+        environment: &SourcesEnvironment,
+    ) -> Option<IptvScreen> {
+        let catalog = environment.catalog();
         loop {
             let now = chrono::Utc::now().timestamp();
-            let query = self.channel_query.to_lowercase();
-            let indices: Vec<_> = self
-                .channels
-                .iter()
-                .enumerate()
-                .filter(|(_, channel)| {
-                    (self.channel_kind.is_none() || self.channel_kind == Some(channel.kind))
-                        && (self.channel_group.is_empty() || self.channel_group == channel.group)
-                        && (query.is_empty() || channel.name.to_lowercase().contains(&query))
-                })
-                .map(|(index, _)| index)
-                .collect();
+            let indices = self.visible_channels();
+            if indices.is_empty() {
+                ui.status(catalog.text("iptv_no_channels"), true);
+                if self.channel_query.is_empty() {
+                    return Some(self.channels_back());
+                }
+                self.channel_query.clear();
+                continue;
+            }
             let rows = indices
                 .iter()
                 .map(|&index| {
                     let channel = &self.channels[index];
-                    let current = self.guide.now_next(&channel.epg_id, now).0;
-                    current.map_or_else(
+                    self.guide.now_next(&channel.epg_id, now).0.map_or_else(
                         || channel.name.clone(),
-                        |programme| format!("{}; {}", channel.name, programme.title),
+                        |programme| {
+                            catalog
+                                .text("iptv_channel_now")
+                                .replace("{name}", &channel.name)
+                                .replace("{title}", &programme.title)
+                        },
                     )
                 })
                 .collect();
+            let mut actions = vec![
+                ("play", catalog.text("play")),
+                ("iptv_details", catalog.text("iptv_details")),
+                ("iptv_search", catalog.text("iptv_search")),
+                ("iptv_refresh", catalog.text("iptv_refresh")),
+            ];
+            let playlist = self
+                .iptv_active
+                .as_ref()
+                .is_some_and(|source| source.kind == SourceKind::Playlist);
+            // Provider addresses carry the login, so only playlist
+            // addresses are offered for copying.
+            if playlist {
+                actions.push(("iptv_copy_url", catalog.text("radio_copy_url")));
+            }
+            let title = if self.channel_group.is_empty() {
+                self.channel_kind
+                    .map_or(catalog.text("iptv_channels"), |kind| {
+                        catalog.text(iptv_kind_key(kind))
+                    })
+                    .to_owned()
+            } else {
+                self.channel_group.clone()
+            };
             let Some(selected) = ui.browse(&Self::browser(
                 environment,
-                "IPTV channels",
+                &title,
                 rows,
-                self.channel_selected,
-                &[
-                    ("play", "Play"),
-                    ("details", "Programme details"),
-                    ("filters", "Search and filters"),
-                    ("refresh", "Refresh source"),
-                    ("copy", "Copy stream URL"),
-                ],
+                self.channel_selected.min(indices.len() - 1),
+                &actions,
             )) else {
-                return;
+                self.channel_query.clear();
+                return Some(self.channels_back());
             };
             self.channel_selected = selected.index;
-            if selected.action == "filters" {
-                self.channel_filters(ui);
-                continue;
-            }
             let Some(source) = self.iptv_active.clone() else {
-                return;
+                return None;
             };
-            if selected.action == "refresh" {
-                self.load_iptv(ui, environment, source);
-                return;
+            match selected.action.as_str() {
+                "iptv_search" => {
+                    self.search_channels(ui, &catalog);
+                    continue;
+                }
+                "iptv_refresh" => {
+                    self.load_iptv(ui, environment, source);
+                    return None;
+                }
+                _ => {}
             }
             let Some(channel) = indices
                 .get(selected.index)
@@ -1289,106 +1635,203 @@ impl SourcesController {
                 continue;
             };
             match selected.action.as_str() {
-                "open" | "play" => {
-                    let proxy = environment.proxy.clone();
-                    self.spawn(ui, move || {
-                        let client = IptvClient::new(Some(&proxy))?;
-                        if channel.kind == ChannelKind::Series {
-                            Ok(Work::IptvSeries {
-                                channels: client.series(&source, &channel.id)?,
-                                source,
-                            })
-                        } else {
-                            Ok(Work::PlayIptv {
-                                channel: client.resolve_channel(&channel)?,
-                                source,
-                            })
-                        }
-                    });
-                    return;
+                "iptv_details" => {
+                    self.show_programme_details(ui, &catalog, &channel);
                 }
-                "details" => {
-                    let (current, next) = self.guide.now_next(&channel.epg_id, now);
-                    let mut details = format!(
-                        "{}\nCategory: {}\nChannel number: {}",
-                        channel.name, channel.group, channel.number
-                    );
-                    if let Some(current) = current {
-                        details.push_str(&format!(
-                            "\nNow: {}\n{}",
-                            current.title, current.description
-                        ));
+                "iptv_copy_url" => {
+                    if ui.copy(&channel.url) {
+                        ui.status(catalog.text("url_copied"), true);
                     }
-                    if let Some(next) = next {
-                        details.push_str(&format!("\nNext: {}\n{}", next.title, next.description));
+                }
+                _ => {
+                    if channel.kind == ChannelKind::Series {
+                        self.episode_series = Some(channel.clone());
+                        self.episode_selected = 0;
                     }
-                    let _ = ui.form(&FeatureForm::new(
-                        "Programme details",
-                        vec![FormField::read_only("details", "Programme", details)],
-                    ));
+                    self.open_channel(ui, environment, source, channel);
+                    return None;
                 }
-                "copy" => {
-                    let _ = ui.copy(&channel.url);
-                }
-                _ => {}
             }
         }
     }
 
-    fn channel_filters(&mut self, ui: &mut dyn SourcesUi) {
-        let mut groups = vec!["All categories".into()];
-        groups.extend(
-            self.channels
-                .iter()
-                .map(|channel| channel.group.clone())
-                .filter(|group| !group.is_empty())
-                .collect::<BTreeSet<_>>(),
-        );
-        let selected = groups
+    fn open_channel(
+        &mut self,
+        ui: &mut dyn SourcesUi,
+        environment: &SourcesEnvironment,
+        source: IptvSource,
+        channel: IptvChannel,
+    ) {
+        let proxy = environment.proxy.clone();
+        let catalog = environment.catalog();
+        self.spawn(ui, move || {
+            let client =
+                IptvClient::new(Some(&proxy)).map_err(|error| iptv_error(&catalog, error))?;
+            if channel.kind == ChannelKind::Series {
+                Ok(Work::IptvSeries {
+                    channels: client
+                        .series(&source, &channel.id)
+                        .map_err(|error| iptv_error(&catalog, error))?,
+                    source,
+                })
+            } else {
+                Ok(Work::PlayIptv {
+                    channel: client
+                        .resolve_channel(&channel)
+                        .map_err(|error| iptv_error(&catalog, error))?,
+                    source,
+                })
+            }
+        });
+    }
+
+    fn episode_list(
+        &mut self,
+        ui: &mut dyn SourcesUi,
+        environment: &SourcesEnvironment,
+    ) -> Option<IptvScreen> {
+        let catalog = environment.catalog();
+        if self.episodes.is_empty() {
+            ui.status(catalog.text("iptv_no_episodes"), true);
+            return Some(IptvScreen::Channels);
+        }
+        let rows = self
+            .episodes
             .iter()
-            .position(|group| *group == self.channel_group)
-            .unwrap_or_default();
-        let Some(values) = ui.form(&FeatureForm::new(
-            "IPTV filters",
-            vec![
-                FormField::text("query", "Channel name", &self.channel_query),
-                FormField::choice(
-                    "kind",
-                    "Show",
-                    vec![
-                        "All".into(),
-                        "Live TV".into(),
-                        "Movies".into(),
-                        "Series".into(),
-                        "Episodes".into(),
-                    ],
-                    match self.channel_kind {
-                        None => 0,
-                        Some(ChannelKind::Live) => 1,
-                        Some(ChannelKind::Movie) => 2,
-                        Some(ChannelKind::Series) => 3,
-                        Some(ChannelKind::Episode) => 4,
-                    },
-                ),
-                FormField::choice("group", "Category", groups.clone(), selected),
-            ],
+            .map(|episode| {
+                catalog
+                    .text("iptv_episode_row")
+                    .replace("{season}", &episode.group)
+                    .replace("{episode}", &episode.number)
+                    .replace("{title}", &episode.name)
+            })
+            .collect();
+        let title = self
+            .episode_series
+            .as_ref()
+            .map_or(catalog.text("iptv_episodes"), |series| &series.name)
+            .to_owned();
+        let Some(selected) = ui.browse(&Self::browser(
+            environment,
+            &title,
+            rows,
+            self.episode_selected,
+            &[("play", catalog.text("play"))],
         )) else {
-            return;
+            return Some(IptvScreen::Channels);
         };
-        self.channel_query = text(&values, "query");
-        self.channel_kind = match choice(&values, "kind") {
-            1 => Some(ChannelKind::Live),
-            2 => Some(ChannelKind::Movie),
-            3 => Some(ChannelKind::Series),
-            4 => Some(ChannelKind::Episode),
-            _ => None,
+        self.episode_selected = selected.index;
+        let (Some(source), Some(episode)) = (
+            self.iptv_active.clone(),
+            self.episodes.get(selected.index).cloned(),
+        ) else {
+            return Some(IptvScreen::Channels);
         };
-        self.channel_group = groups
-            .get(choice(&values, "group"))
-            .filter(|_| choice(&values, "group") > 0)
-            .cloned()
-            .unwrap_or_default();
-        self.channel_selected = 0;
+        self.open_channel(ui, environment, source, episode);
+        None
+    }
+
+    fn search_channels(&mut self, ui: &mut dyn SourcesUi, catalog: &TranslationCatalog) {
+        let mut form = FeatureForm::localized(
+            catalog,
+            catalog.text("iptv_search"),
+            vec![FormField::text(
+                "query",
+                catalog.text("iptv_channel_name"),
+                &self.channel_query,
+            )],
+        );
+        catalog.text("search").clone_into(&mut form.submit);
+        if let Some(values) = ui.form(&form) {
+            self.channel_query = text(&values, "query").trim().to_owned();
+            self.channel_selected = 0;
+        }
+    }
+
+    fn show_programme_details(
+        &self,
+        ui: &mut dyn SourcesUi,
+        catalog: &TranslationCatalog,
+        channel: &IptvChannel,
+    ) {
+        let mut form = FeatureForm::localized(
+            catalog,
+            catalog.text("iptv_details"),
+            vec![FormField::read_only(
+                "details",
+                &channel.name,
+                self.programme_details(catalog, channel),
+            )],
+        );
+        catalog.text("ok").clone_into(&mut form.submit);
+        let _ = ui.form(&form);
+    }
+
+    fn programme_details(&self, catalog: &TranslationCatalog, channel: &IptvChannel) -> String {
+        let now = chrono::Utc::now().timestamp();
+        let (current, next) = self.guide.now_next(&channel.epg_id, now);
+        let mut lines = vec![channel.name.clone()];
+        if !channel.group.is_empty() {
+            lines.push(format!(
+                "{}: {}",
+                catalog.text("iptv_category"),
+                channel.group
+            ));
+        }
+        if !channel.number.is_empty() {
+            lines.push(format!(
+                "{}: {}",
+                catalog.text("iptv_number"),
+                channel.number
+            ));
+        }
+        for (key, programme) in [("iptv_now", current), ("iptv_next", next)] {
+            if let Some(programme) = programme {
+                lines.push(
+                    catalog
+                        .text(key)
+                        .replace("{start}", &clock(programme.start))
+                        .replace("{end}", &clock(programme.end))
+                        .replace("{title}", &programme.title),
+                );
+                if !programme.description.is_empty() {
+                    lines.push(programme.description.clone());
+                }
+            }
+        }
+        if current.is_none() && next.is_none() {
+            lines.push(catalog.text("iptv_no_guide").to_owned());
+        }
+        lines.join("\n")
+    }
+
+    /// The programme now and next of the IPTV channel that plays.
+    fn playing_programme(&self, catalog: &TranslationCatalog) -> Option<String> {
+        let id = self.playing_iptv.as_deref()?;
+        let channel = self
+            .channels
+            .iter()
+            .chain(&self.episodes)
+            .find(|channel| channel.id == id)?;
+        let now = chrono::Utc::now().timestamp();
+        let (current, next) = self.guide.now_next(&channel.epg_id, now);
+        let mut parts = Vec::new();
+        for (key, programme) in [("iptv_now", current), ("iptv_next", next)] {
+            if let Some(programme) = programme {
+                parts.push(
+                    catalog
+                        .text(key)
+                        .replace("{start}", &clock(programme.start))
+                        .replace("{end}", &clock(programme.end))
+                        .replace("{title}", &programme.title),
+                );
+            }
+        }
+        Some(if parts.is_empty() {
+            catalog.text("iptv_no_guide").to_owned()
+        } else {
+            parts.join(" ")
+        })
     }
 
     fn recording_panel(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) {
@@ -1684,8 +2127,69 @@ fn unique_id() -> String {
         |duration| format!("iptv-{}", duration.as_nanos()),
     )
 }
-fn confirm(ui: &mut dyn SourcesUi, title: &str, message: &str) -> bool {
-    ui.ask_yes_no(&format!("{title} {message}"))
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IptvScreen {
+    Sources,
+    Kinds,
+    Groups,
+    Channels,
+    Episodes,
+}
+
+const IPTV_KINDS: [ChannelKind; 4] = [
+    ChannelKind::Live,
+    ChannelKind::Movie,
+    ChannelKind::Series,
+    ChannelKind::Episode,
+];
+
+const fn iptv_kind_key(kind: ChannelKind) -> &'static str {
+    match kind {
+        ChannelKind::Live => "iptv_live",
+        ChannelKind::Movie => "iptv_movies",
+        ChannelKind::Series => "iptv_series",
+        ChannelKind::Episode => "iptv_episodes",
+    }
+}
+
+/// A programme time in the computer's time zone.
+fn clock(timestamp: i64) -> String {
+    chrono::DateTime::from_timestamp(timestamp, 0).map_or_else(String::new, |time| {
+        time.with_timezone(&chrono::Local)
+            .format("%H:%M")
+            .to_string()
+    })
+}
+
+fn iptv_error(catalog: &TranslationCatalog, error: IptvError) -> String {
+    let key = match error {
+        IptvError::CredentialsSave => "iptv_error_credentials_save",
+        IptvError::CredentialsLocked => "iptv_error_credentials_locked",
+        IptvError::PlaylistUnreadable => "iptv_error_playlist_unreadable",
+        IptvError::PlaylistTooLarge | IptvError::TooManyChannels => "iptv_error_playlist_large",
+        IptvError::HlsStream => "iptv_error_hls",
+        IptvError::NoChannels => "iptv_error_no_channels",
+        IptvError::GuideUnreadable => "iptv_error_guide_unreadable",
+        IptvError::GuideTooLarge => "iptv_error_guide_large",
+        IptvError::GuideInvalid => "iptv_error_guide_invalid",
+        IptvError::Proxy => "radio_error_proxy",
+        IptvError::Connect => "iptv_error_connect",
+        IptvError::Http(code) => {
+            return catalog
+                .text("iptv_error_http")
+                .replace("{code}", &code.to_string());
+        }
+        IptvError::ResponseTooLarge => "iptv_error_response_large",
+        IptvError::InvalidData => "iptv_error_data",
+        IptvError::NoSeries => "iptv_no_episodes",
+        IptvError::ChooseEpisode => "iptv_error_choose_episode",
+        IptvError::InvalidMac => "iptv_error_mac",
+        IptvError::PortalRefused => "iptv_error_portal",
+        IptvError::NoPlaybackLink => "iptv_error_no_link",
+        IptvError::NeedHttpAddress => "iptv_error_address",
+    };
+    catalog.text(key).to_owned()
 }
 
 /// The rows of the Radio menu, in order.
@@ -1859,13 +2363,126 @@ mod tests {
         let mut ui = Spoken::default();
         let url = Some("https://stream.example.test/aac-320");
         for title in ["aac-320", "Artist - Song", "Artist - Song", "Artist - Next"] {
-            controller.stream_metadata(&mut ui, Some("station"), Some(title), url);
+            controller.stream_metadata(&mut ui, Some("station"), Some(title), url, None);
         }
         assert_eq!(ui.0, ["Artist - Song", "Artist - Next"]);
         controller.radio.announce_metadata = false;
-        controller.stream_metadata(&mut ui, Some("station"), Some("Quiet - Song"), url);
+        controller.stream_metadata(&mut ui, Some("station"), Some("Quiet - Song"), url, None);
         assert_eq!(ui.0.len(), 2);
         assert_eq!(controller.metadata_title, "Quiet - Song");
+    }
+
+    #[derive(Default)]
+    struct Browsing {
+        answers: std::collections::VecDeque<Option<(usize, &'static str)>>,
+        titles: Vec<String>,
+        rows: Vec<Vec<String>>,
+    }
+
+    impl SourcesUi for Browsing {
+        fn browse(&mut self, browser: &SourceBrowser) -> Option<SourceSelection> {
+            self.titles.push(browser.title.clone());
+            self.rows.push(browser.rows.clone());
+            self.answers
+                .pop_front()
+                .flatten()
+                .map(|(index, action)| SourceSelection {
+                    index,
+                    action: action.to_owned(),
+                })
+        }
+        fn form(&mut self, _form: &FeatureForm) -> Option<FormValues> {
+            None
+        }
+        fn status(&mut self, _message: &str, _announce: bool) {}
+        fn error(&mut self, _message: &str) {}
+        fn play(&mut self, _item: MediaItem) {}
+        fn choose_file(&mut self, _title: &str) -> Option<PathBuf> {
+            None
+        }
+        fn choose_folder(&mut self, _title: &str) -> Option<PathBuf> {
+            None
+        }
+        fn copy(&mut self, _text: &str) -> bool {
+            false
+        }
+        fn cue(&mut self, _started: bool) {}
+        fn ask_yes_no(&mut self, _message: &str) -> bool {
+            false
+        }
+    }
+
+    fn channel(name: &str, group: &str, kind: ChannelKind) -> IptvChannel {
+        IptvChannel {
+            id: name.into(),
+            name: name.into(),
+            group: group.into(),
+            number: String::new(),
+            epg_id: String::new(),
+            logo: String::new(),
+            url: format!("https://example.test/{name}"),
+            kind,
+            metadata: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn iptv_back_walks_up_through_the_screens_that_had_a_choice() {
+        let environment = SourcesEnvironment {
+            directory: PathBuf::from("unused"),
+            download_directory: PathBuf::from("unused"),
+            ffmpeg: None,
+            proxy: String::new(),
+            shortcuts: BTreeMap::new(),
+            language: "en".into(),
+        };
+        let mut controller = SourcesController::default();
+        controller.iptv_sources.push(IptvSource {
+            id: "one".into(),
+            name: "Home".into(),
+            kind: SourceKind::Playlist,
+            address: "https://example.test/list.m3u".into(),
+            protected_credentials: String::new(),
+            epg_address: String::new(),
+            prefer_hls: false,
+        });
+        controller.iptv_active = controller.iptv_sources.first().cloned();
+        controller.channels = vec![
+            channel("News One", "News", ChannelKind::Live),
+            channel("Sport One", "Sport", ChannelKind::Live),
+            channel("Film", "Drama", ChannelKind::Movie),
+        ];
+        let mut ui = Browsing::default();
+        ui.answers
+            .extend([Some((0, "open")), Some((2, "open")), None, None, None, None]);
+
+        controller.iptv_navigate(&mut ui, &environment, IptvScreen::Kinds);
+
+        assert_eq!(
+            ui.titles,
+            [
+                "Home",
+                "Live TV",
+                "Sport",
+                "Live TV",
+                "Home",
+                "IPTV sources"
+            ]
+        );
+        assert_eq!(ui.rows[0], ["Live TV, 2", "Movies, 1"]);
+        assert_eq!(ui.rows[1], ["All categories, 2", "News, 1", "Sport, 1"]);
+        assert_eq!(ui.rows[2], ["Sport One"]);
+        assert_eq!(ui.rows[5], ["Home"]);
+    }
+
+    #[test]
+    fn iptv_errors_are_worded_for_people() {
+        let catalog = apricot_app::embedded_catalog("en");
+        assert_eq!(
+            iptv_error(&catalog, IptvError::Http(401)),
+            "The IPTV provider answered with an error (HTTP 401)."
+        );
+        assert!(iptv_error(&catalog, IptvError::HlsStream).contains("Play link"));
     }
 
     #[test]

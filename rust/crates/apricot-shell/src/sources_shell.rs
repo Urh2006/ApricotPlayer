@@ -100,6 +100,11 @@ impl Shell {
         self.sources = controller;
         busy
     }
+    pub(crate) fn source_playback_started(&mut self, ui: &mut dyn ShellUi) {
+        let mut controller = std::mem::take(&mut self.sources);
+        controller.playback_started(&mut Ui { shell: self, ui });
+        self.sources = controller;
+    }
     pub(crate) fn source_stream_metadata(&mut self, ui: &mut dyn ShellUi) {
         let session = self.application.player_session();
         let station = session
@@ -112,12 +117,18 @@ impl Shell {
             .current_item()
             .and_then(|item| item.url.as_ref())
             .map(ToString::to_string);
+        let iptv = session
+            .current_item()
+            .and_then(|item| item.metadata.get("iptv_channel_id"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
         let mut controller = std::mem::take(&mut self.sources);
         controller.stream_metadata(
             &mut Ui { shell: self, ui },
             station.as_deref(),
             title.as_deref(),
             url.as_deref(),
+            iptv.as_deref(),
         );
         self.sources = controller;
     }

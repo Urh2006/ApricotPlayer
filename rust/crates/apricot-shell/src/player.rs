@@ -517,7 +517,10 @@ impl Shell {
                 continue;
             }
             match update.event {
-                PlaybackEvent::Started => self.player_started(ui),
+                PlaybackEvent::Started => {
+                    self.player_started(ui);
+                    self.source_playback_started(ui);
+                }
                 PlaybackEvent::MediaInfo(_) => self.source_stream_metadata(ui),
                 PlaybackEvent::Paused(paused) => {
                     let key = if paused {

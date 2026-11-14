@@ -26,7 +26,7 @@ Ta dokument vodi delo za 2.1 beta 1. Obseg je potrjen v 19 sklopih (EQ, obdelava
 | 10 | Playlisti, mape, formati | narejeno |
 | 11 | Upravljanje lokalnih datotek | narejeno |
 | 12 | Radio | narejeno |
-| 13 | IPTV | čaka |
+| 13 | IPTV | narejeno |
 | 14 | Snemanje | čaka |
 | 15 | Pretvornik | čaka |
 | 16 | YouTube dodatki | čaka |
@@ -172,3 +172,16 @@ Ročni NVDA preizkus: Ctrl+Alt+O, izberi mapo, na datoteki pritisni Delete: NVDA
 Preverjeno v izoliranem namizju s pravim imenikom in pravim tokom: meni in vrstni red Tab (seznam, Open, Actions, Back), seznam 100 postaj z največ glasovi, Ctrl+F, predvajanje Radio Paradise, samodejna najava skladbe in Alt+Shift+N, zapis v `radio.json`.
 
 Ročni NVDA preizkus: Ctrl+Alt+Shift+1: NVDA pove "Radio" in "Search stations". Puščica dol do "Most voted", Enter: po "Loading" NVDA prebere prvo postajo. Ctrl+F: "Added to radio favorites." Enter: "Playing: ime postaje", ob novi skladbi NVDA prebere izvajalca in naslov. Alt+Shift+N ponovi skladbo.
+
+## Enota 13
+
+- IPTV (Ctrl+Alt+Shift+2 ali vnos IPTV v glavnem meniju) odpre seznam virov. Brez virov se takoj odpre obrazec za nov vir. Viri so datoteka ali naslov seznama M3U, prijava Xtream ali portal Stalker. Naslov seznama in programski vodnik imata gumb Browse, obrazec z napako se vrne z vpisanimi podatki. Prijava je shranjena z zaščito sistema.
+- Navigacija: vrsta vsebine (TV v živo, filmi, serije), nato kategorija s številom kanalov, nato kanali. Zaslon, kjer ni izbire, se preskoči. Back gre vedno korak nazaj do zaslona z izbiro, zasloni pa tečejo v eni zanki, zato se klici ne gnezdijo. Serija odpre seznam epizod ("Season 1, episode 2: naslov"), Back se vrne na serije.
+- Vrstica kanala pove ime in trenutno oddajo ("Paradise, now: Morning show"). Ob predvajanju NVDA najprej pove "Playing: ime kanala", nato "Now: oddaja", če jo vodnik pozna. Alt+Shift+N pove trenutno in naslednjo oddajo s časom, podrobnosti pa so v kontekstnem meniju.
+- Naslovi ponudnikov Xtream in Stalker vsebujejo prijavo, zato se taki kanali ne zapišejo v zgodovino in ne v položaje za nadaljevanje, kopiranje naslova pa je ponujeno samo za kanale iz seznamov.
+- Popravljena napaka osnutka v sistemu Windows: ko je seznam iz ozadja začel novo delo (na primer predvajanje kanala ali glas za postajo), se rezultat ni nikoli obdelal, ker se je časovnik ustavil.
+- Vse napake IPTV in vsa besedila so prevedena v 27 jezikov.
+
+Preverjeno v izoliranem namizju z lokalnim seznamom M3U, vodnikom XMLTV in pravim tokom: seznam virov, kategorije s števili, kanal z oddajo, Back s kanalov na kategorije, predvajanje z vrstnim redom najav in Alt+Shift+N. Xtream in Stalker sta preverjena samo s testi, ker za njiju ni testnega računa.
+
+Ročni NVDA preizkus: dodaj vir s seznamom M3U, Ctrl+Alt+Shift+2, Enter: NVDA prebere kategorije s števili. Izberi kategorijo, Enter: NVDA prebere kanal in trenutno oddajo. Enter: "Playing: kanal", nato "Now: oddaja". Alt+Shift+N: trenutna in naslednja oddaja s časom.

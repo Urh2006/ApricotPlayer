@@ -10607,6 +10607,10 @@ unsafe fn poll_playback_runtime(window: HWND) {
                 if !collection && let Some(item) = current_item.as_ref() {
                     spotify_browse::announce_playing(state, item);
                 }
+                sources_ui::playback_started(window);
+                let Some(state) = state_mut(window) else {
+                    return;
+                };
                 if let Some(item) = current_item {
                     let timestamp = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)

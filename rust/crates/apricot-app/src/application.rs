@@ -238,7 +238,11 @@ impl Application {
         &mut self,
     ) -> Result<PlaybackPositionUpdate, PlaybackPositionControllerError> {
         let session = &self.state.player;
-        let Some(item) = session.current_item().cloned() else {
+        let Some(item) = session
+            .current_item()
+            .filter(|item| !item.has_private_address())
+            .cloned()
+        else {
             return Ok(PlaybackPositionUpdate::Unchanged);
         };
         let position = session.position_seconds();
@@ -809,7 +813,7 @@ impl Application {
         action: &str,
         timestamp: f64,
     ) -> Result<(), MediaCollectionControllerError> {
-        if !self.settings.current().enable_history {
+        if !self.settings.current().enable_history || item.has_private_address() {
             return Ok(());
         }
         item.metadata.insert(
@@ -4235,6 +4239,23 @@ mod tests {
             app.request_relative_player_item(1),
             PlayerNavigationOutcome::Unavailable
         );
+    }
+
+    #[test]
+    fn addresses_with_a_login_stay_out_of_history() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        app.configure_media_collections(
+            MediaListFile::new(root.path().join("beta/favorites.json")),
+            &MediaListFile::new(root.path().join("stable/favorites.json")),
+            MediaListFile::new(root.path().join("beta/history.json")),
+            &MediaListFile::new(root.path().join("stable/history.json")),
+        );
+        let mut item = media_item("provider");
+        item.metadata
+            .insert("apricot_private_address".into(), true.into());
+        app.record_history(item, "played", 1.0).expect("skipped");
+        assert!(app.history().is_empty());
     }
 
     #[test]
