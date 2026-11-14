@@ -261,6 +261,8 @@ const EDIT_SAVE_TIMER_INTERVAL_MS: u32 = 100;
 const DIAGNOSTIC_REPORT_TIMER_ID: usize = 13;
 const DIAGNOSTIC_REPORT_TIMER_INTERVAL_MS: u32 = 100;
 const CONVERSION_TIMER_ID: usize = 14;
+/// `YouTube` search suggestions on their way.
+const SUGGESTIONS_TIMER_ID: usize = 31;
 const CONVERSION_TIMER_INTERVAL_MS: u32 = 100;
 const UPDATE_TIMER_ID: usize = 15;
 const UPDATE_TIMER_INTERVAL_MS: u32 = 100;
@@ -665,6 +667,7 @@ struct WindowState {
     pending_conversions: Vec<Receiver<ConversionMessage>>,
     /// The Cancel flags of the folder conversions that run.
     conversion_cancels: Vec<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    pending_suggestions: Option<apricot_shell::youtube_extras::PendingSuggestions>,
     /// Python `conversion_progress_dialog`.
     conversion_progress_window: Option<crate::converter_win32::ConversionProgressWindow>,
     pending_updates: Vec<Receiver<UpdateMessage>>,
@@ -1255,6 +1258,10 @@ unsafe extern "system" fn window_proc(
         }
         WM_TIMER if wparam.0 == DIAGNOSTIC_REPORT_TIMER_ID => {
             poll_diagnostic_report(window);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == SUGGESTIONS_TIMER_ID => {
+            poll_search_suggestions(window);
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == CONVERSION_TIMER_ID => {
@@ -2181,6 +2188,7 @@ unsafe fn create_controls(
         pending_edit_saves: Vec::new(),
         pending_conversions: Vec::new(),
         conversion_cancels: Vec::new(),
+        pending_suggestions: None,
         conversion_progress_window: None,
         pending_updates: Vec::new(),
         app_update_check_running: false,
@@ -8253,9 +8261,11 @@ unsafe fn activate_direct_link(window: HWND, action: &str) {
     {
         return;
     }
-    let item = text.and_then(|value| {
-        apricot_core::MediaItem::from_direct_link(&direct_link_with_scheme(&value))
-    });
+    let link = text
+        .as_deref()
+        .map(direct_link_with_scheme)
+        .unwrap_or_default();
+    let item = apricot_core::MediaItem::from_direct_link(&link);
     let Some(item) = item else {
         if let Some(state) = state(window) {
             let message = catalog_text(&state.application, "direct_link_invalid");
@@ -8264,6 +8274,30 @@ unsafe fn activate_direct_link(window: HWND, action: &str) {
         }
         return;
     };
+    // A link to a video in a playlist asks which of the two is meant.
+    let item = match apricot_app::youtube_extras::video_and_playlist(&link) {
+        Some((video, playlist)) => {
+            let Some(catalog) = state(window)
+                .map(|state| apricot_app::embedded_catalog(&state.application.settings().language))
+            else {
+                return;
+            };
+            let form = apricot_shell::youtube_extras::link_choice_form(&catalog);
+            let Some(values) = crate::feature_form_win32::show(window, &form) else {
+                return;
+            };
+            if apricot_shell::youtube_extras::wants_playlist(&values) {
+                playlist
+            } else {
+                video
+            }
+        }
+        None => item,
+    };
+    if item.kind == apricot_core::MediaKind::Playlist && !action.starts_with("download_") {
+        open_youtube_collection(window, item, YoutubeCollectionKind::PlaylistVideos);
+        return;
+    }
     match action {
         "copy_stream_url" => {
             start_youtube_resolve(window, &item, YoutubeResolvePurpose::CopyStreamUrl);
@@ -9137,6 +9171,15 @@ unsafe fn build_download_request(
     }) else {
         return Err("Application state is unavailable.".to_owned());
     };
+    // Download with options: this item's own formats and folder.
+    let item_options = apricot_app::youtube_extras::ItemDownloadOptions::from_item(item);
+    let settings = item_options
+        .as_ref()
+        .map_or(settings.clone(), |options| options.apply(&settings));
+    let item_folder = item_options
+        .as_ref()
+        .and_then(apricot_app::youtube_extras::ItemDownloadOptions::folder);
+    let output_override = output_override.or(item_folder.as_deref());
     let url = item
         .url
         .as_ref()
@@ -13637,6 +13680,8 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "save_podcast_speed_preset" => save_current_podcast_speed_preset(window),
         "copy_diagnostic_report" => copy_diagnostic_report(window),
         "converter_options" => edit_converter_options(window),
+        "download_with_options" => download_with_options(window),
+        "search_suggestions" => start_search_suggestions(window),
         "cancel_conversion" => cancel_conversions(window),
         "file_converter" => show_converter(window, false),
         "folder_converter" => show_converter(window, true),
@@ -15743,6 +15788,104 @@ unsafe fn edit_converter_options(window: HWND) {
                 .replace("{error}", &error.to_string()),
         ),
     }
+}
+
+/// Download with options for the selected or playing item.
+unsafe fn download_with_options(window: HWND) {
+    let Some(mut item) = active_media_item(window) else {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "no_selection"),
+                true,
+            );
+        }
+        return;
+    };
+    let Some((catalog, settings)) = state(window).map(|state| {
+        (
+            apricot_app::embedded_catalog(&state.application.settings().language),
+            state.application.settings().clone(),
+        )
+    }) else {
+        return;
+    };
+    let form = apricot_shell::youtube_extras::download_options_form(
+        &catalog,
+        &settings,
+        DownloadChoice::Audio,
+    );
+    let Some(values) = crate::feature_form_win32::show(window, &form) else {
+        return;
+    };
+    let (choice, options) =
+        apricot_shell::youtube_extras::download_options_from_values(&values, &settings);
+    options.store(&mut item);
+    start_download_item(window, &item, choice, false);
+}
+
+/// Search suggestions for the typed query.
+unsafe fn start_search_suggestions(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    if state.view != MainView::Search {
+        return;
+    }
+    let query = window_text(state.search_edit);
+    if query.trim().is_empty() {
+        let message = catalog_text(&state.application, "enter_query");
+        set_status(state, &message, true);
+        return;
+    }
+    let settings = state.application.settings();
+    state.pending_suggestions = Some(apricot_shell::youtube_extras::PendingSuggestions::start(
+        &query,
+        &settings.language,
+        &settings.proxy,
+    ));
+    let message = catalog_text(&state.application, "search_suggestions_loading");
+    set_status(state, &message, true);
+    let _ = SetTimer(Some(window), SUGGESTIONS_TIMER_ID, 100, None);
+}
+
+unsafe fn poll_search_suggestions(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let Some(result) = state
+        .pending_suggestions
+        .as_ref()
+        .and_then(apricot_shell::youtube_extras::PendingSuggestions::poll)
+    else {
+        if state.pending_suggestions.is_none() {
+            let _ = KillTimer(Some(window), SUGGESTIONS_TIMER_ID);
+        }
+        return;
+    };
+    state.pending_suggestions = None;
+    let _ = KillTimer(Some(window), SUGGESTIONS_TIMER_ID);
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let suggestions = match result {
+        Ok(suggestions) if !suggestions.is_empty() => suggestions,
+        _ => {
+            set_status(state, catalog.text("search_suggestions_none"), true);
+            return;
+        }
+    };
+    let form = apricot_shell::youtube_extras::suggestions_form(&catalog, &suggestions);
+    let Some(values) = crate::feature_form_win32::show(window, &form) else {
+        return;
+    };
+    let Some(query) = apricot_shell::youtube_extras::chosen_suggestion(&values, &suggestions)
+    else {
+        return;
+    };
+    if let Some(main) = self::state(window) {
+        let text = wide(&query);
+        let _ = SetWindowTextW(main.search_edit, PCWSTR(text.as_ptr()));
+    }
+    submit_search(window);
 }
 
 /// Stops the folder conversions that run.

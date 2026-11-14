@@ -995,22 +995,12 @@ fn download_controls(
     catalog: &TranslationCatalog,
     settings: &SettingsDocument,
 ) -> Vec<SettingsControl> {
-    let audio_quality_options = [
-        "0", "320", "256", "192", "160", "128", "96", "64", "1", "2", "3", "4", "5", "6", "7", "8",
-        "9", "10",
-    ]
-    .into_iter()
-    .map(|value| {
-        let label = if value == "0" {
-            "Best variable quality (VBR 0)".to_owned()
-        } else if value.parse::<i64>().is_ok_and(|number| number <= 10) {
-            format!("Variable quality (VBR {value})")
-        } else {
-            format!("{value} kbps")
-        };
-        SettingsChoiceOption::labeled(value, label)
-    })
-    .collect();
+    let audio_quality_options = crate::youtube_extras::AUDIO_QUALITY_VALUES
+        .into_iter()
+        .map(|value| {
+            SettingsChoiceOption::labeled(value, crate::youtube_extras::audio_quality_label(value))
+        })
+        .collect();
     vec![
         checkbox(
             SettingId::ConfirmBeforeDownload,

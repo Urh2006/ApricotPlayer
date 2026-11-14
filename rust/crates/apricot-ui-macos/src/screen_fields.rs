@@ -218,6 +218,12 @@ impl ScreenFields {
         }
     }
 
+    pub fn set_text(&self, id: &str, value: &str) {
+        if let Some(FieldControl::Text(text)) = self.control(id) {
+            text.setStringValue(&NSString::from_str(value));
+        }
+    }
+
     pub fn choice(&self, id: &str) -> Option<usize> {
         match self.control(id) {
             Some(FieldControl::Choice(popup)) => popup.selected(),

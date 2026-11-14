@@ -213,6 +213,8 @@ const ACTION_CATEGORIES: &[(&str, &str)] = &[
     ("manage_files", "files"),
     ("converter_options", "files"),
     ("cancel_conversion", "files"),
+    ("download_with_options", "downloads"),
+    ("search_suggestions", "youtube"),
     ("local_file_actions", "files"),
     ("open_search", "youtube"),
     ("open_channel", "youtube"),

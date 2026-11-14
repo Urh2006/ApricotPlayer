@@ -26,6 +26,7 @@ pub mod radio;
 pub mod recording;
 pub mod recording_cue;
 pub mod rss_client;
+pub mod search_suggestions;
 pub mod shell;
 pub mod single_instance;
 pub mod soundcloud_search;

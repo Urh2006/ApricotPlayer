@@ -44,6 +44,7 @@ pub mod transcript;
 pub mod unavailable;
 pub mod user_playlist_controller;
 pub mod youtube_collection;
+pub mod youtube_extras;
 pub mod youtube_trending;
 
 use apricot_core::NavigationStack;

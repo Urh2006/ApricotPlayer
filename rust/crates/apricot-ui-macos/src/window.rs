@@ -2211,6 +2211,12 @@ impl ShellUi for MacUi<'_> {
             .unwrap_or_default()
     }
 
+    fn set_screen_text(&mut self, id: &str, text: &str) {
+        if let Some(fields) = self.controller.ivars().fields.borrow().as_ref() {
+            fields.set_text(id, text);
+        }
+    }
+
     fn screen_choice(&self, id: &str) -> Option<usize> {
         self.controller
             .ivars()

@@ -101,6 +101,9 @@ pub trait ShellUi {
 
     /// The text of a screen's text field.
     fn screen_text(&self, id: &str) -> String;
+    /// Replaces the text of a screen field, such as a chosen search
+    /// suggestion in the query.
+    fn set_screen_text(&mut self, _id: &str, _text: &str) {}
 
     /// The selected row of a screen's drop-down list.
     fn screen_choice(&self, id: &str) -> Option<usize>;

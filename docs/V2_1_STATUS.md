@@ -29,7 +29,7 @@ Ta dokument vodi delo za 2.1 beta 1. Obseg je potrjen v 19 sklopih (EQ, obdelava
 | 13 | IPTV | narejeno |
 | 14 | Snemanje | narejeno |
 | 15 | Pretvornik | narejeno |
-| 16 | YouTube dodatki | čaka |
+| 16 | YouTube dodatki | narejeno |
 | 17 | Medijske tipke in Discord | čaka |
 | 18 | Spotify naročnine | čaka |
 | 19 | Uvoz in izvoz, dokumentacija, izdaja | čaka |
@@ -207,3 +207,14 @@ Ročni NVDA preizkus: Ctrl+Alt+F9: NVDA prebere seznam virov. Izberi "Computer a
 Preverjeno v izoliranem namizju s pravim FFmpeg: pretvornik mape ponudi MKA in OGA, okno napredka s fokusom na Cancel, dve hkratni pretvorbi in datoteke MKA poleg izvirnikov. Preklic in vzporedna imena sta preverjena s testi.
 
 Ročni NVDA preizkus: v glavnem meniju Folder converter, izberi mapo in MKA, Convert: NVDA prebere "Converting folder", besedilo napredka in gumb Cancel. Escape: "Stopping the conversion.", nato "Conversion stopped. ...". Ctrl+Alt+Shift+K odpre možnosti pretvornika.
+
+## Enota 16
+
+- Predlogi za iskanje: v polju za iskanje Ctrl+Shift+Down naloži predloge YouTube za vpisano besedilo (v jeziku vmesnika) in jih ponudi v seznamu. Izbrani predlog se vpiše v polje in iskanje se začne takoj. Nalaganje teče v ozadju, brez predlogov se najavi "No suggestions for this query."
+- Izbira povezave: povezava na videoposnetek v seznamu predvajanja (watch?v=...&list=... ali youtu.be/...?list=...) vpraša "Only the video" ali "The whole playlist". Videoposnetek se predvaja ali prenese sam, seznam se odpre kot seznam videoposnetkov ali prenese v celoti.
+- Prenos z možnostmi (Alt+Shift+D na izbranem ali predvajanem elementu): zvok ali video, oblika in kakovost zvoka, oblika videa, največja višina in mapa samo za ta prenos. Shranijo se samo razlike od nastavitev, ki ostanejo na elementu tudi v čakalni vrsti. Obstoječa kakovost, piškotki in čakalna vrsta ostanejo enaki.
+- Posebnih možnosti predvajanja posameznega elementa nisem dodal, ker jih Python verzija nima in plan ne pove, kaj naj bi bile; izbira "Only the video" pokrije primer predvajanja enega videoposnetka iz seznama.
+
+Preverjeno v izoliranem namizju s pravim omrežjem: predlogi za "mozart", izbira tretjega predloga in rezultati iskanja zanj, obrazec za prenos z možnostmi z imeni vseh polj, vprašanje za povezavo s seznamom.
+
+Ročni NVDA preizkus: Ctrl+Alt+Y, vpiši "mozart", Ctrl+Shift+Down: NVDA pove "Loading suggestions." in nato "Search suggestions" s prvim predlogom. Puščice, Enter: iskanje teče. Na rezultatu Alt+Shift+D: NVDA prebere "Download with options" in "Download as". Ctrl+Alt+L, prilepi povezavo z &list=, Enter: NVDA prebere "This link has a video and a playlist".

@@ -54,6 +54,7 @@ mod ui;
 mod updates;
 mod windows_import;
 mod youtube;
+pub mod youtube_extras;
 
 pub use audiovault::AudiovaultLogin;
 pub use bookmarks::{BookmarkDialog, BookmarkEntry, BookmarkRequest, BookmarkResponse};
@@ -157,6 +158,7 @@ pub struct Shell {
     podcasts: podcasts::PodcastState,
     downloads: downloads::DownloadState,
     conversions: converter::ConversionState,
+    pending_suggestions: Option<youtube_extras::PendingSuggestions>,
     settings_window: settings_window::SettingsState,
     subscriptions: subscriptions::SubscriptionState,
     updates: updates::UpdateState,
@@ -197,6 +199,7 @@ impl Shell {
             podcasts: podcasts::PodcastState::default(),
             downloads: downloads::DownloadState::default(),
             conversions: converter::ConversionState::default(),
+            pending_suggestions: None,
             settings_window: settings_window::SettingsState::default(),
             subscriptions: subscriptions::SubscriptionState::default(),
             updates: updates::UpdateState::default(),
@@ -597,6 +600,14 @@ impl Shell {
             }
             "converter_options" => {
                 self.edit_converter_options(ui);
+                return;
+            }
+            "download_with_options" => {
+                self.download_with_options(ui);
+                return;
+            }
+            "search_suggestions" if self.view == View::Search => {
+                self.start_search_suggestions(ui);
                 return;
             }
             "cancel_conversion" => {

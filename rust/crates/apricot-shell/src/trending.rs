@@ -455,12 +455,24 @@ impl Shell {
         if self.spotify_play_link(ui, &text, action) {
             return;
         }
-        let Some(item) = MediaItem::from_direct_link(&direct_link_with_scheme(&text)) else {
+        let link = direct_link_with_scheme(&text);
+        let Some(item) = MediaItem::from_direct_link(&link) else {
             ui.set_status(&self.text("direct_link_invalid"), true);
             ui.focus_screen_control("direct_link");
             return;
         };
+        let Some(item) = self.choose_link_item(ui, &link, item) else {
+            return;
+        };
+        let playlist = item.kind == apricot_core::MediaKind::Playlist;
         match action {
+            _ if playlist && !action.starts_with("download_") => {
+                self.open_youtube_collection(
+                    ui,
+                    &item,
+                    apricot_app::YoutubeCollectionKind::PlaylistVideos,
+                );
+            }
             "copy_stream_url" => {
                 self.start_youtube_resolve(
                     ui,

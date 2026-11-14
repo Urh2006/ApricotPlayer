@@ -804,7 +804,16 @@ impl Shell {
         output_override: Option<&Path>,
     ) -> Result<Option<DownloadRequest>, String> {
         let cookies_file = self.effective_cookies_file();
-        let settings = self.application.settings().clone();
+        // Download with options: this item's own formats and folder.
+        let item_options = apricot_app::youtube_extras::ItemDownloadOptions::from_item(item);
+        let settings = item_options.as_ref().map_or_else(
+            || self.application.settings().clone(),
+            |options| options.apply(self.application.settings()),
+        );
+        let item_folder = item_options
+            .as_ref()
+            .and_then(apricot_app::youtube_extras::ItemDownloadOptions::folder);
+        let output_override = output_override.or(item_folder.as_deref());
         let settings_file = self.application.settings_file();
         let url = item
             .url
