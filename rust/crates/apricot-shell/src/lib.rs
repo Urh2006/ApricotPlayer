@@ -9,6 +9,7 @@
 //! (`docs/MACOS_RUST_PORT_PLAN.md`).
 
 mod audiovault;
+pub mod backups;
 mod bookmarks;
 mod collections;
 mod comments;
@@ -486,6 +487,10 @@ impl Shell {
             return;
         }
         if self.feature_action(ui, action_id) {
+            return;
+        }
+        if let Some(backup) = backups::Backup::from_action(action_id) {
+            self.run_backup(ui, backup);
             return;
         }
         match action_id {

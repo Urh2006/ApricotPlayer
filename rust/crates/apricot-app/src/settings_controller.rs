@@ -1,11 +1,12 @@
 //! Settings load, draft, and save coordination outside the native UI layer.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use apricot_core::{SettingId, SettingsSection};
 use apricot_storage::{
-    SettingsDocument, SettingsLoadOutcome, SettingsPaths, SettingsSaveError, SettingsSource,
-    load_settings, save_loaded_settings,
+    JsonFileError, SettingsDocument, SettingsLoadError, SettingsLoadOutcome, SettingsPaths,
+    SettingsSaveError, SettingsSource, load_settings, save_loaded_settings, write_bytes_atomic,
+    write_json_atomic,
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -26,7 +27,16 @@ pub enum SettingsControllerError {
     InvalidShortcut(String),
     #[error("{0}")]
     Spotify(String),
+    #[error(transparent)]
+    File(#[from] JsonFileError),
+    #[error("the settings backup is larger than 4 MiB")]
+    ImportTooLarge,
+    #[error("the file is not an ApricotPlayer settings backup: {0}")]
+    ImportInvalid(#[from] SettingsLoadError),
 }
+
+/// The largest settings backup an import reads.
+const IMPORT_LIMIT: u64 = 4 * 1024 * 1024;
 
 #[derive(Debug)]
 pub struct SettingsController {
@@ -175,6 +185,70 @@ impl SettingsController {
         shortcuts.insert(action_id.to_owned(), shortcut.to_owned());
         self.draft
             .set_value(SettingId::KeyboardShortcuts, serde_json::json!(shortcuts))?;
+        Ok(())
+    }
+
+    /// Writes the saved settings to a user-selected backup file in the
+    /// same shape as `settings.json`, so either version can read it. Changes
+    /// left unsaved in the Settings window are not part of a backup.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the file cannot be written.
+    pub fn export(&self, path: &Path) -> Result<(), SettingsControllerError> {
+        write_json_atomic(path, &self.loaded.settings)?;
+        Ok(())
+    }
+
+    /// Replaces every setting with a user-selected backup and saves at once.
+    /// The backup is merged over the platform defaults like `settings.json`
+    /// itself, and the replaced file is kept as `settings.json.before-import`.
+    /// An explicit import also works when the current file could not be
+    /// loaded, so a backup can repair damaged settings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error without changing anything when the backup cannot be
+    /// read or is not a settings file, or when saving fails.
+    pub fn import(&mut self, path: &Path) -> Result<(), SettingsControllerError> {
+        use std::io::Read;
+        let read_error = |source| JsonFileError::Read {
+            path: path.to_owned(),
+            source,
+        };
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)
+            .map_err(read_error)?
+            .take(IMPORT_LIMIT + 1)
+            .read_to_end(&mut bytes)
+            .map_err(read_error)?;
+        if bytes.len() as u64 > IMPORT_LIMIT {
+            return Err(SettingsControllerError::ImportTooLarge);
+        }
+        let text = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes);
+        let raw: Value = serde_json::from_slice(text).map_err(SettingsLoadError::from)?;
+        let imported =
+            SettingsDocument::from_value_with_defaults(&raw, self.draft.defaults().clone())?;
+        if self.paths.primary.exists() {
+            let previous =
+                std::fs::read(&self.paths.primary).map_err(|source| JsonFileError::Read {
+                    path: self.paths.primary.clone(),
+                    source,
+                })?;
+            write_bytes_atomic(
+                &self.paths.primary.with_extension("json.before-import"),
+                &previous,
+            )?;
+        }
+        let draft = self.draft.current().clone();
+        let blocked = self.loaded.save_blocked;
+        self.loaded.save_blocked = false;
+        self.draft.replace_all(imported);
+        if let Err(error) = self.save() {
+            self.loaded.save_blocked = blocked;
+            self.draft.replace_all(draft);
+            return Err(error);
+        }
         Ok(())
     }
 

@@ -3019,6 +3019,31 @@ impl Application {
         self.startup_announcement.take()
     }
 
+    /// Writes the current settings to a backup file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the file cannot be written.
+    pub fn export_settings(&self, path: &std::path::Path) -> Result<(), SettingsControllerError> {
+        self.settings.export(path)
+    }
+
+    /// Replaces every setting with a backup and saves at once. Unsaved
+    /// Spotify settings changes are dropped with the rest of the draft.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error without changing anything when the backup is invalid
+    /// or saving fails.
+    pub fn import_settings(
+        &mut self,
+        path: &std::path::Path,
+    ) -> Result<(), SettingsControllerError> {
+        self.settings.import(path)?;
+        self.spotify_settings_draft = None;
+        Ok(())
+    }
+
     /// Saves the complete current settings draft atomically.
     ///
     /// # Errors

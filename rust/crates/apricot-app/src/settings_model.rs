@@ -67,6 +67,25 @@ pub enum SettingsCommand {
     RecordingSettings,
     OpenIntegrations,
     ConverterOptions,
+    ExportSettings,
+    ImportSettings,
+    ExportBookmarks,
+    ImportBookmarks,
+}
+
+impl SettingsCommand {
+    /// The global action a command runs after the Settings window closes.
+    #[must_use]
+    pub const fn deferred_action(self) -> Option<&'static str> {
+        Some(match self {
+            Self::OpenIntegrations => "open_integrations",
+            Self::ExportSettings => "settings_export",
+            Self::ImportSettings => "settings_import",
+            Self::ExportBookmarks => "bookmarks_export",
+            Self::ImportBookmarks => "bookmarks_import",
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -338,6 +357,17 @@ impl SettingsScreenModel {
                 command: SettingsCommand::OpenIntegrations,
                 label: catalog.text("integrations_settings").to_owned(),
             });
+            for (command, label) in [
+                (SettingsCommand::ExportSettings, "settings_export"),
+                (SettingsCommand::ImportSettings, "settings_import"),
+                (SettingsCommand::ExportBookmarks, "bookmarks_export"),
+                (SettingsCommand::ImportBookmarks, "bookmarks_import"),
+            ] {
+                controls.push(SettingsControl::Command {
+                    command,
+                    label: catalog.text(label).to_owned(),
+                });
+            }
         }
         if selected_section == SettingsSection::Downloads {
             controls.push(SettingsControl::Command {
@@ -1739,8 +1769,9 @@ mod tests {
         );
         // macOS adds "Import data from Windows" after "Set default player".
         let mac = usize::from(cfg!(target_os = "macos"));
-        // 2.1 appends "Media controls and Discord".
-        assert_eq!(model.controls.len(), 19 + mac);
+        // 2.1 appends "Media controls and Discord" and the four import and
+        // export commands.
+        assert_eq!(model.controls.len(), 23 + mac);
         assert!(matches!(
             &model.controls[0],
             SettingsControl::Choice {
@@ -1877,9 +1908,10 @@ mod tests {
     fn implemented_sections_preserve_complete_control_counts() {
         let settings = SettingsDocument::default();
         let expected = [
+            // 2.1 appends integrations and the four import and export commands.
             (
                 SettingsSection::General,
-                19 + usize::from(cfg!(target_os = "macos")),
+                23 + usize::from(cfg!(target_os = "macos")),
             ),
             // 19 Python items, Spotify, the four 2.1 entries and the reset button.
             (SettingsSection::MainMenu, 25),

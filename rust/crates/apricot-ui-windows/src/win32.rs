@@ -109,6 +109,8 @@ use windows::{
 
 #[path = "audiovault_win32.rs"]
 mod audiovault;
+#[path = "backups_win32.rs"]
+mod backups;
 #[path = "file_operations_win32.rs"]
 mod file_operations;
 #[path = "playback_features_win32.rs"]
@@ -13709,6 +13711,10 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "copy_diagnostic_report" => copy_diagnostic_report(window),
         "converter_options" => edit_converter_options(window),
         "open_integrations" => edit_integrations(window),
+        "settings_export" => backups::run(window, apricot_shell::backups::Backup::ExportSettings),
+        "settings_import" => backups::run(window, apricot_shell::backups::Backup::ImportSettings),
+        "bookmarks_export" => backups::run(window, apricot_shell::backups::Backup::ExportBookmarks),
+        "bookmarks_import" => backups::run(window, apricot_shell::backups::Backup::ImportBookmarks),
         "download_with_options" => download_with_options(window),
         "search_suggestions" => start_search_suggestions(window),
         "cancel_conversion" => cancel_conversions(window),

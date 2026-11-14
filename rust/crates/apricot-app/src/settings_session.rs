@@ -120,6 +120,16 @@ impl SettingsDraft {
         self.current = self.defaults.clone();
     }
 
+    /// The platform defaults an imported backup is merged over.
+    pub const fn defaults(&self) -> &SettingsDocument {
+        &self.defaults
+    }
+
+    /// Replaces the whole draft with an already validated document.
+    pub fn replace_all(&mut self, settings: SettingsDocument) {
+        self.current = settings;
+    }
+
     pub fn discard(&mut self) {
         self.current = self.original.clone();
     }

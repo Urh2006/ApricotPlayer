@@ -1454,7 +1454,15 @@ impl SettingsWindow {
             SettingsCommand::PlaybackTransitions => self.edit_playback_transitions(),
             SettingsCommand::ConverterOptions => self.edit_converter_options(),
             SettingsCommand::RecordingSettings => self.defer_global_action("recording_settings"),
-            SettingsCommand::OpenIntegrations => self.defer_global_action("open_integrations"),
+            SettingsCommand::OpenIntegrations
+            | SettingsCommand::ExportSettings
+            | SettingsCommand::ImportSettings
+            | SettingsCommand::ExportBookmarks
+            | SettingsCommand::ImportBookmarks => {
+                if let Some(action) = command.deferred_action() {
+                    self.defer_global_action(action);
+                }
+            }
             SettingsCommand::ResetShortcut
             | SettingsCommand::ClearShortcut
             | SettingsCommand::ResetShortcutCategory

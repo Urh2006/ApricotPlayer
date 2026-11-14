@@ -1438,7 +1438,15 @@ unsafe fn handle_settings_command(window: HWND, command: SettingsCommand) {
         SettingsCommand::PlaybackTransitions => edit_playback_transitions(window),
         SettingsCommand::ConverterOptions => edit_converter_options(window),
         SettingsCommand::RecordingSettings => defer_global_action(window, "recording_settings"),
-        SettingsCommand::OpenIntegrations => defer_global_action(window, "open_integrations"),
+        SettingsCommand::OpenIntegrations
+        | SettingsCommand::ExportSettings
+        | SettingsCommand::ImportSettings
+        | SettingsCommand::ExportBookmarks
+        | SettingsCommand::ImportBookmarks => {
+            if let Some(action) = command.deferred_action() {
+                defer_global_action(window, action);
+            }
+        }
         SettingsCommand::ResetShortcut
         | SettingsCommand::ClearShortcut
         | SettingsCommand::ResetShortcutCategory
