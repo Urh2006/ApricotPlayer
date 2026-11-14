@@ -490,6 +490,7 @@ impl Shell {
             return false;
         }
         self.tick_playback_tools(ui);
+        self.run_media_keys(ui);
         if crate::playback_features::automatic_crossfade_due(&mut self.application) {
             self.navigate_player_relative(ui, 1, true);
         }
@@ -520,6 +521,7 @@ impl Shell {
                 PlaybackEvent::Started => {
                     self.player_started(ui);
                     self.source_playback_started(ui);
+                    self.update_integrations();
                 }
                 PlaybackEvent::MediaInfo(_) => self.source_stream_metadata(ui),
                 PlaybackEvent::Paused(paused) => {
@@ -542,6 +544,7 @@ impl Shell {
                     if self.view == View::Player {
                         self.refresh_player(ui, PlayerFocus::Preserve);
                     }
+                    self.update_integrations();
                 }
                 PlaybackEvent::Position { .. } | PlaybackEvent::AudioDevices(_) => {}
                 PlaybackEvent::PreviewFinished => {
@@ -1120,6 +1123,7 @@ impl Shell {
     /// Windows `close_player_runtime`.
     pub(crate) fn close_player_runtime(&mut self, ui: &mut dyn ShellUi) {
         self.player.clip_preview = None;
+        self.integrations_player_closed();
         self.stop_key_repeat(ui);
         let generation = self.application.player_session().generation();
         if let Some(runtime) = self.player.playback.as_ref() {

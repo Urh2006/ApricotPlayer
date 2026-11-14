@@ -19,6 +19,7 @@ mod downloads;
 mod equalizer_dialog;
 mod feature_form;
 pub mod file_manager;
+pub mod integrations;
 mod keyboard;
 mod library;
 mod lyrics;
@@ -159,6 +160,7 @@ pub struct Shell {
     downloads: downloads::DownloadState,
     conversions: converter::ConversionState,
     pending_suggestions: Option<youtube_extras::PendingSuggestions>,
+    integrations: integrations::IntegrationState,
     settings_window: settings_window::SettingsState,
     subscriptions: subscriptions::SubscriptionState,
     updates: updates::UpdateState,
@@ -200,6 +202,7 @@ impl Shell {
             downloads: downloads::DownloadState::default(),
             conversions: converter::ConversionState::default(),
             pending_suggestions: None,
+            integrations: integrations::IntegrationState::default(),
             settings_window: settings_window::SettingsState::default(),
             subscriptions: subscriptions::SubscriptionState::default(),
             updates: updates::UpdateState::default(),
@@ -600,6 +603,10 @@ impl Shell {
             }
             "converter_options" => {
                 self.edit_converter_options(ui);
+                return;
+            }
+            "open_integrations" => {
+                self.edit_integrations(ui);
                 return;
             }
             "download_with_options" => {

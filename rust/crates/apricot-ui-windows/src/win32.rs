@@ -263,6 +263,9 @@ const DIAGNOSTIC_REPORT_TIMER_INTERVAL_MS: u32 = 100;
 const CONVERSION_TIMER_ID: usize = 14;
 /// `YouTube` search suggestions on their way.
 const SUGGESTIONS_TIMER_ID: usize = 31;
+/// A media key or the system media overlay: WPARAM is the event, LPARAM
+/// milliseconds for seeking.
+const WM_MEDIA_KEY: u32 = WM_APP + 30;
 const CONVERSION_TIMER_INTERVAL_MS: u32 = 100;
 const UPDATE_TIMER_ID: usize = 15;
 const UPDATE_TIMER_INTERVAL_MS: u32 = 100;
@@ -668,6 +671,8 @@ struct WindowState {
     /// The Cancel flags of the folder conversions that run.
     conversion_cancels: Vec<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pending_suggestions: Option<apricot_shell::youtube_extras::PendingSuggestions>,
+    media_controls: Option<apricot_platform::integrations::SystemMediaControls>,
+    discord: Option<apricot_platform::integrations::DiscordPresence>,
     /// Python `conversion_progress_dialog`.
     conversion_progress_window: Option<crate::converter_win32::ConversionProgressWindow>,
     pending_updates: Vec<Receiver<UpdateMessage>>,
@@ -799,6 +804,7 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
     refresh_rss_feeds_on_startup(window);
     configure_app_update_timer(window);
     schedule_startup_update_checks(window);
+    apply_integrations(window);
 
     let mut message = MSG::default();
     loop {
@@ -1258,6 +1264,10 @@ unsafe extern "system" fn window_proc(
         }
         WM_TIMER if wparam.0 == DIAGNOSTIC_REPORT_TIMER_ID => {
             poll_diagnostic_report(window);
+            LRESULT(0)
+        }
+        WM_MEDIA_KEY => {
+            handle_media_key(window, wparam.0, lparam.0);
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == SUGGESTIONS_TIMER_ID => {
@@ -2189,6 +2199,8 @@ unsafe fn create_controls(
         pending_conversions: Vec::new(),
         conversion_cancels: Vec::new(),
         pending_suggestions: None,
+        media_controls: None,
+        discord: None,
         conversion_progress_window: None,
         pending_updates: Vec::new(),
         app_update_check_running: false,
@@ -10653,6 +10665,7 @@ unsafe fn poll_playback_runtime(window: HWND) {
                 if !collection && let Some(item) = current_item.as_ref() {
                     spotify_browse::announce_playing(state, item);
                 }
+                update_integrations(state);
                 sources_ui::playback_started(window);
                 let Some(state) = state_mut(window) else {
                     return;
@@ -10693,6 +10706,7 @@ unsafe fn poll_playback_runtime(window: HWND) {
                     );
                 }
                 refresh_player(window, state, false, true);
+                update_integrations(state);
             }
             PlaybackEvent::MediaInfo(_) => sources_ui::metadata(window),
             PlaybackEvent::Position { .. } | PlaybackEvent::AudioDevices(_) => {}
@@ -13680,6 +13694,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "save_podcast_speed_preset" => save_current_podcast_speed_preset(window),
         "copy_diagnostic_report" => copy_diagnostic_report(window),
         "converter_options" => edit_converter_options(window),
+        "open_integrations" => edit_integrations(window),
         "download_with_options" => download_with_options(window),
         "search_suggestions" => start_search_suggestions(window),
         "cancel_conversion" => cancel_conversions(window),
@@ -15788,6 +15803,162 @@ unsafe fn edit_converter_options(window: HWND) {
                 .replace("{error}", &error.to_string()),
         ),
     }
+}
+
+/// Starts or stops the system media controls and Discord as Integrations
+/// says.
+unsafe fn apply_integrations(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let settings =
+        apricot_app::integrations::IntegrationSettings::from_settings(state.application.settings());
+    if !settings.media_controls {
+        state.media_controls = None;
+    } else if state.media_controls.is_none() {
+        let target = window.0 as isize;
+        state.media_controls = apricot_platform::integrations::SystemMediaControls::new(
+            Some(window.0),
+            move |event| {
+                let (code, milliseconds) = media_key_message(event);
+                let _ = PostMessageW(
+                    Some(HWND(target as *mut c_void)),
+                    WM_MEDIA_KEY,
+                    WPARAM(code),
+                    LPARAM(milliseconds),
+                );
+            },
+        )
+        .ok();
+    }
+    if !settings.discord_active() {
+        state.discord = None;
+    } else if state.discord.is_none() {
+        state.discord = Some(apricot_platform::integrations::DiscordPresence::start(
+            apricot_app::integrations::DISCORD_APPLICATION_ID,
+        ));
+    }
+    update_integrations(state);
+}
+
+/// A media key event as a window message.
+fn media_key_message(event: apricot_platform::integrations::MediaKeyEvent) -> (usize, isize) {
+    use apricot_platform::integrations::MediaKeyEvent as Key;
+    #[allow(clippy::cast_possible_truncation)] // Milliseconds of a seek.
+    let milliseconds = |seconds: f64| (seconds * 1000.0) as isize;
+    match event {
+        Key::Toggle => (0, 0),
+        Key::Play => (1, 0),
+        Key::Pause => (2, 0),
+        Key::Next => (3, 0),
+        Key::Previous => (4, 0),
+        Key::Stop => (5, 0),
+        Key::SeekBy(seconds) => (6, milliseconds(seconds)),
+        Key::SetPosition(seconds) => (7, milliseconds(seconds)),
+    }
+}
+
+/// Media keys act on the player as its own keys do.
+unsafe fn handle_media_key(window: HWND, code: usize, milliseconds: isize) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    let session = state.application.player_session();
+    if !session.is_open() {
+        return;
+    }
+    let paused = session.is_paused();
+    match code {
+        0 => activate_action(window, "player_play_pause"),
+        1 if paused => activate_action(window, "player_play_pause"),
+        2 | 5 if !paused => activate_action(window, "player_play_pause"),
+        3 => activate_action(window, "player_next"),
+        4 => activate_action(window, "player_previous"),
+        6 => activate_action(
+            window,
+            if milliseconds >= 0 {
+                "player_seek_forward"
+            } else {
+                "player_seek_back"
+            },
+        ),
+        // The overlay's position slider moves the player without speech.
+        #[allow(clippy::cast_precision_loss)] // Milliseconds of a position.
+        7 => {
+            let _ = execute_player_command(
+                window,
+                PlaybackCommand::SeekAbsolute {
+                    seconds: (milliseconds as f64 / 1000.0).max(0.0),
+                    exact: true,
+                },
+            );
+        }
+        _ => {}
+    }
+}
+
+/// What the system media controls and Discord show for the player.
+unsafe fn update_integrations(state: &mut WindowState) {
+    let session = state.application.player_session();
+    let Some(item) = session.current_item().cloned() else {
+        return;
+    };
+    let paused = session.is_paused();
+    let position = session.position_seconds();
+    let duration = session.duration_seconds().or(item.duration_seconds);
+    if let Some(controls) = state.media_controls.as_mut() {
+        controls.now_playing(&item.title, &item.channel, duration);
+        controls.playback(!paused, Some(position));
+    }
+    if let Some(discord) = &state.discord {
+        let settings = apricot_app::integrations::IntegrationSettings::from_settings(
+            state.application.settings(),
+        );
+        discord.show(apricot_shell::integrations::presence_for_platform(
+            settings.presence(
+                &item,
+                position,
+                duration,
+                paused,
+                apricot_shell::integrations::now_ms(),
+            ),
+        ));
+    }
+}
+
+/// Integrations from Settings or its own shortcut, saved at once.
+unsafe fn edit_integrations(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let settings =
+        apricot_app::integrations::IntegrationSettings::from_settings(state.application.settings());
+    let form = apricot_shell::integrations::integrations_form(&catalog, &settings);
+    state.modal_open = true;
+    let values = crate::feature_form_win32::show(window, &form);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state.modal_open = false;
+    let Some(values) = values else {
+        return;
+    };
+    let settings = apricot_shell::integrations::integrations_from_values(&values);
+    state.application.set_feature_settings(
+        apricot_app::integrations::INTEGRATIONS_KEY,
+        serde_json::json!(settings),
+    );
+    match state.application.save_settings() {
+        Ok(()) => set_status(state, catalog.text("integrations_saved"), true),
+        Err(error) => show_error_message(
+            window,
+            &catalog
+                .text("settings_save_failed")
+                .replace("{error}", &error.to_string()),
+        ),
+    }
+    apply_integrations(window);
 }
 
 /// Download with options for the selected or playing item.
@@ -18451,6 +18622,12 @@ unsafe fn configured_pitch_step(window: HWND) -> f64 {
 
 unsafe fn close_player_runtime(window: HWND, state: &mut WindowState) {
     state.clip_preview = None;
+    if let Some(controls) = state.media_controls.as_mut() {
+        controls.stopped();
+    }
+    if let Some(discord) = &state.discord {
+        discord.show(None);
+    }
     let _ = KillTimer(Some(window), CONTROLLED_REPEAT_TIMER_ID);
     state.controlled_repeat = None;
     let generation = state.application.player_session().generation();

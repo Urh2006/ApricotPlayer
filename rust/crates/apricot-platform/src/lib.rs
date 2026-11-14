@@ -15,6 +15,7 @@ pub mod clip_export;
 pub mod diagnostics;
 pub mod download;
 pub mod file_operations;
+pub mod integrations;
 pub mod iptv;
 pub mod local_edit;
 pub mod local_media;

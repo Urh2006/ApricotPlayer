@@ -423,7 +423,12 @@ define_class!(
 impl MainWindowController {
     pub fn new(mtm: MainThreadMarker, application: Application) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(ControllerIvars {
-            shell: RefCell::new(Some(Shell::new(application))),
+            shell: RefCell::new(Some({
+                let mut shell = Shell::new(application);
+                // Now Playing and media keys, and Discord when turned on.
+                shell.apply_integrations();
+                shell
+            })),
             window: RefCell::new(None),
             list: RefCell::new(None),
             buttons: RefCell::new(None),

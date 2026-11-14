@@ -30,7 +30,7 @@ Ta dokument vodi delo za 2.1 beta 1. Obseg je potrjen v 19 sklopih (EQ, obdelava
 | 14 | Snemanje | narejeno |
 | 15 | Pretvornik | narejeno |
 | 16 | YouTube dodatki | narejeno |
-| 17 | Medijske tipke in Discord | čaka |
+| 17 | Medijske tipke in Discord | narejeno, Discord čaka na aplikacijo |
 | 18 | Spotify naročnine | čaka |
 | 19 | Uvoz in izvoz, dokumentacija, izdaja | čaka |
 
@@ -218,3 +218,13 @@ Ročni NVDA preizkus: v glavnem meniju Folder converter, izberi mapo in MKA, Con
 Preverjeno v izoliranem namizju s pravim omrežjem: predlogi za "mozart", izbira tretjega predloga in rezultati iskanja zanj, obrazec za prenos z možnostmi z imeni vseh polj, vprašanje za povezavo s seznamom.
 
 Ročni NVDA preizkus: Ctrl+Alt+Y, vpiši "mozart", Ctrl+Shift+Down: NVDA pove "Loading suggestions." in nato "Search suggestions" s prvim predlogom. Puščice, Enter: iskanje teče. Na rezultatu Alt+Shift+D: NVDA prebere "Download with options" in "Download as". Ctrl+Alt+L, prilepi povezavo z &list=, Enter: NVDA prebere "This link has a video and a playlist".
+
+## Enota 17
+
+- Medijske tipke in sistemski predstavnostni kontrolniki (Windows: prekrivni kontrolnik z naslovom in izvajalcem, macOS: Now Playing) so privzeto vklopljeni in jih lahko izklopiš. Predvajaj ali premor, naslednji, prejšnji, previjanje in položaj delujejo kot tipke predvajalnika, vendar samo, ko je predvajalnik odprt. Premik drsnika položaja v sistemskem kontrolniku ne povzroči najave.
+- Discord Rich Presence je privzeto izklopljen. Ko ga vklopiš, se privzeto delijo naslov, izvajalec ali kanal, slika in čas predvajanja, vsako od tega lahko izklopiš, med premorom pa se privzeto ne prikazuje. Povezava z Discordom teče v svoji niti in se ob napaki vsakih 15 sekund poskusi znova, zato nikoli ne ustavi vmesnika.
+- Integracije (Ctrl+Alt+Shift+4 ali Settings, General, "Media controls and Discord") so en obrazec z vsemi stikali. Discord potrebuje svojo aplikacijo Discord z ID-jem, ki je ApricotPlayer še nima, zato obrazec pove, da bo deljenje na voljo pozneje, izbire pa se shranijo.
+
+Preverjeno: testi preslikave medijskih dogodkov, zasebnosti Discorda in obrazca, obrazec Integrations v izoliranem namizju z imeni vseh stikal. Sistemskih kontrolnikov v izoliranem namizju ni mogoče preveriti, ker jih Windows tam ne prikaže; preveriti jih je treba ročno na navadnem namizju.
+
+Ročni NVDA preizkus: predvajaj datoteko, pritisni tipko za predvajanje ali premor na tipkovnici: NVDA pove "Paused" ali "Playing". Win+A ali prekrivni kontrolnik glasnosti pokaže naslov skladbe. Ctrl+Alt+Shift+4: NVDA prebere "Media controls and Discord" in prvo stikalo.
