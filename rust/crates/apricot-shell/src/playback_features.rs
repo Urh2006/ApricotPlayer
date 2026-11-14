@@ -1,5 +1,4 @@
 //! Shared player-tool dialogs and transport decisions.
-#![allow(clippy::pedantic, clippy::style)] // 2.1 draft: fully linted when its feature unit is finished.
 
 use std::{path::PathBuf, time::Instant};
 
@@ -53,10 +52,10 @@ fn text<'a>(values: &'a FormValues, key: &str) -> &'a str {
         .and_then(FormValue::text)
         .unwrap_or_default()
 }
-fn set_property(name: &'static str, value: impl ToString) -> PlaybackCommand {
+fn set_property(name: &'static str, value: impl Into<String>) -> PlaybackCommand {
     PlaybackCommand::SetProperty {
         name,
-        value: value.to_string(),
+        value: value.into(),
     }
 }
 
@@ -112,6 +111,7 @@ fn pan_status(app: &Application, pan: f64) -> String {
 /// The complete audio processing form, shared by the player (F5) and
 /// Settings > Playback.
 #[must_use]
+#[allow(clippy::too_many_lines)] // One form with every processing option.
 pub fn audio_processing_form(
     catalog: &apricot_core::TranslationCatalog,
     settings: &AudioProcessingSettings,
@@ -780,6 +780,7 @@ pub fn sleep_timer_from_values(values: &FormValues) -> SleepTimerOptions {
 
 /// `None` means this action belongs to another feature. A handled, cancelled
 /// dialog returns an empty command list and has no side effects.
+#[allow(clippy::too_many_lines)] // One branch per playback feature action.
 pub fn dispatch_playback_feature(
     app: &mut Application,
     ui: &mut dyn PlaybackFeatureUi,
@@ -1063,9 +1064,9 @@ pub fn dispatch_playback_feature(
                             catalog
                                 .text("go_to_item_field")
                                 .replace("{count}", &length.to_string()),
-                            (current + 1) as f64,
+                            f64::from(u32::try_from(current + 1).unwrap_or(u32::MAX)),
                             1.0,
-                            length as f64,
+                            f64::from(u32::try_from(length).unwrap_or(u32::MAX)),
                         )],
                     ))
                     .map(|values| {
@@ -1188,15 +1189,12 @@ pub fn dispatch_playback_feature(
             if let (Some(start), Some(end)) = (start, end)
                 && ((start - shown.start).abs() > 0.000_5 || (end - shown.end).abs() > 0.000_5)
             {
-                match MarkedRange::new(start, end) {
-                    Ok(edited) => {
-                        range = edited;
-                        app.playback_features_mut().ranges.ranges[index] = edited;
-                    }
-                    Err(_) => {
-                        ui.announce(catalog.text("excerpt_invalid_times"));
-                        return Some(commands);
-                    }
+                if let Ok(edited) = MarkedRange::new(start, end) {
+                    range = edited;
+                    app.playback_features_mut().ranges.ranges[index] = edited;
+                } else {
+                    ui.announce(catalog.text("excerpt_invalid_times"));
+                    return Some(commands);
                 }
             }
             let effects = checked(&values, "effects");
@@ -1310,7 +1308,7 @@ pub fn dispatch_playback_feature(
             if let Some(track) = index.and_then(|index| tracks.get(index))
                 && let Some(id) = track["id"].as_i64()
             {
-                commands.push(set_property("aid", id));
+                commands.push(set_property("aid", id.to_string()));
                 ui.announce(&track_label(&catalog, track));
             }
         }
@@ -1395,7 +1393,7 @@ pub fn dispatch_playback_feature(
             } else if let Some(track) = tracks.get(selected - 1)
                 && let Some(id) = track["id"].as_i64()
             {
-                commands.push(set_property("sid", id));
+                commands.push(set_property("sid", id.to_string()));
                 state.subtitle_language = track["lang"].as_str().map(ToOwned::to_owned);
             }
         }
@@ -1508,6 +1506,7 @@ fn track_label(catalog: &apricot_core::TranslationCatalog, track: &serde_json::V
 /// The advanced equalizer of the profile shown in the equalizer dialog: band
 /// frequencies and widths and two shelves. Changes are heard at once; Save
 /// keeps them, Cancel restores the previous sound.
+#[allow(clippy::too_many_lines)] // One loop over the band, shelf and save actions.
 fn edit_advanced_equalizer(
     app: &mut Application,
     ui: &mut dyn PlaybackFeatureUi,
@@ -1678,6 +1677,7 @@ pub fn natural_playback_end(app: &mut Application, chapter: bool) -> Option<Vec<
 
 /// Called on the native playback poll even while menus have focus. State is
 /// generation-bound, so a late subtitle or range cannot control the next item.
+#[allow(clippy::too_many_lines)] // Timer, ranges, subtitles and chapters in one poll.
 pub fn tick_playback_features(
     app: &mut Application,
     ui: &mut dyn PlaybackFeatureUi,
@@ -1720,7 +1720,7 @@ pub fn tick_playback_features(
         {
             let key = format!("{generation}:{id}");
             if state.extra.get("subtitle_language_applied") != Some(&key) {
-                commands.push(set_property("sid", id));
+                commands.push(set_property("sid", id.to_string()));
                 state
                     .extra
                     .insert("subtitle_language_applied".to_owned(), key);

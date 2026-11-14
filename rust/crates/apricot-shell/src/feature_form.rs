@@ -1,5 +1,4 @@
 //! Shared, typed form contract for native feature dialogs.
-#![allow(clippy::pedantic, clippy::style)] // 2.1 draft: fully linted when its feature unit is finished.
 
 use std::collections::BTreeMap;
 

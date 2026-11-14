@@ -1,5 +1,4 @@
 //! Accessible, scrollable native forms shared by optional player tools.
-#![allow(clippy::pedantic, clippy::style)] // 2.1 draft: fully linted when its feature unit is finished.
 #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
 use apricot_shell::{FeatureForm, FormFieldKind, FormValue, FormValues};
@@ -213,6 +212,7 @@ unsafe fn child(
     Ok(control)
 }
 
+#[allow(clippy::too_many_lines)] // One branch per field kind.
 unsafe fn create_controls(
     parent: HWND,
     instance: HINSTANCE,
@@ -348,11 +348,11 @@ unsafe fn layout(window: HWND, state: &mut State) {
     let visible = (area.bottom - 70).max(1);
     state.offset = state.offset.clamp(0, (content_height - visible).max(0));
     let info = SCROLLINFO {
-        cbSize: size_of::<SCROLLINFO>() as u32,
+        cbSize: u32::try_from(size_of::<SCROLLINFO>()).expect("scroll info size fits"),
         fMask: SIF_RANGE | SIF_PAGE | SIF_POS,
         nMin: 0,
         nMax: content_height,
-        nPage: visible as u32,
+        nPage: u32::try_from(visible).unwrap_or(1),
         nPos: state.offset,
         ..Default::default()
     };
@@ -568,6 +568,10 @@ mod tests {
         },
     };
 
+    fn field_id(offset: usize) -> i32 {
+        i32::try_from(FIRST_FIELD + offset).unwrap()
+    }
+
     /// Runs `action` against the form, then always closes it, so a failed
     /// assertion can never leave a modal window waiting on the desktop.
     fn drive(title: &str, action: impl FnOnce(HWND) + Send + 'static) -> thread::JoinHandle<()> {
@@ -606,17 +610,17 @@ mod tests {
             ],
         );
         let driver = drive(&form.title, |window| unsafe {
-            let edit = GetDlgItem(Some(window), FIRST_FIELD as i32).unwrap();
+            let edit = GetDlgItem(Some(window), field_id(0)).unwrap();
             let value = wide("2.5");
             SetWindowTextW(edit, PCWSTR(value.as_ptr())).unwrap();
             SendMessageW(
-                GetDlgItem(Some(window), (FIRST_FIELD + 1) as i32).unwrap(),
+                GetDlgItem(Some(window), field_id(1)).unwrap(),
                 0x014E,
                 Some(WPARAM(1)),
                 None,
             );
             SendMessageW(
-                GetDlgItem(Some(window), (FIRST_FIELD + 2) as i32).unwrap(),
+                GetDlgItem(Some(window), field_id(2)).unwrap(),
                 0x00F1,
                 Some(WPARAM(1)),
                 None,
@@ -640,7 +644,7 @@ mod tests {
         let driver = drive(&form.title, |window| unsafe {
             let value = wide("6");
             SetWindowTextW(
-                GetDlgItem(Some(window), FIRST_FIELD as i32).unwrap(),
+                GetDlgItem(Some(window), field_id(0)).unwrap(),
                 PCWSTR(value.as_ptr()),
             )
             .unwrap();
@@ -648,7 +652,7 @@ mod tests {
         });
         let mut heard = Vec::new();
         let result = show_preview(HWND::default(), &form, &mut |values| {
-            heard.push(values["gain"].number().unwrap())
+            heard.push(values["gain"].number().unwrap());
         });
         driver.join().expect("native driver");
         assert!(result.is_none());
@@ -673,8 +677,8 @@ mod tests {
                 .collect(),
         );
         let driver = drive(&form.title, |window| unsafe {
-            let last = GetDlgItem(Some(window), (FIRST_FIELD + 23) as i32).unwrap();
-            let mut field = GetDlgItem(Some(window), FIRST_FIELD as i32).unwrap();
+            let last = GetDlgItem(Some(window), field_id(23)).unwrap();
+            let mut field = GetDlgItem(Some(window), field_id(0)).unwrap();
             for _ in 0..23 {
                 field = GetNextDlgTabItem(window, Some(field), false).unwrap();
             }

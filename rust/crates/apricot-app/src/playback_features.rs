@@ -1,5 +1,4 @@
 //! Playback tools and deterministic state transitions shared by both native UIs.
-#![allow(clippy::pedantic, clippy::style)] // 2.1 draft: fully linted when its feature unit is finished.
 
 use std::{collections::BTreeMap, time::Instant};
 
@@ -68,6 +67,11 @@ pub struct SleepTimer {
 }
 
 impl SleepTimer {
+    /// Starts a timer for the chosen duration or end of track or chapter.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message for a duration or fade outside the allowed range.
     pub fn new(
         options: SleepTimerOptions,
         now: Instant,
@@ -203,6 +207,7 @@ impl Default for SpatialSettings {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
+#[allow(clippy::struct_excessive_bools)] // One switch per fade, as in the dialog.
 pub struct TransitionSettings {
     pub crossfade: bool,
     pub crossfade_seconds: f64,
@@ -353,6 +358,12 @@ pub struct MarkedRange {
     pub end: f64,
 }
 impl MarkedRange {
+    /// A range from `start` to a later `end`, in seconds.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when either end is not a valid time or `end` is not
+    /// after `start`.
     pub fn new(start: f64, end: f64) -> Result<Self, String> {
         if !start.is_finite() || !end.is_finite() || start < 0.0 || end <= start {
             return Err("The end of an excerpt must be after its beginning.".to_owned());
@@ -412,6 +423,10 @@ pub struct SubtitleCue {
 
 /// SRT and `WebVTT` share timing lines. Ignore headers, cue numbers and VTT
 /// positioning; strip markup so the speech engine never reads formatting.
+///
+/// # Errors
+///
+/// Returns a message when the file or its number of cues is too large.
 pub fn parse_subtitles(source: &str) -> Result<Vec<SubtitleCue>, String> {
     if source.len() > 32 * 1024 * 1024 {
         return Err("The subtitle file is too large.".to_owned());
@@ -623,6 +638,7 @@ pub enum TransitionKind {
 }
 
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)] // Independent per-session switches.
 pub struct PlaybackFeatures {
     pub timer: Option<SleepTimer>,
     pub ranges: SelectionRanges,
@@ -797,7 +813,7 @@ mod tests {
             repeat: true,
             ..SelectionRanges::default()
         };
-        assert_eq!(ranges.constrain(9.0), 2.346);
+        assert!((ranges.constrain(9.0) - 2.346).abs() < f64::EPSILON);
         assert!(MarkedRange::new(2.0, 1.0).is_err());
     }
     #[test]
@@ -805,8 +821,8 @@ mod tests {
         let cues=parse_subtitles("WEBVTT\n\n00:01.250 --> 00:02.500 position:50%\n<i>Hello &amp; goodbye</i>\n\n2\n00:00:03,000 --> 00:00:04,000\nNext line").unwrap();
         assert_eq!(cues.len(), 2);
         assert_eq!(cues[0].text, "Hello & goodbye");
-        assert_eq!(cues[0].start, 1.25);
-        assert_eq!(cues[1].start, 3.0);
+        assert!((cues[0].start - 1.25).abs() < f64::EPSILON);
+        assert!((cues[1].start - 3.0).abs() < f64::EPSILON);
     }
     #[test]
     fn processing_defaults_leave_the_audio_chain_unchanged() {

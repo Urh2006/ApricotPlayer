@@ -1,5 +1,4 @@
 //! Windows host of the shared player-tool controller.
-#![allow(clippy::pedantic, clippy::style)] // 2.1 draft: fully linted when its feature unit is finished.
 #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
 use super::{

@@ -1,5 +1,4 @@
 //! Distinct start/stop cues kept alive for asynchronous native playback.
-#![allow(clippy::pedantic, clippy::style)] // 2.1 draft: fully linted when its feature unit is finished.
 #![cfg_attr(windows, allow(unsafe_code))]
 #[cfg(target_os = "macos")]
 use std::process::{Command, Stdio};
@@ -67,7 +66,10 @@ fn wave(started: bool) -> Vec<u8> {
         };
         phase += 2.0 * std::f64::consts::PI * frequency / f64::from(rate);
         let amplitude = (fraction * 30.0).min(1.0) * ((1.0 - fraction) * 30.0).min(1.0);
-        bytes.extend(((phase.sin() * amplitude * 6000.0) as i16).to_le_bytes());
+        // The sample stays within +-6000, well inside i16.
+        #[allow(clippy::cast_possible_truncation)]
+        let sample = (phase.sin() * amplitude * 6000.0) as i16;
+        bytes.extend(sample.to_le_bytes());
     }
     bytes
 }

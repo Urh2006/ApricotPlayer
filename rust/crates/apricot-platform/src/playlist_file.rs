@@ -1,5 +1,4 @@
 //! Bounded playlist parsing shared by library import and source adapters.
-#![allow(clippy::pedantic, clippy::style)] // 2.1 draft: fully linted when its feature unit is finished.
 use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
 use std::{collections::BTreeMap, io::Read, path::Path};
 use url::Url;
@@ -14,6 +13,11 @@ pub fn is_hls(text: &str) -> bool {
     text.lines()
         .any(|line| line.trim_start().starts_with("#EXT-X-"))
 }
+/// Reads a playlist file from disk.
+///
+/// # Errors
+///
+/// Returns a message when the file cannot be read or parsed.
 pub fn read_local(path: &Path) -> Result<ParsedPlaylist, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
@@ -27,6 +31,11 @@ pub fn read_local(path: &Path) -> Result<ParsedPlaylist, String> {
     let base = Url::from_file_path(&absolute).map_err(|()| "The playlist path is invalid")?;
     parse(&decode(&bytes), &base)
 }
+/// Downloads and parses a playlist from the web.
+///
+/// # Errors
+///
+/// Returns a message for a non-web address, a failed download or a bad playlist.
 pub fn read_url(url: &Url) -> Result<ParsedPlaylist, String> {
     if !matches!(url.scheme(), "http" | "https") {
         return Err("Use an HTTP or HTTPS playlist address".into());
@@ -59,6 +68,11 @@ fn decode(bytes: &[u8]) -> String {
     String::from_utf8(bytes.to_vec())
         .unwrap_or_else(|_| encoding_rs::WINDOWS_1252.decode(bytes).0.into_owned())
 }
+/// Parses playlist text; relative entries resolve against `base`.
+///
+/// # Errors
+///
+/// Returns a message when the text is not a playlist of a known format.
 pub fn parse(text: &str, base: &Url) -> Result<ParsedPlaylist, String> {
     let ext = Path::new(base.path())
         .extension()
@@ -79,11 +93,11 @@ pub fn parse(text: &str, base: &Url) -> Result<ParsedPlaylist, String> {
         "cue" => parse_cue(text, base)?,
         "json" => {
             let value: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
-            title = value
+            value
                 .get("title")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("")
-                .to_owned();
+                .clone_into(&mut title);
             let entries = value
                 .get("items")
                 .and_then(serde_json::Value::as_array)
@@ -103,7 +117,7 @@ pub fn parse(text: &str, base: &Url) -> Result<ParsedPlaylist, String> {
             let mut duration = None;
             for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
                 if let Some(value) = line.strip_prefix("#PLAYLIST:") {
-                    title = value.trim().to_owned();
+                    value.trim().clone_into(&mut title);
                     continue;
                 }
                 if let Some(value) = line.strip_prefix("#EXTINF:") {
@@ -113,7 +127,7 @@ pub fn parse(text: &str, base: &Url) -> Result<ParsedPlaylist, String> {
                             .next()
                             .and_then(|v| v.parse::<f64>().ok())
                             .filter(|n| n.is_finite() && *n >= 0.0);
-                        name = label.trim().to_owned();
+                        label.trim().clone_into(&mut name);
                     }
                 } else if !line.starts_with('#') {
                     result.push(location(line, &name, duration, base)?);
@@ -183,8 +197,7 @@ fn location(
             .map_err(|()| "A local playlist path is invalid")?;
         let name = path
             .file_stem()
-            .map(|v| v.to_string_lossy().into_owned())
-            .unwrap_or_else(|| value.into());
+            .map_or_else(|| value.into(), |v| v.to_string_lossy().into_owned());
         MediaItem {
             id: MediaId(path.to_string_lossy().into_owned()),
             source: MediaSource::Local,
@@ -203,7 +216,7 @@ fn location(
             .ok_or("The playlist contains an unsupported address")?
     };
     if !title.is_empty() {
-        item.title = title.to_owned();
+        title.clone_into(&mut item.title);
     }
     item.duration_seconds = duration;
     Ok(item)
@@ -222,14 +235,14 @@ fn parse_pls(text: &str, base: &Url) -> Result<Vec<MediaItem>, String> {
             {
                 let entry = entries.entry(index).or_default();
                 match prefix {
-                    "file" => entry.0 = value.trim().to_owned(),
-                    "title" => entry.1 = value.trim().to_owned(),
+                    "file" => value.trim().clone_into(&mut entry.0),
+                    "title" => value.trim().clone_into(&mut entry.1),
                     _ => {
                         entry.2 = value
                             .trim()
                             .parse::<f64>()
                             .ok()
-                            .filter(|n| n.is_finite() && *n >= 0.0)
+                            .filter(|n| n.is_finite() && *n >= 0.0);
                     }
                 }
             }
@@ -305,16 +318,16 @@ fn parse_cue(text: &str, base: &Url) -> Result<Vec<MediaItem>, String> {
                 .ok_or("Invalid CUE track")?;
             title = format!("Track {track}");
         } else if let Some(value) = line.strip_prefix("TITLE ") {
-            title = value.trim_matches('"').to_owned();
+            value.trim_matches('"').clone_into(&mut title);
         } else if let Some(value) = line.strip_prefix("PERFORMER ") {
-            artist = value.trim_matches('"').to_owned();
+            value.trim_matches('"').clone_into(&mut artist);
         } else if let Some(value) = line.strip_prefix("INDEX 01 ") {
             if track == 0 || file.is_empty() {
                 return Err("CUE index has no file or track".into());
             }
             let start = cue_time(value).ok_or("Invalid CUE time")?;
             let mut item = location(&file, &title, None, base)?;
-            item.channel = artist.clone();
+            item.channel.clone_from(&artist);
             item.id.0 = format!("{}#cue:{track}", item.id.0);
             item.metadata
                 .insert("apricot_segment_start".into(), serde_json::json!(start));
@@ -340,6 +353,11 @@ fn parse_cue(text: &str, base: &Url) -> Result<Vec<MediaItem>, String> {
     }
     Ok(items)
 }
+/// A playlist entry that stands for a folder, read again on every open.
+///
+/// # Errors
+///
+/// Returns a message when the path is not an existing folder.
 pub fn folder_reference(path: &Path) -> Result<MediaItem, String> {
     let absolute = std::path::absolute(path).map_err(|e| e.to_string())?;
     if !absolute.is_dir() {
@@ -359,6 +377,11 @@ pub fn folder_reference(path: &Path) -> Result<MediaItem, String> {
         metadata: BTreeMap::from([("apricot_folder_reference".into(), serde_json::json!(true))]),
     })
 }
+/// Replaces folder entries with the media files they currently contain.
+///
+/// # Errors
+///
+/// Returns a message when cancelled or when a folder cannot be read.
 pub fn resolve_folders(
     items: &[MediaItem],
     cancelled: &std::sync::atomic::AtomicBool,
@@ -475,7 +498,7 @@ mod tests {
         let base = Url::parse("https://example.org/book.cue").unwrap();
         let list=parse("FILE \"book.flac\" WAVE\n TRACK 01 AUDIO\n TITLE \"One\"\n INDEX 01 00:00:00\n TRACK 02 AUDIO\n TITLE \"Two\"\n INDEX 01 02:30:37",&base).unwrap();
         assert_eq!(list.items.len(), 2);
-        assert!((list.items[0].duration_seconds.unwrap() - 150.493333).abs() < 0.00001);
+        assert!((list.items[0].duration_seconds.unwrap() - 150.493_333).abs() < 0.00001);
         assert_ne!(
             list.items[0].stable_identity(),
             list.items[1].stable_identity()
