@@ -122,6 +122,13 @@ impl GlobalShortcutSettings {
 mod tests {
     use super::*;
 
+    /// The Mac hint's example: Command and Option, no Control (VoiceOver).
+    #[test]
+    fn the_mac_example_is_a_chord_without_the_system_key() {
+        let chord = GlobalChord::parse("Command+Option+Shift+Space").expect("chord");
+        assert!(!chord.system && chord.chord.control && chord.chord.alt && chord.chord.shift);
+    }
+
     #[test]
     fn chords_need_a_modifier_and_read_the_windows_key() {
         let chord = GlobalChord::parse("Win+Alt+Space").expect("chord");

@@ -51,6 +51,8 @@ pub struct ControllerIvars {
     background_player: RefCell<Option<crate::background_player::BackgroundPlayer>>,
     global_hotkey: RefCell<Option<crate::global_hotkey::GlobalHotKey>>,
     global_chord: RefCell<Option<String>>,
+    /// 2.1 global shortcuts: the registered commands and their chords.
+    global_shortcuts: RefCell<Option<RegisteredShortcuts>>,
     layout_observer: Cell<bool>,
     pending_global_pause: Cell<bool>,
     #[cfg(debug_assertions)]
@@ -93,6 +95,13 @@ pub struct ControllerIvars {
     /// The comments window waiting to open after the current event.
     pending_comments: RefCell<Option<apricot_shell::CommentsDialog>>,
 }
+
+/// The Carbon registration of the 2.1 global shortcuts and the commands it
+/// numbers, in order.
+type RegisteredShortcuts = (
+    crate::global_hotkey::GlobalShortcuts,
+    Vec<(&'static str, apricot_app::global_shortcuts::GlobalChord)>,
+);
 
 define_class!(
     /// Owns the shell and the controls of the main window.
@@ -184,6 +193,31 @@ define_class!(
             if self.with_shell(|shell, ui| shell.activate_player_control(ui, "background_play_pause")).is_none() {
                 self.ivars().pending_global_pause.set(true);
             }
+        }
+
+        /// A 2.1 global shortcut, in Apricot or in another program (Windows
+        /// `run_global_hotkey`). Ignored while a dialog runs.
+        #[unsafe(method(globalShortcut:))]
+        fn global_shortcut(&self, index: Option<&objc2_foundation::NSNumber>) {
+            let Some(index) = index.and_then(|index| usize::try_from(index.unsignedIntValue()).ok()) else {
+                return;
+            };
+            let action = self
+                .ivars()
+                .global_shortcuts
+                .borrow()
+                .as_ref()
+                .and_then(|(_, registered)| registered.get(index).map(|(action, _)| *action));
+            let Some(action) = action else { return };
+            if NSApplication::sharedApplication(self.mtm()).modalWindow().is_some() {
+                return;
+            }
+            self.with_shell(|shell, ui| {
+                // Player commands act only on an open player, as media keys do.
+                if !action.starts_with("player_") || shell.application.player_session().is_open() {
+                    shell.activate_action(ui, action);
+                }
+            });
         }
 
         /// Windows `PLAYBACK_TIMER_ID`.
@@ -446,6 +480,7 @@ impl MainWindowController {
             background_player: RefCell::new(None),
             global_hotkey: RefCell::new(None),
             global_chord: RefCell::new(None),
+            global_shortcuts: RefCell::new(None),
             layout_observer: Cell::new(false),
             pending_global_pause: Cell::new(false),
             #[cfg(debug_assertions)]
@@ -681,8 +716,10 @@ impl MainWindowController {
             }
         }
         self.ivars().global_hotkey.borrow_mut().take();
+        self.ivars().global_shortcuts.borrow_mut().take();
         self.with_shell(|shell, ui| shell.shutdown(ui));
         self.ivars().global_hotkey.borrow_mut().take();
+        self.ivars().global_shortcuts.borrow_mut().take();
     }
 
     /// The id of the screen field that sent an action.
@@ -720,6 +757,7 @@ impl MainWindowController {
         }
         self.sync_background_player(shell);
         self.sync_global_hotkey(shell);
+        self.sync_global_shortcuts(shell, &mut ui);
         Some(result)
     }
 
@@ -1004,6 +1042,41 @@ impl MainWindowController {
             Ok(registration) => *self.ivars().global_hotkey.borrow_mut() = Some(registration),
             Err(error) => eprintln!("{error}; in-app play/pause remains available"),
         }
+    }
+
+    /// Registers the 2.1 global shortcuts again when they changed (Windows
+    /// `apply_global_shortcuts`); a chord another program holds is named.
+    fn sync_global_shortcuts(&self, shell: &Shell, ui: &mut dyn ShellUi) {
+        let active = apricot_app::global_shortcuts::GlobalShortcutSettings::from_settings(
+            shell.application.settings(),
+        )
+        .active();
+        let first = {
+            let current = self.ivars().global_shortcuts.borrow();
+            if current
+                .as_ref()
+                .is_some_and(|(_, registered)| *registered == active)
+            {
+                return;
+            }
+            current.is_none()
+        };
+        self.ivars().global_shortcuts.borrow_mut().take();
+        let chords: Vec<_> = active
+            .iter()
+            .map(|(_, chord)| (chord.system, chord.chord))
+            .collect();
+        let (registration, failed) =
+            crate::global_hotkey::GlobalShortcuts::install(self.as_ref(), &chords);
+        let failed: Vec<_> = failed.iter().map(|index| active[*index].0).collect();
+        if !failed.is_empty() && !first {
+            let catalog = shell.catalog();
+            ui.set_status(
+                &apricot_shell::global_shortcuts::applied_message(&catalog, &failed),
+                true,
+            );
+        }
+        *self.ivars().global_shortcuts.borrow_mut() = Some((registration, active));
     }
 
     fn sync_background_player(&self, shell: &Shell) {

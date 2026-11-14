@@ -26,7 +26,12 @@ pub fn global_shortcuts_form(
         FormField::read_only(
             "hint",
             catalog.text("global_shortcuts_hint_label"),
-            catalog.text("global_shortcuts_hint"),
+            // Control with Option is VoiceOver's, so the Mac example differs.
+            catalog.text(if cfg!(target_os = "macos") {
+                "global_shortcuts_hint_mac"
+            } else {
+                "global_shortcuts_hint"
+            }),
         ),
     ];
     for (action, _) in GLOBAL_ACTIONS {
@@ -71,7 +76,11 @@ pub fn global_shortcuts_from_values(
         if !text.is_empty() {
             let Some(chord) = GlobalChord::parse(&text) else {
                 return Err(catalog
-                    .text("global_shortcut_invalid")
+                    .text(if cfg!(target_os = "macos") {
+                        "global_shortcut_invalid_mac"
+                    } else {
+                        "global_shortcut_invalid"
+                    })
                     .replace("{field}", &label(catalog, action)));
             };
             if let Some((_, other)) = used.iter().find(|(existing, _)| *existing == chord) {

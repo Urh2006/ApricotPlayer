@@ -186,6 +186,123 @@ impl Drop for GlobalHotKey {
     }
 }
 
+const SHORTCUT_SIGNATURE: u32 = u32::from_be_bytes(*b"Apr9");
+
+unsafe extern "C" fn shortcut_pressed(_: Ref, event: Ref, data: Ref) -> i32 {
+    let mut id = HotKeyId::default();
+    // SAFETY: Carbon provides a live event; the output is an eight-byte HotKeyId.
+    let status = unsafe {
+        GetEventParameter(
+            event,
+            u32::from_be_bytes(*b"----"),
+            u32::from_be_bytes(*b"hkid"),
+            ptr::null_mut(),
+            8,
+            ptr::null_mut(),
+            (&raw mut id).cast(),
+        )
+    };
+    // Another handler's hot key (the play/pause one) passes on.
+    if status != 0 || id.signature != SHORTCUT_SIGNATURE {
+        return -9874;
+    }
+    // SAFETY: as in `pressed`; Carbon calls on the application thread.
+    let target = unsafe { &*data.cast::<AnyObject>() };
+    // SAFETY: only the press runs the command, scheduled after Carbon returns.
+    if unsafe { GetEventKind(event) } == 5 {
+        let index = objc2_foundation::NSNumber::new_u32(id.id);
+        unsafe {
+            let _: () = msg_send![target, performSelector: sel!(globalShortcut:), withObject: &*index, afterDelay: 0.0_f64];
+        }
+    }
+    0
+}
+
+/// 2.1 global shortcuts: one Carbon hot key per command, numbered by its
+/// place in the list given to [`GlobalShortcuts::install`].
+pub struct GlobalShortcuts {
+    handler: Ref,
+    hotkeys: Vec<Ref>,
+}
+
+impl GlobalShortcuts {
+    /// Registers what it can; returns the indexes of the chords that are
+    /// not possible or that another program already holds.
+    pub fn install(target: &AnyObject, chords: &[(bool, ShortcutChord)]) -> (Self, Vec<usize>) {
+        let mut registration = Self {
+            handler: ptr::null_mut(),
+            hotkeys: Vec::new(),
+        };
+        let events = [
+            EventType {
+                class: u32::from_be_bytes(*b"keyb"),
+                kind: 5,
+            },
+            EventType {
+                class: u32::from_be_bytes(*b"keyb"),
+                kind: 6,
+            },
+        ];
+        let mut failed = Vec::new();
+        // SAFETY: the controller owns the registration and drops it before
+        // it goes away; Carbon copies the event spec.
+        unsafe {
+            let event_target = GetApplicationEventTarget();
+            if InstallEventHandler(
+                event_target,
+                shortcut_pressed,
+                2,
+                events.as_ptr(),
+                std::ptr::from_ref(target).cast_mut().cast(),
+                &raw mut registration.handler,
+            ) != 0
+            {
+                return (registration, (0..chords.len()).collect());
+            }
+            for (index, (system, chord)) in chords.iter().enumerate() {
+                let Some((key, modifiers)) = carbon_chord(*chord) else {
+                    failed.push(index);
+                    continue;
+                };
+                // The Windows key of a global chord is Control on a Mac.
+                let modifiers = modifiers + u32::from(*system) * 4096;
+                let mut hotkey = ptr::null_mut();
+                let status = RegisterEventHotKey(
+                    key,
+                    modifiers,
+                    HotKeyId {
+                        signature: SHORTCUT_SIGNATURE,
+                        id: u32::try_from(index).unwrap_or(u32::MAX),
+                    },
+                    event_target,
+                    1,
+                    &raw mut hotkey,
+                );
+                if status == 0 {
+                    registration.hotkeys.push(hotkey);
+                } else {
+                    failed.push(index);
+                }
+            }
+        }
+        (registration, failed)
+    }
+}
+
+impl Drop for GlobalShortcuts {
+    fn drop(&mut self) {
+        // SAFETY: each handle belongs to this registration alone.
+        unsafe {
+            for hotkey in self.hotkeys.drain(..) {
+                UnregisterEventHotKey(hotkey);
+            }
+            if !self.handler.is_null() {
+                RemoveEventHandler(self.handler);
+            }
+        }
+    }
+}
+
 pub fn carbon_chord(chord: ShortcutChord) -> Option<(u32, u32)> {
     let key = match chord.key {
         ShortcutKey::Space => 49,
