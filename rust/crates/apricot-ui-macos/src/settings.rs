@@ -643,19 +643,18 @@ impl SettingsWindow {
         for bound in self.ivars().controls.borrow().iter() {
             match (&bound.binding, &bound.kind) {
                 (SettingsBinding::ShortcutCategoryList(categories), ControlKind::List(list, _)) => {
-                    category = list
-                        .selected()
+                    list.selected()
                         .and_then(|index| categories.get(index))
                         .map_or("all", |item| &item.value)
-                        .to_owned();
+                        .clone_into(&mut category);
                 }
                 (SettingsBinding::ShortcutSearch, ControlKind::Field(field)) => {
-                    query = field.stringValue().to_string()
+                    query = field.stringValue().to_string();
                 }
                 (SettingsBinding::ShortcutFilter, ControlKind::Choice(choice)) => {
                     filter = apricot_app::shortcut_catalog::ShortcutFilter::from_index(
                         choice.selected().unwrap_or(0),
-                    )
+                    );
                 }
                 _ => {}
             }

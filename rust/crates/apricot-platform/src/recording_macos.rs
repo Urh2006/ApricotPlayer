@@ -1,5 +1,4 @@
-//! ScreenCaptureKit audio-only streams, including microphone and app filters.
-#![allow(clippy::pedantic, clippy::style)] // 2.1 draft: fully linted when its feature unit is finished.
+//! `ScreenCaptureKit` audio-only streams, including microphone and app filters.
 
 use super::{CAPTURE_RATE, CaptureKind, CaptureQueue, CaptureSource};
 use screencapturekit::prelude::*;
@@ -12,6 +11,7 @@ use std::{
     time::Duration,
 };
 
+#[allow(clippy::unnecessary_wraps)] // The Windows enumeration can fail.
 pub(super) fn sources() -> Result<Vec<CaptureSource>, String> {
     let mut sources = vec![CaptureSource {
         name: String::new(),
@@ -34,7 +34,7 @@ pub(super) fn sources() -> Result<Vec<CaptureSource>, String> {
                 continue;
             }
             sources.push(CaptureSource {
-                name: app.application_name().to_string(),
+                name: app.application_name().clone(),
                 kind: CaptureKind::Application {
                     process_id,
                     identity: app.bundle_identifier(),
@@ -47,6 +47,7 @@ pub(super) fn sources() -> Result<Vec<CaptureSource>, String> {
     Ok(sources)
 }
 
+#[allow(clippy::needless_pass_by_value)] // The Windows capture takes the same values.
 pub(super) fn capture(
     source: &CaptureSource,
     queue: Arc<CaptureQueue>,
@@ -60,6 +61,7 @@ pub(super) fn capture(
     result
 }
 
+#[allow(clippy::needless_pass_by_value, clippy::too_many_lines)] // Owned by the capture thread.
 fn capture_inner(
     source: &CaptureSource,
     queue: Arc<CaptureQueue>,
@@ -99,7 +101,7 @@ fn capture_inner(
             builder.with_including_applications(&selected, &[])
         };
     } else {
-        builder = builder.with_excluding_windows(&[])
+        builder = builder.with_excluding_windows(&[]);
     }
     let filter = builder.build().map_err(|error| error.to_string())?;
     let microphone = matches!(source.kind, CaptureKind::Input { .. });
@@ -108,7 +110,7 @@ fn capture_inner(
         .with_height(2)
         .with_captures_audio(!microphone)
         .with_excludes_current_process_audio(false)
-        .with_sample_rate(CAPTURE_RATE as i32)
+        .with_sample_rate(CAPTURE_RATE.cast_signed())
         .with_channel_count(2);
     if let CaptureKind::Input { device } = &source.kind {
         config
@@ -157,10 +159,10 @@ fn capture_inner(
                             buffer.number_channels as usize,
                             buffer
                                 .data()
-                                .chunks_exact(4)
-                                .map(|bytes| {
-                                    f32::from_le_bytes(bytes.try_into().unwrap_or_default())
-                                })
+                                .as_chunks::<4>()
+                                .0
+                                .iter()
+                                .map(|bytes| f32::from_le_bytes(*bytes))
                                 .collect::<Vec<_>>(),
                         )
                     })
@@ -233,6 +235,12 @@ struct Resampler {
 }
 
 impl Resampler {
+    // Frame counts per buffer stay far below 2^52, and the phase is never negative.
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
     fn convert(&mut self, samples: &[f32], rate: f64) -> Vec<f32> {
         if !rate.is_finite() || rate <= 0.0 {
             return Vec::new();
@@ -240,7 +248,7 @@ impl Resampler {
         let mut frames: Vec<[f32; 2]> = self
             .previous
             .into_iter()
-            .chain(samples.chunks_exact(2).map(|frame| [frame[0], frame[1]]))
+            .chain(samples.as_chunks::<2>().0.iter().copied())
             .collect();
         if frames.len() < 2 {
             self.previous = frames.pop();

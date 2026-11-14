@@ -1,5 +1,4 @@
 //! Native AppKit rendering of typed feature forms.
-#![allow(clippy::pedantic, clippy::style)] // 2.1 draft: fully linted when its feature unit is finished.
 #![allow(unsafe_code)]
 
 use crate::controls;
@@ -141,6 +140,7 @@ fn read_values(form: &FeatureForm, bound: &[Control]) -> FormValues {
         .collect()
 }
 
+#[allow(clippy::too_many_lines, clippy::cast_precision_loss)] // One block per field kind; few rows.
 fn show_inner(
     mtm: MainThreadMarker,
     form: &FeatureForm,
@@ -206,7 +206,8 @@ fn show_inner(
                 let read_only = matches!(kind, FormFieldKind::ReadOnly { .. });
                 field_view.setEditable(!read_only);
                 field_view.setSelectable(true);
-                field_view.setDelegate(Some(ProtocolObject::from_ref(&*target)));
+                // SAFETY: the form target outlives the field; the delegate is weak.
+                unsafe { field_view.setDelegate(Some(ProtocolObject::from_ref(&*target))) };
                 if read_only {
                     Control::ReadOnly(field_view)
                 } else {

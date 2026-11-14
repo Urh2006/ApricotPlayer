@@ -1,0 +1,5 @@
+# The ScreenCaptureKit Swift bridge needs the system Swift runtime, which macOS
+# keeps in /usr/lib/swift. Its own run path reaches only its own crate, so every
+# macOS binary and test gets it here.
+[target.'cfg(target_os = "macos")']
+rustflags = ["-C", "link-arg=-Wl,-rpath,/usr/lib/swift"]

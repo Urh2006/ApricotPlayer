@@ -309,6 +309,7 @@ dependencies = [
  "objc2-open-gl",
  "objc2-quartz-core",
  "objc2-user-notifications",
+ "serde_json",
 ]
 
 [[package]]

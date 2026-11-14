@@ -1,5 +1,4 @@
 //! Native source browser. VoiceOver and keyboard context actions share one menu.
-#![allow(clippy::pedantic, clippy::style)] // 2.1 draft: fully linted when its feature unit is finished.
 #![allow(unsafe_code)]
 
 use crate::controls::{self, Button, List};
@@ -110,7 +109,7 @@ impl Dialog {
                     &NSString::from_str(""),
                 )
             };
-            item.setTag(index as isize);
+            item.setTag(isize::try_from(index).unwrap_or(isize::MAX));
             unsafe { item.setTarget(Some(self)) };
             menu.addItem(&item);
         }
@@ -139,9 +138,9 @@ define_class!(
     impl SourcesWindow {
         #[unsafe(method(performKeyEquivalent:))]
         fn perform_key_equivalent(&self,event:&NSEvent)->bool {
-            if self.ivars().target.borrow().as_ref().and_then(Weak::load).is_some_and(|target|target.shortcut(event)){return true}
+            let own=self.ivars().target.borrow().as_ref().and_then(Weak::load).is_some_and(|target|target.shortcut(event));
             // SAFETY: forwarding the same event to NSWindow.
-            unsafe{msg_send![super(self),performKeyEquivalent:event]}
+            own||unsafe{msg_send![super(self),performKeyEquivalent:event]}
         }
     }
 );
@@ -195,12 +194,12 @@ pub(crate) fn show(mtm: MainThreadMarker, model: &SourceBrowser) -> Option<Sourc
     let actions = Button::new(mtm, &model.actions_button, &target, sel!(actions:));
     let back = Button::new(mtm, &model.back_button, &target, sel!(back:));
     back.setKeyEquivalent(&NSString::from_str("\u{1b}"));
-    for (index, button) in [&open, &actions, &back].into_iter().enumerate() {
-        button.setFrame(NSRect::new(
-            NSPoint::new(12.0 + index as f64 * 180.0, 12.0),
-            NSSize::new(168.0, 34.0),
-        ));
-        content.addSubview(&**button);
+    for (x, button) in [12.0, 192.0, 372.0]
+        .into_iter()
+        .zip([&open, &actions, &back])
+    {
+        button.setFrame(NSRect::new(NSPoint::new(x, 12.0), NSSize::new(168.0, 34.0)));
+        content.addSubview(button);
     }
     controls::set_tab_order(&[&list, &open, &actions, &back]);
     window.setAutorecalculatesKeyViewLoop(false);
@@ -220,6 +219,5 @@ pub(crate) fn show(mtm: MainThreadMarker, model: &SourceBrowser) -> Option<Sourc
     if response != NSModalResponseOK {
         return None;
     }
-    let result = target.ivars().result.borrow_mut().take();
-    result
+    target.ivars().result.take()
 }
